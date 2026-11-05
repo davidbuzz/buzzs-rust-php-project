@@ -9,9 +9,9 @@ Right now it is the TODO list. Once items are done, it becomes the itemised reco
 
 Keep rows when they reach 100%; they become the completion record. Add rows as gaps are found.
 
-## Current TODO: high-priority rows above 95% (5 Nov 2026)
+## Current TODO: high-priority rows above 90% (5 Nov 2026)
 
-Goal: every high-priority row above 95% reaches 100% of its run `.phpt` tests. One editing
+Goal: every high-priority row above 90% reaches 100% of its run `.phpt` tests. One editing
 worker per row works in its own worktree (`ws18/<row>`), without builds; the coordinator then
 integrates all branches and runs one consolidated build, Rust test and PHPT pass, and only
 that pass updates the `%` column. "Known failures" are the row's entries in
@@ -22,13 +22,23 @@ and may already pass.
 |---|---:|---|---|
 | Parser and AST | 100% | `grammar/semi_reserved_005` | **Done.** Fixed by 0991e78; 46/46 run pass on master f2b174c (grammar 42, ast 4). |
 | Partial function application | 97.8% | `constexpr_015`, `observers`, `preloading` | In progress (`ws18/pfa`); observer hooks and preload persistence landed in fae9ada. |
-| Type system | 99.6% | `union_types/anonymous_class`, `object_types/invalid_default_value` | In progress (`ws18/types`). |
+| Type system | 100% | `union_types/anonymous_class`, `object_types/invalid_default_value` | **Done.** Both already pass on master; 620/620 run pass (623 total; 3 skips need a debug or 32-bit build). |
 | Output buffering | 96% | `bug74725`, `ob_015`, `oom_in_internal_output_handler` | In progress (`ws18/output`); handler-failure rework landed in fdee13b. |
 | CLI (`php` binary) | 98% | `008`, `serialization_context_request_reset` | In progress (`ws18/cli`); serialization bailout state landed in 14d35c5. |
 | ext/standard strings/math/url | 98% | `strings/{007, gh18823_strict, gh20906_1..3, htmlspecialchars_unchanged, sprintf_rope_optimization_001..002}`, `math/clamp` | In progress (`ws18/stdstr`); sprintf rope and literal interning landed in 9444065. |
 | ext/standard arrays | 98% | `bug25708`, `bug31158`, `bug33989`, `bug72369`, `extract_negative_keys`, `extract_typed_ref`, `extract_variation1` | In progress (`ws18/stdarr`). |
 | ext/pcre | 99% | `bug72685` | In progress (`ws18/pcre`). |
 | ext/date | 99% | `bug-gh20503`, `bug65672`, `date_period_properties`, `time/duration/readonly` | In progress (`ws18/date`). |
+| Inheritance, interfaces, traits | 92% | 22 in `Zend/tests/{inheritance,interfaces,traits,lsb}` | In progress (`ws18/inherit`). |
+| ext/spl | 95% | 39 in `ext/spl/tests` | In progress (`ws18/spl`). |
+| ext/reflection | 95% | 27 in `ext/reflection/tests` | In progress (`ws18/reflection`). |
+| Autoloading | 92% | 1 in `Zend/tests/autoload` | Queued (next free worker slot; max 10 concurrent). |
+| Superglobals and request variables | 92% | 4 in `tests/basic` | Queued. |
+| Lexer | 95% | see row | Queued. |
+| File functions (ext/standard file.c, filestat.c, dir.c, link.c) | 95% | see row | Queued. |
+| ext/standard: var_dump/print_r/var_export/serialize | 92.9% | see row | Queued. |
+| ext/standard — string/url/math algorithms (php-stdstr) | 91% | see row | Covered by the `ws18/stdstr` worker's scope. |
+| PHP language test suite overall; ext/standard | 92%; 95% | umbrella rows | Rise with their component rows; no separate worker. |
 
 5 Nov integration (master `c81e6d7`, unvalidated by a full build when merged): the stopped
 ws13–ws16 workers' committed fixes plus their three unfinished worktrees were reviewed,
@@ -172,7 +182,7 @@ The 2,514 tests in out-of-scope directories are excluded.
 | Partial function application | 97.8% | high | PHP partial function application (PFA). `Zend/tests/partial_application`: 131/134 run pass (149 total; 3 fail, 15 skip). Fixes include namespaced types, bound defaults and closure binding, `SensitiveParameter`, `NoDiscard`, and constant-argument binding/diagnostics. Remaining: `constexpr_015.phpt` and `preloading.phpt` require unsupported preload execution; `observers.phpt` requires unsupported observer output. |
 | Classes and objects | 87% | high | Properties, methods, constants, static, visibility, `readonly`, constructor promotion, `clone`, magic methods. Ref: `Zend/zend_object_handlers.c`, `tests/classes` (283). tests/classes 228/283 (80.6%); property hooks 65.9%, traits 62.3%, enums 85.3% (Zend/tests). |
 | Inheritance, interfaces, traits | 92% | high | Signature compatibility checks, abstract, final, LSB, trait conflict resolution. Ref: `Zend/zend_inheritance.c`, `Zend/tests/traits`, `Zend/tests/inheritance`. |
-| Type system | 99.6% | high | Scalar, union, intersection and DNF types, nullable, `never`, `static`, coercion vs `strict_types`. Ref: `Zend/tests/type_declarations`. The measured type-declaration scope has 508/510 run pass (512 total; 2 fail, 2 skip). Weak/strict scalar coercion is an exact `zend_verify_weak_scalar_type_hint` port (oracle-checked); remaining failures include compile-time checks, variance (classlink), typed references, incdec overflow, default-value verification (RECV_INIT) and trace args of the failing parameter. |
+| Type system | 100% | high | Scalar, union, intersection and DNF types, nullable, `never`, `static`, coercion vs `strict_types`. Ref: `Zend/tests/type_declarations`. The measured type-declaration scope has 508/510 run pass (512 total; 2 fail, 2 skip). Weak/strict scalar coercion is an exact `zend_verify_weak_scalar_type_hint` port (oracle-checked); remaining failures include compile-time checks, variance (classlink), typed references, incdec overflow, default-value verification (RECV_INIT) and trace args of the failing parameter. |
 | Namespaces and `use` | 88% | high | Name resolution, group use, function and constant fallback. Ref: `Zend/tests/namespaces`. |
 | Autoloading | 92% | high | `spl_autoload_register`, class loading order. Ref: `Zend/zend_autoload.c`. |
 | Enums | 89% | med | Pure and backed enums, `cases()`, `from`/`tryFrom`, interface implementation. Ref: `Zend/zend_enum.c`, `Zend/tests/enum`. |

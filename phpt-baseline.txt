@@ -423,7 +423,6 @@ Zend/tests/nullsafe_operator/gh8661.phpt
 Zend/tests/nullsafe_operator/oss-fuzz-69765.phpt
 Zend/tests/nullsafe_operator/oss_fuzz_60011_1.phpt
 Zend/tests/nullsafe_operator/oss_fuzz_60011_2.phpt
-Zend/tests/object_types/invalid_default_value.phpt
 Zend/tests/objects/objects_013.phpt
 Zend/tests/objects/objects_014.phpt
 Zend/tests/offset_assign.phpt
@@ -543,7 +542,6 @@ Zend/tests/try/try_finally_017.phpt
 Zend/tests/try/try_finally_018.phpt
 Zend/tests/try/try_finally_019.phpt
 Zend/tests/try/try_finally_020.phpt
-Zend/tests/type_declarations/union_types/anonymous_class.phpt
 Zend/tests/undef_index_to_exception.phpt
 Zend/tests/undefined_variables_operations.phpt
 Zend/tests/unified_arg_infos_001.phpt
