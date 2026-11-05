@@ -20,7 +20,11 @@
 //!   left out of usage and both limits for their whole lifetime;
 //! * an allocation that crosses the hard ceiling (2× the limit by default)
 //!   calls the [hard-limit handler](set_hard_limit_handler) or fails, which
-//!   aborts the process — the backstop against runaway memory use.
+//!   aborts the process — the backstop against runaway memory use;
+//! * a [heap observer](set_heap_observer) can be told about each
+//!   allocation and free of the request thread while
+//!   [observing](observe_heap) is on (`ext/zend_test`'s custom ZendMM
+//!   handlers); while it is off the fast paths do no extra work.
 //!
 //! See `INTEGRATION.md` in this crate for how the VM and bindings use it.
 
@@ -29,7 +33,9 @@ mod limit;
 
 pub use mimalloc::MiMalloc;
 
-pub use counting::{fallible, uncounted, CountingAlloc, HardLimitHandler, Stats};
+pub use counting::{
+    fallible, uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, Stats,
+};
 pub use limit::{
     clamp_to_max_warning, hard_limit_for, limit_from_ini, round_to_chunks, scale_by_percent,
     HardLimitExceeded, HardLimitPercentError, MemoryLimitIni, OverLimit, SetLimitError, CHUNK_SIZE,
@@ -121,10 +127,25 @@ pub fn reset_peak() {
     GLOBAL.reset_peak();
 }
 
-/// `gc_mem_caches()`: Zend returns the bytes released from its chunk
-/// caches; we keep no allocator-level caches, so nothing is ever freed.
+/// [`CountingAlloc::gc_mem_caches`] on [`GLOBAL`] (`gc_mem_caches()`:
+/// always 0, we keep no allocator-level caches).
 pub fn gc_mem_caches() -> usize {
-    0
+    GLOBAL.gc_mem_caches()
+}
+
+/// [`CountingAlloc::set_observer`] on [`GLOBAL`].
+pub fn set_heap_observer(observer: HeapObserver) -> bool {
+    GLOBAL.set_observer(observer)
+}
+
+/// [`CountingAlloc::observe`] on [`GLOBAL`].
+pub fn observe_heap(on: bool) {
+    GLOBAL.observe(on);
+}
+
+/// [`CountingAlloc::is_observing`] on [`GLOBAL`].
+pub fn is_observing_heap() -> bool {
+    GLOBAL.is_observing()
 }
 
 /// [`CountingAlloc::set_baseline`] on [`GLOBAL`].

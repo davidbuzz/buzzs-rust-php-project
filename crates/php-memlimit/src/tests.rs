@@ -631,3 +631,89 @@ fn full_uncounted_registry_falls_back_to_counting() {
     drop(extra);
     assert_eq!(a.stats().current, 0);
 }
+
+thread_local! {
+    /// Events heard by [`record_event`] on this thread.
+    static EVENTS: std::cell::RefCell<Vec<HeapEvent>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A heap observer that records what it hears (in the test binary's own
+/// allocator, not the instance under test).
+fn record_event(e: HeapEvent) {
+    EVENTS.with(|v| v.borrow_mut().push(e));
+}
+
+fn take_events() -> Vec<HeapEvent> {
+    EVENTS.with(|v| std::mem::take(&mut *v.borrow_mut()))
+}
+
+#[test]
+fn heap_observer_hears_the_observed_thread_only() {
+    let a = CountingAlloc::new(System);
+    a.bind_to_current_thread();
+    a.observe(true);
+    assert!(
+        !a.is_observing(),
+        "nothing to report to without an observer"
+    );
+    assert!(a.set_observer(record_event));
+    assert!(!a.set_observer(record_event), "installed once");
+    let quiet = alloc(&a, 64);
+    a.observe(true);
+    assert!(a.is_observing());
+    let mut b = alloc(&a, 100);
+    let first = b.p.addr();
+    grow(&mut b, 200);
+    let grown = b.p.addr();
+    assert_eq!(a.gc_mem_caches(), 0);
+    drop(b);
+    std::thread::scope(|s| {
+        s.spawn(|| drop(alloc(&a, 10)));
+    });
+    a.observe(false);
+    assert!(!a.is_observing());
+    drop(quiet);
+    drop(alloc(&a, 32));
+    assert_eq!(
+        take_events(),
+        vec![
+            HeapEvent::Alloc {
+                size: 100,
+                addr: first
+            },
+            HeapEvent::Realloc {
+                size: 200,
+                old: first,
+                new: grown
+            },
+            HeapEvent::Gc { freed: 0 },
+            HeapEvent::Free { addr: grown },
+        ]
+    );
+    let s = a.stats();
+    assert_eq!((s.current, s.allocs, s.frees, s.reallocs), (0, 4, 4, 1));
+}
+
+#[test]
+fn observing_keeps_the_limit_semantics() {
+    let a = CountingAlloc::new(System);
+    a.bind_to_current_thread();
+    assert!(a.set_observer(record_event));
+    a.request_start(Some(128 * M)).expect("limit");
+    a.observe(true);
+    let small = alloc(&a, 1000);
+    assert!(!small.p.is_null());
+    assert!(a.check().is_none(), "an allocation under the limit is fine");
+    let over = alloc(&a, 200 * M);
+    assert!(!over.p.is_null(), "a soft overrun is still granted");
+    assert!(a.check().is_some(), "and recorded");
+    a.observe(false);
+    drop(over);
+    drop(small);
+    let heard = take_events();
+    assert_eq!(heard.len(), 2, "{heard:?}");
+    assert!(matches!(heard[0], HeapEvent::Alloc { size: 1000, .. }));
+    assert!(matches!(heard[1], HeapEvent::Alloc { size, .. } if size == 200 * M));
+    a.request_end();
+    assert_eq!(a.stats().current, 0);
+}

@@ -185,6 +185,8 @@ const DIRECTIVES: &[(&str, &str, Access, ModifyHandler)] = &[
         Access::SYSTEM,
         ModifyHandler::Bool,
     ),
+    // zend_mm_custom_handlers.c (hooks in `crate::mm`)
+    (crate::mm::DIRECTIVE, "0", Access::USER, ModifyHandler::Bool),
 ];
 
 /// `zend_test_observer_OnUpdateCommaList`: the function list can only be

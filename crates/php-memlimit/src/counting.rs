@@ -20,6 +20,48 @@ use crate::limit::{
 /// [`CountingAlloc::set_hard_limit_handler`]). It must not return.
 pub type HardLimitHandler = fn(HardLimitExceeded) -> !;
 
+/// One heap operation reported to the [heap observer](CountingAlloc::set_observer)
+/// while [observing](CountingAlloc::observe) is on (the custom heap handlers
+/// of `zend_mm_set_custom_handlers_ex`, as `ext/zend_test`'s
+/// `zend_mm_custom_handlers.c` installs them). Addresses are plain
+/// integers: the observer only prints them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeapEvent {
+    /// `size` bytes were allocated at `addr` (0 if the allocation failed).
+    Alloc {
+        /// Requested bytes.
+        size: usize,
+        /// Address of the new block.
+        addr: usize,
+    },
+    /// The block at `addr` was freed.
+    Free {
+        /// Address of the freed block.
+        addr: usize,
+    },
+    /// The block at `old` grew to `size` bytes, now at `new` (0 if the
+    /// reallocation failed).
+    Realloc {
+        /// New size in bytes.
+        size: usize,
+        /// Address before.
+        old: usize,
+        /// Address after.
+        new: usize,
+    },
+    /// The heap's garbage collection (`zend_mm_gc`, run by
+    /// `gc_mem_caches()`) released `freed` bytes.
+    Gc {
+        /// Bytes released.
+        freed: usize,
+    },
+}
+
+/// Signature of the heap observer (see [`CountingAlloc::set_observer`]).
+/// It runs inside the allocator: it must not panic, and the allocations
+/// and frees it makes itself are not reported.
+pub type HeapObserver = fn(HeapEvent);
+
 /// `over_state` values.
 const NONE: u8 = 0;
 const RECORDING: u8 = 1;
@@ -56,6 +98,9 @@ thread_local! {
     /// Nesting depth of [`crate::uncounted`] on this thread (same
     /// constraints as `FALLIBLE_DEPTH`).
     static UNCOUNTED_DEPTH: Cell<u32> = const { Cell::new(0) };
+    /// Whether the [heap observer](CountingAlloc::set_observer) is running
+    /// on this thread (its own allocations are not reported).
+    static IN_OBSERVER: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Runs `f` with soft-limit-exceeding allocations made *fallible*: instead
@@ -117,6 +162,9 @@ enum Admit {
     /// Huge and [uncounted](uncounted): not accounted; the registry slot
     /// reserved for it.
     Uncounted(usize),
+    /// Counted, and the [heap observer](CountingAlloc::set_observer) wants
+    /// to hear about it once the block exists.
+    Observed,
 }
 
 /// A non-zero value unique to each live thread: the address of this
@@ -246,6 +294,17 @@ pub struct CountingAlloc<A> {
     uncounted_used: AtomicUsize,
     /// Bytes held by live uncounted blocks.
     uncounted_bytes: AtomicUsize,
+    /// The [heap observer](Self::set_observer).
+    observer: OnceLock<HeapObserver>,
+    /// [`thread_token`] of the thread being [observed](Self::observe), 0
+    /// for none. While non-zero the soft threshold is 0 (every allocation
+    /// takes the slow path) and the observed thread is not the owner (its
+    /// frees take the non-owner path), so observing costs the fast paths
+    /// nothing while it is off.
+    observing: AtomicUsize,
+    /// Whether [`observe`](Self::observe) took ownership away from the
+    /// observed thread (to give it back when observing stops).
+    observed_owner: AtomicBool,
 }
 
 impl<A> CountingAlloc<A> {
@@ -278,6 +337,9 @@ impl<A> CountingAlloc<A> {
             uncounted_slots: [const { AtomicUsize::new(SLOT_FREE) }; UNCOUNTED_SLOTS],
             uncounted_used: AtomicUsize::new(0),
             uncounted_bytes: AtomicUsize::new(0),
+            observer: OnceLock::new(),
+            observing: AtomicUsize::new(0),
+            observed_owner: AtomicBool::new(false),
         }
     }
 
@@ -507,6 +569,13 @@ impl<A> CountingAlloc<A> {
                 (to_raw(soft), to_raw(hard).saturating_add(forgiven))
             }
         };
+        // While observing, every allocation takes the slow path, which
+        // decides whether to report it.
+        let soft = if self.observing.load(Relaxed) == 0 {
+            soft
+        } else {
+            0
+        };
         self.soft_raw.store(soft, Relaxed);
         self.hard_raw.store(hard, Relaxed);
     }
@@ -661,6 +730,118 @@ impl<A> CountingAlloc<A> {
         self.hard_handler.set(handler).is_ok()
     }
 
+    // ---- heap observer ------------------------------------------------
+
+    /// Installs the heap observer (once; returns `false` if one was already
+    /// installed). It hears nothing until [`observe`](Self::observe) turns
+    /// observing on.
+    pub fn set_observer(&self, observer: HeapObserver) -> bool {
+        self.observer.set(observer).is_ok()
+    }
+
+    /// Starts (`true`) or stops (`false`) reporting the calling thread's
+    /// heap operations to the [observer](Self::set_observer): allocations,
+    /// frees, growing reallocations and [`gc_mem_caches`](Self::gc_mem_caches)
+    /// (`zend_mm_set_heap()` of an observed heap and back). Other threads
+    /// are never reported; shrinking reallocations and huge
+    /// [uncounted](uncounted) blocks are not reported either. Without an
+    /// observer, or when another thread is already observed, starting does
+    /// nothing.
+    pub fn observe(&self, on: bool) {
+        let token = thread_token();
+        if on {
+            if self.observer.get().is_none()
+                || self
+                    .observing
+                    .compare_exchange(0, token, Relaxed, Relaxed)
+                    .is_err()
+            {
+                return;
+            }
+            // Route this thread's frees through the non-owner path.
+            if self
+                .owner
+                .compare_exchange(token, 0, Relaxed, Relaxed)
+                .is_ok()
+            {
+                self.observed_owner.store(true, Relaxed);
+            }
+        } else {
+            if self
+                .observing
+                .compare_exchange(token, 0, Relaxed, Relaxed)
+                .is_err()
+            {
+                return;
+            }
+            if self.observed_owner.swap(false, Relaxed) {
+                let _ = self.owner.compare_exchange(0, token, Relaxed, Relaxed);
+            }
+        }
+        self.update_thresholds();
+    }
+
+    /// Whether some thread's heap operations are being
+    /// [observed](Self::observe).
+    pub fn is_observing(&self) -> bool {
+        self.observing.load(Relaxed) != 0
+    }
+
+    /// `gc_mem_caches()` (`zend_mm_gc`): Zend returns the bytes released
+    /// from its chunk caches; we keep no allocator-level caches, so nothing
+    /// is ever freed. Reported to the [observer](Self::set_observer).
+    pub fn gc_mem_caches(&self) -> usize {
+        let freed = 0;
+        if self.is_observing() {
+            self.notify(HeapEvent::Gc { freed });
+        }
+        freed
+    }
+
+    /// Whether an operation of the calling thread is to be reported now.
+    #[inline]
+    fn observed_here(&self) -> bool {
+        let observed = self.observing.load(Relaxed);
+        observed != 0
+            && observed == thread_token()
+            && !IN_OBSERVER.try_with(Cell::get).unwrap_or(true)
+    }
+
+    /// Reports `event` to the observer if the calling thread is observed
+    /// (and not already inside the observer).
+    #[cold]
+    #[inline(never)]
+    fn notify(&self, event: HeapEvent) {
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let _ = IN_OBSERVER.try_with(|c| c.set(false));
+            }
+        }
+        if !self.observed_here() {
+            return;
+        }
+        let Some(observer) = self.observer.get() else {
+            return;
+        };
+        if IN_OBSERVER.try_with(|c| c.replace(true)).unwrap_or(true) {
+            return;
+        }
+        let _guard = Guard;
+        observer(event);
+    }
+
+    /// The release half of a free made by a thread that is not the owner
+    /// (other threads, and the [observed](Self::observe) one).
+    #[cold]
+    #[inline(never)]
+    fn release_foreign(&self, ptr: *mut u8, size: usize) {
+        self.shared.fetch_sub(size, Relaxed);
+        if self.is_observing() {
+            self.notify(HeapEvent::Free { addr: ptr.addr() });
+        }
+    }
+
     // ---- request lifecycle ------------------------------------------
 
     /// Request startup: baseline the counters, clear any stale violation and
@@ -724,6 +905,9 @@ impl<A> CountingAlloc<A> {
         }
         if new > self.peak.load(Relaxed) {
             self.peak.fetch_max(new, Relaxed);
+        }
+        if self.observed_here() {
+            return Admit::Observed;
         }
         Admit::Counted
     }
@@ -968,6 +1152,10 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
             match self.admit(grow, new_size > MAX_LARGE_SIZE) {
                 Admit::Counted => {}
                 Admit::Refused => return ptr::null_mut(),
+                Admit::Observed => {
+                    // SAFETY: caller upholds `GlobalAlloc::realloc`'s contract.
+                    return unsafe { self.realloc_observed(ptr, layout, new_size) };
+                }
                 // Only a huge growth in an uncounted scope whose registry
                 // was full a moment ago gets here: count it after all.
                 Admit::Uncounted(slot) => {
@@ -1035,6 +1223,66 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
     }
 }
 
+impl<A: GlobalAlloc> CountingAlloc<A> {
+    /// `alloc`/`alloc_zeroed` of a counted block that is reported to the
+    /// [observer](Self::set_observer) (`observe_malloc`).
+    ///
+    /// # Safety
+    ///
+    /// The caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
+    #[cold]
+    #[inline(never)]
+    unsafe fn alloc_observed(&self, layout: Layout, zeroed: bool) -> *mut u8 {
+        // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
+        let p = unsafe {
+            if zeroed {
+                self.inner.alloc_zeroed(layout)
+            } else {
+                self.inner.alloc(layout)
+            }
+        };
+        if p.is_null() {
+            self.release(layout.size());
+        } else {
+            bump(&self.allocs);
+            if layout.size() > MAX_LARGE_SIZE {
+                self.huge_change(layout.size(), 0);
+            }
+        }
+        self.notify(HeapEvent::Alloc {
+            size: layout.size(),
+            addr: p.addr(),
+        });
+        p
+    }
+
+    /// The growing half of [`realloc_counted`](Self::realloc_counted) once
+    /// the growth was admitted and is to be reported (`observe_realloc`).
+    ///
+    /// # Safety
+    ///
+    /// The caller upholds `GlobalAlloc::realloc`'s contract.
+    #[cold]
+    #[inline(never)]
+    unsafe fn realloc_observed(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let old_size = layout.size();
+        // SAFETY: caller upholds `GlobalAlloc::realloc`'s contract.
+        let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
+        if p.is_null() {
+            self.release(new_size - old_size);
+        } else {
+            bump(&self.reallocs);
+            self.huge_realloc(old_size, new_size);
+        }
+        self.notify(HeapEvent::Realloc {
+            size: new_size,
+            old: ptr.addr(),
+            new: p.addr(),
+        });
+        p
+    }
+}
+
 impl<A> fmt::Debug for CountingAlloc<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CountingAlloc")
@@ -1059,6 +1307,8 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
             Admit::Refused => return ptr::null_mut(),
             // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
             Admit::Uncounted(slot) => return unsafe { self.alloc_uncounted(layout, slot, false) },
+            // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
+            Admit::Observed => return unsafe { self.alloc_observed(layout, false) },
         }
         // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
         let p = unsafe { self.inner.alloc(layout) };
@@ -1081,6 +1331,8 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
             Admit::Refused => return ptr::null_mut(),
             // SAFETY: caller upholds `GlobalAlloc::alloc_zeroed`'s contract.
             Admit::Uncounted(slot) => return unsafe { self.alloc_uncounted(layout, slot, true) },
+            // SAFETY: caller upholds `GlobalAlloc::alloc_zeroed`'s contract.
+            Admit::Observed => return unsafe { self.alloc_observed(layout, true) },
         }
         // SAFETY: caller upholds `GlobalAlloc::alloc_zeroed`'s contract.
         let p = unsafe { self.inner.alloc_zeroed(layout) };
@@ -1104,7 +1356,12 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
         // (hence by `inner`) with `layout`.
         unsafe { self.inner.dealloc(ptr, layout) };
         if !uncounted {
-            self.release(size);
+            if self.is_owner() {
+                self.owned
+                    .store(self.owned.load(Relaxed).wrapping_sub(size), Relaxed);
+            } else {
+                self.release_foreign(ptr, size);
+            }
             if size > MAX_LARGE_SIZE {
                 self.huge_change(0, size);
             }

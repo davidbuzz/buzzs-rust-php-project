@@ -17,6 +17,7 @@
 //!   what [`php_vm::ext::ClassBuilder`] cannot express);
 //! * [`iterators`], [`object_handlers`] — the auxiliary stubs;
 //! * [`ini`] — the `zend_test.*` directives;
+//! * [`mm`] — the custom ZendMM heap handlers (`zend_mm_custom_handlers.c`);
 //! * [`post`] — `zend_test_handle_post_data()` (the SAPI POST handlers).
 
 mod classes;
@@ -24,6 +25,7 @@ mod compile;
 mod functions;
 mod ini;
 mod iterators;
+mod mm;
 mod object_handlers;
 #[cfg(feature = "observer")]
 mod observer;
@@ -59,6 +61,7 @@ impl Extension for ZendTest {
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         ini::register(m);
+        mm::register(m);
         functions::register(m);
         zpp::register(m);
         classes::register(m);
