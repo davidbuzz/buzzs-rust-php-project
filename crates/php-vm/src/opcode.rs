@@ -434,6 +434,17 @@ pub enum Op {
         place: PlaceId,
         dst: Option<u32>,
     },
+    /// `yield expr` in a by-reference generator where `expr` is not a
+    /// variable (`ZEND_YIELD` with a CONST/TMP operand, or a call result
+    /// flagged `ZEND_RETURNS_FUNCTION` when `call`): raises the
+    /// "Only variable references should be yielded by reference" notice
+    /// unless `call` and the call returned a reference.
+    YieldByRefValue {
+        key: Option<Operand>,
+        val: Operand,
+        call: bool,
+        dst: Option<u32>,
+    },
     /// `yield from`.
     YieldFrom { src: Operand, dst: Option<u32> },
 

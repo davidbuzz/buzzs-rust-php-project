@@ -1057,6 +1057,19 @@ impl Vm {
                         let r = self.place_make_ref(*place)?;
                         self.op_yield(k, Some(Value::Reference(r)), *dst, base)?
                     }
+                    Op::YieldByRefValue {
+                        key,
+                        val,
+                        call,
+                        dst,
+                    } => {
+                        let k = match key {
+                            Some(k) => Some(self.read(*k)?),
+                            None => None,
+                        };
+                        let v = self.read_raw(*val)?;
+                        self.op_yield_by_ref_value(k, v, *call, *dst, base)?
+                    }
                     Op::YieldFrom { src, dst } => {
                         let v = self.read_raw(*src)?;
                         self.op_yield_from(v, *dst, base)?

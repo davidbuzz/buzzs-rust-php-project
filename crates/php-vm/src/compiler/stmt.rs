@@ -1121,6 +1121,13 @@ impl Compiler {
         } else {
             None
         };
+        // zend_compile_try: `label: try { }` must not be equal to
+        // `try { label: }`, so a label right before the try gets a NOP of
+        // its own (outside the try range).
+        let here = self.here();
+        if self.fref().labels.values().any(|(l, _)| *l == here) {
+            self.emit(Op::Nop);
+        }
         let try_start = self.here();
         if let Some(fid) = fin_id {
             self.f().finally_stack.push(fid);

@@ -200,3 +200,23 @@ $later = 1;
         "int(1)\nint(2)\nint(1)\nstring(1) \"1\"\nbool(false)\nbool(false)\n"
     );
 }
+
+/// `zend_delayed_compile_dim`: `$GLOBALS[]` in any write context is a
+/// compile error (`restrict_globals/invalid_append`).
+#[test]
+fn appending_to_globals_is_a_compile_error() {
+    for stmt in [
+        "$GLOBALS[] = 1;",
+        "$GLOBALS[][1] = 2;",
+        "$GLOBALS[] .= 1;",
+        "$GLOBALS[]++;",
+        "$x = &$GLOBALS[];",
+        "foreach ([1] as $GLOBALS[]) {}",
+    ] {
+        assert_eq!(
+            run(&format!("<?php\necho \"x\";\n{stmt}\n")),
+            "\nFatal error: Cannot append to $GLOBALS in t.php on line 3\n",
+            "{stmt}"
+        );
+    }
+}
