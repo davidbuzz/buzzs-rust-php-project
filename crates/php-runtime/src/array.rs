@@ -1812,7 +1812,7 @@ impl ZArray {
             return None;
         }
         // Unshared first: the handles below are then the only other ones.
-        Rc::make_mut(&mut self.0);
+        let _ = Rc::make_mut(&mut self.0);
         let stored = ZArray(Rc::clone(&self.0));
         let result = Value::Array(ZArray(Rc::clone(&self.0)));
         let top = Rc::as_ptr(&self.0).cast_mut();
