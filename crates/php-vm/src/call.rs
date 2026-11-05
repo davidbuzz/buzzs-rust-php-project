@@ -1949,10 +1949,20 @@ impl Vm {
         args: Vec<Value>,
         named: Vec<(ZStr, Value)>,
     ) -> VmResult<Value> {
-        let mut call = match self.zend_is_callable(callable, false)? {
+        let call = match self.zend_is_callable(callable, false)? {
             Ok(call) => call,
             Err(reason) => return Err(self.make_throw("TypeError", &reason)),
         };
+        self.call_resolved_named(call, args, named)
+    }
+
+    /// [`Vm::call_value_named`] for an already resolved callable.
+    pub(crate) fn call_resolved_named(
+        &mut self,
+        mut call: PendingCall,
+        args: Vec<Value>,
+        named: Vec<(ZStr, Value)>,
+    ) -> VmResult<Value> {
         call.args = args.into_iter().map(Some).collect();
         for (k, v) in named {
             let pos = if call.magic_name.is_some() {
