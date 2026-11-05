@@ -747,13 +747,6 @@ ext/spl/tests/gh12721.phpt
 ext/spl/tests/gh14290.phpt
 ext/spl/tests/gh24264_5.phpt
 ext/spl/tests/gh8044.phpt
-ext/standard/tests/array/bug25708.phpt
-ext/standard/tests/array/bug31158.phpt
-ext/standard/tests/array/bug33989.phpt
-ext/standard/tests/array/bug72369.phpt
-ext/standard/tests/array/extract_negative_keys.phpt
-ext/standard/tests/array/extract_typed_ref.phpt
-ext/standard/tests/array/extract_variation1.phpt
 ext/standard/tests/assert/assert.phpt
 ext/standard/tests/assert/assert03.phpt
 ext/standard/tests/assert/assert04.phpt
