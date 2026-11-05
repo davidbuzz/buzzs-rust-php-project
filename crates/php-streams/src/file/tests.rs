@@ -91,6 +91,23 @@ fn get_contents_and_lines() {
 }
 
 #[test]
+fn split_lines_reserving_matches_split_lines() {
+    let inputs: [&[u8]; 6] = [b"", b"a", b"a\nb", b"a\r\n\nb\n", b"\n\n", b"x\ny\n\n"];
+    for buf in inputs {
+        for (inc, skip) in [(true, false), (false, false), (false, true)] {
+            assert_eq!(
+                split_lines_reserving(buf, b'\n', inc, skip),
+                Some(split_lines(buf, b'\n', inc, skip)),
+                "{buf:?} {inc} {skip}"
+            );
+        }
+    }
+    assert_eq!(zend_string_size(0), 32);
+    assert_eq!(zend_string_size(7), 32);
+    assert_eq!(zend_string_size(8), 40);
+}
+
+#[test]
 fn directories_and_renames() {
     let d = TempDir::new();
     let f = p(&d, "f");
