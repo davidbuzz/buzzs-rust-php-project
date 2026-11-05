@@ -48,8 +48,38 @@ pub(crate) fn defer_throw(t: crate::vm::Throw) {
     drop(rejected);
 }
 
-/// Drops an exception parked outside a dump (a handler called for
-/// another purpose), so it does not surface from an unrelated call.
+thread_local! {
+    /// Nesting depth of the dumping builtins (`var_dump()` called from a
+    /// `__debugInfo()` of an object being dumped).
+    static DUMP_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Marks a running dumping builtin; see [`begin_dump`].
+pub(crate) struct DumpScope(());
+
+impl Drop for DumpScope {
+    fn drop(&mut self) {
+        DUMP_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
+/// Enters a dumping builtin. The outermost one drops an exception parked
+/// outside any dump (a handler called for another purpose), so it does
+/// not surface from an unrelated call.
+#[must_use]
+pub(crate) fn begin_dump() -> DumpScope {
+    let outermost = DUMP_DEPTH.with(|d| {
+        let n = d.get();
+        d.set(n.saturating_add(1));
+        n == 0
+    });
+    if outermost {
+        clear_deferred_throw();
+    }
+    DumpScope(())
+}
+
+/// Drops the parked exception (the dump failed with its own).
 pub(crate) fn clear_deferred_throw() {
     if let Some(t) = DEFERRED_THROW.with(|d| d.borrow_mut().take()) {
         drop(t);

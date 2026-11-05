@@ -9,7 +9,7 @@ use crate::vm::{Vm, VmResult};
 use php_runtime::{Value, ZArray, ZStr};
 
 fn var_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    dump::clear_deferred_throw();
+    let _scope = dump::begin_dump();
     for i in 0..a.values.len() {
         let v = a.values[i].deref();
         let mut out = Out::stream();
@@ -26,7 +26,7 @@ fn var_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn debug_zval_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    dump::clear_deferred_throw();
+    let _scope = dump::begin_dump();
     for i in 0..a.values.len() {
         let v = a.values[i].clone();
         let mut out = Out::stream();
@@ -43,7 +43,7 @@ fn debug_zval_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn print_r(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    dump::clear_deferred_throw();
+    let _scope = dump::begin_dump();
     let v = a.at(0);
     if b(a, 1) {
         // Output produced by `__debugInfo()` is not captured.
