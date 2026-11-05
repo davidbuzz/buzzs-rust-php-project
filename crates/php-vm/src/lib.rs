@@ -214,6 +214,7 @@ impl Vm {
             const_deprecation_guard: std::collections::HashSet::new(),
             const_attributes: std::collections::HashMap::new(),
             const_files: std::collections::HashMap::new(),
+            const_names: std::collections::HashMap::new(),
             deprecated_constants: std::collections::HashMap::new(),
             const_deprecation_filter: std::cell::RefCell::new((0, Vec::new())),
             ct_constants: None,
@@ -223,6 +224,7 @@ impl Vm {
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
             prop_guards: HashSet::new(),
             observer: crate::observer::ObserverState::default(),
+            user_opcode_handlers: Vec::new(),
         };
         for n in ["error_reporting", "precision", "serialize_precision"] {
             vm.sync_ini(n);

@@ -1,5 +1,6 @@
 //! Expression compilation.
 
+use super::stack;
 use super::stmt::is_ref_expr;
 use super::{CResult, Compiler, FnKind};
 use crate::ast::{
@@ -177,12 +178,28 @@ impl Compiler {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// One `zend_compile_expr()` level: its `zend_check_stack_limit()`,
+    /// then the expression.
     fn compile_expr_inner(&mut self, e: &Expr) -> CResult<Operand> {
+        let bytes = stack::expr_frame_bytes(&e.kind);
+        if !self.stack.enter(bytes) {
+            return self.stack_limit_error(e.span.line);
+        }
+        let r = self.compile_expr_body(e);
+        self.stack.leave(bytes);
+        r
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn compile_expr_body(&mut self, e: &Expr) -> CResult<Operand> {
         let line = e.span.line;
         self.f().line = line;
         if let Some(v) = self.try_fold(e) {
             return Ok(self.lit(v));
+        }
+        if self.stack.overflowed() {
+            // `zend_eval_const_expr()` ran out of stack.
+            return self.stack_limit_error(line);
         }
         Ok(match &e.kind {
             ExprKind::Int(i) => self.lit(Value::Int(*i)),
@@ -220,6 +237,13 @@ impl Compiler {
                         b"false" => return Ok(self.lit(Value::Bool(false))),
                         b"null" => return Ok(self.lit(Value::Null)),
                         _ => {}
+                    }
+                }
+                // `zend_try_ct_eval_const()`: persistent internal constants
+                // are substituted at compile time.
+                if fb.is_none() {
+                    if let Some(v) = self.ct_eval_const(&n) {
+                        return Ok(self.lit(v));
                     }
                 }
                 if lc.as_slice() == b"__compiler_halt_offset__" {
@@ -938,8 +962,18 @@ impl Compiler {
         self.member_name(n)
     }
 
-    /// Compiles a writable expression into a place (offsets evaluated now).
-    pub(crate) fn compile_place(&mut self, e: &Expr, _for_unset: bool) -> CResult<Place> {
+    /// Compiles a writable expression into a place (offsets evaluated now),
+    /// after `zend_delayed_compile_var()`'s `zend_check_stack_limit()`.
+    pub(crate) fn compile_place(&mut self, e: &Expr, for_unset: bool) -> CResult<Place> {
+        if !self.stack.enter(stack::VAR_FRAME_BYTES) {
+            return self.stack_limit_error(e.span.line);
+        }
+        let r = self.compile_place_body(e, for_unset);
+        self.stack.leave(stack::VAR_FRAME_BYTES);
+        r
+    }
+
+    fn compile_place_body(&mut self, e: &Expr, _for_unset: bool) -> CResult<Place> {
         self.f().line = e.span.line;
         Ok(match &e.kind {
             ExprKind::Var(VarName::Name(id)) => {
@@ -1290,6 +1324,25 @@ impl Compiler {
         Operand::Tmp(dst)
     }
 
+    /// `zend_try_ct_eval_binary_op()` in `zend_compile_binary_op()`: two
+    /// literal operands that [`Compiler::try_fold`] could not see (magic
+    /// constants, substituted constants) fold unless evaluating them would
+    /// diagnose or throw.
+    fn fold_lit_binary(&self, op: AB, l: Operand, r: Operand) -> Option<Value> {
+        let (Operand::Lit(a), Operand::Lit(b)) = (l, r) else {
+            return None;
+        };
+        let bop = map_binop(op)?;
+        let lits = &self.fref().literals;
+        let (x, y) = (lits.get(a as usize)?, lits.get(b as usize)?);
+        if matches!(x, Value::Array(_)) || matches!(y, Value::Array(_)) {
+            return None;
+        }
+        let mut ctx = CollectingContext::new();
+        let v = php_runtime::ops::binary_op(bop, x, y, &mut ctx).ok()?;
+        ctx.diagnostics.is_empty().then_some(v)
+    }
+
     fn compile_binary(&mut self, op: AB, left: &Expr, right: &Expr) -> CResult<Operand> {
         let t = self.tmp();
         match op {
@@ -1373,6 +1426,9 @@ impl Compiler {
             _ => {
                 let l = self.compile_expr(left)?;
                 let r = self.compile_expr(right)?;
+                if let Some(v) = self.fold_lit_binary(op, l, r) {
+                    return Ok(self.lit(v));
+                }
                 let (l, r) = if op == AB::Concat {
                     self.f().line = left.span.line;
                     let l = self.concat_cast_array_literal(l);
@@ -1407,6 +1463,9 @@ impl Compiler {
                     ),
                 };
                 self.f().line = left.span.line;
+                if matches!(kind, BinKind::Arith(BinaryOp::Add)) {
+                    self.user_opcode_hook("ZEND_ADD");
+                }
                 self.emit(Op::Bin {
                     op: kind,
                     a,
@@ -2631,8 +2690,19 @@ impl Compiler {
         self.opts.ct_constants.as_ref()?.get(resolved).cloned()
     }
 
-    /// Constant folding of simple expressions.
+    /// Constant folding of simple expressions, after
+    /// `zend_eval_const_expr()`'s `zend_check_stack_limit()`: past the
+    /// limit nothing folds and the compiler reports the overflow.
     pub(crate) fn try_fold(&self, e: &Expr) -> Option<Value> {
+        if !self.stack.enter(stack::FOLD_FRAME_BYTES) {
+            return None;
+        }
+        let r = self.try_fold_inner(e);
+        self.stack.leave(stack::FOLD_FRAME_BYTES);
+        r
+    }
+
+    fn try_fold_inner(&self, e: &Expr) -> Option<Value> {
         match &e.kind {
             ExprKind::Int(i) => Some(Value::Int(*i)),
             ExprKind::Float(f) => Some(Value::Float(*f)),

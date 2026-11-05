@@ -364,3 +364,53 @@ fn begin_and_end_report_the_current_zend_opcode() {
         ]
     );
 }
+
+#[test]
+fn deprecated_builtins_construct_their_attribute() {
+    // ext/zend_test/tests/observer_sqlite_create_function.phpt:
+    // `zend_deprecated_function` instantiates `#[\Deprecated]` (an
+    // observed `Deprecated::__construct`) before the call begins.
+    LOG.with(|l| l.borrow_mut().clear());
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+    vm.set_observer(ObserverHooks {
+        init: Some(|_, _| true),
+        begin: Some(|_, f| {
+            let n = match &f.scope {
+                Some(s) => format!("{}::{}", s.to_string_lossy(), name(f)),
+                None => name(f),
+            };
+            log(format!("begin {n}"));
+        }),
+        ..ObserverHooks::default()
+    });
+    vm.run_script(b"<?php @is_long(1);", "dep.php");
+    drop(vm);
+    let log = LOG.with(|l| l.borrow().clone());
+    let ctor = log
+        .iter()
+        .position(|e| e == "begin Deprecated::__construct")
+        .expect("Deprecated::__construct observed");
+    let call = log
+        .iter()
+        .position(|e| e == "begin is_long")
+        .expect("is_long observed");
+    assert!(ctor < call, "{log:?}");
+}
+
+#[test]
+fn user_opcode_handlers_run_before_each_hooked_opcode() {
+    // ext/zend_test/tests/gh24081.phpt
+    LOG.with(|l| l.borrow_mut().clear());
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+    assert!(vm.set_user_opcode_handler("ZEND_ADD", |_, op| log(format!("hook {op}"))));
+    assert!(!vm.set_user_opcode_handler("ZEND_NOP", |_, _| {}));
+    vm.run_script(
+        b"<?php function f($a, $b) { $r = $a + $b; return strlen('x') + $r; } f(1, 2); $c = 1 + 2;",
+        "add.php",
+    );
+    drop(vm);
+    assert_eq!(
+        LOG.with(|l| l.borrow().clone()),
+        ["hook ZEND_ADD", "hook ZEND_ADD"]
+    );
+}

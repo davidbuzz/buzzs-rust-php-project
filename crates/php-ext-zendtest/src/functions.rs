@@ -757,6 +757,23 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         "zend_test_handle_post_data(mixed $stream, string $content_type, int $content_length): void",
         crate::post::handle_post_data,
     );
+    // ext/standard's upload functions read `SG(rfc1867_uploaded_files)`,
+    // which only `zend_test_handle_post_data()` fills under the CLI; SAPIs
+    // with an upload store of their own register their versions.
+    if !m
+        .vm()
+        .functions
+        .contains_key(&ZStr::from("is_uploaded_file"))
+    {
+        m.function(
+            "is_uploaded_file(string $filename): bool",
+            crate::post::is_uploaded_file,
+        );
+        m.function(
+            "move_uploaded_file(string $from, string $to): bool",
+            crate::post::move_uploaded_file,
+        );
+    }
     m.function("zend_leak_bytes(int $bytes = 3): void", none);
     m.function("zend_delref(mixed $variable): void", none);
     m.function(

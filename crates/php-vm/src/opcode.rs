@@ -566,6 +566,9 @@ pub enum Op {
     Ticks(u32),
     /// Emits a compile-time-style diagnostic at runtime (deferred warnings).
     Diag { level: u8, msg: u32 },
+    /// Runs the `zend_set_user_opcode_handler()` hook of the Zend opcode
+    /// named by literal `opcode` (the next instruction implements it).
+    UserOpcode { opcode: u32 },
     /// `assert()`: when assertions are disabled at runtime, stores `true`
     /// in `dst` and jumps to `skip`.
     AssertCheck { dst: u32, skip: Label },

@@ -50,6 +50,15 @@ fn zend_opcode_name(op: &Op) -> Option<&'static str> {
     })
 }
 
+/// A `zend_set_user_opcode_handler()` hook, called with the Zend opcode
+/// name before the opcode runs; the opcode then runs as usual
+/// (`ZEND_USER_OPCODE_DISPATCH`).
+pub type UserOpcodeHandler = fn(&mut Vm, &str);
+
+/// The Zend opcodes the compiler can hook (each is one instruction kind
+/// here): `ZEND_ADD` is a non-constant `+`.
+const HOOKABLE_OPCODES: &[&str] = &["ZEND_ADD"];
+
 /// A fiber context as the fiber observers see it (`zend_fiber_context`,
 /// `Zend/zend_fibers.h`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,6 +157,40 @@ impl ObservedFrame {
 }
 
 impl Vm {
+    /// `zend_set_user_opcode_handler()` (Zend/zend_execute.c): code compiled
+    /// from now on runs `handler` before each `opcode` (a Zend opcode name
+    /// such as `ZEND_ADD`). Returns false, installing nothing, for opcodes
+    /// the compiler cannot hook.
+    pub fn set_user_opcode_handler(&mut self, opcode: &str, handler: UserOpcodeHandler) -> bool {
+        let Some(&name) = HOOKABLE_OPCODES.iter().find(|n| **n == opcode) else {
+            return false;
+        };
+        self.user_opcode_handlers.retain(|(n, _)| *n != name);
+        self.user_opcode_handlers.push((name, handler));
+        true
+    }
+
+    /// The opcodes [`Self::set_user_opcode_handler`] hooked, for the
+    /// compiler.
+    pub(crate) fn user_opcodes(&self) -> Vec<&'static str> {
+        self.user_opcode_handlers.iter().map(|(n, _)| *n).collect()
+    }
+
+    /// `Op::UserOpcode`: the hook of the opcode named by literal `opcode`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn run_user_opcode_handler(&mut self, opcode: u32) {
+        let name = self.lit_str(opcode);
+        let hook = self
+            .user_opcode_handlers
+            .iter()
+            .find(|(n, _)| n.as_bytes() == name.as_bytes())
+            .copied();
+        if let Some((n, handler)) = hook {
+            handler(self, n);
+        }
+    }
+
     /// Installs the process's observer hooks before request execution.
     pub fn set_observer(&mut self, hooks: ObserverHooks) {
         self.observer = ObserverState {

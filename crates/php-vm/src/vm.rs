@@ -804,6 +804,10 @@ pub struct Vm {
     pub const_attributes: HashMap<ZStr, Rc<Vec<crate::class::AttributeInfo>>>,
     /// File that defined each user constant (`ReflectionConstant::getFileName`).
     pub const_files: HashMap<ZStr, ZStr>,
+    /// `zend_constant.name` of user constants whose name differs from
+    /// their `EG(zend_constants)` key (`define()` lowercases the key's
+    /// namespace part only; GH-11423).
+    pub const_names: HashMap<ZStr, ZStr>,
     /// Deprecated native constants: name → " since X, msg" suffix.
     pub deprecated_constants: HashMap<ZStr, Vec<u8>>,
     /// `(entries, sorted hashes)` of the names in `deprecated_constants`
@@ -823,6 +827,9 @@ pub struct Vm {
     pub prop_guards: HashSet<(u32, ZStr, u8)>,
     /// Request-local observer initialization and callback state.
     pub(crate) observer: crate::observer::ObserverState,
+    /// `zend_set_user_opcode_handler()` hooks: Zend opcode name and the
+    /// handler run before each such opcode compiled after registration.
+    pub(crate) user_opcode_handlers: Vec<(&'static str, crate::observer::UserOpcodeHandler)>,
 }
 
 impl std::fmt::Debug for Vm {

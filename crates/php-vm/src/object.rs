@@ -158,7 +158,6 @@ impl ObjectStore {
     }
 }
 
-
 /// Creates this thread's object store at its initial size (VM startup), so
 /// the first object of a script does not allocate it.
 pub(crate) fn prewarm_store() {

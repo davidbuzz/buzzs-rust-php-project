@@ -1267,6 +1267,19 @@ impl Vm {
         self.error_bytes(code, &msg)
     }
 
+    /// `get_deprecation_suffix_from_attribute()` instantiates the
+    /// `#[\Deprecated]` attribute of an internal function too; the suffix
+    /// of a builtin is precomputed, so its constructor call is only made
+    /// where it is observable (observers).
+    #[cold]
+    #[inline(never)]
+    fn observe_deprecated_attribute(&mut self) -> VmResult<()> {
+        if let Some(cls) = self.find_class(b"Deprecated") {
+            self.construct_with(&cls, Vec::new(), Vec::new())?;
+        }
+        Ok(())
+    }
+
     fn check_deprecated_call(&mut self, call: &PendingCall) -> VmResult<()> {
         if call.func.flags() & flags::DEPRECATED != 0 {
             // `zend_deprecated_function`.
@@ -1282,6 +1295,9 @@ impl Vm {
                         .get(&ZStr::from(b.name.to_ascii_lowercase()))
                         .cloned()
                         .unwrap_or_default();
+                    if !suffix.is_empty() && self.observer.enabled {
+                        self.observe_deprecated_attribute()?;
+                    }
                     (suffix, call.scope.clone(), crate::errors::level::DEPRECATED)
                 }
             };

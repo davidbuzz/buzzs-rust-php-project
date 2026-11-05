@@ -827,6 +827,8 @@ impl Vm {
             ),
             anon_base: self.anon_counter,
             ct_constants: Some(self.ct_constants()),
+            stack_limit: None,
+            user_opcodes: Vec::new(),
         };
         let compiled = crate::compiler::compile(&program, Rc::from(src), opts);
         self.activate_compiled_auto_globals();

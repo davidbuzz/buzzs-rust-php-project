@@ -422,6 +422,27 @@ fn module_startup(vm: &mut Vm) {
     if ini(vm, "set_vm_interrupt_on_end") {
         vm.register_interrupt_handler(on_interrupt);
     }
+    if enabled {
+        // `observer_set_user_opcode_handler`: a space/comma separated list.
+        let names = vm
+            .ini_string("zend_test.observer.show_opcode_in_user_handler")
+            .unwrap_or_default();
+        for name in names
+            .split(|&c| c == b' ' || c == b',')
+            .filter(|n| !n.is_empty())
+        {
+            let name = String::from_utf8_lossy(name);
+            vm.set_user_opcode_handler(&name, show_opcode_in_user_handler);
+        }
+    }
+}
+
+/// `observer_show_opcode_in_user_handler`.
+fn show_opcode_in_user_handler(vm: &mut Vm, opcode: &str) {
+    if ini(vm, "show_output") {
+        let line = format!("{}<!-- opcode: '{opcode}' in user handler -->\n", indent(0));
+        out(vm, &line);
+    }
 }
 
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {

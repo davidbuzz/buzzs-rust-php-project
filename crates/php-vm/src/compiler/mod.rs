@@ -4,7 +4,12 @@ pub(crate) mod attrs;
 mod constexpr;
 mod decl;
 mod expr;
+#[cfg(test)]
+mod fold_tests;
+mod stack;
 mod stmt;
+
+pub use stack::CompileStackLimit;
 
 use crate::ast::{self, Name, NameKind};
 use crate::class::{AttributeInfo, ClassDecl, ConstExpr};
@@ -132,6 +137,12 @@ pub struct CompileOptions {
     /// (`zend_try_ct_eval_const`); `None` substitutes only `true`, `false`
     /// and `null`.
     pub ct_constants: Option<CtConstants>,
+    /// The C stack model of compile-time `zend_check_stack_limit()`;
+    /// `None` disables the check.
+    pub stack_limit: Option<CompileStackLimit>,
+    /// Zend opcodes with a `zend_set_user_opcode_handler()` hook: each is
+    /// preceded by an `Op::UserOpcode`.
+    pub user_opcodes: Vec<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -355,6 +366,8 @@ pub(crate) struct Compiler {
     /// `ReflectionParameter::isDefaultValueConstant()` still sees the
     /// constant.
     pub no_const_subst: bool,
+    /// Compile-time `zend_check_stack_limit()` state.
+    pub(crate) stack: stack::StackModel,
 }
 
 /// Compiles a parsed program.
@@ -407,6 +420,7 @@ impl Compiler {
             hoisted_classes: Vec::new(),
             warnings: Vec::new(),
             anon_counter: opts.anon_base,
+            stack: stack::StackModel::new(opts.stack_limit),
             opts,
             declared_functions: HashMap::new(),
             known_functions: HashMap::new(),
@@ -493,6 +507,15 @@ impl Compiler {
 
     pub(crate) fn err<T>(&self, msg: impl Into<String>, line: u32) -> CResult<T> {
         Err(CompileError::new(msg, line, self.warnings.clone()))
+    }
+
+    /// The `Op::UserOpcode` before an instruction implementing `opcode`,
+    /// when that Zend opcode has a user handler.
+    pub(crate) fn user_opcode_hook(&mut self, opcode: &'static str) {
+        if self.opts.user_opcodes.contains(&opcode) {
+            let name = self.lit_str(opcode.as_bytes());
+            self.emit(Op::UserOpcode { opcode: name });
+        }
     }
 
     pub(crate) fn emit(&mut self, op: Op) -> usize {
