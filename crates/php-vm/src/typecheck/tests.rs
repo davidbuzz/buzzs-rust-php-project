@@ -30,6 +30,42 @@ fn run(src: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+fn run_array_lookup(src: &str) -> String {
+    use crate::func::Args;
+    use crate::vm::{FrameKind, VmResult};
+    use php_runtime::Value;
+
+    fn lookup(vm: &mut Vm, args: &mut Args) -> VmResult<Value> {
+        let key = args.at(0);
+        let array = args.array(1);
+        let name = args.func_name();
+        let n = vm.frames.len();
+        if matches!(key, Value::Array(_) | Value::Object(_))
+            && n >= 2
+            && vm.frames[n - 2].kind != FrameKind::Builtin
+        {
+            return Err(vm.throw(
+                "TypeError",
+                &format!("Cannot access offset of type {} on array", key.value_name()),
+            ));
+        }
+        php_stdarr::basic::array_key_exists(vm, &name, &key, &array)
+            .map(Value::Bool)
+            .map_err(|e| vm.rt_throw(e))
+    }
+
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    vm.register_function("array_key_exists($key, array $array): bool", lookup);
+    vm.register_function("test_resource()", |_vm, _args| {
+        Ok(Value::Resource(php_runtime::Resource::with_handle(42, "test", None)))
+    });
+    vm.run_script(src.as_bytes(), "t.php");
+    drop(vm);
+    let out = sink.0.borrow().clone();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[test]
 fn weak_mode_coercions() {
     let src = r#"<?php
@@ -433,7 +469,7 @@ $a = fresh(); var_dump(\array_key_exists(1.0E+42, $a));
     let warning = "The float 1.0E+42 is not representable as an int, cast occurred\n";
     let expected = format!("{warning}bool(false)\n{warning}bool(true)\n{warning}bool(false)\n");
     assert_eq!(
-        run(src),
+        run_array_lookup(src),
         format!("{}{warning}bool(false)\n{warning}bool(false)\n", expected.repeat(3))
     );
 }
@@ -455,7 +491,7 @@ var_dump(empty(fresh()[1.0E+42]));
 "#;
     let warning = "The float 1.0E+42 is not representable as an int, cast occurred\n";
     let expected = format!("{warning}bool(true)\n").repeat(4);
-    assert_eq!(run(src), format!("{expected}{warning}bool(false)\n"));
+    assert_eq!(run_array_lookup(src), format!("{expected}{warning}bool(false)\n"));
 }
 
 #[test]
@@ -471,5 +507,136 @@ catch (Exception $e) { echo $e->getMessage(), "\n"; }
 try { var_dump(array_key_exists(1.0E+42, $a)); }
 catch (Exception $e) { echo $e->getMessage(), "\n"; }
 "#;
-    assert_eq!(run(src), "stopped\nstopped\nstopped\n");
+    assert_eq!(run_array_lookup(src), "stopped\nstopped\nstopped\n");
+}
+
+#[test]
+fn array_key_exists_specialization_is_float_literal_only() {
+    use crate::opcode::Op;
+
+    for key in [
+        "true", "false", "0", "'0'", "null", "1.5", "$key", "$resource", "[]", "new stdClass",
+    ] {
+        let src = format!("<?php array_key_exists({key}, $array);");
+        let unit = compile(&src).expect("valid call");
+        assert!(!unit
+            .main
+            .code
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::ArrayKeyExists { .. })));
+        assert!(unit
+            .main
+            .code
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::DoCall { .. })));
+    }
+    for src in [
+        "<?php namespace N; array_key_exists(1e42, $array);",
+        "<?php array_key_exists(key: 1e42, array: $array);",
+        "<?php $f = 'array_key_exists'; $f(1e42, $array);",
+    ] {
+        let unit = compile(src).expect("valid fallback call");
+        assert!(!unit
+            .main
+            .code
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::ArrayKeyExists { .. })));
+    }
+    let unit = compile("<?php array_key_exists(1e42, $array);").expect("float call");
+    assert!(unit
+        .main
+        .code
+        .ops
+        .iter()
+        .any(|op| matches!(op, Op::InitFCall { .. })));
+    assert!(unit
+        .main
+        .code
+        .ops
+        .iter()
+        .any(|op| matches!(op, Op::Send { .. })));
+    assert!(unit
+        .main
+        .code
+        .ops
+        .iter()
+        .any(|op| matches!(op, Op::ArrayKeyExists { dst: None, .. })));
+}
+
+#[test]
+fn array_key_exists_native_parity_and_side_effects() {
+    let src = r#"<?php
+set_error_handler(function ($level, $message) { echo $message, "\n"; });
+$a = [0 => 7, 1 => null, "" => 9];
+var_dump(array_key_exists(false, $a), array_key_exists(true, $a));
+var_dump(array_key_exists("0", $a), array_key_exists(null, $a));
+try { array_key_exists([], $a); }
+catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { array_key_exists(new stdClass, $a); }
+catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$key = "before";
+function change() { global $key; $key = "after"; echo "array\n"; return ["before" => 1]; }
+var_dump(array_key_exists($key, change()));
+function key_expr() { echo "key\n"; return "before"; }
+var_dump(array_key_exists(key_expr(), change()));
+var_dump(array_key_exists($missing_key, change()));
+try { array_key_exists(1e42, $missing_array); }
+catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+    echo $e->getTrace()[0]["function"], "\n";
+}
+"#;
+    assert_eq!(
+        run_array_lookup(src),
+        "bool(true)\nbool(true)\nbool(true)\nUsing null as the key parameter for array_key_exists() is deprecated, use an empty string instead\nbool(true)\nCannot access offset of type array on array\nCannot access offset of type stdClass on array\narray\nbool(true)\nkey\narray\nbool(true)\nUndefined variable $missing_key\narray\nUsing null as the key parameter for array_key_exists() is deprecated, use an empty string instead\nbool(false)\nUndefined variable $missing_array\narray_key_exists(): Argument #2 ($array) must be of type array, null given\narray_key_exists\n"
+    );
+}
+
+#[test]
+fn array_key_exists_namespace_shadow_and_float_fallback() {
+    let src = r#"<?php
+namespace N;
+function array_key_exists($key, $array) { echo "shadow\n"; return "shadow"; }
+$a = [0 => 7];
+var_dump(array_key_exists(1e42, $a));
+set_error_handler(function ($level, $message) { echo $message, "\n"; });
+function array_expr() { echo "array\n"; return [0 => 7]; }
+var_dump(\array_key_exists(1e42, array_expr()));
+try { \array_key_exists(1e42, null); }
+catch (\TypeError $e) {
+    echo $e->getMessage(), "\n";
+    echo $e->getTrace()[0]["function"], "\n";
+}
+"#;
+    assert_eq!(
+        run_array_lookup(src),
+        "shadow\nstring(6) \"shadow\"\narray\nThe float 1.0E+42 is not representable as an int, cast occurred\nbool(true)\narray_key_exists(): Argument #2 ($array) must be of type array, null given\narray_key_exists\n"
+    );
+}
+
+#[test]
+fn array_key_exists_specialized_call_can_resolve_to_user_function() {
+    let src = r#"<?php
+function array_key_exists($key, &$array) { $array = "changed"; return "user"; }
+$a = [0 => 7];
+var_dump(array_key_exists(1e42, $a), $a);
+"#;
+    assert_eq!(run(src), "string(4) \"user\"\nstring(7) \"changed\"\n");
+}
+
+#[test]
+fn array_key_exists_resource_key_uses_native_diagnostic() {
+    let src = r#"<?php
+set_error_handler(function ($level, $message) { echo $message, "\n"; });
+$resource = test_resource();
+$a = [42 => null];
+var_dump(array_key_exists($resource, $a));
+"#;
+    assert_eq!(
+        run_array_lookup(src),
+        "Resource ID#42 used as offset, casting to integer (42)\nbool(true)\n"
+    );
 }

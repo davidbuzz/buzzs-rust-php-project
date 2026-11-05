@@ -1787,12 +1787,22 @@ impl Compiler {
         let only_positional = positional.len() == args.args.len();
         match lc.as_slice() {
             b"array_key_exists" if fb.is_none() && only_positional && positional.len() == 2 => {
-                let key = self.compile_expr(positional[0])?;
-                let array = self.compile_expr(positional[1])?;
+                if !matches!(
+                    positional[0].kind,
+                    ExprKind::Float(f) if !f.is_finite() || !php_runtime::convert::double_fits_long(f)
+                ) {
+                    return Ok(None);
+                }
+                self.emit_init_fcall(n);
+                self.f().line = args.args[0].span.line;
+                let src = self.arg_src_for(positional[0])?;
+                self.emit(Op::Send { src });
+                self.f().line = args.args[1].span.line;
+                let array = self.arg_src_for(positional[1])?;
                 self.f().line = line;
-                let t = self.tmp();
-                self.emit(Op::ArrayKeyExists { key, array, dst: t });
-                Ok(Some(Operand::Tmp(t)))
+                let dst = need.then(|| self.tmp());
+                self.emit(Op::ArrayKeyExists { array, dst });
+                Ok(Some(dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp)))
             }
             b"exit" | b"die" if only_positional && positional.len() <= 1 => {
                 let v = match positional.first() {

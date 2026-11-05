@@ -325,11 +325,11 @@ pub enum Op {
     Isset { place: PlaceId, dst: u32 },
     /// `empty(place)`.
     Empty { place: PlaceId, dst: u32 },
-    /// Direct `array_key_exists(key, array)` without copying call arguments.
+    /// Finishes a pending call with a literal nonrepresentable float key.
+    /// Only a native call with a defined CV array avoids copying that array.
     ArrayKeyExists {
-        key: Operand,
-        array: Operand,
-        dst: u32,
+        array: ArgSrc,
+        dst: Option<u32>,
     },
     /// `unset(place)`.
     Unset { place: PlaceId },

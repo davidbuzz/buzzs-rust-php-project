@@ -861,6 +861,52 @@ impl Vm {
         self.op_do_call_checked(call, dst, strict)
     }
 
+    /// Avoids native argument snapshots only for the float-key lifetime case.
+    pub(crate) fn op_array_key_exists(&mut self, src: &ArgSrc, dst: Option<u32>) -> VmResult<bool> {
+        let key = {
+            let call = self.frame().calls.last().expect("pending call");
+            match (&call.func, call.args.as_slice()) {
+                (Func::Builtin(b), [Some(Value::Float(f))])
+                    if b.name.as_bytes() == b"array_key_exists"
+                        && b.flags & (flags::DEPRECATED | flags::NODISCARD) == 0
+                        && (!f.is_finite() || !php_runtime::convert::double_fits_long(*f)) =>
+                {
+                    Some(*f)
+                }
+                _ => None,
+            }
+        };
+        let array = key.and_then(|_| {
+            let ArgSrc::Place(pid) = src else {
+                return None;
+            };
+            let p = &self.frame().code.places[*pid as usize];
+            let crate::opcode::PlaceBase::Cv(cv) = &p.base else {
+                return None;
+            };
+            if !p.segs.is_empty() {
+                return None;
+            }
+            self.cv_get(*cv).map(|v| v.deref())
+        });
+        if let (Some(f), Some(Value::Array(a))) = (key, array) {
+            let mut call = self.frame_mut().calls.pop().expect("pending call");
+            self.put_arg_vec(std::mem::take(&mut call.args));
+            // This snapshot is Zend's temporary addref, not a surviving owner.
+            let had_owner = a.refcount() > 1;
+            let found =
+                php_stdarr::basic::array_key_exists(self, "array_key_exists", &Value::Float(f), &a)
+                    .map_err(|e| self.rt_throw(e))?;
+            let lost_owner = had_owner && a.refcount() == 1;
+            if let Some(d) = dst {
+                self.set_tmp(d, Value::Bool(!lost_owner && found));
+            }
+            return Ok(false);
+        }
+        self.op_send(src, None)?;
+        self.op_do_call(dst)
+    }
+
     fn op_do_call_checked(
         &mut self,
         call: PendingCall,

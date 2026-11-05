@@ -598,7 +598,7 @@ fn pending_method_name(vm: &Vm) -> Option<ZStr> {
     let mut depth = 0usize;
     loop {
         match &ops[i] {
-            Op::DoCall { .. } | Op::CallableConvert { .. } => depth += 1,
+            Op::DoCall { .. } | Op::ArrayKeyExists { .. } | Op::CallableConvert { .. } => depth += 1,
             Op::InitMethodCall { name, .. } => {
                 depth -= 1;
                 if depth == 0 {

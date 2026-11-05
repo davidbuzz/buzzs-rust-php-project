@@ -634,37 +634,12 @@ impl Vm {
                         self.set_tmp(*dst, Value::Bool(v));
                         Flow::Next
                     }
-                    Op::ArrayKeyExists { key, array, dst } => {
-                        let key = self.read(*key)?;
-                        let subject = self.read(*array)?;
-                        let Value::Array(a) = subject else {
-                            return Err(self.make_throw(
-                                "TypeError",
-                                &format!(
-                                    "array_key_exists(): Argument #2 ($array) must be of type array, {} given",
-                                    crate::typecheck::given_type(&subject)
-                                ),
-                            ));
-                        };
-                        // This snapshot substitutes for Zend's temporary
-                        // addref; it must not keep a removed CV owner alive.
-                        let had_owner = a.refcount() > 1;
-                        let is_float = matches!(key, Value::Float(_));
-                        let k = if key.is_null() {
-                            self.deprecated(
-                                "Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead",
-                            )?;
-                            php_runtime::ArrayKey::Str(ZStr::empty())
+                    Op::ArrayKeyExists { array, dst } => {
+                        if self.op_array_key_exists(array, *dst)? {
+                            Flow::Reload
                         } else {
-                            let mut diags = Vec::new();
-                            let k = crate::place::key_of(&key, &mut diags, KeyCtx::Read)
-                                .map_err(|e| self.walk_err(e))?;
-                            self.flush_diags(diags)?;
-                            k
-                        };
-                        let lost_owner = is_float && had_owner && a.refcount() == 1;
-                        self.set_tmp(*dst, Value::Bool(!lost_owner && a.get(&k).is_some()));
-                        Flow::Next
+                            Flow::Next
+                        }
                     }
                     Op::Unset { place } => {
                         self.place_unset(*place)?;
