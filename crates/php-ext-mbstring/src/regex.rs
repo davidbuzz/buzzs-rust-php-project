@@ -271,6 +271,7 @@ fn translate(p: &[u8], names: bool) -> Result<Vec<u8>, String> {
                         continue;
                     }
                     1 => out.extend_from_slice(b"\\x01"),
+                    n if class_depth > 0 && literal_in_class(n, p.get(i + 2)) => out.push(n),
                     _ => {
                         out.push(b'\\');
                         out.push(n);
@@ -361,6 +362,20 @@ fn translate(p: &[u8], names: bool) -> Result<Vec<u8>, String> {
         i += 1;
     }
     Ok(out)
+}
+
+/// Escapes that Oniguruma (Ruby syntax) reads as the bare letter inside a
+/// character class, where PCRE2 rejects them ("escape sequence is invalid
+/// in character class", unsupported `\L`/`\N`/...) or reads them as
+/// operators (`\Q`, `\E`).
+fn literal_in_class(n: u8, next: Option<&u8>) -> bool {
+    match n {
+        b'A' | b'B' | b'E' | b'F' | b'G' | b'I' | b'J' | b'K' | b'L' | b'N' | b'O' | b'Q'
+        | b'R' | b'T' | b'U' | b'X' | b'Y' | b'Z' | b'i' | b'j' | b'k' | b'l' | b'm' | b'q'
+        | b'y' | b'z' => true,
+        b'o' | b'p' | b'P' => next != Some(&b'{'),
+        _ => false,
+    }
 }
 
 /// Rewrites the GNU/POSIX basic syntaxes (`b`, `g`, `c`), where `\(`,
@@ -1346,6 +1361,9 @@ mod tests {
         assert_eq!(tr("[(]"), "[(]");
         assert_eq!(tr("[]a]"), r"[\]a]");
         assert_eq!(tr("[[:alpha:]]"), "[[:alpha:]]");
+        assert_eq!(tr(r"[\K\k\X]"), "[KkX]");
+        assert_eq!(tr(r"[\p{L}\p]"), r"[\p{L}p]");
+        assert_eq!(tr(r"a\Kb"), r"a\Kb");
         assert!(translate(br"abc\", false).is_err());
         assert_eq!(
             translate(b"(?<0>a)", true).unwrap_err(),

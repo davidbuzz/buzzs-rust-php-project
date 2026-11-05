@@ -159,6 +159,13 @@ struct RelDate {
     nf: Option<Obj>,
 }
 
+/// `IntlRelativeDateTimeFormatter_get_gc`: the bound `NumberFormatter`.
+pub(crate) fn gc_payload(d: &dyn std::any::Any, v: &mut php_vm::gc::GcVisitor<'_>) {
+    if let Some(RelDate { nf: Some(nf), .. }) = d.downcast_ref::<RelDate>() {
+        v.obj(nf);
+    }
+}
+
 fn case_name(vm: &mut Vm, v: &Value) -> VmResult<Option<String>> {
     match v {
         Value::Object(o) => {

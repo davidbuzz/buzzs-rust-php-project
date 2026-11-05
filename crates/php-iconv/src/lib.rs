@@ -494,7 +494,8 @@ impl Iconv {
         };
         let mut out: Vec<(Vec<u8>, HeaderValue)> = Vec::new();
         let mut rest = s;
-        while !rest.is_empty() {
+        // `while (enc_str_len_tmp > 0 && !ZEND_HAS_OOM())`
+        while !rest.is_empty() && !crate::core::oom_pending() {
             let decoded = match mime::mime_decode(rest, cs, mode, self.limit()) {
                 Ok(d) => d,
                 Err(e) => return Outcome::fail(show_error(e, cs, b"???")),

@@ -232,6 +232,13 @@ fn get_iterator_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// `read_dimension`.
 pub(crate) fn read_dimension(vm: &mut Vm, o: &Obj, off: &Value) -> VmResult<Option<Value>> {
+    // `resourcebundle_array_get`: no offset (`&$r[]`, `$r[][..] = v`).
+    if matches!(
+        vm.dimension_context(),
+        php_vm::ext::DimensionCtx::Append | php_vm::ext::DimensionCtx::AppendRw
+    ) {
+        return Err(vm.throw("Error", "Cannot apply [] to ResourceBundle object"));
+    }
     match off.deref() {
         v @ (Value::Int(_) | Value::Str(_)) => fetch_elem(vm, None, o, &v, true, None).map(Some),
         other => {

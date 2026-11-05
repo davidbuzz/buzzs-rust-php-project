@@ -1,7 +1,7 @@
 //! `_php_iconv_mime_encode()` / `_php_iconv_mime_decode()` and the
 //! base64 / quoted-printable helpers they rely on.
 
-use crate::core::{appendc, appendl, open, Limit, SmartStr, ASCII};
+use crate::core::{appendc, appendl, oom_pending, open, Limit, SmartStr, ASCII};
 use crate::error::{c_prefix, IconvErr};
 use crate::ffi::Cd;
 
@@ -362,7 +362,8 @@ pub fn mime_encode(
                 }
             }
         }
-        if inp.is_empty() {
+        // `while (in_left > 0 && !ZEND_HAS_OOM())`
+        if inp.is_empty() || oom_pending() {
             break;
         }
     }

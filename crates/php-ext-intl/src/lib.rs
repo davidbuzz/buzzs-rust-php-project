@@ -202,6 +202,7 @@ fn class_opts(name: &str) -> registry::ClassOpts {
             o.hooks = ClassHooks {
                 create: Some(converter::create),
                 clone: Some(converter::clone),
+                destruct: Some(converter::destruct),
                 ..ClassHooks::default()
             };
         }
@@ -247,6 +248,7 @@ impl Extension for Intl {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        php_vm::gc::register_traverse_with::<core::IntlObj>(core::gc_traverse);
         m.ini(IniDirective::new(
             "intl.default_locale",
             None,

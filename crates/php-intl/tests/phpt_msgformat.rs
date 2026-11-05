@@ -245,3 +245,18 @@ fn msgfmt_parse_int64_min() {
     );
     assert!(format!("{r:?}").contains("-9223372036854775808"), "{r:?}");
 }
+
+/// clone_preserves_php_fields.phpt: a clone keeps the time zone the
+/// first `format()` applied (`tz_set` and the cloned sub-formats).
+#[test]
+fn clone_keeps_time_zone_of_first_format() {
+    let mut m = MessageFormatter::new("en_US", b"{0,time,short}").expect("create");
+    let args = [(MsgKey::Index(0), MsgValue::Int(1_704_164_645))];
+    let first = m.format(&args, "UTC").expect("format");
+    let mut c = m.try_clone().expect("clone");
+    assert_eq!(
+        c.format(&args, "America/New_York").expect("format clone"),
+        first
+    );
+    assert_eq!(m.format(&args, "America/New_York").expect("again"), first);
+}
