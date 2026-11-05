@@ -1791,6 +1791,7 @@ impl Vm {
 /// that loop over script-sized input check it to stop early (the VM raises
 /// the fatal right after the call returns).
 #[must_use]
+#[inline]
 pub fn oom_pending() -> bool {
     php_memlimit::is_pending()
 }
