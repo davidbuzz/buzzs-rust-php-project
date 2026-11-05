@@ -44,6 +44,9 @@ pub mod oflags {
     /// `HASH_FLAG_HAS_EMPTY_IND` on that table: a declared slot it points
     /// to was undefined, so its element count is recalculated.
     pub const EMPTY_IND: u32 = 1 << 6;
+    /// The properties table holds frozen copies of the declared
+    /// properties (`lazy::stale_slots`).
+    pub const STALE_PROPS: u32 = 1 << 7;
 }
 
 /// The state of a PHP object.
@@ -303,7 +306,12 @@ impl Drop for ObjectData {
         let slots = std::mem::take(self.slots.get_mut());
         let dynamic = self.dynamic.get_mut().take();
         let internal = self.internal.get_mut().take();
-        drop((slots, dynamic, internal));
+        let stale = if self.flags.get() & oflags::STALE_PROPS == 0 {
+            None
+        } else {
+            crate::lazy::take_stale_slots(handle)
+        };
+        drop((slots, dynamic, internal, stale));
         // A destructor queued meanwhile runs (and frees its object) before
         // this handle is reusable, as it would have inside php-src's
         // `zend_object_std_dtor`.
