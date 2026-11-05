@@ -19,12 +19,11 @@ thread_local! {
 }
 
 impl Vm {
-    /// The object for enum case `name`.
+    /// The object for enum case `name`. Like the class constant zval of
+    /// php-src, the case constant's value is the only owner of the object
+    /// (so `debug_zval_dump(Foo::Bar)` shows refcount 2).
     pub(crate) fn enum_case(&mut self, cls: &Rc<Class>, name: &ZStr) -> VmResult<Value> {
-        if let Some(v) = cls.enum_cases.borrow().get(name) {
-            return Ok(v.clone());
-        }
-        let Some(c) = cls.find_const(name.as_bytes()).cloned() else {
+        let Some(c) = cls.find_const(name.as_bytes()) else {
             return Err(self.make_throw(
                 "Error",
                 &format!(
@@ -40,11 +39,15 @@ impl Vm {
                 &format!("{}::{} is not a case", cls.name, name.to_string_lossy()),
             ));
         }
+        if let Some(v) = c.value.borrow().as_ref() {
+            return Ok(v.clone());
+        }
+        let c = c.clone();
         // `ZEND_FETCH_CLASS_CONSTANT` builds the whole backed table only for
         // user enums; an internal enum's case is created on its own.
         if cls.backing.is_some() && cls.flags & cflags::INTERNAL == 0 {
             self.enum_ensure_backed_table(cls)?;
-            if let Some(v) = cls.enum_cases.borrow().get(name) {
+            if let Some(v) = c.value.borrow().as_ref() {
                 return Ok(v.clone());
             }
         }
@@ -81,9 +84,13 @@ impl Vm {
     /// Builds the backed-enum table unless all cases already exist (or it is
     /// being built further up the stack).
     fn enum_ensure_backed_table(&mut self, cls: &Rc<Class>) -> VmResult<()> {
-        let total = cls.consts.iter().filter(|c| c.is_case).count();
+        let complete = cls
+            .consts
+            .iter()
+            .filter(|c| c.is_case)
+            .all(|c| c.value.borrow().is_some());
         let ptr = Rc::as_ptr(cls);
-        if cls.enum_cases.borrow().len() >= total || BUILDING.with(|b| b.borrow().contains(&ptr)) {
+        if complete || BUILDING.with(|b| b.borrow().contains(&ptr)) {
             return Ok(());
         }
         BUILDING.with(|b| b.borrow_mut().push(ptr));
@@ -98,7 +105,7 @@ impl Vm {
         let cases: Vec<Rc<ClassConst>> = cls.consts.iter().filter(|c| c.is_case).cloned().collect();
         let mut values: Vec<Value> = Vec::with_capacity(cases.len());
         for c in &cases {
-            let existing = cls.enum_cases.borrow().get(&c.name).cloned();
+            let existing = c.value.borrow().clone();
             let v = match existing {
                 Some(Value::Object(o)) => Self::enum_case_value(&o).unwrap_or_default(),
                 _ => self.enum_case_backing_value(cls, c)?,
@@ -115,7 +122,7 @@ impl Vm {
             values.push(v);
         }
         for (c, v) in cases.iter().zip(values) {
-            if !cls.enum_cases.borrow().contains_key(&c.name) {
+            if c.value.borrow().is_none() {
                 Self::enum_create_case(cls, c, Some(v));
             }
         }
@@ -126,7 +133,8 @@ impl Vm {
     fn enum_create_case(cls: &Rc<Class>, c: &ClassConst, value: Option<Value>) -> Value {
         let mut slots = vec![None; cls.props.len()];
         if let Some(pi) = cls.prop_map.get(&ZStr::from("name")) {
-            slots[pi.slot as usize] = Some(Value::Str(c.name.clone()));
+            // The case name is the (interned) constant name.
+            slots[pi.slot as usize] = Some(Value::Str(c.name.interned()));
         }
         if let (Some(v), Some(pi)) = (value, cls.prop_map.get(&ZStr::from("value"))) {
             slots[pi.slot as usize] = Some(v);
@@ -136,9 +144,6 @@ impl Vm {
         d.flags
             .set(d.flags.get() | object::oflags::ENUM_CASE | object::oflags::DESTRUCTED);
         let v = Value::Object(o);
-        cls.enum_cases
-            .borrow_mut()
-            .insert(c.name.clone(), v.clone());
         *c.value.borrow_mut() = Some(v.clone());
         v
     }

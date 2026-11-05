@@ -211,3 +211,17 @@ fn dim_on_object_in_constant_expression() {
         "int(2)\nError: Cannot use [] on objects in constant expression\n"
     );
 }
+
+#[test]
+fn case_objects_are_owned_by_their_constant() {
+    // Zend/tests/enum/cases-refcount.phpt and unserialize-refcount.phpt.
+    let out = run("<?php enum Foo { case Bar; }\n\
+         function callCases() { Foo::cases(); }\n\
+         callCases(); debug_zval_dump(Foo::Bar);\n\
+         $foo = Foo::Bar; $bar = unserialize('E:7:\"Foo:Bar\";'); debug_zval_dump($foo);");
+    assert_eq!(
+        out,
+        "object(Foo)#1 (1) refcount(2){\n  [\"name\"]=>\n  string(3) \"Bar\" interned\n}\n\
+         object(Foo)#1 (1) refcount(4){\n  [\"name\"]=>\n  string(3) \"Bar\" interned\n}\n"
+    );
+}
