@@ -242,9 +242,15 @@ fn write_dimension(vm: &mut Vm, o: &Obj, k: Option<&Value>, v: &Value) -> VmResu
     }
     // The VM hands a reference to `write_dimension` only for
     // `$obj[$k] = &$v`.
-    if matches!(v, Value::Reference(_)) {
-        // `$obj[$k] = &$v`: FETCH_DIM_W yields a temporary, then
-        // ASSIGN_REF fails.
+    if let Value::Reference(r) = v {
+        // `$obj[$k] = &$v`: `ArrayObject`/`ArrayIterator` fetch the element
+        // as a reference and bind it; elsewhere FETCH_DIM_W yields a
+        // temporary, then ASSIGN_REF fails.
+        if let Some(k) = k {
+            if with_host(vm, |host| h::assign_ref_dimension(host, o, k, r))? {
+                return Ok(true);
+            }
+        }
         vm.raise(
             8,
             &format!(

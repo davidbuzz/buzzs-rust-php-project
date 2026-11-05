@@ -317,3 +317,40 @@ fn foreach_over_spl_objects_numbers_handles_like_zend() {
     "#);
     assert_eq!(out, "4,3\np=1\n");
 }
+
+#[test]
+fn array_object_element_references_match_zend() {
+    // A compound assignment leaves no visible reference in a wrapped
+    // object's property table, and `$ao[$k] = &$v` binds the element.
+    let out = run(r#"<?php
+$o = new stdClass;
+$ao = @new ArrayObject($o);
+$ao['x'] = 1;
+$ao['x'] += 1;
+$ao['y'] = 5;
+$ao['y']++;
+var_dump($o, (array) $ao);
+$ao = new ArrayObject;
+foreach ([1, 2] as $i => $var) { $ao[$i] = &$var; }
+var_dump($ao->getArrayCopy());
+"#);
+    assert_eq!(out, r#"object(stdClass)#1 (2) {
+  ["x"]=>
+  int(2)
+  ["y"]=>
+  int(6)
+}
+array(2) {
+  ["x"]=>
+  int(2)
+  ["y"]=>
+  int(6)
+}
+array(2) {
+  [0]=>
+  &int(2)
+  [1]=>
+  &int(2)
+}
+"#);
+}

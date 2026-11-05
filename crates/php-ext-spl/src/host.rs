@@ -142,7 +142,20 @@ pub fn std_properties(obj: &Obj) -> ZArray {
 }
 
 /// Records the table handed out for `obj`.
+///
+/// Only the keys and the iterator positions of the cached table are ever
+/// used ([`std_properties`] refreshes the values), so references are not
+/// kept: holding them would count as a second owner and make `var_dump()`
+/// show the object's property as `&` after `$ao[$k] += $v`.
 fn remember(obj: &Obj, table: &ZArray) {
+    let mut table = table.clone();
+    if table.values().any(|v| matches!(v, Value::Reference(_))) {
+        for (_, v) in table.make_mut().iter_mut() {
+            if matches!(v, Value::Reference(_)) {
+                *v = Value::Null;
+            }
+        }
+    }
     PROP_CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if c.len() > 256 {
@@ -152,10 +165,20 @@ fn remember(obj: &Obj, table: &ZArray) {
             obj.handle(),
             PropCache {
                 owner: Rc::downgrade(obj.rc()),
-                table: table.clone(),
+                table,
             },
         );
     });
+}
+
+/// A property value as `zend_array_dup` copies it: a reference only the
+/// object holds (refcount 1, left behind by `$ao[$k]++` or an unset
+/// alias) is no reference at all.
+fn property_value(v: &Value) -> Value {
+    match v {
+        Value::Reference(r) if r.refcount() == 1 => r.get(),
+        other => other.clone(),
+    }
 }
 
 fn build_properties(obj: &Obj) -> ZArray {
@@ -171,14 +194,14 @@ fn build_properties(obj: &Obj) -> ZArray {
             if let Some(Some(v)) = slots.get(pi.slot as usize) {
                 t.insert(
                     ArrayKey::Str(mangle(pi.flags, &pi.class, &pi.name)),
-                    v.clone(),
+                    property_value(v),
                 );
             }
         }
     }
     if let Some(dynp) = d.dynamic.borrow().as_ref() {
         for (k, v) in dynp {
-            t.insert(k.clone(), v.clone());
+            t.insert(k.clone(), property_value(v));
         }
     }
     ZArray::from_table(t)

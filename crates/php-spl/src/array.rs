@@ -383,6 +383,37 @@ fn write_dimension_ex(
     Ok(())
 }
 
+/// `$ao[$k] = &$v`: `FETCH_DIM_W` makes the element a reference
+/// (`spl_array_read_dimension_ex` in a write context) and `ASSIGN_REF`
+/// binds it to `r`. Returns `false` when `offsetGet()` is overridden (the
+/// fetch then yields a temporary and the engine reports the failure).
+pub fn assign_ref_dimension(
+    host: &mut dyn SplHost,
+    this: &Obj,
+    st: &Rc<SplObject>,
+    offset: &Value,
+    r: &PhpRef,
+) -> RtResult<bool> {
+    if host.has_user_method(this, "offsetGet") {
+        return Ok(false);
+    }
+    if st.array(|a| a.apply_count)? > 0 {
+        return Err(sorting_error());
+    }
+    let (tgt, is_obj) = target(host, this, st)?;
+    let offset = offset.deref();
+    let Some(key) = hash_key(host, &offset, is_obj)? else {
+        return Err(illegal_offset(this, &offset, DimKind::Write));
+    };
+    let value = Value::Reference(r.clone());
+    let old = with_ht(host, &tgt, |ht| match key {
+        ArrayKey::Str(s) => ht.insert_str_raw(s, value),
+        ArrayKey::Int(_) => ht.insert(key, value),
+    })?;
+    drop(old);
+    Ok(true)
+}
+
 /// `spl_array_unset_dimension_ex`.
 fn unset_dimension_ex(
     host: &mut dyn SplHost,

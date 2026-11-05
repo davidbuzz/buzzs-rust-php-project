@@ -9,7 +9,7 @@
 use crate::host::{ObjectIterator, SplHost};
 use crate::object::{SplObject, SplState};
 use crate::util::DimKind;
-use php_runtime::{Obj, PropertyPurpose, RtResult, Value, ZArray, ZStr};
+use php_runtime::{Obj, PhpRef, PropertyPurpose, RtResult, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +116,21 @@ pub fn write_dimension(
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+/// `$o[$k] = &$v` (`FETCH_DIM_W` + `ASSIGN_REF`). Returns whether the
+/// element was bound: only `ArrayObject`/`ArrayIterator` hand out element
+/// references; other classes yield a temporary.
+pub fn assign_ref_dimension(
+    host: &mut dyn SplHost,
+    obj: &Obj,
+    offset: &Value,
+    r: &PhpRef,
+) -> RtResult<bool> {
+    match state(host, obj)? {
+        Some((st, Family::Array)) => crate::array::assign_ref_dimension(host, obj, &st, offset, r),
+        _ => Ok(false),
+    }
 }
 
 /// `has_dimension` (`isset()` / `empty()` with `check_empty`).
