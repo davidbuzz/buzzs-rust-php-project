@@ -79,7 +79,7 @@ fn any_source_repeats_ignored() {
 #[test]
 fn error_clear_last_resets_repeat_check() {
     let out = run(
-        "<?php\nfor ($i = 0; $i < 2; $i++) { $u; error_clear_last(); }\n",
+        "<?php\nfor ($i = 0; $i < 2; $i++) { echo $u; error_clear_last(); }\n",
         &[("ignore_repeated_errors", "1")],
     );
     assert_eq!(count(&out, "Undefined variable $u in"), 2, "{out}");

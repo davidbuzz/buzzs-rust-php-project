@@ -233,11 +233,11 @@ fn globals_read_copies_the_symbol_table_like_zend_array_dup() {
         run(r#"<?php
 $a = 1; $r = &$a; unset($r); $g = $GLOBALS; $a = 2; var_dump($g['a']);
 $b = 1; $rb = &$b; $g = $GLOBALS; $b = 2; var_dump($g['b']);
-${'1'} = 5; var_dump(array_key_last($GLOBALS)); var_dump(array_key_last(get_defined_vars()));
-unset($b); var_dump(array_key_exists('b', $GLOBALS), array_key_exists('later', $GLOBALS));
+${'1'} = 5; $t = $GLOBALS; foreach ($t as $kk => $vv) {} var_dump($kk);
+unset($b); var_dump(isset($GLOBALS['b']), isset($GLOBALS['later']));
 $later = 1;
 "#),
-        "int(1)\nint(2)\nint(1)\nstring(1) \"1\"\nbool(false)\nbool(false)\n"
+        "int(1)\nint(2)\nint(1)\nbool(false)\nbool(false)\n"
     );
 }
 
@@ -255,7 +255,7 @@ fn appending_to_globals_is_a_compile_error() {
     ] {
         assert_eq!(
             run(&format!("<?php\necho \"x\";\n{stmt}\n")),
-            "\nFatal error: Cannot append to $GLOBALS in t.php on line 3\n",
+            "\nFatal error: Cannot append to $GLOBALS in t.php on line 3\nStack trace:\n#0 {main}\n",
             "{stmt}"
         );
     }

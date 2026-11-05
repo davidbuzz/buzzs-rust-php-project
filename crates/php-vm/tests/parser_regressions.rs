@@ -405,7 +405,7 @@ fn const_expr_class_operand_is_folded_before_the_dynamic_check() {
     ] {
         assert_eq!(
             run(&format!("<?php\nconst B = {expr};\n")),
-            format!("\nFatal error: {msg} in t.php on line 2\n"),
+            format!("\nFatal error: {msg} in t.php on line 2\nStack trace:\n#0 {{main}}\n"),
             "{expr}"
         );
     }

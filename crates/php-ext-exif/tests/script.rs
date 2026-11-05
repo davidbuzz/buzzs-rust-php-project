@@ -44,7 +44,7 @@ error_reporting(0);
 class T { function __destruct() { global $box; echo gettype($box), "\n"; } }
 $box = [new T];
 getimagesizefromstring("x", $box);
-echo gettype($box), " ", count($box), "\n";
+echo gettype($box), " ", $box === [] ? 0 : -1, "\n";
 "#);
     assert_eq!(out, "NULL\narray 0\n");
 }

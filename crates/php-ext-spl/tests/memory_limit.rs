@@ -55,6 +55,7 @@ fn from_array_refuses_a_block_over_the_limit() {
         ini: vec![
             ("display_errors".into(), "1".into()),
             ("memory_limit".into(), "4M".into()),
+            ("fatal_error_backtraces".into(), "0".into()),
         ],
     };
     let mut vm = Vm::with_extensions(&options, Box::new(sink.clone()), &[&php_ext_spl::Spl]);

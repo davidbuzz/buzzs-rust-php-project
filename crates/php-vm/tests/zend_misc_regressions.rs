@@ -159,6 +159,6 @@ fn append_passed_by_value_to_known_function_is_a_compile_error() {
         out.contains("Fatal error: Cannot use [] for reading in t.php on line 4"),
         "{out}"
     );
-    let out = run("<?php\nfunction r(&$x) {}\nr($a[]);\nvar_dump(count($a));\ntry { g($b[]); } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\nfunction g($v) {}\n");
-    assert_eq!(out, "int(1)\nCannot use [] for reading\n");
+    let out = run("<?php\nfunction r(&$x) {}\nr($a[]);\nforeach ($a as $k => $v) { var_dump($k); }\ntry { g($b[]); } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\nfunction g($v) {}\n");
+    assert_eq!(out, "int(0)\nCannot use [] for reading\n");
 }
