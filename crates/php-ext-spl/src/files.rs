@@ -58,6 +58,32 @@ pub fn shutdown(_vm: &mut Vm) {
     }
 }
 
+/// `spl_filesystem_object_destroy_object` (the `dtor_obj` of the
+/// `SplFileInfo` family, after any `__destruct`): the directory or file
+/// stream is closed when the object is released or destructed at
+/// shutdown, so code that still reaches the object afterwards sees
+/// "Object not initialized".
+pub fn destroy(vm: &mut Vm, st: &SplObject) -> VmResult<()> {
+    // Inside an entry the access hook checks a parked stream out of its
+    // resource, which is left empty (closed) when the stream is taken.
+    let entry = enter();
+    let taken = st.file(|f| {
+        let streams = [f.dirp.take(), f.stream.take()];
+        let resources = [f.dir_res.take(), f.stream_res.take()];
+        (streams, resources)
+    });
+    drop(entry);
+    let Ok((streams, resources)) = taken else {
+        return Ok(());
+    };
+    drop(resources);
+    for mut stream in streams.into_iter().flatten() {
+        // User wrappers run PHP code from `stream_close()`.
+        bridge::run(vm, || stream.close())?;
+    }
+    Ok(())
+}
+
 /// Records a new `SplFileInfo`-family state (from the `create`/`clone`
 /// hooks).
 pub fn track(st: &Rc<SplObject>) {

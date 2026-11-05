@@ -1521,7 +1521,11 @@ fn rit_move_forward(host: &mut dyn SplHost, this: &Obj, st: &SplObject) -> RtRes
                         && sub(st, level)?.is_some_and(|s| Rc::ptr_eq(&s.it, &cur.it));
                     if still_same {
                         let garbage = st.recursive(|r| r.iterators.as_mut().and_then(Vec::pop))?;
-                        drop(garbage);
+                        drop((garbage, cur));
+                        // `zval_ptr_dtor(&garbage)`: the child iterator is
+                        // destructed right here, and an exception from its
+                        // destructor ends the walk (`while (!EG(exception))`).
+                        host.run_pending_destructors()?;
                     }
                     continue;
                 }

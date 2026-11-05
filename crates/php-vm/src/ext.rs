@@ -507,8 +507,9 @@ pub struct ClassHooks {
     /// here for classes that cannot be constructed ("Cannot directly
     /// construct X, use Y()").
     pub get_constructor: Option<fn(&mut Vm, &Obj) -> VmResult<()>>,
-    /// `dtor_obj` without a PHP-visible `__destruct` method: runs when the
-    /// object is released (and at shutdown), like a destructor.
+    /// `dtor_obj`: runs when the object is released (and at shutdown),
+    /// after the class's `__destruct` if it has one. Classes without it
+    /// (and without `__destruct`) pay nothing when their objects die.
     pub destruct: Option<fn(&mut Vm, &Obj) -> VmResult<()>>,
     /// `interface_gets_implemented` (set on an interface): called with
     /// each class that implements it, when the class is linked.

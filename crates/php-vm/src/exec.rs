@@ -330,7 +330,11 @@ impl Vm {
 
     /// Finds a handler for `exc` in the frames above `base`. Returns
     /// `Ok(())` when execution can continue, or the throw that escapes.
-    pub(crate) fn handle_exception(&mut self, exc: php_runtime::Obj, base: usize) -> VmResult<()> {
+    pub(crate) fn handle_exception(
+        &mut self,
+        mut exc: php_runtime::Obj,
+        base: usize,
+    ) -> VmResult<()> {
         loop {
             if self.frames.len() <= base {
                 // Thrown after the frames of this execution were left
@@ -372,10 +376,19 @@ impl Vm {
                     }
                 }
             }
-            // Unwind this frame.
+            // Unwind this frame (observers see its end first). Then
+            // `cleanup_unfinished_calls` + `cleanup_live_vars`: its
+            // unfinished calls and live temporaries (foreach iterators,
+            // intermediate results) are released while it is still the
+            // current frame.
             if self.observer.enabled {
                 self.observer_end_frame(fidx, None, Some(&Throw::Exception(exc.clone())));
             }
+            self.release_frame_temporaries();
+            exc = match self.destruct_while_unwinding(exc) {
+                Ok(e) => e,
+                Err(t) => return Err(self.abandon_unwinding(t, base)),
+            };
             let popped = self.frames.pop();
             if let Some(p) = &popped {
                 if let Some(g) = &p.generator {
@@ -390,11 +403,59 @@ impl Vm {
                     }
                 }
             }
+            // `zend_leave_helper`: the compiled variables (and `$this`) are
+            // released with the caller current.
             drop(popped);
+            exc = match self.destruct_while_unwinding(exc) {
+                Ok(e) => e,
+                Err(t) => return Err(self.abandon_unwinding(t, base)),
+            };
             if fidx <= base {
                 return Err(Throw::Exception(exc));
             }
         }
+    }
+
+    /// Releases the temporaries, foreach iterators and unfinished calls of
+    /// the current frame (which an exception is about to leave).
+    fn release_frame_temporaries(&mut self) {
+        let n = u32::try_from(self.frame().iters.len()).unwrap_or(u32::MAX);
+        for i in 0..n {
+            self.op_fe_free(i);
+        }
+        let f = self.frame_mut();
+        let tmps: Vec<Value> = f.tmps.iter_mut().map(std::mem::take).collect();
+        let calls = std::mem::take(&mut f.calls);
+        drop((tmps, calls));
+    }
+
+    /// Runs the destructors of objects released while `exc` unwinds the
+    /// stack (`zend_objects_destroy_object` with an exception in flight):
+    /// an exception a destructor throws gets `exc` as its previous one and
+    /// continues the unwinding in its place.
+    fn destruct_while_unwinding(
+        &mut self,
+        exc: php_runtime::Obj,
+    ) -> Result<php_runtime::Obj, Throw> {
+        if !object::has_pending_destructors() {
+            return Ok(exc);
+        }
+        match self.run_pending_destructors() {
+            Ok(()) => Ok(exc),
+            Err(Throw::Exception(new)) => {
+                crate::exceptions::chain_previous(&new, &exc);
+                Ok(new)
+            }
+            Err(t) => Err(t),
+        }
+    }
+
+    /// A destructor run during unwinding exited or bailed out: the frames
+    /// of this execution are abandoned.
+    fn abandon_unwinding(&mut self, t: Throw, base: usize) -> Throw {
+        self.observer_unwind(base, Some(&t));
+        self.frames.truncate(base);
+        t
     }
 
     /// The interpreter loop proper.
