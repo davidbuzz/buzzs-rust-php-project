@@ -216,23 +216,20 @@ impl Vm {
                 }
             }
         }
-        // Take the handles of the nodes to free; release everything else
+        // Keep the handles of the nodes to free; release everything else
         // (no destructor can run before the destructor phase below, and
         // nothing here can reach a zero count: every node is still held by
-        // its cycle).
-        // The edges and indexes are done with: release them before the
-        // garbage handles are moved out (peak memory on large heaps).
+        // its cycle). The edges and indexes are done with, and the node
+        // list itself keeps the handles (no second list: peak memory on
+        // large heaps).
         g.drop_edges();
-        let mut to_free: Vec<(Handle, Option<Obj>)> = Vec::with_capacity(garbage);
         for (i, node) in g.nodes.iter_mut().enumerate() {
-            if !node.live && !removed[i] {
-                to_free.push((
-                    std::mem::replace(&mut node.handle, Handle::Taken),
-                    node.outer.take(),
-                ));
+            if node.live || removed[i] {
+                node.handle = Handle::Taken;
+                node.outer = None;
             }
         }
-        drop(g);
+        let to_free = g.nodes;
         drop(quiet);
 
         // Destructor phase.
@@ -249,8 +246,8 @@ impl Vm {
         let quiet = Quiet::new(providers);
         let mut trash: Vec<Value> = Vec::new();
         let mut states: Vec<Box<dyn Any>> = Vec::new();
-        for (h, _) in &to_free {
-            match h {
+        for node in to_free.iter() {
+            match &node.handle {
                 Handle::Obj(inner) => clear_object(inner, &mut trash, &mut states),
                 Handle::Ref(r) => {
                     if let Some(mut v) = r.try_borrow_mut() {
