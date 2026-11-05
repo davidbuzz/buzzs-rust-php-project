@@ -2705,7 +2705,7 @@ impl Compiler {
         {
             return Some(Value::Str(ZStr::from(self.resolve_class_name(n))));
         }
-        if lc.as_slice() != b"self" || self.in_const_expr() {
+        if lc.as_slice() != b"self" || self.fns.is_empty() || self.in_const_expr() {
             // `compile_expr_inner` validates `self` in constant expressions.
             return None;
         }
