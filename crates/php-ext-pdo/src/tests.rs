@@ -195,3 +195,43 @@ fn legacy_sqlite_methods_need_an_sqlite_connection() {
          use Pdo\\Sqlite::createFunction() instead;bool(true)\n"
     );
 }
+
+/// `pdo_hash_methods`: the legacy `sqlite*` methods live in the driver's
+/// method table, not in `PDO`'s: absent from `get_class_methods()` and
+/// `method_exists('PDO', …)`, found by `method_exists()` and
+/// `is_callable()` only on an `SQLite` connection, refused by callable
+/// checks elsewhere, and free for a subclass to declare with any
+/// signature.
+#[test]
+fn legacy_sqlite_methods_are_driver_methods() {
+    let out = run(r#"
+        set_error_handler(function ($no, $msg) { echo $no, ':', $msg, ';'; return true; });
+        class P extends PDO { function __construct() {} }
+        class Q extends PDO { function __construct() {} function sqliteCreateFunction($x) { return "mine $x"; } }
+        class R extends PDO { function __call($n, $a) { return "call $n"; } }
+        $p = new P;
+        $s = new PDO('sqlite::memory:');
+        echo (int) method_exists('PDO', 'sqliteCreateFunction'),
+            (int) method_exists($p, 'sqliteCreateFunction'),
+            (int) method_exists($s, 'sqliteCreateFunction'),
+            (int) method_exists(new R('sqlite::memory:'), 'sqliteCreateFunction'),
+            (int) is_callable([$p, 'sqliteCreateFunction']),
+            (int) is_callable([$s, 'SQLITECREATECOLLATION']), ';';
+        foreach (get_class_methods($s) as $m) {
+            if ($m === 'sqliteCreateFunction') { echo 'listed;'; }
+        }
+        echo (new Q)->sqliteCreateFunction(1), ';';
+        echo (new R('sqlite::memory:'))->sqliteCreateFunction(1), ';';
+        try { call_user_func([$p, 'sqliteCreateFunction'], 'f', 'strlen'); }
+        catch (TypeError $e) { echo $e->getMessage(), ';'; }
+        var_dump(call_user_func([$s, 'sqliteCreateCollation'], 'c', 'strcmp'));
+    "#);
+    assert_eq!(
+        out,
+        "001001;mine 1;call sqliteCreateFunction;\
+         call_user_func(): Argument #1 ($callback) must be a valid callback, \
+         class P does not have a method \"sqliteCreateFunction\";\
+         8192:Method PDO::sqliteCreateCollation() is deprecated since 8.5, \
+         use Pdo\\Sqlite::createCollation() instead;bool(true)\n"
+    );
+}

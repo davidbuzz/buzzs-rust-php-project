@@ -447,6 +447,9 @@ impl Vm {
         if let Some(callm) = cls.magic.call.clone() {
             return Ok(self.magic_call(&callm, Some(o.clone()), cls.clone(), name));
         }
+        if let Some(m) = self.extra_method(o, cls, name) {
+            return Ok(self.pending_for_method(&m, Some(o.clone()), object::class_of(o).clone()));
+        }
         Err(self.make_throw(
             "Error",
             &format!(
@@ -455,6 +458,28 @@ impl Vm {
                 name.to_string_lossy()
             ),
         ))
+    }
+
+    /// The rest of an object's `get_method` handler once
+    /// `zend_std_get_method` found nothing ([`ClassHooks::extra_method`],
+    /// e.g. PDO's driver methods): asked only for the object's own class
+    /// and when that class has no `__call` (whose trampoline
+    /// `zend_std_get_method` would have returned).
+    ///
+    /// [`ClassHooks::extra_method`]: crate::ext::ClassHooks::extra_method
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn extra_method(
+        &mut self,
+        o: &Obj,
+        cls: &Rc<Class>,
+        name: &ZStr,
+    ) -> Option<Rc<Method>> {
+        if !Rc::ptr_eq(cls, object::class_of(o)) || cls.magic.call.is_some() {
+            return None;
+        }
+        let f = cls.hooks.as_ref().and_then(|h| h.extra_method)?;
+        f(self, o, name)
     }
 
     fn pending_for_method(

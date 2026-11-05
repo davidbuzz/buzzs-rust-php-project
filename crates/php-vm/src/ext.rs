@@ -18,7 +18,7 @@
 
 use crate::builtins::sig::parse_sig;
 use crate::class::Class;
-use crate::func::{flags, Builtin, Func};
+use crate::func::{flags, Builtin, Func, Method};
 use crate::vm::Vm;
 use php_runtime::{
     ArrayKey, BinaryOp, CastTarget, Obj, PhpRef, PropertyPurpose, Value, ZArray, ZStr,
@@ -26,7 +26,7 @@ use php_runtime::{
 use php_support::ini::IniDirective;
 use std::rc::Rc;
 
-pub use crate::builtins::classbuilder::ClassBuilder;
+pub use crate::builtins::classbuilder::{native_method, ClassBuilder};
 pub use crate::compiler::attrs::ExtAttributeValidator;
 pub use crate::fiber::{register_zend_test_fiber, FiberState};
 pub use crate::func::{Args, BuiltinFn as NativeFn};
@@ -584,6 +584,16 @@ pub struct ClassHooks {
     /// iterator): that object, whose methods `method_exists()` also
     /// reports. `Ok(None)` when there is none.
     pub forward_methods_to: Option<fn(&mut Vm, &Obj) -> VmResult<Option<Obj>>>,
+    /// The part of a `get_method` handler that finds methods outside the
+    /// class's method table, after `zend_std_get_method` found neither a
+    /// method of that name nor a `__call` (`dbh_method_get`: PDO's
+    /// per-driver methods from `pdo_hash_methods`). Consulted by method
+    /// calls, callables (`is_callable()`, `call_user_func()`,
+    /// `Closure::fromCallable()`) and `method_exists()` on an object of
+    /// the class itself (not for `parent::` lookups), never by
+    /// `get_class_methods()` or reflection. Build the method with
+    /// [`native_method`]; it must be public and non-static.
+    pub extra_method: Option<fn(&mut Vm, &Obj, &ZStr) -> Option<Rc<Method>>>,
     /// `get_property_ptr_ptr` for `$o->p = &$v`: runs before the property
     /// slot is rebound; throw to refuse. (Other reference fetches ask
     /// [`ClassHooks::read_property`] with [`PropCtx::Ref`].)
@@ -1243,9 +1253,10 @@ pub fn check_signature(sig: &str) -> (String, usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, Extension, ModuleBuilder, VmResult};
+    use super::{Args, ClassHooks, Extension, ModuleBuilder, VmResult};
+    use crate::func::Method;
     use crate::{Vm, VmOptions};
-    use php_runtime::Value;
+    use php_runtime::{Obj, Value, ZStr};
     use std::cell::RefCell;
     use std::io::Write;
     use std::rc::Rc;
@@ -1265,6 +1276,24 @@ mod tests {
 
     fn answer(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Ok(Value::Int(a.int(0) + i64::from(a.has(0))))
+    }
+
+    fn hidden(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+        Ok(Value::Int(a.int(0) * 10))
+    }
+
+    /// A `get_method` that serves `hidden()` outside the method table.
+    fn driver_method(vm: &mut Vm, _o: &Obj, name: &ZStr) -> Option<Rc<Method>> {
+        if !name.eq_ignore_ascii_case(b"hidden") {
+            return None;
+        }
+        let cls = vm.find_class(b"Driver")?;
+        Some(super::native_method(
+            &cls,
+            "hidden(int $x): int",
+            crate::func::flags::PUBLIC,
+            hidden,
+        ))
     }
 
     struct TestExt;
@@ -1288,6 +1317,12 @@ mod tests {
                 .unit_enum()
                 .case("A", None)
                 .register(vm);
+            crate::ext::ClassBuilder::new("Driver")
+                .hooks(ClassHooks {
+                    extra_method: Some(driver_method),
+                    ..Default::default()
+                })
+                .register(vm);
         }
     }
 
@@ -1299,6 +1334,21 @@ mod tests {
         drop(vm);
         let out = sink.0.borrow().clone();
         String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// `ClassHooks::extra_method` (`dbh_method_get`): a method outside the
+    /// class table is callable and exists for objects, but not for the
+    /// class name or `get_class_methods()`, and a `__call` hides it.
+    #[test]
+    fn extra_methods_outside_the_class_table() {
+        let out = run(
+            "<?php $d = new Driver; echo $d->hidden(2), method_exists($d, 'hidden') ? 'y' : 'n',\n\
+             method_exists('Driver', 'hidden') ? 'y' : 'n', is_callable([$d, 'HIDDEN']) ? 'y' : 'n',\n\
+             get_class_methods($d) === [] ? 'e' : 'n', call_user_func([$d, 'hidden'], 3);\n\
+             class Sub extends Driver { function __call($n, $a) { return 'magic'; } }\n\
+             echo (new Sub)->hidden(1), method_exists(new Sub, 'hidden') ? 'y' : 'n';",
+        );
+        assert_eq!(out, "20ynye30magicn");
     }
 
     #[test]

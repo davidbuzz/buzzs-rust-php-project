@@ -5,9 +5,13 @@ use php_pdo::consts::{pdo_class_constants, ConstValue, PARAM_STR};
 use php_pdo::{ConnectArgs, Pdo};
 use php_runtime::{Obj, Value, ZArray, ZStr};
 use php_sqlite::pdo::PdoSqliteDbh;
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, VmResult};
-use php_vm::func::Func;
+use php_vm::ext::{
+    acc, class_flags, native_method, Args, ClassBuilder, ClassHooks, NativeFn, VmResult,
+};
+use php_vm::func::Method;
 use php_vm::Vm;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// The `create_object` handler of `PDO` (`pdo_dbh_new`).
 fn pdo_create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
@@ -301,43 +305,75 @@ const LEGACY_METHODS: [(&str, &str); 3] = [
     ("sqliteCreateFunction", "Pdo\\Sqlite::createFunction"),
 ];
 
-/// `dbh_method_get` (ext/pdo/pdo_dbh.c): the legacy driver methods are
-/// not class methods but entries of the driver's method table, consulted
-/// only when `zend_std_get_method` finds nothing. On a `PDO` that is not
-/// connected to `SQLite` they do not exist, so the call fails with "Call
-/// to undefined method" before the engine reports any deprecation. A user
-/// subclass that declares a method of the same name keeps it.
-fn pdo_get_method(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<()> {
+/// `get_driver_methods(dbh, PDO_DBH_DRIVER_METHOD_KIND_DBH)` of the
+/// `SQLite` driver (`class_PDO_SQLite_Ext_methods`,
+/// ext/pdo_sqlite/sqlite_driver.stub.php). The callbacks are `mixed` here
+/// because `Z_PARAM_FUNC` runs after the engine's deprecation
+/// ([`legacy_callable`]).
+const SQLITE_DBH_METHODS: [(&str, NativeFn); 3] = [
+    (
+        "sqliteCreateFunction(string $name, mixed $callback, int $numArgs = -1, int $flags = 0): bool",
+        sqlite_create_function,
+    ),
+    (
+        "sqliteCreateAggregate(string $name, mixed $step, mixed $finalize, int $numArgs = -1): bool",
+        sqlite_create_aggregate,
+    ),
+    (
+        "sqliteCreateCollation(string $name, mixed $callback): bool",
+        sqlite_create_collation,
+    ),
+];
+
+thread_local! {
+    /// `dbh->cls_methods[PDO_DBH_DRIVER_METHOD_KIND_DBH]` of `SQLite`
+    /// connections: built on first use for the running VM's `PDO` class
+    /// (rebuilt when a new VM registered a new one).
+    static SQLITE_DRIVER_METHODS: RefCell<Vec<Rc<Method>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// `dbh_method_get` (ext/pdo/pdo_dbh.c) after `zend_std_get_method` found
+/// nothing: the driver's methods (`pdo_hash_methods`), which are not in
+/// `PDO`'s method table. Only an `SQLite` connection has any, so on other
+/// `PDO`s the legacy `sqlite*` methods do not exist at all
+/// (`method_exists()`, `is_callable()`, "Call to undefined method") and a
+/// subclass may declare methods of those names with any signature.
+/// `pdo_hash_methods` gives them `scope = pdo_dbh_ce`, no module and
+/// `ZEND_ACC_DEPRECATED` with the 8.5 message.
+fn pdo_driver_method(vm: &mut Vm, o: &Obj, name: &ZStr) -> Option<Rc<Method>> {
+    if !pdo_of(o).is_some_and(|p| p.sqlite().is_some()) {
+        return None;
+    }
     let n = name.as_bytes();
     if !LEGACY_METHODS
         .iter()
         .any(|(m, _)| m.as_bytes().eq_ignore_ascii_case(n))
-        || pdo_of(o).is_some_and(|p| p.sqlite().is_some())
     {
-        return Ok(());
+        return None;
     }
-    let cls = php_vm::object::class_of(o);
-    let inherited = cls
-        .methods
-        .get(&ZStr::from(n.to_ascii_lowercase()))
-        .is_some_and(|m| matches!(m.func, Func::Builtin(_)));
-    if !inherited {
-        return Ok(());
-    }
-    Err(vm.throw(
-        "Error",
-        &format!(
-            "Call to undefined method {}::{}()",
-            o.class_name().to_string_lossy(),
-            name.to_string_lossy()
-        ),
-    ))
+    let pdo = vm.find_class(b"PDO")?;
+    SQLITE_DRIVER_METHODS.with(|t| {
+        let mut t = t.borrow_mut();
+        if t.first()
+            .is_none_or(|m| !std::ptr::eq(m.scope.as_ptr(), Rc::as_ptr(&pdo)))
+        {
+            *t = SQLITE_DBH_METHODS
+                .iter()
+                .map(|&(sig, h)| {
+                    native_method(&pdo, sig, acc::PUBLIC | acc::DEPRECATED | acc::NO_MODULE, h)
+                })
+                .collect();
+        }
+        t.iter()
+            .find(|m| m.name.as_bytes().eq_ignore_ascii_case(n))
+            .cloned()
+    })
 }
 
-/// The legacy driver methods callable on any `PDO` connected to `SQLite`
-/// (`dbh_method_get`); the engine has already reported their deprecation.
-/// [`pdo_get_method`] refuses them on other connections; calls that skip
-/// method lookup (callables) still end here.
+/// The legacy driver methods, found only on a `PDO` connected to `SQLite`
+/// ([`pdo_driver_method`]); the engine has already reported their
+/// deprecation. A callable resolved while the connection was `SQLite` may
+/// still be called after the handle changed, hence the check.
 fn legacy(vm: &mut Vm, a: &Args, name: &str) -> VmResult<PdoSqliteDbh> {
     let (o, p) = this_pdo(a);
     let Some(h) = p.sqlite() else {
@@ -439,7 +475,7 @@ pub fn register(vm: &mut Vm) {
         .flags(class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE)
         .hooks(ClassHooks {
             create: Some(pdo_create),
-            get_method: Some(pdo_get_method),
+            extra_method: Some(pdo_driver_method),
             ..Default::default()
         });
     for (name, v) in pdo_class_constants() {
@@ -497,21 +533,6 @@ pub fn register(vm: &mut Vm) {
         "setAttribute(int $attribute, mixed $value): bool",
         pub_,
         set_attribute,
-    )
-    .method(
-        "sqliteCreateFunction(string $name, mixed $callback, int $numArgs = -1, int $flags = 0): bool",
-        pub_ | acc::DEPRECATED,
-        sqlite_create_function,
-    )
-    .method(
-        "sqliteCreateAggregate(string $name, mixed $step, mixed $finalize, int $numArgs = -1): bool",
-        pub_ | acc::DEPRECATED,
-        sqlite_create_aggregate,
-    )
-    .method(
-        "sqliteCreateCollation(string $name, mixed $callback): bool",
-        pub_ | acc::DEPRECATED,
-        sqlite_create_collation,
     )
     .register(vm);
     for (name, replacement) in LEGACY_METHODS {
