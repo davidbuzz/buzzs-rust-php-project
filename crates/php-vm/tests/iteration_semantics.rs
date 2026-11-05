@@ -89,3 +89,16 @@ foreach ($obj as $k => $v) { echo "$k=$v\n"; }
 "#);
     assert_eq!(out, "1:b=42\n1:c=24\n1:d=1\nb=84\nc=48\nd=2\n");
 }
+
+/// A by-reference arrow function over a non-variable returns by value with
+/// the ZEND_RETURN_BY_REF notice (oss_fuzz_58181).
+#[test]
+fn by_ref_arrow_fn_on_value_notices() {
+    let out = run("<?php\n$f = fn&() => true;\n$x = $f();\nvar_dump($x);\n");
+    assert_eq!(
+        out,
+        "\nNotice: Only variable references should be returned by reference in t.php on line 2\nbool(true)\n"
+    );
+    let out = run("<?php\n$a = 1;\n$f = fn&() => $a;\n$x = $f();\nvar_dump($x);\n");
+    assert_eq!(out, "int(1)\n");
+}
