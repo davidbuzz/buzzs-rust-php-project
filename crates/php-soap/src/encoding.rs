@@ -1577,7 +1577,11 @@ impl<'h> EncodeCtx<'h> {
     /// `to_zval_user`.
     fn to_zval_user(&mut self, enc: &Encoder, doc: &Doc, node: NodeId) -> SoapResult<Value> {
         if let Some(cb) = enc.map.as_ref().and_then(|m| m.to_zval.clone()) {
-            let dump = doc.dump_node(node);
+            // xmlCopyNode(node, 1) + xmlNodeDump: the copy re-declares
+            // the namespaces its element and attribute names use.
+            let mut copy = Doc::new();
+            let root = copy.import(doc, node);
+            let dump = copy.dump_node(root);
             return Ok(self
                 .host
                 .call_callable(&cb, &[Value::from(dump.as_slice())])?);

@@ -887,6 +887,21 @@ impl Doc {
                 }
             }
         }
+        // xmlCopyPropInternal: an attribute namespace declared outside the
+        // copied subtree is searched in the original tree and declared on
+        // the top of the copy; when it cannot be found the copy loses it.
+        for i in 0..self.nodes[dst_n].attrs.len() {
+            let Some(ns) = self.nodes[dst_n].attrs[i].ns.clone() else {
+                continue;
+            };
+            if self.search_ns(dst_n, ns.prefix.as_deref()).is_some() {
+                continue;
+            }
+            let declared = src
+                .search_ns(src_n, ns.prefix.as_deref())
+                .and_then(|orig| self.new_ns(dst_root, &orig.href, orig.prefix.as_deref()));
+            self.nodes[dst_n].attrs[i].ns = declared;
+        }
         let pairs: Vec<(NodeId, NodeId)> = src.children(src_n).zip(self.children(dst_n)).collect();
         for (s, d) in pairs {
             self.reconcile_copy(src, s, d, dst_root);
@@ -1410,6 +1425,25 @@ mod tests {
         assert_eq!(d.dump_node(e), b"<a>x &lt; AB &foo; y</a>".to_vec());
         d.set_content(e, b"");
         assert_eq!(d.dump_node(e), b"<a/>".to_vec());
+    }
+
+    #[test]
+    fn import_redeclares_attribute_namespaces() {
+        // xmlCopyNode(res, 1): xsi is declared on an ancestor only, so the
+        // copy declares it on its root; the child reuses that declaration.
+        let src = Doc::parse(
+            b"<e xmlns:xsi=\"urn:xsi\" xmlns:n=\"urn:n\"><res xsi:type=\"n:book\"><a xsi:type=\"s\">foo</a></res></e>",
+        )
+        .unwrap();
+        let e = src.root().unwrap();
+        let res = src.first_child(e).unwrap();
+        let mut copy = Doc::new();
+        let root = copy.import(&src, res);
+        assert_eq!(
+            copy.dump_node(root),
+            b"<res xmlns:xsi=\"urn:xsi\" xsi:type=\"n:book\"><a xsi:type=\"s\">foo</a></res>"
+                .to_vec()
+        );
     }
 
     #[test]
