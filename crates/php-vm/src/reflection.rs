@@ -49,8 +49,9 @@ mod source;
 mod types;
 
 use crate::class::{AttributeInfo, Class, ClassConst};
-use crate::func::{flags, Args, Func, Method};
+use crate::func::{flags, Args, Builtin, Func, Method};
 use crate::object;
+use crate::opcode::ParamInfo;
 use crate::types::TypeDecl;
 use crate::vm::{Throw, Vm, VmResult};
 use php_runtime::{Obj, PhpRef, Value, ZStr};
@@ -129,6 +130,44 @@ impl FnRef {
         }
     }
 
+    /// The function of closure object `c` (with data `d`). A fake closure
+    /// of a `__call`/`__callStatic` trampoline reflects as the internal
+    /// function of `zend_closure_from_frame`: named after the called
+    /// method, with `zend_call_trampoline_arginfo` (`mixed ...$arguments`).
+    pub fn of_closure(c: &Obj, d: &crate::closure::ClosureData) -> Self {
+        let func = match &d.magic_name {
+            Some(name) => Func::Builtin(Rc::new(Builtin {
+                name: name.clone(),
+                params: vec![ParamInfo {
+                    name: ZStr::from("arguments"),
+                    by_ref: false,
+                    variadic: true,
+                    ty: Some(TypeDecl::mixed()),
+                    has_default: false,
+                    default_text: None,
+                    promote: 0,
+                    sensitive: false,
+                    default_expr: None,
+                    attributes: Vec::new(),
+                }],
+                defaults: Vec::new(),
+                required: 0,
+                return_type: None,
+                flags: flags::PUBLIC
+                    | flags::VARIADIC
+                    | (d.func.flags() & (flags::STATIC | flags::RETURN_REF)),
+                handler: reflected_trampoline,
+            })),
+            None => d.func.clone(),
+        };
+        FnRef {
+            func,
+            method: None,
+            class: None,
+            closure: Some(c.clone()),
+        }
+    }
+
     /// `Closure::__invoke` of a closure object: an internal trampoline
     /// with the closure's (userland) arginfo (`ZEND_ACC_USER_ARG_INFO`).
     pub fn is_trampoline(&self) -> bool {
@@ -183,6 +222,12 @@ impl FnRef {
         }
         None
     }
+}
+
+/// The handler of a reflected `__call` trampoline: calls go through the
+/// closure object (`FnRef::closure`), never here.
+fn reflected_trampoline(_: &mut Vm, _: &mut Args) -> VmResult<Value> {
+    Ok(Value::Null)
 }
 
 /// A reflected property (`property_reference`).

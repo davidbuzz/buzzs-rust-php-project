@@ -430,7 +430,7 @@ impl Vm {
             this,
             scope: Some(m.scope()),
             called: Some(called),
-            magic_name: Some(name.clone()),
+            magic_name: Some(trampoline_name(name)),
             ..PendingCall::new(m.func.clone())
         }
     }
@@ -481,6 +481,12 @@ impl Vm {
                     }
                 }
                 if let Some(cs) = cls.magic.call_static.clone() {
+                    // `zend_get_call_trampoline_func` copies
+                    // `ZEND_ACC_ABSTRACT`: an interface's or abstract
+                    // class's `__callStatic` cannot be called (GH-17718).
+                    if cs.is_abstract() {
+                        return Err(self.abstract_method_error(&cs.scope(), name));
+                    }
                     // The trampoline forwards the called scope like a
                     // resolved static method would.
                     let called = forwarded_called(cur_called, cls, forward);
@@ -515,14 +521,7 @@ impl Vm {
             }
         };
         if m.is_abstract() {
-            return Err(self.make_throw(
-                "Error",
-                &format!(
-                    "Cannot call abstract method {}::{}()",
-                    object::display_name(&m.scope().name),
-                    m.name
-                ),
-            ));
+            return Err(self.abstract_method_error(&m.scope(), &m.name));
         }
         if m.is_static() {
             let called = forwarded_called(cur_called, cls, forward);
@@ -554,6 +553,19 @@ impl Vm {
         ))
     }
 
+    /// `zend_abstract_method_call`.
+    #[cold]
+    fn abstract_method_error(&mut self, scope: &Class, name: &ZStr) -> Throw {
+        self.make_throw(
+            "Error",
+            &format!(
+                "Cannot call abstract method {}::{}()",
+                object::display_name(&scope.name),
+                name.to_string_lossy()
+            ),
+        )
+    }
+
     pub(crate) fn op_init_static_call(&mut self, class: &ClassSpec, name: Value) -> VmResult<()> {
         let Value::Str(name) = name else {
             return Err(self.make_throw("Error", "Method name must be a string"));
@@ -563,6 +575,12 @@ impl Vm {
             ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
         );
         let cls = self.resolve_class_spec(class)?;
+        // `X::__construct()` compiles to `ZEND_INIT_STATIC_METHOD_CALL` with
+        // an unused method operand: it calls `ce->constructor`, never a
+        // `__callStatic` fallback.
+        if cls.magic.construct.is_none() && name.as_bytes().eq_ignore_ascii_case(b"__construct") {
+            return Err(self.make_throw("Error", "Cannot call constructor"));
+        }
         let call = self.static_method_call(&cls, &name, forward)?;
         if cls.is_trait() {
             // `zend_std_get_static_method()`: the resolved method (or the
@@ -1149,13 +1167,16 @@ impl Vm {
         f.called_from_internal = from_internal;
         f.is_ctor = call.is_ctor;
         if let Some(name) = call.magic_name {
-            // __call($name, $args)
+            // __call($name, $args). `ZEND_CALL_TRAMPOLINE` packs the
+            // arguments as sent: `zend_call_function` does not unwrap
+            // references for a trampoline (bug #50394), the VM's sends
+            // already passed values.
             let mut arr = HashTable::new();
             for a in call.args.into_iter().flatten() {
-                let _ = arr.push(a.deref());
+                let _ = arr.push(a);
             }
             for (k, v) in call.named {
-                arr.insert(ArrayKey::Str(k), v.deref());
+                arr.insert(ArrayKey::Str(k), v);
             }
             self.put_arg_vec(std::mem::take(&mut f.args));
             f.args = vec![
@@ -2123,6 +2144,16 @@ impl Vm {
         let result = self.call_pending(call);
         self.observer.quiet_builtin = saved;
         result
+    }
+}
+
+/// The method name a `__call`/`__callStatic` trampoline carries:
+/// `zend_get_call_trampoline_func` cuts it at the first NUL byte (kept
+/// for compatibility, bug #46238).
+pub(crate) fn trampoline_name(name: &ZStr) -> ZStr {
+    match name.as_bytes().iter().position(|&b| b == 0) {
+        Some(n) => ZStr::from(&name.as_bytes()[..n]),
+        None => name.clone(),
     }
 }
 

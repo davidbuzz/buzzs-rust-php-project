@@ -743,15 +743,32 @@ impl Compiler {
                 if !p.modifiers.is_empty() || p.hooks.is_some() {
                     self.f().line = p.span.line;
                     let name = self.lit(Value::Str(ZStr::from(p.name.name.as_slice())));
+                    let cv = u32::try_from(i).unwrap_or(0);
                     let place = self.place(Place {
                         base: PlaceBase::This,
                         segs: vec![Seg::Prop(name)],
                     });
-                    self.emit(Op::Assign {
-                        place,
-                        val: Operand::Cv(u32::try_from(i).unwrap_or(0)),
-                        dst: None,
-                    });
+                    if p.by_ref {
+                        // ZEND_ASSIGN_OBJ_REF for `public T &$x`
+                        // (zend_compile_params).
+                        let src = self.place(Place {
+                            base: PlaceBase::Cv(cv),
+                            segs: Vec::new(),
+                        });
+                        let t = self.tmp();
+                        self.emit(Op::MakeRef { place: src, dst: t });
+                        self.emit(Op::AssignRef {
+                            place,
+                            src: Operand::Tmp(t),
+                            dst: None,
+                        });
+                    } else {
+                        self.emit(Op::Assign {
+                            place,
+                            val: Operand::Cv(cv),
+                            dst: None,
+                        });
+                    }
                 }
             }
         }
@@ -1908,6 +1925,20 @@ impl Compiler {
                                     format!("Cannot redeclare {cname}::${}", p.name.as_str_lossy()),
                                     p.span.line,
                                 );
+                            }
+                            // zend_compile_params: a promoted property may not be
+                            // `callable` (Zend/zend_compile.c).
+                            if let Some(t) = &ty {
+                                if t.mask & mask::CALLABLE != 0 {
+                                    return self.err(
+                                        format!(
+                                            "Property {cname}::${} cannot have type {}",
+                                            p.name.as_str_lossy(),
+                                            t.to_php_string()
+                                        ),
+                                        p.span.line,
+                                    );
+                                }
                             }
                             let attrs = self.attributes(&p.attributes)?;
                             self.validate_attributes(

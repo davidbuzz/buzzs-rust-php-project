@@ -131,3 +131,72 @@ echo spl_object_id($a), spl_object_id($b), spl_object_id($c), "\n";
 "#);
     assert_eq!(out, "Unsupported operand types: array + int\n324\n");
 }
+
+#[test]
+fn catch_releases_the_try_body_temporaries_first() {
+    // bug29368_3: `cleanup_live_vars` frees the left operand before the
+    // catch block runs.
+    let (status, output) = run(r#"<?php
+class Foo { function __destruct() { echo "Foo dtor\n"; } }
+class Bar { function __construct() { throw new Exception("ctor"); } }
+try {
+    new Foo() + new Bar();
+} catch (Exception $e) {
+    echo "caught\n";
+}
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(output, "Foo dtor\ncaught\n");
+}
+
+#[test]
+fn uncaught_exception_keeps_shutdown_destructors() {
+    // bug36268: `zend_exception_error` reports with `E_DONT_BAIL`, so the
+    // objects are still destructed at shutdown.
+    let (status, output) = run(r#"<?php
+class Foo { function __destruct() { echo "Ha!\n"; } }
+$x = new Foo();
+throw new Exception("boom");
+"#);
+    assert_eq!(status, 255);
+    assert_eq!(
+        output,
+        "\nFatal error: Uncaught Exception: boom in test.php:4\nStack trace:\n#0 {main}\n  thrown in test.php on line 4\nHa!\n"
+    );
+}
+
+#[test]
+fn uncaught_parse_error_keeps_shutdown_destructors() {
+    // `zend_exception_error`: E_PARSE | E_DONT_BAIL.
+    let (status, output) = run("<?php\nclass Foo { function __destruct() { echo \"Ha!\\n\"; } }\n$x = new Foo();\neval(\"1 +\");\n");
+    assert_eq!(status, 255);
+    assert_eq!(
+        output,
+        "\nParse error: syntax error, unexpected end of file in test.php(4) : eval()'d code on line 1\nHa!\n"
+    );
+}
+
+#[test]
+fn shutdown_destructors_reach_objects_their_destructors_create() {
+    // bug51822 / bug74053: `zend_objects_store_call_destructors` walks the
+    // store up to its current top, without reusing handles meanwhile.
+    let (status, output) = run(r#"<?php
+class B { function __destruct() { echo "B dtor\n"; } }
+class A {
+    static $keep;
+    static $left = 3;
+    function __destruct() {
+        echo "A dtor\n";
+        if (self::$left-- > 0) { self::$keep[] = new A; }
+        self::$keep[] = new B;
+    }
+}
+A::$keep = [new A];
+echo "end\n";
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(
+        output,
+        "end\nA dtor\nA dtor\nB dtor\nA dtor\nB dtor\nA dtor\nB dtor\nB dtor\n"
+    );
+}

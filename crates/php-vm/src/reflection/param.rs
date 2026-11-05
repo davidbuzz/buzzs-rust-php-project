@@ -154,12 +154,7 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Value::Object(ob) => {
             let c = object::class_of(ob).clone();
             if let Some(d) = vm.closure_data(ob) {
-                FnRef {
-                    func: d.func,
-                    method: None,
-                    class: None,
-                    closure: Some(ob.clone()),
-                }
+                FnRef::of_closure(ob, &d)
             } else {
                 match c.find_method(b"__invoke").cloned() {
                     Some(m) => FnRef::method(&m, &c),

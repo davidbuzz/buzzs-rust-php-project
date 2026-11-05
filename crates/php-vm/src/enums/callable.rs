@@ -491,7 +491,7 @@ impl Vm {
                     this: if is_static { None } else { fcc.object.clone() },
                     scope: Some(m.scope()),
                     called: fcc.called.clone(),
-                    magic_name: Some(name),
+                    magic_name: Some(crate::call::trampoline_name(&name)),
                     ..PendingCall::new(m.func.clone())
                 }
             }

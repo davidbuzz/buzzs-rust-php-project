@@ -354,3 +354,13 @@ try { A::{5}; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "
         "Error: Class \"y\" not found\nTypeError: Cannot use value of type int as class constant name\n"
     );
 }
+
+#[test]
+fn generator_constructor_and_destructor_are_deprecated() {
+    // constructor_destructor_return: raised after the parameters
+    // (CG(zend_lineno) is the last parameter's line).
+    assert_eq!(
+        run("<?php\nclass Gen {\n    public function __construct(\n        $a = 1\n    ) { yield ''; }\n    public function __destruct() { yield ''; }\n    public function other() { yield ''; }\n}\n"),
+        "\nDeprecated: Making a constructor a Generator is deprecated in t.php on line 4\n\nDeprecated: Making a destructor a Generator is deprecated in t.php on line 6\n"
+    );
+}

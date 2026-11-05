@@ -1012,9 +1012,10 @@ fn check_hook_variance(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
             };
             if source.is_interface() && !child.is_virtual() {
                 if let Some(proto_set) = proto.hooks.as_ref().and_then(|h| h.set.as_ref()) {
-                    if child.is_readonly()
-                        || child.flags & (flags::SET_PROTECTED | flags::SET_PRIVATE) != 0
-                    {
+                    // `do_inherit_property` compares set visibility only:
+                    // a `public(set) readonly` property passes here and
+                    // leaves the set hook abstract instead.
+                    if child.flags & (flags::SET_PROTECTED | flags::SET_PRIVATE) != 0 {
                         out.error = Some((
                             format!(
                                 "Set access level of {}::${} must be omitted (as in class {})",

@@ -1061,7 +1061,9 @@ impl Compiler {
             self.f().finally_stack.push(fid);
             self.f().fast_call_patches_init(fid);
         }
+        let tmps_start = self.f().num_tmps;
         self.compile_stmts(body)?;
+        let try_tmps = (tmps_start, self.f().num_tmps);
         if let Some(fid) = fin_id {
             self.emit_fast_call(fid);
         }
@@ -1141,6 +1143,7 @@ impl Compiler {
                 catch_start,
                 catch_end,
                 finally: finally_info,
+                try_tmps,
             },
             end,
         ));

@@ -782,7 +782,7 @@ impl Vm {
                 }
                 ArrayKey::Int(i) => ZStr::from(i.to_string()),
             };
-            if cls.flags & cflags::NO_DYNAMIC_PROPERTIES != 0 {
+            if cls.flags & (cflags::NO_DYNAMIC_PROPERTIES | cflags::READONLY) != 0 {
                 return Err(self.make_throw(
                     "Error",
                     &format!(

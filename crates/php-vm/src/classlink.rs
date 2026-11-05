@@ -1116,7 +1116,9 @@ impl Vm {
                         // php-src: "During inheritance of %s, while
                         // autoloading %s: Uncaught ..." (the class cannot be
                         // unlinked any more).
+                        // `zend_exception_uncaught_error` bails out.
                         self.report_uncaught(&e);
+                        object::set_destructors_enabled(false);
                         return Err(Throw::Fatal);
                     }
                     Err(t) => return Err(t),
@@ -1437,6 +1439,21 @@ impl Vm {
                 traits.push(tc);
             }
         }
+        // `zend_do_bind_traits`: a `__toString()` imported from a trait
+        // implements Stringable as well, appended after the other
+        // interfaces (bug #81582).
+        if decl.kind == ClassKind::Class
+            && !interfaces
+                .iter()
+                .any(|i| i.lc_name.as_bytes() == b"stringable")
+        {
+            let lc = ZStr::from("__tostring");
+            if traits.iter().any(|t| t.methods.contains_key(&lc)) {
+                if let Some(sc) = self.find_class(b"stringable") {
+                    interfaces.push(sc);
+                }
+            }
+        }
         let trait_rules = if traits.is_empty() {
             TraitRules::default()
         } else {
@@ -1585,7 +1602,16 @@ impl Vm {
             if !explicit_abstract {
                 for interface in &cls.interfaces {
                     for pi in &interface.props {
-                        if cls.prop_map.contains_key(&pi.name) {
+                        if let Some(own) = cls.prop_map.get(&pi.name) {
+                            // `inherit_property_hook`: a backed readonly
+                            // property does not implement an abstract `set`.
+                            if pi.hooks.as_ref().is_some_and(|h| h.abstract_set)
+                                && own.flags & flags::READONLY != 0
+                                && !own.is_virtual()
+                                && own.hooks.as_ref().is_none_or(|h| h.set.is_none())
+                            {
+                                missing.push(format!("{}::${}::set", interface.name, pi.name));
+                            }
                             continue;
                         }
                         if let Some(h) = &pi.hooks {
@@ -2521,12 +2547,21 @@ fn check_parent_methods(cls: &Rc<Class>, parent: &Rc<Class>) -> Option<(String, 
             ));
         }
         // Constructors only inherit a prototype (and its visibility) from
-        // an abstract or interface declaration.
-        if lc.as_bytes() == b"__construct"
-            && !pm.is_abstract()
-            && !pm.proto_scope.upgrade().is_some_and(|p| p.is_interface())
-        {
-            continue;
+        // an abstract or interface declaration, which may sit further up
+        // than the parent (`parent = proto` in
+        // `do_inheritance_check_on_method`).
+        let mut as_in = pm.scope();
+        if lc.as_bytes() == b"__construct" {
+            let proto = pm.proto_scope.upgrade();
+            let proto_abstract = proto.as_ref().is_some_and(|p| {
+                p.is_interface() || p.methods.get(lc).is_some_and(|pr| pr.is_abstract())
+            });
+            if !pm.is_abstract() && !proto_abstract {
+                continue;
+            }
+            if let Some(p) = proto {
+                as_in = p;
+            }
         }
         let pv = pm.visibility();
         let v = m.visibility();
@@ -2542,7 +2577,7 @@ fn check_parent_methods(cls: &Rc<Class>, parent: &Rc<Class>) -> Option<(String, 
                     object::display_name(&cls.name),
                     m.name,
                     visibility_name(pv),
-                    object::display_name(&pm.scope().name),
+                    object::display_name(&as_in.name),
                     if pv == flags::PROTECTED {
                         " or weaker"
                     } else {

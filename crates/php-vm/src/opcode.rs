@@ -574,6 +574,9 @@ pub struct TryEntry {
     pub catch_end: Label,
     /// The finally block, if any.
     pub finally: Option<(u32, Label, Label)>,
+    /// The temporaries the try body allocates (`start..end`): dead once a
+    /// catch clause of this entry takes over (`cleanup_live_vars`).
+    pub try_tmps: (u32, u32),
 }
 
 /// A literal table entry.
