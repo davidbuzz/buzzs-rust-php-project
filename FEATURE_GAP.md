@@ -1,6 +1,11 @@
 # FEATURE_GAP
 
-The TODO list for the Rust port of PHP: everything that has to be built to pass the php-src `.phpt` suite, as one table. A row at 100% is done; any other row is the share done, measured where possible as the share of the row's run `.phpt` tests that pass (skips excluded, XFAIL counted as passing; refreshed by `scripts/update_feature_gap.py`). **Pri**: `high` blocks most other work or tests, `med` is a widely used feature, `low` is niche or optional, `out` is out of scope (decided 3 Nov 2026: opcache/JIT, non-CLI SAPIs except apache2handler, server-backed DB/protocol clients except mysqli, ffi, readline, tidy/enchant/com_dotnet/imap) and excluded from all pass rates. Test counts in parentheses are `.phpt` files in `modules/php-src/` at commit `0c7255dc521` (23,792 in the tree).
+The TODO list for the Rust port of PHP: everything that has to be built to pass the php-src `.phpt` suite, as one table.
+
+- **%**: 100% means done; anything lower is the share done. Where possible it is the share of the row's run `.phpt` tests that pass (skips excluded, XFAIL counted as passing), refreshed by `scripts/update_feature_gap.py`.
+- **Pri**: `high` blocks most other work or tests; `med` is a widely used feature; `low` is niche or optional.
+- **out**: out of scope and excluded from all pass rates (decided 3 Nov 2026): opcache/JIT, non-CLI SAPIs except apache2handler, server-backed DB/protocol clients except mysqli, ffi, readline, tidy/enchant/com_dotnet/imap.
+- **Test counts** in parentheses are `.phpt` files in `modules/php-src/` at commit `0c7255dc521` (23,792 in the tree).
 
 | Item | % | Pri | Description |
 |---|---|---|---|
