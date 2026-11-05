@@ -232,6 +232,29 @@ impl Vm {
             .and_then(|s| s.as_ref().map(Value::deref))
     }
 
+    /// The `OP_DATA` read of [`Op::Assign`] from a compiled variable:
+    /// [`Vm::read_cv_defined`], except that a reference to null, false or
+    /// an array is left to the place walk, which reads it after fetching
+    /// the containers ([`Vm::place_assign_cv_ref`]).
+    #[inline]
+    pub(crate) fn read_cv_op_data(&self, cv: u32) -> CvOpData {
+        let f = self.frame();
+        let idx = f.cv_idx(cv);
+        let vars = f.vars.borrow();
+        match vars.slots.get(idx) {
+            Some(Some(Value::Reference(r))) => {
+                let inner = r.borrow();
+                if matches!(*inner, Value::Null | Value::Bool(false) | Value::Array(_)) {
+                    CvOpData::Deferred
+                } else {
+                    CvOpData::Value(inner.clone())
+                }
+            }
+            Some(Some(v)) => CvOpData::Value(v.clone()),
+            _ => CvOpData::Undefined,
+        }
+    }
+
     /// Reads a compiled variable without warning (`None` if undefined).
     pub(crate) fn cv_get(&self, cv: u32) -> Option<Value> {
         let f = self.frame();
@@ -891,9 +914,10 @@ impl Vm {
                     }
                     Op::Assign { place, val, dst } => {
                         let r = match *val {
-                            Operand::Cv(cv) => match self.read_cv_defined(cv) {
-                                Some(v) => self.place_assign(*place, v)?,
-                                None => self.place_assign_undef_cv(*place, cv)?,
+                            Operand::Cv(cv) => match self.read_cv_op_data(cv) {
+                                CvOpData::Value(v) => self.place_assign(*place, v)?,
+                                CvOpData::Deferred => self.place_assign_cv_ref(*place, cv)?,
+                                CvOpData::Undefined => self.place_assign_undef_cv(*place, cv)?,
                             },
                             other => {
                                 let v = self.read(other)?;
@@ -2049,6 +2073,18 @@ impl Vm {
         );
         self.make_throw("TypeError", &m)
     }
+}
+
+/// A compiled variable read as the value of an assignment to a place
+/// ([`Vm::read_cv_op_data`]).
+pub(crate) enum CvOpData {
+    /// The (dereferenced) value.
+    Value(Value),
+    /// A reference to null, false or an array, possibly a container of the
+    /// place: read by the walk ([`Vm::place_assign_cv_ref`]).
+    Deferred,
+    /// Undefined.
+    Undefined,
 }
 
 /// How a key is used (affects error messages).

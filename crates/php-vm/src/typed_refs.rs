@@ -1142,6 +1142,11 @@ impl Vm {
                 Ok(Some(r))
             }
             WOp::Unset => Ok(None),
+            WOp::AssignDeref(_) => {
+                let w = std::mem::replace(wop, WOp::Unset);
+                *wop = w.resolve_deferred();
+                self.typed_static_write(cell, segs, wop)
+            }
         }
     }
 

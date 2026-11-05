@@ -1910,6 +1910,87 @@ impl ZArray {
     pub fn into_table(self) -> HashTable {
         Rc::try_unwrap(self.0).unwrap_or_else(|rc| (*rc).clone())
     }
+
+    /// Stores a handle to this very array inside it, at the end of `path`,
+    /// and returns the stored value: the array then contains itself by
+    /// value, as `$t = &$a; $a[] = $t;` builds it in php-src, whose
+    /// `ZEND_ASSIGN_DIM` fetches (and separates) the container before it
+    /// reads `OP_DATA` and adds a reference to the same `zend_array`.
+    ///
+    /// `path` lists the keys from this table down to the slot; `None`
+    /// stands for the last element of that level's table (the one a `[]`
+    /// segment just appended). Intermediate elements must be unshared
+    /// arrays or references to unshared arrays, which is how a write walk
+    /// leaves them, and the slot must exist. Otherwise nothing is stored
+    /// and `None` is returned.
+    pub fn store_self_at(&mut self, path: &[Option<ArrayKey>]) -> Option<Value> {
+        if path.is_empty() {
+            return None;
+        }
+        // Unshared first: the handles below are then the only other ones.
+        let _ = Rc::make_mut(&mut self.0);
+        let stored = ZArray(Rc::clone(&self.0));
+        let result = Value::Array(ZArray(Rc::clone(&self.0)));
+        let top = Rc::as_ptr(&self.0).cast_mut();
+        // SAFETY: this is `Rc::get_mut_unchecked` (unstable in std). The
+        // allocation was unshared after `make_mut`; its only handles now are
+        // `self`, which is borrowed mutably for this whole call, and the two
+        // created above, neither of which is dereferenced before the last
+        // use of `table` (`stored` is moved into the slot, `result` is
+        // returned; their counts live in the `Rc` header, not the table).
+        // No value reachable from the table holds another handle to it,
+        // since any such handle would have made it shared. `Rc::as_ptr`
+        // keeps the allocation's provenance, so writing through it is sound
+        // while those conditions hold.
+        let table = unsafe { &mut *top };
+        match store_in(table, path, Value::Array(stored)) {
+            Ok(old) => {
+                drop(old);
+                Some(result)
+            }
+            Err(unstored) => {
+                drop(unstored);
+                None
+            }
+        }
+    }
+}
+
+/// [`ZArray::store_self_at`]'s walk: stores `v` at `path` below `t`,
+/// returning the previous value, or gives `v` back when the path does not
+/// lead to an existing slot through unshared arrays.
+fn store_in(t: &mut HashTable, path: &[Option<ArrayKey>], v: Value) -> Result<Value, Value> {
+    let Some((first, rest)) = path.split_first() else {
+        return Err(v);
+    };
+    let key = match first {
+        Some(k) => k.clone(),
+        None => match t.last() {
+            Some((k, _)) => k.clone(),
+            None => return Err(v),
+        },
+    };
+    let Some(slot) = t.get_mut(&key) else {
+        return Err(v);
+    };
+    if rest.is_empty() {
+        return Ok(std::mem::replace(slot, v));
+    }
+    match slot {
+        Value::Array(a) if a.refcount() == 1 => store_in(a.make_mut(), rest, v),
+        Value::Reference(r) => {
+            let Some(mut b) = r.try_borrow_mut() else {
+                return Err(v);
+            };
+            let res = match &mut *b {
+                Value::Array(a) if a.refcount() == 1 => store_in(a.make_mut(), rest, v),
+                _ => Err(v),
+            };
+            drop(b);
+            res
+        }
+        _ => Err(v),
+    }
 }
 
 impl Default for ZArray {
@@ -2052,6 +2133,55 @@ mod tests {
         }
         assert_eq!(t.pop().and_then(|v| v.as_int()), Some(2));
         assert_eq!(t.push(Value::Int(9)).ok(), Some(2));
+    }
+
+    #[test]
+    fn store_self_at_makes_an_array_contain_itself() {
+        // $t = &$a; $a[] = $t;  (the test leaks the cycle on purpose)
+        let mut a = ZArray::new();
+        a.make_mut().push(Value::Int(1)).unwrap();
+        a.make_mut().push(Value::Null).unwrap();
+        let v = a.store_self_at(&[None]).expect("stored");
+        assert!(matches!(&v, Value::Array(h) if ZArray::ptr_eq(h, &a)));
+        assert!(matches!(a.get_int(1), Some(Value::Array(x)) if ZArray::ptr_eq(x, &a)));
+        assert_eq!(a.refcount(), 3);
+        drop(v);
+        assert_eq!(a.refcount(), 2);
+        // A later write separates: the copy holds the old table.
+        let old = a.clone();
+        a.make_mut().push(Value::Int(5)).unwrap();
+        assert!(!ZArray::ptr_eq(&a, &old));
+        assert!(matches!(a.get_int(1), Some(Value::Array(x)) if ZArray::ptr_eq(x, &old)));
+    }
+
+    #[test]
+    fn store_self_at_walks_nested_tables_and_references() {
+        // $t = &$a; $a['k']['r'][] = $t; with $a['k']['r'] a reference
+        let inner = PhpRef::new(Value::Array(ZArray::from_values([Value::Null])));
+        let mut k = HashTable::new();
+        k.insert("r", Value::Reference(inner.clone()));
+        let mut a = ZArray::new();
+        a.make_mut()
+            .insert("k", Value::Array(ZArray::from_table(k)));
+        let path = [Some(ArrayKey::from("k")), Some(ArrayKey::from("r")), None];
+        assert!(a.store_self_at(&path).is_some());
+        let got = inner.get();
+        let Value::Array(r) = &got else {
+            panic!("array expected");
+        };
+        assert!(matches!(r.get_int(0), Some(Value::Array(x)) if ZArray::ptr_eq(x, &a)));
+        // Missing slots and shared intermediates store nothing.
+        let mut b = ZArray::from_values([Value::Int(1)]);
+        assert!(b.store_self_at(&[Some(ArrayKey::Int(7))]).is_none());
+        assert!(b.store_self_at(&[]).is_none());
+        let shared = ZArray::from_values([Value::Null]);
+        let _keep = shared.clone();
+        let mut c = ZArray::from_values([Value::Array(shared)]);
+        assert!(c
+            .store_self_at(&[Some(ArrayKey::Int(0)), Some(ArrayKey::Int(0))])
+            .is_none());
+        assert_eq!(b.refcount(), 1);
+        assert_eq!(c.refcount(), 1);
     }
 
     #[test]

@@ -179,12 +179,26 @@ impl Serializer {
         }
         self.out
             .extend_from_slice(format!("{}:{{", t.len()).as_bytes());
+        // `php_var_serialize_nested_data`: an array element that is the
+        // array being serialized (`$t = &$a; $a[] = $t;`) is written as
+        // `N;` (counted like any value).
+        let own = (tag == b"a").then(|| std::ptr::from_ref(t) as usize);
+        let is_own = |v: &Value| matches!(v, Value::Array(e) if Some(e.addr()) == own);
         for (k, v) in t {
             write_key(&mut self.out, k);
             match v {
                 Value::Reference(r) if r.refcount() == 1 => {
                     let inner = r.get();
-                    self.value(&inner, ctx)?;
+                    if is_own(&inner) {
+                        self.n += 1;
+                        self.out.extend_from_slice(b"N;");
+                    } else {
+                        self.value(&inner, ctx)?;
+                    }
+                }
+                other if is_own(other) => {
+                    self.n += 1;
+                    self.out.extend_from_slice(b"N;");
                 }
                 other => self.value(other, ctx)?,
             }
@@ -1319,6 +1333,23 @@ mod tests {
         // Re-serializing gives the same string back.
         drop(x);
         assert_eq!(ser(&v).replace("i:9;", "i:1;"), s);
+    }
+
+    #[test]
+    fn self_containing_array_serializes_null() {
+        // $t = &$a; $a = [1]; $a[] = $t; serialize($a) (leaks the cycle)
+        let mut a = ZArray::from_values([Value::Int(1), Value::Null]);
+        assert!(a.store_self_at(&[None]).is_some());
+        assert_eq!(ser(&Value::Array(a.clone())), "a:2:{i:0;i:1;i:1;N;}");
+        // the element still counts for back-references
+        let o = PhpRef::new(Value::Int(3));
+        let mut b = ZArray::from_values([Value::Null, Value::Reference(o.clone())]);
+        b.make_mut().push(Value::Reference(o)).unwrap();
+        assert!(b.store_self_at(&[Some(ArrayKey::Int(0))]).is_some());
+        assert_eq!(
+            ser(&Value::Array(b.clone())),
+            "a:3:{i:0;N;i:1;i:3;i:2;R:3;}"
+        );
     }
 
     #[test]
