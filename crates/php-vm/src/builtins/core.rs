@@ -642,14 +642,16 @@ fn get_class_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn get_class_methods(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(cls) = class_arg(vm, &a.at(0), true)? else {
+        // `zend_wrong_parameter_type_error` quotes a string argument.
+        let given = match a.at(0) {
+            Value::Str(s) => format!("\"{}\"", s.to_string_lossy()),
+            other => crate::typecheck::given_type(&other),
+        };
         return Err(super::util::type_error(
             vm,
             a,
             1,
-            &format!(
-                "must be an object or a valid class name, {} given",
-                crate::typecheck::given_type(&a.at(0))
-            ),
+            &format!("must be an object or a valid class name, {given} given"),
         ));
     };
     let scope = vm
@@ -691,8 +693,14 @@ fn method_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(cls) = cls else {
         return Ok(Value::Bool(false));
     };
-    if cls.find_method(m.as_bytes()).is_some() {
-        return Ok(Value::Bool(true));
+    if let Some(f) = cls.find_method(m.as_bytes()) {
+        // `ZEND_FUNCTION(method_exists)`: a private method inherited from a
+        // parent is a shadow when checking a class name.
+        return Ok(Value::Bool(
+            matches!(v, Value::Object(_))
+                || f.flags & flags::PRIVATE == 0
+                || std::ptr::eq(f.scope.as_ptr(), Rc::as_ptr(&cls)),
+        ));
     }
     // `zend_get_closure_invoke_method`: Closure::__invoke exists for the
     // class and its instances although it is not in the method table.

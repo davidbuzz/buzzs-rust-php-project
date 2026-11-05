@@ -416,3 +416,23 @@ var_dump(is_a('A', 'A'), is_a('A', 'A', true), is_subclass_of('A', 'A', false), 
          bool(false)\nbool(true)\nbool(false)\nbool(false)\n"
     );
 }
+
+/// `ZEND_FUNCTION(method_exists)` hides private methods inherited from a
+/// parent when given a class name; `get_class_methods()` quotes an unknown
+/// class name (`zend_wrong_parameter_type_error`).
+#[test]
+fn method_exists_hides_inherited_private_for_class_names() {
+    let out = run(r#"<?php
+class P { private function p() {} private static function s() {} }
+class Q extends P { private function q() {} }
+var_dump(method_exists('Q', 'p'), method_exists('Q', 's'), method_exists('Q', 'q'), method_exists(new Q, 'p'), method_exists('P', 'p'));
+try { get_class_methods("Nope"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { get_class_methods(1); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n\
+         get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, \"Nope\" given\n\
+         get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n"
+    );
+}
