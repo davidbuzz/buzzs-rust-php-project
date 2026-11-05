@@ -9,6 +9,27 @@ Right now it is the TODO list. Once items are done, it becomes the itemised reco
 
 Keep rows when they reach 100%; they become the completion record. Add rows as gaps are found.
 
+High-priority completion batch integrated (validation pending): multibyte scanner
+filters are wired through files, includes, eval, CLI lint and reflection; startup
+configuration preserves arrays, sections and binary data for `get_cfg_var()`.
+The batch also adds native output aliases and shared header/handler state,
+per-match `strtr()` conversion, scanner stream reads, strict locale validation,
+mixed-value `clamp()`, typed extraction/writeback, current-locale array sorting,
+date diagnostic/restoration fixes, JSON native-stack checks and random-engine
+allocation reduction. Existing percentages below remain prior measurements until
+the combined Rust/PHPT/performance report is accepted. PFA preload persistence
+and engine observer callbacks remain genuine infrastructure gaps.
+
+First combined completion-batch report (not accepted): build and affected-crate
+clippy passed. Rust tests: 1,633 passed, 4 failed, 42 ignored. PHPT: 10,659
+total, 9,630 passing (including one WARN), 629 failed, 398 skipped, 2 XFAIL.
+Baseline comparison found 80 newly passing entries and 5 new failures; neither
+baseline nor percentages has been refreshed from this run. Type-system scope
+620/620 ran, JSON 109/109, random 70/70 and hash 86/86 passed. The full
+82-workload performance gate passed all unchanged budgets at a 15.16 geometric
+mean instruction ratio; the exact PCRE repeated UTF-8 test passed in release.
+Corrections to failed Rust fixtures and new PHPT failures are in progress.
+
 Current progress (5 Nov 2026): typed references, trait linking/variance rewrite,
 property-hook inheritance, and native stack-limit checks added 405 passing tests across
 Zend/tests, tests/, ext/standard, ext/date and ext/openssl. The baseline now contains
