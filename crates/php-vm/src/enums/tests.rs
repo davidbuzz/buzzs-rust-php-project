@@ -120,3 +120,39 @@ fn callable_resolution_errors() {
          bool(false)\nbool(false)\n"
     );
 }
+
+#[test]
+fn from_parses_its_argument_like_zpp() {
+    // `zend_enum_from_base`: Z_PARAM_LONG / Z_PARAM_STR under strict_types.
+    let out = run(&format!(
+        "<?php declare(strict_types=1); enum I: int {{ case A = 42; }} enum S: string {{ case A = '42'; }}\n\
+         try {{ S::from(42); }} {CATCH}\n\
+         try {{ S::tryFrom(1.5); }} {CATCH}\n\
+         try {{ I::from('42'); }} {CATCH}\n\
+         try {{ I::from(42.0); }} {CATCH}\n\
+         var_dump(I::from(42), S::from('42'));"
+    ));
+    assert_eq!(
+        out,
+        "TypeError: S::from(): Argument #1 ($value) must be of type string, int given\n\
+         TypeError: S::tryFrom(): Argument #1 ($value) must be of type string, float given\n\
+         TypeError: I::from(): Argument #1 ($value) must be of type int, string given\n\
+         TypeError: I::from(): Argument #1 ($value) must be of type int, float given\n\
+         enum(I::A)\nenum(S::A)\n"
+    );
+    // Weak mode: Z_PARAM_LONG / Z_PARAM_STR_OR_LONG.
+    let out = run(&format!(
+        "<?php enum I: int {{ case A = 42; }} enum S: string {{ case A = '42'; case B = '1.0E+30'; }}\n\
+         var_dump(S::from(42), I::from('42'), I::from(42.0), S::from(1e30));\n\
+         try {{ I::from([]); }} {CATCH}\n\
+         try {{ S::from([]); }} {CATCH}\n\
+         try {{ I::from(1e30); }} {CATCH}"
+    ));
+    assert_eq!(
+        out,
+        "enum(S::A)\nenum(I::A)\nenum(I::A)\nenum(S::B)\n\
+         TypeError: I::from(): Argument #1 ($value) must be of type int, array given\n\
+         TypeError: S::from(): Argument #1 ($value) must be of type string|int, array given\n\
+         TypeError: I::from(): Argument #1 ($value) must be of type int, float given\n"
+    );
+}

@@ -2409,12 +2409,12 @@ pub(crate) fn enum_methods() -> [(&'static str, u32, crate::func::BuiltinFn); 3]
     [
         ("cases(): array", flags::PUBLIC | flags::STATIC, enum_cases),
         (
-            "from(int|string $value): static",
+            "from(@unchecked int|string $value): static",
             flags::PUBLIC | flags::STATIC,
             enum_from,
         ),
         (
-            "tryFrom(int|string $value): ?static",
+            "tryFrom(@unchecked int|string $value): ?static",
             flags::PUBLIC | flags::STATIC,
             enum_try_from,
         ),
