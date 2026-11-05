@@ -1582,6 +1582,18 @@ impl Compiler {
                                 c.span.line,
                             );
                         }
+                        // `zend_declare_typed_class_constant`.
+                        if kind == ClassKind::Interface
+                            && fl & (flags::PRIVATE | flags::PROTECTED) != 0
+                        {
+                            return self.err(
+                                format!(
+                                    "Access type for interface constant {cname}::{} must be public",
+                                    c.name.as_str_lossy()
+                                ),
+                                c.span.line,
+                            );
+                        }
                         self.f().line = c.span.line;
                         self.check_const_expr(&c.value, false)?;
                         if let Some(ty) = &ty {
