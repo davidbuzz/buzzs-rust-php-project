@@ -321,6 +321,12 @@ impl ClassBuilder {
                 }
             }
             for (n, f, ty, def) in &self.props {
+                let mut f = *f;
+                if f & (flags::PUBLIC | flags::READONLY | flags::SET_MASK)
+                    == flags::PUBLIC | flags::READONLY
+                {
+                    f |= flags::SET_PROTECTED;
+                }
                 let pn = ZStr::from(n.as_str());
                 let slot = match prop_map.get(&pn) {
                     Some(e) => e.slot,
@@ -329,7 +335,7 @@ impl ClassBuilder {
                 let pi = Rc::new(PropInfo {
                     name: pn.clone(),
                     slot,
-                    flags: *f,
+                    flags: f,
                     ty: ty.map(parse_type),
                     class: name.clone(),
                     default: def.clone().map(ConstExpr::Value),

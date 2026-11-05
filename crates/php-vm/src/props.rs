@@ -903,7 +903,7 @@ impl Vm {
         if cls.flags & cflags::ALLOW_DYNAMIC == 0 {
             self.deprecated(&format!(
                 "Creation of dynamic property {}::${} is deprecated",
-                object::display_name(&cls.name),
+                cls.name,
                 name.to_string_lossy()
             ))?;
         }

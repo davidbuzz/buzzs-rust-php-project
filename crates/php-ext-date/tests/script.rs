@@ -466,6 +466,72 @@ fn duration() {
 }
 
 #[test]
+fn anonymous_period_dynamic_property_diagnostics() {
+    assert_eq!(
+        run(r#"$period = new class(new DateTime('2000-01-01'), new DateInterval('P1D'), 2) extends DatePeriod { public $extra; };
+            set_error_handler(function ($level, $message) { echo $message, "\n"; });
+            $period->extra = [];
+            $period->extra[] = 1;
+            $period->dynamic1 = 1;
+            $period->dynamic1 = 2;
+            $period->dynamic2 = [];
+            $period->dynamic2[] = 3;
+            $period->dynamic3[] = 4;
+            var_dump($period->extra[0], $period->dynamic1, $period->dynamic2[0], $period->dynamic3[0]);
+        "#),
+        "Creation of dynamic property DatePeriod@anonymous\0test.php:1$0::$dynamic1 is deprecated\n\
+         Creation of dynamic property DatePeriod@anonymous\0test.php:1$0::$dynamic2 is deprecated\n\
+         Creation of dynamic property DatePeriod@anonymous\0test.php:1$0::$dynamic3 is deprecated\n\
+         int(1)\nint(2)\nint(3)\nint(4)\n"
+    );
+}
+
+#[test]
+fn duration_readonly_clone_diagnostics() {
+    assert_eq!(
+        run(r#"
+            $d = Time\Duration::fromSeconds(1, 2);
+            foreach ([$d, clone $d] as $value) {
+                foreach (['seconds' => 3, 'nanoseconds' => 4, 'negative' => true] as $name => $replacement) {
+                    try { $value->$name = $replacement; } catch (Throwable $e) {
+                        echo $e::class, ': ', $e->getMessage(), "\n";
+                    }
+                    foreach (['setValue', 'setRawValue', 'setRawValueWithoutLazyInitialization'] as $method) {
+                        try { (new ReflectionProperty($value, $name))->$method($value, $replacement); } catch (Throwable $e) {
+                            echo $e::class, ': ', $e->getMessage(), "\n";
+                        }
+                    }
+                    try { clone($value, [$name => $replacement]); } catch (Throwable $e) {
+                        echo $e::class, ': ', $e->getMessage(), "\n";
+                    }
+                    var_dump((new ReflectionProperty($value, $name))->isWritable(null, $value));
+                }
+                echo $value->seconds, ' ', $value->nanoseconds, ' ', (int) $value->negative, "\n";
+            }
+            try { (new ReflectionMethod($d, '__construct'))->invoke($d); } catch (Throwable $e) {
+                echo $e::class, ': ', $e->getMessage(), "\n";
+            }
+            echo $d->seconds, ' ', $d->nanoseconds, ' ', (int) $d->negative, "\n";
+        "#),
+        (0..2)
+            .map(|_| {
+                ["seconds", "nanoseconds", "negative"]
+                    .map(|name| {
+                        let readonly = format!("Error: Cannot modify readonly property Time\\Duration::${name}\n");
+                        format!(
+                            "{}Error: Cannot modify protected(set) readonly property Time\\Duration::${name} from global scope\nbool(false)\n",
+                            readonly.repeat(4)
+                        )
+                    })
+                    .concat()
+                    + "1 2 0\n"
+            })
+            .collect::<String>()
+            + "Error: Cannot directly construct Time\\Duration, use Time\\Duration::from*() methods instead\n1 2 0\n"
+    );
+}
+
+#[test]
 fn nul_parser_diagnostics() {
     assert_eq!(
         run(r#"

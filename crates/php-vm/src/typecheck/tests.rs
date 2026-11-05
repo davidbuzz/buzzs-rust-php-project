@@ -69,6 +69,56 @@ fn run_array_lookup(src: &str) -> String {
 }
 
 #[test]
+fn native_public_readonly_set_visibility() {
+    use crate::builtins::classbuilder::ClassBuilder;
+    use crate::func::flags;
+    use php_runtime::ZStr;
+
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink));
+    let ro = flags::PUBLIC | flags::READONLY;
+    let cls = ClassBuilder::new("NativeReadonly")
+        .prop("implicit", ro, Some("int"), None)
+        .prop("publicSet", ro | flags::SET_PUBLIC, Some("int"), None)
+        .prop("privateSet", ro | flags::SET_PRIVATE, Some("int"), None)
+        .prop("mutable", flags::PUBLIC, Some("int"), None)
+        .register(&mut vm);
+    for (name, expected) in [
+        ("implicit", flags::SET_PROTECTED),
+        ("publicSet", flags::SET_PUBLIC),
+        ("privateSet", flags::SET_PRIVATE),
+        ("mutable", 0),
+    ] {
+        assert_eq!(
+            cls.prop_map[&ZStr::from(name)].flags & flags::SET_MASK,
+            expected
+        );
+    }
+}
+
+#[test]
+fn anonymous_dynamic_property_diagnostics() {
+    let src = "<?php\n\
+        set_error_handler(function ($level, $message) { echo $message, \"\\n\"; });\n\
+        $a = new class { public $extra; };\n\
+        $a->extra = [];\n\
+        $a->extra[] = 1;\n\
+        $a->dynamic1 = 1;\n\
+        $a->dynamic1 = 2;\n\
+        $a->dynamic2 = [];\n\
+        $a->dynamic2[] = 3;\n\
+        $a->dynamic3[] = 4;\n\
+        var_dump($a->extra[0], $a->dynamic1, $a->dynamic2[0], $a->dynamic3[0]);\n";
+    assert_eq!(
+        run(src),
+        "Creation of dynamic property class@anonymous\0t.php:3$0::$dynamic1 is deprecated\n\
+         Creation of dynamic property class@anonymous\0t.php:3$0::$dynamic2 is deprecated\n\
+         Creation of dynamic property class@anonymous\0t.php:3$0::$dynamic3 is deprecated\n\
+         int(1)\nint(2)\nint(3)\nint(4)\n"
+    );
+}
+
+#[test]
 fn anonymous_self_union_diagnostics() {
     let src = "<?php\n\
         $a = new class {\n\
