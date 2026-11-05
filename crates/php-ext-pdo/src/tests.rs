@@ -139,6 +139,27 @@ fn pdorow_dimension_fetch_by_reference() {
     );
 }
 
+/// pdo_fetch_func_001: `zend_is_callable()` on the `FETCH_FUNC` callable
+/// raises the relative-callable deprecation once, in the caller's scope.
+#[test]
+fn fetch_func_relative_callable_deprecation() {
+    let out = run(r#"
+        set_error_handler(function ($no, $msg) { echo $no, ':', $msg, ';'; return true; });
+        class Foo { public function m($x) { return __METHOD__ . "($x)"; } }
+        class Bar extends Foo {
+            public function run($db) {
+                $st = $db->query('SELECT 1 UNION ALL SELECT 2');
+                echo implode(',', $st->fetchAll(PDO::FETCH_FUNC, [$this, 'parent::m']));
+            }
+        }
+        (new Bar)->run(new PDO('sqlite::memory:'));
+    "#);
+    assert_eq!(
+        out,
+        "8192:Callables of the form [\"Bar\", \"parent::m\"] are deprecated;Foo::m(1),Foo::m(2)"
+    );
+}
+
 #[test]
 fn blob_stream_resource() {
     let out = run(r#"

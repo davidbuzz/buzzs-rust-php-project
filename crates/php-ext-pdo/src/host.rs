@@ -448,6 +448,14 @@ impl PdoHost for VmHost<'_> {
         }
     }
 
+    fn check_callable_with_deprecations(
+        &mut self,
+        callable: &Value,
+    ) -> RtResult<Result<(), String>> {
+        let r = self.vm.resolve_callable(callable);
+        Ok(self.rt(r)?.map(|_| ()))
+    }
+
     fn docref(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
         self.docref_impl(level, message)
     }
