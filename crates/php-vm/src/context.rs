@@ -771,16 +771,15 @@ impl OutputHost for Vm {
         let output = match r {
             Ok(output) => output,
             // `zend_throw_exception_internal()` with no executing frame
-            // (`php_output_end_all()` at request shutdown): without a user
-            // exception handler the exception is a fatal error, and the
-            // bailout discards the buffered output.
+            // (`php_output_end_all()` at request shutdown): the user
+            // exception handler gets it; without one the exception is a
+            // fatal error, and the bailout discards the buffered output.
             Err(Throw::Exception(e))
-                if !self.is_executing()
-                    && !crate::fiber::is_graceful_exit(&e)
-                    && self.exception_handlers.last().is_none_or(Value::is_null) =>
+                if !self.is_executing() && !crate::fiber::is_graceful_exit(&e) =>
             {
-                self.report_uncaught(&e);
-                self.pending_throw = Some(Throw::Fatal);
+                if let Err(t) = self.uncaught_exception(e) {
+                    self.pending_throw = Some(t);
+                }
                 None
             }
             Err(t) => {

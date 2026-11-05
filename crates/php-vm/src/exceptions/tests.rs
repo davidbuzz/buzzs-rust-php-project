@@ -136,3 +136,110 @@ array(2) {
 "#
     );
 }
+
+/// `zend_throw_exception_object`: throwing a non-Throwable object.
+#[test]
+fn throwing_a_non_throwable_object_is_an_error() {
+    let src = r#"<?php
+class Foo {}
+try { throw new Foo; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { throw 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#;
+    assert_eq!(
+        run(src),
+        "Cannot throw objects that do not implement Throwable\nCan only throw objects\n"
+    );
+}
+
+/// `ZEND_UNSET_STATIC_PROP` → `zend_std_unset_static_property` throws,
+/// whether or not the property is declared (the class is fetched first).
+#[test]
+fn unsetting_a_static_property_throws() {
+    let src = r#"<?php
+class C { public static $p = 1; }
+try { unset(C::$a); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { unset(C::$p); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { unset(D::$p); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#;
+    assert_eq!(
+        run(src),
+        "Attempt to unset static property C::$a\nAttempt to unset static property C::$p\nClass \"D\" not found\n"
+    );
+}
+
+/// `zend_fetch_debug_backtrace` `fake_frame`: a handler called by the
+/// include op itself is followed by an `include` pseudo frame.
+#[test]
+fn backtrace_of_a_handler_called_by_include_has_the_include_frame() {
+    let src = r#"<?php
+set_error_handler(function ($c, $m) {
+    foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $f) {
+        echo $f['function'], '@', $f['line'], "\n";
+    }
+    return true;
+});
+function f() { include 'nonexistent_zz.php'; }
+f();
+"#;
+    let out = run(src);
+    assert!(out.starts_with("{closure}@8\ninclude@8\nf@9\n"), "{out}");
+}
+
+/// `zend_user_exception_handler`: a handler that installs another keeps it
+/// current, and an exception it throws goes to that handler (GH-10695,
+/// GH-13446).
+#[test]
+fn exception_handler_installed_by_the_handler_stays_and_catches_its_throw() {
+    let src = r#"<?php
+function h1($e) {
+    echo "h1: ", $e->getMessage(), "\n";
+    set_exception_handler('h2');
+    throw new Exception("from h1");
+}
+function h2($e) { echo "h2: ", $e->getMessage(), "\n"; }
+set_exception_handler('h1');
+register_shutdown_function(function () {
+    echo set_exception_handler(null), "\n";
+});
+throw new Exception("main");
+"#;
+    assert_eq!(run(src), "h1: main\nh2: from h1\nh2\n");
+}
+
+/// `ZEND_AST_NEW` has the line of its class name: the constructor call's
+/// frame reports it (GH-8810).
+#[test]
+fn constructor_frame_reports_the_class_name_line_of_new() {
+    let src = r#"<?php
+class A {
+    public function __construct() {
+        throw new Exception();
+    }
+}
+try {
+    new
+        A
+        ();
+} catch (Exception $e) {
+    echo $e->getTrace()[0]['line'], "\n";
+}
+"#;
+    assert_eq!(run(src), "9\n");
+}
+
+/// Array literals and constant-expression arrays reject array/object keys
+/// with `zend_illegal_array_offset_access`'s message (GH-8821).
+#[test]
+fn illegal_array_literal_key_names_its_type() {
+    let src = r#"<?php
+enum E { case A; }
+$k = []; try { $a = [$k => 1]; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$o = new stdClass; try { $a = [1, $o => 1]; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+class C { const X = [E::A => 3]; }
+try { var_dump(C::X); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#;
+    assert_eq!(
+        run(src),
+        "Cannot access offset of type array on array\nCannot access offset of type stdClass on array\nCannot access offset of type E on array\n"
+    );
+}

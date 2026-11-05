@@ -200,3 +200,209 @@ echo "end\n";
         "end\nA dtor\nA dtor\nB dtor\nA dtor\nB dtor\nA dtor\nB dtor\nB dtor\n"
     );
 }
+
+/// `zend_compile_goto` + `zend_resolve_goto_label`: a goto frees the loops
+/// and calls the finally blocks it leaves, and only those.
+#[test]
+fn goto_frees_left_loops_and_calls_left_finally_blocks() {
+    let (status, output) = run(r#"<?php
+class A {
+    function __construct(public $n) {}
+    function __destruct() { echo "destruct{$this->n}\n"; }
+}
+function f() {
+    foreach ([new A(1)] as $a) {
+        $a = null;
+        try {
+            foreach ([new A(2)] as $a) {
+                $a = null;
+                goto out;
+            }
+        } finally {
+            echo "finally\n";
+        }
+out:
+        echo "out\n";
+    }
+    try {
+        goto end;
+    } finally {
+        echo "finally2\n";
+    }
+end:
+    echo "end\n";
+}
+f();
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(
+        output,
+        "destruct2\nfinally\nout\ndestruct1\nfinally2\nend\n"
+    );
+}
+
+/// `zend_handle_loops_and_finally_ex`: `break 2` calls the finally block
+/// before freeing the loops, and a destructor exception from the freed
+/// iterator is thrown from the loop (`ZEND_FREE_ON_RETURN`), outside the
+/// try the `break` is in.
+#[test]
+fn break_calls_finally_before_freeing_loops_outside_the_try() {
+    let (status, output) = run(r#"<?php
+class T {
+    function __destruct() { throw new Exception("dtor"); }
+}
+function f() {
+    foreach ([0] as $_) {
+        foreach ([new T] as $v) {
+            $v = null;
+            try {
+                break 2;
+            } catch (Exception $e) {
+                echo "inner catch\n";
+            } finally {
+                echo "finally\n";
+            }
+        }
+    }
+}
+try {
+    f();
+} catch (Exception $e) {
+    echo "outer catch: ", $e->getMessage(), "\n";
+}
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(output, "finally\nouter catch: dtor\n");
+}
+
+/// `zend_check_finally_breakout`: a `break` in a finally block may not
+/// leave it.
+#[test]
+fn break_out_of_a_finally_block_is_a_compile_error() {
+    let (_, output) = run(r"<?php
+function f() {
+    while (true) {
+        try {
+        } finally {
+            break;
+        }
+    }
+}
+");
+    assert!(
+        output.contains(
+            "Fatal error: jump out of a finally block is disallowed in test.php on line 6"
+        ),
+        "{output}"
+    );
+}
+
+/// `cleanup_live_vars(throw_op, catch_op)`: an exception caught in the
+/// frame it was thrown in releases the iterators of the loops it leaves,
+/// outermost first, before the catch block runs.
+#[test]
+fn caught_exception_releases_the_iterators_of_the_loops_it_leaves() {
+    let (status, output) = run(r#"<?php
+class A {
+    function __construct(public $n) {}
+    function __destruct() { echo "destruct{$this->n}\n"; }
+}
+function f() {
+    try {
+        foreach ([new A(1)] as $a) {
+            $a = null;
+            foreach ([new A(2)] as $a) {
+                $a = null;
+                foreach ([new A(3)] as $a) {
+                    $a = null;
+                    throw new Exception("x");
+                }
+            }
+        }
+    } catch (Exception $e) {
+        echo "catch\n";
+    }
+    echo "after\n";
+}
+f();
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(output, "destruct1\ndestruct2\ndestruct3\ncatch\nafter\n");
+}
+
+/// `ZEND_LIVE_NEW` + `zend_object_store_ctor_failed`: an object whose
+/// constructor call is abandoned while its arguments are evaluated is
+/// never destructed.
+#[test]
+fn object_of_an_abandoned_constructor_call_is_not_destructed() {
+    let (status, output) = run(r#"<?php
+class D {
+    function __construct() { echo "ctor\n"; }
+    function __destruct() { echo "dtor\n"; }
+}
+function fail() { throw new Exception("arg"); }
+try {
+    $d = new D(fail());
+} catch (Exception $e) {
+    echo "caught ", $e->getMessage(), "\n";
+}
+echo "end\n";
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(output, "caught arg\nend\n");
+}
+
+/// Operands freed by a throwing op are destructed before the handler in
+/// the same frame runs; their exceptions chain to the one in flight.
+#[test]
+fn destructor_exceptions_of_freed_operands_chain_before_the_catch() {
+    let (status, output) = run(r#"<?php
+class T { function __destruct() { throw new Exception("dtor"); } }
+try {
+    new T + new T;
+} catch (Exception $e) {
+    for ($x = $e; $x; $x = $x->getPrevious()) {
+        echo $x::class, ": ", $x->getMessage(), "\n";
+    }
+}
+echo "end\n";
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(
+        output,
+        "Exception: dtor\nException: dtor\nTypeError: Unsupported operand types: T + T\nend\n"
+    );
+}
+
+/// `zend_generator_dtor_storage`: destroying a generator suspended in a
+/// finally block whose exception is pending runs the inner finally and
+/// rethrows the pending exception (`zend_dispatch_try_catch_finally_helper`
+/// adopts the backed-up exception when none is in flight).
+#[test]
+fn destroyed_generator_rethrows_the_exception_pending_in_its_finally() {
+    let (status, output) = run(r#"<?php
+function gen() {
+    try {
+        throw new Exception("1");
+    } finally {
+        try {
+            throw new Exception("2");
+        } finally {
+            try {
+                yield;
+            } finally {
+                echo "inner finally\n";
+            }
+        }
+    }
+}
+try {
+    gen()->rewind();
+} catch (Exception $e) {
+    echo $e->getMessage(), " <- ", $e->getPrevious()?->getMessage(), "\n";
+}
+echo "end\n";
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(output, "inner finally\n2 <- 1\nend\n");
+}

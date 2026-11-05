@@ -446,3 +446,28 @@ var_dump($arg);
         "\nWarning: inc(): Argument #1 ($x) must be passed by reference, value given in t.php on line 4\nint(2)\n"
     );
 }
+
+/// `load_delayed_classes` → `zend_exception_uncaught_error`: an exception
+/// from autoloading a class a pending variance check needs is fatal, with
+/// the class being linked and the autoloaded name as prefix.
+#[test]
+fn exception_while_autoloading_for_variance_is_a_prefixed_fatal() {
+    let (status, out) = run_status(
+        r#"<?php
+spl_autoload_register(function ($c) {
+    class Y {}
+    throw new Exception("boom");
+});
+class A { function m(): object {} }
+class B extends A { function m(): Y {} }
+"#,
+    );
+    assert_ne!(status, 0, "{out}");
+    assert!(
+        out.contains(
+            "Fatal error: During inheritance of B, while autoloading Y: Uncaught Exception: boom in t.php:4\nStack trace:\n"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("#1 {main} in t.php on line "), "{out}");
+}

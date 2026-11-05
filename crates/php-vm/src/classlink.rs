@@ -1100,7 +1100,7 @@ impl Vm {
 
     /// `load_delayed_classes`: autoloads the classes that pending variance
     /// checks need (nested linking may take some of them first).
-    fn load_delayed_classes(&mut self) -> VmResult<()> {
+    fn load_delayed_classes(&mut self, ce_name: &ZStr) -> VmResult<()> {
         loop {
             let next = LINK_STATE.with(|st| {
                 let mut st = st.borrow_mut();
@@ -1113,13 +1113,12 @@ impl Vm {
                 match self.lookup_class(&n) {
                     Ok(_) => {}
                     Err(Throw::Exception(e)) => {
-                        // php-src: "During inheritance of %s, while
-                        // autoloading %s: Uncaught ..." (the class cannot be
-                        // unlinked any more).
-                        // `zend_exception_uncaught_error` bails out.
-                        self.report_uncaught(&e);
-                        object::set_destructors_enabled(false);
-                        return Err(Throw::Fatal);
+                        // `zend_exception_uncaught_error`: the class cannot
+                        // be unlinked any more.
+                        let message = self.to_zstr(&Value::Object(e))?;
+                        return Err(self.fatal(&format!(
+                            "During inheritance of {ce_name}, while autoloading {n}: Uncaught {message}"
+                        )));
                     }
                     Err(t) => return Err(t),
                 }
@@ -1723,7 +1722,7 @@ impl Vm {
                     constants: cc.pending_consts,
                 });
             });
-            self.load_delayed_classes()?;
+            self.load_delayed_classes(&cls.name)?;
             if is_pending(&cls) {
                 self.resolve_pending(&cls, Some(&mut recorded))?;
             }

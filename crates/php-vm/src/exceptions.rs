@@ -267,6 +267,7 @@ impl Vm {
             idx -= 1;
         }
         let mut count = 0;
+        let mut include_filename: Option<ZStr> = None;
         loop {
             if limit != 0 && count >= limit {
                 break;
@@ -301,6 +302,20 @@ impl Vm {
                 }
                 &self.frames[pidx]
             });
+            // `fake_frame`: a function called by an include/eval op itself
+            // (an error handler, a stream wrapper method: a
+            // `ZEND_CALL_TOP_FUNCTION`) is followed by the include as a
+            // pseudo frame.
+            let fake = if matches!(f.kind, FrameKind::Include | FrameKind::Eval) {
+                None
+            } else {
+                prev.and_then(|p| {
+                    include_op_name(p).map(|n| (p.code.filename.clone(), p.line(), n))
+                })
+            };
+            let frame_filename = prev
+                .filter(|p| p.kind != FrameKind::Builtin)
+                .map(|p| p.code.filename.clone());
             let mut entry = HashTable::new();
             // File/line of the call site.
             let attr_site = idx
@@ -404,6 +419,29 @@ impl Vm {
             }
             let _ = out.push(Value::Array(ZArray::from_table(entry)));
             count += 1;
+            if let Some((file, line, name)) = fake.filter(|_| limit == 0 || count < limit) {
+                let mut e = HashTable::new();
+                e.insert(ArrayKey::Str(ZStr::from("file")), Value::Str(file));
+                e.insert(
+                    ArrayKey::Str(ZStr::from("line")),
+                    Value::Int(i64::from(line)),
+                );
+                if let (false, false, Some(inc)) = (ignore_args, name == "eval", &include_filename)
+                {
+                    e.insert(
+                        ArrayKey::Str(ZStr::from("args")),
+                        Value::Array(ZArray::from_values([Value::Str(inc.clone())])),
+                    );
+                }
+                e.insert(
+                    ArrayKey::Str(ZStr::from("function")),
+                    Value::Str(ZStr::from(name)),
+                );
+                let _ = out.push(Value::Array(ZArray::from_table(e)));
+                count += 1;
+            }
+            // `include_filename = filename`.
+            include_filename = frame_filename;
             if idx == 0 {
                 break;
             }
@@ -1055,6 +1093,26 @@ pub(crate) fn register(vm: &mut Vm) {
         ("RequestParseBodyException", "Exception"),
     ] {
         ClassBuilder::new(name).extends(vm, parent).register(vm);
+    }
+}
+
+/// The pseudo function name of the include/eval op frame `p` is executing
+/// (`zend_fetch_debug_backtrace`: `prev->opline->opcode ==
+/// ZEND_INCLUDE_OR_EVAL`).
+fn include_op_name(p: &crate::vm::Frame) -> Option<&'static str> {
+    use crate::opcode::{IncludeKind, Op};
+    if matches!(p.kind, FrameKind::Builtin) {
+        return None;
+    }
+    match p.code.ops.get(p.ip.checked_sub(1)?)? {
+        Op::Include { kind, .. } => Some(match kind {
+            IncludeKind::Include => "include",
+            IncludeKind::IncludeOnce => "include_once",
+            IncludeKind::Require => "require",
+            IncludeKind::RequireOnce => "require_once",
+            IncludeKind::Eval => "eval",
+        }),
+        _ => None,
     }
 }
 

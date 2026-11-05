@@ -108,6 +108,33 @@ pub(crate) struct LoopInfo {
     pub continue_patches: Vec<usize>,
     pub cleanup: Cleanup,
     pub finally_depth: usize,
+    /// Finally-body nesting (`FnCtx::in_finally`) the loop was opened at:
+    /// a `break`/`continue` compiled deeper jumps out of a finally block.
+    pub in_finally: u32,
+}
+
+/// An unwinding op emitted before a `goto` (`zend_compile_goto` calls
+/// `zend_handle_loops_and_finally`); the ones the jump does not leave are
+/// turned into NOPs once the label is known (`zend_resolve_goto_label`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GotoUnwind {
+    /// Frees the variable of the loop with this id.
+    Loop(usize),
+    /// Calls the finally block with this id.
+    Finally(u32),
+}
+
+/// A `goto` whose label is resolved when the function is finished.
+#[derive(Debug)]
+pub(crate) struct PendingGoto {
+    /// The `Jmp` op.
+    pub at: usize,
+    pub label: Vec<u8>,
+    pub line: u32,
+    /// Ids of the loops enclosing the `goto`.
+    pub loops: Vec<usize>,
+    /// The unwinding ops emitted before the jump, innermost first.
+    pub unwind: Vec<(usize, GotoUnwind)>,
 }
 
 /// Class context while compiling methods.
@@ -139,7 +166,7 @@ pub(crate) struct FnCtx {
     pub loops: Vec<LoopInfo>,
     pub finally_stack: Vec<u32>,
     pub labels: HashMap<Vec<u8>, (Label, Vec<usize>)>,
-    pub gotos: Vec<(usize, Vec<u8>, u32, Vec<usize>)>,
+    pub gotos: Vec<PendingGoto>,
     pub loop_ids: Vec<usize>,
     /// FE_RESET op of each foreach iterator (exceptions thrown while a
     /// `return` frees the loop are dispatched from the loop's position).
@@ -454,7 +481,14 @@ impl Compiler {
     /// Finalises a function context into an op array.
     pub(crate) fn finish_fn(&mut self, mut f: FnCtx) -> CResult<OpArray> {
         // Resolve gotos.
-        for (at, label, line, loops) in std::mem::take(&mut f.gotos) {
+        for PendingGoto {
+            at,
+            label,
+            line,
+            loops,
+            unwind,
+        } in std::mem::take(&mut f.gotos)
+        {
             let Some((target, label_loops)) = f.labels.get(&label) else {
                 return self.err(
                     format!(
@@ -484,8 +518,28 @@ impl Compiler {
             if !label_loops.iter().all(|l| loops.contains(l)) {
                 return self.err("'goto' into loop or switch statement is disallowed", line);
             }
+            // `zend_resolve_goto_label`: the loop frees and finally calls of
+            // the constructs the jump stays inside become NOPs.
+            for (op, u) in unwind {
+                let crossed = match u {
+                    GotoUnwind::Loop(id) => !label_loops.contains(&id),
+                    GotoUnwind::Finally(fid) => f
+                        .try_table
+                        .iter()
+                        .find_map(|(e, _)| match e.finally {
+                            Some((id, _, fe)) if id == fid => {
+                                Some(target_op < e.try_start || target_op >= fe)
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(true),
+                };
+                if !crossed {
+                    f.ops[op] = Op::Nop;
+                }
+            }
             if let Op::Jmp(t) = &mut f.ops[at] {
-                *t = *target;
+                *t = target_op;
             }
         }
         let mut try_table: Vec<(TryEntry, Label)> = std::mem::take(&mut f.try_table);

@@ -378,7 +378,13 @@ impl Vm {
                 let in_try = throw_ip >= entry.try_start && throw_ip < entry.try_end;
                 if in_try {
                     if let Some(cs) = entry.catch_start {
+                        exc = match self.free_left_iterators(&code, throw_ip, cs, exc) {
+                            Ok(e) => e,
+                            Err(t) => return Err(self.abandon_unwinding(t, base)),
+                        };
+                        let f = self.frame_mut();
                         f.ip = cs as usize;
+                        ctor_failed_unfinished(&f.calls);
                         f.calls.clear();
                         // `cleanup_live_vars`: the try body's temporaries
                         // (e.g. the left operand of `new A + new B()`) are
@@ -400,15 +406,29 @@ impl Vm {
                 }
                 if let Some((fin, fs, fe)) = entry.finally {
                     if throw_ip >= entry.try_start && throw_ip < entry.catch_end {
+                        exc = match self.free_left_iterators(&code, throw_ip, fs, exc) {
+                            Ok(e) => e,
+                            Err(t) => return Err(self.abandon_unwinding(t, base)),
+                        };
+                        let f = self.frame_mut();
                         f.fins[fin as usize] = FinState::Exception(exc);
                         f.ip = fs as usize;
+                        ctor_failed_unfinished(&f.calls);
                         f.calls.clear();
                         return Ok(());
                     }
                     if throw_ip >= fs && throw_ip < fe {
+                        let f = self.frame_mut();
                         let prev = std::mem::take(&mut f.fins[fin as usize]);
                         if let FinState::Exception(p) = prev {
-                            crate::exceptions::chain_previous(&exc, &p);
+                            if crate::fiber::is_graceful_exit(&exc)
+                                && crate::generator::is_close_marker(&exc)
+                            {
+                                // A force-closed generator rethrows it.
+                                exc = p;
+                            } else {
+                                crate::exceptions::chain_previous(&exc, &p);
+                            }
                         }
                     }
                 }
@@ -477,6 +497,35 @@ impl Vm {
         self.destruct_while_unwinding(exc)
     }
 
+    /// `cleanup_live_vars(op_num, catch_op_num)` for foreach iterators: an
+    /// exception handled in the frame it was thrown in first releases the
+    /// iterators of the loops it leaves (outermost first, the order of
+    /// the live-range table). Their destructors, and those of the operands
+    /// the throwing op freed, run with `exc` in flight before the handler
+    /// (`zend_objects_destroy_object`), so their exceptions chain to it.
+    #[cold]
+    fn free_left_iterators(
+        &mut self,
+        code: &crate::opcode::OpArray,
+        throw_ip: u32,
+        target: u32,
+        exc: php_runtime::Obj,
+    ) -> Result<php_runtime::Obj, Throw> {
+        if self.frame().iters.iter().any(Option::is_some) {
+            for (at, op) in code.ops.iter().enumerate() {
+                if let Op::FeReset { iter, end, .. } = op {
+                    // Live from after FE_RESET up to (excluding) the FE_FREE.
+                    let start = u32::try_from(at).unwrap_or(u32::MAX);
+                    let live = |ip: u32| start < ip && ip < *end;
+                    if live(throw_ip) && !live(target) {
+                        self.op_fe_free(*iter);
+                    }
+                }
+            }
+        }
+        self.destruct_while_unwinding(exc)
+    }
+
     /// Releases the temporaries, foreach iterators and unfinished calls of
     /// the current frame (which an exception is about to leave).
     fn release_frame_temporaries(&mut self) {
@@ -484,6 +533,8 @@ impl Vm {
         // releasing its arguments before `$this`; then `cleanup_live_vars`.
         // (The order decides which object handles are reused first.)
         let mut calls = std::mem::take(&mut self.frame_mut().calls);
+        // An abandoned `new` is not destructed (`zend_object_store_ctor_failed`).
+        ctor_failed_unfinished(&calls);
         while let Some(mut call) = calls.pop() {
             call.args.clear();
             call.named.clear();
@@ -1567,9 +1618,14 @@ impl Vm {
         }
     }
 
+    /// `ZEND_THROW` + `zend_throw_exception_object`.
     fn op_throw(&mut self, v: Value) -> Throw {
         match v {
             Value::Object(o) if self.instance_of(&o, b"throwable") => Throw::Exception(o),
+            Value::Object(_) => self.make_throw(
+                "Error",
+                "Cannot throw objects that do not implement Throwable",
+            ),
             _ => self.make_throw("Error", "Can only throw objects"),
         }
     }
@@ -1900,5 +1956,20 @@ impl Vm {
     /// CLI's large VM stack); the default assumes 8 MiB.
     pub fn set_native_stack_size(&mut self, bytes: usize) {
         self.native_stack_size = bytes;
+    }
+}
+
+/// `cleanup_unfinished_calls` + `ZEND_LIVE_NEW`: the object of a `new`
+/// whose constructor call an exception abandons before it was made is
+/// never destructed (`zend_object_store_ctor_failed`).
+#[cold]
+fn ctor_failed_unfinished(calls: &[crate::vm::PendingCall]) {
+    for c in calls {
+        if c.is_ctor {
+            if let Some(t) = &c.this {
+                let d = object::data(t);
+                d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
+            }
+        }
     }
 }
