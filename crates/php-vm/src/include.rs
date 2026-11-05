@@ -140,7 +140,9 @@ impl Vm {
                 .insert(filename.clone(), Rc::new(program));
         }
         let unit = Rc::new(unit);
-        self.units.push(unit.clone());
+        if declares_anything(&unit) {
+            self.units.push(unit.clone());
+        }
         Ok(CompileOutcome::Ok(unit))
     }
 
@@ -553,4 +555,20 @@ impl Vm {
             Err(t) => self.handle_top_throw(t),
         }
     }
+}
+
+/// Whether a compiled unit declares functions, closures, classes or
+/// attributed constants: only such units stay registered in
+/// [`Vm::units`] (Reflection looks closures up there and
+/// preloading images them). A unit that declares nothing is released once
+/// its code has run and nothing else holds it, like the op array php-src's
+/// `zend_include_or_eval` / `zend_eval_stringl` destroys after executing an
+/// included file or `eval()`'d string; keeping every such unit made each
+/// `eval()` call retain its op array for the rest of the request.
+fn declares_anything(unit: &CompiledUnit) -> bool {
+    !unit.hoisted_functions.is_empty()
+        || !unit.hoisted_classes.is_empty()
+        || !unit.decls.functions.borrow().is_empty()
+        || !unit.decls.classes.borrow().is_empty()
+        || !unit.decls.const_attributes.borrow().is_empty()
 }
