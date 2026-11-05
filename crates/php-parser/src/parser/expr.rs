@@ -1602,10 +1602,9 @@ impl Parser<'_> {
                 _ => return Err(self.unexpected(&[close])),
             }
         }
-        // `zend_ast_list_rtrim`: drop one trailing empty element.
-        if matches!(items.last(), Some(None)) {
-            items.pop();
-        }
+        // `zend_ast_list_rtrim` drops the one empty element after the last
+        // comma, which is never pushed: `[,]` keeps the empty element
+        // before it ("Cannot use empty array elements in arrays").
         Ok(items)
     }
 
