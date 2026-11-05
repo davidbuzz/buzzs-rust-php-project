@@ -224,6 +224,7 @@ impl Vm {
             self.frames.truncate(base);
             return self.handle_top_throw(t);
         }
+        self.observer_begin_top();
         let r = self.execute(base);
         self.frames.truncate(base);
         match r {
@@ -490,6 +491,7 @@ impl Vm {
         f.ret = RetTarget::Tmp(dst);
         f.builtin_name = kind_name.map(ZStr::from);
         self.frames.push(f);
+        self.observer_begin_top();
     }
 
     /// Runs a file as `include` would from builtin code (e.g. the
@@ -510,6 +512,7 @@ impl Vm {
         let map = self.cv_map_for(&unit.main.code, &globals);
         let f = Frame::with_vars(unit.main.code.clone(), FrameKind::Main, globals, Some(map));
         self.frames.push(f);
+        self.observer_begin_top();
         let base = self.frames.len() - 1;
         let r = self.execute(base);
         self.frames.truncate(base);

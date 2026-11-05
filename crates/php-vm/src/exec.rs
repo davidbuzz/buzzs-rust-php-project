@@ -294,10 +294,12 @@ impl Vm {
         // `zend_call_stack_overflowed()`: nested executions (callbacks,
         // destructors, __clone, ...) use the native stack.
         if self.native_stack_exhausted() {
+            self.observer_unwind(base, None);
             self.frames.truncate(base);
             return Err(crate::builtins::dump::stack_size_error(self));
         }
         if self.depth >= MAX_NESTED_EXECUTIONS {
+            self.observer_unwind(base, None);
             // A backstop for native stacks whose size we were not told.
             self.frames.truncate(base);
             return Err(crate::builtins::dump::stack_size_error(self));
@@ -318,6 +320,7 @@ impl Vm {
                     }
                 }
                 Err(t) => {
+                    self.observer_unwind(base, Some(&t));
                     self.frames.truncate(base);
                     return Err(t);
                 }
@@ -370,6 +373,9 @@ impl Vm {
                 }
             }
             // Unwind this frame.
+            if self.observer.enabled {
+                self.observer_end_frame(fidx, None, Some(&Throw::Exception(exc.clone())));
+            }
             let popped = self.frames.pop();
             if let Some(p) = &popped {
                 if let Some(g) = &p.generator {
@@ -1454,6 +1460,7 @@ impl Vm {
     pub(crate) fn op_return_raw(&mut self, v: Option<Value>, base: usize) -> VmResult<Flow> {
         let v = v.unwrap_or_default();
         let fidx = self.frames.len() - 1;
+        self.observer_end_frame(fidx, Some(&v), None);
         let mut frame = self.frames.pop().expect("frame");
         if let Some(g) = &frame.generator {
             crate::generator::finish_with(g, v);

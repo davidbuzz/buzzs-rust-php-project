@@ -187,7 +187,7 @@ pub enum ClassKind {
 }
 
 /// A compiled (unlinked) class declaration.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ClassDecl {
     /// Fully qualified name (generated for anonymous classes).
     pub name: ZStr,

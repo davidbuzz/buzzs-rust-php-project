@@ -340,6 +340,10 @@ pub struct Frame {
     pub caller_strict: bool,
     /// Whether the call came from internal code (no "called in" suffix).
     pub called_from_internal: bool,
+    /// Whether this invocation has an active begin/end observation.
+    pub(crate) observed: bool,
+    /// VM implementation frames must not be exposed as PHP calls.
+    pub(crate) observer_hidden: bool,
 }
 
 /// Keep small call buffers allocation-free without retaining exceptional frame sizes.
@@ -386,6 +390,8 @@ impl Frame {
             magic_name: None,
             caller_strict: false,
             called_from_internal: false,
+            observed: false,
+            observer_hidden: false,
         }
     }
 
@@ -417,6 +423,8 @@ impl Frame {
         self.magic_name = None;
         self.caller_strict = false;
         self.called_from_internal = false;
+        self.observed = false;
+        self.observer_hidden = false;
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
             clear_frame_buffer(&mut vs.slots);
@@ -514,6 +522,8 @@ impl Frame {
             magic_name: None,
             caller_strict: false,
             called_from_internal: false,
+            observed: false,
+            observer_hidden: false,
         }
     }
 
@@ -720,6 +730,8 @@ pub struct Vm {
     /// Active `__get`/`__set`/`__isset`/`__unset` guards: (object handle,
     /// property name, kind).
     pub prop_guards: HashSet<(u32, ZStr, u8)>,
+    /// Request-local observer initialization and callback state.
+    pub(crate) observer: crate::observer::ObserverState,
 }
 
 impl std::fmt::Debug for Vm {

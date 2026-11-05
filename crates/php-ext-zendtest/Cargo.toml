@@ -18,7 +18,8 @@ libc = "0.2"
 # Parts that need the VM hooks proposed in `proposals/vm-hooks.diff`: the
 # observer printer (`zend_test.observer.*`) and internal attribute
 # classes with validators.
-vm-hooks = []
+vm-hooks = ["observer"]
+observer = []
 
 [lints]
 workspace = true

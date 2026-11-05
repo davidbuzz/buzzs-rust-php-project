@@ -3,6 +3,7 @@
 mod config;
 mod extensions;
 mod getopt;
+mod preload;
 mod proctitle;
 mod sapi;
 mod startup;
@@ -284,6 +285,9 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
         err(format!("PHP:  {w}\n").as_bytes());
     }
     if let Err(status) = startup::module_startup(&cfg) {
+        return status;
+    }
+    if let Err(status) = preload::startup(&cfg) {
         return status;
     }
     do_cli(argv, &cfg)
@@ -588,6 +592,14 @@ fn new_vm(cfg: &Config) -> Vm {
     vm
 }
 
+fn new_request_vm(cfg: &Config) -> Result<Vm, i32> {
+    let mut vm = new_vm(cfg);
+    if let Err(error) = preload::install(&mut vm) {
+        return Err(vm.shutdown(Err(error)).max(1));
+    }
+    Ok(vm)
+}
+
 /// `php_request_startup()` (what `Vm::run_script` does before running).
 fn request_startup(vm: &mut Vm) {
     let ob = vm.ini_long("output_buffering");
@@ -606,7 +618,10 @@ fn request_startup(vm: &mut Vm) {
 /// become `$argv[1..]`.
 fn run_snippet(cfg: &Config, code: &[u8], args: &[Vec<u8>], with_handles: bool) -> i32 {
     let _ = with_handles;
-    let mut vm = new_vm(cfg);
+    let mut vm = match new_request_vm(cfg) {
+        Ok(vm) => vm,
+        Err(status) => return status,
+    };
     let mut request_argv = vec![b"Standard input code".to_vec()];
     request_argv.extend_from_slice(args);
     vm.set_cli_args("Standard input code", args);
@@ -711,7 +726,10 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config) -> 
             r
         }
         Mode::Standard | Mode::CliDirect | Mode::ProcessStdin => {
-            let mut vm = new_vm(cfg);
+            let mut vm = match new_request_vm(cfg) {
+                Ok(vm) => vm,
+                Err(status) => return status,
+            };
             vm.set_cli_args(&lossy(&php_self), &request_argv[1..]);
             sapi::register_variables(
                 &mut vm,
@@ -764,7 +782,10 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config) -> 
         }
         Mode::ReflectionExtInfo => {
             if req.reflection_what == b"main" {
-                let mut vm = new_vm(cfg);
+                let mut vm = match new_request_vm(cfg) {
+                    Ok(vm) => vm,
+                    Err(status) => return status,
+                };
                 request_startup(&mut vm);
                 out(&show_main_ini(&vm.ini));
                 return vm.shutdown(Ok(()));
@@ -779,7 +800,10 @@ else { echo \"Extension '$n' not present.\\n\"; exit(1); }";
             0
         }
         Mode::ShowIniDiff => {
-            let mut vm = new_vm(cfg);
+            let mut vm = match new_request_vm(cfg) {
+                Ok(vm) => vm,
+                Err(status) => return status,
+            };
             request_startup(&mut vm);
             out(&show_ini_diff(&vm.ini));
             vm.shutdown(Ok(()))
@@ -1055,7 +1079,10 @@ fn process_stdin(vm: &mut Vm, req: &Request) -> i32 {
 /// `-l`: `php_lint_script()` then the CLI's verdict line.
 fn lint(cfg: &Config, src: &[u8], php_self: &[u8]) -> i32 {
     let name = lossy(php_self);
-    let mut vm = new_vm(cfg);
+    let mut vm = match new_request_vm(cfg) {
+        Ok(vm) => vm,
+        Err(status) => return status,
+    };
     request_startup(&mut vm);
     let parsed = vm.parse_source(src, false, true);
     let warnings = match &parsed {

@@ -264,10 +264,24 @@ impl Vm {
     /// Pops the running generator frame and stores it in the generator.
     fn gen_suspend_frame(&mut self, base: usize, update: impl FnOnce(&mut GenData)) -> Flow {
         let fidx = self.frames.len() - 1;
+        // With observers the yielded value must be stored before the end
+        // notification reads it; otherwise update once, after the pop.
+        let mut update = Some(update);
+        if self.observer.enabled {
+            if let Some(g) = self.frame().generator.clone() {
+                if let Some(u) = update.take() {
+                    with(&g, u);
+                }
+                let value = with(&g, |d| d.value.clone()).flatten();
+                self.observer_end_frame(fidx, value.as_ref(), None);
+            }
+        }
         let mut frame = self.frames.pop().expect("generator frame");
         if let Some(g) = frame.generator.take() {
             with(&g, move |d| {
-                update(d);
+                if let Some(u) = update {
+                    u(d);
+                }
                 d.frame = Some(Box::new(frame));
                 d.state = GenState::Suspended;
             });
@@ -582,6 +596,7 @@ impl Vm {
         };
         frame.generator = Some(g.clone());
         self.frames.push(*frame);
+        self.observer_begin_top();
         let base = self.frames.len() - 1;
         let r = match exc {
             Some(e) => match self.handle_exception(e, base) {
@@ -632,10 +647,11 @@ impl Vm {
                 .flatten();
                 if let Some(f) = own {
                     self.frames.push(*f);
+                    self.observer_begin_top();
                     chain.push(gen.clone());
                 }
                 let r = self.gen_next_delegated(&gen);
-                self.gen_return_chain(chain);
+                self.gen_return_chain(chain, r.as_ref().err());
                 with(&gen, |d| {
                     if d.state == GenState::Running {
                         d.state = GenState::Suspended;
@@ -655,7 +671,7 @@ impl Vm {
             }
             let chain = self.gen_lend_chain(orig, &gen);
             let r = self.gen_run(&gen);
-            self.gen_return_chain(chain);
+            self.gen_return_chain(chain, r.as_ref().err());
             match r {
                 Ok(()) => {}
                 Err(Throw::Exception(e)) => {
@@ -736,6 +752,7 @@ impl Vm {
             .flatten();
             if let Some(f) = frame {
                 self.frames.push(*f);
+                self.observer_begin_top();
                 lent.push(g);
             }
         }
@@ -743,8 +760,12 @@ impl Vm {
     }
 
     /// Takes back the frames lent by [`Vm::gen_lend_chain`].
-    fn gen_return_chain(&mut self, lent: Vec<Obj>) {
+    fn gen_return_chain(&mut self, lent: Vec<Obj>, thrown: Option<&Throw>) {
         for g in lent.into_iter().rev() {
+            if self.observer.enabled && !self.frames.is_empty() {
+                let value = with(&g, |d| d.value.clone()).flatten();
+                self.observer_end_frame(self.frames.len() - 1, value.as_ref(), thrown);
+            }
             if let Some(f) = self.frames.pop() {
                 with(&g, |d| {
                     d.lent = false;

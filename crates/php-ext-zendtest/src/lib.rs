@@ -24,7 +24,7 @@ mod functions;
 mod ini;
 mod iterators;
 mod object_handlers;
-#[cfg(feature = "vm-hooks")]
+#[cfg(feature = "observer")]
 mod observer;
 mod patch;
 mod stack;
@@ -61,7 +61,7 @@ impl Extension for ZendTest {
         classes::register(m);
         iterators::register(m);
         object_handlers::register(m);
-        #[cfg(feature = "vm-hooks")]
+        #[cfg(feature = "observer")]
         observer::register(m);
         m.info(info);
         m.on_request_startup(state::request_startup);

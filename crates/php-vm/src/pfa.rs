@@ -640,6 +640,7 @@ impl Vm {
 
         // Run it with the bound values as variables.
         let mut f = Frame::new(unit.main.code.clone(), FrameKind::Eval);
+        f.observer_hidden = true;
         {
             let mut vars = f.vars.borrow_mut();
             let set = |vars: &mut crate::vm::VarStore, name: &str, v: Value| {

@@ -1122,6 +1122,9 @@ impl Vm {
             ));
         }
         self.frames.push(f);
+        if self.observer.enabled && !uf.is_generator() {
+            self.observer_begin_top();
+        }
         Ok(())
     }
 
@@ -1129,8 +1132,28 @@ impl Vm {
     pub(crate) fn call_builtin(
         &mut self,
         b: &Rc<Builtin>,
+        call: PendingCall,
+        strict: bool,
+    ) -> VmResult<Value> {
+        if !self.observer.enabled {
+            return self.call_builtin_impl(b, call, strict, false);
+        }
+        let depth = self.frames.len();
+        let keep = std::mem::replace(&mut self.observer.keep_builtin_frame, true);
+        let quiet = std::mem::take(&mut self.observer.quiet_builtin);
+        let result = self.call_builtin_impl(b, call, strict, quiet);
+        self.observer.keep_builtin_frame = keep;
+        self.observer_end_frame(depth, result.as_ref().ok(), result.as_ref().err());
+        self.frames.truncate(depth);
+        result
+    }
+
+    fn call_builtin_impl(
+        &mut self,
+        b: &Rc<Builtin>,
         mut call: PendingCall,
         strict: bool,
+        quiet: bool,
     ) -> VmResult<Value> {
         // A native `__call`/`__callStatic` gets the called name through
         // `vm.magic_call_name()`.
@@ -1189,18 +1212,28 @@ impl Vm {
         f.this.clone_from(&call.this);
         f.scope = call.scope.clone();
         f.called.clone_from(&call.called);
+        if self.observer.enabled {
+            f.observer_hidden = quiet
+                || (b.name.as_bytes() == b"__destruct"
+                    && call
+                        .scope
+                        .as_ref()
+                        .is_some_and(|c| c.name.as_bytes() == b"Generator"));
+        }
         self.frames.push(f);
         let depth = self.frames.len();
+        self.observer_begin_top();
+        // `zend_execute_internal` wraps the handler, which parses its own
+        // arguments: internal enter precedes arity and type checks.
+        self.observer_internal(depth - 1, None);
         // Arity.
         if npassed < b.required as usize && (!call.has_named || !call.named.is_empty()) {
             let e = self.arg_count_error_builtin(&fname(self), b, npassed);
-            self.pop_frames_to(depth);
-            return Err(e);
+            return self.builtin_arg_error(depth, e);
         }
         if !variadic && npassed > nparams {
             let e = self.arg_count_error_builtin(&fname(self), b, npassed);
-            self.pop_frames_to(depth);
-            return Err(e);
+            return self.builtin_arg_error(depth, e);
         }
         let mut call_args = std::mem::take(&mut call.args);
         for (i, a) in call_args.drain(..).enumerate() {
@@ -1220,8 +1253,7 @@ impl Vm {
                             "ArgumentCountError",
                             &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
                         );
-                        self.pop_frames_to(depth);
-                        return Err(e);
+                        return self.builtin_arg_error(depth, e);
                     }
                     values.push(self.builtin_default(b, i).unwrap_or_default());
                     passed.push(false);
@@ -1256,8 +1288,7 @@ impl Vm {
                 "ArgumentCountError",
                 &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
             );
-            self.pop_frames_to(depth);
-            return Err(e);
+            return self.builtin_arg_error(depth, e);
         }
         // Only named-argument gaps (`None`s, now filled with defaults) can
         // make `values` differ from the copy taken when the frame was pushed.
@@ -1275,8 +1306,7 @@ impl Vm {
                     fname(self)
                 ),
             );
-            self.pop_frames_to(depth);
-            return Err(e);
+            return self.builtin_arg_error(depth, e);
         }
         // Type coercion.
         let mut coerced = false;
@@ -1317,8 +1347,7 @@ impl Vm {
                 let callable = match self.zend_is_callable(v, true) {
                     Ok(callable) => callable,
                     Err(e) => {
-                        self.pop_frames_to(depth);
-                        return Err(e);
+                        return self.builtin_arg_error(depth, e);
                     }
                 };
                 match callable {
@@ -1332,16 +1361,14 @@ impl Vm {
                                 i + 1
                             ),
                         );
-                        self.pop_frames_to(depth);
-                        return Err(e);
+                        return self.builtin_arg_error(depth, e);
                     }
                 }
             }
             let ok = match self.verify_type(ty, v, &ctx) {
                 Ok(ok) => ok,
                 Err(e) => {
-                    self.pop_frames_to(depth);
-                    return Err(e);
+                    return self.builtin_arg_error(depth, e);
                 }
             };
             if !ok {
@@ -1364,8 +1391,7 @@ impl Vm {
                     )
                 };
                 let e = self.make_throw("TypeError", &msg);
-                self.pop_frames_to(depth);
-                return Err(e);
+                return self.builtin_arg_error(depth, e);
             }
         }
         if coerced {
@@ -1383,6 +1409,7 @@ impl Vm {
         };
         let mut r = (b.handler)(self, &mut args);
         r = self.flush_typed_arg_writes(r);
+        self.observer_internal(depth - 1, Some(&r));
         // Blocking builtins (sleep, stream reads) return to a pending
         // interrupt.
         if r.is_ok() {
@@ -1447,11 +1474,20 @@ impl Vm {
 
     /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
     fn pop_frames_to(&mut self, depth: usize) {
-        if self.frames.len() >= depth {
+        if self.frames.len() >= depth && !self.observer.keep_builtin_frame {
             let args = std::mem::take(&mut self.frames[depth - 1].args);
             self.frames.truncate(depth - 1);
             self.put_arg_vec(args);
         }
+    }
+
+    /// An argument error raised before a builtin's handler ran: the
+    /// internal-leave notification, then the frame pop.
+    fn builtin_arg_error(&mut self, depth: usize, e: Throw) -> VmResult<Value> {
+        let r = Err(e);
+        self.observer_internal(depth - 1, Some(&r));
+        self.pop_frames_to(depth);
+        r
     }
 
     fn arg_count_error_builtin(&mut self, fname: &str, b: &Builtin, given: usize) -> Throw {
@@ -1981,9 +2017,17 @@ impl Vm {
         let Some(f) = f else {
             return Err(self.make_throw("Error", &format!("Call to undefined function {name}()")));
         };
+        let quiet = matches!(&f, Func::Builtin(_)) && self.observer.enabled;
         let mut call = PendingCall::new(f);
         call.args = args.into_iter().map(Some).collect();
-        self.call_pending(call)
+        if !self.observer.enabled {
+            return self.call_pending(call);
+        }
+        let saved = self.observer.quiet_builtin;
+        self.observer.quiet_builtin = quiet;
+        let result = self.call_pending(call);
+        self.observer.quiet_builtin = saved;
+        result
     }
 }
 

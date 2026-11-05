@@ -34,7 +34,9 @@ pub mod interrupt;
 mod iter;
 mod lazy;
 pub mod object;
+mod observer;
 pub mod opcode;
+mod persistence;
 mod pfa;
 mod place;
 mod props;
@@ -46,6 +48,7 @@ mod variance;
 pub mod vm;
 mod weakref;
 
+pub use persistence::PersistentDeclarations;
 pub use vm::{Throw, Vm, VmResult};
 
 use php_runtime::{Value, ZArray, ZStr};
@@ -202,6 +205,7 @@ impl Vm {
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
             prop_guards: HashSet::new(),
+            observer: crate::observer::ObserverState::default(),
         };
         for n in ["error_reporting", "precision", "serialize_precision"] {
             vm.sync_ini(n);
@@ -309,6 +313,7 @@ impl Vm {
         if !fatal && php_memlimit::is_pending() {
             let _ = self.raise_pending_oom();
         }
+        self.observer_unwind(0, r.as_ref().err());
         self.frames.clear();
         // A shutdown function may raise its own OOM.
         php_memlimit::clear();
