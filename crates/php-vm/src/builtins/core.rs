@@ -1528,18 +1528,6 @@ fn call_user_func(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     cuf_call(vm, &cb, args, named, "call_user_func")
 }
 
-/// `PHP_FUNCTION(forward_static_call)`: the calling frame
-/// (`EX(prev_execute_data)`) must have a class scope.
-fn forward_static_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    if !caller_idx(vm).is_some_and(|i| vm.frames[i].scope.is_some()) {
-        return Err(vm.make_throw(
-            "Error",
-            "Cannot call forward_static_call() when no class scope is active",
-        ));
-    }
-    call_user_func(vm, a)
-}
-
 fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     let (args, named) = cufa_args(vm, &arr(a, 1))?;
