@@ -470,6 +470,56 @@ class B extends A { function m(): Y {} }
         "{out}"
     );
     assert!(out.contains("#1 {main} in t.php on line "), "{out}");
+#[test]
+fn core_introspection_follows_php_src_master() {
+    // method_exists() skips inherited private methods for class names;
+    // is_a()/is_subclass_of() deprecate strings without $allow_string;
+    // get_exception_handler(); instanceof on a constant folds to false.
+    assert_eq!(
+        run(r#"<?php
+class P { private function hidden() {} private static function sp() {} }
+class C extends P { private function own() {} }
+var_dump(method_exists('C', 'hidden'), method_exists('C', 'sp'), method_exists('C', 'own'), method_exists(new C, 'hidden'));
+var_dump(is_a('C', 'P'));
+var_dump(is_a('C', 'P', true));
+var_dump(is_subclass_of('C', 'P', false));
+var_dump(get_exception_handler());
+set_exception_handler('strlen');
+var_dump(get_exception_handler());
+set_exception_handler(null);
+var_dump(get_exception_handler());
+var_dump("abc" instanceof stdClass, 1 instanceof C);
+"#),
+        "bool(false)\nbool(false)\nbool(true)\nbool(true)\n\
+\nDeprecated: Calling is_a() with a string when $allow_string is false in t.php on line 5\nbool(false)\n\
+bool(true)\n\
+\nDeprecated: Calling is_subclass_of() with a string when $allow_string is false in t.php on line 7\nbool(false)\n\
+NULL\nstring(6) \"strlen\"\nNULL\nbool(false)\nbool(false)\n"
+    );
+}
+
+#[test]
+fn constant_class_and_method_names_are_compile_errors() {
+    let cases = [
+        ("<?php\nclass p { function c() { (0)::t; } }\n", "Illegal class name in t.php on line 2"),
+        ("<?php\n(-0)::$prop;\n", "Illegal class name in t.php on line 2"),
+        ("<?php\n[]::X::X;\n", "Illegal class name in t.php on line 2"),
+        ("<?php\n$o = new stdClass;\n$o->{0}();\n", "Method name must be a string in t.php on line 3"),
+        ("<?php\nstdClass::{null}();\n", "Method name must be a string in t.php on line 2"),
+        (
+            "<?php\nclass T { function m() { try {} catch (static $e) {} } }\n",
+            "Bad class name in the catch statement in t.php on line 2",
+        ),
+        (
+            "<?php\nnamespace A;\nfunction assert() {}\n",
+            "Defining a custom assert() function is not allowed, as the function has special semantics in t.php on line 3",
+        ),
+    ];
+    for (src, msg) in cases {
+        let (status, out) = run_status(src);
+        assert_ne!(status, 0, "{src}");
+        assert!(out.contains(&format!("Fatal error: {msg}")), "{src}: {out}");
+    }
 }
 
 /// `forward_static_call[_array]()` (`ext/standard/basic_functions.c`) keep

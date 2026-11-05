@@ -1130,12 +1130,9 @@ impl Compiler {
             self.f().line = c.span.line;
             let mut classes = Vec::new();
             for t in &c.types {
-                let lc = t.name.to_ascii_lowercase();
-                if t.kind == ast::NameKind::Unqualified
-                    && matches!(lc.as_slice(), b"self" | b"static" | b"parent")
-                {
-                    let spec = self.class_spec_name(t)?;
-                    let _ = spec;
+                // `zend_is_const_default_class_ref` in zend_compile_try.
+                if t.is_special("self") || t.is_special("static") || t.is_special("parent") {
+                    return self.err("Bad class name in the catch statement", c.span.line);
                 }
                 let n = self.resolve_class_name(t);
                 classes.push(self.lit_str(&n));
@@ -1325,7 +1322,12 @@ impl Compiler {
             })
         } else if matches!(
             e.kind,
-            ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::StaticCall { .. }
+            ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::StaticCall { .. }
+                // `ZEND_ASSIGN_REF` yields a VAR holding the reference, sent
+                // with SEND_VAR_NO_REF(_EX) like a call result.
+                | ExprKind::AssignRef { .. }
         ) {
             let op = self.compile_expr(e)?;
             Ok(ArgSrc::CallResult(op))

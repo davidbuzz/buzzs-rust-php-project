@@ -200,6 +200,12 @@ impl Compiler {
                 fd.span.line,
             ));
         }
+        if unq.eq_ignore_ascii_case(b"assert") {
+            return self.err(
+                "Defining a custom assert() function is not allowed, as the function has special semantics",
+                fd.span.line,
+            );
+        }
         let spec = BodySpec {
             kind: FnKind::Function,
             name: ZStr::from(name),

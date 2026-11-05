@@ -1014,6 +1014,12 @@ fn restore_exception_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(true))
 }
 
+/// `get_exception_handler()` (Zend/zend_builtin_functions.c): the active
+/// user exception handler, or null.
+fn get_exception_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(vm.exception_handlers.last().cloned().unwrap_or_default())
+}
+
 fn trigger_error(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let msg = s(a, 0);
     let level = if a.has(1) { i(a, 1) } else { 1024 };
@@ -2527,6 +2533,11 @@ pub(crate) fn register(vm: &mut Vm) {
         vm,
         "restore_exception_handler(): true",
         restore_exception_handler,
+    );
+    reg(
+        vm,
+        "get_exception_handler(): ?callable",
+        get_exception_handler,
     );
     reg(
         vm,

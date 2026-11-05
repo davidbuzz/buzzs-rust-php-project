@@ -819,6 +819,11 @@ impl Compiler {
         match cref {
             ast::ClassRef::Name(n) => self.class_spec_name(n),
             ast::ClassRef::Expr(e) => {
+                // `zend_compile_class_ref`: a class reference that compiles
+                // to a constant other than a string is "Illegal class name".
+                if !matches!(self.try_fold(e), None | Some(Value::Str(_))) {
+                    return self.err("Illegal class name", e.span.line);
+                }
                 let op = self.compile_expr(e)?;
                 Ok(ClassSpec::Dyn(op))
             }

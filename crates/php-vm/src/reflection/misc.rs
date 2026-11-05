@@ -107,6 +107,7 @@ const CORE_FUNCTIONS: &[&str] = &[
     "restore_error_handler",
     "set_exception_handler",
     "restore_exception_handler",
+    "get_exception_handler",
     "get_declared_classes",
     "get_declared_traits",
     "get_declared_interfaces",
