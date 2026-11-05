@@ -1043,7 +1043,7 @@ impl Vm {
             RSeg::Prop(name) => {
                 if last {
                     return match wop {
-                        WOp::Assign(v) => self.write_property(&obj, name, v),
+                        WOp::Assign(v) => self.write_property_walk(&obj, name, v),
                         WOp::FetchRw => match self.native_read_property(
                             &obj,
                             name,

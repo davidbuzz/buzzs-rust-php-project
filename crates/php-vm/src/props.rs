@@ -884,8 +884,47 @@ impl Vm {
     }
 
     /// Writes `$o->name = v`; returns the assigned value.
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn write_property(&mut self, o: &Obj, name: &ZStr, v: Value) -> VmResult<Value> {
+        self.write_property_ex(o, name, v, 0)
+    }
+
+    /// [`Vm::write_property`] from an assignment walk, whose `o` is a
+    /// temporary handle the walk owns: lets the typed-property path tell
+    /// when user code run by the coercion (`__toString`) released the
+    /// last real holder of the object (`zend_std_write_property`'s
+    /// `GC_ADDREF(zobj)` / `GC_DELREF(zobj) == 0` check).
+    pub(crate) fn write_property_walk(
+        &mut self,
+        o: &Obj,
+        name: &ZStr,
+        v: Value,
+    ) -> VmResult<Value> {
+        self.write_property_ex(o, name, v, 1)
+    }
+
+    /// `zend_object_released_while_assigning_to_property_error`.
+    #[cold]
+    #[inline(never)]
+    fn released_while_assigning(&mut self, pi: &PropInfo) -> crate::vm::Throw {
+        self.make_throw(
+            "Error",
+            &format!(
+                "Object was released while assigning to property {}::${}",
+                pi.class, pi.name
+            ),
+        )
+    }
+
+    /// [`Vm::write_property`]; `caller_temps` counts the handles to `o`
+    /// the caller holds only as temporaries.
+    #[allow(clippy::too_many_lines)]
+    fn write_property_ex(
+        &mut self,
+        o: &Obj,
+        name: &ZStr,
+        v: Value,
+        caller_temps: usize,
+    ) -> VmResult<Value> {
         if !matches!(v, Value::Reference(_)) {
             if let Some(slot) = Self::plain_property_slot(o, name, true) {
                 let old = object::data(o).slots.borrow_mut()[slot].replace(v.clone());
@@ -895,6 +934,7 @@ impl Vm {
             }
         }
         let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let caller = o;
         let o = &lazy_target;
         let cls = object::class_of(o).clone();
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.write_property) {
@@ -951,7 +991,21 @@ impl Vm {
                     return self.magic_write(o, name, v);
                 }
                 self.check_write_access(o, &pi, cur_defined, "modify")?;
+                // Handles held only by this call chain: the caller's
+                // temporaries, `lazy_target` and the hooked `backing`.
+                let release_check = caller_temps > 0
+                    && pi.ty.is_some()
+                    && matches!(v, Value::Object(_))
+                    && Obj::ptr_eq(caller, o);
+                let temps = caller_temps + 1 + usize::from(pi.hooks.is_some());
+                let rc_before = o.refcount();
                 let (typed_ref, v) = self.typed_prop_write(o, &pi, v)?;
+                if release_check {
+                    let rc_after = o.refcount();
+                    if rc_after < rc_before && rc_after <= temps {
+                        return Err(self.released_while_assigning(&pi));
+                    }
+                }
                 if let Some(f) = object::data(o).readonly_init.borrow_mut().get_mut(idx) {
                     *f = false;
                 }
