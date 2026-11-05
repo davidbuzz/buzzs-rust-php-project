@@ -476,3 +476,20 @@ fn memory_limit_emulation() {
         Some(Diagnostic::OutOfMemory { .. })
     ));
 }
+
+#[test]
+fn fallible_reserve_makes_room() {
+    // Without the accounting allocator installed (test binaries), no
+    // `memory_limit` is enforced: the reservation always succeeds.
+    let mut v: Vec<u8> = Vec::new();
+    assert!(crate::core::reserve(&mut v, 300).is_ok());
+    assert!(v.capacity() >= 300);
+    let mut w = vec![1u8; 10];
+    assert!(crate::core::reserve_exact(&mut w, 5).is_ok());
+    assert!(w.capacity() >= 15);
+    assert!(!crate::core::oom_pending());
+    // A large substring still converts in full (gh17399_substr's input).
+    let s = vec![b'a'; 64 * 1024];
+    let out = ic().substr(&s, 0, None, Some(b"UTF-8"));
+    assert_eq!(out.value.as_ref().map(Vec::len), Some(s.len()));
+}

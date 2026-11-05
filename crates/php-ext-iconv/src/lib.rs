@@ -83,6 +83,12 @@ fn finish<T>(
     out: Outcome<T>,
     ok: impl FnOnce(T) -> Value,
 ) -> VmResult<Value> {
+    // `RETURN_OOM()`: an allocation crossed `memory_limit` and the library
+    // stopped early (`ZEND_HAS_OOM()`); the VM raises the delayed fatal
+    // right after this call, so the partial result is dropped unbuilt.
+    if php_vm::oom_pending() {
+        return Ok(Value::Null);
+    }
     if let Some(d) = out.diagnostic {
         raise(vm, a, d)?;
     }

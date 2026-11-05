@@ -1064,6 +1064,7 @@ name = "php-iconv"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-memlimit",
 ]
 
 [[package]]

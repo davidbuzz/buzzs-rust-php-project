@@ -28,6 +28,32 @@ impl Limit {
     }
 }
 
+/// `smart_str_falloc(.., fallible)`: makes room for `extra` more bytes
+/// in `buf` under the process-wide `memory_limit` accounting. When that
+/// would cross the limit, the violation is recorded (the VM raises the
+/// delayed fatal right after the builtin returns, `ZEND_HAS_OOM()`) and
+/// [`IconvErr::Alloc`] is returned without allocating.
+pub(crate) fn reserve(buf: &mut Vec<u8>, extra: usize) -> Result<(), IconvErr> {
+    if buf.capacity() - buf.len() >= extra {
+        return Ok(());
+    }
+    php_memlimit::fallible(|| buf.try_reserve(extra)).map_err(|_| IconvErr::Alloc(extra))
+}
+
+/// [`reserve`] for an exactly sized buffer (`safe_femalloc`/`erealloc`).
+pub(crate) fn reserve_exact(buf: &mut Vec<u8>, extra: usize) -> Result<(), IconvErr> {
+    if buf.capacity() - buf.len() >= extra {
+        return Ok(());
+    }
+    php_memlimit::fallible(|| buf.try_reserve_exact(extra)).map_err(|_| IconvErr::Alloc(extra))
+}
+
+/// `ZEND_HAS_OOM()`: a `memory_limit` violation is pending; loops over
+/// script-sized input stop early (the VM raises the fatal after the call).
+pub(crate) fn oom_pending() -> bool {
+    php_memlimit::is_pending()
+}
+
 /// A `smart_str`: tracks whether a buffer was ever allocated, since PHP
 /// distinguishes "nothing appended" (`s == NULL`) from an empty string.
 #[derive(Debug, Default, Clone)]
@@ -99,7 +125,14 @@ pub fn iconv_string(
             out: None,
         };
     }
-    let mut buf = vec![0u8; bsz];
+    let mut buf: Vec<u8> = Vec::new();
+    if let Err(e) = reserve_exact(&mut buf, bsz) {
+        return StringResult {
+            err: Some(e),
+            out: None,
+        };
+    }
+    buf.resize(bsz, 0);
     let mut pos = 0usize;
     let mut result: Result<usize, i32> = Ok(0);
     let mut errno = 0;
@@ -119,7 +152,10 @@ pub fn iconv_string(
             }
             if errno == libc::E2BIG && !inp.is_empty() {
                 bsz += in_len;
-                if let Err(e) = limit.check(bsz) {
+                if let Err(e) = limit
+                    .check(bsz)
+                    .and_then(|()| reserve_exact(&mut buf, bsz - buf.len()))
+                {
                     return StringResult {
                         err: Some(e),
                         out: None,
@@ -187,6 +223,7 @@ pub(crate) fn appendl(
         while !inp.is_empty() {
             let start = d.buf.len();
             limit.check(start + growth)?;
+            reserve(&mut d.buf, growth)?;
             d.allocated = true;
             d.buf.resize(start + growth, 0);
             let mut pos = start;
@@ -215,6 +252,7 @@ pub(crate) fn appendl(
         loop {
             let start = d.buf.len();
             limit.check(start + growth)?;
+            reserve(&mut d.buf, growth)?;
             d.allocated = true;
             d.buf.resize(start + growth, 0);
             let mut pos = start;
