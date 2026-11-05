@@ -113,6 +113,12 @@ fn is_cli_std_handle(handle: i64) -> bool {
 
 fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (r, cell) = res::stream_arg_res(vm, a, 0)?;
+    if res::is_enclosed(&r) {
+        // The memory stream inside php://temp (GH-21221):
+        // php_stream_encloses() set PHP_STREAM_FLAG_NO_FCLOSE.
+        vm.php_warning("cannot close the provided stream, as it must not be manually closed")?;
+        return Ok(Value::Bool(false));
+    }
     // A stream in use by one of its own callbacks cannot be closed
     // (PHP_STREAM_FLAG_NO_FCLOSE is set around user-space calls).
     let busy = cell.get().is_none();
@@ -143,6 +149,7 @@ fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         let id = s.id();
         result = res::fclosing(id, || bridge::run(vm, || s.close()))?;
+        res::release_enclosed(id);
         crate::process::reap(cell.id());
     } else {
         r.close();

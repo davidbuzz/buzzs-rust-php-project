@@ -156,6 +156,14 @@ impl Drop for StreamCell {
 #[derive(Debug)]
 pub struct StreamRes(pub Rc<StreamCell>);
 
+/// The resource payload of the memory stream a `php://temp` or `data:`
+/// stream encloses (`php_stream_temp_create()` registers it as a resource
+/// of its own; `php_stream_encloses()` sets `PHP_STREAM_FLAG_NO_FCLOSE` on
+/// it). It stands for the enclosing stream, which reads and writes through
+/// it.
+#[derive(Debug)]
+pub struct EnclosedRes(pub Weak<StreamCell>);
+
 /// The shared state behind a stream-context resource.
 #[derive(Debug)]
 pub struct CtxCell {
@@ -186,6 +194,63 @@ thread_local! {
     /// Persistent ids of open persistent streams.
     static PERSISTENT: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
     static DEFAULT_CONTEXT: RefCell<Option<Resource>> = const { RefCell::new(None) };
+    /// The enclosed-stream resources ([`EnclosedRes`]) by the library id of
+    /// their enclosing stream.
+    static ENCLOSED: RefCell<HashMap<u64, Resource>> = RefCell::new(HashMap::new());
+    /// [`ENCLOSED`] size at which entries of closed streams are pruned.
+    static ENCLOSED_PRUNE_AT: Cell<usize> = const { Cell::new(16) };
+}
+
+/// Whether `php_stream_temp_create()` backs a stream of this type with an
+/// enclosed memory stream resource.
+fn has_enclosed_stream(s: &Stream) -> bool {
+    matches!(s.ops_label(), "TEMP" | "RFC2397")
+}
+
+/// Registers the enclosed-stream resource of `cell`, numbered right after
+/// the enclosing stream's (`php_stream_memory_create()` inside
+/// `php_stream_temp_create()`).
+fn register_enclosed(cell: &Rc<StreamCell>) {
+    let inner = Resource::new(STREAM, Some(Box::new(EnclosedRes(Rc::downgrade(cell)))));
+    ENCLOSED.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= ENCLOSED_PRUNE_AT.with(Cell::get) {
+            // Streams released without fclose(): php_stream_free_enclosed().
+            m.retain(|_, r| {
+                let live = enclosing_cell(r).is_some_and(|c| !c.is_closed());
+                if !live {
+                    r.close();
+                }
+                live
+            });
+            ENCLOSED_PRUNE_AT.with(|p| p.set((m.len() * 2).max(16)));
+        }
+        m.insert(cell.id(), inner);
+    });
+}
+
+/// The enclosing stream of an enclosed-stream resource.
+fn enclosing_cell(r: &Resource) -> Option<Rc<StreamCell>> {
+    r.data()
+        .as_ref()
+        .and_then(|d| d.downcast_ref::<EnclosedRes>())
+        .and_then(|e| e.0.upgrade())
+}
+
+/// Whether `r` is the enclosed memory stream of a `php://temp` or `data:`
+/// stream (`PHP_STREAM_FLAG_NO_FCLOSE`: `fclose()` refuses it).
+pub fn is_enclosed(r: &Resource) -> bool {
+    r.data()
+        .as_ref()
+        .is_some_and(|d| d.downcast_ref::<EnclosedRes>().is_some())
+}
+
+/// `php_stream_free_enclosed()`: the enclosing stream `id` was closed, so
+/// its enclosed-stream resource is freed too.
+pub fn release_enclosed(id: u64) {
+    if let Some(r) = ENCLOSED.with(|m| m.borrow_mut().remove(&id)) {
+        r.close();
+    }
 }
 
 /// Wraps a library stream in a new resource.
@@ -210,6 +275,7 @@ pub fn new_stream_ex(mut stream: Stream, wrapper_data: Option<Value>, persistent
         stream.context = None;
     }
     let id = stream.id();
+    let encloses = has_enclosed_stream(&stream);
     let cell = Rc::new(StreamCell {
         ctx_keep: RefCell::new(stream.context.as_ref().and_then(ctx_cell_of_lib)),
         stream: RefCell::new(Some(stream)),
@@ -228,6 +294,9 @@ pub fn new_stream_ex(mut stream: Stream, wrapper_data: Option<Value>, persistent
     let r = Resource::new(ty, Some(Box::new(StreamRes(Rc::clone(&cell)))));
     cell.handle.set(r.handle());
     STREAMS.with(|m| m.borrow_mut().insert(id, Rc::downgrade(&cell)));
+    if encloses {
+        register_enclosed(&cell);
+    }
     Value::Resource(r)
 }
 
@@ -270,12 +339,15 @@ pub fn new_stream_with_handle(stream: Stream, handle: i64) -> Value {
     Value::Resource(r)
 }
 
-/// The cell of a stream resource (open or not).
+/// The cell of a stream resource (open or not). An enclosed-stream
+/// resource gives its enclosing stream's.
 pub fn cell_of(r: &Resource) -> Option<Rc<StreamCell>> {
-    r.data()
-        .as_ref()
-        .and_then(|d| d.downcast_ref::<StreamRes>())
-        .map(|s| Rc::clone(&s.0))
+    let d = r.data();
+    let d = d.as_ref()?;
+    if let Some(s) = d.downcast_ref::<StreamRes>() {
+        return Some(Rc::clone(&s.0));
+    }
+    d.downcast_ref::<EnclosedRes>().and_then(|e| e.0.upgrade())
 }
 
 /// The library stream id of a stream resource.
@@ -434,6 +506,9 @@ pub fn live_resources() -> Vec<(i64, &'static str, Value)> {
         };
         let r = Resource::with_handle(c.handle(), ty, Some(Box::new(StreamRes(Rc::clone(&c)))));
         out.push((c.handle(), ty, Value::Resource(r)));
+        if let Some(inner) = ENCLOSED.with(|m| m.borrow().get(&c.id()).cloned()) {
+            out.push((inner.handle(), STREAM, Value::Resource(inner)));
+        }
     }
     let ctxs: Vec<Rc<CtxCell>> =
         CONTEXTS.with(|m| m.borrow().values().filter_map(Weak::upgrade).collect());
@@ -685,6 +760,37 @@ mod tests {
         drop(alias);
         drop(v);
         assert!(stream_value_by_id(id).is_none());
+    }
+
+    #[test]
+    fn temp_streams_enclose_a_resource() {
+        let s = php_streams::memory::temp_create(
+            php_streams::mode::TempMode::Default,
+            php_streams::memory::MAX_MEM,
+            None,
+        );
+        let id = s.id();
+        let v = new_stream(s, None);
+        let Value::Resource(r) = &v else { panic!() };
+        let inner = ENCLOSED
+            .with(|m| m.borrow().get(&id).cloned())
+            .expect("enclosed");
+        assert_eq!(inner.handle(), r.handle() + 1);
+        assert!(is_enclosed(&inner));
+        assert!(!is_enclosed(r));
+        let cell = cell_of(&inner).expect("enclosing cell");
+        assert_eq!(cell.id(), id);
+        assert!(live_resources()
+            .iter()
+            .any(|(h, ty, _)| *h == inner.handle() && *ty == STREAM));
+        release_enclosed(id);
+        assert!(inner.is_closed());
+
+        // php://memory streams enclose nothing.
+        let m = php_streams::memory::memory_create(php_streams::mode::TempMode::Default);
+        let mid = m.id();
+        let _mv = new_stream(m, None);
+        assert!(ENCLOSED.with(|e| e.borrow().get(&mid).is_none()));
     }
 
     #[test]
