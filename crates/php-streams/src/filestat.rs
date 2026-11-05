@@ -234,10 +234,17 @@ pub fn php_stat(filename: &[u8], ty: FsType) -> StatResult {
     }
 }
 
-/// `clearstatcache()`. The realpath cache is not implemented (no cache is
-/// kept), so `clear_realpath_cache` has nothing else to clear.
-pub fn clearstatcache(_clear_realpath_cache: bool, _filename: Option<&[u8]>) {
+/// `clearstatcache()` (`php_clear_stat_cache()`): forgets the stat cache
+/// and, with `clear_realpath_cache`, the realpath cache entry of
+/// `filename` or (without one) the whole realpath cache.
+pub fn clearstatcache(clear_realpath_cache: bool, filename: Option<&[u8]>) {
     state::clear_stat_cache();
+    if clear_realpath_cache {
+        match filename {
+            Some(f) => crate::vcwd::cache_del(f),
+            None => crate::vcwd::cache_clean(),
+        }
+    }
 }
 
 fn non_plain(filename: &[u8]) -> Option<std::rc::Rc<dyn wrapper::Wrapper>> {

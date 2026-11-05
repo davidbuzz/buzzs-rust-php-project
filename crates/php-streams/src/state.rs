@@ -36,6 +36,11 @@ pub struct Settings {
     pub user_agent: Option<Vec<u8>>,
     /// `from` (`FG(from_address)`; `None` when unset).
     pub from_address: Option<Vec<u8>>,
+    /// `realpath_cache_size` in bytes (`CWDG(realpath_cache_size_limit)`;
+    /// 0 disables the realpath cache).
+    pub realpath_cache_size_limit: i64,
+    /// `realpath_cache_ttl` in seconds.
+    pub realpath_cache_ttl: i64,
 }
 
 impl Default for Settings {
@@ -53,6 +58,8 @@ impl Default for Settings {
             sapi_is_cli: true,
             user_agent: None,
             from_address: None,
+            realpath_cache_size_limit: 4096 * 1024,
+            realpath_cache_ttl: 120,
         }
     }
 }
