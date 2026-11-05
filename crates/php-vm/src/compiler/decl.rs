@@ -629,7 +629,7 @@ impl Compiler {
                 }
                 modifiers_to_flags(p.modifiers)
             };
-            let attrs = self.attributes_at(&p.attributes, Some(spec.line_start))?;
+            let mut attrs = self.attributes_at(&p.attributes, Some(spec.line_start))?;
             let promoted_tgt = if promote == 0 {
                 0
             } else {
@@ -642,6 +642,13 @@ impl Compiler {
                 None,
                 false,
             )?;
+            if promoted_tgt != 0 {
+                super::attrs::retain_promoted(
+                    &mut attrs,
+                    super::attrs::target::PARAMETER,
+                    promoted_tgt,
+                );
+            }
             // `Type $p = null` (PHP 5 style, `forced_allow_nullable`) is
             // exempt from the optional-before-required notice.
             if p.default.is_some() && !forced && u32::try_from(i).is_ok_and(|i| i < required) {
@@ -1971,7 +1978,7 @@ impl Compiler {
                                     );
                                 }
                             }
-                            let attrs = self.attributes(&p.attributes)?;
+                            let mut attrs = self.attributes(&p.attributes)?;
                             self.validate_attributes(
                                 &attrs,
                                 super::attrs::target::PROPERTY,
@@ -1979,6 +1986,11 @@ impl Compiler {
                                 None,
                                 false,
                             )?;
+                            super::attrs::retain_promoted(
+                                &mut attrs,
+                                super::attrs::target::PROPERTY,
+                                super::attrs::target::PARAMETER,
+                            );
                             let mut pfl = normalize_set_visibility(
                                 self,
                                 pfl,

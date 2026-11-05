@@ -8,6 +8,7 @@ use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::func::flags;
 use php_vm::vm::FrameKind;
 use php_vm::Vm;
+use std::rc::Rc;
 
 /// Handler of the functions that only parse (no) parameters and return
 /// `null`.
@@ -217,6 +218,11 @@ fn call_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 )?;
                 return Ok(Value::Null);
             };
+            // Without an object, even an instance method runs (without
+            // `$this`) with the class as the called scope.
+            if let Some(r) = vm.call_class_method(&c, &method.to_string_lossy(), args.clone()) {
+                return r;
+            }
             Value::Array(ZArray::from_values([
                 Value::Str(c.name.clone()),
                 Value::Str(method),
@@ -332,20 +338,32 @@ fn call_with_consumed_args(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(a.value_error(vm, 3, "must be between 0 and 4294967295"));
     }
     let list: Vec<Value> = args.values().cloned().collect();
+    // `zend_call_function` moves a consumed argument into the callee
+    // unless it is a reference; the bits of the moved ones come back.
+    let mut actual = 0_i64;
+    for (i, v) in list.iter().enumerate().take(32) {
+        if consumed & (1_i64 << i) != 0 && !matches!(v, Value::Reference(_)) {
+            actual |= 1_i64 << i;
+        }
+    }
     let r = vm.call_value(&cb, list)?;
     Ok(Value::Array(ZArray::from_pairs([
-        ("consumed_args", Value::Int(0)),
+        ("consumed_args", Value::Int(actual)),
         ("retval", r),
     ])))
 }
 
 /// `zend_test_refcount(mixed $value)`: values are not reference counted
-/// the same way here; report what php-src does for a fresh value.
+/// the same way here; arrays and objects report their handle count. A
+/// string counts like `debug_zval_dump()` does, without this call's own
+/// copies (the frame's argument copy and `a.at(0)`'s clone).
 fn refcount(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(match a.at(0) {
         Value::Array(arr) => Value::Int(i64::try_from(arr.refcount()).unwrap_or(1)),
         Value::Object(o) => Value::Int(i64::try_from(o.refcount()).unwrap_or(1)),
-        Value::Str(st) if !st.is_empty() => Value::Int(1),
+        Value::Str(st) if !st.is_empty() && !st.is_interned() => {
+            Value::Int(i64::try_from(st.refcount().saturating_sub(2).max(1)).unwrap_or(1))
+        }
         _ => Value::Int(-1),
     })
 }
@@ -405,11 +423,34 @@ fn call_stack_use_all(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 /// `zend_test_is_string_marked_as_valid_utf8(string $string)`: strings
-/// carry no UTF-8 flag here; report validity.
-fn is_valid_utf8(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(
-        std::str::from_utf8(a.str(0).as_bytes()).is_ok(),
-    ))
+/// carry no UTF-8 flag here; report validity. A compile-time string that
+/// interning replaces by an equal permanent string (a class, property,
+/// method or function name registered by an extension, which carries no
+/// flag) is unmarked, as in php-src.
+fn is_valid_utf8(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let s = a.str(0);
+    let b = s.as_bytes();
+    if b.len() > 1 && s.is_interned() && is_permanent_name(vm, b) {
+        return Ok(Value::Bool(false));
+    }
+    Ok(Value::Bool(std::str::from_utf8(b).is_ok()))
+}
+
+/// Whether `name` is a permanent interned string: a name an extension
+/// registered (single characters are known strings with the flag).
+fn is_permanent_name(vm: &Vm, name: &[u8]) -> bool {
+    use php_vm::class::cflags;
+    let internal_fn = matches!(
+        vm.functions.get(&ZStr::from(name)),
+        Some(php_vm::func::Func::Builtin(_))
+    );
+    internal_fn
+        || vm.classes.values().any(|c| {
+            c.flags & cflags::INTERNAL != 0
+                && (c.lc_name.as_bytes() == name
+                    || c.methods.contains_key(name)
+                    || c.props.iter().any(|p| p.name.as_bytes() == name))
+        })
 }
 
 /// `zend_get_map_ptr_last()`.
@@ -455,11 +496,44 @@ fn fill_packed_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+thread_local! {
+    /// The hidden class standing in for `le_throwing_resource_dtor`.
+    static THROWING_DTOR: std::cell::RefCell<Option<Rc<php_vm::class::Class>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// `le_throwing_resource_dtor`: the native destructor of the hidden object
+/// a throwing resource owns. Releasing the resource releases the object,
+/// so the exception is thrown where the resource is released, the way the
+/// VM runs object destructors.
+fn throwing_resource_dtor(vm: &mut Vm, _o: &php_runtime::Obj) -> VmResult<()> {
+    Err(vm.throw("Exception", "Throwing resource destructor called"))
+}
+
+/// Registers the hidden destructor class (outside the class table).
+fn register_throwing_resource(vm: &mut Vm) {
+    let cls = php_vm::ext::ClassBuilder::new("ZendTestThrowingResourceDtor")
+        .flags(php_vm::ext::class_flags::FINAL)
+        .hooks(php_vm::ext::ClassHooks {
+            destruct: Some(throwing_resource_dtor),
+            ..Default::default()
+        })
+        .register(vm);
+    vm.classes.remove(&cls.lc_name);
+    vm.class_order.retain(|n| *n != cls.lc_name);
+    THROWING_DTOR.with(|c| *c.borrow_mut() = Some(cls));
+}
+
 /// `zend_test_create_throwing_resource()`.
-fn create_throwing_resource(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+fn create_throwing_resource(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let cls = THROWING_DTOR.with(|c| c.borrow().clone());
+    let data = match cls {
+        Some(cls) => Some(Box::new(vm.new_object(&cls)?) as Box<dyn std::any::Any>),
+        None => None,
+    };
     Ok(Value::Resource(php_runtime::Resource::new(
         "throwing resource",
-        None,
+        data,
     )))
 }
 
@@ -586,6 +660,57 @@ fn cast_fread(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// `zend_test_uri_parser` and friends are not provided by this binding.
 #[allow(clippy::too_many_lines)]
+/// The attributes (`zend_add_function_attribute`,
+/// `zend_add_global_constant_attribute`) and exposed doc comments that
+/// `test_arginfo.h` attaches to functions and constants.
+fn register_stub_metadata(vm: &mut Vm) {
+    let message = |m: &str| vec![(Some("message"), s(m))];
+    let functions = [
+        (
+            "zend_test_deprecated_attr",
+            vec![attribute("Deprecated", message("custom message"))],
+        ),
+        (
+            "zend_test_nodiscard",
+            vec![attribute("NoDiscard", message("custom message"))],
+        ),
+        (
+            "zend_test_deprecated_nodiscard",
+            vec![
+                attribute("Deprecated", message("custom message")),
+                attribute("NoDiscard", message("custom message 2")),
+            ],
+        ),
+        (
+            "zend_test_attribute_with_named_argument",
+            vec![attribute(
+                "ZendTestAttributeWithArguments",
+                vec![(Some("arg"), s("foo"))],
+            )],
+        ),
+    ];
+    for (name, attrs) in functions {
+        vm.builtin_attributes
+            .insert(ZStr::from(name), Rc::new(attrs));
+    }
+    vm.builtin_doc_comments.insert(
+        ZStr::from("zend_test_nullable_array_return"),
+        ZStr::from(
+            "/**\n     * \"Lorem ipsum\"\n     * @see https://www.php.net\n     * @since 8.3\n     */",
+        ),
+    );
+    vm.const_attributes.insert(
+        ZStr::from("ZEND_TEST_ATTRIBUTED_CONSTANT"),
+        Rc::new(vec![attribute(
+            "Deprecated",
+            vec![
+                (Some("message"), s("use something else")),
+                (Some("since"), s("version 1.5")),
+            ],
+        )]),
+    );
+}
+
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     m.function("zend_trigger_bailout(): never", trigger_bailout);
     m.function(
@@ -787,10 +912,15 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for f in ["zend_test_nodiscard", "zend_test_deprecated_nodiscard"] {
         edit_function(vm, f, |b| b.flags |= flags::NODISCARD);
     }
+    register_stub_metadata(vm);
+    register_throwing_resource(vm);
     let dnf = crate::classes::type_of(vm, "Iterator|(Traversable&Countable)");
     edit_function(vm, "zend_test_internal_dnf_arguments", |b| {
         if let Some(p) = b.params.first_mut() {
             p.ty.clone_from(&dnf);
+            // The stub-signature parser ends the parameter list at the
+            // DNF group's `)`.
+            p.name = ZStr::from("arg");
         }
         b.return_type = dnf;
     });

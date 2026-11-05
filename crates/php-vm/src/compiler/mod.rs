@@ -1,6 +1,6 @@
 //! AST → opcode compiler (`Zend/zend_compile.c`).
 
-mod attrs;
+pub(crate) mod attrs;
 mod constexpr;
 mod decl;
 mod expr;

@@ -302,6 +302,18 @@ impl Vm {
                 }
                 &self.frames[pidx]
             });
+            // `zend_fetch_debug_backtrace`: code an internal function runs
+            // directly (`zend_execute`, e.g. zend_test_compile_string()) is a
+            // dummy frame, skipped when its caller has no file to preserve.
+            if matches!(f.kind, FrameKind::Include | FrameKind::Eval)
+                && prev.is_some_and(|p| p.kind == FrameKind::Builtin)
+            {
+                if idx == 0 {
+                    break;
+                }
+                idx -= 1;
+                continue;
+            }
             // `fake_frame`: a function called by an include/eval op itself
             // (an error handler, a stream wrapper method: a
             // `ZEND_CALL_TOP_FUNCTION`) is followed by the include as a
@@ -327,7 +339,11 @@ impl Vm {
                     ArrayKey::Str(ZStr::from("line")),
                     Value::Int(i64::from(*line)),
                 );
-            } else if let Some(prev) = prev.filter(|p| p.kind != FrameKind::Builtin) {
+            } else if let Some(prev) = prev.filter(|p| {
+                // Nor the code-less bottom frame of a `_ZendTestFiber`.
+                p.kind != FrameKind::Builtin
+                    && !(p.kind == FrameKind::Main && Rc::ptr_eq(&p.code, &self.empty_code))
+            }) {
                 entry.insert(
                     ArrayKey::Str(ZStr::from("file")),
                     Value::Str(prev.code.filename.clone()),
@@ -923,6 +939,23 @@ fn trace_as_string(vm: &mut Vm, o: &Obj) -> VmResult<String> {
     })
 }
 
+/// `Exception::__toString` calls `getTraceAsString()` through
+/// `zend_call_function`: a real call, which observers see.
+#[cold]
+fn observed_trace_as_string(vm: &mut Vm, o: &Obj) -> VmResult<String> {
+    let m = object::class_of(o)
+        .methods
+        .get(&ZStr::from("gettraceasstring"))
+        .cloned();
+    let Some(m) = m else {
+        return trace_as_string(vm, o);
+    };
+    Ok(match vm.call_method(o, &m, Vec::new())? {
+        Value::Str(s) => s.to_string_lossy(),
+        _ => String::new(),
+    })
+}
+
 fn get_trace_as_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = trace_as_string(vm, &a.this_obj())?;
     Ok(Value::Str(ZStr::from(s)))
@@ -943,7 +976,11 @@ fn exc_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let file = vm.to_zstr(&file_v)?;
         let line_v = read_prop(vm, &e, "line")?;
         let line = vm.to_long(&line_v)?;
-        let trace = trace_as_string(vm, &e)?;
+        let trace = if vm.observer.enabled {
+            observed_trace_as_string(vm, &e)?
+        } else {
+            trace_as_string(vm, &e)?
+        };
         let trace = if trace.is_empty() {
             "#0 {main}\n".to_string()
         } else {

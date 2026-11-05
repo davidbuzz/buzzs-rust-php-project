@@ -61,6 +61,8 @@ impl Extension for ZendTest {
         functions::register(m);
         zpp::register(m);
         classes::register(m);
+        // fiber.c: `_ZendTestFiber` (its context switching is the VM's).
+        php_vm::ext::register_zend_test_fiber(m.vm());
         iterators::register(m);
         object_handlers::register(m);
         #[cfg(feature = "observer")]

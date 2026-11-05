@@ -676,6 +676,9 @@ impl Vm {
             }));
             let mut call = PendingCall::new(func);
             call.is_ctor = true;
+            // Never called; marks the object constructor-failed when an
+            // argument throws (`ZEND_LIVE_NEW`).
+            call.this = Some(o);
             self.push_pending(call);
             return Ok(true);
         };
@@ -1271,20 +1274,32 @@ impl Vm {
         result
     }
 
-    /// `zend_compile_func_num_args()` / `zend_compile_func_get_args()`:
-    /// inside a function body, a statically named zero-argument call
-    /// compiles to `ZEND_FUNC_NUM_ARGS` / `ZEND_FUNC_GET_ARGS`, so no
-    /// internal call exists for observers to see. (Only consulted while
-    /// observers are enabled.)
+    /// `zend_try_compile_special_func()`: statically named calls without
+    /// named arguments that php-src compiles to dedicated opcodes, so no
+    /// internal call exists for observers to see. Inside a function body,
+    /// `func_num_args()` / `func_get_args()` become `ZEND_FUNC_NUM_ARGS` /
+    /// `ZEND_FUNC_GET_ARGS`; `strlen($x)` becomes `ZEND_STRLEN`; and
+    /// `call_user_func()` / `call_user_func_array()` become
+    /// `ZEND_INIT_USER_CALL` + `ZEND_SEND_USER`/`ZEND_SEND_ARRAY`
+    /// (`zend_compile_func_cuf()` / `zend_compile_func_cufa()`), calling
+    /// the callback directly. (Only consulted while observers are enabled.)
     fn compiles_to_opcode(&self, b: &Builtin, call: &PendingCall) -> bool {
-        call.direct
-            && call.args.is_empty()
-            && !call.has_named
-            && matches!(b.name.as_bytes(), b"func_num_args" | b"func_get_args")
-            && self
-                .frames
-                .last()
-                .is_some_and(|caller| caller.kind == FrameKind::Function)
+        if !call.direct || call.has_named {
+            return false;
+        }
+        match b.name.as_bytes() {
+            b"func_num_args" | b"func_get_args" => {
+                call.args.is_empty()
+                    && self
+                        .frames
+                        .last()
+                        .is_some_and(|caller| caller.kind == FrameKind::Function)
+            }
+            b"strlen" => call.args.len() == 1,
+            b"call_user_func" => !call.args.is_empty(),
+            b"call_user_func_array" => call.args.len() == 2,
+            _ => false,
+        }
     }
 
     #[allow(clippy::too_many_lines)] // the builtin call protocol (zend_execute_internal)
@@ -1355,10 +1370,12 @@ impl Vm {
         if self.observer.enabled {
             f.observer_hidden = quiet
                 || (b.name.as_bytes() == b"__destruct"
-                    && call
-                        .scope
-                        .as_ref()
-                        .is_some_and(|c| c.name.as_bytes() == b"Generator"))
+                    && call.scope.as_ref().is_some_and(|c| {
+                        matches!(
+                            c.name.as_bytes(),
+                            b"Generator" | b"Fiber" | b"_ZendTestFiber"
+                        )
+                    }))
                 || self.compiles_to_opcode(b, &call);
         }
         self.frames.push(f);
@@ -1450,7 +1467,6 @@ impl Vm {
             return self.builtin_arg_error(depth, e);
         }
         // Type coercion.
-        let mut coerced = false;
         for (i, v) in values.iter_mut().enumerate() {
             if !passed[i] {
                 continue;
@@ -1471,7 +1487,6 @@ impl Vm {
             if ty.is_mixed() || accepts_without_coercion(ty.mask, v) {
                 continue;
             }
-            coerced = true;
             let fname = fname(self);
             let pname = p.name.to_string_lossy();
             let ctx = TypeCtx {
@@ -1544,10 +1559,18 @@ impl Vm {
                 let e = self.make_throw("TypeError", &msg);
                 return self.builtin_arg_error(depth, e);
             }
-        }
-        if coerced {
-            if let Some(f) = self.frames.get_mut(depth - 1) {
-                frame_args(&values[..nframe_args], &mut f.args);
+            // Weak-mode zpp converts to a string in place
+            // (`zend_parse_arg_str_weak`), which backtraces show; other
+            // scalar conversions only fill C locals, leaving the argument as
+            // passed (`NULL` for a deprecated null-to-int).
+            if matches!(v, Value::Str(_)) && i < nframe_args {
+                if let Some(slot) = self
+                    .frames
+                    .get_mut(depth - 1)
+                    .and_then(|f| f.args.get_mut(i))
+                {
+                    *slot = Some(v.clone());
+                }
             }
         }
         let mut args = Args {

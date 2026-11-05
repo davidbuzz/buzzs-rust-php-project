@@ -91,6 +91,29 @@ pub(crate) fn fn_file(f: &FnRef) -> Option<ZStr> {
     }
 }
 
+/// The key of a native function or method in [`Vm::builtin_attributes`] /
+/// [`Vm::builtin_doc_comments`]: lowercase `name` or `class::method`.
+pub(crate) fn builtin_key(f: &FnRef) -> Option<ZStr> {
+    let Func::Builtin(b) = &f.func else {
+        return None;
+    };
+    let name = b.name.as_bytes().to_ascii_lowercase();
+    Some(match &f.method {
+        Some(m) => {
+            let mut k = m.scope().lc_name.as_bytes().to_vec();
+            k.extend_from_slice(b"::");
+            k.extend_from_slice(&name);
+            ZStr::from(k)
+        }
+        None => ZStr::from(name),
+    })
+}
+
+/// The doc comment of a native function exposed by its stub.
+pub(crate) fn builtin_doc_comment(vm: &Vm, f: &FnRef) -> Option<ZStr> {
+    builtin_key(f).and_then(|k| vm.builtin_doc_comments.get(&k).cloned())
+}
+
 /// The reflected function.
 pub(crate) fn this_fn(vm: &mut Vm, a: &Args) -> VmResult<FnRef> {
     match this_refl(vm, a)? {
@@ -417,7 +440,7 @@ fn rf_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))),
             None => Value::Bool(false),
         },
-        Func::Builtin(_) => Value::Bool(false),
+        Func::Builtin(_) => builtin_doc_comment(vm, &f).map_or(Value::Bool(false), Value::Str),
     })
 }
 
@@ -464,7 +487,10 @@ fn rf_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let attrs = match &f.func {
         Func::User(u) => u.attributes.clone(),
-        Func::Builtin(_) => Vec::new(),
+        Func::Builtin(_) => builtin_key(&f)
+            .and_then(|k| vm.builtin_attributes.get(&k))
+            .map(|v| (**v).clone())
+            .unwrap_or_default(),
     };
     super::attribute::attributes_array_in(vm, &attrs, t, scope.as_ref(), fn_file(&f), a)
 }

@@ -4,6 +4,42 @@
 use super::{CResult, Compiler};
 use crate::class::{cflags, AttributeInfo};
 use php_runtime::ZStr;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+/// The validator of an extension's internal attribute
+/// (`zend_internal_attribute.validator`): receives the target
+/// (`Attribute::TARGET_*`) and returns the compile error, if any.
+pub type ExtAttributeValidator = fn(target: u32) -> Option<String>;
+
+thread_local! {
+    /// Attribute classes registered by extensions
+    /// (`zend_mark_internal_attribute`), by lowercase name.
+    static EXT_ATTRIBUTES: RefCell<HashMap<Vec<u8>, (u32, Option<ExtAttributeValidator>)>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Registers an extension's internal attribute class.
+pub(crate) fn register_internal_attribute(
+    name: &str,
+    flags: u32,
+    validator: Option<ExtAttributeValidator>,
+) {
+    let key = name
+        .trim_start_matches('\\')
+        .to_ascii_lowercase()
+        .into_bytes();
+    EXT_ATTRIBUTES.with(|m| m.borrow_mut().insert(key, (flags, validator)));
+}
+
+/// The flags of an extension's internal attribute class.
+pub(crate) fn ext_attribute_flags(lcname: &[u8]) -> Option<u32> {
+    EXT_ATTRIBUTES.with(|m| m.borrow().get(lcname).map(|(f, _)| *f))
+}
+
+fn ext_attribute_validator(lcname: &[u8]) -> Option<ExtAttributeValidator> {
+    EXT_ATTRIBUTES.with(|m| m.borrow().get(lcname).and_then(|(_, v)| *v))
+}
 
 /// `Attribute::TARGET_*`.
 pub(crate) mod target {
@@ -33,6 +69,8 @@ enum Validator {
     AllowDynamicProperties,
     Deprecated,
     NoDiscard,
+    /// Registered by an extension.
+    Ext,
 }
 
 /// `zend_internal_attribute_get`: flags and validator of an internal
@@ -51,8 +89,18 @@ fn internal_attribute(lcname: &[u8]) -> Option<(u32, Validator)> {
         ),
         b"nodiscard" => (t::METHOD | t::FUNCTION, Validator::NoDiscard),
         b"delayedtargetvalidation" => (t::ALL, Validator::None),
-        _ => return None,
+        _ => (ext_attribute_flags(lcname)?, Validator::Ext),
     })
+}
+
+/// `zend_compile_attributes`: drops the internal attributes of a promoted
+/// constructor parameter that only apply to the other declaration (the
+/// parameter or the property, `tgt`) and so are not added to it.
+pub(crate) fn retain_promoted(attrs: &mut Vec<AttributeInfo>, tgt: u32, promoted: u32) {
+    attrs.retain(|a| {
+        internal_attribute(&lc(&a.name))
+            .is_none_or(|(flags, _)| tgt & flags != 0 || promoted & flags == 0)
+    });
 }
 
 /// `zend_get_attribute_target_names`.
@@ -193,6 +241,7 @@ impl Compiler {
                 (Validator::NoDiscard, _) if in_hook => {
                     Some("#[\\NoDiscard] is not supported for property hooks".to_string())
                 }
+                (Validator::Ext, _) => ext_attribute_validator(&lcname).and_then(|v| v(tgt)),
                 _ => None,
             };
             if let Some(m) = msg {
@@ -205,7 +254,45 @@ impl Compiler {
 
 #[cfg(test)]
 mod tests {
-    use super::{target, target_names};
+    use super::{
+        ext_attribute_flags, register_internal_attribute, retain_promoted, target, target_names,
+    };
+    use crate::class::AttributeInfo;
+    use php_runtime::ZStr;
+
+    fn attr(name: &str) -> AttributeInfo {
+        AttributeInfo {
+            name: ZStr::from(name),
+            args: Vec::new(),
+            line: 1,
+            strict: false,
+        }
+    }
+
+    #[test]
+    fn promoted_parameters_keep_only_matching_internal_attributes() {
+        register_internal_attribute("Test\\PropOnly", target::PROPERTY, None);
+        assert_eq!(
+            ext_attribute_flags(b"test\\proponly"),
+            Some(target::PROPERTY)
+        );
+        let all = || {
+            vec![
+                attr("\\Test\\PropOnly"),
+                attr("SensitiveParameter"),
+                attr("UserAttribute"),
+            ]
+        };
+        let names = |v: &[AttributeInfo]| -> Vec<String> {
+            v.iter().map(|a| a.name.to_string_lossy()).collect()
+        };
+        let mut param = all();
+        retain_promoted(&mut param, target::PARAMETER, target::PROPERTY);
+        assert_eq!(names(&param), ["SensitiveParameter", "UserAttribute"]);
+        let mut prop = all();
+        retain_promoted(&mut prop, target::PROPERTY, target::PARAMETER);
+        assert_eq!(names(&prop), ["\\Test\\PropOnly", "UserAttribute"]);
+    }
 
     #[test]
     fn names_in_php_order() {

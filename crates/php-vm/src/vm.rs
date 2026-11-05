@@ -760,6 +760,14 @@ pub struct Vm {
     /// `#[\Deprecated]` suffixes (" since X, msg") of native functions,
     /// by lowercase name.
     pub builtin_deprecations: HashMap<ZStr, Vec<u8>>,
+    /// Attributes of native functions and methods declared by stubs
+    /// (`zend_add_function_attribute`), by lowercase `name` or
+    /// `class::method`.
+    pub builtin_attributes: HashMap<ZStr, Rc<Vec<crate::class::AttributeInfo>>>,
+    /// Doc comments of native functions and methods exposed by stubs
+    /// (`@genstubs-expose-comment-block`), keyed like
+    /// [`Vm::builtin_attributes`].
+    pub builtin_doc_comments: HashMap<ZStr, ZStr>,
     /// Class constants whose `#[\Deprecated]` notice is being built.
     pub(crate) const_deprecation_guard: HashSet<usize>,
     /// Attributes of user constants declared with `const` (by name).

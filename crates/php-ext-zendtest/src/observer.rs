@@ -8,7 +8,9 @@
 //! with their return value or type.
 
 use php_runtime::{Value, ZStr};
-use php_vm::ext::{ModuleBuilder, ObservedFrame, ObserverHooks, VmResult};
+use php_vm::ext::{
+    FiberContext, FiberState, ModuleBuilder, ObservedFrame, ObserverHooks, VmResult,
+};
 use php_vm::vm::FrameKind;
 use php_vm::Vm;
 use std::cell::{Cell, RefCell};
@@ -88,7 +90,8 @@ fn wants(vm: &Vm, f: &ObservedFrame) -> bool {
 fn show_init_backtrace(vm: &mut Vm) {
     let mut s = format!("{}<!--\n", indent(0));
     let pad = indent(4);
-    for fr in vm.frames.iter().rev() {
+    let fiber_bases = vm.running_fiber_bases();
+    for (i, fr) in vm.frames.iter().enumerate().rev() {
         match (fr.kind, &fr.func) {
             (FrameKind::Function | FrameKind::Builtin, Some(func)) => {
                 let name = func.name().to_string_lossy();
@@ -106,9 +109,22 @@ fn show_init_backtrace(vm: &mut Vm) {
                 let _ = writeln!(s, "{pad}{{main}} {}", fr.code.filename.to_string_lossy());
             }
         }
+        if fiber_bases.contains(&i) {
+            // The bottom frame of a fiber's VM stack (`zend_fiber_execute`):
+            // a function-less frame without an op array.
+            let _ = writeln!(s, "{pad}{{main}} [no active file]");
+        }
     }
     let _ = writeln!(s, "{}-->", indent(0));
     out(vm, &s);
+}
+
+/// `observer_show_opcode`: the current opline of user code.
+fn show_opcode(vm: &mut Vm, f: &ObservedFrame) {
+    if let (Some(op), true) = (f.opcode, ini(vm, "show_opcode")) {
+        let line = format!("{}<!-- opcode: '{op}' -->\n", indent(0));
+        out(vm, &line);
+    }
 }
 
 /// `observer_fcall_init`: called once per function, on its first call.
@@ -122,6 +138,7 @@ fn init(vm: &mut Vm, f: &ObservedFrame) -> bool {
         if ini(vm, "show_init_backtrace") {
             show_init_backtrace(vm);
         }
+        show_opcode(vm, f);
     }
     true
 }
@@ -139,6 +156,7 @@ fn begin(vm: &mut Vm, f: &ObservedFrame) {
     };
     out(vm, &line);
     DEPTH.with(|d| d.set(d.get() + 1));
+    show_opcode(vm, f);
 }
 
 /// `php_var_export_ex(retval, level, buf)`.
@@ -251,12 +269,89 @@ fn end(vm: &mut Vm, f: &ObservedFrame, retval: Option<&Value>) {
         );
         out(vm, &line);
     }
+    show_opcode(vm, f);
     DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
     let line = match display(f) {
         Some(n) => format!("{}</{n}{}>\n", indent(0), retval_info(vm, retval)),
         None => format!("{}</file '{}'>\n", indent(0), file_name(f)),
     };
     out(vm, &line);
+}
+
+/// `%p` of a fiber context.
+fn ptr(ctx: &FiberContext) -> String {
+    format!("{:#x}", ctx.id)
+}
+
+/// `fiber_init_observer`.
+fn fiber_init(vm: &mut Vm, ctx: &FiberContext) {
+    if ini(vm, "fiber_init") {
+        out(vm, &format!("<!-- alloc: {} -->\n", ptr(ctx)));
+    }
+}
+
+/// `fiber_destroy_observer`.
+fn fiber_destroy(vm: &mut Vm, ctx: &FiberContext) {
+    if ini(vm, "fiber_destroy") {
+        out(vm, &format!("<!-- destroy: {} -->\n", ptr(ctx)));
+    }
+}
+
+/// `fiber_address_observer`, `fiber_enter_observer` and
+/// `fiber_suspend_observer`, in their registration order.
+fn fiber_switch(vm: &mut Vm, from: &FiberContext, to: &FiberContext) {
+    if !ini(vm, "fiber_switch") {
+        return;
+    }
+    let mut s = format!(
+        "<!-- switching from fiber {} to {} -->\n",
+        ptr(from),
+        ptr(to)
+    );
+    // fiber_enter_observer
+    if to.status == FiberState::Init {
+        let _ = writeln!(s, "<init '{}'>", ptr(to));
+    } else if to.is_fiber && to.caller == Some(from.id) {
+        if to.destroyed {
+            let _ = writeln!(s, "<destroying '{}'>", ptr(to));
+        } else if to.status != FiberState::Dead {
+            let _ = writeln!(s, "<resume '{}'>", ptr(to));
+        }
+    }
+    // fiber_suspend_observer
+    if from.status == FiberState::Dead {
+        let what = if from.is_fiber && from.threw {
+            "threw"
+        } else if from.is_fiber && from.destroyed {
+            "destroyed"
+        } else {
+            "returned"
+        };
+        let _ = writeln!(s, "<{what} '{}'>", ptr(from));
+    } else if from.is_fiber && from.caller.is_none() {
+        let _ = writeln!(s, "<suspend '{}'>", ptr(from));
+    }
+    out(vm, &s);
+}
+
+/// `declared_function_observer` / `declared_class_observer`.
+fn declared(vm: &mut Vm, what: &str, lcname: &ZStr) {
+    if ini(vm, "observe_declaring") {
+        let line = format!(
+            "{}<!-- declared {what} '{}' -->\n",
+            indent(0),
+            c_str(lcname)
+        );
+        out(vm, &line);
+    }
+}
+
+fn function_declared(vm: &mut Vm, lcname: &ZStr) {
+    declared(vm, "function", lcname);
+}
+
+fn class_linked(vm: &mut Vm, lcname: &ZStr) {
+    declared(vm, "class", lcname);
 }
 
 /// `zend_test_execute_internal`: around every native call.
@@ -318,6 +413,11 @@ fn module_startup(vm: &mut Vm) {
         internal_enter: execute_internal.then_some(internal_enter as fn(&mut Vm, &ObservedFrame)),
         internal_leave: execute_internal
             .then_some(internal_leave as fn(&mut Vm, &ObservedFrame, Option<&Value>)),
+        fiber_init: enabled.then_some(fiber_init as fn(&mut Vm, &FiberContext)),
+        fiber_switch: enabled.then_some(fiber_switch as fn(&mut Vm, &FiberContext, &FiberContext)),
+        fiber_destroy: enabled.then_some(fiber_destroy as fn(&mut Vm, &FiberContext)),
+        function_declared: enabled.then_some(function_declared as fn(&mut Vm, &ZStr)),
+        class_linked: enabled.then_some(class_linked as fn(&mut Vm, &ZStr)),
     });
     if ini(vm, "set_vm_interrupt_on_end") {
         vm.register_interrupt_handler(on_interrupt);

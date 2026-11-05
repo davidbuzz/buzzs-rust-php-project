@@ -194,3 +194,150 @@ var_dump(strlen($_POST['a'] ?? '') < 100 * 1024);
     );
     assert!(out.ends_with("bool(true)\n"), "{out}");
 }
+
+#[test]
+fn stub_attributes_and_doc_comments_of_internal_symbols() {
+    let out = run(r#"
+$a = (new ReflectionFunction('zend_test_attribute_with_named_argument'))->getAttributes()[0];
+echo $a->getName(), '|', $a->newInstance()->arg, '|';
+$m = new ReflectionMethod(ZendAttributeTest::class, 'testMethod');
+echo get_class($m->getAttributes()[0]->newInstance()), '|';
+$d = (new ReflectionConstant('ZEND_TEST_ATTRIBUTED_CONSTANT'))->getAttributes()[0]->newInstance();
+echo $d->since, '|', strlen((new ReflectionFunction('zend_test_nullable_array_return'))->getDocComment()), '|';
+echo (new ReflectionClass(ZendTestPropertyAttribute::class))->isInternal() ? 'internal' : 'user';"#);
+    assert_eq!(
+        out,
+        "ZendTestAttributeWithArguments|foo|ZendTestAttribute|version 1.5|82|internal"
+    );
+}
+
+#[test]
+fn internal_attributes_on_promoted_parameters_follow_their_targets() {
+    // attribute-promotion-{parameter,property}-only.phpt
+    let out = run(r#"
+class AttrTest {
+    public function __construct(
+        #[ZendTestPropertyAttribute('foo')] public $prop,
+        #[ZendTestParameterAttribute('bar')] public $param,
+    ) {}
+}
+$r = new ReflectionClass(AttrTest::class);
+foreach ($r->getConstructor()->getParameters() as $p) {
+    echo 'param ', $p->getName(), ':';
+    foreach ($p->getAttributes() as $a) { echo $a->getName(); }
+    echo ' prop ', $p->getName(), ':';
+    foreach ($r->getProperty($p->getName())->getAttributes() as $a) { echo $a->getName(); }
+    echo ' ';
+}"#);
+    assert_eq!(
+        out,
+        "param prop: prop prop:ZendTestPropertyAttribute \
+         param param:ZendTestParameterAttribute prop param: "
+    );
+}
+
+#[test]
+fn custom_attribute_validator_runs_at_compile_time() {
+    // Zend/tests/attributes/016_custom_attribute_validation.phpt
+    let out = run("#[ZendTestAttribute] function foo() {}");
+    assert!(
+        out.contains("Fatal error: Only classes can be marked with #[ZendTestAttribute]"),
+        "{out}"
+    );
+}
+
+#[test]
+fn consumed_args_report_the_moved_arguments() {
+    // consumed_args_basic.phpt
+    let out = run(r#"
+$r = zend_test_call_with_consumed_args(static fn ($a, $b) => $b, [[1], "x"], 1);
+echo $r["consumed_args"], '|', $r["retval"], '|';
+$r = zend_test_call_with_consumed_args(static fn ($a) => $a, [1], 0);
+echo $r["consumed_args"];"#);
+    assert_eq!(out, "1|x|0");
+}
+
+#[test]
+fn throwing_resource_destructor_throws_where_released() {
+    // gh17408.phpt
+    let out = run(r#"
+function test() {
+    try { zend_test_create_throwing_resource(); } catch (Exception $e) { echo $e->getMessage(), '|'; }
+    $r = zend_test_create_throwing_resource();
+}
+try { test(); } catch (Exception $e) { echo get_class($e), ':', $e->getLine(); }"#);
+    assert_eq!(out, "Throwing resource destructor called|Exception:6");
+}
+
+#[test]
+fn dnf_argument_errors_name_the_parameter() {
+    // internal_dnf_arguments.phpt
+    let out = run(r#"
+try { zend_test_internal_dnf_arguments(new stdClass); } catch (TypeError $e) { echo $e->getMessage(); }"#);
+    assert_eq!(
+        out,
+        "zend_test_internal_dnf_arguments(): Argument #1 ($arg) must be of type \
+         Iterator|(Traversable&Countable), stdClass given"
+    );
+}
+
+#[test]
+fn zend_call_method_on_a_class_uses_it_as_called_scope() {
+    // internal-call-internal-static-return.phpt
+    let out = run(r#"
+class StillReturnsStatic extends _ZendTestClass {}
+echo get_class(zend_call_method(_ZendTestClass::class, "returnsStatic")), '|',
+    get_class(zend_call_method(StillReturnsStatic::class, "returnsStatic"));"#);
+    assert_eq!(out, "_ZendTestClass|StillReturnsStatic");
+}
+
+#[test]
+fn internal_iterator_calls_and_destruction() {
+    // iterators/double-rewind.phpt, gh14741.phpt
+    let out = run(r#"
+$it = (new \ZendTest\Iterators\TraversableTest())->getIterator();
+var_dump($it);
+foreach ($it as $k => $v) { if ($k == 1) break; }
+try { clone $it; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+unset($it);
+echo "end\n";"#);
+    assert_eq!(
+        out,
+        "object(InternalIterator)#3 (0) {\n}\n\
+         TraversableTest::rewind\nTraversableTest::valid\nTraversableTest::current\n\
+         TraversableTest::key\nTraversableTest::next\nTraversableTest::valid\n\
+         TraversableTest::current\nTraversableTest::key\n\
+         Trying to clone an uncloneable object of class InternalIterator\n\
+         TraversableTest::drop\nend\n"
+    );
+}
+
+#[test]
+fn interned_strings_equal_to_extension_names_are_not_marked_utf8() {
+    // strings_marked_as_utf8.phpt: "foo" is ZendTestNS2\Foo's property name.
+    let out = run(r#"
+var_dump(zend_test_is_string_marked_as_valid_utf8("f" . "o" . "o"));
+var_dump(zend_test_is_string_marked_as_valid_utf8("f" . "x" . "o"));
+$f = "f"; $o = "o";
+var_dump(zend_test_is_string_marked_as_valid_utf8($f . $o . $o));"#);
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\n");
+}
+
+#[test]
+fn forbidden_dynamic_calls() {
+    // zend_forbid_dynamic_call.phpt
+    let out = run(r#"
+$o = new ZendTestForbidDynamicCall();
+$o->call();
+ZendTestForbidDynamicCall::callStatic();
+foreach ([[$o, 'call'], [ZendTestForbidDynamicCall::class, 'callStatic']] as $c) {
+    try { $c(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+try { call_user_func([$o, 'call']); } catch (Error $e) { echo $e->getMessage(), "\n"; }"#);
+    assert_eq!(
+        out,
+        "Cannot call ZendTestForbidDynamicCall::call() dynamically\n\
+         Cannot call ZendTestForbidDynamicCall::callStatic() dynamically\n\
+         Cannot call ZendTestForbidDynamicCall::call() dynamically\n"
+    );
+}

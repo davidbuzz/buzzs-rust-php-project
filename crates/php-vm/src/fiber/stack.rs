@@ -58,15 +58,21 @@ pub(crate) struct Suspender {
 impl Suspender {
     /// Switches back to the resumer; returns when the coroutine is resumed.
     ///
-    /// Must only be called from the coroutine's own stack while it runs.
+    /// Must only be called while the coroutine runs: from its own stack, or
+    /// from the stack of a coroutine it resumed (transitively), which is
+    /// then suspended along with it — the current stack pointer is saved as
+    /// the coroutine's and the next `resume` continues there (the symmetric
+    /// switches of `_ZendTestFiber`). The stacks involved stay mapped: the
+    /// suspended fiber keeps the inner coroutines alive.
     pub(crate) fn suspend(self) {
         // SAFETY: a `Suspender` is only handed to the body of the coroutine
         // it belongs to, and the resumer keeps the `Coroutine` (hence the
         // boxed `Inner`) alive for as long as the body can run.
         let inner = unsafe { &*self.inner };
-        // SAFETY: we are running on the coroutine's stack (precondition), so
-        // saving the current stack pointer into `sp` and jumping to the
-        // resumer's saved `caller_sp` is the documented switch protocol.
+        // SAFETY: the coroutine is running (precondition), on this stack or
+        // below a coroutine running on this stack, so saving the current
+        // stack pointer into `sp` and jumping to the resumer's saved
+        // `caller_sp` is the documented switch protocol.
         unsafe { arch::switch(inner.sp.as_ptr(), inner.caller_sp.get()) };
     }
 }

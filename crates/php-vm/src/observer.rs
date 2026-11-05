@@ -1,8 +1,9 @@
 //! Function observers. Notifications run with observation disabled so that
 //! callbacks may use the engine without recursively observing themselves.
 
+use crate::fiber::FiberState;
 use crate::func::Func;
-use crate::opcode::OpArray;
+use crate::opcode::{Op, OpArray};
 use crate::vm::{Frame, FrameKind, Throw, Vm};
 use php_runtime::{Obj, Value, ZStr};
 use std::collections::HashMap;
@@ -17,6 +18,54 @@ pub struct ObservedFrame {
     pub scope: Option<ZStr>,
     /// Source file.
     pub filename: Option<ZStr>,
+    /// The Zend name of the frame's current opline (`EX(opline)`: the
+    /// first one at `begin`, the returning one at `end`) for user code,
+    /// when it maps onto a Zend opcode.
+    pub opcode: Option<&'static str>,
+}
+
+/// `zend_get_opcode_name` of the Zend opcode an [`Op`] implements (only
+/// the ones that begin or end an op array).
+fn zend_opcode_name(op: &Op) -> Option<&'static str> {
+    Some(match op {
+        Op::InitFCall { .. } => "ZEND_INIT_FCALL",
+        Op::InitDynCall { .. } => "ZEND_INIT_DYNAMIC_CALL",
+        Op::InitMethodCall { .. } => "ZEND_INIT_METHOD_CALL",
+        Op::InitStaticCall { .. } => "ZEND_INIT_STATIC_METHOD_CALL",
+        Op::New { .. } => "ZEND_NEW",
+        Op::DoCall { .. } => "ZEND_DO_FCALL",
+        Op::Recv { .. } => "ZEND_RECV",
+        Op::RecvInit { .. } => "ZEND_RECV_INIT",
+        Op::RecvVariadic { .. } => "ZEND_RECV_VARIADIC",
+        Op::Return { .. } => "ZEND_RETURN",
+        Op::ReturnRef { .. } | Op::ReturnByRefValue { .. } => "ZEND_RETURN_BY_REF",
+        Op::GeneratorCreate => "ZEND_GENERATOR_CREATE",
+        Op::Yield { .. } => "ZEND_YIELD",
+        Op::YieldFrom { .. } => "ZEND_YIELD_FROM",
+        Op::Include { .. } => "ZEND_INCLUDE_OR_EVAL",
+        Op::Echo(_) => "ZEND_ECHO",
+        Op::Throw(_) => "ZEND_THROW",
+        Op::Exit(_) => "ZEND_EXIT",
+        _ => return None,
+    })
+}
+
+/// A fiber context as the fiber observers see it (`zend_fiber_context`,
+/// `Zend/zend_fibers.h`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FiberContext {
+    /// Stable identity while the context lives (its address in php-src).
+    pub id: usize,
+    /// `kind == zend_ce_fiber`: false for the main context.
+    pub is_fiber: bool,
+    /// `status` at notification time (before the switch updates it).
+    pub status: FiberState,
+    /// `ZEND_FIBER_FLAG_DESTROYED`.
+    pub destroyed: bool,
+    /// `ZEND_FIBER_FLAG_THREW`.
+    pub threw: bool,
+    /// Identity of `fiber->caller` (`None` when it is `NULL`).
+    pub caller: Option<usize>,
 }
 
 /// Hooks installed during module startup.
@@ -33,6 +82,20 @@ pub struct ObserverHooks {
     pub internal_enter: Option<fn(&mut Vm, &ObservedFrame)>,
     /// Called immediately after a native handler.
     pub internal_leave: Option<fn(&mut Vm, &ObservedFrame, Option<&Value>)>,
+    /// `zend_observer_fiber_init_register`: a fiber context was created.
+    pub fiber_init: Option<fn(&mut Vm, &FiberContext)>,
+    /// `zend_observer_fiber_switch_register`: called before switching
+    /// from the first context to the second.
+    pub fiber_switch: Option<fn(&mut Vm, &FiberContext, &FiberContext)>,
+    /// `zend_observer_fiber_destroy_register`: a dead fiber context is
+    /// being freed.
+    pub fiber_destroy: Option<fn(&mut Vm, &FiberContext)>,
+    /// `zend_observer_function_declared_register`: a user function was
+    /// declared (lowercase name).
+    pub function_declared: Option<fn(&mut Vm, &ZStr)>,
+    /// `zend_observer_class_linked_register`: a user class was linked
+    /// (lowercase name).
+    pub class_linked: Option<fn(&mut Vm, &ZStr)>,
 }
 
 enum Identity {
@@ -64,8 +127,16 @@ pub(crate) struct ObserverState {
 }
 
 impl ObservedFrame {
-    fn from_frame(f: &Frame) -> Self {
+    /// `at_end`: the opline is the one just executed (the return).
+    fn from_frame(f: &Frame, at_end: bool) -> Self {
+        let opcode = if f.kind == FrameKind::Builtin {
+            None
+        } else {
+            let ip = if at_end { f.ip.saturating_sub(1) } else { f.ip };
+            f.code.ops.get(ip).and_then(zend_opcode_name)
+        };
         Self {
+            opcode,
             function: f.func.as_ref().map(|func| func.name().clone()),
             scope: f
                 .func
@@ -119,7 +190,7 @@ impl Vm {
             |f| Identity::Function(f.clone()),
         );
         let key = identity.key();
-        let info = ObservedFrame::from_frame(frame);
+        let info = ObservedFrame::from_frame(frame, false);
         self.observer.in_hook = true;
         #[allow(clippy::single_match_else)] // the None arm is a multi-line computation
         let selected = match self.observer.initialized.get(&key) {
@@ -166,7 +237,7 @@ impl Vm {
         if !std::mem::take(&mut frame.observed) {
             return;
         }
-        let info = ObservedFrame::from_frame(frame);
+        let info = ObservedFrame::from_frame(frame, true);
         let Some(end) = self.observer.hooks.and_then(|h| h.end) else {
             return;
         };
@@ -213,7 +284,7 @@ impl Vm {
         let Some(frame) = self.frames.get(index).filter(|f| !f.observer_hidden) else {
             return;
         };
-        let info = ObservedFrame::from_frame(frame);
+        let info = ObservedFrame::from_frame(frame, false);
         let saved = self.observer.exception.take();
         self.observer.exception = match result {
             Some(Err(Throw::Exception(e))) => Some(e.clone()),
@@ -234,5 +305,63 @@ impl Vm {
         }
         self.observer.in_hook = false;
         self.observer.exception = saved;
+    }
+
+    /// `zend_observer_fiber_init_notify` / `zend_observer_fiber_destroy_notify`
+    /// (`destroy` selects the latter). Only called while observers are
+    /// enabled.
+    #[cold]
+    pub(crate) fn observer_fiber_lifecycle(&mut self, ctx: &FiberContext, destroy: bool) {
+        let Some(hooks) = self.observer.hooks else {
+            return;
+        };
+        let hook = if destroy {
+            hooks.fiber_destroy
+        } else {
+            hooks.fiber_init
+        };
+        if let Some(hook) = hook {
+            let in_hook = std::mem::replace(&mut self.observer.in_hook, true);
+            hook(self, ctx);
+            self.observer.in_hook = in_hook;
+        }
+    }
+
+    /// `zend_observer_function_declared_notify` (`class == false`) /
+    /// `zend_observer_class_linked_notify`. Free without observers.
+    #[inline]
+    pub(crate) fn observer_declared(&mut self, lcname: &ZStr, class: bool) {
+        if self.observer.enabled {
+            self.observer_declared_slow(lcname, class);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn observer_declared_slow(&mut self, lcname: &ZStr, class: bool) {
+        let Some(hooks) = self.observer.hooks else {
+            return;
+        };
+        let hook = if class {
+            hooks.class_linked
+        } else {
+            hooks.function_declared
+        };
+        if let Some(hook) = hook {
+            let in_hook = std::mem::replace(&mut self.observer.in_hook, true);
+            hook(self, lcname);
+            self.observer.in_hook = in_hook;
+        }
+    }
+
+    /// `zend_observer_fiber_switch_notify`. Only called while observers are
+    /// enabled.
+    #[cold]
+    pub(crate) fn observer_fiber_switch(&mut self, from: &FiberContext, to: &FiberContext) {
+        if let Some(hook) = self.observer.hooks.and_then(|h| h.fiber_switch) {
+            let in_hook = std::mem::replace(&mut self.observer.in_hook, true);
+            hook(self, from, to);
+            self.observer.in_hook = in_hook;
+        }
     }
 }

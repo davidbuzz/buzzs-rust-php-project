@@ -754,13 +754,15 @@ fn ii_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 fn ii_current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    with_internal_iter(vm, a, |vm, it| {
-        if it.valid(vm)? {
-            Ok(it.current(vm)?.deref())
-        } else {
-            Ok(Value::Null)
-        }
-    })
+    with_internal_iter(vm, a, |vm, it| Ok(it.current_data(vm)?.deref()))
+}
+
+/// `zend_internal_iterator_free`: destroys the wrapped iterator.
+pub(crate) fn ii_destruct(vm: &mut Vm, o: &Obj) -> VmResult<()> {
+    match object::internal::<InternalIter, _>(o, |s| s.iter.take()).flatten() {
+        Some(mut it) => it.dtor(vm),
+        None => Ok(()),
+    }
 }
 
 fn ii_key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -803,6 +805,10 @@ pub(crate) fn register(vm: &mut Vm) {
             .method("next(): void", PUB, ii_next)
             .method("valid(): bool", PUB, ii_valid)
             .method("rewind(): void", PUB, ii_rewind)
+            .hooks(ClassHooks {
+                destruct: Some(ii_destruct),
+                ..ClassHooks::default()
+            })
             .register(vm);
     }
     ClassBuilder::new("WeakReference")

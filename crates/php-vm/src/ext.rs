@@ -27,8 +27,10 @@ use php_support::ini::IniDirective;
 use std::rc::Rc;
 
 pub use crate::builtins::classbuilder::ClassBuilder;
+pub use crate::compiler::attrs::ExtAttributeValidator;
+pub use crate::fiber::{register_zend_test_fiber, FiberState};
 pub use crate::func::{Args, BuiltinFn as NativeFn};
-pub use crate::observer::{ObservedFrame, ObserverHooks};
+pub use crate::observer::{FiberContext, ObservedFrame, ObserverHooks};
 pub use crate::vm::{Throw, VmResult};
 
 /// Method/property flag bits for [`ClassBuilder`].
@@ -436,6 +438,20 @@ impl<'a> ModuleBuilder<'a> {
         self
     }
 
+    /// Marks the registered class `name` as an internal attribute
+    /// (`zend_mark_internal_attribute`): `flags` are `Attribute::TARGET_*`
+    /// (`| IS_REPEATABLE`), validated at compile time like the core
+    /// attributes; `validator` returns the compile error for a target.
+    pub fn internal_attribute(
+        &mut self,
+        name: &str,
+        flags: u32,
+        validator: Option<ExtAttributeValidator>,
+    ) -> &mut Self {
+        crate::compiler::attrs::register_internal_attribute(name, flags, validator);
+        self
+    }
+
     /// Starts a class definition; call [`ClassBuilder::register`] with
     /// [`ModuleBuilder::vm`] to finish it.
     pub fn class(&mut self, name: &str) -> ClassBuilder {
@@ -456,6 +472,22 @@ pub trait NativeIterator {
     fn key(&mut self, vm: &mut Vm) -> VmResult<Value>;
     /// Advances.
     fn next(&mut self, vm: &mut Vm) -> VmResult<()>;
+    /// `get_current_data` as `InternalIterator::current()` calls it,
+    /// without a validity check of its own. The default asks
+    /// [`NativeIterator::valid`] first (`NULL` past the end); iterators
+    /// whose `current` is safe at any position override it.
+    fn current_data(&mut self, vm: &mut Vm) -> VmResult<Value> {
+        if self.valid(vm)? {
+            self.current(vm)
+        } else {
+            Ok(Value::Null)
+        }
+    }
+    /// The `dtor` handler, run when the `InternalIterator` wrapping the
+    /// iterator is destroyed.
+    fn dtor(&mut self, _vm: &mut Vm) -> VmResult<()> {
+        Ok(())
+    }
 }
 
 /// Object handlers of a native class (`zend_object_handlers`). Every hook
@@ -858,6 +890,33 @@ impl Vm {
         args: Vec<Value>,
     ) -> VmResult<Value> {
         self.call_method_name(o, name, args)
+    }
+
+    /// `zend_call_method(NULL, ce, ...)`: calls method `name` of `class`
+    /// without an object (`$this` is unset, even for an instance method)
+    /// and with `class` as the called scope; `None` when there is no such
+    /// method.
+    pub fn call_class_method(
+        &mut self,
+        class: &Rc<Class>,
+        name: &str,
+        args: Vec<Value>,
+    ) -> Option<VmResult<Value>> {
+        let m = class.find_method(name.as_bytes())?.clone();
+        let call = crate::vm::PendingCall {
+            scope: Some(m.scope()),
+            called: Some(class.clone()),
+            args: args.into_iter().map(Some).collect(),
+            ..crate::vm::PendingCall::new(m.func.clone())
+        };
+        Some(self.call_pending(call))
+    }
+
+    /// The `dtor_obj` handler of `InternalIterator` objects created by
+    /// [`Vm::new_internal_iterator`]: runs [`NativeIterator::dtor`] (for
+    /// SAPIs or extensions that register their own `InternalIterator`).
+    pub fn internal_iterator_destruct(&mut self, o: &Obj) -> VmResult<()> {
+        crate::weakref::ii_destruct(self, o)
     }
 
     /// Creates an instance of a class (without calling the constructor).

@@ -203,6 +203,8 @@ impl Vm {
             script_encoding_provider: None,
             parsed_sources: std::cell::RefCell::new(std::collections::HashMap::new()),
             builtin_deprecations: std::collections::HashMap::new(),
+            builtin_attributes: std::collections::HashMap::new(),
+            builtin_doc_comments: std::collections::HashMap::new(),
             const_deprecation_guard: std::collections::HashSet::new(),
             const_attributes: std::collections::HashMap::new(),
             const_files: std::collections::HashMap::new(),

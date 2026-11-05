@@ -7,7 +7,9 @@ use crate::host::{rt_throw, VmHost};
 use php_runtime::ZStr;
 use php_runtime::{RtResult, Value};
 use php_spl::ObjectIterator;
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, NativeFn, NativeIterator, VmResult};
+use php_vm::ext::{
+    acc, class_flags, Args, ClassBuilder, ClassHooks, NativeFn, NativeIterator, VmResult,
+};
 use php_vm::func::Func;
 use php_vm::Vm;
 use std::cell::RefCell;
@@ -208,7 +210,7 @@ pub fn register_internal_iterator(vm: &mut Vm) {
         });
     }
     ClassBuilder::new("InternalIterator")
-        .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE)
+        .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE)
         .implements(vm, &["Iterator"])
         .method("__construct()", acc::PRIVATE, ii_construct)
         .method("current(): mixed", acc::PUBLIC, ii_current)
@@ -216,6 +218,11 @@ pub fn register_internal_iterator(vm: &mut Vm) {
         .method("next(): void", acc::PUBLIC, ii_next)
         .method("valid(): bool", acc::PUBLIC, ii_valid)
         .method("rewind(): void", acc::PUBLIC, ii_rewind)
+        // `zend_internal_iterator_free` of the VM's native iterators.
+        .hooks(ClassHooks {
+            destruct: Some(|vm, o| vm.internal_iterator_destruct(o)),
+            ..ClassHooks::default()
+        })
         .register(vm);
     // Replacing a class appends its name to the declaration order again.
     let mut seen = std::collections::HashSet::new();

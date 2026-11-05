@@ -723,6 +723,7 @@ impl Vm {
             };
             return Err(self.fatal_at(&msg, f.line_start));
         }
+        self.observer_declared(&lc, false);
         self.functions.insert(lc, Func::User(f.clone()));
         Ok(())
     }
@@ -755,6 +756,7 @@ impl Vm {
         if !self.classes.get(&lc).is_some_and(|c| Rc::ptr_eq(c, &cls)) {
             self.register_class(cls.clone());
         }
+        self.observer_declared(&lc, true);
         // `zend_emit_recorded_errors`: warnings raised while linking are
         // emitted once the class is declared (an exception thrown by an
         // error handler then leaves the class declared).

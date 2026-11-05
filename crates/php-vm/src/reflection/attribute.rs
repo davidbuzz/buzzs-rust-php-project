@@ -344,7 +344,7 @@ pub(crate) fn attribute_flags(vm: &mut Vm, c: &Rc<Class>) -> VmResult<Option<i64
             ),
             b"nodiscard" => Some(target::METHOD | target::FUNCTION),
             b"delayedtargetvalidation" => Some(target::ALL),
-            _ => None,
+            other => crate::compiler::attrs::ext_attribute_flags(other).map(i64::from),
         });
     }
     let Some(marker) = c

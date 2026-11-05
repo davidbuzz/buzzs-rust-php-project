@@ -211,7 +211,7 @@ pub(crate) fn connect(vm: &mut Vm, t: &ConnectTarget) -> Option<Box<dyn HttpStre
 
 /// Whether a stream wrapper is registered for `scheme`.
 pub(crate) fn has_wrapper(vm: &mut Vm, scheme: &str) -> bool {
-    match vm.call_value(&Value::from("stream_get_wrappers"), Vec::new()) {
+    match vm.call_function("stream_get_wrappers", Vec::new()) {
         Ok(Value::Array(a)) => a.values().any(|v| {
             matches!(v.deref(), Value::Str(s) if s.as_bytes().eq_ignore_ascii_case(scheme.as_bytes()))
         }),
