@@ -715,3 +715,30 @@ var_dump($r);
         "\nNotice: Indirect modification of overloaded element of B has no effect in test.php on line 4\nB::offsetGet(): Argument #1 ($offset) not passed\n\nNotice: Indirect modification of overloaded element of B has no effect in test.php on line 5\nB::offsetGet(): Argument #1 ($offset) not passed\n\nNotice: Indirect modification of overloaded element of ArrayObject has no effect in test.php on line 7\nNULL\n"
     );
 }
+
+/// GH-24264: destroying a fiber suspended in a `getChildren()` called by
+/// `RecursiveIteratorIterator` unwinds through the iterator even with
+/// `CATCH_GET_CHILD`; the graceful exit is never swallowed.
+#[test]
+fn catch_get_child_lets_destroyed_fiber_unwind() {
+    let out = run(r#"<?php
+class ReproIterator extends RecursiveArrayIterator {
+    public function getChildren(): ?RecursiveArrayIterator {
+        try { Fiber::suspend(); } finally { echo "finally\n"; }
+    }
+}
+$fiber = new Fiber(function () {
+    $it = new RecursiveIteratorIterator(
+        new ReproIterator([[1], [2]]),
+        RecursiveIteratorIterator::LEAVES_ONLY,
+        RecursiveIteratorIterator::CATCH_GET_CHILD,
+    );
+    foreach ($it as $_) {}
+    echo "Not reached\n";
+});
+$fiber->start();
+unset($fiber);
+echo "Done\n";
+"#);
+    assert_eq!(out, "finally\nDone\n");
+}
