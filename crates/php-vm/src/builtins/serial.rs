@@ -1445,7 +1445,8 @@ impl Unserializer<'_> {
             .is_some_and(|t| t.get(&ArrayKey::Str(key.clone())).is_some());
         if !exists && !is_incomplete(cls) && cls.lc_name.as_bytes() != b"stdclass" {
             let shown = String::from_utf8_lossy(name).into_owned();
-            if cls.flags & cflags::NO_DYNAMIC_PROPERTIES != 0 {
+            // A readonly class is `ZEND_ACC_NO_DYNAMIC_PROPERTIES` (GH-9186).
+            if cls.flags & (cflags::NO_DYNAMIC_PROPERTIES | cflags::READONLY) != 0 {
                 return Err(vm.make_throw(
                     "Error",
                     &format!("Cannot create dynamic property {}::${shown}", cls.name),

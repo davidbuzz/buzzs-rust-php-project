@@ -213,3 +213,70 @@ A::missing();
 "#);
     assert_eq!(out, "B\nA\n");
 }
+
+#[test]
+fn constructor_visibility_is_checked_against_an_abstract_grand_prototype() {
+    // bug61970_2: `do_inheritance_check_on_method` checks a constructor
+    // against its abstract prototype further up.
+    let (status, out) = run_status(
+        "<?php\nabstract class Foo { abstract public function __construct(); }\nclass Bar extends Foo { public function __construct() {} }\nclass Baz extends Bar { protected function __construct() {} }\n",
+    );
+    assert_eq!(status, 255);
+    assert!(
+        out.contains("Fatal error: Access level to Baz::__construct() must be public (as in class Foo) in t.php on line 4"),
+        "{out}"
+    );
+}
+
+#[test]
+fn trait_to_string_implements_stringable() {
+    // stringable_trait (bug #81582).
+    let out = run(r#"<?php
+trait T { public function __toString(): string { return "ok"; } }
+trait T2 { use T; }
+class C { use T; }
+class C2 { use T2; }
+var_dump(new C instanceof Stringable, new C2 instanceof Stringable);
+"#);
+    assert_eq!(out, "bool(true)\nbool(true)\n");
+}
+
+#[test]
+fn method_call_errors_name_the_declaring_class_and_called_name() {
+    // access_modifiers_010, call_static_006, gh_17718_001, bug46238.
+    let out = run(r#"<?php
+class d { private function test2() {} }
+class a extends d { public function test() { $this->TEST2(); } }
+try { (new a)->test(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+interface I { public static function __callStatic($m, $a); }
+try { I::bar(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+class S { static function __callStatic($m, $a) { var_dump($m); } }
+try { S::__construct(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$n = "a\0b";
+S::$n();
+"#);
+    assert_eq!(
+        out,
+        "Call to private method d::TEST2() from scope a\nCannot call abstract method I::bar()\nCannot call constructor\nstring(1) \"a\"\n"
+    );
+}
+
+#[test]
+fn call_trampoline_keeps_references_from_call_user_func_array() {
+    // bug50394: `zend_call_function` does not unwrap references for a
+    // trampoline; the VM's own sends pass values.
+    let out = run(r#"<?php
+function inc(&$x) { $x++; }
+class Proxy {
+    function __call($name, $args) { call_user_func_array('inc', $args); }
+}
+$arg = 1;
+call_user_func_array([new Proxy, 'bar'], [&$arg]);
+(new Proxy)->bar($arg);
+var_dump($arg);
+"#);
+    assert_eq!(
+        out,
+        "\nWarning: inc(): Argument #1 ($x) must be passed by reference, value given in t.php on line 4\nint(2)\n"
+    );
+}

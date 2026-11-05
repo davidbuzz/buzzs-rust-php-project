@@ -166,3 +166,13 @@ var_dump(is_array(get_defined_functions(exclude_disabled: true)['user']));
          bool(true)\n"
     );
 }
+
+#[test]
+fn generator_constructor_and_destructor_are_deprecated() {
+    // constructor_destructor_return: raised after the parameters
+    // (CG(zend_lineno) is the last parameter's line).
+    assert_eq!(
+        run("<?php\nclass Gen {\n    public function __construct(\n        $a = 1\n    ) { yield ''; }\n    public function __destruct() { yield ''; }\n    public function other() { yield ''; }\n}\n"),
+        "\nDeprecated: Making a constructor a Generator is deprecated in t.php on line 4\n\nDeprecated: Making a destructor a Generator is deprecated in t.php on line 6\n"
+    );
+}

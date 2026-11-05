@@ -1174,10 +1174,14 @@ impl Vm {
         let cur = self.write_place(base, &segs, WOp::FetchRw)?;
         // Objects: property inc/dec of undefined, string offsets checked.
         let mut nv = cur.deref();
-        if kind.is_inc() {
-            ops::increment(&mut nv, self).map_err(|e| self.rt_throw(e))?;
+        let r = if kind.is_inc() {
+            ops::increment(&mut nv, self)
         } else {
-            ops::decrement(&mut nv, self).map_err(|e| self.rt_throw(e))?;
+            ops::decrement(&mut nv, self)
+        };
+        if let Err(e) = r {
+            let err = self.rt_throw(e);
+            return Err(self.incdec_write_back(base2, &segs, nv, err));
         }
         let old = cur.deref();
         let guard = crate::typed_refs::IncDecGuard::new(kind.is_inc(), &old, &nv);
@@ -1189,6 +1193,29 @@ impl Vm {
         drop(guard);
         let res = res?;
         Ok(if kind.is_post() { old } else { res })
+    }
+
+    /// `zend_{pre,post}_incdec_overloaded_property`: a property that is
+    /// not modified in place (readonly, hooked, magic, asymmetric
+    /// visibility) is written back even when the increment failed, so the
+    /// write's own error ("Cannot modify readonly property ...") becomes
+    /// the exception, with the `TypeError` as its previous one. Writing an
+    /// ordinary property back is unobservable.
+    #[cold]
+    fn incdec_write_back(&mut self, base: RBase, segs: &[RSeg], old: Value, err: Throw) -> Throw {
+        if !matches!(segs.last(), Some(RSeg::Prop(_))) {
+            return err;
+        }
+        match self.write_place(base, segs, WOp::Assign(old)) {
+            Ok(_) => err,
+            Err(Throw::Exception(new)) => {
+                if let Throw::Exception(prev) = &err {
+                    crate::exceptions::chain_previous(&new, prev);
+                }
+                Throw::Exception(new)
+            }
+            Err(t) => t,
+        }
     }
 
     /// `place =& v`

@@ -855,3 +855,65 @@ var_dump(get_object_vars(new FallbackVars), get_object_vars(new EmptyVars));
         b"native table failure\narray(1) {\n  [0]=>\n  int(42)\n}\narray(0) {\n}\n"
     );
 }
+
+#[test]
+fn promoted_by_reference_property_binds_the_argument() {
+    // ctor_promotion_by_ref: `ZEND_ASSIGN_OBJ_REF`.
+    let out = run(r#"<?php
+class Ary { public function __construct(public array &$array) {} }
+$array = [];
+$ary = new Ary($array);
+$array[] = 42;
+var_dump($ary->array);
+"#);
+    assert_eq!(out, "array(1) {\n  [0]=>\n  int(42)\n}\n");
+}
+
+#[test]
+fn promoted_property_cannot_be_callable() {
+    // ctor_promotion_callable_type (the parameter's line, as in master).
+    let out = run("<?php\nclass T {\n    public function __construct(\n        public ?callable $c\n    ) {}\n}\n");
+    assert_eq!(
+        out,
+        "\nFatal error: Property T::$c cannot have type ?callable in t.php on line 4\n"
+    );
+}
+
+#[test]
+fn readonly_object_incdec_reports_the_write_after_the_type_error() {
+    // readonly_containing_object: the overloaded inc/dec path writes back
+    // even when the increment failed.
+    let out = run(r#"<?php
+class Test { public function __construct(public readonly object $prop) {} }
+$t = new Test(new stdClass);
+try { $t->prop++; } catch (Error $e) {
+    $p = $e->getPrevious();
+    echo $e::class, ": ", $e->getMessage(), " <- ", $p::class, ": ", $p->getMessage(), "\n";
+}
+try { $t->prop += 1; } catch (Throwable $e) { echo $e::class, ": ", $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "Error: Cannot modify readonly property Test::$prop <- TypeError: Cannot increment stdClass\nTypeError: Unsupported operand types: stdClass + int\n"
+    );
+}
+
+#[test]
+fn readonly_class_rejects_unserialized_dynamic_properties() {
+    // readonly_class_unserialize_error (GH-9186).
+    let out = run(r#"<?php
+readonly class R {}
+try { unserialize('O:1:"R":1:{s:1:"x";b:1;}'); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(out, "Cannot create dynamic property R::$x\n");
+}
+
+#[test]
+fn public_set_readonly_property_leaves_interface_set_abstract() {
+    // readonly_with_default_interface_get_set.
+    let out = run("<?php\ninterface I {\n    public int $prop { get; set; }\n}\nclass C implements I {\n    public public(set) readonly int $prop = 42;\n}\n");
+    assert!(
+        out.contains("Fatal error: Class C contains 1 abstract method and must therefore be declared abstract or implement the remaining method (I::$prop::set) in t.php on line"),
+        "{out}"
+    );
+}

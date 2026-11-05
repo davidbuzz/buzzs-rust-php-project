@@ -1117,6 +1117,21 @@ impl Validator {
                         if let Some(t) = &md.return_type {
                             self.ty(t)?;
                         }
+                        // `zend_compile_func_decl`, right after the params
+                        // (CG(zend_lineno) is the last parameter's line).
+                        if md.is_generator {
+                            let msg = if is_ctor {
+                                Some("Making a constructor a Generator is deprecated")
+                            } else if md.name.eq_ignore_case("__destruct") {
+                                Some("Making a destructor a Generator is deprecated")
+                            } else {
+                                None
+                            };
+                            if let Some(msg) = msg {
+                                let line = md.params.last().map_or(md.span.line, |p| p.span.line);
+                                self.warn(DiagnosticLevel::Deprecated, msg, line);
+                            }
+                        }
                         if let Some(b) = &md.body {
                             self.stmts(b)?;
                         }
