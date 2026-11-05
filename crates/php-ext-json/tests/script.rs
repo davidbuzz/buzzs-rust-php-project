@@ -25,10 +25,15 @@ impl Write for Sink {
 }
 
 fn run(code: &str) -> String {
+    run_configured(code, |_| {})
+}
+
+fn run_configured(code: &str, configure: impl FnOnce(&mut Vm)) -> String {
     let sink = Sink::default();
     let ext = php_ext_json::Json;
     let exts: [&dyn Extension; 1] = [&ext];
     let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
+    configure(&mut vm);
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
     drop(vm);
     let out = sink.0.borrow().clone();
@@ -148,6 +153,43 @@ fn recursion_is_detected() {
         out,
         "bool(false)\nstring(18) \"Recursion detected\"\n{\"x\":1,\"self\":null}"
     );
+}
+
+#[test]
+fn native_stack_exhaustion_is_a_json_depth_error() {
+    let out = run_configured(
+        r#"echo json_encode(1), '|';
+        var_dump(json_encode([]), json_last_error(), json_last_error_msg());
+        echo json_encode(new stdClass, JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_PRETTY_PRINT), '|';
+        json_decode("\xFF");
+        try { json_encode([], JSON_THROW_ON_ERROR); }
+        catch (JsonException $e) { echo $e->getCode(), ':', $e->getMessage(), '|', json_last_error(), '|'; }
+        echo json_encode([], JSON_THROW_ON_ERROR | JSON_PARTIAL_OUTPUT_ON_ERROR), '|', json_last_error();"#,
+        |vm| vm.set_native_stack_size(0),
+    );
+    assert_eq!(
+        out,
+        "1|bool(false)\nint(1)\nstring(28) \"Maximum stack depth exceeded\"\nnull|1:Maximum stack depth exceeded|5|null|1"
+    );
+}
+
+#[test]
+fn native_stack_allows_encoding_beyond_default_nesting_limit() {
+    const STACK_SIZE: usize = 256 << 20;
+    std::thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(|| {
+            let out = run_configured(
+                r#"$a = 1;
+                for ($i = 0; $i < 3001; $i++) { $a = [$a]; }
+                echo json_encode($a, 0, 4000), '|', json_last_error();"#,
+                |vm| vm.set_native_stack_size(STACK_SIZE),
+            );
+            assert_eq!(out, format!("{}1{}|0", "[".repeat(3001), "]".repeat(3001)));
+        })
+        .expect("spawn")
+        .join()
+        .expect("JSON stack thread");
 }
 
 #[test]

@@ -1575,7 +1575,8 @@ impl Vm {
     /// usable budget (`zend.max_allowed_stack_size` minus
     /// `zend.reserved_stack_size`, or the thread's stack minus a safety
     /// margin for the interpreter's own frames).
-    fn native_stack_exhausted(&mut self) -> bool {
+    /// Extensions may use this check without raising the VM's stack error.
+    pub fn native_stack_exhausted(&mut self) -> bool {
         let marker = 0u8;
         let here = std::ptr::addr_of!(marker) as usize;
         if self.native_stack_base == 0 || here > self.native_stack_base {

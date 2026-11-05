@@ -165,6 +165,10 @@ impl JsonHost for VmJsonHost<'_> {
         Ok(())
     }
 
+    fn json_stack_limit_reached(&mut self, _nesting: usize) -> bool {
+        self.vm.native_stack_exhausted()
+    }
+
     fn json_exception(&mut self, message: &str, code: i64) -> RuntimeError {
         match self
             .vm

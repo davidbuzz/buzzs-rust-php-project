@@ -181,6 +181,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn non_vm_host_keeps_default_stack_limit() {
+        let mut host = php_runtime::CollectingContext::new();
+        assert!(!host.json_stack_limit_reached(DEFAULT_MAX_NESTING - 1));
+        assert!(host.json_stack_limit_reached(DEFAULT_MAX_NESTING));
+    }
+
+    #[test]
     fn default_guards() {
         let k = GuardKey::Array(12345);
         assert!(default_protect(k));
