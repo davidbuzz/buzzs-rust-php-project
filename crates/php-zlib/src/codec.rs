@@ -110,8 +110,33 @@ pub fn gzcompress(data: &[u8], level: i64, encoding: i64) -> Result<Vec<u8>> {
     encode_func("gzcompress", data, level, encoding, 2, 3)
 }
 
+/// Resizes `buf` to `new_len` bytes (zero-filled) through a fallible
+/// allocation, like PHP's `safe_ferealloc(..., fallible)` /
+/// `zend_string_fextend(..., fallible)`: `false`, with `buf` unchanged,
+/// when the growth would exceed `memory_limit`. The violation stays
+/// recorded (`ZEND_HAS_OOM()`), so the VM raises "Allowed memory size of N
+/// bytes exhausted" once the builtin returns (and suppresses the builtin's
+/// own warnings meanwhile).
+pub(crate) fn fallible_resize(buf: &mut Vec<u8>, new_len: usize) -> bool {
+    let additional = new_len.saturating_sub(buf.len());
+    if php_memlimit::fallible(|| buf.try_reserve(additional)).is_err() {
+        return false;
+    }
+    buf.resize(new_len, 0);
+    true
+}
+
+/// The failure of a [`fallible_resize`] (`RETURN_OOM()`): zlib's
+/// `"insufficient memory"` warning, which the VM drops while the
+/// memory_limit fatal is pending.
+pub(crate) fn oom_error() -> Error {
+    Error::Warning(z_error(Z_MEM_ERROR).into())
+}
+
 /// `php_zlib_inflate_rounds()`: inflates with a growing buffer, at most 100
-/// rounds; `max` (0 = unlimited) caps the buffer.
+/// rounds; `max` (0 = unlimited) caps the buffer. The buffer grows through
+/// fallible allocations: past `memory_limit` the round fails with
+/// `Z_MEM_ERROR`.
 fn inflate_rounds(z: &mut ZStream, input: &[u8], max: usize) -> (i32, Vec<u8>) {
     let mut status;
     let mut round = 0;
@@ -124,10 +149,9 @@ fn inflate_rounds(z: &mut ZStream, input: &[u8], max: usize) -> (i32, Vec<u8>) {
         input.len()
     };
     loop {
-        if max != 0 && max <= used {
+        if (max != 0 && max <= used) || !fallible_resize(&mut buf, size) {
             status = Z_MEM_ERROR;
         } else {
-            buf.resize(size, 0);
             let step = z.inflate(&input[pos..], &mut buf[used..size], Z_NO_FLUSH);
             status = step.status;
             pos += step.consumed;
@@ -259,6 +283,23 @@ mod tests {
             gzinflate(b"x", -1).unwrap_err().message(),
             "gzinflate(): Argument #2 ($max_length) must be greater than or equal to 0"
         );
+    }
+
+    #[test]
+    fn fallible_resize_and_oom_error() {
+        let mut v = vec![7u8];
+        assert!(fallible_resize(&mut v, 3));
+        assert_eq!(v, [7, 0, 0]);
+        assert_eq!(oom_error(), Error::Warning("insufficient memory".into()));
+    }
+
+    #[test]
+    fn decode_large_expansion() {
+        // 4 MiB of zeros deflate to a few KiB: many growth rounds.
+        let data = vec![0u8; 4 << 20];
+        let c = gzencode(&data, 9, ZLIB_ENCODING_GZIP).unwrap();
+        assert!(c.len() < 16 * 1024);
+        assert_eq!(gzdecode(&c, 0).unwrap(), data);
     }
 
     #[test]

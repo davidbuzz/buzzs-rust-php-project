@@ -11,7 +11,7 @@ use std::rc::Rc;
 use php_ext_streams::{bridge, res};
 use php_runtime::{Value, ZArray};
 use php_streams::context::ContextRef;
-use php_streams::stream::Stream;
+use php_streams::stream::{Stream, CHUNK_SIZE};
 use php_streams::wrapper::{REPORT_ERRORS, USE_PATH};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
@@ -26,6 +26,14 @@ const PACKED_SLOT: usize = 16;
 /// `php_stream_gets()` buffer size used by `gzfile()` (`char buf[8192]`,
 /// read with `sizeof(buf) - 1`).
 const GZFILE_LINE: usize = 8191;
+
+// `readgzfile()` and `gzpassthru()` write each chunk as it is read
+// (`_php_stream_passthru()`, `char buf[8192]`). With output buffering the
+// buffer can grow past `memory_limit`: the allocation is granted and the
+// violation recorded, and the loop stops at the next chunk
+// (`ZEND_HAS_OOM()`), so the VM raises "Allowed memory size of N bytes
+// exhausted" (discarding the buffers) right after the call instead of the
+// output growing towards the hard limit.
 
 /// `php_stream_context_from_zval(NULL, false)`: the default context.
 fn default_context() -> Option<ContextRef> {
@@ -91,32 +99,35 @@ fn readgzfile(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(mut s) = open(vm, a, "rb", use_path)? else {
         return Ok(Value::Bool(false));
     };
-    let mut out = Vec::new();
-    let n = bridge::run(vm, || {
-        let n = s
-            .passthru(&mut |d: &[u8]| out.extend_from_slice(d))
-            .unwrap_or(0);
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut count = 0usize;
+    // `php_stream_passthru()`: PHPWRITE each chunk as it is read.
+    while let Ok(n @ 1..) = bridge::run_stream(vm, || s.read(&mut buf))? {
+        if php_vm::oom_pending() {
+            break;
+        }
+        vm.output(&buf[..n]);
+        count += n;
+    }
+    bridge::run(vm, || {
         s.close();
-        n
     })?;
-    mem::check_output(vm, out.len())?;
-    vm.output(&out);
-    Ok(Value::Int(i64::try_from(n).unwrap_or(i64::MAX)))
+    Ok(Value::Int(i64::try_from(count).unwrap_or(i64::MAX)))
 }
 
-/// `gzpassthru()` (`fpassthru()`, with the buffered-output memory check).
+/// `gzpassthru()` (`fpassthru()`): `php_stream_passthru()` on the stream.
 fn gzpassthru(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = res::stream_arg(vm, a, 0)?;
-    let mut out = Vec::new();
-    let n = res::with_stream(vm, &cell, |s| {
-        s.passthru(&mut |d: &[u8]| out.extend_from_slice(d))
-            .unwrap_or(0)
-    })?;
-    mem::check_output(vm, out.len())?;
-    vm.output(&out);
-    Ok(Value::Int(
-        n.map_or(0, |n| i64::try_from(n).unwrap_or(i64::MAX)),
-    ))
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut count = 0usize;
+    while let Some(Ok(n @ 1..)) = res::with_stream(vm, &cell, |s| s.read(&mut buf))? {
+        if php_vm::oom_pending() {
+            break;
+        }
+        vm.output(&buf[..n]);
+        count += n;
+    }
+    Ok(Value::Int(i64::try_from(count).unwrap_or(i64::MAX)))
 }
 
 /// `gzgets()` (`fgets()`, with the memory check on the line read).

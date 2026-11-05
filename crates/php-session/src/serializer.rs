@@ -12,7 +12,7 @@
 //! `ext/standard/var_unserializer.re`.
 
 use php_runtime::serialize::{
-    serialize, unserialize_partial, EnumCaseLookup, SerializedObject, UnserializeOptions,
+    EnumCaseLookup, SerializedObject, UnserializeOptions, serialize, unserialize_partial,
 };
 use php_runtime::{
     ArrayKey, BinaryOp, CastTarget, ErrorLevel, Obj, ObjectDump, PropertyPurpose, RtResult,
@@ -805,43 +805,80 @@ mod tests {
         Ok((Value::Int(n), off + end + 1))
     }
 
+    /// A recording [`NestedDecode`]: `parse` answers each
+    /// `unserialize_at`, and stored entries are kept in order.
+    struct Recorder<F> {
+        parse: F,
+        stored: Vec<(ZStr, Value)>,
+    }
+
+    impl<F> NestedDecode for Recorder<F>
+    where
+        F: FnMut(&[u8], usize) -> Option<RtResult<Result<(Value, usize), usize>>>,
+    {
+        fn unserialize_at(
+            &mut self,
+            data: &[u8],
+            offset: usize,
+        ) -> Option<RtResult<Result<(Value, usize), usize>>> {
+            (self.parse)(data, offset)
+        }
+
+        fn store(&mut self, name: ZStr, value: Value) {
+            self.stored.push((name, value));
+        }
+    }
+
+    fn recorder<F>(parse: F) -> Recorder<F>
+    where
+        F: FnMut(&[u8], usize) -> Option<RtResult<Result<(Value, usize), usize>>>,
+    {
+        Recorder {
+            parse,
+            stored: Vec::new(),
+        }
+    }
+
     #[test]
     fn decode_nested_parses_each_value_at_its_offset() {
         let mut seen = Vec::new();
         let data = b"a|i:1;bb|i:22;";
-        let r = decode_nested(Serializer::Php, data, &mut |d: &[u8], off: usize| {
-            Some(Ok(int_parser(&mut seen, d, off)))
-        });
+        let mut rec = recorder(|d: &[u8], off: usize| Some(Ok(int_parser(&mut seen, d, off))));
+        let r = decode_nested(Serializer::Php, data, &mut rec);
         let Some(Ok(Decoded::Merge { entries, ok })) = r else {
             panic!("expected a merge")
         };
         assert!(ok);
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].0.as_bytes(), b"a");
-        assert!(matches!(entries[1].1, Value::Int(22)));
+        // Entries are stored one by one, not returned.
+        assert!(entries.is_empty());
+        let stored = rec.stored;
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[0].0.as_bytes(), b"a");
+        assert!(matches!(stored[0].1, Value::Int(1)));
+        assert_eq!(stored[1].0.as_bytes(), b"bb");
+        assert!(matches!(stored[1].1, Value::Int(22)));
         assert_eq!(seen, vec![2, 9]);
 
         // php_binary: length byte, name, value; a failing value stops.
         let mut seen = Vec::new();
         let data = b"\x01xi:5;\x01yz";
-        let r = decode_nested(Serializer::PhpBinary, data, &mut |d: &[u8], off: usize| {
-            Some(Ok(int_parser(&mut seen, d, off)))
-        });
+        let mut rec = recorder(|d: &[u8], off: usize| Some(Ok(int_parser(&mut seen, d, off))));
+        let r = decode_nested(Serializer::PhpBinary, data, &mut rec);
         let Some(Ok(Decoded::Merge { entries, ok })) = r else {
             panic!("expected a merge")
         };
         assert!(!ok);
-        assert_eq!(entries.len(), 1);
-        assert!(matches!(entries[0].1, Value::Int(5)));
+        assert!(entries.is_empty());
+        let stored = rec.stored;
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].0.as_bytes(), b"x");
+        assert!(matches!(stored[0].1, Value::Int(5)));
     }
 
     #[test]
     fn decode_nested_php_serialize_and_decline() {
-        let r = decode_nested(
-            Serializer::PhpSerialize,
-            b"r:2;",
-            &mut |_: &[u8], _: usize| Some(Ok(Ok((Value::Int(7), 4)))),
-        );
+        let mut rec = recorder(|_: &[u8], _: usize| Some(Ok(Ok((Value::Int(7), 4)))));
+        let r = decode_nested(Serializer::PhpSerialize, b"r:2;", &mut rec);
         assert!(matches!(
             r,
             Some(Ok(Decoded::Replace {
@@ -849,13 +886,15 @@ mod tests {
                 ok: true
             }))
         ));
-        let r = decode_nested(Serializer::PhpSerialize, b"x", &mut |_: &[u8], _: usize| {
-            Some(Ok(Err(0)))
-        });
+        assert!(rec.stored.is_empty());
+        let mut rec = recorder(|_: &[u8], _: usize| Some(Ok(Err(0))));
+        let r = decode_nested(Serializer::PhpSerialize, b"x", &mut rec);
         assert!(matches!(r, Some(Ok(Decoded::Replace { ok: false, .. }))));
         // No active unserialize() call: the caller falls back to decode_with.
-        let r = decode_nested(Serializer::Php, b"a|i:1;", &mut |_: &[u8], _: usize| None);
+        let mut rec = recorder(|_: &[u8], _: usize| None);
+        let r = decode_nested(Serializer::Php, b"a|i:1;", &mut rec);
         assert!(r.is_none());
+        assert!(rec.stored.is_empty());
     }
 
     #[test]

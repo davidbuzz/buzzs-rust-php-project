@@ -15,7 +15,7 @@
 
 use php_streams::value::{Key, Value};
 
-use crate::codec::{buffer_size_guess, valid_encoding};
+use crate::codec::{buffer_size_guess, fallible_resize, oom_error, valid_encoding};
 use crate::constants::{z_error, ZLIB_ENCODING_RAW};
 use crate::conv::{find, try_get_long, value_name};
 use crate::error::{arg_type_error, arg_value_error, Error, Result};
@@ -425,16 +425,22 @@ impl InflateContext {
             used += step.produced;
             self.status = step.status;
             let out_full = used == out.len();
-            match step.status {
-                Z_OK if out_full => out.resize(out.len() + CHUNK, 0),
-                Z_OK | Z_STREAM_END => break,
-                Z_BUF_ERROR => {
-                    if flush_mode == Z_FINISH && out_full {
-                        out.resize(out.len() + CHUNK, 0);
-                    } else {
-                        break;
-                    }
+            // More output space needed: `php_zlib_inflate_grow()` extends
+            // the result by a chunk through a fallible allocation; past
+            // memory_limit inflate_add() gives up (`RETURN_OOM()`).
+            let grow = match step.status {
+                Z_OK => out_full,
+                Z_BUF_ERROR => flush_mode == Z_FINISH && out_full,
+                _ => false,
+            };
+            if grow {
+                if !fallible_resize(&mut out, out.len() + CHUNK) {
+                    return Err(oom_error());
                 }
+                continue;
+            }
+            match step.status {
+                Z_OK | Z_STREAM_END | Z_BUF_ERROR => break,
                 Z_NEED_DICT => {
                     let Some(dict) = self.dict.take() else {
                         return Err(Error::Warning(

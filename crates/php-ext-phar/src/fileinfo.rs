@@ -157,7 +157,7 @@ pub fn get_metadata(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = st(a);
     let opts = a.get(0);
     let m = run(vm, || st.borrow().get_metadata(opts.is_some()))?;
-    metadata_value(vm, m, opts)
+    metadata_value(vm, m, opts, "PharFileInfo::getMetadata")
 }
 
 /// `PharFileInfo::setMetadata()`.

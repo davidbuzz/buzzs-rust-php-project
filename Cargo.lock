@@ -353,6 +353,7 @@ version = "0.1.0"
 dependencies = [
  "bzip2-sys",
  "libc",
+ "php-memlimit",
  "php-streams",
 ]
 
@@ -1368,6 +1369,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "libz-sys",
+ "php-memlimit",
  "php-streams",
 ]
 

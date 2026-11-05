@@ -755,6 +755,13 @@ impl Stream {
                         cpysz = m - 1;
                         done = true;
                     }
+                } else if php_memlimit::is_pending() || !crate::util::reserve_more(&mut out, cpysz)
+                {
+                    // Grow mode: a line without EOL can be as long as the
+                    // stream. Stop once memory_limit is reached
+                    // (`ZEND_HAS_OOM()`); the VM raises the fatal after
+                    // the call.
+                    break;
                 }
                 out.extend_from_slice(&self.readbuf[self.readpos..self.readpos + cpysz]);
                 self.position += to_i64(cpysz);

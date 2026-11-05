@@ -88,6 +88,11 @@ impl StreamFilter for InflateFilter {
             let data = bucket.data;
             let mut bin = 0usize;
             while bin < data.len() && !self.finished {
+                // Output is unbounded relative to the input: stop once a
+                // memory_limit violation is pending (`ZEND_HAS_OOM()`).
+                if php_memlimit::is_pending() {
+                    break;
+                }
                 let desired = (data.len() - bin).min(BUF_LEN);
                 let mut outbuf = std::mem::take(&mut self.outbuf);
                 let step = self
@@ -111,7 +116,7 @@ impl StreamFilter for InflateFilter {
         }
         if !self.finished && flags.is_closing() {
             let mut status = Z_OK;
-            while status == Z_OK {
+            while status == Z_OK && !php_memlimit::is_pending() {
                 let mut outbuf = std::mem::take(&mut self.outbuf);
                 let step = self.z.inflate(&[], &mut outbuf, Z_FINISH);
                 self.outbuf = outbuf;

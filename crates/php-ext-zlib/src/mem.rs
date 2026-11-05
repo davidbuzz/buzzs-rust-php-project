@@ -1,12 +1,12 @@
 //! A model of the Zend allocator's `memory_limit` for results whose size
-//! the (possibly hostile) input controls: decompression output, `gzfile()`
-//! arrays and buffered `readgzfile()`/`gzpassthru()` output.
+//! the (possibly hostile) input controls: decompression output and
+//! `gzfile()` arrays.
 //!
 //! The VM does not account memory, so PHP's "Allowed memory size of N
 //! bytes exhausted" fatal error is reproduced from the sizes PHP would
 //! have to allocate.
 
-use php_runtime::{Value, ZStr};
+use php_runtime::Value;
 use php_vm::ext::VmResult;
 use php_vm::Vm;
 
@@ -59,28 +59,6 @@ pub(crate) fn check_str(vm: &mut Vm, v: &Value) -> VmResult<()> {
         Value::Str(s) => check(vm, zstr(s.len())),
         _ => Ok(()),
     }
-}
-
-/// Bytes already held by the active output buffers (0 without output
-/// buffering, where output is written straight through).
-fn buffered(vm: &mut Vm) -> VmResult<Option<usize>> {
-    let level = vm.call_value(&Value::Str(ZStr::from("ob_get_level")), Vec::new())?;
-    if !matches!(level, Value::Int(n) if n > 0) {
-        return Ok(None);
-    }
-    let len = vm.call_value(&Value::Str(ZStr::from("ob_get_length")), Vec::new())?;
-    Ok(Some(match len {
-        Value::Int(n) => usize::try_from(n).unwrap_or(0),
-        _ => 0,
-    }))
-}
-
-/// [`check`] for `n` more bytes of output (only when it is buffered).
-pub(crate) fn check_output(vm: &mut Vm, n: usize) -> VmResult<()> {
-    if let Some(held) = buffered(vm)? {
-        check(vm, held.saturating_add(n))?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
