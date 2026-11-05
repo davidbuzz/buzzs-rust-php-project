@@ -187,3 +187,88 @@ fn output_add_rewrite_var_uses_url_rewriter_tags() {
     );
     assert_eq!(out, "<a href=\"p?k=v%20w\">\n");
 }
+
+#[test]
+fn rewrite_handler_refreshes_environment_when_output_is_processed() {
+    let out = run_with(
+        r#"<?php ob_start();
+        ini_set('url_rewriter.tags', 'a=href,form=');
+        output_add_rewrite_var('k', 'v');
+        echo "<a href=\"p?q=1\">\n<form action=\"http://new.test/\">x\n";
+        ini_set('arg_separator.output', '&amp;');
+        $_SERVER['HTTP_HOST'] = 'new.test';
+        ob_end_flush();
+        ob_end_flush();"#,
+        &[],
+    );
+    assert_eq!(
+        out,
+        "<a href=\"p?q=1&amp;k=v\">\n<form action=\"http://new.test/\">\
+         <input type=\"hidden\" name=\"k\" value=\"v\" />x\n"
+    );
+}
+
+#[test]
+fn rewrite_variables_reset_duplicates_and_encode_links_and_forms() {
+    let out = run_with(
+        r#"<?php ini_set('url_rewriter.tags', 'a=href,form=');
+        output_add_rewrite_var('old', 'discarded');
+        echo "<a href=\"p#f\">\n<form>x\n";
+        output_reset_rewrite_vars();
+        output_add_rewrite_var('k&', '<v>');
+        output_add_rewrite_var('k&', 'a b');
+        ob_end_flush();"#,
+        &[],
+    );
+    assert_eq!(
+        out,
+        "<a href=\"p?k%26=%3Cv%3E&k%26=a%20b#f\">\n<form>\
+         <input type=\"hidden\" name=\"k&amp;\" value=\"&lt;v&gt;\" />\
+         <input type=\"hidden\" name=\"k&amp;\" value=\"a b\" />x\n"
+    );
+}
+
+#[test]
+fn rewrite_vars_do_not_restart_a_removed_handler() {
+    let out = run_with(
+        r#"<?php ini_set('url_rewriter.tags', 'a=href');
+        output_add_rewrite_var('a', 'b');
+        ob_end_clean();
+        output_reset_rewrite_vars();
+        var_dump(output_add_rewrite_var('c', 'd'), ob_get_level());
+        echo "<a href=\"p\">\n";"#,
+        &[],
+    );
+    assert_eq!(out, "bool(true)\nint(0)\n<a href=\"p\">\n");
+}
+
+#[test]
+fn rewrite_handler_name_is_not_a_userland_alias() {
+    let out = run_with(
+        r#"<?php output_add_rewrite_var('k', 'v');
+        $r = @ob_start('URL-Rewriter');
+        $level = ob_get_level();
+        ob_end_clean();
+        var_dump($r, $level);"#,
+        &[],
+    );
+    assert_eq!(out, "bool(false)\nint(1)\n");
+}
+
+#[test]
+fn rewrite_var_start_inside_a_handler_bails_out() {
+    let out = run_with(
+        r#"<?php ob_start(function($s) {
+        output_add_rewrite_var('k', 'v');
+        echo "unreachable";
+        return $s;
+        });
+        echo "discarded";
+        ob_end_flush();"#,
+        &[],
+    );
+    assert_eq!(
+        out,
+        "\nFatal error: output_add_rewrite_var(): Cannot use output buffering in output buffering display handlers in test.php on line 2\n"
+    );
+}

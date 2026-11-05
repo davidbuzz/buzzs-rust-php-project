@@ -722,12 +722,8 @@ impl OutputHost for Vm {
         let cb = callback.clone();
         // Named native handlers (`php_output_handler_alias`).
         if let Value::Str(n) = &cb {
-            if let Some(f) = self
-                .output_handler_aliases
-                .get(&ZStr::from(n.as_bytes().to_ascii_lowercase()))
-                .copied()
-            {
-                return match f(self, buffer, mode) {
+            if let Some(f) = self.output_handler_aliases.get(n).copied() {
+                return match (f.handler)(self, buffer, mode) {
                     Ok(r) => r,
                     Err(t) => {
                         if self.pending_throw.is_none() {
@@ -767,6 +763,23 @@ impl OutputHost for Vm {
 
     fn send_headers(&mut self) -> bool {
         crate::builtins::headers::send_headers(self)
+    }
+
+    fn check_handler_conflicts(&mut self, name: &[u8]) -> bool {
+        self.output_handler_conflicts
+            .get(&ZStr::from(name))
+            .copied()
+            .is_none_or(|check| check(self, name))
+    }
+
+    fn before_internal_handler(&mut self, name: &[u8]) {
+        if let Some(hook) = self.output_handler_hooks.get(&ZStr::from(name)).copied() {
+            hook(self);
+        }
+    }
+
+    fn has_pending_exception(&self) -> bool {
+        self.pending_throw.is_some()
     }
 
     fn sapi_flush(&mut self) {

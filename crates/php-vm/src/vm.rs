@@ -683,7 +683,11 @@ pub struct Vm {
     /// arguments on the VM stack; these pools avoid per-call mallocs).
     pub(crate) call_bufs: CallBufs,
     /// Named native output handlers (`ob_start('ob_gzhandler')`).
-    pub output_handler_aliases: HashMap<ZStr, crate::ext::OutputHandlerFn>,
+    pub output_handler_aliases: HashMap<ZStr, crate::ext::OutputHandlerAlias>,
+    /// Module conflict checks, keyed by exact handler name.
+    pub output_handler_conflicts: HashMap<ZStr, crate::ext::OutputHandlerConflictFn>,
+    /// Request-setting refresh hooks for internal handlers.
+    pub output_handler_hooks: HashMap<ZStr, crate::ext::OutputHandlerHookFn>,
     /// `include` opener hook.
     pub include_opener: Option<crate::ext::IncludeOpenerFn>,
     /// Source filter hook.

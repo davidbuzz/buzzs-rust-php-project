@@ -140,6 +140,65 @@ fn setlocale_validates_all_scalar_args_before_trying_locales() {
 }
 
 #[test]
+fn source_return_buffers_obey_the_output_handler_lock() {
+    for (name, call) in [
+        ("php_strip_whitespace", "php_strip_whitespace(__FILE__)"),
+        ("highlight_file", "highlight_file(__FILE__, true)"),
+        ("highlight_string", "highlight_string(__FILE__, true)"),
+    ] {
+        let out = run(&format!(
+            "ob_start(function($s) {{\n{call};\nreturn $s;\n}});\necho 'discarded';\nob_end_flush();"
+        ));
+        assert_eq!(
+            out,
+            format!(
+                "\nFatal error: {name}(): Cannot use output buffering in output buffering display handlers in test.php on line 2\n"
+            )
+        );
+    }
+}
+
+#[test]
+fn source_return_buffers_capture_open_warnings_and_restore_the_stack() {
+    let out = run(
+        r#"ob_start();
+        set_error_handler(function($n, $m) { var_dump(ob_get_level()); return true; });
+        var_dump(highlight_file('/nonexistent-gh20906.php', true), ob_get_level());
+        var_dump(php_strip_whitespace('/nonexistent-gh20906.php'), ob_get_level());"#,
+    );
+    assert_eq!(
+        out,
+        "int(2)\nint(2)\nbool(false)\nint(1)\nint(2)\nstring(0) \"\"\nint(1)\n"
+    );
+}
+
+#[test]
+fn source_return_buffers_are_removed_on_an_open_exception() {
+    let out = run(
+        r#"ob_start();
+        set_error_handler(function($n, $m) { throw new Exception($m); });
+        try { highlight_file('/nonexistent-gh20906.php', true); } catch (Exception $e) {}
+        var_dump(ob_get_level());
+        try { php_strip_whitespace('/nonexistent-gh20906.php'); } catch (Exception $e) {}
+        var_dump(ob_get_level());"#,
+    );
+    assert_eq!(out, "int(1)\nint(1)\n");
+}
+
+#[test]
+fn highlight_return_buffer_does_not_invoke_the_outer_handler() {
+    let out = run(
+        r#"ob_start(function($s) { return strtoupper($s); }, 1);
+        $s = highlight_string('x', true);
+        $level = ob_get_level();
+        ob_end_clean();
+        var_dump($level, str_contains($s, '<code'));"#,
+    );
+    assert_eq!(out, "int(1)\nbool(true)\n");
+}
+
+
+#[test]
 fn setlocale_strict_scalar_args_and_weak_array_elements() {
     let out = run(r#"declare(strict_types=1);
         try { setlocale(LC_ALL, 0, '0'); }

@@ -6,6 +6,7 @@ use php_runtime::{CastTarget, HashTable, RtResult, RuntimeContext, Value, ZArray
 use php_stdmisc::highlight::{self, HighlightColors};
 use php_stdmisc::locale::{self, LocaleState};
 use php_stdmisc::query::{self, InputSettings};
+use php_support::output::{self, flags, StartHandler};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 use std::cell::RefCell;
@@ -37,21 +38,41 @@ fn short_tags(vm: &Vm) -> bool {
 }
 
 /// Prints or returns highlighted HTML (`$return`).
-fn emit(vm: &mut Vm, html: &[u8], ret: bool) -> Value {
-    if ret {
-        Value::Str(ZStr::from(html))
+fn emit(vm: &mut Vm, html: &[u8], ret: bool) -> VmResult<Value> {
+    vm.output(html);
+    let value = if ret {
+        let contents = vm.output.contents();
+        output::discard(vm);
+        contents.map_or(Value::Bool(false), |s| Value::Str(ZStr::from(s)))
     } else {
-        vm.output(html);
         Value::Bool(true)
+    };
+    if let Some(t) = vm.pending_throw.take() {
+        return Err(t);
     }
+    Ok(value)
 }
 
-#[allow(clippy::unnecessary_wraps)] // native handler signature
+/// `php_output_start_default()` for the temporary return buffer.
+fn start_capture(vm: &mut Vm) -> VmResult<()> {
+    let ok = output::start(vm, StartHandler::Default, 0, flags::STDFLAGS);
+    if let Some(t) = vm.pending_throw.take() {
+        return Err(t);
+    }
+    if !ok {
+        return Err(vm.throw("Error", "Unable to start output handler"));
+    }
+    Ok(())
+}
+
 fn highlight_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let src = a.str(0);
     let ret = a.has(1) && a.bool(1);
+    if ret {
+        start_capture(vm)?;
+    }
     let html = highlight::highlight(src.as_bytes(), &colors(vm), short_tags(vm));
-    Ok(emit(vm, &html, ret))
+    emit(vm, &html, ret)
 }
 
 /// Reads a script for highlighting/stripping like `zend_stream_open()`:
@@ -99,15 +120,30 @@ fn highlight_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if path.as_bytes().contains(&0) {
         return Err(a.value_error(vm, 1, "must not contain any null bytes"));
     }
-    let Some(src) = read_script(vm, path.as_bytes())? else {
-        vm.php_warning(&format!(
-            "Failed opening '{}' for highlighting",
-            String::from_utf8_lossy(path.as_bytes())
-        ))?;
-        return Ok(Value::Bool(false));
-    };
-    let html = highlight::highlight(&src, &colors(vm), short_tags(vm));
-    Ok(emit(vm, &html, ret))
+    if ret {
+        start_capture(vm)?;
+    }
+    let result = (|| {
+        let Some(src) = read_script(vm, path.as_bytes())? else {
+            vm.php_warning(&format!(
+                "Failed opening '{}' for highlighting",
+                String::from_utf8_lossy(path.as_bytes())
+            ))?;
+            if ret {
+                output::end(vm);
+            }
+            return Ok(Value::Bool(false));
+        };
+        let html = highlight::highlight(&src, &colors(vm), short_tags(vm));
+        emit(vm, &html, ret)
+    })();
+    if ret && result.is_err() {
+        output::end(vm);
+    }
+    if let Some(t) = vm.pending_throw.take() {
+        return Err(t);
+    }
+    result
 }
 
 fn php_strip_whitespace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -115,18 +151,29 @@ fn php_strip_whitespace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if path.as_bytes().contains(&0) {
         return Err(a.value_error(vm, 1, "must not contain any null bytes"));
     }
-    let Some(src) = read_script(vm, path.as_bytes())? else {
-        return Ok(Value::from(""));
-    };
-    let (out, warnings) = highlight::strip_whitespace(&src, short_tags(vm));
-    for w in warnings {
-        let level = match w.kind {
-            WarningKind::CompileWarning => E_COMPILE_WARNING,
-            WarningKind::Deprecated => E_DEPRECATED,
+    start_capture(vm)?;
+    let result = (|| {
+        let Some(src) = read_script(vm, path.as_bytes())? else {
+            output::end(vm);
+            return Ok(Value::from(""));
         };
-        vm.error_at(level, &w.message, &path, w.line)?;
+        let (out, warnings) = highlight::strip_whitespace(&src, short_tags(vm));
+        for w in warnings {
+            let level = match w.kind {
+                WarningKind::CompileWarning => E_COMPILE_WARNING,
+                WarningKind::Deprecated => E_DEPRECATED,
+            };
+            vm.error_at(level, &w.message, &path, w.line)?;
+        }
+        emit(vm, &out, true)
+    })();
+    if result.is_err() {
+        output::end(vm);
     }
-    Ok(Value::Str(ZStr::from(out)))
+    if let Some(t) = vm.pending_throw.take() {
+        return Err(t);
+    }
+    result
 }
 
 fn http_build_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

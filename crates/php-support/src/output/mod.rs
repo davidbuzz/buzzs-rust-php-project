@@ -357,6 +357,19 @@ pub trait OutputHost {
         true
     }
 
+    /// Checks the module's conflicts before a handler is pushed.
+    fn check_handler_conflicts(&mut self, _name: &[u8]) -> bool {
+        true
+    }
+
+    /// Refreshes request settings before an internal handler runs.
+    fn before_internal_handler(&mut self, _name: &[u8]) {}
+
+    /// Whether a diagnostic has raised an exception in the embedding VM.
+    fn has_pending_exception(&self) -> bool {
+        false
+    }
+
     /// Reports a diagnostic.  An `E_ERROR` is fatal: the operation that
     /// reported it returns and the VM must bail out.
     fn report(&mut self, diagnostic: Diagnostic);
@@ -372,6 +385,13 @@ pub enum StartHandler<C> {
         /// Name shown by `ob_list_handlers()`.
         name: Vec<u8>,
         /// The callable.
+        callback: C,
+    },
+    /// A host callback implementing an internal output handler.
+    Alias {
+        /// Name shown by `ob_list_handlers()`.
+        name: Vec<u8>,
+        /// The host's native callback.
         callback: C,
     },
     /// An internal handler (e.g. an alias like `ob_gzhandler`).
@@ -393,6 +413,7 @@ impl<C> std::fmt::Debug for StartHandler<C> {
         match self {
             Self::Default => f.write_str("Default"),
             Self::User { name, .. } => write!(f, "User({})", String::from_utf8_lossy(name)),
+            Self::Alias { name, .. } => write!(f, "Alias({})", String::from_utf8_lossy(name)),
             Self::Internal { name, .. } => write!(f, "Internal({})", String::from_utf8_lossy(name)),
             Self::DevNull => f.write_str("DevNull"),
             Self::Invalid(e) => write!(f, "Invalid({e})"),
@@ -442,6 +463,24 @@ impl Context {
 
 fn notice<H: OutputHost + ?Sized>(host: &mut H, msg: String) {
     host.report(Diagnostic::docref(ErrorLevel::NOTICE, msg));
+}
+
+/// `php_output_handler_conflict()`: warns if `old` is still on the stack.
+pub fn handler_conflict<H: OutputHost + ?Sized>(host: &mut H, new: &[u8], old: &[u8]) -> bool {
+    if !host.output().handler_started(old) {
+        return false;
+    }
+    let name = String::from_utf8_lossy(new);
+    let message = if new == old {
+        format!("Output handler '{name}' cannot be used twice")
+    } else {
+        format!(
+            "Output handler '{name}' conflicts with '{}'",
+            String::from_utf8_lossy(old)
+        )
+    };
+    host.report(Diagnostic::docref(ErrorLevel::WARNING, message));
+    true
 }
 
 /// `php_output_header()`.
@@ -521,7 +560,9 @@ fn handler_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Context) 
     let o = host.output();
     if ctx.op == flags::WRITE && o.active.is_some() && o.running.is_some() {
         if let Some(h) = o.find_mut(id) {
-            h.flags |= flags::PRODUCED_OUTPUT;
+            if h.flags & flags::USER != 0 {
+                h.flags |= flags::PRODUCED_OUTPUT;
+            }
         }
     }
     let input = std::mem::take(&mut ctx.input);
@@ -544,7 +585,7 @@ fn handler_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Context) 
         }
         o.running = Some(id);
     }
-    let (is_user, buffer, taken_user, taken_internal, passthrough) = {
+    let (is_callback, buffer, taken_user, taken_internal, passthrough) = {
         let o = host.output();
         let Some(h) = o.find_mut(id) else {
             return Status::Failure;
@@ -557,7 +598,19 @@ fn handler_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Context) 
             HandlerFunc::DevNull => (false, buffer, None, None, Some(false)),
         }
     };
-    if is_user {
+    let is_user = host
+        .output()
+        .find(id)
+        .is_some_and(|h| h.flags & flags::USER != 0);
+    if !is_user {
+        let name = host
+            .output()
+            .find(id)
+            .map(|h| h.name.clone())
+            .unwrap_or_default();
+        host.before_internal_handler(&name);
+    }
+    if is_callback {
         let retval = match taken_user {
             Some(mut cb) => {
                 let r = host.call_handler(&mut cb, &buffer, ctx.op);
@@ -578,7 +631,7 @@ fn handler_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Context) 
             .output()
             .find(id)
             .is_some_and(|h| h.flags & flags::PRODUCED_OUTPUT != 0);
-        if produced {
+        if is_user && produced {
             let name = {
                 let h = host.output().find_mut(id);
                 h.map(|h| {
@@ -932,6 +985,9 @@ fn handler_start<H: OutputHost + ?Sized>(host: &mut H, mut handler: Handler<H::C
     if lock_error(host, flags::START) {
         return false;
     }
+    if !host.check_handler_conflicts(&handler.name) {
+        return false;
+    }
     let o = host.output();
     handler.level = i32::try_from(o.handlers.len()).unwrap_or(i32::MAX);
     o.active = Some(handler.id);
@@ -967,6 +1023,12 @@ pub fn start<H: OutputHost + ?Sized>(
             ability | flags::USER,
             HandlerFunc::User(Some(callback)),
         ),
+        StartHandler::Alias { name, callback } => o.new_handler(
+            &name,
+            chunk_size,
+            ability | flags::INTERNAL,
+            HandlerFunc::User(Some(callback)),
+        ),
         StartHandler::Internal { name, func } => o.new_handler(
             &name,
             chunk_size,
@@ -996,7 +1058,7 @@ pub fn ob_start<H: OutputHost + ?Sized>(
         return true;
     }
     // A lock error is fatal (bailout); PHP never reaches the notice then.
-    if was_activated && !host.output().is_activated() {
+    if (was_activated && !host.output().is_activated()) || host.has_pending_exception() {
         return false;
     }
     notice(host, "Failed to create buffer".into());

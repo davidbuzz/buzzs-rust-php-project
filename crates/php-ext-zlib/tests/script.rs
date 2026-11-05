@@ -138,6 +138,55 @@ fn filters_and_coding_type() {
 }
 
 #[test]
+fn output_alias_is_internal_and_lookup_is_case_sensitive() {
+    assert_eq!(
+        run(r#"ob_start("ob_gzhandler");
+            $s = ob_get_status();
+            ob_end_clean();
+            var_dump($s["name"], $s["type"], $s["flags"], $s["chunk_size"]);
+            ob_start("OB_GZHANDLER");
+            $s = ob_get_status();
+            ob_end_clean();
+            var_dump($s["name"], $s["type"], $s["flags"]);"#),
+        "string(12) \"ob_gzhandler\"\nint(0)\nint(112)\nint(0)\n\
+         string(12) \"OB_GZHANDLER\"\nint(1)\nint(113)\n"
+    );
+}
+
+#[test]
+fn output_alias_conflicts_and_does_not_add_a_buffer() {
+    assert_eq!(
+        run(r#"set_error_handler(function($n, $m) { echo "$n:$m\n"; });
+            ob_start("ob_gzhandler");
+            var_dump(ob_start("ob_gzhandler"), ob_get_level());
+            ob_end_flush();"#),
+        "2:ob_start(): Output handler 'ob_gzhandler' cannot be used twice\n\
+         8:ob_start(): Failed to create buffer\nbool(false)\nint(1)\n"
+    );
+    assert_eq!(
+        run(r#"ob_start(function($s) { return $s; });
+            var_dump(ob_start("ob_gzhandler"), ob_get_level());
+            ob_end_flush();
+            ob_end_flush();"#),
+        "bool(true)\nint(2)\n"
+    );
+}
+
+#[test]
+fn output_conflict_exception_keeps_the_original_handler() {
+    assert_eq!(
+        run(r#"ob_start("ob_gzhandler");
+            $calls = [];
+            set_error_handler(function($n, $m) use (&$calls) { $calls[] = $n; throw new Exception($m); });
+            try { ob_start("ob_gzhandler"); } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+            var_dump(ob_get_level(), $calls);
+            ob_end_flush();"#),
+        "ob_start(): Output handler 'ob_gzhandler' cannot be used twice\nint(1)\n\
+         array(1) {\n  [0]=>\n  int(2)\n}\n"
+    );
+}
+
+#[test]
 fn memory_limit_model() {
     let out =
         run(r#"ini_set("memory_limit", "4M"); gzdecode(gzencode(str_repeat("a", 8 << 20)));"#);

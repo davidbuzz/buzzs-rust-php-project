@@ -18,6 +18,7 @@ struct TestHost {
     fatal: bool,
     sapi_flushes: usize,
     headers_ok: Option<bool>,
+    conflicts: Vec<(&'static str, &'static str)>,
 }
 
 impl OutputHost for TestHost {
@@ -46,6 +47,13 @@ impl OutputHost for TestHost {
 
     fn send_headers(&mut self) -> bool {
         self.headers_ok.unwrap_or(true)
+    }
+
+    fn check_handler_conflicts(&mut self, name: &[u8]) -> bool {
+        let conflicts = self.conflicts.clone();
+        !conflicts.iter().any(|(new, old)| {
+            new.as_bytes() == name && handler_conflict(self, name, old.as_bytes())
+        })
     }
 
     fn report(&mut self, d: Diagnostic) {
@@ -137,6 +145,76 @@ fn cb(f: impl Fn(&mut TestHost, &[u8], i32) -> Option<Vec<u8>> + 'static) -> Cb 
 
 fn identity() -> Cb {
     cb(|_, s, _| Some(s.to_vec()))
+}
+
+#[test]
+fn native_alias_has_internal_flags_and_failure_passthrough() {
+    let mut h = TestHost::default();
+    assert!(ob_start(
+        &mut h,
+        StartHandler::Alias {
+            name: b"native".to_vec(),
+            callback: cb(|_, _, _| None),
+        },
+        1,
+        i64::from(flags::STDFLAGS),
+    ));
+    let st = h.stack.active_status().unwrap();
+    assert_eq!(st.kind, flags::INTERNAL);
+    assert_eq!(st.flags, flags::STDFLAGS);
+    h.echo("x");
+    let st = h.stack.active_status().unwrap();
+    assert_eq!(st.kind, flags::INTERNAL);
+    assert_ne!(st.flags & flags::DISABLED, 0);
+    assert!(h.end_flush());
+    assert_eq!(h.finish(), "x");
+}
+
+#[test]
+fn conflicts_are_ordered_and_preserve_the_existing_stack() {
+    let mut h = TestHost::default();
+    h.conflicts = vec![("native", DEFAULT_HANDLER_NAME), ("native", "native")];
+    assert!(h.ob_start());
+    assert!(!h.ob_start_cb("native", 0, 112, identity()));
+    assert_eq!(h.stack.level(), 1);
+    assert_eq!(
+        h.finish(),
+        "\nWarning: ob_start(): Output handler 'native' conflicts with 'default output handler' in %s on line %d\n\
+         \nNotice: ob_start(): Failed to create buffer in %s on line %d\n"
+    );
+
+    let mut h = TestHost::default();
+    h.conflicts = vec![("native", "native")];
+    assert!(h.ob_start_cb("native", 1, 112, cb(|_, _, _| None)));
+    h.echo("x");
+    assert!(!h.ob_start_cb("native", 0, 112, identity()));
+    assert_eq!(h.stack.level(), 1);
+    assert_eq!(
+        h.finish(),
+        "x\nWarning: ob_start(): Output handler 'native' cannot be used twice in %s on line %d\n\
+         \nNotice: ob_start(): Failed to create buffer in %s on line %d\n"
+    );
+}
+
+#[test]
+fn output_lock_precedes_conflict_checks() {
+    let mut h = TestHost::default();
+    h.conflicts = vec![("native", "native")];
+    assert!(h.ob_start_cb(
+        "native",
+        0,
+        112,
+        cb(|h, _, _| {
+            assert!(!h.ob_start_cb("native", 0, 112, identity()));
+            None
+        }),
+    ));
+    h.end_flush();
+    assert!(h.fatal);
+    assert_eq!(
+        h.finish(),
+        "\nFatal error: ob_start(): Cannot use output buffering in output buffering display handlers in %s on line %d\n"
+    );
 }
 
 #[test]

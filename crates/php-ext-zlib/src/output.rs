@@ -1,26 +1,20 @@
 //! Output compression: `ob_gzhandler()`, `zlib_get_coding_type()` and the
 //! `zlib.output_compression*` / `zlib.output_handler` INI settings.
 //!
-//! The VM has no INI modify callbacks and no native output handlers, so:
-//!
-//! * INI changes are picked up lazily ([`sync_ini`]) at request startup,
-//!   when `zlib_get_coding_type()`/`ob_gzhandler()` run and when the
-//!   compression handler is invoked;
-//! * the internal `"zlib output compression"` handler is a hidden native
-//!   function of that name, started with `ob_start()` (so
-//!   `ob_list_handlers()` reports PHP's name);
-//! * `ob_start('ob_gzhandler')` calls the `ob_gzhandler()` function as a
-//!   user handler (PHP's "legacy" path, with a per-request context).
+//! INI changes are picked up lazily by [`sync_ini`]. The native
+//! `ob_gzhandler` alias and automatic compression use the internal output
+//! handler; direct function calls retain PHP's separate legacy context.
 
 use std::cell::RefCell;
 
 use php_runtime::{Value, ZStr};
 use php_support::ini::{parse_quantity, Access, IniDirective, ModifyHandler};
+use php_support::output::{self, StartHandler};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 use php_zlib::output::{
     flags, output_compression_keyword, CompressionStart, IniUpdate, OutputContext, OutputEnv,
-    ZlibOutput, OUTPUT_HANDLER_NAME,
+    ZlibOutput, CONFLICTING_HANDLERS, OUTPUT_HANDLER_NAME,
 };
 
 use crate::bytes;
@@ -77,15 +71,19 @@ fn compression_value(v: &[u8]) -> i64 {
 fn start(vm: &mut Vm, s: CompressionStart) -> VmResult<()> {
     STATE.with(|st| st.borrow_mut().handler_ctx = Some(s.context));
     let chunk = i64::try_from(s.chunk_size).unwrap_or(0);
-    let ok = vm.call_value(
-        &Value::Str(ZStr::from("ob_start")),
-        vec![
-            Value::Str(ZStr::from(OUTPUT_HANDLER_NAME)),
-            Value::Int(chunk),
-            Value::Int(i64::from(flags::STDFLAGS)),
-        ],
-    )?;
-    if matches!(ok, Value::Bool(true)) {
+    let ok = output::start(
+        vm,
+        StartHandler::Alias {
+            name: OUTPUT_HANDLER_NAME.as_bytes().to_vec(),
+            callback: Value::from("ob_gzhandler"),
+        },
+        s.chunk_size,
+        flags::STDFLAGS,
+    );
+    if let Some(t) = vm.pending_throw.take() {
+        return Err(t);
+    }
+    if ok {
         if let Some(h) = s.user_handler {
             vm.call_value(
                 &Value::Str(ZStr::from("ob_start")),
@@ -154,11 +152,30 @@ fn request_startup(vm: &mut Vm) {
     let _ = sync_ini(vm, true);
 }
 
-/// The internal `"zlib output compression"` output handler.
-fn compression_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+/// Initializes the alias without replacing an already active context.
+fn init_handler(vm: &mut Vm, chunk: usize, _flags: i32) -> VmResult<()> {
     sync_ini(vm, false)?;
-    let data = a.str(0);
-    let op = i32::try_from(a.int(1)).unwrap_or(0);
+    let active = vm.output.handler_started(b"ob_gzhandler")
+        || vm.output.handler_started(OUTPUT_HANDLER_NAME.as_bytes());
+    STATE.with(|st| {
+        let mut st = st.borrow_mut();
+        let ctx = st.zlib.handler_init(chunk);
+        if !active {
+            st.handler_ctx = Some(ctx);
+        }
+    });
+    Ok(())
+}
+
+fn conflict_check(vm: &mut Vm, name: &[u8]) -> bool {
+    !CONFLICTING_HANDLERS
+        .iter()
+        .any(|old| output::handler_conflict(vm, name, old.as_bytes()))
+}
+
+/// The internal compression handler (not a userland function).
+fn native_handler(vm: &mut Vm, data: &[u8], op: i32) -> VmResult<Option<Vec<u8>>> {
+    sync_ini(vm, false)?;
     let mut env = CliEnv {
         started: Some(op & flags::START == 0),
     };
@@ -166,9 +183,9 @@ fn compression_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let mut st = st.borrow_mut();
         let st = &mut *st;
         let ctx = st.handler_ctx.get_or_insert_with(OutputContext::new);
-        st.zlib.output_handler(ctx, &mut env, op, data.as_bytes())
+        st.zlib.output_handler(ctx, &mut env, op, data)
     });
-    Ok(out.map_or(Value::Bool(false), bytes))
+    Ok(out)
 }
 
 fn ob_gzhandler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -217,11 +234,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         "ob_gzhandler(string $data, int $flags): string|false",
         ob_gzhandler,
     )
-    .function("zlib_get_coding_type(): string|false", zlib_get_coding_type)
-    .function(
-        &format!("{OUTPUT_HANDLER_NAME}(string $data, int $flags): string|false"),
-        compression_handler,
-    );
+    .function("zlib_get_coding_type(): string|false", zlib_get_coding_type);
+    m.output_handler_with_init("ob_gzhandler", native_handler, Some(init_handler))
+        .output_handler_conflict("ob_gzhandler", conflict_check)
+        .output_handler_conflict(OUTPUT_HANDLER_NAME, conflict_check);
     m.on_request_startup(request_startup);
 }
 
@@ -249,5 +265,58 @@ mod tests {
             Some(flags::STDFLAGS | flags::STARTED)
         );
         assert!(!env.headers_sent());
+    }
+
+    #[test]
+    fn registered_alias_checks_each_upstream_conflict() {
+        let ext = crate::Zlib;
+        for old in CONFLICTING_HANDLERS {
+            let mut vm = Vm::with_extensions(
+                &php_vm::VmOptions::default(),
+                Box::new(Vec::<u8>::new()),
+                &[&ext],
+            );
+            assert!(output::start(
+                &mut vm,
+                StartHandler::Internal {
+                    name: old.as_bytes().to_vec(),
+                    func: Box::new(|buf, _| Some(buf.to_vec())),
+                },
+                0,
+                flags::STDFLAGS,
+            ));
+            let r = vm
+                .call_value(
+                    &Value::from("ob_start"),
+                    vec![Value::from("ob_gzhandler")],
+                )
+                .expect("ob_start");
+            assert!(matches!(r, Value::Bool(false)), "{old}");
+            assert_eq!(vm.output.list_handlers(), vec![old.as_bytes().to_vec()]);
+        }
+    }
+
+    #[test]
+    fn alias_constructor_initializes_compression_state_at_start() {
+        let ext = crate::Zlib;
+        let mut vm = Vm::with_extensions(
+            &php_vm::VmOptions::default(),
+            Box::new(Vec::<u8>::new()),
+            &[&ext],
+        );
+        let r = vm
+            .call_value(
+                &Value::from("ob_start"),
+                vec![Value::from("ob_gzhandler"), Value::Int(1024)],
+            )
+            .expect("ob_start");
+        assert!(matches!(r, Value::Bool(true)));
+        STATE.with(|s| {
+            let s = s.borrow();
+            assert_eq!(s.zlib.output_compression, 1024);
+            assert!(s.zlib.handler_registered);
+            assert!(s.handler_ctx.is_some());
+        });
+        assert_eq!(vm.output.active_status().expect("handler").kind, 0);
     }
 }

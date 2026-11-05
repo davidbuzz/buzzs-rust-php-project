@@ -142,6 +142,24 @@ pub type SourceFilterFn = fn(&mut Vm, &ZStr, Vec<u8>) -> VmResult<Vec<u8>>;
 /// means failure (the buffer passes through).
 pub type OutputHandlerFn = fn(&mut Vm, &[u8], i32) -> VmResult<Option<Vec<u8>>>;
 
+/// Initializes a native handler before the stack's lock/conflict checks.
+pub type OutputHandlerInitFn = fn(&mut Vm, usize, i32) -> VmResult<()>;
+
+/// A native output alias and its optional constructor.
+#[derive(Debug, Clone, Copy)]
+pub struct OutputHandlerAlias {
+    /// The native callback.
+    pub handler: OutputHandlerFn,
+    /// The constructor, if this handler has per-handler state.
+    pub init: Option<OutputHandlerInitFn>,
+}
+
+/// Checks a module's handler conflicts before pushing a buffer.
+pub type OutputHandlerConflictFn = fn(&mut Vm, &[u8]) -> bool;
+
+/// Refreshes request settings before an internal handler runs.
+pub type OutputHandlerHookFn = fn(&mut Vm);
+
 /// A `PHP_MINFO` callback.
 pub type ModuleInfoFn = fn(&mut Vm) -> Vec<InfoItem>;
 
@@ -276,12 +294,39 @@ impl<'a> ModuleBuilder<'a> {
     }
 
     /// Registers a named output handler usable as `ob_start('name')`
-    /// without being a function (`ob_gzhandler`, `ob_iconv_handler`,
-    /// `mb_output_handler`).
+    /// without being a function (`ob_gzhandler`, `ob_iconv_handler`).
     pub fn output_handler(&mut self, name: &str, f: OutputHandlerFn) -> &mut Self {
+        self.output_handler_with_init(name, f, None)
+    }
+
+    /// Registers an alias with a constructor for its per-handler state.
+    pub fn output_handler_with_init(
+        &mut self,
+        name: &str,
+        f: OutputHandlerFn,
+        init: Option<OutputHandlerInitFn>,
+    ) -> &mut Self {
         self.vm
             .output_handler_aliases
-            .insert(ZStr::from(name.to_ascii_lowercase()), f);
+            .insert(ZStr::from(name), OutputHandlerAlias { handler: f, init });
+        self
+    }
+
+    /// Registers a module's ordered conflict check for this exact name.
+    pub fn output_handler_conflict(
+        &mut self,
+        name: &str,
+        check: OutputHandlerConflictFn,
+    ) -> &mut Self {
+        self.vm
+            .output_handler_conflicts
+            .insert(ZStr::from(name), check);
+        self
+    }
+
+    /// Refreshes request settings before this internal handler runs.
+    pub fn output_handler_hook(&mut self, name: &str, hook: OutputHandlerHookFn) -> &mut Self {
+        self.vm.output_handler_hooks.insert(ZStr::from(name), hook);
         self
     }
 

@@ -39,9 +39,8 @@ pub(crate) fn install_hooks(m: &mut ModuleBuilder<'_>) {
 }
 
 /// Request startup: `output_handler=mb_output_handler` in php.ini starts
-/// the handler before the script runs (`php_output_start_user()` with
-/// mbstring's handler alias). The VM does not interpret `output_handler`
-/// itself.
+/// the user handler before the script runs (`php_output_start_user()`).
+/// The VM does not interpret `output_handler` itself.
 pub(crate) fn request_startup(vm: &mut Vm) {
     if vm.ini.raw("output_handler") == Some(b"mb_output_handler".as_slice()) {
         php_support::output::start(
@@ -148,17 +147,37 @@ fn mb_output_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     handle(vm, s.as_bytes(), status).map(bytes)
 }
 
-/// The named native handler (`php_mb_output_handler_init` alias), used by
-/// `ob_start('mb_output_handler')` and `output_handler=mb_output_handler`.
-fn native_handler(vm: &mut Vm, buf: &[u8], mode: i32) -> VmResult<Option<Vec<u8>>> {
-    handle(vm, buf, i64::from(mode)).map(Some)
-}
-
 /// Registers `mb_output_handler`.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     m.function(
         "mb_output_handler(string $string, int $status): string",
         mb_output_handler,
     );
-    m.output_handler("mb_output_handler", native_handler);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use php_support::output::flags;
+
+    #[test]
+    fn mb_output_handler_is_a_user_handler() {
+        let ext = crate::Mbstring;
+        let mut vm = Vm::with_extensions(
+            &php_vm::VmOptions::default(),
+            Box::new(Vec::<u8>::new()),
+            &[&ext],
+        );
+        let r = vm
+            .call_value(
+                &Value::from("ob_start"),
+                vec![Value::from("mb_output_handler")],
+            )
+            .expect("ob_start");
+        assert!(matches!(r, Value::Bool(true)));
+        let st = vm.output.active_status().expect("handler");
+        assert_eq!(st.name, b"mb_output_handler");
+        assert_eq!(st.kind, flags::USER);
+        assert_eq!(st.flags, flags::STDFLAGS | flags::USER);
+    }
 }

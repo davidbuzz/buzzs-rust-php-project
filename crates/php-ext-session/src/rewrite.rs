@@ -71,6 +71,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         "output_reset_rewrite_vars(): bool",
         output_reset_rewrite_vars,
     );
+    m.output_handler_hook("URL-Rewriter", refresh_env);
 }
 
 /// The deprecation `OnUpdateSessionTags`/`OnUpdateSessionHosts` raise for
@@ -132,8 +133,8 @@ pub(crate) fn request_shutdown(vm: &mut Vm) {
     }
 }
 
-/// Snapshots `arg_separator.output` and `$_SERVER['HTTP_HOST']` for the
-/// output handler.
+/// Refreshes `arg_separator.output` and `$_SERVER['HTTP_HOST']` before
+/// adding a variable or processing buffered output.
 fn refresh_env(vm: &mut Vm) {
     let sep = vm
         .ini_string("arg_separator.output")
@@ -184,10 +185,12 @@ pub(crate) fn session_var(vm: &mut Vm, name: &[u8], id: &[u8]) {
     add_var(vm, Kind::Session, name, id);
 }
 
-#[allow(clippy::unnecessary_wraps)] // the native function signature
 fn output_add_rewrite_var(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (name, value) = (a.str(0), a.str(1));
     add_var(vm, Kind::Output, name.as_bytes(), value.as_bytes());
+    if let Some(t) = vm.pending_throw.take() {
+        return Err(t);
+    }
     Ok(Value::Bool(true))
 }
 

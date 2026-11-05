@@ -184,6 +184,8 @@ impl Vm {
             stack_limit_ini: None,
             call_bufs: crate::vm::CallBufs::prewarmed(&empty_code),
             output_handler_aliases: std::collections::HashMap::new(),
+            output_handler_conflicts: std::collections::HashMap::new(),
+            output_handler_hooks: std::collections::HashMap::new(),
             include_opener: None,
             source_filter: None,
             builtin_deprecations: std::collections::HashMap::new(),

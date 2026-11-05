@@ -154,11 +154,25 @@ fn ob_start(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     let chunk = i(a, 1);
     let fl = if a.has(2) { i(a, 2) } else { 112 };
-    let is_alias = matches!(&cb, Value::Str(n)
-        if vm.output_handler_aliases.contains_key(&ZStr::from(n.as_bytes().to_ascii_lowercase())));
+    let alias = match &cb {
+        Value::Str(n) => vm
+            .output_handler_aliases
+            .get(n)
+            .copied()
+            .map(|alias| (n.as_bytes().to_vec(), alias)),
+        _ => None,
+    };
     let handler = if cb.is_null() {
         StartHandler::Default
-    } else if is_alias || vm.is_callable_value(&cb) {
+    } else if let Some((name, alias)) = alias {
+        if let Some(init) = alias.init {
+            let size = usize::try_from(chunk.max(0)).unwrap_or(usize::MAX);
+            #[allow(clippy::cast_possible_truncation)]
+            let flags = fl as i32;
+            init(vm, size, flags)?;
+        }
+        StartHandler::Alias { name, callback: cb }
+    } else if vm.is_callable_value(&cb) {
         let name = handler_name(vm, &cb);
         StartHandler::User { name, callback: cb }
     } else {
