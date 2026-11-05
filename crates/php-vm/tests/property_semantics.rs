@@ -1370,3 +1370,19 @@ Error: Cannot use temporary expression in write context
 string(3) \"bar\"
 ");
 }
+
+#[test]
+fn require_once_of_the_primary_script_is_a_no_op() {
+    // bug60825: php_execute_script adds the primary file to included_files.
+    let src = "<?php\nclass test {}\nvar_dump(require_once __FILE__);\necho \"done\\n\";\n";
+    let file = format!("phprust-{}-require-once-main.php", std::process::id());
+    let path = std::env::temp_dir().join(file);
+    std::fs::write(&path, src).expect("write script");
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    vm.run_script(src.as_bytes(), &path.to_string_lossy());
+    drop(vm);
+    let _ = std::fs::remove_file(&path);
+    let output = sink.0.borrow().clone();
+    assert_eq!(String::from_utf8(output).expect("UTF-8 output"), "bool(true)\ndone\n");
+}

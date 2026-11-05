@@ -238,6 +238,15 @@ impl Vm {
     fn run_top_level(&mut self, src: &[u8], path: &ZStr, is_eval: bool) -> Result<(), Throw> {
         self.script_path = path.clone();
         self.apply_compare_depth_limit();
+        if !is_eval {
+            // php_execute_script adds the primary script to
+            // EG(included_files): `require_once` of it is a no-op (bug60825).
+            use std::os::unix::ffi::OsStrExt;
+            if let Ok(real) = std::fs::canonicalize(std::ffi::OsStr::from_bytes(path.as_bytes())) {
+                self.included_set
+                    .insert(ZStr::from(real.as_os_str().as_bytes()));
+            }
+        }
         let src = if is_eval {
             src.to_vec()
         } else {
