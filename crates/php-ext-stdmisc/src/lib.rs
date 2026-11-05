@@ -1,6 +1,7 @@
 //! The "misc" of `ext/standard` for the phprust VM: binds the
 //! `php-stdmisc` library through the `php_vm::ext` extension API.
 //!
+//! * [`browscap`] — `get_browser()`.
 //! * [`crypt`] — `crypt()` and `password_*`.
 //! * [`exec`] — `escapeshell*`, `exec`/`system`/`passthru`/`shell_exec`,
 //!   `proc_nice`.
@@ -21,6 +22,7 @@
 //! Per-request state (locale, `putenv` changes, syslog, assert callback)
 //! lives in thread-locals and is reset by request-shutdown hooks.
 
+mod browscap;
 mod credits;
 mod crypt;
 mod ctx;
@@ -46,6 +48,7 @@ impl Extension for StdMisc {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        browscap::register(m);
         crypt::register(m);
         exec::register(m);
         proc::register(m);

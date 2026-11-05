@@ -2,6 +2,7 @@
 //! string/array/stream crates (php-src master semantics, verified against
 //! `/usr/bin/php` with oracle fixtures in `tests/fixtures`).
 //!
+//! * [`browscap`] — `get_browser()` (browscap.ini matching).
 //! * [`crypt`] — `crypt()` with every bundled algorithm (std/ext DES, MD5,
 //!   SHA-256/512, bcrypt incl. `$2a$`/`$2x$` bug handling) and the
 //!   `password_*` API (bcrypt, pure-Rust Argon2i/Argon2id).
@@ -38,6 +39,7 @@
 //!
 //! All `unsafe` code is confined to [`sys`].
 
+pub mod browscap;
 pub mod crypt;
 pub mod dns;
 pub mod exec;

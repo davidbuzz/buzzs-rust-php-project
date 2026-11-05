@@ -616,3 +616,40 @@ try { assert(false); } catch (Error $e) { echo $e::class, ':', $e->getPrevious()
         )
     );
 }
+
+/// `get_browser()` (`ext/standard/browscap.c`): the best wildcard match,
+/// its `Parent` chain, boolean normalization, the object form and the
+/// missing `HTTP_USER_AGENT` warning.
+#[test]
+fn get_browser_matches_browscap_sections() {
+    let ini = std::env::temp_dir().join(format!("phprust-browscap-{}.ini", std::process::id()));
+    std::fs::write(
+        &ini,
+        "[*]\nBrowser=\"Default Browser\"\nFrames=true\n\n[Opera*]\nParent=Op\nPlatform=WinXP\n\n[Op]\nBrowser=Opera\nFrames=off\n",
+    )
+    .expect("write browscap fixture");
+    let opts = VmOptions {
+        ini: [("browscap".to_string(), ini.display().to_string())]
+            .into_iter()
+            .collect(),
+    };
+    let ext = php_ext_stdmisc::StdMisc;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let out = run_with(
+        &opts,
+        &exts,
+        r#"var_dump(get_browser('Opera/7', true));
+$o = get_browser('x'); echo get_class($o), ' ', $o->browser, ' ', $o->frames, "\n";
+var_dump(get_browser(null));"#,
+    );
+    let _ = std::fs::remove_file(&ini);
+    assert_eq!(
+        out,
+        "array(6) {\n  [\"browser_name_regex\"]=>\n  string(11) \"~^opera.*$~\"\n  \
+         [\"browser_name_pattern\"]=>\n  string(6) \"Opera*\"\n  [\"parent\"]=>\n  string(2) \"Op\"\n  \
+         [\"platform\"]=>\n  string(5) \"WinXP\"\n  [\"browser\"]=>\n  string(5) \"Opera\"\n  \
+         [\"frames\"]=>\n  string(0) \"\"\n}\nstdClass Default Browser 1\n\
+         \nWarning: get_browser(): HTTP_USER_AGENT variable is not set, cannot determine user agent name in test.php on line 3\n\
+         bool(false)\n"
+    );
+}
