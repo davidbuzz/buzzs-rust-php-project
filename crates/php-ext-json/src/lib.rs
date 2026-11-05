@@ -101,7 +101,7 @@ fn json_encode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let mut st = STATE.with(|s| *s.borrow());
     let r = {
-        let mut h = VmJsonHost::new(vm);
+        let mut h = VmJsonHost::new(vm, input_len(&value));
         functions::json_encode(&mut st, &mut h, &value, flags, depth)
     };
     STATE.with(|s| *s.borrow_mut() = st);
@@ -123,7 +123,7 @@ fn json_decode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let flags = if a.has(3) { a.int(3) } else { 0 };
     let mut st = STATE.with(|s| *s.borrow());
     let r = {
-        let mut h = VmJsonHost::new(vm);
+        let mut h = VmJsonHost::new(vm, json.len());
         functions::json_decode(&mut st, &mut h, json.as_bytes(), assoc, depth, flags)
     };
     STATE.with(|s| *s.borrow_mut() = st);

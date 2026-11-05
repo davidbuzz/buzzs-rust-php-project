@@ -151,6 +151,21 @@ fn recursion_is_detected() {
 }
 
 #[test]
+fn memory_limit_stops_json_output_growth() {
+    for code in [
+        r#"ini_set("memory_limit", "8M"); $subject = str_repeat("\x01", 2 * 1024 * 1024); json_encode($subject); echo "not reached";"#,
+        r#"ini_set("memory_limit", "8M"); $subject = array_fill(0, 200, str_repeat("\x01", 20000)); json_encode($subject, JSON_PARTIAL_OUTPUT_ON_ERROR); echo "not reached";"#,
+    ] {
+        let out = run(code);
+        assert!(
+            out.contains("Allowed memory size of 8388608 bytes exhausted"),
+            "{out}"
+        );
+        assert!(!out.contains("not reached"));
+    }
+}
+
+#[test]
 fn memory_limit_is_modelled() {
     let out = run(
         r#"ini_set('memory_limit', '4M'); json_encode(str_repeat("\x01", 1 << 20)); echo "not reached";"#,

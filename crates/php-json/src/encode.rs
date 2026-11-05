@@ -101,12 +101,13 @@ pub(crate) fn next_utf8_char(s: &[u8]) -> (Option<u32>, usize) {
     (None, 1)
 }
 
-/// Appends `\uXXXX` with lowercase hex digits.
-fn push_u_escape(buf: &mut Vec<u8>, us: u32) {
-    buf.extend_from_slice(b"\\u");
-    for shift in [12, 8, 4, 0] {
-        buf.push(HEX_DIGITS[((us >> shift) & 0xF) as usize]);
+/// Builds `\uXXXX` with lowercase hex digits.
+fn u_escape(us: u32) -> [u8; 6] {
+    let mut out = *b"\\u0000";
+    for (index, shift) in [12, 8, 4, 0].into_iter().enumerate() {
+        out[index + 2] = HEX_DIGITS[((us >> shift) & 0xF) as usize];
     }
+    out
 }
 
 /// Formats a double like `php_json_encode_double` (`zend_gcvt` with
@@ -151,36 +152,54 @@ impl<'h> Encoder<'h> {
         }
     }
 
-    fn pretty_char(buf: &mut Vec<u8>, options: i64, c: u8) {
-        if options & PRETTY_PRINT != 0 {
-            buf.push(c);
-        }
+    fn reserve_output(&mut self, buf: &mut Vec<u8>, additional: usize) -> RtResult<()> {
+        self.host.json_reserve(buf, additional)
     }
 
-    fn pretty_indent(&self, buf: &mut Vec<u8>, options: i64) {
+    fn append_output(&mut self, buf: &mut Vec<u8>, bytes: &[u8]) -> RtResult<()> {
+        self.reserve_output(buf, bytes.len())?;
+        buf.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn push_output(&mut self, buf: &mut Vec<u8>, byte: u8) -> RtResult<()> {
+        self.reserve_output(buf, 1)?;
+        buf.push(byte);
+        Ok(())
+    }
+
+    fn pretty_char(&mut self, buf: &mut Vec<u8>, options: i64, c: u8) -> RtResult<()> {
+        if options & PRETTY_PRINT != 0 {
+            self.push_output(buf, c)?;
+        }
+        Ok(())
+    }
+
+    fn pretty_indent(&mut self, buf: &mut Vec<u8>, options: i64) -> RtResult<()> {
         if options & PRETTY_PRINT != 0 {
             for _ in 0..self.depth {
-                buf.extend_from_slice(b"    ");
+                self.append_output(buf, b"    ")?;
             }
         }
+        Ok(())
     }
 
     /// `php_json_encode_zval`.
     pub(crate) fn encode_zval(&mut self, buf: &mut Vec<u8>, val: &Value, options: i64) -> Step {
         match val {
-            Value::Null => buf.extend_from_slice(b"null"),
-            Value::Bool(true) => buf.extend_from_slice(b"true"),
-            Value::Bool(false) => buf.extend_from_slice(b"false"),
-            Value::Int(i) => buf.extend_from_slice(i.to_string().as_bytes()),
+            Value::Null => self.append_output(buf, b"null")?,
+            Value::Bool(true) => self.append_output(buf, b"true")?,
+            Value::Bool(false) => self.append_output(buf, b"false")?,
+            Value::Int(i) => self.append_output(buf, i.to_string().as_bytes())?,
             Value::Float(d) => {
                 if d.is_finite() {
-                    buf.extend_from_slice(format_double(*d, self.precision, options).as_bytes());
+                    self.append_output(buf, format_double(*d, self.precision, options).as_bytes())?;
                 } else {
                     self.error = ErrorCode::InfOrNan;
-                    buf.push(b'0');
+                    self.push_output(buf, b'0')?;
                 }
             }
-            Value::Str(s) => return Ok(self.escape_string(buf, s.as_bytes(), options)),
+            Value::Str(s) => return self.escape_string(buf, s.as_bytes(), options),
             Value::Object(o) => {
                 if self.host.is_json_serializable(o) {
                     return self.encode_serializable_object(buf, o, options);
@@ -198,7 +217,7 @@ impl<'h> Encoder<'h> {
             Value::Resource(_) => {
                 self.error = ErrorCode::UnsupportedType;
                 if options & PARTIAL_OUTPUT_ON_ERROR != 0 {
-                    buf.extend_from_slice(b"null");
+                    self.append_output(buf, b"null")?;
                 }
                 return Ok(false);
             }
@@ -212,7 +231,7 @@ impl<'h> Encoder<'h> {
         if !self.host.json_protect(guard) {
             self.error = ErrorCode::Recursion;
             if options & PARTIAL_OUTPUT_ON_ERROR != 0 {
-                buf.extend_from_slice(b"null");
+                self.append_output(buf, b"null")?;
             }
             return Ok(false);
         }
@@ -240,7 +259,7 @@ impl<'h> Encoder<'h> {
         match self.host.enum_backing_value(obj) {
             None => {
                 self.error = ErrorCode::NonBackedEnum;
-                buf.push(b'0');
+                self.push_output(buf, b'0')?;
                 Ok(false)
             }
             Some(v) => self.encode_zval(buf, &v, options),
@@ -254,7 +273,7 @@ impl<'h> Encoder<'h> {
         if self.host.json_stack_limit_reached(self.nesting) {
             self.error = ErrorCode::Depth;
             if partial {
-                buf.extend_from_slice(b"null");
+                self.append_output(buf, b"null")?;
             }
             return Ok(false);
         }
@@ -269,7 +288,7 @@ impl<'h> Encoder<'h> {
         };
         if !self.host.json_protect(guard) {
             self.error = ErrorCode::Recursion;
-            buf.extend_from_slice(b"null");
+            self.append_output(buf, b"null")?;
             return Ok(false);
         }
         let table: Option<ZArray> = match val {
@@ -300,10 +319,10 @@ impl<'h> Encoder<'h> {
         }
         self.depth -= 1;
         if !empty {
-            Self::pretty_char(buf, options, b'\n');
-            self.pretty_indent(buf, options);
+            self.pretty_char(buf, options, b'\n')?;
+            self.pretty_indent(buf, options)?;
         }
-        buf.push(if encode_as_object { b'}' } else { b']' });
+        self.push_output(buf, if encode_as_object { b'}' } else { b']' })?;
         Ok(true)
     }
 
@@ -319,7 +338,7 @@ impl<'h> Encoder<'h> {
         is_object: bool,
     ) -> RtResult<Option<bool>> {
         let partial = options & PARTIAL_OUTPUT_ON_ERROR != 0;
-        buf.push(if encode_as_object { b'{' } else { b'[' });
+        self.push_output(buf, if encode_as_object { b'{' } else { b'[' })?;
         self.depth += 1;
         let Some(table) = table.filter(|t| !t.is_empty()) else {
             return Ok(Some(true));
@@ -333,35 +352,35 @@ impl<'h> Encoder<'h> {
                             // Skip protected and private members.
                             continue;
                         }
-                        Self::pretty_char(buf, options, b'\n');
-                        self.pretty_indent(buf, options);
-                        if !self.escape_string(buf, k, options & !NUMERIC_CHECK) {
+                        self.pretty_char(buf, options, b'\n')?;
+                        self.pretty_indent(buf, options)?;
+                        if !self.escape_string(buf, k, options & !NUMERIC_CHECK)? {
                             if !partial {
                                 return Ok(None);
                             }
-                            // Replace the "null" written on error by "".
+                            // Replace the `null` written on error with an empty string.
                             buf.truncate(buf.len() - 4);
-                            buf.extend_from_slice(b"\"\"");
+                            self.append_output(buf, b"\"\"")?;
                         }
                     }
                     ArrayKey::Int(i) => {
-                        Self::pretty_char(buf, options, b'\n');
-                        self.pretty_indent(buf, options);
-                        buf.push(b'"');
-                        buf.extend_from_slice(i.to_string().as_bytes());
-                        buf.push(b'"');
+                        self.pretty_char(buf, options, b'\n')?;
+                        self.pretty_indent(buf, options)?;
+                        self.push_output(buf, b'"')?;
+                        self.append_output(buf, i.to_string().as_bytes())?;
+                        self.push_output(buf, b'"')?;
                     }
                 }
-                buf.push(b':');
-                Self::pretty_char(buf, options, b' ');
+                self.push_output(buf, b':')?;
+                self.pretty_char(buf, options, b' ')?;
             } else {
-                Self::pretty_char(buf, options, b'\n');
-                self.pretty_indent(buf, options);
+                self.pretty_char(buf, options, b'\n')?;
+                self.pretty_indent(buf, options)?;
             }
             if !self.encode_zval(buf, data, options)? && !partial {
                 return Ok(None);
             }
-            buf.push(b',');
+            self.push_output(buf, b',')?;
         }
         let empty = buf.last() != Some(&b',');
         if !empty {
@@ -374,27 +393,32 @@ impl<'h> Encoder<'h> {
     /// `php_json_escape_string`. Returns `false` on failure (invalid UTF-8),
     /// in which case nothing is appended unless `JSON_PARTIAL_OUTPUT_ON_ERROR`
     /// is set (then `null` is).
-    pub(crate) fn escape_string(&mut self, buf: &mut Vec<u8>, s: &[u8], options: i64) -> bool {
+    pub(crate) fn escape_string(
+        &mut self,
+        buf: &mut Vec<u8>,
+        s: &[u8],
+        options: i64,
+    ) -> RtResult<bool> {
         if s.is_empty() {
-            buf.extend_from_slice(b"\"\"");
-            return true;
+            self.append_output(buf, b"\"\"")?;
+            return Ok(true);
         }
         if options & NUMERIC_CHECK != 0 {
             match is_numeric_string(s, false) {
                 Some(Number::Int(i)) => {
-                    buf.extend_from_slice(i.to_string().as_bytes());
-                    return true;
+                    self.append_output(buf, i.to_string().as_bytes())?;
+                    return Ok(true);
                 }
                 Some(Number::Float(d)) if d.is_finite() => {
-                    buf.extend_from_slice(format_double(d, self.precision, options).as_bytes());
-                    return true;
+                    self.append_output(buf, format_double(d, self.precision, options).as_bytes())?;
+                    return Ok(true);
                 }
                 _ => {}
             }
         }
         let checkpoint = buf.len();
-        buf.reserve(s.len() + 2);
-        buf.push(b'"');
+        self.reserve_output(buf, s.len().saturating_add(2))?;
+        self.push_output(buf, b'"')?;
         let mut pos = 0;
         while pos < s.len() {
             // Copy the run of bytes that need no escaping.
@@ -402,7 +426,7 @@ impl<'h> Encoder<'h> {
                 .iter()
                 .position(|&b| needs_escape(b))
                 .unwrap_or(s.len() - pos);
-            buf.extend_from_slice(&s[pos..pos + run]);
+            self.append_output(buf, &s[pos..pos + run])?;
             pos += run;
             let Some(&us) = s.get(pos) else { break };
             if us >= 0x80 {
@@ -413,17 +437,17 @@ impl<'h> Encoder<'h> {
                             // Drop the invalid sequence.
                         } else if options & INVALID_UTF8_SUBSTITUTE != 0 {
                             if options & UNESCAPED_UNICODE != 0 {
-                                buf.extend_from_slice("\u{FFFD}".as_bytes());
+                                self.append_output(buf, "\u{FFFD}".as_bytes())?;
                             } else {
-                                buf.extend_from_slice(b"\\ufffd");
+                                self.append_output(buf, b"\\ufffd")?;
                             }
                         } else {
                             buf.truncate(checkpoint);
                             self.error = ErrorCode::Utf8;
                             if options & PARTIAL_OUTPUT_ON_ERROR != 0 {
-                                buf.extend_from_slice(b"null");
+                                self.append_output(buf, b"null")?;
                             }
-                            return false;
+                            return Ok(false);
                         }
                     }
                     Some(cp)
@@ -431,15 +455,15 @@ impl<'h> Encoder<'h> {
                             && (options & UNESCAPED_LINE_TERMINATORS != 0
                                 || !(0x2028..=0x2029).contains(&cp)) =>
                     {
-                        buf.extend_from_slice(&s[pos..pos + n]);
+                        self.append_output(buf, &s[pos..pos + n])?;
                     }
                     Some(mut cp) => {
                         if cp >= 0x10000 {
                             cp -= 0x10000;
-                            push_u_escape(buf, 0xD800 | (cp >> 10));
+                            self.append_output(buf, &u_escape(0xD800 | (cp >> 10)))?;
                             cp = 0xDC00 | (cp & 0x3FF);
                         }
-                        push_u_escape(buf, cp);
+                        self.append_output(buf, &u_escape(cp))?;
                     }
                 }
                 pos += n;
@@ -449,34 +473,34 @@ impl<'h> Encoder<'h> {
             match us {
                 b'"' => {
                     if options & HEX_QUOT != 0 {
-                        buf.extend_from_slice(b"\\u0022");
+                        self.append_output(buf, b"\\u0022")?;
                     } else {
-                        buf.extend_from_slice(b"\\\"");
+                        self.append_output(buf, b"\\\"")?;
                     }
                 }
-                b'\\' => buf.extend_from_slice(b"\\\\"),
+                b'\\' => self.append_output(buf, b"\\\\")?,
                 b'/' => {
                     if options & UNESCAPED_SLASHES != 0 {
-                        buf.push(b'/');
+                        self.push_output(buf, us)?;
                     } else {
-                        buf.extend_from_slice(b"\\/");
+                        self.append_output(buf, b"\\/")?;
                     }
                 }
-                0x08 => buf.extend_from_slice(b"\\b"),
-                0x0C => buf.extend_from_slice(b"\\f"),
-                b'\n' => buf.extend_from_slice(b"\\n"),
-                b'\r' => buf.extend_from_slice(b"\\r"),
-                b'\t' => buf.extend_from_slice(b"\\t"),
-                b'<' if options & HEX_TAG != 0 => buf.extend_from_slice(b"\\u003C"),
-                b'>' if options & HEX_TAG != 0 => buf.extend_from_slice(b"\\u003E"),
-                b'&' if options & HEX_AMP != 0 => buf.extend_from_slice(b"\\u0026"),
-                b'\'' if options & HEX_APOS != 0 => buf.extend_from_slice(b"\\u0027"),
-                b'<' | b'>' | b'&' | b'\'' => buf.push(us),
-                _ => push_u_escape(buf, u32::from(us)),
+                0x08 => self.append_output(buf, b"\\b")?,
+                0x0C => self.append_output(buf, b"\\f")?,
+                b'\n' => self.append_output(buf, b"\\n")?,
+                b'\r' => self.append_output(buf, b"\\r")?,
+                b'\t' => self.append_output(buf, b"\\t")?,
+                b'<' if options & HEX_TAG != 0 => self.append_output(buf, b"\\u003C")?,
+                b'>' if options & HEX_TAG != 0 => self.append_output(buf, b"\\u003E")?,
+                b'&' if options & HEX_AMP != 0 => self.append_output(buf, b"\\u0026")?,
+                39 if options & HEX_APOS != 0 => self.append_output(buf, b"\\u0027")?,
+                b'<' | b'>' | b'&' | 39 => self.push_output(buf, us)?,
+                _ => self.append_output(buf, &u_escape(u32::from(us)))?,
             }
         }
-        buf.push(b'"');
-        true
+        self.push_output(buf, b'"')?;
+        Ok(true)
     }
 }
 
@@ -527,7 +551,8 @@ pub fn encode_string(s: &[u8], flags: i64) -> Option<Vec<u8>> {
     let mut host = php_runtime::CollectingContext::new();
     let mut buf = Vec::new();
     let mut encoder = Encoder::new(&mut host, crate::flags::DEFAULT_DEPTH);
-    encoder
+    let encoded = encoder
         .escape_string(&mut buf, s, flags & !PARTIAL_OUTPUT_ON_ERROR)
-        .then_some(buf)
+        .ok()?;
+    encoded.then_some(buf)
 }

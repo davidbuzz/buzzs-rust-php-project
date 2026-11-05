@@ -85,6 +85,13 @@ pub fn default_unprotect(key: GuardKey) {
 ///   then [`std_class_write`](Self::std_class_write) for each member, so
 ///   object handle numbers match.
 pub trait JsonHost: RuntimeContext {
+    /// Reserves space for an output-buffer append. A VM may check its
+    /// `memory_limit` before the allocation.
+    fn json_reserve(&mut self, buf: &mut Vec<u8>, additional: usize) -> RtResult<()> {
+        buf.reserve(additional);
+        Ok(())
+    }
+
     /// Whether the object's class implements `JsonSerializable`.
     fn is_json_serializable(&mut self, obj: &Obj) -> bool {
         let _ = obj;
