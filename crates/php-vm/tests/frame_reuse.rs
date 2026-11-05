@@ -169,6 +169,17 @@ fn by_ref_void_function_emits_compile_deprecation() {
     );
 }
 
+#[test]
+fn unpacked_assertion_preserves_explicit_description() {
+    assert_eq!(
+        run(r#"<?php
+try { assert(...["assertion" => false, "description" => "explicit"]); }
+catch (AssertionError $e) { echo $e->getMessage(), "\n"; }
+"#),
+        "explicit\n"
+    );
+}
+
 fn reference_phpt(path: &str) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/php-src");
     let text = std::fs::read_to_string(root.join(path)).expect("read-only reference PHPT");

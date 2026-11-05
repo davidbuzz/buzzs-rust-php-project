@@ -843,7 +843,10 @@ impl Compiler {
                     && matches!(lc.as_slice(), b"self" | b"parent")
                 {
                     return self.err(
-                        format!("'\\{}' is an invalid class name", n.as_str_lossy()),
+                        format!(
+                            "'\\{}' is an invalid class name",
+                            String::from_utf8_lossy(&n.name)
+                        ),
                         t.span.line,
                     );
                 }

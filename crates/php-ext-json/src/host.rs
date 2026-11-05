@@ -121,11 +121,13 @@ impl RuntimeContext for VmJsonHost<'_> {
 
 impl JsonHost for VmJsonHost<'_> {
     fn json_reserve(&mut self, buf: &mut Vec<u8>, additional: usize) -> RtResult<()> {
-        let output = buf.len().saturating_add(additional);
-        if let Err(t) = super::check_memory(self.vm, self.input_len, output) {
-            return Err(to_rt(self.vm, t));
+        if additional > buf.capacity() - buf.len() {
+            let output = buf.len().saturating_add(additional);
+            if let Err(t) = super::check_memory(self.vm, self.input_len, output) {
+                return Err(to_rt(self.vm, t));
+            }
+            buf.reserve(additional);
         }
-        buf.reserve(additional);
         Ok(())
     }
 

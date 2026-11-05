@@ -43,8 +43,7 @@ fn run(code: &str) -> String {
 
 #[test]
 fn array_object_uses_configured_iterator_aggregate() {
-    let out = run(
-        r#"<?php
+    let out = run(r#"<?php
         class MyIterator extends ArrayIterator {
             function __construct() {
                 echo "   In " . __METHOD__ . "(" . implode(',', func_get_args()) . ")\n";
@@ -84,8 +83,7 @@ fn array_object_uses_configured_iterator_aggregate() {
         foreach ($ao as $key => $value) {
             echo "$key=>$value\n";
         }
-        ?>"#,
-    );
+        ?>"#);
     assert!(out.contains("string(10) \"MyIterator\"\n"));
     assert!(out.contains("[\"storage\":\"ArrayIterator\":private]=>\n"));
     assert!(out.contains("object(ArrayObject)#"));
