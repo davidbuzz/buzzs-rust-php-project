@@ -580,3 +580,27 @@ try { get_class_methods(1); } catch (TypeError $e) { echo $e->getMessage(), "\n"
          get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n"
     );
 }
+
+/// `zend_implement_throwable`: user classes and enums cannot implement
+/// `Throwable` directly; it is checked before the abstract methods.
+#[test]
+fn throwable_is_only_implemented_through_exception_or_error() {
+    let (status, output) = run_status("<?php\nclass Failure implements Throwable {}\n");
+    assert_eq!(status, 255, "{output}");
+    assert!(
+        output.contains(
+            "Fatal error: Class Failure cannot implement interface Throwable, extend Exception or Error instead in t.php"
+        ),
+        "{output}"
+    );
+    let (status, output) = run_status("<?php\nenum Foo implements Throwable {}\n");
+    assert_eq!(status, 255, "{output}");
+    assert!(
+        output.contains("Fatal error: Enum Foo cannot implement interface Throwable in t.php"),
+        "{output}"
+    );
+    let output = run(
+        "<?php\ninterface MyThrowable extends Throwable {}\nclass E extends Exception implements MyThrowable {}\necho get_class(new E), \"\\n\";\n",
+    );
+    assert_eq!(output, "E\n");
+}

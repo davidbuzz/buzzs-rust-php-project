@@ -1590,8 +1590,14 @@ impl Vm {
             recorded.push((crate::errors::level::DEPRECATED, w, l));
         }
         // `do_implement_interface` runs the interface hooks while binding
-        // the interfaces, before `zend_verify_abstract_class`.
-        for iface in cls.interfaces.clone() {
+        // the interfaces, before `zend_verify_abstract_class` (not for an
+        // interface extending them).
+        let ifaces = if cls.is_interface() {
+            Vec::new()
+        } else {
+            cls.interfaces.clone()
+        };
+        for iface in ifaces {
             if let Some(f) = iface
                 .hooks
                 .as_ref()
