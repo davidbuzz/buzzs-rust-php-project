@@ -1953,6 +1953,16 @@ thread_local! {
     /// there even when it is raised at a later interrupt point.
     static OOM_SITE: std::cell::RefCell<Option<(ZStr, u32)>> =
         const { std::cell::RefCell::new(None) };
+    /// Set while the output buffers are discarded for a memory-limit fatal
+    /// (`ZEND_OOM_STATE_HANDLING`): user output handlers are not called.
+    static OOM_DISCARDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the output buffers are being discarded for a memory-limit fatal
+/// (`zend_call_function` fails while `ZEND_HAS_OOM()`), see
+/// [`Vm::raise_pending_oom`].
+pub(crate) fn oom_discarding_output() -> bool {
+    OOM_DISCARDING.with(std::cell::Cell::get)
 }
 
 /// Whether a pending OOM may wait past this instruction. php-src only acts
@@ -2002,9 +2012,28 @@ impl Vm {
         let site = OOM_SITE.with(|s| s.borrow_mut().take());
         if let Some(over) = php_memlimit::take() {
             let (file, line) = site.unwrap_or_else(|| self.current_location());
+            self.discard_output_for_oom();
             self.error_at(crate::errors::level::ERROR, &over.to_string(), &file, line)?;
         }
         Ok(())
+    }
+
+    /// `php_error_cb` while `zend_alloc_in_memory_limit_error_reporting()`:
+    /// every output buffer is discarded before the error is shown, unless
+    /// a handler is running (`PHP_OUTPUT_LOCKED`). User handlers are not
+    /// called on the way (`zend_call_function` fails while the OOM is
+    /// handled), so the buffered output is lost (GH-11189).
+    #[cold]
+    #[inline(never)]
+    fn discard_output_for_oom(&mut self) {
+        if self.output.level() == 0
+            || self.output.status() & php_support::output::status::LOCKED != 0
+        {
+            return;
+        }
+        OOM_DISCARDING.with(|c| c.set(true));
+        php_support::output::discard_all(self);
+        OOM_DISCARDING.with(|c| c.set(false));
     }
 
     /// Forgets a pending violation and its location (start of request

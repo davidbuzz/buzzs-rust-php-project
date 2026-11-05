@@ -760,6 +760,10 @@ impl OutputHost for Vm {
         };
         let r = if let Some(f) = alias {
             (f.handler)(self, buffer, mode)
+        } else if crate::exec::oom_discarding_output() {
+            // A user handler is not called while a memory-limit fatal is
+            // being reported.
+            return None;
         } else {
             self.call_value(
                 callback,
