@@ -122,3 +122,13 @@ try { $r = &$a['xx']; } catch (Error $e) { echo get_class($e), ": ", $e->getMess
          TypeError: Cannot access offset of type string on string\n"
     );
 }
+
+/// `list()` over a string warns like any other scalar (foreach_list_002).
+#[test]
+fn list_destructuring_of_string_warns() {
+    let out = run("<?php\nforeach (['c'] as list(, $a)) {\n    var_dump($a);\n}\n");
+    assert_eq!(
+        out,
+        "\nWarning: Cannot use string as array in t.php on line 2\nNULL\n"
+    );
+}
