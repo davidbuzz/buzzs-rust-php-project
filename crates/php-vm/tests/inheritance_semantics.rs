@@ -618,3 +618,21 @@ fn recorded_link_deprecations_precede_a_link_fatal() {
         "\nDeprecated: A implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary) in t.php on line 3\n\nFatal error: Could not check compatibility between A::f(): Unknown and I::f(): X, because class Unknown is not available in t.php on line 6\n"
     );
 }
+
+/// `zend_lookup_class_ex`: a class still being linked is not found and
+/// not autoloaded (Zend/tests/use_unlinked_class).
+#[test]
+fn class_being_linked_is_not_found_or_autoloaded() {
+    let output = run(r#"<?php
+spl_autoload_register(function ($class) {
+    echo "load $class\n";
+    var_dump(class_exists('A'));
+    if ($class === 'I') {
+        interface I {}
+    }
+});
+class A implements I {}
+var_dump(class_exists('A', false));
+"#);
+    assert_eq!(output, "load I\nbool(false)\nbool(true)\n");
+}

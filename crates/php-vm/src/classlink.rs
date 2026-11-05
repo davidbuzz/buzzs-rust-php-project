@@ -49,6 +49,11 @@ impl Vm {
         if let Some(c) = self.classes.get(&lc) {
             return Ok(Some(c.clone()));
         }
+        // `zend_lookup_class_ex`: a class being linked sits unlinked in the
+        // class table: it is not found, and not autoloaded either.
+        if unlinked_decl(bytes).is_some() {
+            return Ok(None);
+        }
         self.autoload(&ZStr::from(bytes), &lc)?;
         Ok(self.classes.get(&lc).cloned())
     }
