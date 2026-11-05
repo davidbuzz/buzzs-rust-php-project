@@ -538,10 +538,24 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
 
 impl Vm {
     /// Resolves a place's base and segments.
+    #[inline]
     pub(crate) fn resolve_place(
         &mut self,
         pid: PlaceId,
         write: bool,
+    ) -> VmResult<(RBase, Vec<RSeg>)> {
+        self.resolve_place_ex(pid, write, false)
+    }
+
+    /// [`Vm::resolve_place`]; `quiet` is `BP_VAR_IS` (`isset`, `empty`,
+    /// `??`), where an undeclared or inaccessible static property resolves
+    /// to an undefined base instead of throwing
+    /// (`zend_fetch_static_property_address()` in Zend/zend_execute.c).
+    fn resolve_place_ex(
+        &mut self,
+        pid: PlaceId,
+        write: bool,
+        quiet: bool,
     ) -> VmResult<(RBase, Vec<RSeg>)> {
         let code = self.frame().code.clone();
         let p = &code.places[pid as usize];
@@ -588,8 +602,14 @@ impl Vm {
                 let n = self.read(*name)?;
                 let n = self.to_zstr(&n)?;
                 let cls = self.resolve_class_spec(class)?;
-                let cell = self.static_prop_cell(&cls, &n)?;
-                RBase::Cell(cell)
+                if quiet {
+                    match self.static_prop_cell_quiet(&cls, &n)? {
+                        Some(cell) => RBase::Cell(cell),
+                        None => RBase::Undef(n),
+                    }
+                } else {
+                    RBase::Cell(self.static_prop_cell(&cls, &n)?)
+                }
             }
             PlaceBase::Value(op) => {
                 let v = self.read_raw(*op)?;
@@ -1241,7 +1261,7 @@ impl Vm {
                 return self.read_cv(cv);
             }
         }
-        let (base, segs) = self.resolve_place(pid, false)?;
+        let (base, segs) = self.resolve_place_ex(pid, false, mode == FetchMode::Is)?;
         let mut cur = match base {
             RBase::Var(store, idx) => {
                 let v = store.borrow().slots[idx].as_ref().map(Value::deref);
@@ -1456,7 +1476,7 @@ impl Vm {
     /// `isset(place)` / `empty(place)` (returns the isset or empty result).
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
-        let (base, segs) = self.resolve_place(pid, false)?;
+        let (base, segs) = self.resolve_place_ex(pid, false, true)?;
         let mut cur = match base {
             RBase::Var(store, idx) => store.borrow().slots[idx].as_ref().map(Value::deref),
             RBase::This(o) => o.map(Value::Object),

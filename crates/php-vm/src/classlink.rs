@@ -663,6 +663,60 @@ impl Vm {
         Ok(sp.cell.clone())
     }
 
+    /// `A::$name` in `BP_VAR_IS` mode (`isset()`, `empty()`, `??`):
+    /// `zend_std_get_static_property_with_info()` returns NULL without an
+    /// error when the property is undeclared or not accessible from the
+    /// calling scope, so those cases give `None` here (the class lookup and
+    /// default evaluation still throw).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn static_prop_cell_quiet(
+        &mut self,
+        cls: &Rc<Class>,
+        name: &ZStr,
+    ) -> VmResult<Option<Rc<RefCell<Value>>>> {
+        let scope = self.scope();
+        let accessible = |vis: u32, decl: Option<&Rc<Class>>| match (vis, &scope, decl) {
+            (flags::PUBLIC, _, _) => true,
+            (flags::PRIVATE, Some(s), Some(d)) => Rc::ptr_eq(s, d),
+            (flags::PROTECTED, Some(s), Some(d)) => s.is_subclass_of(d) || d.is_subclass_of(s),
+            _ => false,
+        };
+        let sp = match cls.find_static(name.as_bytes()) {
+            Some(sp) => sp.clone(),
+            None => {
+                // Mirrors `static_prop_miss`: a same-named instance
+                // property's visibility is checked first.
+                if let Some(pi) = cls.prop_map.get(name) {
+                    let mut decl = self.find_class(pi.class.as_bytes());
+                    if pi.flags & flags::PROTECTED != 0 {
+                        while let Some(parent) = decl.as_ref().and_then(|d| d.parent.clone()) {
+                            if parent.prop_map.get(name).is_some_and(|p| {
+                                p.visibility() != flags::PRIVATE && p.flags & flags::STATIC == 0
+                            }) {
+                                decl = Some(parent);
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    if !accessible(pi.flags & flags::VISIBILITY, decl.as_ref()) {
+                        return Ok(None);
+                    }
+                }
+                match inherited_private_static(cls, name.as_bytes()) {
+                    Some(sp) => sp,
+                    None => return Ok(None),
+                }
+            }
+        };
+        let decl = self.find_class(sp.class.as_bytes());
+        if !accessible(sp.flags & flags::VISIBILITY, decl.as_ref()) {
+            return Ok(None);
+        }
+        self.static_prop_cell(cls, name).map(Some)
+    }
+
     // ------------------------------------------------------------------
     // Functions
     // ------------------------------------------------------------------
