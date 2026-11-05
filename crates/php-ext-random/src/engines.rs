@@ -282,10 +282,11 @@ fn hooks() -> ClassHooks {
     }
 }
 
-/// Registers the engine classes (after the `Random\Engine` interfaces).
+/// Registers the engine classes (after the `Random\Engine` interfaces);
+/// all are `@strict-properties` (`ZEND_ACC_NO_DYNAMIC_PROPERTIES`).
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     ClassBuilder::new(MT19937)
-        .flags(class_flags::FINAL)
+        .flags(class_flags::FINAL | class_flags::NO_DYNAMIC_PROPERTIES)
         .implements(m.vm(), &["Random\\Engine"])
         .method(
             "__construct(int|null $seed = null, int $mode = MT_RAND_MT19937)",
@@ -299,7 +300,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .hooks(hooks())
         .register(m.vm());
     ClassBuilder::new(PCG)
-        .flags(class_flags::FINAL)
+        .flags(class_flags::FINAL | class_flags::NO_DYNAMIC_PROPERTIES)
         .implements(m.vm(), &["Random\\Engine"])
         .method(
             "__construct(string|int|null $seed = null)",
@@ -314,7 +315,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .hooks(hooks())
         .register(m.vm());
     ClassBuilder::new(XOSHIRO)
-        .flags(class_flags::FINAL)
+        .flags(class_flags::FINAL | class_flags::NO_DYNAMIC_PROPERTIES)
         .implements(m.vm(), &["Random\\Engine"])
         .method(
             "__construct(string|int|null $seed = null)",
@@ -330,7 +331,12 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .hooks(hooks())
         .register(m.vm());
     ClassBuilder::new(SECURE)
-        .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE)
+        .flags(
+            class_flags::FINAL
+                | class_flags::NOT_SERIALIZABLE
+                | class_flags::NO_CLONE
+                | class_flags::NO_DYNAMIC_PROPERTIES,
+        )
         .implements(m.vm(), &["Random\\CryptoSafeEngine"])
         .method("generate(): string", acc::PUBLIC, generate)
         .hooks(hooks())

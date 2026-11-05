@@ -1885,8 +1885,19 @@ impl Vm {
 
     /// Clones an object (`clone $o`).
     pub(crate) fn clone_value(&mut self, v: Value) -> VmResult<Value> {
-        let Value::Object(o) = v else {
-            return Err(self.make_throw("Error", "__clone method called on non-object"));
+        let o = match v {
+            Value::Object(o) => o,
+            Value::Reference(r) => return self.clone_value(r.get()),
+            other => {
+                // `ZEND_CLONE`, kept in sync with the `clone()` function.
+                return Err(self.make_throw(
+                    "TypeError",
+                    &format!(
+                        "clone(): Argument #1 ($object) must be of type object, {} given",
+                        other.value_name()
+                    ),
+                ));
+            }
         };
         // Lazy objects initialize first; proxies clone the real instance.
         if let Some(v) = crate::reflection::lazy::clone_lazy(self, &o)? {
@@ -1922,8 +1933,9 @@ impl Vm {
                 return Err(self.make_throw(
                     "Error",
                     &format!(
-                        "Call to {vis} {}::__clone() from {}",
-                        object::display_name(&cls.name),
+                        "Call to {vis} method {}::{}() from {}",
+                        object::display_name(&m.scope().name),
+                        m.name,
                         scope_display(scope.as_ref())
                     ),
                 ));
