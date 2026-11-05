@@ -158,3 +158,20 @@ var_dump($v);
         "secret\nsecret\nCannot create dynamic property SensitiveParameterValue::$foo\nCannot modify readonly property SensitiveParameterValue::$value\npw\nobject(SensitiveParameterValue)#1 (0) {\n}\n"
     );
 }
+
+/// `eval()` reports its operand's line (`zend_ast_create_1()` copies the
+/// child's lineno), and a heredoc literal carries its body's line
+/// (Zend/tests/function_arguments/sensitive_parameter_eval_call.phpt).
+#[test]
+fn eval_line_is_its_operand_line() {
+    let src = r#"<?php
+eval(
+
+"echo __FILE__, \"\\n\";"
+);
+eval(<<<EOT
+echo __FILE__, "\\n";
+EOT);
+"#;
+    assert_eq!(run(src), "t.php(4) : eval()'d code\nt.php(7) : eval()'d code\n");
+}

@@ -452,7 +452,9 @@ impl Compiler {
             }
             ExprKind::Include { kind, expr } => {
                 let a = self.compile_expr(expr)?;
-                self.f().line = line;
+                // `zend_ast_create_1()` takes the operand's line, so a
+                // multi-line `eval(\n$code)` reports the operand's line.
+                self.f().line = expr.span.line;
                 let t = self.tmp();
                 let k = match kind {
                     ast::IncludeKind::Include => IncludeKind::Include,
