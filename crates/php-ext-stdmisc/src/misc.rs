@@ -168,11 +168,6 @@ fn error_log_to_file(vm: &mut Vm, path: &[u8], message: &[u8]) -> VmResult<bool>
     })
 }
 
-thread_local! {
-    /// The callback set with `assert_options(ASSERT_CALLBACK, ...)`.
-    static ASSERT_CALLBACK: std::cell::RefCell<Option<Value>> = const { std::cell::RefCell::new(None) };
-}
-
 fn assert_options(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     vm.raise(8192, "Function assert_options() is deprecated since 8.3")?;
     let mut st = AssertState::default();
@@ -181,15 +176,22 @@ fn assert_options(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         "assert.bail",
         "assert.warning",
         "assert.exception",
-        "assert.callback",
     ] {
         let v = vm.ini_string(name).unwrap_or_default();
         st.on_ini_update(name, &v);
     }
-    st.callback = ASSERT_CALLBACK.with(|c| c.borrow().clone());
+    // `ASSERTG(cb)` is the startup value; runtime changes go to
+    // `ASSERTG(callback)` (kept by the VM for `assert()`).
+    let cb = vm
+        .ini
+        .config_value("assert.callback")
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default();
+    st.on_ini_update("assert.callback", &cb);
+    st.callback = vm.ext.assert_callback.clone();
     let value = a.get(1);
     let (old, change) = st.assert_options(a.int(0), value.as_ref(), vm).vm(vm)?;
-    ASSERT_CALLBACK.with(|c| c.borrow_mut().clone_from(&st.callback));
+    vm.ext.assert_callback = st.callback;
     if let Some(ch) = change {
         let mut sink: Vec<php_support::Diagnostic> = Vec::new();
         if vm
@@ -201,6 +203,63 @@ fn assert_options(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     }
     Ok(old)
+}
+
+/// The `assert.*` directives with the value whose setting is deprecated
+/// (`OnUpdate{Active,Bail,Warning,Exception}Bool` in
+/// `ext/standard/assert.c`), in registration order; `None` is
+/// `assert.callback` (deprecated when non-empty).
+const ASSERT_INI: [(&str, Option<bool>); 5] = [
+    ("assert.active", Some(false)),
+    ("assert.bail", Some(true)),
+    ("assert.warning", Some(false)),
+    ("assert.callback", None),
+    ("assert.exception", Some(false)),
+];
+
+/// Whether setting `name` to `value` raises "`name` INI setting is
+/// deprecated" (`php_must_emit_ini_deprecation()` stages aside).
+fn assert_ini_deprecated(name: &str, value: &[u8]) -> bool {
+    ASSERT_INI
+        .iter()
+        .find(|(n, _)| *n == name)
+        .is_some_and(|(_, deprecated)| match deprecated {
+            Some(b) => misc::ini_parse_bool(value) == *b,
+            None => !value.is_empty(),
+        })
+}
+
+/// `PHP_INI_MH` of the `assert.*` directives for `ini_set()` /
+/// `ini_restore()`: the deprecation, and for `assert.callback`
+/// (`OnChangeCallback`) the new `ASSERTG(callback)`.
+fn assert_ini_modify(vm: &mut Vm, name: &str, value: &[u8]) -> VmResult<bool> {
+    if name == "assert.callback" {
+        vm.ext.assert_callback = (!value.is_empty()).then(|| Value::Str(ZStr::from(value)));
+    }
+    if assert_ini_deprecated(name, value) {
+        vm.php_deprecated(&format!("{name} INI setting is deprecated"))?;
+    }
+    Ok(true)
+}
+
+/// The startup half of the `assert.*` handlers: "PHP Startup: ... INI
+/// setting is deprecated" for configured (`-d`/php.ini) values.
+fn assert_startup(vm: &mut Vm) {
+    let headers_sent = vm.headers_sent;
+    for (name, _) in ASSERT_INI {
+        let Some(v) = vm.ini.config_value(name).map(<[u8]>::to_vec) else {
+            continue;
+        };
+        if assert_ini_deprecated(name, &v) {
+            let _ = vm.error_at(
+                8192,
+                &format!("PHP Startup: {name} INI setting is deprecated"),
+                &ZStr::from("Unknown"),
+                0,
+            );
+        }
+    }
+    vm.headers_sent = headers_sent;
 }
 
 /// A loaded extension as a `phpinfo()` section.
@@ -567,9 +626,35 @@ fn dl(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions and constants.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    for (name, v) in info::INFO_CONSTANTS.iter().chain(misc::ASSERT_CONSTANTS) {
+    for (name, v) in info::INFO_CONSTANTS {
         m.constant(name, Value::Int(*v));
     }
+    for (name, v) in misc::ASSERT_CONSTANTS {
+        m.constant_deprecated(
+            name,
+            Value::Int(*v),
+            "8.3",
+            "as assert_options() is deprecated",
+        );
+    }
+    m.ini_on_modify("assert.active", |vm, v| {
+        assert_ini_modify(vm, "assert.active", v)
+    })
+    .ini_on_modify("assert.bail", |vm, v| {
+        assert_ini_modify(vm, "assert.bail", v)
+    })
+    .ini_on_modify("assert.warning", |vm, v| {
+        assert_ini_modify(vm, "assert.warning", v)
+    })
+    .ini_on_modify("assert.callback", |vm, v| {
+        assert_ini_modify(vm, "assert.callback", v)
+    })
+    .ini_on_modify("assert.exception", |vm, v| {
+        assert_ini_modify(vm, "assert.exception", v)
+    })
+    .on_request_startup(assert_startup)
+    // `PHP_RSHUTDOWN_FUNCTION(assert)`.
+    .on_request_shutdown(|vm| vm.ext.assert_callback = None);
     m.function(
         "mail(string $to, string $subject, string $message, array|string $additional_headers = [], string $additional_params = \"\"): bool",
         mail_fn,

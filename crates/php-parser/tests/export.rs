@@ -147,3 +147,42 @@ fn assert_messages_in_corpus() {
         "no matching assert message in: {failures:#?}"
     );
 }
+
+/// `(bar)::m()`: a parenthesized constant is a dynamic class expression
+/// (`class_name_reference: '(' expr ')'`), not the class name `bar`
+/// (php-src `ext/standard/tests/assert/gh22387.phpt`).
+#[test]
+fn parenthesized_constant_class_is_dynamic() {
+    let src = "<?php assert(!(bar)::m()); assert(!(bar)::C); assert(!(bar)::$p); assert((baz)::class !== 'stdClass');";
+    assert_eq!(
+        assert_args(src)
+            .iter()
+            .map(|m| String::from_utf8_lossy(m).into_owned())
+            .collect::<Vec<_>>(),
+        [
+            "assert(!(bar)::m())",
+            "assert(!(bar)::C)",
+            "assert(!(bar)::$p)",
+            "assert((baz)::class !== 'stdClass')",
+        ]
+    );
+    let program = php_parser::parse(
+        b"<?php (bar)::m(); bar::m();",
+        &php_parser::ParseOptions::default(),
+    )
+    .expect("parses");
+    let classes: Vec<bool> = program
+        .statements
+        .iter()
+        .filter_map(|s| match &s.kind {
+            StmtKind::Expr(e) => match &e.kind {
+                ExprKind::StaticCall { class, .. } => {
+                    Some(matches!(**class, php_parser::ast::ClassRef::Expr(_)))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(classes, [true, false]);
+}

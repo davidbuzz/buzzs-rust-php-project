@@ -29,6 +29,10 @@ pub struct ExtState {
     pub halt_offsets: HashMap<ZStr, i64>,
     /// Random number generator globals (`mt_rand`, `rand`, `lcg_value`).
     pub random: Option<php_random::RandomGlobals>,
+    /// `ASSERTG(callback)` (`ext/standard/assert.c`): the callback set by
+    /// `assert_options(ASSERT_CALLBACK)` or a runtime `assert.callback`
+    /// change; `None` (`IS_UNDEF`) falls back to the startup INI value.
+    pub assert_callback: Option<Value>,
 }
 
 /// Registers a builtin function from a stub signature.
@@ -110,6 +114,26 @@ pub(crate) fn constant(vm: &mut Vm, name: &str, v: Value) {
     if vm.constants.insert(ZStr::from(name), v).is_none() {
         crate::reflection::note_new(crate::reflection::Table::Constant, name.as_bytes());
     }
+}
+
+/// The error log timestamp, `php_format_date("d-M-Y H:i:s e", time(), 1)`
+/// (`php_log_err_with_severity`, main/main.c): the date extension's
+/// `date()` in the default timezone, or UTC without it.
+#[cold]
+pub(crate) fn log_time_string(vm: &mut Vm) -> String {
+    let date = ZStr::from("date");
+    if matches!(vm.functions.get(&date), Some(Func::Builtin(_))) {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+        if let Ok(Value::Str(s)) = vm.call_value(
+            &Value::Str(date),
+            vec![Value::from("d-M-Y H:i:s e"), Value::Int(secs)],
+        ) {
+            return s.to_string_lossy();
+        }
+    }
+    time_now_string()
 }
 
 /// The current time formatted like PHP's error log (`d-M-Y H:i:s UTC`).

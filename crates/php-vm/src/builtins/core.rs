@@ -17,9 +17,17 @@ fn caller_idx(vm: &Vm) -> Option<usize> {
     Some(n - 2)
 }
 
+/// `zend_forbid_dynamic_call()` for a call without a previous frame (a
+/// shutdown function or other `zend_call_function()` call from outside
+/// any frame is `ZEND_CALL_DYNAMIC`).
+#[cold]
+fn called_dynamically(vm: &mut Vm, name: &str) -> Throw {
+    vm.make_throw("Error", &format!("Cannot call {name}() dynamically"))
+}
+
 fn func_get_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let Some(idx) = caller_idx(vm) else {
-        return Ok(Value::Null);
+        return Err(called_dynamically(vm, "func_get_args"));
     };
     if vm.frames[idx].kind != FrameKind::Function {
         return Err(vm.make_throw(
@@ -32,7 +40,7 @@ fn func_get_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let Some(idx) = caller_idx(vm) else {
-        return Ok(Value::Int(-1));
+        return Err(called_dynamically(vm, "func_num_args"));
     };
     if vm.frames[idx].kind != FrameKind::Function {
         return Err(vm.make_throw(
@@ -48,7 +56,10 @@ fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn func_get_arg(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = i(a, 0);
     let Some(idx) = caller_idx(vm) else {
-        return Ok(Value::Null);
+        if n < 0 {
+            return Err(value_error(vm, a, 1, "must be greater than or equal to 0"));
+        }
+        return Err(called_dynamically(vm, "func_get_arg"));
     };
     if vm.frames[idx].kind != FrameKind::Function {
         return Err(vm.make_throw(
@@ -1074,6 +1085,18 @@ fn ini_get(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn ini_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = s(a, 0).to_string_lossy();
     let v = a.at(1);
+    // `Z_PARAM_ZVAL(new_value)` + `Z_TYPE_P(new_value) > IS_STRING`.
+    if matches!(
+        v,
+        Value::Array(_) | Value::Object(_) | Value::Resource(_) | Value::Reference(_)
+    ) {
+        return Err(super::util::type_error(
+            vm,
+            a,
+            2,
+            "must be of type string|int|float|bool|null",
+        ));
+    }
     let val: Vec<u8> = match &v {
         Value::Bool(b) => {
             if *b {
@@ -1162,7 +1185,13 @@ fn debug_print_backtrace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+/// `PHP_FUNCTION(assert)` (`ext/standard/assert.c`).
 fn assert_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    // `!ASSERTG(active) || EG(assertions) <= 0`: only dynamic calls reach
+    // here with assertions disabled (compiled calls skip the call).
+    if !vm.ini.get_bool("assert.active") || vm.ini.get_long("zend.assertions") <= 0 {
+        return Ok(Value::Bool(true));
+    }
     let v = a.at(0);
     if vm.to_bool(&v)? {
         return Ok(Value::Bool(true));
@@ -1173,41 +1202,114 @@ fn assert_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Err(Throw::Exception(o.clone()));
         }
     }
-    let cb = vm
-        .ini
-        .get("assert.callback")
-        .map(<[u8]>::to_vec)
-        .unwrap_or_default();
-    if !cb.is_empty() {
-        let cbv = sv(cb);
-        let (file, line) = vm.current_location();
-        let mut args = vec![Value::Str(file), Value::Int(i64::from(line)), Value::Null];
-        if !desc.is_null() {
-            args.push(desc.clone());
-        }
-        vm.call_value(&cbv, args)?;
-    }
     let msg = if desc.is_null() {
         None
     } else {
         Some(vm.to_zstr(&desc)?)
     };
+    assert_failed(vm, msg)
+}
+
+/// The failure path of `assert()`: the `ASSERT_CALLBACK` call, then the
+/// `AssertionError` / warning and `assert.bail` handling.
+#[cold]
+fn assert_failed(vm: &mut Vm, msg: Option<ZStr>) -> VmResult<Value> {
+    // `ASSERTG(callback)`, else the startup `assert.callback` (`ASSERTG(cb)`).
+    let callback = vm.ext.assert_callback.clone().or_else(|| {
+        vm.ini
+            .config_value("assert.callback")
+            .filter(|c| !c.is_empty())
+            .map(sv)
+    });
+    // An exception the callback left pending (`EG(exception)`).
+    let mut pending: Option<php_runtime::Obj> = None;
+    if let Some(cb) = callback {
+        let (file, line) = vm.current_location();
+        let mut args = vec![Value::Str(file), Value::Int(i64::from(line)), Value::Null];
+        if let Some(m) = &msg {
+            args.push(Value::Str(m.clone()));
+        }
+        // `call_user_function()` → `zend_call_function()`.
+        let r = match vm.zend_is_callable(&cb, false)? {
+            Ok(mut call) => {
+                call.args = args.into_iter().map(Some).collect();
+                vm.call_pending(call)
+            }
+            Err(err) => {
+                let name = vm.callable_name(&cb);
+                Err(vm.make_throw("Error", &format!("Invalid callback {name}, {err}")))
+            }
+        };
+        match r {
+            Ok(_) => {}
+            Err(Throw::Exception(e)) => pending = Some(e),
+            Err(t) => return Err(t),
+        }
+    }
+    let bail = vm.ini.get_bool("assert.bail");
     if vm.ini.get_bool("assert.exception") {
-        let m = msg.map(|m| m.to_string_lossy()).unwrap_or_default();
-        return Err(vm.make_throw("AssertionError", &m));
+        let text = msg.map(|m| m.to_string_lossy()).unwrap_or_default();
+        // `zend_throw_exception(assertion_error_ce, ..., E_ERROR)`.
+        let e = vm.create_exception("AssertionError", &text, crate::errors::level::ERROR)?;
+        if let Some(prev) = &pending {
+            crate::exceptions::chain_previous(&e, prev);
+        }
+        if bail {
+            // `zend_exception_error(EG(exception), E_ERROR)`: not catchable.
+            vm.report_uncaught(&e);
+            return Err(Throw::Fatal);
+        }
+        return Err(Throw::Exception(e));
     }
     if vm.ini.get_bool("assert.warning") {
-        let m = msg.map_or_else(
-            || "Assertion".to_string(),
-            |m| format!("{}", m.to_string_lossy()),
-        );
-        vm.warning(&format!("assert(): {m} failed"))?;
+        let m = msg.map_or_else(|| "Assertion".to_string(), |m| m.to_string_lossy());
+        vm.docref(crate::errors::level::WARNING, &format!("{m} failed"))?;
     }
-    if vm.ini.get_bool("assert.bail") {
-        vm.exit_status = 255;
+    if bail {
+        if let Some(e) = pending {
+            // The callback threw: `zend_exception_error(EG(exception),
+            // E_WARNING)`, then `zend_throw_unwind_exit()`.
+            uncaught_warning(vm, &e)?;
+        }
         return Err(Throw::Exit);
     }
-    Ok(Value::Bool(false))
+    match pending {
+        Some(e) => Err(Throw::Exception(e)),
+        None => Ok(Value::Bool(false)),
+    }
+}
+
+/// `zend_exception_error(ex, E_WARNING)`: reports `e` as an
+/// "Uncaught ..." warning. An exception thrown by its `__toString()` is
+/// reported and stays pending (returned as the throw).
+#[cold]
+fn uncaught_warning(vm: &mut Vm, e: &php_runtime::Obj) -> VmResult<()> {
+    let s = match vm.call_method_name(e, "__toString", Vec::new()) {
+        Ok(v) => v.deref().as_str().cloned().unwrap_or_default(),
+        Err(Throw::Exception(inner)) => {
+            let file = vm
+                .exc_prop(&inner, "file")
+                .as_str()
+                .cloned()
+                .unwrap_or_default();
+            let line =
+                u32::try_from(vm.exc_prop(&inner, "line").as_int().unwrap_or(0)).unwrap_or(0);
+            let msg = format!(
+                "Uncaught {} in exception handling during call to {}::__toString()",
+                object::class_of(&inner).name,
+                object::class_of(e).name
+            );
+            vm.error_at(crate::errors::level::WARNING, &msg, &file, line)?;
+            return Err(Throw::Exception(inner));
+        }
+        Err(t) => return Err(t),
+    };
+    let file = vm.exc_prop(e, "file").as_str().cloned().unwrap_or_default();
+    let line = u32::try_from(vm.exc_prop(e, "line").as_int().unwrap_or(0)).unwrap_or(0);
+    let mut msg = b"Uncaught ".to_vec();
+    msg.extend_from_slice(s.as_bytes());
+    msg.extend_from_slice(b"\n  thrown");
+    vm.error_at_bytes(crate::errors::level::WARNING, &msg, &file, line)
 }
 
 fn class_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1418,6 +1520,18 @@ fn call_user_func(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
     let named = std::mem::take(&mut a.named);
     cuf_call(vm, &cb, args, named, "call_user_func")
+}
+
+/// `PHP_FUNCTION(forward_static_call)`: the calling frame
+/// (`EX(prev_execute_data)`) must have a class scope.
+fn forward_static_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if !caller_idx(vm).is_some_and(|i| vm.frames[i].scope.is_some()) {
+        return Err(vm.make_throw(
+            "Error",
+            "Cannot call forward_static_call() when no class scope is active",
+        ));
+    }
+    call_user_func(vm, a)
 }
 
 fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -2424,7 +2538,7 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "ini_get(string $option): string|false", ini_get);
     reg(
         vm,
-        "ini_set(string $option, string|int|float|bool|null $value): string|false",
+        "ini_set(string $option, mixed $value): string|false",
         ini_set,
     );
     alias(vm, "ini_alter", "ini_set");

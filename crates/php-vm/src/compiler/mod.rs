@@ -430,6 +430,13 @@ impl Compiler {
             f.literals.push(Value::Str(s.interned()));
             return i;
         }
+        let v = match v {
+            Value::Array(mut a) => {
+                intern_array_strings(&mut a);
+                Value::Array(a)
+            }
+            other => other,
+        };
         f.literals.push(v);
         u32::try_from(f.literals.len() - 1).unwrap_or(u32::MAX)
     }
@@ -901,6 +908,10 @@ impl Compiler {
         if let Some(v) = self.try_fold(e) {
             let v = match v {
                 Value::Str(s) => Value::Str(s.interned()),
+                Value::Array(mut a) => {
+                    intern_array_strings(&mut a);
+                    Value::Array(a)
+                }
                 other => other,
             };
             return Ok(ConstExpr::Value(v));
@@ -934,5 +945,32 @@ impl Compiler {
         let mut fs = self.decls.functions.borrow_mut();
         fs.push(Rc::new(f));
         u32::try_from(fs.len() - 1).unwrap_or(u32::MAX)
+    }
+}
+
+/// Whether a folded array holds an empty or one-byte string that is not
+/// the shared interned instance.
+fn has_uninterned_strings(a: &php_runtime::ZArray) -> bool {
+    a.values().any(|v| match v {
+        Value::Str(s) => s.len() <= 1 && !s.is_interned(),
+        Value::Array(inner) => has_uninterned_strings(inner),
+        _ => false,
+    })
+}
+
+/// The scanner makes empty and one-byte string literals the shared
+/// interned `ZSTR_EMPTY_ALLOC()` / `ZSTR_CHAR(c)` (`zend_scan_escape_string`);
+/// a compile-time array keeps those zvals (`zend_try_ct_eval_array`), so
+/// `debug_zval_dump()` shows them "interned" (longer strings are not).
+fn intern_array_strings(a: &mut php_runtime::ZArray) {
+    if !has_uninterned_strings(a) {
+        return;
+    }
+    for (_, v) in a.make_mut().iter_mut() {
+        match v {
+            Value::Str(s) if s.len() <= 1 && !s.is_interned() => *s = s.interned(),
+            Value::Array(inner) => intern_array_strings(inner),
+            _ => {}
+        }
     }
 }

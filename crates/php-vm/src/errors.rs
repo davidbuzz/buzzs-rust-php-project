@@ -329,7 +329,7 @@ impl Vm {
                     .append(true)
                     .open(path)
                 {
-                    let now = crate::builtins::time_now_string();
+                    let now = crate::builtins::log_time_string(self);
                     let _ =
                         std::io::Write::write_all(&mut f, format!("[{now}] {msg}\n").as_bytes());
                     return;

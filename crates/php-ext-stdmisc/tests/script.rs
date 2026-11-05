@@ -604,3 +604,97 @@ fn request_parse_body_validates_options() {
          RequestParseBodyException: Request does not provide a content type\n"
     );
 }
+
+/// `ext/standard/assert.c`: the startup values of the `assert.*`
+/// directives raise their deprecations, and the startup
+/// `assert.callback` (`ASSERTG(cb)`) is called with four arguments.
+#[test]
+fn assert_startup_deprecations_and_ini_callback() {
+    let opts = VmOptions {
+        ini: [
+            ("assert.warning", "0"),
+            ("assert.callback", "f1"),
+            ("assert.bail", "0"),
+            ("assert.exception", "0"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect(),
+    };
+    let ext = php_ext_stdmisc::StdMisc;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let out = run_with(
+        &opts,
+        &exts,
+        r#"function f1($f, $l, $u, $d) { echo "f1 $l $d\n"; } var_dump(assert(0));"#,
+    );
+    assert_eq!(
+        out,
+        "\nDeprecated: PHP Startup: assert.warning INI setting is deprecated in Unknown on line 0\n\
+         \nDeprecated: PHP Startup: assert.callback INI setting is deprecated in Unknown on line 0\n\
+         \nDeprecated: PHP Startup: assert.exception INI setting is deprecated in Unknown on line 0\n\
+         f1 1 assert(0)\nbool(false)\n"
+    );
+}
+
+/// `assert_options(ASSERT_CALLBACK)` keeps any callable (`ASSERTG(callback)`)
+/// apart from the INI value; `ini_set('assert.callback')` replaces it and
+/// is deprecated; the `ASSERT_*` constants are deprecated.
+#[test]
+fn assert_options_callback_state() {
+    let out = run(
+        r#"class C { static function cb($f, $l, $u, $d) { echo "C $d\n"; } }
+assert_options(ASSERT_CALLBACK, ['C', 'cb']);
+echo ini_get('assert.callback'), "|\n";
+try { assert(false); } catch (AssertionError $e) { echo $e->getMessage(), "\n"; }
+ini_set('assert.callback', 'nope');
+try { assert(false); } catch (Error $e) { echo $e::class, ':', $e->getPrevious()->getMessage(), "\n"; }"#,
+    );
+    let dep = "\nDeprecated: Constant ASSERT_CALLBACK is deprecated since 8.3, as assert_options() is deprecated in test.php on line 2\n\
+               \nDeprecated: Function assert_options() is deprecated since 8.3 in test.php on line 2\n";
+    assert_eq!(
+        out,
+        format!(
+            "{dep}|\nC assert(false)\nassert(false)\n\
+             \nDeprecated: ini_set(): assert.callback INI setting is deprecated in test.php on line 5\n\
+             AssertionError:Invalid callback nope, function \"nope\" not found or invalid function name\n"
+        )
+    );
+}
+
+/// `get_browser()` (`ext/standard/browscap.c`): the best wildcard match,
+/// its `Parent` chain, boolean normalization, the object form and the
+/// missing `HTTP_USER_AGENT` warning.
+#[test]
+fn get_browser_matches_browscap_sections() {
+    let ini = std::env::temp_dir().join(format!("phprust-browscap-{}.ini", std::process::id()));
+    std::fs::write(
+        &ini,
+        "[*]\nBrowser=\"Default Browser\"\nFrames=true\n\n[Opera*]\nParent=Op\nPlatform=WinXP\n\n[Op]\nBrowser=Opera\nFrames=off\n",
+    )
+    .expect("write browscap fixture");
+    let opts = VmOptions {
+        ini: [("browscap".to_string(), ini.display().to_string())]
+            .into_iter()
+            .collect(),
+    };
+    let ext = php_ext_stdmisc::StdMisc;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let out = run_with(
+        &opts,
+        &exts,
+        r#"var_dump(get_browser('Opera/7', true));
+$o = get_browser('x'); echo get_class($o), ' ', $o->browser, ' ', $o->frames, "\n";
+var_dump(get_browser(null));"#,
+    );
+    let _ = std::fs::remove_file(&ini);
+    assert_eq!(
+        out,
+        "array(6) {\n  [\"browser_name_regex\"]=>\n  string(11) \"~^opera.*$~\"\n  \
+         [\"browser_name_pattern\"]=>\n  string(6) \"Opera*\"\n  [\"parent\"]=>\n  string(2) \"Op\"\n  \
+         [\"platform\"]=>\n  string(5) \"WinXP\"\n  [\"browser\"]=>\n  string(5) \"Opera\"\n  \
+         [\"frames\"]=>\n  string(0) \"\"\n}\nstdClass Default Browser 1\n\
+         \nWarning: get_browser(): HTTP_USER_AGENT variable is not set, cannot determine user agent name in test.php on line 3\n\
+         bool(false)\n"
+    );
+}

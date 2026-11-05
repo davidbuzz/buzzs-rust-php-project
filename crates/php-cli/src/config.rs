@@ -5,7 +5,7 @@
 //! hard-coded CLI entries and the `-d` defines.
 
 use php_support::ini::configuration::IniConfiguration;
-use php_support::ini::{IniHooks, IniKey, IniScalar, IniValue};
+use php_support::ini::{IniHooks, IniKey, IniMap, IniScalar, IniValue};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -214,6 +214,23 @@ impl Config {
                 cfg.configuration
                     .zend_extensions
                     .push(v.as_bytes().to_vec());
+            } else if let Some((base, offset)) = array_define(k) {
+                // `ary[a]=1` (`ZEND_INI_PARSER_POP_ENTRY` in
+                // `php_ini_parser_cb`): an array in the configuration hash
+                // only, not a directive value.
+                let key = IniKey::Str(base.as_bytes().to_vec());
+                let values = &mut cfg.configuration.values;
+                if !matches!(values.get(&key), Some(IniValue::Array(_))) {
+                    values.insert(key.clone(), IniValue::Array(IniMap::new()));
+                }
+                if let Some(IniValue::Array(array)) = values.get_mut(&key) {
+                    let value = IniValue::Scalar(IniScalar::Str(v.as_bytes().to_vec()));
+                    if offset.is_empty() {
+                        array.push(value);
+                    } else {
+                        array.insert(IniKey::symtable(offset.as_bytes()), value);
+                    }
+                }
             } else {
                 cfg.entries.push((k.clone(), v.clone()));
                 cfg.configuration.values.insert(
@@ -263,6 +280,12 @@ impl Config {
             }
         }
     }
+}
+
+/// Splits a `-d` define name `base[offset]` (see `php_vm::parse_cli_define`).
+fn array_define(name: &str) -> Option<(&str, &str)> {
+    let (base, offset) = name.strip_suffix(']')?.split_once('[')?;
+    (!base.is_empty()).then_some((base, offset))
 }
 
 fn split_search_path(p: &[u8]) -> Vec<Vec<u8>> {
@@ -374,6 +397,37 @@ mod tests {
         assert_eq!(cfg.get("precision"), Some("10"));
         assert_eq!(cfg.extensions, vec!["x.so".to_string()]);
         assert!(cfg.opened_path.is_none());
+    }
+
+    /// `-d ary[a]=1`: an array in the configuration hash
+    /// (`get_cfg_var_array.phpt`), not a directive.
+    #[test]
+    fn array_defines() {
+        let cfg = Config::load(&Options {
+            ignore: true,
+            defines: vec![
+                ("ary[a]".into(), "1".into()),
+                ("ary[b]".into(), "2".into()),
+                ("ary2[]".into(), "x".into()),
+            ],
+            ..Options::default()
+        });
+        assert_eq!(cfg.get("ary[a]"), None);
+        let Some(IniValue::Array(a)) = cfg.configuration.values.get(&IniKey::Str(b"ary".to_vec()))
+        else {
+            panic!("ary is not an array");
+        };
+        assert_eq!(a.len(), 2);
+        assert!(matches!(
+            a.get(&IniKey::symtable(b"b")),
+            Some(IniValue::Scalar(IniScalar::Str(v))) if v == b"2"
+        ));
+        let Some(IniValue::Array(a2)) = cfg.configuration.values.get_str("ary2") else {
+            panic!("ary2 is not an array");
+        };
+        assert!(a2.get(&IniKey::Int(0)).is_some());
+        assert_eq!(array_define("x[]"), Some(("x", "")));
+        assert_eq!(array_define("[a]"), None);
     }
 
     #[test]
