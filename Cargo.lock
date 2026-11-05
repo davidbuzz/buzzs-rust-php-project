@@ -779,6 +779,7 @@ dependencies = [
 name = "php-ext-session"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
  "php-runtime",
  "php-session",
  "php-stdstr",
