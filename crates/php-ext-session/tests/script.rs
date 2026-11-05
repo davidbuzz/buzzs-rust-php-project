@@ -450,3 +450,55 @@ var_dump($_SESSION);"#,
         "array(2) {\n  [\"x\"]=>\n  object(stdClass)#3 (0) {\n  }\n  [\"y\"]=>\n  object(stdClass)#1 (0) {\n  }\n}\n"
     );
 }
+
+thread_local! {
+    static SAPI_HEADERS: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn record_sapi_header(
+    _vm: &mut Vm,
+    line: &[u8],
+    _replace: bool,
+    _code: i64,
+) -> php_vm::VmResult<bool> {
+    SAPI_HEADERS.with(|h| h.borrow_mut().push(line.to_vec()));
+    Ok(true)
+}
+
+/// `php_session_send_cookie()` / the cache limiter use `sapi_add_header_ex`:
+/// the headers reach the active SAPI (`php -S`, apache2handler).
+#[test]
+fn session_headers_reach_the_sapi() {
+    let dir = save_dir("sapi-headers");
+    let sink = Sink::default();
+    let ext = php_ext_session::Session;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let opts = VmOptions {
+        ini: vec![(
+            "session.save_path".to_string(),
+            dir.to_string_lossy().into_owned(),
+        )],
+    };
+    let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
+    vm.response_header_hook = Some(record_sapi_header);
+    vm.run_script(
+        b"<?php session_start(); echo session_id() === '' ? 'no' : 'ok';",
+        "test.php",
+    );
+    drop(vm);
+    assert_eq!(&*sink.0.borrow(), b"ok");
+    let headers = SAPI_HEADERS.with(|h| h.borrow().clone());
+    assert!(
+        headers
+            .iter()
+            .any(|l| l.starts_with(b"Set-Cookie: PHPSESSID=")),
+        "{headers:?}"
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|l| l.starts_with(b"Cache-Control: no-store")),
+        "{headers:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

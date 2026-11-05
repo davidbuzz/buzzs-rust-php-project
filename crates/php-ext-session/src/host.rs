@@ -438,10 +438,25 @@ impl SessionHost for VmHost<'_> {
 
     fn add_header(&mut self, line: &[u8], replace: bool) {
         crate::headers::add(line, replace);
+        // `sapi_add_header_ex()` through the active SAPI: `php -S` and
+        // apache2handler send it, the CLI drops it.
+        let r = self.parked(|vm| {
+            vm.add_response_header(line, replace)
+                .map(drop)
+                .map_err(|t| to_rt(vm, t))
+        });
+        if let Err(e) = r {
+            self.state().set_exception(e);
+        }
     }
 
     fn delete_header_prefix(&mut self, prefix: &[u8]) {
         crate::headers::delete_prefix(prefix);
+        let r = self
+            .parked(|vm| crate::headers::sapi_delete_prefix(vm, prefix).map_err(|t| to_rt(vm, t)));
+        if let Err(e) = r {
+            self.state().set_exception(e);
+        }
     }
 
     fn request_global(&mut self, name: &str) -> Option<ZArray> {

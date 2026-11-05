@@ -1,14 +1,16 @@
-//! A minimal SAPI header list (`SG(sapi_headers)`).
+//! The session module's `Set-Cookie` and cache-limiter headers
+//! (`sapi_add_header`).
 //!
-//! The VM's `header()`/`headers_list()` keep no header state, and the CLI
-//! SAPI discards headers anyway (its `header_handler` never adds them to the
-//! list, so `headers_list()` is always empty in CLI). The session module
-//! still emits its `Set-Cookie` and cache-limiter headers through
-//! `sapi_add_header`; they are recorded here, which keeps
-//! `delete_header_prefix` (`session_regenerate_id()` replacing the cookie)
-//! well-defined and lets tests observe them.
+//! They go to the active SAPI through [`Vm::add_response_header`] (`php -S`
+//! and apache2handler send them; the CLI SAPI's `header_handler` drops
+//! them, so `headers_list()` stays empty there) and are also recorded
+//! here, which keeps `delete_header_prefix` (`session_regenerate_id()`
+//! replacing the cookie) well-defined and lets tests observe them.
 
 use std::cell::RefCell;
+
+use php_runtime::{Value, ZStr};
+use php_vm::{Vm, VmResult};
 
 thread_local! {
     static HEADERS: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
@@ -40,6 +42,38 @@ pub(crate) fn delete_prefix(prefix: &[u8]) {
             !(l.len() > prefix.len() && l[..prefix.len()].eq_ignore_ascii_case(prefix))
         });
     });
+}
+
+/// `sapi_header_op(SAPI_HEADER_DELETE_PREFIX)` on the active SAPI's
+/// header list (`headers_list()`). The SAPIs only remove headers by name,
+/// so the other headers of that name are removed too and added back. The
+/// CLI keeps no list.
+pub(crate) fn sapi_delete_prefix(vm: &mut Vm, prefix: &[u8]) -> VmResult<()> {
+    if vm.response_header_hook.is_none() {
+        return Ok(());
+    }
+    let Value::Array(list) = vm.call_function("headers_list", Vec::new())? else {
+        return Ok(());
+    };
+    let hit = |l: &[u8]| l.len() > prefix.len() && l[..prefix.len()].eq_ignore_ascii_case(prefix);
+    let target = name(prefix);
+    let same_name: Vec<Vec<u8>> = list
+        .values()
+        .filter_map(|v| match v {
+            Value::Str(s) if name(s.as_bytes()).eq_ignore_ascii_case(target) => {
+                Some(s.as_bytes().to_vec())
+            }
+            _ => None,
+        })
+        .collect();
+    if !same_name.iter().any(|l| hit(l)) {
+        return Ok(());
+    }
+    vm.call_function("header_remove", vec![Value::Str(ZStr::from(target))])?;
+    for l in same_name.iter().filter(|l| !hit(l)) {
+        vm.add_response_header(l, false)?;
+    }
+    Ok(())
 }
 
 /// The recorded headers, oldest first.
