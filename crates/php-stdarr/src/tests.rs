@@ -1248,3 +1248,51 @@ fn self_referencing_array_sorts_in_place() {
         assert!(ctx.messages().is_empty());
     }
 }
+
+/// The reference may sit deeper than the top level: comparing
+/// `['k' => ['m' => 0, 'n' => 0]]` with `['k' => &$a]` looks `m` up in the
+/// live table being sorted, misses, and finds the arrays uncomparable (1).
+/// Expected orders from php 8.3.
+#[test]
+fn nested_reference_sees_the_live_table() {
+    let cases = [
+        (false, false, ["'n'", "'m'"]),
+        (false, true, ["'m'", "'n'"]),
+        (true, false, ["'m'", "'n'"]),
+        (true, true, ["'n'", "'m'"]),
+    ];
+    for (reverse, n_first, expected) in cases {
+        let mut ctx = Ctx::new();
+        let r = PhpRef::new(Value::Array(ZArray::new()));
+        let m = Value::Array(ZArray::from_pairs([("k", Value::Reference(r.clone()))]));
+        let inner = ZArray::from_pairs([("m", Value::Int(0)), ("n", Value::Int(0))]);
+        let n = Value::Array(ZArray::from_pairs([("k", Value::Array(inner))]));
+        let pairs = if n_first {
+            [("n", n), ("m", m)]
+        } else {
+            [("m", m), ("n", n)]
+        };
+        r.set(Value::Array(ZArray::from_pairs(pairs)));
+        if reverse {
+            sort::arsort(&mut ctx, &r, SORT_REGULAR).unwrap();
+        } else {
+            sort::asort(&mut ctx, &r, SORT_REGULAR).unwrap();
+        }
+        let out = arr_of(&r.get());
+        assert_eq!(keys(&out), expected, "reverse={reverse} n_first={n_first}");
+    }
+}
+
+/// Without objects, arrays or references nothing can observe the sort; a
+/// shared array is still separated (`Z_PARAM_ARRAY_HT_EX(array, 0, 1)`).
+#[test]
+fn scalar_sort_separates_a_shared_array() {
+    let mut ctx = Ctx::new();
+    let shared = list([Value::Int(3), Value::Int(1), Value::Int(2)]);
+    let r = PhpRef::new(Value::Array(shared.clone()));
+    sort::sort(&mut ctx, &r, SORT_REGULAR).unwrap();
+    assert_eq!(int_vals(&arr_of(&r.get())), [1, 2, 3]);
+    assert_eq!(int_vals(&shared), [3, 1, 2]);
+    let r = PhpRef::new(Value::Int(1));
+    assert!(sort::asort(&mut ctx, &r, SORT_REGULAR).is_err());
+}

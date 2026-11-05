@@ -1164,53 +1164,102 @@ impl HashTable {
         }
     }
 
-    /// [`HashTable::sort_by`] for a table that the reference `bound` holds
-    /// while it is sorted (`zend_array_sort` on a by-reference argument) and
-    /// that the comparisons can reach through `bound`, e.g. because one of
-    /// its elements is `bound` itself.
+    /// Sorts, in place, the array that the reference `bound` holds, the way
+    /// `zend_array_sort` sorts a by-reference argument
+    /// (`Z_PARAM_ARRAY_HT_EX(array, 0, 1)`, then `zend_array_sort_ex` /
+    /// `zend_hash_sort_internal`). Meant for sorts whose comparisons can run
+    /// PHP code (`__toString`, error handlers, lazy object initializers) or
+    /// reach the array through a reference among its elements
+    /// (`Zend/tests/bug63882_2.phpt`).
     ///
-    /// php-src sorts `arData` in place after `HT_HASH_RESET`
-    /// (`zend_hash_sort_internal`, which cites `Zend/tests/bug63882_2.phpt`),
-    /// so whatever reaches the table mid-sort sees its elements in their
-    /// current, half-sorted order while every key lookup in it misses. Before
-    /// each comparison `bound` is therefore made to hold such a view of the
-    /// table: the buckets in their current order (with the renumbering swap,
-    /// `zend_hash_bucket_renum_swap`, keys stay in place and only values
-    /// move) and an empty hash index. Once PHP code replaces the value of
-    /// `bound` (any write separates the shared table), views stop being
-    /// published and comparisons see whatever `bound` then holds.
+    /// php-src separates a shared table, adds a reference to it for the
+    /// duration of the sort (`GC_ADDREF`, GH-16648), turns a packed table
+    /// into a hash, removes holes, resets the hash index (`HT_HASH_RESET`)
+    /// and lets `zend_sort` swap the buckets of the live table. Whatever
+    /// reaches the array mid-sort therefore sees its elements in their
+    /// current, half-sorted order while every key lookup in it misses; with
+    /// renumbering (`zend_hash_bucket_renum_swap`) only the values move and
+    /// the keys stay in place. A write separates the shared table (the copy
+    /// is rehashed, `zend_array_dup`), and php-src then drops the sorted
+    /// table: `bound` keeps whatever PHP code left in it.
     ///
-    /// Returns whether `bound` still holds the table being sorted. When it
-    /// does not, php-src drops the sorted table, so the caller should not
-    /// store it.
-    #[must_use]
-    pub fn sort_by_in_ref<F>(&mut self, bound: &PhpRef, mut cmp: F, renumber: bool) -> bool
+    /// `bound` holds the table being sorted whenever a comparison runs; the
+    /// swaps take it back first, so the table is mutated without copying.
+    /// The comparisons and swaps are exactly `zend_sort`'s, with ties broken
+    /// on the original position. A `bound` that does not hold an array is
+    /// left alone.
+    pub fn sort_in_ref<F>(bound: &PhpRef, mut cmp: F, renumber: bool)
     where
         F: FnMut(&ArrayKey, &Value, &ArrayKey, &Value) -> i32,
     {
-        let Some(items) = self.sort_begin(renumber) else {
-            return true;
+        let mut table = match bound.set(Value::Null) {
+            Value::Array(a) => a,
+            other => {
+                bound.set(other);
+                return;
+            }
         };
-        let n = items.len();
-        let slot_keys = if renumber {
-            items.iter().map(|(b, _)| b.key.clone()).collect()
-        } else {
-            Vec::new()
+        // `make_mut` separates a shared table (`zend_array_dup`).
+        let begun = table.make_mut().live_sort_begin(renumber);
+        let Some(n) = begun else {
+            bound.set(Value::Array(table));
+            return;
         };
         let mut live = LiveSort {
-            items,
-            slot_keys,
-            table_size: self.table_size,
-            next_free: self.next_free,
             bound,
-            published: None,
+            table,
+            order: (0..to_u32(n)).collect(),
+            renumber,
+            in_bound: false,
             attached: true,
             cmp: &mut cmp,
         };
         zend_sort_by(&mut live, n);
-        let attached = live.attached && live.published.as_ref().is_none_or(|p| holds(bound, p));
-        self.sort_finish(live.items, renumber);
-        attached
+        if let Some(mut table) = live.finish() {
+            table.make_mut().live_sort_finish(renumber);
+            bound.set(Value::Array(table));
+        }
+    }
+
+    /// The setup of [`HashTable::sort_in_ref`]: `zend_hash_sort_internal`'s
+    /// early exits (`None`: nothing to sort), then, as `zend_array_sort_ex`
+    /// and `zend_hash_sort_internal` leave the table for `zend_sort`, a hash
+    /// without holes whose index is reset. Returns the element count.
+    fn live_sort_begin(&mut self, renumber: bool) -> Option<usize> {
+        if self.num_elements <= 1 {
+            if !renumber || self.num_elements == 0 {
+                return None;
+            }
+            if self.kind == Kind::Packed && self.is_without_holes() {
+                self.internal_ptr = 0;
+                self.next_free = 1;
+                return None;
+            }
+        }
+        self.data.retain(Option::is_some);
+        for b in self.data.iter_mut().flatten() {
+            b.next = INVALID;
+        }
+        self.kind = Kind::Hash;
+        self.index = vec![INVALID; (self.table_size as usize) * 2];
+        Some(self.data.len())
+    }
+
+    /// The end of `zend_hash_sort_internal` on a table sorted in place:
+    /// renumbering turns it back into a list, otherwise the hash index is
+    /// rebuilt over the sorted buckets.
+    fn live_sort_finish(&mut self, renumber: bool) {
+        self.internal_ptr = 0;
+        if renumber {
+            for (i, b) in self.data.iter_mut().flatten().enumerate() {
+                b.key = ArrayKey::Int(i64::try_from(i).unwrap_or(i64::MAX));
+            }
+            self.next_free = i64::try_from(self.data.len()).unwrap_or(i64::MAX);
+            self.kind = Kind::Packed;
+            self.index = Vec::new();
+        } else {
+            self.rehash_without_compaction();
+        }
     }
 
     /// `array_splice` core (`php_splice`): removes `length` elements starting
@@ -1497,73 +1546,45 @@ fn holds(r: &PhpRef, a: &ZArray) -> bool {
         .is_some_and(|v| matches!(&*v, Value::Array(b) if ZArray::ptr_eq(a, b)))
 }
 
-/// The table of [`HashTable::sort_by_in_ref`] being sorted in place: the
-/// comparisons and swaps of `zend_sort` over its buckets, publishing the
-/// live view into the bound reference before every comparison.
+/// The table of [`HashTable::sort_in_ref`] being sorted in place: the
+/// comparisons and swaps of `zend_sort` over its buckets, with the table
+/// held by the bound reference whenever a comparison runs.
 struct LiveSort<'a, F: ?Sized> {
-    /// `(bucket, original position)` in their current order.
-    items: Vec<(Bucket, u32)>,
-    /// With renumbering, the keys by position (they do not move).
-    slot_keys: Vec<ArrayKey>,
-    table_size: u32,
-    next_free: i64,
     bound: &'a PhpRef,
-    /// The view `bound` was last given.
-    published: Option<ZArray>,
-    /// Whether `bound` still holds the table (no PHP code replaced it).
+    /// The table being sorted (the reference `zend_array_sort_ex` adds).
+    table: ZArray,
+    /// The original position of the element at each position (`Z_EXTRA`,
+    /// the stability tie-break).
+    order: Vec<u32>,
+    /// Whether the swaps move values only (`zend_hash_bucket_renum_swap`).
+    renumber: bool,
+    /// Whether `bound` was last given `table`.
+    in_bound: bool,
+    /// Whether `bound` has held `table` at every check so far: once PHP code
+    /// writes to it (separating the shared table) or replaces it, php-src
+    /// keeps sorting a table nobody can see and drops it.
     attached: bool,
     cmp: &'a mut F,
 }
 
-impl<F> LiveSort<'_, F>
-where
-    F: FnMut(&ArrayKey, &Value, &ArrayKey, &Value) -> i32 + ?Sized,
-{
-    /// The table as php-src's `arData` stands mid-sort: buckets in their
-    /// current order, no holes, and a reset hash index (every lookup
-    /// misses).
-    fn view(&self) -> HashTable {
-        let data = self
-            .items
-            .iter()
-            .enumerate()
-            .map(|(i, (b, _))| {
-                Some(Bucket {
-                    key: self.slot_keys.get(i).unwrap_or(&b.key).clone(),
-                    val: b.val.clone(),
-                    next: INVALID,
-                })
-            })
-            .collect();
-        HashTable {
-            data,
-            index: vec![INVALID; (self.table_size as usize) * 2],
-            num_elements: to_u32(self.items.len()),
-            table_size: self.table_size,
-            next_free: self.next_free,
-            internal_ptr: 0,
-            kind: Kind::Hash,
-            iterators: Vec::new(),
+impl<F: ?Sized> LiveSort<'_, F> {
+    /// Takes `table` back from `bound` (so that it is unshared again), or
+    /// notes that PHP code replaced it.
+    fn reclaim(&mut self) {
+        if self.in_bound {
+            self.in_bound = false;
+            if holds(self.bound, &self.table) {
+                drop(self.bound.set(Value::Null));
+            } else {
+                self.attached = false;
+            }
         }
     }
 
-    /// Makes `bound` hold the current view, unless PHP code replaced its
-    /// value since the last one.
-    fn publish(&mut self) {
-        if !self.attached {
-            return;
-        }
-        if let Some(prev) = &self.published {
-            if !holds(self.bound, prev) {
-                self.attached = false;
-                self.published = None;
-                return;
-            }
-        }
-        let view = ZArray::from_table(self.view());
-        let old = self.bound.set(Value::Array(view.clone()));
-        self.published = Some(view);
-        drop(old);
+    /// Ends the sort: the table, unless PHP code detached it from `bound`.
+    fn finish(mut self) -> Option<ZArray> {
+        self.reclaim();
+        self.attached.then_some(self.table)
     }
 }
 
@@ -1572,19 +1593,47 @@ where
     F: FnMut(&ArrayKey, &Value, &ArrayKey, &Value) -> i32 + ?Sized,
 {
     fn compare(&mut self, a: usize, b: usize) -> i32 {
-        self.publish();
-        let Self { items, cmp, .. } = self;
-        let (x, y) = (&items[a], &items[b]);
-        let r = cmp(&x.0.key, &x.0.val, &y.0.key, &y.0.val);
+        if self.attached && !self.in_bound {
+            drop(self.bound.set(Value::Array(self.table.clone())));
+            self.in_bound = true;
+        }
+        let Self {
+            table, order, cmp, ..
+        } = self;
+        let (Some(x), Some(y)) = (&table.data[a], &table.data[b]) else {
+            return 0;
+        };
+        let r = cmp(&x.key, &x.val, &y.key, &y.val);
         if r != 0 {
             r
         } else {
-            i32::from(x.1 > y.1) - i32::from(x.1 < y.1)
+            i32::from(order[a] > order[b]) - i32::from(order[a] < order[b])
         }
     }
 
     fn swap(&mut self, a: usize, b: usize) {
-        self.items.swap(a, b);
+        self.reclaim();
+        self.order.swap(a, b);
+        // PHP code that kept a copy of the array (refcount > 1) shares the
+        // live table in php-src; here the swap separates it, and the
+        // duplicate keeps the reset index.
+        let shared = self.table.refcount() > 1;
+        let t = self.table.make_mut();
+        if shared {
+            t.index.fill(INVALID);
+        }
+        if self.renumber {
+            // zend_hash_bucket_renum_swap: the values move, the keys stay.
+            if a != b {
+                let (lo, hi) = (a.min(b), a.max(b));
+                let (head, tail) = t.data.split_at_mut(hi);
+                if let (Some(x), Some(y)) = (&mut head[lo], &mut tail[0]) {
+                    std::mem::swap(&mut x.val, &mut y.val);
+                }
+            }
+        } else {
+            t.data.swap(a, b);
+        }
     }
 }
 
@@ -2192,14 +2241,21 @@ mod tests {
         t
     }
 
-    /// Runs `sort_by_in_ref` on `xyz()` bound to a reference, logging what
+    /// The table a reference holds (empty when it holds no array).
+    fn table_of(r: &PhpRef) -> HashTable {
+        match r.get() {
+            Value::Array(a) => (*a).clone(),
+            _ => HashTable::new(),
+        }
+    }
+
+    /// Runs `sort_in_ref` on `xyz()` bound to a reference, logging what
     /// the reference holds at every comparison and whether a key lookup in
-    /// it succeeds.
-    fn live_sort_log(renumber: bool) -> (HashTable, bool, Vec<String>) {
-        let mut t = xyz();
-        let r = PhpRef::new(Value::Array(ZArray::from_table(t.clone())));
+    /// it succeeds; returns the table it holds afterwards.
+    fn live_sort_log(renumber: bool) -> (HashTable, Vec<String>) {
+        let r = PhpRef::new(Value::Array(ZArray::from_table(xyz())));
         let mut log = Vec::new();
-        let attached = t.sort_by_in_ref(
+        HashTable::sort_in_ref(
             &r,
             |_, a, _, b| {
                 if let Value::Array(live) = r.get() {
@@ -2210,14 +2266,14 @@ mod tests {
             },
             renumber,
         );
-        (t, attached, log)
+        (table_of(&r), log)
     }
 
     #[test]
     fn sort_in_ref_shows_the_live_table_without_lookups() {
-        // sort3: compares (3,1), (2,1), swaps x/y, compares (3,2), swaps.
-        let (t, attached, log) = live_sort_log(false);
-        assert!(attached);
+        // zend_sort_3: compares (3,1) and (2,1), swaps x/y, compares
+        // (3,2), swaps.
+        let (t, log) = live_sort_log(false);
         assert_eq!(
             log,
             [
@@ -2233,18 +2289,44 @@ mod tests {
     #[test]
     fn sort_in_ref_renumber_keeps_keys_in_place() {
         // zend_hash_bucket_renum_swap moves values only.
-        let (t, attached, log) = live_sort_log(true);
-        assert!(attached);
+        let (t, log) = live_sort_log(true);
         assert_eq!(log[2], "x=1,y=3,z=2 found=false");
         assert_eq!(render(&t), "0=1,1=2,2=3");
+        assert!(t.is_packed());
+        assert_eq!(t.next_index(), 3);
+    }
+
+    #[test]
+    fn sort_in_ref_matches_sort_by() {
+        // 40 elements: the quicksort part of zend_sort, with ties.
+        let mut plain = HashTable::new();
+        for i in 0..40_i64 {
+            plain.insert(format!("k{i}").as_str(), Value::Int((i * 7) % 11));
+        }
+        plain.remove(&ArrayKey::from("k5"));
+        for renumber in [false, true] {
+            let r = PhpRef::new(Value::Array(ZArray::from_table(plain.clone())));
+            HashTable::sort_in_ref(&r, |_, a, _, b| int_cmp(a, b), renumber);
+            let mut want = plain.clone();
+            want.sort_by(|_, a, _, b| int_cmp(a, b), renumber);
+            assert_eq!(render(&table_of(&r)), render(&want), "renumber={renumber}");
+        }
+    }
+
+    #[test]
+    fn sort_in_ref_separates_a_shared_table() {
+        let keep = ZArray::from_table(xyz());
+        let r = PhpRef::new(Value::Array(keep.clone()));
+        HashTable::sort_in_ref(&r, |_, a, _, b| int_cmp(a, b), false);
+        assert_eq!(render(&keep), "x=3,y=1,z=2");
+        assert_eq!(render(&table_of(&r)), "y=1,z=2,x=3");
     }
 
     #[test]
     fn sort_in_ref_detaches_when_the_reference_is_replaced() {
-        let mut t = xyz();
-        let r = PhpRef::new(Value::Array(ZArray::from_table(t.clone())));
+        let r = PhpRef::new(Value::Array(ZArray::from_table(xyz())));
         let mut calls = 0;
-        let attached = t.sort_by_in_ref(
+        HashTable::sort_in_ref(
             &r,
             |_, a, _, b| {
                 calls += 1;
@@ -2255,10 +2337,33 @@ mod tests {
             },
             false,
         );
-        assert!(!attached);
         assert_eq!(calls, 3);
-        // No further views were published over the PHP code's write.
+        // The sorted table was dropped; the PHP code's value stays.
         assert!(matches!(r.get(), Value::Int(7)));
-        assert_eq!(render(&t), "y=1,z=2,x=3");
+    }
+
+    #[test]
+    fn sort_in_ref_write_keeps_the_separated_copy() {
+        // `$c['new'] = 9` from a comparison separates the half-sorted live
+        // table (rehashed, so lookups work) and php-src drops the sorted one.
+        let r = PhpRef::new(Value::Array(ZArray::from_table(xyz())));
+        let mut calls = 0;
+        HashTable::sort_in_ref(
+            &r,
+            |_, a, _, b| {
+                calls += 1;
+                if calls == 3 {
+                    if let Value::Array(arr) = &mut *r.borrow_mut() {
+                        arr.make_mut().insert("new", Value::Int(9));
+                    }
+                }
+                int_cmp(a, b)
+            },
+            false,
+        );
+        assert_eq!(calls, 3);
+        let t = table_of(&r);
+        assert_eq!(render(&t), "y=1,x=3,z=2,new=9");
+        assert!(matches!(t.get(&ArrayKey::from("x")), Some(Value::Int(3))));
     }
 }

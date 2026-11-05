@@ -6,7 +6,7 @@
 //! (`stable_sort_fallback`), which [`HashTable::sort_by`] provides.
 
 use crate::compare::{compare_data_by, compare_keys_by, SortKind, UserCompare};
-use crate::util::{arg_type_error, arg_value_error, not_array_error, with_bound_array, ErrSlot};
+use crate::util::{arg_type_error, arg_value_error, not_array_error, ErrSlot};
 use crate::{ArrayContext, Callback, SORT_ASC, SORT_DESC, SORT_FLAG_CASE};
 use crate::{SORT_LOCALE_STRING, SORT_NATURAL, SORT_NUMERIC, SORT_REGULAR, SORT_STRING};
 use php_runtime::sort::zend_sort;
@@ -54,75 +54,61 @@ fn php_sort<C: ArrayContext + ?Sized>(
     reverse: bool,
     renumber: bool,
 ) -> RtResult<()> {
-    if !by_key {
-        if let Some(res) = sort_self_bound(ctx, array, flags, reverse, renumber) {
-            return res;
-        }
+    let kind = SortKind::from_flags(flags);
+    let live = match array.get() {
+        Value::Array(a) => !by_key && can_observe_sort(&a),
+        other => return Err(not_array_error(func, 1, Some("array"), &other)),
+    };
+    if live {
+        return sort_live(ctx, array, kind, reverse, renumber);
     }
-    with_bound_array(array, func, 1, "array", |a| {
-        sort_table(
-            ctx,
-            a,
-            by_key,
-            reverse,
-            SortKind::from_flags(flags),
-            renumber,
-        )
-    })
-}
-
-/// The value sorts of an array that holds the very reference it is passed
-/// by (`$a[0] =& $a`). php-src sorts the table in place, with its hash index
-/// reset (`zend_hash_sort_internal`), so comparisons reaching the array
-/// through that element see its current, half-sorted order and find none
-/// of its keys (`Zend/tests/bug63882_2.phpt`); [`HashTable::sort_by_in_ref`]
-/// reproduces that. `None` for every other array, which takes the
-/// [`with_bound_array`] path.
-fn sort_self_bound<C: ArrayContext + ?Sized>(
-    ctx: &mut C,
-    array: &PhpRef,
-    flags: i64,
-    reverse: bool,
-    renumber: bool,
-) -> Option<RtResult<()>> {
-    let holds_itself = matches!(&*array.try_borrow()?, Value::Array(a)
-        if a.values().any(|v| matches!(v, Value::Reference(r) if PhpRef::ptr_eq(r, array))));
-    if !holds_itself {
-        return None;
-    }
-    Some(sort_self_bound_slow(ctx, array, flags, reverse, renumber))
-}
-
-/// The slow path of [`sort_self_bound`].
-#[cold]
-#[inline(never)]
-fn sort_self_bound_slow<C: ArrayContext + ?Sized>(
-    ctx: &mut C,
-    array: &PhpRef,
-    flags: i64,
-    reverse: bool,
-    renumber: bool,
-) -> RtResult<()> {
-    // `Z_PARAM_ARRAY_HT_EX(array, 0, 1)` separates a shared table
-    // (`zend_array_dup`) and sorts an unshared one as it is. No PHP code
-    // runs before the first comparison publishes the live table.
+    // No PHP code can run and nothing can reach the array while it is
+    // sorted, so it is sorted outside the reference, separated first when
+    // shared (`Z_PARAM_ARRAY_HT_EX(array, 0, 1)`).
     let mut work = match array.set(Value::Null) {
-        Value::Array(a) => a.into_table(),
+        Value::Array(a) => a,
         other => {
             array.set(other);
             return Ok(());
         }
     };
-    let kind = SortKind::from_flags(flags);
+    let res = sort_table(ctx, work.make_mut(), by_key, reverse, kind, renumber);
+    array.set(Value::Array(work));
+    res
+}
+
+/// Whether anything can observe a value sort of `a` while it runs: PHP
+/// code started by a comparison (`__toString`, a compare handler that
+/// initializes a lazy object, an error handler for "Array to string
+/// conversion") or a comparison reaching the array through a reference
+/// (`$a[0] =& $a`). Only objects, arrays and references can lead there;
+/// comparing scalars never runs PHP code. Key sorts compare keys only.
+fn can_observe_sort(a: &ZArray) -> bool {
+    a.values()
+        .any(|v| matches!(v, Value::Array(_) | Value::Object(_) | Value::Reference(_)))
+}
+
+/// A value sort that PHP code or a self-reference may observe: php-src
+/// sorts the live table that the variable keeps holding, with its hash
+/// index reset (`zend_array_sort` on the by-reference argument), which
+/// [`HashTable::sort_in_ref`] reproduces. Comparisons reaching the array
+/// mid-sort see its current, half-sorted order and find none of its keys
+/// (`Zend/tests/bug63882_2.phpt`); a write from PHP code separates it and
+/// the sorted table is dropped (`Zend/tests/gh16648.phpt`).
+#[inline(never)]
+fn sort_live<C: ArrayContext + ?Sized>(
+    ctx: &mut C,
+    array: &PhpRef,
+    kind: SortKind,
+    reverse: bool,
+    renumber: bool,
+) -> RtResult<()> {
     let mut slot = ErrSlot::default();
-    let attached = work.sort_by_in_ref(
+    HashTable::sort_in_ref(
         array,
         |_, va, _, vb| slot.run(|| compare_data_by(ctx, kind, reverse, va, vb)),
         renumber,
     );
-    if attached {
-        array.set(Value::Array(ZArray::from_table(work)));
-    }
     slot.into_result()
 }
 
