@@ -571,8 +571,9 @@ impl Vm {
             return Err(self.make_throw(
                 "Error",
                 &format!(
-                    "Call to {vis} {}::__construct() from {}",
-                    object::display_name(&cls.name),
+                    "Call to {vis} {}::{}() from {}",
+                    object::display_name(&ctor.scope().name),
+                    ctor.name,
                     scope_display(scope.as_ref())
                 ),
             ));
