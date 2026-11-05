@@ -7,7 +7,7 @@
 //! (closed by `proc_close()`, like `proc_open_rsrc_dtor`).
 
 use crate::ctx::RtExt;
-use php_runtime::{ErrorLevel, Resource, RtResult, Value, ZArray, ZStr};
+use php_runtime::{ErrorLevel, Resource, RtResult, RuntimeError, Value, ZArray, ZStr};
 use php_stdmisc::process::{self, CommandArg, ProcHost, Process};
 use php_streams::stream::CastAs;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
@@ -98,8 +98,15 @@ impl ProcHost for Host {
     }
 
     fn stream_fd(&mut self, resource: &Resource) -> RtResult<Option<RawFd>> {
-        let fd = php_ext_streams::res::cell_of(resource)
-            .and_then(|c| c.get().and_then(|mut s| s.cast(CastAs::Fd, true)));
+        // `zend_fetch_resource2_ex(..., "stream", le_stream, le_pstream)`.
+        let Some(cell) = php_ext_streams::res::cell_of(resource)
+            .filter(|c| !resource.is_closed() && !c.is_closed())
+        else {
+            return Err(RuntimeError::TypeError(
+                "proc_open(): supplied resource is not a valid stream resource".into(),
+            ));
+        };
+        let fd = cell.get().and_then(|mut s| s.cast(CastAs::Fd, true));
         // The stream layer's own warnings ("N bytes of buffered data lost
         // during stream conversion!", "Cannot represent a stream of type X
         // as a File Descriptor").
@@ -218,4 +225,22 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     .function("proc_close($process): int", proc_close)
     .function("proc_terminate($process, int $signal = 15): bool", proc_terminate)
     .function("proc_get_status($process): array", proc_get_status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_stream_resource_is_a_type_error() {
+        let mut host = Host::default();
+        let ctx = Resource::new("stream-context", None);
+        match host.stream_fd(&ctx) {
+            Err(RuntimeError::TypeError(m)) => assert_eq!(
+                m,
+                "proc_open(): supplied resource is not a valid stream resource"
+            ),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
 }
