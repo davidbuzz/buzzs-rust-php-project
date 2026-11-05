@@ -93,3 +93,13 @@ fn rounding_mode_is_an_internal_standard_enum() {
         "bool(true)\nstring(8) \"standard\"\nint(8)\n"
     );
 }
+
+#[test]
+fn number_property_isset_empty_and_reference() {
+    assert_eq!(
+        run(r"$z = new BcMath\Number(0); $o = new BcMath\Number(1); $f = new BcMath\Number('5.67');
+            var_dump(isset($z->value), empty($z->value), empty($z->scale), empty($o->value), empty($o->scale), empty($f->scale));
+            $a = $o; $x = &$a->value; var_dump($x);"),
+        "bool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nstring(1) \"1\"\n"
+    );
+}
