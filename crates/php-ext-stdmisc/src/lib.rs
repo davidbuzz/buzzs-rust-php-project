@@ -19,8 +19,9 @@
 //! * [`misc`] — `mail`, `error_log`, `assert_options`, `phpinfo`,
 //!   `phpcredits`.
 //!
-//! Per-request state (locale, `putenv` changes, syslog, assert callback)
-//! lives in thread-locals and is reset by request-shutdown hooks.
+//! Per-request state (locale, `putenv` changes, syslog) lives in
+//! thread-locals and is reset by request-shutdown hooks; the assert
+//! callback (`ASSERTG(callback)`) lives in the VM's `ext` state.
 
 mod browscap;
 mod credits;
