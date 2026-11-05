@@ -1479,6 +1479,7 @@ impl Compiler {
                 args,
                 nullsafe,
             } => {
+                let checkpoint = self.f().sc_jumps.len();
                 let o = self.compile_chain(object)?;
                 let o = if let Operand::Cv(_) = o { o } else { o };
                 if *nullsafe {
@@ -1488,6 +1489,11 @@ impl Compiler {
                         target: 0,
                     });
                     self.f().sc_jumps.push(j);
+                }
+                // zend_compile_method_call(): a callable conversion inside a
+                // short-circuiting chain.
+                if args.is_partial() && self.f().sc_jumps.len() != checkpoint {
+                    return self.err("Cannot combine nullsafe operator with Closure creation", line);
                 }
                 let n = self.member_name(name)?;
                 self.f().line = line;

@@ -194,3 +194,17 @@ fn recursive_static_initializer_keeps_inner_value() {
     );
     assert_eq!(out, "Done 3\nDone 3\nDone 3\nDone 3\nDone 3\n");
 }
+
+/// A callable conversion inside a nullsafe chain is a compile error
+/// (zend_compile_method_call(); first_class_callable_012/013.phpt).
+#[test]
+fn nullsafe_closure_creation_is_compile_error() {
+    for src in ["<?php\n$foo?->bar(...);\n", "<?php\n$foo?->foo->bar(...);\n"] {
+        assert_eq!(
+            run(src),
+            "\nFatal error: Cannot combine nullsafe operator with Closure creation in t.php on line 2\n"
+        );
+    }
+    // A nullsafe access applied to the conversion's result is fine.
+    assert_eq!(run("<?php\necho strlen(...)?->__invoke('abc');"), "3");
+}
