@@ -1,25 +1,12 @@
-//! `mb_ereg*` support (port of the encoding bookkeeping of
+//! `mb_ereg*` support (port of the encoding and option bookkeeping of
 //! `ext/mbstring/php_mbregex.c`).
 //!
-//! # Status
-//!
-//! Only the regex *encoding* state (`mb_regex_encoding`) is implemented
-//! here. The matching functions (`mb_ereg`, `mb_eregi`, `mb_ereg_replace`,
-//! `mb_eregi_replace`, `mb_ereg_replace_callback`, `mb_split`,
-//! `mb_ereg_match`, `mb_ereg_search*`, `mb_regex_set_options`) need an
-//! Oniguruma-compatible engine (Ruby syntax by default, `ONIG_OPTION_*`
-//! flags, per-encoding character semantics). The intended route is:
-//!
-//! 1. Convert pattern and subject from the regex encoding
-//!    ([`MbState::regex_encoding`](crate::MbState::regex_encoding)) to UTF-8
-//!    with [`crate::convert::fast_convert`] (keeping a byte-offset map back
-//!    to the original encoding for `mb_ereg_search_getpos`/`_regs`);
-//! 2. translate the Oniguruma/Ruby syntax to PCRE2 syntax (`(?<name>)`,
-//!    `\h` = hex digit, `\A`/`\z`, POSIX brackets, option letters
-//!    `i m x s p l n e j u g c r z b d` from `_php_mb_regex_init_options`)
-//!    and run it through `php-pcre`;
-//! 3. map match offsets back and convert captured substrings back to the
-//!    regex encoding.
+//! This module holds the `MBREX(...)` state: the regex encoding
+//! (`mb_regex_encoding`, an index into [`ENC_NAME_MAP`]) and the default
+//! options and syntax (`mb_regex_set_options`). Patterns are compiled and
+//! matched by the system Oniguruma through [`crate::onig`], exactly as PHP
+//! does; the `mb_ereg*` functions themselves live in the VM binding
+//! (`php-ext-mbstring`).
 
 use crate::encoding::{self, Encoding};
 
@@ -240,6 +227,13 @@ impl RegexState {
         self.current_encoding
     }
 
+    /// `MBREX(current_mbctype)`: the current regex encoding as an index
+    /// into [`ENC_NAME_MAP`] (the Oniguruma encoding, see
+    /// [`crate::onig::Regex::new`]).
+    pub fn mbctype(&self) -> usize {
+        self.current_mbctype
+    }
+
     /// `PHP_RSHUTDOWN_FUNCTION(mb_regex)`.
     pub fn request_shutdown(&mut self) {
         self.current_mbctype = self.default_mbctype;
@@ -286,10 +280,23 @@ impl crate::MbState {
     pub fn regex_encoding(&self) -> &'static Encoding {
         self.regex.encoding()
     }
+
+    /// The Oniguruma encoding of the regex encoding, as an index into
+    /// [`ENC_NAME_MAP`].
+    pub fn regex_mbctype(&self) -> usize {
+        self.regex.mbctype()
+    }
+
+    /// The default regex options and syntax (`MBREX(regex_default_options)`,
+    /// `MBREX(regex_default_syntax)`).
+    pub fn regex_defaults(&self) -> (u32, Syntax) {
+        (self.regex.default_options, self.regex.default_syntax)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{Syntax, OPTION_EXTEND, OPTION_IGNORECASE};
     use crate::MbState;
 
     #[test]
@@ -306,5 +313,10 @@ mod tests {
         st.mb_regex_encoding_set(b"sjis-win").unwrap();
         assert_eq!(st.mb_regex_encoding_get(), "SJIS");
         assert!(st.mb_regex_encoding_set(b"UTF-7").is_err());
+        assert_eq!(st.regex_mbctype(), 6);
+        assert_eq!(
+            st.regex_defaults(),
+            (OPTION_IGNORECASE | OPTION_EXTEND, Syntax::Perl)
+        );
     }
 }

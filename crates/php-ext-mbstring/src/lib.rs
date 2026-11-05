@@ -7,7 +7,7 @@
 //! (`mb_convert_encoding`/`mb_check_encoding` on arrays, by-reference
 //! `mb_convert_variables`), the `mbstring.*` INI table with its on-modify
 //! handlers, `mb_parse_str`, `mb_send_mail`, `mb_output_handler`, and the
-//! `mb_ereg*` family, which runs on PCRE2 (see [`regex`]).
+//! `mb_ereg*` family, which runs on the system Oniguruma (see [`regex`]).
 
 mod arrays;
 mod funcs;
@@ -71,7 +71,7 @@ fn register_constants(m: &mut ModuleBuilder<'_>) {
     }
     m.constant(
         "MB_ONIGURUMA_VERSION",
-        Value::from(regex::ONIGURUMA_VERSION),
+        Value::from(regex::oniguruma_version()),
     );
 }
 
@@ -98,7 +98,10 @@ fn module_info(vm: &mut Vm) -> Vec<InfoItem> {
         InfoItem::TableEnd,
         InfoItem::TableStart,
         row("Multibyte (japanese) regex support", "enabled"),
-        row("Multibyte regex (oniguruma) version", regex::ONIGURUMA_VERSION),
+        row(
+            "Multibyte regex (oniguruma) version",
+            &regex::oniguruma_version(),
+        ),
         InfoItem::TableEnd,
         InfoItem::IniEntries,
     ]
