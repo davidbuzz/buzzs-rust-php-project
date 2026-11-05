@@ -369,6 +369,9 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
             serializer::decode_with(ser, data, &opts, h)
         }
     };
+    // `zend_catch`: a fatal error while decoding bailed out (`exit` is an
+    // unwind exception, not a bailout).
+    let bailout = matches!(&decoded, Err(RuntimeError::Fatal(_)));
     let ok = match decoded {
         Ok(Decoded::Merge { entries, ok }) => {
             if let Some(r) = h.session().http_session_vars.clone() {
@@ -402,11 +405,15 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
         // php_session_cancel_decode()
         destroy(h);
         track_init(h);
-        warn(
-            h,
-            ErrorLevel::Warning,
-            "Failed to decode session object. Session has been destroyed",
-        );
+        let msg = "Failed to decode session object. Session has been destroyed";
+        if bailout {
+            // `_zend_bailout()` cleared `EG(current_execute_data)`.
+            if let Err(e) = h.emit_diagnostic_after_bailout(ErrorLevel::Warning, msg) {
+                h.session().set_exception(e);
+            }
+        } else {
+            warn(h, ErrorLevel::Warning, msg);
+        }
     }
     ok
 }

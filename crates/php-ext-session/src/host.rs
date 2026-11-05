@@ -338,6 +338,15 @@ impl SessionHost for VmHost<'_> {
         self.parked(|vm| docref(vm, level.bits(), message.as_bytes()).map_err(|t| to_rt(vm, t)))
     }
 
+    fn emit_diagnostic_after_bailout(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+        self.parked(|vm| {
+            let mut m = b"Unknown: ".to_vec();
+            m.extend_from_slice(message.as_bytes());
+            vm.error_at_bytes(level.bits(), &m, &ZStr::from("Unknown"), 0)
+                .map_err(|t| to_rt(vm, t))
+        })
+    }
+
     fn call_handler(&mut self, callable: &Value, args: &[Value]) -> RtResult<Option<Value>> {
         self.parked(|vm| {
             // With no frame at all (request shutdown) an exception cannot

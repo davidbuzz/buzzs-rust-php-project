@@ -374,3 +374,33 @@ fn headers_sent_warning_names_where_output_started() {
          already been sent (sent from test.php on line 2) in test.php on line 3\nbool(false)\n";
     assert_eq!(out, expected);
 }
+
+/// GH-12504: a fatal error while decoding bails out; `php_session_decode`'s
+/// `zend_catch` then reports the failure with no active function or location.
+#[test]
+fn decode_failure_after_bailout_has_no_location() {
+    let out = run_with(
+        r#"<?php
+class H implements SessionHandlerInterface, SessionIdInterface, SessionUpdateTimestampHandlerInterface {
+    function open($p, $n): bool { return true; }
+    function close(): bool { return true; }
+    function read($id): string|false { return 'a|O:4:"Test":0:{}'; }
+    function write($id, $d): bool { echo "write\n"; return true; }
+    function destroy($id): bool { return true; }
+    function gc($m): int|false { return 0; }
+    function create_sid(): string { return "abc"; }
+    function validateId($id): bool { return true; }
+    function updateTimestamp($id, $d): bool { return true; }
+}
+spl_autoload_register(function () { eval('class Test {public int $v = null;}'); });
+session_set_save_handler(new H, false);
+session_start();
+"#,
+        &[("fatal_error_backtraces", "0")],
+    );
+    let expected = "\nFatal error: Default value for property of type int may not be null. Use the \
+         nullable type ?int to allow null default value in test.php(13) : eval()'d code on line 1\n\
+         \nWarning: Unknown: Failed to decode session object. Session has been destroyed in \
+         Unknown on line 0\n";
+    assert_eq!(out, expected);
+}

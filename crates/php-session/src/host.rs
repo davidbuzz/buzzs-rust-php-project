@@ -50,6 +50,14 @@ pub trait SessionHost: RuntimeContext {
     /// and reports the exception when the current entry point returns.
     fn emit_diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()>;
 
+    /// `php_error_docref()` from a `zend_catch` block: `_zend_bailout()`
+    /// cleared `EG(current_execute_data)`, so there is no active function
+    /// and no location (`"Unknown: <message>"` in Unknown on line 0). The
+    /// default is [`SessionHost::emit_diagnostic`].
+    fn emit_diagnostic_after_bailout(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+        self.emit_diagnostic(level, message)
+    }
+
     /// `call_user_function()` on a user save-handler callable (a string, an
     /// `[object, "method"]` array or a closure). `Ok(None)` means the call
     /// failed without an exception (the retval is `UNDEF`); `Err` is a
