@@ -178,6 +178,25 @@ pub(crate) struct CallBufs {
     pub(crate) passed: Vec<Vec<bool>>,
 }
 
+impl CallBufs {
+    /// Pools pre-filled at startup so that reaching steady state does not
+    /// allocate while user code runs (`memory_get_usage()` deltas, e.g.
+    /// Zend/tests/bug79514.phpt, must not see the pools grow).
+    pub(crate) fn prewarmed() -> Self {
+        let mut b = CallBufs {
+            args: Vec::with_capacity(16),
+            values: Vec::with_capacity(16),
+            passed: Vec::with_capacity(16),
+        };
+        for _ in 0..4 {
+            b.args.push(Vec::with_capacity(8));
+            b.values.push(Vec::with_capacity(8));
+            b.passed.push(Vec::with_capacity(8));
+        }
+        b
+    }
+}
+
 impl PendingCall {
     /// A call without object context.
     pub fn new(func: Func) -> Self {

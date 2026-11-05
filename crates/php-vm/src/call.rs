@@ -48,22 +48,32 @@ impl Vm {
     // INIT
     // ------------------------------------------------------------------
 
-    /// Pushes a pending call, giving it a pooled argument buffer so the
-    /// SEND ops do not allocate (php-src's VM-stack call frames).
+    /// Pushes a pending call.
     #[inline]
-    fn push_pending(&mut self, mut call: PendingCall) {
-        if call.args.capacity() == 0 {
-            if let Some(v) = self.call_bufs.args.pop() {
-                call.args = v;
-            }
-        }
+    fn push_pending(&mut self, call: PendingCall) {
         self.frame_mut().calls.push(call);
+    }
+
+    /// Installs a pooled argument buffer into the pending call before its
+    /// first argument, so the SEND ops do not allocate (php-src's VM-stack
+    /// call frames). Zero-argument calls never touch the pool.
+    #[inline]
+    fn pooled_args(&mut self) {
+        let Some(v) = self.call_bufs.args.pop() else {
+            return;
+        };
+        let call = self.frame_mut().calls.last_mut().expect("pending call");
+        if call.args.capacity() == 0 {
+            call.args = v;
+        } else if self.call_bufs.args.len() < 4 {
+            self.call_bufs.args.push(v);
+        }
     }
 
     /// Returns an argument buffer to the pool.
     #[inline]
     fn put_arg_vec(&mut self, mut v: Vec<Option<Value>>) {
-        if v.capacity() > 0 && self.call_bufs.args.len() < 16 {
+        if v.capacity() > 0 && self.call_bufs.args.len() < 4 {
             v.clear();
             self.call_bufs.args.push(v);
         }
@@ -72,7 +82,7 @@ impl Vm {
     /// Returns a ZPP value buffer to the pool.
     #[inline]
     fn put_val_vec(&mut self, mut v: Vec<Value>) {
-        if v.capacity() > 0 && self.call_bufs.values.len() < 16 {
+        if v.capacity() > 0 && self.call_bufs.values.len() < 4 {
             v.clear();
             self.call_bufs.values.push(v);
         }
@@ -81,7 +91,7 @@ impl Vm {
     /// Returns a ZPP passed-flag buffer to the pool.
     #[inline]
     fn put_bool_vec(&mut self, mut v: Vec<bool>) {
-        if v.capacity() > 0 && self.call_bufs.passed.len() < 16 {
+        if v.capacity() > 0 && self.call_bufs.passed.len() < 4 {
             v.clear();
             self.call_bufs.passed.push(v);
         }
@@ -557,6 +567,7 @@ impl Vm {
     }
 
     pub(crate) fn op_send(&mut self, src: &ArgSrc, name: Option<ZStr>) -> VmResult<()> {
+        self.pooled_args();
         // Fast path: a positional by-value argument of an ordinary call
         // (the general path below computes the same thing in more steps).
         if name.is_none() {
@@ -961,11 +972,18 @@ impl Vm {
         let fname = |vm: &Self| vm.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
         let nparams = b.params.len();
         let variadic = b.flags & flags::VARIADIC != 0;
-        let mut values: Vec<Value> = self.call_bufs.values.pop().unwrap_or_default();
-        values.reserve(call.args.len());
-        let mut passed: Vec<bool> = self.call_bufs.passed.pop().unwrap_or_default();
-        passed.reserve(call.args.len());
         let npassed = call.args.len();
+        // Zero-argument calls (func_num_args() and friends) never touch the
+        // buffer pools: empty Vecs are free.
+        let (mut values, mut passed): (Vec<Value>, Vec<bool>) = if npassed == 0 {
+            (Vec::new(), Vec::new())
+        } else {
+            let mut values = self.call_bufs.values.pop().unwrap_or_default();
+            values.reserve(npassed);
+            let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+            passed.reserve(npassed);
+            (values, passed)
+        };
         if b.flags & flags::DEPRECATED != 0 {
             // Before zpp, like ZEND_DO_ICALL.
             self.check_deprecated_call(&call)?;
@@ -980,7 +998,9 @@ impl Vm {
         );
         f.func = Some(Func::Builtin(b.clone()));
         f.builtin_name = Some(b.name.clone());
-        f.args = {
+        f.args = if call.args.is_empty() {
+            Vec::new()
+        } else {
             let mut fa = self.call_bufs.args.pop().unwrap_or_default();
             fa.extend(call.args.iter().cloned());
             fa
