@@ -1574,7 +1574,11 @@ impl Vm {
         let res = if let Value::Reference(r) = &cur {
             self.assign_ref(r, nv)
         } else {
-            self.write_place(base2, &segs, WOp::Assign(nv))
+            // A silent write-back walk: `FETCH_DIM_RW` converted the
+            // offsets (and reported them) once already.
+            let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
+            flush_deferred_ref_assigns();
+            r
         };
         drop(guard);
         let res = res?;

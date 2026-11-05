@@ -182,3 +182,19 @@ strlen("foo")[0] ??= 123;
         "\nFatal error: Cannot use result of built-in function in write context in t.php on line 2\n"
     );
 }
+
+/// `++`/`--` on a dimension reports each offset conversion once
+/// (`FETCH_DIM_RW`; the write-back is silent), as in Zend/tests/resource_key.
+#[test]
+fn incdec_on_dimensions_converts_offsets_once() {
+    assert_eq!(
+        run(r#"<?php
+$a = [1 => 1];
+$a[1.5]++;
+$b = [[0 => 1]];
+--$b[0.5][0.5];
+var_dump($a, $b);
+"#),
+        "\nDeprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 3\n\nDeprecated: Implicit conversion from float 0.5 to int loses precision in t.php on line 5\n\nDeprecated: Implicit conversion from float 0.5 to int loses precision in t.php on line 5\narray(1) {\n  [1]=>\n  int(2)\n}\narray(1) {\n  [0]=>\n  array(1) {\n    [0]=>\n    int(0)\n  }\n}\n"
+    );
+}
