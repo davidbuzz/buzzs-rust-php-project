@@ -1501,6 +1501,10 @@ impl Vm {
             return match seg {
                 RSeg::Dim(k) => match c {
                     Value::Array(a) => {
+                        // The lookup snapshot is Zend's temporary GC addref,
+                        // not an owner that survives a diagnostic callback.
+                        let guarded = matches!(k, Value::Float(_) | Value::Null);
+                        let had_owner = guarded && a.refcount() > 1;
                         let mut diags = Vec::new();
                         let key = match key_of(k, &mut diags, KeyCtx::Isset) {
                             Ok(k) => k,
@@ -1508,6 +1512,9 @@ impl Vm {
                         };
                         // isset() does not emit the null-offset deprecation twice.
                         self.flush_diags(diags)?;
+                        if had_owner && a.refcount() == 1 {
+                            return Ok(empty);
+                        }
                         match a.get(&key) {
                             None => Ok(empty),
                             Some(v) => {

@@ -325,6 +325,12 @@ pub enum Op {
     Isset { place: PlaceId, dst: u32 },
     /// `empty(place)`.
     Empty { place: PlaceId, dst: u32 },
+    /// Direct `array_key_exists(key, array)` without copying call arguments.
+    ArrayKeyExists {
+        key: Operand,
+        array: Operand,
+        dst: u32,
+    },
     /// `unset(place)`.
     Unset { place: PlaceId },
     /// `global $name` bound to `cv`.

@@ -1786,6 +1786,14 @@ impl Compiler {
             .collect();
         let only_positional = positional.len() == args.args.len();
         match lc.as_slice() {
+            b"array_key_exists" if fb.is_none() && only_positional && positional.len() == 2 => {
+                let key = self.compile_expr(positional[0])?;
+                let array = self.compile_expr(positional[1])?;
+                self.f().line = line;
+                let t = self.tmp();
+                self.emit(Op::ArrayKeyExists { key, array, dst: t });
+                Ok(Some(Operand::Tmp(t)))
+            }
             b"exit" | b"die" if only_positional && positional.len() <= 1 => {
                 let v = match positional.first() {
                     Some(e) => self.compile_expr(e)?,

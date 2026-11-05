@@ -409,3 +409,67 @@ $v = NAN; settype($v, "null"); var_dump($v);
 "#;
     assert_eq!(run(src), "unexpected NAN value was coerced to array\nNULL\nunexpected NAN value was coerced to object\nNULL\nunexpected NAN value was coerced to null\nNULL\nunexpected NAN value was coerced to array\nfloat(NAN)\nunexpected NAN value was coerced to object\nfloat(NAN)\nunexpected NAN value was coerced to null\nNULL\nunexpected NAN value was coerced to array\nstring(7) \"changed\"\nunexpected NAN value was coerced to object\nstring(7) \"changed\"\nunexpected NAN value was coerced to null\nNULL\n");
 }
+
+#[test]
+fn float_key_callback_removes_array_owner() {
+    let src = r#"<?php
+function fresh() { $a = []; $a[] = 7; return $a; }
+set_error_handler(function ($level, $message) {
+    global $a, $mode;
+    if ($mode === 0) { $a = null; }
+    elseif ($mode === 1) { unset($a); }
+    else { $a = "changed"; }
+    echo $message, "\n";
+});
+foreach ([0, 1, 2] as $mode) {
+    $a = fresh(); var_dump(isset($a[1.0E+42]));
+    $a = fresh(); var_dump(empty($a[1.0E+42]));
+    $a = fresh(); var_dump(\array_key_exists(1.0E+42, $a));
+}
+$mode = 0;
+$a = fresh(); $alias =& $a; var_dump(isset($a[1.0E+42]));
+$a = fresh(); var_dump(\array_key_exists(1.0E+42, $a));
+"#;
+    let warning = "The float 1.0E+42 is not representable as an int, cast occurred\n";
+    let expected = format!("{warning}bool(false)\n{warning}bool(true)\n{warning}bool(false)\n");
+    assert_eq!(
+        run(src),
+        format!("{}{warning}bool(false)\n{warning}bool(false)\n", expected.repeat(3))
+    );
+}
+
+#[test]
+fn float_key_callback_preserves_shared_and_temporary_arrays() {
+    let src = r#"<?php
+function fresh() { $a = []; $a[] = 7; return $a; }
+set_error_handler(function ($level, $message) {
+    global $a;
+    $a = null;
+    echo $message, "\n";
+});
+$a = fresh(); $b = $a; var_dump(isset($a[1.0E+42]));
+$a = fresh(); $b = $a; var_dump(array_key_exists(1.0E+42, $a));
+var_dump(isset(fresh()[1.0E+42]));
+var_dump(array_key_exists(1.0E+42, fresh()));
+var_dump(empty(fresh()[1.0E+42]));
+"#;
+    let warning = "The float 1.0E+42 is not representable as an int, cast occurred\n";
+    let expected = format!("{warning}bool(true)\n").repeat(4);
+    assert_eq!(run(src), format!("{expected}{warning}bool(false)\n"));
+}
+
+#[test]
+fn float_key_callback_exception_aborts_lookup() {
+    let src = r#"<?php
+function fresh() { $a = []; $a[] = 7; return $a; }
+set_error_handler(function () { throw new Exception("stopped"); });
+$a = fresh();
+try { var_dump(isset($a[1.0E+42])); }
+catch (Exception $e) { echo $e->getMessage(), "\n"; }
+try { var_dump(empty($a[1.0E+42])); }
+catch (Exception $e) { echo $e->getMessage(), "\n"; }
+try { var_dump(array_key_exists(1.0E+42, $a)); }
+catch (Exception $e) { echo $e->getMessage(), "\n"; }
+"#;
+    assert_eq!(run(src), "stopped\nstopped\nstopped\n");
+}
