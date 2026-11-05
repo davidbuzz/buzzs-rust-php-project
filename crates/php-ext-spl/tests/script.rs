@@ -653,3 +653,28 @@ var_dump((new ReflectionMethod('ArrayObject', 'uasort'))->getParameters()[0]->is
          bool(false)\n"
     );
 }
+
+#[test]
+fn nested_callback_filter_iterator_cycle_is_collected() {
+    // GH-7958: `spl_dual_it_get_gc` reports the inner iterator and the
+    // callback, whose bound `$this` closes the cycle.
+    let out = run(r#"<?php
+class Action {
+    public \Iterator $iterator;
+    public function __construct(array $data) { $this->iterator = new ArrayIterator($data); }
+    public function __destruct() { echo "d\n"; }
+    public function filter() {
+        $this->iterator = new \CallbackFilterIterator($this->iterator, fn() => true);
+        $this->iterator->rewind();
+    }
+}
+$action = new Action(['a', 'b']);
+$action->filter();
+$action->filter();
+echo implode(',', iterator_to_array($action->iterator)), "\n";
+$action = null;
+gc_collect_cycles();
+echo "done\n";
+"#);
+    assert_eq!(out, "a,b\nd\ndone\n");
+}

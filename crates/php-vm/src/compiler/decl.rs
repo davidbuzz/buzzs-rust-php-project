@@ -804,6 +804,10 @@ impl Compiler {
                         self.emit(Op::Return {
                             val: Operand::Unused,
                         });
+                    } else if spec.by_ref && !spec.is_generator {
+                        // `fn&() => expr` on a non-variable: ZEND_RETURN_BY_REF
+                        // of a value, with its notice (oss_fuzz_58181).
+                        self.emit(Op::ReturnByRefValue { val: v });
                     } else {
                         self.emit(Op::Return { val: v });
                     }

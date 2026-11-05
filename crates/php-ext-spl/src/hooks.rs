@@ -97,10 +97,59 @@ fn gc_traverse(st: &Rc<php_spl::SplObject>, v: &mut php_vm::gc::GcVisitor<'_>) {
             }
         }
         php_spl::SplState::FixedArray(f) => v.values(&f.elements),
+        php_spl::SplState::DualIt(d) => dual_it_gc(d, v),
         _ => {}
     });
     if r.is_err() {
         v.opaque();
+    }
+}
+
+/// `spl_dual_it_get_gc`: the inner object and its iterator, the current
+/// key/value and the variant's own values (the `CallbackFilterIterator`
+/// callback, the caching iterator's cache, the append iterator's
+/// `ArrayIterator`), so that cycles through a callback's bound `$this` are
+/// collectable (GH-7958).
+fn dual_it_gc(d: &php_spl::iterators::DualIt, v: &mut php_vm::gc::GcVisitor<'_>) {
+    use php_spl::iterators::DualKind;
+    if let Some(o) = &d.inner {
+        v.obj(o);
+    }
+    if let Some(it) = &d.inner_it {
+        method_iterator_gc(it, v);
+    }
+    for x in [&d.data, &d.key].into_iter().flatten() {
+        v.value(x);
+    }
+    match &d.kind {
+        DualKind::Caching {
+            children, cache, ..
+        } => {
+            if let Some(c) = children {
+                v.value(c);
+            }
+            v.array(cache);
+        }
+        DualKind::Append { array_it, it } => {
+            v.obj(array_it);
+            method_iterator_gc(it, v);
+        }
+        DualKind::CallbackFilter { callback } => v.value(callback),
+        _ => {}
+    }
+}
+
+/// The object a `zend_user_iterator` (`MethodIterator`) owns, when this
+/// state holds the only handle to the iterator. Native iterators over SPL
+/// state are opaque (omitting them only keeps their targets alive).
+fn method_iterator_gc(it: &php_spl::iterators::ItRef, v: &mut php_vm::gc::GcVisitor<'_>) {
+    if Rc::strong_count(it) != 1 {
+        return;
+    }
+    if let Ok(b) = it.try_borrow() {
+        if let Some(o) = php_spl::ObjectIterator::method_object(&**b) {
+            v.obj(o);
+        }
     }
 }
 

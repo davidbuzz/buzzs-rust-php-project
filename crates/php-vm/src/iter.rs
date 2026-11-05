@@ -104,7 +104,12 @@ impl Vm {
                         ArrayKey::Str(s) => s.clone(),
                         ArrayKey::Int(i) => ZStr::from(i.to_string()),
                     };
-                    if !matches!(
+                    if name.as_bytes().first() == Some(&0) {
+                        // `zend_fe_fetch_object_helper`: a dynamic key that
+                        // looks mangled (`(object)["\0A\0b" => 1]`) is
+                        // always accessible and yields its unmangled name.
+                        out.push((unmangled_key(&name), name, None));
+                    } else if !matches!(
                         self.lookup_prop(&cls, &name, scope.as_ref()),
                         PropLookup::Found(pi) if pi.visibility() == flags::PRIVATE
                     ) {
@@ -435,7 +440,12 @@ impl Vm {
                                     ));
                                 }
                             }
-                            Value::Reference(self.property_ref(&obj, &name)?)
+                            match nul_dynamic_prop_ref(&obj, &name) {
+                                Some(r) => Value::Reference(r),
+                                None => Value::Reference(self.property_ref(&obj, &name)?),
+                            }
+                        } else if name.as_bytes().first() == Some(&0) {
+                            nul_dynamic_prop(&obj, &name)
                         } else {
                             self.read_property(&obj, &name, crate::opcode::FetchMode::Is)?
                         };
@@ -635,7 +645,11 @@ impl Vm {
                     return Ok(out);
                 }
                 for (k, name, _) in self.visible_props(o)? {
-                    let v = self.read_property(o, &name, crate::opcode::FetchMode::Is)?;
+                    let v = if name.as_bytes().first() == Some(&0) {
+                        nul_dynamic_prop(o, &name)
+                    } else {
+                        self.read_property(o, &name, crate::opcode::FetchMode::Is)?
+                    };
                     out.push((k, v));
                 }
                 Ok(out)
@@ -692,4 +706,39 @@ impl Vm {
             o => PhpRef::new(o),
         }
     }
+}
+
+/// The iteration key of a NUL-prefixed dynamic property: the property part
+/// of `zend_unmangle_property_name_ex()`.
+#[cold]
+fn unmangled_key(name: &ZStr) -> Value {
+    let (_, prop) = php_runtime::dump::unmangle_property_name(name.as_bytes());
+    Value::Str(ZStr::from(prop))
+}
+
+/// Reads a NUL-prefixed dynamic property straight from the property table,
+/// as `zend_fe_fetch_object_helper` does (a property fetch would reject the
+/// name).
+#[cold]
+fn nul_dynamic_prop(o: &Obj, name: &ZStr) -> Value {
+    object::data(o)
+        .dynamic
+        .borrow()
+        .as_ref()
+        .and_then(|t| t.get(&ArrayKey::Str(name.clone())))
+        .map_or(Value::Null, Value::deref)
+}
+
+/// By-reference counterpart of [`nul_dynamic_prop`] (`ZEND_FE_FETCH_RW`);
+/// `None` for an ordinary name.
+fn nul_dynamic_prop_ref(o: &Obj, name: &ZStr) -> Option<PhpRef> {
+    if name.as_bytes().first() != Some(&0) {
+        return None;
+    }
+    object::data(o)
+        .dynamic
+        .borrow_mut()
+        .as_mut()
+        .and_then(|t| t.get_mut(&ArrayKey::Str(name.clone())))
+        .map(Value::make_ref)
 }

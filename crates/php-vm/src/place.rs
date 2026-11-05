@@ -1044,10 +1044,10 @@ impl Vm {
                             self.call_method_name(&obj, "offsetSet", vec![key, v.clone()])?;
                             Ok(v)
                         }
+                        // `zend_binary_assign_op_obj_dim`: `$o[] op= v` reads
+                        // `offsetGet(null)` (bug69955); the write-back then
+                        // calls `offsetSet(null, ...)`.
                         WOp::FetchRw => {
-                            if matches!(seg, RSeg::Append) {
-                                return Err(self.make_throw("Error", "Cannot use [] for reading"));
-                            }
                             let v =
                                 self.call_method_name_raw(&obj, "offsetGet", vec![key.clone()])?;
                             OVERLOADED_RW.with(|c| c.set(Some((obj, key))));
