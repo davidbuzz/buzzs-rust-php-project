@@ -1103,7 +1103,6 @@ ext/standard/tests/streams/gh20286.phpt
 ext/standard/tests/streams/stream_errors_handler_outside_operation.phpt
 ext/standard/tests/streams/stream_errors_legacy_handler_raises_error.phpt
 ext/standard/tests/strings/007.phpt
-ext/standard/tests/strings/gh12151.phpt
 ext/standard/tests/strings/gh18823_strict.phpt
 ext/standard/tests/strings/gh20906_1.phpt
 ext/standard/tests/strings/gh20906_2.phpt

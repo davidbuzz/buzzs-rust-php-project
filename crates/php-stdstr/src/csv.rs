@@ -195,9 +195,12 @@ struct Line {
 }
 
 impl Line {
-    fn new(buf: Vec<u8>) -> Self {
+    fn new(mut buf: Vec<u8>) -> Self {
         let limit = lookup_trailing_spaces(&buf);
         let eol_len = buf.len() - limit;
+        // C strings are NUL-terminated; the parser may read (and even copy)
+        // the terminator, e.g. when the escape character is "\0" (GH-12151).
+        buf.push(0);
         Self {
             buf,
             limit,
