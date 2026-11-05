@@ -60,6 +60,9 @@ pub mod flags {
     /// A static native method that still receives `$this` when called on
     /// an instance (`XMLReader::open`'s `get_method` override).
     pub const STATIC_KEEPS_THIS: u32 = 1 << 23;
+    /// A temporary native method made by a `get_method` handler
+    /// (`internal_function.module` is NULL): it belongs to no extension.
+    pub const NO_MODULE: u32 = 1 << 24;
     /// Set-visibility mask.
     pub const SET_MASK: u32 = SET_PUBLIC | SET_PROTECTED | SET_PRIVATE;
 }

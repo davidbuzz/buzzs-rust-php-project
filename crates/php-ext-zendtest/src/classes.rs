@@ -236,7 +236,9 @@ fn register_test_class(vm: &mut Vm) {
         )
         .method(
             "testTmpMethodWithArgInfo(Foo|Bar|null $tmpMethodParamName = null, string $tmpMethodParamWithStringDefaultValue = \"tmpMethodParamWithStringDefaultValue\")",
-            pub_,
+            // `zend_test_class_method_get` makes it a temporary function
+            // without a module.
+            pub_ | acc::NO_MODULE,
             tmp_method,
         )
         .register(vm);
