@@ -288,9 +288,21 @@ fn set_authorizer(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+/// `driver_specific_method_deprecations` (ext/pdo/pdo_dbh.c): the legacy
+/// `SQLite` driver methods and their replacements. `pdo_hash_methods()`
+/// marks them `ZEND_ACC_DEPRECATED` with a hard-coded
+/// `#[\Deprecated(since: "8.5", message: "use X() instead")]`, so the
+/// engine reports the call before the method runs (and before observers
+/// see it).
+const LEGACY_METHODS: [(&str, &str); 3] = [
+    ("sqliteCreateAggregate", "Pdo\\Sqlite::createAggregate"),
+    ("sqliteCreateCollation", "Pdo\\Sqlite::createCollation"),
+    ("sqliteCreateFunction", "Pdo\\Sqlite::createFunction"),
+];
+
 /// The legacy driver methods callable on any `PDO` connected to `SQLite`
-/// (`dbh_method_get` + `ZEND_ACC_DEPRECATED`).
-fn legacy(vm: &mut Vm, a: &Args, name: &str, replacement: &str) -> VmResult<PdoSqliteDbh> {
+/// (`dbh_method_get`); the engine has already reported their deprecation.
+fn legacy(vm: &mut Vm, a: &Args, name: &str) -> VmResult<PdoSqliteDbh> {
     let (o, p) = this_pdo(a);
     let Some(h) = p.sqlite() else {
         return Err(vm.throw(
@@ -301,10 +313,6 @@ fn legacy(vm: &mut Vm, a: &Args, name: &str, replacement: &str) -> VmResult<PdoS
             ),
         ));
     };
-    vm.raise(
-        php_runtime::ErrorLevel::Deprecated.bits(),
-        &format!("Method PDO::{name}() is deprecated since 8.5, use {replacement}() instead"),
-    )?;
     Ok(h)
 }
 
@@ -332,7 +340,7 @@ fn legacy_callable(vm: &mut Vm, a: &Args, n: usize, method: &str) -> VmResult<Va
 
 fn sqlite_create_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let m = "sqliteCreateFunction";
-    let h = legacy(vm, a, m, "Pdo\\Sqlite::createFunction")?;
+    let h = legacy(vm, a, m)?;
     let cb = legacy_callable(vm, a, 1, m)?;
     let name = a.str(0);
     let argc = if a.has(2) { a.int(2) } else { -1 };
@@ -346,7 +354,7 @@ fn sqlite_create_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn sqlite_create_aggregate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let m = "sqliteCreateAggregate";
-    let h = legacy(vm, a, m, "Pdo\\Sqlite::createAggregate")?;
+    let h = legacy(vm, a, m)?;
     let step = legacy_callable(vm, a, 1, m)?;
     let fini = legacy_callable(vm, a, 2, m)?;
     let name = a.str(0);
@@ -361,7 +369,7 @@ fn sqlite_create_aggregate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn sqlite_create_collation(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let m = "sqliteCreateCollation";
-    let h = legacy(vm, a, m, "Pdo\\Sqlite::createCollation")?;
+    let h = legacy(vm, a, m)?;
     let cb = legacy_callable(vm, a, 1, m)?;
     let name = a.str(0);
     Ok(Value::Bool(h.create_collation(name.as_bytes(), cb)))
@@ -455,20 +463,26 @@ pub fn register(vm: &mut Vm) {
     )
     .method(
         "sqliteCreateFunction(string $name, mixed $callback, int $numArgs = -1, int $flags = 0): bool",
-        pub_,
+        pub_ | acc::DEPRECATED,
         sqlite_create_function,
     )
     .method(
         "sqliteCreateAggregate(string $name, mixed $step, mixed $finalize, int $numArgs = -1): bool",
-        pub_,
+        pub_ | acc::DEPRECATED,
         sqlite_create_aggregate,
     )
     .method(
         "sqliteCreateCollation(string $name, mixed $callback): bool",
-        pub_,
+        pub_ | acc::DEPRECATED,
         sqlite_create_collation,
     )
     .register(vm);
+    for (name, replacement) in LEGACY_METHODS {
+        vm.builtin_deprecations.insert(
+            ZStr::from(name.to_ascii_lowercase()),
+            format!(" since 8.5, use {replacement}() instead").into_bytes(),
+        );
+    }
 
     let mut sq = ClassBuilder::new("Pdo\\Sqlite")
         .extends(vm, "PDO")
