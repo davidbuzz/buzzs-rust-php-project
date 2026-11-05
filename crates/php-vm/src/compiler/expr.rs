@@ -328,7 +328,12 @@ impl Compiler {
             | ExprKind::Dim { .. }
             | ExprKind::Prop { .. }
             | ExprKind::StaticProp { .. } => {
-                if let ExprKind::Dim { index: None, .. } = &e.kind {
+                if let ExprKind::Dim { base, index: None } = &e.kind {
+                    // zend_delayed_compile_dim checks `$GLOBALS[]` first.
+                    if matches!(&base.kind, ExprKind::Var(VarName::Name(id)) if id.name == b"GLOBALS")
+                    {
+                        return self.err("Cannot append to $GLOBALS", line);
+                    }
                     return self.err("Cannot use [] for reading", line);
                 }
                 let p = self.compile_place(e, false)?;
@@ -975,13 +980,16 @@ impl Compiler {
             ExprKind::Dim { base, index } => {
                 if let ExprKind::Var(VarName::Name(id)) = &base.kind {
                     if id.name == b"GLOBALS" {
-                        if let Some(idx) = index {
-                            let n = self.compile_expr(idx)?;
-                            return Ok(Place {
-                                base: PlaceBase::Global(n),
-                                segs: Vec::new(),
-                            });
-                        }
+                        // zend_delayed_compile_dim: `$GLOBALS[$name]` is a
+                        // global variable fetch; `$GLOBALS[]` never compiles.
+                        let Some(idx) = index else {
+                            return self.err("Cannot append to $GLOBALS", e.span.line);
+                        };
+                        let n = self.compile_expr(idx)?;
+                        return Ok(Place {
+                            base: PlaceBase::Global(n),
+                            segs: Vec::new(),
+                        });
                     }
                 }
                 let mut p = self.compile_place_base(base)?;
