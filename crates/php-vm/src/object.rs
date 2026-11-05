@@ -466,6 +466,7 @@ fn prune_prop_orders(m: &mut HashMap<u32, Rc<PropOrder>>) {
 
 /// Builds a property table in an object's property order: entries are
 /// pushed in default order (declared, then dynamic).
+#[derive(Debug)]
 pub struct PropTableBuilder {
     order: Option<Rc<PropOrder>>,
     table: HashTable,
