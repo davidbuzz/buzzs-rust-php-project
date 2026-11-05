@@ -749,7 +749,9 @@ impl OutputHost for Vm {
     }
 
     fn call_handler(&mut self, callback: &mut Value, buffer: &[u8], mode: i32) -> Option<Vec<u8>> {
-        self.output_handler_threw = false;
+        // Kept in a local and stored last: the user exception handler run
+        // below may start and flush buffers of its own, re-entering this.
+        let mut threw = false;
         // Named native handlers (`php_output_handler_alias`).
         let alias = match callback {
             Value::Str(n) => self.output_handler_aliases.get(n).copied(),
@@ -784,14 +786,14 @@ impl OutputHost for Vm {
             Err(Throw::Exception(e))
                 if !self.is_executing() && !crate::fiber::is_graceful_exit(&e) =>
             {
-                self.output_handler_threw = true;
+                threw = true;
                 if let Err(t) = self.uncaught_exception(e) {
                     self.pending_throw = Some(t);
                 }
                 None
             }
             Err(t) => {
-                self.output_handler_threw = true;
+                threw = true;
                 if self.pending_throw.is_none() {
                     self.pending_throw = Some(t);
                 }
@@ -804,6 +806,7 @@ impl OutputHost for Vm {
         if let Err(t) = self.raise_pending_oom() {
             self.pending_throw = Some(t);
         }
+        self.output_handler_threw = threw;
         output
     }
 
