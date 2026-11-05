@@ -5,7 +5,7 @@
 
 use php_runtime::{CastTarget, Obj, PhpRef, PropertyPurpose, RtResult, Value, ZArray, ZStr};
 use php_simplexml::{CheckKind, FetchMode, PropertyPtr, Sxe, SxeRef};
-use php_vm::ext::{ClassHooks, DimensionCtx, NativeIterator, PropCtx, VmResult};
+use php_vm::ext::{ClassHooks, DimensionCtx, NativeIterator, PropCtx, Throw, VmResult};
 use php_vm::func::Func;
 use php_vm::Vm;
 
@@ -161,10 +161,42 @@ fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, v: &Value) -> VmResult<bool
     let Some(st) = sxe_of(o) else {
         return Ok(false);
     };
-    direct(vm, |h| {
-        Sxe::write_property(&st, h, name.as_bytes(), &v.deref())
-    })?;
+    let v = v.deref();
+    if st.node().is_none() && !name.is_empty() && is_complex_write_value(&v) {
+        return Err(uninitialized_complex_write(vm, &v));
+    }
+    direct(vm, |h| Sxe::write_property(&st, h, name.as_bytes(), &v))?;
     Ok(true)
+}
+
+/// A value `sxe_prop_dim_write` refuses ("not possible to assign a complex
+/// type"): anything but a scalar, null or a `SimpleXMLElement` itself.
+fn is_complex_write_value(v: &Value) -> bool {
+    match v {
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_) => false,
+        Value::Object(o) => o.class_name().as_bytes() != b"SimpleXMLElement",
+        _ => true,
+    }
+}
+
+/// `sxe_prop_dim_write` on an object whose constructor never ran (a
+/// stream wrapper instance getting its `context`, GH-12929): `GET_NODE`
+/// throws "not properly initialized" and carries on, so the complex value
+/// also raises its `TypeError`, chained onto the first error.
+#[cold]
+fn uninitialized_complex_write(vm: &mut Vm, v: &Value) -> Throw {
+    let first = vm.throw("Error", "SimpleXMLElement is not properly initialized");
+    let second = vm.throw(
+        "TypeError",
+        &format!(
+            "It's not possible to assign a complex type to properties, {} given",
+            v.value_name()
+        ),
+    );
+    if let (Throw::Exception(prev), Throw::Exception(exc)) = (&first, &second) {
+        vm.chain_exception(exc, prev);
+    }
+    second
 }
 
 fn check_kind(check_empty: bool) -> CheckKind {

@@ -156,3 +156,14 @@ fn add_element_warning_uses_main_prefix() {
         run(code).contains("main(): Cannot add element i number 5 when only 1 such elements exist")
     );
 }
+
+#[test]
+fn uninitialized_complex_write_chains_both_errors() {
+    // GH-12929: `GET_NODE` throws and carries on to the value check.
+    assert_eq!(
+        run(r"$x = (new ReflectionClass('SimpleXMLElement'))->newInstanceWithoutConstructor();
+            try { $x->a = []; } catch (Throwable $e) { echo get_class($e), ': ', $e->getMessage(), ' / ', $e->getPrevious()?->getMessage(), '|'; }
+            try { $x->a = 1; } catch (Throwable $e) { echo get_class($e), ': ', $e->getMessage(), ' / ', var_export($e->getPrevious(), true); }"),
+        "TypeError: It's not possible to assign a complex type to properties, array given / SimpleXMLElement is not properly initialized|Error: SimpleXMLElement is not properly initialized / NULL"
+    );
+}
