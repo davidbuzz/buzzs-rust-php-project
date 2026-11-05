@@ -443,7 +443,13 @@ class C {
 $c = new C;
 "#);
     assert_eq!(status, 255, "{output}");
-    assert!(output.contains("Fatal error: Uncaught Exception in test.php:9"), "{output}");
-    assert!(output.contains("#0 [internal function]: C->__destruct()"), "{output}");
+    assert!(
+        output.contains("Fatal error: Uncaught Exception in test.php:9"),
+        "{output}"
+    );
+    assert!(
+        output.contains("#0 [internal function]: C->__destruct()"),
+        "{output}"
+    );
     assert!(!output.contains("Next Exception"), "{output}");
 }
