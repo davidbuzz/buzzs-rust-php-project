@@ -762,9 +762,14 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config) -> 
             run_snippet(cfg, code.as_bytes(), std::slice::from_ref(what), false)
         }
         Mode::ReflectionExtInfo => {
+            if req.reflection_what == b"main" {
+                let mut vm = new_vm(cfg);
+                request_startup(&mut vm);
+                out(&show_main_ini(&vm.ini));
+                return vm.shutdown(Ok(()));
+            }
             let code = b"<?php $n = $argv[1];
 if (extension_loaded($n)) { (new ReflectionExtension($n))->info(); }
-elseif ($n === 'main') { $all = ini_get_all(null, true); }
 else { echo \"Extension '$n' not present.\\n\"; exit(1); }";
             run_snippet(cfg, code, std::slice::from_ref(&req.reflection_what), false)
         }
@@ -772,7 +777,12 @@ else { echo \"Extension '$n' not present.\\n\"; exit(1); }";
             out(show_ini_config(cfg).as_bytes());
             0
         }
-        Mode::ShowIniDiff => run_snippet(cfg, INI_DIFF_SNIPPET, &[], false),
+        Mode::ShowIniDiff => {
+            let mut vm = new_vm(cfg);
+            request_startup(&mut vm);
+            out(&show_ini_diff(&vm.ini));
+            vm.shutdown(Ok(()))
+        }
     }
 }
 
@@ -803,17 +813,104 @@ fn show_ini_config(cfg: &Config) -> String {
     s
 }
 
-const INI_DIFF_SNIPPET: &[u8] = b"<?php
-echo \"Non-default INI settings:\\n\";
-$all = ini_get_all(null, true);
-uksort($all, 'strcasecmp');
-foreach ($all as $k => $v) {
-    $d = $v['global_value'];
-    $l = $v['local_value'];
-    if ($l === $d) continue;
-    printf(\"%s: %s -> %s\\n\", $k, $d === null ? '(none)' : \"\\\"$d\\\"\", $l === null ? '(none)' : \"\\\"$l\\\"\");
+/// `display_ini_entries(NULL)` in the CLI's text mode. Only the core
+/// definitions belong to module number zero, not extension entries
+/// registered under `Core` by the VM.
+fn show_main_ini(ini: &php_support::ini::IniRegistry) -> Vec<u8> {
+    use php_support::ini::{core_directives, ModifyHandler};
+    let definitions = core_directives();
+    let entries = ini.ini_entries_registered(Some("Core")).unwrap_or_default();
+    let mut s = Vec::new();
+    for e in entries {
+        let Some(def) = definitions
+            .iter()
+            .find(|d| d.module == "Core" && d.name == e.name)
+        else {
+            continue;
+        };
+        if s.is_empty() {
+            s.extend_from_slice(b"\nDirective => Local Value => Master Value\n");
+        }
+        s.extend_from_slice(e.name.as_bytes());
+        for value in [e.local_value.as_deref(), e.global_value.as_deref()] {
+            s.extend_from_slice(b" => ");
+            match def.handler {
+                ModifyHandler::Bool | ModifyHandler::GcEnabled => {
+                    s.extend_from_slice(if php_support::ini::parse_bool(value.unwrap_or_default()) {
+                        b"On"
+                    } else {
+                        b"Off"
+                    });
+                }
+                ModifyHandler::DisplayErrors => {
+                    s.extend_from_slice(match ini.get_long("display_errors") {
+                        1 => b"STDOUT",
+                        2 => b"STDERR",
+                        _ => b"Off",
+                    });
+                }
+                _ if e.name.starts_with("highlight.") => {
+                    if let Some(v) = value {
+                        let v = v.split(|&c| c == 0).next().unwrap_or_default();
+                        if ini.get_bool("html_errors") {
+                            s.extend_from_slice(b"<span style=\"color: ");
+                            s.extend_from_slice(v);
+                            s.extend_from_slice(b"\">");
+                            s.extend_from_slice(v);
+                            s.extend_from_slice(b"</span>");
+                        } else {
+                            s.extend_from_slice(v);
+                        }
+                    } else if ini.get_bool("html_errors") {
+                        s.extend_from_slice(b"<i>no value</i>");
+                    } else {
+                        s.extend_from_slice(b"no value");
+                    }
+                }
+                _ => s.extend_from_slice(
+                    value
+                        .filter(|v| v.first().is_some_and(|&c| c != 0))
+                        .unwrap_or(b"no value"),
+                ),
+            }
+        }
+        s.push(b'\n');
+    }
+    s
 }
-";
+
+/// `--ini=diff`: compare the effective registered value to the definition,
+/// not to the master value (which already includes `php.ini` and `-d`).
+fn show_ini_diff(ini: &php_support::ini::IniRegistry) -> Vec<u8> {
+    let mut s = b"Non-default INI settings:\n".to_vec();
+    for e in ini.ini_get_all(None).unwrap_or_default() {
+        if e.local_value == e.builtin_default_value {
+            continue;
+        }
+        s.extend_from_slice(e.name.as_bytes());
+        s.extend_from_slice(b": ");
+        for (i, value) in [
+            e.builtin_default_value.as_deref(),
+            e.local_value.as_deref(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if i != 0 {
+                s.extend_from_slice(b" -> ");
+            }
+            if let Some(v) = value {
+                s.push(b'"');
+                s.extend_from_slice(v.split(|&c| c == 0).next().unwrap_or_default());
+                s.push(b'"');
+            } else {
+                s.extend_from_slice(b"(none)");
+            }
+        }
+        s.push(b'\n');
+    }
+    s
+}
 
 /// `php_resolve_path()` for `auto_prepend_file`/`auto_append_file`:
 /// relative names are looked up in `include_path`, then the working
@@ -1002,5 +1099,124 @@ mod tests {
     #[test]
     fn builtin_date_shape() {
         assert_eq!(BUILD_DATE.len(), 20);
+    }
+
+    fn ini_registry(entries: &[(&str, &str)]) -> php_support::ini::IniRegistry {
+        let mut config = php_support::ini::CLI_OVERRIDES.to_vec();
+        config.extend_from_slice(entries);
+        let mut diagnostics = Vec::new();
+        php_support::ini::IniRegistry::with_core(config, &mut diagnostics)
+    }
+
+    #[test]
+    fn main_ini_core_entries_and_displayers() {
+        use php_support::ini::{Access, IniDirective, ModifyHandler};
+        let mut ini = ini_registry(&[
+            ("display_errors", "stderr"),
+            ("precision", "17"),
+            ("docref_root", ""),
+        ]);
+        let mut diagnostics = Vec::new();
+        ini.register(
+            IniDirective::new(
+                "date.timezone",
+                Some("UTC"),
+                Access::ALL,
+                ModifyHandler::None,
+                "Core",
+            ),
+            &mut diagnostics,
+        );
+        let s = String::from_utf8(show_main_ini(&ini)).unwrap();
+        assert!(s.starts_with(
+            "\nDirective => Local Value => Master Value\nhighlight.comment => #FF8000 => #FF8000\n"
+        ));
+        assert!(s.contains("display_errors => STDERR => STDERR\n"));
+        assert!(s.contains("html_errors => Off => Off\n"));
+        assert!(s.contains("implicit_flush => On => On\n"));
+        assert!(s.contains("docref_root => no value => no value\n"));
+        assert!(s.contains("output_handler => no value => no value\n"));
+        assert!(s.contains("precision => 17 => 17\n"));
+        assert!(!s.contains("date.timezone"));
+        assert!(!s.contains("default_socket_timeout"));
+    }
+
+    #[test]
+    fn main_ini_color_displayer_uses_html_errors() {
+        let ini = ini_registry(&[("html_errors", "1"), ("highlight.comment", "")]);
+        let s = String::from_utf8(show_main_ini(&ini)).unwrap();
+        assert!(s.contains(
+            "highlight.comment => <span style=\"color: \"></span> => <span style=\"color: \"></span>\n"
+        ));
+        assert!(s.contains(
+            "highlight.default => <span style=\"color: #0000BB\">#0000BB</span> => <span style=\"color: #0000BB\">#0000BB</span>\n"
+        ));
+        assert!(s.contains("html_errors => On => On\n"));
+    }
+
+    #[test]
+    fn main_ini_display_errors_modes() {
+        for (value, shown) in [
+            ("0", "Off"),
+            ("off", "Off"),
+            ("yes", "STDOUT"),
+            ("stdout", "STDOUT"),
+            ("STDERR", "STDERR"),
+            ("2suffix", "STDERR"),
+            ("256", "Off"),
+            ("3", "STDOUT"),
+        ] {
+            let ini = ini_registry(&[("display_errors", value)]);
+            let s = String::from_utf8(show_main_ini(&ini)).unwrap();
+            assert!(s.contains(&format!("display_errors => {shown} => {shown}\n")));
+        }
+    }
+
+    #[test]
+    fn ini_diff_uses_builtin_defaults_and_effective_values() {
+        let mut ini = ini_registry(&[
+            ("precision", "17"),
+            ("docref_root", ""),
+            ("auto_prepend_file", ""),
+        ]);
+        let mut diagnostics = Vec::new();
+        ini.ini_set("precision", b"18", &mut diagnostics);
+        let s = String::from_utf8(show_ini_diff(&ini)).unwrap();
+        assert!(s.starts_with("Non-default INI settings:\n"));
+        assert!(s.contains("html_errors: \"1\" -> \"0\"\n"));
+        assert!(s.contains("implicit_flush: \"0\" -> \"1\"\n"));
+        assert!(s.contains("max_execution_time: \"30\" -> \"0\"\n"));
+        assert!(s.contains("precision: \"14\" -> \"18\"\n"));
+        assert!(s.contains("auto_prepend_file: (none) -> \"\"\n"));
+        assert!(!s.contains("docref_root:"));
+        assert!(!s.contains("error_reporting:"));
+        assert!(!s.contains("serialize_precision:"));
+    }
+
+    #[test]
+    fn ini_diff_preserves_null_empty_and_case_insensitive_order() {
+        use php_support::ini::{Access, IniDirective, IniRegistry, ModifyHandler};
+        let mut ini = IniRegistry::new();
+        let mut diagnostics = Vec::new();
+        for (name, default) in [("z.test", Some("")), ("A.test", None), ("b.test", Some("old"))] {
+            ini.register(
+                IniDirective::new(name, default, Access::ALL, ModifyHandler::None, "test"),
+                &mut diagnostics,
+            );
+        }
+        ini.ini_set("z.test", b"", &mut diagnostics);
+        ini.ini_set("A.test", b"", &mut diagnostics);
+        ini.ini_set("b.test", b"\xff\"\n\0hidden", &mut diagnostics);
+        assert_eq!(
+            show_ini_diff(&ini),
+            b"Non-default INI settings:\nA.test: (none) -> \"\"\nb.test: \"old\" -> \"\xff\"\n\"\n"
+        );
+    }
+
+    #[test]
+    fn ini_diff_omits_rejected_startup_value() {
+        let ini = ini_registry(&[("precision", "-2")]);
+        let s = String::from_utf8(show_ini_diff(&ini)).unwrap();
+        assert!(!s.contains("precision:"));
     }
 }
