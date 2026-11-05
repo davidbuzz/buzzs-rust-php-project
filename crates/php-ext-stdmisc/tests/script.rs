@@ -51,6 +51,24 @@ fn crypt_and_password() {
     );
 }
 
+/// `crypt()`, `password_hash()` and `password_verify()` mark their password
+/// parameter `#[\SensitiveParameter]` (ext/standard/basic_functions.stub.php),
+/// so backtraces show `Object(SensitiveParameterValue)` instead of it.
+#[test]
+fn password_parameters_are_sensitive() {
+    let out = run(
+        r#"try { password_hash("foo", "Invalid"); } catch (ValueError $e) { echo $e->getTraceAsString(), "|"; }
+try { password_verify("foo"); } catch (ArgumentCountError $e) { echo $e->getTraceAsString(), "|"; }
+try { crypt("foo"); } catch (ArgumentCountError $e) { echo $e->getTraceAsString(); }"#,
+    );
+    assert_eq!(
+        out,
+        "#0 test.php(1): password_hash(Object(SensitiveParameterValue), 'Invalid')\n#1 {main}|\
+         #0 test.php(2): password_verify(Object(SensitiveParameterValue))\n#1 {main}|\
+         #0 test.php(3): crypt(Object(SensitiveParameterValue))\n#1 {main}"
+    );
+}
+
 #[test]
 fn shell_escaping_and_exec() {
     let out = run(

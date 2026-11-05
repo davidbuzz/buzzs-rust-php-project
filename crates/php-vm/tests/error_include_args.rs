@@ -242,3 +242,36 @@ echo "$n\n";
 "#;
     assert_eq!(run(src, &[]), "1\n1 1 1\n");
 }
+
+#[test]
+fn html_errors_link_include_warnings_to_the_manual() {
+    let out = run(
+        "<?php include_once 'nonexistent.php';",
+        &[
+            ("html_errors", "1"),
+            ("docref_root", "/"),
+            ("docref_ext", ".html"),
+        ],
+    );
+    assert!(
+        out.contains(
+            "<b>Warning</b>:  include_once() [<a href='/function.include-once.html'>\
+             function.include-once.html</a>]: Failed to open stream: No such file or directory \
+             in <b>t.php</b>"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn html_errors_escape_docref_messages_once() {
+    let out = run(
+        "<?php include '<x&y>';",
+        &[("html_errors", "1"), ("docref_ext", ".html")],
+    );
+    // No docref_root: no link, and the message is escaped exactly once.
+    assert!(
+        out.contains("<b>Warning</b>:  include(): Failed opening '&lt;x&amp;y&gt;' for inclusion"),
+        "{out}"
+    );
+}

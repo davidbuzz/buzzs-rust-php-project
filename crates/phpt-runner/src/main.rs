@@ -13,6 +13,7 @@ use phpt_runner::discover::{collect, find_srcdir, ConflictResolver};
 use phpt_runner::ini::{
     default_ini_overwrites, escapeshellarg, IniSettings, E_ALL, NO_EXTENSION_DIR,
 };
+use phpt_runner::junit::junit_xml;
 use phpt_runner::phpt::TestFile;
 use phpt_runner::process::Env;
 use phpt_runner::report::{by_dir, dir_table, summary, totals, JsonReport};
@@ -99,6 +100,15 @@ struct Cli {
     /// (repeatable).
     #[arg(long, value_name = "KEY=VALUE")]
     env: Vec<String>,
+    /// Run each test script N times in the same process (`php --repeat N`) and check the
+    /// output of the last execution, like run-tests.php --repeat. Exports `SKIP_REPEAT=1`;
+    /// tests with FILE_EXTERNAL, CLEAN, STDIN or CAPTURE_STDIO sections are skipped.
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    repeat: u32,
+    /// Write a `JUnit` XML report in run-tests.php's format to this file [default:
+    /// `$TEST_PHP_JUNIT` if set].
+    #[arg(long, value_name = "FILE")]
+    junit: Option<PathBuf>,
     /// Test files or directories.
     #[arg(required = true)]
     paths: Vec<PathBuf>,
@@ -351,6 +361,8 @@ fn apply_scope(
             info: format!("reason: out of scope ({file_name})"),
             duration_ms: 0,
             diff: None,
+            title: None,
+            junit_message: None,
         })
         .collect()
 }
@@ -374,6 +386,9 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, RunGuards), String> 
     let php = snapshot.as_ref().map_or(php, |s| s.path.clone());
 
     let mut env = base_env(&php, cli.skip_slow);
+    if cli.repeat > 1 {
+        env.insert("SKIP_REPEAT".into(), "1".into());
+    }
     for kv in &cli.env {
         let (k, v) = kv
             .split_once('=')
@@ -413,6 +428,7 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, RunGuards), String> 
         ini_overwrites,
         write_artifacts: !cli.no_artifacts,
         extensions,
+        repeat: cli.repeat,
     });
     Ok((
         runner,
@@ -441,6 +457,7 @@ fn execute(
     runner: &Runner,
     tests: &[PathBuf],
     mut log: Option<&mut std::fs::File>,
+    keep_diffs: bool,
 ) -> Vec<TestResult> {
     let mut resolver = ConflictResolver::default();
     let jobs: Vec<Job> = tests
@@ -473,9 +490,12 @@ fn execute(
         |batch| {
             for r in batch {
                 print_result(&r, cli, color, show_diff);
-                // Diffs can be large; they were printed (and written to .diff) already.
+                // Diffs can be large; they were printed (and written to .diff) already. A `JUnit`
+                // report embeds them, so they are kept for it.
                 let mut r = r;
-                r.diff = None;
+                if !keep_diffs {
+                    r.diff = None;
+                }
                 if let Some(log) = log.as_deref_mut() {
                     if let Ok(line) = serde_json::to_string(&r) {
                         let _ = writeln!(log, "{line}");
@@ -584,8 +604,18 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         );
     }
 
+    let junit_path = cli.junit.clone().or_else(|| {
+        std::env::var_os("TEST_PHP_JUNIT")
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+    });
+    if let Some(path) = &junit_path {
+        // Like run-tests.php, fail before running anything if the report cannot be written.
+        std::fs::File::create(path)
+            .map_err(|e| format!("Failed to open {} for writing: {e}", path.display()))?;
+    }
     let start = Instant::now();
-    let mut results = execute(cli, &runner, &tests, log.as_mut());
+    let mut results = execute(cli, &runner, &tests, log.as_mut(), junit_path.is_some());
     results.append(&mut previous);
     results.extend(out_of_scope);
     let elapsed = start.elapsed().as_secs_f64();
@@ -606,6 +636,10 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         );
         let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
         std::fs::write(path, json).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    }
+    if let Some(path) = &junit_path {
+        std::fs::write(path, junit_xml(&results, &srcdir))
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     }
     check_baseline(cli, &results)
 }

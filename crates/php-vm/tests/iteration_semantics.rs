@@ -157,3 +157,45 @@ var_dump(byRef($c['obj']) === $c->o);
         "get NULL\nset NULL\nint(105)\nint(105)\nget string(3) \"obj\"\nbool(true)\n"
     );
 }
+
+/// `ZEND_YIELD` in a by-reference generator: constants, temporaries and
+/// non-reference call results notice; variables and by-ref call results
+/// do not (`yield_const_by_ref_error`, `yield_by_reference_optimization`,
+/// `yield_non_ref_function_call_by_ref_error`).
+#[test]
+fn by_ref_yield_of_non_variable_notices() {
+    let notice = |line: u32| {
+        format!(
+            "\nNotice: Only variable references should be yielded by reference in t.php on line {line}\n"
+        )
+    };
+    let out = run("<?php\nfunction &gen() {\n    yield \"foo\";\n}\n$gen = gen();\nvar_dump($gen->current());\n");
+    assert_eq!(out, format!("{}string(3) \"foo\"\n", notice(3)));
+    let out = run(
+        "<?php\nfunction &gen() {\n    yield $v = 0;\n    yield $v = 1;\n}\nforeach (gen() as $v) {\n    var_dump($v);\n}\n",
+    );
+    assert_eq!(out, format!("{}int(0)\n{}int(1)\n", notice(3), notice(4)));
+    let out = run(
+        "<?php\nfunction foo() { return \"bar\"; }\nfunction &gen() {\n    yield foo();\n}\n$gen = gen();\nvar_dump($gen->current());\n",
+    );
+    assert_eq!(out, format!("{}string(3) \"bar\"\n", notice(4)));
+    // A by-reference call result, a variable and a bare `yield` are silent.
+    let out = run(
+        "<?php\nfunction &r() { static $a = 1; return $a; }\nfunction &gen() {\n    $x = 2;\n    yield r();\n    yield $x;\n    yield;\n}\nforeach (gen() as $v) { var_dump($v); }\n",
+    );
+    assert_eq!(out, "int(1)\nint(2)\nNULL\n");
+}
+
+/// `zend_compile_yield_from`: `yield from` is a compile error inside a
+/// by-reference generator (`yield_from_by_reference`).
+#[test]
+fn yield_from_in_by_ref_generator_is_fatal() {
+    let (status, out) = run_status("<?php\n\nfunction &gen() {\n    yield from [];\n}\n");
+    assert_ne!(status, 0, "{out}");
+    assert!(
+        out.contains(
+            "Fatal error: Cannot use \"yield from\" inside a by-reference generator in t.php on line 4"
+        ),
+        "{out}"
+    );
+}

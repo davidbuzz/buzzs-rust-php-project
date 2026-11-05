@@ -40,7 +40,7 @@ fn zend_opcode_name(op: &Op) -> Option<&'static str> {
         Op::Return { .. } => "ZEND_RETURN",
         Op::ReturnRef { .. } | Op::ReturnByRefValue { .. } => "ZEND_RETURN_BY_REF",
         Op::GeneratorCreate => "ZEND_GENERATOR_CREATE",
-        Op::Yield { .. } => "ZEND_YIELD",
+        Op::Yield { .. } | Op::YieldRef { .. } | Op::YieldByRefValue { .. } => "ZEND_YIELD",
         Op::YieldFrom { .. } => "ZEND_YIELD_FROM",
         Op::Include { .. } => "ZEND_INCLUDE_OR_EVAL",
         Op::Echo(_) => "ZEND_ECHO",

@@ -358,6 +358,36 @@ impl Vm {
         }))
     }
 
+    /// `ZEND_YIELD` of a non-variable operand in a by-reference generator:
+    /// constants and temporaries, and call results that are not references
+    /// (`ZEND_RETURNS_FUNCTION`), are yielded by value after the
+    /// "Only variable references should be yielded by reference" notice,
+    /// which follows the force-closed check as in php-src.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn op_yield_by_ref_value(
+        &mut self,
+        key: Option<Value>,
+        val: Value,
+        call: bool,
+        dst: Option<u32>,
+        base: usize,
+    ) -> VmResult<Flow> {
+        let val = match val {
+            Value::Reference(r) if call => Value::Reference(r),
+            other => {
+                let live = self
+                    .running_generator()
+                    .is_some_and(|g| !with(&g, |d| d.forced_close).unwrap_or(false));
+                if live {
+                    self.notice("Only variable references should be yielded by reference")?;
+                }
+                other.deref()
+            }
+        };
+        self.op_yield(key, Some(val), dst, base)
+    }
+
     /// `ZEND_YIELD_FROM`.
     #[allow(clippy::needless_pass_by_value)] // called with an owned operand
     pub(crate) fn op_yield_from(

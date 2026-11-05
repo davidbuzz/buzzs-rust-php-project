@@ -406,14 +406,21 @@ fn setlocale(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             args.push(locale_arg(vm, i + 2, v, strict)?);
         }
     }
-    LOCALE
-        .with(|l| {
-            let mut st = l.borrow().clone();
-            let r = st.setlocale(cat, &args, vm);
-            *l.borrow_mut() = st;
-            r
-        })
-        .vm(vm)
+    let r = LOCALE.with(|l| {
+        let mut st = l.borrow().clone();
+        let r = st.setlocale(cat, &args, vm);
+        *l.borrow_mut() = st;
+        r
+    });
+    sync_decimal_point();
+    r.vm(vm)
+}
+
+/// Publishes the C library's current `LC_NUMERIC` decimal point to the
+/// printf engine (`LCONV_DECIMAL_POINT` in `ext/standard/formatted_print.c`
+/// and `main/snprintf.c`) after the process locale may have changed.
+fn sync_decimal_point() {
+    php_support::fmt::locale::set_decimal_point(locale::decimal_point());
 }
 
 #[allow(clippy::unnecessary_wraps)] // native handler signature
@@ -454,6 +461,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     .function("setlocale(int $category, $locales, ...$rest): string|false", setlocale)
     .function("localeconv(): array", localeconv)
     .function("nl_langinfo(int $item): string|false", nl_langinfo)
-    .on_request_shutdown(|_| LOCALE.with(|l| l.borrow_mut().request_shutdown()));
+    .on_request_shutdown(|_| {
+        LOCALE.with(|l| l.borrow_mut().request_shutdown());
+        sync_decimal_point();
+    });
     locale::reset_lc_ctype();
+    sync_decimal_point();
 }

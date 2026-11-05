@@ -295,9 +295,10 @@ pub fn format_log_date_utc(ts: i64) -> String {
 }
 
 /// `mail($to, $subject, $message, $additional_headers, $additional_params)`.
-/// `log_date` formats the current time for `mail.log` files.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub fn mail(
+/// `log_date` formats the current time for `mail.log` files, which are
+/// appended to with [`append_log_file`].
+#[allow(clippy::too_many_arguments)]
+pub fn mail<C: RuntimeContext + ?Sized>(
     to: &[u8],
     subject: &[u8],
     message: &[u8],
@@ -306,7 +307,38 @@ pub fn mail(
     settings: &MailSettings,
     script: &ScriptInfo,
     log_date: &dyn Fn(i64) -> String,
-    ctx: &mut (impl RuntimeContext + ?Sized),
+    ctx: &mut C,
+) -> RtResult<bool> {
+    mail_ex(
+        to,
+        subject,
+        message,
+        headers,
+        extra_params,
+        settings,
+        script,
+        log_date,
+        ctx,
+        &mut append_log_file::<C>,
+    )
+}
+
+/// [`mail`] with the `mail.log` file writer supplied by the caller:
+/// `log_file(ctx, filename, line)` is `php_mail_log_to_file()`. An error
+/// it returns (an exception thrown by an error handler for the open
+/// warning) aborts the mail before the delivery program runs (GH-7875).
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn mail_ex<C: RuntimeContext + ?Sized>(
+    to: &[u8],
+    subject: &[u8],
+    message: &[u8],
+    headers: HeadersArg<'_>,
+    extra_params: Option<&[u8]>,
+    settings: &MailSettings,
+    script: &ScriptInfo,
+    log_date: &dyn Fn(i64) -> String,
+    ctx: &mut C,
+    log_file: &mut dyn FnMut(&mut C, &[u8], &[u8]) -> RtResult<()>,
 ) -> RtResult<bool> {
     for (n, name, v) in [
         (1, "to", to),
@@ -355,7 +387,7 @@ pub fn mail(
     };
 
     let headers_opt = headers_str.filter(|h| !h.is_empty());
-    php_mail(
+    php_mail_ex(
         &to_r,
         &subject_r,
         message,
@@ -365,12 +397,32 @@ pub fn mail(
         script,
         log_date,
         ctx,
+        log_file,
     )
 }
 
-/// `php_mail()`: logging, header checks and the sendmail pipe.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub fn php_mail(
+/// The default `mail.log` writer: appends `line` to the file `filename`
+/// (created if missing); a file that cannot be opened is skipped silently.
+///
+/// # Errors
+///
+/// Never fails; the `RtResult` matches the `log_file` callback of
+/// [`mail_ex`] and [`php_mail_ex`].
+pub fn append_log_file<C: ?Sized>(_ctx: &mut C, filename: &[u8], line: &[u8]) -> RtResult<()> {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(std::ffi::OsStr::from_bytes(filename))
+    {
+        let _ = f.write_all(line);
+    }
+    Ok(())
+}
+
+/// `php_mail()`: logging, header checks and the sendmail pipe. `mail.log`
+/// files are appended to with [`append_log_file`].
+#[allow(clippy::too_many_arguments)]
+pub fn php_mail<C: RuntimeContext + ?Sized>(
     to: &[u8],
     subject: &[u8],
     message: &[u8],
@@ -379,7 +431,37 @@ pub fn php_mail(
     settings: &MailSettings,
     script: &ScriptInfo,
     log_date: &dyn Fn(i64) -> String,
-    ctx: &mut (impl RuntimeContext + ?Sized),
+    ctx: &mut C,
+) -> RtResult<bool> {
+    php_mail_ex(
+        to,
+        subject,
+        message,
+        headers,
+        extra_cmd,
+        settings,
+        script,
+        log_date,
+        ctx,
+        &mut append_log_file::<C>,
+    )
+}
+
+/// [`php_mail`] with the `mail.log` file writer supplied by the caller
+/// (see [`mail_ex`]). ref: ext/standard/mail.c `php_mail()`: when writing
+/// the log leaves an exception (`EG(exception)`), no mail is sent.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn php_mail_ex<C: RuntimeContext + ?Sized>(
+    to: &[u8],
+    subject: &[u8],
+    message: &[u8],
+    headers: Option<&[u8]>,
+    extra_cmd: Option<&[u8]>,
+    settings: &MailSettings,
+    script: &ScriptInfo,
+    log_date: &dyn Fn(i64) -> String,
+    ctx: &mut C,
+    log_file: &mut dyn FnMut(&mut C, &[u8], &[u8]) -> RtResult<()>,
 ) -> RtResult<bool> {
     let lossy = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
     if !settings.log.is_empty() {
@@ -398,13 +480,7 @@ pub fn php_mail(
             sys::syslog(libc::LOG_NOTICE, logline.as_bytes());
         } else {
             let line = format!("[{}] {logline}\n", log_date(sys::now()));
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(std::ffi::OsStr::new(&lossy(&settings.log)))
-            {
-                let _ = f.write_all(line.as_bytes());
-            }
+            log_file(ctx, &settings.log, line.as_bytes())?;
         }
     }
     let line_sep: &[u8] = match settings.cr_lf_mode.as_slice() {

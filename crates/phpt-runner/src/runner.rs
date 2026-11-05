@@ -23,6 +23,11 @@ use crate::result::{Status, TestResult};
 /// Marker appended to the output of a test that hit the timeout.
 const TIMEOUT_MARKER: &[u8] = b"** ERROR: process timed out **";
 
+/// Printed by the CLI SAPI before the first run of a `--repeat` script (`sapi/cli/php_cli.c`).
+const REPEAT_FIRST: &[u8] = b"Executing for the first time...\n";
+/// Printed by the CLI SAPI between runs of a `--repeat` script.
+const REPEAT_AGAIN: &[u8] = b"Finished execution, repeating...\n";
+
 /// Extensions the target binary has loaded, from a probe run at start-up.
 #[derive(Debug, Clone, Default)]
 pub struct Extensions {
@@ -142,6 +147,16 @@ pub struct Config {
     pub write_artifacts: bool,
     /// Extensions available in the binary.
     pub extensions: Extensions,
+    /// `--repeat N`: run each test script N times in one process and check the output of the
+    /// last run (run-tests.php `$num_repeats`; values below 2 mean a single run).
+    pub repeat: u32,
+}
+
+impl Config {
+    /// Whether tests run in `--repeat` mode.
+    pub fn repeating(&self) -> bool {
+        self.repeat > 1
+    }
 }
 
 /// Context for tests run through a `--REDIRECTTEST--`.
@@ -209,6 +224,8 @@ impl Attempt<'_> {
             info,
             duration_ms: 0,
             diff: None,
+            title: None,
+            junit_message: None,
         }
     }
 
@@ -221,7 +238,9 @@ impl Attempt<'_> {
     }
 
     fn bork(&self, message: String, info: &str) -> Once {
-        Once::Done(self.result(Status::Bork, message, info.to_string()))
+        let mut result = self.result(Status::Bork, message, info.to_string());
+        result.title = Some(self.tested.clone());
+        Once::Done(result)
     }
 
     /// Directory of the original test file (`{PWD}`).
@@ -354,6 +373,29 @@ fn prefix_reason(rest: &[u8], require_space: bool) -> Option<String> {
     (!line.is_empty()).then(|| lossy(line))
 }
 
+/// `--repeat` output: keep what was printed before the first execution and the output of the
+/// last one, dropping the earlier runs and the SAPI's separators (run-tests.php `run_test()`).
+fn strip_repeat_output(out: &[u8]) -> Vec<u8> {
+    let Some(first) = find(out, REPEAT_FIRST) else {
+        return out.to_vec();
+    };
+    let rest =
+        rfind(out, REPEAT_AGAIN).map_or(first + REPEAT_FIRST.len(), |p| p + REPEAT_AGAIN.len());
+    let mut kept = out[..first].to_vec();
+    kept.extend_from_slice(&out[rest..]);
+    kept
+}
+
+/// `strpos()`: offset of the first occurrence of a non-empty `needle`.
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// `strrpos()`: offset of the last occurrence of a non-empty `needle`.
+fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).rposition(|w| w == needle)
+}
+
 /// Spawn errors worth retrying.
 fn is_transient_spawn_error(e: &std::io::Error) -> bool {
     use nix::errno::Errno;
@@ -421,8 +463,14 @@ impl Runner {
         }
     }
 
+    /// `create_test_command()`: `[php, (--repeat N), <ini args>]`; the caller appends
+    /// `-f <file>`.
     fn php_argv(&self, extra: &[String]) -> Vec<OsString> {
         let mut argv = vec![self.config.php.clone().into_os_string()];
+        if self.config.repeating() {
+            argv.push(os("--repeat"));
+            argv.push(os(&self.config.repeat.to_string()));
+        }
         argv.extend(extra.iter().map(OsString::from));
         argv
     }
@@ -479,11 +527,25 @@ impl Runner {
             Ok(a) => a,
             Err(once) => return once,
         };
+        let repeating = self.config.repeating();
+        if repeating && attempt.test.has_section("FILE_EXTERNAL") {
+            return attempt.skip("Test with FILE_EXTERNAL might not be repeatable");
+        }
+        // Without CGI and phpdbg binaries, their "does not support --repeat" skips are
+        // unreachable: the "not available" skips come first in run-tests.php too.
         if attempt.test.is_cgi() {
             return attempt.skip("CGI not available");
         }
         if attempt.test.has_section("PHPDBG") {
             return attempt.skip("phpdbg not available");
+        }
+        if repeating {
+            if let Some(section) = ["CLEAN", "STDIN", "CAPTURE_STDIO"]
+                .into_iter()
+                .find(|s| attempt.test.has_section(s))
+            {
+                return attempt.skip(&format!("Test with {section} might not be repeatable"));
+            }
         }
         for ext in [
             "diff",
@@ -574,12 +636,15 @@ impl Runner {
                 })
             }
             Err(e) => Err(Once::Done(TestResult {
+                // run-tests.php names the `JUnit` test case after the unparsable file.
+                title: Some(shortname.clone()),
                 path: shortname,
                 name: e.0,
                 result: Status::Bork,
                 info: String::new(),
                 duration_ms: 0,
                 diff: None,
+                junit_message: None,
             })),
         }
     }
@@ -634,6 +699,10 @@ impl Runner {
             .map_err(|reason| a.skip(&reason))?;
         ini.apply_lines(cfg.ini_overwrites.iter().map(String::as_str));
         let orig_ini_args = ini.to_arguments();
+        if cfg.repeating() {
+            // Make sure warnings still show up on the second run.
+            ini.set("opcache.record_warnings", "1");
+        }
 
         if let Some(section) = a.test.section("INI") {
             let text = lossy(section)
@@ -651,6 +720,9 @@ impl Runner {
                 return Err(a.skip(&format!("Environment variable {name} is not set")));
             }
             ini.apply_lines(text.split(['\n', '\r']));
+            if cfg.repeating() && ini.get("opcache.opt_debug_level").is_some() {
+                return Err(a.skip("opt_debug_level tests are not repeatable"));
+            }
         }
         set_env(
             &mut env,
@@ -796,7 +868,10 @@ impl Runner {
             shell.push_str(&lossy(args));
             argv = vec![os("/bin/sh"), os("-c"), os(&format!("exec {shell}"))];
         }
-        let out = self.exec(&argv, env, a.test.section("STDIN"), a.capture());
+        let mut out = self.exec(&argv, env, a.test.section("STDIN"), a.capture());
+        if self.config.repeating() {
+            out = strip_repeat_output(&out);
+        }
 
         let mut clean_output = Vec::new();
         if a.test.section_not_empty("CLEAN") {
@@ -855,7 +930,11 @@ impl Runner {
         if passed {
             let _ = fs::remove_file(&test_file);
             if !php_empty(clean_output) {
-                return a.bork(lossy(&output), "reason: invalid output from CLEAN");
+                let mut once = a.bork(lossy(&output), "reason: invalid output from CLEAN");
+                if let Once::Done(result) = &mut once {
+                    result.junit_message = Some(lossy(clean_output));
+                }
+                return once;
             }
             let (status, info) = if a.test.has_section("XFAIL") {
                 (
@@ -1021,6 +1100,22 @@ mod tests {
             replace_placeholders("{ENV:}", "ENV", |_| "!".into()),
             "{ENV:}"
         );
+    }
+
+    #[test]
+    fn repeat_output_keeps_prologue_and_last_run() {
+        let out = b"pre\nExecuting for the first time...\nrun1\n\
+                    Finished execution, repeating...\nrun2\n\
+                    Finished execution, repeating...\nrun3\n";
+        assert_eq!(strip_repeat_output(out), b"pre\nrun3\n");
+        // A single separator-free run (e.g. a fatal error before the first repeat).
+        let out = b"Executing for the first time...\nonly\n";
+        assert_eq!(strip_repeat_output(out), b"only\n");
+        // Output of a binary without --repeat support is left alone.
+        assert_eq!(strip_repeat_output(b"plain\n"), b"plain\n");
+        assert_eq!(find(b"abcabc", b"bc"), Some(1));
+        assert_eq!(rfind(b"abcabc", b"bc"), Some(4));
+        assert_eq!(rfind(b"ab", b"abc"), None);
     }
 
     #[test]

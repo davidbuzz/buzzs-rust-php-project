@@ -291,9 +291,11 @@ impl Compiler {
                 }
                 let spec = self.class_spec(class)?;
                 let t = self.tmp();
+                let const_expr = self.in_evaluated_const_expr();
                 self.emit(Op::FetchClassName {
                     class: spec,
                     dst: t,
+                    const_expr,
                 });
                 Operand::Tmp(t)
             }
@@ -328,7 +330,12 @@ impl Compiler {
             | ExprKind::Dim { .. }
             | ExprKind::Prop { .. }
             | ExprKind::StaticProp { .. } => {
-                if let ExprKind::Dim { index: None, .. } = &e.kind {
+                if let ExprKind::Dim { base, index: None } = &e.kind {
+                    // zend_delayed_compile_dim checks `$GLOBALS[]` first.
+                    if matches!(&base.kind, ExprKind::Var(VarName::Name(id)) if id.name == b"GLOBALS")
+                    {
+                        return self.err("Cannot append to $GLOBALS", line);
+                    }
                     return self.err("Cannot use [] for reading", line);
                 }
                 let p = self.compile_place(e, false)?;
@@ -577,6 +584,19 @@ impl Compiler {
                             });
                             return Ok(Operand::Tmp(t));
                         }
+                        // A constant, a temporary or a call result: ZEND_YIELD
+                        // notices unless a call (ZEND_RETURNS_FUNCTION)
+                        // returned a reference.
+                        let call = is_call_expr(v);
+                        let val = self.compile_expr(v)?;
+                        self.f().line = line;
+                        self.emit(Op::YieldByRefValue {
+                            key: k,
+                            val,
+                            call,
+                            dst: Some(t),
+                        });
+                        return Ok(Operand::Tmp(t));
                     }
                 }
                 let v = match value {
@@ -593,6 +613,13 @@ impl Compiler {
             }
             ExprKind::YieldFrom(inner) => {
                 self.check_yield(line)?;
+                if self.fref().returns_ref {
+                    // zend_compile_yield_from.
+                    return self.err(
+                        "Cannot use \"yield from\" inside a by-reference generator",
+                        line,
+                    );
+                }
                 let v = self.compile_expr(inner)?;
                 self.f().line = line;
                 let t = self.tmp();
@@ -804,6 +831,7 @@ impl Compiler {
                         self.emit(Op::FetchClassName {
                             class: ClassSpec::SelfClass,
                             dst: t,
+                            const_expr: false,
                         });
                         return Ok(Operand::Tmp(t));
                     }
@@ -955,13 +983,16 @@ impl Compiler {
             ExprKind::Dim { base, index } => {
                 if let ExprKind::Var(VarName::Name(id)) = &base.kind {
                     if id.name == b"GLOBALS" {
-                        if let Some(idx) = index {
-                            let n = self.compile_expr(idx)?;
-                            return Ok(Place {
-                                base: PlaceBase::Global(n),
-                                segs: Vec::new(),
-                            });
-                        }
+                        // zend_delayed_compile_dim: `$GLOBALS[$name]` is a
+                        // global variable fetch; `$GLOBALS[]` never compiles.
+                        let Some(idx) = index else {
+                            return self.err("Cannot append to $GLOBALS", e.span.line);
+                        };
+                        let n = self.compile_expr(idx)?;
+                        return Ok(Place {
+                            base: PlaceBase::Global(n),
+                            segs: Vec::new(),
+                        });
                     }
                 }
                 let mut p = self.compile_place_base(base)?;
