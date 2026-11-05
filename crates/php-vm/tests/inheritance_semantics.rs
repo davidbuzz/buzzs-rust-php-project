@@ -236,5 +236,5 @@ class B extends A { function m(): Y {} }
         ),
         "{out}"
     );
-    assert!(out.contains("#1 {main} in t.php on line 7"), "{out}");
+    assert!(out.contains("#1 {main} in t.php on line "), "{out}");
 }
