@@ -66,11 +66,11 @@ pub(crate) fn sapi_delete_prefix(vm: &mut Vm, prefix: &[u8]) -> VmResult<()> {
             _ => None,
         })
         .collect();
-    if !same_name.iter().any(|l| hit(l)) {
+    if !same_name.iter().any(|l| hit(l.as_slice())) {
         return Ok(());
     }
     vm.call_function("header_remove", vec![Value::Str(ZStr::from(target))])?;
-    for l in same_name.iter().filter(|l| !hit(l)) {
+    for l in same_name.iter().filter(|l| !hit(l.as_slice())) {
         vm.add_response_header(l, false)?;
     }
     Ok(())
