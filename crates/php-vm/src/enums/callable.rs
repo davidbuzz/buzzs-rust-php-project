@@ -382,9 +382,11 @@ impl Vm {
                     .is_some_and(|m| self.can_access_method(m, ctx.scope.as_ref()));
                 if let (Some(m), true) = (m.clone(), accessible) {
                     handler = Some(Handler::Method(m));
-                } else if let Some(t) = ctx.this.as_ref().filter(|t| {
-                    cs.magic.call.is_some() && instance_of(object::class_of(t), cs)
-                }) {
+                } else if let Some(t) = ctx
+                    .this
+                    .as_ref()
+                    .filter(|t| cs.magic.call.is_some() && instance_of(object::class_of(t), cs))
+                {
                     handler = object::class_of(t)
                         .magic
                         .call
