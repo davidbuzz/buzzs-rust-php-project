@@ -73,6 +73,9 @@ fn register_std_streams(m: &mut ModuleBuilder<'_>) {
 }
 
 fn shutdown(vm: &mut Vm) {
+    // `PHP_RSHUTDOWN(basic)` (user_filter_map) runs before
+    // `zend_close_rsrc_list()` closes the remaining streams.
+    userfilter::shutdown();
     res::shutdown(vm);
     http::shutdown();
 }
