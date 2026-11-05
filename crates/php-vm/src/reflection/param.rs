@@ -439,7 +439,8 @@ fn rp_is_variadic(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(this_param(vm, a)?.2.variadic))
 }
 fn rp_is_promoted(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(this_param(vm, a)?.2.promote != 0))
+    let promote = this_param(vm, a)?.2.promote & !crate::opcode::NATIVE_PARAM_BITS;
+    Ok(Value::Bool(promote != 0))
 }
 fn rp_is_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_param(vm, a)?.2;

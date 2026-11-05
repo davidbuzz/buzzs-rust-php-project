@@ -155,9 +155,13 @@ fn signature(d: &MethodDef) -> String {
         // Some parameters are checked by `php-spl` itself, which produces
         // the exact `zend_parse_parameters` messages: callables ("must be
         // a valid callback, ..."), `array|object` ("must be of type
-        // array, ...") and constructor arguments (constructors are not
-        // subject to signature compatibility checks).
-        if let Some(t) = p.ty.filter(|t| !loose_type(d.name, t)) {
+        // array, ...") and constructor arguments. Their types are arginfo
+        // only (`@unchecked`): Reflection and inheritance checks see them,
+        // the VM does not enforce them.
+        if let Some(t) = p.ty {
+            if loose_type(d.name, t) {
+                s.push_str("@unchecked ");
+            }
             s.push_str(t);
             s.push(' ');
         }
@@ -721,8 +725,19 @@ mod tests {
         );
         let (_, m) =
             php_spl::classes::find_method("CallbackFilterIterator", "__construct").expect("ctor");
-        assert_eq!(signature(m), "__construct($iterator, $callback)");
+        assert_eq!(
+            signature(m),
+            "__construct(@unchecked Iterator $iterator, @unchecked callable $callback)"
+        );
         let (_, m) = php_spl::classes::find_method("ArrayObject", "exchangeArray").expect("method");
-        assert_eq!(signature(m), "exchangeArray($array): array");
+        assert_eq!(
+            signature(m),
+            "exchangeArray(@unchecked array|object $array): array"
+        );
+        let (_, m) = php_spl::classes::find_method("ArrayIterator", "__construct").expect("ctor");
+        assert_eq!(
+            signature(m),
+            "__construct(@unchecked array|object $array = [], @unchecked int $flags = 0)"
+        );
     }
 }

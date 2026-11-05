@@ -616,3 +616,24 @@ echo implode(',', array_keys(get_object_vars($o))), "\n";
 "#);
     assert_eq!(out, "a,b,c,x\n");
 }
+
+#[test]
+fn constructor_types_are_reflected_but_parsed_by_the_handler() {
+    // Bug #71412: Reflection shows the arginfo types; the handler's own
+    // `zend_parse_parameters` messages still report bad arguments.
+    let out = run(r#"<?php
+foreach ((new ReflectionMethod('ArrayIterator', '__construct'))->getParameters() as $p) {
+    echo $p->getType(), " $", $p->getName(), "\n";
+}
+try { new ArrayIterator("x"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { new ArrayIterator([], "y"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+var_dump((new ReflectionMethod('ArrayObject', 'uasort'))->getParameters()[0]->isPromoted());
+"#);
+    assert_eq!(
+        out,
+        "object|array $array\nint $flags\n\
+         ArrayIterator::__construct(): Argument #1 ($array) must be of type array, string given\n\
+         ArrayIterator::__construct(): Argument #2 ($flags) must be of type int, string given\n\
+         bool(false)\n"
+    );
+}
