@@ -361,19 +361,20 @@ impl HeldMark {
     fn new() -> Self {
         HeldMark(DZ_STATE.with(|s| s.borrow().as_ref().map_or(0, |st| st.held.len())))
     }
+}
 
-    /// Records that the frame holds a handle to `v`.
-    fn hold(&self, v: &Value) {
-        let Some(id) = identity(v) else {
-            return;
-        };
-        DZ_STATE.with(|s| {
-            if let Some(st) = s.borrow_mut().as_mut() {
-                st.held.push(id);
-                *st.held_count.entry(id).or_insert(0) += 1;
-            }
-        });
-    }
+/// Records that the current dumper frame holds a handle to `v` (until its
+/// [`HeldMark`] drops).
+fn hold(v: &Value) {
+    let Some(id) = identity(v) else {
+        return;
+    };
+    DZ_STATE.with(|s| {
+        if let Some(st) = s.borrow_mut().as_mut() {
+            st.held.push(id);
+            *st.held_count.entry(id).or_insert(0) += 1;
+        }
+    });
 }
 
 impl Drop for HeldMark {
@@ -592,18 +593,17 @@ fn var_dump_object(
     // Our copy of the property table holds a handle to each value until
     // the dump of this object ends; php-src walks the object's own table.
     // (The synthetic proxy instance table owns a PHP-visible reference.)
-    let held = zv.map(|_| HeldMark::new());
-    if let Some(held) = &held {
-        let own_copy = !crate::object::data(o)
+    let _held = zv.map(|_| HeldMark::new());
+    if zv.is_some()
+        && !crate::object::data(o)
             .lazy
             .borrow()
             .as_ref()
-            .is_some_and(|info| info.proxy && info.initialized);
-        if own_copy {
-            for (_, slot) in properties.iter().flatten() {
-                if let PropertySlot::Value(v) = slot {
-                    held.hold(v);
-                }
+            .is_some_and(|info| info.proxy && info.initialized)
+    {
+        for (_, slot) in properties.iter().flatten() {
+            if let PropertySlot::Value(v) = slot {
+                hold(v);
             }
         }
     }
