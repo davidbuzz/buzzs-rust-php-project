@@ -225,3 +225,29 @@ echo "done\n";
     let msg = "Deprecated: The predefined locally scoped $http_response_header variable is deprecated, call http_get_last_response_headers() instead in t.php on line";
     assert_eq!(out, format!("\n{msg} 2\n\n{msg} 4\n\n{msg} 5\ndone\n"));
 }
+
+/// `SPEC(COMMUTATIVE)` opcodes (`ZEND_MUL`, `ZEND_BW_OR`/`AND`/`XOR`) get
+/// their operands swapped when op1's type sorts before op2's (`IS_CONST` <
+/// `IS_TMP_VAR` < `IS_CV`), so the error names them in swapped order
+/// (operator_unsupported_types.phpt; expectations from php-src master).
+#[test]
+fn commutative_operands_are_reported_in_canonical_order() {
+    let out = run(r#"<?php
+function t($f) { try { $f(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; } }
+t(fn() => [] * new stdClass);
+t(fn() => 1 & new stdClass);
+t(function () { $o = new stdClass; return [] ^ $o; });
+t(function () { $o = new stdClass; return $o * []; });
+t(function () { $a = []; return new stdClass * $a; });
+t(fn() => [] + new stdClass);
+"#);
+    assert_eq!(
+        out,
+        "Unsupported operand types: stdClass * array\n\
+         Unsupported operand types: stdClass & int\n\
+         Unsupported operand types: stdClass ^ array\n\
+         Unsupported operand types: stdClass * array\n\
+         Unsupported operand types: array * stdClass\n\
+         Unsupported operand types: array + stdClass\n"
+    );
+}

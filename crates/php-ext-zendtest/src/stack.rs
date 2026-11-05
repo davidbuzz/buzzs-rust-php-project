@@ -54,20 +54,36 @@ pub(crate) fn raise_signal(sig: i32) -> bool {
 
 /// `zend_test_emalloc(int $size)`: an allocation of `$size` bytes counted
 /// against `memory_limit`.
-pub(crate) fn emalloc(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+pub(crate) fn emalloc(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let size = usize::try_from(a.int(0)).unwrap_or(usize::MAX);
-    if php_memlimit::hard_limit().is_some_and(|h| size > h) {
-        // Beyond the hard limit the allocator's handler terminates the
-        // process ("Hard memory limit of N bytes exhausted"), as
-        // zend_mm_alloc_huge does; the block is never touched.
-        let block: Vec<u8> = Vec::with_capacity(size);
-        drop(std::hint::black_box(block));
-        return Ok(Value::Null);
+    if let Some(hard_limit) = php_memlimit::hard_limit().filter(|&h| size > h) {
+        // Beyond the hard limit `zend_mm_hard_limit_error` prints the
+        // executing location and terminates the process; the allocator's
+        // own handler cannot see the VM, so report it from here.
+        hard_limit_error(vm, hard_limit, size);
     }
     // On failure the VM raises "Allowed memory size of N bytes exhausted"
     // right after this call.
     let _ = php_memlimit::try_reserve(size);
     Ok(Value::Null)
+}
+
+/// `zend_mm_hard_limit_error`: "Hard memory limit of N bytes exhausted
+/// (tried to allocate M bytes) in FILE on line L" on stderr, then
+/// `_exit(137)` without unwinding or flushing output.
+#[cold]
+fn hard_limit_error(vm: &Vm, hard_limit: usize, tried: usize) -> ! {
+    use std::io::Write;
+    let (file, line) = vm.current_location();
+    let e = php_memlimit::HardLimitExceeded { hard_limit, tried };
+    let msg = format!(
+        "{e} in {} on line {line}\n",
+        String::from_utf8_lossy(file.as_bytes())
+    );
+    let _ = std::io::stderr().write_all(msg.as_bytes());
+    // SAFETY: `_exit` terminates the process immediately; nothing relies on
+    // destructors or atexit handlers (php-src does the same).
+    unsafe { libc::_exit(137) }
 }
 
 #[cfg(test)]

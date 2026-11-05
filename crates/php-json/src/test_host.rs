@@ -50,6 +50,8 @@ pub(crate) struct TestHost {
     pub(crate) serialize_precision: Option<i64>,
     /// Log of `jsonSerialize()` calls etc.
     pub(crate) log: Vec<String>,
+    /// What [`JsonHost::json_oom_pending`] reports.
+    pub(crate) oom_pending: bool,
 }
 
 impl std::fmt::Debug for TestHost {
@@ -183,6 +185,10 @@ impl RuntimeContext for TestHost {
 }
 
 impl JsonHost for TestHost {
+    fn json_oom_pending(&mut self) -> bool {
+        self.oom_pending
+    }
+
     fn json_native_properties(&mut self, obj: &Obj) -> RtResult<Option<(ZArray, GuardKey)>> {
         if !matches!(obj_ref(obj).kind, Kind::RebuiltProperties) {
             return Ok(None);

@@ -175,3 +175,26 @@ fn shutdown_destructs_objects_created_by_destructors() {
         "end\nC\nD\n"
     );
 }
+
+/// A function declared inside a method has no class scope
+/// (`zend_compile_func_decl` clears `CG(active_class_entry)`), unlike a
+/// closure (nested_method_and_function.phpt).
+#[test]
+fn function_declared_in_a_method_has_no_class_scope() {
+    assert_eq!(
+        run(r#"<?php
+namespace Baz;
+class Foo {
+    public static function bar() {
+        function foo() { var_dump(__CLASS__, __METHOD__, __FUNCTION__); }
+        foo();
+        var_dump(__CLASS__);
+        return function () { var_dump(__CLASS__); };
+    }
+}
+$c = Foo::bar();
+$c();
+"#),
+        "string(0) \"\"\nstring(7) \"Baz\\foo\"\nstring(7) \"Baz\\foo\"\nstring(7) \"Baz\\Foo\"\nstring(7) \"Baz\\Foo\"\n"
+    );
+}

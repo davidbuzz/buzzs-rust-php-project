@@ -83,6 +83,12 @@ pub(crate) trait Sink {
     ) -> Result<(), ActionError>;
     /// The object's value once complete.
     fn object_finish(&mut self, object: Self::Object) -> Self::Value;
+    /// Whether to stop before the next value: the host has a delayed
+    /// out-of-memory fatal pending (`ZEND_HAS_OOM()`), which it raises once
+    /// the decoder returns. The parse then fails as a syntax error.
+    fn aborted(&mut self) -> bool {
+        false
+    }
 }
 
 /// An open container on the parser stack.
@@ -172,6 +178,9 @@ impl<'a, S: Sink> Parser<'a, S> {
         let mut stack: Vec<Frame<S>> = Vec::new();
         let mut tok = self.scanner.scan();
         loop {
+            if self.sink.aborted() {
+                return Err(self.error(ErrorCode::Syntax));
+            }
             // `tok` is the lookahead at a position expecting a value.
             let mut value = match self.start_value(tok, &mut stack)? {
                 Started::Value(v) => v,

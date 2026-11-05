@@ -102,6 +102,10 @@ impl Sink for DecodeSink<'_> {
             ObjectBuilder::Std(obj) => obj,
         }
     }
+
+    fn aborted(&mut self) -> bool {
+        self.host.json_oom_pending()
+    }
 }
 
 /// Clamps a `zend_long` depth to the C `int` the parser stores.

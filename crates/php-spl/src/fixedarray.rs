@@ -47,6 +47,18 @@ fn checked_alloc(elements: &mut Vec<Value>, size: usize) -> RtResult<()> {
     Ok(())
 }
 
+/// The fallible part of `safe_femalloc(size, sizeof(zval), 0, true)` for
+/// growing `current` elements to `size`: `false` when the host refuses the
+/// block (`memory_limit`), and the caller returns `RETURN_OOM()`'s null.
+/// Sizes whose byte count overflows are left to [`checked_alloc`]'s fatal.
+fn reserve(host: &mut dyn SplHost, size: usize, current: usize) -> bool {
+    let extra = size.saturating_sub(current);
+    if extra == 0 || extra.checked_mul(ZVAL_SIZE).is_none() {
+        return true;
+    }
+    host.spl_try_reserve(extra.saturating_mul(std::mem::size_of::<Value>()))
+}
+
 impl FixedArray {
     /// Creates an array of `size` nulls.
     #[must_use]
@@ -239,6 +251,9 @@ fn construct(host: &mut dyn SplHost, this: &Obj, args: &[Value]) -> RtResult<Val
     }
     let st = state_of(host, this)?;
     let size = usize::try_from(size).unwrap_or(usize::MAX);
+    if st.fixed(|f| f.can_init())? && !reserve(host, size, 0) {
+        return Ok(Value::Null);
+    }
     st.fixed(|f| {
         if f.can_init() {
             checked_alloc(&mut f.elements, size)
@@ -418,6 +433,9 @@ fn from_array(host: &mut dyn SplHost, args: &[Value]) -> RtResult<Value> {
             };
             usize::try_from(tmp).unwrap_or(usize::MAX)
         };
+        if !reserve(host, size, 0) {
+            return Ok(Value::Null);
+        }
         let mut f = FixedArray::default();
         checked_alloc(&mut f.elements, size)?;
         for (k, v) in data.iter() {

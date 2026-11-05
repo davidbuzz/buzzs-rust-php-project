@@ -1019,6 +1019,11 @@ impl Unserializer<'_> {
                     return Ok(None);
                 }
             }
+            // `ZEND_HAS_OOM()`: stop at the element that crossed
+            // `memory_limit` (the fatal follows the call).
+            if php_memlimit::is_pending() {
+                return Ok(None);
+            }
         }
         Ok(Some(t))
     }
@@ -1064,6 +1069,12 @@ impl Unserializer<'_> {
         let ic = || -> Option<Rc<Class>> { None };
         let _ = ic;
         let lc = name.as_bytes().to_ascii_lowercase();
+        // A huge class name: the lowercase copy may already have crossed
+        // `memory_limit`; php-src's lookup fails the same way
+        // (`oom_unserialize_007.phpt`).
+        if php_memlimit::is_pending() {
+            return Ok(None);
+        }
         let allowed = {
             let d = self.d.borrow();
             d.allowed.as_ref().map(|a| a.contains(&lc))
@@ -1390,6 +1401,9 @@ impl Unserializer<'_> {
                     self.cur.pos -= 1;
                     return Ok(false);
                 }
+            }
+            if php_memlimit::is_pending() {
+                return Ok(false);
             }
         }
         Ok(true)
@@ -1845,6 +1859,9 @@ fn unser_destroy(vm: &mut Vm, d: &UnserRc, outermost: bool, run: bool) -> VmResu
                     mark_destructed(&o);
                     continue;
                 }
+                if php_memlimit::is_pending() {
+                    return abandon_for_oom(vm, d, dtors);
+                }
                 let cls = object::class_of(&o).clone();
                 if let Some(m) = cls.magic.wakeup.clone() {
                     if let Err(t) = locked(|| vm.call_method(&o, &m, Vec::new())) {
@@ -1863,6 +1880,9 @@ fn unser_destroy(vm: &mut Vm, d: &UnserRc, outermost: bool, run: bool) -> VmResu
                 if failed {
                     mark_destructed(&o);
                     continue;
+                }
+                if php_memlimit::is_pending() {
+                    return abandon_for_oom(vm, d, dtors);
                 }
                 let cls = object::class_of(&o).clone();
                 let r = if let Some(m) = cls.magic.unserialize.clone() {
@@ -1890,6 +1910,18 @@ fn unser_destroy(vm: &mut Vm, d: &UnserRc, outermost: bool, run: bool) -> VmResu
         }
     }
     result
+}
+
+/// A delayed `__wakeup()`/`__unserialize()` call with an OOM pending:
+/// `zend_call_function()` raises the fatal instead of calling, and the
+/// bailout leaves the rest of the `var_hash` behind (`var_destroy` in
+/// `oom_call_function_003.phpt`).
+#[cold]
+fn abandon_for_oom(vm: &mut Vm, d: &UnserRc, rest: impl Iterator<Item = Dtor>) -> VmResult<()> {
+    d.borrow_mut().dtors.extend(rest);
+    ABANDONED_UNSER.with(|u| u.borrow_mut().push(d.clone()));
+    vm.raise_pending_oom()?;
+    Err(Throw::Fatal)
 }
 
 /// Parses `options` (`allowed_classes`, `max_depth`).

@@ -311,6 +311,14 @@ impl Vm {
             self.frames.truncate(base);
             return Err(crate::builtins::dump::stack_size_error(self));
         }
+        // `zend_call_function`: a pending OOM is raised before user code
+        // called from a builtin runs.
+        if php_memlimit::is_pending() {
+            self.observer_unwind(base, None);
+            self.frames.truncate(base);
+            self.raise_pending_oom()?;
+            return Err(Throw::Fatal);
+        }
         if self.depth >= MAX_NESTED_EXECUTIONS {
             self.observer_unwind(base, None);
             // A backstop for native stacks whose size we were not told.
@@ -1328,7 +1336,7 @@ impl Vm {
                 }
                 // Delayed memory_limit violation (`zend_mm_delayed_error`).
                 if php_memlimit::is_pending() {
-                    self.raise_pending_oom()?;
+                    self.poll_pending_oom(&code.ops[ip])?;
                 }
                 self.check_interrupt()?;
                 match flow {
@@ -1934,14 +1942,90 @@ pub(crate) fn undefined_var_msg(name: &impl std::fmt::Display) -> String {
     )
 }
 
+thread_local! {
+    /// Where the pending `memory_limit` violation was first seen
+    /// (`EG(delayed_oom).filename`/`lineno`, recorded by
+    /// `zend_mm_delayed_verror` at allocation time): the fatal is reported
+    /// there even when it is raised at a later interrupt point.
+    static OOM_SITE: std::cell::RefCell<Option<(ZStr, u32)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Whether a pending OOM may wait past this instruction. php-src only acts
+/// on `EG(vm_interrupt)` at interrupt points (`ZEND_VM_ENTER`, taken jumps,
+/// after internal calls: `ZEND_VM_FCALL_INTERRUPT_CHECK`), so the plain
+/// data instructions after the allocation that crossed the limit still run
+/// (`oom_after_main_script.phpt` prints "Done" before the fatal).
+fn defers_oom(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Nop
+            | Op::Move { .. }
+            | Op::Bin { .. }
+            | Op::Unary { .. }
+            | Op::Cast { .. }
+            | Op::Rope { .. }
+            | Op::InitArray { .. }
+            | Op::ArrayAdd { .. }
+            | Op::AssignCv { .. }
+            | Op::Assign { .. }
+            | Op::AssignOp { .. }
+            | Op::Echo(_)
+            | Op::Free(_)
+    )
+}
+
 impl Vm {
-    /// Raises a recorded `memory_limit` violation as PHP's fatal error.
+    /// The per-instruction check of a pending `memory_limit` violation:
+    /// raises it unless `op` [defers](defers_oom) it, in which case only
+    /// the location is remembered.
+    #[cold]
+    #[inline(never)]
+    fn poll_pending_oom(&mut self, op: &Op) -> VmResult<()> {
+        if defers_oom(op) {
+            if OOM_SITE.with(|s| s.borrow().is_none()) {
+                let site = self.current_location();
+                OOM_SITE.with(|s| *s.borrow_mut() = Some(site));
+            }
+            return Ok(());
+        }
+        self.raise_pending_oom()
+    }
+
+    /// Raises a recorded `memory_limit` violation as PHP's fatal error
+    /// (`zend_handle_delayed_oom`), at the location it was first seen.
     pub(crate) fn raise_pending_oom(&mut self) -> VmResult<()> {
+        let site = OOM_SITE.with(|s| s.borrow_mut().take());
         if let Some(over) = php_memlimit::take() {
-            self.error(crate::errors::level::ERROR, &over.to_string())?;
+            let (file, line) = site.unwrap_or_else(|| self.current_location());
+            self.error_at(crate::errors::level::ERROR, &over.to_string(), &file, line)?;
         }
         Ok(())
     }
+
+    /// Forgets a pending violation and its location (start of request
+    /// shutdown: `EG(delayed_oom).state = ZEND_OOM_STATE_NONE`).
+    pub(crate) fn clear_pending_oom() {
+        php_memlimit::clear();
+        OOM_SITE.with(|s| *s.borrow_mut() = None);
+    }
+}
+
+/// `ZEND_HAS_OOM()`: a delayed `memory_limit` fatal is pending. Builtins
+/// that loop over script-sized input check it to stop early (the VM raises
+/// the fatal right after the call returns).
+#[must_use]
+#[inline]
+pub fn oom_pending() -> bool {
+    php_memlimit::is_pending()
+}
+
+/// A fallible allocation of `bytes` (`safe_femalloc(..., fallible)`):
+/// `false` when it would exceed `memory_limit`, in which case the violation
+/// is recorded and the caller returns without allocating (`RETURN_OOM()`).
+#[must_use]
+pub fn try_reserve_memory(bytes: usize) -> bool {
+    php_memlimit::try_reserve(bytes).is_ok()
 }
 
 impl Vm {

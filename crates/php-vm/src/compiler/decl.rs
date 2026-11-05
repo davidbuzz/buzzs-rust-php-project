@@ -217,7 +217,13 @@ impl Compiler {
             uses: Vec::new(),
             has_body: true,
         };
-        let uf = self.compile_body(&spec, BodyKind::Stmts(&fd.body))?;
+        // `zend_compile_func_decl`: a function declared inside a method has
+        // no class scope (`CG(active_class_entry) = NULL`), so `__CLASS__`
+        // is empty there (`nested_method_and_function.phpt`).
+        let classes = std::mem::take(&mut self.classes);
+        let uf = self.compile_body(&spec, BodyKind::Stmts(&fd.body));
+        self.classes = classes;
+        let uf = uf?;
         let idx = self.add_function(uf);
         if top_level {
             self.hoisted_functions.push(idx);
