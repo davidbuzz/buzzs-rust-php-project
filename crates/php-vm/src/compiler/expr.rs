@@ -299,6 +299,7 @@ impl Compiler {
                         FetchMode::Read,
                     )
                 } else {
+                    self.note_cv_read(&id.name, line);
                     Operand::Cv(self.cv(&id.name))
                 }
             }
@@ -310,6 +311,7 @@ impl Compiler {
                     return self.err("Cannot use [] for reading", line);
                 }
                 let p = self.compile_place(e, false)?;
+                self.note_place_read(&p, line);
                 self.fetch_place(p, FetchMode::Read)
             }
             ExprKind::Call { .. }
@@ -1076,6 +1078,9 @@ impl Compiler {
         {
             inner = &**next;
         }
+        if let ExprKind::Var(VarName::Name(id)) = &inner.kind {
+            self.note_cv_write(&id.name);
+        }
         if !std::ptr::eq(inner, e) && self.is_opcode_builtin_call(inner) {
             return self.err(
                 "Cannot use result of built-in function in write context",
@@ -1289,6 +1294,7 @@ impl Compiler {
                 if id.name == b"this" {
                     return self.err("Cannot re-assign $this", line);
                 }
+                self.note_cv_write(&id.name);
                 let cv = self.cv(&id.name);
                 let v = self.compile_expr(value)?;
                 self.f().line = line;

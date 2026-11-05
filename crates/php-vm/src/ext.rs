@@ -781,6 +781,13 @@ impl Vm {
         self.make_throw(class, message)
     }
 
+    /// `zend_exception_set_previous` (`Zend/zend_exceptions.c`): appends
+    /// `prev` to the `previous` chain of `exc`, for a native caller that
+    /// raised `exc` while `prev` was already pending.
+    pub fn chain_exception(&mut self, exc: &Obj, prev: &Obj) {
+        crate::exceptions::chain_previous(exc, prev);
+    }
+
     /// Emits a warning prefixed with the running native function
     /// (`"func(): message"`, `php_error_docref`).
     pub fn php_warning(&mut self, message: &str) -> VmResult<()> {

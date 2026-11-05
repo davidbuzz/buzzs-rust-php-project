@@ -208,3 +208,20 @@ fn builtin_opcode_result_in_write_context_is_a_compile_error() {
     );
     assert!(out.ends_with("ok"), "{out}");
 }
+
+/// `zend_try_compile_cv` / `zend_compile_simple_var_no_cv`
+/// (`Zend/zend_compile.c`): reading `$http_response_header` is deprecated at
+/// compile time unless the op array assigned it first or took it as a
+/// parameter; a constant variable-variable name always warns.
+#[test]
+fn http_response_header_read_is_deprecated_per_op_array() {
+    let out = run(r#"<?php
+function a() { echo $http_response_header; }
+function b($http_response_header) { echo $http_response_header; }
+function c() { $http_response_header = 1; echo $http_response_header; function d() { echo $http_response_header; } }
+function e() { ${'http_response_header'} = 1; var_dump(${'http_response_header'}); }
+echo "done\n";
+"#);
+    let msg = "Deprecated: The predefined locally scoped $http_response_header variable is deprecated, call http_get_last_response_headers() instead in t.php on line";
+    assert_eq!(out, format!("\n{msg} 2\n\n{msg} 4\n\n{msg} 5\ndone\n"));
+}

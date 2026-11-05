@@ -1268,6 +1268,7 @@ impl Compiler {
             if id.name == b"this" {
                 return self.err("Cannot re-assign $this", target.span.line);
             }
+            self.note_cv_write(&id.name);
             let cv = self.cv(&id.name);
             self.emit(Op::AssignCv { cv, val, dst });
             return Ok(());
@@ -1314,6 +1315,7 @@ impl Compiler {
                 return Ok(ArgSrc::Val(op));
             }
             let p = self.compile_place(e, false)?;
+            self.note_place_read(&p, e.span.line);
             Ok(ArgSrc::Place(self.place(p)))
         } else if matches!(
             e.kind,

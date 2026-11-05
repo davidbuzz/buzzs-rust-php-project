@@ -471,3 +471,60 @@ class B extends A { function m(): Y {} }
     );
     assert!(out.contains("#1 {main} in t.php on line "), "{out}");
 }
+
+/// `forward_static_call[_array]()` (`ext/standard/basic_functions.c`) keep
+/// the caller's called scope when it derives from the callback's class;
+/// `forward_static_call()` needs an active class scope.
+#[test]
+fn forward_static_call_forwards_called_scope() {
+    let out = run(r#"<?php
+class A { static function t() { echo static::class, "\n"; } }
+class B extends A { static function go() { forward_static_call(['A', 't']); forward_static_call_array('A::t', []); call_user_func(['A', 't']); } }
+function f() { echo "f\n"; }
+class C { static function go() { forward_static_call('f'); } }
+B::go();
+C::go();
+function g() { try { forward_static_call(['A', 't']); } catch (Error $e) { echo $e->getMessage(), "\n"; } }
+g();
+"#);
+    assert_eq!(
+        out,
+        "B\nB\nA\nf\nCannot call forward_static_call() when no class scope is active\n"
+    );
+}
+
+/// `is_a_impl` (`Zend/zend_builtin_functions.c`): a string first argument
+/// without `$allow_string` is deprecated and yields false.
+#[test]
+fn is_a_with_string_without_allow_string_is_deprecated() {
+    let out = run(r#"<?php
+class A {}
+var_dump(is_a('A', 'A'), is_a('A', 'A', true), is_subclass_of('A', 'A', false), is_a(1, 'A'));
+"#);
+    assert_eq!(
+        out,
+        "\nDeprecated: Calling is_a() with a string when $allow_string is false in t.php on line 3\n\
+         \nDeprecated: Calling is_subclass_of() with a string when $allow_string is false in t.php on line 3\n\
+         bool(false)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// `ZEND_FUNCTION(method_exists)` hides private methods inherited from a
+/// parent when given a class name; `get_class_methods()` quotes an unknown
+/// class name (`zend_wrong_parameter_type_error`).
+#[test]
+fn method_exists_hides_inherited_private_for_class_names() {
+    let out = run(r#"<?php
+class P { private function p() {} private static function s() {} }
+class Q extends P { private function q() {} }
+var_dump(method_exists('Q', 'p'), method_exists('Q', 's'), method_exists('Q', 'q'), method_exists(new Q, 'p'), method_exists('P', 'p'));
+try { get_class_methods("Nope"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { get_class_methods(1); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n\
+         get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, \"Nope\" given\n\
+         get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n"
+    );
+}

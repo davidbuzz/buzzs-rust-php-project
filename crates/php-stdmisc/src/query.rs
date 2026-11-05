@@ -23,6 +23,13 @@ pub trait QueryContext: RuntimeContext {
     /// For an enum case: `Some(Some(value))` for a backed enum,
     /// `Some(None)` for a pure enum; `None` if `obj` is not an enum.
     fn enum_case_value(&mut self, obj: &Obj) -> RtResult<Option<Option<Value>>>;
+
+    /// How deeply `http_build_query()` may nest before
+    /// `php_url_check_stack_limit()` (`ext/standard/http.c`) throws
+    /// "Maximum call stack size reached.".
+    fn max_depth(&self) -> usize {
+        MAX_DEPTH
+    }
 }
 
 fn hex_upper(n: u8) -> u8 {
@@ -78,7 +85,7 @@ pub fn url_decode(s: &[u8], raw: bool) -> Vec<u8> {
 }
 
 /// Recursion bound standing in for the C stack limit check.
-const MAX_DEPTH: usize = 4096;
+pub const MAX_DEPTH: usize = 4096;
 
 struct Builder<'a> {
     out: Vec<u8>,
@@ -171,7 +178,7 @@ impl Builder<'_> {
         if self.active.contains(&id) {
             return Ok(());
         }
-        if self.active.len() >= MAX_DEPTH {
+        if self.active.len() >= ctx.max_depth() {
             return Err(RuntimeError::Error(
                 "Maximum call stack size reached.".into(),
             ));

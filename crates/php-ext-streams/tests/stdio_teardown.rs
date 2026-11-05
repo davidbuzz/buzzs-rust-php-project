@@ -72,3 +72,61 @@ fn dropping_the_vm_keeps_std_descriptors_but_fclose_closes_them() {
     assert_eq!(out, "bool(true)\n");
     assert!(closed, "fclose(STDIN) must close descriptor 0");
 }
+
+/// `user_filter_factory_create` (`ext/standard/user_filters.c`): on a class
+/// that forbids dynamic properties, the `$params` failure is thrown with
+/// the `$filtername` one as its previous exception.
+#[test]
+fn user_filter_property_errors_are_chained() {
+    let out = run(
+        r#"var_dump(stream_filter_register("f", "SensitiveParameter"));
+$s = fopen("php://memory", "w+");
+try { stream_filter_append($s, "f", STREAM_FILTER_READ); } catch (Error $e) { echo $e->getMessage(), "|", $e->getPrevious()?->getMessage(), "\n"; }
+fclose($s);
+echo "end\n";"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nCannot create dynamic property SensitiveParameter::$params|Cannot create dynamic property SensitiveParameter::$filtername\nend\n"
+    );
+}
+
+/// GH-15836: a stream released when a function returns is closed right
+/// after that opcode (not at shutdown), and its user filters see
+/// `$this->stream === null` during the close flush.
+#[test]
+fn released_filtered_stream_closes_before_next_statement() {
+    let out = run(r#"class F extends php_user_filter {
+    function filter($in, $out, &$consumed, $closing): int {
+        if ($closing) { echo "closing "; var_dump($this->stream); }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("f", "F");
+function run() { $s = fopen("php://memory", "w+"); stream_filter_append($s, "f", STREAM_FILTER_WRITE); }
+run();
+echo "after\n";"#);
+    assert_eq!(out, "closing NULL\nafter\n");
+}
+
+/// `php_verror()`: once creating an include's filter threw, its warnings
+/// name the active function (`main`, `f`) rather than `include`.
+#[test]
+fn include_warnings_after_a_throw_name_the_active_function() {
+    let out = run(
+        r#"class SampleFilter extends php_user_filter { private $data = \FOO; }
+stream_filter_register('sample.filter', SampleFilter::class);
+function f() { include 'php://filter/read=sample.filter/resource=php://memory'; }
+try { include 'php://filter/read=sample.filter/resource=php://memory'; } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+try { f(); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }"#,
+    );
+    assert_eq!(
+        out,
+        "\nWarning: main(): Unable to create or locate filter \"sample.filter\" in test.php on line 4\n\
+         \nWarning: main(): Unable to create filter (sample.filter) in test.php on line 4\n\
+         Error: Undefined constant \"FOO\"\n\
+         \nWarning: f(): Unable to create or locate filter \"sample.filter\" in test.php on line 3\n\
+         \nWarning: f(): Unable to create filter (sample.filter) in test.php on line 3\n\
+         Error: Undefined constant \"FOO\"\n"
+    );
+}

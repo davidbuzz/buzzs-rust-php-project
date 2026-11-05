@@ -5,7 +5,7 @@ use super::{alias, constant, reg};
 use crate::class::Class;
 use crate::func::{flags, Args, Func};
 use crate::object;
-use crate::vm::{ErrorHandler, FrameKind, Throw, Vm, VmResult};
+use crate::vm::{ErrorHandler, FrameKind, PendingCall, Throw, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, PropertyPurpose, Value, ZArray, ZStr};
 use std::rc::Rc;
 
@@ -672,14 +672,16 @@ fn get_class_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn get_class_methods(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(cls) = class_arg(vm, &a.at(0), true)? else {
+        // `zend_wrong_parameter_type_error` quotes a string argument.
+        let given = match a.at(0) {
+            Value::Str(s) => format!("\"{}\"", s.to_string_lossy()),
+            other => crate::typecheck::given_type(&other),
+        };
         return Err(super::util::type_error(
             vm,
             a,
             1,
-            &format!(
-                "must be an object or a valid class name, {} given",
-                crate::typecheck::given_type(&a.at(0))
-            ),
+            &format!("must be an object or a valid class name, {given} given"),
         ));
     };
     let scope = vm
@@ -721,8 +723,14 @@ fn method_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(cls) = cls else {
         return Ok(Value::Bool(false));
     };
-    if cls.find_method(m.as_bytes()).is_some() {
-        return Ok(Value::Bool(true));
+    if let Some(f) = cls.find_method(m.as_bytes()) {
+        // `ZEND_FUNCTION(method_exists)`: a private method inherited from a
+        // parent is a shadow when checking a class name.
+        return Ok(Value::Bool(
+            matches!(v, Value::Object(_))
+                || f.flags & flags::PRIVATE == 0
+                || std::ptr::eq(f.scope.as_ptr(), Rc::as_ptr(&cls)),
+        ));
     }
     // `zend_get_closure_invoke_method`: Closure::__invoke exists for the
     // class and its instances although it is not in the method table.
@@ -852,6 +860,15 @@ fn is_a_impl(vm: &mut Vm, a: &Args, subclass_only: bool) -> VmResult<Value> {
             Some(c) => c,
             None => return Ok(Value::Bool(false)),
         },
+        // `is_a_impl` (`Zend/zend_builtin_functions.c`).
+        Value::Str(_) => {
+            vm.deprecated(if subclass_only {
+                "Calling is_subclass_of() with a string when $allow_string is false"
+            } else {
+                "Calling is_a() with a string when $allow_string is false"
+            })?;
+            return Ok(Value::Bool(false));
+        }
         _ => return Ok(Value::Bool(false)),
     };
     let target = s(a, 1);
@@ -1405,7 +1422,14 @@ fn call_user_func(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
-    let arr = arr(a, 1);
+    let (args, named) = cufa_args(vm, &arr(a, 1))?;
+    cuf_call(vm, &cb, args, named, "call_user_func_array")
+}
+
+/// Splits a `call_user_func_array()` argument array into positional and
+/// named arguments (`zend_fcall_info.named_params`).
+#[allow(clippy::type_complexity)]
+fn cufa_args(vm: &mut Vm, arr: &ZArray) -> VmResult<(Vec<Value>, Vec<(ZStr, Value)>)> {
     let mut args = Vec::new();
     let mut named = Vec::new();
     for (k, v) in arr.iter() {
@@ -1422,7 +1446,83 @@ fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             ArrayKey::Str(s) => named.push((s.clone(), v.clone())),
         }
     }
-    cuf_call(vm, &cb, args, named, "call_user_func_array")
+    Ok((args, named))
+}
+
+/// `PHP_FUNCTION(forward_static_call)` (`ext/standard/basic_functions.c`):
+/// like `call_user_func()`, but only from a class scope, and the callee
+/// keeps the caller's called scope (`static::`) when it derives from the
+/// callback's class.
+fn forward_static_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cb = a.at(0);
+    let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
+    let named = std::mem::take(&mut a.named);
+    let call = fsc_resolve(vm, &cb)?;
+    let caller_has_scope = vm
+        .frames
+        .len()
+        .checked_sub(2)
+        .and_then(|i| vm.frames.get(i))
+        .is_some_and(|f| f.scope.is_some());
+    if !caller_has_scope {
+        return Err(vm.make_throw(
+            "Error",
+            "Cannot call forward_static_call() when no class scope is active",
+        ));
+    }
+    let call = fsc_forward_called_scope(vm, call);
+    vm.call_resolved_named(call, args, named)
+}
+
+/// `PHP_FUNCTION(forward_static_call_array)`: [`forward_static_call`] with
+/// the arguments in an array, and without the class scope check.
+fn forward_static_call_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cb = a.at(0);
+    let call = fsc_resolve(vm, &cb)?;
+    let (args, named) = cufa_args(vm, &arr(a, 1))?;
+    let call = fsc_forward_called_scope(vm, call);
+    vm.call_resolved_named(call, args, named)
+}
+
+/// `Z_PARAM_FUNC` of the `forward_static_call*()` functions.
+fn fsc_resolve(vm: &mut Vm, cb: &Value) -> VmResult<PendingCall> {
+    match vm.zend_is_callable(cb, false)? {
+        Ok(call) => Ok(call),
+        Err(reason) => Err(vm.make_throw("TypeError", &reason)),
+    }
+}
+
+/// `zend_get_called_scope(execute_data)` (`Zend/zend_execute_API.c`) seen
+/// from the builtin's frame replaces the callback's called scope when it
+/// is an instance of the callback's class (`fci_cache.calling_scope`).
+/// A callback bound to an object keeps the object's class.
+fn fsc_forward_called_scope(vm: &Vm, mut call: PendingCall) -> PendingCall {
+    if call.this.is_some() {
+        return call;
+    }
+    let Some(calling) = call.called.clone().or_else(|| call.scope.clone()) else {
+        return call;
+    };
+    let mut called = None;
+    for f in vm.frames.iter().rev() {
+        if let Some(o) = &f.this {
+            called = Some(object::class_of(o).clone());
+            break;
+        }
+        if let Some(c) = &f.called {
+            called = Some(c.clone());
+            break;
+        }
+        if f.kind != FrameKind::Builtin || f.scope.is_some() {
+            break;
+        }
+    }
+    if let Some(c) = called {
+        if c.is_subclass_of(&calling) {
+            call.called = Some(c);
+        }
+    }
+    call
 }
 
 /// Calls the callback of `call_user_func[_array]()`. A direct call compiles
@@ -2413,12 +2513,12 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(
         vm,
         "forward_static_call(callable $callback, mixed ...$args): mixed",
-        call_user_func,
+        forward_static_call,
     );
     reg(
         vm,
         "forward_static_call_array(callable $callback, array $args): mixed",
-        call_user_func_array,
+        forward_static_call_array,
     );
     reg(
         vm,

@@ -178,6 +178,9 @@ impl RuntimeContext for VmQuery<'_> {
     }
 }
 
+/// Approximate C stack bytes per `php_url_encode_hash_ex()` recursion.
+const URL_ENCODE_FRAME_BYTES: u64 = 128;
+
 impl QueryContext for VmQuery<'_> {
     fn accessible_properties(&mut self, obj: &Obj) -> RtResult<Vec<(ArrayKey, Value)>> {
         let cls = class_of(obj).clone();
@@ -199,6 +202,21 @@ impl QueryContext for VmQuery<'_> {
             }
         }
         Ok(out)
+    }
+
+    /// `zend_call_stack_overflowed()` under `zend.max_allowed_stack_size`:
+    /// one `php_url_encode_hash_ex()` level takes about
+    /// [`URL_ENCODE_FRAME_BYTES`] of C stack.
+    fn max_depth(&self) -> usize {
+        let max = self.vm.ini_long("zend.max_allowed_stack_size");
+        if max <= 0 {
+            return php_stdmisc::query::MAX_DEPTH;
+        }
+        let reserved = self.vm.ini_long("zend.reserved_stack_size").max(0);
+        let budget = u64::try_from(max.saturating_sub(reserved)).unwrap_or(0);
+        usize::try_from(budget / URL_ENCODE_FRAME_BYTES)
+            .unwrap_or(usize::MAX)
+            .min(php_stdmisc::query::MAX_DEPTH)
     }
 
     fn enum_case_value(&mut self, obj: &Obj) -> RtResult<Option<Option<Value>>> {

@@ -105,6 +105,8 @@ impl Extension for Streams {
             }
         }
         m.on_request_shutdown(shutdown);
+        m.vm()
+            .register_interrupt_handler(res::close_deferred_on_interrupt);
         include::install(m.vm());
         ini::register(m);
     }
