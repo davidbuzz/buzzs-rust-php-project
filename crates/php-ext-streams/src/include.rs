@@ -8,6 +8,7 @@ use std::cell::Cell;
 
 use php_runtime::ZStr;
 use php_streams::diag::{self, Severity};
+use php_streams::stream::{BufferMode, StreamOption};
 use php_streams::wrapper::{REPORT_ERRORS, STREAM_OPEN_FOR_INCLUDE, USE_PATH};
 use php_vm::ext::{IncludeOpen, IncludeOpenerFn, VmResult};
 use php_vm::Vm;
@@ -52,6 +53,14 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
             None,
         );
         s.map(|mut s| {
+            // `php_stream_open_for_zend_ex`: read buffering is turned off
+            // (no double buffering), then `zend_stream_fixup` sizes the
+            // stream (`php_zend_stream_fsizer`: a stat unless read filters
+            // are attached). User wrappers see both calls.
+            s.set_option(&mut StreamOption::ReadBuffer(BufferMode::None, None));
+            if s.read_filters.is_empty() {
+                let _ = s.stat();
+            }
             let src = s.copy_to_mem(None).unwrap_or_default();
             s.close();
             (src, opened.or_else(|| s.orig_path.clone()))
@@ -86,6 +95,56 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
 #[cfg(test)]
 mod tests {
     use super::is_url;
+    use php_vm::ext::Extension;
+    use php_vm::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// `php_stream_open_for_zend_ex` + `zend_stream_fixup`: a user wrapper
+    /// opened for `require` sees `stream_set_option` (no read buffer) and
+    /// `stream_stat` (sizing) before the first `stream_read`, whose
+    /// exception propagates (Zend/tests/exceptions/exception_stream_wrapper).
+    #[test]
+    fn include_through_a_user_wrapper_sets_option_and_stats_first() {
+        let sink = Sink::default();
+        let streams = crate::Streams;
+        let exts: [&dyn Extension; 1] = [&streams];
+        let mut vm = Vm::with_extensions(&VmOptions { ini: vec![] }, Box::new(sink.clone()), &exts);
+        vm.run_script(
+            br#"<?php
+class Loader {
+    public $context;
+    function stream_open() { return true; }
+    function stream_read() { echo "stream_read\n"; throw new Exception("Message"); }
+    function __call($m, $a) { echo "$m\n"; }
+}
+stream_wrapper_register('abc', 'Loader');
+try { require 'abc://'; } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+"#,
+            "test.php",
+        );
+        drop(vm);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "stream_set_option\nstream_stat\nstream_read\nException: Message\n"
+        );
+    }
 
     #[test]
     fn urls() {
