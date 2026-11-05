@@ -92,3 +92,17 @@ fn base64_strictness() {
     assert_eq!(base64_decode(b"Z#m9v", false).unwrap(), b"foo");
     assert_eq!(url_decode(b"a+b%41%4"), b"a bA%4");
 }
+
+#[test]
+fn memory_truncate_grow_shrink_and_impossible_size() {
+    let mut s = memory_create(TempMode::Default);
+    assert_eq!(s.write(b"abcdef").unwrap(), 6);
+    assert_eq!(s.truncate(3), OPT_OK);
+    assert_eq!(s.ops_as::<MemoryOps>().unwrap().buffer(), b"abc");
+    assert_eq!(s.truncate(5), OPT_OK);
+    assert_eq!(s.ops_as::<MemoryOps>().unwrap().buffer(), b"abc\0\0");
+    // `zend_string_frealloc(..., fallible)`: an allocation that cannot be
+    // satisfied fails the truncate and leaves the buffer untouched.
+    assert_eq!(s.truncate(i64::MAX), OPT_ERR);
+    assert_eq!(s.ops_as::<MemoryOps>().unwrap().buffer(), b"abc\0\0");
+}

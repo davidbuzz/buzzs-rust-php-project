@@ -62,8 +62,17 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
                 let _ = s.stat();
             }
             let src = s.copy_to_mem(None).unwrap_or_default();
-            s.close();
-            (src, opened.or_else(|| s.orig_path.clone()))
+            let opened = opened.or_else(|| s.orig_path.clone());
+            if bridge::pending_is_fatal() {
+                // A fatal error in a wrapper callback longjmps past the
+                // file handle's destructor: the stream stays in
+                // `EG(regular_list)` and its `stream_close()` runs at
+                // request shutdown (`zend_close_rsrc_list`, GH-19844).
+                crate::res::park_bailed(s);
+            } else {
+                s.close();
+            }
+            (src, opened)
         })
     });
     let pending = bridge::take_pending();
@@ -170,6 +179,77 @@ try { require 'abc://'; } catch (Throwable $e) { echo $e::class, ': ', $e->getMe
         assert_eq!(
             out,
             "stream_set_option\nstream_stat\nstream_read\nException: Message\n"
+        );
+    }
+
+    fn run(src: &[u8]) -> String {
+        let sink = Sink::default();
+        let streams = crate::Streams;
+        let exts: [&dyn Extension; 1] = [&streams];
+        let mut vm = Vm::with_extensions(&VmOptions { ini: vec![] }, Box::new(sink.clone()), &exts);
+        vm.run_script(src, "test.php");
+        drop(vm);
+        let bytes = sink.0.borrow().clone();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// GH-19844: a fatal error inside a wrapper callback leaves the included
+    /// streams open; each one's `stream_close()` runs at request shutdown,
+    /// and its own fatal error does not stop the next close.
+    #[test]
+    fn bailout_leaves_include_streams_for_shutdown() {
+        let out = run(br#"<?php
+class Test {
+    public $context;
+    private static $nested = false;
+    function stream_open() { return true; }
+    function stream_read() { return '.'; }
+    function stream_set_option() {}
+    function stream_stat() {}
+    function stream_eof() {
+        if (!Test::$nested) {
+            Test::$nested = true;
+            include 'Test://';
+        }
+        @trigger_error('Bail', E_USER_ERROR);
+    }
+    function stream_close() {
+        @trigger_error('Bail', E_USER_ERROR);
+    }
+}
+stream_wrapper_register('Test', Test::class);
+include 'Test://';
+"#);
+        assert_eq!(out.matches("Fatal error: Bail").count(), 3, "{out}");
+    }
+
+    /// GH-20286: streams an `include` inside `stream_close()` leaves open
+    /// at shutdown are closed as well.
+    #[test]
+    fn shutdown_closes_streams_parked_while_closing() {
+        let out = run(br#"<?php
+class lib {
+   public $context;
+   function stream_set_option() {}
+   function stream_stat() { return true; }
+   function stream_open() { return true; }
+   function stream_read($count) {
+     function a() {}
+     include('lib://');
+   }
+   function stream_close() {
+     static $count = 0;
+     if ($count++ < 3) include('lib://');
+   }
+}
+stream_wrapper_register('lib', lib::class);
+include('lib://test.php');
+"#);
+        assert_eq!(
+            out.matches("Fatal error: Cannot redeclare function a()")
+                .count(),
+            4,
+            "{out}"
         );
     }
 

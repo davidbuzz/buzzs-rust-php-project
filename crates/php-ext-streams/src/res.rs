@@ -177,6 +177,8 @@ thread_local! {
     static STREAMS: RefCell<HashMap<u64, Weak<StreamCell>>> = RefCell::new(HashMap::new());
     static CONTEXTS: RefCell<HashMap<usize, Weak<CtxCell>>> = RefCell::new(HashMap::new());
     static DEFERRED: RefCell<Vec<Stream>> = const { RefCell::new(Vec::new()) };
+    /// Streams a fatal error left open (see [`park_bailed`]).
+    static BAILED: RefCell<Vec<Stream>> = const { RefCell::new(Vec::new()) };
     /// Streams being closed by `fclose()` (their resource is still valid).
     static FCLOSING: RefCell<std::collections::HashSet<u64>> =
         RefCell::new(std::collections::HashSet::new());
@@ -369,10 +371,42 @@ pub fn close_deferred_on_interrupt(vm: &mut Vm) -> VmResult<()> {
     Ok(())
 }
 
+/// Keeps a stream without a resource of its own (opened by `include`) that
+/// a fatal error interrupted open until request shutdown: `zend_bailout()`
+/// skips its `php_stream_close()`, so php-src finds it in
+/// `EG(regular_list)` there.
+pub fn park_bailed(s: Stream) {
+    BAILED.with(|b| b.borrow_mut().push(s));
+}
+
+/// `zend_close_rsrc_list()` for the [`park_bailed`] streams: newest first;
+/// a fatal error raised by one `stream_close()` does not stop the others
+/// (each close runs in its own `zend_try`), and streams parked meanwhile
+/// (an `include` inside `stream_close()` that bails out again, GH-20286)
+/// are closed from the top again.
+fn close_bailed(vm: &mut Vm) {
+    loop {
+        let next = BAILED.with(|b| {
+            let mut b = b.borrow_mut();
+            let i = b
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, s)| s.id())
+                .map(|(i, _)| i)?;
+            Some(b.swap_remove(i))
+        });
+        let Some(mut s) = next else {
+            break;
+        };
+        let _ = bridge::run(vm, || s.close());
+    }
+}
+
 /// Request shutdown: closes every stream still open, most recent first
 /// (`zend_close_rsrc_list`).
 pub fn shutdown(vm: &mut Vm) {
     close_deferred(vm);
+    close_bailed(vm);
     let mut cells: Vec<Rc<StreamCell>> =
         STREAMS.with(|m| m.borrow().values().filter_map(Weak::upgrade).collect());
     cells.sort_by_key(|c| std::cmp::Reverse(c.handle()));
@@ -394,8 +428,10 @@ pub fn shutdown(vm: &mut Vm) {
         if let Some(mut s) = c.take() {
             let _ = bridge::run(vm, || s.close());
         }
+        close_bailed(vm);
     }
     close_deferred(vm);
+    close_bailed(vm);
 }
 
 /// Runs `f` (closing stream `id`) as `fclose()` does: user filters still
