@@ -266,5 +266,5 @@ function test() {
     $r = zend_test_create_throwing_resource();
 }
 try { test(); } catch (Exception $e) { echo get_class($e), ':', $e->getLine(); }"#);
-    assert_eq!(out, "Throwing resource destructor called|Exception:5");
+    assert_eq!(out, "Throwing resource destructor called|Exception:6");
 }
