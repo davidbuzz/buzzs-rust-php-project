@@ -79,6 +79,16 @@ pub(crate) fn to_rt(vm: &mut Vm, t: Throw) -> RuntimeError {
             class: ZStr::from(BAILOUT_MARK),
             message: String::new(),
         },
+        Throw::Fatal if !server_context() && last_error_is_oom(vm) => {
+            // `soap_real_error_handler` (client): `ZEND_HAS_OOM()` sends the
+            // memory-limit fatal to the original handler (the VM already
+            // reported it) and the bailout ends the request instead of
+            // becoming a SoapFault.
+            RuntimeError::Custom {
+                class: ZStr::from(BAILOUT_MARK),
+                message: String::new(),
+            }
+        }
         Throw::Fatal => {
             let msg = vm
                 .last_error
@@ -95,6 +105,15 @@ pub(crate) fn to_rt(vm: &mut Vm, t: Throw) -> RuntimeError {
             RuntimeError::Fatal(String::new())
         }
     }
+}
+
+/// Whether the fatal error the VM just raised is the `memory_limit` one
+/// (`zend_handle_delayed_oom`, i.e. `ZEND_HAS_OOM()` is set).
+fn last_error_is_oom(vm: &Vm) -> bool {
+    vm.last_error.as_ref().is_some_and(|e| {
+        // E_ERROR
+        e.level == 1 && e.message.starts_with(b"Allowed memory size of ")
+    })
 }
 
 /// Converts a runtime error into a VM throw, creating exception objects
@@ -716,6 +735,16 @@ impl SoapHost for VmHost<'_> {
         }
         // Client: `ZEND_HAS_OOM()` bypasses the SoapFault conversion.
         Err(oom_error(msg))
+    }
+
+    fn memory_reserve(&mut self, bytes: usize) -> RtResult<()> {
+        // A block that would cross `memory_limit` is not allocated: the
+        // violation is recorded (as `zend_mm_alloc_huge` raises it before
+        // allocating) and reported like any other one.
+        if bytes > 0 {
+            let _ = php_memlimit::try_reserve(bytes);
+        }
+        self.memory_check(0)
     }
 
     fn load_resource(&mut self, url: &str, context: Option<&Value>) -> Result<Vec<u8>, String> {

@@ -142,6 +142,10 @@ pub struct EncodeCtx<'h> {
     decode_depth: u32,
     protected: HashSet<usize>,
     mem: usize,
+    /// The exception a `zend_value_error()` raised while encoding goes on
+    /// (`EG(exception)`): the last one thrown wins, like the exception
+    /// that ends up in `EG(exception)` when errors chain.
+    pending_error: Option<RuntimeError>,
 }
 
 impl std::fmt::Debug for EncodeCtx<'_> {
@@ -406,7 +410,21 @@ impl<'h> EncodeCtx<'h> {
             decode_depth: 0,
             protected: HashSet::new(),
             mem: 0,
+            pending_error: None,
         }
+    }
+
+    /// Takes the exception left by a `zend_value_error()` that did not
+    /// abort encoding (`EG(exception)` checked after a serializer ran).
+    pub fn take_pending_error(&mut self) -> Option<RuntimeError> {
+        self.pending_error.take()
+    }
+
+    /// `zend_value_error()` from a serialization helper: records the
+    /// exception and lets the caller go on with a fallback value.
+    #[cold]
+    fn defer_value_error(&mut self, msg: &str) {
+        self.pending_error = Some(RuntimeError::ValueError(msg.into()));
     }
 
     /// `encode_reset_ns`.
@@ -551,9 +569,8 @@ impl<'h> EncodeCtx<'h> {
             match self.host.enum_kind(o) {
                 EnumKind::NotEnum => {}
                 EnumKind::Pure => {
-                    return Err(SoapError::Runtime(RuntimeError::ValueError(
-                        "Non-backed enums have no default serialization".into(),
-                    )))
+                    self.defer_value_error("Non-backed enums have no default serialization");
+                    return Ok(Vec::new());
                 }
                 EnumKind::Backed(b) => return self.zval_string(&b),
             }
@@ -567,15 +584,13 @@ impl<'h> EncodeCtx<'h> {
             match self.host.enum_kind(o) {
                 EnumKind::NotEnum => {}
                 EnumKind::Pure => {
-                    return Err(SoapError::Runtime(RuntimeError::ValueError(
-                        "Non-backed enums have no default serialization".into(),
-                    )))
+                    self.defer_value_error("Non-backed enums have no default serialization");
+                    return Ok(0);
                 }
                 EnumKind::Backed(Value::Int(i)) => return Ok(i),
                 EnumKind::Backed(_) => {
-                    return Err(SoapError::Runtime(RuntimeError::ValueError(
-                        "String-backed enum cannot be serialized as int".into(),
-                    )))
+                    self.defer_value_error("String-backed enum cannot be serialized as int");
+                    return Ok(0);
                 }
             }
         }
@@ -1577,7 +1592,11 @@ impl<'h> EncodeCtx<'h> {
     /// `to_zval_user`.
     fn to_zval_user(&mut self, enc: &Encoder, doc: &Doc, node: NodeId) -> SoapResult<Value> {
         if let Some(cb) = enc.map.as_ref().and_then(|m| m.to_zval.clone()) {
-            let dump = doc.dump_node(node);
+            // xmlCopyNode(node, 1) + xmlNodeDump: the copy re-declares
+            // the namespaces its element and attribute names use.
+            let mut copy = Doc::new();
+            let root = copy.import(doc, node);
+            let dump = copy.dump_node(root);
             return Ok(self
                 .host
                 .call_callable(&cb, &[Value::from(dump.as_slice())])?);

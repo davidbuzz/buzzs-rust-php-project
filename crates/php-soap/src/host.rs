@@ -236,6 +236,15 @@ pub trait SoapHost: RuntimeContext {
         Ok(())
     }
 
+    /// A fallible allocation of `bytes` more (`zend_mm_alloc_huge` checking
+    /// `memory_limit` before it allocates): the engine returns its
+    /// memory-limit fatal error when the block would not fit, or when the
+    /// limit was already crossed (`memory_reserve(0)` only polls).
+    fn memory_reserve(&mut self, bytes: usize) -> RtResult<()> {
+        let _ = bytes;
+        Ok(())
+    }
+
     // ---- I/O -----------------------------------------------------------------
 
     /// Reads a WSDL/XSD document through the stream layer (`url` may be a
