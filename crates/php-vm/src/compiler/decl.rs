@@ -410,9 +410,19 @@ impl Compiler {
                 Some(t) => Some(self.resolve_type(t)?),
                 None => None,
             };
-            if let (Some(t), Some(d)) = (&mut ty, &p.default) {
-                if is_null_literal(d) && !t.allows_null() && !t.is_mixed() {
+            let folded_default = p.default.as_ref().and_then(|d| self.try_fold(d));
+            if let (Some(t), Some(Value::Null)) = (&mut ty, &folded_default) {
+                if p.modifiers.is_empty() && p.hooks.is_none() && !t.allows_null() && !t.is_mixed()
+                {
+                    if t.mask & mask::VOID != 0 {
+                        return self.err("Void can only be used as a standalone type", p.span.line);
+                    }
+                    if t.mask & mask::NEVER != 0 {
+                        return self
+                            .err("never can only be used as a standalone type", p.span.line);
+                    }
                     t.mask |= mask::NULL;
+                    t.pure_intersection = false;
                     self.warnings.push((
                         8192,
                         format!(
@@ -422,6 +432,27 @@ impl Compiler {
                         ),
                         p.span.line,
                     ));
+                }
+            }
+            if let Some(t) = &ty {
+                if t.mask & mask::VOID != 0 {
+                    return self.err("void cannot be used as a parameter type", p.span.line);
+                }
+                if t.mask & mask::NEVER != 0 {
+                    return self.err("never cannot be used as a parameter type", p.span.line);
+                }
+                if let Some(value) = &folded_default {
+                    if !t.accepts_default(value) {
+                        return self.err(
+                            format!(
+                                "Cannot use {} as default value for parameter ${} of type {}",
+                                value.type_name(),
+                                p.name.as_str_lossy(),
+                                t.to_php_string()
+                            ),
+                            p.span.line,
+                        );
+                    }
                 }
             }
             if p.variadic && p.default.is_some() {
@@ -672,7 +703,15 @@ impl Compiler {
         match &t.kind {
             TypeKind::Array => self.add_mask(out, mask::ARRAY, "array", t.span.line)?,
             TypeKind::Callable => self.add_mask(out, mask::CALLABLE, "callable", t.span.line)?,
-            TypeKind::Static => self.add_mask(out, mask::STATIC, "static", t.span.line)?,
+            TypeKind::Static => {
+                if self.current_class().is_none() && self.closure_depth == 0 {
+                    return self.err(
+                        "Cannot use \"static\" when no class scope is active",
+                        t.span.line,
+                    );
+                }
+                self.add_mask(out, mask::STATIC, "static", t.span.line)?;
+            }
             TypeKind::Nullable(inner) => {
                 self.add_type(out, inner, in_union)?;
                 if let TypeKind::Named(n) = &inner.kind {
@@ -687,7 +726,7 @@ impl Compiler {
                         }
                         if lc.as_slice() == b"never" {
                             return self
-                                .err("never cannot be used as a parameter type", t.span.line);
+                                .err("never can only be used as a standalone type", t.span.line);
                         }
                         if lc.as_slice() == b"mixed" {
                             return self.err(
@@ -701,20 +740,13 @@ impl Compiler {
             }
             TypeKind::Union(ts) => {
                 for x in ts {
-                    if let TypeKind::Intersection(parts) = &x.kind {
-                        let mut g = Vec::new();
-                        for p in parts {
-                            if let TypeKind::Named(n) = &p.kind {
-                                g.push(ZStr::from(self.resolve_type_class(n)));
-                            }
-                        }
-                        out.intersections.push(g);
-                    } else {
-                        self.add_type(out, x, true)?;
-                    }
+                    self.add_type(out, x, true)?;
                 }
                 if out.mask & mask::VOID != 0 {
                     return self.err("Void can only be used as a standalone type", t.span.line);
+                }
+                if out.mask & mask::NEVER != 0 {
+                    return self.err("never can only be used as a standalone type", t.span.line);
                 }
                 if out.is_mixed() {
                     return self.err(
@@ -724,43 +756,73 @@ impl Compiler {
                 }
             }
             TypeKind::Intersection(ts) => {
-                let mut g = Vec::new();
+                let mut group = TypeDecl::default();
                 for p in ts {
-                    match &p.kind {
-                        TypeKind::Named(n) => {
-                            let lc = n.name.to_ascii_lowercase();
-                            if n.kind == ast::NameKind::Unqualified && is_builtin_type(&lc) {
-                                return self.err(
-                                    format!(
-                                        "Type {} cannot be part of an intersection type",
-                                        String::from_utf8_lossy(&lc)
-                                    ),
-                                    p.span.line,
-                                );
-                            }
-                            g.push(ZStr::from(self.resolve_type_class(n)));
-                        }
-                        TypeKind::Array => {
-                            return self.err(
-                                "Type array cannot be part of an intersection type",
-                                p.span.line,
-                            )
-                        }
-                        TypeKind::Static => {
-                            return self.err(
-                                "Type static cannot be part of an intersection type",
-                                p.span.line,
-                            )
-                        }
-                        TypeKind::Callable => {
-                            return self.err(
-                                "Type callable cannot be part of an intersection type",
-                                p.span.line,
-                            )
-                        }
-                        _ => {}
+                    let single = self.resolve_type(p)?;
+                    if single.mask != 0
+                        || single.classes.iter().any(|n| {
+                            n.eq_ignore_ascii_case(b"self") || n.eq_ignore_ascii_case(b"parent")
+                        })
+                    {
+                        return self.err(
+                            format!(
+                                "Type {} cannot be part of an intersection type",
+                                single.to_php_string()
+                            ),
+                            p.span.line,
+                        );
+                    }
+                    for name in single.classes {
+                        self.add_class_type(&mut group, name, p.span.line)?;
                     }
                 }
+                let g = group.classes;
+                let text = |g: &[ZStr]| {
+                    g.iter()
+                        .map(ZStr::to_string_lossy)
+                        .collect::<Vec<_>>()
+                        .join("&")
+                };
+                for previous in &out.intersections {
+                    let (smaller, larger) = if previous.len() < g.len() {
+                        (previous, &g)
+                    } else {
+                        (&g, previous)
+                    };
+                    if smaller
+                        .iter()
+                        .all(|n| larger.iter().any(|c| c.eq_ignore_ascii_case(n.as_bytes())))
+                    {
+                        let message = if smaller.len() == larger.len() {
+                            format!(
+                                "Type {} is redundant with type {}",
+                                text(smaller),
+                                text(larger)
+                            )
+                        } else {
+                            format!(
+                                "Type {} is redundant as it is more restrictive than type {}",
+                                text(larger),
+                                text(smaller)
+                            )
+                        };
+                        return self.err(message, t.span.line);
+                    }
+                }
+                for c in &out.classes {
+                    if g.iter().any(|n| n.eq_ignore_ascii_case(c.as_bytes())) {
+                        return self.err(
+                            format!(
+                                "Type {} is redundant as it is more restrictive than type {c}",
+                                text(&g)
+                            ),
+                            t.span.line,
+                        );
+                    }
+                }
+                out.members.push(crate::types::TypeMember::Intersection(
+                    out.intersections.len(),
+                ));
                 out.intersections.push(g);
                 if !in_union {
                     out.pure_intersection = true;
@@ -768,6 +830,23 @@ impl Compiler {
             }
             TypeKind::Named(n) => {
                 let lc = n.name.to_ascii_lowercase();
+                if n.kind != ast::NameKind::Unqualified && is_builtin_type(&lc) {
+                    return self.err(
+                        format!(
+                            "Type declaration '{}' must be unqualified",
+                            String::from_utf8_lossy(&lc)
+                        ),
+                        t.span.line,
+                    );
+                }
+                if n.kind == ast::NameKind::FullyQualified
+                    && matches!(lc.as_slice(), b"self" | b"parent")
+                {
+                    return self.err(
+                        format!("'\\{}' is an invalid class name", n.as_str_lossy()),
+                        t.span.line,
+                    );
+                }
                 if n.kind == ast::NameKind::Unqualified {
                     let m = match lc.as_slice() {
                         b"int" => Some((mask::LONG, "int")),
@@ -788,6 +867,12 @@ impl Compiler {
                         _ => None,
                     };
                     if let Some((m, nm)) = m {
+                        if in_union && m == mask::ANY {
+                            return self.err(
+                                "Type mixed can only be used as a standalone type",
+                                t.span.line,
+                            );
+                        }
                         return self.add_mask(out, m, nm, t.span.line);
                     }
                     if matches!(lc.as_slice(), b"self" | b"parent") {
@@ -797,6 +882,16 @@ impl Compiler {
                                     "Cannot use \"{}\" when no class scope is active",
                                     String::from_utf8_lossy(&lc)
                                 ),
+                                t.span.line,
+                            );
+                        }
+                        if lc.as_slice() == b"parent"
+                            && self
+                                .current_class()
+                                .is_some_and(|c| !c.is_trait && c.parent.is_none())
+                        {
+                            return self.err(
+                                "Cannot use \"parent\" when current class scope has no parent",
                                 t.span.line,
                             );
                         }
@@ -810,11 +905,11 @@ impl Compiler {
                                 })
                         });
                         let resolved = if lc.as_slice() == b"self" {
-                            known.map_or_else(|| ZStr::from("self"), |c| c.name.clone())
+                            known.map_or_else(|| ZStr::from(n.name.as_slice()), |c| c.name.clone())
                         } else {
                             known
                                 .and_then(|c| c.parent.clone())
-                                .unwrap_or_else(|| ZStr::from("parent"))
+                                .unwrap_or_else(|| ZStr::from(n.name.as_slice()))
                         };
                         self.add_class_type(out, resolved, t.span.line)?;
                         return Ok(());
@@ -822,7 +917,8 @@ impl Compiler {
                     if matches!(
                         lc.as_slice(),
                         b"integer" | b"boolean" | b"double" | b"resource"
-                    ) {
+                    ) && !self.class_uses.contains_key(&lc)
+                    {
                         let correct = match lc.as_slice() {
                             b"integer" => Some("int"),
                             b"boolean" => Some("bool"),
@@ -830,18 +926,36 @@ impl Compiler {
                             _ => None,
                         };
                         let name = String::from_utf8_lossy(&n.name).into_owned();
+                        let class_name =
+                            String::from_utf8_lossy(&self.resolve_class_name(n)).into_owned();
+                        let extra = if self.namespace.is_empty() {
+                            ""
+                        } else {
+                            " or import the class with \"use\""
+                        };
                         let msg = match correct {
                             Some(c) => format!(
-                                "\"{name}\" will be interpreted as a class name. Did you mean \"{c}\"? Write \"\\{name}\" to suppress this warning"
+                                "\"{name}\" will be interpreted as a class name. Did you mean \"{c}\"? Write \"\\{class_name}\"{extra} to suppress this warning"
                             ),
                             None => format!(
-                                "\"{name}\" is not a supported builtin type and will be interpreted as a class name. Write \"\\{name}\" to suppress this warning"
+                                "\"{name}\" is not a supported builtin type and will be interpreted as a class name. Write \"\\{class_name}\"{extra} to suppress this warning"
                             ),
                         };
                         self.warnings.push((128, msg, t.span.line));
                     }
                 }
                 let resolved = ZStr::from(self.resolve_class_name(n));
+                let last = resolved
+                    .as_bytes()
+                    .rsplit(|c| *c == b'\\')
+                    .next()
+                    .unwrap_or_default();
+                if is_reserved_class_name(&last.to_ascii_lowercase()) {
+                    return self.err(
+                        format!("Cannot use \"{resolved}\" as a type name as it is reserved"),
+                        t.span.line,
+                    );
+                }
                 self.add_class_type(out, resolved, t.span.line)?;
             }
         }
@@ -863,32 +977,44 @@ impl Compiler {
         {
             return self.err(format!("Duplicate type {name} is redundant"), line);
         }
+        if out.mask & mask::ITERABLE != 0 && name.eq_ignore_ascii_case(b"Traversable") {
+            return self.err(format!("Duplicate type {name} is redundant"), line);
+        }
+        for g in &out.intersections {
+            if g.iter().any(|c| c.eq_ignore_ascii_case(name.as_bytes())) {
+                let text = g
+                    .iter()
+                    .map(ZStr::to_string_lossy)
+                    .collect::<Vec<_>>()
+                    .join("&");
+                return self.err(
+                    format!("Type {text} is redundant as it is more restrictive than type {name}"),
+                    line,
+                );
+            }
+        }
+        out.members
+            .push(crate::types::TypeMember::Class(out.classes.len()));
         out.classes.push(name);
         Ok(())
     }
 
-    fn resolve_type_class(&self, n: &ast::Name) -> Vec<u8> {
-        let lc = n.name.to_ascii_lowercase();
-        if n.kind == ast::NameKind::Unqualified && lc.as_slice() == b"self" {
-            if self
-                .opts
-                .closure_name
-                .as_ref()
-                .is_some_and(|name| name.as_bytes().starts_with(b"{closure:pfa:"))
-            {
-                return n.name.clone();
-            }
-
-            if let Some(c) = self.current_class() {
-                if !c.is_trait && !c.is_anon {
-                    return c.name.as_bytes().to_vec();
-                }
-            }
-        }
-        self.resolve_class_name(n)
-    }
-
     fn add_mask(&mut self, out: &mut TypeDecl, m: u32, name: &str, line: u32) -> CResult<()> {
+        if (m & (mask::ARRAY | mask::ITERABLE) != 0)
+            && out.mask & (mask::ARRAY | mask::ITERABLE) != 0
+        {
+            return self.err("Duplicate type array is redundant", line);
+        }
+        if m == mask::ITERABLE {
+            if out
+                .classes
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(b"Traversable"))
+            {
+                return self.err("Duplicate type Traversable is redundant", line);
+            }
+            out.members.push(crate::types::TypeMember::Iterable);
+        }
         if out.mask & m == m && m != 0 {
             return self.err(format!("Duplicate type {name} is redundant"), line);
         }
@@ -2262,6 +2388,9 @@ impl Compiler {
                 non_static(self)?;
                 public(self);
                 ret_type(self, m::ARRAY | m::NULL, "?array")?;
+                if uf.return_type.as_ref().is_some_and(TypeDecl::allows_null) {
+                    self.warnings.push((8192, format!("Returning null from {cname}::__debugInfo() is deprecated, make the return type non-nullable and return an empty array instead"), line));
+                }
             }
             "__serialize" | "__sleep" => {
                 args(self, 0)?;
@@ -2383,7 +2512,7 @@ fn is_builtin_type(lc: &[u8]) -> bool {
     )
 }
 
-fn is_reserved_class_name(lc: &[u8]) -> bool {
+pub(super) fn is_reserved_class_name(lc: &[u8]) -> bool {
     matches!(
         lc,
         b"self"

@@ -144,7 +144,7 @@ impl<'a> Checker<'a> {
         self.vm
             .find_class(n.as_bytes())
             .map(Found::Linked)
-            .or_else(|| crate::classlink::unlinked_decl(n.as_bytes()).map(Found::Unlinked))
+            .or_else(|| crate::classlink::variance_decl(n.as_bytes()).map(Found::Unlinked))
     }
 
     /// `unlinked_instanceof`.

@@ -2,7 +2,7 @@
 //! `"strlen(string $string): int"`.
 
 use crate::opcode::ParamInfo;
-use crate::types::{mask, TypeDecl};
+use crate::types::{mask, TypeDecl, TypeMember};
 use php_runtime::{Value, ZArray, ZStr};
 
 /// A parsed signature.
@@ -27,6 +27,8 @@ pub(crate) fn parse_type(s: &str) -> TypeDecl {
     for part in s.split('|') {
         let part = part.trim().trim_start_matches('(').trim_end_matches(')');
         if part.contains('&') {
+            t.members
+                .push(TypeMember::Intersection(t.intersections.len()));
             t.intersections
                 .push(part.split('&').map(|p| ZStr::from(p.trim())).collect());
             continue;
@@ -49,12 +51,18 @@ pub(crate) fn parse_type(s: &str) -> TypeDecl {
             "static" => mask::STATIC,
             "resource" => mask::RESOURCE,
             _ => {
+                t.members.push(TypeMember::Class(t.classes.len()));
                 t.classes.push(ZStr::from(part.trim_start_matches('\\')));
                 0
             }
         };
+        if m == mask::ITERABLE {
+            t.members.push(TypeMember::Iterable);
+        }
         t.mask |= m;
     }
+    t.pure_intersection =
+        t.intersections.len() == 1 && t.classes.is_empty() && t.mask == 0 && !nullable;
     if nullable {
         t.mask |= mask::NULL;
     }

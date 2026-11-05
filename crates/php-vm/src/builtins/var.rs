@@ -124,14 +124,29 @@ fn settype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             Value::Array(_) => v,
             Value::Null => Value::Array(ZArray::new()),
             Value::Object(o) => Value::Array(vm.object_to_array(&o)?),
+            Value::Float(f) if f.is_nan() => {
+                vm.warning("unexpected NAN value was coerced to array")?;
+                Value::Array(ZArray::from_values([r.get()]))
+            }
             other => Value::Array(ZArray::from_values([other])),
         },
-        b"null" => Value::Null,
+        b"null" => {
+            if matches!(v, Value::Float(f) if f.is_nan()) {
+                vm.warning("unexpected NAN value was coerced to null")?;
+            }
+            Value::Null
+        }
         b"object" => match v {
             Value::Object(_) => v,
             Value::Array(arr) => vm.array_to_object(&arr)?,
             Value::Null => vm.create_std_object_vm()?,
             other => {
+                let other = if matches!(other, Value::Float(f) if f.is_nan()) {
+                    vm.warning("unexpected NAN value was coerced to object")?;
+                    r.get()
+                } else {
+                    other
+                };
                 let o = vm.create_std_object_vm()?;
                 if let Value::Object(obj) = &o {
                     vm.write_dynamic_prop(obj, ZStr::from("scalar"), other);

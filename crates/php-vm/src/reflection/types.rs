@@ -6,7 +6,7 @@ use super::{new_refl, this_refl, Refl, PRIV, PUB};
 use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, Class};
 use crate::func::Args;
-use crate::types::{mask, TypeDecl};
+use crate::types::{mask, TypeDecl, TypeMember};
 use crate::vm::{Vm, VmResult};
 use php_runtime::{Value, ZArray, ZStr};
 use std::rc::Rc;
@@ -50,14 +50,24 @@ impl ZType {
             z.intersection = true;
             return z;
         }
-        for g in &t.intersections {
-            z.names.push(TypeElem::Inter(g.clone()));
-        }
-        for c in &t.classes {
-            z.names.push(TypeElem::Class(c.clone()));
+        if t.members.is_empty() {
+            for g in &t.intersections {
+                z.names.push(TypeElem::Inter(g.clone()));
+            }
+            for c in &t.classes {
+                z.names.push(TypeElem::Class(c.clone()));
+            }
+        } else {
+            for member in &t.members {
+                z.names.push(match *member {
+                    TypeMember::Class(i) => TypeElem::Class(t.classes[i].clone()),
+                    TypeMember::Intersection(i) => TypeElem::Inter(t.intersections[i].clone()),
+                    TypeMember::Iterable => TypeElem::Class(ZStr::from("Traversable")),
+                });
+            }
         }
         if t.mask & mask::ITERABLE != 0 {
-            if z.names.is_empty() && t.mask & !(mask::ITERABLE | mask::NULL) == 0 {
+            if !t.has_classes() && t.mask & !(mask::ITERABLE | mask::NULL) == 0 {
                 z.iterable = true;
             }
             if !z
@@ -250,8 +260,15 @@ fn to_decl(z: &ZType) -> TypeDecl {
     }
     for e in &z.names {
         match e {
-            TypeElem::Class(c) => t.classes.push(c.clone()),
-            TypeElem::Inter(g) => t.intersections.push(g.clone()),
+            TypeElem::Class(c) => {
+                t.members.push(TypeMember::Class(t.classes.len()));
+                t.classes.push(c.clone());
+            }
+            TypeElem::Inter(g) => {
+                t.members
+                    .push(TypeMember::Intersection(t.intersections.len()));
+                t.intersections.push(g.clone());
+            }
         }
     }
     t

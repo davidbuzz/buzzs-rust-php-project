@@ -977,7 +977,10 @@ fn class_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     }
     if matches!(
-        lc.as_bytes(),
+        lc.as_bytes()
+            .rsplit(|c| *c == b'\\')
+            .next()
+            .unwrap_or_default(),
         b"self"
             | b"parent"
             | b"static"
@@ -997,8 +1000,8 @@ fn class_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             | b"callable"
     ) {
         return Err(vm.fatal(&format!(
-            "Cannot use '{}' as class name as it is reserved",
-            String::from_utf8_lossy(an)
+            "Cannot use \"{}\" as a class alias as it is reserved",
+            lc.to_string_lossy()
         )));
     }
     // `zend_assert_valid_class_name(lcname, "a class alias")`.

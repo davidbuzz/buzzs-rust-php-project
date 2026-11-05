@@ -412,7 +412,7 @@ impl Compiler {
         match kind {
             ast::UseKind::Class => {
                 let lc = short.to_ascii_lowercase();
-                if matches!(lc.as_slice(), b"self" | b"parent" | b"static") {
+                if super::decl::is_reserved_class_name(&lc) {
                     return self.err(
                         format!(
                             "Cannot use {} as {} because '{}' is a special class name",
@@ -616,19 +616,30 @@ impl Compiler {
         let is_gen = self.fref().is_generator;
         if let Some(rt) = &self.fref().return_type {
             if !is_gen {
+                let what = if self.current_class().is_some() {
+                    "method"
+                } else {
+                    "function"
+                };
                 if rt.is_void() && e.is_some() {
-                    return self.err("A void function must not return a value", line);
+                    let hint = if e.is_some_and(|e| matches!(self.try_fold(e), Some(Value::Null))) {
+                        " (did you mean \"return;\" instead of \"return null;\"?)"
+                    } else {
+                        ""
+                    };
+                    return self.err(format!("A void {what} must not return a value{hint}"), line);
                 }
                 if rt.is_never() {
-                    return self.err("A never-returning function must not return", line);
+                    return self.err(format!("A never-returning {what} must not return"), line);
                 }
                 if e.is_none() && !rt.is_void() && self.fref().has_return_type {
-                    let fname = self.fn_display_name();
+                    let hint = if rt.allows_null() {
+                        " (did you mean \"return null;\" instead of \"return;\"?)"
+                    } else {
+                        ""
+                    };
                     return self.err(
-                        format!(
-                            "{fname}(): Return value must be of type {}, none returned",
-                            rt.to_php_string()
-                        ),
+                        format!("A {what} with return type must return a value{hint}"),
                         line,
                     );
                 }

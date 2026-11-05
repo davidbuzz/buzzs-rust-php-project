@@ -39,6 +39,17 @@ pub mod mask {
     pub const ANY: u32 = NULL | BOOL | LONG | DOUBLE | STRING | ARRAY | OBJECT | RESOURCE;
 }
 
+/// A class-like member in declaration order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TypeMember {
+    /// Index into `TypeDecl::classes`.
+    Class(usize),
+    /// Index into `TypeDecl::intersections`.
+    Intersection(usize),
+    /// The `Traversable` member of the iterable alias.
+    Iterable,
+}
+
 /// A parsed type declaration.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TypeDecl {
@@ -51,6 +62,8 @@ pub struct TypeDecl {
     pub intersections: Vec<Vec<ZStr>>,
     /// Whether the type is a pure intersection type (`A&B`).
     pub pure_intersection: bool,
+    /// Class-like members in source order; empty for legacy builtin declarations.
+    pub members: Vec<TypeMember>,
 }
 
 impl TypeDecl {
@@ -123,7 +136,7 @@ impl TypeDecl {
         let resolve = |n: &ZStr| -> String {
             if n.eq_ignore_ascii_case(b"self") {
                 if let Some(s) = self_name {
-                    return s.to_string_lossy();
+                    return crate::object::display_name(s).to_string_lossy();
                 }
             } else if n.eq_ignore_ascii_case(b"parent") {
                 if let Some(p) = parent_name {
@@ -137,7 +150,7 @@ impl TypeDecl {
             if let Some(g) = self.intersections.first() {
                 parts.push(g.iter().map(&resolve).collect::<Vec<_>>().join("&"));
             }
-        } else {
+        } else if self.members.is_empty() {
             for g in &self.intersections {
                 parts.push(format!(
                     "({})",
@@ -146,6 +159,21 @@ impl TypeDecl {
             }
             for c in &self.classes {
                 parts.push(resolve(c));
+            }
+        } else {
+            for member in &self.members {
+                match *member {
+                    TypeMember::Class(i) => parts.push(resolve(&self.classes[i])),
+                    TypeMember::Intersection(i) => parts.push(format!(
+                        "({})",
+                        self.intersections[i]
+                            .iter()
+                            .map(&resolve)
+                            .collect::<Vec<_>>()
+                            .join("&")
+                    )),
+                    TypeMember::Iterable => parts.push("Traversable".into()),
+                }
             }
         }
         let m = self.mask;

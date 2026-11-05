@@ -1039,6 +1039,31 @@ impl Vm {
         Throw::Fatal
     }
 
+    /// A hierarchy dependency cannot fail gracefully once variance used the unlinked class.
+    fn lookup_class_for_inheritance(
+        &mut self,
+        name: &ZStr,
+        decl: &Rc<ClassDecl>,
+    ) -> VmResult<Option<Rc<Class>>> {
+        match self.lookup_class(name) {
+            Err(Throw::Exception(e))
+                if LINK_STATE.with(|st| {
+                    st.borrow()
+                        .unlinked_uses
+                        .iter()
+                        .any(|d| Rc::ptr_eq(d, decl))
+                }) =>
+            {
+                let message = self.to_zstr(&Value::Object(e))?;
+                Err(self.fatal(&format!(
+                    "During inheritance of {} with variance dependencies: Uncaught {message}",
+                    decl.name
+                )))
+            }
+            result => result,
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     /// Links a class; also returns the warnings recorded while linking
     /// (level, message, line), to be emitted after the class is declared.
@@ -1061,7 +1086,7 @@ impl Vm {
         // Parent.
         let parent = match &decl.parent {
             Some(p) => {
-                let Some(pc) = self.lookup_class(p)? else {
+                let Some(pc) = self.lookup_class_for_inheritance(p, decl)? else {
                     let kind = if decl.kind == ClassKind::Interface {
                         "Interface"
                     } else {
@@ -1135,7 +1160,7 @@ impl Vm {
             }
         }
         for iname in &iface_names {
-            let Some(ic) = self.lookup_class(iname)? else {
+            let Some(ic) = self.lookup_class_for_inheritance(iname, decl)? else {
                 return Err(self.make_throw(
                     "Error",
                     &format!("Interface \"{}\" not found", iname.to_string_lossy()),
@@ -1521,6 +1546,7 @@ struct LinkState {
     /// Number of `link_class` calls in progress.
     depth: usize,
     linking: Vec<Rc<ClassDecl>>,
+    unlinked_uses: Vec<Rc<ClassDecl>>,
     delayed: Vec<ZStr>,
     pending: Vec<PendingClass>,
 }
@@ -1552,6 +1578,18 @@ pub(crate) fn unlinked_decl(name: &[u8]) -> Option<Rc<ClassDecl>> {
     })
 }
 
+/// Looks up an unlinked class for variance and records the hierarchy dependency.
+pub(crate) fn variance_decl(name: &[u8]) -> Option<Rc<ClassDecl>> {
+    let decl = unlinked_decl(name)?;
+    LINK_STATE.with(|st| {
+        let mut st = st.borrow_mut();
+        if !st.unlinked_uses.iter().any(|d| Rc::ptr_eq(d, &decl)) {
+            st.unlinked_uses.push(decl.clone());
+        }
+    });
+    Some(decl)
+}
+
 /// Whether a declared class still waits for variance checks.
 fn is_pending(cls: &Rc<Class>) -> bool {
     LINK_STATE.with(|st| st.borrow().pending.iter().any(|p| Rc::ptr_eq(&p.cls, cls)))
@@ -1568,6 +1606,7 @@ impl LinkingGuard {
             if st.depth == 0 {
                 // A previous top-level declaration ended in a fatal error.
                 st.linking.clear();
+                st.unlinked_uses.clear();
                 st.delayed.clear();
                 st.pending.clear();
             }
@@ -1593,6 +1632,7 @@ impl Drop for LinkingGuard {
         self.declared();
         LINK_STATE.with(|st| {
             let mut st = st.borrow_mut();
+            st.unlinked_uses.retain(|d| !Rc::ptr_eq(d, &self.0));
             st.depth = st.depth.saturating_sub(1);
         });
     }
