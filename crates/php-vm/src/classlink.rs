@@ -603,6 +603,38 @@ impl Vm {
         })
     }
 
+    /// The storage slot of `A::$name` for `isset()`/`empty()`
+    /// (`zend_std_get_static_property_with_info` with `BP_VAR_IS`): an
+    /// undeclared or inaccessible static property yields no slot instead
+    /// of an error.
+    #[cold]
+    pub(crate) fn static_prop_cell_is(
+        &mut self,
+        cls: &Rc<Class>,
+        name: &ZStr,
+    ) -> VmResult<Option<Rc<RefCell<Value>>>> {
+        let Some(sp) = cls
+            .find_static(name.as_bytes())
+            .cloned()
+            .or_else(|| inherited_private_static(cls, name.as_bytes()))
+        else {
+            return Ok(None);
+        };
+        if sp.flags & flags::VISIBILITY != flags::PUBLIC {
+            let scope = self.scope();
+            let decl = self.find_class(sp.class.as_bytes());
+            let ok = match (sp.flags & flags::VISIBILITY, &scope, &decl) {
+                (flags::PRIVATE, Some(s), Some(d)) => Rc::ptr_eq(s, d),
+                (flags::PROTECTED, Some(s), Some(d)) => s.is_subclass_of(d) || d.is_subclass_of(s),
+                _ => false,
+            };
+            if !ok {
+                return Ok(None);
+            }
+        }
+        self.static_prop_cell(cls, name).map(Some)
+    }
+
     /// The storage slot of `A::$name`.
     pub(crate) fn static_prop_cell(
         &mut self,
@@ -1480,6 +1512,17 @@ impl Vm {
         for (w, l) in std::mem::take(&mut cc.warnings) {
             recorded.push((crate::errors::level::DEPRECATED, w, l));
         }
+        // `do_implement_interface` runs the interface hooks while binding
+        // the interfaces, before `zend_verify_abstract_class`.
+        for iface in cls.interfaces.clone() {
+            if let Some(f) = iface
+                .hooks
+                .as_ref()
+                .and_then(|h| h.interface_gets_implemented)
+            {
+                f(self, &cls)?;
+            }
+        }
         // Abstract method check.
         // (`zend_verify_abstract_class`: an explicitly abstract class must
         // still implement its private abstract methods.)
@@ -1575,15 +1618,6 @@ impl Vm {
         }
         if let Some((e, l)) = crate::attrs::check_override(&cls) {
             return Err(self.fatal_at(&e, if l == 0 { line } else { l }));
-        }
-        for iface in cls.interfaces.clone() {
-            if let Some(f) = iface
-                .hooks
-                .as_ref()
-                .and_then(|h| h.interface_gets_implemented)
-            {
-                f(self, &cls)?;
-            }
         }
         // `zend_implement_serializable`.
         if cls.flags & cflags::EXPLICIT_ABSTRACT == 0
@@ -2233,6 +2267,51 @@ fn visibility_name(f: u32) -> &'static str {
     }
 }
 
+/// `do_inherit_property` for a static property `pd` declared in class
+/// `name`: an inherited non-static property cannot become static, and an
+/// inherited static one may only widen its visibility.
+#[cold]
+fn static_prop_override_error(
+    pd: &crate::class::PropDecl,
+    name: &ZStr,
+    prop_map: &HashMap<ZStr, Rc<PropInfo>>,
+    static_map: &HashMap<ZStr, usize>,
+    static_props: &[StaticProp],
+) -> Option<String> {
+    if let Some(e) = prop_map
+        .get(&pd.name)
+        .filter(|e| e.class != *name && e.visibility() != flags::PRIVATE)
+    {
+        return Some(format!(
+            "Cannot redeclare non static {}::${} as static {}::${}",
+            object::display_name(&e.class),
+            pd.name,
+            object::display_name(name),
+            pd.name
+        ));
+    }
+    let sp = &static_props[*static_map.get(&pd.name)?];
+    let parent_vis = sp.flags & flags::VISIBILITY;
+    if sp.class == *name
+        || parent_vis == flags::PRIVATE
+        || pd.flags & flags::VISIBILITY <= parent_vis
+    {
+        return None;
+    }
+    Some(format!(
+        "Access level to {}::${} must be {} (as in class {}){}",
+        object::display_name(name),
+        pd.name,
+        visibility_name(sp.flags),
+        object::display_name(&sp.class),
+        if parent_vis == flags::PUBLIC {
+            ""
+        } else {
+            " or weaker"
+        }
+    ))
+}
+
 /// Checks overriding rules; returns (message, line).
 fn check_method_inheritance(cls: &Rc<Class>) -> Option<(String, u32)> {
     if let Some(parent) = &cls.parent {
@@ -2451,6 +2530,26 @@ fn build_class(
                     cd.name
                 ));
             }
+            // `do_inherit_constant_check`: the visibility may only widen.
+            let parent_vis = existing.flags & flags::VISIBILITY;
+            if cd.flags & flags::VISIBILITY > parent_vis && err.is_none() {
+                let kind = if interfaces.iter().any(|i| i.name == existing.class) {
+                    "interface"
+                } else {
+                    "class"
+                };
+                *err = Some(format!(
+                    "Access level to {display}::{} must be {} (as in {kind} {}){}",
+                    cd.name,
+                    visibility_name(existing.flags),
+                    object::display_name(&existing.class),
+                    if parent_vis == flags::PUBLIC {
+                        ""
+                    } else {
+                        " or weaker"
+                    }
+                ));
+            }
         }
         let value = match &cd.value {
             ConstExpr::Value(v) if cd.ty.is_none() => Some(v.clone()),
@@ -2658,6 +2757,10 @@ fn build_class(
             }
         }
         if pd.flags & flags::STATIC != 0 {
+            if err.is_none() {
+                *err =
+                    static_prop_override_error(&pd, &name, &prop_map, &static_map, &static_props);
+            }
             let sp = StaticProp {
                 name: pd.name.clone(),
                 flags: pd.flags,

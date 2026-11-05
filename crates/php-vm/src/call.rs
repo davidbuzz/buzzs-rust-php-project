@@ -349,12 +349,14 @@ impl Vm {
             } else {
                 "protected"
             };
+            // `zend_bad_method_call`: the method's declaring scope and the
+            // name as spelled by the caller.
             return Err(self.make_throw(
                 "Error",
                 &format!(
                     "Call to {vis} method {}::{}() from {}",
-                    object::display_name(&cls.name),
-                    m.name,
+                    object::display_name(&m.scope().name),
+                    name.to_string_lossy(),
                     scope_display(scope.as_ref())
                 ),
             ));
@@ -388,6 +390,33 @@ impl Vm {
             called: Some(called),
             ..PendingCall::new(m.func.clone())
         }
+    }
+
+    /// `X::__construct()` on an inaccessible private constructor
+    /// (`ZEND_INIT_STATIC_METHOD_CALL` with an unused op2): "Cannot call
+    /// private X::__construct()" unless `$this` is exactly the constructor's
+    /// class.
+    #[cold]
+    fn private_ctor_call_error(
+        &mut self,
+        cls: &Rc<Class>,
+        m: &Method,
+        this: Option<&Obj>,
+        lc: &ZStr,
+    ) -> Option<Throw> {
+        if lc.as_bytes() != b"__construct" || m.visibility() != flags::PRIVATE {
+            return None;
+        }
+        if this.is_some_and(|t| Rc::ptr_eq(object::class_of(t), &m.scope())) {
+            return None;
+        }
+        Some(self.make_throw(
+            "Error",
+            &format!(
+                "Cannot call private {}::__construct()",
+                object::display_name(&cls.name)
+            ),
+        ))
     }
 
     fn magic_call(
@@ -431,10 +460,17 @@ impl Vm {
         let m = match found {
             Some(m) if self.can_access_method(&m, scope.as_ref()) => m,
             other => {
-                // __call in object context, else __callStatic.
+                if let Some(m) = &other {
+                    if let Some(e) = self.private_ctor_call_error(cls, m, this.as_ref(), &lc) {
+                        return Err(e);
+                    }
+                }
+                // __call in object context, else __callStatic
+                // (`get_static_method_fallback`): the top-level `__call()`
+                // of `$this`'s class is favoured over the named class's.
                 if let Some(t) = &this {
-                    if object::class_of(t).is_subclass_of(cls) {
-                        if let Some(callm) = cls.magic.call.clone() {
+                    if cls.magic.call.is_some() && object::class_of(t).is_subclass_of(cls) {
+                        if let Some(callm) = object::class_of(t).magic.call.clone() {
                             return Ok(self.magic_call(
                                 &callm,
                                 Some(t.clone()),
@@ -461,8 +497,8 @@ impl Vm {
                             "Error",
                             &format!(
                                 "Call to {vis} method {}::{}() from {}",
-                                object::display_name(&cls.name),
-                                m.name,
+                                object::display_name(&m.scope().name),
+                                name.to_string_lossy(),
                                 scope_display(scope.as_ref())
                             ),
                         )
@@ -1391,6 +1427,16 @@ impl Vm {
                 match callable {
                     Ok(_) => continue,
                     Err(why) => {
+                        // `Z_PARAM_FUNC` checks without suppressing the
+                        // callable deprecations; a valid callable emits
+                        // them when the function resolves it, an invalid
+                        // one here (a class that was not found has none,
+                        // and is not autoloaded twice).
+                        if !why.contains("not found") {
+                            if let Err(e) = self.zend_is_callable(v, false) {
+                                return self.builtin_arg_error(depth, e);
+                            }
+                        }
                         let nul = if ty.allows_null() { " or null" } else { "" };
                         let e = self.make_throw(
                             "TypeError",

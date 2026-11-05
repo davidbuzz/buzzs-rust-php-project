@@ -1239,9 +1239,20 @@ fn clone_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 ArrayKey::Str(s) => s.clone(),
                 ArrayKey::Int(i) => ZStr::from(i.to_string()),
             };
+            // `zend_objects_clone_obj_with`: a reference held only by the
+            // array is unwrapped; a shared one cannot be assigned.
+            let pv = match pv {
+                Value::Reference(r) if r.refcount() > 1 => {
+                    return Err(vm.make_throw(
+                        "Error",
+                        "Cannot assign by reference when cloning with updated properties",
+                    ));
+                }
+                pv => pv.deref(),
+            };
             let d = crate::object::data(o);
             d.flags.set(d.flags.get() | crate::object::oflags::CLONING);
-            let res = vm.write_property(o, &name, pv.deref());
+            let res = vm.write_property(o, &name, pv);
             d.flags.set(d.flags.get() & !crate::object::oflags::CLONING);
             res?;
         }
