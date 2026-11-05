@@ -311,3 +311,14 @@ echo "end\n";"#);
          TraversableTest::drop\nend\n"
     );
 }
+
+#[test]
+fn interned_strings_equal_to_extension_names_are_not_marked_utf8() {
+    // strings_marked_as_utf8.phpt: "foo" is ZendTestNS2\Foo's property name.
+    let out = run(r#"
+var_dump(zend_test_is_string_marked_as_valid_utf8("f" . "o" . "o"));
+var_dump(zend_test_is_string_marked_as_valid_utf8("f" . "x" . "o"));
+$f = "f"; $o = "o";
+var_dump(zend_test_is_string_marked_as_valid_utf8($f . $o . $o));"#);
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\n");
+}

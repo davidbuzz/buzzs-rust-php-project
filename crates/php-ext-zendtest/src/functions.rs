@@ -423,11 +423,34 @@ fn call_stack_use_all(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 /// `zend_test_is_string_marked_as_valid_utf8(string $string)`: strings
-/// carry no UTF-8 flag here; report validity.
-fn is_valid_utf8(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(
-        std::str::from_utf8(a.str(0).as_bytes()).is_ok(),
-    ))
+/// carry no UTF-8 flag here; report validity. A compile-time string that
+/// interning replaces by an equal permanent string (a class, property,
+/// method or function name registered by an extension, which carries no
+/// flag) is unmarked, as in php-src.
+fn is_valid_utf8(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let s = a.str(0);
+    let b = s.as_bytes();
+    if b.len() > 1 && s.is_interned() && is_permanent_name(vm, b) {
+        return Ok(Value::Bool(false));
+    }
+    Ok(Value::Bool(std::str::from_utf8(b).is_ok()))
+}
+
+/// Whether `name` is a permanent interned string: a name an extension
+/// registered (single characters are known strings with the flag).
+fn is_permanent_name(vm: &Vm, name: &[u8]) -> bool {
+    use php_vm::class::cflags;
+    let internal_fn = matches!(
+        vm.functions.get(&ZStr::from(name)),
+        Some(php_vm::func::Func::Builtin(_))
+    );
+    internal_fn
+        || vm.classes.values().any(|c| {
+            c.flags & cflags::INTERNAL != 0
+                && (c.lc_name.as_bytes() == name
+                    || c.methods.contains_key(name)
+                    || c.props.iter().any(|p| p.name.as_bytes() == name))
+        })
 }
 
 /// `zend_get_map_ptr_last()`.
