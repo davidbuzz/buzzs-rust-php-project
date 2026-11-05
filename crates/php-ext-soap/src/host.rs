@@ -215,9 +215,11 @@ impl<'a> VmHost<'a> {
     }
 
     /// Calls a PHP function by name.
+    /// Calls an internal function the way php-src's C code does (not seen
+    /// by observers).
     fn call_named(&mut self, name: &str, args: Vec<Value>) -> RtResult<Value> {
         self.vm
-            .call_value(&Value::from(name), args)
+            .call_function(name, args)
             .map_err(|t| to_rt(self.vm, t))
     }
 
@@ -731,9 +733,7 @@ impl SoapHost for VmHost<'_> {
             args.push(c.clone());
         }
         let vm = &mut *self.vm;
-        let r = silenced(vm, |vm| {
-            vm.call_value(&Value::from("file_get_contents"), args)
-        });
+        let r = silenced(vm, |vm| vm.call_function("file_get_contents", args));
         match r {
             Ok(Value::Str(s)) => Ok(s.as_bytes().to_vec()),
             Ok(_) => Err(format!("failed to load external entity \"{url}\"\n")),
@@ -766,7 +766,7 @@ impl SoapHost for VmHost<'_> {
 
     fn add_header(&mut self, line: &str) {
         let _ = silenced(self.vm, |vm| {
-            vm.call_value(&Value::from("header"), vec![Value::from(line)])
+            vm.call_function("header", vec![Value::from(line)])
         });
     }
 
