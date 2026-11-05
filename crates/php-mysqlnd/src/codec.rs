@@ -388,9 +388,20 @@ fn binary_value(field: &Field, r: &mut Reader<'_>) -> Option<Value> {
             Some(from_1_to_8_bytes(field, b))
         }
         _ => {
+            // `ps_fetch_string`: `ZVAL_STRINGL_FAST`.
             let (b, _) = var_len(r, pack_len)?;
-            Some(Value::Str(ZStr::from(b)))
+            Some(Value::Str(zstr_fast(b)))
         }
+    }
+}
+
+/// `zend_string_init_fast` (`ZVAL_STRINGL_FAST`): empty and one-byte
+/// values are the shared interned `ZSTR_EMPTY_ALLOC()` / `ZSTR_CHAR(c)`.
+fn zstr_fast(b: &[u8]) -> ZStr {
+    match b {
+        [] => ZStr::empty(),
+        [c] => ZStr::from_byte(*c),
+        _ => ZStr::from(b),
     }
 }
 
@@ -479,7 +490,7 @@ pub fn decode_text_row(
         } else if as_int_or_float && php_type == PhpType::Double {
             Value::Float(php_runtime::numeric::strtod(data).0)
         } else {
-            Value::Str(ZStr::from(data))
+            Value::Str(zstr_fast(data))
         };
         out.push(v);
     }
