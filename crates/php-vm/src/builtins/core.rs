@@ -1115,7 +1115,13 @@ fn debug_print_backtrace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+/// `PHP_FUNCTION(assert)` (`ext/standard/assert.c`).
 fn assert_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    // `!ASSERTG(active) || EG(assertions) <= 0`: only dynamic calls reach
+    // here with assertions disabled (compiled calls skip the call).
+    if !vm.ini.get_bool("assert.active") || vm.ini.get_long("zend.assertions") <= 0 {
+        return Ok(Value::Bool(true));
+    }
     let v = a.at(0);
     if vm.to_bool(&v)? {
         return Ok(Value::Bool(true));
@@ -1126,41 +1132,114 @@ fn assert_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Err(Throw::Exception(o.clone()));
         }
     }
-    let cb = vm
-        .ini
-        .get("assert.callback")
-        .map(<[u8]>::to_vec)
-        .unwrap_or_default();
-    if !cb.is_empty() {
-        let cbv = sv(cb);
-        let (file, line) = vm.current_location();
-        let mut args = vec![Value::Str(file), Value::Int(i64::from(line)), Value::Null];
-        if !desc.is_null() {
-            args.push(desc.clone());
-        }
-        vm.call_value(&cbv, args)?;
-    }
     let msg = if desc.is_null() {
         None
     } else {
         Some(vm.to_zstr(&desc)?)
     };
+    assert_failed(vm, msg)
+}
+
+/// The failure path of `assert()`: the `ASSERT_CALLBACK` call, then the
+/// `AssertionError` / warning and `assert.bail` handling.
+#[cold]
+fn assert_failed(vm: &mut Vm, msg: Option<ZStr>) -> VmResult<Value> {
+    // `ASSERTG(callback)`, else the startup `assert.callback` (`ASSERTG(cb)`).
+    let callback = vm.ext.assert_callback.clone().or_else(|| {
+        vm.ini
+            .config_value("assert.callback")
+            .filter(|c| !c.is_empty())
+            .map(sv)
+    });
+    // An exception the callback left pending (`EG(exception)`).
+    let mut pending: Option<php_runtime::Obj> = None;
+    if let Some(cb) = callback {
+        let (file, line) = vm.current_location();
+        let mut args = vec![Value::Str(file), Value::Int(i64::from(line)), Value::Null];
+        if let Some(m) = &msg {
+            args.push(Value::Str(m.clone()));
+        }
+        // `call_user_function()` → `zend_call_function()`.
+        let r = match vm.zend_is_callable(&cb, false)? {
+            Ok(mut call) => {
+                call.args = args.into_iter().map(Some).collect();
+                vm.call_pending(call)
+            }
+            Err(err) => {
+                let name = vm.callable_name(&cb);
+                Err(vm.make_throw("Error", &format!("Invalid callback {name}, {err}")))
+            }
+        };
+        match r {
+            Ok(_) => {}
+            Err(Throw::Exception(e)) => pending = Some(e),
+            Err(t) => return Err(t),
+        }
+    }
+    let bail = vm.ini.get_bool("assert.bail");
     if vm.ini.get_bool("assert.exception") {
-        let m = msg.map(|m| m.to_string_lossy()).unwrap_or_default();
-        return Err(vm.make_throw("AssertionError", &m));
+        let text = msg.map(|m| m.to_string_lossy()).unwrap_or_default();
+        // `zend_throw_exception(assertion_error_ce, ..., E_ERROR)`.
+        let e = vm.create_exception("AssertionError", &text, crate::errors::level::ERROR)?;
+        if let Some(prev) = &pending {
+            crate::exceptions::chain_previous(&e, prev);
+        }
+        if bail {
+            // `zend_exception_error(EG(exception), E_ERROR)`: not catchable.
+            vm.report_uncaught(&e);
+            return Err(Throw::Fatal);
+        }
+        return Err(Throw::Exception(e));
     }
     if vm.ini.get_bool("assert.warning") {
-        let m = msg.map_or_else(
-            || "Assertion".to_string(),
-            |m| format!("{}", m.to_string_lossy()),
-        );
-        vm.warning(&format!("assert(): {m} failed"))?;
+        let m = msg.map_or_else(|| "Assertion".to_string(), |m| m.to_string_lossy());
+        vm.docref(crate::errors::level::WARNING, &format!("{m} failed"))?;
     }
-    if vm.ini.get_bool("assert.bail") {
-        vm.exit_status = 255;
+    if bail {
+        if let Some(e) = pending {
+            // The callback threw: `zend_exception_error(EG(exception),
+            // E_WARNING)`, then `zend_throw_unwind_exit()`.
+            uncaught_warning(vm, &e)?;
+        }
         return Err(Throw::Exit);
     }
-    Ok(Value::Bool(false))
+    match pending {
+        Some(e) => Err(Throw::Exception(e)),
+        None => Ok(Value::Bool(false)),
+    }
+}
+
+/// `zend_exception_error(ex, E_WARNING)`: reports `e` as an
+/// "Uncaught ..." warning. An exception thrown by its `__toString()` is
+/// reported and stays pending (returned as the throw).
+#[cold]
+fn uncaught_warning(vm: &mut Vm, e: &php_runtime::Obj) -> VmResult<()> {
+    let s = match vm.call_method_name(e, "__toString", Vec::new()) {
+        Ok(v) => v.deref().as_str().cloned().unwrap_or_default(),
+        Err(Throw::Exception(inner)) => {
+            let file = vm
+                .exc_prop(&inner, "file")
+                .as_str()
+                .cloned()
+                .unwrap_or_default();
+            let line =
+                u32::try_from(vm.exc_prop(&inner, "line").as_int().unwrap_or(0)).unwrap_or(0);
+            let msg = format!(
+                "Uncaught {} in exception handling during call to {}::__toString()",
+                object::class_of(&inner).name,
+                object::class_of(e).name
+            );
+            vm.error_at(crate::errors::level::WARNING, &msg, &file, line)?;
+            return Err(Throw::Exception(inner));
+        }
+        Err(t) => return Err(t),
+    };
+    let file = vm.exc_prop(e, "file").as_str().cloned().unwrap_or_default();
+    let line = u32::try_from(vm.exc_prop(e, "line").as_int().unwrap_or(0)).unwrap_or(0);
+    let mut msg = b"Uncaught ".to_vec();
+    msg.extend_from_slice(s.as_bytes());
+    msg.extend_from_slice(b"\n  thrown");
+    vm.error_at_bytes(crate::errors::level::WARNING, &msg, &file, line)
 }
 
 fn class_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

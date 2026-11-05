@@ -29,6 +29,10 @@ pub struct ExtState {
     pub halt_offsets: HashMap<ZStr, i64>,
     /// Random number generator globals (`mt_rand`, `rand`, `lcg_value`).
     pub random: Option<php_random::RandomGlobals>,
+    /// `ASSERTG(callback)` (`ext/standard/assert.c`): the callback set by
+    /// `assert_options(ASSERT_CALLBACK)` or a runtime `assert.callback`
+    /// change; `None` (`IS_UNDEF`) falls back to the startup INI value.
+    pub assert_callback: Option<Value>,
 }
 
 /// Registers a builtin function from a stub signature.

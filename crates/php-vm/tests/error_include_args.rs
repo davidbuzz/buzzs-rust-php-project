@@ -88,3 +88,47 @@ fn require_failure_throws_error() {
         "{out}"
     );
 }
+
+/// `PHP_FUNCTION(assert)` (`ext/standard/assert.c`): dynamic calls honour
+/// `zend.assertions` and `assert.active` (php-src
+/// `ext/standard/tests/assert/gh18509.phpt`, `assert_basic1.phpt`).
+#[test]
+fn assert_dynamic_call_and_active() {
+    let src = "<?php $c = 'assert'; var_dump($c(false));";
+    assert_eq!(run(src, &[("zend.assertions", "0")]), "bool(true)\n");
+    let src = "<?php var_dump(assert(false));";
+    assert_eq!(run(src, &[("assert.active", "0")]), "bool(true)\n");
+}
+
+/// The `AssertionError` code is `E_ERROR`; the startup `assert.callback`
+/// gets file, line, `null` and the description; an invalid callback
+/// throws "Invalid callback" (`zend_call_function`).
+#[test]
+fn assert_callback_and_exception() {
+    let src = "<?php try { assert(false, 'm'); } catch (AssertionError $e) { echo $e->getMessage(), $e->getCode(); }";
+    assert_eq!(run(src, &[]), "m1");
+    let src = "<?php function cb($f, $l, $u, $d) { var_dump($f, $l, $u, $d); }\nvar_dump(assert(false, 'd'));";
+    assert_eq!(
+        run(
+            src,
+            &[
+                ("assert.callback", "cb"),
+                ("assert.exception", "0"),
+                ("display_errors", "1"),
+            ]
+        ),
+        "string(5) \"t.php\"\nint(2)\nNULL\nstring(1) \"d\"\n\nWarning: assert(): d failed in t.php on line 2\nbool(false)\n"
+    );
+    let src = "<?php try { var_dump(assert(false)); } catch (Error $e) { echo $e->getMessage(); }";
+    assert_eq!(
+        run(
+            src,
+            &[
+                ("assert.callback", "nope"),
+                ("assert.exception", "0"),
+                ("assert.warning", "0"),
+            ]
+        ),
+        "Invalid callback nope, function \"nope\" not found or invalid function name"
+    );
+}
