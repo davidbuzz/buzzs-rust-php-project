@@ -12,7 +12,7 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 Current progress (5 Nov 2026): typed references, trait linking/variance rewrite,
 property-hook inheritance, and native stack-limit checks added 405 passing tests across
 Zend/tests, tests/, ext/standard, ext/date and ext/openssl. The baseline now contains
-956 known-failure entry paths, down from 1,187 after 231 paths verified passing in
+949 known-failure entry paths, down from 1,187 after 238 paths verified passing in
 scoped reports were removed. This baseline update is not a new full-suite result.
 
 Scoped validation passed: formatting, build, and clippy for php-runtime, php-vm,
@@ -31,6 +31,15 @@ The configured ArrayObject iterator dispatch is implemented, but its exact
 This is not a new full-suite result. Fixes cover call/reference diagnostics,
 declaration checks and ordering, lazy release detection, internal enum cases,
 JSON output-growth guards, and configured ArrayObject iterator dispatch.
+
+Next integrated worktree batch: 338 Rust tests passed (15 ignored), and scoped
+PHPT acceptance covered 1,918 tests with 1,842 pass, 49 known failures, 26 skip,
+1 XFAIL, zero new failures. Seven additional baseline entries removed.
+Return types: 88/88 ran; coercion: 70/70 ran; type declarations: 509/510 ran;
+lazy objects: 227/228 ran. Method-closure and never-return diagnostics, warning
+ordering, callback coercion, lazy iterator rebinding and fiber destructor traces
+are covered. The remaining lazy dynamic assignment expectation is JIT-specific;
+non-JIT ghost/proxy ordering is preserved and regression-tested.
 
 The final language report covers 1,348 tests: 1,224 pass, 95 fail, 29 skip. The
 seven-language scope covers 1,281 tests: 1,173 pass, 85 fail, 23 skip—138 more passes

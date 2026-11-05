@@ -346,7 +346,6 @@ Zend/tests/iterators/bug48667_1.phpt
 Zend/tests/iterators/bug48667_2.phpt
 Zend/tests/iterators/gh7958.phpt
 Zend/tests/iterators/oss_fuzz_58181.phpt
-Zend/tests/lazy_objects/gh20085.phpt
 Zend/tests/lazy_objects/jit_assign_obj_op_dynamic.phpt
 Zend/tests/line_numbers/gh8810_2.phpt
 Zend/tests/line_numbers/gh8810_6.phpt
@@ -492,8 +491,6 @@ Zend/tests/resource_key.phpt
 Zend/tests/restrict_globals/invalid_append.phpt
 Zend/tests/restrict_globals/invalid_pass_by_ref.phpt
 Zend/tests/restrict_globals/valid.phpt
-Zend/tests/return_types/013.phpt
-Zend/tests/return_types/never_disallowed5.phpt
 Zend/tests/runtime_compile_time_binary_operands.phpt
 Zend/tests/self_instanceof_outside_class.phpt
 Zend/tests/self_method_or_prop_outside_class.phpt
@@ -547,10 +544,6 @@ Zend/tests/try/try_finally_017.phpt
 Zend/tests/try/try_finally_018.phpt
 Zend/tests/try/try_finally_019.phpt
 Zend/tests/try/try_finally_020.phpt
-Zend/tests/type_coercion/float_to_int/non-rep-float-as-int-extra3.phpt
-Zend/tests/type_coercion/float_to_int/non-rep-float-as-int-extra4.phpt
-Zend/tests/type_coercion/nan_to_other.phpt
-Zend/tests/type_declarations/iterable/iterable_002.phpt
 Zend/tests/type_declarations/union_types/anonymous_class.phpt
 Zend/tests/undef_index_to_exception.phpt
 Zend/tests/undefined_variables_operations.phpt
