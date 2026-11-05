@@ -308,17 +308,25 @@ pub fn set_signature_algorithm(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
-/// Unserializes metadata with the caller's options.
-pub fn metadata_value(vm: &mut Vm, m: MetadataGet, options: Option<Value>) -> VmResult<Value> {
+/// Unserializes metadata with the caller's options
+/// (`phar_metadata_tracker_unserialize_or_copy()`:
+/// `php_unserialize_with_options(..., method_name)`, so warnings name the
+/// running method, e.g. `Phar::getMetadata()`).
+pub fn metadata_value(
+    vm: &mut Vm,
+    m: MetadataGet,
+    options: Option<Value>,
+    method_name: &str,
+) -> VmResult<Value> {
     match m {
         MetadataGet::None => Ok(Value::Null),
         MetadataGet::Value(v) => Ok(v),
         MetadataGet::Serialized(s) => {
-            let mut args = vec![bytes(s)];
-            if let Some(o) = options {
-                args.push(o);
-            }
-            vm.call_function("unserialize", args)
+            let options = match options.map(|o| o.deref()) {
+                Some(Value::Array(a)) => Some(a),
+                _ => None,
+            };
+            vm.unserialize_with_options(&s, options.as_ref(), method_name)
         }
     }
 }
@@ -328,7 +336,7 @@ pub fn get_metadata(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = st(a);
     let opts = a.get(0);
     let m = run(vm, || st.borrow().get_metadata(opts.is_some()))?;
-    metadata_value(vm, m, opts)
+    metadata_value(vm, m, opts, "Phar::getMetadata")
 }
 
 /// Serializes a metadata value (`serialize_metadata_or_throw`).

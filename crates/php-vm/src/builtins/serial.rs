@@ -1924,8 +1924,9 @@ fn abandon_for_oom(vm: &mut Vm, d: &UnserRc, rest: impl Iterator<Item = Dtor>) -
     Err(Throw::Fatal)
 }
 
-/// Parses `options` (`allowed_classes`, `max_depth`).
-fn apply_options(vm: &mut Vm, d: &UnserRc, opts: &ZArray) -> VmResult<()> {
+/// Parses `options` (`allowed_classes`, `max_depth`); `func` names the
+/// caller in the errors.
+fn apply_options(vm: &mut Vm, d: &UnserRc, opts: &ZArray, func: &str) -> VmResult<()> {
     if let Some(classes) = opts.get(&ArrayKey::Str(ZStr::from("allowed_classes"))) {
         let classes = classes.deref();
         match &classes {
@@ -1937,7 +1938,7 @@ fn apply_options(vm: &mut Vm, d: &UnserRc, opts: &ZArray) -> VmResult<()> {
                         return Err(vm.make_throw(
                             "TypeError",
                             &format!(
-                                "unserialize(): Option \"allowed_classes\" must be an array of class names, {} given",
+                                "{func}(): Option \"allowed_classes\" must be an array of class names, {} given",
                                 given_type(&e)
                             ),
                         ));
@@ -1947,7 +1948,7 @@ fn apply_options(vm: &mut Vm, d: &UnserRc, opts: &ZArray) -> VmResult<()> {
                         return Err(vm.make_throw(
                             "ValueError",
                             &format!(
-                                "unserialize(): Option \"allowed_classes\" must be an array of class names, \"{}\" given",
+                                "{func}(): Option \"allowed_classes\" must be an array of class names, \"{}\" given",
                                 n.to_string_lossy()
                             ),
                         ));
@@ -1962,7 +1963,7 @@ fn apply_options(vm: &mut Vm, d: &UnserRc, opts: &ZArray) -> VmResult<()> {
                 return Err(vm.make_throw(
                     "TypeError",
                     &format!(
-                        "unserialize(): Option \"allowed_classes\" must be of type array|bool, {} given",
+                        "{func}(): Option \"allowed_classes\" must be of type array|bool, {} given",
                         given_type(other)
                     ),
                 ))
@@ -1974,7 +1975,7 @@ fn apply_options(vm: &mut Vm, d: &UnserRc, opts: &ZArray) -> VmResult<()> {
             return Err(vm.make_throw(
                 "TypeError",
                 &format!(
-                    "unserialize(): Option \"max_depth\" must be of type int, {} given",
+                    "{func}(): Option \"max_depth\" must be of type int, {} given",
                     given_type(&md.deref())
                 ),
             ));
@@ -1982,7 +1983,7 @@ fn apply_options(vm: &mut Vm, d: &UnserRc, opts: &ZArray) -> VmResult<()> {
         if n < 0 {
             return Err(vm.make_throw(
                 "ValueError",
-                "unserialize(): Option \"max_depth\" must be greater than or equal to 0",
+                &format!("{func}(): Option \"max_depth\" must be greater than or equal to 0"),
             ));
         }
         let mut d = d.borrow_mut();
@@ -1992,8 +1993,14 @@ fn apply_options(vm: &mut Vm, d: &UnserRc, opts: &ZArray) -> VmResult<()> {
     Ok(())
 }
 
-/// `php_unserialize_with_options()`.
-fn unserialize_with_options(vm: &mut Vm, buf: &[u8], opts: Option<&ZArray>) -> VmResult<Value> {
+/// `php_unserialize_with_options()`; `func` names the caller in option
+/// errors (diagnostics name the running builtin, like `php_error_docref`).
+fn unserialize_with_options(
+    vm: &mut Vm,
+    buf: &[u8],
+    opts: Option<&ZArray>,
+    func: &str,
+) -> VmResult<Value> {
     let (d, outermost) = unser_init(vm);
     let prev = {
         let b = d.borrow();
@@ -2006,7 +2013,7 @@ fn unserialize_with_options(vm: &mut Vm, buf: &[u8], opts: Option<&ZArray>) -> V
         b.cur_depth = prev.2;
     };
     if let Some(o) = opts {
-        if let Err(t) = apply_options(vm, &d, o) {
+        if let Err(t) = apply_options(vm, &d, o, func) {
             restore(&d);
             let _ = unser_destroy(vm, &d, outermost, false);
             return Err(t);
@@ -2125,6 +2132,20 @@ impl Vm {
         }
     }
 
+    /// `php_unserialize_with_options()` for native callers such as
+    /// `Phar::getMetadata()`: `unserialize()` semantics (options,
+    /// delayed `__wakeup()`/`__unserialize()` calls, `false` on failure),
+    /// with warnings naming the running builtin and option errors naming
+    /// `function_name`.
+    pub fn unserialize_with_options(
+        &mut self,
+        data: &[u8],
+        options: Option<&ZArray>,
+        function_name: &str,
+    ) -> VmResult<Value> {
+        unserialize_with_options(self, data, options, function_name)
+    }
+
     pub fn unserialize_nested(
         &mut self,
         data: &[u8],
@@ -2181,7 +2202,7 @@ impl Vm {
 fn unserialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let data = s(a, 0);
     let opts = if a.has(1) { Some(arr(a, 1)) } else { None };
-    unserialize_with_options(vm, data.as_bytes(), opts.as_ref())
+    unserialize_with_options(vm, data.as_bytes(), opts.as_ref(), "unserialize")
 }
 
 /// Registers `serialize()` / `unserialize()`.
