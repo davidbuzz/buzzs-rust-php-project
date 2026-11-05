@@ -16,8 +16,6 @@ use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::net::TcpStream;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -90,8 +88,6 @@ pub struct RequestCtx {
     pub headers_written: Cell<bool>,
     /// `sapi_cli_server_discard_headers` is in effect.
     pub discard_headers: Cell<bool>,
-    /// `SG(rfc1867_uploaded_files)`.
-    pub uploaded: RefCell<Vec<PathBuf>>,
     /// The body for `php://input` (`None` until first read).
     pub body: RefCell<Body>,
     /// `client->post_read_offset`.
@@ -131,7 +127,6 @@ impl RequestCtx {
             aborted: Cell::new(false),
             headers_written: Cell::new(false),
             discard_headers: Cell::new(false),
-            uploaded: RefCell::new(Vec::new()),
             body: RefCell::new(Body::Available),
             post_read_offset: Cell::new(0),
             header_callback: RefCell::new(None),
@@ -543,57 +538,6 @@ fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
-fn path_of(s: &ZStr) -> PathBuf {
-    PathBuf::from(std::ffi::OsStr::from_bytes(s.as_bytes()))
-}
-
-#[allow(clippy::unnecessary_wraps)]
-fn is_uploaded_file(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let p = path_of(&a.str(0));
-    Ok(Value::Bool(ctx_or(false, |c| {
-        c.uploaded.borrow().contains(&p)
-    })))
-}
-
-fn move_uploaded_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let from_z = a.str(0);
-    let to_z = a.str(1);
-    let from = path_of(&from_z);
-    let to = path_of(&to_z);
-    if !ctx_or(false, |c| c.uploaded.borrow().contains(&from)) {
-        return Ok(Value::Bool(false));
-    }
-    let mut ok = false;
-    if std::fs::rename(&from, &to).is_ok() {
-        ok = true;
-        // SAFETY: umask only reads/writes the process file mode mask.
-        let mask = unsafe {
-            let m = libc::umask(0o077);
-            libc::umask(m);
-            m
-        };
-        if let Err(e) =
-            std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o666 & !mask))
-        {
-            vm.php_warning(&e.to_string())?;
-        }
-    } else if std::fs::copy(&from, &to).is_ok() {
-        let _ = std::fs::remove_file(&from);
-        ok = true;
-    }
-    if ok {
-        with_ctx(|c| c.uploaded.borrow_mut().retain(|f| f != &from));
-    } else {
-        let mut msg = b"Unable to move \"".to_vec();
-        msg.extend_from_slice(from_z.as_bytes());
-        msg.extend_from_slice(b"\" to \"");
-        msg.extend_from_slice(to_z.as_bytes());
-        msg.push(b'"');
-        vm.php_warning_bytes(&msg)?;
-    }
-    Ok(Value::Bool(ok))
-}
-
 /// `apache_request_headers()` / `getallheaders()`.
 #[allow(clippy::unnecessary_wraps)]
 fn apache_request_headers(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -730,8 +674,6 @@ impl Extension for CliServerModule {
                 "error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool",
                 error_log,
             )
-            .function("is_uploaded_file(string $filename): bool", is_uploaded_file)
-            .function("move_uploaded_file(string $from, string $to): bool", move_uploaded_file)
             .function("apache_request_headers(): array", apache_request_headers)
             .function("getallheaders(): array", apache_request_headers)
             .function("apache_response_headers(): array", apache_response_headers)
@@ -818,8 +760,7 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx, r: Result<(), Throw>) {
     vm.shutdown(r);
     call_header_callback(vm, ctx);
     ctx.send_headers();
-    crate::multipart::cleanup(&ctx.uploaded.borrow());
-    ctx.uploaded.borrow_mut().clear();
+    crate::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
 }
 
 /// A VM created ahead of its request (module startup is the expensive
@@ -952,7 +893,7 @@ fn run_request_inner(
     ctx.discard_headers.set(true);
     vm.shutdown(r);
     ctx.send_headers();
-    crate::multipart::cleanup(&ctx.uploaded.borrow());
+    crate::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
     Outcome::ServeStatic
 }
 

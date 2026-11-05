@@ -6,6 +6,7 @@ use php_pdo::{ConnectArgs, Pdo};
 use php_runtime::{Obj, Value, ZArray, ZStr};
 use php_sqlite::pdo::PdoSqliteDbh;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, VmResult};
+use php_vm::func::Func;
 use php_vm::Vm;
 
 /// The `create_object` handler of `PDO` (`pdo_dbh_new`).
@@ -300,8 +301,43 @@ const LEGACY_METHODS: [(&str, &str); 3] = [
     ("sqliteCreateFunction", "Pdo\\Sqlite::createFunction"),
 ];
 
+/// `dbh_method_get` (ext/pdo/pdo_dbh.c): the legacy driver methods are
+/// not class methods but entries of the driver's method table, consulted
+/// only when `zend_std_get_method` finds nothing. On a `PDO` that is not
+/// connected to `SQLite` they do not exist, so the call fails with "Call
+/// to undefined method" before the engine reports any deprecation. A user
+/// subclass that declares a method of the same name keeps it.
+fn pdo_get_method(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<()> {
+    let n = name.as_bytes();
+    if !LEGACY_METHODS
+        .iter()
+        .any(|(m, _)| m.as_bytes().eq_ignore_ascii_case(n))
+        || pdo_of(o).is_some_and(|p| p.sqlite().is_some())
+    {
+        return Ok(());
+    }
+    let cls = php_vm::object::class_of(o);
+    let inherited = cls
+        .methods
+        .get(&ZStr::from(n.to_ascii_lowercase()))
+        .is_some_and(|m| matches!(m.func, Func::Builtin(_)));
+    if !inherited {
+        return Ok(());
+    }
+    Err(vm.throw(
+        "Error",
+        &format!(
+            "Call to undefined method {}::{}()",
+            o.class_name().to_string_lossy(),
+            name.to_string_lossy()
+        ),
+    ))
+}
+
 /// The legacy driver methods callable on any `PDO` connected to `SQLite`
 /// (`dbh_method_get`); the engine has already reported their deprecation.
+/// [`pdo_get_method`] refuses them on other connections; calls that skip
+/// method lookup (callables) still end here.
 fn legacy(vm: &mut Vm, a: &Args, name: &str) -> VmResult<PdoSqliteDbh> {
     let (o, p) = this_pdo(a);
     let Some(h) = p.sqlite() else {
@@ -403,6 +439,7 @@ pub fn register(vm: &mut Vm) {
         .flags(class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE)
         .hooks(ClassHooks {
             create: Some(pdo_create),
+            get_method: Some(pdo_get_method),
             ..Default::default()
         });
     for (name, v) in pdo_class_constants() {

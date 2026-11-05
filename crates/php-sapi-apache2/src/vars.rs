@@ -231,7 +231,7 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, auth: &Auth) {
                             };
                             register(vm, &r.name, v, track, false);
                         }
-                        ctx.uploaded.borrow_mut().extend(outcome.uploaded);
+                        vm.rfc1867_uploaded_files.extend(outcome.uploaded);
                     }
                 }
                 _ => read_standard_form_data(vm, ctx, content_length),

@@ -14,8 +14,6 @@ use php_vm::ext::{Args, Extension, ModuleBuilder, NativeFn};
 use php_vm::{Vm, VmResult};
 use std::cell::Cell;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 
 /// Internal shutdown function applying the fatal-error 500 status.
 pub const FATAL_CHECK: &str = "__apache2handler_fatal_status";
@@ -358,57 +356,6 @@ fn set_time_limit(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(ok))
 }
 
-fn path_of(s: &ZStr) -> PathBuf {
-    PathBuf::from(std::ffi::OsStr::from_bytes(s.as_bytes()))
-}
-
-#[allow(clippy::unnecessary_wraps)]
-fn is_uploaded_file(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let p = path_of(&a.str(0));
-    Ok(Value::Bool(ctx_or(false, |c| {
-        c.uploaded.borrow().contains(&p)
-    })))
-}
-
-fn move_uploaded_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let from_z = a.str(0);
-    let to_z = a.str(1);
-    let from = path_of(&from_z);
-    let to = path_of(&to_z);
-    if !ctx_or(false, |c| c.uploaded.borrow().contains(&from)) {
-        return Ok(Value::Bool(false));
-    }
-    let mut ok = false;
-    if std::fs::rename(&from, &to).is_ok() {
-        ok = true;
-        // SAFETY: umask only reads/writes the process file mode mask.
-        let mask = unsafe {
-            let m = libc::umask(0o077);
-            libc::umask(m);
-            m
-        };
-        if let Err(e) =
-            std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o666 & !mask))
-        {
-            vm.php_warning(&e.to_string())?;
-        }
-    } else if std::fs::copy(&from, &to).is_ok() {
-        let _ = std::fs::remove_file(&from);
-        ok = true;
-    }
-    if ok {
-        with_ctx(|c| c.uploaded.borrow_mut().retain(|f| f != &from));
-    } else {
-        let mut msg = b"Unable to move \"".to_vec();
-        msg.extend_from_slice(from_z.as_bytes());
-        msg.extend_from_slice(b"\" to \"");
-        msg.extend_from_slice(to_z.as_bytes());
-        msg.push(b'"');
-        vm.php_warning_bytes(&msg)?;
-    }
-    Ok(Value::Bool(ok))
-}
-
 fn table_array(b: &dyn Backend, t: Table) -> Value {
     let mut arr = ZArray::new();
     let h = arr.make_mut();
@@ -664,8 +611,6 @@ impl Extension for Apache2Handler {
                 ini_set,
             )
             .function("ini_restore(string $option): void", ini_restore)
-            .function("is_uploaded_file(string $filename): bool", is_uploaded_file)
-            .function("move_uploaded_file(string $from, string $to): bool", move_uploaded_file)
             .function("php_ini_loaded_file(): string|false", php_ini_loaded_file)
             .function("php_ini_scanned_files(): string|false", php_ini_scanned_files)
             .function("apache_lookup_uri(string $filename): object|false", apache_lookup_uri)

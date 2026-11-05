@@ -183,6 +183,7 @@ impl Vm {
             send_default_content_type: true,
             response_header_hook: None,
             rfc1867_callback: None,
+            rfc1867_uploaded_files: Vec::new(),
             fibers: Vec::new(),
             loaded_extensions: Vec::new(),
             shutdown_hooks: Vec::new(),

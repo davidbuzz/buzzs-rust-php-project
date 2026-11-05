@@ -728,6 +728,12 @@ pub struct Vm {
     pub response_header_hook: Option<crate::ext::ResponseHeaderFn>,
     /// Observer of the SAPI's multipart parser (`php_rfc1867_callback`).
     pub rfc1867_callback: Option<crate::ext::Rfc1867Fn>,
+    /// `SG(rfc1867_uploaded_files)`: the temporary files of this request's
+    /// uploads, the only paths ext/standard's `is_uploaded_file()` and
+    /// `move_uploaded_file()` accept. The multipart parser's caller (the
+    /// SAPI, or `zend_test_handle_post_data()`) fills it and deletes the
+    /// files still listed at request shutdown.
+    pub rfc1867_uploaded_files: Vec<std::path::PathBuf>,
     /// Running fibers (innermost last).
     pub fibers: Vec<Obj>,
     /// Destination temporary of the builtin call in progress (fibers).

@@ -7,7 +7,6 @@
 //! `main/php_variables.c` (`php_std_post_handler`) and `main/rfc1867.c`
 //! (whose port lives in [`php_cli_server::multipart`]).
 
-use crate::state;
 use crate::util::E_WARNING;
 use php_cli_server::multipart::{self, RegValue, Target, UploadSettings};
 use php_cli_server::vars::{content_type_key, display_errors};
@@ -150,7 +149,7 @@ fn handle(
         let Some(outcome) = outcome else {
             return Ok(());
         };
-        state::set_uploaded(outcome.uploaded);
+        vm.rfc1867_uploaded_files = outcome.uploaded;
         for w in &outcome.warnings {
             warn(vm, &w.message, w.docref)?;
         }
@@ -226,57 +225,6 @@ fn read_full(s: &mut Stream, buf: &mut [u8]) -> usize {
     n
 }
 
-fn path_of(s: &ZStr) -> PathBuf {
-    use std::os::unix::ffi::OsStrExt;
-    PathBuf::from(std::ffi::OsStr::from_bytes(s.as_bytes()))
-}
-
-/// `is_uploaded_file()` (ext/standard/basic_functions.c) over the uploads
-/// `zend_test_handle_post_data()` parsed: under the CLI they are the only
-/// entries of `SG(rfc1867_uploaded_files)`.
-#[allow(clippy::unnecessary_wraps)] // native handler signature
-pub(crate) fn is_uploaded_file(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(state::is_uploaded(&path_of(&a.str(0)))))
-}
-
-/// `move_uploaded_file()` (ext/standard/basic_functions.c): renames (or
-/// copies and unlinks) an upload, then applies `0666 & ~umask`.
-pub(crate) fn move_uploaded_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    use std::os::unix::fs::PermissionsExt;
-    let from_z = a.str(0);
-    let to_z = a.str(1);
-    let from = path_of(&from_z);
-    if !state::is_uploaded(&from) {
-        return Ok(Value::Bool(false));
-    }
-    let to = path_of(&to_z);
-    let moved = std::fs::rename(&from, &to).is_ok()
-        || (std::fs::copy(&from, &to).is_ok() && {
-            let _ = std::fs::remove_file(&from);
-            true
-        });
-    if !moved {
-        let mut msg = b"Unable to move \"".to_vec();
-        msg.extend_from_slice(from_z.as_bytes());
-        msg.extend_from_slice(b"\" to \"");
-        msg.extend_from_slice(to_z.as_bytes());
-        msg.push(b'"');
-        vm.php_warning_bytes(&msg)?;
-        return Ok(Value::Bool(false));
-    }
-    state::forget_uploaded(&from);
-    // SAFETY: umask only reads and restores the process file mode mask.
-    let mask = unsafe {
-        let m = libc::umask(0o077);
-        libc::umask(m);
-        m
-    };
-    if let Err(e) = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o666 & !mask)) {
-        vm.php_warning(&e.to_string())?;
-    }
-    Ok(Value::Bool(true))
-}
-
 /// `zend_test_handle_post_data(resource $stream, string $content_type,
 /// int $content_length): void`.
 pub(crate) fn handle_post_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -285,7 +233,7 @@ pub(crate) fn handle_post_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let content_length = a.int(2);
     let cell = res::stream_of_resource(vm, a, &r)?;
     // Tear down what a previous call set up, as the request shutdown would.
-    multipart::cleanup(&state::take_uploaded());
+    multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
     let mut post = ZArray::new();
     let mut files = ZArray::new();
     let result = handle(
