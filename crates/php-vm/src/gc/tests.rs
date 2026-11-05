@@ -366,3 +366,40 @@ fn fiber_releases_its_callable_when_its_function_returns() {
     );
     assert_eq!(out, "return\nC\ncaught c\n");
 }
+
+/// Binding a reference (`$a[$i][0] = &$a[$i]`, `$y = &$x`) releases no
+/// handle in php-src, so it buffers no possible root.
+#[test]
+fn binding_references_buffers_no_roots() {
+    let out = run(
+        "<?php $a = []; for ($i = 0; $i < 3; $i++) { $a[$i] = [[]]; $a[$i][0] = &$a[$i]; }\n\
+         $x = [1]; $y = &$x; $z = &$x;\n\
+         var_dump(gc_status()['roots']);",
+    );
+    assert_eq!(out, "int(0)\n");
+}
+
+/// gc_023: the automatic run collects the roots buffered when the
+/// threshold was reached, not the root that crossed it
+/// (`gc_possible_root_when_full`).
+#[test]
+fn threshold_run_leaves_the_crossing_root() {
+    let out = run("<?php $a = [];\n\
+         for ($i = 0; $i < 10001; $i++) { $a[$i] = [[]]; $a[$i][0] = &$a[$i]; }\n\
+         unset($a); $s = gc_status();\n\
+         var_dump($s['runs'], $s['collected'], $s['roots'], gc_collect_cycles());");
+    assert_eq!(out, "int(1)\nint(10000)\nint(1)\nint(1)\n");
+}
+
+/// A cycle spanning several node chunks and trash batches of the
+/// collector (`graph::Nodes`, `TRASH_BATCH`).
+#[test]
+fn large_cycle_is_collected() {
+    let out = run("<?php class N { public $next; public $a; }\n\
+         $first = new N; $cur = $first;\n\
+         for ($i = 1; $i < 10000; $i++) { $n = new N; $cur->next = $n; $cur = $n; }\n\
+         $cur->next = $first; unset($first, $cur, $n);\n\
+         var_dump(gc_collect_cycles());\n\
+         $o = new N; var_dump(spl_object_id($o) <= 10000);");
+    assert_eq!(out, "int(10000)\nbool(true)\n");
+}

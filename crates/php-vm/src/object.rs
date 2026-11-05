@@ -64,6 +64,10 @@ thread_local! {
     static STORE: RefCell<ObjectStore> = RefCell::new(ObjectStore::default());
     static PENDING: RefCell<Vec<Obj>> = const { RefCell::new(Vec::new()) };
     static HAS_PENDING: Cell<bool> = const { Cell::new(false) };
+    /// Bumped whenever an object is queued on [`PENDING`]: lets
+    /// `ObjectData::drop` see whether releasing its contents queued
+    /// destructors.
+    static PENDING_SEQ: Cell<u32> = const { Cell::new(0) };
     static DESTRUCTORS_ENABLED: Cell<bool> = const { Cell::new(true) };
     /// Per-object property orders by handle; an entry only counts while its
     /// object carries [`oflags::PROP_ORDER`].
@@ -87,6 +91,13 @@ struct ObjectStore {
     /// `EG_FLAGS_OBJECT_STORE_NO_REUSE`: while shutdown destructors run,
     /// new objects take fresh handles past the end of the store.
     no_reuse: bool,
+    /// Handles of freed objects whose release queued a destructor, keyed
+    /// by the handle of the last object so queued: they join the free
+    /// list once that object is freed (or survives its destructor). In
+    /// php-src the nested object is destructed and freed inside
+    /// `zend_object_std_dtor` of the outer one, before the outer handle
+    /// goes on the free list, so the outer handle is reused first.
+    followers: HashMap<u32, Vec<u32>>,
 }
 
 impl Default for ObjectStore {
@@ -126,7 +137,27 @@ impl ObjectStore {
         let cap = self.objects.capacity();
         self.free.reserve(cap.saturating_sub(self.free.len()));
     }
+
+    /// `ZEND_OBJECTS_STORE_ADD_TO_FREE_LIST` for `handle` (then for the
+    /// handles waiting on it), or, with `anchor`, defers them all until
+    /// the object `anchor` is released.
+    fn release_handle(&mut self, handle: u32, anchor: Option<u32>) {
+        let waiting = if self.followers.is_empty() {
+            None
+        } else {
+            self.followers.remove(&handle)
+        };
+        let dst = match anchor {
+            Some(a) => self.followers.entry(a).or_default(),
+            None => &mut self.free,
+        };
+        dst.push(handle);
+        if let Some(w) = waiting {
+            dst.extend(w);
+        }
+    }
 }
+
 
 /// Creates this thread's object store at its initial size (VM startup), so
 /// the first object of a script does not allocate it.
@@ -137,6 +168,7 @@ pub(crate) fn prewarm_store() {
 impl Drop for ObjectData {
     fn drop(&mut self) {
         let handle = self.handle;
+        let seq = PENDING_SEQ.try_with(Cell::get).unwrap_or(0);
         // `zend_weakrefs_notify`: purge WeakMap entries before the handle
         // can be reused.
         crate::weakref::object_freed(handle);
@@ -147,13 +179,21 @@ impl Drop for ObjectData {
         let dynamic = self.dynamic.get_mut().take();
         let internal = self.internal.get_mut().take();
         drop((slots, dynamic, internal));
+        // A destructor queued meanwhile runs (and frees its object) before
+        // this handle is reusable, as it would have inside php-src's
+        // `zend_object_std_dtor`.
+        let anchor = if PENDING_SEQ.try_with(Cell::get).unwrap_or(0) == seq {
+            None
+        } else {
+            last_pending_handle()
+        };
         // `try_with`: the store may already be gone during thread teardown.
         let _ = STORE.try_with(|s| {
             if let Ok(mut s) = s.try_borrow_mut() {
                 if let Some(slot) = s.objects.get_mut(handle as usize - 1) {
                     *slot = None;
                 }
-                s.free.push(handle);
+                s.release_handle(handle, anchor);
             }
         });
     }
@@ -199,6 +239,7 @@ impl Drop for ObjBox {
             if let Ok(mut p) = p.try_borrow_mut() {
                 p.push(revived);
                 HAS_PENDING.with(|h| h.set(true));
+                PENDING_SEQ.with(|c| c.set(c.get().wrapping_add(1)));
             }
         });
     }
@@ -294,6 +335,29 @@ pub fn class_of(o: &Obj) -> &Rc<Class> {
 /// Whether destructors are pending.
 pub fn has_pending_destructors() -> bool {
     HAS_PENDING.with(Cell::get)
+}
+
+/// The handle of the object queued last for its destructor.
+#[cold]
+#[inline(never)]
+fn last_pending_handle() -> Option<u32> {
+    PENDING
+        .try_with(|p| p.try_borrow().ok().and_then(|p| p.last().map(Obj::handle)))
+        .ok()
+        .flatten()
+}
+
+/// Puts the handles deferred behind `handle` (see `ObjectStore::followers`)
+/// on the free list: called once the destructor of the object `handle`
+/// ran and the object survived it.
+pub fn release_deferred_handles(handle: u32) {
+    let _ = STORE.try_with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut() {
+            if let Some(w) = s.followers.remove(&handle) {
+                s.free.extend(w);
+            }
+        }
+    });
 }
 
 /// Takes the objects whose destructors must run now.

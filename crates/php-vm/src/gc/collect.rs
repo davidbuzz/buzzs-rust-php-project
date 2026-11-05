@@ -11,6 +11,9 @@ use std::any::Any;
 use std::rc::{Rc, Weak};
 use std::time::Instant;
 
+/// Values emptied out of garbage nodes are released this many at a time.
+const TRASH_BATCH: usize = 4096;
+
 /// What a run considers.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Mode {
@@ -213,20 +216,20 @@ impl Vm {
                 }
             }
         }
-        // Take the handles of the nodes to free; release everything else
+        // Keep the handles of the nodes to free; release everything else
         // (no destructor can run before the destructor phase below, and
         // nothing here can reach a zero count: every node is still held by
-        // its cycle).
-        let mut to_free: Vec<(Handle, Option<Obj>)> = Vec::new();
+        // its cycle). The edges and indexes are done with, and the node
+        // list itself keeps the handles (no second list: peak memory on
+        // large heaps).
+        g.drop_edges();
         for (i, node) in g.nodes.iter_mut().enumerate() {
-            if !node.live && !removed[i] {
-                to_free.push((
-                    std::mem::replace(&mut node.handle, Handle::Taken),
-                    node.outer.take(),
-                ));
+            if node.live || removed[i] {
+                node.handle = Handle::Taken;
+                node.outer = None;
             }
         }
-        drop(g);
+        let to_free = g.nodes;
         drop(quiet);
 
         // Destructor phase.
@@ -243,8 +246,8 @@ impl Vm {
         let quiet = Quiet::new(providers);
         let mut trash: Vec<Value> = Vec::new();
         let mut states: Vec<Box<dyn Any>> = Vec::new();
-        for (h, _) in &to_free {
-            match h {
+        for node in to_free.iter() {
+            match &node.handle {
                 Handle::Obj(inner) => clear_object(inner, &mut trash, &mut states),
                 Handle::Ref(r) => {
                     if let Some(mut v) = r.try_borrow_mut() {
@@ -252,6 +255,13 @@ impl Vm {
                     }
                 }
                 Handle::Arr(_) | Handle::Taken => {}
+            }
+            // Released in batches (bounded memory on large heaps):
+            // `to_free` still holds every node being freed, so this only
+            // releases values outside it; graphs below the batch size keep
+            // the single release after the loop (and its free order).
+            if trash.len() >= TRASH_BATCH {
+                drop(std::mem::take(&mut trash));
             }
         }
         drop(to_free);

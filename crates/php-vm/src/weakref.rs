@@ -418,6 +418,13 @@ fn map_create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
 /// `read_dimension`. The engine uses this hook both for reads and as the
 /// target of nested writes, so the slot is handed out as a reference.
 fn map_read_dimension(vm: &mut Vm, o: &Obj, key: &Value) -> VmResult<Option<Value>> {
+    // `zend_weakmap_read_dimension`: a null offset (`$map[][..] = v`).
+    if matches!(
+        vm.dimension_context(),
+        crate::ext::DimensionCtx::Append | crate::ext::DimensionCtx::AppendRw
+    ) {
+        return Err(vm.make_throw("Error", "Cannot append to WeakMap"));
+    }
     let key = key_object(vm, key)?;
     let map = map_state(vm, o)?;
     let mut st = map.borrow_mut();
@@ -947,11 +954,42 @@ mod tests {
         let out = run("<?php $m = new WeakMap;\n\
              try { $m[1] = 1; } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; }\n\
              try { $m[] = 1; } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
+             try { $m[][1] = 1; } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
              try { $m[new stdClass]; } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }");
         assert_eq!(
             out,
-            "WeakMap key must be an object\nCannot append to WeakMap\nObject stdClass#2 not contained in WeakMap\n"
+            "WeakMap key must be an object\nCannot append to WeakMap\nCannot append to WeakMap\nObject stdClass#2 not contained in WeakMap\n"
         );
+    }
+
+    #[test]
+    fn by_ref_output_is_null_while_old_value_destructs() {
+        // GH-17442: `zval_ptr_safe_dtor` in `ZEND_TRY_ASSIGN_REF_*`.
+        let out = run("<?php $map = new WeakMap; $obj = new stdClass;\n\
+             $map[$obj] = new class { function __destruct() { global $obj, $l;\n\
+             var_dump($obj, $l); throw new Exception('T'); } };\n\
+             try { headers_sent($obj, $l); } catch (Exception $e) { echo $e->getMessage(), \"\\n\"; }\n\
+             var_dump($obj, $l);");
+        assert_eq!(out, "NULL\nNULL\nT\nstring(0) \"\"\nint(0)\n");
+    }
+
+    #[test]
+    fn handles_freed_after_the_destructed_objects_they_released() {
+        // `zend_object_std_dtor` destructs and frees nested objects (and
+        // WeakMap values) before the outer handle joins the free list.
+        let out = run(
+            "<?php class D { function __destruct() { echo \"D\\n\"; } }\n\
+             $o = new stdClass; $o->p = new D; unset($o);\n\
+             $a = new stdClass; $b = new stdClass;\n\
+             echo spl_object_id($a), spl_object_id($b), \"\\n\"; unset($a, $b);\n\
+             $m = new WeakMap; $k = new stdClass; $m[$k] = new D; unset($k);\n\
+             $x = new stdClass; echo spl_object_id($x), \"\\n\";\n\
+             class E { public $d; function __construct() { $this->d = new D; }\n\
+             function __destruct() { echo \"E\\n\"; } }\n\
+             $e = new E; unset($e); $a = new stdClass; $b = new stdClass;\n\
+             echo spl_object_id($a), spl_object_id($b), \"\\n\";",
+        );
+        assert_eq!(out, "D\n12\nD\n1\nE\nD\n34\n");
     }
 
     #[test]

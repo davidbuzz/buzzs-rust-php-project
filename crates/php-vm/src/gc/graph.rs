@@ -74,27 +74,86 @@ impl Node {
 /// the key are (`GC_FROM_WEAKMAP` / `GC_FROM_WEAKMAP_KEY`).
 pub(super) struct CondEdge {
     pub map: u32,
-    /// The key object's data address (resolved to a node by `analyze`).
-    key_addr: usize,
+    /// The key object's handle, if it is alive (resolved to a node by
+    /// `analyze`).
+    key_handle: Option<u32>,
     pub key: u32,
     pub value: u32,
+}
+
+/// Nodes per [`Nodes`] chunk.
+const CHUNK: usize = 4096;
+
+/// The node list, in fixed-size chunks: a graph spanning a large heap
+/// grows without the reallocation copies (and the doubled capacity) of a
+/// single `Vec`, which would raise the collector's peak memory by up to
+/// three times the graph's size (bug77345_gc_2 under `memory_limit`).
+#[derive(Default)]
+pub(super) struct Nodes {
+    chunks: Vec<Vec<Node>>,
+    len: usize,
+}
+
+impl Nodes {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    fn push(&mut self, n: Node) {
+        match self.chunks.last_mut() {
+            Some(c) if c.len() < CHUNK => c.push(n),
+            _ => {
+                // The first chunk grows like a `Vec` (small graphs stay
+                // small); later ones are allocated whole.
+                let mut c = if self.chunks.is_empty() {
+                    Vec::new()
+                } else {
+                    Vec::with_capacity(CHUNK)
+                };
+                c.push(n);
+                self.chunks.push(c);
+            }
+        }
+        self.len += 1;
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Node> {
+        self.chunks.iter().flatten()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Node> {
+        self.chunks.iter_mut().flatten()
+    }
+}
+
+impl std::ops::Index<usize> for Nodes {
+    type Output = Node;
+
+    fn index(&self, i: usize) -> &Node {
+        &self.chunks[i / CHUNK][i % CHUNK]
+    }
+}
+
+impl std::ops::IndexMut<usize> for Nodes {
+    fn index_mut(&mut self, i: usize) -> &mut Node {
+        &mut self.chunks[i / CHUNK][i % CHUNK]
+    }
 }
 
 /// The candidate subgraph.
 #[derive(Default)]
 pub(super) struct Graph {
-    pub nodes: Vec<Node>,
+    pub nodes: Nodes,
+    /// Object nodes by object handle (`NONE`: not in the graph). Handles
+    /// are dense and cannot be reused while the graph holds the objects;
+    /// this costs 4 bytes per handle instead of a hash entry per node.
+    obj_index: Vec<u32>,
+    /// Array and reference nodes by address.
     index: HashMap<usize, u32>,
     edges: Vec<u32>,
     pub cond: Vec<CondEdge>,
     /// Nodes before this index have been expanded.
     expanded: usize,
-}
-
-/// The identity of an object node: its `ObjectData` address (an `Obj` is a
-/// second `Rc` around an `ObjBox`, which revival may re-create).
-fn data_addr(d: &Rc<ObjectData>) -> usize {
-    Rc::as_ptr(d) as usize
 }
 
 impl Graph {
@@ -105,14 +164,33 @@ impl Graph {
 
     /// Adds a live object from the object store as a candidate root.
     pub fn add_object(&mut self, d: Rc<ObjectData>) {
-        let key = data_addr(&d);
-        if self.index.contains_key(&key) {
+        if self.obj_node(d.handle).is_some() {
             return;
         }
-        self.push(key, Handle::Obj(d), None);
+        let i = self.push_node(Handle::Obj(d), None);
+        self.set_obj_node(i);
     }
 
-    fn push(&mut self, key: usize, handle: Handle, outer: Option<Obj>) -> u32 {
+    /// The node of the object with handle `h`. The identity of an object
+    /// node is its `ObjectData` (an `Obj` is a second `Rc` around an
+    /// `ObjBox`, which revival may re-create), whose handle is unique
+    /// among live objects.
+    fn obj_node(&self, h: u32) -> Option<u32> {
+        obj_node_in(&self.obj_index, h)
+    }
+
+    /// Indexes object node `i` by its handle.
+    fn set_obj_node(&mut self, i: u32) {
+        let Some(h) = self.nodes[i as usize].data().map(|d| d.handle as usize) else {
+            return;
+        };
+        if self.obj_index.len() <= h {
+            self.obj_index.resize(h + 1, NONE);
+        }
+        self.obj_index[h] = i;
+    }
+
+    fn push_node(&mut self, handle: Handle, outer: Option<Obj>) -> u32 {
         let i = u32::try_from(self.nodes.len()).unwrap_or(NONE - 1);
         self.nodes.push(Node {
             handle,
@@ -123,6 +201,11 @@ impl Graph {
             pinned: false,
             live: false,
         });
+        i
+    }
+
+    fn push(&mut self, key: usize, handle: Handle) -> u32 {
+        let i = self.push_node(handle, None);
         self.index.insert(key, i);
         i
     }
@@ -142,8 +225,7 @@ impl Graph {
         // Objects of other `PhpObject` implementations hold nothing the
         // collector knows about: leaves.
         let b = o.downcast_ref::<ObjBox>()?;
-        let key = data_addr(&b.0);
-        if let Some(&i) = self.index.get(&key) {
+        if let Some(i) = self.obj_node(b.0.handle) {
             let n = &mut self.nodes[i as usize];
             match &n.outer {
                 None => n.outer = Some(o.clone()),
@@ -152,20 +234,22 @@ impl Graph {
             }
             return Some(i);
         }
-        Some(self.push(key, Handle::Obj(b.0.clone()), Some(o.clone())))
+        let i = self.push_node(Handle::Obj(b.0.clone()), Some(o.clone()));
+        self.set_obj_node(i);
+        Some(i)
     }
 
     pub(super) fn intern_arr(&mut self, a: &ZArray) -> u32 {
         match self.index.get(&a.addr()) {
             Some(&i) => i,
-            None => self.push(a.addr(), Handle::Arr(a.clone()), None),
+            None => self.push(a.addr(), Handle::Arr(a.clone())),
         }
     }
 
     pub(super) fn intern_ref(&mut self, r: &PhpRef) -> u32 {
         match self.index.get(&r.addr()) {
             Some(&i) => i,
-            None => self.push(r.addr(), Handle::Ref(r.clone()), None),
+            None => self.push(r.addr(), Handle::Ref(r.clone())),
         }
     }
 
@@ -187,7 +271,7 @@ impl Graph {
             self.nodes[t as usize].internal += 1;
             self.cond.push(CondEdge {
                 map,
-                key_addr: key.as_ptr() as usize,
+                key_handle: key.upgrade().map(|d| d.handle),
                 key: NONE,
                 value: t,
             });
@@ -269,7 +353,10 @@ impl Graph {
     /// nodes.
     pub fn analyze(&mut self) -> usize {
         for c in &mut self.cond {
-            c.key = self.index.get(&c.key_addr).copied().unwrap_or(NONE);
+            c.key = c
+                .key_handle
+                .and_then(|h| obj_node_in(&self.obj_index, h))
+                .unwrap_or(NONE);
         }
         let mut work: Vec<u32> = Vec::new();
         for (i, n) in self.nodes.iter_mut().enumerate() {
@@ -308,6 +395,19 @@ impl Graph {
         self.nodes.iter().filter(|n| !n.live).count()
     }
 
+    /// Releases the edges and indexes once the analysis and the nested-data
+    /// removal are done ([`Graph::children`] is empty afterwards).
+    pub fn drop_edges(&mut self) {
+        self.edges = Vec::new();
+        self.cond = Vec::new();
+        self.obj_index = Vec::new();
+        self.index = HashMap::new();
+        for n in self.nodes.iter_mut() {
+            n.start = 0;
+            n.len = 0;
+        }
+    }
+
     /// Children of `i` (edges plus the `WeakMap` values it holds or keys).
     pub fn children(&self, i: u32) -> impl Iterator<Item = u32> + '_ {
         let n = &self.nodes[i as usize];
@@ -319,6 +419,11 @@ impl Graph {
                 .map(|c| c.value),
         )
     }
+}
+
+/// [`Graph::obj_node`] over the index alone (while `cond` is borrowed).
+fn obj_node_in(obj_index: &[u32], h: u32) -> Option<u32> {
+    obj_index.get(h as usize).copied().filter(|&i| i != NONE)
 }
 
 /// References to `n` from outside the candidate subgraph, or `None` when

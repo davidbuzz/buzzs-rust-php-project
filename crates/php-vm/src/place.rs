@@ -427,14 +427,17 @@ pub(crate) fn descend(
         return apply_final(v, wop);
     }
     if let Value::Reference(r) = v {
-        let r = r.clone();
+        // Walked through the container's own handle: a temporary clone
+        // released afterwards would be buffered as a GC possible root
+        // (php-src never touches the count here).
+        let r: &PhpRef = r;
         if r.try_borrow().is_none() {
             return Step::Err(WalkErr::Error(
                 "Cannot modify a value while it is being iterated".into(),
             ));
         }
         if !matches!(wop, WOp::Unset) && !matches!(segs[i], RSeg::Prop(_)) {
-            if let Some(msg) = crate::typed_refs::walk_auto_init_error(&r) {
+            if let Some(msg) = crate::typed_refs::walk_auto_init_error(r) {
                 return Step::Err(WalkErr::TypeError(msg));
             }
         }

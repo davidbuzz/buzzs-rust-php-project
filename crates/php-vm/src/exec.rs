@@ -923,7 +923,13 @@ impl Vm {
                     Op::AssignRef { place, src, dst } => {
                         let v = self.read_raw(*src)?;
                         let r = self.place_assign_ref(*place, v)?;
-                        self.set_dst(*dst, r);
+                        if dst.is_some() {
+                            self.set_dst(*dst, r);
+                        } else {
+                            // An unused result is a duplicate handle of the
+                            // reference just bound: not a GC possible root.
+                            crate::gc::release_duplicate(r);
+                        }
                         Flow::Next
                     }
                     Op::MakeRef { place, dst } => {
@@ -1833,6 +1839,12 @@ impl Vm {
                         (_, e) => e,
                     });
                 }
+                // Freed here unless the destructor stored it somewhere;
+                // either way the handles of the objects whose release
+                // queued it are free now.
+                let h = o.handle();
+                drop(o);
+                object::release_deferred_handles(h);
             }
             if let Some(e) = pending_err {
                 return Err(e);
