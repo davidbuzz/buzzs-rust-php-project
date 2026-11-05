@@ -63,6 +63,41 @@ pub struct CompiledUnit {
     pub anon_end: u32,
 }
 
+/// The global constants `zend_try_ct_eval_const` (`Zend/zend_compile.c`)
+/// may substitute while compiling: the persistent internal constants with
+/// scalar values that are not deprecated (`can_ct_eval_const`), by their
+/// case-sensitive name. Shared by every compilation of a request.
+#[derive(Clone, Default)]
+pub struct CtConstants(Rc<HashMap<ZStr, Value>>);
+
+impl CtConstants {
+    /// Wraps a name → value table.
+    pub fn new(constants: HashMap<ZStr, Value>) -> Self {
+        Self(Rc::new(constants))
+    }
+
+    /// The value of the constant `name`, if it may be substituted.
+    pub fn get(&self, name: &[u8]) -> Option<&Value> {
+        self.0.get(name)
+    }
+
+    /// The number of substitutable constants.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether no constant may be substituted.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for CtConstants {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CtConstants({} entries)", self.0.len())
+    }
+}
+
 /// Options for [`compile`].
 #[derive(Clone, Debug, Default)]
 pub struct CompileOptions {
@@ -93,6 +128,10 @@ pub struct CompileOptions {
     /// compilation (`CG(rtd_key_counter)`), so recompiling a file or eval
     /// string names its anonymous classes afresh.
     pub anon_base: u32,
+    /// Internal constants substituted at compile time
+    /// (`zend_try_ct_eval_const`); `None` substitutes only `true`, `false`
+    /// and `null`.
+    pub ct_constants: Option<CtConstants>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,6 +349,12 @@ pub(crate) struct Compiler {
     /// name (`foo()`, `C::m()`), which names the closures in the attribute
     /// arguments as `CG(active_op_array)` is already the function.
     pub attr_owner: Option<String>,
+    /// `ZEND_COMPILE_NO_CONSTANT_SUBSTITUTION |
+    /// ZEND_COMPILE_NO_PERSISTENT_CONSTANT_SUBSTITUTION`, set by
+    /// `zend_compile_params` around a parameter default so that
+    /// `ReflectionParameter::isDefaultValueConstant()` still sees the
+    /// constant.
+    pub no_const_subst: bool,
 }
 
 /// Compiles a parsed program.
@@ -346,6 +391,7 @@ pub fn compile(
         inline_const_depth: 0,
         in_global_const: false,
         attr_owner: None,
+        no_const_subst: false,
     };
     for w in &program.warnings {
         let level = match w.level {

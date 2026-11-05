@@ -807,6 +807,10 @@ pub struct Vm {
     /// and `const_attributes`, rebuilt when their size changes (entries
     /// are only ever added).
     pub(crate) const_deprecation_filter: std::cell::RefCell<(usize, Vec<u64>)>,
+    /// The constants the compiler substitutes (`zend_try_ct_eval_const`),
+    /// keyed by the number of internal and deprecated constants it was
+    /// built from (see [`Vm::ct_constants`]).
+    pub(crate) ct_constants: Option<((usize, usize), crate::compiler::CtConstants)>,
     /// Shared empty code for builtin frames.
     pub empty_code: Rc<OpArray>,
     /// Shared empty variable store for builtin frames.

@@ -572,7 +572,11 @@ impl Compiler {
                 Some(t) => Some(self.resolve_type(t)?),
                 None => None,
             };
+            // `zend_compile_params` compiles the default without constant
+            // substitution.
+            let saved_subst = std::mem::replace(&mut self.no_const_subst, true);
             let folded_default = p.default.as_ref().and_then(|d| self.try_fold(d));
+            self.no_const_subst = saved_subst;
             let mut forced = false;
             if let (Some(t), Some(Value::Null)) = (&mut ty, &folded_default) {
                 if p.modifiers.is_empty() && p.hooks.is_none() && !t.allows_null() && !t.is_mixed()
@@ -679,6 +683,16 @@ impl Compiler {
                     p.span.line,
                 ));
             }
+            let default_expr = match &p.default {
+                Some(d) => {
+                    self.check_const_expr(d, true)?;
+                    let saved_subst = std::mem::replace(&mut self.no_const_subst, true);
+                    let r = self.const_expr(d);
+                    self.no_const_subst = saved_subst;
+                    Some(r?)
+                }
+                None => None,
+            };
             params.push(ParamInfo {
                 name: ZStr::from(p.name.name.as_slice()),
                 by_ref: p.by_ref,
@@ -696,13 +710,7 @@ impl Compiler {
                 sensitive: attrs
                     .iter()
                     .any(|a| a.name.eq_ignore_ascii_case(b"SensitiveParameter")),
-                default_expr: match &p.default {
-                    Some(d) => {
-                        self.check_const_expr(d, true)?;
-                        Some(self.const_expr(d)?)
-                    }
-                    None => None,
-                },
+                default_expr,
                 attributes: attrs,
             });
         }
@@ -773,9 +781,11 @@ impl Compiler {
             } else if let Some(d) = default {
                 let at = self.emit(Op::RecvInit { n, cv, skip: 0 });
                 let saved = std::mem::replace(&mut self.in_const_default, true);
+                let saved_subst = std::mem::replace(&mut self.no_const_subst, true);
                 let depth = std::mem::replace(&mut self.inline_const_depth, self.fns.len());
                 let v = self.compile_expr(d);
                 self.in_const_default = saved;
+                self.no_const_subst = saved_subst;
                 self.inline_const_depth = depth;
                 let v = v?;
                 self.f().line = p.span.line;
