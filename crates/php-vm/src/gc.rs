@@ -133,6 +133,33 @@ impl RootBuffer {
         true
     }
 
+    /// Drops the entry of the freed handle at `addr` (`gc_remove_from_buffer`);
+    /// `false` if it was not buffered.
+    /// The order of the other entries is kept (it is the collection order);
+    /// trailing dead entries are popped so the buffer does not grow while
+    /// short-lived objects come and go.
+    fn remove(&mut self, addr: usize) -> bool {
+        let Some(i) = self.index.remove(&addr) else {
+            return false;
+        };
+        if let Some(slot) = self.entries.get_mut(i) {
+            let empty: Weak<dyn PhpObject> = Weak::<ObjBox>::new();
+            *slot = empty;
+        }
+        while let Some(last) = self.entries.last() {
+            if last.strong_count() > 0 {
+                break;
+            }
+            let a = last.as_ptr().cast::<u8>() as usize;
+            let j = self.entries.len() - 1;
+            if self.index.get(&a) == Some(&j) {
+                self.index.remove(&a);
+            }
+            self.entries.pop();
+        }
+        true
+    }
+
     fn compact(&mut self) {
         self.entries.retain(|e| e.strong_count() > 0);
         self.index.clear();
@@ -327,8 +354,25 @@ fn root_obj(o: &Obj) {
     with_state(|s| {
         // Roots released by destructors during a run are kept for the
         // next one (they never trigger a nested run).
-        if !s.protected && s.roots.push(o) && !s.active {
-            note_new_root(s);
+        if !s.protected && s.roots.push(o) {
+            let d = crate::object::data(o);
+            d.flags
+                .set(d.flags.get() | crate::object::oflags::GC_BUFFERED);
+            if !s.active {
+                note_new_root(s);
+            }
+        }
+    });
+}
+
+/// A buffered object handle (`oflags::GC_BUFFERED`) at `addr` is being
+/// freed: its root buffer entry goes (`GC_REMOVE_FROM_BUFFER`).
+pub(crate) fn forget_root(addr: usize) {
+    with_state(|s| {
+        // The freed slot no longer counts towards the threshold
+        // (`gc_remove_from_buffer` decrements `num_roots`).
+        if s.roots.remove(addr) {
+            s.pending = s.pending.saturating_sub(1);
         }
     });
 }

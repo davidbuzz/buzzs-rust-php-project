@@ -27,6 +27,9 @@ pub mod oflags {
     pub const ENUM_CASE: u32 = 1 << 2;
     /// The object has its own property order (see [`super::PropOrder`]).
     pub const PROP_ORDER: u32 = 1 << 3;
+    /// A handle of the object was buffered as a possible GC root (a hint
+    /// like `GC_INFO`: freeing the handle removes its buffer entry).
+    pub const GC_BUFFERED: u32 = 1 << 4;
 }
 
 /// The state of a PHP object.
@@ -77,6 +80,23 @@ struct ObjectStore {
     objects: Vec<Option<Weak<ObjectData>>>,
     /// Free handles (LIFO, like Zend's free list).
     free: Vec<u32>,
+    /// `EG_FLAGS_OBJECT_STORE_NO_REUSE`: while shutdown destructors run,
+    /// new objects take fresh handles past the end of the store.
+    no_reuse: bool,
+}
+
+impl ObjectStore {
+    /// `zend_objects_store_put`: the next handle — the head of the free
+    /// list unless reuse is suspended, else a new slot at the end.
+    fn take_handle(&mut self) -> u32 {
+        if !self.no_reuse {
+            if let Some(h) = self.free.pop() {
+                return h;
+            }
+        }
+        self.objects.push(None);
+        u32::try_from(self.objects.len()).unwrap_or(u32::MAX)
+    }
 }
 
 impl Drop for ObjectData {
@@ -128,6 +148,10 @@ impl PhpObject for ObjBox {
 impl Drop for ObjBox {
     fn drop(&mut self) {
         let data = &self.0;
+        if data.flags.get() & oflags::GC_BUFFERED != 0 {
+            // `GC_REMOVE_FROM_BUFFER` in `zend_objects_store_del`.
+            crate::gc::forget_root(std::ptr::from_ref(self).cast::<u8>() as usize);
+        }
         if data.flags.get() & oflags::DESTRUCTED != 0 || !data.class.has_destructor() {
             return;
         }
@@ -158,12 +182,7 @@ pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {
     let n = slots.len();
     STORE.with(|s| {
         let mut s = s.borrow_mut();
-        let handle = if let Some(h) = s.free.pop() {
-            h
-        } else {
-            s.objects.push(None);
-            u32::try_from(s.objects.len()).unwrap_or(u32::MAX)
-        };
+        let handle = s.take_handle();
         let data = Rc::new(ObjectData {
             handle,
             class,
@@ -194,13 +213,7 @@ impl HandleGuard {
     #[must_use]
     pub fn reserve() -> Self {
         STORE.with(|s| {
-            let mut s = s.borrow_mut();
-            let handle = if let Some(h) = s.free.pop() {
-                h
-            } else {
-                s.objects.push(None);
-                u32::try_from(s.objects.len()).unwrap_or(u32::MAX)
-            };
+            let handle = s.borrow_mut().take_handle();
             HandleGuard(handle)
         })
     }
@@ -275,6 +288,28 @@ pub fn live_objects() -> Vec<Rc<ObjectData>> {
     })
 }
 
+/// The number of handle slots in the store (`objects->top - 1`).
+pub fn store_len() -> usize {
+    STORE.with(|s| s.borrow().objects.len())
+}
+
+/// The live object in store slot `i` (handle `i + 1`), if any.
+pub fn live_object_at(i: usize) -> Option<Rc<ObjectData>> {
+    STORE.with(|s| {
+        s.borrow()
+            .objects
+            .get(i)
+            .and_then(|w| w.as_ref().and_then(Weak::upgrade))
+    })
+}
+
+/// Suspends (`true`) or restores handle reuse
+/// (`EG_FLAGS_OBJECT_STORE_NO_REUSE`, set by
+/// `zend_objects_store_call_destructors`).
+pub fn set_handle_no_reuse(on: bool) {
+    STORE.with(|s| s.borrow_mut().no_reuse = on);
+}
+
 /// Wraps existing object data in a new handle (used at shutdown for objects
 /// only reachable through cycles).
 pub fn revive(data: Rc<ObjectData>) -> Obj {
@@ -288,6 +323,7 @@ pub fn next_handle() -> u32 {
         s.free
             .last()
             .copied()
+            .filter(|_| !s.no_reuse)
             .unwrap_or_else(|| u32::try_from(s.objects.len() + 1).unwrap_or(u32::MAX))
     })
 }

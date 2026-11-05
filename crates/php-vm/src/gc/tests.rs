@@ -227,3 +227,19 @@ fn threshold_triggers_automatic_collection() {
     );
     assert_eq!(out, "bool(true)\nbool(true)\n");
 }
+
+/// Bug #43450: a buffered root whose handle is freed leaves the buffer
+/// (`GC_REMOVE_FROM_BUFFER`), so short-lived objects do not grow it.
+#[test]
+fn freed_objects_leave_the_root_buffer() {
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    vm.run_script(
+        b"<?php class Q { function m() {} }\nfor ($i = 0; $i < 1000; $i++) { $q = new Q; $q->m(); }\necho 'ok';",
+        "t.php",
+    );
+    let len = super::with_state(|s| s.roots.entries.len()).unwrap_or_default();
+    drop(vm);
+    assert_eq!(sink.0.borrow().as_slice(), b"ok");
+    assert!(len < 16, "{len} buffered entries");
+}

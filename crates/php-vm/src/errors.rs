@@ -342,6 +342,15 @@ impl Vm {
     }
 
     fn report_fatal_bytes(&mut self, msg: &[u8], file: &ZStr, line: u32) {
+        self.display_fatal_bytes(msg, file, line);
+        object::set_destructors_enabled(false);
+    }
+
+    /// Records and displays an `E_ERROR` without the bailout's
+    /// `zend_objects_store_mark_destructed` — the `E_DONT_BAIL` path of
+    /// `php_error_cb` that `zend_exception_error` takes, so objects still
+    /// get their destructors at shutdown after an uncaught exception.
+    fn display_fatal_bytes(&mut self, msg: &[u8], file: &ZStr, line: u32) {
         self.last_error = Some(LastError {
             level: level::ERROR,
             message: msg.to_vec(),
@@ -352,7 +361,6 @@ impl Vm {
             self.display_error(level::ERROR, msg, file, line);
         }
         self.exit_status = 255;
-        object::set_destructors_enabled(false);
     }
 
     /// Reports a compile error (`E_COMPILE_ERROR`).
@@ -408,7 +416,10 @@ impl Vm {
             let msg = msg.as_str().map(ZStr::to_string_lossy).unwrap_or_default();
             let file = file.as_str().cloned().unwrap_or_default();
             let line = u32::try_from(line.as_int().unwrap_or(0)).unwrap_or(0);
+            // Reported with `E_DONT_BAIL` as well: the destructors still run.
+            let enabled = object::destructors_enabled();
             self.report_compile_error(&msg, &file, line, cls.lc_name.as_bytes() == b"parseerror");
+            object::set_destructors_enabled(enabled);
             return;
         }
         // `zend_exception_error`.
@@ -464,7 +475,7 @@ impl Vm {
         let mut msg = b"Uncaught ".to_vec();
         msg.extend_from_slice(s.as_bytes());
         msg.extend_from_slice(b"\n  thrown");
-        self.report_fatal_bytes(&msg, &file, line);
+        self.display_fatal_bytes(&msg, &file, line);
     }
 }
 

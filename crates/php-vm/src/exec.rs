@@ -355,9 +355,23 @@ impl Vm {
                 let in_try = throw_ip >= entry.try_start && throw_ip < entry.try_end;
                 if in_try {
                     if let Some(cs) = entry.catch_start {
-                        f.pending_exc = Some(exc);
                         f.ip = cs as usize;
                         f.calls.clear();
+                        // `cleanup_live_vars`: the try body's temporaries
+                        // (e.g. the left operand of `new A + new B()`) are
+                        // released, and destructed, before the catch runs.
+                        let (ts, te) = entry.try_tmps;
+                        let dead: Vec<Value> = f
+                            .tmps
+                            .get_mut(ts as usize..te as usize)
+                            .map(|t| t.iter_mut().map(std::mem::take).collect())
+                            .unwrap_or_default();
+                        drop(dead);
+                        let exc = match self.destruct_while_unwinding(exc) {
+                            Ok(e) => e,
+                            Err(t) => return Err(self.abandon_unwinding(t, base)),
+                        };
+                        self.frame_mut().pending_exc = Some(exc);
                         return Ok(());
                     }
                 }

@@ -364,6 +364,11 @@ impl Vm {
     }
 
     fn call_global_destructors(&mut self) -> Result<(), Throw> {
+        // Objects released on the way here (the uncaught exception and its
+        // trace, the unwound frames).
+        if let Err(e) = self.run_pending_destructors() {
+            return self.destructor_error(e);
+        }
         // Globals holding the only reference, in reverse order.
         loop {
             let n = self.globals.borrow().slots.len();
@@ -389,16 +394,36 @@ impl Vm {
                 break;
             }
         }
-        // Remaining objects in creation order.
-        for d in object::live_objects() {
+        // `zend_objects_store_call_destructors`: the remaining objects in
+        // handle order, including the ones their destructors create (which
+        // take fresh handles at the end of the store meanwhile).
+        object::set_handle_no_reuse(true);
+        let r = self.call_store_destructors();
+        object::set_handle_no_reuse(false);
+        r
+    }
+
+    fn call_store_destructors(&mut self) -> Result<(), Throw> {
+        // The store is not freed here: an object whose destructor dropped
+        // its last reference stays allocated (`GC_DELREF`, no release).
+        let mut keep = Vec::new();
+        let mut i = 0;
+        while i < object::store_len() {
+            let slot = object::live_object_at(i);
+            i += 1;
+            let Some(d) = slot else {
+                continue;
+            };
             if d.flags.get() & object::oflags::DESTRUCTED != 0 || !d.class.has_destructor() {
                 continue;
             }
             d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
-            let o = object::revive(d);
+            let o = object::revive(d.clone());
+            keep.push(d);
             if let Err(e) = self.call_destructor(&o) {
                 return self.destructor_error(e);
             }
+            drop(o);
             if let Err(e) = self.run_pending_destructors() {
                 return self.destructor_error(e);
             }
