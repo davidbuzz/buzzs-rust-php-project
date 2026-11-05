@@ -16,10 +16,15 @@ fn parse(src: &str) -> Program {
 }
 
 /// `foreach` used to hold three inline expressions, which made every
-/// statement node about 450 bytes.
+/// statement node about 450 bytes; inline `while`/`switch` expressions kept
+/// it at 192. No variant is now larger than an expression statement.
 #[test]
 fn statement_nodes_stay_small() {
     let size = std::mem::size_of::<Stmt>();
+    assert!(
+        size <= std::mem::size_of::<Expr>() + 40,
+        "size_of::<Stmt>() = {size}"
+    );
     assert!(size < 256, "size_of::<Stmt>() = {size}");
 }
 

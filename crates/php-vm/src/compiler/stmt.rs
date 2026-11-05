@@ -191,7 +191,7 @@ impl Compiler {
                 value,
                 by_ref,
                 body,
-            } => self.compile_foreach(subject, key.as_ref(), value, *by_ref, body)?,
+            } => self.compile_foreach(subject, key.as_deref(), value, *by_ref, body)?,
             StmtKind::Switch { subject, cases } => self.compile_switch(subject, cases)?,
             StmtKind::Break(n) | StmtKind::Continue(n) => {
                 let is_break = matches!(s.kind, StmtKind::Break(_));

@@ -1130,7 +1130,7 @@ impl Interp {
                 value,
                 by_ref,
                 body,
-            } => self.exec_foreach(subject, key.as_ref(), value, *by_ref, body),
+            } => self.exec_foreach(subject, key.as_deref(), value, *by_ref, body),
             StmtKind::Switch { subject, cases } => {
                 let v = self.eval(subject)?;
                 let mut matched = None;

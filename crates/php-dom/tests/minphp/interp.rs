@@ -720,7 +720,7 @@ impl Interp {
                 value,
                 body,
                 ..
-            } => self.exec_foreach(subject, key.as_ref(), value, body),
+            } => self.exec_foreach(subject, key.as_deref(), value, body),
             StmtKind::Switch { subject, cases } => {
                 let v = self.eval(subject)?;
                 let mut matched = false;
