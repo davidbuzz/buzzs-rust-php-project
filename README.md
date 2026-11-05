@@ -6,25 +6,8 @@ The original PHP is written in C. This project ports it to idiomatic, best-pract
 (clippy-pedantic clean, `unsafe` only in audited FFI modules), matching PHP's observable
 behaviour byte for byte: error messages, line numbers, `var_dump` layout, float printing.
 
-## Status (4 Nov 2026)
-
-The engine runs real PHP and every in-scope extension is bound to it. Full in-scope run of the
-php-src suite (`Zend`, `tests`, `ext`, `sapi`) with our own `php` binary, measured 4 Nov 2026
-(`scripts/update_feature_gap.py report.json --summary`); "ran" excludes skipped tests. 2,514
-tests under out-of-scope directories ([phpt-scope.txt](phpt-scope.txt)) are not counted.
-
-| Suite | tests | pass | fail | skip | pass % (ran) | pass % (all) |
-|---|---|---|---|---|---|---|
-| `Zend/tests` | 5,725 | 4,498 | 1,167 | 60 | 79.4% | 78.6% |
-| `tests/` | 904 | 707 | 70 | 126 | 90.9% | 78.2% |
-| `ext/standard` | 4,068 | 3,363 | 189 | 514 | 94.6% | 82.7% |
-| other `ext/*` | 10,590 | 9,700 | 199 | 684 | 97.9% | 91.6% |
-| `sapi/` | 127 | 110 | 2 | 15 | 98.2% | 86.6% |
-| **in scope, total** | **21,414** | **18,378** | **1,627** | **1,399** | **91.8%** | **85.8%** |
-
-Per-extension rows (measured from the same run, with skips excluded) and what is currently
-in progress are in [FEATURE_GAP.md](FEATURE_GAP.md), along with what is deliberately out of
-scope (opcache, FPM, pgsql, ffi, …) and the row-by-row detail.
+Current implementation coverage, test results, and remaining work are tracked in
+[FEATURE_GAP.md](FEATURE_GAP.md).
 
 ## Layout
 
@@ -33,7 +16,7 @@ list with the php-src files each one ports is in [CLAUDE.md](CLAUDE.md). The imp
 
 | Crate | Role |
 |---|---|
-| `php-lexer`, `php-parser` | tokenizer and full PHP 8.x parser/AST (99.95% agreement with `php -l` on the corpus) |
+| `php-lexer`, `php-parser` | tokenizer and PHP 8.x parser/AST |
 | `php-runtime` | zval, zend_string, ordered hash table, operators, type juggling, var_dump/serialize |
 | `php-vm`, `php-cli` | compiler, executor, classes, exceptions, generators, fibers; the `php` binary |
 | `phpt-runner` | Rust port of `run-tests.php`; runs `.phpt` files and reports pass rates |
@@ -86,49 +69,24 @@ php-src master differ, the port follows master.
 
 ## Related work
 
-Projects with the same or an overlapping thesis, found by searching the project goals
-(5 Nov 2026):
+Projects with a related thesis or implementation:
 
 - **[francescotinti/php-rust](https://github.com/francescotinti/php-rust)** /
-  [phprust.com](https://phprust.com/) — the closest relative, and the owner of the
-  "phprust" name on the web. Same core thesis stated almost verbatim ("the contract worth
-  preserving isn't Zend's design, but PHP's observable output", the `.phpt` corpus as an
-  executable oracle, performance measured against the reference interpreter's CPU with a
-  1× target). Targets PHP 8.5 via the mago parser → HIR → bytecode pipeline; reports the
-  full WordPress core suite at effective oracle parity over a native mysqli wire protocol,
-  with micro-benchmarks at ~2.1–2.9× oracle CPU (s183) and the WP suite at ~1.77×.
-  On the shared yardstick its own COVERAGE.md reports **Zend/tests at 2,655/4,067 ran
-  (65.3%)** and **1,017/2,143 internal functions (47%)** — versus this repo's ~80% of
-  Zend/tests ran and 91.8% of the full in-scope php-src suite (which it does not run).
-  Measured head-to-head here (5 Nov 2026, same runner, same php-src master corpus,
-  same oracle): conformance Zend/tests+tests/ **phpr 47.6% vs ours ~82%** of ran;
-  performance (instruction ratio vs `/usr/bin/php` on this repo's 82-workload gate)
-  **phpr ~2.3–9.7× on the 47 workloads its parser can run** (it cannot parse
-  `Zend/micro_bench.php`) **vs ours 4.8–27× (geomean 17.9×)** — i.e. phpr's
-  interpreter is ~2.5–3× leaner per op today, while this repo leads conformance by
-  ~35 points on the same corpus.
-  Ahead of this repo on: CPU performance, end-to-end application validation
-  (WordPress, Symfony http-kernel), and public presence. Behind on: engine-corpus pass
-  rate, extension breadth, SAPI coverage, and master tracking.
-  A READ-ONLY reference clone lives at `modules/php-rust/` (gitignored) for
-  comparison and study; its code is never edited or copied.
+  [phprust.com](https://phprust.com/) — a Rust PHP implementation targeting PHP 8.5,
+  using the mago parser and a HIR-to-bytecode pipeline. A read-only reference clone lives
+  at `modules/php-rust/` (gitignored) for comparison and study; its code is never edited
+  or copied.
 - **[jolicode/rphp](https://github.com/jolicode/rphp)** — AI-assisted experiment
-  ([write-up](https://jolicode.com/blog/writing-the-php-virtual-machine-in-rust-with-a-lot-of-help-from-ai)):
-  ~80% of basic compatibility tests, 5–15× slower on pure code, but a copy-on-write
-  "fork mode" for requests that beats classic PHP serving on app workloads. Confirms the
-  register-VM (not stack-VM) choice as necessary for matching destruction/error ordering.
+  ([write-up](https://jolicode.com/blog/writing-the-php-virtual-machine-in-rust-with-a-lot-of-help-from-ai))
+  exploring a Rust PHP VM and copy-on-write request forking.
 - Earlier/smaller efforts: `rust-php/php`, `tagua-vm` (archived), various experimental
   interpreters and parsers (`wudi/php-parser`, `jorgsowa/rust-php-parser`);
   [mago](https://github.com/carthage-software/mago) is a PHP toolchain (not an engine)
   in Rust.
 
-This project differs in following php-src `master` (not a fixed release), implementing
-extensions as per-extension crates validated byte-for-byte against the full in-scope
-`.phpt` tree (including `sapi/`, mod_php, and the CLI server), and gating performance
-per workload on instruction counts rather than a micro-benchmark average. Lessons worth
-adopting from the relatives: application-level end-to-end validation (WordPress core
-suite over the native mysqli client is the natural next milestone here), and a public
-name that does not collide with phprust.com before anything is published.
+This project follows php-src `master`, organizes extensions as per-extension crates,
+and uses `.phpt` tests and per-workload instruction counts as its compatibility and
+performance measures.
 
 ## Resource notes
 
