@@ -102,3 +102,23 @@ fn by_ref_arrow_fn_on_value_notices() {
     let out = run("<?php\n$a = 1;\n$f = fn&() => $a;\n$x = $f();\nvar_dump($x);\n");
     assert_eq!(out, "int(1)\n");
 }
+
+/// `zend_check_string_offset()` runs before the write-context string
+/// offset error (bug73792).
+#[test]
+fn string_offset_check_precedes_reference_error() {
+    let out = run(r#"<?php
+$a = 'aaa';
+try { foreach ($a['2bbb'] as &$v) {} } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { $a['1x'] .= 'b'; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { $r = &$a['xx']; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "\nWarning: Illegal string offset \"2bbb\" in t.php on line 3\n\
+         Error: Cannot create references to/from string offsets\n\
+         \nWarning: Illegal string offset \"1x\" in t.php on line 4\n\
+         Error: Cannot use assign-op operators with string offsets\n\
+         TypeError: Cannot access offset of type string on string\n"
+    );
+}

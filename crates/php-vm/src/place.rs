@@ -349,12 +349,20 @@ pub(crate) fn descend(
                                 Err(e) => Step::Err(e),
                             }
                         }
-                        WOp::FetchRw => Step::Err(WalkErr::Error(
-                            "Cannot use assign-op operators with string offsets".into(),
-                        )),
-                        WOp::MakeRef | WOp::AssignRef(_) => Step::Err(WalkErr::Error(
-                            "Cannot create references to/from string offsets".into(),
-                        )),
+                        // `zend_check_string_offset()` (its warning or
+                        // TypeError) precedes `zend_wrong_string_offset_error()`.
+                        WOp::FetchRw => match string_offset(dim, diags, true) {
+                            Err(e) => Step::Err(e),
+                            Ok(_) => Step::Err(WalkErr::Error(
+                                "Cannot use assign-op operators with string offsets".into(),
+                            )),
+                        },
+                        WOp::MakeRef | WOp::AssignRef(_) => match string_offset(dim, diags, true) {
+                            Err(e) => Step::Err(e),
+                            Ok(_) => Step::Err(WalkErr::Error(
+                                "Cannot create references to/from string offsets".into(),
+                            )),
+                        },
                         WOp::Unset => {
                             Step::Err(WalkErr::Error("Cannot unset string offsets".into()))
                         }
