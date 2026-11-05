@@ -86,3 +86,57 @@ fn duplicate_interface_through_alias() {
         "Fatal error: Interface c cannot implement previously implemented interface a in t.php on line 4",
     );
 }
+
+/// `zend_compile_use` and the declarations colliding with imports.
+#[test]
+fn imports_collide_with_declarations() {
+    let cases = [
+        (
+            "<?php\nuse A\\B as Foo;\n\nclass Foo {\n}\n",
+            "Fatal error: Cannot redeclare class Foo (previously declared as local import) in t.php on line 4",
+        ),
+        (
+            "<?php\nclass Foo {\n}\n\nuse A\\B as Foo;\n",
+            "Fatal error: Cannot use A\\B as Foo because the name is already in use in t.php on line 5",
+        ),
+        (
+            "<?php\nnamespace Bazzle {\n    use function Foo\\bar;\n    function bar() {}\n}\n",
+            "Fatal error: Cannot redeclare function Bazzle\\bar() (previously declared as local import) in t.php on line 4",
+        ),
+        (
+            "<?php\nnamespace Bazzle {\n    use const Foo\\BAR;\n    const BAR = 24;\n}\n",
+            "Fatal error: Cannot declare const Bazzle\\BAR because the name is already in use in t.php on line 4",
+        ),
+        (
+            "<?php\nuse A\\B;\nuse A\\B;\n",
+            "Fatal error: Cannot use A\\B as B because the name is already in use in t.php on line 3",
+        ),
+        (
+            "<?php\nnamespace X;\nuse function A\\b;\nuse function A\\b;\n",
+            "Fatal error: Cannot use function A\\b as b because the name is already in use in t.php on line 4",
+        ),
+        (
+            "<?php\nnamespace foo;\nconst NULL = 1;\n",
+            "Fatal error: Cannot redeclare constant 'NULL' in t.php on line 3",
+        ),
+    ];
+    for (src, expected) in cases {
+        assert_contains(src, expected);
+    }
+    // Importing the declared class itself is allowed.
+    assert_eq!(
+        run("<?php\nnamespace N;\nclass Foo {}\nuse N\\Foo;\necho Foo::class;\n"),
+        "N\\Foo"
+    );
+}
+
+/// "use A" outside a namespace has no effect.
+#[test]
+fn non_compound_use_warns_outside_namespace() {
+    assert_eq!(
+        run("<?php\nuse A;\nuse \\B;\necho 'ok';\n"),
+        "\nWarning: The use statement with non-compound name 'A' has no effect in t.php on line 2\n\
+         \nWarning: The use statement with non-compound name 'B' has no effect in t.php on line 3\nok"
+    );
+    assert_eq!(run("<?php\nnamespace N;\nuse A;\necho 'ok';\n"), "ok");
+}

@@ -5,6 +5,13 @@ use crate::ast::{self, Expr, ExprKind, Stmt, StmtKind, VarName};
 use crate::opcode::{ArgSrc, BinKind, ForeachKind, Op, Operand, Place, PlaceBase, TryEntry};
 use php_runtime::{Value, ZStr};
 
+/// `ZEND_SYMBOL_CLASS` (`FC(seen_symbols)` kinds, Zend/zend_compile.h).
+pub(crate) const SYMBOL_CLASS: u8 = 1 << 0;
+/// `ZEND_SYMBOL_FUNCTION`.
+pub(crate) const SYMBOL_FUNCTION: u8 = 1 << 1;
+/// `ZEND_SYMBOL_CONST`.
+pub(crate) const SYMBOL_CONST: u8 = 1 << 2;
+
 impl Compiler {
     /// Compiles the statements of a file.
     pub(crate) fn compile_top_statements(&mut self, stmts: &[Stmt]) -> CResult<()> {
@@ -351,6 +358,7 @@ impl Compiler {
                     let full = self.ns_prefixed_pub(&c.name.name);
                     let name = self.lit_str(&full);
                     self.check_const_expr(&c.value, true)?;
+                    self.check_const_decl_name(&c.name.name, &full, c.span.line)?;
                     let val = self.compile_expr(&c.value)?;
                     self.emit(Op::DeclareConst { name, val, attrs });
                 }
@@ -398,6 +406,46 @@ impl Compiler {
         }
     }
 
+    /// `zend_compile_const_decl` (Zend/zend_compile.c): `true`/`false`/`null`
+    /// cannot be declared, nor a name imported by `use const` for another
+    /// constant. Registers the name as seen.
+    fn check_const_decl_name(&mut self, unqualified: &[u8], full: &[u8], line: u32) -> CResult<()> {
+        if unqualified.eq_ignore_ascii_case(b"null")
+            || unqualified.eq_ignore_ascii_case(b"true")
+            || unqualified.eq_ignore_ascii_case(b"false")
+        {
+            return self.err(
+                format!(
+                    "Cannot redeclare constant '{}'",
+                    String::from_utf8_lossy(unqualified)
+                ),
+                line,
+            );
+        }
+        if self
+            .const_uses
+            .get(unqualified)
+            .is_some_and(|import| import.as_slice() != full)
+        {
+            return self.err(
+                format!(
+                    "Cannot declare const {} because the name is already in use",
+                    String::from_utf8_lossy(full)
+                ),
+                line,
+            );
+        }
+        self.register_seen_symbol(full.to_vec(), SYMBOL_CONST);
+        Ok(())
+    }
+
+    /// `zend_register_seen_symbol`.
+    pub(crate) fn register_seen_symbol(&mut self, name: Vec<u8>, kind: u8) {
+        *self.seen_symbols.entry(name).or_insert(0) |= kind;
+    }
+
+    /// `zend_compile_use` (Zend/zend_compile.c) for one imported name.
+    #[allow(clippy::too_many_lines)]
     fn add_use(
         &mut self,
         kind: ast::UseKind,
@@ -405,10 +453,29 @@ impl Compiler {
         alias: Option<&[u8]>,
         line: u32,
     ) -> CResult<()> {
-        let short = alias.map_or_else(
-            || full.rsplit(|&c| c == b'\\').next().unwrap_or(full).to_vec(),
-            <[u8]>::to_vec,
-        );
+        // The grammar drops the leading `\` of `use \A\B`.
+        let full = full.strip_prefix(b"\\").unwrap_or(full);
+        let short = match alias {
+            Some(a) => a.to_vec(),
+            None => {
+                if let Some(p) = full.iter().rposition(|&c| c == b'\\') {
+                    // "use A\B" is equivalent to "use A\B as B".
+                    full[p + 1..].to_vec()
+                } else {
+                    if self.namespace.is_empty() {
+                        self.warnings.push((
+                            2,
+                            format!(
+                                "The use statement with non-compound name '{}' has no effect",
+                                String::from_utf8_lossy(full)
+                            ),
+                            line,
+                        ));
+                    }
+                    full.to_vec()
+                }
+            }
+        };
         match kind {
             ast::UseKind::Class => {
                 let lc = short.to_ascii_lowercase();
@@ -433,19 +500,6 @@ impl Compiler {
                         line,
                     ));
                 }
-                if let Some(prev) = self.class_uses.get(&lc) {
-                    if !prev.eq_ignore_ascii_case(full) {
-                        return self.err(
-                            format!(
-                                "Cannot use {} as {} because the name is already in use",
-                                String::from_utf8_lossy(full),
-                                String::from_utf8_lossy(&short)
-                            ),
-                            line,
-                        );
-                    }
-                }
-                self.class_uses.insert(lc, full.to_vec());
             }
             ast::UseKind::Function => {
                 let lc = short.to_ascii_lowercase();
@@ -459,12 +513,9 @@ impl Compiler {
                         line,
                     ));
                 }
-                self.fn_uses
-                    .insert(short.to_ascii_lowercase(), full.to_vec());
             }
             ast::UseKind::Const => {
-                let lc = short.to_ascii_lowercase();
-                if matches!(lc.as_slice(), b"_" | b"let" | b"is") {
+                if matches!(short.to_ascii_lowercase().as_slice(), b"_" | b"let" | b"is") {
                     self.warnings.push((
                         8192,
                         format!(
@@ -474,9 +525,45 @@ impl Compiler {
                         line,
                     ));
                 }
-                self.const_uses.insert(short, full.to_vec());
             }
         }
+        // Constant imports are case-sensitive.
+        let (lookup, symbol, type_str) = match kind {
+            ast::UseKind::Class => (short.to_ascii_lowercase(), SYMBOL_CLASS, ""),
+            ast::UseKind::Function => (short.to_ascii_lowercase(), SYMBOL_FUNCTION, " function"),
+            ast::UseKind::Const => (short.clone(), SYMBOL_CONST, " const"),
+        };
+        // `zend_check_already_in_use`: a symbol of that name declared
+        // earlier in the file (in the current namespace).
+        let check = if self.namespace.is_empty() {
+            lookup.clone()
+        } else {
+            let mut v = self.namespace.to_ascii_lowercase();
+            v.push(b'\\');
+            v.extend_from_slice(&lookup);
+            v
+        };
+        let seen = self
+            .seen_symbols
+            .get(&check)
+            .is_some_and(|k| (k & symbol) != 0)
+            && !full.eq_ignore_ascii_case(&check);
+        let table = match kind {
+            ast::UseKind::Class => &mut self.class_uses,
+            ast::UseKind::Function => &mut self.fn_uses,
+            ast::UseKind::Const => &mut self.const_uses,
+        };
+        if seen || table.contains_key(&lookup) {
+            return self.err(
+                format!(
+                    "Cannot use{type_str} {} as {} because the name is already in use",
+                    String::from_utf8_lossy(full),
+                    String::from_utf8_lossy(&short)
+                ),
+                line,
+            );
+        }
+        table.insert(lookup, full.to_vec());
         Ok(())
     }
 
