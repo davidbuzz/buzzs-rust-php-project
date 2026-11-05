@@ -10,6 +10,7 @@ php-vm = { path = "../php-vm" }
 php-memlimit = { path = "../php-memlimit" }
 php-runtime = { path = "../php-runtime" }
 php-uri = { path = "../php-uri" }
+php-stdstr = { path = "../php-stdstr" }
 
 [lints]
 workspace = true

@@ -10,6 +10,7 @@
 //! native unit enums.
 
 mod common;
+pub mod internal_api;
 mod memory;
 mod rfc3986;
 mod whatwg;
