@@ -2050,10 +2050,6 @@ fn inherit_prop_hooks(
     Some(Rc::new(h))
 }
 
-/// `do_trait_constant_check` for trait constant `tc` of `traits[ti]` that
-/// meets `existing`, a constant the class already has (its own, an enum
-/// case or one of an earlier trait). Values that need evaluating are
-/// compared later by [`Vm::link_class`].
 /// `zend_class_redeclaration_error`: names the kind, name and (for user
 /// classes) the declaration site of the class already registered.
 #[cold]
@@ -2146,6 +2142,10 @@ fn constant_access_level_error(
     ))
 }
 
+/// `do_trait_constant_check` for trait constant `tc` of `traits[ti]` that
+/// meets `existing`, a constant the class already has (its own, an enum
+/// case or one of an earlier trait). Values that need evaluating are
+/// compared later by [`Vm::link_class`].
 fn trait_constant_conflict(
     class: &ZStr,
     traits: &[Rc<Class>],

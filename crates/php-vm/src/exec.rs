@@ -1594,7 +1594,6 @@ impl Vm {
         Ok(Flow::Reload)
     }
 
-    /// Creates an exception of an internal class and returns the throw.
     /// `Fetching properties on non-enums in constant expressions is not
     /// allowed` (`zend_ast_evaluate_ex`, `ZEND_AST_PROP`).
     #[cold]
@@ -1605,6 +1604,7 @@ impl Vm {
         )
     }
 
+    /// Creates an exception of an internal class and returns the throw.
     pub(crate) fn make_throw(&mut self, class: &str, msg: &str) -> Throw {
         match self.create_exception(class, msg, 0) {
             Ok(o) => Throw::Exception(o),
