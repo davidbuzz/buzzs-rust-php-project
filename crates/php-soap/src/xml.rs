@@ -15,6 +15,10 @@ use php_libxml::tree::{Document, Node as LxNode, NodeType, ParseOptions, ParserC
 
 use crate::consts::{SOAP_MAX_XML_DEPTH, XML_NAMESPACE};
 
+/// How many nodes [`Doc::parse_budgeted`] converts between two polls of
+/// its memory budget.
+pub const BUDGET_POLL: usize = 1024;
+
 /// Index of a node inside its [`Doc`].
 pub type NodeId = usize;
 
@@ -1024,17 +1028,45 @@ impl Doc {
 
     /// `soap_xmlParseMemory`: parses a SOAP message.
     pub fn parse(data: &[u8]) -> Result<Doc, ParseFailure> {
-        Self::parse_with(data, None, false)
+        match Self::parse_with(data, None, false, &mut |_| {
+            Ok::<(), std::convert::Infallible>(())
+        }) {
+            Ok(r) => r,
+            Err(never) => match never {},
+        }
+    }
+
+    /// [`Doc::parse`] under the engine's memory limit: `budget(bytes)` is
+    /// asked before the tree grows by a large block (`bytes`) and polled
+    /// every [`BUDGET_POLL`] nodes with `0`; its error aborts the parse.
+    /// (libxml2 builds the request tree with `emalloc`-accounted memory in
+    /// PHP; here the converted tree is what grows with the request.)
+    pub fn parse_budgeted<E>(
+        data: &[u8],
+        budget: &mut dyn FnMut(usize) -> Result<(), E>,
+    ) -> Result<Result<Doc, ParseFailure>, E> {
+        Self::parse_with(data, None, false, budget)
     }
 
     /// `soap_xmlParseFile` over already-fetched bytes: parses a WSDL or
     /// schema document and removes blank text, comments and processing
     /// instructions (`cleanup_xml_node`).
     pub fn parse_wsdl(data: &[u8], url: &str) -> Result<Doc, ParseFailure> {
-        Self::parse_with(data, Some(url), true)
+        match Self::parse_with(data, Some(url), true, &mut |_| {
+            Ok::<(), std::convert::Infallible>(())
+        }) {
+            Ok(r) => r,
+            Err(never) => match never {},
+        }
     }
 
-    fn parse_with(data: &[u8], url: Option<&str>, cleanup: bool) -> Result<Doc, ParseFailure> {
+    #[allow(clippy::too_many_lines)]
+    fn parse_with<E>(
+        data: &[u8],
+        url: Option<&str>,
+        cleanup: bool,
+        budget: &mut dyn FnMut(usize) -> Result<(), E>,
+    ) -> Result<Result<Doc, ParseFailure>, E> {
         let options = ParseOptions {
             options: php_libxml::ffi::XML_PARSE_HUGE
                 | php_libxml::ffi::XML_PARSE_NONET
@@ -1044,12 +1076,12 @@ impl Doc {
             channels: ParserChannels::SILENT,
         };
         php_libxml::raw::errors::reset_last_error();
-        let lx = Document::parse_memory(data, &options).map_err(|_| {
-            ParseFailure::Malformed(
+        let Ok(lx) = Document::parse_memory(data, &options) else {
+            return Ok(Err(ParseFailure::Malformed(
                 php_libxml::raw::errors::last_error()
                     .map(|e| String::from_utf8_lossy(&e.message).into_owned()),
-            )
-        })?;
+            )));
+        };
         let mut doc = Doc {
             url: url.map(str::to_owned),
             encoding: lx.encoding(),
@@ -1063,7 +1095,12 @@ impl Doc {
             .rev()
             .map(|c| (c, Parent::Doc, 0))
             .collect();
+        let mut polled = 0usize;
         while let Some((lxn, parent, depth)) = stack.pop() {
+            polled += 1;
+            if polled % BUDGET_POLL == 0 {
+                budget(0)?;
+            }
             let kind = match lxn.node_type() {
                 NodeType::Element => Kind::Element,
                 NodeType::Text => Kind::Text,
@@ -1128,13 +1165,25 @@ impl Doc {
                     continue;
                 }
             }
+            if doc.nodes.len() == doc.nodes.capacity() {
+                let grown = doc.nodes.capacity().saturating_mul(2).max(4);
+                budget(grown.saturating_mul(std::mem::size_of::<NodeData>()))?;
+                doc.nodes.reserve_exact(grown - doc.nodes.len());
+            }
             let id = doc.alloc(d);
             doc.link_last(parent, id);
             if kind == Kind::Element {
                 let kids = lxn.children();
                 if !kids.is_empty() {
                     if depth + 1 > SOAP_MAX_XML_DEPTH {
-                        return Err(ParseFailure::TooDeep);
+                        return Ok(Err(ParseFailure::TooDeep));
+                    }
+                    if stack.capacity() - stack.len() < kids.len() {
+                        let want = (stack.len() + kids.len()).max(stack.capacity() * 2);
+                        budget(
+                            want.saturating_mul(std::mem::size_of::<(LxNode, Parent, usize)>()),
+                        )?;
+                        stack.reserve_exact(want - stack.len());
                     }
                     for c in kids.into_iter().rev() {
                         stack.push((c, Parent::Node(id), depth + 1));
@@ -1145,7 +1194,7 @@ impl Doc {
         if cleanup {
             doc.remove_blank_texts();
         }
-        Ok(doc)
+        Ok(Ok(doc))
     }
 
     fn remove_blank_texts(&mut self) {
@@ -1444,6 +1493,36 @@ mod tests {
             b"<res xmlns:xsi=\"urn:xsi\" xsi:type=\"n:book\"><a xsi:type=\"s\">foo</a></res>"
                 .to_vec()
         );
+    }
+
+    #[test]
+    fn budgeted_parse_stops_when_the_budget_refuses() {
+        let mut src = b"<r>".to_vec();
+        for _ in 0..3000 {
+            src.extend_from_slice(b"<p><a/></p>");
+        }
+        src.extend_from_slice(b"</r>");
+        let mut asked = Vec::new();
+        let d = Doc::parse_budgeted(&src, &mut |bytes| {
+            asked.push(bytes);
+            Ok::<(), ()>(())
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(d.dump(), Doc::parse(&src).unwrap().dump());
+        assert!(asked.contains(&0), "polled every BUDGET_POLL nodes");
+        assert!(asked
+            .iter()
+            .any(|&b| b >= 4096 * std::mem::size_of::<NodeData>()));
+        let limit = 1024 * std::mem::size_of::<NodeData>();
+        let r = Doc::parse_budgeted(&src, &mut |bytes| {
+            if bytes > limit {
+                Err(bytes)
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(r.unwrap_err(), 2048 * std::mem::size_of::<NodeData>());
     }
 
     #[test]

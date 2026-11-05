@@ -737,6 +737,16 @@ impl SoapHost for VmHost<'_> {
         Err(oom_error(msg))
     }
 
+    fn memory_reserve(&mut self, bytes: usize) -> RtResult<()> {
+        // A block that would cross `memory_limit` is not allocated: the
+        // violation is recorded (as `zend_mm_alloc_huge` raises it before
+        // allocating) and reported like any other one.
+        if bytes > 0 {
+            let _ = php_memlimit::try_reserve(bytes);
+        }
+        self.memory_check(0)
+    }
+
     fn load_resource(&mut self, url: &str, context: Option<&Value>) -> Result<Vec<u8>, String> {
         let lower = url.to_ascii_lowercase();
         for scheme in ["http", "https"] {
