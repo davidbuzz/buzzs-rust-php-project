@@ -740,6 +740,10 @@ impl Vm {
         };
         let scope = self.scope();
         if !self.can_access_method(&ctor, scope.as_ref()) {
+            // zend_std_get_constructor: zend_object_store_ctor_failed()
+            // (GH-14456), so the destructor never runs.
+            let d = object::data(&o);
+            d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
             let vis = if ctor.visibility() == flags::PRIVATE {
                 "private"
             } else {

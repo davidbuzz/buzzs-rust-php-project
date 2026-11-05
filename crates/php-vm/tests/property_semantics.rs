@@ -1412,3 +1412,15 @@ function byRef(&$v) {}
 try { byRef(C::INT->prop); } catch (Error $e) { echo $e->getMessage(), "\n"; }
 "#), "Attempt to modify property \"prop\" on int\n");
 }
+
+#[test]
+fn inaccessible_constructor_skips_the_destructor() {
+    // GH-14456: zend_std_get_constructor calls zend_object_store_ctor_failed.
+    assert_eq!(run(r#"<?php
+class PrivateUser {
+    private function __construct() {}
+    public function __destruct() { echo "Destructor\n"; }
+}
+try { new PrivateUser(); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+"#), "Error: Call to private PrivateUser::__construct() from global scope\n");
+}
