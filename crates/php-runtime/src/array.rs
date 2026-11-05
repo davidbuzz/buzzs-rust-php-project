@@ -1183,6 +1183,7 @@ impl HashTable {
     /// Returns whether `bound` still holds the table being sorted. When it
     /// does not, php-src drops the sorted table, so the caller should not
     /// store it.
+    #[must_use]
     pub fn sort_by_in_ref<F>(&mut self, bound: &PhpRef, mut cmp: F, renumber: bool) -> bool
     where
         F: FnMut(&ArrayKey, &Value, &ArrayKey, &Value) -> i32,
