@@ -150,6 +150,12 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
             if let Some(nodes) = l.fixed_nodes() {
                 for n in nodes {
                     keep.push(Value::Object(node_object(vm, &n)?));
+                    // `if (ZEND_HAS_OOM()) goto oom_nodeset;` (ext/dom/xpath.c):
+                    // the VM raises the pending memory-limit fatal after
+                    // the call instead of running into the hard limit.
+                    if php_memlimit::is_pending() {
+                        return Ok(Value::Null);
+                    }
                 }
             }
             let class = l.class_name();

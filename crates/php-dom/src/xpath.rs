@@ -460,6 +460,14 @@ impl XPath {
                             } else {
                                 items.push(Node::wrap(n));
                             }
+                            // `if (ZEND_HAS_OOM()) goto oom_nodeset;`: stop
+                            // before a huge result runs into the hard limit;
+                            // the method returns and the embedder raises the
+                            // pending memory-limit fatal.
+                            if php_memlimit::is_pending() {
+                                err = Some(DomError::Silent);
+                                break;
+                            }
                         }
                     }
                     if let Some(e) = err {
