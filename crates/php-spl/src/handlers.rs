@@ -358,18 +358,16 @@ pub fn native_iterator(
     let Some((st, fam)) = state(host, obj)? else {
         return Ok(None);
     };
-    // A user subclass overriding the iteration methods iterates through
-    // them (`zend_implement_iterator` / `zend_implement_aggregate`).
-    let overridden = match fam {
+    // User iterator methods and `ArrayObject`'s configured iterator class
+    // require method dispatch (`zend_implement_iterator` / aggregate).
+    let method_dispatch = match fam {
         Family::Fixed | Family::Storage => host.has_user_method(obj, "getIterator"),
-        Family::Array if host.instance_of(obj, "IteratorAggregate") => {
-            host.has_user_method(obj, "getIterator")
-        }
+        Family::Array if host.instance_of(obj, "IteratorAggregate") => true,
         _ => ["rewind", "valid", "key", "current", "next"]
             .iter()
             .any(|m| host.has_user_method(obj, m)),
     };
-    if overridden {
+    if method_dispatch {
         return Ok(None);
     }
     let it: Box<dyn ObjectIterator> = match fam {

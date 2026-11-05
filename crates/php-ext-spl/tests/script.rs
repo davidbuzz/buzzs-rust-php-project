@@ -41,6 +41,66 @@ fn run(code: &str) -> String {
     output(&sink)
 }
 
+#[test]
+fn array_object_uses_configured_iterator_aggregate() {
+    let out = run(
+        r#"<?php
+        class MyIterator extends ArrayIterator {
+            function __construct() {
+                echo "   In " . __METHOD__ . "(" . implode(',', func_get_args()) . ")\n";
+            }
+            function rewind(): void {
+                echo "   In " . __METHOD__ . "(" . implode(',', func_get_args()) . ")\n";
+                parent::rewind();
+            }
+            function valid(): bool {
+                echo "   In " . __METHOD__ . "(" . implode(',', func_get_args()) . ")\n";
+                return parent::valid();
+            }
+            function current(): mixed {
+                echo "   In " . __METHOD__ . "(" . implode(',', func_get_args()) . ")\n";
+                return parent::current();
+            }
+            function next(): void {
+                echo "   In " . __METHOD__ . "(" . implode(',', func_get_args()) . ")\n";
+                parent::next();
+            }
+            function key(): string|int|null {
+                echo "   In " . __METHOD__ . "(" . implode(',', func_get_args()) . ")\n";
+                return parent::key();
+            }
+        }
+
+        $ao = new ArrayObject(['a' => 1, 'b' => 2, 'c' => 3], 0, MyIterator::class);
+        var_dump($ao->getIteratorClass());
+        var_dump($ao->getIterator());
+        foreach ($ao as $key => $value) {
+            echo "  $key=>$value\n";
+        }
+
+        var_dump($ao->setIteratorClass(ArrayIterator::class));
+        var_dump($ao->getIteratorClass());
+        var_dump($ao->getIterator());
+        foreach ($ao as $key => $value) {
+            echo "$key=>$value\n";
+        }
+        ?>"#,
+    );
+    assert!(out.contains("string(10) \"MyIterator\"\n"));
+    assert!(out.contains("[\"storage\":\"ArrayIterator\":private]=>\n"));
+    assert!(out.contains("object(ArrayObject)#"));
+    assert!(out.contains("[\"a\"]=>\n      int(1)\n"));
+    assert!(!out.contains("In MyIterator::__construct()"));
+    assert!(out.contains("In MyIterator::rewind()\n"));
+    assert!(out.contains("In MyIterator::valid()\n"));
+    assert!(out.contains("In MyIterator::current()\n"));
+    assert!(out.contains("In MyIterator::key()\n"));
+    assert!(out.contains("In MyIterator::next()\n"));
+    assert!(out.contains("NULL\nstring(13) \"ArrayIterator\"\n"));
+    assert!(out.contains("object(ArrayIterator)#"));
+    assert!(out.contains("a=>1\nb=>2\nc=>3\n"));
+}
+
 fn declare(vm: &mut Vm, code: &str, class: &[u8]) -> Obj {
     vm.run_main(code.as_bytes(), &ZStr::from("test.php"))
         .expect("class declarations");
