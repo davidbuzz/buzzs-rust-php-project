@@ -817,6 +817,10 @@ impl Vm {
                 self.functions.get(&ZStr::from("sprintf")),
                 Some(Func::Builtin(_))
             ),
+            array_map_builtin: matches!(
+                self.functions.get(&ZStr::from("array_map")),
+                Some(Func::Builtin(_))
+            ),
         };
         match crate::compiler::compile(&program, Rc::from(src), opts) {
             Ok(u) => {

@@ -289,3 +289,49 @@ foreach ((new ReflectionFunction('rd_flags'))->getParameters() as $p) {
         "int(5)\n\nDeprecated: Constant RD_OLD is deprecated since 8.4, use RD_A in t.php on line 3\nint(2)\n"
     );
 }
+
+/// A stand-in `array_map` that marks the calls that were not inlined.
+struct ArrayMapStub;
+
+impl Extension for ArrayMapStub {
+    fn name(&self) -> &'static str {
+        "array_map_stub_test"
+    }
+
+    fn register(&self, module: &mut ModuleBuilder<'_>) {
+        module.function(
+            "array_map(?callable $callback, $array, ...$arrays): array",
+            |_vm, _args| Ok(Value::Int(42)),
+        );
+    }
+}
+
+/// zend_compile_func_array_map(): `array_map(f(...), $array)` compiles into
+/// a foreach loop calling `f` directly (keys kept, no Closure, no
+/// `array_map()` frame, `ZEND_TYPE_ASSERT` on the array); other callbacks
+/// and literal non-arrays keep the real call
+/// (Zend/tests/functions/zend_call_function_deprecated_frame.phpt, gh14003).
+#[test]
+fn array_map_with_first_class_callable_is_inlined() {
+    let sink = Sink::default();
+    let mut vm =
+        Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &[&ArrayMapStub]);
+    vm.run_script(
+        br"<?php
+function foo($v) { return $v . '!'; }
+function boom($v) { throw new Exception('x'); }
+var_dump(array_map(foo(...), ['a' => 'x', 3 => 'y']));
+try { array_map(boom(...), [1]); } catch (Exception $e) { echo $e->getTraceAsString(), PHP_EOL; }
+$s = 'str';
+try { array_map(foo(...), $s); } catch (TypeError $e) { echo $e->getMessage(), PHP_EOL; }
+var_dump(array_map('foo', [1]), array_map(foo(...), 'lit'));
+",
+        "t.php",
+    );
+    drop(vm);
+    let output = String::from_utf8(sink.0.borrow().clone()).expect("UTF-8 output");
+    assert_eq!(
+        output,
+        "array(2) {\n  [\"a\"]=>\n  string(2) \"x!\"\n  [3]=>\n  string(2) \"y!\"\n}\n#0 t.php(5): boom(1)\n#1 {main}\narray_map(): Argument #2 ($array) must be of type array, string given\nint(42)\nint(42)\n"
+    );
+}

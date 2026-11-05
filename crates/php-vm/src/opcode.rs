@@ -522,6 +522,9 @@ pub enum Op {
     FeFreeOnReturn { iter: u32, loop_at: u32 },
     /// Throws `UnhandledMatchError` for the subject.
     MatchError { subject: Operand },
+    /// `ZEND_TYPE_ASSERT` of an inlined internal call: throws a `TypeError`
+    /// "`msg`, X given" unless `val` is an array.
+    TypeAssertArray { val: Operand, msg: u32 },
     /// `declare(ticks=N)` tick.
     /// `ZEND_TICKS` with N of `declare(ticks=N)`.
     Ticks(u32),

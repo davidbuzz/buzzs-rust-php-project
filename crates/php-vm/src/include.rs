@@ -99,6 +99,10 @@ impl Vm {
                 self.functions.get(&ZStr::from("sprintf")),
                 Some(crate::func::Func::Builtin(_))
             ),
+            array_map_builtin: matches!(
+                self.functions.get(&ZStr::from("array_map")),
+                Some(crate::func::Func::Builtin(_))
+            ),
         };
         let unit = match compiler::compile(&program, Rc::from(src), opts) {
             Ok(u) => u,

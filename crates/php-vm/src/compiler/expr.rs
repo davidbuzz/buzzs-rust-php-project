@@ -1789,6 +1789,104 @@ impl Compiler {
         Ok(())
     }
 
+    /// `zend_compile_func_array_map()`: `array_map(f(...), $array)` and
+    /// `array_map(C::m(...), $array)` compile into a foreach loop calling the
+    /// callback directly, so no Closure is created and no `array_map()`
+    /// frame shows in backtraces. `None` compiles a regular call (other
+    /// callbacks, or a literal that is not an array).
+    fn compile_array_map_foreach(
+        &mut self,
+        callback: &Expr,
+        array: &Expr,
+        line: u32,
+    ) -> CResult<Option<Operand>> {
+        enum Target<'e> {
+            Func(&'e ast::Name),
+            Static(ClassSpec, ZStr),
+        }
+        let target = match &callback.kind {
+            ExprKind::Call { callee, args } if args.is_first_class_callable() => match &**callee {
+                Callee::Name(n) => Target::Func(n),
+                Callee::Expr(_) => return Ok(None),
+            },
+            ExprKind::StaticCall {
+                class,
+                name: MemberName::Ident(id),
+                args,
+            } if args.is_first_class_callable() => match &**class {
+                ast::ClassRef::Name(cn) => Target::Static(
+                    self.class_spec_name(cn)?,
+                    ZStr::from(id.name.as_slice()),
+                ),
+                ast::ClassRef::Expr(_) => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        let mark = self.fref().ops.len();
+        let arr = self.compile_expr(array)?;
+        if let Operand::Lit(i) = arr {
+            if !matches!(self.fref().literals.get(i as usize), Some(Value::Array(_))) {
+                let f = self.f();
+                f.ops.truncate(mark);
+                f.lines.truncate(mark);
+                return Ok(None);
+            }
+        }
+        self.f().line = line;
+        let msg = self.lit_str(b"array_map(): Argument #2 ($array) must be of type array");
+        self.emit(Op::TypeAssertArray {
+            val: Compiler::keep(arr),
+            msg,
+        });
+        let result = self.tmp();
+        self.emit(Op::InitArray { dst: result });
+        let iter = {
+            let f = self.f();
+            f.num_iters += 1;
+            f.num_iters - 1
+        };
+        let reset = self.emit(Op::FeReset {
+            subject: arr,
+            place: None,
+            kind: crate::opcode::ForeachKind::Value,
+            iter,
+            end: 0,
+        });
+        let fetch_at = self.here();
+        let reset_at = u32::try_from(reset).unwrap_or(u32::MAX);
+        self.f().iter_starts.insert(iter, reset_at);
+        let val = self.tmp();
+        let key = self.tmp();
+        let fetch = self.emit(Op::FeFetch {
+            iter,
+            end: 0,
+            val,
+            key: Some(key),
+        });
+        match target {
+            Target::Func(n) => self.emit_init_fcall(n),
+            Target::Static(class, m) => {
+                let name = self.lit(Value::Str(m));
+                self.emit(Op::InitStaticCall { class, name });
+            }
+        }
+        self.emit(Op::Send {
+            src: ArgSrc::Val(Operand::Tmp(val)),
+        });
+        let ret = self.tmp();
+        self.emit(Op::DoCall { dst: Some(ret) });
+        self.emit(Op::ArrayAdd {
+            arr: result,
+            key: Some(Operand::Tmp(key)),
+            val: Operand::Tmp(ret),
+        });
+        self.emit(Op::Jmp(fetch_at));
+        self.patch_here(reset);
+        self.patch_here(fetch);
+        self.emit(Op::FeFree { iter });
+        Ok(Some(Operand::Tmp(result)))
+    }
+
     /// Compile-time special functions. Returns `None` when `n` is not one.
     #[allow(clippy::too_many_lines)] // one arm per special function, as zend_try_compile_special_func
     fn compile_special_call(
@@ -1836,6 +1934,15 @@ impl Compiler {
                 Ok(Some(
                     dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
                 ))
+            }
+            b"array_map"
+                if fb.is_none()
+                    && only_positional
+                    && positional.len() == 2
+                    && self.opts.array_map_builtin
+                    && !self.strict_types =>
+            {
+                self.compile_array_map_foreach(positional[0], positional[1], line)
             }
             b"exit" | b"die" if only_positional && positional.len() <= 1 => {
                 let v = match positional.first() {

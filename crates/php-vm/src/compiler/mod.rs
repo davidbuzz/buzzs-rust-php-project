@@ -77,6 +77,9 @@ pub struct CompileOptions {
     pub strict_types: bool,
     /// Whether `sprintf` is currently registered as an internal function.
     pub sprintf_builtin: bool,
+    /// Whether `array_map` is currently registered as an internal function
+    /// (`zend_compile_func_array_map()` needs its arginfo).
+    pub array_map_builtin: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
