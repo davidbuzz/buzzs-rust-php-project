@@ -532,6 +532,16 @@ impl Compiler {
             None => None,
         };
         if let Some(rt) = &return_type {
+            if spec.by_ref && rt.is_void() {
+                self.warnings.push((
+                    8192,
+                    format!(
+                        "{}(): Returning by reference from a void function is deprecated",
+                        self.fn_display_name()
+                    ),
+                    spec.line_start,
+                ));
+            }
             if spec.is_generator {
                 let ok = rt.mask & (mask::OBJECT | mask::ITERABLE) != 0
                     || rt.is_mixed()

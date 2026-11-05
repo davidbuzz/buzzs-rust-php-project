@@ -75,6 +75,10 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
     }
     let class = vm.classes[&ZStr::from("stdclass")].clone();
     let object = php_vm::object::new_object(class, Vec::new());
+    frame.this = Some(object.clone());
+    frame.closure = Some(object.clone());
+    frame.generator = Some(object.clone());
+    frame.pending_exc = Some(object.clone());
     frame.tmps.push(Value::Object(object.clone()));
     frame.args.push(Some(Value::Object(object.clone())));
     frame
@@ -85,7 +89,7 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
         .borrow_mut()
         .slots
         .push(Some(Value::Object(object.clone())));
-    assert_eq!(object.refcount(), 5);
+    assert_eq!(object.refcount(), 9);
     frame.clear_for_pool(&vm.empty_code);
     assert_eq!(object.refcount(), 1);
     assert_eq!(frame.tmps.capacity(), 0);
@@ -134,6 +138,34 @@ for ($i = 0; $i < 20; $i++) {
 echo "ok\n";
 "#),
         "ok\n"
+    );
+}
+
+#[test]
+fn pooled_frames_preserve_captured_references_and_suspended_fibers() {
+    assert_eq!(
+        run(r#"<?php
+class Item { public function __construct(public string $name) {} public function __destruct() { echo $this->name, "\n"; } }
+function capture_counter() { $counter = 0; return function() use (&$counter) { return ++$counter; }; }
+function return_with_local() { $item = new Item("normal destructor"); }
+function throw_with_local() { $item = new Item("exception destructor"); throw new Exception(); }
+$next = capture_counter();
+echo $next(), ":", $next(), "\n";
+return_with_local();
+try { throw_with_local(); } catch (Exception $e) {}
+$fiber = new Fiber(function() use ($next) { $value = $next(); Fiber::suspend($value); echo $next(), "\n"; });
+echo "fiber:", $fiber->start(), "\n";
+$fiber->resume();
+"#),
+        "1:2\nnormal destructor\nexception destructor\nfiber:3\n4\n"
+    );
+}
+
+#[test]
+fn by_ref_void_function_emits_compile_deprecation() {
+    assert_eq!(
+        run("<?php\nfunction &test(): void {\n}\n$r =& test();\nvar_dump($r);\n"),
+        "Deprecated: test(): Returning by reference from a void function is deprecated in t.php on line 2\n\nNotice: Only variable references should be returned by reference in t.php on line 4\nNULL\n"
     );
 }
 
