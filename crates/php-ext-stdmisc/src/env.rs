@@ -226,11 +226,9 @@ fn getopt(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn get_cfg_var(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = a.str(0);
-    let name = String::from_utf8_lossy(name.as_bytes());
     Ok(vm
-        .ini
-        .config_value(&name)
-        .map_or(Value::Bool(false), |v| Value::Str(ZStr::from(v))))
+        .configuration_value(name.as_bytes())
+        .unwrap_or(Value::Bool(false)))
 }
 
 /// Registers the functions and constants.

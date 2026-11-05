@@ -18,6 +18,7 @@ pub mod class;
 mod classlink;
 mod closure;
 pub mod compiler;
+mod configuration;
 mod context;
 mod enums;
 mod errors;
@@ -130,6 +131,7 @@ impl Vm {
             user_constants: Vec::new(),
             globals: Rc::new(RefCell::new(vm::VarStore::default())),
             ini,
+            configuration: None,
             output: php_support::output::OutputStack::new(),
             stdout,
             error_reporting: 30719,

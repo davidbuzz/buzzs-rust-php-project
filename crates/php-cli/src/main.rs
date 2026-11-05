@@ -582,6 +582,7 @@ fn new_vm(cfg: &Config) -> Vm {
     let exts = extensions::all();
     let refs: Vec<&dyn php_vm::ext::Extension> = exts.iter().map(AsRef::as_ref).collect();
     let mut vm = Vm::with_extensions(&opts, stdout, &refs);
+    vm.set_configuration(cfg.configuration.values.clone());
     vm.set_native_stack_size(usize::try_from(VM_STACK).unwrap_or(usize::MAX));
     sapi::register(&mut vm, cfg);
     vm
@@ -1286,5 +1287,39 @@ mod tests {
         let ini = ini_registry(&[("precision", "-2")]);
         let s = String::from_utf8(show_ini_diff(&ini)).unwrap();
         assert!(!s.contains("precision:"));
+    }
+
+    #[test]
+    fn new_vm_preserves_complete_configuration() {
+        let path = std::env::temp_dir().join(format!(
+            "php-cli-get-cfg-var-{}.ini",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "items[2]=first\nitems[]=second\n[PATH=/app]\nprecision=8\n",
+        )
+        .unwrap();
+        let cfg = Config::load(&config::Options {
+            path_override: Some(path.as_os_str().as_bytes().to_vec()),
+            ignore: true,
+            defines: vec![("precision".into(), "11".into())],
+            ..config::Options::default()
+        });
+        let mut vm = new_vm(&cfg);
+        let value = vm
+            .call_function("get_cfg_var", vec![Value::from("items")])
+            .unwrap();
+        assert!(matches!(value, Value::Array(_)));
+        let value = vm
+            .call_function("get_cfg_var", vec![Value::from("/app")])
+            .unwrap();
+        assert!(matches!(value, Value::Array(_)));
+        let value = vm
+            .call_function("get_cfg_var", vec![Value::from("precision")])
+            .unwrap();
+        assert!(matches!(value, Value::Str(value) if value.as_bytes() == b"11"));
+        assert_eq!(vm.ini_long("precision"), 11);
+        let _ = std::fs::remove_file(path);
     }
 }

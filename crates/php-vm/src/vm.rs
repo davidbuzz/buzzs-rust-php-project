@@ -572,6 +572,8 @@ pub struct Vm {
     pub globals: Rc<RefCell<VarStore>>,
     /// INI settings.
     pub ini: IniRegistry,
+    /// Complete startup configuration supplied by the SAPI, if available.
+    pub(crate) configuration: Option<php_support::ini::IniMap>,
     /// Output buffering stack.
     pub output: OutputStack<Value>,
     /// Standard output.
