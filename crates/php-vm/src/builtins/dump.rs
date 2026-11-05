@@ -8,6 +8,7 @@
 //! `php_printf()`: everything produced so far is written before user code
 //! (`__debugInfo()`) runs.
 
+use crate::class::ConstExpr;
 use crate::vm::{Vm, VmResult};
 use php_runtime::dump::{export_string, unmangle_property_name};
 use php_runtime::float::{format_double, format_double_h};
@@ -16,6 +17,9 @@ use php_runtime::{
     ArrayKey, ErrorLevel, Obj, ObjectDump, ObjectKind, PropertyPurpose, PropertySlot,
     RuntimeContext, Value,
 };
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 /// Output of a dump: streamed through the output layer, or collected
 /// (`print_r($v, true)`, `var_export($v, true)`).
@@ -277,6 +281,137 @@ fn rc(count: usize, z: Zval) -> usize {
     count.saturating_sub(z.extra).max(1)
 }
 
+/// Per-call state of `debug_zval_dump()`: handles to refcounted values
+/// that this VM holds and php-src does not.
+struct DzState {
+    /// Handles kept by compiled class metadata, by value identity: a
+    /// literal property default lives in its `PropDecl` and `PropInfo`
+    /// as well as in the class's default slot table, while php-src keeps
+    /// it only in `default_properties_table`.
+    meta: HashMap<usize, usize>,
+    /// Identities of the values in the property lists that the dumper
+    /// frames hold (each list holds a handle to each of its values, where
+    /// php-src walks the object's own table), innermost last.
+    held: Vec<usize>,
+    /// Occurrence counts of `held`.
+    held_count: HashMap<usize, usize>,
+}
+
+thread_local! {
+    static DZ_STATE: RefCell<Option<DzState>> = const { RefCell::new(None) };
+}
+
+/// The identity of a refcounted value (`None` for scalars, resources and
+/// interned or empty strings).
+fn identity(v: &Value) -> Option<usize> {
+    match v {
+        Value::Array(a) => Some(a.addr()),
+        Value::Str(s) if !s.is_interned() && !s.is_empty() => Some(s.as_bytes().as_ptr() as usize),
+        Value::Object(o) => Some(o.addr()),
+        Value::Reference(r) => Some(r.addr()),
+        _ => None,
+    }
+}
+
+/// Handles to the value with identity `id` held by class metadata and by
+/// the dumper's property lists (see [`DzState`]).
+fn hidden_handles(id: usize) -> usize {
+    DZ_STATE.with(|s| {
+        s.borrow().as_ref().map_or(0, |st| {
+            st.meta.get(&id).copied().unwrap_or(0) + st.held_count.get(&id).copied().unwrap_or(0)
+        })
+    })
+}
+
+/// `rc()` for the value with identity `id`, also discounting the handles
+/// php-src does not have.
+fn rc_of(count: usize, z: Zval, id: usize) -> usize {
+    rc(
+        count,
+        Zval {
+            extra: z.extra + hidden_handles(id),
+        },
+    )
+}
+
+/// The handles compiled class metadata keeps to literal instance property
+/// defaults: `PropInfo::default` and the declaring `PropDecl::default`
+/// (each counted once, however many classes share them).
+fn metadata_handles(vm: &Vm) -> HashMap<usize, usize> {
+    let mut seen_props = HashSet::new();
+    let mut seen_decls = HashSet::new();
+    let mut meta: HashMap<usize, usize> = HashMap::new();
+    let mut note = |e: Option<&ConstExpr>| {
+        if let Some(ConstExpr::Value(v)) = e {
+            if let Some(id) = identity(v) {
+                *meta.entry(id).or_insert(0) += 1;
+            }
+        }
+    };
+    for cls in vm.classes.values() {
+        for pi in cls.props.iter().chain(cls.prop_map.values()) {
+            if seen_props.insert(Rc::as_ptr(pi)) {
+                note(pi.default.as_ref());
+            }
+        }
+        if let Some(decl) = &cls.decl {
+            if seen_decls.insert(Rc::as_ptr(decl)) {
+                for pd in decl
+                    .props
+                    .iter()
+                    .filter(|pd| pd.flags & crate::func::flags::STATIC == 0)
+                {
+                    note(pd.default.as_ref());
+                }
+            }
+        }
+    }
+    meta
+}
+
+/// A dumper frame's entries in [`DzState::held`], removed when dropped.
+struct HeldMark(usize);
+
+impl HeldMark {
+    fn new() -> Self {
+        HeldMark(DZ_STATE.with(|s| s.borrow().as_ref().map_or(0, |st| st.held.len())))
+    }
+}
+
+/// Records that the current dumper frame holds a handle to `v` (until its
+/// [`HeldMark`] drops).
+fn hold(v: &Value) {
+    let Some(id) = identity(v) else {
+        return;
+    };
+    DZ_STATE.with(|s| {
+        if let Some(st) = s.borrow_mut().as_mut() {
+            st.held.push(id);
+            *st.held_count.entry(id).or_insert(0) += 1;
+        }
+    });
+}
+
+impl Drop for HeldMark {
+    fn drop(&mut self) {
+        let _ = DZ_STATE.try_with(|s| {
+            if let Some(st) = s.borrow_mut().as_mut() {
+                while st.held.len() > self.0 {
+                    let Some(id) = st.held.pop() else {
+                        break;
+                    };
+                    if let Some(c) = st.held_count.get_mut(&id) {
+                        *c -= 1;
+                        if *c == 0 {
+                            st.held_count.remove(&id);
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
 /// `php_var_dump()` (`zv == None`) / `php_debug_zval_dump()` of one value.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn var_dump(
@@ -294,7 +429,8 @@ pub(crate) fn var_dump(
     let value = match value {
         Value::Reference(r) => {
             if let Some(z) = zv {
-                out.put(format!("reference refcount({}) {{\n", rc(r.refcount(), z)).as_bytes());
+                let n = rc_of(r.refcount(), z, r.addr());
+                out.put(format!("reference refcount({n}) {{\n").as_bytes());
                 let inner = r.get();
                 var_dump(vm, out, &inner, level + 2, Some(Zval { extra: 1 }))?;
                 if level > 1 {
@@ -339,7 +475,11 @@ pub(crate) fn var_dump(
             out.put(s.as_bytes());
             match zv {
                 Some(z) if !s.is_interned() => {
-                    out.put(format!("\" refcount({})\n", rc(s.refcount(), z)).as_bytes());
+                    let n = match identity(value) {
+                        Some(id) => rc_of(s.refcount(), z, id),
+                        None => rc(s.refcount(), z),
+                    };
+                    out.put(format!("\" refcount({n})\n").as_bytes());
                 }
                 Some(_) => out.put(b"\" interned\n"),
                 None => out.put(b"\"\n"),
@@ -357,7 +497,7 @@ pub(crate) fn var_dump(
                     if a.is_empty() {
                         out.put(b"array(0) interned {\n");
                     } else {
-                        let n = rc(a.refcount(), z);
+                        let n = rc_of(a.refcount(), z, a.addr());
                         out.put(format!("array({}) {packed}refcount({n}){{\n", a.len()).as_bytes());
                     }
                 }
@@ -465,8 +605,25 @@ fn var_dump_object(
         out.put(class.as_bytes());
         out.put(format!(")#{} ({count}) ", o.handle()).as_bytes());
         match zv {
-            Some(z) => out.put(format!("refcount({}){{\n", rc(refs, z)).as_bytes()),
+            Some(z) => out.put(format!("refcount({}){{\n", rc_of(refs, z, o.addr())).as_bytes()),
             None => out.put(b"{\n"),
+        }
+    }
+    // Our copy of the property table holds a handle to each value until
+    // the dump of this object ends; php-src walks the object's own table.
+    // (The synthetic proxy instance table owns a PHP-visible reference.)
+    let _held = zv.map(|_| HeldMark::new());
+    if zv.is_some()
+        && !crate::object::data(o)
+            .lazy
+            .borrow()
+            .as_ref()
+            .is_some_and(|info| info.proxy && info.initialized)
+    {
+        for (_, slot) in properties.iter().flatten() {
+            if let PropertySlot::Value(v) = slot {
+                hold(v);
+            }
         }
     }
     for (k, slot) in properties.iter().flatten() {
@@ -478,15 +635,7 @@ fn var_dump_object(
         put_property_key(out, k, level);
         match slot {
             PropertySlot::Value(v) => {
-                // The synthetic proxy instance table owns a PHP-visible reference.
-                let extra = usize::from(
-                    !crate::object::data(o)
-                        .lazy
-                        .borrow()
-                        .as_ref()
-                        .is_some_and(|info| info.proxy && info.initialized),
-                );
-                var_dump(vm, out, v, level + 2, zv.map(|_| Zval { extra }))?;
+                var_dump(vm, out, v, level + 2, zv.map(|_| Zval { extra: 0 }))?;
             }
             PropertySlot::Uninitialized(t) => {
                 out.spaces(level + 1);
@@ -504,14 +653,28 @@ fn var_dump_object(
 }
 
 /// `debug_zval_dump()` of one argument; `extra` is the number of handles
-/// held beyond PHP's own (the variable and the argument slot).
+/// held beyond PHP's own (the variable and the argument slot). A nested
+/// call (from `__debugInfo()`) shares the enclosing call's [`DzState`].
 pub(crate) fn debug_zval_dump(
     vm: &mut Vm,
     out: &mut Out,
     value: &Value,
     extra: usize,
 ) -> VmResult<()> {
-    var_dump(vm, out, value, 1, Some(Zval { extra }))
+    let outermost = DZ_STATE.with(|s| s.borrow().is_none());
+    if outermost {
+        let state = DzState {
+            meta: metadata_handles(vm),
+            held: Vec::new(),
+            held_count: HashMap::new(),
+        };
+        DZ_STATE.with(|s| *s.borrow_mut() = Some(state));
+    }
+    let r = var_dump(vm, out, value, 1, Some(Zval { extra }));
+    if outermost {
+        DZ_STATE.with(|s| *s.borrow_mut() = None);
+    }
+    r
 }
 
 // ---------------------------------------------------------------------------

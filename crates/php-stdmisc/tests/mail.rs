@@ -237,6 +237,59 @@ impl LogTarget for Capture {
     }
 }
 
+/// GH-7875 (ext/standard/tests/mail/gh7875.phpt): an exception from the
+/// `mail.log` writer (an error handler throwing for the open warning)
+/// propagates and no mail is handed to the delivery program.
+#[test]
+fn log_failure_aborts_the_mail() {
+    let out = tmpfile("mail-gh7875");
+    let _ = std::fs::remove_file(&out);
+    let mut ctx = CollectingContext::new();
+    let settings = MailSettings {
+        sendmail_path: format!("cat > {}", out.display()).into_bytes(),
+        log: b"/some/mail.log".to_vec(),
+        ..MailSettings::default()
+    };
+    let script = ScriptInfo {
+        filename: b"/x/gh7875.php".to_vec(),
+        lineno: 3,
+        uid: 0,
+    };
+    let date = |ts: i64| mail::format_log_date_utc(ts);
+    let mut logged = Vec::new();
+    let mut log_file =
+        |_: &mut CollectingContext, filename: &[u8], line: &[u8]| -> php_runtime::RtResult<()> {
+            logged.push((filename.to_vec(), line.to_vec()));
+            Err(php_runtime::RuntimeError::Error("log failed".into()))
+        };
+    let r = mail::mail_ex(
+        b"a@b",
+        b"subj",
+        b"body",
+        HeadersArg::None,
+        None,
+        &settings,
+        &script,
+        &date,
+        &mut ctx,
+        &mut log_file,
+    );
+    assert!(
+        matches!(&r, Err(php_runtime::RuntimeError::Error(m)) if m == "log failed"),
+        "{r:?}"
+    );
+    assert_eq!(logged.len(), 1);
+    assert_eq!(logged[0].0, b"/some/mail.log");
+    let line = String::from_utf8_lossy(&logged[0].1).into_owned();
+    assert!(
+        line.ends_with(
+            " UTC] mail() on [/x/gh7875.php:3]: To: a@b -- Headers:  -- Subject: subj\n"
+        ),
+        "{line}"
+    );
+    assert!(!out.exists());
+}
+
 #[test]
 fn error_log_types() {
     let mut ctx = CollectingContext::new();
