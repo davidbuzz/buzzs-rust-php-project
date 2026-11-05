@@ -1017,8 +1017,10 @@ impl Parser<'_> {
                 }
                 T::PaamayimNekudotayim if cat.is_fully_deref() || cat == Cat::Const => {
                     let span = e.span;
+                    // `(bar)::m()` is `class_name_reference: '(' expr ')'`:
+                    // the constant `bar` names the class at runtime.
                     let class = match e.kind {
-                        ExprKind::Const(name) => ClassRef::Name(name),
+                        ExprKind::Const(name) if cat == Cat::Const => ClassRef::Name(name),
                         kind => ClassRef::Expr(Expr::new(kind, span)),
                     };
                     let start = match &class {
