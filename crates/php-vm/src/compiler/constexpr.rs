@@ -11,6 +11,39 @@ fn is_static_name(n: &ast::Name) -> bool {
 }
 
 impl Compiler {
+    /// The class operand `(expr)::NAME` of a class constant in a constant
+    /// expression. `zend_eval_const_expr` folds it first: with a literal
+    /// constant name, a folded non-string class is "Illegal class name"
+    /// (`zend_resolve_class_name_ast`); then
+    /// `zend_compile_const_expr_class_const` rejects an unfolded class and,
+    /// with `zend_throw_error` during compilation (a plain fatal error), a
+    /// folded non-string one. A string literal class is allowed.
+    #[cold]
+    fn check_const_expr_class_operand(
+        &self,
+        class: &Expr,
+        name: &MemberName,
+        line: u32,
+    ) -> CResult<()> {
+        let Some(v) = self.try_fold(class) else {
+            return self.err(
+                "Dynamic class names are not allowed in compile-time class constant references",
+                line,
+            );
+        };
+        if matches!(v, php_runtime::Value::Str(_)) {
+            return Ok(());
+        }
+        let literal_name = match name {
+            MemberName::Ident(_) => true,
+            MemberName::Expr(x) => matches!(self.try_fold(x), Some(php_runtime::Value::Str(_))),
+        };
+        if literal_name {
+            return self.err("Illegal class name", line);
+        }
+        self.err("Class name must be a valid object or a string", line)
+    }
+
     /// Rejects what php-src rejects in a constant expression;
     /// `allow_dynamic` permits `new` and object casts (attribute
     /// arguments, parameter defaults, global constants).
@@ -34,14 +67,12 @@ impl Compiler {
             }
             ExprKind::ClassConst { class, name } => {
                 match &**class {
-                    ClassRef::Expr(_) => {
+                    ClassRef::Expr(x) => self.check_const_expr_class_operand(x, name, line)?,
+                    ClassRef::Name(n) if is_static_name(n) => {
                         return self.err(
-                            "Dynamic class names are not allowed in compile-time class constant references",
+                            "\"static::\" is not allowed in compile-time constants",
                             line,
                         )
-                    }
-                    ClassRef::Name(n) if is_static_name(n) => {
-                        return self.err("\"static::\" is not allowed in compile-time constants", line)
                     }
                     ClassRef::Name(_) => {}
                 }

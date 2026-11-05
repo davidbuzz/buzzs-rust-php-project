@@ -841,7 +841,7 @@ impl Vm {
     ) -> VmResult<Value> {
         let again = matches!(
             wop,
-            WOp::AssignOp(..) | WOp::Assign(Value::Object(_) | Value::Reference(_))
+            WOp::AssignOp(..) | WOp::FetchRw | WOp::Assign(Value::Object(_) | Value::Reference(_))
         )
         .then(|| base.clone());
         let mut diags = Vec::new();
@@ -934,8 +934,16 @@ impl Vm {
         } else {
             self.flush_diags(diags)
         };
+        if let Err(t) = flushed {
+            return Err(match again {
+                Some(b) => self.undo_rw_insert(b, segs, t),
+                None => {
+                    rw_container_changed(&wop);
+                    t
+                }
+            });
+        }
         let changed = rw_container_changed(&wop);
-        flushed?;
         if changed {
             return Ok(Value::Null);
         }
@@ -954,6 +962,49 @@ impl Vm {
             _ => {}
         }
         self.finish_step(step, segs, wop)
+    }
+
+    /// `zend_undefined_offset_write` / `zend_undefined_index_write`: when
+    /// the "Undefined array key" warning throws (an error handler), the
+    /// missing key is not added. The walk added it before reporting, so a
+    /// silent unset walk removes it again, unless the handler already
+    /// replaced the array (then only the orphaned copy holds it).
+    #[cold]
+    #[inline(never)]
+    fn undo_rw_insert(&mut self, base: RBase, segs: &[RSeg], err: Throw) -> Throw {
+        let unchanged = RW_UNDEF_WATCH
+            .with(std::cell::Cell::take)
+            .is_some_and(|a| a.refcount() > 1);
+        if unchanged {
+            let _ = self.write_place_inner(base, segs, WOp::Unset, true);
+        }
+        err
+    }
+
+    /// `zend_fetch_var_address_helper` with `BP_VAR_RW` on an undefined
+    /// `$GLOBALS['name']` (`ZEND_FETCH_GLOBAL`): "Undefined global
+    /// variable", then the variable is defined as null unless that threw.
+    #[cold]
+    #[inline(never)]
+    fn rw_undefined_global(&mut self, pid: PlaceId, base: &RBase) -> VmResult<()> {
+        let RBase::Var(store, idx) = base else {
+            return Ok(());
+        };
+        let name = {
+            let st = store.borrow();
+            if st.slots.get(*idx).is_none_or(Option::is_some) {
+                return Ok(());
+            }
+            st.names[*idx].clone()
+        };
+        let msg = self.undefined_place_var_msg(pid, &name);
+        self.warning(&msg)?;
+        if let Some(slot) = store.borrow_mut().slots.get_mut(*idx) {
+            if slot.is_none() {
+                *slot = Some(Value::Null);
+            }
+        }
+        Ok(())
     }
 
     /// The binary operation of a compound assignment.
@@ -1472,6 +1523,12 @@ impl Vm {
         v: Value,
     ) -> VmResult<Value> {
         let (base, segs) = self.resolve_place(pid, true)?;
+        if matches!(
+            self.frame().code.places[pid as usize].base,
+            PlaceBase::Global(_)
+        ) {
+            self.rw_undefined_global(pid, &base)?;
+        }
         if !segs.is_empty() {
             // One walk: offsets convert and object handlers run once.
             return self.write_place(base, &segs, WOp::AssignOp(op, v));
@@ -1560,6 +1617,12 @@ impl Vm {
             }
         }
         let (base, segs) = self.resolve_place(pid, true)?;
+        if matches!(
+            self.frame().code.places[pid as usize].base,
+            PlaceBase::Global(_)
+        ) {
+            self.rw_undefined_global(pid, &base)?;
+        }
         let base2 = match &base {
             RBase::Var(s, i) => RBase::Var(s.clone(), *i),
             RBase::This(o) => RBase::This(o.clone()),
@@ -1635,7 +1698,11 @@ impl Vm {
         let res = if let Value::Reference(r) = &cur {
             self.assign_ref(r, nv)
         } else {
-            self.write_place(base2, &segs, WOp::Assign(nv))
+            // A silent write-back walk: `FETCH_DIM_RW` converted the
+            // offsets (and reported them) once already.
+            let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
+            flush_deferred_ref_assigns();
+            r
         };
         drop(guard);
         let res = res?;

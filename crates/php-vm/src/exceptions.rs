@@ -1047,11 +1047,37 @@ fn exc_clone(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Err(vm.make_throw("Exception", "Cannot clone object using __clone()"))
 }
 
+/// `zend_implement_throwable`: only classes whose root ancestor is
+/// `Exception` or `Error` may implement `Throwable`.
+fn implement_throwable(vm: &mut Vm, cls: &Rc<Class>) -> VmResult<()> {
+    let mut root = cls.clone();
+    while let Some(p) = root.parent.clone() {
+        root = p;
+    }
+    if matches!(root.name.as_bytes(), b"Exception" | b"Error") {
+        return Ok(());
+    }
+    let name = object::display_name(&cls.name);
+    let msg = if cls.is_enum() {
+        format!("Enum {name} cannot implement interface Throwable")
+    } else {
+        let kind = if cls.is_trait() { "Trait" } else { "Class" };
+        format!(
+            "{kind} {name} cannot implement interface Throwable, extend Exception or Error instead"
+        )
+    };
+    Err(vm.fatal(&msg))
+}
+
 /// Registers the Throwable hierarchy.
 pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("Throwable")
         .flags(cflags::INTERFACE)
         .implements(vm, &["Stringable"])
+        .hooks(crate::ext::ClassHooks {
+            interface_gets_implemented: Some(implement_throwable),
+            ..crate::ext::ClassHooks::default()
+        })
         .abstract_method("getMessage(): string", PUB)
         .abstract_method("getCode()", PUB)
         .abstract_method("getFile(): string", PUB)

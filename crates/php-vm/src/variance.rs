@@ -1123,6 +1123,15 @@ pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
             }
         }
         for i in &cls.interfaces {
+            // `zend_do_inherit_interfaces`: an interface the parent already
+            // implements is not checked again (the parent's methods were).
+            if cls
+                .parent
+                .as_ref()
+                .is_some_and(|p| p.interfaces.iter().any(|pi| Rc::ptr_eq(pi, i)))
+            {
+                continue;
+            }
             if let Some(im) = i.methods.get(lc) {
                 if !protos.iter().any(|(_, p)| Rc::ptr_eq(p, im)) {
                     protos.push((m.clone(), im.clone()));

@@ -760,9 +760,13 @@ impl Compiler {
             let n = u32::try_from(i).unwrap_or(0);
             self.f().line = p.span.line;
             let cv = n;
+            // `zend_compile_params`: a default before the last required
+            // parameter is dropped (ZEND_RECV), so a named-argument call
+            // cannot skip it either.
+            let default = p.default.as_ref().filter(|_| n >= required);
             if p.variadic {
                 self.emit(Op::RecvVariadic { n, cv });
-            } else if let Some(d) = &p.default {
+            } else if let Some(d) = default {
                 let at = self.emit(Op::RecvInit { n, cv, skip: 0 });
                 let saved = std::mem::replace(&mut self.in_const_default, true);
                 let depth = std::mem::replace(&mut self.inline_const_depth, self.fns.len());

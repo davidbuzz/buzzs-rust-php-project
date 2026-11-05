@@ -388,3 +388,25 @@ fn empty_statements_may_precede_strict_types() {
         "{out}"
     );
 }
+
+/// `zend_eval_const_expr` + `zend_compile_const_expr_class_const`: the
+/// class of `(expr)::NAME` in a constant expression is folded first
+/// (oss-fuzz #59764).
+#[test]
+fn const_expr_class_operand_is_folded_before_the_dynamic_check() {
+    for (expr, msg) in [
+        ("[]::{A}", "Class name must be a valid object or a string"),
+        ("[]::A", "Illegal class name"),
+        ("(1 + 1)::A", "Illegal class name"),
+        (
+            "$x::A",
+            "Dynamic class names are not allowed in compile-time class constant references",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!("<?php\nconst B = {expr};\n")),
+            format!("\nFatal error: {msg} in t.php on line 2\n"),
+            "{expr}"
+        );
+    }
+}

@@ -141,6 +141,11 @@ pub(crate) fn function_module(
     if f.is_user() {
         return None;
     }
+    if let Func::Builtin(b) = f {
+        if b.flags & flags::NO_MODULE != 0 {
+            return None;
+        }
+    }
     if let Some(c) = scope {
         return class_module(vm, c);
     }

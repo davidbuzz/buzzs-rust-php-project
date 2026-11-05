@@ -183,6 +183,46 @@ strlen("foo")[0] ??= 123;
     );
 }
 
+/// `++`/`--` on a dimension reports each offset conversion once
+/// (`FETCH_DIM_RW`; the write-back is silent), as in Zend/tests/resource_key.
+#[test]
+fn incdec_on_dimensions_converts_offsets_once() {
+    assert_eq!(
+        run(r#"<?php
+$a = [1 => 1];
+$a[1.5]++;
+$b = [[0 => 1]];
+--$b[0.5][0.5];
+var_dump($a, $b);
+"#),
+        "\nDeprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 3\n\nDeprecated: Implicit conversion from float 0.5 to int loses precision in t.php on line 5\n\nDeprecated: Implicit conversion from float 0.5 to int loses precision in t.php on line 5\narray(1) {\n  [1]=>\n  int(2)\n}\narray(1) {\n  [0]=>\n  array(1) {\n    [0]=>\n    int(0)\n  }\n}\n"
+    );
+}
+
+/// `zend_undefined_offset_write` / `zend_fetch_var_address_helper`: a
+/// throwing "Undefined ..." warning of a read-modify-write leaves the key
+/// or global undefined; `$GLOBALS[...]` bases say "global variable"
+/// (Zend/tests/undef_index_to_exception).
+#[test]
+fn throwing_undefined_warnings_of_read_modify_writes_add_nothing() {
+    assert_eq!(
+        run(r#"<?php
+set_error_handler(function ($_, $msg) { throw new Exception($msg); });
+$t = [];
+try { $t[0] .= "x"; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+try { $t["k"]++; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+var_dump($t);
+try { $GLOBALS["u"] .= "x"; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+try { $GLOBALS["u"]++; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+var_dump(isset($u));
+restore_error_handler();
+$GLOBALS["w"] .= "x";
+var_dump($w);
+"#),
+        "Undefined array key 0\nUndefined array key \"k\"\narray(0) {\n}\nUndefined global variable $u\nUndefined global variable $u\nbool(false)\n\nWarning: Undefined global variable $w in t.php on line 11\nstring(1) \"x\"\n"
+    );
+}
+
 /// `ZEND_FETCH_GLOBALS` copies the symbol table with
 /// `zend_proptable_to_symtable(.., 1)`: a reference held only by the table
 /// is copied as a value, a shared one stays shared, numeric names become

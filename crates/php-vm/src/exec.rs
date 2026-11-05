@@ -598,12 +598,34 @@ impl Vm {
         }
         match self.run_pending_destructors() {
             Ok(()) => Ok(exc),
+            Err(Throw::Exception(new)) if !self.is_executing() => {
+                self.destructor_threw_without_frame(new)?;
+                Ok(exc)
+            }
             Err(Throw::Exception(new)) => {
                 crate::exceptions::chain_previous(&new, &exc);
                 Ok(new)
             }
             Err(t) => Err(t),
         }
+    }
+
+    /// A destructor run while an exception leaves the outermost frame
+    /// (`zend_leave_helper` makes the caller, here none, current before
+    /// freeing the compiled variables) threw: `zend_call_function` with no
+    /// `EG(current_execute_data)` reports it at once
+    /// (`zend_throw_exception_internal`: the user exception handler, else
+    /// the uncaught fatal and a bailout), without chaining it to the
+    /// exception in flight. `Ok` (handled by the user handler) keeps that
+    /// one unwinding (`zend_objects_destroy_object` restores it).
+    #[cold]
+    #[inline(never)]
+    fn destructor_threw_without_frame(&mut self, new: php_runtime::Obj) -> VmResult<()> {
+        if let Err(t) = self.uncaught_exception(new) {
+            object::set_destructors_enabled(false);
+            return Err(t);
+        }
+        Ok(())
     }
 
     /// A destructor run during unwinding exited or bailed out: the frames

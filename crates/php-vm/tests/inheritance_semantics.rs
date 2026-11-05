@@ -580,3 +580,73 @@ try { get_class_methods(1); } catch (TypeError $e) { echo $e->getMessage(), "\n"
          get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n"
     );
 }
+
+/// `zend_implement_throwable`: user classes and enums cannot implement
+/// `Throwable` directly; it is checked before the abstract methods.
+#[test]
+fn throwable_is_only_implemented_through_exception_or_error() {
+    let (status, output) = run_status("<?php\nclass Failure implements Throwable {}\n");
+    assert_eq!(status, 255, "{output}");
+    assert!(
+        output.contains(
+            "Fatal error: Class Failure cannot implement interface Throwable, extend Exception or Error instead in t.php"
+        ),
+        "{output}"
+    );
+    let (status, output) = run_status("<?php\nenum Foo implements Throwable {}\n");
+    assert_eq!(status, 255, "{output}");
+    assert!(
+        output.contains("Fatal error: Enum Foo cannot implement interface Throwable in t.php"),
+        "{output}"
+    );
+    let output = run(
+        "<?php\ninterface MyThrowable extends Throwable {}\nclass E extends Exception implements MyThrowable {}\necho get_class(new E), \"\\n\";\n",
+    );
+    assert_eq!(output, "E\n");
+}
+
+/// `zend_error_impl`: the deprecations recorded while a class links are
+/// emitted before a fatal error of the same link (tentative_type_early_binding).
+#[test]
+fn recorded_link_deprecations_precede_a_link_fatal() {
+    let (status, output) = run_status(
+        "<?php\ninterface I { function f(): X; }\nclass A implements Serializable, I {\n    function serialize() {}\n    function unserialize($s) {}\n    function f(): Unknown {}\n}\n",
+    );
+    assert_eq!(status, 255, "{output}");
+    assert_eq!(
+        output,
+        "\nDeprecated: A implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary) in t.php on line 3\n\nFatal error: Could not check compatibility between A::f(): Unknown and I::f(): X, because class Unknown is not available in t.php on line 6\n"
+    );
+}
+
+/// `zend_lookup_class_ex`: a class still being linked is not found and
+/// not autoloaded (Zend/tests/use_unlinked_class).
+#[test]
+fn class_being_linked_is_not_found_or_autoloaded() {
+    let output = run(r#"<?php
+spl_autoload_register(function ($class) {
+    echo "load $class\n";
+    var_dump(class_exists('A'));
+    if ($class === 'I') {
+        interface I {}
+    }
+});
+class A implements I {}
+var_dump(class_exists('A', false));
+"#);
+    assert_eq!(output, "load I\nbool(false)\nbool(true)\n");
+}
+
+/// `zend_compile_params`: a parameter with a default before a required
+/// one is compiled without its default, so named arguments cannot skip it
+/// (Zend/tests/required_param_after_optional_named_args).
+#[test]
+fn implicitly_required_parameter_cannot_be_skipped_by_named_args() {
+    let out = run(
+        "<?php\nfunction t(?int $a = null, $b) { var_dump($a, $b); }\ntry { t(b: 2); } catch (ArgumentCountError $e) { echo $e->getMessage(), \"\\n\"; }\nt(null, 3);\n",
+    );
+    assert!(
+        out.ends_with("\nt(): Argument #1 ($a) not passed\nNULL\nint(3)\n"),
+        "{out}"
+    );
+}
