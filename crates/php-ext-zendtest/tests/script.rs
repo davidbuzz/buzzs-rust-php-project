@@ -268,3 +268,15 @@ function test() {
 try { test(); } catch (Exception $e) { echo get_class($e), ':', $e->getLine(); }"#);
     assert_eq!(out, "Throwing resource destructor called|Exception:6");
 }
+
+#[test]
+fn dnf_argument_errors_name_the_parameter() {
+    // internal_dnf_arguments.phpt
+    let out = run(r#"
+try { zend_test_internal_dnf_arguments(new stdClass); } catch (TypeError $e) { echo $e->getMessage(); }"#);
+    assert_eq!(
+        out,
+        "zend_test_internal_dnf_arguments(): Argument #1 ($arg) must be of type \
+         Iterator|(Traversable&Countable), stdClass given"
+    );
+}

@@ -890,6 +890,9 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     edit_function(vm, "zend_test_internal_dnf_arguments", |b| {
         if let Some(p) = b.params.first_mut() {
             p.ty.clone_from(&dnf);
+            // The stub-signature parser ends the parameter list at the
+            // DNF group's `)`.
+            p.name = ZStr::from("arg");
         }
         b.return_type = dnf;
     });
