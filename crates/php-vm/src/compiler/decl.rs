@@ -269,6 +269,11 @@ impl Compiler {
 
     #[allow(clippy::too_many_lines)]
     fn compile_body(&mut self, spec: &BodySpec<'_>, body: BodyKind<'_>) -> CResult<UserFunction> {
+        let saved_hook = if spec.kind != FnKind::Method || !spec.name.as_bytes().starts_with(b"$") {
+            self.hook_prop.take()
+        } else {
+            None
+        };
         // Attributes first (`zend_compile_func_decl`).
         let attributes = self.attributes(spec.attributes)?;
         let tgt = if spec.kind == FnKind::Method {
@@ -345,9 +350,12 @@ impl Compiler {
         if attributes
             .iter()
             .any(|a| a.name.eq_ignore_ascii_case(b"NoDiscard"))
-            && self.hook_prop.is_none()
+            && !in_hook
         {
             fl |= flags::NODISCARD;
+        }
+        if saved_hook.is_some() {
+            self.hook_prop = saved_hook;
         }
         Ok(UserFunction {
             name: spec.name.clone(),
@@ -422,7 +430,7 @@ impl Compiler {
                     p.span.line,
                 );
             }
-            let promote = if p.modifiers.is_empty() {
+            let promote = if p.modifiers.is_empty() && p.hooks.is_none() {
                 0
             } else {
                 if !spec.is_ctor {
@@ -567,7 +575,7 @@ impl Compiler {
         // Constructor promotion.
         if spec.is_ctor {
             for (i, p) in spec.params.iter().enumerate() {
-                if !p.modifiers.is_empty() {
+                if !p.modifiers.is_empty() || p.hooks.is_some() {
                     self.f().line = p.span.line;
                     let name = self.lit(Value::Str(ZStr::from(p.name.name.as_slice())));
                     let place = self.place(Place {
@@ -632,6 +640,15 @@ impl Compiler {
     pub(crate) fn resolve_type(&mut self, t: &ast::Type) -> CResult<TypeDecl> {
         let mut out = TypeDecl::default();
         self.add_type(&mut out, t, false)?;
+        if out.mask & mask::OBJECT != 0 && (out.has_classes() || out.mask & mask::STATIC != 0) {
+            return self.err(
+                format!(
+                    "Type {} contains both object and a class type, which is redundant",
+                    out.display(None, None, None)
+                ),
+                t.span.line,
+            );
+        }
         if out.is_mixed() && out.mask & mask::NULL != 0 && matches!(t.kind, TypeKind::Nullable(_)) {
             return self.err(
                 "Type mixed cannot be marked as nullable since mixed already includes null",
@@ -775,7 +792,13 @@ impl Compiler {
                         }
                         // `zend_compile_single_typename`: self/parent are not
                         // substituted in traits or anonymous classes (GH-18373).
-                        let known = self.current_class().filter(|c| !c.is_trait && !c.is_anon);
+                        let known = self.current_class().filter(|c| {
+                            !c.is_trait
+                                && !c.is_anon
+                                && !self.opts.closure_name.as_ref().is_some_and(|name| {
+                                    name.as_bytes().starts_with(b"{closure:pfa:")
+                                })
+                        });
                         let resolved = if lc.as_slice() == b"self" {
                             known.map_or_else(|| ZStr::from("self"), |c| c.name.clone())
                         } else {
@@ -816,6 +839,13 @@ impl Compiler {
     }
 
     fn add_class_type(&mut self, out: &mut TypeDecl, name: ZStr, line: u32) -> CResult<()> {
+        if name.as_bytes() == b"_" {
+            self.warnings.push((
+                8192,
+                "Using \"_\" as a type name is deprecated since 8.4".to_string(),
+                line,
+            ));
+        }
         if out
             .classes
             .iter()
@@ -830,6 +860,15 @@ impl Compiler {
     fn resolve_type_class(&self, n: &ast::Name) -> Vec<u8> {
         let lc = n.name.to_ascii_lowercase();
         if n.kind == ast::NameKind::Unqualified && lc.as_slice() == b"self" {
+            if self
+                .opts
+                .closure_name
+                .as_ref()
+                .is_some_and(|name| name.as_bytes().starts_with(b"{closure:pfa:"))
+            {
+                return n.name.clone();
+            }
+
             if let Some(c) = self.current_class() {
                 if !c.is_trait && !c.is_anon {
                     return c.name.as_bytes().to_vec();
@@ -1194,8 +1233,9 @@ impl Compiler {
                             if ty.mask & mask::CALLABLE != 0 {
                                 return self.err(
                                     format!(
-                                        "Property {cname}::${} cannot have type callable",
-                                        pg.props[0].name.as_str_lossy()
+                                        "Property {cname}::${} cannot have type {}",
+                                        pg.props[0].name.as_str_lossy(),
+                                        ty.to_php_string()
                                     ),
                                     t.span.line,
                                 );
@@ -1256,6 +1296,19 @@ impl Compiler {
                                 }
                             }
                         };
+                        if let (Some(ty), Some(ConstExpr::Value(value))) = (&ty, &default) {
+                            if !ty.accepts_default(value) {
+                                let type_name = ty.to_php_string();
+                                let message = if value.is_null() && !ty.pure_intersection {
+                                    let mut nullable = ty.clone();
+                                    nullable.mask |= mask::NULL;
+                                    format!("Default value for property of type {type_name} may not be null. Use the nullable type {} to allow null default value", nullable.to_php_string())
+                                } else {
+                                    format!("Cannot use {} as default value for property {cname}::${} of type {type_name}", value.value_name(), p.name.as_str_lossy())
+                                };
+                                return self.err(message, p.span.line);
+                            }
+                        }
                         let mut fl = normalize_set_visibility(
                             self,
                             fl,
@@ -1281,6 +1334,11 @@ impl Compiler {
                                 Some(Rc::new(h))
                             }
                             None => None,
+                        };
+                        let default = if fl & flags::VIRTUAL != 0 && p.default.is_none() {
+                            None
+                        } else {
+                            default
                         };
                         props.push(PropDecl {
                             name: ZStr::from(p.name.name.as_slice()),
@@ -1344,7 +1402,24 @@ impl Compiler {
                         }
                         self.f().line = c.span.line;
                         self.check_const_expr(&c.value, false)?;
+                        if let Some(ty) = &ty {
+                            if ty.mask & (mask::CALLABLE | mask::VOID | mask::NEVER) != 0 {
+                                return self.err(
+                                    format!(
+                                        "Class constant {cname}::{} cannot have type {}",
+                                        c.name.as_str_lossy(),
+                                        ty.to_php_string()
+                                    ),
+                                    c.span.line,
+                                );
+                            }
+                        }
                         let value = self.const_expr(&c.value)?;
+                        if let (Some(ty), ConstExpr::Value(value)) = (&ty, &value) {
+                            if !ty.accepts_default(value) {
+                                return self.err(format!("Cannot use {} as value for class constant {cname}::{} of type {}", value.value_name(), c.name.as_str_lossy(), ty.to_php_string()), c.span.line);
+                            }
+                        }
                         consts.push(ConstDecl {
                             name: ZStr::from(c.name.name.as_slice()),
                             value,
@@ -1439,7 +1514,12 @@ impl Compiler {
                         ));
                     }
                     let is_ctor = md.name.eq_ignore_case("__construct");
-                    if !is_ctor && md.params.iter().any(|p| !p.modifiers.is_empty()) {
+                    if !is_ctor
+                        && md
+                            .params
+                            .iter()
+                            .any(|p| !p.modifiers.is_empty() || p.hooks.is_some())
+                    {
                         return self.err(
                             "Cannot declare promoted property outside a constructor",
                             md.span.line,
@@ -1447,7 +1527,7 @@ impl Compiler {
                     }
                     if is_ctor {
                         for p in &md.params {
-                            if p.modifiers.is_empty() {
+                            if p.modifiers.is_empty() && p.hooks.is_none() {
                                 continue;
                             }
                             if kind == ClassKind::Interface || fl & flags::ABSTRACT != 0 {
@@ -1521,7 +1601,7 @@ impl Compiler {
                             };
                             props.push(PropDecl {
                                 name: ZStr::from(p.name.name.as_slice()),
-                                default: if ty.is_none() {
+                                default: if ty.is_none() && pfl & flags::VIRTUAL == 0 {
                                     Some(ConstExpr::Value(Value::Null))
                                 } else {
                                     None
@@ -1969,6 +2049,16 @@ impl Compiler {
                 out.final_set = is_final;
                 out.abstract_set = is_abstract;
             }
+        }
+        if prop_flags & flags::ABSTRACT != 0 && !out.abstract_get && !out.abstract_set {
+            return self.err(
+                format!(
+                    "Abstract property {}::${} must specify at least one abstract hook",
+                    cname,
+                    String::from_utf8_lossy(prop)
+                ),
+                line,
+            );
         }
         Ok((out, is_virtual))
     }

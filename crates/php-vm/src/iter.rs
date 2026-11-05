@@ -47,10 +47,29 @@ impl Vm {
         let scope = self.scope();
         let cls = object::class_of(o).clone();
         let mut out = Vec::new();
-        for (k, v, pi) in self.object_prop_table(o, false) {
-            if v.is_none() {
-                continue;
+        let mut table = Vec::new();
+        for pi in &cls.props {
+            let readable_hook = pi.hooks.as_ref().is_some_and(|h| h.get.is_some());
+            let value = if pi.is_virtual() {
+                None
+            } else {
+                object::data(o)
+                    .slots
+                    .borrow()
+                    .get(pi.slot as usize)
+                    .cloned()
+                    .flatten()
+            };
+            if readable_hook || value.is_some() {
+                table.push((ArrayKey::Str(pi.name.clone()), value, Some(pi.clone())));
             }
+        }
+        table.extend(
+            self.object_prop_table(o, false)
+                .into_iter()
+                .filter(|(_, _, pi)| pi.is_none()),
+        );
+        for (k, _, pi) in table {
             match pi {
                 Some(pi) => {
                     let name = pi.name.clone();
@@ -82,7 +101,12 @@ impl Vm {
                         ArrayKey::Str(s) => s.clone(),
                         ArrayKey::Int(i) => ZStr::from(i.to_string()),
                     };
-                    out.push((k.to_value(), name, None));
+                    if !matches!(
+                        self.lookup_prop(&cls, &name, scope.as_ref()),
+                        PropLookup::Found(pi) if pi.visibility() == flags::PRIVATE
+                    ) {
+                        out.push((k.to_value(), name, None));
+                    }
                 }
             }
         }
@@ -325,6 +349,15 @@ impl Vm {
             } => {
                 let obj = obj.clone();
                 let by_ref = *by_ref;
+                if *pos >= keys.len() {
+                    for (key, name, private_of) in self.visible_props(&obj) {
+                        if !keys.iter().any(|(_, old_name, old_private)| {
+                            *old_name == name && *old_private == private_of
+                        }) {
+                            keys.push((key, name, private_of));
+                        }
+                    }
+                }
                 let mut found = None;
                 while *pos < keys.len() {
                     let (k, name, private_of) = keys[*pos].clone();
@@ -343,6 +376,23 @@ impl Vm {
                     Some((k, name, _)) => {
                         let v = if by_ref {
                             self.foreach_readonly_ref_check(&obj, &name)?;
+                            let cls = object::class_of(&obj);
+                            if let Some(pi) = cls.prop_map.get(&name) {
+                                if pi
+                                    .hooks
+                                    .as_ref()
+                                    .and_then(|h| h.get.as_ref())
+                                    .is_some_and(|g| g.flags & flags::RETURN_REF == 0)
+                                {
+                                    return Err(self.make_throw(
+                                        "Error",
+                                        &format!(
+                                            "Cannot create reference to property {}::${name}",
+                                            object::display_name(&cls.name)
+                                        ),
+                                    ));
+                                }
+                            }
                             Value::Reference(self.property_ref(&obj, &name)?)
                         } else {
                             self.read_property(&obj, &name, crate::opcode::FetchMode::Is)?
@@ -423,6 +473,9 @@ impl Vm {
         let cls = object::class_of(o);
         if let Some(pi) = cls.prop_map.get(name) {
             if pi.flags & flags::STATIC == 0 {
+                if pi.hooks.as_ref().is_some_and(|h| h.get.is_some()) {
+                    return true;
+                }
                 return object::data(o)
                     .slots
                     .borrow()

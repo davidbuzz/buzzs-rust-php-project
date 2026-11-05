@@ -852,6 +852,7 @@ impl Vm {
                 self.typed_prop_dim_write_check(&obj, name, &segs[i + 1], &wop)?;
                 match self.property_container(&obj, name, matches!(wop, WOp::FetchRw))? {
                     PropContainer::Declared(idx) => {
+                        let obj = self.lazy_object_for(&obj, Some(name))?;
                         let mut diags = Vec::new();
                         let mut w = wop;
                         let s = {
@@ -864,6 +865,7 @@ impl Vm {
                         self.finish_step(s, segs, w)
                     }
                     PropContainer::Dynamic(key) => {
+                        let obj = self.lazy_object_for(&obj, Some(name))?;
                         let mut diags = Vec::new();
                         let mut w = wop;
                         let s = {
@@ -1003,7 +1005,7 @@ impl Vm {
                             if matches!(seg, RSeg::Append) {
                                 return Err(self.make_throw("Error", "Cannot use [] for reading"));
                             }
-                            self.call_method_name(&obj, "offsetGet", vec![key])
+                            self.call_method_name_raw(&obj, "offsetGet", vec![key])
                         }
                         WOp::Unset => {
                             self.call_method_name(&obj, "offsetUnset", vec![key])?;
@@ -1164,17 +1166,22 @@ impl Vm {
         }
         let cur = self.write_place(base, &segs, WOp::FetchRw)?;
         // Objects: property inc/dec of undefined, string offsets checked.
-        let mut nv = cur.clone();
+        let mut nv = cur.deref();
         if kind.is_inc() {
             ops::increment(&mut nv, self).map_err(|e| self.rt_throw(e))?;
         } else {
             ops::decrement(&mut nv, self).map_err(|e| self.rt_throw(e))?;
         }
-        let guard = crate::typed_refs::IncDecGuard::new(kind.is_inc(), &cur, &nv);
-        let res = self.write_place(base2, &segs, WOp::Assign(nv));
+        let old = cur.deref();
+        let guard = crate::typed_refs::IncDecGuard::new(kind.is_inc(), &old, &nv);
+        let res = if let Value::Reference(r) = &cur {
+            self.assign_ref(r, nv)
+        } else {
+            self.write_place(base2, &segs, WOp::Assign(nv))
+        };
         drop(guard);
         let res = res?;
-        Ok(if kind.is_post() { cur } else { res })
+        Ok(if kind.is_post() { old } else { res })
     }
 
     /// `place =& v`

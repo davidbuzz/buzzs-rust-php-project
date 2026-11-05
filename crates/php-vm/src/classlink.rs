@@ -649,6 +649,39 @@ impl Vm {
             && !self.has_unresolved_variance(decl)
     }
 
+    fn has_unresolved_constant_variance(&self, decl: &ClassDecl, own: &[u8]) -> bool {
+        for constant in &decl.consts {
+            let overridden = decl
+                .parent
+                .iter()
+                .chain(decl.interfaces.iter())
+                .any(|base| {
+                    self.find_class(base.as_bytes()).is_some_and(|class| {
+                        class
+                            .find_const(constant.name.as_bytes())
+                            .is_some_and(|proto| proto.ty.is_some())
+                    })
+                });
+            if overridden {
+                if let Some(ty) = &constant.ty {
+                    if ty
+                        .classes
+                        .iter()
+                        .chain(ty.intersections.iter().flatten())
+                        .any(|name| {
+                            !matches!(name.as_bytes(), b"self" | b"parent" | b"static")
+                                && !name.eq_ignore_ascii_case(own)
+                                && self.find_class(name.as_bytes()).is_none()
+                        })
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// `zend_try_early_bind` gives up when a method signature check against
     /// the parent is `INHERITANCE_UNRESOLVED`: approximated as an overriding
     /// method whose signature differs from the parent's in a class name
@@ -667,6 +700,31 @@ impl Vm {
                 }
             }
         }
+        let own = decl.name.as_bytes().to_ascii_lowercase();
+        if self.has_unresolved_constant_variance(decl, &own) {
+            return true;
+        }
+        for prop in &decl.props {
+            if let Some(setter) = prop.hooks.as_ref().and_then(|hooks| hooks.set.as_ref()) {
+                let mut required = Vec::new();
+                names(setter, &mut required);
+                if let Some(ty) = &prop.ty {
+                    required.extend(
+                        ty.classes
+                            .iter()
+                            .chain(ty.intersections.iter().flatten())
+                            .map(|name| name.as_bytes().to_ascii_lowercase()),
+                    );
+                }
+                if required.iter().any(|name| {
+                    !matches!(name.as_slice(), b"self" | b"parent" | b"static")
+                        && *name != own
+                        && self.find_class(name).is_none()
+                }) {
+                    return true;
+                }
+            }
+        }
         let Some(parent) = decl
             .parent
             .as_ref()
@@ -674,7 +732,29 @@ impl Vm {
         else {
             return false;
         };
-        let own = decl.name.as_bytes().to_ascii_lowercase();
+        for prop in &decl.props {
+            let Some(proto) = parent
+                .prop_map
+                .get(&prop.name)
+                .filter(|p| p.visibility() != flags::PRIVATE)
+            else {
+                continue;
+            };
+            let required = prop
+                .ty
+                .iter()
+                .chain(proto.ty.iter())
+                .flat_map(|ty| ty.classes.iter().chain(ty.intersections.iter().flatten()));
+            if required
+                .filter(|name| {
+                    !matches!(name.as_bytes(), b"self" | b"parent" | b"static")
+                        && !name.eq_ignore_ascii_case(&own)
+                })
+                .any(|name| self.find_class(name.as_bytes()).is_none())
+            {
+                return true;
+            }
+        }
         decl.methods.iter().any(|md| {
             let Some(pm) = parent.find_method(&md.name.as_bytes().to_ascii_lowercase()) else {
                 return false;
@@ -932,6 +1012,22 @@ impl Vm {
                     self.report_fatal(&m, &file, l);
                     return Err(Throw::Fatal);
                 }
+            }
+        }
+        for ob in &p.constants {
+            let mut unresolved = Vec::new();
+            if ob.check(self, cls, &mut unresolved) != crate::variance::Status::Ok {
+                let (message, file, line) = ob.message();
+                self.report_fatal(&message, &file, line);
+                return Err(Throw::Fatal);
+            }
+        }
+        for ob in &p.properties {
+            let mut unresolved = Vec::new();
+            if ob.check(self, cls, &mut unresolved) != crate::variance::Status::Ok {
+                let (message, file, line) = ob.message();
+                self.report_fatal(&message, &file, line);
+                return Err(Throw::Fatal);
             }
         }
         Ok(())
@@ -1276,12 +1372,42 @@ impl Vm {
                     continue;
                 }
                 if let Some(h) = &pi.hooks {
-                    let dn = object::display_name(&h.class);
+                    let declaring = |hook: &Option<Rc<crate::func::UserFunction>>| {
+                        let name = hook
+                            .as_ref()
+                            .and_then(|g| g.class_name.as_ref())
+                            .unwrap_or(&h.class);
+                        if self
+                            .find_class(name.as_bytes())
+                            .is_some_and(|c| c.is_trait())
+                        {
+                            object::display_name(&pi.class)
+                        } else {
+                            object::display_name(name)
+                        }
+                    };
                     if h.abstract_get {
-                        missing.push(format!("{dn}::${}::get", pi.name));
+                        missing.push(format!("{}::${}::get", declaring(&h.get), pi.name));
                     }
                     if h.abstract_set {
-                        missing.push(format!("{dn}::${}::set", pi.name));
+                        missing.push(format!("{}::${}::set", declaring(&h.set), pi.name));
+                    }
+                }
+            }
+            if !explicit_abstract {
+                for interface in &cls.interfaces {
+                    for pi in &interface.props {
+                        if cls.prop_map.contains_key(&pi.name) {
+                            continue;
+                        }
+                        if let Some(h) = &pi.hooks {
+                            if h.abstract_get {
+                                missing.push(format!("{}::${}::get", interface.name, pi.name));
+                            }
+                            if h.abstract_set {
+                                missing.push(format!("{}::${}::set", interface.name, pi.name));
+                            }
+                        }
                     }
                 }
             }
@@ -1340,7 +1466,11 @@ impl Vm {
             );
             recorded.push((crate::errors::level::DEPRECATED, msg, line));
         }
-        if !cc.pending.is_empty() || !deps.is_empty() {
+        if !cc.pending.is_empty()
+            || !cc.pending_props.is_empty()
+            || !cc.pending_consts.is_empty()
+            || !deps.is_empty()
+        {
             // Nearly linked: declared, so that the classes the pending
             // checks need can be autoloaded and refer back to it.
             guard.declared();
@@ -1366,6 +1496,8 @@ impl Vm {
                     cls: cls.clone(),
                     deps,
                     obligations: cc.pending,
+                    properties: cc.pending_props,
+                    constants: cc.pending_consts,
                 });
             });
             self.load_delayed_classes()?;
@@ -1400,6 +1532,8 @@ struct PendingClass {
     deps: Vec<Rc<Class>>,
     /// `OBLIGATION_COMPATIBILITY`.
     obligations: Vec<crate::variance::Obligation>,
+    properties: Vec<crate::variance::PropertyObligation>,
+    constants: Vec<crate::variance::ConstantObligation>,
 }
 
 thread_local! {
@@ -2426,7 +2560,10 @@ fn build_class(
             flags: pflags,
             ty: pd.ty.clone(),
             class: owner,
-            default: pd.default.clone(),
+            default: pd.default.clone().or_else(|| {
+                (pflags & flags::VIRTUAL == 0 && pd.ty.is_none())
+                    .then_some(ConstExpr::Value(Value::Null))
+            }),
             doc_comment: pd.doc_comment.clone(),
             attributes: pd.attributes.clone(),
             hooks: inherit_prop_hooks(
@@ -2437,6 +2574,26 @@ fn build_class(
                 pflags,
             ),
         });
+        if pi.is_virtual() && pi.default.is_some() && err.is_none() {
+            *err = Some(format!(
+                "Cannot specify default value for virtual hooked property {}::${}",
+                display, pd.name
+            ));
+        }
+        if !pi.is_virtual()
+            && pi.hooks.as_ref().is_some_and(|h| {
+                h.set.is_some()
+                    && h.get
+                        .as_ref()
+                        .is_some_and(|g| g.flags & flags::RETURN_REF != 0)
+            })
+            && err.is_none()
+        {
+            *err = Some(format!(
+                "Get hook of backed property {}::{} with set hook may not return by reference",
+                display, pd.name
+            ));
+        }
         if (slot as usize) < props.len() {
             props[slot as usize] = pi.clone();
         } else {

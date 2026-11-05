@@ -36,11 +36,19 @@ impl sa::ArrayContext for Vm {
             .map_err(|t| self.to_rt(t))
     }
 
+    fn prepare_object_walk(&mut self, obj: &Obj) -> RtResult<()> {
+        self.lazy_object_for(obj, None)
+            .map(|_| ())
+            .map_err(|t| self.to_rt(t))
+    }
+
     fn property_reference(
         &mut self,
         obj: &Obj,
         key: &ArrayKey,
     ) -> RtResult<Option<sa::PropertyRef>> {
+        let target = self.lazy_object_for(obj, None).map_err(|t| self.to_rt(t))?;
+        let obj = &target;
         let cls = object::class_of(obj).clone();
         if cls
             .hooks
@@ -68,11 +76,25 @@ impl sa::ArrayContext for Vm {
             .iter()
             .find(|p| !p.is_virtual() && crate::props::mangle(p) == *key)
         {
-            let mut slots = d.slots.borrow_mut();
-            return Ok(match slots.get_mut(pi.slot as usize) {
-                Some(Some(v)) => Some(sa::PropertyRef::Bound(v.make_ref())),
-                _ => None,
-            });
+            if pi.is_readonly() {
+                return Err(self.make_throw(
+                    "Error",
+                    &format!(
+                        "Cannot acquire reference to readonly property {}::${}",
+                        pi.class, pi.name
+                    ),
+                ))
+                .map_err(|t| self.to_rt(t));
+            }
+            let r = {
+                let mut slots = d.slots.borrow_mut();
+                match slots.get_mut(pi.slot as usize) {
+                    Some(Some(v)) => v.make_ref(),
+                    _ => return Ok(None),
+                }
+            };
+            self.add_slot_type_source(obj, pi.slot as usize, &r);
+            return Ok(Some(sa::PropertyRef::Bound(r)));
         }
         // A dynamic property (numeric names are integer keys in the
         // `(array)` table but string keys in the object).

@@ -6,6 +6,7 @@ use crate::ast::{
     self, ArgKind, ArgList, ArrayItem, BinaryOp as AB, Callee, Expr, ExprKind, InterpPart,
     MagicConst, MemberName, NewClass, UnaryOp, VarName,
 };
+use crate::func::flags;
 use crate::opcode::{
     ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Op, Operand, Place,
     PlaceBase, Seg, UnKind,
@@ -47,6 +48,39 @@ pub(crate) fn map_binop(op: AB) -> Option<BinaryOp> {
 }
 
 impl Compiler {
+    fn parent_hook_property(&self, class: &ast::ClassRef, name: &MemberName) -> Option<ZStr> {
+        let ast::ClassRef::Expr(expr) = class else {
+            return None;
+        };
+        let ExprKind::StaticProp {
+            class,
+            name: prop,
+            parenthesized: false,
+        } = &expr.kind
+        else {
+            return None;
+        };
+        if !matches!(class.as_ref(), ast::ClassRef::Name(parent) if parent.is_special("parent"))
+            || !matches!(name, MemberName::Ident(kind) if kind.eq_ignore_case("get") || kind.eq_ignore_case("set"))
+        {
+            return None;
+        }
+        match prop {
+            VarName::Name(prop) => Some(ZStr::from(prop.name.as_slice())),
+            VarName::Expr(expr) => {
+                if !matches!(
+                    expr.kind,
+                    ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::String(_)
+                ) {
+                    return None;
+                }
+                self.try_fold(expr)?
+                    .to_zstr(&mut CollectingContext::new())
+                    .ok()
+            }
+        }
+    }
+
     /// Compiles an expression and returns the operand holding its value.
     pub(crate) fn compile_expr(&mut self, e: &Expr) -> CResult<Operand> {
         let saved = std::mem::take(&mut self.f().sc_jumps);
@@ -1023,6 +1057,14 @@ impl Compiler {
             _ => {
                 let l = self.compile_expr(left)?;
                 let r = self.compile_expr(right)?;
+                let (l, r) = if matches!(op, AB::Identical | AB::NotIdentical)
+                    && matches!(l, Operand::Lit(_))
+                    && !matches!(r, Operand::Lit(_))
+                {
+                    (r, l)
+                } else {
+                    (l, r)
+                };
                 let (kind, a, b) = match op {
                     AB::Identical => (BinKind::Identical, l, r),
                     AB::NotIdentical => (BinKind::NotIdentical, l, r),
@@ -1444,17 +1486,12 @@ impl Compiler {
                 self.emit(Op::InitMethodCall { obj: o, name: n });
                 self.finish_call(args, line, need)
             }
-            ExprKind::StaticCall { class, name, args } if class.is_parent_hook_call(name) => {
-                let ast::ClassRef::Expr(sp) = &**class else {
-                    unreachable!("parent hook call")
-                };
-                let ExprKind::StaticProp {
-                    name: VarName::Name(prop),
-                    ..
-                } = &sp.kind
-                else {
-                    unreachable!("parent hook call")
-                };
+            ExprKind::StaticCall { class, name, args }
+                if self.parent_hook_property(class, name).is_some() =>
+            {
+                let prop = self
+                    .parent_hook_property(class, name)
+                    .expect("parent hook call");
                 let MemberName::Ident(kind) = name else {
                     unreachable!("parent hook call")
                 };
@@ -1465,16 +1502,16 @@ impl Compiler {
                         return self.err(
                             format!(
                                 "Must not use parent::${}::{kname}() outside a property hook",
-                                prop.as_str_lossy()
+                                prop.to_string_lossy()
                             ),
                             line,
                         )
                     }
-                    Some(hp) if hp != prop.name => {
+                    Some(hp) if hp != prop.as_bytes() => {
                         return self.err(
                             format!(
                                 "Must not use parent::${}::{kname}() in a different property (${})",
-                                prop.as_str_lossy(),
+                                prop.to_string_lossy(),
                                 String::from_utf8_lossy(&hp)
                             ),
                             line,
@@ -1487,14 +1524,14 @@ impl Compiler {
                             return self.err(
                                 format!(
                                     "Must not use parent::${}::{kname}() in a different property hook ({other})",
-                                    prop.as_str_lossy()
+                                    prop.to_string_lossy()
                                 ),
                                 line,
                             );
                         }
                     }
                 }
-                let p = self.lit_str(&prop.name);
+                let p = self.lit_str(prop.as_bytes());
                 self.f().line = line;
                 self.emit(Op::InitParentHook {
                     prop: p,
@@ -1623,10 +1660,34 @@ impl Compiler {
             }
             match &a.kind {
                 ArgKind::Positional(ex) => {
+                    let constant_return = if let ExprKind::Call { callee, args } = &ex.kind {
+                        if let Callee::Name(name) = &**callee {
+                            let (resolved, _) = self.resolve_function_name(name);
+                            let functions = self.decls.functions.borrow();
+                            self.hoisted_functions.iter().any(|index| {
+                                let function = &functions[*index as usize];
+                                args.args.is_empty()
+                                    && function.name.eq_ignore_ascii_case(&resolved)
+                                    && function.params.is_empty()
+                                    && function.return_type.is_none()
+                                    && function.flags & flags::RETURN_REF == 0
+                                    && matches!(
+                                        function.code.ops.first(),
+                                        Some(Op::Return {
+                                            val: Operand::Lit(_)
+                                        })
+                                    )
+                            })
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
                     if pos < 32
-                        && self
-                            .try_fold(ex)
-                            .is_some_and(|v| !matches!(v, Value::Array(_)))
+                        && (constant_return
+                            || (!matches!(ex.kind, ExprKind::Unary { .. })
+                                && self.try_fold(ex).is_some()))
                     {
                         const_args |= 1 << pos;
                     }

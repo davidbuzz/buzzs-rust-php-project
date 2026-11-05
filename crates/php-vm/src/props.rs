@@ -109,7 +109,38 @@ impl Vm {
     }
 
     fn guard_active(&self, o: &Obj, name: &ZStr, kind: u8) -> bool {
+        if self.prop_guards.is_empty() {
+            return false;
+        }
         self.prop_guards.contains(&(o.handle(), name.clone(), kind))
+            || object::data(o).lazy.borrow().as_ref().is_some_and(|info| {
+                info.proxy
+                    && info.initialized
+                    && info.instance.as_ref().is_some_and(|instance| {
+                        self.prop_guards
+                            .contains(&(instance.handle(), name.clone(), kind))
+                    })
+            })
+            || self
+                .frames
+                .iter()
+                .filter_map(|f| f.this.as_ref())
+                .any(|this| {
+                    self.prop_guards
+                        .contains(&(this.handle(), name.clone(), kind))
+                        && object::data(this)
+                            .lazy
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(|info| {
+                                info.proxy
+                                    && info.initialized
+                                    && info
+                                        .instance
+                                        .as_ref()
+                                        .is_some_and(|instance| Obj::ptr_eq(instance, o))
+                            })
+                })
     }
 
     fn with_guard<T>(
@@ -222,7 +253,7 @@ impl Vm {
         }
     }
 
-    fn call_hook(
+    pub(crate) fn call_hook(
         &mut self,
         o: &Obj,
         f: &Rc<crate::func::UserFunction>,
@@ -276,6 +307,32 @@ impl Vm {
         r
     }
 
+    /// Initialized plain public slots need no lazy, native or visibility dispatch.
+    fn plain_property_slot(o: &Obj, name: &ZStr, write: bool) -> Option<usize> {
+        let data = object::data(o);
+        let cls = &data.class;
+        let pi = cls.prop_map.get(name)?;
+        if pi.flags != flags::PUBLIC || pi.hooks.is_some() || (write && pi.ty.is_some()) {
+            return None;
+        }
+        if cls.parent.is_some()
+            || cls.hooks.is_some()
+            || cls.magic.get.is_some()
+            || cls.magic.set.is_some()
+            || cls.magic.isset.is_some()
+            || cls.magic.unset.is_some()
+            || data.lazy.borrow().is_some()
+            || data.dynamic.borrow().is_some()
+        {
+            return None;
+        }
+        let slot = pi.slot as usize;
+        match data.slots.borrow().get(slot) {
+            Some(Some(value)) if !matches!(value, Value::Reference(_)) => Some(slot),
+            _ => None,
+        }
+    }
+
     /// Reads `$o->name`.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn read_property(
@@ -284,6 +341,22 @@ impl Vm {
         name: &ZStr,
         mode: FetchMode,
     ) -> VmResult<Value> {
+        if let Some(slot) = Self::plain_property_slot(o, name, false) {
+            return Ok(object::data(o).slots.borrow()[slot]
+                .clone()
+                .expect("initialized slot"));
+        }
+        if object::data(o).lazy.borrow().is_some()
+            && !object::class_of(o).prop_map.contains_key(name)
+            && !object::data(o)
+                .dynamic
+                .borrow()
+                .as_ref()
+                .is_some_and(|table| table.contains_key(&ArrayKey::Str(name.clone())))
+            && self.has_read_magic(o, name, mode)
+        {
+            return self.magic_read(o, name, mode);
+        }
         let lazy_target = self.lazy_object_for(o, Some(name))?;
         let o = &lazy_target;
         let cls = object::class_of(o).clone();
@@ -350,8 +423,7 @@ impl Vm {
                         "Error",
                         &format!(
                             "Typed property {}::${} must not be accessed before initialization",
-                            object::display_name(&pi.class),
-                            pi.name
+                            pi.class, pi.name
                         ),
                     ));
                 }
@@ -565,7 +637,7 @@ impl Vm {
             "Error",
             &format!(
                 "Cannot {op} {vis} property {}::${} from {}",
-                object::display_name(&pi.class),
+                pi.class,
                 pi.name,
                 scope_display(called.as_ref())
             ),
@@ -585,17 +657,9 @@ impl Vm {
         }
         if pi.flags & flags::READONLY != 0 && initialized && self.readonly_locked(o, pi) {
             let msg = if op == "unset" {
-                format!(
-                    "Cannot unset readonly property {}::${}",
-                    object::display_name(&pi.class),
-                    pi.name
-                )
+                format!("Cannot unset readonly property {}::${}", pi.class, pi.name)
             } else {
-                format!(
-                    "Cannot modify readonly property {}::${}",
-                    object::display_name(&pi.class),
-                    pi.name
-                )
+                format!("Cannot modify readonly property {}::${}", pi.class, pi.name)
             };
             return Err(self.make_throw("Error", &msg));
         }
@@ -661,17 +725,13 @@ impl Vm {
         if self.verify_type(&ty, &mut v, &ctx)? {
             return Ok(v);
         }
-        let tyname = ty.display(
-            decl.as_ref().map(|c| &c.name),
-            decl.as_ref().and_then(|c| c.parent_name()),
-            None,
-        );
+        let tyname = ty.display(None, None, None);
         Err(self.make_throw(
             "TypeError",
             &format!(
                 "Cannot assign {} to property {}::${} of type {tyname}",
                 given_type(&v),
-                object::display_name(&pi.class),
+                pi.class,
                 pi.name
             ),
         ))
@@ -680,6 +740,14 @@ impl Vm {
     /// Writes `$o->name = v`; returns the assigned value.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn write_property(&mut self, o: &Obj, name: &ZStr, v: Value) -> VmResult<Value> {
+        if !matches!(v, Value::Reference(_)) {
+            if let Some(slot) = Self::plain_property_slot(o, name, true) {
+                let old = object::data(o).slots.borrow_mut()[slot].replace(v.clone());
+                object::data(o).readonly_init.borrow_mut()[slot] = false;
+                drop(old);
+                return Ok(v);
+            }
+        }
         let lazy_target = self.lazy_object_for(o, Some(name))?;
         let o = &lazy_target;
         let cls = object::class_of(o).clone();
@@ -867,6 +935,22 @@ impl Vm {
         }
         // The slot of the real instance (a lazy proxy forwards).
         let lazy_target = self.lazy_object_for(o, Some(name))?;
+        if !Obj::ptr_eq(o, &lazy_target)
+            && !self
+                .prop_guards
+                .contains(&(o.handle(), name.clone(), G_GET))
+            && self.guard_active(&lazy_target, name, G_GET)
+            && !object::class_of(&lazy_target).prop_map.contains_key(name)
+            && !object::data(&lazy_target)
+                .dynamic
+                .borrow()
+                .as_ref()
+                .is_some_and(|table| table.contains_key(&ArrayKey::Str(name.clone())))
+        {
+            return self
+                .read_property(&lazy_target, name, FetchMode::Read)
+                .map(PhpRef::new);
+        }
         let o = &lazy_target;
         if let Some(r) = self.uninit_typed_prop_ref(o, name)? {
             return Ok(r);
@@ -1026,8 +1110,7 @@ impl Vm {
             "Error",
             &format!(
                 "Typed property {}::${} must not be accessed before initialization",
-                object::display_name(&pi.class),
-                pi.name
+                pi.class, pi.name
             ),
         )
     }
@@ -1474,6 +1557,16 @@ impl Vm {
         if let Some(d) = cls.defaults.borrow().as_ref() {
             return Ok(d.clone());
         }
+        for constant in &cls.consts {
+            if !constant.is_case && constant.value.borrow().is_none() {
+                let scope = self
+                    .class_by_name(&constant.class)
+                    .unwrap_or_else(|| cls.clone());
+                crate::reflection::with_scope(self, Some(scope), |vm| {
+                    vm.class_constant(cls, &constant.name)
+                })?;
+            }
+        }
         let mut out = Vec::with_capacity(cls.props.len());
         for pi in &cls.props {
             let v = match &pi.default {
@@ -1569,6 +1662,9 @@ impl Vm {
         o: &Obj,
         include_uninit: bool,
     ) -> Vec<(ArrayKey, Option<Value>, Option<Rc<PropInfo>>)> {
+        if let Some(instance) = crate::reflection::lazy::proxy_instance(o) {
+            return self.object_prop_table(&instance, include_uninit);
+        }
         let cls = object::class_of(o).clone();
         let d = object::data(o);
         let slots = d.slots.borrow();
@@ -1595,6 +1691,9 @@ impl Vm {
 
     /// `(array) $obj`.
     pub(crate) fn object_to_array(&mut self, o: &Obj) -> VmResult<ZArray> {
+        if let Some(instance) = crate::reflection::lazy::proxy_instance(o) {
+            return self.object_to_array(&instance);
+        }
         // `convert_to_array`: a Closure becomes `[closure]`.
         if object::class_of(o).lc_name.as_bytes() == b"closure" {
             return Ok(ZArray::from_values([Value::Object(o.clone())]));
@@ -1686,6 +1785,7 @@ impl Vm {
         let n = object::new_object(cls.clone(), slots);
         self.add_object_type_sources(&n);
         let nd = object::data(&n);
+        *nd.readonly_init.borrow_mut() = d.readonly_init.borrow().clone();
         *nd.dynamic.borrow_mut() = d.dynamic.borrow().clone();
         self.clone_internal(&o, &n)?;
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.clone) {
@@ -1767,8 +1867,7 @@ fn parent_backing_get(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value>
                 "Error",
                 &format!(
                     "Typed property {}::${} must not be accessed before initialization",
-                    object::display_name(&pi.class),
-                    pi.name
+                    pi.class, pi.name
                 ),
             )),
         };

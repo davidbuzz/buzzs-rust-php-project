@@ -153,7 +153,14 @@ impl<'a> Checker<'a> {
             return true;
         }
         match (a, b) {
-            (Found::Linked(x), Found::Linked(y)) => x.is_subclass_of(y),
+            (Found::Linked(x), Found::Linked(y)) => {
+                if y.is_interface() {
+                    x.instance_of_name(y.lc_name.as_bytes())
+                } else {
+                    x.is_subclass_of(y)
+                }
+            }
+
             (Found::Linked(_), Found::Unlinked(_)) => false,
             (Found::Unlinked(d), _) => {
                 if depth > 64 {
@@ -711,6 +718,175 @@ impl Obligation {
     }
 }
 
+/// A backed property must satisfy its parent type in both directions.
+pub(crate) struct PropertyObligation {
+    child: Rc<crate::class::PropInfo>,
+    child_scope: Rc<Class>,
+    proto: Rc<crate::class::PropInfo>,
+    proto_scope: Rc<Class>,
+    file: ZStr,
+    line: u32,
+    invariant: bool,
+    error: Option<String>,
+}
+
+impl PropertyObligation {
+    pub(crate) fn check(&self, vm: &Vm, linking: &Rc<Class>, unresolved: &mut Vec<ZStr>) -> Status {
+        let mut checker = Checker::new(vm, linking);
+        let child_type = self.child.ty.clone().unwrap_or_else(TypeDecl::mixed);
+        let proto_type = self.proto.ty.clone().unwrap_or_else(TypeDecl::mixed);
+        let status = if self.invariant {
+            match (&self.child.ty, &self.proto.ty) {
+                (Some(child), Some(proto)) => {
+                    let forward =
+                        checker.covariant(&self.child_scope, child, &self.proto_scope, proto);
+                    let reverse =
+                        checker.covariant(&self.proto_scope, proto, &self.child_scope, child);
+                    if forward == Status::Error || reverse == Status::Error {
+                        Status::Error
+                    } else if forward == Status::Unresolved || reverse == Status::Unresolved {
+                        Status::Unresolved
+                    } else {
+                        Status::Ok
+                    }
+                }
+                (None, None) => Status::Ok,
+                _ => Status::Error,
+            }
+        } else {
+            checker.covariant(
+                &self.child_scope,
+                &child_type,
+                &self.proto_scope,
+                &proto_type,
+            )
+        };
+        for name in checker.unresolved {
+            if !unresolved
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(name.as_bytes()))
+            {
+                unresolved.push(name);
+            }
+        }
+        status
+    }
+
+    pub(crate) fn message(&self) -> (String, ZStr, u32) {
+        if let Some(error) = &self.error {
+            return (error.clone(), self.file.clone(), self.line);
+        }
+        if self.proto.ty.is_none() {
+            return (
+                format!(
+                    "Type of {}::${} must be omitted to match the parent definition in class {}",
+                    display_name(&self.child_scope.name),
+                    self.child.name,
+                    display_name(&self.proto_scope.name)
+                ),
+                self.file.clone(),
+                self.line,
+            );
+        }
+        let need = self.proto.ty.as_ref().map_or_else(
+            || "not be defined".to_string(),
+            |ty| format!("be {}", ty.display(None, None, None)),
+        );
+        (
+            format!(
+                "Type of {}::${} must {need} (as in class {})",
+                display_name(&self.child_scope.name),
+                self.child.name,
+                display_name(&self.proto_scope.name)
+            ),
+            self.file.clone(),
+            self.line,
+        )
+    }
+}
+
+pub(crate) struct ConstantObligation {
+    child: Rc<crate::class::ClassConst>,
+    child_scope: Rc<Class>,
+    proto: Rc<crate::class::ClassConst>,
+    proto_scope: Rc<Class>,
+}
+
+impl ConstantObligation {
+    pub(crate) fn check(&self, vm: &Vm, linking: &Rc<Class>, unresolved: &mut Vec<ZStr>) -> Status {
+        let mut checker = Checker::new(vm, linking);
+        let child_type = self.child.ty.clone().unwrap_or_else(TypeDecl::mixed);
+        let proto_type = self.proto.ty.clone().unwrap_or_else(TypeDecl::mixed);
+        let status = checker.covariant(
+            &self.child_scope,
+            &child_type,
+            &self.proto_scope,
+            &proto_type,
+        );
+        for name in checker.unresolved {
+            if !unresolved
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(name.as_bytes()))
+            {
+                unresolved.push(name);
+            }
+        }
+        status
+    }
+
+    pub(crate) fn message(&self) -> (String, ZStr, u32) {
+        (
+            format!(
+                "Type of {}::{} must be compatible with {}::{} of type {}",
+                self.child_scope.name,
+                self.child.name,
+                self.proto_scope.name,
+                self.proto.name,
+                self.proto
+                    .ty
+                    .as_ref()
+                    .map_or_else(|| "mixed".to_string(), TypeDecl::to_php_string)
+            ),
+            self.child_scope.filename.clone().unwrap_or_default(),
+            self.child_scope.line_start,
+        )
+    }
+}
+
+fn check_constant_variance(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
+    for base in cls.parent.iter().chain(cls.interfaces.iter()) {
+        for proto in &base.consts {
+            if proto.flags & flags::PRIVATE != 0 || proto.ty.is_none() {
+                continue;
+            }
+            let Some(child) = cls.find_const(proto.name.as_bytes()) else {
+                continue;
+            };
+            if Rc::ptr_eq(child, proto) {
+                continue;
+            }
+            let ob = ConstantObligation {
+                child: child.clone(),
+                child_scope: vm
+                    .find_class(child.class.as_bytes())
+                    .unwrap_or_else(|| cls.clone()),
+                proto: proto.clone(),
+                proto_scope: vm
+                    .find_class(proto.class.as_bytes())
+                    .unwrap_or_else(|| base.clone()),
+            };
+            match ob.check(vm, cls, &mut out.unresolved) {
+                Status::Error => {
+                    out.error = Some(ob.message());
+                    return;
+                }
+                Status::Unresolved => out.pending_consts.push(ob),
+                _ => {}
+            }
+        }
+    }
+}
+
 /// The outcome of the signature checks of a freshly linked class.
 #[derive(Default)]
 pub(crate) struct ClassCheck {
@@ -721,6 +897,9 @@ pub(crate) struct ClassCheck {
     /// Checks that need classes which are not available yet
     /// (`add_compatibility_obligation`).
     pub(crate) pending: Vec<Obligation>,
+    /// Backed-property invariance checks awaiting type dependencies.
+    pub(crate) pending_props: Vec<PropertyObligation>,
+    pub(crate) pending_consts: Vec<ConstantObligation>,
     /// The classes they need, in registration order.
     pub(crate) unresolved: Vec<ZStr>,
 }
@@ -751,9 +930,184 @@ impl ClassCheck {
     }
 }
 
+fn check_property_variance(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
+    if let Some(parent) = &cls.parent {
+        for child in &cls.props {
+            if !child.class.eq_ignore_ascii_case(cls.name.as_bytes()) {
+                continue;
+            }
+            let Some(proto) = parent.prop_map.get(&child.name) else {
+                continue;
+            };
+            if proto.visibility() == flags::PRIVATE || proto.is_virtual() {
+                continue;
+            }
+            let proto_scope = vm
+                .find_class(proto.class.as_bytes())
+                .unwrap_or_else(|| parent.clone());
+            let ob = PropertyObligation {
+                child: child.clone(),
+                child_scope: cls.clone(),
+                proto: proto.clone(),
+                proto_scope,
+                file: cls.filename.clone().unwrap_or_default(),
+                line: cls.line_start,
+                invariant: true,
+                error: None,
+            };
+            match ob.check(vm, cls, &mut out.unresolved) {
+                Status::Error => {
+                    out.error = Some(ob.message());
+                    return;
+                }
+                Status::Unresolved => out.pending_props.push(ob),
+                _ => {}
+            }
+        }
+    }
+    for child in &cls.props {
+        if !child.class.eq_ignore_ascii_case(cls.name.as_bytes()) {
+            continue;
+        }
+        if let Some(setter) = child.hooks.as_ref().and_then(|h| h.set.as_ref()) {
+            if let Some(param) = setter.params.first() {
+                let mut accepted = (**child).clone();
+                accepted.ty.clone_from(&param.ty);
+                let setter_scope = setter
+                    .class_name
+                    .as_ref()
+                    .and_then(|name| vm.find_class(name.as_bytes()))
+                    .filter(|scope| !scope.is_trait())
+                    .unwrap_or_else(|| cls.clone());
+                let ob = PropertyObligation {
+                    child: child.clone(), child_scope: cls.clone(), proto: Rc::new(accepted),
+                    proto_scope: setter_scope, file: setter.code.filename.clone(), line: setter.line_start,
+                    invariant: false,
+                    error: Some(format!(
+                        "Type of parameter ${} of hook {}::${}::set must be compatible with property type",
+                        param.name, display_name(&cls.name), child.name
+                    )),
+                };
+                match ob.check(vm, cls, &mut out.unresolved) {
+                    Status::Error => {
+                        out.error = Some(ob.message());
+                        return;
+                    }
+                    Status::Unresolved => out.pending_props.push(ob),
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+fn check_hook_variance(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
+    for source in cls.parent.iter().chain(cls.interfaces.iter()) {
+        for proto in &source.props {
+            if proto.visibility() == flags::PRIVATE {
+                continue;
+            }
+            let Some(child) = cls.prop_map.get(&proto.name) else {
+                continue;
+            };
+            if source.is_interface() && !child.is_virtual() {
+                if let Some(proto_set) = proto.hooks.as_ref().and_then(|h| h.set.as_ref()) {
+                    if child.is_readonly()
+                        || child.flags & (flags::SET_PROTECTED | flags::SET_PRIVATE) != 0
+                    {
+                        out.error = Some((
+                            format!(
+                                "Set access level of {}::${} must be omitted (as in class {})",
+                                display_name(&cls.name),
+                                child.name,
+                                display_name(&source.name)
+                            ),
+                            cls.filename.clone().unwrap_or_default(),
+                            cls.line_start,
+                        ));
+                        return;
+                    }
+                    if child.hooks.as_ref().is_none_or(|h| h.set.is_none()) {
+                        if let Some(param) = proto_set.params.first() {
+                            let mut accepted = (**proto).clone();
+                            accepted.ty.clone_from(&param.ty);
+                            let need = param.ty.as_ref().map_or_else(
+                                || "mixed".to_string(),
+                                |ty| ty.display(None, None, None),
+                            );
+                            let ob = PropertyObligation {
+                                child: Rc::new(accepted), child_scope: source.clone(),
+                                proto: child.clone(), proto_scope: cls.clone(),
+                                file: cls.filename.clone().unwrap_or_default(), line: cls.line_start,
+                                invariant: false,
+                                error: Some(format!("Set type of {}::${} must be supertype of {need} (as in interface {})",
+                                    display_name(&cls.name), child.name, display_name(&source.name))),
+                            };
+                            match ob.check(vm, cls, &mut out.unresolved) {
+                                Status::Error => {
+                                    out.error = Some(ob.message());
+                                    return;
+                                }
+                                Status::Unresolved => out.pending_props.push(ob),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            let (Some(child_hooks), Some(proto_hooks)) = (&child.hooks, &proto.hooks) else {
+                continue;
+            };
+            for (child_hook, proto_hook) in [
+                (&child_hooks.get, &proto_hooks.get),
+                (&child_hooks.set, &proto_hooks.set),
+            ] {
+                let (Some(child_hook), Some(proto_hook)) = (child_hook, proto_hook) else {
+                    continue;
+                };
+                if Rc::ptr_eq(child_hook, proto_hook) {
+                    continue;
+                }
+                let method = |function: &Rc<crate::func::UserFunction>, scope: &Rc<Class>| {
+                    Rc::new(Method {
+                        name: function.name.clone(),
+                        func: Func::User(function.clone()),
+                        flags: function.flags,
+                        scope: Rc::downgrade(scope),
+                        proto_scope: Rc::downgrade(scope),
+                    })
+                };
+                let ob = Obligation {
+                    child: method(child_hook, cls),
+                    child_name: display_name(&cls.name),
+                    child_scope: cls.clone(),
+                    proto: method(proto_hook, source),
+                    proto_name: display_name(&source.name),
+                    proto_scope: source.clone(),
+                };
+                if out.record(vm, cls, ob) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 /// Checks the overriding methods of a freshly linked class against their
 /// parent and interface prototypes.
 pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
+    check_constant_variance(vm, cls, out);
+    if out.error.is_some() {
+        return;
+    }
+    check_property_variance(vm, cls, out);
+    if out.error.is_some() {
+        return;
+    }
+    check_hook_variance(vm, cls, out);
+    if out.error.is_some() {
+        return;
+    }
     let mut protos: Vec<(Rc<Method>, Rc<Method>)> = Vec::new();
     for lc in &cls.method_order {
         let m = &cls.methods[lc];

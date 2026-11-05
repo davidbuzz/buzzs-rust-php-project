@@ -15,7 +15,7 @@ impl Vm {
     pub(crate) fn func_display(&self, func: &Func, scope: Option<&Rc<Class>>) -> String {
         let name = func.name().to_string_lossy();
         if let Func::User(u) = func {
-            if u.is_closure() {
+            if u.is_closure() && !name.starts_with("{closure:pfa:") {
                 return name;
             }
         }
@@ -73,7 +73,7 @@ impl Vm {
     /// Returns an argument buffer to the pool.
     #[inline]
     fn put_arg_vec(&mut self, mut v: Vec<Option<Value>>) {
-        if v.capacity() > 0 && self.call_bufs.args.len() < 4 {
+        if v.capacity() > 0 && v.capacity() <= 256 && self.call_bufs.args.len() < 4 {
             v.clear();
             self.call_bufs.args.push(v);
         }
@@ -82,7 +82,7 @@ impl Vm {
     /// Returns a ZPP value buffer to the pool.
     #[inline]
     fn put_val_vec(&mut self, mut v: Vec<Value>) {
-        if v.capacity() > 0 && self.call_bufs.values.len() < 4 {
+        if v.capacity() > 0 && v.capacity() <= 256 && self.call_bufs.values.len() < 4 {
             v.clear();
             self.call_bufs.values.push(v);
         }
@@ -91,7 +91,7 @@ impl Vm {
     /// Returns a ZPP passed-flag buffer to the pool.
     #[inline]
     fn put_bool_vec(&mut self, mut v: Vec<bool>) {
-        if v.capacity() > 0 && self.call_bufs.passed.len() < 4 {
+        if v.capacity() > 0 && v.capacity() <= 256 && self.call_bufs.passed.len() < 4 {
             v.clear();
             self.call_bufs.passed.push(v);
         }
@@ -239,7 +239,10 @@ impl Vm {
                     )),
                 }
             }
-            _ => Err(self.make_throw("Error", "Value not callable")),
+            other => Err(self.make_throw(
+                "Error",
+                &format!("Value of type {} is not callable", other.type_name()),
+            )),
         }
     }
 
@@ -614,18 +617,19 @@ impl Vm {
             ArgSrc::Val(op) => {
                 let v = self.read(*op)?;
                 if by_ref && !prefer_ref {
-                    let p = pos.unwrap_or(0);
                     let call = self.frame().calls.last().expect("pending call").clone();
+                    let p = pos.unwrap_or_else(|| call.func.params().len().saturating_sub(1));
                     let pname = call
                         .func
                         .params()
                         .get(p)
-                        .map_or_else(String::new, |x| x.name.to_string_lossy());
+                        .filter(|p| !p.variadic)
+                        .map_or_else(String::new, |x| format!(" (${})", x.name));
                     let fname = self.func_display(&call.func, call.scope.as_ref());
                     return Err(self.make_throw(
                         "Error",
                         &format!(
-                            "{fname}(): Argument #{} (${pname}) could not be passed by reference",
+                            "{fname}(): Argument #{}{pname} could not be passed by reference",
                             p + 1
                         ),
                     ));
@@ -1389,9 +1393,19 @@ impl Vm {
         }
         let exact = uf.required as usize == uf.params.len() && uf.flags & flags::VARIADIC == 0;
         let mut msg = format!("Too few arguments to function {fname}(), {passed} passed");
-        if !internal && self.frames.len() >= 2 {
-            let caller = &self.frames[self.frames.len() - 2];
-            if caller.kind != FrameKind::Builtin {
+        let caller = self
+            .frames
+            .iter()
+            .rev()
+            .skip(1)
+            .find(|caller| caller.kind != FrameKind::Builtin);
+        let through_call_user_func = self.frames.iter().rev().nth(1).is_some_and(|caller| {
+            caller.builtin_name.as_ref().is_some_and(|name| {
+                matches!(name.as_bytes(), b"call_user_func" | b"call_user_func_array")
+            })
+        });
+        if !internal || through_call_user_func {
+            if let Some(caller) = caller {
                 msg.push_str(&format!(
                     " in {} on line {}",
                     caller.code.filename,
@@ -1432,23 +1446,20 @@ impl Vm {
     }
 
     pub(crate) fn op_recv_variadic(&mut self, n: u32, cv: u32) -> VmResult<()> {
-        let rest: Vec<Option<Value>> = {
-            let f = self.frame_mut();
-            if f.args.len() > n as usize {
-                f.args.drain(n as usize..).collect()
-            } else {
-                Vec::new()
-            }
-        };
-        let named = std::mem::take(&mut self.frame_mut().named);
+        let passed = self.frame().args.len();
         let mut arr = HashTable::new();
-        for (i, a) in rest.into_iter().enumerate() {
-            let Some(v) = a else { continue };
-            let v = self.recv_check(n + u32::try_from(i).unwrap_or(0), v)?;
+        for i in n as usize..passed {
+            let Some(v) = self.frame().args[i].clone() else {
+                continue;
+            };
+            let v = self.recv_check(u32::try_from(i).unwrap_or(n), v)?;
+            self.frame_mut().args[i] = Some(v.clone());
             let _ = arr.push(v);
         }
-        for (k, v) in named {
+        for i in 0..self.frame().named.len() {
+            let (k, v) = self.frame().named[i].clone();
             let v = self.recv_check(n, v)?;
+            self.frame_mut().named[i].1 = v.clone();
             arr.insert(ArrayKey::Str(k), v);
         }
         self.cv_bind(cv, Value::Array(ZArray::from_table(arr)));
@@ -1547,33 +1558,49 @@ impl Vm {
         // `zend_call_function` services pending interrupts (async signals)
         // before entering user code from internal code.
         self.check_interrupt()?;
+        if call.magic_name.is_none() {
+            for (i, arg) in call.args.iter_mut().enumerate() {
+                let Some(value) = arg else { continue };
+                let param = call
+                    .func
+                    .params()
+                    .get(i)
+                    .or_else(|| call.func.params().last().filter(|p| p.variadic));
+                if let Some(param) = param.filter(|p| p.by_ref) {
+                    if !value.is_reference() && param.promote & crate::opcode::PREFER_REF == 0 {
+                        let pname = if param.variadic {
+                            String::new()
+                        } else {
+                            format!(" (${})", param.name)
+                        };
+                        let fname = self.func_display(&call.func, call.scope.as_ref());
+                        self.warning(&format!(
+                            "{fname}(): Argument #{}{pname} must be passed by reference, value given", i + 1
+                        ))?;
+                        *value = Value::Reference(PhpRef::new(std::mem::take(value)));
+                    }
+                } else {
+                    *value = value.deref();
+                }
+            }
+            for (_, value) in &mut call.named {
+                let param = call.func.params().last().filter(|p| p.variadic);
+                if let Some(param) = param.filter(|p| p.by_ref) {
+                    if !value.is_reference() && param.promote & crate::opcode::PREFER_REF == 0 {
+                        let fname = self.func_display(&call.func, call.scope.as_ref());
+                        self.warning(&format!(
+                            "{fname}(): Argument #{} must be passed by reference, value given",
+                            call.func.params().len()
+                        ))?;
+                        *value = Value::Reference(PhpRef::new(std::mem::take(value)));
+                    }
+                } else {
+                    *value = value.deref();
+                }
+            }
+        }
         match call.func.clone() {
             Func::User(uf) => {
-                // Arguments passed by value to by-ref parameters.
-                for (i, a) in call.args.iter_mut().enumerate() {
-                    if let Some(v) = a {
-                        if uf.params.get(i).is_some_and(|p| p.by_ref)
-                            || (i >= uf.params.len()
-                                && uf.params.last().is_some_and(|p| p.variadic && p.by_ref))
-                        {
-                            if !v.is_reference() {
-                                let pname = uf
-                                    .params
-                                    .get(i)
-                                    .or_else(|| uf.params.last())
-                                    .map_or_else(String::new, |p| p.name.to_string_lossy());
-                                let fname = self.func_display(&call.func, call.scope.as_ref());
-                                self.warning(&format!(
-                                    "{fname}(): Argument #{} (${pname}) must be passed by reference, value given",
-                                    i + 1
-                                ))?;
-                                *v = Value::Reference(PhpRef::new(std::mem::take(v)));
-                            }
-                        } else if let Value::Reference(_) = v {
-                            *v = v.deref();
-                        }
-                    }
-                }
                 self.check_deprecated_call(&call)?;
                 let strict = call.strict;
                 self.push_user_frame(&uf, call, RetTarget::Discard, strict, true)?;

@@ -782,12 +782,12 @@ impl Vm {
                             self.read_raw(*val)?
                         };
                         let v = match raw {
-                            Value::Reference(r) => Value::Reference(r),
+                            Value::Reference(r) => self.verify_return(Some(Value::Reference(r)))?,
                             other => {
+                                let checked = self.verify_return((!unused).then_some(other))?;
                                 self.notice(
                                     "Only variable references should be returned by reference",
                                 )?;
-                                let checked = self.verify_return((!unused).then_some(other))?;
                                 Value::Reference(php_runtime::PhpRef::new(checked))
                             }
                         };
@@ -804,7 +804,7 @@ impl Vm {
                         } else {
                             self.place_fetch(*place, crate::opcode::FetchMode::Read)?
                         };
-                        self.op_return_raw(Some(v), base)?
+                        self.op_return(Some(v), base)?
                     }
                     Op::GeneratorCreate => self.op_generator_create(base)?,
                     Op::Yield { key, val, dst } => {

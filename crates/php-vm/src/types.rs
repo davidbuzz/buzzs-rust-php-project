@@ -95,6 +95,22 @@ impl TypeDecl {
         self.mask == mask::NEVER && !self.has_classes()
     }
 
+    /// Checks a folded property or class-constant initializer without weak coercion.
+    pub(crate) fn accepts_default(&self, value: &php_runtime::Value) -> bool {
+        use php_runtime::Value;
+        let bit = match value {
+            Value::Null => mask::NULL,
+            Value::Bool(false) => mask::FALSE,
+            Value::Bool(true) => mask::TRUE,
+            Value::Int(_) => mask::LONG | mask::DOUBLE,
+            Value::Float(_) => mask::DOUBLE,
+            Value::Str(_) => mask::STRING,
+            Value::Array(_) => mask::ARRAY | mask::ITERABLE,
+            _ => return false,
+        };
+        self.mask & bit != 0
+    }
+
     /// Renders the type like `zend_type_to_string_resolved`; `self_name` and
     /// `parent_name` resolve `self`/`parent`, `static_name` resolves
     /// `static`.

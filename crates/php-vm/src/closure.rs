@@ -30,6 +30,8 @@ pub struct ClosureData {
     pub fake: bool,
     /// `__call` target name for fake closures of magic methods.
     pub magic_name: Option<ZStr>,
+    /// Captured target closure of a partial application, rebound with its wrapper.
+    pub partial_inner: Option<u32>,
 }
 
 impl Vm {
@@ -101,6 +103,7 @@ impl Vm {
             statics: Rc::new(RefCell::new(Vec::new())),
             fake: false,
             magic_name: None,
+            partial_inner: None,
         };
         let o = self.new_closure_object(data);
         if cacheable && cached.is_none() {
@@ -164,6 +167,7 @@ impl Vm {
             statics: Rc::new(RefCell::new(Vec::new())),
             fake: true,
             magic_name: call.magic_name,
+            partial_inner: None,
         };
         Value::Object(self.new_closure_object(data))
     }
@@ -328,7 +332,7 @@ impl Vm {
         scope: Option<&Rc<Class>>,
     ) -> VmResult<bool> {
         let fflags = d.func.flags();
-        let is_fake = d.fake;
+        let is_fake = d.fake || d.func.name().as_bytes().starts_with(b"{closure:pfa:");
         let func_scope = d.scope.as_ref();
         if let Some(t) = new_this {
             if fflags & flags::STATIC != 0 {
@@ -411,15 +415,31 @@ impl Vm {
             .iter()
             .map(|s| s.as_ref().map(|r| PhpRef::new(r.get())))
             .collect();
+        let mut vars = d.vars.clone();
+        if let Some(inner_cv) = d.partial_inner {
+            if let Some((_, Value::Object(inner))) = vars.iter_mut().find(|(cv, _)| *cv == inner_cv)
+            {
+                if let Some(inner_data) = self.closure_data(inner) {
+                    let rebound = self.rebound_closure(
+                        &inner_data,
+                        inner_data.scope.clone(),
+                        called.clone(),
+                        this.clone(),
+                    );
+                    *inner = self.new_closure_object(rebound);
+                }
+            }
+        }
         ClosureData {
             func: d.func.clone(),
             this,
             scope,
             called,
-            vars: d.vars.clone(),
+            vars,
             statics: Rc::new(RefCell::new(statics)),
             fake: d.fake,
             magic_name: d.magic_name.clone(),
+            partial_inner: d.partial_inner,
         }
     }
 

@@ -450,7 +450,15 @@ fn var_dump_object(
         put_property_key(out, k, level);
         match slot {
             PropertySlot::Value(v) => {
-                var_dump(vm, out, v, level + 2, zv.map(|_| Zval { extra: 1 }))?;
+                // The synthetic proxy instance table owns a PHP-visible reference.
+                let extra = usize::from(
+                    !crate::object::data(o)
+                        .lazy
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|info| info.proxy && info.initialized),
+                );
+                var_dump(vm, out, v, level + 2, zv.map(|_| Zval { extra }))?;
             }
             PropertySlot::Uninitialized(t) => {
                 out.spaces(level + 1);

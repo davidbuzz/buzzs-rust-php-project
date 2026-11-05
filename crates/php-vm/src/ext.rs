@@ -20,7 +20,9 @@ use crate::builtins::sig::parse_sig;
 use crate::class::Class;
 use crate::func::{flags, Builtin, Func};
 use crate::vm::Vm;
-use php_runtime::{BinaryOp, CastTarget, Obj, PropertyPurpose, Value, ZArray, ZStr};
+use php_runtime::{
+    ArrayKey, BinaryOp, CastTarget, Obj, PhpRef, PropertyPurpose, Value, ZArray, ZStr,
+};
 use php_support::ini::IniDirective;
 use std::rc::Rc;
 
@@ -713,6 +715,38 @@ impl Vm {
             Value::Str(ZStr::from(method)),
         ]));
         self.call_value_named(&cb, args, named)
+    }
+
+    /// Validates an incoming reference for native property-table writeback,
+    /// attaching the declared slot type source without changing storage.
+    /// `key` is the exact table key (mangled for nonpublic properties), not
+    /// a userland property name; this does not perform a property setter.
+    /// Store the same reference immediately on the returned lazy target,
+    /// before using it: a type source is live only while its slot holds it.
+    /// Dynamic keys, including numeric ones, do not acquire a type source.
+    pub fn prepare_property_table_reference(
+        &mut self,
+        o: &Obj,
+        key: &ArrayKey,
+        r: &PhpRef,
+    ) -> VmResult<Obj> {
+        let target = self.lazy_object_for(o, None)?;
+        let cls = crate::object::class_of(&target).clone();
+        if let Some(pi) = cls.props.iter().find(|pi| {
+            !pi.is_virtual() && pi.flags & flags::STATIC == 0 && crate::props::mangle(pi) == *key
+        }) {
+            if pi.is_readonly() {
+                return Err(self.make_throw(
+                    "Error",
+                    &format!(
+                        "Cannot acquire reference to readonly property {}::${}",
+                        pi.class, pi.name
+                    ),
+                ));
+            }
+            self.bind_slot_ref(&target, pi.slot as usize, &Value::Reference(r.clone()))?;
+        }
+        Ok(target)
     }
 
     /// Writes a declared or dynamic property directly (no visibility,

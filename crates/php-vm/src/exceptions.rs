@@ -402,13 +402,8 @@ impl Vm {
     pub(crate) fn frame_args(&self, idx: usize) -> ZArray {
         let mut t = HashTable::new();
         for (k, v, _) in self.frame_arg_list(idx) {
-            match k {
-                Some(k) => {
-                    t.insert(ArrayKey::Str(k), v);
-                }
-                None => {
-                    let _ = t.push(v);
-                }
+            if k.is_none() {
+                let _ = t.push(v);
             }
         }
         ZArray::from_table(t)
@@ -482,22 +477,11 @@ impl Vm {
         };
         for (i, p) in uf.params.iter().enumerate() {
             if p.variadic {
-                match cv(i) {
-                    Some(Value::Array(a)) => {
-                        for (k, v) in a.iter() {
-                            let key = match k {
-                                ArrayKey::Int(_) => None,
-                                ArrayKey::Str(s) => Some(s.clone()),
-                            };
-                            out.push((key, v.deref(), p.sensitive));
-                        }
-                    }
-                    // Not yet received: the passed values.
-                    _ => {
-                        for a in f.args.iter().skip(i).flatten() {
-                            out.push((None, a.deref(), p.sensitive));
-                        }
-                    }
+                for a in f.args.iter().skip(i).flatten() {
+                    out.push((None, a.deref(), p.sensitive));
+                }
+                for (key, value) in &f.named {
+                    out.push((Some(key.clone()), value.deref(), p.sensitive));
                 }
                 return out;
             }

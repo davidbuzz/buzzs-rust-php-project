@@ -337,6 +337,15 @@ pub struct Frame {
     pub called_from_internal: bool,
 }
 
+/// Keep small call buffers allocation-free without retaining exceptional frame sizes.
+fn clear_frame_buffer<T>(buffer: &mut Vec<T>) {
+    if buffer.capacity() > 256 {
+        *buffer = Vec::new();
+    } else {
+        buffer.clear();
+    }
+}
+
 impl Frame {
     /// Creates a pre-allocated empty frame for the pool.
     pub fn new_pooled(empty_code: Rc<OpArray>) -> Self {
@@ -376,37 +385,37 @@ impl Frame {
     }
 
     /// Cleans up state when returning to the frame pool, dropping all user values
-    /// while preserving allocated buffer capacities.
+    /// while preserving ordinary buffer capacities and releasing oversized buffers.
     pub fn clear_for_pool(&mut self, empty_code: &Rc<OpArray>) {
         self.func = None;
         self.ufunc = None;
         self.code = empty_code.clone();
         self.ip = 0;
         self.cv_map = None;
-        self.tmps.clear();
-        self.iters.clear();
-        self.fins.clear();
-        self.calls.clear();
+        clear_frame_buffer(&mut self.tmps);
+        clear_frame_buffer(&mut self.iters);
+        clear_frame_buffer(&mut self.fins);
+        clear_frame_buffer(&mut self.calls);
         self.this = None;
         self.scope = None;
         self.called = None;
-        self.args.clear();
-        self.named.clear();
+        clear_frame_buffer(&mut self.args);
+        clear_frame_buffer(&mut self.named);
         self.ret = RetTarget::Discard;
         self.closure = None;
         self.generator = None;
         self.pending_exc = None;
         self.statics = None;
         self.is_ctor = false;
-        self.silence_saved.clear();
+        clear_frame_buffer(&mut self.silence_saved);
         self.builtin_name = None;
         self.magic_name = None;
         self.caller_strict = false;
         self.called_from_internal = false;
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
-            vs.slots.clear();
-            vs.names.clear();
+            clear_frame_buffer(&mut vs.slots);
+            clear_frame_buffer(&mut vs.names);
             vs.index = None;
         } else {
             self.vars = Rc::new(RefCell::new(VarStore::default()));

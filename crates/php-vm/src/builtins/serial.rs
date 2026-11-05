@@ -1299,6 +1299,16 @@ impl Unserializer<'_> {
     /// `is_property_visibility_changed`); `None` fails the parse.
     fn prop_target(vm: &mut Vm, o: &Obj, cls: &Rc<Class>, key: &ZStr) -> VmResult<Option<Target>> {
         if let Some(pi) = declared_exact(cls, key.as_bytes()) {
+            if pi.is_virtual() {
+                vm.docref(
+                    E_WARNING,
+                    &format!(
+                        "Cannot unserialize value for virtual property {}::${}",
+                        pi.class, pi.name
+                    ),
+                )?;
+                return Ok(None);
+            }
             return Ok(Some(Target::Declared(pi.clone())));
         }
         // Visibility changed since serialization?

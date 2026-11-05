@@ -89,8 +89,7 @@ pub(crate) fn object_for(vm: &mut Vm, o: &Obj, name: Option<&ZStr>) -> VmResult<
                 .prop_guards
                 .iter()
                 .any(|(h, gn, _)| *h == o.handle() && gn == n);
-            if !i.proxy
-                && !guarded
+            if !guarded
                 && (m.get.is_some() || m.set.is_some() || m.isset.is_some() || m.unset.is_some())
             {
                 return Ok(o.clone());
@@ -342,6 +341,8 @@ fn make_lazy(
                     ));
                 }
                 set_info(&o, None);
+                drop(i);
+                vm.run_pending_destructors()?;
             } else {
                 let d = object::data(&o);
                 let destructed = d.flags.get() & oflags::DESTRUCTED != 0;
@@ -358,6 +359,13 @@ fn make_lazy(
             {
                 let mut slots = d.slots.borrow_mut();
                 for p in &oc.props {
+                    if !cls.props.iter().any(|declared| {
+                        declared.name == p.name
+                            && (declared.visibility() != flags::PRIVATE
+                                || declared.class == p.class)
+                    }) {
+                        continue;
+                    }
                     if p.is_virtual() {
                         continue;
                     }
@@ -482,6 +490,12 @@ fn reset(vm: &mut Vm, a: &Args, proxy: bool, method: &str) -> VmResult<Value> {
     let (c, _) = this_class_obj(vm, a)?;
     let o = obj_of_class(vm, a, 0, &c, method)?;
     let opts = check_options(vm, a, 2, method, true)?;
+    if info(&o).is_some_and(|i| i.initializing) {
+        return Err(vm.make_throw(
+            "Error",
+            "Can not reset an object while it is being initialized",
+        ));
+    }
     if is_uninit(&o) {
         return Err(rexc(vm, "Object is already lazy"));
     }

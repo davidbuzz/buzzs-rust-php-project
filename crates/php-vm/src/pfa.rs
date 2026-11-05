@@ -142,14 +142,34 @@ impl Vm {
     ) -> VmResult<Value> {
         let pfa = call.pfa.take().map(|b| *b).unwrap_or_default();
         let func = call.func.clone();
+        if !func.is_user()
+            && matches!(
+                func.name().as_bytes(),
+                b"func_get_arg"
+                    | b"func_get_args"
+                    | b"func_num_args"
+                    | b"compact"
+                    | b"extract"
+                    | b"get_defined_vars"
+            )
+        {
+            return Err(self.make_throw(
+                "Error",
+                &format!("Cannot call {}() dynamically", func.name()),
+            ));
+        }
+
         // A `__call`/`__callStatic` trampoline: one variadic `$arguments`.
         let magic = call.magic_name.clone();
+        if magic.is_some() {
+            call.scope = self.find_class(b"Closure");
+        }
         let params: Vec<ParamInfo> = if magic.is_some() {
             vec![ParamInfo {
                 name: ZStr::from("arguments"),
                 by_ref: false,
                 variadic: true,
-                ty: None,
+                ty: Some(crate::types::TypeDecl::mixed()),
                 has_default: false,
                 default_text: None,
                 promote: 0,
@@ -190,7 +210,9 @@ impl Vm {
                 ),
             ));
         }
+        let bind_constants = call.closure.is_some() || call.this.is_some();
         let argc = call.args.len();
+
         if argc < required && !variadic_ph {
             let limit = if num_args <= required {
                 "exactly"
@@ -220,8 +242,10 @@ impl Vm {
             let s = match call.args.get(i) {
                 _ if pfa.is_placeholder(i) => Slot::Placeholder,
                 Some(Some(v)) => {
-                    let lit =
-                        i < 32 && const_args & (1 << i) != 0 && !matches!(v, Value::Reference(_));
+                    let lit = !bind_constants
+                        && i < 32
+                        && const_args & (1 << i) != 0
+                        && !matches!(v, Value::Reference(_));
                     if lit {
                         Slot::Const(v.clone())
                     } else {
@@ -387,11 +411,17 @@ impl Vm {
         }
 
         // Generate the closure source.
-        let scope = call.scope.clone();
         let type_src = |ty: &crate::types::TypeDecl| -> String {
-            // `self`/`parent` stay as written: the closure is compiled in
-            // the target's class scope.
-            let _ = &scope;
+            let mut ty = ty.clone();
+            for name in ty
+                .classes
+                .iter_mut()
+                .chain(ty.intersections.iter_mut().flatten())
+            {
+                if !name.eq_ignore_ascii_case(b"self") && !name.eq_ignore_ascii_case(b"parent") {
+                    *name = ZStr::from(format!("\\{name}"));
+                }
+            }
             ty.to_php_string()
         };
         let mut src = String::new();
@@ -414,7 +444,7 @@ impl Vm {
                         s.push_str(&type_src(t));
                         s.push(' ');
                     }
-                    if (magic.is_none() && func.arg_by_ref(i)) {
+                    if magic.is_none() && func.arg_by_ref(i) {
                         s.push('&');
                     }
                     s.push('$');
@@ -426,7 +456,7 @@ impl Vm {
                 }
                 Slot::Bound(_) => {
                     let n = names.params[i].clone().unwrap_or_default();
-                    uses.push(if (magic.is_none() && func.arg_by_ref(i)) {
+                    uses.push(if magic.is_none() && func.arg_by_ref(i) {
                         format!("&${n}")
                     } else {
                         format!("${n}")
@@ -446,6 +476,9 @@ impl Vm {
         if variadic_ph && fn_variadic {
             let p = params.last();
             let mut s = String::new();
+            if p.is_some_and(|p| p.sensitive) {
+                s.push_str("#[\\SensitiveParameter] ");
+            }
             if let Some(t) = p.and_then(|p| p.ty.as_ref()) {
                 s.push_str(&type_src(t));
                 s.push(' ');
@@ -580,14 +613,23 @@ impl Vm {
         // Compile `return <closure>;` at the declaring line.
         let (file, line) = self.current_location();
         let mut code = String::from("<?php ");
+        let declaring_name = call.scope.as_ref().map_or_else(|| func.name(), |c| &c.name);
+        if let Some((namespace, _)) = declaring_name.to_string_lossy().rsplit_once('\\') {
+            code.push_str("namespace ");
+            code.push_str(namespace);
+            code.push_str("; ");
+        }
+
         for _ in 1..line {
             code.push('\n');
         }
         code.push_str("return ");
         code.push_str(&src);
         code.push(';');
-        let fscope = match &func {
-            Func::User(_) | Func::Builtin(_) => call.scope.clone(),
+        let fscope = if magic.is_some() && this_obj.is_none() {
+            None
+        } else {
+            call.scope.clone()
         };
         let unit =
             match self.compile_pfa(code.as_bytes(), &file, fscope.as_ref(), &pfa_name, strict)? {
@@ -614,7 +656,7 @@ impl Vm {
             }
             for i in 0..new_argc {
                 if let Slot::Bound(v) = &slots[i] {
-                    let v = if (magic.is_none() && func.arg_by_ref(i)) {
+                    let v = if magic.is_none() && func.arg_by_ref(i) {
                         match v {
                             Value::Reference(r) => Value::Reference(r.clone()),
                             other => Value::Reference(php_runtime::PhpRef::new(other.clone())),
@@ -648,6 +690,46 @@ impl Vm {
         let base = self.frames.len() - 1;
         let r = self.execute(base);
         self.frames.truncate(base);
+        if let Ok(Value::Object(closure)) = &r {
+            object::internal::<crate::closure::ClosureData, _>(closure, |data| {
+                if let Func::User(function) = &data.func {
+                    if let Some(inner_name) = &names.inner {
+                        data.partial_inner = function
+                            .uses
+                            .iter()
+                            .find(|capture| capture.name.as_bytes() == inner_name.as_bytes())
+                            .map(|capture| capture.cv);
+                    }
+                    if let Func::User(original) = &func {
+                        let attributes: Vec<_> = original
+                            .attributes
+                            .iter()
+                            .filter(|attribute| attribute.name.eq_ignore_ascii_case(b"NoDiscard"))
+                            .cloned()
+                            .collect();
+                        if !attributes.is_empty() {
+                            let statics = function.statics.borrow().clone();
+                            data.func = Func::User(Rc::new(crate::func::UserFunction {
+                                name: function.name.clone(),
+                                params: function.params.clone(),
+                                required: function.required,
+                                return_type: function.return_type.clone(),
+                                flags: function.flags,
+                                code: function.code.clone(),
+                                line_start: function.line_start,
+                                line_end: function.line_end,
+                                doc_comment: function.doc_comment.clone(),
+                                statics: std::cell::RefCell::new(statics),
+                                uses: function.uses.clone(),
+                                class_name: function.class_name.clone(),
+                                attributes,
+                                hook_prop: function.hook_prop.clone(),
+                            }));
+                        }
+                    }
+                }
+            });
+        }
         r
     }
 
@@ -663,6 +745,15 @@ impl Vm {
         let Some(p) = params.get(i) else {
             return Ok("null".into());
         };
+        if matches!(func, Func::Builtin(b) if b.name.as_bytes() == b"__invoke")
+            && scope.is_some_and(|scope| scope.lc_name.as_bytes() == b"closure")
+        {
+            let fname = self.func_display(func, scope);
+            return Err(self.make_throw("ArgumentCountError", &format!(
+                "{fname}(): Argument #{} (${}) must be passed explicitly, because the default value is not known",
+                i + 1, p.name
+            )));
+        }
         if let Some(e) = &p.default_expr {
             let e = e.clone();
             if let Ok(v) = self.eval_const_expr(&e, scope) {
@@ -723,7 +814,13 @@ impl Vm {
             strict_types: strict,
         };
         match crate::compiler::compile(&program, Rc::from(src), opts) {
-            Ok(u) => Ok(CompileOutcome::Ok(Rc::new(u))),
+            Ok(u) => {
+                for (level, message, line) in &u.warnings {
+                    self.error_at(*level, message, file, *line)?;
+                }
+                Ok(CompileOutcome::Ok(Rc::new(u)))
+            }
+
             Err(e) => {
                 self.report_compile_error(&e.message, file, e.line, e.is_parse);
                 Ok(CompileOutcome::Fatal)

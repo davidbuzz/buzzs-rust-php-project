@@ -45,7 +45,7 @@ impl Vm {
             return Ok(None);
         };
         let r = self.call_method(o, &m, Vec::new())?;
-        match r {
+        match r.deref() {
             Value::Str(s) => Ok(Some(s)),
             other => Err(self.make_throw(
                 "TypeError",
@@ -106,6 +106,37 @@ impl Vm {
             return Ok(Some(a));
         }
         let mut t = HashTable::new();
+        if matches!(purpose, PropertyPurpose::VarExport | PropertyPurpose::Json) {
+            for pi in object::class_of(o).props.clone() {
+                if purpose == PropertyPurpose::Json && pi.visibility() != flags::PUBLIC {
+                    continue;
+                }
+                let value =
+                    if let Some(getter) = pi.hooks.as_ref().and_then(|hooks| hooks.get.as_ref()) {
+                        Some(self.call_hook(o, getter, &pi, Vec::new())?.deref())
+                    } else if pi.is_virtual() {
+                        None
+                    } else {
+                        object::data(o)
+                            .slots
+                            .borrow()
+                            .get(pi.slot as usize)
+                            .cloned()
+                            .flatten()
+                    };
+                if let Some(value) = value {
+                    t.insert(crate::props::mangle(&pi), value);
+                }
+            }
+            for (key, value, prop) in self.object_prop_table(o, false) {
+                if prop.is_none() {
+                    if let Some(value) = value {
+                        t.insert(key, value);
+                    }
+                }
+            }
+            return Ok(Some(ZArray::from_table(t)));
+        }
         for (k, v, _) in self.object_prop_table(o, false) {
             if let Some(v) = v {
                 t.insert(k, v);
@@ -130,6 +161,13 @@ impl Vm {
         if let Some(r) = self.internal_compare(a, b)? {
             return Ok(r);
         }
+        let _guard = php_runtime::ops::RecursionGuard::try_enter(
+            php_runtime::ops::GuardKind::Compare,
+            a.addr(),
+        )
+        .ok_or_else(|| {
+            self.make_throw("Error", "Nesting level too deep - recursive dependency?")
+        })?;
         // Compare declared slots in order, then dynamic tables.
         let sa = object::data(a).slots.borrow().clone();
         let sb = object::data(b).slots.borrow().clone();
@@ -180,10 +218,6 @@ impl RuntimeContext for Vm {
                 Err(t) => Err(self.to_rt(t)),
             },
             CastTarget::Bool => Ok(Some(Value::Bool(true))),
-            CastTarget::Array => match self.object_to_array(obj) {
-                Ok(a) => Ok(Some(Value::Array(a))),
-                Err(t) => Err(self.to_rt(t)),
-            },
             _ => Ok(None),
         }
     }
@@ -299,7 +333,8 @@ impl RuntimeContext for Vm {
                 });
             }
         }
-        let custom = purpose == PropertyPurpose::Debug && cls.magic.debug_info.is_some()
+        let custom = purpose == PropertyPurpose::VarExport
+            || purpose == PropertyPurpose::Debug && cls.magic.debug_info.is_some()
             || self.has_internal_array(obj);
         if custom {
             let props = self.props_for(obj, purpose).map_err(|t| self.to_rt(t))?;

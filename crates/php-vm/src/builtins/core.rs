@@ -41,14 +41,7 @@ fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         ));
     }
     let f = &vm.frames[idx];
-    let n = if f.magic_name.is_some() {
-        match f.args.get(1) {
-            Some(Some(Value::Array(a))) => a.len(),
-            _ => 0,
-        }
-    } else {
-        f.args.len()
-    };
+    let n = f.args.len();
     Ok(Value::Int(i64::try_from(n).unwrap_or(0)))
 }
 
