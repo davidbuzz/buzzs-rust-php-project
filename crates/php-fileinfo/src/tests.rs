@@ -62,6 +62,52 @@ fn buffer_basics() {
     assert_eq!(r.unwrap(), b"PHP script, ASCII text");
 }
 
+/// The default database carries php-src 5.48's entries (`overlay.magic`).
+#[test]
+fn default_database_overlay() {
+    let mut f = default_finfo(FILEINFO_MIME_TYPE);
+    // gh17039.phpt: a closure no longer makes PHP look like JavaScript.
+    let php = b"<?php\n\nclass Foo\n{\n    public function bar()\n    {\n        $this->baz(function () {});\n    }\n}\n";
+    let (r, w) = warnings(|warn| f.buffer(php, 0, warn));
+    assert_eq!(r.unwrap(), b"text/x-php");
+    assert!(w.is_empty());
+    let (r, _) = warnings(|warn| f.buffer(php, FILEINFO_NONE, warn));
+    assert_eq!(r.unwrap(), b"PHP script, ASCII text");
+    // FILEINFO_CONTINUE runs on the plain database, so the overlaid `<?php`
+    // entry is not reported twice.
+    let (r, _) = warnings(|warn| f.buffer(b"<?php echo 1;\n", FILEINFO_CONTINUE, warn));
+    assert_eq!(r.unwrap(), b"PHP script, ASCII text");
+    // A named-block override (`arj-archive`, upstream/arj.testfile) reached
+    // through the system database's own top-level test.
+    let mut arj = vec![
+        0x60, 0xea, 0x32, 0x00, 0x22, 0x0b, 0x01, 0x02, 0x10, 0x00, 0x02, 0x4e, 0xe4, 0x3b, 0xe5,
+        0x61, 0xe4, 0x3b, 0xe5, 0x61,
+    ];
+    arj.resize(38, 0);
+    arj.extend_from_slice(b"example_m0.arj\0\0");
+    let mut f = default_finfo(FILEINFO_NONE);
+    let (r, _) = warnings(|warn| f.buffer(&arj, 0, warn));
+    assert_eq!(
+        String::from_utf8(r.unwrap()).unwrap(),
+        "ARJ archive data, v11, slash-switched, created Jan 05 2028 07:31:08, \
+         modified Jan 05 2028 07:31:08, original name: example_m0.arj, os: Unix"
+    );
+}
+
+/// libmagic 5.48 counts SUB (`^Z`) as a text character.
+#[test]
+fn sub_is_text() {
+    let mut f = default_finfo(FILEINFO_NONE);
+    let (r, _) = warnings(|warn| f.buffer(b"a\x1ab\n", 0, warn));
+    assert_eq!(r.unwrap(), b"ASCII text");
+    let (r, _) = warnings(|warn| f.buffer(b"a\x1ab\n", FILEINFO_MIME, warn));
+    assert_eq!(r.unwrap(), b"text/plain; charset=us-ascii");
+    let p = scratch("sub.txt");
+    std::fs::write(&p, b"a\x1ab\n").unwrap();
+    let (r, _) = warnings(|warn| f.file(bytes(&p), 0, warn));
+    assert_eq!(r.unwrap(), b"ASCII text");
+}
+
 #[test]
 fn set_flags_persists() {
     let mut f = default_finfo(FILEINFO_NONE);

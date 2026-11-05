@@ -80,3 +80,15 @@ fn error_queue_phpt() {
     let _ = o.csr_get_subject(CsrArg::Str(&crt), true);
     expect(&mut o, "csr_get_subject pem", &["0480006C"]);
 }
+
+/// The default config file is chosen on first use (bug #79881: creating
+/// the state must not allocate it) and stays the same afterwards.
+#[test]
+fn default_config_file_is_stable() {
+    let o = OpenSsl::new();
+    let conf = o.default_config_file();
+    let from_env =
+        std::env::var_os("OPENSSL_CONF").is_some() || std::env::var_os("SSLEAY_CONF").is_some();
+    assert!(from_env || conf.ends_with(b"/openssl.cnf"), "{conf:?}");
+    assert_eq!(o.default_config_file(), conf);
+}

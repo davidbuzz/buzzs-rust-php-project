@@ -25,6 +25,11 @@
 //! php-src ships a patched libmagic (5.48 on master) with a compiled-in
 //! database; this crate uses the system library and its default database
 //! (`$MAGIC` or the distribution's `magic.mgc`), so some descriptions differ.
+//! The default database is loaded behind a small overlay of 5.48 entries
+//! (`overlay.magic`) that fix the differences php-src's tests observe, and
+//! data that is text apart from SUB (`^Z`) bytes is described as text, as
+//! 5.48's `encoding.c` does.  `FILEINFO_CONTINUE` calls use the plain
+//! default database, where the overlay would repeat matches.
 //! The magic-database loader mirrors PHP's (`apprentice_map` then
 //! `apprentice_load`, with the same "Failed to open stream" / "using
 //! regular magic file" warnings), but a text database is ultimately parsed
@@ -89,6 +94,8 @@ pub const CONSTANTS: &[(&str, i64)] = &[
 
 /// `MAGIC_COMPRESS`.
 const MAGIC_COMPRESS: i32 = 0x4;
+/// `MAGIC_CONTINUE`: report every match, not just the first.
+const MAGIC_CONTINUE: i32 = 0x20;
 /// `MAGIC_CHECK`: print (here: warn about) magic-file problems.
 const MAGIC_CHECK: i32 = 0x40;
 /// `MAGIC_COMPRESS_TRANSP`.
@@ -288,6 +295,13 @@ fn is_compiled(bytes: &[u8]) -> bool {
 #[derive(Debug)]
 pub struct Finfo {
     magic: Magic,
+    /// Whether `magic` has [`compat::OVERLAY`] in front of the default
+    /// database.
+    overlay: bool,
+    /// The default database without the overlay, opened on the first
+    /// `FILEINFO_CONTINUE` call (the overlay's entries would be reported
+    /// next to the system ones they replace).
+    plain: Option<Magic>,
 }
 
 impl Finfo {
@@ -316,11 +330,15 @@ impl Finfo {
             env.as_ref().map(|e| e.as_bytes())
         };
         let loaded = match path {
-            None => magic.load(None).is_ok(),
-            Some(p) => load_path(&mut magic, p, warn),
+            None => load_default(&mut magic),
+            Some(p) => load_path(&mut magic, p, warn).then_some(false),
         };
-        if loaded {
-            Some(Self { magic })
+        if let Some(overlay) = loaded {
+            Some(Self {
+                magic,
+                overlay,
+                plain: None,
+            })
         } else {
             let shown = String::from_utf8_lossy(database.unwrap_or_default());
             warn(Warning::new(format!(
@@ -347,17 +365,16 @@ impl Finfo {
         &mut self.magic
     }
 
-    /// Runs `f` once with libmagic's stderr captured (and turned into
-    /// warnings) when `MAGIC_CHECK` is on.
+    /// Runs `f` once on `magic` with libmagic's stderr captured (and turned
+    /// into warnings) when `MAGIC_CHECK` is on.
     fn run(
-        &mut self,
+        magic: &mut Magic,
         warn: &mut dyn FnMut(Warning),
         f: &mut dyn FnMut(&mut Magic) -> Result<Vec<u8>, MagicError>,
     ) -> Result<Vec<u8>, MagicError> {
-        if self.magic.flags() & MAGIC_CHECK == 0 {
-            return f(&mut self.magic);
+        if magic.flags() & MAGIC_CHECK == 0 {
+            return f(magic);
         }
-        let magic = &mut self.magic;
         let (r, err) = capture::with_captured_stderr(|| f(magic));
         for m in capture::magwarn_messages(&err) {
             warn(Warning::new(m));
@@ -377,16 +394,18 @@ impl Finfo {
     ) -> Option<Vec<u8>> {
         let old = self.magic.flags();
         let effective = if flags == 0 { old } else { c_flags(flags) };
-        let _ = self.magic.set_flags(effective);
-        let mut result = self.run(warn, f);
+        let magic = self.cookie_for(effective);
+        let saved = magic.flags();
+        let _ = magic.set_flags(effective);
+        let mut result = Self::run(magic, warn, f);
         if result.as_deref().is_ok_and(compat::is_simh_description) {
-            let max = self.magic.param(Param::BytesMax).unwrap_or(7 * 1024 * 1024);
+            let max = magic.param(Param::BytesMax).unwrap_or(7 * 1024 * 1024);
             if data(max).is_some_and(|d| !compat::is_simh(&d)) {
-                let _ = self.magic.set_flags(effective | MAGIC_NO_CHECK_SIMH);
-                result = self.run(warn, f);
+                let _ = magic.set_flags(effective | MAGIC_NO_CHECK_SIMH);
+                result = Self::run(magic, warn, f);
             }
         }
-        let _ = self.magic.set_flags(old);
+        let _ = magic.set_flags(saved);
         match result {
             Ok(desc) => Some(desc),
             Err(e) => {
@@ -396,6 +415,28 @@ impl Finfo {
         }
     }
 
+    /// The cookie a call with `flags` runs on: the overlaid database, or for
+    /// `MAGIC_CONTINUE` the plain default one (opened lazily; the overlaid
+    /// cookie is used if that fails).
+    fn cookie_for(&mut self, flags: i32) -> &mut Magic {
+        let plain = flags & MAGIC_CONTINUE != 0 && self.overlay;
+        if plain && self.plain.is_none() {
+            self.plain = Magic::open(0).and_then(|mut m| {
+                let (r, _) = capture::with_captured_stderr(|| m.load(None));
+                r.is_ok().then_some(m)
+            });
+        }
+        match (plain, self.plain.as_mut()) {
+            (true, Some(m)) => m,
+            _ => &mut self.magic,
+        }
+    }
+
+    /// The window libmagic's `file_encoding()` classifies.
+    fn encoding_max(&self) -> usize {
+        self.magic.param(Param::EncodingMax).unwrap_or(64 * 1024)
+    }
+
     /// `finfo_buffer($finfo, $string, $flags)`.
     pub fn buffer(
         &mut self,
@@ -403,6 +444,8 @@ impl Finfo {
         flags: i64,
         warn: &mut dyn FnMut(Warning),
     ) -> Option<Vec<u8>> {
+        let fixed = compat::sub_as_text(data, self.encoding_max());
+        let data = fixed.as_deref().unwrap_or(data);
         self.identify(
             flags,
             warn,
@@ -455,6 +498,15 @@ impl Finfo {
             buf.truncate(len);
             Some(buf)
         };
+        // Text with SUB bytes (see `compat::sub_as_text`): described from
+        // memory when the whole rest of the file fits libmagic's window.
+        let encoding_max = self.encoding_max();
+        if sample(encoding_max).is_some_and(|h| compat::sub_as_text(&h, encoding_max).is_some()) {
+            let max = self.magic.param(Param::BytesMax).unwrap_or(7 * 1024 * 1024);
+            if let Some(all) = sample(max).filter(|all| all.len() < max) {
+                return self.buffer(&all, flags, warn);
+            }
+        }
         self.identify(flags, warn, &sample, &mut |m| m.descriptor(file.as_fd()))
     }
 
@@ -548,6 +600,28 @@ fn load_path(magic: &mut Magic, path: &[u8], warn: &mut dyn FnMut(Warning)) -> b
     result.is_ok()
 }
 
+/// Loads the default database the way PHP's bundled copy describes files:
+/// [`compat::OVERLAY`] (php-src's 5.48 entries) in front of the system
+/// default, falling back to the plain default when the overlay cannot be
+/// written or loaded.  Load-time notices (`using regular magic file`) are
+/// dropped: PHP's default database is compiled in.  `None` when nothing
+/// could be loaded, otherwise whether the overlay is in use.
+fn load_default(magic: &mut Magic) -> Option<bool> {
+    if let (Some(default), Some((overlay, guard))) =
+        (crate::magic::default_path(), compat::overlay_source())
+    {
+        let mut joined = overlay.into_os_string().into_vec();
+        joined.push(b':');
+        joined.extend_from_slice(&default);
+        let (result, _) = capture::with_captured_stderr(|| magic.load(Some(&joined)));
+        drop(guard);
+        if result.is_ok() {
+            return Some(true);
+        }
+    }
+    magic.load(None).is_ok().then_some(false)
+}
+
 /// A fresh `MAGIC_MIME_TYPE` cookie on the default database, as
 /// `mime_content_type()` opens for every call.
 fn mime_magic(warn: &mut dyn FnMut(Warning)) -> Option<Finfo> {
@@ -555,15 +629,19 @@ fn mime_magic(warn: &mut dyn FnMut(Warning)) -> Option<Finfo> {
         warn(Warning::new("Failed to load magic database"));
         return None;
     };
-    let ok = match std::env::var_os("MAGIC") {
+    let loaded = match std::env::var_os("MAGIC") {
         Some(p) => {
             let (r, _) = capture::with_captured_stderr(|| magic.load(Some(p.as_bytes())));
-            r.is_ok()
+            r.is_ok().then_some(false)
         }
-        None => magic.load(None).is_ok(),
+        None => load_default(&mut magic),
     };
-    if ok {
-        Some(Finfo { magic })
+    if let Some(overlay) = loaded {
+        Some(Finfo {
+            magic,
+            overlay,
+            plain: None,
+        })
     } else {
         warn(Warning::new(format!(
             "Failed identify data {}",

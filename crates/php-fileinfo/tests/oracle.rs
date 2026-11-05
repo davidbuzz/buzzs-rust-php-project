@@ -93,9 +93,9 @@ fn upstream_regression_files() {
         })
         .collect();
     names.sort();
-    // Results the system libmagic 5.45 renders differently from master's
-    // bundled 5.48 (date formatting and a renamed field).
-    let known = ["arj", "uf2", "fit-map-data"];
+    // FIT timestamps are rendered in the local time zone (the .phpt runs
+    // with TZ=UTC).
+    let known = ["fit-map-data"];
     let mut failures = Vec::new();
     for p in &names {
         let stem = p.file_stem().unwrap().to_str().unwrap();

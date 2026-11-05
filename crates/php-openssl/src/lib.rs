@@ -100,7 +100,11 @@ pub struct OpenSsl {
     errors: Option<ErrorQueue>,
     errors_mark: Option<ErrorQueue>,
     diagnostics: Vec<Diagnostic>,
-    default_conf: Vec<u8>,
+    /// The default config file, computed on first use: PHP keeps it in
+    /// persistent memory from MINIT, so creating the state for an unrelated
+    /// call (e.g. `openssl_x509_read()`) must not leave a request
+    /// allocation behind (`memory_get_usage()` deltas, bug #79881).
+    default_conf: std::cell::OnceCell<Vec<u8>>,
     /// `openssl.cafile` INI value (reported by `openssl_get_cert_locations`).
     pub ini_cafile: Vec<u8>,
     /// `openssl.capath` INI value.
@@ -117,34 +121,35 @@ impl Default for OpenSsl {
 }
 
 impl OpenSsl {
-    /// Initialises the library (`OPENSSL_init_ssl(LOAD_CONFIG)`) and
-    /// determines the default config file like PHP's MINIT: `$OPENSSL_CONF`,
-    /// else `$SSLEAY_CONF`, else `<X509_get_default_cert_area()>/openssl.cnf`.
+    /// Initialises the library (`OPENSSL_init_ssl(LOAD_CONFIG)`).
     pub fn new() -> Self {
         ffi::init();
-        let default_conf = std::env::var_os("OPENSSL_CONF")
-            .or_else(|| std::env::var_os("SSLEAY_CONF"))
-            .map_or_else(
-                || {
-                    let area = ffi::default_cert_locations()[5].1.clone();
-                    format!("{area}/openssl.cnf").into_bytes()
-                },
-                |v| v.to_string_lossy().into_owned().into_bytes(),
-            );
         OpenSsl {
             errors: None,
             errors_mark: None,
             diagnostics: Vec::new(),
-            default_conf,
+            default_conf: std::cell::OnceCell::new(),
             ini_cafile: Vec::new(),
             ini_capath: Vec::new(),
             open_basedir: None,
         }
     }
 
-    /// The default configuration file path (`php_openssl_get_conf_filename`).
+    /// The default configuration file path (`php_openssl_get_conf_filename`),
+    /// chosen like PHP's MINIT: `$OPENSSL_CONF`, else `$SSLEAY_CONF`, else
+    /// `<X509_get_default_cert_area()>/openssl.cnf`.
     pub fn default_config_file(&self) -> &[u8] {
-        &self.default_conf
+        self.default_conf.get_or_init(|| {
+            std::env::var_os("OPENSSL_CONF")
+                .or_else(|| std::env::var_os("SSLEAY_CONF"))
+                .map_or_else(
+                    || {
+                        let area = ffi::default_cert_locations()[5].1.clone();
+                        format!("{area}/openssl.cnf").into_bytes()
+                    },
+                    |v| v.to_string_lossy().into_owned().into_bytes(),
+                )
+        })
     }
 
     /// Drains the diagnostics raised since the last call.

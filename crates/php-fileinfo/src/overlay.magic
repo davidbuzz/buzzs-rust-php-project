@@ -1,0 +1,311 @@
+# php-fileinfo overlay: magic entries of php-src master's bundled libmagic
+# 5.48 database (ext/fileinfo/data_file.c, decompiled) that the system
+# libmagic 5.45 database describes differently.  It is loaded in front of
+# the default database, so its top-level tests are tried first and its
+# named (`name`) blocks replace the system ones that `use` refers to.
+#
+# * `<?xml version=` (Magdir/sgml): 5.48 marks it string/bt (+50), so it
+#   also runs in the text pass over UTF-16 converted to UTF-8 (GH-11891).
+# * `<?php` (Magdir/commands): strength +55 in 5.48, above the JavaScript
+#   regexes (+20), so PHP with closures is text/x-php (GH-17039).
+# * UF2 (Magdir/firmware): 5.48's family table and "base address".
+# * `arj-archive` (Magdir/archive): 5.48 prints the creation/modification
+#   dates with lemsdosdate/lemsdostime.  5.45 formats a DOS date as
+#   "%a, %b %d %Y" without clamping the month, so `php-msdosdate` spells
+#   out 5.48's file_fmtdate() ("%b %d %Y", invalid months as January).
+0	string/tb	\<?xml\ version=
+!:strength +50
+>14	regex	['"\ \t]*[0-9.]+['"\ \t]*
+>>19	search/4096	\<svg	SVG Scalable Vector Graphics image
+!:mime	image/svg+xml
+!:ext	svg
+>>19	search/4096	\<gnc-v2	GnuCash file
+!:mime	application/x-gnucash
+>>19	search/4096	application/x-qtskin	QuickTime5 skinned movie
+!:mime	application/x-qtskin
+
+0	search/1/c	\<?php	PHP script text
+!:strength +55
+!:mime	text/x-php
+
+0	string	UF2\n	UF2 firmware image
+!:ext	uf2
+>8	lelong	&0x1	\b, not main flash
+>8	lelong	&0x1000	\b, file container
+>8	lelong	&0x2000	\b, family
+>>28	lelong	0xff6919	ST STM32L4xx
+>>28	lelong	0x4240bdf	ST STM32L5xx
+>>28	lelong	0x6d1097b	ST STM32F411xC
+>>28	lelong	0x11de784a	M0SENSE BL702
+>>28	lelong	0x16573617	Microchip (Atmel) ATmega32
+>>28	lelong	0x1851780a	Microchip (Atmel) SAML21
+>>28	lelong	0x1b57745f	Nordic NRF52
+>>28	lelong	0x1c5f21b0	ESP32
+>>28	lelong	0x1e1f432d	ST STM32L1xx
+>>28	lelong	0x202e3a91	ST STM32L0xx
+>>28	lelong	0x21460ff0	ST STM32WLxx
+>>28	lelong	0x22e0d6fc	Realtek AmebaZ RTL8710B
+>>28	lelong	0x2abc77ec	NXP LPC55xx
+>>28	lelong	0x2b88d29c	ESP32-C2
+>>28	lelong	0x2dc309c5	ST STM32F411xE
+>>28	lelong	0x300f5633	ST STM32G0xx
+>>28	lelong	0x31d228c6	GD32F350
+>>28	lelong	0x332726f6	ESP32-H2
+>>28	lelong	0x3379cfe2	Realtek AmebaD RTL8720D
+>>28	lelong	0x3d308e94	ESP32-P4
+>>28	lelong	0x4b684d71	Sipeed MaixPlay-U4 (BL618)
+>>28	lelong	0x4c71240a	ST STM32G4xx
+>>28	lelong	0x4f6ace52	LISTENAI CSK300x/400x
+>>28	lelong	0x4fb2d5bd	NXP i.MX RT10XX
+>>28	lelong	0x51e903a8	Xradiotech 809
+>>28	lelong	0x53b80f00	ST STM32F7xx
+>>28	lelong	0x540ddf62	ESP32-C6
+>>28	lelong	0x55114460	Microchip (Atmel) SAMD51
+>>28	lelong	0x57755a57	ST STM32F4xx
+>>28	lelong	0x5a18069b	Cypress FX2
+>>28	lelong	0x5d1a0a2e	ST STM32F2xx
+>>28	lelong	0x5ee21072	ST STM32F103
+>>28	lelong	0x621e937a	Nordic NRF52833
+>>28	lelong	0x647824b6	ST STM32F0xx
+>>28	lelong	0x675a40b0	Beken 7231U/7231T
+>>28	lelong	0x68ed2b88	Microchip (Atmel) SAMD21
+>>28	lelong	0x699b62ec	WCH CH32V2xx and CH32V3xx
+>>28	lelong	0x6a82cc42	Beken 7251/7252
+>>28	lelong	0x6b846188	ST STM32F3xx
+>>28	lelong	0x6d0922fa	ST STM32F407
+>>28	lelong	0x6db66082	ST STM32H7xx
+>>28	lelong	0x6e7348a8	LISTENAI CSK60xx
+>>28	lelong	0x6f752678	Nordic NRF52832xxAB
+>>28	lelong	0x70d16653	ST STM32WBxx
+>>28	lelong	0x72721d4e	Nordic NRF52832xxAA
+>>28	lelong	0x77d850c4	ESP32-C61
+>>28	lelong	0x7b3ef230	Beken 7231N
+>>28	lelong	0x7be8976d	Renesas RA4M1
+>>28	lelong	0x7eab61ed	ESP8266
+>>28	lelong	0x7f83e793	NXP KL32L2x
+>>28	lelong	0x8fb060fe	ST STM32F407VG
+>>28	lelong	0x9517422f	Renesas RZ/A1LU (R7S7210xx)
+>>28	lelong	0x9af03e33	GigaDevice GD32VF103
+>>28	lelong	0x9fffd543	Realtek Ameba1 RTL8710A
+>>28	lelong	0xa0c97b8e	ArteryTek AT32F415
+>>28	lelong	0xada52840	Nordic NRF52840
+>>28	lelong	0xbfdd4eee	ESP32-S2
+>>28	lelong	0xc47e5767	ESP32-S3
+>>28	lelong	0xd42ba06c	ESP32-C3
+>>28	lelong	0xde1270b7	Boufallo 602
+>>28	lelong	0xe08f7564	Realtek AmebaZ2 RTL8720C
+>>28	lelong	0xe48bff56	Raspberry Pi RP2040
+>>28	lelong	0xe48bff57	Raspberry Pi MC: Absolute (unpartitioned) download
+>>28	lelong	0xe48bff58	Raspberry Pi MC: Data partition download
+>>28	lelong	0xe48bff59	Raspberry Pi RP2350, Secure Arm image
+>>28	lelong	0xe48bff5a	Raspberry Pi RP2350, RISC-V image
+>>28	lelong	0xe48bff5b	Raspberry Pi RP2350, Non-secure Arm image
+>>28	lelong	0xf71c0343	ESP32-C5
+>>28	default	x
+>>>28	lelong	x	%#08x
+>8	lelong&0x2000	0x0	\b, file size
+>>28	lelong	x	%#08x
+>8	lelong	&0x4000	\b, MD5 checksum present
+>8	lelong	&0x8000	\b, extension tags present
+>12	lelong	x	\b, base address %#08x
+>24	lelong	x	\b, %u total blocks
+
+0	name	arj-archive
+>0	leshort	x	ARJ archive
+!:mime	application/x-arj
+>38	search/1024	\x00
+>>&-5	string/c	.arj	data
+!:ext	arj
+>>&-5	default	x
+>>>8	byte	&0x4	data
+!:ext	a01/a02
+>>>8	byte	^0x4	data, SFX multi-volume
+!:ext	e01/e02
+>5	byte	x	\b, v%d
+>6	ubyte	!0x1	\b, minimum %u to extract
+>8	byte	&0x1	\b, password-protected
+>>32	ubyte	x	(v%u)
+>8	byte	&0x2	\b, ANSI codepage
+>8	byte	&0x4	\b, multi-volume
+>8	byte	&0x8	\b, recoverable
+>>34	byte	x	(factor %u)
+>8	byte	&0x10	\b, slash-switched
+>8	byte	&0x20	\b, backup
+>8	byte	&0x40	\b, secured,
+>8	byte	&0x80	\b, dual-name
+>9	ubyte	!0x0
+>>9	ubyte	!0x2	\b, security version %u
+>10	ubyte	!0x2	\b, file type %u
+>14	uleshort	x	\b, created
+>14	use	php-msdosdate
+>12	lemsdostime	x	%s
+>5	ubyte	>0x5
+>>16	ulelong	>0x0	\b, modified
+>>>18	use	php-msdosdate
+>>>16	lemsdostime	x	%s
+>30	uleshort	!0x0	\b, security envelope length %#x
+>33	ubyte	!0x0	\b, last chapter %u
+>34	byte	x	\b, original name:
+>34	byte	<0xb
+>>38	string	x	%s
+>34	byte	>0xa
+>>34	string	x	%s
+>7	byte	0x0	\b, os: MS-DOS
+>7	byte	0x1	\b, os: PRIMOS
+>7	byte	0x2	\b, os: Unix
+>7	byte	0x3	\b, os: Amiga
+>7	byte	0x4	\b, os: Macintosh
+>7	byte	0x5	\b, os: OS/2
+>7	byte	0x6	\b, os: Apple ][ GS
+>7	byte	0x7	\b, os: Atari ST
+>7	byte	0x8	\b, os: NeXT
+>7	byte	0x9	\b, os: VAX/VMS
+>7	byte	0xa	\b, os: WIN95
+>7	byte	0xb	\b, os: WIN32
+
+0	name	php-msdosdate
+>0	uleshort&0x01e0	=0x0000	Jan
+>0	uleshort&0x01e0	=0x0020	Jan
+>0	uleshort&0x01e0	=0x0040	Feb
+>0	uleshort&0x01e0	=0x0060	Mar
+>0	uleshort&0x01e0	=0x0080	Apr
+>0	uleshort&0x01e0	=0x00a0	May
+>0	uleshort&0x01e0	=0x00c0	Jun
+>0	uleshort&0x01e0	=0x00e0	Jul
+>0	uleshort&0x01e0	=0x0100	Aug
+>0	uleshort&0x01e0	=0x0120	Sep
+>0	uleshort&0x01e0	=0x0140	Oct
+>0	uleshort&0x01e0	=0x0160	Nov
+>0	uleshort&0x01e0	=0x0180	Dec
+>0	uleshort&0x01e0	=0x01a0	Jan
+>0	uleshort&0x01e0	=0x01c0	Jan
+>0	uleshort&0x01e0	=0x01e0	Jan
+>0	uleshort&0x001f	x	%02u
+>0	uleshort&0xfe00	=0x0000	1980
+>0	uleshort&0xfe00	=0x0200	1981
+>0	uleshort&0xfe00	=0x0400	1982
+>0	uleshort&0xfe00	=0x0600	1983
+>0	uleshort&0xfe00	=0x0800	1984
+>0	uleshort&0xfe00	=0x0a00	1985
+>0	uleshort&0xfe00	=0x0c00	1986
+>0	uleshort&0xfe00	=0x0e00	1987
+>0	uleshort&0xfe00	=0x1000	1988
+>0	uleshort&0xfe00	=0x1200	1989
+>0	uleshort&0xfe00	=0x1400	1990
+>0	uleshort&0xfe00	=0x1600	1991
+>0	uleshort&0xfe00	=0x1800	1992
+>0	uleshort&0xfe00	=0x1a00	1993
+>0	uleshort&0xfe00	=0x1c00	1994
+>0	uleshort&0xfe00	=0x1e00	1995
+>0	uleshort&0xfe00	=0x2000	1996
+>0	uleshort&0xfe00	=0x2200	1997
+>0	uleshort&0xfe00	=0x2400	1998
+>0	uleshort&0xfe00	=0x2600	1999
+>0	uleshort&0xfe00	=0x2800	2000
+>0	uleshort&0xfe00	=0x2a00	2001
+>0	uleshort&0xfe00	=0x2c00	2002
+>0	uleshort&0xfe00	=0x2e00	2003
+>0	uleshort&0xfe00	=0x3000	2004
+>0	uleshort&0xfe00	=0x3200	2005
+>0	uleshort&0xfe00	=0x3400	2006
+>0	uleshort&0xfe00	=0x3600	2007
+>0	uleshort&0xfe00	=0x3800	2008
+>0	uleshort&0xfe00	=0x3a00	2009
+>0	uleshort&0xfe00	=0x3c00	2010
+>0	uleshort&0xfe00	=0x3e00	2011
+>0	uleshort&0xfe00	=0x4000	2012
+>0	uleshort&0xfe00	=0x4200	2013
+>0	uleshort&0xfe00	=0x4400	2014
+>0	uleshort&0xfe00	=0x4600	2015
+>0	uleshort&0xfe00	=0x4800	2016
+>0	uleshort&0xfe00	=0x4a00	2017
+>0	uleshort&0xfe00	=0x4c00	2018
+>0	uleshort&0xfe00	=0x4e00	2019
+>0	uleshort&0xfe00	=0x5000	2020
+>0	uleshort&0xfe00	=0x5200	2021
+>0	uleshort&0xfe00	=0x5400	2022
+>0	uleshort&0xfe00	=0x5600	2023
+>0	uleshort&0xfe00	=0x5800	2024
+>0	uleshort&0xfe00	=0x5a00	2025
+>0	uleshort&0xfe00	=0x5c00	2026
+>0	uleshort&0xfe00	=0x5e00	2027
+>0	uleshort&0xfe00	=0x6000	2028
+>0	uleshort&0xfe00	=0x6200	2029
+>0	uleshort&0xfe00	=0x6400	2030
+>0	uleshort&0xfe00	=0x6600	2031
+>0	uleshort&0xfe00	=0x6800	2032
+>0	uleshort&0xfe00	=0x6a00	2033
+>0	uleshort&0xfe00	=0x6c00	2034
+>0	uleshort&0xfe00	=0x6e00	2035
+>0	uleshort&0xfe00	=0x7000	2036
+>0	uleshort&0xfe00	=0x7200	2037
+>0	uleshort&0xfe00	=0x7400	2038
+>0	uleshort&0xfe00	=0x7600	2039
+>0	uleshort&0xfe00	=0x7800	2040
+>0	uleshort&0xfe00	=0x7a00	2041
+>0	uleshort&0xfe00	=0x7c00	2042
+>0	uleshort&0xfe00	=0x7e00	2043
+>0	uleshort&0xfe00	=0x8000	2044
+>0	uleshort&0xfe00	=0x8200	2045
+>0	uleshort&0xfe00	=0x8400	2046
+>0	uleshort&0xfe00	=0x8600	2047
+>0	uleshort&0xfe00	=0x8800	2048
+>0	uleshort&0xfe00	=0x8a00	2049
+>0	uleshort&0xfe00	=0x8c00	2050
+>0	uleshort&0xfe00	=0x8e00	2051
+>0	uleshort&0xfe00	=0x9000	2052
+>0	uleshort&0xfe00	=0x9200	2053
+>0	uleshort&0xfe00	=0x9400	2054
+>0	uleshort&0xfe00	=0x9600	2055
+>0	uleshort&0xfe00	=0x9800	2056
+>0	uleshort&0xfe00	=0x9a00	2057
+>0	uleshort&0xfe00	=0x9c00	2058
+>0	uleshort&0xfe00	=0x9e00	2059
+>0	uleshort&0xfe00	=0xa000	2060
+>0	uleshort&0xfe00	=0xa200	2061
+>0	uleshort&0xfe00	=0xa400	2062
+>0	uleshort&0xfe00	=0xa600	2063
+>0	uleshort&0xfe00	=0xa800	2064
+>0	uleshort&0xfe00	=0xaa00	2065
+>0	uleshort&0xfe00	=0xac00	2066
+>0	uleshort&0xfe00	=0xae00	2067
+>0	uleshort&0xfe00	=0xb000	2068
+>0	uleshort&0xfe00	=0xb200	2069
+>0	uleshort&0xfe00	=0xb400	2070
+>0	uleshort&0xfe00	=0xb600	2071
+>0	uleshort&0xfe00	=0xb800	2072
+>0	uleshort&0xfe00	=0xba00	2073
+>0	uleshort&0xfe00	=0xbc00	2074
+>0	uleshort&0xfe00	=0xbe00	2075
+>0	uleshort&0xfe00	=0xc000	2076
+>0	uleshort&0xfe00	=0xc200	2077
+>0	uleshort&0xfe00	=0xc400	2078
+>0	uleshort&0xfe00	=0xc600	2079
+>0	uleshort&0xfe00	=0xc800	2080
+>0	uleshort&0xfe00	=0xca00	2081
+>0	uleshort&0xfe00	=0xcc00	2082
+>0	uleshort&0xfe00	=0xce00	2083
+>0	uleshort&0xfe00	=0xd000	2084
+>0	uleshort&0xfe00	=0xd200	2085
+>0	uleshort&0xfe00	=0xd400	2086
+>0	uleshort&0xfe00	=0xd600	2087
+>0	uleshort&0xfe00	=0xd800	2088
+>0	uleshort&0xfe00	=0xda00	2089
+>0	uleshort&0xfe00	=0xdc00	2090
+>0	uleshort&0xfe00	=0xde00	2091
+>0	uleshort&0xfe00	=0xe000	2092
+>0	uleshort&0xfe00	=0xe200	2093
+>0	uleshort&0xfe00	=0xe400	2094
+>0	uleshort&0xfe00	=0xe600	2095
+>0	uleshort&0xfe00	=0xe800	2096
+>0	uleshort&0xfe00	=0xea00	2097
+>0	uleshort&0xfe00	=0xec00	2098
+>0	uleshort&0xfe00	=0xee00	2099
+>0	uleshort&0xfe00	=0xf000	2100
+>0	uleshort&0xfe00	=0xf200	2101
+>0	uleshort&0xfe00	=0xf400	2102
+>0	uleshort&0xfe00	=0xf600	2103
+>0	uleshort&0xfe00	=0xf800	2104
+>0	uleshort&0xfe00	=0xfa00	2105
+>0	uleshort&0xfe00	=0xfc00	2106
+>0	uleshort&0xfe00	=0xfe00	2107

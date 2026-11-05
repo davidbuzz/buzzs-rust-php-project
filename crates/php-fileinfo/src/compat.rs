@@ -205,6 +205,54 @@ fn sanitize(text: &[u8]) -> Option<Vec<u8>> {
     changed.then_some(out)
 }
 
+/// C `text_chars[c] == T` of php-src's libmagic 5.48 (`encoding.c`) for the
+/// ASCII range: BEL..CR, SUB, ESC and the printable characters.  5.48 added
+/// SUB (`^Z`, the DOS end-of-file mark); 5.45 treats it as binary.
+fn is_text_ascii(c: u8) -> bool {
+    matches!(c, 0x07..=0x0d | 0x1a | 0x1b | 0x20..=0x7e)
+}
+
+/// libmagic 5.48 counts SUB (0x1a) as a text character, so data that is
+/// text apart from SUB bytes takes the text path (binary-only `/b` tests
+/// are skipped, `ascmagic` describes it).  The system 5.45 would call it
+/// binary; for such data the SUB bytes within the encoding window
+/// (`encoding_max`, what `file_encoding()` inspects) are replaced by spaces,
+/// which 5.45 classifies the same way 5.48 classifies SUB.  UTF-16/32 data
+/// (byte-order mark) is left alone: there 0x1a is half of a character.
+/// Returns `None` when nothing needs rewriting.
+pub(crate) fn sub_as_text(data: &[u8], encoding_max: usize) -> Option<Vec<u8>> {
+    let n = data.len().min(encoding_max);
+    let head = &data[..n];
+    if !head.contains(&0x1a) || head.starts_with(&[0xff, 0xfe]) || head.starts_with(&[0xfe, 0xff]) {
+        return None;
+    }
+    if !head.iter().all(|&c| c >= 0x80 || is_text_ascii(c)) {
+        return None;
+    }
+    let mut out = data.to_vec();
+    for c in &mut out[..n] {
+        if *c == 0x1a {
+            *c = b' ';
+        }
+    }
+    Some(out)
+}
+
+/// Magic entries of php-src's bundled libmagic 5.48 database that the
+/// system 5.45 database describes differently (see the file's header);
+/// loaded in front of the default database.
+pub(crate) const OVERLAY: &[u8] = include_bytes!("overlay.magic");
+
+/// Writes [`OVERLAY`] to a temporary file for `magic_load()` (which only
+/// parses text databases from paths); returns its path plus the guard
+/// removing it, which may be dropped once the database is loaded.
+pub(crate) fn overlay_source() -> Option<(PathBuf, TempDir)> {
+    let tmp = TempDir::new()?;
+    let file = tmp.0.join("php-overlay.magic");
+    std::fs::write(&file, OVERLAY).ok()?;
+    Some((file, tmp))
+}
+
 /// A temporary directory removed on drop.
 #[derive(Debug)]
 pub(crate) struct TempDir(PathBuf);
@@ -287,6 +335,32 @@ mod tests {
         // Mismatched trailer.
         let bad = [2, 0, 0, 0, b'h', b'i', 4, 0, 0, 0];
         assert!(!is_simh(&bad));
+    }
+
+    #[test]
+    fn sub_counts_as_text() {
+        // finfo_buffer_basic.phpt's MIFF lookalike.
+        assert_eq!(
+            sub_as_text(b"id=ImageMagick\x0a\x0c\x0a:\x1a", 65536).unwrap(),
+            b"id=ImageMagick\x0a\x0c\x0a: "
+        );
+        assert_eq!(sub_as_text(b"a\x1a\xe9b", 65536).unwrap(), b"a \xe9b");
+        // Only the encoding window is inspected and rewritten.
+        assert_eq!(sub_as_text(b"ab\x1a\x1a", 3).unwrap(), b"ab \x1a");
+        assert!(sub_as_text(b"ab\x00\x1a", 65536).is_none());
+        assert!(sub_as_text(b"plain text\n", 65536).is_none());
+        assert!(sub_as_text(b"\x89PNG\r\n\x1a\n\x00\x00", 65536).is_none());
+        assert!(sub_as_text(b"\xff\xfea\x00\x1a\x00", 65536).is_none());
+        assert!(sub_as_text(b"ab\x7f\x1a", 65536).is_none());
+    }
+
+    #[test]
+    fn overlay_is_written() {
+        let (path, guard) = overlay_source().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), OVERLAY);
+        drop(guard);
+        assert!(!path.exists());
+        assert!(OVERLAY.starts_with(b"# php-fileinfo overlay"));
     }
 
     #[test]

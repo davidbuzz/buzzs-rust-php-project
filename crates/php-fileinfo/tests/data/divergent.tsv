@@ -1,14 +1,11 @@
-# Fixtures where the system libmagic 5.45 (left: what this crate returns) differs from
+# Fixtures where the system libmagic 5.45 + the 5.48 overlay (left: what this crate returns) differs from
 # PHP 8.3.6's bundled libmagic 5.43 (right). Columns: path, flags, system, php.
-fileinfo/tests/bug-gh11891.svg	0	XML 1.0 document, Unicode text, UTF-16, little-endian text	SVG Scalable Vector Graphics image, Unicode text, UTF-16, little-endian text
-fileinfo/tests/bug-gh11891.svg	1040	text/xml; charset=utf-16le	image/svg+xml; charset=utf-16le
-fileinfo/tests/bug-gh11891.svg	16	text/xml	image/svg+xml
-fileinfo/tests/bug-gh11891.svg	16777216	???	svg
 fileinfo/tests/magic	1040	text/x-file; charset=us-ascii	text/plain; charset=us-ascii
 fileinfo/tests/magic	16	text/x-file	text/plain
 fileinfo/tests/magic	16777216	/	???
 fileinfo/tests/resources/test.pdf	0	PDF document, version 1.3, 1 page(s)	PDF document, version 1.3, 1 pages
 fileinfo/tests/resources/test.xz	16777216	xz	???
+fileinfo/tests/upstream/arj.testfile	0	ARJ archive data, v11, slash-switched, created Jan 05 2028 07:31:08, modified Jan 05 2028 07:31:08, original name: example_m0.arj, os: Unix	ARJ archive data, v11, slash-switched, created 5 1980+48, original name: example_m0.arj, os: Unix
 fileinfo/tests/upstream/gedcom.testfile	1040	text/vnd.familysearch.gedcom; charset=us-ascii	text/plain; charset=us-ascii
 fileinfo/tests/upstream/gedcom.testfile	16	text/vnd.familysearch.gedcom	text/plain
 fileinfo/tests/upstream/gedcom.testfile	16777216	ged	???
@@ -40,6 +37,7 @@ fileinfo/tests/upstream/pgp-binary-key-v4-rsa-no-userid-secret.testfile	16777216
 fileinfo/tests/upstream/pgp-binary-key-v4-rsa-secret-key.testfile	1040	application/pgp-keys; charset=binary	application/octet-stream; charset=binary
 fileinfo/tests/upstream/pgp-binary-key-v4-rsa-secret-key.testfile	16	application/pgp-keys	application/octet-stream
 fileinfo/tests/upstream/pgp-binary-key-v4-rsa-secret-key.testfile	16777216	pgp/gpg/pkr/asd	???
+fileinfo/tests/upstream/uf2.testfile	0	UF2 firmware image, family ESP32-S2, base address 00000000, 4829 total blocks	UF2 firmware image, family ESP32-S2, address 00000000, 4829 total blocks
 fileinfo/tests/upstream/zstd-v0.2-FF.testfile	16777216	zst	???
 fileinfo/tests/upstream/zstd-v0.3-FF.testfile	16777216	zst	???
 fileinfo/tests/upstream/zstd-v0.4-FF.testfile	16777216	zst	???

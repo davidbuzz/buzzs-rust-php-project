@@ -75,7 +75,10 @@ thread_local! {
 /// Smallest [`PROP_ORDERS`] size that triggers pruning.
 const PROP_ORDERS_MIN_PRUNE: usize = 64;
 
-#[derive(Default)]
+/// `zend_objects_store_init(&EG(objects_store), 1024)`: the store's initial
+/// size, allocated before any script runs.
+const STORE_INITIAL: usize = 1024;
+
 struct ObjectStore {
     /// Live objects by handle (index = handle - 1).
     objects: Vec<Option<Weak<ObjectData>>>,
@@ -84,6 +87,16 @@ struct ObjectStore {
     /// `EG_FLAGS_OBJECT_STORE_NO_REUSE`: while shutdown destructors run,
     /// new objects take fresh handles past the end of the store.
     no_reuse: bool,
+}
+
+impl Default for ObjectStore {
+    fn default() -> Self {
+        Self {
+            objects: Vec::with_capacity(STORE_INITIAL),
+            free: Vec::with_capacity(STORE_INITIAL),
+            no_reuse: false,
+        }
+    }
 }
 
 impl ObjectStore {
@@ -95,9 +108,30 @@ impl ObjectStore {
                 return h;
             }
         }
+        if self.objects.len() == self.objects.capacity() {
+            self.grow();
+        }
         self.objects.push(None);
         u32::try_from(self.objects.len()).unwrap_or(u32::MAX)
     }
+
+    /// The full store doubles (`zend_objects_store_put`'s `erealloc`). The
+    /// free list, which Zend threads through the store's slots, grows with
+    /// it, so freeing an object never allocates (no `memory_get_usage()`
+    /// delta after a first object comes and goes, bug #79881).
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self) {
+        self.objects.reserve(self.objects.len().max(STORE_INITIAL));
+        let cap = self.objects.capacity();
+        self.free.reserve(cap.saturating_sub(self.free.len()));
+    }
+}
+
+/// Creates this thread's object store at its initial size (VM startup), so
+/// the first object of a script does not allocate it.
+pub(crate) fn prewarm_store() {
+    STORE.with(|_| {});
 }
 
 impl Drop for ObjectData {
@@ -571,6 +605,25 @@ mod tests {
 
     fn key(s: &str) -> ArrayKey {
         ArrayKey::Str(ZStr::from(s))
+    }
+
+    #[test]
+    fn store_free_list_grows_with_the_store() {
+        let mut s = ObjectStore::default();
+        assert!(s.objects.capacity() >= STORE_INITIAL);
+        assert!(s.free.capacity() >= STORE_INITIAL);
+        for _ in 0..=STORE_INITIAL {
+            let _ = s.take_handle();
+        }
+        assert!(s.objects.capacity() >= 2 * STORE_INITIAL);
+        assert!(s.free.capacity() >= s.objects.capacity());
+        // Freeing every handle never reallocates the free list.
+        let cap = s.free.capacity();
+        for h in 1..=u32::try_from(s.objects.len()).unwrap() {
+            s.free.push(h);
+        }
+        assert_eq!(s.free.capacity(), cap);
+        assert_eq!(s.take_handle(), u32::try_from(STORE_INITIAL + 1).unwrap());
     }
 
     #[test]

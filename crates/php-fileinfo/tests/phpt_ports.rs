@@ -185,10 +185,10 @@ fn buffers_with_test_database() {
                 "ELF",
                 "old ACE/gr binary file",
                 "xo65 object,",
-                // master's bundled libmagic 5.48 evaluates `&0` after a
-                // `search` differently and says "ASCII text"; 5.45 (and
-                // PHP 8.3's 5.43) find the MIFF continuation.
-                "MIFF image data",
+                // master's bundled libmagic 5.48 counts SUB (0x1a) as text,
+                // so the binary-only MIFF test is skipped; 5.45 (and PHP
+                // 8.3's 5.43) would say "MIFF image data".
+                "ASCII text",
                 "RIFF (little-endian) data",
             ],
         ),
@@ -199,7 +199,7 @@ fn buffers_with_test_database() {
                 "text/plain; charset=ebcdic",
                 "application/octet-stream; charset=binary",
                 "text/plain; charset=us-ascii",
-                "image/x-miff; charset=binary",
+                "text/plain; charset=us-ascii",
                 "text/plain; charset=utf-8",
             ],
         ),
