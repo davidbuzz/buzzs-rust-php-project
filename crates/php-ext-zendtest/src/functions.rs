@@ -619,6 +619,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     );
     m.function("zend_terminate_string(string &$str): void", none);
     m.function("zend_leak_variable(mixed $variable): void", leak_variable);
+    m.function(
+        "zend_test_handle_post_data(mixed $stream, string $content_type, int $content_length): void",
+        crate::post::handle_post_data,
+    );
     m.function("zend_leak_bytes(int $bytes = 3): void", none);
     m.function("zend_delref(mixed $variable): void", none);
     m.function(

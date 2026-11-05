@@ -1612,7 +1612,14 @@ fn get_declared_traits(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(declared(vm, Class::is_trait))
 }
 
-fn get_defined_functions(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+fn get_defined_functions(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    // Disabled functions are never registered, so the flag is a no-op
+    // (`ZEND_NUM_ARGS() == 1` deprecation in zend_builtin_functions.c).
+    if a.has(0) {
+        vm.deprecated(
+            "get_defined_functions(): The $exclude_disabled parameter has no effect since PHP 8.0",
+        )?;
+    }
     let mut internal = Vec::new();
     let mut user = Vec::new();
     for (k, f) in &vm.functions {

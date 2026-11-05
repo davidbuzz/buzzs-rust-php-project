@@ -133,3 +133,36 @@ echo C::NAMESPACE, " ", I::Namespace, " ", E::NAMESPACE, "\n";
          class interface enum\n"
     );
 }
+
+#[test]
+fn unset_with_null_offset_is_silent_but_nested_fetch_is_not() {
+    assert_eq!(
+        run(r#"<?php
+$a = ['' => 1, 'k' => ['' => 2, 'x' => 3]];
+unset($a[null]);
+var_dump(isset($a['']));
+$b = ['' => ['x' => 1]];
+unset($b[null]['x']);
+var_dump($b);
+"#),
+        "bool(false)\n\
+         \nDeprecated: Using null as an array offset is deprecated, use an empty string instead in t.php on line 6\n\
+         array(1) {\n  [\"\"]=>\n  array(0) {\n  }\n}\n"
+    );
+}
+
+#[test]
+fn get_defined_functions_argument_is_deprecated() {
+    assert_eq!(
+        run(r#"<?php
+var_dump(is_array(get_defined_functions()['internal']));
+var_dump(is_array(get_defined_functions(false)['user']));
+var_dump(is_array(get_defined_functions(exclude_disabled: true)['user']));
+"#),
+        "bool(true)\n\
+         \nDeprecated: get_defined_functions(): The $exclude_disabled parameter has no effect since PHP 8.0 in t.php on line 3\n\
+         bool(true)\n\
+         \nDeprecated: get_defined_functions(): The $exclude_disabled parameter has no effect since PHP 8.0 in t.php on line 4\n\
+         bool(true)\n"
+    );
+}

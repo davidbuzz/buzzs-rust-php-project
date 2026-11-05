@@ -16,7 +16,8 @@
 //!   classes (plus [`patch`], which edits a registered class in place for
 //!   what [`php_vm::ext::ClassBuilder`] cannot express);
 //! * [`iterators`], [`object_handlers`] — the auxiliary stubs;
-//! * [`ini`] — the `zend_test.*` directives.
+//! * [`ini`] — the `zend_test.*` directives;
+//! * [`post`] — `zend_test_handle_post_data()` (the SAPI POST handlers).
 
 mod classes;
 mod compile;
@@ -27,6 +28,7 @@ mod object_handlers;
 #[cfg(feature = "observer")]
 mod observer;
 mod patch;
+mod post;
 mod stack;
 mod state;
 mod util;

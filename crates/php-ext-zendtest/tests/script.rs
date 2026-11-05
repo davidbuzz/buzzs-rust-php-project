@@ -112,3 +112,85 @@ fn ini_directives() {
         "string(3) \"val\"\nbool(false)\nstring(0) \"\"\nstring(3) \"abc\"\n"
     );
 }
+
+/// Runs `code` with the streams extension loaded (for `fopen()`), under
+/// `post_max_size=100K`.
+fn run_with_streams(code: &str) -> String {
+    let sink = Sink::default();
+    let zt = php_ext_zendtest::ZendTest;
+    let streams = php_ext_streams::Streams;
+    let exts: [&dyn Extension; 2] = [&streams, &zt];
+    let opts = VmOptions {
+        ini: vec![("post_max_size".into(), "100K".into())],
+    };
+    let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
+    vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
+    drop(vm);
+    let out = sink.0.borrow().clone();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[test]
+fn handle_post_data_urlencoded_and_post_max_size() {
+    let out = run_with_streams(
+        r#"
+$s = fopen('php://memory', 'w+');
+fwrite($s, 'a=hello&b[x]=1');
+rewind($s);
+zend_test_handle_post_data($s, 'application/x-www-form-urlencoded', 0);
+var_dump($_POST['a'], $_POST['b']['x'], $_FILES);
+$big = 'aaaaaaaa';
+for ($i = 0; $i < 17; $i++) { $big .= $big; }
+$s = fopen('php://memory', 'w+');
+fwrite($s, 'a=' . $big);
+rewind($s);
+zend_test_handle_post_data($s, 'application/x-www-form-urlencoded', 0);
+var_dump(strlen($_POST['a']));
+zend_test_handle_post_data($s, 'application/x-www-form-urlencoded', 200 * 1024);
+var_dump($_POST);
+"#,
+    );
+    assert!(
+        out.starts_with("string(5) \"hello\"\nstring(1) \"1\"\narray(0) {\n}\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Warning: zend_test_handle_post_data(): Actual POST length does not match Content-Length, and exceeds 102400 bytes in test.php"),
+        "{out}"
+    );
+    // Seven 16 KiB blocks were read: the variable keeps all but "a=".
+    assert!(out.contains("int(114686)\n"), "{out}");
+    assert!(
+        out.contains("Warning: zend_test_handle_post_data(): POST Content-Length of 204800 bytes exceeds the limit of 102400 bytes in test.php"),
+        "{out}"
+    );
+    assert!(out.ends_with("array(0) {\n}\n"), "{out}");
+}
+
+#[test]
+fn handle_post_data_multipart_stops_at_post_max_size() {
+    let out = run_with_streams(
+        r#"
+function body($value) {
+    $s = fopen('php://memory', 'w+');
+    fwrite($s, "--b\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n");
+    fwrite($s, $value);
+    fwrite($s, "\r\n--b--\r\n");
+    rewind($s);
+    return $s;
+}
+zend_test_handle_post_data(body('hello'), 'multipart/form-data; boundary=b', 0);
+var_dump($_POST['a']);
+$big = 'aaaaaaaa';
+for ($i = 0; $i < 17; $i++) { $big .= $big; }
+zend_test_handle_post_data(body($big), 'multipart/form-data; boundary=b', 0);
+var_dump(strlen($_POST['a'] ?? '') < 100 * 1024);
+"#,
+    );
+    assert!(out.starts_with("string(5) \"hello\"\n"), "{out}");
+    assert!(
+        out.contains("\nWarning: Actual POST length does not match Content-Length, and exceeds 102400 bytes in test.php"),
+        "{out}"
+    );
+    assert!(out.ends_with("bool(true)\n"), "{out}");
+}
