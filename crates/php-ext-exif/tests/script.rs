@@ -40,6 +40,7 @@ fn run(code: &str) -> String {
 #[test]
 fn image_info_is_null_during_old_value_destructor() {
     let out = run(r#"
+error_reporting(0);
 class T { function __destruct() { global $box; echo gettype($box), "\n"; } }
 $box = [new T];
 getimagesizefromstring("x", $box);
