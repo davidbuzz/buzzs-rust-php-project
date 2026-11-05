@@ -1342,6 +1342,24 @@ impl Vm {
             );
             return Err(Throw::Fatal);
         }
+        // `zend_implement_aggregate` / `zend_implement_iterator`: a class
+        // (not an interface) may not be both an Iterator and an
+        // IteratorAggregate, whichever one it implements first.
+        if decl.kind != ClassKind::Interface
+            && interfaces
+                .iter()
+                .any(|i| i.lc_name.as_bytes() == b"iterator")
+            && interfaces
+                .iter()
+                .any(|i| i.lc_name.as_bytes() == b"iteratoraggregate")
+        {
+            return Err(self.fatal_at(
+                &format!(
+                    "Class {full} cannot implement both Iterator and IteratorAggregate at the same time"
+                ),
+                line,
+            ));
+        }
         // An enum-only interface reached through another interface
         // (`zend_implement_unit_enum` runs for every implemented interface).
         if decl.kind == ClassKind::Class {
