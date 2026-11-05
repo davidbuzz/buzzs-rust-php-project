@@ -172,6 +172,31 @@ Cannot use \"parent\" in the global scope\n"
     );
 }
 
+/// `Zend/tests/class_name/self_class_const_in_unknown_scope.phpt`: `self::class`
+/// and `parent::class` in an evaluated constant expression (a global `const`
+/// value, a closure parameter default) report `ZEND_AST_CLASS_NAME`'s error,
+/// always naming "self"; eval code inherits the calling method's scope.
+#[test]
+fn relative_class_names_in_const_exprs_without_scope() {
+    assert_eq!(
+        run(r#"<?php
+class T { function m() { eval('const FOO = self::class;'); return FOO; } }
+var_dump((new T)->m());
+$f = function ($a = self::class) { return $a; };
+try { var_dump($f()); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$g = function ($a = parent::class) { return $a; };
+try { var_dump($g()); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { eval('const Q = parent::class;'); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { var_dump((function () { return self::class; })()); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#),
+        "string(1) \"T\"\n\
+Cannot use \"self\" when no class scope is active\n\
+Cannot use \"self\" when no class scope is active\n\
+Cannot use \"self\" when no class scope is active\n\
+Cannot use \"self\" in the global scope\n"
+    );
+}
+
 /// `gh22681/ReflectionEnum_case_doc_comment.phpt`: enum case doc comments are
 /// kept by the compiler (also for `eval()`'d code, which has no file to
 /// re-read), NUL bytes included.

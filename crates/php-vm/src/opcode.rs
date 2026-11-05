@@ -464,7 +464,16 @@ pub enum Op {
         dst: u32,
     },
     /// `A::class`
-    FetchClassName { class: ClassSpec, dst: u32 },
+    FetchClassName {
+        class: ClassSpec,
+        dst: u32,
+        /// Compiled in an evaluated constant expression (a global `const`
+        /// value or a parameter default): with no class scope the error is
+        /// `ZEND_AST_CLASS_NAME`'s "Cannot use \"self\" when no class scope
+        /// is active" (`zend_ast_evaluate_inner()`), not
+        /// `ZEND_FETCH_CLASS_NAME`'s "... in the global scope".
+        const_expr: bool,
+    },
     /// `a instanceof B`
     InstanceOf {
         a: Operand,

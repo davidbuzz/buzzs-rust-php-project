@@ -1110,8 +1110,12 @@ impl Vm {
                         self.set_tmp(*dst, v);
                         Flow::Next
                     }
-                    Op::FetchClassName { class, dst } => {
-                        let v = self.op_fetch_class_name(class)?;
+                    Op::FetchClassName {
+                        class,
+                        dst,
+                        const_expr,
+                    } => {
+                        let v = self.op_fetch_class_name(class, *const_expr)?;
                         self.set_tmp(*dst, v);
                         Flow::Next
                     }
