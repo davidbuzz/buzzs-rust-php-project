@@ -706,17 +706,32 @@ impl Vm {
         &mut self,
         o: Option<&Obj>,
         pi: &PropInfo,
-        mut v: Value,
+        v: Value,
     ) -> VmResult<Value> {
-        let Some(ty) = &pi.ty else {
+        if pi.ty.is_none() {
             return Ok(v);
-        };
+        }
         let strict = self
             .frames
             .iter()
             .rev()
             .find(|f| f.kind != crate::vm::FrameKind::Builtin)
             .is_some_and(|f| f.code.strict_types);
+        self.coerce_prop_with(o, pi, v, strict)
+    }
+
+    /// [`Vm::coerce_prop`] with an explicit `strict_types` mode
+    /// (`zend_verify_property_type(.., strict)`).
+    fn coerce_prop_with(
+        &mut self,
+        o: Option<&Obj>,
+        pi: &PropInfo,
+        mut v: Value,
+        strict: bool,
+    ) -> VmResult<Value> {
+        let Some(ty) = &pi.ty else {
+            return Ok(v);
+        };
         let decl = self.class_by_name(&pi.class);
         let called = o.map(|o| object::class_of(o).clone());
         let ctx = TypeCtx {
@@ -739,6 +754,133 @@ impl Vm {
                 pi.name
             ),
         ))
+    }
+
+    /// `object_properties_load`: copies the members of an `__unserialize()`
+    /// payload into an object (the SPL containers' extra properties).
+    /// Declared properties are type-checked strictly; other keys become
+    /// dynamic properties, with the "Creation of dynamic property"
+    /// deprecation even when the property already exists.
+    ///
+    /// # Errors
+    /// The `TypeError`/`Error` of a rejected member (earlier members stay
+    /// loaded), or a throwing deprecation handler.
+    pub fn object_properties_load(&mut self, o: &Obj, props: &ZArray) -> VmResult<()> {
+        let cls = object::class_of(o).clone();
+        for (k, v) in props.iter() {
+            let declared = match k {
+                ArrayKey::Str(s) => Self::load_target(&cls, s),
+                ArrayKey::Int(_) => None,
+            };
+            if let Some(pi) = declared {
+                self.load_declared(o, &cls, &pi, v)?;
+                continue;
+            }
+            let shown = match k {
+                ArrayKey::Str(s) => ZStr::from(
+                    php_runtime::dump::unmangle_property_name(s.as_bytes()).1,
+                ),
+                ArrayKey::Int(i) => ZStr::from(i.to_string()),
+            };
+            if cls.flags & cflags::NO_DYNAMIC_PROPERTIES != 0 {
+                return Err(self.make_throw(
+                    "Error",
+                    &format!(
+                        "Cannot create dynamic property {}::${}",
+                        object::display_name(&cls.name),
+                        shown.to_string_lossy()
+                    ),
+                ));
+            }
+            if cls.flags & cflags::ALLOW_DYNAMIC == 0 {
+                self.deprecated(&format!(
+                    "Creation of dynamic property {}::${} is deprecated",
+                    object::display_name(&cls.name),
+                    shown.to_string_lossy()
+                ))?;
+            }
+            let key = match k {
+                ArrayKey::Str(s) => s.clone(),
+                ArrayKey::Int(i) => ZStr::from(i.to_string()),
+            };
+            self.write_dynamic_prop(o, key, v.clone());
+        }
+        Ok(())
+    }
+
+    /// The declared, non-static property a (possibly mangled) member name
+    /// of [`Vm::object_properties_load`] denotes.
+    fn load_target(cls: &Rc<Class>, key: &ZStr) -> Option<Rc<PropInfo>> {
+        let (cls_part, unmangled) = php_runtime::dump::unmangle_property_name(key.as_bytes());
+        let n = ZStr::from(unmangled);
+        match cls_part {
+            Some(c) if c != b"*" => cls
+                .props
+                .iter()
+                .find(|p| {
+                    p.name == n
+                        && p.class.as_bytes().eq_ignore_ascii_case(c)
+                        && p.visibility() == flags::PRIVATE
+                })
+                .cloned(),
+            _ => cls
+                .prop_map
+                .get(&n)
+                .filter(|p| p.flags & flags::STATIC == 0)
+                .cloned(),
+        }
+    }
+
+    /// One declared member of [`Vm::object_properties_load`].
+    fn load_declared(
+        &mut self,
+        o: &Obj,
+        cls: &Rc<Class>,
+        pi: &PropInfo,
+        v: &Value,
+    ) -> VmResult<()> {
+        if pi.is_virtual() {
+            return Err(self.make_throw(
+                "Error",
+                &format!(
+                    "Cannot unserialize value for virtual property {}::${}",
+                    object::display_name(&cls.name),
+                    pi.name
+                ),
+            ));
+        }
+        let mut val = v.clone();
+        if pi.ty.is_some() {
+            let is_ref = matches!(v, Value::Reference(_));
+            let initialized = object::data(o)
+                .slots
+                .borrow()
+                .get(pi.slot as usize)
+                .is_some_and(Option::is_some);
+            if pi.is_readonly() && (is_ref || initialized) {
+                let msg = if is_ref {
+                    "Cannot indirectly modify readonly property"
+                } else {
+                    "Cannot modify readonly property"
+                };
+                return Err(self.make_throw("Error", &format!("{msg} {}::${}", pi.class, pi.name)));
+            }
+            let checked = self.coerce_prop_with(Some(o), pi, v.deref(), true)?;
+            if is_ref {
+                // `zend_verify_prop_assignable_by_ref` checks the value; the
+                // reference itself is stored.
+                drop(checked);
+            } else {
+                val = checked;
+            }
+        }
+        let old = object::data(o)
+            .slots
+            .borrow_mut()
+            .get_mut(pi.slot as usize)
+            .map(|slot| slot.replace(val));
+        drop(old);
+        Ok(())
     }
 
     /// Writes `$o->name = v`; returns the assigned value.

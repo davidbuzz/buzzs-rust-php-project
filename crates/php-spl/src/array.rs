@@ -95,7 +95,12 @@ fn target(host: &mut dyn SplHost, this: &Obj, st: &Rc<SplObject>) -> RtResult<(T
                 st = state_of(host, &o)?;
                 obj = o;
             }
-            Value::Object(o) => return Ok((Target::Props(o), true)),
+            Value::Object(o) => {
+                // Reading the property table directly initializes a lazy
+                // object (`spl_array_get_hash_table_ptr`).
+                let o = host.init_lazy_object(&o)?;
+                return Ok((Target::Props(o), true));
+            }
             _ => return Ok((Target::Own(st), false)),
         }
     }
@@ -381,6 +386,37 @@ fn write_dimension_ex(
     })?;
     drop(garbage);
     Ok(())
+}
+
+/// `$ao[$k] = &$v`: `FETCH_DIM_W` makes the element a reference
+/// (`spl_array_read_dimension_ex` in a write context) and `ASSIGN_REF`
+/// binds it to `r`. Returns `false` when `offsetGet()` is overridden (the
+/// fetch then yields a temporary and the engine reports the failure).
+pub fn assign_ref_dimension(
+    host: &mut dyn SplHost,
+    this: &Obj,
+    st: &Rc<SplObject>,
+    offset: &Value,
+    r: &PhpRef,
+) -> RtResult<bool> {
+    if host.has_user_method(this, "offsetGet") {
+        return Ok(false);
+    }
+    if st.array(|a| a.apply_count)? > 0 {
+        return Err(sorting_error());
+    }
+    let (tgt, is_obj) = target(host, this, st)?;
+    let offset = offset.deref();
+    let Some(key) = hash_key(host, &offset, is_obj)? else {
+        return Err(illegal_offset(this, &offset, DimKind::Write));
+    };
+    let value = Value::Reference(r.clone());
+    let old = with_ht(host, &tgt, |ht| match key {
+        ArrayKey::Str(s) => ht.insert_str_raw(s, value),
+        ArrayKey::Int(_) => ht.insert(key, value),
+    })?;
+    drop(old);
+    Ok(true)
 }
 
 /// `spl_array_unset_dimension_ex`.
@@ -1288,9 +1324,7 @@ fn unserialize(
         }
         set_array(host, func, this, st, &storage, 0, true)?;
     }
-    for (k, v) in members.iter() {
-        host.property_write(this, &k.to_zstr(), v.clone())?;
-    }
+    host.properties_load(this, &members)?;
     if let Some(Value::Str(c)) = iterator_class {
         match host.class_is_a(&c, "ArrayIterator") {
             None => {
@@ -1385,9 +1419,7 @@ fn legacy_unserialize(
     let Value::Array(members) = members else {
         return Err(err(np));
     };
-    for (k, v) in members.iter() {
-        host.property_write(this, &k.to_zstr(), v.clone())?;
-    }
+    host.properties_load(this, &members)?;
     Ok(())
 }
 

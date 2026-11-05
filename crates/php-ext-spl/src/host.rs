@@ -71,6 +71,21 @@ pub fn rt_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
     }
 }
 
+/// Applies the `pcre.*` INI settings (registered by ext/pcre, when loaded)
+/// to SPL's own PCRE state: `RegexIterator` matches honour
+/// `pcre.backtrack_limit` like `preg_*` (GH-14290).
+fn sync_pcre_ini(vm: &Vm, p: &mut php_pcre::Pcre) {
+    if vm.ini_string("pcre.backtrack_limit").is_some() {
+        p.set_backtrack_limit(vm.ini_long("pcre.backtrack_limit"));
+    }
+    if vm.ini_string("pcre.recursion_limit").is_some() {
+        p.set_recursion_limit(vm.ini_long("pcre.recursion_limit"));
+    }
+    if vm.ini_string("pcre.jit").is_some() {
+        p.set_jit(vm.ini_bool("pcre.jit"));
+    }
+}
+
 /// The SPL state attached to an object by the `create` hook.
 #[must_use]
 pub fn spl_state_of(obj: &Obj) -> Option<Rc<SplObject>> {
@@ -142,7 +157,20 @@ pub fn std_properties(obj: &Obj) -> ZArray {
 }
 
 /// Records the table handed out for `obj`.
+///
+/// Only the keys and the iterator positions of the cached table are ever
+/// used ([`std_properties`] refreshes the values), so references are not
+/// kept: holding them would count as a second owner and make `var_dump()`
+/// show the object's property as `&` after `$ao[$k] += $v`.
 fn remember(obj: &Obj, table: &ZArray) {
+    let mut table = table.clone();
+    if table.values().any(|v| matches!(v, Value::Reference(_))) {
+        for (_, v) in table.make_mut().iter_mut() {
+            if matches!(v, Value::Reference(_)) {
+                *v = Value::Null;
+            }
+        }
+    }
     PROP_CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if c.len() > 256 {
@@ -152,10 +180,20 @@ fn remember(obj: &Obj, table: &ZArray) {
             obj.handle(),
             PropCache {
                 owner: Rc::downgrade(obj.rc()),
-                table: table.clone(),
+                table,
             },
         );
     });
+}
+
+/// A property value as `zend_array_dup` copies it: a reference only the
+/// object holds (refcount 1, left behind by `$ao[$k]++` or an unset
+/// alias) is no reference at all.
+fn property_value(v: &Value) -> Value {
+    match v {
+        Value::Reference(r) if r.refcount() == 1 => r.get(),
+        other => other.clone(),
+    }
 }
 
 fn build_properties(obj: &Obj) -> ZArray {
@@ -171,14 +209,14 @@ fn build_properties(obj: &Obj) -> ZArray {
             if let Some(Some(v)) = slots.get(pi.slot as usize) {
                 t.insert(
                     ArrayKey::Str(mangle(pi.flags, &pi.class, &pi.name)),
-                    v.clone(),
+                    property_value(v),
                 );
             }
         }
     }
     if let Some(dynp) = d.dynamic.borrow().as_ref() {
         for (k, v) in dynp {
-            t.insert(k.clone(), v.clone());
+            t.insert(k.clone(), property_value(v));
         }
     }
     ZArray::from_table(t)
@@ -580,6 +618,16 @@ impl SplHost for VmHost<'_> {
         self.vm_rt(r)
     }
 
+    fn properties_load(&mut self, obj: &Obj, props: &ZArray) -> RtResult<()> {
+        let r = self.vm.object_properties_load(obj, props);
+        self.vm_rt(r)
+    }
+
+    fn init_lazy_object(&mut self, obj: &Obj) -> RtResult<Obj> {
+        let r = self.vm.lazy_object_init(obj);
+        self.vm_rt(r)
+    }
+
     fn class_info(&mut self, name: &ZStr, autoload: bool) -> Option<ClassInfo> {
         let cls = if autoload {
             match self.vm.lookup_class(name) {
@@ -626,8 +674,9 @@ impl SplHost for VmHost<'_> {
 
     fn pcre(&mut self) -> &mut php_pcre::Pcre {
         if self.pcre.is_none() {
-            let p = PCRE.with(|s| s.borrow_mut().take());
-            self.pcre = Some(p.unwrap_or_default());
+            let mut p = PCRE.with(|s| s.borrow_mut().take()).unwrap_or_default();
+            sync_pcre_ini(self.vm, &mut p);
+            self.pcre = Some(p);
         }
         self.pcre.get_or_insert_with(php_pcre::Pcre::new)
     }
@@ -879,6 +928,12 @@ impl SplHost for BridgedHost {
     fn set_std_properties(&mut self, obj: &Obj, props: ZArray) -> RtResult<()> {
         lent_rt(|h| h.set_std_properties(obj, props))
     }
+    fn properties_load(&mut self, obj: &Obj, props: &ZArray) -> RtResult<()> {
+        lent_rt(|h| h.properties_load(obj, props))
+    }
+    fn init_lazy_object(&mut self, obj: &Obj) -> RtResult<Obj> {
+        lent_rt(|h| h.init_lazy_object(obj))
+    }
     fn class_info(&mut self, name: &ZStr, autoload: bool) -> Option<ClassInfo> {
         lent(|h| h.class_info(name, autoload)).flatten()
     }
@@ -893,8 +948,9 @@ impl SplHost for BridgedHost {
     }
     fn pcre(&mut self) -> &mut php_pcre::Pcre {
         if self.pcre.is_none() {
-            let p = PCRE.with(|s| s.borrow_mut().take());
-            self.pcre = Some(p.unwrap_or_default());
+            let mut p = PCRE.with(|s| s.borrow_mut().take()).unwrap_or_default();
+            lent(|h| sync_pcre_ini(h.vm, &mut p));
+            self.pcre = Some(p);
         }
         self.pcre.get_or_insert_with(php_pcre::Pcre::new)
     }

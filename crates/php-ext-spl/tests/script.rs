@@ -350,6 +350,78 @@ fn self_callables_register_the_class_of_the_registering_scope() {
     assert_eq!(
         out,
         "First::load\nSecond::load\nFirst::load(Missing)\nSecond::load(Missing)\nbool(false)\n"
+fn foreach_over_spl_objects_numbers_handles_like_zend() {
+    // `ArrayObject::getIterator()` creates an ArrayIterator and the
+    // `foreach` iterator takes one more handle; a non-Traversable SPL
+    // class iterates its properties.
+    let out = run(r#"<?php
+        $a = new ArrayObject([1]);
+        foreach ($a as $v) { echo spl_object_id(new stdClass), ","; }
+        echo spl_object_id(new stdClass), "\n";
+        class F extends SplFileInfo { public $p = 1; }
+        foreach (new F('x') as $k => $v) { echo $k, "=", $v, "\n"; }
+    "#);
+    assert_eq!(out, "4,3\np=1\n");
+}
+
+#[test]
+fn array_object_element_references_match_zend() {
+    // A compound assignment leaves no visible reference in a wrapped
+    // object's property table, and `$ao[$k] = &$v` binds the element.
+    let out = run(r#"<?php
+$o = new stdClass;
+$ao = @new ArrayObject($o);
+$ao['x'] = 1;
+$ao['x'] += 1;
+$ao['y'] = 5;
+$ao['y']++;
+var_dump($o, (array) $ao);
+$ao = new ArrayObject;
+foreach ([1, 2] as $i => $var) { $ao[$i] = &$var; }
+var_dump($ao->getArrayCopy());
+"#);
+    assert_eq!(out, r#"object(stdClass)#1 (2) {
+  ["x"]=>
+  int(2)
+  ["y"]=>
+  int(6)
+}
+array(2) {
+  ["x"]=>
+  int(2)
+  ["y"]=>
+  int(6)
+}
+array(2) {
+  [0]=>
+  &int(2)
+  [1]=>
+  &int(2)
+}
+"#);
+}
+
+#[test]
+fn unserialize_members_load_like_object_properties_load() {
+    // GH-9708: declared members are type-checked strictly; undeclared
+    // ones are dynamic properties with the PHP 8.2 deprecation.
+    let out = run(r#"<?php
+error_reporting(E_ALL);
+set_error_handler(function ($n, $m) { echo $m, "\n"; return true; });
+class Foo extends ArrayObject { public int $a = 5; }
+try {
+    unserialize('O:3:"Foo":4:{i:0;i:0;i:1;a:0:{}i:2;a:1:{s:1:"a";s:2:"10";}i:3;N;}');
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+$f = unserialize('O:13:"SplFixedArray":2:{i:0;i:1;s:3:"foo";s:3:"bar";}');
+var_dump($f->foo);
+"#);
+    assert_eq!(
+        out,
+        "Cannot assign string to property Foo::$a of type int\n\
+         Creation of dynamic property SplFixedArray::$foo is deprecated\n\
+         string(3) \"bar\"\n"
     );
 }
 
@@ -380,4 +452,109 @@ fn autoloader_is_called_as_resolved_in_the_registering_scope() {
         out,
         "__call(autoload, Outer)\nbool(false)\n__call(autoload, Inner)\nbool(false)\n"
     );
+}
+fn array_iterator_initializes_lazy_storage() {
+    // GH-15833: reading a lazy object's property table initializes it
+    // (a proxy reads its real instance; a failing initializer throws).
+    let out = run(r#"<?php
+class C { public int $a = 1; }
+$r = new ReflectionClass(C::class);
+$it = new RecursiveArrayIterator($r->newLazyProxy(fn ($o) => new C()));
+var_dump($it->current());
+$it->next();
+var_dump($it->current());
+$it = new RecursiveArrayIterator($r->newLazyProxy(function ($o) {
+    static $n = 0;
+    throw new Error('nope ' . $n++);
+}));
+for ($i = 0; $i < 2; $i++) {
+    try { $it->current(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+"#);
+    assert_eq!(out, "int(1)\nNULL\nnope 0\nnope 1\n");
+}
+
+#[test]
+fn autoload_callbacks_resolve_at_registration() {
+    // `self` resolves (with its deprecation) and a private method stays
+    // callable from the registering scope; a loader registered by another
+    // runs in the same lookup (bug #71202).
+    let out = run(r#"<?php
+error_reporting(E_ALL);
+set_error_handler(function ($n, $m) { echo $m, "\n"; return true; });
+class First {
+    public static function init() { spl_autoload_register(['self', 'load']); }
+    public static function load($c) {}
+}
+First::init();
+foreach (spl_autoload_functions() as $f) { echo implode("::", $f), "\n"; }
+spl_autoload_unregister(['First', 'load']);
+class L {
+    function __construct() { spl_autoload_register([$this, 'load']); }
+    private function load($c) {
+        echo "load $c\n";
+        if ($c === 'A') { spl_autoload_register(function ($c) { echo "inner $c\n"; }); }
+    }
+}
+new L;
+var_dump(class_exists('A'));
+"#);
+    assert_eq!(
+        out,
+        "Use of \"self\" in callables is deprecated\nFirst::load\nload A\ninner A\nbool(false)\n"
+    );
+}
+
+#[test]
+fn internal_class_constants_list_inherited_first() {
+    // Bug #75242: an internal class's table holds the parent's constants
+    // before its own.
+    let out = run(r#"<?php
+foreach ((new ReflectionClass('RecursiveArrayIterator'))->getConstants() as $k => $v) {
+    echo $k, "=", $v, "\n";
+}
+"#);
+    assert_eq!(out, "STD_PROP_LIST=1\nARRAY_AS_PROPS=2\nCHILD_ARRAYS_ONLY=4\n");
+}
+
+#[test]
+fn fixed_array_export_and_zval_dump_match_zend() {
+    // GH-8044: var_export() buffers its output (the circular-reference
+    // warning comes first) and debug_zval_dump() counts the references of
+    // the table `get_properties_for` builds.
+    let out = run(r#"<?php
+set_error_handler(function ($n, $m) { echo "W:$m\n"; return true; });
+call_user_func(function () {
+    $x = new SplFixedArray(1);
+    $x[0] = $x;
+    echo "start\n";
+    var_export($x); echo "\n";
+    debug_zval_dump($x);
+});
+"#);
+    assert_eq!(
+        out,
+        "start\nW:var_export does not handle circular references\n\
+         \\SplFixedArray::__set_state(array(\n   0 => NULL,\n))\n\
+         object(SplFixedArray)#3 (1) refcount(4){\n  [0]=>\n  *RECURSION*\n}\n"
+    );
+}
+
+#[test]
+fn object_storage_cycle_counts_only_objects() {
+    // Bug #53071: the collected cycle is the three objects.
+    let out = run(r#"<?php
+class C { public $member; }
+function scope() {
+    $a = new C();
+    $b = new SplObjectStorage();
+    $c = new C();
+    $c->member = $a;
+    $b->offsetSet($c);
+    $a->member = $b;
+}
+scope();
+var_dump(gc_collect_cycles());
+"#);
+    assert_eq!(out, "int(3)\n");
 }

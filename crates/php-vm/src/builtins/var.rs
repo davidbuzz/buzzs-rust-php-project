@@ -53,9 +53,15 @@ fn var_export(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         dump::var_export(vm, &mut out, &v, 1)?;
         return Ok(sv(out.finish(vm)));
     }
-    let mut out = Out::stream();
+    // `php_var_export_ex` builds the whole export in a buffer: warnings
+    // (circular references) and output of user code run meanwhile come
+    // first, and a partial export is still written on an exception.
+    let mut out = Out::collect();
     let r = dump::var_export(vm, &mut out, &v, 1);
-    out.flush(vm);
+    let bytes = out.finish(vm);
+    if !bytes.is_empty() {
+        vm.echo(&bytes);
+    }
     r?;
     Ok(Value::Null)
 }

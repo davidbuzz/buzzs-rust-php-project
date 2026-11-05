@@ -598,9 +598,7 @@ fn list_method(
                     d.list.push(v.clone());
                 }
             })?;
-            for (k, v) in members.iter() {
-                host.property_write(this, &k.to_zstr(), v.clone())?;
-            }
+            host.properties_load(this, &members)?;
             Ok(Value::Null)
         }
         "add" => {

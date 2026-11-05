@@ -48,6 +48,17 @@ impl Vm {
         crate::reflection::lazy::object_for(self, o, name)
     }
 
+    /// `zend_lazy_object_init` for extensions that read an object's
+    /// property table directly: initializes an uninitialized lazy object
+    /// and returns the object holding the properties (the real instance
+    /// of a proxy; `o` itself otherwise).
+    ///
+    /// # Errors
+    /// The initializer's exception (the object stays lazy).
+    pub fn lazy_object_init(&mut self, o: &Obj) -> VmResult<Obj> {
+        self.lazy_object_for(o, None)
+    }
+
     /// Whether `o` is an uninitialized lazy object (`var_dump` prefix).
     pub(crate) fn lazy_prefix(&self, o: &Obj) -> &'static str {
         match object::data(o).lazy.borrow().as_ref() {

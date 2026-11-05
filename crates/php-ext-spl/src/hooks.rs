@@ -65,7 +65,18 @@ fn gc_traverse(st: &Rc<php_spl::SplObject>, v: &mut php_vm::gc::GcVisitor<'_>) {
     }
     let r = st.with(|s| match s {
         php_spl::SplState::Array(a) => v.value(&a.array),
-        php_spl::SplState::Storage(s) => v.table(&s.storage),
+        php_spl::SplState::Storage(s) => {
+            // `spl_object_storage_get_gc` reports each element's object and
+            // information directly: the `[object, info]` pair arrays of this
+            // representation are not garbage PHP counts (bug #53071). A
+            // pair shared with user code stays a node of its own.
+            for e in s.storage.values() {
+                match e {
+                    Value::Array(pair) if pair.refcount() == 1 => v.table(pair),
+                    other => v.value(other),
+                }
+            }
+        }
         php_spl::SplState::FixedArray(f) => v.values(&f.elements),
         _ => {}
     });
@@ -242,9 +253,15 @@ fn write_dimension(vm: &mut Vm, o: &Obj, k: Option<&Value>, v: &Value) -> VmResu
     }
     // The VM hands a reference to `write_dimension` only for
     // `$obj[$k] = &$v`.
-    if matches!(v, Value::Reference(_)) {
-        // `$obj[$k] = &$v`: FETCH_DIM_W yields a temporary, then
-        // ASSIGN_REF fails.
+    if let Value::Reference(r) = v {
+        // `$obj[$k] = &$v`: `ArrayObject`/`ArrayIterator` fetch the element
+        // as a reference and bind it; elsewhere FETCH_DIM_W yields a
+        // temporary, then ASSIGN_REF fails.
+        if let Some(k) = k {
+            if with_host(vm, |host| h::assign_ref_dimension(host, o, k, r))? {
+                return Ok(true);
+            }
+        }
         vm.raise(
             8,
             &format!(
