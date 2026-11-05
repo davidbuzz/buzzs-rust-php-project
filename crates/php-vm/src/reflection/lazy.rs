@@ -152,12 +152,16 @@ pub(crate) fn init(vm: &mut Vm, o: &Obj) -> VmResult<Obj> {
             None => Ok(o.clone()),
         };
     }
+    let initial_refs = o.refcount();
     let r = init_uninit(vm, o, &i);
     // `GC_DELREF(obj) == 0`: the initializer dropped every reference but
     // the handle the caller borrowed `o` through (the counterpart of
     // php-src's `GC_ADDREF` around the initializer).
     let returned = usize::from(matches!(&r, Ok(x) if Obj::ptr_eq(x, o)));
-    if o.refcount() - returned > 1 || matches!(&r, Err(e) if !matches!(e, Throw::Exception(_))) {
+    if initial_refs == 1
+        || o.refcount() - returned > 1
+        || matches!(&r, Err(e) if !matches!(e, Throw::Exception(_)))
+    {
         return r;
     }
     let e = vm.make_throw("Error", "Lazy object was released during initialization");

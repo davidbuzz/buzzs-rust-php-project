@@ -189,6 +189,19 @@ try { $o->s = new stdClass; } catch (Error $e) {
 }
 
 #[test]
+fn temporary_lazy_objects_can_initialize_before_cloning() {
+    assert_eq!(
+        run(r#"<?php
+class C { public $value; function __clone() { echo "cloned\n"; } }
+$r = new ReflectionClass(C::class);
+clone $r->newLazyGhost(function ($o) {});
+clone $r->newLazyProxy(fn() => new C);
+"#),
+        "cloned\ncloned\n"
+    );
+}
+
+#[test]
 fn lazy_hook_fetch_does_not_initialize_when_the_hook_ignores_state() {
     assert_eq!(
         run(r#"<?php
