@@ -162,3 +162,61 @@ fn append_passed_by_value_to_known_function_is_a_compile_error() {
     let out = run("<?php\nfunction r(&$x) {}\nr($a[]);\nforeach ($a as $k => $v) { var_dump($k); }\ntry { g($b[]); } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\nfunction g($v) {}\n");
     assert_eq!(out, "int(0)\nCannot use [] for reading\n");
 }
+
+/// Since PHP 8.4 `exit`/`die` are an ordinary `exit()` function
+/// (`Zend/tests/exit/exit_as_function.phpt`, `exit_named_arg.phpt`,
+/// `exit_values.phpt`).
+#[test]
+fn exit_is_a_function() {
+    let out = run(
+        "<?php\nvar_dump(is_callable('exit'), is_callable('die'), exit(...) instanceof Closure);\n",
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\n");
+    assert_eq!(
+        run_status("<?php\nexit(status: 12);\n"),
+        (12, String::new())
+    );
+    assert_eq!(
+        run_status("<?php\ndie(status: \"Goodbye!\");\n"),
+        (0, "Goodbye!".to_string())
+    );
+    assert_eq!(
+        run_status("<?php\n$f = 'exit'; $f(7);\n"),
+        (7, String::new())
+    );
+    assert_eq!(
+        run_status("<?php\nexit(null);\n"),
+        (
+            0,
+            "\nDeprecated: exit(): Passing null to parameter #1 ($status) of type string|int is deprecated in t.php on line 2\n"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        run_status("<?php\nexit(15.5);\n"),
+        (
+            15,
+            "\nDeprecated: Implicit conversion from float 15.5 to int loses precision in t.php on line 2\n"
+                .to_string()
+        )
+    );
+    assert_eq!(run_status("<?php\nexit(true);\n"), (1, String::new()));
+}
+
+/// `exit("...")` rethrows an exception raised by an output handler
+/// (`Zend/tests/exit/exit_string_with_buffer_output.phpt`).
+#[test]
+fn exit_string_rethrows_output_handler_exception() {
+    let out = run(r#"<?php
+ob_start(function ($text) {
+    throw new Exception('test');
+}, chunk_size: 10);
+try {
+    exit("Hello world!\n");
+} catch (Throwable $e) {
+    echo $e::class, ': ', $e->getMessage(), "\n";
+}
+echo "After?\n";
+"#);
+    assert!(out.contains("Exception: test\nAfter?\n"), "{out}");
+}

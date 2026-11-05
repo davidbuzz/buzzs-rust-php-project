@@ -2435,15 +2435,6 @@ impl Compiler {
                     _ => Ok(None),
                 }
             }
-            b"exit" | b"die" if only_positional && positional.len() <= 1 => {
-                let v = match positional.first() {
-                    Some(e) => self.compile_expr(e)?,
-                    None => Operand::Unused,
-                };
-                self.f().line = line;
-                self.emit(Op::Exit(v));
-                Ok(Some(self.lit(Value::Null)))
-            }
             // zend_compile_func_num_args / zend_compile_func_get_args: only
             // inside a function body, and not as a namespaced fallback.
             b"func_num_args" | b"func_get_args"

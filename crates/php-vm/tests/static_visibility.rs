@@ -71,3 +71,46 @@ try { var_dump(isset(B::$x)); } catch (Error $e) { echo $e->getMessage(), "\n"; 
         "bool(false)\nbool(true)\nstring(1) \"d\"\nbool(false)\nstring(1) \"e\"\nbool(false)\nbool(true)\nbool(true)\nint(7)\nClass \"B\" not found\n"
     );
 }
+
+/// Asymmetric visibility on static properties
+/// (`Zend/tests/asymmetric_visibility/static_props.phpt`).
+#[test]
+fn static_set_visibility_is_enforced_outside_the_class() {
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    vm.run_script(
+        br#"<?php
+class C {
+    public private(set) static int $prop = 1;
+    public private(set) static array $arr = [];
+    public private(set) static stdClass $obj;
+    public private(set) static object $unset;
+    public static function set($v) { self::$prop = $v; self::$obj = new stdClass; }
+}
+C::set(3);
+$tests = [
+    fn() => C::$prop = 2,
+    fn() => C::$prop++,
+    fn() => C::$prop += 1,
+    function () { $r = &C::$prop; },
+    fn() => C::$arr[] = 1,
+];
+foreach ($tests as $t) {
+    try { $t(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+C::$obj->foo = 'foo';
+unset(C::$unset->foo);
+var_dump(C::$prop, C::$obj->foo);
+"#,
+        "asym.php",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(sink.0.borrow().as_slice()),
+        "Cannot modify private(set) property C::$prop from global scope\n\
+         Cannot indirectly modify private(set) property C::$prop from global scope\n\
+         Cannot indirectly modify private(set) property C::$prop from global scope\n\
+         Cannot indirectly modify private(set) property C::$prop from global scope\n\
+         Cannot indirectly modify private(set) property C::$arr from global scope\n\
+         int(3)\nstring(3) \"foo\"\n"
+    );
+}

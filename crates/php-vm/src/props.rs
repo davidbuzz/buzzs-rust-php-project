@@ -7,7 +7,7 @@ use crate::exec::scope_display;
 use crate::func::flags;
 use crate::object::{self, oflags};
 use crate::opcode::FetchMode;
-use crate::place::PropContainer;
+use crate::place::{PropContainer, StaticWrite};
 use crate::typecheck::{given_type, TypeCtx};
 use crate::vm::{Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
@@ -627,21 +627,93 @@ impl Vm {
             "protected(set)"
         };
         let _ = cls_name;
+        let from = self.asym_error_scope();
+        self.make_throw(
+            "Error",
+            &format!(
+                "Cannot {op} {vis} property {}::${} from {from}",
+                pi.class, pi.name
+            ),
+        )
+    }
+
+    /// The scope named by `zend_asymmetric_visibility_property_modification_error`
+    /// (`zend_get_called_scope`).
+    fn asym_error_scope(&self) -> String {
         let called = self
             .frames
             .iter()
             .rev()
             .find(|f| f.kind != crate::vm::FrameKind::Builtin)
             .and_then(|f| f.called.clone().or_else(|| f.scope.clone()));
-        self.make_throw(
+        scope_display(called.as_ref())
+    }
+
+    /// The set-visibility check of a static property write fetch
+    /// (`ZEND_ASSIGN_STATIC_PROP`'s `zend_assign_to_typed_prop`, the
+    /// `*_STATIC_PROP` compound/increment/reference handlers and
+    /// `zend_fetch_static_prop_helper`, `Zend/zend_vm_def.h`), for a
+    /// property whose flags carry a set visibility. Returns whether the
+    /// fetch yields no container: `BP_VAR_UNSET` of an uninitialized
+    /// property is silently skipped.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn check_static_set_access(
+        &mut self,
+        cls: &Rc<Class>,
+        name: &ZStr,
+        cell: &Rc<std::cell::RefCell<Value>>,
+        sw: StaticWrite,
+    ) -> VmResult<bool> {
+        let Some(sp) = cls.find_static(name.as_bytes()) else {
+            return Ok(false);
+        };
+        if sp.flags & flags::SET_MASK == 0 || self.static_has_set_access(sp) {
+            return Ok(false);
+        }
+        let op = match sw {
+            StaticWrite::Assign => "modify",
+            StaticWrite::Indirect => "indirectly modify",
+            StaticWrite::Fetch | StaticWrite::FetchUnset => {
+                // An object is handed out as is (`copy_deref`).
+                if matches!(Value::deref(&cell.borrow()), Value::Object(_)) {
+                    return Ok(false);
+                }
+                if sw == StaticWrite::FetchUnset && crate::typed_refs::static_cell_uninit(cell) {
+                    return Ok(true);
+                }
+                "indirectly modify"
+            }
+        };
+        let vis = if sp.flags & flags::SET_PRIVATE != 0 {
+            "private(set)"
+        } else {
+            "protected(set)"
+        };
+        let from = self.asym_error_scope();
+        Err(self.make_throw(
             "Error",
             &format!(
-                "Cannot {op} {vis} property {}::${} from {}",
-                pi.class,
-                pi.name,
-                scope_display(called.as_ref())
+                "Cannot {op} {vis} property {}::${} from {from}",
+                object::display_name(&sp.class),
+                sp.name
             ),
-        )
+        ))
+    }
+
+    /// `zend_asymmetric_property_has_set_access` for a static property:
+    /// the declaring class, or for `protected(set)` a related class.
+    fn static_has_set_access(&self, sp: &crate::class::StaticProp) -> bool {
+        let Some(s) = self.scope() else { return false };
+        if s.name.eq_ignore_ascii_case(sp.class.as_bytes()) {
+            return true;
+        }
+        if sp.flags & flags::SET_PROTECTED != 0 {
+            if let Some(d) = self.find_class(sp.class.as_bytes()) {
+                return s.is_subclass_of(&d) || d.is_subclass_of(&s);
+            }
+        }
+        false
     }
 
     /// Readonly / set-visibility checks for writes (`zend_std_write_property`).

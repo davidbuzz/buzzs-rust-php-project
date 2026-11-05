@@ -129,6 +129,8 @@ const CORE_FUNCTIONS: &[&str] = &[
     "gc_disable",
     "gc_status",
     "clone",
+    "exit",
+    "die",
 ];
 
 /// The extension of an internal function.

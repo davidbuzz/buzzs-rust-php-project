@@ -36,6 +36,11 @@ pub(crate) fn validate_limited(
         ..Validator::default()
     };
     let r = v.top_level(&program.statements);
+    if r.is_ok() {
+        for i in v.compiler_dups.iter().rev() {
+            v.warnings.remove(*i);
+        }
+    }
     program.warnings.append(&mut v.warnings);
     r.map_err(|e| (e, v.stack_exhausted))
 }
@@ -108,6 +113,11 @@ struct Validator {
     /// Inside a property hook: (property name, hook name).
     hook: Option<(Vec<u8>, Vec<u8>)>,
     warnings: Vec<Diagnostic>,
+    /// Indexes into `warnings` of diagnostics the compiler proper also
+    /// raises (class-name deprecations of `zend_assert_valid_class_name`).
+    /// They are only kept when validation fails, so that a later
+    /// compile error is still preceded by them, as in compilation order.
+    compiler_dups: Vec<usize>,
 }
 
 fn is_this(e: &Expr) -> bool {
@@ -930,6 +940,21 @@ impl Validator {
                     line,
                 );
             }
+            // `zend_assert_valid_class_name()` identifier deprecations; the
+            // compiler raises them again when validation succeeds.
+            let dep = if n.name.as_slice() == b"_" {
+                Some("Using \"_\" as {ty} is deprecated since 8.4")
+            } else if n.name.eq_ignore_ascii_case(b"let") {
+                Some("Using \"let\" as {ty} is deprecated since 8.6")
+            } else if n.name.eq_ignore_ascii_case(b"is") {
+                Some("Using \"is\" as {ty} is deprecated since 8.6")
+            } else {
+                None
+            };
+            if let Some(dep) = dep {
+                self.compiler_dups.push(self.warnings.len());
+                self.warn(DiagnosticLevel::Deprecated, dep.replace("{ty}", ty), line);
+            }
         }
         let class_name = self.class_display_name(c);
         self.classes.push(ClassCtx {
@@ -1719,6 +1744,13 @@ impl Validator {
                 self.expr(right)
             }
             ExprKind::Pipe { left, right } => {
+                // `zend_compile_pipe`
+                if matches!(&right.kind, ExprKind::ArrowFn(f) if !f.parenthesized) {
+                    return err(
+                        "Arrow functions on the right hand side of |> must be parenthesized",
+                        line,
+                    );
+                }
                 self.expr(left)?;
                 self.expr(right)
             }

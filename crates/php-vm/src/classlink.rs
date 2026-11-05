@@ -672,11 +672,22 @@ impl Vm {
     }
 
     /// The storage slot of `A::$name`.
+    #[inline]
     pub(crate) fn static_prop_cell(
         &mut self,
         cls: &Rc<Class>,
         name: &ZStr,
     ) -> VmResult<Rc<RefCell<Value>>> {
+        self.static_prop_cell_flags(cls, name).map(|(cell, _)| cell)
+    }
+
+    /// [`Vm::static_prop_cell`] with the property's flags (for the set
+    /// visibility check of a write).
+    pub(crate) fn static_prop_cell_flags(
+        &mut self,
+        cls: &Rc<Class>,
+        name: &ZStr,
+    ) -> VmResult<(Rc<RefCell<Value>>, u32)> {
         // One lookup on the hot path, borrowing from `cls` (owned by the
         // caller, not the VM); misses (instance-property visibility errors,
         // ancestors' private statics, undeclared) are cold.
@@ -712,7 +723,8 @@ impl Vm {
                 ));
             }
         }
-        self.static_prop_slot(cls, name, sp)
+        let fl = sp.flags;
+        self.static_prop_slot(cls, name, sp).map(|cell| (cell, fl))
     }
 
     /// The tail of a static property fetch once `sp` is known accessible:
@@ -3251,6 +3263,19 @@ fn build_class(
                 "Get hook of backed property {}::{} with set hook may not return by reference",
                 display, pd.name
             ));
+        }
+        // `zend_verify_hooked_property`: a virtual property with only one
+        // hook cannot have a separate set visibility.
+        if pi.is_virtual() && pflags & flags::SET_MASK != 0 && err.is_none() {
+            if let Some(h) = pi.hooks.as_ref() {
+                if h.get.is_none() || h.set.is_none() {
+                    let only = if h.get.is_none() { "set" } else { "get" };
+                    *err = Some(format!(
+                        "{only}-only virtual property {display}::${} must not specify asymmetric visibility",
+                        pd.name
+                    ));
+                }
+            }
         }
         if (slot as usize) < props.len() {
             props[slot as usize] = pi.clone();

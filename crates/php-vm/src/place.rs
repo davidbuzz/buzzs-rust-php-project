@@ -62,6 +62,30 @@ pub(crate) enum WOp {
     Unset,
 }
 
+/// How a static property base is fetched for writing, for the check of
+/// its set visibility (`zend_asymmetric_property_has_set_access`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StaticWrite {
+    /// `ZEND_ASSIGN_STATIC_PROP`: "Cannot modify".
+    Assign,
+    /// Compound assignment, increment/decrement, reference binding or
+    /// taking: "Cannot indirectly modify".
+    Indirect,
+    /// `FETCH_STATIC_PROP_W`/`_RW` of a container: an object passes.
+    Fetch,
+    /// `FETCH_STATIC_PROP_UNSET` of a container: an object or an
+    /// uninitialized property passes.
+    FetchUnset,
+}
+
+/// The operation a place is resolved for (see [`StaticWrite`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlaceOp {
+    Other,
+    Assign,
+    Unset,
+}
+
 /// Deferred diagnostics: (level bits, message).
 type Diags = Vec<(i64, String)>;
 
@@ -782,7 +806,7 @@ impl Vm {
         pid: PlaceId,
         write: bool,
     ) -> VmResult<(RBase, Vec<RSeg>)> {
-        self.resolve_place_ex(pid, write, false, None)
+        self.resolve_place_ex(pid, write, false, None, PlaceOp::Other)
     }
 
     /// [`Vm::resolve_place`]; `quiet` is the `BP_VAR_IS` fetch of
@@ -792,16 +816,27 @@ impl Vm {
     /// With `undef_last_dim`, a final offset that is an undefined compiled
     /// variable resolves to null without the warning and the variable is
     /// stored there (see `PENDING_UNDEF_DIM`).
+    ///
+    /// `op` tells a static property base how it is written (see
+    /// [`StaticWrite`]).
     fn resolve_place_ex(
         &mut self,
         pid: PlaceId,
         write: bool,
         quiet: bool,
         mut undef_last_dim: Option<&mut Option<u32>>,
+        op: PlaceOp,
     ) -> VmResult<(RBase, Vec<RSeg>)> {
         let code = self.frame().code.clone();
         let p = &code.places[pid as usize];
-        let base = self.resolve_base(&p.base, write, quiet)?;
+        let sw = match (write, p.segs.is_empty(), op) {
+            (true, true, PlaceOp::Assign) => Some(StaticWrite::Assign),
+            (true, true, _) => Some(StaticWrite::Indirect),
+            (true, false, _) => Some(StaticWrite::Fetch),
+            (false, false, PlaceOp::Unset) => Some(StaticWrite::FetchUnset),
+            (false, _, _) => None,
+        };
+        let base = self.resolve_base(&p.base, write, quiet, sw)?;
         let n = p.segs.len();
         let mut segs = Vec::with_capacity(n);
         for (j, s) in p.segs.iter().enumerate() {
@@ -832,7 +867,15 @@ impl Vm {
     /// cell or a temporary (reading the name operands of `$$n`/`A::$n`).
     /// `quiet` is `BP_VAR_IS`: an undeclared or inaccessible static
     /// property base resolves to an undefined base without an error.
-    fn resolve_base(&mut self, base: &PlaceBase, write: bool, quiet: bool) -> VmResult<RBase> {
+    /// `sw` is how a static property base is written, for its set
+    /// visibility check.
+    fn resolve_base(
+        &mut self,
+        base: &PlaceBase,
+        write: bool,
+        quiet: bool,
+        sw: Option<StaticWrite>,
+    ) -> VmResult<RBase> {
         Ok(match base {
             PlaceBase::Cv(cv) => {
                 let f = self.frame();
@@ -880,6 +923,15 @@ impl Vm {
                     match self.static_prop_cell_is(&cls, &n)? {
                         Some(cell) => RBase::Cell(cell),
                         None => RBase::Undef(n),
+                    }
+                } else if let Some(sw) = sw {
+                    let (cell, fl) = self.static_prop_cell_flags(&cls, &n)?;
+                    if fl & crate::func::flags::SET_MASK != 0
+                        && self.check_static_set_access(&cls, &n, &cell, sw)?
+                    {
+                        RBase::Undef(n)
+                    } else {
+                        RBase::Cell(cell)
                     }
                 } else {
                     RBase::Cell(self.static_prop_cell(&cls, &n)?)
@@ -1601,7 +1653,8 @@ impl Vm {
     /// `place = v`
     pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
         let mut undef_dim = None;
-        let (base, segs) = self.resolve_place_ex(pid, true, false, Some(&mut undef_dim))?;
+        let (base, segs) =
+            self.resolve_place_ex(pid, true, false, Some(&mut undef_dim), PlaceOp::Assign)?;
         if let Some(cv) = undef_dim {
             return self.assign_undef_dim(base, &segs, v, cv);
         }
@@ -1730,7 +1783,7 @@ impl Vm {
             let v = self.read_cv(cv)?;
             return self.place_assign(pid, v);
         }
-        let (base, segs) = self.resolve_place(pid, true)?;
+        let (base, segs) = self.resolve_place_ex(pid, true, false, None, PlaceOp::Assign)?;
         if !segs.iter().any(|s| matches!(s, RSeg::Prop(_))) {
             let v = self.read_cv(cv)?;
             return self.write_place(base, &segs, WOp::Assign(v));
@@ -2100,7 +2153,7 @@ impl Vm {
         if let (PlaceBase::StaticProp { class, name }, true) = (&p.base, p.segs.is_empty()) {
             return Err(self.unset_static_prop(class, *name));
         }
-        let (base, segs) = self.resolve_place(pid, false)?;
+        let (base, segs) = self.resolve_place_ex(pid, false, false, None, PlaceOp::Unset)?;
         if let RBase::Undef(_) = &base {
             return Ok(());
         }
@@ -2187,7 +2240,7 @@ impl Vm {
         }
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];
-        let base = self.resolve_base(&place.base, false, mode == FetchMode::Is)?;
+        let base = self.resolve_base(&place.base, false, mode == FetchMode::Is, None)?;
         let segs = &place.segs;
         let mut cur = match base {
             RBase::Var(store, idx) => {
@@ -2402,7 +2455,7 @@ impl Vm {
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];
-        let base = self.resolve_base(&place.base, false, true)?;
+        let base = self.resolve_base(&place.base, false, true, None)?;
         let segs = &place.segs;
         let mut cur = match base {
             RBase::Var(store, idx) => store.borrow().slots[idx].as_ref().map(Value::deref),

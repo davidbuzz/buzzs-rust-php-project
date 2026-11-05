@@ -1532,3 +1532,27 @@ var_dump($d->z);
          \nNotice: Only variables should be assigned by reference in t.php on line 15\nint(1)\n"
     );
 }
+
+#[test]
+fn single_hook_virtual_property_rejects_asymmetric_visibility() {
+    let out = run(
+        "<?php\nclass Foo {\n    public private(set) int $bar {\n        get => 42;\n    }\n}\n",
+    );
+    assert!(
+        out.contains(
+            "Fatal error: get-only virtual property Foo::$bar must not specify asymmetric visibility"
+        ),
+        "{out}"
+    );
+    let out =
+        run("<?php\nclass Foo {\n    public private(set) int $bar {\n        set {}\n    }\n}\n");
+    assert!(
+        out.contains(
+            "Fatal error: set-only virtual property Foo::$bar must not specify asymmetric visibility"
+        ),
+        "{out}"
+    );
+    // Backed, or virtual with both hooks: allowed.
+    let out = run("<?php\nclass Foo {\n    public private(set) int $bar {\n        get => $this->bar;\n    }\n    public private(set) int $baz {\n        get => 1;\n        set {}\n    }\n}\necho \"ok\\n\";\n");
+    assert_eq!(out, "ok\n");
+}
