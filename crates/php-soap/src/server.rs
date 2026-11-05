@@ -768,7 +768,7 @@ fn handle_inner(host: &mut dyn SoapHost, this: &Obj, request: Option<&[u8]>) -> 
     }
     let mut soap_action = None;
     let parsed = if let Some(arg) = request {
-        Doc::parse_budgeted(arg, &mut |bytes| host.memory_reserve(bytes))
+        Doc::parse_budgeted(arg, &mut |bytes: usize| host.memory_reserve(bytes))
     } else {
         let Some(body) = host.request_body() else {
             return Ok(());
@@ -799,7 +799,7 @@ fn handle_inner(host: &mut dyn SoapHost, this: &Obj, request: Option<&[u8]>) -> 
             }
         }
         soap_action = host.server_var("HTTP_SOAPACTION").filter(|a| !a.is_empty());
-        Doc::parse_budgeted(&body, &mut |bytes| host.memory_reserve(bytes))
+        Doc::parse_budgeted(&body, &mut |bytes: usize| host.memory_reserve(bytes))
     };
     // The memory limit hit while the request tree was built: the SOAP
     // error handler answers with a fault (`soap_real_error_handler`).

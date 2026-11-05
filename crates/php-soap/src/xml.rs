@@ -1503,7 +1503,7 @@ mod tests {
         }
         src.extend_from_slice(b"</r>");
         let mut asked = Vec::new();
-        let d = Doc::parse_budgeted(&src, &mut |bytes| {
+        let d = Doc::parse_budgeted(&src, &mut |bytes: usize| {
             asked.push(bytes);
             Ok::<(), ()>(())
         })
@@ -1515,7 +1515,7 @@ mod tests {
             .iter()
             .any(|&b| b >= 4096 * std::mem::size_of::<NodeData>()));
         let limit = 1024 * std::mem::size_of::<NodeData>();
-        let r = Doc::parse_budgeted(&src, &mut |bytes| {
+        let r = Doc::parse_budgeted(&src, &mut |bytes: usize| {
             if bytes > limit {
                 Err(bytes)
             } else {
