@@ -371,15 +371,24 @@ fn properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Op
                 ArrayKey::Str(ZStr::from("registerNodeNamespaces")),
                 Value::Bool(true),
             );
+            // Reading `document` failed: the dump throws afterwards.
+            let e = invalid_state(vm);
+            php_vm::ext::defer_handler_throw(e);
             return Ok(Some(ZArray::from_table(t)));
         }
         return Ok(None);
     };
     let mut t = std_properties(o);
-    let items = run::direct(vm, || dispatch::debug_info(&d))?;
+    let (items, pending) = run::direct(vm, || dispatch::debug_info_checked(&d))?;
     for (name, v) in items {
         let v = to_value(vm, v)?;
         t.insert(ArrayKey::Str(ZStr::from(name)), v);
+    }
+    if let Some(e) = pending {
+        let ctx = obj_ctx(o);
+        if let Some(t) = crate::errors::throw(vm, e, Some(&ctx)) {
+            php_vm::ext::defer_handler_throw(t);
+        }
     }
     Ok(Some(ZArray::from_table(t)))
 }

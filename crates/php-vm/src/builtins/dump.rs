@@ -21,6 +21,49 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+thread_local! {
+    /// An exception a native `get_properties_for` / `get_debug_info`
+    /// handler raised while still returning its table (php-src handlers
+    /// leave it in `EG(exception)`, e.g. `dom_get_debug_info` reading a
+    /// property of an unconstructed `DOMXPath`): the dump is printed in
+    /// full and the dumping function throws it when it returns.
+    static DEFERRED_THROW: RefCell<Option<crate::vm::Throw>> = const { RefCell::new(None) };
+}
+
+/// Parks `t` for the running dump (see [`DEFERRED_THROW`]); the first
+/// exception wins, like a handler that stops reading once
+/// `EG(exception)` is set.
+pub(crate) fn defer_throw(t: crate::vm::Throw) {
+    // A losing exception is dropped outside the borrow (its destructor may
+    // run user code that dumps).
+    let rejected = DEFERRED_THROW.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.is_none() {
+            *d = Some(t);
+            None
+        } else {
+            Some(t)
+        }
+    });
+    drop(rejected);
+}
+
+/// Drops an exception parked outside a dump (a handler called for
+/// another purpose), so it does not surface from an unrelated call.
+pub(crate) fn clear_deferred_throw() {
+    if let Some(t) = DEFERRED_THROW.with(|d| d.borrow_mut().take()) {
+        drop(t);
+    }
+}
+
+/// Throws the exception parked during the dump that just ended, if any.
+pub(crate) fn take_deferred_throw() -> VmResult<()> {
+    match DEFERRED_THROW.with(|d| d.borrow_mut().take()) {
+        Some(t) => Err(t),
+        None => Ok(()),
+    }
+}
+
 /// Output of a dump: streamed through the output layer, or collected
 /// (`print_r($v, true)`, `var_export($v, true)`).
 pub(crate) struct Out {

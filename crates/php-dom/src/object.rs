@@ -581,6 +581,14 @@ impl Node {
         self.n().ok_or(crate::error::DomError::CouldntFetch)
     }
 
+    /// `DOM_GET_OBJ` on an argument object: the node, or
+    /// "Couldn't fetch <the argument's class>" (`%pS` of its `ce->name`).
+    pub(crate) fn arg_node(&self) -> crate::error::DomResult<N> {
+        self.n().ok_or_else(|| {
+            crate::error::DomError::Error(format!("Couldn't fetch {}", self.class_name()))
+        })
+    }
+
     /// `DOM_PROP_NODE`: the node, or an `InvalidStateError`.
     pub(crate) fn prop_node(&self) -> crate::error::DomResult<N> {
         self.n().ok_or_else(|| {
