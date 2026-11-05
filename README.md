@@ -49,6 +49,15 @@ Per-crate checks, as required before any work is declared done:
 cargo fmt && cargo clippy --all-targets -p <crate> && cargo test -p <crate>
 ```
 
+Use these incremental dev-profile builds for correctness checks and scoped PHPT
+runs. Reserve `--release` for performance measurements: the release profile uses
+thin LTO and one codegen unit, which makes rebuilding test executables expensive.
+Keep build directories consistent and avoid `cargo clean` during edit/test loops.
+For multiple affected crates, combine their `-p` selectors in one command.
+`ccache` caches C/C++ compilation, not Rust; a local-only `sccache` setup can help
+repeated non-incremental Rust compilation, but does not cache final linking or
+replace Cargo's incremental dev builds.
+
 ## Reference source
 
 `modules/php-src/` is a READ-ONLY clone of https://github.com/php/php-src — the specification
