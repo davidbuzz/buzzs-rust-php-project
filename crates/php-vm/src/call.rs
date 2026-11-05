@@ -1289,12 +1289,12 @@ impl Vm {
         from_internal: bool,
     ) -> VmResult<()> {
         if self.frames.len() > 50_000 {
-            // The error object is created before the arguments are released
-            // (object handle reuse is observable).
-            let e = self.make_throw(
-                "Error",
-                "Maximum call stack size reached. Infinite recursion?",
-            );
+            // A backstop like `execute`'s nesting limit: php-src would have
+            // hit its native stack limit by now, so the error is
+            // `zend_call_stack_size_error()`'s. The error object is created
+            // before the arguments are released (object handle reuse is
+            // observable).
+            let e = crate::builtins::dump::stack_size_error(self);
             self.put_arg_vec(std::mem::take(&mut call.args));
             return Err(e);
         }

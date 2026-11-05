@@ -1125,10 +1125,15 @@ pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
         for i in &cls.interfaces {
             // `zend_do_inherit_interfaces`: an interface the parent already
             // implements is not checked again (the parent's methods were).
-            if cls
-                .parent
-                .as_ref()
-                .is_some_and(|p| p.interfaces.iter().any(|pi| Rc::ptr_eq(pi, i)))
+            // Constructors are the exception: a concrete parent constructor
+            // imposes no signature, so `do_inheritance_check_on_method`
+            // checks the child against the parent method's prototype, the
+            // interface's `__construct` (ctor_in_interface_04).
+            if lc.as_bytes() != b"__construct"
+                && cls
+                    .parent
+                    .as_ref()
+                    .is_some_and(|p| p.interfaces.iter().any(|pi| Rc::ptr_eq(pi, i)))
             {
                 continue;
             }
