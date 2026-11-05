@@ -264,3 +264,21 @@ fn inherited_constant_conflicts_and_visibility() {
               echo C::C, Q::T, \"\\n\";\n";
     assert_eq!(run(ok), "31\n");
 }
+
+/// `zend_class_redeclaration_error` names the kind and name of the class
+/// already declared, with its declaration site for user classes.
+#[test]
+fn class_redeclaration_names_the_existing_class() {
+    let (status, out) = run_status("<?php\nclass stdclass {}\n");
+    assert_ne!(status, 0);
+    assert!(
+        out.contains("Fatal error: Cannot redeclare class stdClass in t.php on line 2"),
+        "{out}"
+    );
+    let (status, out) = run_status("<?php\ninterface A {}\ntrait A {}\n");
+    assert_ne!(status, 0);
+    assert!(
+        out.contains("Fatal error: Cannot redeclare interface A (previously declared in t.php:2) in t.php on line 3"),
+        "{out}"
+    );
+}

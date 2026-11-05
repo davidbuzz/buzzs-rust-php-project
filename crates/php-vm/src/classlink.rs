@@ -700,27 +700,9 @@ impl Vm {
             return Ok(c.clone());
         }
         let lc = ZStr::from(decl.name.to_ascii_lowercase());
-        if self.classes.contains_key(&lc) {
-            let kind = match decl.kind {
-                ClassKind::Interface => "interface",
-                ClassKind::Trait => "trait",
-                ClassKind::Enum => "enum",
-                ClassKind::Class => "class",
-            };
-            let _ = kind;
-            return Err(self.fatal_at(
-                &format!(
-                    "Cannot declare {} {}, because the name is already in use",
-                    match decl.kind {
-                        ClassKind::Interface => "interface",
-                        ClassKind::Trait => "trait",
-                        ClassKind::Enum => "enum",
-                        ClassKind::Class => "class",
-                    },
-                    decl.name
-                ),
-                decl.line_start,
-            ));
+        if let Some(old) = self.classes.get(&lc) {
+            let msg = class_redeclaration_error(old);
+            return Err(self.fatal_at(&msg, decl.line_start));
         }
         let (cls, recorded) = self.link_class(decl, is_anon)?;
         self.bound_decls.insert(key, cls.clone());
@@ -2062,6 +2044,29 @@ fn inherit_prop_hooks(
 /// meets `existing`, a constant the class already has (its own, an enum
 /// case or one of an earlier trait). Values that need evaluating are
 /// compared later by [`Vm::link_class`].
+/// `zend_class_redeclaration_error`: names the kind, name and (for user
+/// classes) the declaration site of the class already registered.
+#[cold]
+fn class_redeclaration_error(old: &Class) -> String {
+    // `zend_get_object_type(old_ce)`.
+    let kind = if old.is_trait() {
+        "trait"
+    } else if old.is_interface() {
+        "interface"
+    } else if old.is_enum() {
+        "enum"
+    } else {
+        "class"
+    };
+    match &old.filename {
+        Some(file) if old.flags & cflags::INTERNAL == 0 => format!(
+            "Cannot redeclare {kind} {} (previously declared in {}:{})",
+            old.name, file, old.line_start
+        ),
+        _ => format!("Cannot redeclare {kind} {}", old.name),
+    }
+}
+
 /// The `inherits both ... which is ambiguous` (or final override) error
 /// of `do_inherit_constant_check` for an interface constant `c` whose name
 /// is already inherited (`existing`) from the parent or another interface.
