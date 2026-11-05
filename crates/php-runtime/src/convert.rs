@@ -121,13 +121,37 @@ pub fn nan_coerced_warning(
 }
 
 /// Formats an integer (`zend_long_to_str`).
+///
+/// The digits are written into a stack buffer (`zend_print_long_to_buf`)
+/// and copied into an exactly sized string: `i64::to_string` reserves the
+/// worst-case 20 bytes for every number, which made each int-to-string
+/// conversion (array keys, property names, concatenation operands) cost
+/// up to 19 bytes more than php-src's exactly sized `zend_string`.
 #[must_use]
 pub fn long_to_zstr(n: i64) -> ZStr {
     if (0..=9).contains(&n) {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         return ZStr::from_byte(b'0' + n as u8);
     }
-    ZStr::from(n.to_string())
+    // `i64::MIN` is 19 digits plus the sign.
+    let mut buf = [0u8; 20];
+    let mut pos = buf.len();
+    let mut m = n.unsigned_abs();
+    loop {
+        pos -= 1;
+        #[allow(clippy::cast_possible_truncation)]
+        let digit = (m % 10) as u8;
+        buf[pos] = b'0' + digit;
+        m /= 10;
+        if m == 0 {
+            break;
+        }
+    }
+    if n < 0 {
+        pos -= 1;
+        buf[pos] = b'-';
+    }
+    ZStr::from(&buf[pos..])
 }
 
 /// `zend_double_to_str`: formats a float with the `precision` setting and
@@ -537,6 +561,27 @@ pub fn try_get_long(v: &Value, ctx: &mut (impl RuntimeContext + ?Sized)) -> RtRe
 mod tests {
     use super::*;
     use crate::error::CollectingContext;
+
+    #[test]
+    fn long_to_zstr_formats_every_width() {
+        for n in [
+            0,
+            7,
+            9,
+            10,
+            -1,
+            -9,
+            -10,
+            42,
+            1_000_000,
+            -1_234_567,
+            i64::MAX,
+            i64::MIN,
+            i64::MIN + 1,
+        ] {
+            assert_eq!(long_to_zstr(n).as_bytes(), n.to_string().as_bytes(), "{n}");
+        }
+    }
 
     #[test]
     fn long_conversion() {
