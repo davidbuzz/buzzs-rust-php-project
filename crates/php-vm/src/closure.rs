@@ -301,25 +301,24 @@ impl Vm {
         b.get(idx as usize).cloned().flatten()
     }
 
-    /// Initializes static variable slot `idx`.
+    /// Initializes static variable slot `idx`. A slot that a recursive call
+    /// made from the initializer already set wins: `ZEND_BIND_STATIC` binds
+    /// the existing reference and drops the computed value
+    /// (Zend/tests/static_variables/static_variables_recursive.phpt).
     pub(crate) fn static_init(&mut self, idx: u32, v: Value) -> PhpRef {
-        let r = PhpRef::new(v);
+        fn put(b: &mut Vec<Option<PhpRef>>, idx: usize, v: Value) -> PhpRef {
+            if b.len() <= idx {
+                b.resize(idx + 1, None);
+            }
+            b[idx].get_or_insert_with(|| PhpRef::new(v)).clone()
+        }
         if self.frame().statics.is_none() {
             if let Some(uf) = self.frame().ufunc.clone() {
-                let mut b = uf.statics.borrow_mut();
-                if b.len() <= idx as usize {
-                    b.resize(idx as usize + 1, None);
-                }
-                b[idx as usize] = Some(r.clone());
-                return r;
+                return put(&mut uf.statics.borrow_mut(), idx as usize, v);
             }
         }
         let s = self.statics_store();
-        let mut b = s.borrow_mut();
-        if b.len() <= idx as usize {
-            b.resize(idx as usize + 1, None);
-        }
-        b[idx as usize] = Some(r.clone());
+        let r = put(&mut s.borrow_mut(), idx as usize, v);
         r
     }
 

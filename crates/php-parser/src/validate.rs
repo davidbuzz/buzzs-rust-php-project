@@ -1822,6 +1822,12 @@ impl Validator {
                     if let Some(t) = &c.return_type {
                         v.ty(t)?;
                     }
+                    // `zend_compile_closure_uses()` stores the lexical
+                    // variables in the closure's static_variables table, so a
+                    // later `static $x` of the same name is a duplicate.
+                    v.func()
+                        .statics
+                        .extend(c.uses.iter().map(|u| u.name.name.clone()));
                     v.stmts(&c.body)
                 })
             }

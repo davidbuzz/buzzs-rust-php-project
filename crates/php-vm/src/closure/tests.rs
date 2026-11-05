@@ -183,3 +183,14 @@ fn callable_names() {
          echo \"$a $b $c $d\\n\";");
     assert_eq!(out, "Foo::__invoke Foo::bar strlen Closure::__invoke\n");
 }
+
+/// A recursive call made by a static initializer sets the slot first; the
+/// outer `ZEND_BIND_STATIC` then binds that reference and drops its own
+/// value (Zend/tests/static_variables/static_variables_recursive.phpt).
+#[test]
+fn recursive_static_initializer_keeps_inner_value() {
+    let out = run(
+        "<?php function foo($i) { static $a = $i <= 2 ? foo($i + 1) : \"Done $i\"; echo $a, \"\\n\"; return $i; }\nfoo(0); foo(5);",
+    );
+    assert_eq!(out, "Done 3\nDone 3\nDone 3\nDone 3\nDone 3\n");
+}
