@@ -3,7 +3,6 @@
 use php_runtime::{Obj, PhpObject, Value, ZArray};
 use php_vm::Vm;
 use std::cell::RefCell;
-use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
 /// One entry of the global weak map (`ZT_G(global_weakmap)`).
@@ -20,9 +19,6 @@ struct State {
     weakmap: Vec<WeakEntry>,
     /// Values kept alive by `zend_leak_variable()`.
     leaked: Vec<Value>,
-    /// Temporary files of uploads parsed by `zend_test_handle_post_data()`
-    /// (`SG(rfc1867_uploaded_files)`).
-    uploaded: Vec<PathBuf>,
 }
 
 thread_local! {
@@ -35,32 +31,12 @@ pub(crate) fn request_startup(_vm: &mut Vm) {
 }
 
 /// `PHP_RSHUTDOWN(zend_test)`: drops the weak map values and, as the
-/// SAPI deactivation does, deletes the uploads' temporary files.
-pub(crate) fn request_shutdown(_vm: &mut Vm) {
+/// SAPI deactivation does, deletes the temporary files of the uploads
+/// `zend_test_handle_post_data()` parsed (`SG(rfc1867_uploaded_files)`).
+pub(crate) fn request_shutdown(vm: &mut Vm) {
     let old = STATE.with(|s| std::mem::take(&mut *s.borrow_mut()));
-    php_cli_server::multipart::cleanup(&old.uploaded);
+    php_cli_server::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
     drop(old);
-}
-
-/// Records the temporary files of the uploads just parsed.
-pub(crate) fn set_uploaded(files: Vec<PathBuf>) {
-    STATE.with(|s| s.borrow_mut().uploaded = files);
-}
-
-/// Whether `path` is the temporary file of a parsed upload
-/// (`zend_hash_exists(SG(rfc1867_uploaded_files), path)`).
-pub(crate) fn is_uploaded(path: &std::path::Path) -> bool {
-    STATE.with(|s| s.borrow().uploaded.iter().any(|f| f == path))
-}
-
-/// Forgets an upload whose file was moved away.
-pub(crate) fn forget_uploaded(path: &std::path::Path) {
-    STATE.with(|s| s.borrow_mut().uploaded.retain(|f| f != path));
-}
-
-/// Takes the recorded upload files (to delete them).
-pub(crate) fn take_uploaded() -> Vec<PathBuf> {
-    STATE.with(|s| std::mem::take(&mut s.borrow_mut().uploaded))
 }
 
 fn weak_id(o: &Obj) -> i64 {

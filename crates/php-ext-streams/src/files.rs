@@ -483,6 +483,72 @@ fn copy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(r))
 }
 
+/// Whether `path` is, byte for byte, one of the request's uploads
+/// (`zend_hash_exists(SG(rfc1867_uploaded_files), path)`).
+fn is_upload(vm: &Vm, path: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    vm.rfc1867_uploaded_files
+        .iter()
+        .any(|f| f.as_os_str().as_bytes() == path)
+}
+
+/// `is_uploaded_file()` (ext/standard/basic_functions.c).
+fn is_uploaded_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let path = path_arg(vm, a, 0)?;
+    Ok(Value::Bool(is_upload(vm, &path)))
+}
+
+/// `move_uploaded_file()` (ext/standard/basic_functions.c): renames the
+/// upload (then applies `0666 & ~umask`), or copies it and unlinks the
+/// original; the moved file stops being an upload.
+fn move_uploaded_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    let from = path_arg(vm, a, 0)?;
+    let to = path_arg(vm, a, 1)?;
+    if !is_upload(vm, &from) {
+        return Ok(Value::Bool(false));
+    }
+    if !bridge::run(vm, || php_streams::paths::check_open_basedir(&to))? {
+        return Ok(Value::Bool(false));
+    }
+    let from_p = std::path::Path::new(std::ffi::OsStr::from_bytes(&from));
+    let to_p = std::path::Path::new(std::ffi::OsStr::from_bytes(&to));
+    let moved = if std::fs::rename(from_p, to_p).is_ok() {
+        let mask = php_streams::sys::current_umask();
+        if let Err(e) =
+            std::fs::set_permissions(to_p, std::fs::Permissions::from_mode(0o666 & !mask))
+        {
+            vm.php_warning(&php_streams::sys::error_text(&e))?;
+        }
+        true
+    } else if bridge::run(vm, || {
+        lib::copy_file_ctx(
+            &from,
+            &to,
+            php_streams::wrapper::STREAM_DISABLE_OPEN_BASEDIR,
+            None,
+        )
+    })? {
+        let _ = std::fs::remove_file(from_p);
+        true
+    } else {
+        false
+    };
+    if moved {
+        vm.rfc1867_uploaded_files
+            .retain(|f| f.as_os_str().as_bytes() != from.as_slice());
+    } else {
+        let mut msg = b"Unable to move \"".to_vec();
+        msg.extend_from_slice(&from);
+        msg.extend_from_slice(b"\" to \"");
+        msg.extend_from_slice(&to);
+        msg.push(b'"');
+        vm.php_warning_bytes(&msg)?;
+    }
+    Ok(Value::Bool(moved))
+}
+
 fn mkdir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let dir = path_arg(vm, a, 0)?;
     let mode = a.int(1);
@@ -897,6 +963,11 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
     .function("unlink(string $filename, $context = null): bool", unlink)
     .function("rename(string $from, string $to, $context = null): bool", rename)
     .function("copy(string $from, string $to, $context = null): bool", copy)
+    .function("is_uploaded_file(string $filename): bool", is_uploaded_file)
+    .function(
+        "move_uploaded_file(string $from, string $to): bool",
+        move_uploaded_file,
+    )
     .function(
         "mkdir(string $directory, int $permissions = 511, bool $recursive = false, $context = null): bool",
         mkdir,

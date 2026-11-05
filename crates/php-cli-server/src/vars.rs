@@ -405,7 +405,7 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
                             };
                             register(vm, &r.name, v, track, false);
                         }
-                        ctx.uploaded.borrow_mut().extend(outcome.uploaded);
+                        vm.rfc1867_uploaded_files.extend(outcome.uploaded);
                     }
                 }
                 _ => {

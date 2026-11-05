@@ -91,8 +91,6 @@ pub struct RequestCtx {
     pub facts: RefCell<HeaderFacts>,
     /// `PG(connection_status) & PHP_CONNECTION_ABORTED`.
     pub aborted: Cell<bool>,
-    /// `SG(rfc1867_uploaded_files)`.
-    pub uploaded: RefCell<Vec<PathBuf>>,
     /// The request body.
     pub body: RefCell<Body>,
     /// Whether `ap_setup_client_block` ran (and whether a body follows).
@@ -138,7 +136,6 @@ impl RequestCtx {
             headers: RefCell::new(SapiHeaders::new(status)),
             facts: RefCell::new(facts),
             aborted: Cell::new(false),
-            uploaded: RefCell::new(Vec::new()),
             body: RefCell::new(Body::Unread),
             body_ready: Cell::new(None),
             read_post_bytes: Cell::new(0),
@@ -507,8 +504,7 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx) {
     apply_fatal_status(vm);
     call_header_callback(vm, ctx);
     ctx.send_headers();
-    crate::multipart::cleanup(&ctx.uploaded.borrow());
-    ctx.uploaded.borrow_mut().clear();
+    crate::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
 }
 
 /// Invokes the `header_register_callback()` callable once, before the
