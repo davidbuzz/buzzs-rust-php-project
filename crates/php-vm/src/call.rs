@@ -70,7 +70,7 @@ impl Vm {
             return;
         }
         if let Some(v) = self.call_bufs.args.pop() {
-            call.args = v;
+            install_buffer(&mut call.args, v);
         }
     }
 
@@ -1478,7 +1478,7 @@ impl Vm {
             f.func = Some(Func::Builtin(b.clone()));
             f.builtin_name = builtin_name;
             f.named.clone_from(&call.named);
-            f.args = frame_args;
+            install_buffer(&mut f.args, frame_args);
             f.this.clone_from(&call.this);
             f.scope.clone_from(&call.scope);
             f.called.clone_from(&call.called);
@@ -2378,6 +2378,18 @@ pub(crate) fn trampoline_name(name: &ZStr) -> ZStr {
 /// The called scope of a static call to `cls`: `self::`/`parent::`/
 /// `static::` (`forward`) keep the caller's called scope when it is a
 /// subclass of `cls`.
+/// Stores `buf` in `slot`. The replaced buffer is usually a fresh,
+/// unallocated `Vec`; it is then forgotten instead of dropped, which skips
+/// an out-of-line `drop_in_place` call on every call (a zero-capacity `Vec`
+/// of a sized element type owns no allocation and no elements).
+#[inline]
+fn install_buffer<T>(slot: &mut Vec<T>, buf: Vec<T>) {
+    let old = std::mem::replace(slot, buf);
+    if old.capacity() == 0 {
+        std::mem::forget(old);
+    }
+}
+
 fn forwarded_called(cur: Option<Rc<Class>>, cls: &Rc<Class>, forward: bool) -> Rc<Class> {
     if forward {
         cur.filter(|c| c.is_subclass_of(cls))
@@ -2484,6 +2496,20 @@ restore_error_handler();
         assert_eq!(capacities(&vm), before);
         assert_eq!(held.refcount(), 1);
         assert!(vm.call_bufs.args.iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn install_buffer_replaces_and_releases_the_old_buffer() {
+        let held = ZStr::from("old buffer value");
+        let mut slot: Vec<Option<Value>> = Vec::new();
+        install_buffer(&mut slot, Vec::with_capacity(8));
+        assert!(slot.is_empty());
+        assert_eq!(slot.capacity(), 8);
+        slot.push(Some(Value::Str(held.clone())));
+        assert_eq!(held.refcount(), 2);
+        install_buffer(&mut slot, vec![Some(Value::Int(1))]);
+        assert_eq!(held.refcount(), 1);
+        assert!(matches!(slot.as_slice(), [Some(Value::Int(1))]));
     }
 
     #[test]
