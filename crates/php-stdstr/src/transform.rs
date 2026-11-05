@@ -365,31 +365,55 @@ pub fn strtr(s: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 /// (`php_strtr_array()`): at each position the longest matching key is
 /// replaced, and replaced text is never rescanned.
 ///
-/// The VM converts the array first: integer keys become their decimal
-/// string, values go through `zval_get_string()`.  Pass the pairs in array
-/// order.  Empty keys push `strtr(): Ignoring replacement of empty string`.
+/// Integer keys become their decimal string before calling. Pass the pairs
+/// in array order. Empty keys push `strtr(): Ignoring replacement of empty string`.
 pub fn strtr_pairs<K: AsRef<[u8]>, V: AsRef<[u8]>>(
     s: &[u8],
     pairs: &[(K, V)],
     notices: &mut Notices,
 ) -> Vec<u8> {
+    let result = strtr_pairs_with(s, pairs, notices, |_, v, _, _| {
+        Ok::<_, std::convert::Infallible>(v.as_ref())
+    });
+    match result {
+        Ok(out) => out,
+        Err(e) => match e {},
+    }
+}
+
+/// Translates pairs with PHP-order replacement conversion: a single pair
+/// is converted eagerly, while multiple pairs convert only on each match.
+/// Pending notices are passed to the converter so it can emit them before
+/// conversion side effects. The final argument is the output buffer's
+/// capacity, for allocation checks before appending the replacement.
+///
+/// # Errors
+///
+/// Propagates replacement conversion errors.
+pub fn strtr_pairs_with<'a, K: AsRef<[u8]>, V, R: AsRef<[u8]>, E>(
+    s: &[u8],
+    pairs: &'a [(K, V)],
+    notices: &mut Notices,
+    mut convert: impl FnMut(&[u8], &'a V, &mut Notices, usize) -> Result<R, E>,
+) -> Result<Vec<u8>, E> {
     if s.is_empty() || pairs.is_empty() {
-        return s.to_vec();
+        return Ok(s.to_vec());
     }
     if let [(k, v)] = pairs {
-        let (k, v) = (k.as_ref(), v.as_ref());
+        let k = k.as_ref();
+        let v = convert(k, v, notices, 0)?;
         if k.is_empty() {
             notices.push(Notice::warning(
                 "strtr",
                 "Ignoring replacement of empty string",
             ));
-            return s.to_vec();
+            return Ok(s.to_vec());
         }
-        return replace_all(s, k, v, false).0;
+        return Ok(replace_all(s, k, v.as_ref(), false).0);
     }
     let mut minlen = usize::MAX;
     let mut maxlen = 0;
-    let mut map: std::collections::HashMap<&[u8], &[u8]> = std::collections::HashMap::new();
+    let mut map: std::collections::HashMap<&[u8], &V> = std::collections::HashMap::new();
     let mut first = [false; 256];
     for (k, v) in pairs {
         let k = k.as_ref();
@@ -406,10 +430,10 @@ pub fn strtr_pairs<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         minlen = minlen.min(k.len());
         maxlen = maxlen.max(k.len());
         first[usize::from(k[0])] = true;
-        map.insert(k, v.as_ref());
+        map.insert(k, v);
     }
     if minlen > maxlen {
-        return s.to_vec();
+        return Ok(s.to_vec());
     }
     let mut out = Vec::with_capacity(s.len());
     let mut pos = 0;
@@ -419,8 +443,9 @@ pub fn strtr_pairs<K: AsRef<[u8]>, V: AsRef<[u8]>>(
             let mut len = maxlen.min(s.len() - pos);
             while len >= minlen {
                 if let Some(rep) = map.get(&s[pos..pos + len]) {
+                    let rep = convert(&s[pos..pos + len], *rep, notices, out.capacity())?;
                     out.extend_from_slice(&s[old_pos..pos]);
-                    out.extend_from_slice(rep);
+                    out.extend_from_slice(rep.as_ref());
                     old_pos = pos + len;
                     pos = old_pos - 1;
                     break;
@@ -431,7 +456,7 @@ pub fn strtr_pairs<K: AsRef<[u8]>, V: AsRef<[u8]>>(
         pos += 1;
     }
     out.extend_from_slice(&s[old_pos..]);
-    out
+    Ok(out)
 }
 
 /// Replaces every non-overlapping occurrence of `needle` (non-empty) in
@@ -1067,5 +1092,58 @@ mod tests {
             str_repeat(b"x", -1).map_err(|e| e.kind),
             Err(ErrorKind::ValueError)
         );
+    }
+
+    #[test]
+    fn strtr_pair_conversion_is_lazy() {
+        let pairs = [(&b""[..], 0), (b"a", 1), (b"aa", 2), (b"unused", 3)];
+        let mut notices = Notices::new();
+        let mut converted = Vec::new();
+        let out = strtr_pairs_with(b"aaa", &pairs, &mut notices, |_, v, n, _| {
+            if converted.is_empty() {
+                assert_eq!(n.len(), 1);
+                n.clear();
+            }
+            converted.push(*v);
+            Ok::<_, ()>(v.to_string().into_bytes())
+        });
+        assert_eq!(out, Ok(b"21".to_vec()));
+        assert_eq!(converted, [2, 1]);
+        assert!(notices.is_empty());
+
+        let out = strtr_pairs_with(b"", &pairs, &mut notices, |_, _, _, _| {
+            Err::<Vec<u8>, _>("unexpected conversion")
+        });
+        assert_eq!(out, Ok(Vec::new()));
+        assert!(notices.is_empty());
+    }
+
+    #[test]
+    fn strtr_pair_conversion_errors_and_single_pair_order() {
+        let mut notices = Notices::new();
+        let pairs = [(&b""[..], 0)];
+        let out = strtr_pairs_with(b"x", &pairs, &mut notices, |_, _, n, capacity| {
+            assert!(n.is_empty());
+            assert_eq!(capacity, 0);
+            Ok::<_, ()>(b"ignored".to_vec())
+        });
+        assert_eq!(out, Ok(b"x".to_vec()));
+        assert_eq!(notices.len(), 1);
+        notices.clear();
+
+        let out = strtr_pairs_with(b"x", &pairs, &mut notices, |_, _, _, _| {
+            Err::<Vec<u8>, _>("conversion failed")
+        });
+        assert_eq!(out, Err("conversion failed"));
+        assert!(notices.is_empty());
+
+        let pairs = [(&b"a"[..], 0), (b"b", 1)];
+        let mut converted = Vec::new();
+        let out = strtr_pairs_with(b"ab", &pairs, &mut notices, |_, v, _, _| {
+            converted.push(*v);
+            Err::<Vec<u8>, _>("conversion failed")
+        });
+        assert_eq!(out, Err("conversion failed"));
+        assert_eq!(converted, [0]);
     }
 }

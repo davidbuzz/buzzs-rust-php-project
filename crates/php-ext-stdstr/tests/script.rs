@@ -101,6 +101,39 @@ fn strtr_forms() {
 }
 
 #[test]
+fn strtr_converts_replacements_in_php_order() {
+    let out = run(r#"
+        class Replacement {
+            public $n = 0;
+            function __toString(): string {
+                echo "convert:", ++$this->n, "\n";
+                return (string) $this->n;
+            }
+        }
+        $r = new Replacement;
+        echo strtr('aa', ['a' => $r, 'unused' => new stdClass]), "\n";
+        echo strtr('x', ['yy' => new stdClass, 'z' => new stdClass]), "\n";
+        echo strtr('abab', ['a' => 'b', 'ab' => 'a']), "\n";
+        echo strtr('12', [1 => 'one', 2 => 'two']), "\n";
+        echo strtr('', ['' => new stdClass, 'a' => new stdClass]), "empty\n";
+        set_error_handler(function($n, $s) { echo $s, "\n"; });
+        echo strtr('aa', ['' => new stdClass, 'a' => $r]), "\n";
+        echo strtr('x', ['missing' => $r]), "\n";
+        try { strtr('x', ['' => new stdClass]); }
+        catch (Error $e) { echo $e->getMessage(), "\n"; }
+        try { strtr('aa', ['a' => new stdClass, 'b' => 'B']); }
+        catch (Error $e) { echo $e->getMessage(), "\n"; }
+    "#);
+    assert_eq!(
+        out,
+        "convert:1\nconvert:2\n12\nx\naa\nonetwo\nempty\n\
+         strtr(): Ignoring replacement of empty string\nconvert:3\nconvert:4\n34\n\
+         convert:5\nx\nObject of class stdClass could not be converted to string\n\
+         Object of class stdClass could not be converted to string\n"
+    );
+}
+
+#[test]
 fn by_reference_outputs() {
     let out = run(r#"
         echo similar_text('World', 'Word', $p), ' ', round($p, 4), "\n";

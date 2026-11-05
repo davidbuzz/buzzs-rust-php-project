@@ -494,30 +494,38 @@ fn strtr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if s.is_empty() {
         return Ok(bytes(ZStr::empty()));
     }
-    let mut ps: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(pairs.len());
+    let mut ps: Vec<(Vec<u8>, Value)> = Vec::with_capacity(pairs.len());
     for (k, v) in pairs.iter() {
         let key = match k {
             ArrayKey::Int(i) => i.to_string().into_bytes(),
             ArrayKey::Str(s) => s.as_bytes().to_vec(),
         };
-        let val = to_str(vm, &v.deref())?;
-        ps.push((key, val.as_bytes().to_vec()));
+        ps.push((key, v.clone()));
     }
-    if ps.len() <= 16 {
-        // Upper bound of the result: every occurrence of every key replaced.
-        let growth: usize = ps
-            .iter()
-            .map(|(k, v)| {
-                mem::occurrences(s.as_bytes(), k, false)
-                    .saturating_mul(v.len().saturating_sub(k.len()))
-            })
-            .fold(0, usize::saturating_add);
-        mem::check(vm, mem::zstr(s.len().saturating_add(growth)))?;
-    }
+    let mut alloc = s.len();
     let mut n = Notices::new();
-    let r = transform::strtr_pairs(s.as_bytes(), &ps, &mut n);
+    let r = transform::strtr_pairs_with(
+        s.as_bytes(),
+        &ps,
+        &mut n,
+        |key, v, notices, capacity| -> VmResult<ZStr> {
+            emit(vm, std::mem::take(notices))?;
+            let val = to_str(vm, v)?;
+            if ps.len() == 1 {
+                let count = mem::occurrences(s.as_bytes(), key, false);
+                alloc =
+                    alloc.saturating_add(count.saturating_mul(val.len().saturating_sub(key.len())));
+            } else {
+                alloc = alloc.saturating_sub(key.len()).saturating_add(val.len());
+            }
+            if alloc > capacity {
+                mem::check(vm, mem::zstr(alloc - capacity))?;
+            }
+            Ok(val)
+        },
+    );
     emit(vm, n)?;
-    Ok(bytes(r))
+    Ok(bytes(r?))
 }
 
 fn strrev(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
