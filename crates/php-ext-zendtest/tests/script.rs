@@ -290,3 +290,24 @@ echo get_class(zend_call_method(_ZendTestClass::class, "returnsStatic")), '|',
     get_class(zend_call_method(StillReturnsStatic::class, "returnsStatic"));"#);
     assert_eq!(out, "_ZendTestClass|StillReturnsStatic");
 }
+
+#[test]
+fn internal_iterator_calls_and_destruction() {
+    // iterators/double-rewind.phpt, gh14741.phpt
+    let out = run(r#"
+$it = (new \ZendTest\Iterators\TraversableTest())->getIterator();
+var_dump($it);
+foreach ($it as $k => $v) { if ($k == 1) break; }
+try { clone $it; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+unset($it);
+echo "end\n";"#);
+    assert_eq!(
+        out,
+        "object(InternalIterator)#3 (0) {\n}\n\
+         TraversableTest::rewind\nTraversableTest::valid\nTraversableTest::current\n\
+         TraversableTest::key\nTraversableTest::next\nTraversableTest::valid\n\
+         TraversableTest::current\nTraversableTest::key\n\
+         Trying to clone an uncloneable object of class InternalIterator\n\
+         TraversableTest::drop\nend\n"
+    );
+}

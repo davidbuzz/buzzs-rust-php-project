@@ -472,6 +472,22 @@ pub trait NativeIterator {
     fn key(&mut self, vm: &mut Vm) -> VmResult<Value>;
     /// Advances.
     fn next(&mut self, vm: &mut Vm) -> VmResult<()>;
+    /// `get_current_data` as `InternalIterator::current()` calls it,
+    /// without a validity check of its own. The default asks
+    /// [`NativeIterator::valid`] first (`NULL` past the end); iterators
+    /// whose `current` is safe at any position override it.
+    fn current_data(&mut self, vm: &mut Vm) -> VmResult<Value> {
+        if self.valid(vm)? {
+            self.current(vm)
+        } else {
+            Ok(Value::Null)
+        }
+    }
+    /// The `dtor` handler, run when the `InternalIterator` wrapping the
+    /// iterator is destroyed.
+    fn dtor(&mut self, _vm: &mut Vm) -> VmResult<()> {
+        Ok(())
+    }
 }
 
 /// Object handlers of a native class (`zend_object_handlers`). Every hook
@@ -887,6 +903,13 @@ impl Vm {
             ..crate::vm::PendingCall::new(m.func.clone())
         };
         Some(self.call_pending(call))
+    }
+
+    /// The `dtor_obj` handler of `InternalIterator` objects created by
+    /// [`Vm::new_internal_iterator`]: runs [`NativeIterator::dtor`] (for
+    /// SAPIs or extensions that register their own `InternalIterator`).
+    pub fn internal_iterator_destruct(&mut self, o: &Obj) -> VmResult<()> {
+        crate::weakref::ii_destruct(self, o)
     }
 
     /// Creates an instance of a class (without calling the constructor).

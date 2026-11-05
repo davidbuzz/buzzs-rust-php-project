@@ -11,6 +11,22 @@ use php_vm::Vm;
 /// `test_traversable_it`.
 struct TraversableIt {
     current: i64,
+    /// Stands in for the iterator's own object handle (`zend_iterator_init`
+    /// stores every `zend_object_iterator` in the object store).
+    _handle: Option<Obj>,
+}
+
+impl TraversableIt {
+    fn new(vm: &mut Vm) -> VmResult<Self> {
+        let handle = match vm.find_class(b"stdClass") {
+            Some(cls) => Some(vm.new_object(&cls)?),
+            None => None,
+        };
+        Ok(Self {
+            current: 0,
+            _handle: handle,
+        })
+    }
 }
 
 impl NativeIterator for TraversableIt {
@@ -40,6 +56,17 @@ impl NativeIterator for TraversableIt {
         self.current += 1;
         Ok(())
     }
+
+    /// `test_iterator_get_current_data`: reported without a validity check.
+    fn current_data(&mut self, vm: &mut Vm) -> VmResult<Value> {
+        self.current(vm)
+    }
+
+    /// `test_iterator_dtor`.
+    fn dtor(&mut self, vm: &mut Vm) -> VmResult<()> {
+        vm.output(b"TraversableTest::drop\n");
+        Ok(())
+    }
 }
 
 /// `test_traversable_get_iterator`.
@@ -50,7 +77,7 @@ fn get_iterator(vm: &mut Vm, _o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeI
             "An iterator cannot be used with foreach by reference",
         ));
     }
-    Ok(Box::new(TraversableIt { current: 0 }))
+    Ok(Box::new(TraversableIt::new(vm)?))
 }
 
 fn construct(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -59,7 +86,8 @@ fn construct(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// `getIterator()`: an `InternalIterator` over the native iterator.
 fn method_get_iterator(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    let o = vm.new_internal_iterator(Box::new(TraversableIt { current: 0 }))?;
+    let it = TraversableIt::new(vm)?;
+    let o = vm.new_internal_iterator(Box::new(it))?;
     Ok(Value::Object(o))
 }
 
