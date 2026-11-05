@@ -51,3 +51,61 @@ echo count($r), $r[0], "\n";
 "#);
     assert_eq!(out, "1ok\n11x\n22\n1y\n");
 }
+
+/// `zend_std_get_property_ptr_ptr` (`BP_VAR_RW`) raises the dynamic
+/// property deprecation before the "Undefined property" warning
+/// (`dynamic_prop_deprecation`).
+#[test]
+fn rw_fetch_of_new_dynamic_property_deprecates_before_warning() {
+    let out = run(r#"<?php
+set_error_handler(function ($no, $msg) { echo $msg, "\n"; });
+class T {}
+$o = new T;
+$o->a += 1;
+$o->b++;
+$o->c[0] .= "x";
+echo $o->a, $o->b, $o->c[0], "\n";
+"#);
+    assert_eq!(
+        out,
+        "Creation of dynamic property T::$a is deprecated\n\
+         Undefined property: T::$a\n\
+         Creation of dynamic property T::$b is deprecated\n\
+         Undefined property: T::$b\n\
+         Creation of dynamic property T::$c is deprecated\n\
+         Undefined property: T::$c\n\
+         Undefined array key 0\n\
+         11x\n"
+    );
+}
+
+/// `zend_deprecated_dynamic_property`: an error handler that releases the
+/// object makes the creation fail (`dynamic_prop_deprecation_002`).
+#[test]
+fn dynamic_property_deprecation_handler_releasing_object_throws() {
+    let out = run(r#"<?php
+set_error_handler(function ($no, $msg) { echo $msg, "\n"; $GLOBALS['r'] = null; });
+class T {}
+$r = new T;
+try { [&$r->y]; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$r = new T;
+try { $r->y = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$r = new T;
+try { $r->y .= 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$r = new T;
+$keep = $r;
+[&$r->y];
+echo "kept\n";
+"#);
+    assert_eq!(
+        out,
+        "Creation of dynamic property T::$y is deprecated\n\
+         Cannot create dynamic property T::$y\n\
+         Creation of dynamic property T::$y is deprecated\n\
+         Cannot create dynamic property T::$y\n\
+         Creation of dynamic property T::$y is deprecated\n\
+         Cannot create dynamic property T::$y\n\
+         Creation of dynamic property T::$y is deprecated\n\
+         kept\n"
+    );
+}

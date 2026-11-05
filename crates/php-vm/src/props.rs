@@ -1058,7 +1058,9 @@ impl Vm {
                     if self.has_magic(o, name, G_SET) {
                         return self.magic_write(o, name, v);
                     }
-                    self.check_dynamic_creation(o, name)?;
+                    // The caller's temporaries and `lazy_target`.
+                    let temps = caller_temps + usize::from(caller_temps > 0);
+                    self.check_dynamic_creation(o, name, temps)?;
                 }
                 if let Some(r) = crate::typed_refs::dynamic_typed_ref(o, &key) {
                     return self.assign_ref(&r, v);
@@ -1078,7 +1080,18 @@ impl Vm {
         }
     }
 
-    fn check_dynamic_creation(&mut self, o: &Obj, name: &ZStr) -> VmResult<()> {
+    /// `zend_forbidden_dynamic_property` / `zend_deprecated_dynamic_property`
+    /// (`Zend/zend_object_handlers.c`). The deprecation holds a reference to
+    /// the object (`GC_ADDREF`); when the error handler released the last
+    /// real one, the property cannot be created ("Cannot create dynamic
+    /// property"). `temps` counts the handles to `o` this call chain holds
+    /// only as temporaries (0 skips that check: unknown).
+    pub(crate) fn check_dynamic_creation(
+        &mut self,
+        o: &Obj,
+        name: &ZStr,
+        temps: usize,
+    ) -> VmResult<()> {
         let cls = object::class_of(o).clone();
         if cls.flags & cflags::READONLY != 0 {
             return Err(self.make_throw(
@@ -1101,13 +1114,74 @@ impl Vm {
             ));
         }
         if cls.flags & cflags::ALLOW_DYNAMIC == 0 {
+            let rc_before = o.refcount();
             self.deprecated(&format!(
                 "Creation of dynamic property {}::${} is deprecated",
                 cls.name,
                 name.to_string_lossy()
             ))?;
+            let rc_after = o.refcount();
+            if temps > 0 && rc_after < rc_before && rc_after <= temps {
+                return Err(self.make_throw(
+                    "Error",
+                    &format!(
+                        "Cannot create dynamic property {}::${}",
+                        cls.name,
+                        name.to_string_lossy()
+                    ),
+                ));
+            }
         }
         Ok(())
+    }
+
+    /// `zend_std_get_property_ptr_ptr` with `BP_VAR_RW` on a missing
+    /// dynamic property of an object without a usable `__get()`
+    /// (`$o->p op= v`, `$o->p++`): the dynamic-property deprecation (or
+    /// error) comes before the "Undefined property" warning, and the
+    /// property is added as null before the operation, which then finds it
+    /// defined (an error handler may also have set it). `None` when the
+    /// regular read applies (native handlers, declared, existing, magic,
+    /// lazy, mangled or static-named properties). `temps` as for
+    /// [`Vm::check_dynamic_creation`].
+    pub(crate) fn rw_create_dynamic(
+        &mut self,
+        o: &Obj,
+        name: &ZStr,
+        temps: usize,
+    ) -> VmResult<Option<Value>> {
+        let cls = object::class_of(o).clone();
+        if cls.hooks.is_some()
+            || cls.prop_map.contains_key(name)
+            || name.as_bytes().first() == Some(&0)
+            || cls.find_static(name.as_bytes()).is_some()
+            || self.has_magic(o, name, G_GET)
+            || object::data(o).lazy.borrow().is_some()
+        {
+            return Ok(None);
+        }
+        let scope = self.scope();
+        if !matches!(
+            self.lookup_prop(&cls, name, scope.as_ref()),
+            PropLookup::NotFound
+        ) {
+            return Ok(None);
+        }
+        let key = ArrayKey::Str(name.clone());
+        let exists = object::data(o)
+            .dynamic
+            .borrow()
+            .as_ref()
+            .is_some_and(|t| t.contains_key(&key));
+        if exists {
+            return Ok(None);
+        }
+        self.check_dynamic_creation(o, name, temps)?;
+        self.undefined_property_warning(o, name)?;
+        let d = object::data(o);
+        let mut dynp = d.dynamic.borrow_mut();
+        let t = dynp.get_or_insert_with(HashTable::new);
+        Ok(Some(t.lookup(key).deref()))
     }
 
     fn magic_write(&mut self, o: &Obj, name: &ZStr, v: Value) -> VmResult<Value> {
@@ -1155,7 +1229,9 @@ impl Vm {
         if let Some(r) = self.uninit_typed_prop_ref(o, name)? {
             return Ok(r);
         }
-        match self.property_container(o, name, false)? {
+        // The caller's handle (an `obj_walk` or `foreach` temporary) and
+        // `lazy_target`.
+        match self.property_container(o, name, false, 2)? {
             PropContainer::Declared(idx) => {
                 let r = {
                     let d = object::data(o);
@@ -1183,11 +1259,14 @@ impl Vm {
     /// `BP_VAR_W` (or, with `rw`, `BP_VAR_RW`) fetch of
     /// `zend_fetch_property_address` — `get_property_ptr_ptr`, falling back
     /// to `read_property` for hooks, `__get()` and restricted properties.
+    /// `caller_temps` counts the handles to `o` the caller chain holds only
+    /// as temporaries (0: unknown; see [`Vm::check_dynamic_creation`]).
     pub(crate) fn property_container(
         &mut self,
         o: &Obj,
         name: &ZStr,
         rw: bool,
+        caller_temps: usize,
     ) -> VmResult<PropContainer> {
         let lazy_target = self.lazy_object_for(o, Some(name))?;
         let o = &lazy_target;
@@ -1273,7 +1352,14 @@ impl Vm {
                     if self.has_magic(o, name, G_GET) {
                         return self.magic_container(o, name);
                     }
-                    self.check_dynamic_creation(o, name)?;
+                    // The caller's temporaries and `lazy_target`.
+                    let temps = caller_temps + usize::from(caller_temps > 0);
+                    self.check_dynamic_creation(o, name, temps)?;
+                    if rw {
+                        // `BP_VAR_RW` (`$o->a[0] .= v`); the walk then adds
+                        // the property as null unless the handler set it.
+                        self.undefined_property_warning(o, name)?;
+                    }
                 }
                 Ok(PropContainer::Dynamic(key))
             }
@@ -1445,7 +1531,7 @@ impl Vm {
             drop(old);
             return Ok(r);
         }
-        match self.property_container(o, name, false)? {
+        match self.property_container(o, name, false, 0)? {
             PropContainer::Declared(idx) => {
                 self.bind_slot_ref(o, idx, &r)?;
                 let d = object::data(o);
@@ -1491,7 +1577,7 @@ impl Vm {
         let new_dynamic = if slot_ready {
             None
         } else {
-            match self.property_container(o, name, false)? {
+            match self.property_container(o, name, false, 0)? {
                 PropContainer::Declared(_) => None,
                 PropContainer::Dynamic(key) => Some(key),
                 PropContainer::Value(_) => {
@@ -1716,7 +1802,7 @@ impl Vm {
                         // `zend_std_get_property_ptr_ptr` (BP_VAR_UNSET)
                         // adds the missing dynamic property as null
                         // (bug78644).
-                        self.check_dynamic_creation(o, name)?;
+                        self.check_dynamic_creation(o, name, 0)?;
                         self.write_dynamic_prop(o, name.clone(), Value::Null);
                         Ok(Some(Value::Null))
                     }

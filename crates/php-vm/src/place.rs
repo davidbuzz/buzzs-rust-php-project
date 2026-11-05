@@ -1430,7 +1430,7 @@ impl Vm {
                 }
                 self.typed_prop_dim_write_check(&obj, name, &segs[i + 1], &wop)?;
                 let rw = matches!(wop, WOp::FetchRw | WOp::AssignOp(..));
-                match self.property_container(&obj, name, rw)? {
+                match self.property_container(&obj, name, rw, 1)? {
                     PropContainer::Declared(idx) => {
                         let obj = self.lazy_object_for(&obj, Some(name))?;
                         let walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
@@ -1756,7 +1756,12 @@ impl Vm {
     /// an error handler run by the "Undefined property" warning may define
     /// the property, and the operation then works on that value
     /// (`zend_assign_op_overloaded_property`).
+    ///
+    /// `obj` is an [`Vm::obj_walk`] temporary.
     fn fetch_property_rw(&mut self, obj: &Obj, name: &ZStr) -> VmResult<Value> {
+        if let Some(v) = self.rw_create_dynamic(obj, name, 1)? {
+            return Ok(v);
+        }
         let v = self.read_property(obj, name, FetchMode::Read)?;
         if !matches!(v, Value::Null) || self.error_handlers.is_empty() {
             return Ok(v);
