@@ -213,6 +213,8 @@ pub struct ClassDecl {
     pub cases: Vec<(ZStr, Option<ConstExpr>, u32)>,
     /// Attributes of each enum case (parallel to `cases`).
     pub case_attributes: Vec<Vec<AttributeInfo>>,
+    /// Doc comment of each enum case (parallel to `cases`).
+    pub case_doc_comments: Vec<Option<ZStr>>,
     /// Enum backing type (`mask::LONG` or `mask::STRING`).
     pub backing: Option<u32>,
     /// Attributes.

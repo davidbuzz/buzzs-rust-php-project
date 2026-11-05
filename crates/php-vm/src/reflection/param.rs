@@ -270,13 +270,18 @@ fn builtin_default(vm: &mut Vm, f: &FnRef, idx: usize, text: &str) -> VmResult<V
         }
     }
     let t = text.trim();
-    if let Some(p) = t.find("::") {
-        let cn = ZStr::from(&t[..p]);
-        if let Some(c) = vm.lookup_class(&cn)? {
-            return vm.class_constant(&c, &ZStr::from(&t[p + 2..]));
+    // A flag combination (`A::X|A::Y`): the bitwise or of the constants.
+    if t.contains('|') && !t.contains(['"', '\'', '(', '[']) {
+        let mut acc = 0;
+        for part in t.split('|') {
+            match default_constant(vm, part.trim())? {
+                Some(Value::Int(i)) => acc |= i,
+                _ => return Ok(Value::Null),
+            }
         }
+        return Ok(Value::Int(acc));
     }
-    if let Some(v) = vm.constants.get(&ZStr::from(t)).cloned() {
+    if let Some(v) = default_constant(vm, t)? {
         return Ok(v);
     }
     if let Some(e) = parse_const_expr(t) {
@@ -287,6 +292,23 @@ fn builtin_default(vm: &mut Vm, f: &FnRef, idx: usize, text: &str) -> VmResult<V
         }
     }
     Ok(Value::Null)
+}
+
+/// The value of a (class) constant named by an internal default, fetched
+/// like `zval_update_constant_ex()` (deprecations included).
+fn default_constant(vm: &mut Vm, t: &str) -> VmResult<Option<Value>> {
+    if let Some(p) = t.find("::") {
+        let cn = ZStr::from(&t[..p]);
+        if let Some(c) = vm.lookup_class(&cn)? {
+            return vm.class_constant(&c, &ZStr::from(&t[p + 2..])).map(Some);
+        }
+    }
+    let name = ZStr::from(t);
+    let Some(v) = vm.constants.get(&name).cloned() else {
+        return Ok(None);
+    };
+    vm.constant_deprecation(&name)?;
+    Ok(Some(v))
 }
 
 fn rp_get_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

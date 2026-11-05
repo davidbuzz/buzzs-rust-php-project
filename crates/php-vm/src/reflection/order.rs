@@ -154,6 +154,21 @@ fn prop_names(c: &Rc<Class>, out: &mut Vec<ZStr>, seen: &mut HashSet<ZStr>) {
             out.push(n.clone());
         }
     };
+    let parent_names = |c: &Rc<Class>| {
+        let mut pn = Vec::new();
+        if let Some(p) = &c.parent {
+            prop_names(p, &mut pn, &mut HashSet::new());
+        }
+        pn
+    };
+    // An internal class inherits before declaring its own properties
+    // (`zend_register_internal_class_ex()`), so the parent's come first; a
+    // user class declares its own at compile time and inherits after.
+    if c.decl.is_none() {
+        for n in &parent_names(c) {
+            push(n, out);
+        }
+    }
     if let Some(decl) = &c.decl {
         if c.is_enum() {
             push(&ZStr::from("name"), out);
@@ -176,13 +191,8 @@ fn prop_names(c: &Rc<Class>, out: &mut Vec<ZStr>, seen: &mut HashSet<ZStr>) {
             }
         }
     }
-    if let Some(p) = &c.parent {
-        let mut pn = Vec::new();
-        let mut ps = HashSet::new();
-        prop_names(p, &mut pn, &mut ps);
-        for n in &pn {
-            push(n, out);
-        }
+    for n in &parent_names(c) {
+        push(n, out);
     }
     for t in &c.traits {
         if let Some(td) = &t.decl {

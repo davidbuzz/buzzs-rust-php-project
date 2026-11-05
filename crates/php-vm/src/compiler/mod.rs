@@ -228,6 +228,11 @@ pub(crate) struct Compiler {
     /// Property name while compiling a property hook (`__PROPERTY__`).
     pub hook_prop: Option<Vec<u8>>,
     pub closure_depth: u32,
+    /// Compiling a parameter default: a constant expression whose
+    /// `self`/`parent` (in `new` and `X::C`) are only checked when it is
+    /// evaluated, as `zend_compile_const_expr_*` do not call
+    /// `zend_ensure_valid_class_fetch_type()`.
+    pub in_const_default: bool,
 }
 
 /// Compiles a parsed program.
@@ -257,6 +262,7 @@ pub fn compile(
         multibyte: program.multibyte,
         hook_prop: None,
         closure_depth: 0,
+        in_const_default: false,
     };
     for w in &program.warnings {
         let level = match w.level {
@@ -583,33 +589,59 @@ impl Compiler {
         Ok(ClassSpec::Named(l))
     }
 
+    /// The compile-time `self`/`parent`/`static` check of a class
+    /// reference. Constant expressions (parameter defaults, constant and
+    /// property initializers) defer it to evaluation: the
+    /// `zend_compile_const_expr_*` helpers for `new` and `X::C` do not call
+    /// `zend_ensure_valid_class_fetch_type()`.
     fn check_class_scope(&self, what: &str, line: u32) -> CResult<()> {
-        let in_class = !self.classes.is_empty();
+        if self.in_const_expr() {
+            return Ok(());
+        }
+        self.ensure_valid_class_fetch(what, line)
+    }
+
+    /// Whether a constant expression is being compiled.
+    pub(crate) fn in_const_expr(&self) -> bool {
+        self.in_const_default || self.fref().kind == FnKind::ConstExpr
+    }
+
+    /// `zend_ensure_valid_class_fetch_type()`: `self`/`parent`/`static`
+    /// are rejected at compile time only where the scope is known
+    /// (`zend_is_scope_known()`): not in closures, nor in file or eval
+    /// code (which inherits the including scope), nor in traits; elsewhere
+    /// the runtime fetch reports the error.
+    pub(crate) fn ensure_valid_class_fetch(&self, what: &str, line: u32) -> CResult<()> {
         let in_closure = self
             .fns
             .iter()
             .rev()
             .take_while(|f| f.kind != FnKind::Main)
             .any(|f| f.kind == FnKind::Closure);
-        let top_level_fn = self.fns.iter().any(|f| f.kind == FnKind::Function);
-        if !in_class && !in_closure && (top_level_fn || self.fref().kind == FnKind::Main) {
-            if self.opts.is_eval {
+        if in_closure {
+            return Ok(());
+        }
+        let Some(c) = self.classes.last() else {
+            let kind = self
+                .fns
+                .iter()
+                .rev()
+                .map(|f| f.kind)
+                .find(|k| *k != FnKind::ConstExpr)
+                .unwrap_or(FnKind::Main);
+            if kind == FnKind::Main {
                 return Ok(());
             }
             return self.err(
                 format!("Cannot use \"{what}\" when no class scope is active"),
                 line,
             );
-        }
-        if what == "parent" {
-            if let Some(c) = self.classes.last() {
-                if c.parent.is_none() && !c.is_trait && !in_closure {
-                    return self.err(
-                        "Cannot use \"parent\" when current class scope has no parent",
-                        line,
-                    );
-                }
-            }
+        };
+        if what == "parent" && c.parent.is_none() && !c.is_trait {
+            return self.err(
+                "Cannot use \"parent\" when current class scope has no parent",
+                line,
+            );
         }
         Ok(())
     }

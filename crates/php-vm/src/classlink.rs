@@ -140,24 +140,24 @@ impl Vm {
                 cache[slot] = Rc::downgrade(&c);
                 Ok(c)
             }
-            ClassSpec::SelfClass => {
-                match self.scope() {
-                    Some(c) => Ok(c),
-                    None => Err(self
-                        .make_throw("Error", "Cannot use \"self\" when no class scope is active")),
-                }
-            }
+            ClassSpec::SelfClass => match self.scope() {
+                Some(c) => Ok(c),
+                None => Err(self.make_throw(
+                    "Error",
+                    "Cannot access \"self\" when no class scope is active",
+                )),
+            },
             ClassSpec::Parent => match self.scope() {
                 Some(c) => match &c.parent {
                     Some(p) => Ok(p.clone()),
                     None => Err(self.make_throw(
                         "Error",
-                        "Cannot use \"parent\" when current class scope has no parent",
+                        "Cannot access \"parent\" when current class scope has no parent",
                     )),
                 },
                 None => Err(self.make_throw(
                     "Error",
-                    "Cannot use \"parent\" when no class scope is active",
+                    "Cannot access \"parent\" when no class scope is active",
                 )),
             },
             ClassSpec::Static => {
@@ -171,7 +171,7 @@ impl Vm {
                     Some(c) => Ok(c),
                     None => Err(self.make_throw(
                         "Error",
-                        "Cannot use \"static\" when no class scope is active",
+                        "Cannot access \"static\" when no class scope is active",
                     )),
                 }
             }
@@ -204,10 +204,44 @@ impl Vm {
                 )),
             };
         }
-        if let ClassSpec::SelfClass = spec {
-            return Ok(Value::Str(
-                self.scope().map(|c| c.name.clone()).unwrap_or_default(),
-            ));
+        // `ZEND_FETCH_CLASS_NAME` (and `ZEND_AST_CLASS_NAME` in constant
+        // expressions) word their errors "Cannot use", unlike the class
+        // fetches of `resolve_class_spec` ("Cannot access").
+        let kw = match spec {
+            ClassSpec::SelfClass => "self",
+            ClassSpec::Parent => "parent",
+            ClassSpec::Static => "static",
+            _ => "",
+        };
+        if !kw.is_empty() {
+            let Some(scope) = self.scope() else {
+                let msg = if self.frame().kind == FrameKind::ConstExpr {
+                    "Cannot use \"self\" when no class scope is active".to_string()
+                } else {
+                    format!("Cannot use \"{kw}\" in the global scope")
+                };
+                return Err(self.make_throw("Error", &msg));
+            };
+            let c = match spec {
+                ClassSpec::Parent => match &scope.parent {
+                    Some(p) => p.clone(),
+                    None => {
+                        return Err(self.make_throw(
+                            "Error",
+                            "Cannot use \"parent\" when current class scope has no parent",
+                        ))
+                    }
+                },
+                ClassSpec::Static => self
+                    .frames
+                    .iter()
+                    .rev()
+                    .find(|f| f.kind != FrameKind::Builtin)
+                    .and_then(|f| f.called.clone())
+                    .unwrap_or(scope),
+                _ => scope,
+            };
+            return Ok(Value::Str(c.name.clone()));
         }
         let c = self.resolve_class_spec(spec)?;
         Ok(Value::Str(c.name.clone()))
@@ -2406,7 +2440,7 @@ fn build_class(
                 ty: None,
                 is_case: true,
                 evaluating: Cell::new(false),
-                doc_comment: None,
+                doc_comment: decl.case_doc_comments.get(i).cloned().flatten(),
                 attributes: decl.case_attributes.get(i).cloned().unwrap_or_default(),
             }),
             &mut consts,

@@ -82,3 +82,12 @@ fn rounding_mode_enum() {
         "2 3"
     );
 }
+
+#[test]
+fn rounding_mode_is_an_internal_standard_enum() {
+    assert_eq!(
+        run(r"$r = new ReflectionClass('RoundingMode');
+            var_dump($r->isInternal(), $r->getExtensionName(), count(RoundingMode::cases()));"),
+        "bool(true)\nstring(8) \"standard\"\nint(8)\n"
+    );
+}

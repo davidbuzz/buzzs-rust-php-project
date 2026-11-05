@@ -303,7 +303,16 @@ impl Vm {
             });
             let mut entry = HashTable::new();
             // File/line of the call site.
-            if let Some(prev) = prev.filter(|p| p.kind != FrameKind::Builtin) {
+            let attr_site = idx
+                .checked_sub(1)
+                .and_then(|p| self.attribute_call_sites.iter().rev().find(|s| s.0 == p));
+            if let Some((_, file, line)) = attr_site {
+                entry.insert(ArrayKey::Str(ZStr::from("file")), Value::Str(file.clone()));
+                entry.insert(
+                    ArrayKey::Str(ZStr::from("line")),
+                    Value::Int(i64::from(*line)),
+                );
+            } else if let Some(prev) = prev.filter(|p| p.kind != FrameKind::Builtin) {
                 entry.insert(
                     ArrayKey::Str(ZStr::from("file")),
                     Value::Str(prev.code.filename.clone()),

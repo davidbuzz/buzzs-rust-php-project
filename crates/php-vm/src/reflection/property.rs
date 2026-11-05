@@ -313,8 +313,10 @@ fn rp_set_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         };
         let cur = cell.borrow().clone();
         match cur {
+            // `zend_update_static_property_ex()` assigns through a typed
+            // reference with its type checks (non-strict).
             Value::Reference(r) => {
-                r.set(v);
+                vm.assign_ref_ex(&r, v, Some(false))?;
             }
             _ => *cell.borrow_mut() = v,
         }
@@ -958,6 +960,9 @@ fn rp_is_writable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 .borrow()
                 .get(pi.slot as usize)
                 .is_some_and(Option::is_some)
+                // An initialized readonly property is writable again, once,
+                // while the object is being cloned (`IS_PROP_REINITABLE`).
+                && vm.readonly_locked(&o, pi)
             {
                 return Ok(Value::Bool(false));
             }

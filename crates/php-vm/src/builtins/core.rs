@@ -711,7 +711,13 @@ fn property_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     if cls.prop_map.contains_key(&p)
         || cls.static_map.contains_key(&p)
-        || cls.props.iter().any(|x| x.name == p)
+        || cls.props.iter().any(|x| {
+            // `property_exists()`: an inherited private property is not
+            // the class's own (`property_info->ce == ce`).
+            x.name == p
+                && (x.visibility() != crate::func::flags::PRIVATE
+                    || x.class.as_bytes().eq_ignore_ascii_case(cls.name.as_bytes()))
+        })
     {
         return Ok(Value::Bool(true));
     }

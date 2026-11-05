@@ -147,6 +147,7 @@ impl Vm {
             included_set: HashSet::new(),
             autoloaders: Vec::new(),
             autoloading: HashSet::new(),
+            attribute_call_sites: Vec::new(),
             exit_status: 0,
             shutdown_functions: Vec::new(),
             last_error: None,
