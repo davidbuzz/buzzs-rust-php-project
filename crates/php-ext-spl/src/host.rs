@@ -158,6 +158,25 @@ pub fn std_properties(obj: &Obj) -> ZArray {
     fresh
 }
 
+/// The number of entries [`build_properties`] produces for `obj`, without
+/// building the table.
+fn std_property_count(obj: &Obj) -> usize {
+    let cls = class_of(obj).clone();
+    let d = data(obj);
+    let declared = {
+        let slots = d.slots.borrow();
+        cls.props
+            .iter()
+            .filter(|pi| {
+                pi.flags & flags::STATIC == 0
+                    && !pi.is_virtual()
+                    && matches!(slots.get(pi.slot as usize), Some(Some(_)))
+            })
+            .count()
+    };
+    declared + d.dynamic.borrow().as_ref().map_or(0, HashTable::len)
+}
+
 /// Records the table handed out for `obj`.
 ///
 /// Only the keys and the iterator positions of the cached table are ever
@@ -672,6 +691,10 @@ impl SplHost for VmHost<'_> {
         std_properties(obj)
     }
 
+    fn std_property_count(&mut self, obj: &Obj) -> usize {
+        std_property_count(obj)
+    }
+
     fn std_has_property(&mut self, obj: &Obj, name: &ZStr) -> bool {
         let scope = self
             .vm
@@ -976,6 +999,10 @@ impl SplHost for BridgedHost {
     }
     fn std_properties(&mut self, obj: &Obj) -> ZArray {
         std_properties(obj)
+    }
+
+    fn std_property_count(&mut self, obj: &Obj) -> usize {
+        std_property_count(obj)
     }
     fn std_has_property(&mut self, obj: &Obj, name: &ZStr) -> bool {
         lent(|h| h.std_has_property(obj, name)).unwrap_or(false)

@@ -355,6 +355,13 @@ fn wakeup(host: &mut dyn SplHost, this: &Obj, args: &[Value]) -> RtResult<Value>
     Args::none("SplFixedArray::__wakeup", args)?;
     let st = state_of(host, this)?;
     if st.fixed(|f| f.can_init())? {
+        // `spl_fixedarray_init(&intern->array, size)` allocates the elements
+        // before they are copied out of the property table, so a table too
+        // large for `memory_limit` fails there, before any copy is made.
+        let size = host.std_property_count(this);
+        if !reserve(host, size, 0) {
+            return Ok(Value::Null);
+        }
         let props = host.std_properties(this);
         let elements: Vec<Value> = props.values().map(Value::deref).collect();
         st.fixed(|f| f.elements = elements)?;

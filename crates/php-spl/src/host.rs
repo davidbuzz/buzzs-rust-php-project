@@ -130,6 +130,13 @@ pub trait SplHost: ArrayContext {
     /// keys (declared and dynamic properties).
     fn std_properties(&mut self, obj: &Obj) -> ZArray;
 
+    /// `zend_hash_num_elements(zend_std_get_properties(obj))`: the number
+    /// of entries [`std_properties`](Self::std_properties) returns, without
+    /// building the table. The default builds it.
+    fn std_property_count(&mut self, obj: &Obj) -> usize {
+        self.std_properties(obj).len()
+    }
+
     /// `zend_std_has_property(obj, name, ZEND_PROPERTY_EXISTS)`: whether a
     /// property `name` exists and is accessible from the calling scope.
     /// The default checks for a public (unmangled) key.
