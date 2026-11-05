@@ -249,6 +249,7 @@ fn read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
         DimensionCtx::ReadWrite => (DimKind::ReadWrite, Some(k)),
         DimensionCtx::Unset => (DimKind::Unset, Some(k)),
         DimensionCtx::Append => (DimKind::Write, None),
+        DimensionCtx::AppendRw => (DimKind::ReadWrite, None),
     };
     let v = with_host(vm, |host| h::read_dimension(host, o, offset, kind))?;
     if let Some(v) = &v {

@@ -111,10 +111,11 @@ fn dimension_handler_fetch_contexts() {
 $o = new DimensionHandlersNoArrayAccess; $o['foo'] += 10; var_dump($o->read, $o->write, $o->readType);
 $o = new DimensionHandlersNoArrayAccess; $r = $o['foo'] ?? 'd'; var_dump($o->has, $o->readType);
 $o = new DimensionHandlersNoArrayAccess; try { $o['foo']['bar'] = true; } catch (\Error $e) { echo $e->getMessage(), "\n"; } var_dump($o->readType);
-$o = new DimensionHandlersNoArrayAccess; $r = &$o[]; var_dump($o->hasOffset, $o->readType);"#);
+$o = new DimensionHandlersNoArrayAccess; $r = &$o[]; var_dump($o->hasOffset, $o->readType);
+$o = new DimensionHandlersNoArrayAccess; try { $o[]['bar'] += 10; } catch (\Error $e) { echo $e->getMessage(), "\n"; } var_dump($o->hasOffset, $o->readType);"#);
     assert_eq!(
         out,
-        "bool(true)\nbool(true)\nint(0)\nbool(false)\nint(3)\n\nNotice: Indirect modification of overloaded element of DimensionHandlersNoArrayAccess has no effect in test.php on line 4\nCannot use a scalar value as an array\nint(1)\n\nNotice: Indirect modification of overloaded element of DimensionHandlersNoArrayAccess has no effect in test.php on line 5\nbool(false)\nint(1)\n"
+        "bool(true)\nbool(true)\nint(0)\nbool(false)\nint(3)\n\nNotice: Indirect modification of overloaded element of DimensionHandlersNoArrayAccess has no effect in test.php on line 4\nCannot use a scalar value as an array\nint(1)\n\nNotice: Indirect modification of overloaded element of DimensionHandlersNoArrayAccess has no effect in test.php on line 5\nbool(false)\nint(1)\n\nNotice: Indirect modification of overloaded element of DimensionHandlersNoArrayAccess has no effect in test.php on line 6\nCannot use a scalar value as an array\nbool(false)\nint(2)\n"
     );
 }
 

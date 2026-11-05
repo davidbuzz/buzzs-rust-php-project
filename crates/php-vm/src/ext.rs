@@ -88,6 +88,9 @@ pub enum DimensionCtx {
     Unset,
     /// `$o[][..] = v`: the key passed is null.
     Append,
+    /// `$o[][..] .= v` (`BP_VAR_RW` without an offset): the key passed is
+    /// null.
+    AppendRw,
 }
 
 /// Why [`ClassHooks::read_property`] is being called (`BP_VAR_*` of

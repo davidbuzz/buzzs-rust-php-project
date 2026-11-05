@@ -1096,16 +1096,15 @@ impl Vm {
                     };
                     if let (Some(f), Some(k)) = (h.read_dimension, read_key) {
                         if !last || matches!(wop, WOp::FetchRw | WOp::MakeRef) {
-                            self.dim_ctx = if keyopt.is_none() {
-                                crate::ext::DimensionCtx::Append
-                            } else {
-                                match (&wop, last) {
-                                    (WOp::FetchRw | WOp::AssignOp(..), _) => {
-                                        crate::ext::DimensionCtx::ReadWrite
-                                    }
-                                    (WOp::Unset, false) => crate::ext::DimensionCtx::Unset,
-                                    _ => crate::ext::DimensionCtx::Write,
+                            let rw = matches!(wop, WOp::FetchRw | WOp::AssignOp(..));
+                            self.dim_ctx = match (keyopt.is_none(), rw, &wop, last) {
+                                (true, true, ..) => crate::ext::DimensionCtx::AppendRw,
+                                (true, false, ..) => crate::ext::DimensionCtx::Append,
+                                (false, true, ..) => crate::ext::DimensionCtx::ReadWrite,
+                                (false, false, WOp::Unset, false) => {
+                                    crate::ext::DimensionCtx::Unset
                                 }
+                                _ => crate::ext::DimensionCtx::Write,
                             };
                             let r = f(self, &obj, k);
                             self.dim_ctx = crate::ext::DimensionCtx::Read;
