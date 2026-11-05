@@ -73,6 +73,9 @@ fn register_std_streams(m: &mut ModuleBuilder<'_>) {
 }
 
 fn shutdown(vm: &mut Vm) {
+    // `PHP_RSHUTDOWN(basic)` (user_filter_map) runs before
+    // `zend_close_rsrc_list()` closes the remaining streams.
+    userfilter::shutdown();
     res::shutdown(vm);
     http::shutdown();
 }
@@ -105,6 +108,7 @@ impl Extension for Streams {
             }
         }
         m.on_request_shutdown(shutdown);
+        php_vm::ext::set_resource_refs_hook(res::context_refs_held);
         m.vm()
             .register_interrupt_handler(res::close_deferred_on_interrupt);
         include::install(m.vm());

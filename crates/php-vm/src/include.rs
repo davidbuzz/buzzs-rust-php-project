@@ -391,10 +391,11 @@ impl Vm {
             if name.is_empty() {
                 self.warning(&format!("{kind_name}(): Filename cannot be empty"))?;
             } else {
-                let origin = self.include_error_origin(kind_name, name);
-                self.warning(&format!(
-                    "{origin}: Failed to open stream: No such file or directory"
-                ))?;
+                self.include_warning(
+                    kind_name,
+                    name,
+                    "Failed to open stream: No such file or directory",
+                )?;
             }
             return self.include_failed(kind, kind_name, &s, dst);
         };
@@ -413,8 +414,7 @@ impl Vm {
                 // strerror() text, without Rust's " (os error N)" suffix.
                 let text = e.to_string();
                 let text = text.split(" (os error").next().unwrap_or_default();
-                let origin = self.include_error_origin(kind_name, name);
-                self.warning(&format!("{origin}: Failed to open stream: {text}"))?;
+                self.include_warning(kind_name, name, &format!("Failed to open stream: {text}"))?;
                 return self.include_failed(kind, kind_name, &s, dst);
             }
         };
@@ -490,10 +490,11 @@ impl Vm {
                 &format!("Failed opening required '{n}' (include_path='{ip}')"),
             ));
         }
-        let origin = self.include_error_origin(kind_name, s.as_bytes());
-        self.warning(&format!(
-            "{origin}: Failed opening '{n}' for inclusion (include_path='{ip}')"
-        ))?;
+        self.include_warning(
+            kind_name,
+            s.as_bytes(),
+            &format!("Failed opening '{n}' for inclusion (include_path='{ip}')"),
+        )?;
         self.set_tmp(dst, Value::Bool(false));
         Ok(false)
     }

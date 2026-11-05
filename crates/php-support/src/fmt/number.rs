@@ -117,7 +117,16 @@ fn round_helper(integral: f64, value: f64, exponent: f64, places: i32, mode: Rou
 }
 
 /// `_php_math_round(value, places, mode)` — PHP's `round()` for floats.
+///
+/// For `|places| >= 23` PHP round-trips through its own `snprintf("%15fe%d")`,
+/// which writes the current locale's decimal point (see
+/// [`super::locale::decimal_point`]), and `zend_strtod()`.
 pub fn php_round(value: f64, places: i32, mode: RoundingMode) -> f64 {
+    php_round_dp(value, places, mode, super::locale::decimal_point())
+}
+
+/// [`php_round`] with an explicit `LCONV_DECIMAL_POINT`.
+fn php_round_dp(value: f64, places: i32, mode: RoundingMode, dec_point: u8) -> f64 {
     if !value.is_finite() || value == 0.0 {
         return value;
     }
@@ -163,8 +172,16 @@ pub fn php_round(value: f64, places: i32, mode: RoundingMode) -> f64 {
             tmp * exponent
         }
     } else {
-        // snprintf("%15fe%d") + strtod round trip.
+        // snprintf("%15fe%d") + zend_strtod() round trip. PHP's snprintf
+        // writes `%f` with the locale's decimal point, where zend_strtod()
+        // stops: with a decimal comma only the integral digits survive
+        // (round(1.5e-20, 25) is 150000.0 under de_DE, as in php-src).
         let s = format!("{tmp:.6}e{}", -i64::from(places));
+        let s = if dec_point == b'.' {
+            s.as_str()
+        } else {
+            s.split('.').next().unwrap_or_default()
+        };
         match s.parse::<f64>() {
             Ok(v) if v.is_finite() => v,
             _ => value,
@@ -321,6 +338,20 @@ mod tests {
         assert_eq!(php_round(1.21, 1, RoundingMode::AwayFromZero), 1.3);
         assert_eq!(php_round(1.0, 30, RoundingMode::HalfUp), 1.0);
         assert_eq!(php_round(0.123_456, 25, RoundingMode::HalfUp), 0.123_456);
+    }
+
+    #[test]
+    fn round_large_places_locale_decimal_point() {
+        // /usr/bin/php under setlocale(LC_ALL, "en_DK.utf8") (decimal
+        // comma) vs "C".
+        let m = RoundingMode::HalfUp;
+        assert_eq!(php_round_dp(1.5e-20, 25, m, b'.'), 1.5e-20);
+        assert_eq!(php_round_dp(1.5e-20, 25, m, b','), 150_000.0);
+        assert_eq!(php_round_dp(-1.5e-20, 25, m, b','), -150_000.0);
+        assert_eq!(php_round_dp(1.234_567_89, 23, m, b','), 1.234_567_89);
+        assert_eq!(php_round_dp(0.1, 30, m, b','), 0.1);
+        // |places| < 23 never formats.
+        assert_eq!(php_round_dp(1.005, 2, m, b','), 1.01);
     }
 
     #[test]

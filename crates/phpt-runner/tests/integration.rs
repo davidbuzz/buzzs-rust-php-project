@@ -497,3 +497,166 @@ fn php_src_zend_sample_passes() {
     assert_eq!(report.totals.total, paths.len(), "{stdout}");
     assert_eq!(report.totals.pass, paths.len(), "{stdout}");
 }
+
+/// `--repeat N` (run-tests.php semantics): the script runs N times in one process, only the
+/// last run's output is checked, `SKIP_REPEAT=1` is exported, and tests whose sections make
+/// repeating unsafe are skipped with run-tests.php's reasons.
+#[test]
+fn repeat_mode_against_reference_php() {
+    let Some(php) = reference_php() else {
+        eprintln!("skipping: {REFERENCE_PHP} not found");
+        return;
+    };
+    let dir = fixture_copy("repeat");
+    fs::write(
+        dir.join("pass_repeat_state.phpt"),
+        "--TEST--\nrepeat state\n--SKIPIF--\n<?php if (getenv('SKIP_REPEAT') !== '1') die('skip only with --repeat'); ?>\n\
+         --FILE--\n<?php\nfunction counter() { static $n = 0; return ++$n; }\necho counter(), counter(), \"\\n\";\n\
+         --EXPECT--\n12\n",
+    )
+    .unwrap();
+    let (report, _, stdout) = run_runner(
+        &[
+            "--php",
+            php,
+            "--timeout",
+            "2",
+            "-j",
+            "4",
+            "--no-color",
+            "--repeat",
+            "3",
+        ],
+        &[&dir],
+    );
+    let got: BTreeMap<String, (Status, String)> = report
+        .tests
+        .iter()
+        .map(|t| {
+            (
+                t.path.rsplit('/').next().unwrap().to_string(),
+                (t.result, t.info.clone()),
+            )
+        })
+        .collect();
+    let not_repeatable = [
+        ("bork_clean.phpt", "CLEAN"),
+        ("pass_clean.phpt", "CLEAN"),
+        ("pass_stdin.phpt", "STDIN"),
+        ("pass_external.phpt", "FILE_EXTERNAL"),
+    ];
+    for (name, section) in not_repeatable {
+        assert_eq!(
+            got[name],
+            (
+                Status::Skip,
+                format!("reason: Test with {section} might not be repeatable")
+            ),
+            "{stdout}"
+        );
+    }
+    assert_eq!(
+        got["skip_cgi.phpt"],
+        (Status::Skip, "reason: CGI not available".to_string()),
+        "{stdout}"
+    );
+    for (name, (status, _)) in &got {
+        if not_repeatable.iter().any(|(n, _)| n == name) {
+            continue;
+        }
+        let expected = match name.split('_').next().unwrap() {
+            "pass" => Status::Pass,
+            "fail" => Status::Fail,
+            "skip" => Status::Skip,
+            "xfail" => Status::Xfail,
+            "warn" => Status::Warn,
+            "bork" => Status::Bork,
+            other => panic!("unexpected fixture prefix {other}"),
+        };
+        assert_eq!(*status, expected, "{name}\n{stdout}");
+    }
+    assert_eq!(got.len(), 24, "{stdout}");
+    // Without --repeat the state test skips itself.
+    let (report, _, stdout) = run_runner(
+        &["--php", php, "--no-color"],
+        &[&dir.join("pass_repeat_state.phpt")],
+    );
+    assert_eq!(report.tests[0].result, Status::Skip, "{stdout}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--junit FILE` writes run-tests.php's JUnit XML.
+#[test]
+fn junit_report_against_reference_php() {
+    let Some(php) = reference_php() else {
+        eprintln!("skipping: {REFERENCE_PHP} not found");
+        return;
+    };
+    let dir = fixture_copy("junit");
+    let xml_path = dir.join("junit.xml");
+    let (_, _, stdout) = run_runner(
+        &[
+            "--php",
+            php,
+            "--timeout",
+            "2",
+            "-j",
+            "4",
+            "--no-color",
+            "--srcdir",
+            dir.to_str().unwrap(),
+            "--junit",
+            xml_path.to_str().unwrap(),
+        ],
+        &[&dir],
+    );
+    let xml = fs::read_to_string(&xml_path).unwrap_or_else(|e| panic!("{e}\n{stdout}"));
+    assert!(
+        xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites name=\"php\" tests=\"23\" failures=\"2\" errors=\"3\" skip=\"3\" time=\""),
+        "{xml}"
+    );
+    assert!(xml.ends_with("</testsuite>\n</testsuites>"), "{xml}");
+    assert_eq!(xml.matches("<testcase ").count(), 23, "{xml}");
+    for needle in [
+        "<testcase name='fail_expect.phpt (A failing test)' time='",
+        "<failure type='FAILED' message=''>001- expected\n001+ actual\n</failure>\n</testcase>\n",
+        // SKIPIF output and CLEAN output are the BORK messages.
+        "<testcase name='bork_clean.phpt (CLEAN output borks a passing test)' time='",
+        "<testcase name='bork_skipif_output.phpt (SKIPIF printing garbage)' time='",
+        "<error type='BORKED' message='garbage'/>\n</testcase>\n",
+        // A test that cannot be parsed is named after its file.
+        "<testcase name='bork_unknown_section.phpt (bork_unknown_section.phpt)' time='",
+        "<error type='BORKED' message='Unknown section &quot;NOPE&quot;'/>\n",
+        "<skipped>not today</skipped>\n",
+        "<skipped>Required extension missing: definitely_not_an_extension</skipped>\n",
+        "<warning> (warn: XFAIL section but test passes)</warning>\n",
+    ] {
+        assert!(xml.contains(needle), "missing {needle:?} in\n{xml}");
+    }
+    assert_eq!(xml.matches("message='garbage'").count(), 2, "{xml}");
+
+    // Inside php-src, suites are named after the test directory.
+    let zend = php_src().join("Zend/tests/add_001.phpt");
+    if zend.is_file() {
+        let (_, _, stdout) = run_runner(
+            &[
+                "--php",
+                php,
+                "--no-artifacts",
+                "--junit",
+                xml_path.to_str().unwrap(),
+            ],
+            &[&zend],
+        );
+        let xml = fs::read_to_string(&xml_path).unwrap_or_else(|e| panic!("{e}\n{stdout}"));
+        assert!(
+            xml.contains("<testsuite name=\"php.Zend.tests\" tests=\"1\" failures=\"0\" errors=\"0\" skip=\"0\" time=\""),
+            "{xml}"
+        );
+        assert!(
+            xml.contains("<testcase name='Zend/tests/add_001.phpt (adding arrays)' time='"),
+            "{xml}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}

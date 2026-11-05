@@ -34,6 +34,8 @@ target/debug/phpt-runner [OPTIONS] <PATHS>...
 | `--env KEY=VALUE` | Extra environment variable for every test (repeatable). |
 | `--no-snapshot` | Run the binary in place. By default it is hard-linked (or copied) into a private temp directory first, so a concurrent `cargo build` relinking `target/debug/php` cannot break a long run. |
 | `--resume <FILE>` | Append each result to a JSON-lines log as it completes; tests already in the log are not rerun (their results are reused), so a killed full-suite run can be continued. |
+| `--repeat <N>` | Run each test script N times in one process (`php --repeat N`) and check the output of the last run, like `run-tests.php --repeat`; see below. |
+| `--junit <FILE>` | Write a JUnit XML report in run-tests.php's format (default: `$TEST_PHP_JUNIT` if set); see below. |
 
 Examples:
 
@@ -148,9 +150,23 @@ total/pass/fail/skip and pass rates per suite (Zend/tests, tests/, ext/, sapi/) 
 - Deliberate deviations: a test that timed out is not retried as "flaky"; output is capped at
   16 MiB per process (a runaway test is killed and its output marked), which run-tests.php does
   not do.
+- `--repeat N` follows run-tests.php: the test command gets `--repeat N`, `SKIP_REPEAT=1` is
+  exported, `opcache.record_warnings=1` is added to the test's INI settings, and tests with a
+  `FILE_EXTERNAL`, `CLEAN`, `STDIN` or `CAPTURE_STDIO` section (or `opcache.opt_debug_level`
+  in `--INI--`) are skipped as "might not be repeatable". Of the output, what precedes the
+  CLI's `Executing for the first time...` line and what follows its last `Finished execution,
+  repeating...` line are compared.
+- JUnit (`--junit FILE`, or `TEST_PHP_JUNIT` as in run-tests.php): the same document as
+  run-tests.php's `JUnit` class (a root `php` suite, one suite per test directory named by
+  `pathToClassName()`, e.g. `php.Zend.tests`, `<failure>` with the escaped diff, `<error>` for
+  BORK, `<skipped>`, `<warning>`; XFAIL counts as passed). Differences: every counted test gets
+  a `<testcase>` (run-tests.php omits those skipped before their SKIPIF ran and unparsable
+  ones), test cases are sorted by path, times have millisecond resolution, out-of-scope tests
+  are left out, and the redirecting test of a `--REDIRECTTEST--` gets no entry of its own.
+  Results reused by `--resume` carry no diff.
 - Not supported: CGI (`--GET--`, `--POST--`, `--COOKIE--`, `--EXPECTHEADERS--`, ...) and
-  `--PHPDBG--` tests are parsed but SKIPPED; no valgrind/ASAN leak detection, `--repeat`,
-  opcache file-cache/preload modes or JUnit output.
+  `--PHPDBG--` tests are parsed but SKIPPED; no valgrind/ASAN leak detection (XLEAK) and no
+  opcache file-cache/preload modes (out of scope).
 
 ## Validation
 

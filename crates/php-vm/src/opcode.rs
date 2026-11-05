@@ -434,6 +434,17 @@ pub enum Op {
         place: PlaceId,
         dst: Option<u32>,
     },
+    /// `yield expr` in a by-reference generator where `expr` is not a
+    /// variable (`ZEND_YIELD` with a CONST/TMP operand, or a call result
+    /// flagged `ZEND_RETURNS_FUNCTION` when `call`): raises the
+    /// "Only variable references should be yielded by reference" notice
+    /// unless `call` and the call returned a reference.
+    YieldByRefValue {
+        key: Option<Operand>,
+        val: Operand,
+        call: bool,
+        dst: Option<u32>,
+    },
     /// `yield from`.
     YieldFrom { src: Operand, dst: Option<u32> },
 
@@ -464,7 +475,16 @@ pub enum Op {
         dst: u32,
     },
     /// `A::class`
-    FetchClassName { class: ClassSpec, dst: u32 },
+    FetchClassName {
+        class: ClassSpec,
+        dst: u32,
+        /// Compiled in an evaluated constant expression (a global `const`
+        /// value or a parameter default): with no class scope the error is
+        /// `ZEND_AST_CLASS_NAME`'s "Cannot use \"self\" when no class scope
+        /// is active" (`zend_ast_evaluate_inner()`), not
+        /// `ZEND_FETCH_CLASS_NAME`'s "... in the global scope".
+        const_expr: bool,
+    },
     /// `a instanceof B`
     InstanceOf {
         a: Operand,

@@ -182,6 +182,24 @@ fn locale_dependent_functions() {
         "Warning: nl_langinfo(): Item '99999' is not valid"
     );
 
+    // localeconv_decimal_point(): `.` in C, `,` in a decimal-comma locale
+    // (en_DK.utf8 when installed).
+    state
+        .setlocale(libc::LC_ALL.into(), &[Value::from("C")], &mut ctx)
+        .unwrap();
+    assert_eq!(locale::decimal_point(), b'.');
+    let dk = state
+        .setlocale(
+            libc::LC_NUMERIC.into(),
+            &[Value::from("en_DK.utf8")],
+            &mut ctx,
+        )
+        .unwrap();
+    if !matches!(dk, Value::Bool(false)) {
+        assert_eq!(locale::decimal_point(), b',');
+    }
+
     state.request_shutdown();
     assert!(!state.locale_changed);
+    assert_eq!(locale::decimal_point(), b'.');
 }

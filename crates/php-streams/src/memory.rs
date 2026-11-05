@@ -163,6 +163,16 @@ impl StreamOps for MemoryOps {
                         self.fpos = size;
                     }
                 } else {
+                    // `zend_string_frealloc(..., /* fallible */ true)`: a
+                    // size beyond `memory_limit` fails the truncate and
+                    // leaves the "Allowed memory size" violation recorded
+                    // for the VM, instead of attempting the allocation.
+                    let bytes = size.saturating_add(24 + 1).saturating_add(7) & !7;
+                    if php_memlimit::try_reserve(bytes).is_err()
+                        || self.data.try_reserve_exact(size - self.data.len()).is_err()
+                    {
+                        return OPT_ERR;
+                    }
                     self.data.resize(size, 0);
                 }
                 OPT_OK
