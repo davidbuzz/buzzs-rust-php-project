@@ -207,6 +207,19 @@ impl Vm {
         }
     }
 
+    /// [`Vm::read_cv`] for a defined variable (dereferenced); `None` when
+    /// undefined, leaving the warning to the caller.
+    #[inline]
+    pub(crate) fn read_cv_defined(&self, cv: u32) -> Option<Value> {
+        let f = self.frame();
+        let idx = f.cv_idx(cv);
+        f.vars
+            .borrow()
+            .slots
+            .get(idx)
+            .and_then(|s| s.as_ref().map(Value::deref))
+    }
+
     /// Reads a compiled variable without warning (`None` if undefined).
     pub(crate) fn cv_get(&self, cv: u32) -> Option<Value> {
         let f = self.frame();
@@ -657,9 +670,17 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Assign { place, val, dst } => {
-                        let v = self.read(*val)?;
-                        let v = self.copy_on_assign(v);
-                        let r = self.place_assign(*place, v)?;
+                        let r = match *val {
+                            Operand::Cv(cv) => match self.read_cv_defined(cv) {
+                                Some(v) => self.place_assign(*place, v)?,
+                                None => self.place_assign_undef_cv(*place, cv)?,
+                            },
+                            other => {
+                                let v = self.read(other)?;
+                                let v = self.copy_on_assign(v);
+                                self.place_assign(*place, v)?
+                            }
+                        };
                         self.set_dst(*dst, r);
                         Flow::Next
                     }
