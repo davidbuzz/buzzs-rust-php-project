@@ -43,14 +43,12 @@ impl Extension for Mbstring {
         output::register(m);
         regex::register(m);
         ini::register_hooks(m);
-        output::install_hooks(m);
         ini::startup(m.vm());
         multibyte::install(m.vm());
         m.info(module_info);
         m.on_request_startup(output::request_startup);
         m.on_request_shutdown(|_| {
             state::with(php_mbstring::MbState::request_shutdown);
-            output::reset();
             regex::reset();
         });
     }

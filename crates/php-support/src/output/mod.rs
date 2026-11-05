@@ -299,6 +299,18 @@ impl<C> OutputStack<C> {
         self.level() > 0 && self.handlers.iter().any(|h| h.name == name)
     }
 
+    /// `PHP_OUTPUT_HANDLER_HOOK_GET_FLAGS`.
+    pub fn running_flags(&self) -> Option<i32> {
+        self.running.and_then(|id| self.find(id)).map(|h| h.flags)
+    }
+
+    /// `PHP_OUTPUT_HANDLER_HOOK_IMMUTABLE`.
+    pub fn set_running_immutable(&mut self) {
+        if let Some(h) = self.running.and_then(|id| self.find_mut(id)) {
+            h.flags &= !(flags::REMOVABLE | flags::CLEANABLE);
+        }
+    }
+
     fn new_handler(
         &mut self,
         name: &[u8],

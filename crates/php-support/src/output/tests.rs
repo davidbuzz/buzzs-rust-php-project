@@ -171,6 +171,29 @@ fn native_alias_has_internal_flags_and_failure_passthrough() {
 }
 
 #[test]
+fn running_handler_hooks_preserve_flushability() {
+    let mut h = TestHost::default();
+    assert_eq!(h.stack.running_flags(), None);
+    assert!(h.ob_start_cb(
+        "immutable",
+        1,
+        112,
+        cb(|h, s, mode| {
+            if mode & flags::START != 0 {
+                assert_eq!(h.stack.running_flags(), Some(flags::STDFLAGS | flags::USER));
+            }
+            h.stack.set_running_immutable();
+            Some(s.to_vec())
+        }),
+    ));
+    h.echo("x");
+    assert_eq!(h.stack.running_flags(), None);
+    let st = h.stack.active_status().unwrap();
+    assert_eq!(st.flags & flags::STDFLAGS, flags::FLUSHABLE);
+    assert_eq!(h.finish(), "x");
+}
+
+#[test]
 fn conflicts_are_ordered_and_preserve_the_existing_stack() {
     let mut h = TestHost::default();
     h.conflicts = vec![("native", DEFAULT_HANDLER_NAME), ("native", "native")];

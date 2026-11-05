@@ -162,11 +162,22 @@ fn header_add(vm: &mut Vm, line: &[u8], response_code: i64) -> VmResult<()> {
     if response_code != 0 {
         update_response_code(response_code);
     }
+    vm.note_response_header(line);
     Ok(())
 }
 
+/// Internal header additions use the same validation as CLI `header()`.
+pub(crate) fn add_response_header(vm: &mut Vm, line: &[u8]) -> VmResult<bool> {
+    let trimmed = line.trim_ascii_end();
+    let accepted = !vm.headers_sent
+        && !line.is_empty()
+        && !trimmed.iter().any(|c| matches!(c, 0 | b'\r' | b'\n'));
+    header_add(vm, line, 0)?;
+    Ok(accepted)
+}
+
 /// `zend_alter_ini_entry_chars(..., PHP_INI_USER, PHP_INI_STAGE_RUNTIME)`.
-fn alter_ini(vm: &mut Vm, name: &str, value: &[u8]) -> VmResult<()> {
+pub(crate) fn alter_ini(vm: &mut Vm, name: &str, value: &[u8]) -> VmResult<()> {
     if vm.ini.get(name).is_none() {
         return Ok(());
     }
@@ -301,11 +312,51 @@ pub(crate) fn register(vm: &mut Vm) {
 #[cfg(test)]
 mod tests {
     use super::extract_response_code;
+    use crate::{Vm, VmOptions};
+    use php_runtime::Value;
 
     #[test]
     fn response_code_from_status_line() {
         assert_eq!(extract_response_code(b"HTTP/1.1 404 Not Found"), 404);
         assert_eq!(extract_response_code(b"HTTP/1.0"), 0);
         assert_eq!(extract_response_code(b"HTTP/1.1 abc"), 0);
+    }
+
+    #[test]
+    fn internal_headers_preserve_cli_lists_and_first_mime_type() {
+        let mut vm = Vm::with_extensions(
+            &VmOptions::default(),
+            Box::new(Vec::<u8>::new()),
+            &[],
+        );
+        assert!(vm
+            .add_response_header(b"Content-Type: text/plain", true)
+            .expect("header"));
+        assert!(vm
+            .add_response_header(b"Content-Type: application/json", true)
+            .expect("header"));
+        assert_eq!(
+            vm.response_mimetype(),
+            Some(b"text/plain;charset=UTF-8".to_vec())
+        );
+        let list = vm
+            .call_value(&Value::from("headers_list"), Vec::new())
+            .expect("list");
+        assert!(matches!(list, Value::Array(a) if a.is_empty()));
+    }
+
+    #[test]
+    fn rejected_sapi_header_does_not_report_success_or_change_mime() {
+        let mut vm = Vm::with_extensions(
+            &VmOptions::default(),
+            Box::new(Vec::<u8>::new()),
+            &[],
+        );
+        vm.response_header_hook = Some(|_, _, _, _| Ok(false));
+        assert!(!vm
+            .add_response_header(b"Content-Type: text/plain", true)
+            .expect("header"));
+        assert_eq!(vm.response_mimetype(), None);
+        assert!(vm.sends_default_content_type());
     }
 }

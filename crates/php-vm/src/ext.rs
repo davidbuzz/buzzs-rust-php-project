@@ -160,6 +160,9 @@ pub type OutputHandlerConflictFn = fn(&mut Vm, &[u8]) -> bool;
 /// Refreshes request settings before an internal handler runs.
 pub type OutputHandlerHookFn = fn(&mut Vm);
 
+/// Performs a SAPI header add/replace operation, returning its actual result.
+pub type ResponseHeaderFn = fn(&mut Vm, &[u8], bool, i64) -> VmResult<bool>;
+
 /// A `PHP_MINFO` callback.
 pub type ModuleInfoFn = fn(&mut Vm) -> Vec<InfoItem>;
 
@@ -534,6 +537,88 @@ impl Vm {
     /// "headers already sent (output started at f:l)".
     pub fn output_started(&self) -> Option<(ZStr, u32)> {
         crate::builtins::headers::output_start()
+    }
+
+    /// `sapi_add_header_ex`, through the active SAPI's header operation.
+    /// CLI accepts the operation but does not retain a header list.
+    pub fn add_response_header(&mut self, line: &[u8], replace: bool) -> VmResult<bool> {
+        let accepted = match self.response_header_hook {
+            Some(hook) => hook(self, line, replace, 0)?,
+            None => crate::builtins::headers::add_response_header(self, line)?,
+        };
+        if accepted {
+            self.note_response_header(line);
+        }
+        Ok(accepted)
+    }
+
+    /// Reads the active SAPI's sent state, including non-CLI overrides.
+    pub fn response_headers_sent(&mut self) -> VmResult<bool> {
+        let sent = self.call_value(&Value::from("headers_sent"), Vec::new())?;
+        Ok(matches!(sent, Value::Bool(true)))
+    }
+
+    /// Synchronizes the SAPI's MIME state, including default-header emission.
+    pub fn set_response_mime_state(&mut self, mime: Option<Vec<u8>>, send_default: bool) {
+        self.response_mimetype = mime;
+        self.send_default_content_type = send_default;
+    }
+
+    /// Records the MIME side effects of an accepted SAPI header operation.
+    /// `main/SAPI.c` retains the first MIME type even after replacements.
+    pub fn note_response_header(&mut self, line: &[u8]) {
+        let line = line.trim_ascii_end();
+        let Some(colon) = line.iter().position(|&c| c == b':') else {
+            return;
+        };
+        if !line[..colon].eq_ignore_ascii_case(b"Content-Type") {
+            return;
+        }
+        let mut mime = line[colon + 1..]
+            .iter()
+            .copied()
+            .skip_while(|&c| c == b' ')
+            .collect::<Vec<_>>();
+        let charset = self.ini_string("default_charset").unwrap_or_default();
+        if !charset.is_empty()
+            && mime.starts_with(b"text/")
+            && !mime.windows(8).any(|w| w == b"charset=")
+        {
+            mime.extend_from_slice(b";charset=");
+            mime.extend_from_slice(&charset);
+        }
+        if self.response_mimetype.is_none() {
+            self.response_mimetype = Some(mime);
+        }
+        self.send_default_content_type = false;
+    }
+
+    /// Applies MIME and Content-Length side effects of a non-CLI SAPI header.
+    pub fn accepted_response_header(&mut self, line: &[u8]) -> VmResult<()> {
+        self.note_response_header(line);
+        if line
+            .iter()
+            .position(|&c| c == b':')
+            .is_some_and(|colon| line[..colon].eq_ignore_ascii_case(b"Content-Length"))
+        {
+            crate::builtins::headers::alter_ini(self, "zlib.output_compression", b"0")?;
+        }
+        Ok(())
+    }
+
+    /// MIME state used by output converters, independent of CLI header lists.
+    pub fn response_mimetype(&self) -> Option<Vec<u8>> {
+        self.response_mimetype.clone()
+    }
+
+    /// `SG(sapi_headers).send_default_content_type`.
+    pub fn sends_default_content_type(&self) -> bool {
+        self.send_default_content_type
+    }
+
+    /// Clears `SG(sapi_headers).send_default_content_type`.
+    pub fn clear_default_content_type(&mut self) {
+        self.send_default_content_type = false;
     }
 
     /// The context of the running `read_property` hook call.

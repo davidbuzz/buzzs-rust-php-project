@@ -187,6 +187,87 @@ fn output_conflict_exception_keeps_the_original_handler() {
 }
 
 #[test]
+// php-src's php_zlib_output_encoding/output_handler; the PHP 8.3 CLI oracle differs.
+fn output_compression_negotiates_server_values_and_makes_the_handler_immutable() {
+    let sink = Sink::default();
+    let zlib = php_ext_zlib::Zlib;
+    let mut vm = Vm::with_extensions(
+        &VmOptions::default(),
+        Box::new(sink.clone()),
+        &[&zlib],
+    );
+    vm.run_script(
+        br#"<?php
+        $_SERVER['HTTP_ACCEPT_ENCODING'] = 'deflate,gzip';
+        ob_start('ob_gzhandler', 1);
+        echo 'x';
+        $s = ob_get_status();
+        echo $s['type'], ':', $s['flags'] & PHP_OUTPUT_HANDLER_STDFLAGS, ':';
+        echo zlib_get_coding_type(), ':';
+        foreach (headers_list() as $h) { echo 'unexpected'; }
+        echo 'cli';"#,
+        "test.php",
+    );
+    drop(vm);
+    let bytes = sink.0.borrow().clone();
+    assert_eq!(
+        php_zlib::codec::gzdecode(&bytes, 0).expect("gzip"),
+        b"x0:32:gzip:cli"
+    );
+}
+
+#[test]
+fn same_value_compression_ini_writes_run_the_modify_handler() {
+    let sink = Sink::default();
+    let zlib = php_ext_zlib::Zlib;
+    let mut vm = Vm::with_extensions(
+        &VmOptions::default(),
+        Box::new(sink.clone()),
+        &[&zlib],
+    );
+    vm.run_script(
+        br#"<?php
+        ini_set('zlib.output_compression', '1');
+        $_SERVER['HTTP_ACCEPT_ENCODING'] = 'gzip';
+        ini_set('zlib.output_compression', '1');
+        echo implode(',', ob_list_handlers());"#,
+        "test.php",
+    );
+    drop(vm);
+    let bytes = sink.0.borrow().clone();
+    assert_eq!(
+        php_zlib::codec::gzdecode(&bytes, 0).expect("gzip"),
+        b"zlib output compression"
+    );
+}
+
+#[test]
+fn zlib_ini_changes_are_rejected_after_output_without_changing_values() {
+    assert_eq!(
+        run(r#"ini_set('zlib.output_compression', '0');
+            echo 'x';
+            set_error_handler(function($n, $m) { echo "$n:$m\n"; });
+            var_dump(ini_set('zlib.output_compression', '0'), ini_get('zlib.output_compression'));
+            var_dump(ini_set('zlib.output_handler', 'foo'), ini_get('zlib.output_handler'));"#),
+        "x2:ini_set(): Cannot change zlib.output_compression - headers already sent\n\
+         bool(false)\nstring(1) \"0\"\n\
+         2:ini_set(): Cannot change zlib.output_handler - headers already sent\n\
+         bool(false)\nstring(0) \"\"\n"
+    );
+}
+
+#[test]
+fn content_length_disables_the_active_compression_handler() {
+    assert_eq!(
+        run(r#"$_SERVER['HTTP_ACCEPT_ENCODING'] = 'gzip';
+            ob_start('ob_gzhandler');
+            header('Content-Length: 1');
+            echo 'x';"#),
+        "x"
+    );
+}
+
+#[test]
 fn memory_limit_model() {
     let out =
         run(r#"ini_set("memory_limit", "4M"); gzdecode(gzencode(str_repeat("a", 8 << 20)));"#);

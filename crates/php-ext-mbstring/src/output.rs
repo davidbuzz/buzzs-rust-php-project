@@ -1,42 +1,14 @@
 //! `mb_output_handler()` and the bits of SAPI header state it needs.
 //!
-//! The VM's `header()` keeps no header state, so this module wraps it to
-//! track `SG(sapi_headers).mimetype` and `send_default_content_type`
-//! (`sapi_header_op` for `Content-Type:` lines), then calls the original.
-
-use std::cell::RefCell;
+//! The active SAPI's header binding supplies header additions. MIME state
+//! and the running-handler state are shared with the VM output layer.
 
 use php_mbstring::info::OutputSapi;
 use php_runtime::Value;
-use php_vm::ext::{Args, ModuleBuilder, NativeFn, VmResult};
+use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
 use crate::state::{self, bytes};
-
-#[derive(Default)]
-struct Headers {
-    /// `SG(sapi_headers).mimetype`.
-    mimetype: Option<Vec<u8>>,
-    /// `SG(sapi_headers).send_default_content_type` is *cleared*.
-    default_sent: bool,
-}
-
-thread_local! {
-    static HEADERS: RefCell<Headers> = RefCell::new(Headers::default());
-    static ORIG_HEADER: std::cell::Cell<Option<NativeFn>> = const { std::cell::Cell::new(None) };
-}
-
-/// Installs the `header()` wrapper.
-pub(crate) fn install_hooks(m: &mut ModuleBuilder<'_>) {
-    let vm = m.vm();
-    if let Some(b) = vm.native_function("header") {
-        ORIG_HEADER.with(|c| c.set(Some(b.handler)));
-        vm.register_function(
-            "header(string $header, bool $replace = true, int $response_code = 0): void",
-            header_hook,
-        );
-    }
-}
 
 /// Request startup: `output_handler=mb_output_handler` in php.ini starts
 /// the user handler before the script runs (`php_output_start_user()`).
@@ -55,53 +27,19 @@ pub(crate) fn request_startup(vm: &mut Vm) {
     }
 }
 
-/// `RSHUTDOWN`.
-pub(crate) fn reset() {
-    HEADERS.with(|h| *h.borrow_mut() = Headers::default());
-}
-
-fn header_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let line = a.str(0);
-    let line = line.as_bytes();
-    if let Some(colon) = line.iter().position(|&b| b == b':') {
-        if line[..colon].eq_ignore_ascii_case(b"Content-Type") {
-            let mut mime: Vec<u8> = line[colon + 1..]
-                .iter()
-                .copied()
-                .skip_while(|&b| b == b' ')
-                .collect();
-            // sapi_apply_default_charset()
-            let charset = vm.ini_string("default_charset").unwrap_or_default();
-            if !charset.is_empty()
-                && mime.starts_with(b"text/")
-                && !mime.windows(8).any(|w| w == b"charset=")
-            {
-                mime.extend_from_slice(b";charset=");
-                mime.extend_from_slice(&charset);
-            }
-            HEADERS.with(|h| {
-                let mut h = h.borrow_mut();
-                if h.mimetype.is_none() {
-                    h.mimetype = Some(mime);
-                }
-                h.default_sent = true;
-            });
-        }
-    }
-    match ORIG_HEADER.with(std::cell::Cell::get) {
-        Some(f) => f(vm, a),
-        None => Ok(Value::Null),
-    }
-}
-
-/// The CLI SAPI as seen by `mb_output_handler`.
-struct CliSapi {
+/// Snapshot SAPI state, queuing headers until the mbstring borrow is released.
+struct VmSapi {
     default_mimetype: Vec<u8>,
+    mimetype: Option<Vec<u8>>,
+    send_default: bool,
+    in_handler: bool,
+    sent: bool,
+    headers: Vec<Vec<u8>>,
 }
 
-impl OutputSapi for CliSapi {
+impl OutputSapi for VmSapi {
     fn mimetype(&self) -> Option<Vec<u8>> {
-        HEADERS.with(|h| h.borrow().mimetype.clone())
+        self.mimetype.clone()
     }
 
     fn mimetype_matches(&self, pattern: &[u8], mimetype: &[u8]) -> bool {
@@ -109,11 +47,11 @@ impl OutputSapi for CliSapi {
     }
 
     fn send_default_content_type(&self) -> bool {
-        HEADERS.with(|h| !h.borrow().default_sent)
+        self.send_default
     }
 
     fn clear_send_default_content_type(&mut self) {
-        HEADERS.with(|h| h.borrow_mut().default_sent = true);
+        self.send_default = false;
     }
 
     fn default_mimetype(&self) -> Vec<u8> {
@@ -121,23 +59,35 @@ impl OutputSapi for CliSapi {
     }
 
     fn in_output_handler(&self) -> bool {
-        false
+        self.in_handler
     }
 
-    fn add_header(&mut self, _header: &[u8]) -> bool {
-        true
+    fn add_header(&mut self, header: &[u8]) -> bool {
+        self.headers.push(header.to_vec());
+        !self.sent && !header.iter().any(|c| matches!(c, 0 | b'\r' | b'\n'))
     }
 }
 
 /// Runs the handler over one buffer.
 fn handle(vm: &mut Vm, s: &[u8], status: i64) -> VmResult<Vec<u8>> {
-    let mut sapi = CliSapi {
+    let sent = vm.response_headers_sent()?;
+    let mut sapi = VmSapi {
         default_mimetype: vm
             .ini_string("default_mimetype")
             .filter(|m| !m.is_empty())
             .unwrap_or_else(|| b"text/html".to_vec()),
+        mimetype: vm.response_mimetype(),
+        send_default: vm.sends_default_content_type(),
+        in_handler: vm.output.running_flags().is_some(),
+        sent,
+        headers: Vec::new(),
     };
     let out = state::with(|st| st.mb_output_handler(s, status, &mut sapi));
+    for header in sapi.headers {
+        if vm.add_response_header(&header, false)? {
+            vm.clear_default_content_type();
+        }
+    }
     state::flush_diagnostics(vm)?;
     Ok(out)
 }
@@ -179,5 +129,53 @@ mod tests {
         assert_eq!(st.name, b"mb_output_handler");
         assert_eq!(st.kind, flags::USER);
         assert_eq!(st.flags, flags::STDFLAGS | flags::USER);
+    }
+
+    #[test]
+    fn invalid_content_type_does_not_change_shared_mime_state() {
+        let ext = crate::Mbstring;
+        let mut vm = Vm::with_extensions(
+            &php_vm::VmOptions::default(),
+            Box::new(Vec::<u8>::new()),
+            &[&ext],
+        );
+        assert!(!vm
+            .add_response_header(b"Content-Type: application/json\r\nInjected: yes", true)
+            .expect("header"));
+        assert_eq!(vm.response_mimetype(), None);
+        assert!(vm.sends_default_content_type());
+        assert!(vm
+            .add_response_header(b"Content-Type: text/plain", true)
+            .expect("header"));
+        assert_eq!(
+            vm.response_mimetype(),
+            Some(b"text/plain;charset=UTF-8".to_vec())
+        );
+        assert!(!vm.sends_default_content_type());
+    }
+
+    #[test]
+    fn direct_output_handler_uses_real_header_services() {
+        let ext = crate::Mbstring;
+        let mut vm = Vm::with_extensions(
+            &php_vm::VmOptions::default(),
+            Box::new(Vec::<u8>::new()),
+            &[&ext],
+        );
+        vm.call_value(&Value::from("mb_http_output"), vec![Value::from("UTF-8")])
+            .expect("encoding");
+        vm.call_value(
+            &Value::from("mb_output_handler"),
+            vec![
+                Value::from("x"),
+                Value::Int(i64::from(flags::START | flags::FINAL)),
+            ],
+        )
+        .expect("handler");
+        assert_eq!(
+            vm.response_mimetype(),
+            Some(b"text/html; charset=UTF-8".to_vec())
+        );
+        assert!(!vm.sends_default_content_type());
     }
 }

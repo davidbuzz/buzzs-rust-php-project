@@ -640,6 +640,12 @@ pub struct Vm {
     pub(crate) timeout_seconds: i64,
     /// Whether output has been flushed to the SAPI at least once.
     pub headers_sent: bool,
+    /// First accepted response MIME type (`SG(sapi_headers).mimetype`).
+    pub(crate) response_mimetype: Option<Vec<u8>>,
+    /// Whether the SAPI still needs to supply its default content type.
+    pub(crate) send_default_content_type: bool,
+    /// Active non-CLI SAPI's header operation (`sapi_header_op`).
+    pub response_header_hook: Option<crate::ext::ResponseHeaderFn>,
     /// Running fibers (innermost last).
     pub fibers: Vec<Obj>,
     /// Destination temporary of the builtin call in progress (fibers).

@@ -301,14 +301,22 @@ fn header(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let line = a.str(0);
     let replace = if a.has(1) { a.bool(1) } else { true };
     let code = if a.has(2) { a.int(2) } else { 0 };
+    add_response_header(vm, line.as_bytes(), replace, code)?;
+    Ok(Value::Null)
+}
+
+fn add_response_header(vm: &mut Vm, line: &[u8], replace: bool, code: i64) -> VmResult<bool> {
     let op = if replace {
-        HeaderOp::Replace(line.as_bytes(), code)
+        HeaderOp::Replace(line, code)
     } else {
-        HeaderOp::Add(line.as_bytes(), code)
+        HeaderOp::Add(line, code)
     };
     let r = ctx_or(Ok(false), |c| c.header_op(op));
-    header_result(vm, r)?;
-    Ok(Value::Null)
+    let accepted = header_result(vm, r)?;
+    if accepted {
+        vm.accepted_response_header(line)?;
+    }
+    Ok(accepted)
 }
 
 fn header_remove(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -325,8 +333,12 @@ fn header_remove(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 #[allow(clippy::unnecessary_wraps)]
-fn headers_sent(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+fn headers_sent(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let sent = ctx_or(false, RequestCtx::headers_sent);
+    with_ctx(|c| {
+        let h = c.headers.borrow();
+        vm.set_response_mime_state(h.mimetype.clone(), h.send_default_content_type);
+    });
     if a.has(0) {
         a.set_ref(0, str_value(""));
     }
@@ -643,6 +655,7 @@ impl Extension for CliServerModule {
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         use php_support::ini::{Access, IniDirective, ModifyHandler};
+        m.vm().response_header_hook = Some(add_response_header);
         m.ini(IniDirective::new(
             "cli_server.color",
             Some("0"),
