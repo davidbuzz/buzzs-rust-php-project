@@ -110,3 +110,16 @@ try { g(strlen("d")); } catch (Error $e) { echo $e->getMessage(), "\n"; }
         "\nNotice: Only variables should be passed by reference in t.php on line 4\nnext\ng(): Argument #1 ($r) could not be passed by reference\n"
     );
 }
+
+/// `ZEND_ASSIGN_DIM_OP` / `ZEND_FETCH_DIM_RW` fetch an undefined container
+/// before reading the offset (`assign_dim_op_undef`).
+#[test]
+fn compound_dim_assignment_warns_for_undefined_container_first() {
+    let out = run("<?php\n$a[$b] += 1;\n$c[$d]++;\n");
+    let order: Vec<&str> = out
+        .lines()
+        .filter_map(|l| l.strip_prefix("Warning: Undefined variable "))
+        .map(|l| l.split(' ').next().unwrap_or(""))
+        .collect();
+    assert_eq!(order, ["$a", "$b", "$c", "$d"], "{out}");
+}

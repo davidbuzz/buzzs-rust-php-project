@@ -1410,6 +1410,9 @@ impl Vm {
         op: BinaryOp,
         v: Value,
     ) -> VmResult<Value> {
+        if let Some(cv) = self.rw_undef_cv_container(pid) {
+            self.rw_undef_container_first(cv)?;
+        }
         let (base, segs) = self.resolve_place(pid, true)?;
         if !segs.is_empty() {
             // One walk: offsets convert and object handlers run once.
@@ -1448,6 +1451,41 @@ impl Vm {
         let nv = ops::binary_op(op, &cur, &v, self).map_err(|e| self.rt_throw(e))?;
         drop(cur);
         self.write_place(base2, &segs, WOp::Assign(nv))
+    }
+
+    /// The undefined compiled variable a read-modify-write of `pid` fetches
+    /// as a dimension container (`$a[$k] op= v`, `$a[$k]++`).
+    #[inline]
+    fn rw_undef_cv_container(&self, pid: PlaceId) -> Option<u32> {
+        let f = self.frame();
+        let p = &f.code.places[pid as usize];
+        let PlaceBase::Cv(cv) = p.base else {
+            return None;
+        };
+        if !matches!(p.segs.first(), Some(Seg::Dim(_) | Seg::Append)) {
+            return None;
+        }
+        let undef = matches!(f.vars.borrow().slots.get(f.cv_idx(cv)), Some(None));
+        undef.then_some(cv)
+    }
+
+    /// `ZEND_ASSIGN_DIM_OP` / `ZEND_FETCH_DIM_RW` (`Zend/zend_vm_def.h`)
+    /// fetch the container (`BP_VAR_RW`: "Undefined variable", then null)
+    /// before reading the offset, so an undefined container warns before
+    /// an undefined offset variable does.
+    #[cold]
+    #[inline(never)]
+    fn rw_undef_container_first(&mut self, cv: u32) -> VmResult<()> {
+        self.read_cv(cv)?;
+        let f = self.frame();
+        let idx = f.cv_idx(cv);
+        let vars = f.vars.clone();
+        if let Some(slot) = vars.borrow_mut().slots.get_mut(idx) {
+            if slot.is_none() {
+                *slot = Some(Value::Null);
+            }
+        }
+        Ok(())
     }
 
     /// The read half of a read-modify-write: the current value and, when
@@ -1497,6 +1535,9 @@ impl Vm {
                     }
                 }
             }
+        }
+        if let Some(cv) = self.rw_undef_cv_container(pid) {
+            self.rw_undef_container_first(cv)?;
         }
         let (base, segs) = self.resolve_place(pid, true)?;
         let base2 = match &base {
