@@ -2170,6 +2170,21 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_object_refuses_references_and_method_calls() {
+        let out = run("<?php $i = unserialize('O:1:\"C\":1:{s:1:\"p\";i:1;}');\n\
+             foreach ([function () use ($i) { $x = 1; $i->p = &$x; }, function () use ($i) { $r = &$i->p; },\n\
+             fn() => $i->p[] = 1, fn() => $i->f()] as $f) {\n\
+             try { $f(); echo \"ok\\n\"; } catch (Error $e) { echo substr($e->getMessage(), 0, 31), \"\\n\"; } }");
+        assert_eq!(
+            out,
+            "The script tried to modify a pr\n\
+             The script tried to modify a pr\n\
+             The script tried to modify a pr\n\
+             The script tried to call a meth\n"
+        );
+    }
+
+    #[test]
     fn class_names() {
         assert!(valid_class_name(b"Foo\\Bar_1"));
         assert!(!valid_class_name(b"Foo-Bar"));

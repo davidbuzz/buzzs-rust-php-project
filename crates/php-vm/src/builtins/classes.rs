@@ -55,7 +55,16 @@ fn handler_warning(vm: &mut Vm, msg: &str) -> VmResult<()> {
     vm.warning(&format!("{name}(): {msg}"))
 }
 
-fn incomplete_read(vm: &mut Vm, o: &Obj, _name: &ZStr) -> VmResult<Option<Value>> {
+fn incomplete_read(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
+    use crate::ext::PropCtx;
+    // Writes, compound assignments, unsets through and references to the
+    // property go through `get_property_ptr_ptr`, which refuses them.
+    if matches!(
+        vm.property_context(),
+        PropCtx::Write | PropCtx::ReadWrite | PropCtx::Unset | PropCtx::Ref
+    ) {
+        return incomplete_ptr_ptr(vm, o, name).map(|()| None);
+    }
     let msg = incomplete_msg(o, "access a property");
     handler_warning(vm, &msg)?;
     Ok(Some(Value::Null))
@@ -63,6 +72,18 @@ fn incomplete_read(vm: &mut Vm, o: &Obj, _name: &ZStr) -> VmResult<Option<Value>
 
 fn incomplete_write(vm: &mut Vm, o: &Obj, _name: &ZStr, _v: &Value) -> VmResult<bool> {
     let msg = incomplete_msg(o, "modify a property");
+    Err(vm.make_throw("Error", &msg))
+}
+
+/// `incomplete_class_get_property_ptr_ptr`.
+fn incomplete_ptr_ptr(vm: &mut Vm, o: &Obj, _name: &ZStr) -> VmResult<()> {
+    let msg = incomplete_msg(o, "modify a property");
+    Err(vm.make_throw("Error", &msg))
+}
+
+/// `incomplete_class_get_method`.
+fn incomplete_get_method(vm: &mut Vm, o: &Obj, _name: &ZStr) -> VmResult<()> {
+    let msg = incomplete_msg(o, "call a method");
     Err(vm.make_throw("Error", &msg))
 }
 
@@ -259,6 +280,8 @@ pub(crate) fn register(vm: &mut Vm) {
             write_property: Some(incomplete_write),
             has_property: Some(incomplete_has),
             unset_property: Some(incomplete_unset),
+            get_property_ptr_ptr: Some(incomplete_ptr_ptr),
+            get_method: Some(incomplete_get_method),
             ..Default::default()
         })
         .register(vm);
