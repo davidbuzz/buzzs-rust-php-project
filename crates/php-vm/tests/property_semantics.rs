@@ -1203,3 +1203,15 @@ Deprecated: Automatic conversion of false to array is deprecated in t.php on lin
 bool(false)
 ");
 }
+
+#[test]
+fn nested_unset_through_missing_property_creates_it() {
+    // bug78644: FETCH_OBJ_UNSET adds the missing dynamic property as null
+    // (zend_std_get_property_ptr_ptr).
+    assert_eq!(run(r#"<?php
+$a = new stdClass;
+unset($a->b->c->d);
+unset($a->b->c['d']);
+var_dump($a);
+"#), "object(stdClass)#1 (1) {\n  [\"b\"]=>\n  NULL\n}\n");
+}

@@ -1603,7 +1603,12 @@ impl Vm {
                         if self.has_magic(o, name, G_GET) {
                             return Ok(Some(self.call_magic_get(o, name)?));
                         }
-                        Ok(None)
+                        // `zend_std_get_property_ptr_ptr` (BP_VAR_UNSET)
+                        // adds the missing dynamic property as null
+                        // (bug78644).
+                        self.check_dynamic_creation(o, name)?;
+                        self.write_dynamic_prop(o, name.clone(), Value::Null);
+                        Ok(Some(Value::Null))
                     }
                 }
             }
