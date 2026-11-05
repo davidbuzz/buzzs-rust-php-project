@@ -49,7 +49,7 @@ pub mod vm;
 mod weakref;
 
 pub use persistence::PersistentDeclarations;
-pub use vm::{Throw, Vm, VmResult};
+pub use vm::{ClassLoader, Throw, Vm, VmResult};
 
 use php_runtime::{Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, IniRegistry, ModifyHandler};

@@ -69,19 +69,40 @@ impl Vm {
             return Ok(());
         }
         self.autoloading.insert(lc.clone());
-        let loaders = self.autoloaders.clone();
-        let mut r = Ok(());
-        for l in loaders {
-            if let Err(e) = self.call_value(&l, vec![Value::Str(name.clone())]) {
-                r = Err(e);
-                break;
+        let r = self.run_class_loaders(name, lc);
+        self.autoloading.remove(lc);
+        r
+    }
+
+    /// `zend_perform_class_autoload`: calls the registered loaders until
+    /// the class exists. The live table is walked, as loaders may be
+    /// registered or unregistered by a running loader: one added at the
+    /// end is still called for this class, a removed one is skipped.
+    fn run_class_loaders(&mut self, name: &ZStr, lc: &ZStr) -> VmResult<()> {
+        let mut pos = 0;
+        while let Some(loader) = self.autoloaders.get(pos).cloned() {
+            let arg = Value::Str(name.clone());
+            match loader.fcc.clone() {
+                Some(mut call) => {
+                    call.args = vec![Some(arg)];
+                    self.call_pending(call)?;
+                }
+                None => {
+                    self.call_value(&loader.callable, vec![arg])?;
+                }
             }
             if self.classes.contains_key(lc) {
                 break;
             }
+            // Continue after the loader just called; when it unregistered
+            // itself, its successor now sits at its position.
+            pos = self
+                .autoloaders
+                .iter()
+                .position(|l| l.is_same(&loader))
+                .map_or(pos, |i| i + 1);
         }
-        self.autoloading.remove(lc);
-        r
+        Ok(())
     }
 
     /// Looks up a class or throws `Class "X" not found`.

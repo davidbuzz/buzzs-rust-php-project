@@ -302,3 +302,82 @@ fn later_binding_failure_rolls_back_storage_and_coercion() {
         assert!(matches!(r.get(), Value::Array(a) if a.is_empty()));
     }
 }
+
+#[test]
+fn autoloader_registered_by_a_running_loader_is_called_for_the_same_class() {
+    let out = run(r#"<?php
+        function inner_autoload($name) {
+            if ($name == 'A') {
+                class A { function __construct() { echo "okey, "; } }
+            }
+        }
+        spl_autoload_register(function ($name) {
+            if ($name == 'A') {
+                spl_autoload_register('inner_autoload');
+            } else {
+                spl_autoload_unregister('inner_autoload');
+            }
+        });
+        new A();
+        try {
+            new B();
+        } catch (Error $e) {
+            echo $e->getMessage(), "\n";
+        }
+        echo count(spl_autoload_functions()), "\n";
+    "#);
+    assert_eq!(out, "okey, Class \"B\" not found\n1\n");
+}
+
+#[test]
+fn self_callables_register_the_class_of_the_registering_scope() {
+    let out = run(r#"<?php
+        class First {
+            static function init() { spl_autoload_register(['self', 'load']); }
+            static function load($c) { echo "First::load($c)\n"; }
+        }
+        class Second {
+            static function init() { spl_autoload_register('self::load'); }
+            static function load($c) { echo "Second::load($c)\n"; }
+        }
+        First::init();
+        Second::init();
+        foreach (spl_autoload_functions() as $f) {
+            echo implode('::', $f), "\n";
+        }
+        var_dump(class_exists('Missing'));
+    "#);
+    assert_eq!(
+        out,
+        "First::load\nSecond::load\nFirst::load(Missing)\nSecond::load(Missing)\nbool(false)\n"
+    );
+}
+
+#[test]
+fn autoloader_is_called_as_resolved_in_the_registering_scope() {
+    // `[$this, 'autoload']` registered from a scope that cannot see the
+    // protected method resolves to the `__call` trampoline, even when the
+    // autoload is triggered from inside the class.
+    let out = run(r#"<?php
+        class Registrator {
+            static function call($callable, array $args) {
+                return call_user_func_array($callable, [$args]);
+            }
+        }
+        class Loader {
+            function __construct() {
+                Registrator::call('spl_autoload_register', [$this, 'autoload']);
+            }
+            function __call($method, $args) { echo "__call($method, {$args[0]})\n"; }
+            protected function autoload($class) { echo "autoload($class)\n"; }
+            function probe() { return class_exists('Inner'); }
+        }
+        $l = new Loader();
+        var_dump(class_exists('Outer'));
+        var_dump($l->probe());
+    "#);
+    assert_eq!(
+        out,
+        "__call(autoload, Outer)\nbool(false)\n__call(autoload, Inner)\nbool(false)\n"
+    );
+}

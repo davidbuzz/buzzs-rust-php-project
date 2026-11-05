@@ -719,15 +719,13 @@ fn spl_autoload_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             ));
         }
         let prepend = b(a, 2);
-        if !vm
-            .autoloaders
-            .iter()
-            .any(|x| php_runtime::ops::is_identical(x, &cb).unwrap_or(false))
-        {
+        let fcc = vm.zend_is_callable(&cb, true)?.ok();
+        let loader = crate::vm::ClassLoader { callable: cb, fcc };
+        if !vm.autoloaders.iter().any(|x| x.is_same(&loader)) {
             if prepend {
-                vm.autoloaders.insert(0, cb);
+                vm.autoloaders.insert(0, loader);
             } else {
-                vm.autoloaders.push(cb);
+                vm.autoloaders.push(loader);
             }
         }
     }
@@ -738,12 +736,14 @@ fn spl_autoload_unregister(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     let before = vm.autoloaders.len();
     vm.autoloaders
-        .retain(|x| !php_runtime::ops::is_identical(x, &cb).unwrap_or(false));
+        .retain(|x| !php_runtime::ops::is_identical(&x.callable, &cb).unwrap_or(false));
     Ok(Value::Bool(vm.autoloaders.len() != before))
 }
 
 fn spl_autoload_functions(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Array(ZArray::from_values(vm.autoloaders.clone())))
+    Ok(Value::Array(ZArray::from_values(
+        vm.autoloaders.iter().map(|l| l.callable.clone()),
+    )))
 }
 
 fn spl_autoload_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
