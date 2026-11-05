@@ -1187,3 +1187,19 @@ bool(false)
 bool(true)
 ");
 }
+
+#[test]
+fn unset_dim_of_false_is_deprecated_without_conversion() {
+    // ZEND_UNSET_DIM / FETCH_DIM_UNSET call zend_false_to_array_deprecated().
+    assert_eq!(run(r#"<?php
+$a = false;
+unset($a[0][0]);
+unset($a[0]);
+var_dump($a);
+"#), "
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 3
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 4
+bool(false)
+");
+}
