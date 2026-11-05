@@ -63,6 +63,41 @@ pub struct CompiledUnit {
     pub anon_end: u32,
 }
 
+/// The global constants `zend_try_ct_eval_const` (`Zend/zend_compile.c`)
+/// may substitute while compiling: the persistent internal constants with
+/// scalar values that are not deprecated (`can_ct_eval_const`), by their
+/// case-sensitive name. Shared by every compilation of a request.
+#[derive(Clone, Default)]
+pub struct CtConstants(Rc<HashMap<ZStr, Value>>);
+
+impl CtConstants {
+    /// Wraps a name → value table.
+    pub(crate) fn new(constants: HashMap<ZStr, Value>) -> Self {
+        Self(Rc::new(constants))
+    }
+
+    /// The value of the constant `name`, if it may be substituted.
+    pub fn get(&self, name: &[u8]) -> Option<&Value> {
+        self.0.get(name)
+    }
+
+    /// The number of substitutable constants.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether no constant may be substituted.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for CtConstants {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CtConstants({} entries)", self.0.len())
+    }
+}
+
 /// Options for [`compile`].
 #[derive(Clone, Debug, Default)]
 pub struct CompileOptions {
@@ -93,6 +128,10 @@ pub struct CompileOptions {
     /// compilation (`CG(rtd_key_counter)`), so recompiling a file or eval
     /// string names its anonymous classes afresh.
     pub anon_base: u32,
+    /// Internal constants substituted at compile time
+    /// (`zend_try_ct_eval_const`); `None` substitutes only `true`, `false`
+    /// and `null`.
+    pub ct_constants: Option<CtConstants>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,6 +349,12 @@ pub(crate) struct Compiler {
     /// name (`foo()`, `C::m()`), which names the closures in the attribute
     /// arguments as `CG(active_op_array)` is already the function.
     pub attr_owner: Option<String>,
+    /// `ZEND_COMPILE_NO_CONSTANT_SUBSTITUTION |
+    /// ZEND_COMPILE_NO_PERSISTENT_CONSTANT_SUBSTITUTION`, set by
+    /// `zend_compile_params` around a parameter default so that
+    /// `ReflectionParameter::isDefaultValueConstant()` still sees the
+    /// constant.
+    pub no_const_subst: bool,
 }
 
 /// Compiles a parsed program.
@@ -318,87 +363,122 @@ pub fn compile(
     source: Rc<[u8]>,
     opts: CompileOptions,
 ) -> CResult<CompiledUnit> {
-    let mut c = Compiler {
-        filename: opts.filename.clone(),
-        namespace: Vec::new(),
-        class_uses: HashMap::new(),
-        fn_uses: HashMap::new(),
-        const_uses: HashMap::new(),
-        seen_symbols: HashMap::new(),
-        strict_types: false,
-        ticks: 0,
-        decls: Rc::new(DeclTable::default()),
-        fns: Vec::new(),
-        classes: Vec::new(),
-        hoisted_functions: Vec::new(),
-        hoisted_classes: Vec::new(),
-        warnings: Vec::new(),
-        anon_counter: opts.anon_base,
-        opts,
-        declared_functions: HashMap::new(),
-        known_functions: HashMap::new(),
-        source,
-        multibyte: program.multibyte,
-        hook_prop: None,
-        closure_depth: 0,
-        in_const_default: false,
-        in_const_decl: false,
-        inline_const_depth: 0,
-        in_global_const: false,
-        attr_owner: None,
-    };
-    for w in &program.warnings {
-        let level = match w.level {
-            ast::DiagnosticLevel::CompileWarning => 128,
-            ast::DiagnosticLevel::Deprecated => 8192,
-            ast::DiagnosticLevel::Warning => 2,
-        };
-        c.warnings.push((level, w.message.clone(), w.line));
-    }
-    c.strict_types = c.opts.strict_types;
-    if let Some(cls) = c.opts.eval_class.clone() {
-        c.classes.push(ClassCtx {
-            name: cls,
-            parent: c.opts.eval_parent.clone(),
-            is_trait: false,
-            is_interface: false,
-            is_anon: false,
-        });
-    }
-    let mut f = FnCtx::new(FnKind::Main);
-    f.line = program.statements.first().map_or(1, |s| s.span.line);
-    c.fns.push(f);
+    let mut c = Compiler::start(program, source, opts);
     c.compile_top_statements(&program.statements)?;
-    let line = c.f().line;
-    let one = c.lit(Value::Int(1));
-    c.f().line = line;
-    c.emit(Op::Return { val: one });
-    let f = c.fns.pop().expect("main fn ctx");
-    let code = c.finish_fn(f)?;
-    let main = Rc::new(UserFunction {
-        name: ZStr::empty(),
-        params: Vec::new(),
-        required: 0,
-        return_type: None,
-        flags: 0,
-        code: Rc::new(code),
-        line_start: 1,
-        line_end: 0,
-        doc_comment: None,
-        statics: std::cell::RefCell::new(Vec::new()),
-        uses: Vec::new(),
-        class_name: None,
-        attributes: Vec::new(),
-        hook_prop: None,
-    });
-    Ok(CompiledUnit {
-        main,
-        hoisted_functions: c.hoisted_functions,
-        hoisted_classes: c.hoisted_classes,
-        decls: c.decls,
-        warnings: c.warnings,
-        anon_end: c.anon_counter,
-    })
+    c.finish_unit()
+}
+
+/// Compiles a parsed program it consumes, releasing the AST of each
+/// top-level statement as soon as it is compiled. php-src frees a file's
+/// AST arena only after `zend_compile_top_stmt` is done, but its arena
+/// nodes are a fraction of the size of ours: dropping statements as we go
+/// keeps the AST of a large file and its op array from being alive in full
+/// together (`Zend/tests/runtime_compile_time_binary_operands.phpt`
+/// includes 11 MB of generated code under `memory_limit=256M`).
+pub fn compile_program(
+    mut program: ast::Program,
+    source: Rc<[u8]>,
+    opts: CompileOptions,
+) -> CResult<CompiledUnit> {
+    let mut c = Compiler::start(&program, source, opts);
+    let statements = std::mem::take(&mut program.statements);
+    drop(program);
+    c.compile_top_statements_owned(statements)?;
+    c.finish_unit()
+}
+
+impl Compiler {
+    /// The compiler state for a new file (`zend_compile_top_stmt` callers):
+    /// the main op array is open and the parser's diagnostics are queued.
+    fn start(program: &ast::Program, source: Rc<[u8]>, opts: CompileOptions) -> Self {
+        let mut c = Compiler {
+            filename: opts.filename.clone(),
+            namespace: Vec::new(),
+            class_uses: HashMap::new(),
+            fn_uses: HashMap::new(),
+            const_uses: HashMap::new(),
+            seen_symbols: HashMap::new(),
+            strict_types: false,
+            ticks: 0,
+            decls: Rc::new(DeclTable::default()),
+            fns: Vec::new(),
+            classes: Vec::new(),
+            hoisted_functions: Vec::new(),
+            hoisted_classes: Vec::new(),
+            warnings: Vec::new(),
+            anon_counter: opts.anon_base,
+            opts,
+            declared_functions: HashMap::new(),
+            known_functions: HashMap::new(),
+            source,
+            multibyte: program.multibyte,
+            hook_prop: None,
+            closure_depth: 0,
+            in_const_default: false,
+            in_const_decl: false,
+            inline_const_depth: 0,
+            in_global_const: false,
+            attr_owner: None,
+            no_const_subst: false,
+        };
+        for w in &program.warnings {
+            let level = match w.level {
+                ast::DiagnosticLevel::CompileWarning => 128,
+                ast::DiagnosticLevel::Deprecated => 8192,
+                ast::DiagnosticLevel::Warning => 2,
+            };
+            c.warnings.push((level, w.message.clone(), w.line));
+        }
+        c.strict_types = c.opts.strict_types;
+        if let Some(cls) = c.opts.eval_class.clone() {
+            c.classes.push(ClassCtx {
+                name: cls,
+                parent: c.opts.eval_parent.clone(),
+                is_trait: false,
+                is_interface: false,
+                is_anon: false,
+            });
+        }
+        let mut f = FnCtx::new(FnKind::Main);
+        f.line = program.statements.first().map_or(1, |s| s.span.line);
+        c.fns.push(f);
+        c
+    }
+
+    /// Closes the main op array and returns the unit.
+    fn finish_unit(mut self) -> CResult<CompiledUnit> {
+        let c = &mut self;
+        let line = c.f().line;
+        let one = c.lit(Value::Int(1));
+        c.f().line = line;
+        c.emit(Op::Return { val: one });
+        let f = c.fns.pop().expect("main fn ctx");
+        let code = c.finish_fn(f)?;
+        let main = Rc::new(UserFunction {
+            name: ZStr::empty(),
+            params: Vec::new(),
+            required: 0,
+            return_type: None,
+            flags: 0,
+            code: Rc::new(code),
+            line_start: 1,
+            line_end: 0,
+            doc_comment: None,
+            statics: std::cell::RefCell::new(Vec::new()),
+            uses: Vec::new(),
+            class_name: None,
+            attributes: Vec::new(),
+            hook_prop: None,
+        });
+        Ok(CompiledUnit {
+            main,
+            hoisted_functions: std::mem::take(&mut c.hoisted_functions),
+            hoisted_classes: std::mem::take(&mut c.hoisted_classes),
+            decls: c.decls.clone(),
+            warnings: std::mem::take(&mut c.warnings),
+            anon_end: c.anon_counter,
+        })
+    }
 }
 
 impl Compiler {

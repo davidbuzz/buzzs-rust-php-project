@@ -2608,6 +2608,19 @@ impl Compiler {
         }
     }
 
+    /// The rest of `zend_try_ct_eval_const` (`Zend/zend_compile.c`) after
+    /// the special constants: a persistent internal constant found under
+    /// the resolved name is substituted (`can_ct_eval_const`). An
+    /// unqualified name in a namespace resolves to the namespaced name, so
+    /// it is not substituted (its global fallback is decided at runtime).
+    /// Parameter defaults are compiled without substitution.
+    fn ct_eval_const(&self, resolved: &[u8]) -> Option<Value> {
+        if self.no_const_subst {
+            return None;
+        }
+        self.opts.ct_constants.as_ref()?.get(resolved).cloned()
+    }
+
     /// Constant folding of simple expressions.
     pub(crate) fn try_fold(&self, e: &Expr) -> Option<Value> {
         match &e.kind {
@@ -2616,16 +2629,19 @@ impl Compiler {
             ExprKind::String(s) => Some(Value::Str(ZStr::from(s.as_slice()))),
             ExprKind::Const(n) => {
                 let (name, fb) = self.resolve_const_name(n);
-                if n.kind == ast::NameKind::Qualified {
-                    return None;
+                if n.kind != ast::NameKind::Qualified {
+                    let last = fb.as_deref().unwrap_or(&name);
+                    if last.eq_ignore_ascii_case(b"true") {
+                        return Some(Value::Bool(true));
+                    }
+                    if last.eq_ignore_ascii_case(b"false") {
+                        return Some(Value::Bool(false));
+                    }
+                    if last.eq_ignore_ascii_case(b"null") {
+                        return Some(Value::Null);
+                    }
                 }
-                let last = fb.unwrap_or(name).to_ascii_lowercase();
-                match last.as_slice() {
-                    b"true" => Some(Value::Bool(true)),
-                    b"false" => Some(Value::Bool(false)),
-                    b"null" => Some(Value::Null),
-                    _ => None,
-                }
+                self.ct_eval_const(&name)
             }
             ExprKind::Unary { op, expr } => {
                 let v = self.try_fold(expr)?;

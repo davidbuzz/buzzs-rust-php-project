@@ -1,7 +1,7 @@
 //! Compiling and running files: the main script, `include`/`require`
 //! and `eval`.
 
-use crate::compiler::{self, CompileOptions, CompiledUnit};
+use crate::compiler::{self, CompileOptions, CompiledUnit, CtConstants};
 use crate::opcode::IncludeKind;
 use crate::vm::{Frame, FrameKind, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{Value, ZStr};
@@ -17,6 +17,42 @@ pub(crate) enum CompileOutcome {
 }
 
 impl Vm {
+    /// The constants the compiler may substitute (`zend_try_ct_eval_const`,
+    /// `can_ct_eval_const` in `Zend/zend_compile.c`): the internal (not
+    /// user-defined) constants with a scalar value that are not deprecated.
+    /// Built once and rebuilt only when internal or deprecated constants
+    /// are added or removed.
+    pub(crate) fn ct_constants(&mut self) -> CtConstants {
+        let key = (
+            self.constants
+                .len()
+                .saturating_sub(self.user_constants.len()),
+            self.deprecated_constants.len(),
+        );
+        if let Some((k, c)) = &self.ct_constants {
+            if *k == key {
+                return c.clone();
+            }
+        }
+        let user: std::collections::HashSet<&[u8]> =
+            self.user_constants.iter().map(ZStr::as_bytes).collect();
+        let table: std::collections::HashMap<ZStr, Value> = self
+            .constants
+            .iter()
+            .filter(|(name, v)| {
+                matches!(
+                    v,
+                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+                ) && !user.contains(name.as_bytes())
+                    && !self.deprecated_constants.contains_key(*name)
+            })
+            .map(|(name, v)| (name.clone(), v.clone()))
+            .collect();
+        let c = CtConstants::new(table);
+        self.ct_constants = Some((key, c.clone()));
+        c
+    }
+
     /// Parses source with current INI and mbstring request settings.
     ///
     /// For eval, Zend scans in the effective internal encoding and bypasses
@@ -116,8 +152,24 @@ impl Vm {
                 Some(crate::func::Func::Builtin(_))
             ),
             anon_base: self.anon_counter,
+            ct_constants: Some(self.ct_constants()),
         };
-        let unit = match compiler::compile(&program, Rc::from(src), opts) {
+        let halt_compiler_offset = program.halt_compiler_offset;
+        // A multibyte script's AST is kept for the semantic text of
+        // diagnostics; any other is released statement by statement while
+        // it compiles.
+        let (compiled, kept) = if program.multibyte {
+            (
+                compiler::compile(&program, Rc::from(src), opts),
+                Some(program),
+            )
+        } else {
+            (
+                compiler::compile_program(program, Rc::from(src), opts),
+                None,
+            )
+        };
+        let unit = match compiled {
             Ok(u) => {
                 self.anon_counter = u.anon_end;
                 u
@@ -130,7 +182,7 @@ impl Vm {
                 return Ok(CompileOutcome::Fatal);
             }
         };
-        if let Some(off) = program.halt_compiler_offset {
+        if let Some(off) = halt_compiler_offset {
             self.ext
                 .halt_offsets
                 .insert(filename.clone(), i64::try_from(off).unwrap_or(0));
@@ -138,7 +190,7 @@ impl Vm {
         for (level, msg, line) in &unit.warnings {
             self.error_at(*level, msg, filename, *line)?;
         }
-        if program.multibyte {
+        if let Some(program) = kept {
             self.parsed_sources
                 .borrow_mut()
                 .insert(filename.clone(), Rc::new(program));

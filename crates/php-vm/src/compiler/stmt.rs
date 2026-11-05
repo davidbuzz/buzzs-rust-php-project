@@ -15,6 +15,32 @@ pub(crate) const SYMBOL_CONST: u8 = 1 << 2;
 impl Compiler {
     /// Compiles the statements of a file.
     pub(crate) fn compile_top_statements(&mut self, stmts: &[Stmt]) -> CResult<()> {
+        self.check_strict_types_position(stmts)?;
+        for s in stmts {
+            self.compile_stmt_top(s)?;
+            if matches!(s.kind, StmtKind::HaltCompiler { .. }) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// [`Compiler::compile_top_statements`] over statements it owns: each
+    /// one's AST is dropped as soon as it is compiled (see
+    /// [`super::compile_program`]).
+    pub(crate) fn compile_top_statements_owned(&mut self, stmts: Vec<Stmt>) -> CResult<()> {
+        self.check_strict_types_position(&stmts)?;
+        for s in stmts {
+            self.compile_stmt_top(&s)?;
+            if matches!(s.kind, StmtKind::HaltCompiler { .. }) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// `declare(strict_types=...)` must be the very first statement.
+    fn check_strict_types_position(&self, stmts: &[Stmt]) -> CResult<()> {
         for (i, s) in stmts.iter().enumerate() {
             if let StmtKind::Declare { directives, .. } = &s.kind {
                 for d in directives {
@@ -34,12 +60,6 @@ impl Compiler {
                         }
                     }
                 }
-            }
-        }
-        for s in stmts {
-            self.compile_stmt_top(s)?;
-            if matches!(s.kind, StmtKind::HaltCompiler { .. }) {
-                break;
             }
         }
         Ok(())
