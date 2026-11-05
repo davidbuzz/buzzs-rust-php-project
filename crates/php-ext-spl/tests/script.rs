@@ -715,3 +715,20 @@ var_dump($r);
         "\nNotice: Indirect modification of overloaded element of B has no effect in test.php on line 4\nB::offsetGet(): Argument #1 ($offset) not passed\n\nNotice: Indirect modification of overloaded element of B has no effect in test.php on line 5\nB::offsetGet(): Argument #1 ($offset) not passed\n\nNotice: Indirect modification of overloaded element of ArrayObject has no effect in test.php on line 7\nNULL\n"
     );
 }
+
+#[test]
+fn method_exists_sees_inner_iterator_methods() {
+    // Bug #76901: `spl_dual_it_get_method` resolves methods of the inner
+    // iterator, and `method_exists()` asks `get_method`.
+    let out = run(r#"<?php
+$it = new IteratorIterator(new ArrayIterator([1, 2, 3]));
+var_dump(method_exists($it, 'offsetGet'), method_exists($it, 'nope'));
+var_dump(method_exists('IteratorIterator', 'offsetGet'));
+foreach ($it as $v) {
+    if (method_exists($it, 'offsetGet')) {
+        echo $it->offsetGet(0), "\n";
+    }
+}
+"#);
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\n1\n1\n1\n");
+}

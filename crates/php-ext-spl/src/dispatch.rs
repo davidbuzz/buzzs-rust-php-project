@@ -265,11 +265,15 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
         }
     }
     if c.kind != ClassKind::Interface {
-        b = b.hooks(if owns_stream(c.name) {
+        let mut hooks = if owns_stream(c.name) {
             crate::hooks::filesystem_class_hooks()
         } else {
             crate::hooks::class_hooks()
-        });
+        };
+        if matches!(c.name, "IteratorIterator" | "RecursiveIteratorIterator") {
+            hooks.forward_methods_to = Some(forward_methods_to);
+        }
+        b = b.hooks(hooks);
     }
     if matches!(c.name, "IteratorIterator" | "RecursiveIteratorIterator") {
         // `spl_dual_it_get_method` / `spl_recursive_it_get_method` forward
@@ -654,6 +658,18 @@ fn is_direct_call(vm: &Vm, method: &str) -> bool {
 /// Forwards an unknown method call to the inner (current sub-) iterator.
 /// A native `__call` receives the call's own arguments (unpacked); the
 /// method name comes from [`Vm::magic_call_name`].
+/// `ClassHooks::forward_methods_to` of the dual and recursive iterators:
+/// the iterator whose methods `spl_dual_it_get_method` /
+/// `spl_recursive_it_get_method` resolve (so `method_exists()` sees them).
+fn forward_methods_to(vm: &mut Vm, this: &Obj) -> VmResult<Option<Obj>> {
+    let target = {
+        let _entry = crate::files::enter();
+        let mut host = VmHost::new(vm);
+        php_spl::handlers::method_target(&mut host, this)
+    };
+    target.map_err(|e| rt_throw(vm, e))
+}
+
 fn forward_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(this) = a.this.clone() else {
         return Ok(Value::Null);

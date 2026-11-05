@@ -748,7 +748,36 @@ fn method_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if cls.lc_name.as_bytes() == b"closure" && m.eq_ignore_ascii_case(b"__invoke") {
         return Ok(Value::Bool(true));
     }
+    if let Value::Object(o) = &v {
+        return Ok(Value::Bool(forwarded_method_exists(vm, o, &m)?));
+    }
     Ok(Value::Bool(false))
+}
+
+/// `method_exists()` on an object asks its `get_method` handler, which for
+/// `IteratorIterator` & co. (`spl_dual_it_get_method`) finds the inner
+/// iterator's real methods (its `__call` trampoline does not count).
+#[cold]
+fn forwarded_method_exists(vm: &mut Vm, o: &php_runtime::Obj, m: &ZStr) -> VmResult<bool> {
+    let mut cur = o.clone();
+    // Bounded: a chain of wrappers cannot loop, but stay defensive.
+    for _ in 0..64 {
+        let Some(forward) = object::class_of(&cur)
+            .hooks
+            .as_ref()
+            .and_then(|h| h.forward_methods_to)
+        else {
+            return Ok(false);
+        };
+        let Some(inner) = forward(vm, &cur)? else {
+            return Ok(false);
+        };
+        if object::class_of(&inner).find_method(m.as_bytes()).is_some() {
+            return Ok(true);
+        }
+        cur = inner;
+    }
+    Ok(false)
 }
 
 fn property_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
