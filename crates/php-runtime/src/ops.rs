@@ -874,6 +874,48 @@ pub fn compare_arrays(
     compare_tables(a, b, ctx)
 }
 
+thread_local! {
+    /// Current nesting of array comparisons and its limit (see
+    /// [`set_compare_depth_limit`]).
+    static COMPARE_DEPTH: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, usize::MAX)) };
+}
+
+/// Sets how deeply array comparisons (`==`, `<=>`, `===`) may nest before
+/// failing with "Maximum call stack size reached during comparison", the
+/// embedder's model of `zend_call_stack_overflowed()` in
+/// `zend_hash_compare` (Zend/zend_hash.c). Unlimited by default.
+pub fn set_compare_depth_limit(limit: usize) {
+    COMPARE_DEPTH.with(|c| c.set((c.get().0, limit)));
+}
+
+/// One nesting level of an array comparison.
+struct CompareDepth;
+
+impl CompareDepth {
+    fn enter() -> RtResult<Self> {
+        COMPARE_DEPTH.with(|c| {
+            let (depth, limit) = c.get();
+            if depth >= limit {
+                return Err(RuntimeError::Error(
+                    "Maximum call stack size reached during comparison".to_string(),
+                ));
+            }
+            c.set((depth + 1, limit));
+            Ok(CompareDepth)
+        })
+    }
+}
+
+impl Drop for CompareDepth {
+    fn drop(&mut self) {
+        COMPARE_DEPTH.with(|c| {
+            let (depth, limit) = c.get();
+            c.set((depth.saturating_sub(1), limit));
+        });
+    }
+}
+
 /// `zend_hash_compare(ht1, ht2, zend_compare, ordered = 0)` on tables.
 pub fn compare_tables(
     a: &HashTable,
@@ -883,6 +925,7 @@ pub fn compare_tables(
     if std::ptr::eq(a, b) {
         return Ok(0);
     }
+    let _depth = CompareDepth::enter()?;
     let _guard = RecursionGuard::enter(std::ptr::from_ref(a) as usize)?;
     if a.len() != b.len() {
         return Ok(if a.len() > b.len() { 1 } else { -1 });
@@ -979,6 +1022,7 @@ pub fn is_identical(a: &Value, b: &Value) -> RtResult<bool> {
 }
 
 fn tables_identical(a: &HashTable, b: &HashTable) -> RtResult<bool> {
+    let _depth = CompareDepth::enter()?;
     let _guard = RecursionGuard::enter(std::ptr::from_ref(a) as usize)?;
     if a.len() != b.len() {
         return Ok(false);
@@ -1483,5 +1527,30 @@ mod tests {
             e.message(),
             Some("Nesting level too deep - recursive dependency?")
         );
+    }
+
+    #[test]
+    fn deep_array_comparison_hits_the_depth_limit() {
+        fn nested(depth: usize) -> Value {
+            let mut v = Value::empty_array();
+            for _ in 0..depth {
+                let mut a = ZArray::new();
+                a.make_mut().push(v).unwrap();
+                v = Value::Array(a);
+            }
+            v
+        }
+        let mut c = CollectingContext::new();
+        let (a, b) = (nested(3), nested(3));
+        set_compare_depth_limit(2);
+        let eq = compare(&a, &b, &mut c).unwrap_err();
+        let id = is_identical(&a, &b).unwrap_err();
+        set_compare_depth_limit(5);
+        let ok = is_identical(&a, &b);
+        set_compare_depth_limit(usize::MAX);
+        let msg = Some("Maximum call stack size reached during comparison");
+        assert_eq!(eq.message(), msg);
+        assert_eq!(id.message(), msg);
+        assert!(ok.unwrap());
     }
 }

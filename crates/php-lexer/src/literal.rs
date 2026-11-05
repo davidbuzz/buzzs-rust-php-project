@@ -53,13 +53,22 @@ fn strip_underscores(digits: &[u8]) -> Vec<u8> {
     digits.iter().copied().filter(|&c| c != b'_').collect()
 }
 
+/// Overflowing prefixed literal to float, rounding step by step like
+/// `zend_hex_strtod` / `zend_oct_strtod` / `zend_bin_strtod`
+/// (Zend/zend_strtod.c). The octal and binary loops compute
+/// `value * base + c - '0'`, i.e. add the ASCII code before subtracting
+/// `'0'`, which rounds differently once `value` exceeds 2^53.
 fn accumulate_float(digits: &[u8], radix: u32) -> f64 {
     let mut value = 0f64;
     for &c in digits {
         let Some(d) = char::from(c).to_digit(radix) else {
             break;
         };
-        value = value * f64::from(radix) + f64::from(d);
+        value = if radix == 16 {
+            value * 16.0 + f64::from(d)
+        } else {
+            (value * f64::from(radix) + f64::from(c)) - f64::from(b'0')
+        };
     }
     value
 }
@@ -518,6 +527,22 @@ mod tests {
         assert_eq!(
             parse_prefixed_int(b"0x8000000000000000", 16),
             TokenValue::Float(9_223_372_036_854_775_808.0)
+        );
+    }
+
+    #[test]
+    fn prefixed_overflow_rounds_like_zend_strtod() {
+        // zend_bin_strtod adds the ASCII digit then subtracts '0': 64 ones
+        // give 2^64 - 2048, not 2^64 (Zend/tests/binary.phpt).
+        let ones = [b"0b".as_slice(), &[b'1'; 64]].concat();
+        assert_eq!(
+            parse_prefixed_int(&ones, 2),
+            TokenValue::Float(18_446_744_073_709_549_568.0)
+        );
+        let sevens = [b"0o".as_slice(), &[b'7'; 25]].concat();
+        assert_eq!(
+            parse_prefixed_int(&sevens, 8),
+            TokenValue::Float(3.777_893_186_295_716e22)
         );
     }
 

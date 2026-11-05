@@ -197,7 +197,7 @@ impl Parser<'_> {
     /// the lookahead token.
     pub(crate) fn action_error(&mut self, msg: impl Into<String>) -> crate::ParseError {
         let line = self.cur().end_line;
-        crate::ParseError::compile(msg, line)
+        crate::ParseError::compile_exception(msg, line)
     }
 
     // ---- attributes ------------------------------------------------------

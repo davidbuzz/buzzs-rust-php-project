@@ -189,20 +189,29 @@ impl Compiler {
                             self.emit(Op::Global { cv, name });
                         }
                         ExprKind::Var(VarName::Expr(e)) => {
-                            // global $$x: bind by runtime name.
+                            // `zend_compile_global_var` without a CV: the name
+                            // is evaluated once, FETCH_W (global) then FETCH_W
+                            // (local) and ASSIGN_REF.
                             let n = self.compile_expr(e)?;
-                            let t = self.tmp();
-                            let gl = self.lit_str(b"GLOBALS");
-                            let _ = gl;
-                            let place = self.place(Place {
+                            self.f().line = v.span.line;
+                            let global = self.place(Place {
+                                base: PlaceBase::Global(Compiler::keep(n)),
+                                segs: Vec::new(),
+                            });
+                            let local = self.place(Place {
                                 base: PlaceBase::VarVar(n),
                                 segs: Vec::new(),
                             });
-                            let _ = t;
-                            // Approximation: make the local a reference to the
-                            // global through $GLOBALS semantics.
-                            self.emit(Op::Nop);
-                            let _ = place;
+                            let t = self.tmp();
+                            self.emit(Op::MakeRef {
+                                place: global,
+                                dst: t,
+                            });
+                            self.emit(Op::AssignRef {
+                                place: local,
+                                src: Operand::Tmp(t),
+                                dst: None,
+                            });
                         }
                         _ => {}
                     }
@@ -788,6 +797,12 @@ impl Compiler {
             if val != Operand::Unused {
                 self.emit(Op::Move { src: val, dst: t });
                 val = Operand::Tmp(t);
+                // zend_compile_return emits VERIFY_RETURN_TYPE before
+                // zend_handle_loops_and_finally: the coercion (and its
+                // diagnostics) precede the finally blocks (bug72347).
+                if !fins.is_empty() && !is_gen && !returns_ref && self.fref().has_return_type {
+                    self.emit(Op::VerifyReturn { val });
+                }
             }
             self.emit_return_unwind();
         }
@@ -1130,12 +1145,9 @@ impl Compiler {
             self.f().line = c.span.line;
             let mut classes = Vec::new();
             for t in &c.types {
-                let lc = t.name.to_ascii_lowercase();
-                if t.kind == ast::NameKind::Unqualified
-                    && matches!(lc.as_slice(), b"self" | b"static" | b"parent")
-                {
-                    let spec = self.class_spec_name(t)?;
-                    let _ = spec;
+                // `zend_is_const_default_class_ref` in zend_compile_try.
+                if t.is_special("self") || t.is_special("static") || t.is_special("parent") {
+                    return self.err("Bad class name in the catch statement", c.span.line);
                 }
                 let n = self.resolve_class_name(t);
                 classes.push(self.lit_str(&n));
@@ -1325,7 +1337,12 @@ impl Compiler {
             })
         } else if matches!(
             e.kind,
-            ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::StaticCall { .. }
+            ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::StaticCall { .. }
+                // `ZEND_ASSIGN_REF` yields a VAR holding the reference, sent
+                // with SEND_VAR_NO_REF(_EX) like a call result.
+                | ExprKind::AssignRef { .. }
         ) {
             let op = self.compile_expr(e)?;
             Ok(ArgSrc::CallResult(op))
@@ -1341,29 +1358,52 @@ impl Compiler {
 /// fetch cannot be sent by reference.
 fn on_temporary(e: &Expr) -> bool {
     let mut cur = e;
+    let mut through_prop = false;
     loop {
         match &cur.kind {
             ExprKind::Dim { base, .. } => cur = &**base,
-            ExprKind::Prop { object, .. } => cur = &**object,
+            ExprKind::Prop { object, .. } => {
+                through_prop = true;
+                cur = &**object;
+            }
             _ => break,
         }
     }
-    !std::ptr::eq(cur, e)
-        && matches!(
-            cur.kind,
+    if std::ptr::eq(cur, e) {
+        return false;
+    }
+    match &cur.kind {
+        // `zend_mark_const_object_fetch`: a constant under a property
+        // fetch is copied to a VAR (QM_ASSIGN) in write context (GH-10497).
+        ExprKind::Const(_) | ExprKind::ClassConst { .. } => !through_prop,
+        // Special-compiled ZEND_FUNC_GET_ARGS / ZEND_FUNC_NUM_ARGS yield a
+        // TMP (GH-12102).
+        ExprKind::Call { callee, args } => match &**callee {
+            ast::Callee::Name(n) => {
+                args.args.is_empty()
+                    && matches!(
+                        n.kind,
+                        ast::NameKind::Unqualified | ast::NameKind::FullyQualified
+                    )
+                    && (n.name.eq_ignore_ascii_case(b"func_get_args")
+                        || n.name.eq_ignore_ascii_case(b"func_num_args"))
+            }
+            ast::Callee::Expr(_) => false,
+        },
+        kind => matches!(
+            kind,
             ExprKind::Int(_)
                 | ExprKind::Float(_)
                 | ExprKind::String(_)
                 | ExprKind::Interpolated(_)
                 | ExprKind::Array { .. }
-                | ExprKind::Const(_)
-                | ExprKind::ClassConst { .. }
                 | ExprKind::MagicConst(_)
                 | ExprKind::Binary { .. }
                 | ExprKind::Unary { .. }
                 | ExprKind::Cast { .. }
                 | ExprKind::Conditional { .. }
-        )
+        ),
+    }
 }
 
 /// Whether an expression denotes a variable that can be referenced.

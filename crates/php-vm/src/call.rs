@@ -740,6 +740,10 @@ impl Vm {
         };
         let scope = self.scope();
         if !self.can_access_method(&ctor, scope.as_ref()) {
+            // zend_std_get_constructor: zend_object_store_ctor_failed()
+            // (GH-14456), so the destructor never runs.
+            let d = object::data(&o);
+            d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
             let vis = if ctor.visibility() == flags::PRIVATE {
                 "private"
             } else {
@@ -995,6 +999,15 @@ impl Vm {
         };
         let mut changed = false;
         for (k, val) in items {
+            // ZEND_SEND_UNPACK: a Traversable's numeric string keys
+            // (ZEND_HANDLE_NUMERIC) are positional (GH-18581).
+            let k = match k {
+                Value::Str(s) if traversable => match ArrayKey::from_zstr(&s) {
+                    ArrayKey::Int(i) => Value::Int(i),
+                    ArrayKey::Str(s) => Value::Str(s),
+                },
+                k => k,
+            };
             let (pos, name) = match &k {
                 Value::Str(s) => (self.arg_position(s)?, Some(s.clone())),
                 Value::Int(_) => {

@@ -386,10 +386,18 @@ pub(crate) fn descend(
                 let tn = other.value_name();
                 let tn = if undef { "null".to_string() } else { tn };
                 // `zend_throw_non_object_error`: ASSIGN_OBJ and
-                // ASSIGN_OBJ_OP "assign", FETCH_OBJ_W/RW "modify".
+                // ASSIGN_OBJ_OP "assign", PRE/POST_INC/DEC_OBJ
+                // "increment/decrement", FETCH_OBJ_W/RW "modify".
                 if last && matches!(wop, WOp::Assign(_) | WOp::AssignOp(..)) {
                     Step::Err(WalkErr::Error(format!(
                         "Attempt to assign property \"{}\" on {tn}",
+                        name.to_string_lossy()
+                    )))
+                } else if last && matches!(wop, WOp::FetchRw) {
+                    // A final FetchRw walk is the read of `++`/`--`
+                    // (compound assignments walk with `WOp::AssignOp`).
+                    Step::Err(WalkErr::Error(format!(
+                        "Attempt to increment/decrement property \"{}\" on {tn}",
                         name.to_string_lossy()
                     )))
                 } else {
@@ -530,7 +538,13 @@ pub(crate) fn descend(
                                 *slot = r.clone();
                                 Step::Done(r)
                             }
-                            _ => apply_final(slot, wop),
+                            _ => {
+                                let step = apply_final(slot, wop);
+                                if !existed && rw {
+                                    watch_rw_container(arr);
+                                }
+                                step
+                            }
                         }
                     } else {
                         descend(slot, segs, i + 1, wop, diags, !existed)
@@ -555,6 +569,42 @@ thread_local! {
     /// `Vm::obj_walk`, taken by `Vm::fetch_rw`.
     static OVERLOADED_RW: std::cell::Cell<Option<(Obj, Value)>> =
         const { std::cell::Cell::new(None) };
+    /// The array whose missing key a read-modify-write walk added, held
+    /// across the "Undefined array key" warning like
+    /// `zend_undefined_index_write`'s `GC_ADDREF`: an error handler that
+    /// writes to or frees the array leaves this the only owner.
+    static RW_UNDEF_WATCH: std::cell::Cell<Option<ZArray>> = const { std::cell::Cell::new(None) };
+    /// Set when a `WOp::FetchRw` walk was abandoned that way (read by
+    /// `Vm::fetch_rw`).
+    static RW_SKIPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The undefined compiled variable (and frame depth) a
+    /// `place = $undef` walk through a property still has to warn about:
+    /// set by `Vm::place_assign_undef_cv`.
+    static PENDING_UNDEF_VALUE: std::cell::Cell<Option<(u32, usize)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// See `RW_UNDEF_WATCH`.
+#[cold]
+fn watch_rw_container(arr: &ZArray) {
+    RW_UNDEF_WATCH.with(|w| w.set(Some(arr.clone())));
+}
+
+/// After a read-modify-write walk's diagnostics: whether the error handler
+/// wrote to or freed the array whose missing key the walk added
+/// (`zend_undefined_index_write` / `zend_undefined_offset_write` then
+/// return NULL and the operation is skipped; bug70662, bug78598).
+fn rw_container_changed(wop: &WOp) -> bool {
+    if !matches!(wop, WOp::FetchRw | WOp::AssignOp(..)) {
+        return false;
+    }
+    let changed = RW_UNDEF_WATCH
+        .with(std::cell::Cell::take)
+        .is_some_and(|a| a.refcount() == 1);
+    if changed && matches!(wop, WOp::FetchRw) {
+        RW_SKIPPED.with(|c| c.set(true));
+    }
+    changed
 }
 
 /// Performs deferred reference assignments; called once a write walk has
@@ -766,6 +816,17 @@ impl Vm {
                         self.warning(&crate::exec::undefined_var_msg(&name))?;
                         st = store.borrow_mut();
                     }
+                    if matches!(segs[0], RSeg::Prop(_)) {
+                        // `ASSIGN_OBJ`/`FETCH_OBJ_W` on an undefined CV
+                        // throw without defining it (`zend_throw_non_object_error`).
+                        drop(st);
+                        let mut null = Value::Null;
+                        let s = descend(&mut null, segs, 0, &mut wop, &mut diags, true);
+                        if !quiet {
+                            self.flush_diags(diags)?;
+                        }
+                        return self.finish_step(s, segs, wop);
+                    }
                     st.slots[idx] = Some(Value::Null);
                 }
                 let slot = st.slots[idx].as_mut().expect("slot defined");
@@ -821,8 +882,15 @@ impl Vm {
             }
             RBase::Undef(_) => return Ok(Value::Null),
         };
-        if !quiet {
-            self.flush_diags(diags)?;
+        let flushed = if quiet {
+            Ok(())
+        } else {
+            self.flush_diags(diags)
+        };
+        let changed = rw_container_changed(&wop);
+        flushed?;
+        if changed {
+            return Ok(Value::Null);
         }
         if let (Step::Done(cur), WOp::AssignOp(op, rhs), Some(again)) = (&step, &wop, again) {
             // The final slot lies inside the base's container: write the
@@ -870,7 +938,12 @@ impl Vm {
         let mut diags = Vec::new();
         let mut w = wop;
         let s = walk(&mut w, &mut diags);
-        self.flush_diags(diags)?;
+        let flushed = self.flush_diags(diags);
+        let changed = rw_container_changed(&w);
+        flushed?;
+        if changed {
+            return Ok(Value::Null);
+        }
         self.finish_native(s, segs, w, walk)
     }
 
@@ -1078,6 +1151,7 @@ impl Vm {
                         match &wop {
                             WOp::Assign(v) => {
                                 if let Some(f) = h.write_dimension {
+                                    self.take_pending_undef_value()?;
                                     if f(self, &obj, keyopt, v)? {
                                         return Ok(v.clone());
                                     }
@@ -1170,6 +1244,7 @@ impl Vm {
                     let assign_ref = matches!(wop, WOp::AssignRef(_));
                     return match wop {
                         WOp::Assign(v) => {
+                            self.take_pending_undef_value()?;
                             self.call_method_name(&obj, "offsetSet", vec![key, v.clone()])?;
                             Ok(v)
                         }
@@ -1290,8 +1365,42 @@ impl Vm {
             return self.place_assign(pid, v);
         }
         let (base, segs) = self.resolve_place(pid, true)?;
-        let v = self.read_cv(cv)?;
-        self.write_place(base, &segs, WOp::Assign(v))
+        if !segs.iter().any(|s| matches!(s, RSeg::Prop(_))) {
+            let v = self.read_cv(cv)?;
+            return self.write_place(base, &segs, WOp::Assign(v));
+        }
+        // Through a property, the fetches (`FETCH_OBJ_W`'s "Indirect
+        // modification" notice, `__get`, `offsetGet`) precede the OP_DATA
+        // read: the value's warning is raised just before the final store
+        // (`Vm::take_pending_undef_value`) or after the walk.
+        let depth = self.frames.len();
+        let saved = PENDING_UNDEF_VALUE.with(|c| c.replace(Some((cv, depth))));
+        let r = self.write_place(base, &segs, WOp::Assign(Value::Null));
+        let mine = PENDING_UNDEF_VALUE.with(|c| c.replace(saved));
+        let r = r?;
+        if let Some((cv, _)) = mine {
+            self.read_cv(cv)?;
+        }
+        Ok(r)
+    }
+
+    /// Raises the deferred "Undefined variable" warning of
+    /// [`Vm::place_assign_undef_cv`] before an object's final dimension
+    /// write (`offsetSet`, a native `write_dimension`), as `ZEND_ASSIGN_DIM`
+    /// reads OP_DATA before `zend_assign_to_object_dim`.
+    fn take_pending_undef_value(&mut self) -> VmResult<()> {
+        let depth = self.frames.len();
+        let pending = PENDING_UNDEF_VALUE.with(|c| match c.get() {
+            Some((cv, d)) if d == depth => {
+                c.set(None);
+                Some(cv)
+            }
+            _ => None,
+        });
+        if let Some(cv) = pending {
+            self.read_cv(cv)?;
+        }
+        Ok(())
     }
 
     /// `place op= v`
@@ -1327,16 +1436,25 @@ impl Vm {
 
     /// The read half of a read-modify-write: the current value and, when
     /// the walk ended on an `ArrayAccess` offset, that object and offset.
-    fn fetch_rw(&mut self, base: RBase, segs: &[RSeg]) -> VmResult<(Value, Option<(Obj, Value)>)> {
+    /// `None` when the walk was abandoned because an error handler changed
+    /// the array (see `rw_container_changed`).
+    fn fetch_rw(
+        &mut self,
+        base: RBase,
+        segs: &[RSeg],
+    ) -> VmResult<Option<(Value, Option<(Obj, Value)>)>> {
         if !matches!(segs.last(), Some(RSeg::Dim(_) | RSeg::Append)) {
-            return Ok((self.write_place(base, segs, WOp::FetchRw)?, None));
+            return Ok(Some((self.write_place(base, segs, WOp::FetchRw)?, None)));
         }
         // Save and restore around the walk: user code it runs (offsetGet,
         // destructors) may perform read-modify-writes of its own.
         let saved = OVERLOADED_RW.with(std::cell::Cell::take);
+        let saved_skip = RW_SKIPPED.with(|c| c.replace(false));
         let r = self.write_place(base, segs, WOp::FetchRw);
         let mine = OVERLOADED_RW.with(|c| c.replace(saved));
-        Ok((r?, mine))
+        let skipped = RW_SKIPPED.with(|c| c.replace(saved_skip));
+        let r = r?;
+        Ok((!skipped).then_some((r, mine)))
     }
 
     /// `++place` etc.
@@ -1396,7 +1514,16 @@ impl Vm {
                 }
             }
         }
-        let (cur, overloaded) = self.fetch_rw(base, &segs)?;
+        let Some((cur, overloaded)) = self.fetch_rw(base, &segs)? else {
+            // FETCH_DIM_RW yielded a null temporary: ++/-- act on it alone.
+            let mut nv = Value::Null;
+            if kind.is_inc() {
+                ops::increment(&mut nv, self).map_err(|e| self.rt_throw(e))?;
+            } else {
+                ops::decrement(&mut nv, self).map_err(|e| self.rt_throw(e))?;
+            }
+            return Ok(if kind.is_post() { Value::Null } else { nv });
+        };
         // `FETCH_DIM_RW` on an object: a non-reference result is a
         // temporary, so the increment is not written back.
         let temporary = match &overloaded {
@@ -1542,6 +1669,21 @@ impl Vm {
         )
     }
 
+    /// The read warning for an undefined variable base: `$GLOBALS[...]`
+    /// fetches carry `ZEND_FETCH_GLOBAL` ("Undefined global variable",
+    /// `zend_fetch_var_address_helper`).
+    #[cold]
+    fn undefined_place_var_msg(&self, pid: PlaceId, name: &ZStr) -> String {
+        if matches!(
+            self.frame().code.places[pid as usize].base,
+            PlaceBase::Global(_)
+        ) {
+            format!("Undefined global variable ${name}")
+        } else {
+            crate::exec::undefined_var_msg(name)
+        }
+    }
+
     /// Reads a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_fetch(&mut self, pid: PlaceId, mode: FetchMode) -> VmResult<Value> {
@@ -1551,6 +1693,12 @@ impl Vm {
             if let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) {
                 let cv = *cv;
                 return self.read_cv(cv);
+            }
+            // FETCH_DIM_FUNC_ARG sent by value: `$a[]` fails before its
+            // container or any later offset is read
+            // (`zend_use_undef_in_read_context`).
+            if matches!(p.segs.first(), Some(Seg::Append)) {
+                return Err(self.make_throw("Error", "Cannot use [] for reading"));
             }
         }
         let code = self.frame().code.clone();
@@ -1565,7 +1713,8 @@ impl Vm {
                     None => {
                         if mode != FetchMode::Is {
                             let name = store.borrow().names[idx].clone();
-                            self.warning(&crate::exec::undefined_var_msg(&name))?;
+                            let msg = self.undefined_place_var_msg(pid, &name);
+                            self.warning(&msg)?;
                         }
                         Value::Null
                     }
@@ -1591,7 +1740,8 @@ impl Vm {
             RBase::Value(v) => v.deref(),
             RBase::Undef(name) => {
                 if mode != FetchMode::Is {
-                    self.warning(&crate::exec::undefined_var_msg(&name))?;
+                    let msg = self.undefined_place_var_msg(pid, &name);
+                    self.warning(&msg)?;
                 }
                 Value::Null
             }

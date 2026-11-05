@@ -10,7 +10,7 @@ use std::rc::Rc;
 /// Outcome of compiling source code.
 pub(crate) enum CompileOutcome {
     Ok(Rc<CompiledUnit>),
-    /// A `ParseError` exception was created.
+    /// A `ParseError` (or thrown `CompileError`) exception was created.
     ParseError(php_runtime::Obj),
     /// A fatal error was reported.
     Fatal,
@@ -80,6 +80,14 @@ impl Vm {
                         self.set_exc_prop(&o, "line", Value::Int(i64::from(e.line)));
                         Ok(CompileOutcome::ParseError(o))
                     }
+                    // `zend_throw_exception(zend_ce_compile_error, ...)`
+                    // during parsing (bug75218).
+                    php_parser::ErrorKind::Compile if e.thrown => {
+                        let o = self.create_exception("CompileError", &e.message, 0)?;
+                        self.set_exc_prop(&o, "file", Value::Str(filename.clone()));
+                        self.set_exc_prop(&o, "line", Value::Int(i64::from(e.line)));
+                        Ok(CompileOutcome::ParseError(o))
+                    }
                     php_parser::ErrorKind::Compile => {
                         self.report_compile_error(&e.message, filename, e.line, false);
                         Ok(CompileOutcome::Fatal)
@@ -103,9 +111,13 @@ impl Vm {
                 self.functions.get(&ZStr::from("array_map")),
                 Some(crate::func::Func::Builtin(_))
             ),
+            anon_base: self.anon_counter,
         };
         let unit = match compiler::compile(&program, Rc::from(src), opts) {
-            Ok(u) => u,
+            Ok(u) => {
+                self.anon_counter = u.anon_end;
+                u
+            }
             Err(e) => {
                 for (level, msg, line) in &e.warnings {
                     self.error_at(*level, msg, filename, *line)?;
@@ -198,6 +210,29 @@ impl Vm {
         self.run_top_level(src, path, false)
     }
 
+    /// Models `zend_call_stack_overflowed()` in `zend_hash_compare` as a
+    /// nesting limit for array comparisons: the usable stack
+    /// (`zend.max_allowed_stack_size` minus `zend.reserved_stack_size`,
+    /// whose 0 default is 48 KiB) over the C stack one nesting level of
+    /// `zend_compare` takes.
+    #[cold]
+    fn apply_compare_depth_limit(&mut self) {
+        /// Approximate C stack bytes per nesting level of `zend_compare` /
+        /// `zend_hash_compare_impl` / `hash_zval_compare_function`.
+        const COMPARE_FRAME_BYTES: usize = 256;
+        let max = self.ini.get_long("zend.max_allowed_stack_size");
+        let reserved = match usize::try_from(self.ini.get_long("zend.reserved_stack_size")) {
+            Ok(0) | Err(_) => 48 << 10,
+            Ok(r) => r,
+        };
+        let limit = match usize::try_from(max) {
+            Err(_) => usize::MAX,
+            Ok(0) => self.native_stack_size.saturating_sub(reserved) / COMPARE_FRAME_BYTES,
+            Ok(m) => m.saturating_sub(reserved) / COMPARE_FRAME_BYTES,
+        };
+        php_runtime::ops::set_compare_depth_limit(limit.max(1));
+    }
+
     /// Runs top-level eval input, as CLI `-r`, `-B`, `-R`, and `-E` do.
     /// Input has no opening tag and uses Zend's configured internal encoding.
     pub fn run_eval(&mut self, src: &[u8], path: &ZStr) -> Result<(), Throw> {
@@ -206,6 +241,16 @@ impl Vm {
 
     fn run_top_level(&mut self, src: &[u8], path: &ZStr, is_eval: bool) -> Result<(), Throw> {
         self.script_path = path.clone();
+        self.apply_compare_depth_limit();
+        if !is_eval {
+            // php_execute_script adds the primary script to
+            // EG(included_files): `require_once` of it is a no-op (bug60825).
+            use std::os::unix::ffi::OsStrExt;
+            if let Ok(real) = std::fs::canonicalize(std::ffi::OsStr::from_bytes(path.as_bytes())) {
+                self.included_set
+                    .insert(ZStr::from(real.as_os_str().as_bytes()));
+            }
+        }
         let src = if is_eval {
             src.to_vec()
         } else {

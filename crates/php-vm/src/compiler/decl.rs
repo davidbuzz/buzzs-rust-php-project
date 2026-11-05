@@ -200,6 +200,12 @@ impl Compiler {
                 fd.span.line,
             ));
         }
+        if unq.eq_ignore_ascii_case(b"assert") {
+            return self.err(
+                "Defining a custom assert() function is not allowed, as the function has special semantics",
+                fd.span.line,
+            );
+        }
         let spec = BodySpec {
             kind: FnKind::Function,
             name: ZStr::from(name),
@@ -2166,6 +2172,14 @@ impl Compiler {
                             );
                         }
                         _ => {}
+                    }
+                    // zend_declare_typed_class_constant (via zend_compile_enum_case).
+                    if ec.name.eq_ignore_case("namespace") {
+                        self.warnings.push((
+                            8192,
+                            "Declaring enum constant called 'namespace' is deprecated".to_string(),
+                            m.span.line,
+                        ));
                     }
                     if cases
                         .iter()

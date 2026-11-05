@@ -1603,7 +1603,12 @@ impl Vm {
                         if self.has_magic(o, name, G_GET) {
                             return Ok(Some(self.call_magic_get(o, name)?));
                         }
-                        Ok(None)
+                        // `zend_std_get_property_ptr_ptr` (BP_VAR_UNSET)
+                        // adds the missing dynamic property as null
+                        // (bug78644).
+                        self.check_dynamic_creation(o, name)?;
+                        self.write_dynamic_prop(o, name.clone(), Value::Null);
+                        Ok(Some(Value::Null))
                     }
                 }
             }
@@ -1884,12 +1889,31 @@ impl Vm {
         if let Some(a) = self.internal_object_array(o)? {
             return Ok(a);
         }
+        let entries = self.object_prop_table(o, false);
+        // A reference only the property holds is unwrapped
+        // (`zend_std_build_object_properties_array`, `zend_array_dup`, the
+        // conversion of `zend_proptable_to_symtable`), except when a plain
+        // dynamic property table is shared as is (GH-8655).
+        let has_dynamic = object::data(o)
+            .dynamic
+            .borrow()
+            .as_ref()
+            .is_some_and(|t| !t.is_empty());
+        let numeric = entries.iter().any(
+            |(k, _, _)| matches!(k, ArrayKey::Str(s) if matches!(ArrayKey::from_zstr(s), ArrayKey::Int(_))),
+        );
+        let unref = !object::class_of(o).props.is_empty() || !has_dynamic || numeric;
         let mut t = HashTable::new();
-        for (k, v, _) in self.object_prop_table(o, false) {
+        for (k, v, _) in entries {
             let Some(v) = v else { continue };
             let k = match k {
                 ArrayKey::Str(s) => ArrayKey::from_zstr(&s),
                 k => k,
+            };
+            let v = match v {
+                // The property's handle plus this snapshot's.
+                Value::Reference(r) if unref && r.refcount() <= 2 => r.get(),
+                v => v,
             };
             t.insert(k, v);
         }

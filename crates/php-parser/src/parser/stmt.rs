@@ -176,8 +176,11 @@ impl Parser<'_> {
                 self.expect1(T::LParen)?;
                 self.expect1(T::RParen)?;
                 self.expect1(T::Semicolon)?;
-                Err(self
-                    .compile_error("__HALT_COMPILER() can only be used from the outermost scope"))
+                // zend_language_parser.y throws a CompileError here.
+                Err(crate::ParseError::compile_exception(
+                    "__HALT_COMPILER() can only be used from the outermost scope",
+                    self.prev_end_line,
+                ))
             }
             T::Attribute => {
                 let attrs = self.parse_attributes()?;
@@ -794,7 +797,7 @@ impl Parser<'_> {
                     d.value.kind,
                     ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::String(_)
                 ) {
-                    return Err(crate::ParseError::compile(
+                    return Err(crate::ParseError::compile_exception(
                         "Encoding must be a literal",
                         line,
                     ));

@@ -1071,4 +1071,356 @@ fn public_set_readonly_property_leaves_interface_set_abstract() {
         out.contains("Fatal error: Class C contains 1 abstract method and must therefore be declared abstract or implement the remaining method (I::$prop::set) in t.php on line"),
         "{out}"
     );
+#[test]
+fn non_object_property_and_string_offset_errors_follow_the_opcode() {
+    assert_eq!(run(r#"<?php
+$t = true;
+$s = "ab";
+foreach ([
+    fn() => $t->p = 1,
+    fn() => $t->p += 1,
+    fn() => $t->p++,
+    fn() => $t->p[0] = 1,
+    fn() => $s[0]++,
+    fn() => $s[0] .= "x",
+    fn() => $s[0][0] = "x",
+    fn() => $s[0]->p = "x",
+] as $f) {
+    try { $f(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+try { $u->p = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+var_dump(isset($u));
+try { $u->p--; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+var_dump(isset($u));
+"#), "Attempt to assign property \"p\" on true
+Attempt to assign property \"p\" on true
+Attempt to increment/decrement property \"p\" on true
+Attempt to modify property \"p\" on true
+Cannot increment/decrement string offsets
+Cannot use assign-op operators with string offsets
+Cannot use string offset as an array
+Cannot use string offset as an object
+Attempt to assign property \"p\" on null
+bool(false)
+
+Warning: Undefined variable $u in t.php on line 18
+Attempt to increment/decrement property \"p\" on null
+bool(false)
+");
+}
+
+#[test]
+fn undefined_assigned_value_warns_after_property_fetches() {
+    // bug43201: ZEND_ASSIGN_DIM reads OP_DATA after FETCH_OBJ_W's notice,
+    // but before zend_assign_to_object_dim calls offsetSet.
+    assert_eq!(run(r#"<?php
+class Foo { function __get($k) { return null; } }
+class AA implements ArrayAccess {
+    function offsetGet($o): mixed { echo "get\n"; return null; }
+    function offsetSet($o, $v): void { echo "set\n"; }
+    function offsetExists($o): bool { return false; }
+    function offsetUnset($o): void {}
+}
+$c = new Foo();
+$c->arr[0]["k2"] = $ref;
+$o = new stdClass;
+$o->aa = new AA;
+$o->aa[1] = $ref2;
+echo "ok\n";
+"#), "
+Notice: Indirect modification of overloaded property Foo::$arr has no effect in t.php on line 10
+
+Warning: Undefined variable $ref in t.php on line 10
+
+Warning: Undefined variable $ref2 in t.php on line 13
+set
+ok
+");
+}
+
+#[test]
+fn dynamic_global_statement_and_globals_fetch_warning() {
+    // zend_compile_global_var with a non-CV name; ZEND_FETCH_GLOBAL warning.
+    assert_eq!(run(r#"<?php
+function sf($arg) { echo "called\n"; return $arg; }
+function test() {
+    global ${sf("a")};
+    var_dump($a);
+    $a = 43;
+    try { global ${new stdClass}; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+$a = 42;
+test();
+var_dump($a);
+$GLOBALS["nope"];
+"#), "called
+int(42)
+Object of class stdClass could not be converted to string
+int(43)
+
+Warning: Undefined global variable $nope in t.php on line 12
+");
+}
+
+#[test]
+fn compile_time_name_conversions_and_strict_string_offsets() {
+    // zend_compile_enum_case -> zend_declare_typed_class_constant;
+    // zend_delayed_compile_prop's convert_to_string; zend_isempty_dim_slow's
+    // zval_get_long_ex(offset, true).
+    assert_eq!(run(r#"<?php
+enum E: string { case namespace = 'x'; }
+$o = new stdClass;
+echo "run\n";
+var_dump($o->{[]} ?? 'none');
+$s = "abc";
+var_dump(empty($s[1.5]));
+var_dump(isset($s[0.0]));
+"#), "
+Deprecated: Declaring enum constant called 'namespace' is deprecated in t.php on line 2
+
+Warning: Array to string conversion in t.php on line 5
+run
+string(4) \"none\"
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 7
+bool(false)
+bool(true)
+");
+}
+
+#[test]
+fn unset_dim_of_false_is_deprecated_without_conversion() {
+    // ZEND_UNSET_DIM / FETCH_DIM_UNSET call zend_false_to_array_deprecated().
+    assert_eq!(run(r#"<?php
+$a = false;
+unset($a[0][0]);
+unset($a[0]);
+var_dump($a);
+"#), "
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 3
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 4
+bool(false)
+");
+}
+
+#[test]
+fn nested_unset_through_missing_property_creates_it() {
+    // bug78644: FETCH_OBJ_UNSET adds the missing dynamic property as null
+    // (zend_std_get_property_ptr_ptr).
+    assert_eq!(run(r#"<?php
+$a = new stdClass;
+unset($a->b->c->d);
+unset($a->b->c['d']);
+var_dump($a);
+"#), "object(stdClass)#1 (1) {\n  [\"b\"]=>\n  NULL\n}\n");
+}
+
+#[test]
+fn read_modify_write_skips_when_the_handler_changes_the_array() {
+    // bug70662 / bug78598: zend_undefined_index_write returns NULL when the
+    // "Undefined array key" handler wrote to or freed the array.
+    assert_eq!(run(r#"<?php
+$a = [];
+set_error_handler(function () use (&$a) { $a['b'] = 2; });
+$a['b'] += 1;
+var_dump($a);
+$m = null;
+set_error_handler(function () use (&$m) { $m = 0; });
+$m["foo"]["bar"] .= "xyz";
+var_dump($m);
+restore_error_handler();
+set_error_handler(function ($n, $s) { echo $s, "\n"; });
+$c = [];
+$c['k'] .= "x";
+$c['n']++;
+var_dump($c);
+"#), "array(1) {
+  [\"b\"]=>
+  int(2)
+}
+int(0)
+Undefined array key \"k\"
+Undefined array key \"n\"
+array(2) {
+  [\"k\"]=>
+  string(1) \"x\"
+  [\"n\"]=>
+  int(1)
+}
+");
+}
+
+#[test]
+fn return_type_coercion_precedes_finally() {
+    // bug72347: VERIFY_RETURN_TYPE runs before zend_handle_loops_and_finally.
+    assert_eq!(run(r#"<?php
+function test() : int {
+    $d = 1.5;
+    try {
+        return $d;
+    } finally {
+        var_dump($d);
+    }
+}
+var_dump(test());
+"#), "
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 5
+float(1.5)
+int(1)
+");
+}
+
+#[test]
+fn eval_parser_compile_errors_are_catchable() {
+    // bug75218: parser-action CompileErrors are exceptions.
+    assert_eq!(run(r#"<?php
+function try_eval($code) {
+    try {
+        eval($code);
+    } catch (Throwable $e) {
+        echo $e::class, ': ', $e->getMessage(), "\n";
+    }
+}
+try_eval('if (false) {class C { final final function foo($fff) {}}}');
+try_eval('if (false) {class C { private protected $x; }}');
+try_eval('if (true) { __HALT_COMPILER(); }');
+try_eval('declare(encoding=[]);');
+"#), "CompileError: Multiple final modifiers are not allowed
+CompileError: Multiple access type modifiers are not allowed
+CompileError: __HALT_COMPILER() can only be used from the outermost scope
+CompileError: Encoding must be a literal
+");
+}
+
+#[test]
+fn traversable_unpack_numeric_string_keys_are_positional() {
+    // GH-18581: ZEND_SEND_UNPACK applies ZEND_HANDLE_NUMERIC to iterator keys.
+    assert_eq!(run(r#"<?php
+function g() {
+    yield '100' => 'first';
+    yield '101' => 'second';
+    yield '102' => 'third';
+    yield 'named' => 'fourth';
+}
+function test($x = null, $y = null, ...$z) {
+    var_dump($x, $y, $z);
+}
+test(...g());
+"#), "string(5) \"first\"
+string(6) \"second\"
+array(2) {
+  [0]=>
+  string(5) \"third\"
+  [\"named\"]=>
+  string(6) \"fourth\"
+}
+");
+}
+
+#[test]
+fn array_cast_unwraps_references_only_the_property_holds() {
+    // GH-8655: zend_std_build_object_properties_array unwraps rc=1 refs.
+    assert_eq!(run(r#"<?php
+class Foo { public $foo; }
+function hydrate($p, $o) { foreach ($p as $n => &$v) { $o->$n = &$v; } }
+$o = new Foo; hydrate(["foo" => 123], $o);
+$a = (array) $o;
+$o->foo = 234;
+echo $a["foo"], "\n";
+$x = 1; $o->foo = &$x; $b = (array) $o; $x = 2; echo $b["foo"], "\n";
+"#), "123\n2\n");
+}
+
+#[test]
+fn append_sent_by_value_fails_before_reading_offsets() {
+    // func_arg_fetch_optimization: FETCH_DIM_FUNC_ARG with an UNUSED dim.
+    assert_eq!(run(r#"<?php
+function test($x) {
+    test($x[][$y]);
+}
+try {
+    test([]);
+} catch (Throwable $e) {
+    echo $e::class, ': ', $e->getMessage(), "\n";
+}
+"#), "Error: Cannot use [] for reading\n");
+}
+
+#[test]
+fn temporary_dimension_sent_by_reference_is_an_error() {
+    // GH-12102: FETCH_DIM_FUNC_ARG on a TMP/CONST container.
+    assert_eq!(run(r#"<?php
+function test() {
+    byVal(func_get_args()[0]);
+    try { byRef(func_get_args()[0]); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+    byVal(C[0]);
+    try { byRef(C[0]); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+    byRef(f()[0]);
+}
+const C = ['foo'];
+function f() { return ['bar']; }
+function byVal($arg) { var_dump($arg); }
+function byRef(&$arg) { var_dump($arg); }
+test('y');
+"#), "string(1) \"y\"
+Error: Cannot use temporary expression in write context
+string(3) \"foo\"
+Error: Cannot use temporary expression in write context
+string(3) \"bar\"
+");
+}
+
+#[test]
+fn require_once_of_the_primary_script_is_a_no_op() {
+    // bug60825: php_execute_script adds the primary file to included_files.
+    let src = "<?php\nclass test {}\nvar_dump(require_once __FILE__);\necho \"done\\n\";\n";
+    let file = format!("phprust-{}-require-once-main.php", std::process::id());
+    let path = std::env::temp_dir().join(file);
+    std::fs::write(&path, src).expect("write script");
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    vm.run_script(src.as_bytes(), &path.to_string_lossy());
+    drop(vm);
+    let _ = std::fs::remove_file(&path);
+    let output = sink.0.borrow().clone();
+    assert_eq!(String::from_utf8(output).expect("UTF-8 output"), "bool(true)\ndone\n");
+}
+
+#[test]
+fn recompiled_anonymous_classes_get_fresh_names() {
+    // bug73816: CG(rtd_key_counter) is request-wide.
+    assert_eq!(run(r#"<?php
+function anon() {
+    static $i = 0;
+    $i++;
+    return eval('return new class { public $prop' . $i . '; };');
+}
+foreach ([anon(), anon()] as $o) {
+    foreach (get_object_vars($o) as $k => $v) { echo $k, "\n"; }
+}
+"#), "prop1\nprop2\n");
+}
+
+#[test]
+fn constant_under_property_sent_by_reference_is_a_var() {
+    // GH-10497: zend_mark_const_object_fetch copies the constant to a VAR,
+    // so the fetch reports the non-object rather than a temporary.
+    assert_eq!(run(r#"<?php
+class C { const INT = 5; }
+function byRef(&$v) {}
+try { byRef(C::INT->prop); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#), "Attempt to modify property \"prop\" on int\n");
+}
+
+#[test]
+fn inaccessible_constructor_skips_the_destructor() {
+    // GH-14456: zend_std_get_constructor calls zend_object_store_ctor_failed.
+    assert_eq!(run(r#"<?php
+class PrivateUser {
+    private function __construct() {}
+    public function __destruct() { echo "Destructor\n"; }
+}
+try { new PrivateUser(); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+"#), "Error: Call to private PrivateUser::__construct() from global scope\n");
 }

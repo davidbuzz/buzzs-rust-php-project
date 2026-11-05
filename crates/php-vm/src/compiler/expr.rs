@@ -141,7 +141,13 @@ impl Compiler {
     /// follows `child[0]` of ZEND_AST_STATIC_PROP / ZEND_AST_STATIC_CALL).
     fn chain_class_spec(&mut self, cref: &ast::ClassRef) -> CResult<ClassSpec> {
         match cref {
-            ast::ClassRef::Expr(e) => Ok(ClassSpec::Dyn(self.compile_chain(e)?)),
+            ast::ClassRef::Expr(e) => {
+                // `zend_compile_class_ref`, as in `Compiler::class_spec`.
+                if !matches!(self.try_fold(e), None | Some(Value::Str(_))) {
+                    return self.err("Illegal class name", e.span.line);
+                }
+                Ok(ClassSpec::Dyn(self.compile_chain(e)?))
+            }
             ast::ClassRef::Name(_) => self.class_spec(cref),
         }
     }
@@ -508,14 +514,9 @@ impl Compiler {
                 Operand::Tmp(t)
             }
             ExprKind::Instanceof { expr, class } => {
-                if matches!(
-                    expr.kind,
-                    ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::String(_)
-                ) {
-                    return self.err(
-                        "instanceof expects an object instance, constant given",
-                        line,
-                    );
+                // `zend_compile_instanceof`: a constant operand is false.
+                if self.try_fold(expr).is_some() {
+                    return Ok(self.lit(Value::Bool(false)));
                 }
                 let a = self.compile_expr(expr)?;
                 let spec = self.class_spec(class)?;
@@ -905,6 +906,17 @@ impl Compiler {
         })
     }
 
+    /// A method name operand: `zend_compile_method_call` /
+    /// `zend_compile_static_call` reject a constant that is not a string.
+    fn method_member_name(&mut self, n: &MemberName, line: u32) -> CResult<Operand> {
+        if let MemberName::Expr(e) = n {
+            if !matches!(self.try_fold(e), None | Some(Value::Str(_))) {
+                return self.err("Method name must be a string", line);
+            }
+        }
+        self.member_name(n)
+    }
+
     /// Compiles a writable expression into a place (offsets evaluated now).
     pub(crate) fn compile_place(&mut self, e: &Expr, _for_unset: bool) -> CResult<Place> {
         self.f().line = e.span.line;
@@ -1009,7 +1021,16 @@ impl Compiler {
                 if self.in_evaluated_const_expr() {
                     return self.const_prop_place(p, name);
                 }
-                let n = self.member_name(name)?;
+                let n = match name {
+                    // zend_delayed_compile_prop converts a constant name to
+                    // a string at compile time.
+                    MemberName::Expr(e) if matches!(self.try_fold(e), Some(Value::Array(_))) => {
+                        self.warnings
+                            .push((2, "Array to string conversion".to_string(), e.span.line));
+                        self.lit(Value::Str(ZStr::from("Array")))
+                    }
+                    _ => self.member_name(name)?,
+                };
                 p.segs.push(Seg::Prop(n));
                 p
             }
@@ -1828,7 +1849,7 @@ impl Compiler {
                 if args.is_partial() && self.f().sc_jumps.len() != checkpoint {
                     return self.err("Cannot combine nullsafe operator with Closure creation", line);
                 }
-                let n = self.member_name(name)?;
+                let n = self.method_member_name(name, line)?;
                 self.f().line = line;
                 self.emit(Op::InitMethodCall { obj: o, name: n });
                 self.finish_call_at(args, line, member_name_line(name), need)
@@ -1888,7 +1909,7 @@ impl Compiler {
             }
             ExprKind::StaticCall { class, name, args } => {
                 let spec = self.chain_class_spec(class)?;
-                let n = self.member_name(name)?;
+                let n = self.method_member_name(name, line)?;
                 self.f().line = line;
                 self.emit(Op::InitStaticCall {
                     class: spec,

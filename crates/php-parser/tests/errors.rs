@@ -595,3 +595,25 @@ fn static_redeclaring_closure_use_is_duplicate() {
     let ok = b"<?php\nfunction () use ($a) { static $b; };\n";
     assert!(php_parser::parse(ok, &ParseOptions::default()).is_ok());
 }
+
+#[test]
+fn parser_action_compile_errors_are_thrown() {
+    // zend_throw_exception(zend_ce_compile_error, ...) in the parser
+    // actions; post-parse compile checks stay fatal.
+    for src in [
+        &b"<?php class C { final final function foo() {} }"[..],
+        b"<?php class C { private protected $x; }",
+        b"<?php if (true) { __HALT_COMPILER(); }",
+        b"<?php declare(encoding=[]);",
+    ] {
+        let e = php_parser::parse(src, &ParseOptions::default()).expect_err("compile error");
+        assert_eq!(e.kind, php_parser::ErrorKind::Compile);
+        assert!(e.thrown, "{}", e.message);
+    }
+    let e = php_parser::parse(
+        b"<?php $a = null;\nfunction () use (&$a) {\n    static $a;\n};\n",
+        &ParseOptions::default(),
+    )
+    .expect_err("duplicate static");
+    assert!(!e.thrown);
+}
