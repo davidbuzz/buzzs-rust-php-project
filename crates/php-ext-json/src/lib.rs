@@ -127,6 +127,11 @@ fn json_decode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         functions::json_decode(&mut st, &mut h, json.as_bytes(), assoc, depth, flags)
     };
     STATE.with(|s| *s.borrow_mut() = st);
+    if php_vm::oom_pending() {
+        // `RETURN_OOM()`: the VM raises the memory-limit fatal after the
+        // call, even with `JSON_THROW_ON_ERROR`.
+        return Ok(Value::Null);
+    }
     let r = r.map_err(|e| host::rt_throw(vm, e))?;
     if let Value::Str(out) = &r {
         check_memory(vm, json.len(), out.len())?;

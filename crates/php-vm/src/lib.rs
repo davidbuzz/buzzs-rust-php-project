@@ -48,6 +48,7 @@ mod variance;
 pub mod vm;
 mod weakref;
 
+pub use exec::{oom_pending, try_reserve_memory};
 pub use persistence::PersistentDeclarations;
 pub use vm::{ClassLoader, Throw, Vm, VmResult};
 
@@ -325,7 +326,7 @@ impl Vm {
         self.observer_unwind(0, r.as_ref().err());
         self.frames.clear();
         // A shutdown function may raise its own OOM.
-        php_memlimit::clear();
+        Vm::clear_pending_oom();
         // Shutdown functions.
         let mut i = 0;
         while i < self.shutdown_functions.len() {

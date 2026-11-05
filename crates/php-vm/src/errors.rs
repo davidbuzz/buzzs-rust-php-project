@@ -139,6 +139,11 @@ impl Vm {
 
     /// Binary-safe [`Vm::docref`].
     pub(crate) fn docref_bytes(&mut self, level: i64, msg: &[u8]) -> VmResult<()> {
+        // `php_verror`: nothing is reported while a delayed OOM is pending
+        // (the builtin is bailing out; the fatal follows the call).
+        if php_memlimit::is_pending() {
+            return Ok(());
+        }
         match self.docref_function_name() {
             Some(n) => {
                 let args = self.docref_args();

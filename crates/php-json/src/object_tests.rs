@@ -365,6 +365,23 @@ fn handles(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// `ZEND_HAS_OOM()`: with a delayed memory-limit fatal pending the decoder
+/// stops before building anything more (the host raises the fatal).
+#[test]
+fn pending_oom_stops_decoding() {
+    let mut h = TestHost::new();
+    h.oom_pending = true;
+    let r = decode(br#"[{}, {"x": [1, 2]}]"#, None, 512, 0, &mut h);
+    assert!(
+        matches!(&r, Err(crate::DecodeError::Json(e)) if e.code == ErrorCode::Syntax),
+        "{r:?}"
+    );
+    // No object was created before the stop.
+    h.oom_pending = false;
+    let v = decode(b"{}", None, 512, 0, &mut h).expect("decode");
+    assert_eq!(handles(&dump(&mut h, &v)), ["#1"]);
+}
+
 #[test]
 fn decoded_object_creation_order() {
     // Handle numbers from `php -r 'var_dump(json_decode(...));'`.
