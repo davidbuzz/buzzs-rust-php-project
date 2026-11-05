@@ -12,6 +12,7 @@
 pub use php_parser::ast;
 
 mod attrs;
+mod auto_globals;
 mod builtins;
 mod call;
 pub mod class;
@@ -48,6 +49,7 @@ mod variance;
 pub mod vm;
 mod weakref;
 
+pub use auto_globals::{AutoGlobalCallback, AUTO_GLOBAL_NAMES};
 pub use exec::{oom_pending, try_reserve_memory};
 pub use persistence::PersistentDeclarations;
 pub use vm::{ClassLoader, Throw, Vm, VmResult};

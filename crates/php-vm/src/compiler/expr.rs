@@ -13,19 +13,12 @@ use crate::opcode::{
 };
 use php_runtime::{BinaryOp, CollectingContext, Value, ZArray, ZStr};
 
-/// Superglobal names (always global).
+/// `zend_is_auto_global()` at compile time: whether `name` is a
+/// superglobal (always global). Like php-src, naming one arms its JIT
+/// creation: the VM creates `$_ENV`/`$_REQUEST` (and a JIT `$_SERVER`)
+/// once the compilation finishes (see `crate::auto_globals`).
 pub(crate) fn is_superglobal(name: &[u8]) -> bool {
-    matches!(
-        name,
-        b"_GET"
-            | b"_POST"
-            | b"_COOKIE"
-            | b"_SERVER"
-            | b"_ENV"
-            | b"_REQUEST"
-            | b"_FILES"
-            | b"_SESSION"
-    )
+    name.first() == Some(&b'_') && crate::auto_globals::note_compiled(name)
 }
 
 pub(crate) fn map_binop(op: AB) -> Option<BinaryOp> {
@@ -974,10 +967,24 @@ impl Compiler {
                 }
             }
             ExprKind::Var(VarName::Expr(ne)) => {
-                let n = self.compile_expr(ne)?;
-                Place {
-                    base: PlaceBase::VarVar(n),
-                    segs: Vec::new(),
+                // zend_compile_simple_var_no_cv: a constant name that is an
+                // auto-global (`${'_SERVER'}`) is a global fetch.
+                let global = match self.try_fold(ne) {
+                    Some(Value::Str(s)) if is_superglobal(s.as_bytes()) => Some(s),
+                    _ => None,
+                };
+                if let Some(s) = global {
+                    let n = self.lit(Value::Str(s));
+                    Place {
+                        base: PlaceBase::Global(n),
+                        segs: Vec::new(),
+                    }
+                } else {
+                    let n = self.compile_expr(ne)?;
+                    Place {
+                        base: PlaceBase::VarVar(n),
+                        segs: Vec::new(),
+                    }
                 }
             }
             ExprKind::Dim { base, index } => {

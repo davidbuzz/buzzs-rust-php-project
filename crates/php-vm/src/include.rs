@@ -169,6 +169,7 @@ impl Vm {
                 None,
             )
         };
+        self.activate_compiled_auto_globals();
         let unit = match compiled {
             Ok(u) => {
                 self.anon_counter = u.anon_end;

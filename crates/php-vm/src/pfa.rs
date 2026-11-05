@@ -828,7 +828,9 @@ impl Vm {
             anon_base: self.anon_counter,
             ct_constants: Some(self.ct_constants()),
         };
-        match crate::compiler::compile(&program, Rc::from(src), opts) {
+        let compiled = crate::compiler::compile(&program, Rc::from(src), opts);
+        self.activate_compiled_auto_globals();
+        match compiled {
             Ok(u) => {
                 self.anon_counter = u.anon_end;
                 for (level, message, line) in &u.warnings {
