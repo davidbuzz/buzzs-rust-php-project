@@ -1676,7 +1676,7 @@ impl Vm {
                                     if !matches!(other, Value::Object(_)) {
                                         self.notice(&format!(
                                             "Indirect modification of overloaded element of {} has no effect",
-                                            object::display_name(&object::class_of(&obj).name)
+                                            object::class_of(&obj).name
                                         ))?;
                                     }
                                     PhpRef::new(other)
@@ -1710,7 +1710,7 @@ impl Vm {
                         if !matches!(wop, WOp::FetchRw) {
                             self.notice(&format!(
                                 "Indirect modification of overloaded element of {} has no effect",
-                                object::display_name(&object::class_of(&obj).name)
+                                object::class_of(&obj).name
                             ))?;
                         }
                         self.descend_temp(other, segs, i + 1, wop)
@@ -2124,7 +2124,7 @@ impl Vm {
                 if !matches!(cur, Value::Object(_)) {
                     self.notice(&format!(
                         "Indirect modification of overloaded element of {} has no effect",
-                        object::display_name(&object::class_of(obj).name)
+                        object::class_of(obj).name
                     ))?;
                 }
                 true

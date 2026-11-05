@@ -211,3 +211,25 @@ echo "done\n";
 "#);
     assert_eq!(out, "C\ndone\n");
 }
+
+/// "Indirect modification of overloaded element" prints the full class
+/// name (`%pS`), NUL and all, for anonymous classes
+/// (`temporary_cleaning_013`).
+#[test]
+fn indirect_modification_notice_prints_full_anonymous_class_name() {
+    let out = run(r#"<?php
+$o = new class implements ArrayAccess {
+    function offsetGet($k): mixed { return 1; }
+    function offsetSet($k, $v): void {}
+    function offsetExists($k): bool { return true; }
+    function offsetUnset($k): void {}
+};
+$o[0][1] = 2;
+"#);
+    assert!(
+        out.contains(
+            "Notice: Indirect modification of overloaded element of ArrayAccess@anonymous\0t.php:"
+        ),
+        "{out:?}"
+    );
+}
