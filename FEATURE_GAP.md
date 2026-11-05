@@ -63,23 +63,23 @@ PHPT in scope 19,920 pass + 4 WARN of 20,180 run (98.7%; was 96.4%), 252 FAIL + 
 `phpt-baseline.txt` 714 -> 253 entries (461 now pass, none added). Performance gate: all 82
 workloads within budget, geometric mean instruction ratio 14.58 (was 14.89).
 
-| Package | Failing before | Result |
+| Package | Failing | Result |
 |---|---:|---|
-| Classes and objects A (tests/classes, objects, clone) | 45 | **Done.** 343/343 run pass. |
-| Classes and objects B (magic methods, readonly, promotion, visibility) | 21 | **Done.** 272/272 run pass. |
-| Functions and closures | 23 | **Done.** 320/320 run pass. |
-| Exceptions (+ backtrace, line_numbers) | 30 | 216/222 run pass. Left: `fatal_error_backtraces_001..003` (fatal-error stack traces not implemented), `exception_from_toString`, `gh10695_6`, `finally_goto_005`. |
-| `match`, nullsafe, spread, list/destructuring | 21 | **Done.** 171/171 run pass. |
-| Name resolution (namespaces, name_collision, class_alias, class_name) | 28 | 164/165 run pass. Left: `self_class_const_in_unknown_scope` (global `const` values are compiled inline, not as constant expressions). |
-| Error and warning system + Zend built-in functions | 15 | **Done.** 85/85 run pass. |
-| Compile-time diagnostics, constexpr, prop_const_expr, constants | 21 | **Done.** 214/214 run pass. |
-| Variable access (offsets, dynamic_call, isset, unset, coalesce, varSyntax, in-de-crement) | 30 | 153/155 run pass. Left: `array_offset_002` (write aborted by an error handler during key conversion), `unset_prop_recursion`. |
-| ext/zend_test | 59 | 156/164 run pass. Left: `gh24081` (per-opcode user handlers), 3× `zend_mm_custom_handlers_*` (allocator hooks), `gh11423`, `observer_opline_01`, `observer_sqlite_create_function`, `zend_test_handle_post_data` (CLI upload store). |
-| Built-in iterators and interfaces + foreach | 10 | **Done.** 82/82 run pass. |
-| Zend/tests top level, a-m | 80 | 578/604 run pass. 26 left, mostly owned by other areas (callables, by-ref fetch order, `arginfo_zpp_mismatch` timeouts). |
-| Zend/tests top level, n-z and digits | 44 | 192/208 run pass. 16 left: memory per value (`oom_SplFixedArray___wakeup`, `runtime_compile_time_binary_operands`), `new_oom` (fatal backtraces), string-offset and classes leftovers. |
-| ext/standard assert, general_functions, misc | 39 | 322/324 run pass. Left: `error_get_last_002` (fatal backtraces), `debug_zval_dump_o` (default-property refcounts). |
-| ext/standard http, class_object, filters | 25 | **Done.** 212/212 run pass. |
+| Classes and objects A (tests/classes, objects, clone) | 0 | **Done.** 343/343 run pass. |
+| Classes and objects B (magic methods, readonly, promotion, visibility) | 0 | **Done.** 272/272 run pass. |
+| Functions and closures | 0 | **Done.** 320/320 run pass. |
+| Exceptions (+ backtrace, line_numbers) | 6 | 216/222 run pass. Left: `fatal_error_backtraces_001..003` (fatal-error stack traces not implemented), `exception_from_toString`, `gh10695_6`, `finally_goto_005`. |
+| `match`, nullsafe, spread, list/destructuring | 0 | **Done.** 171/171 run pass. |
+| Name resolution (namespaces, name_collision, class_alias, class_name) | 1 | 164/165 run pass. Left: `self_class_const_in_unknown_scope` (global `const` values are compiled inline, not as constant expressions). |
+| Error and warning system + Zend built-in functions | 0 | **Done.** 85/85 run pass. |
+| Compile-time diagnostics, constexpr, prop_const_expr, constants | 0 | **Done.** 214/214 run pass. |
+| Variable access (offsets, dynamic_call, isset, unset, coalesce, varSyntax, in-de-crement) | 2 | 153/155 run pass. Left: `array_offset_002` (write aborted by an error handler during key conversion), `unset_prop_recursion`. |
+| ext/zend_test | 8 | 156/164 run pass. Left: `gh24081` (per-opcode user handlers), 3× `zend_mm_custom_handlers_*` (allocator hooks), `gh11423`, `observer_opline_01`, `observer_sqlite_create_function`, `zend_test_handle_post_data` (CLI upload store). |
+| Built-in iterators and interfaces + foreach | 0 | **Done.** 82/82 run pass. |
+| Zend/tests top level, a-m | 26 | 578/604 run pass. 26 left, mostly owned by other areas (callables, by-ref fetch order, `arginfo_zpp_mismatch` timeouts). |
+| Zend/tests top level, n-z and digits | 16 | 192/208 run pass. 16 left: memory per value (`oom_SplFixedArray___wakeup`, `runtime_compile_time_binary_operands`), `new_oom` (fatal backtraces), string-offset and classes leftovers. |
+| ext/standard assert, general_functions, misc | 2 | 322/324 run pass. Left: `error_get_last_002` (fatal backtraces), `debug_zval_dump_o` (default-property refcounts). |
+| ext/standard http, class_object, filters | 0 | **Done.** 212/212 run pass. |
 
 5 Nov integration (master `c81e6d7`, unvalidated by a full build when merged): the stopped
 ws13–ws16 workers' committed fixes plus their three unfinished worktrees were reviewed,
