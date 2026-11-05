@@ -475,6 +475,7 @@ name = "php-ext-bcmath"
 version = "0.1.0"
 dependencies = [
  "php-bcmath",
+ "php-memlimit",
  "php-runtime",
  "php-support",
  "php-vm",
@@ -932,6 +933,7 @@ version = "0.1.0"
 dependencies = [
  "php-memlimit",
  "php-runtime",
+ "php-stdstr",
  "php-uri",
  "php-vm",
 ]
@@ -944,6 +946,7 @@ dependencies = [
  "php-ext-exif",
  "php-ext-streams",
  "php-libxml",
+ "php-memlimit",
  "php-runtime",
  "php-streams",
  "php-vm",
@@ -983,6 +986,7 @@ dependencies = [
  "libc",
  "php-cli-server",
  "php-ext-streams",
+ "php-ext-uri",
  "php-memlimit",
  "php-parser",
  "php-runtime",
