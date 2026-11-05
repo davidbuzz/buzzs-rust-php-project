@@ -333,20 +333,32 @@ fn call_with_consumed_args(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(a.value_error(vm, 3, "must be between 0 and 4294967295"));
     }
     let list: Vec<Value> = args.values().cloned().collect();
+    // `zend_call_function` moves a consumed argument into the callee
+    // unless it is a reference; the bits of the moved ones come back.
+    let mut actual = 0_i64;
+    for (i, v) in list.iter().enumerate().take(32) {
+        if consumed & (1_i64 << i) != 0 && !matches!(v, Value::Reference(_)) {
+            actual |= 1_i64 << i;
+        }
+    }
     let r = vm.call_value(&cb, list)?;
     Ok(Value::Array(ZArray::from_pairs([
-        ("consumed_args", Value::Int(0)),
+        ("consumed_args", Value::Int(actual)),
         ("retval", r),
     ])))
 }
 
 /// `zend_test_refcount(mixed $value)`: values are not reference counted
-/// the same way here; report what php-src does for a fresh value.
+/// the same way here; arrays and objects report their handle count. A
+/// string counts like `debug_zval_dump()` does, without this call's own
+/// copies (the frame's argument copy and `a.at(0)`'s clone).
 fn refcount(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(match a.at(0) {
         Value::Array(arr) => Value::Int(i64::try_from(arr.refcount()).unwrap_or(1)),
         Value::Object(o) => Value::Int(i64::try_from(o.refcount()).unwrap_or(1)),
-        Value::Str(st) if !st.is_empty() => Value::Int(1),
+        Value::Str(st) if !st.is_empty() && !st.is_interned() => {
+            Value::Int(i64::try_from(st.refcount().saturating_sub(2).max(1)).unwrap_or(1))
+        }
         _ => Value::Int(-1),
     })
 }

@@ -245,3 +245,14 @@ fn custom_attribute_validator_runs_at_compile_time() {
         "{out}"
     );
 }
+
+#[test]
+fn consumed_args_report_the_moved_arguments() {
+    // consumed_args_basic.phpt
+    let out = run(r#"
+$r = zend_test_call_with_consumed_args(static fn ($a, $b) => $b, [[1], "x"], 1);
+echo $r["consumed_args"], '|', $r["retval"], '|';
+$r = zend_test_call_with_consumed_args(static fn ($a) => $a, [1], 0);
+echo $r["consumed_args"];"#);
+    assert_eq!(out, "1|x|0");
+}
