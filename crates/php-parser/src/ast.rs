@@ -291,13 +291,16 @@ pub enum StmtKind {
         body: Box<Stmt>,
     },
     /// `foreach (subject as key => value) body`.
+    ///
+    /// `subject` and `value` are boxed: three inline [`Expr`]s made this
+    /// the largest variant, and every [`Stmt`] (about 450 bytes) paid for it.
     Foreach {
         /// The iterated expression.
-        subject: Expr,
+        subject: Box<Expr>,
         /// The key target.
         key: Option<Expr>,
         /// The value target (a variable, or a list/array for destructuring).
-        value: Expr,
+        value: Box<Expr>,
         /// Whether the value is bound by reference (`&$v`).
         by_ref: bool,
         /// Loop body.

@@ -1449,6 +1449,7 @@ impl Parser<'_> {
             return Err(self.unexpected(&[T::RParen]));
         }
         self.bump();
+        args.shrink_to_fit();
         Ok(ArgList {
             args,
             span: self.span_from(start),
@@ -1603,7 +1604,7 @@ impl Parser<'_> {
                     self.bump();
                     if self.peek() == close {
                         // trailing comma: list was rtrimmed by one
-                        return Ok(items);
+                        break;
                     }
                 }
                 k if k == close => break,
@@ -1614,6 +1615,7 @@ impl Parser<'_> {
         // the final comma, which this loop never pushes: `[1, 2, ,]` keeps
         // its explicit hole and `[,]` its empty element (zend_language_parser.y
         // `array_pair_list`; "Cannot use empty array elements in arrays").
+        items.shrink_to_fit();
         Ok(items)
     }
 
