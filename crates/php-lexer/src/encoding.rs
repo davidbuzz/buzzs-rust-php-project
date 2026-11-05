@@ -88,7 +88,12 @@ impl<'a> ScriptEncoding<'a> {
             replacement_char: opts.replacement_char,
             error_mode: opts.error_mode,
         };
-        let mut input = Input::Borrowed(original);
+        // Zend strips a detected BOM from `script_org` only; without an input
+        // filter the scanner reads the unmodified buffer, so e.g. a UTF-8 BOM
+        // under a UTF-8 internal encoding stays inline HTML
+        // (`open_file_for_scanning`). A later `declare(encoding=...)` rescan
+        // starts from the stripped `script_org` (`zend_multibyte_yyinput_again`).
+        let mut input = Input::Borrowed(src);
         if let Some(encoding) = selected {
             if let Some(filtered) = state.set_encoding(encoding) {
                 input = filtered;

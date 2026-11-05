@@ -309,7 +309,8 @@ impl<'a> Lexer<'a> {
         self.pos
     }
 
-    /// Original-script offset of the cursor, after any detected BOM.
+    /// Original-script offset of the cursor (after any detected BOM when an
+    /// input filter is active, from the start of the input otherwise).
     ///
     /// Used for `__COMPILER_HALT_OFFSET__`; returns `usize::MAX` if no original
     /// prefix maps exactly to the filtered cursor.
