@@ -573,11 +573,34 @@ fn http_build_query_honours_the_stack_limit() {
         for ($i = 0; $i < 100; $i++) { $b = [$i => $b]; }
         var_dump(http_build_query($b));"#;
     let opts = VmOptions {
-        ini: vec![("zend.max_allowed_stack_size".to_string(), "256K".to_string())],
+        ini: vec![(
+            "zend.max_allowed_stack_size".to_string(),
+            "256K".to_string(),
+        )],
     };
     assert_eq!(
         run_with(&opts, &exts, code),
         "Error: Maximum call stack size reached.|string(0) \"\"\n"
     );
     assert_eq!(run(code), "string(0) \"\"\n");
+}
+
+/// `request_parse_body()` (`ext/standard/http.c`) validates `$options`
+/// (`cache_request_parse_body_options`); a CLI request has no content
+/// type.
+#[test]
+fn request_parse_body_validates_options() {
+    let out = run(
+        r#"foreach ([['foo' => 1], [42 => 1], ['max_input_vars' => []], ['upload_max_filesize' => '1GB'], ['POST_MAX_SIZE' => 5], null] as $o) { try { request_parse_body($o); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; } }"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError: Invalid key \"foo\" in $options argument\n\
+         ValueError: Invalid integer key in $options argument\n\
+         ValueError: Invalid array value in $options argument\n\
+         \nWarning: Invalid quantity \"1GB\": unknown multiplier \"B\", interpreting as \"1\" for backwards compatibility in test.php on line 1\n\
+         RequestParseBodyException: Request does not provide a content type\n\
+         RequestParseBodyException: Request does not provide a content type\n\
+         RequestParseBodyException: Request does not provide a content type\n"
+    );
 }

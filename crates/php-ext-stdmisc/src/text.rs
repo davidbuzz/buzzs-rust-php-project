@@ -2,7 +2,7 @@
 
 use crate::ctx::{RtExt, VmQuery};
 use php_lexer::WarningKind;
-use php_runtime::{CastTarget, HashTable, RtResult, RuntimeContext, Value, ZArray, ZStr};
+use php_runtime::{ArrayKey, CastTarget, HashTable, RtResult, RuntimeContext, Value, ZArray, ZStr};
 use php_stdmisc::highlight::{self, HighlightColors};
 use php_stdmisc::locale::{self, LocaleState};
 use php_stdmisc::query::{self, InputSettings};
@@ -204,6 +204,65 @@ fn http_build_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     r.vm(vm).map(Value::Str)
 }
 
+/// The `$options` keys of `request_parse_body()`
+/// (`REQUEST_PARSE_BODY_OPTION_*`).
+const PARSE_BODY_OPTIONS: [&[u8]; 5] = [
+    b"max_file_uploads",
+    b"max_input_vars",
+    b"max_multipart_body_parts",
+    b"post_max_size",
+    b"upload_max_filesize",
+];
+
+/// `PHP_FUNCTION(request_parse_body)` (`ext/standard/http.c`): validates
+/// `$options` like `cache_request_parse_body_options()`, then throws, as
+/// the CLI request has no content type (`SG(request_info).content_type`).
+fn request_parse_body(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if let Some(Value::Array(options)) = a.opt(0) {
+        for (k, v) in options.iter() {
+            let key = match k {
+                ArrayKey::Int(_) => {
+                    return Err(vm.throw("ValueError", "Invalid integer key in $options argument"))
+                }
+                ArrayKey::Str(s) => s.clone(),
+            };
+            if key.as_bytes().is_empty() {
+                return Err(vm.throw(
+                    "ValueError",
+                    "Invalid empty string key in $options argument",
+                ));
+            }
+            if !PARSE_BODY_OPTIONS
+                .iter()
+                .any(|n| key.as_bytes().eq_ignore_ascii_case(n))
+            {
+                let msg = format!(
+                    "Invalid key \"{}\" in $options argument",
+                    key.to_string_lossy()
+                );
+                return Err(vm.throw("ValueError", &msg));
+            }
+            // cache_request_parse_body_option().
+            match v.deref() {
+                Value::Str(s) => {
+                    if let (_, Some(err)) = php_support::ini::parse_quantity(s.as_bytes()) {
+                        vm.raise(2, &err)?;
+                    }
+                }
+                Value::Int(_) => {}
+                other => {
+                    let msg = format!("Invalid {} value in $options argument", other.value_name());
+                    return Err(vm.throw("ValueError", &msg));
+                }
+            }
+        }
+    }
+    Err(vm.throw(
+        "RequestParseBodyException",
+        "Request does not provide a content type",
+    ))
+}
+
 /// The request-variable INI settings used by `parse_str()`.
 fn input_settings(vm: &Vm) -> InputSettings {
     let d = InputSettings::default();
@@ -391,6 +450,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         http_build_query,
     )
     .function("parse_str(string $string, &$result): void", parse_str)
+    .function("request_parse_body(?array $options = null): array", request_parse_body)
     .function("setlocale(int $category, $locales, ...$rest): string|false", setlocale)
     .function("localeconv(): array", localeconv)
     .function("nl_langinfo(int $item): string|false", nl_langinfo)
