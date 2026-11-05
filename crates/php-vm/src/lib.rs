@@ -161,6 +161,7 @@ impl Vm {
             serialize_precision: -1,
             in_shutdown: false,
             in_error_handler: 0,
+            error_msg_html_ready: false,
             ext: builtins::ExtState::default(),
             anon_counter: 0,
             depth: 0,

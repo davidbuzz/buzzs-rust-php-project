@@ -672,6 +672,10 @@ pub struct Vm {
     pub in_shutdown: bool,
     /// Nesting depth of user error handler calls.
     pub in_error_handler: u32,
+    /// Set just before reporting a message that `php_verror` already
+    /// HTML-escaped (and may have given a docref link) under `html_errors`;
+    /// consumed by the next report so the display does not escape it again.
+    pub(crate) error_msg_html_ready: bool,
     /// Builtin-specific state.
     pub ext: crate::builtins::ExtState,
     /// Anonymous class counter.
