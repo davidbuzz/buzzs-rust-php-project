@@ -1,7 +1,7 @@
 //! Function, closure and class declarations; parameters and types.
 
 use super::{CResult, ClassCtx, Compiler, FnCtx, FnKind};
-use crate::ast::{self, ClassMemberKind, Expr, ExprKind, Stmt, StmtKind, TypeKind};
+use crate::ast::{self, ClassMemberKind, Expr, Stmt, StmtKind, TypeKind};
 use crate::class::{
     cflags, AttributeInfo, ClassDecl, ClassKind, ConstDecl, ConstExpr, MethodDecl, PropDecl,
     PropHooks, TraitRule,
@@ -383,7 +383,14 @@ impl Compiler {
     ) -> CResult<(Vec<ParamInfo>, u32, Option<TypeDecl>, Vec<ClosureUse>)> {
         // Parameters occupy the first CVs.
         let mut params = Vec::new();
-        for p in spec.params {
+        // Required count: up to the last required parameter.
+        let mut required = 0u32;
+        for (i, p) in spec.params.iter().enumerate() {
+            if p.default.is_none() && !p.variadic {
+                required = u32::try_from(i + 1).unwrap_or(0);
+            }
+        }
+        for (i, p) in spec.params.iter().enumerate() {
             if p.name.name == b"this" {
                 return self.err("Cannot use $this as parameter", p.span.line);
             }
@@ -411,6 +418,7 @@ impl Compiler {
                 None => None,
             };
             let folded_default = p.default.as_ref().and_then(|d| self.try_fold(d));
+            let mut forced = false;
             if let (Some(t), Some(Value::Null)) = (&mut ty, &folded_default) {
                 if p.modifiers.is_empty() && p.hooks.is_none() && !t.allows_null() && !t.is_mixed()
                 {
@@ -423,6 +431,7 @@ impl Compiler {
                     }
                     t.mask |= mask::NULL;
                     t.pure_intersection = false;
+                    forced = true;
                     self.warnings.push((
                         8192,
                         format!(
@@ -488,6 +497,26 @@ impl Compiler {
                 None,
                 false,
             )?;
+            // `Type $p = null` (PHP 5 style, `forced_allow_nullable`) is
+            // exempt from the optional-before-required notice.
+            if p.default.is_some() && !forced && (i as u32) < required {
+                // php-src names the last required parameter.
+                let later = (required as usize)
+                    .checked_sub(1)
+                    .and_then(|r| spec.params.get(r))
+                    .map(|q| q.name.as_str_lossy().into_owned())
+                    .unwrap_or_default();
+                self.warnings.push((
+                    8192,
+                    format!(
+                        "{}(): Optional parameter ${} declared before required parameter ${} is implicitly treated as a required parameter",
+                        self.fn_display_name(),
+                        p.name.as_str_lossy(),
+                        later
+                    ),
+                    p.span.line,
+                ));
+            }
             params.push(ParamInfo {
                 name: ZStr::from(p.name.name.as_slice()),
                 by_ref: p.by_ref,
@@ -514,37 +543,6 @@ impl Compiler {
                 },
                 attributes: attrs,
             });
-        }
-        // Required count: up to the last required parameter.
-        let mut required = 0u32;
-        for (i, p) in spec.params.iter().enumerate() {
-            if p.default.is_none() && !p.variadic {
-                required = u32::try_from(i + 1).unwrap_or(0);
-            }
-        }
-        // Deprecation for optional-before-required.
-        for (i, p) in spec.params.iter().enumerate() {
-            if let Some(d) = &p.default {
-                if (i as u32) < required {
-                    let is_nullable_null = is_null_literal(d) && p.ty.is_some();
-                    let _ = is_nullable_null;
-                    let later = spec.params[i + 1..]
-                        .iter()
-                        .find(|q| q.default.is_none() && !q.variadic)
-                        .map(|q| q.name.as_str_lossy().into_owned())
-                        .unwrap_or_default();
-                    self.warnings.push((
-                        8192,
-                        format!(
-                            "{}(): Optional parameter ${} declared before required parameter ${} is implicitly treated as a required parameter",
-                            self.fn_display_name(),
-                            p.name.as_str_lossy(),
-                            later
-                        ),
-                        p.span.line,
-                    ));
-                }
-            }
         }
         // Closure uses after params.
         let mut uses = Vec::new();
@@ -1672,16 +1670,8 @@ impl Compiler {
                             md.span.line,
                         );
                     }
-                    if fl & flags::PRIVATE != 0
-                        && fl & flags::FINAL != 0
-                        && !md.name.eq_ignore_case("__construct")
-                    {
-                        self.warnings.push((
-                            128,
-                            "Private methods cannot be final as they are never overridden by other classes".to_string(),
-                            md.span.line,
-                        ));
-                    }
+                    // "Private methods cannot be final ..." is a parser
+                    // diagnostic (`php_parser::validate`).
                     let is_ctor = md.name.eq_ignore_case("__construct");
                     if !is_ctor
                         && md
@@ -2515,10 +2505,6 @@ enum BodyKind<'a> {
     Stmts(&'a [Stmt]),
     Arrow(&'a Expr),
     None,
-}
-
-fn is_null_literal(e: &Expr) -> bool {
-    matches!(&e.kind, ExprKind::Const(n) if n.kind != ast::NameKind::Qualified && n.name.eq_ignore_ascii_case(b"null"))
 }
 
 fn is_superglobal_or_globals(n: &[u8]) -> bool {
