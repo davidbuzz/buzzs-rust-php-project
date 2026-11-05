@@ -13,7 +13,7 @@ only rewritten when the report contains at least --min-tests tests under its pre
 partial run leaves the other rows alone. Rows without a mapping are never touched.
 
 The percentage is passed / total by default (skipped tests count as not passing, since in this
-project a skip usually means a missing extension or SAPI); `--denominator ran` excludes skipped
+project a skip usually means a missing extension or SAPI; XFAIL counts as passing); `--denominator ran` excludes skipped
 and borked tests instead.
 
 Out-of-scope tests (status "OUT" in the report, or under a prefix of the scope file,
@@ -88,6 +88,9 @@ MAPPING: dict[str, list[str]] = {
         "Zend/tests/group_use/",
         "Zend/tests/use_const/",
         "Zend/tests/use_function/",
+        "Zend/tests/name_collision/",
+        "Zend/tests/class_alias/",
+        "Zend/tests/class_name/",
     ],
     "Autoloading": ["Zend/tests/autoload/"],
     "Enums": ["Zend/tests/enum/"],
@@ -179,7 +182,7 @@ MAPPING: dict[str, list[str]] = {
     "ext/xmlreader / ext/xmlwriter": ["ext/xmlreader/tests/", "ext/xmlwriter/tests/"],
     "ext/xsl": ["ext/xsl/tests/"],
     "ext/soap": ["ext/soap/tests/"],
-    "ext/pdo (core)": ["ext/pdo/tests/"],
+    # "ext/pdo (core)" is set by hand: its generic tests run redirected under ext/pdo_sqlite/tests.
     "ext/pdo_sqlite / ext/sqlite3": ["ext/pdo_sqlite/tests/", "ext/sqlite3/tests/"],
     "ext/posix": ["ext/posix/tests/"],
     "ext/pcntl": ["ext/pcntl/tests/"],
@@ -273,7 +276,8 @@ def row_stats(tests: list[dict], prefixes: list[str]) -> tuple[int, int, int]:
         total += 1
         if result not in ("SKIP", "BORK"):
             ran += 1
-        if result in ("PASS", "WARN"):
+        # XFAIL is an expected failure in php-src: the test behaves as php-src does.
+        if result in ("PASS", "WARN", "XFAIL"):
             passed += 1
     return passed, total, ran
 
