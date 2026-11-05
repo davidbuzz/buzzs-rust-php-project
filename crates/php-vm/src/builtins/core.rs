@@ -6,7 +6,7 @@ use crate::class::Class;
 use crate::func::{flags, Args, Func};
 use crate::object;
 use crate::vm::{ErrorHandler, FrameKind, Throw, Vm, VmResult};
-use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
+use php_runtime::{ArrayKey, HashTable, PropertyPurpose, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 fn caller_idx(vm: &Vm) -> Option<usize> {
@@ -294,6 +294,68 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Null);
     };
     let o = vm.lazy_object_for(&o, None)?;
+    if let Some(f) = object::class_of(&o)
+        .hooks
+        .as_ref()
+        .and_then(|h| h.properties_for)
+    {
+        if let Some(properties) = f(vm, &o, PropertyPurpose::GetObjectVars)? {
+            let scope = vm.scope();
+            let cls = object::class_of(&o).clone();
+            let mut t = HashTable::new();
+            for (key, value) in properties.iter() {
+                let mut value = value.clone();
+                let key = match key {
+                    ArrayKey::Str(key) => {
+                        let (declaring, name) =
+                            php_runtime::dump::unmangle_property_name(key.as_bytes());
+                        if declaring.is_some()
+                            && !cls.props.iter().any(|pi| {
+                                crate::props::mangle(pi) == ArrayKey::Str(key.clone())
+                            })
+                        {
+                            let key = ArrayKey::from_zstr(key);
+                            if !t.contains_key(&key) {
+                                t.insert(key, value);
+                            }
+                            continue;
+                        }
+                        let name = ZStr::from(name);
+                        match vm.lookup_prop(&cls, &name, scope.as_ref()) {
+                            crate::props::PropLookup::Found(pi) => {
+                                if declaring.is_some() {
+                                    if crate::props::mangle(&pi) != ArrayKey::Str(key.clone()) {
+                                        continue;
+                                    }
+                                } else if pi.visibility() != flags::PUBLIC {
+                                    continue;
+                                }
+                                if let Some(h) = &pi.hooks {
+                                    if pi.is_virtual() && h.get.is_none() {
+                                        continue;
+                                    }
+                                    value =
+                                        vm.read_property(&o, &name, crate::opcode::FetchMode::Is)?;
+                                }
+                            }
+                            crate::props::PropLookup::Inaccessible(_) => continue,
+                            crate::props::PropLookup::NotFound => {}
+                        }
+                        if declaring.is_some() {
+                            ArrayKey::Str(name)
+                        } else {
+                            ArrayKey::from_zstr(key)
+                        }
+                    }
+                    key => key.clone(),
+                };
+                if !t.contains_key(&key) {
+                    t.insert(key, value);
+                }
+            }
+            return Ok(Value::Array(ZArray::from_table(t)));
+        }
+    }
     if let Some(f) = object::class_of(&o)
         .hooks
         .as_ref()

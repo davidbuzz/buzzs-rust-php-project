@@ -303,6 +303,8 @@ pub enum PropertyPurpose {
     VarExport,
     /// `json_encode`.
     Json,
+    /// `get_object_vars` (filtered by the caller's property visibility).
+    GetObjectVars,
 }
 
 /// What kind of object is being dumped, which changes the output format.

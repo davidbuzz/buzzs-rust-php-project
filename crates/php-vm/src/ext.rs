@@ -458,9 +458,9 @@ pub struct ClassHooks {
     /// `interface_gets_implemented` (set on an interface): called with
     /// each class that implements it, when the class is linked.
     pub interface_gets_implemented: Option<fn(&mut Vm, &Rc<Class>) -> VmResult<()>>,
-    /// `get_properties`: the property table seen by `get_object_vars()`
-    /// and `foreach` over the object (unlike `properties_for`, which
-    /// serves var_dump/(array)/serialize). `Ok(None)` falls back.
+    /// `get_properties`: the property table seen by object `foreach` and
+    /// by `get_object_vars()` when `properties_for` falls back.
+    /// `Ok(None)` falls back to the standard handler.
     pub get_properties: Option<fn(&mut Vm, &Obj) -> VmResult<Option<ZArray>>>,
     /// `get_method`: runs before `$obj->m()` resolves the method (also for
     /// user methods of subclasses); throw to refuse the call.

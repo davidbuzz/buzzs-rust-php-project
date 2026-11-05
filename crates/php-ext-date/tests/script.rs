@@ -648,3 +648,60 @@ fn restored_interval_unsigned_relative_arithmetic() {
          2024-01-08 12:34:56 DateInvalidOperationException: DateTimeImmutable::sub(): Only non-special relative time specifications are supported for subtraction\n"
     );
 }
+
+#[test]
+fn date_period_get_object_vars_native_properties() {
+    assert_eq!(
+        run(r#"
+            class MyDatePeriod extends DatePeriod {
+                public int $prop = 3;
+                public function __debugInfo() { throw new Error('debug info must not run'); }
+            }
+            $p = MyDatePeriod::createFromISO8601String('R4/2012-07-01T00:00:00Z/P7D');
+            foreach (get_object_vars($p) as $name => $value) echo $name, "\n";
+            $vars = get_object_vars($p);
+            echo get_class($vars['start']), ' ', $vars['start']->format('Y-m-d H:i:s.u'), "\n";
+            var_dump($vars['current'], $vars['end'], $vars['interval']->d,
+                     $vars['recurrences'], $vars['include_start_date'], $vars['include_end_date']);
+            $vars['start']->modify('+1 day');
+            $vars['interval']->d = 99;
+            echo $p->start->format('Y-m-d'), ' ', $p->interval->d, "\n";
+            foreach ($p as $date) { break; }
+            echo get_object_vars($p)['current']->format('Y-m-d'), "\n";
+        "#),
+        "prop\nstart\ncurrent\nend\ninterval\nrecurrences\ninclude_start_date\ninclude_end_date\n\
+         DateTimeImmutable 2012-07-01 00:00:00.000000\n\
+         NULL\nNULL\nint(7)\nint(5)\nbool(true)\nbool(false)\n\
+         2012-07-01 7\n2012-07-01\n"
+    );
+}
+
+#[test]
+fn date_period_get_object_vars_visibility_and_uninitialized_state() {
+    assert_eq!(
+        run(r#"
+            class PrivatePeriod extends DatePeriod {
+                public $visible = 1;
+                protected $guarded = 2;
+                private $hidden = 3;
+                public int $unset;
+                function names() {
+                    foreach (get_object_vars($this) as $name => $value) echo $name, "\n";
+                }
+            }
+            $p = PrivatePeriod::createFromISO8601String('R1/2012-07-01T00:00:00Z/P1D');
+            foreach (get_object_vars($p) as $name => $value) echo $name, "\n";
+            echo "inside\n";
+            $p->names();
+            class UninitializedPeriod extends DatePeriod {
+                public $visible = 1;
+                function __construct() {}
+            }
+            echo "uninitialized\n";
+            foreach (get_object_vars(new UninitializedPeriod) as $name => $value) echo $name, "\n";
+        "#),
+        "visible\nstart\ncurrent\nend\ninterval\nrecurrences\ninclude_start_date\ninclude_end_date\n\
+         inside\nvisible\nguarded\nhidden\nstart\ncurrent\nend\ninterval\nrecurrences\ninclude_start_date\ninclude_end_date\n\
+         uninitialized\nvisible\n"
+    );
+}

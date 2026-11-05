@@ -724,3 +724,134 @@ fn typed_initialized_reads_keep_native_property_handlers() {
     drop(vm);
     assert_eq!(sink.0.borrow().as_slice(), b"int(42)\nint(42)\n");
 }
+
+#[test]
+fn native_get_object_vars_filters_visibility_and_reads_property_hooks() {
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    php_vm::ext::ClassBuilder::new("NativeVars")
+        .prop(
+            "visible",
+            php_vm::func::flags::PUBLIC,
+            None,
+            Some(Value::Int(1)),
+        )
+        .prop(
+            "hidden",
+            php_vm::func::flags::PRIVATE,
+            None,
+            Some(Value::Int(2)),
+        )
+        .prop(
+            "guarded",
+            php_vm::func::flags::PROTECTED,
+            None,
+            Some(Value::Int(3)),
+        )
+        .hooks(php_vm::ext::ClassHooks {
+            properties_for: Some(|_, _, purpose| {
+                assert_eq!(purpose, PropertyPurpose::GetObjectVars);
+                let mut table = php_runtime::ZArray::new();
+                for (key, value) in [
+                    (&b"visible"[..], 1),
+                    (&b"\0NativeVars\0hidden"[..], 2),
+                    (&b"\0*\0guarded"[..], 3),
+                    (&b"\0ChildVars\0secret"[..], 4),
+                    (&b"native"[..], 5),
+                    (&b"12"[..], 6),
+                    (&b"computed"[..], 0),
+                ] {
+                    table
+                        .make_mut()
+                        .insert(ArrayKey::Str(ZStr::from(key)), Value::Int(value));
+                }
+                table.make_mut().insert(ArrayKey::Int(7), Value::Int(7));
+                Ok(Some(table))
+            }),
+            get_properties: Some(|_, _| panic!("properties_for must take precedence")),
+            ..php_vm::ext::ClassHooks::default()
+        })
+        .register(&mut vm);
+    assert_eq!(
+        vm.run_script(
+            br#"<?php
+class ChildVars extends NativeVars {
+    private $secret = 4;
+    public int $computed { get { echo "get\n"; return 8; } }
+    function snapshot() {
+        foreach (get_object_vars($this) as $key => $value) echo $key, ':', $value, "\n";
+    }
+}
+$o = new ChildVars;
+foreach (get_object_vars($o) as $key => $value) echo $key, ':', $value, "\n";
+$o->snapshot();
+class ThrowingVars extends NativeVars {
+    public int $computed { get { throw new Error('getter failure'); } }
+}
+try { get_object_vars(new ThrowingVars); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+            "t.php",
+        ),
+        0
+    );
+    drop(vm);
+    assert_eq!(
+        sink.0.borrow().as_slice(),
+        b"get\nvisible:1\nnative:5\n12:6\ncomputed:8\n7:7\n\
+          get\nvisible:1\nguarded:3\nsecret:4\nnative:5\n12:6\ncomputed:8\n7:7\n\
+          getter failure\n"
+    );
+}
+
+#[test]
+fn native_get_object_vars_preserves_handler_exceptions_and_fallback() {
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    php_vm::ext::ClassBuilder::new("FailingVars")
+        .hooks(php_vm::ext::ClassHooks {
+            properties_for: Some(|vm, _, purpose| {
+                assert_eq!(purpose, PropertyPurpose::GetObjectVars);
+                Err(vm.throw("Error", "native table failure"))
+            }),
+            get_properties: Some(|_, _| panic!("must not fall back after an exception")),
+            ..php_vm::ext::ClassHooks::default()
+        })
+        .register(&mut vm);
+    php_vm::ext::ClassBuilder::new("FallbackVars")
+        .hooks(php_vm::ext::ClassHooks {
+            properties_for: Some(|_, _, purpose| {
+                assert_eq!(purpose, PropertyPurpose::GetObjectVars);
+                Ok(None)
+            }),
+            get_properties: Some(|_, _| {
+                Ok(Some(php_runtime::ZArray::from_values([Value::Int(42)])))
+            }),
+            ..php_vm::ext::ClassHooks::default()
+        })
+        .register(&mut vm);
+    php_vm::ext::ClassBuilder::new("EmptyVars")
+        .hooks(php_vm::ext::ClassHooks {
+            properties_for: Some(|_, _, purpose| {
+                assert_eq!(purpose, PropertyPurpose::GetObjectVars);
+                Ok(Some(php_runtime::ZArray::new()))
+            }),
+            get_properties: Some(|_, _| panic!("an empty native table is not fallback")),
+            ..php_vm::ext::ClassHooks::default()
+        })
+        .register(&mut vm);
+    assert_eq!(
+        vm.run_script(
+            br#"<?php
+try { get_object_vars(new FailingVars); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+var_dump(get_object_vars(new FallbackVars), get_object_vars(new EmptyVars));
+"#,
+            "t.php",
+        ),
+        0
+    );
+    drop(vm);
+    assert_eq!(
+        sink.0.borrow().as_slice(),
+        b"native table failure\narray(1) {\n  [0]=>\n  int(42)\n}\narray(0) {\n}\n"
+    );
+}
