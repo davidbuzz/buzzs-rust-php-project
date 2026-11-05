@@ -199,6 +199,8 @@ pub struct PendingCall {
     /// Coerce arguments in strict mode (`ZEND_CALL_STRICT_TYPES` for calls
     /// made from Rust, e.g. attribute instantiation).
     pub strict: bool,
+    /// Made by `ZEND_INIT_DYNAMIC_CALL` (`$f()`): `ZEND_CALL_DYNAMIC`.
+    pub dynamic: bool,
 }
 
 /// Reusable buffers of the call protocol (see [`Vm::call_bufs`]).
@@ -252,6 +254,7 @@ impl PendingCall {
             is_ctor: false,
             pfa: None,
             strict: false,
+            dynamic: false,
         }
     }
 }

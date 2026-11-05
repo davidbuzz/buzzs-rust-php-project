@@ -1128,8 +1128,14 @@ impl Compiler {
                 let op = self.compile_expr(e)?;
                 return Ok(ArgSrc::Val(op));
             }
+            let temp = on_temporary(e);
             let p = self.compile_place(e, false)?;
-            Ok(ArgSrc::Place(self.place(p)))
+            let pid = self.place(p);
+            Ok(if temp {
+                ArgSrc::TempPlace(pid)
+            } else {
+                ArgSrc::Place(pid)
+            })
         } else if matches!(
             e.kind,
             ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::StaticCall { .. }
@@ -1141,6 +1147,36 @@ impl Compiler {
             Ok(ArgSrc::Val(op))
         }
     }
+}
+
+/// Whether a dimension/property chain starts at a temporary expression
+/// (a literal or an operator result, not a variable or a call): such a
+/// fetch cannot be sent by reference.
+fn on_temporary(e: &Expr) -> bool {
+    let mut cur = e;
+    loop {
+        match &cur.kind {
+            ExprKind::Dim { base, .. } => cur = &**base,
+            ExprKind::Prop { object, .. } => cur = &**object,
+            _ => break,
+        }
+    }
+    !std::ptr::eq(cur, e)
+        && matches!(
+            cur.kind,
+            ExprKind::Int(_)
+                | ExprKind::Float(_)
+                | ExprKind::String(_)
+                | ExprKind::Interpolated(_)
+                | ExprKind::Array { .. }
+                | ExprKind::Const(_)
+                | ExprKind::ClassConst { .. }
+                | ExprKind::MagicConst(_)
+                | ExprKind::Binary { .. }
+                | ExprKind::Unary { .. }
+                | ExprKind::Cast { .. }
+                | ExprKind::Conditional { .. }
+        )
 }
 
 /// Whether an expression denotes a variable that can be referenced.

@@ -762,8 +762,7 @@ impl Vm {
                         Flow::Next
                     }
                     Op::InitStaticCall { class, name } => {
-                        let n = self.read(*name)?;
-                        self.op_init_static_call(class, n)?;
+                        self.op_init_static_call(class, *name)?;
                         Flow::Next
                     }
                     Op::InitParentHook { prop, set } => {

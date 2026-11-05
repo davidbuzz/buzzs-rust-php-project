@@ -126,7 +126,7 @@ impl Compiler {
                 self.compile_assign_op(*op, target, value, false, e.span.line)
             }
             ExprKind::IncDec { op, var } => {
-                let p = self.compile_write_place(var)?;
+                let p = self.compile_incdec_place(var)?;
                 let pid = self.place(p);
                 self.emit(Op::IncDec {
                     place: pid,
@@ -340,7 +340,7 @@ impl Compiler {
                 Operand::Tmp(t)
             }
             ExprKind::IncDec { op, var } => {
-                let p = self.compile_write_place(var)?;
+                let p = self.compile_incdec_place(var)?;
                 let pid = self.place(p);
                 let t = self.tmp();
                 self.emit(Op::IncDec {
@@ -897,6 +897,22 @@ impl Compiler {
         }
     }
 
+    /// The operand of `++`/`--`: `zend_compile_pre_incdec` fetches `$this`
+    /// with FETCH_THIS (a temporary copy, so `++$this` compiles and fails
+    /// at run time); everything else is a write place.
+    fn compile_incdec_place(&mut self, var: &Expr) -> CResult<Place> {
+        if let ExprKind::Var(VarName::Name(id)) = &var.kind {
+            if id.name == b"this" {
+                self.f().line = var.span.line;
+                return Ok(Place {
+                    base: PlaceBase::This,
+                    segs: Vec::new(),
+                });
+            }
+        }
+        self.compile_write_place(var)
+    }
+
     /// A place used for writing: rejects nullsafe chains and temporaries.
     pub(crate) fn compile_write_place(&mut self, e: &Expr) -> CResult<Place> {
         if contains_nullsafe(e) {
@@ -931,7 +947,54 @@ impl Compiler {
                 );
             }
         }
+        if self.writes_through_special_call(e) {
+            return self.err(
+                "Cannot use result of built-in function in write context",
+                e.span.line,
+            );
+        }
         self.compile_place(e, false)
+    }
+
+    /// `zend_separate_if_call_and_write`: writing through the result of a
+    /// call that `zend_try_compile_special_func` turns into its own
+    /// opcode (a TMP, not a VAR) is a compile-time error.
+    fn writes_through_special_call(&self, e: &Expr) -> bool {
+        let mut cur = e;
+        loop {
+            match &cur.kind {
+                ExprKind::Dim { base, .. } => cur = &**base,
+                ExprKind::Prop { object, .. } => cur = &**object,
+                _ => break,
+            }
+        }
+        let ExprKind::Call { callee, args } = &cur.kind else {
+            return false;
+        };
+        let Callee::Name(name) = &**callee else {
+            return false;
+        };
+        // Only calls resolved at compile time (no namespace fallback).
+        let (resolved, fallback) = self.resolve_function_name(name);
+        if fallback.is_some()
+            || args
+                .args
+                .iter()
+                .any(|a| !matches!(a.kind, ArgKind::Positional(_)))
+        {
+            return false;
+        }
+        let n = args.args.len();
+        match resolved.to_ascii_lowercase().as_slice() {
+            b"strlen" | b"is_null" | b"is_bool" | b"is_long" | b"is_int" | b"is_integer"
+            | b"is_float" | b"is_double" | b"is_string" | b"is_array" | b"is_object"
+            | b"is_resource" | b"is_scalar" | b"boolval" | b"intval" | b"floatval"
+            | b"doubleval" | b"strval" | b"gettype" | b"count" | b"sizeof" => n == 1,
+            b"get_class" => n <= 1,
+            b"get_called_class" => n == 0,
+            b"array_key_exists" => n == 2,
+            _ => false,
+        }
     }
 
     fn compile_isset_one(&mut self, v: &Expr) -> CResult<Operand> {
@@ -1325,6 +1388,7 @@ impl Compiler {
     ) -> CResult<Option<Operand>> {
         if op == AB::Coalesce {
             let p = self.compile_write_place(target)?;
+            let temps = place_tmps(&p);
             let mut pk = p.clone();
             keep_place(&mut pk);
             let t = self.tmp();
@@ -1343,6 +1407,11 @@ impl Compiler {
                 dst: Some(t),
             });
             self.patch_here(j);
+            // The memoized offsets are freed on both paths (the assignment
+            // consumed them; a short-circuit did not).
+            for tmp in temps {
+                self.emit(Op::Free(Operand::Tmp(tmp)));
+            }
             if need {
                 return Ok(Some(Operand::Tmp(t)));
             }
@@ -1457,7 +1526,17 @@ impl Compiler {
         let line = e.span.line;
         match &e.kind {
             ExprKind::Call { callee, args } => {
-                if let Callee::Name(n) = &**callee {
+                // `zend_compile_call`: a string literal callee (`'f'()`,
+                // `('\f')()`) is a fully qualified static call.
+                let literal = match &**callee {
+                    Callee::Expr(ex) => literal_function_name(ex),
+                    Callee::Name(_) => None,
+                };
+                let name = match &**callee {
+                    Callee::Name(n) => Some(n),
+                    Callee::Expr(_) => literal.as_ref(),
+                };
+                if let Some(n) = name {
                     if !args.is_partial() {
                         if let Some(r) = self.compile_special_call(n, args, line, need)? {
                             return Ok(Some(r));
@@ -2086,6 +2165,52 @@ fn map_incdec(op: ast::IncDecOp) -> IncDecKind {
         ast::IncDecOp::PostInc => IncDecKind::PostInc,
         ast::IncDecOp::PostDec => IncDecKind::PostDec,
     }
+}
+
+/// A string literal used as a callee, as the fully qualified function name
+/// it denotes (`zend_resolve_function_name` with `ZEND_NAME_FQ`); `None`
+/// for other callees and `"A::m"` strings (static method calls).
+fn literal_function_name(e: &Expr) -> Option<ast::Name> {
+    let ExprKind::String(s) = &e.kind else {
+        return None;
+    };
+    let s: &[u8] = s;
+    let s = s.strip_prefix(b"\\").unwrap_or(s);
+    if s.windows(2).any(|w| w == b"::") {
+        return None;
+    }
+    Some(ast::Name {
+        kind: ast::NameKind::FullyQualified,
+        name: s.to_vec(),
+        span: e.span,
+    })
+}
+
+/// The temporaries holding a place's operands.
+fn place_tmps(p: &Place) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut k = |o: &Operand| {
+        if let Operand::Tmp(t) = *o {
+            out.push(t);
+        }
+    };
+    match &p.base {
+        PlaceBase::VarVar(o) | PlaceBase::Value(o) | PlaceBase::Global(o) => k(o),
+        PlaceBase::StaticProp { class, name } => {
+            k(name);
+            if let ClassSpec::Dyn(o) = class {
+                k(o);
+            }
+        }
+        PlaceBase::Cv(_) | PlaceBase::This | PlaceBase::GlobalsArray => {}
+    }
+    for s in &p.segs {
+        match s {
+            Seg::Dim(o) | Seg::Prop(o) => k(o),
+            Seg::Append => {}
+        }
+    }
+    out
 }
 
 /// Replaces consumable temporaries of a place with keep-reads.

@@ -167,9 +167,40 @@ impl Vm {
     }
 
     pub(crate) fn op_init_dyn_call(&mut self, callee: Value) -> VmResult<()> {
-        let call = self.resolve_callable_for_call(&callee)?;
+        let mut call = self.resolve_dyn_callable(&callee)?;
+        call.dynamic = true;
         self.push_pending(call);
         Ok(())
+    }
+
+    /// `zend_init_dynamic_call_string` / `_array`: like
+    /// [`Vm::resolve_callable_for_call`], but a `"C::m"` / `["C", "m"]`
+    /// callee never borrows the caller's `$this` (a non-static method, or
+    /// the `__call` trampoline, "cannot be called statically").
+    fn resolve_dyn_callable(&mut self, callee: &Value) -> VmResult<PendingCall> {
+        let class_method = match callee {
+            Value::Str(s) => find_double_colon(s.as_bytes()).map(|p| {
+                (
+                    ZStr::from(&s.as_bytes()[..p]),
+                    ZStr::from(&s.as_bytes()[p + 2..]),
+                )
+            }),
+            Value::Array(a) if a.len() == 2 => {
+                match (
+                    a.get(&ArrayKey::Int(0)).map(Value::deref),
+                    a.get(&ArrayKey::Int(1)).map(Value::deref),
+                ) {
+                    (Some(Value::Str(c)), Some(Value::Str(m))) => Some((c, m)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some((cls_name, m)) = class_method else {
+            return self.resolve_callable_for_call(callee);
+        };
+        let cls = self.lookup_class_or_error(&cls_name)?;
+        self.static_method_call_ex(&cls, &m, false, false)
     }
 
     /// Resolves a callable value for a dynamic call (`$f()`).
@@ -202,7 +233,7 @@ impl Vm {
                     (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1)))
                 else {
                     return Err(
-                        self.make_throw("Error", "Array callback must have exactly two elements")
+                        self.make_throw("Error", "Array callback has to contain indices 0 and 1")
                     );
                 };
                 let target = target.deref();
@@ -413,6 +444,18 @@ impl Vm {
         name: &ZStr,
         forward: bool,
     ) -> VmResult<PendingCall> {
+        self.static_method_call_ex(cls, name, forward, true)
+    }
+
+    /// [`Vm::static_method_call`]; `use_this: false` is a dynamic call's
+    /// `zend_std_get_static_method` without object forwarding.
+    fn static_method_call_ex(
+        &mut self,
+        cls: &Rc<Class>,
+        name: &ZStr,
+        forward: bool,
+        use_this: bool,
+    ) -> VmResult<PendingCall> {
         let scope = self.scope();
         let this = self
             .frames
@@ -435,6 +478,17 @@ impl Vm {
                 if let Some(t) = &this {
                     if object::class_of(t).is_subclass_of(cls) {
                         if let Some(callm) = cls.magic.call.clone() {
+                            if !use_this {
+                                // The (non-static) trampoline needs `$this`.
+                                return Err(self.make_throw(
+                                    "Error",
+                                    &format!(
+                                        "Non-static method {}::{}() cannot be called statically",
+                                        object::display_name(&callm.scope().name),
+                                        name.to_string_lossy()
+                                    ),
+                                ));
+                            }
                             return Ok(self.magic_call(
                                 &callm,
                                 Some(t.clone()),
@@ -497,7 +551,7 @@ impl Vm {
             });
         }
         // Non-static method: needs a compatible $this.
-        if let Some(t) = this {
+        if let Some(t) = this.filter(|_| use_this) {
             if object::class_of(&t).is_subclass_of(cls) {
                 let called = object::class_of(&t).clone();
                 return Ok(PendingCall {
@@ -518,15 +572,17 @@ impl Vm {
         ))
     }
 
-    pub(crate) fn op_init_static_call(&mut self, class: &ClassSpec, name: Value) -> VmResult<()> {
-        let Value::Str(name) = name else {
-            return Err(self.make_throw("Error", "Method name must be a string"));
-        };
+    pub(crate) fn op_init_static_call(&mut self, class: &ClassSpec, name: Operand) -> VmResult<()> {
         let forward = matches!(
             class,
             ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
         );
+        // The class is fetched before the method name operand is read
+        // (FETCH_CLASS / INIT_STATIC_METHOD_CALL).
         let cls = self.resolve_class_spec(class)?;
+        let Value::Str(name) = self.read(name)? else {
+            return Err(self.make_throw("Error", "Method name must be a string"));
+        };
         let call = self.static_method_call(&cls, &name, forward)?;
         if cls.is_trait() {
             // `zend_std_get_static_method()`: the resolved method (or the
@@ -640,7 +696,9 @@ impl Vm {
                 let v = match src {
                     ArgSrc::Val(op) => self.read(*op)?,
                     ArgSrc::CallResult(op) => self.read_raw(*op)?.deref(),
-                    ArgSrc::Place(pid) => self.place_fetch(*pid, FetchMode::Read)?,
+                    ArgSrc::Place(pid) | ArgSrc::TempPlace(pid) => {
+                        self.place_fetch(*pid, FetchMode::Read)?
+                    }
                 };
                 let call = self.frame_mut().calls.last_mut().expect("pending call");
                 call.args.push(Some(v));
@@ -741,6 +799,14 @@ impl Vm {
                 } else {
                     self.place_fetch(*pid, FetchMode::Read)?
                 }
+            }
+            ArgSrc::TempPlace(pid) => {
+                if by_ref {
+                    // zend_use_tmp_in_write_context_helper
+                    return Err(self
+                        .make_throw("Error", "Cannot use temporary expression in write context"));
+                }
+                self.place_fetch(*pid, FetchMode::Read)?
             }
         };
         self.push_arg(pos, name, value)
@@ -1391,6 +1457,12 @@ impl Vm {
                 match callable {
                     Ok(_) => continue,
                     Err(why) => {
+                        // zpp's `zend_is_callable_ex` reports the callable's
+                        // deprecations before failing; a valid callable
+                        // reports them when it is called.
+                        if let Err(e) = self.zend_is_callable(v, false) {
+                            return self.builtin_arg_error(depth, e);
+                        }
                         let nul = if ty.allows_null() { " or null" } else { "" };
                         let e = self.make_throw(
                             "TypeError",
@@ -1435,6 +1507,11 @@ impl Vm {
         if coerced {
             if let Some(f) = self.frames.get_mut(depth - 1) {
                 frame_args(&values[..nframe_args], &mut f.args);
+            }
+        }
+        if call.dynamic && call.scope.is_none() {
+            if let Some(e) = self.forbidden_dynamic_call(b) {
+                return self.builtin_arg_error(depth, e);
             }
         }
         let mut args = Args {
@@ -1517,6 +1594,27 @@ impl Vm {
             self.frames.truncate(depth - 1);
             self.put_arg_vec(args);
         }
+    }
+
+    /// `zend_forbid_dynamic_call()` of the scope-introspection functions,
+    /// after their parameter parsing.
+    #[cold]
+    fn forbidden_dynamic_call(&mut self, b: &Builtin) -> Option<Throw> {
+        matches!(
+            b.name.as_bytes(),
+            b"extract"
+                | b"compact"
+                | b"get_defined_vars"
+                | b"func_get_args"
+                | b"func_get_arg"
+                | b"func_num_args"
+        )
+        .then(|| {
+            self.make_throw(
+                "Error",
+                &format!("Cannot call {}() dynamically", b.name.to_string_lossy()),
+            )
+        })
     }
 
     /// An argument error raised before a builtin's handler ran: the
