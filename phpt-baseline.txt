@@ -574,10 +574,6 @@ ext/bcmath/tests/number/gh18641.phpt
 ext/bcmath/tests/number/properties_isset_empty_exists.phpt
 ext/bz2/tests/oom_bzdecompress.phpt
 ext/bz2/tests/oom_bzip2_decompress_filter.phpt
-ext/date/tests/bug-gh20503.phpt
-ext/date/tests/bug65672.phpt
-ext/date/tests/date_period_properties.phpt
-ext/date/tests/time/duration/readonly.phpt
 ext/dom/tests/bug47430.phpt
 ext/dom/tests/delayed_freeing/without_contructor.phpt
 ext/dom/tests/entity_reference_stale_03.phpt
