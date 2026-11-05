@@ -41,8 +41,8 @@ impl Vm {
 
     /// Visible property names of an object for iteration from the current
     /// scope: (key value, unmangled name, declaring class for privates).
-    pub(crate) fn visible_props(&mut self, o: &Obj) -> Vec<(Value, ZStr, Option<ZStr>)> {
-        let target = self.lazy_object_for(o, None).unwrap_or_else(|_| o.clone());
+    pub(crate) fn visible_props(&mut self, o: &Obj) -> VmResult<Vec<(Value, ZStr, Option<ZStr>)>> {
+        let target = self.lazy_object_for(o, None)?;
         let o = &target;
         let scope = self.scope();
         let cls = object::class_of(o).clone();
@@ -110,7 +110,7 @@ impl Vm {
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     pub(crate) fn op_fe_reset(
@@ -159,7 +159,13 @@ impl Vm {
                         };
                         ForeachIter::ArrayRef { r, id }
                     }
-                    Value::Object(o) => self.object_iter(o, true)?,
+                    Value::Object(o) => {
+                        let mut it = self.object_iter(o, true)?;
+                        if let ForeachIter::Props { subject, .. } = &mut it {
+                            *subject = Value::Reference(r);
+                        }
+                        it
+                    }
                     other => {
                         self.warning(&format!(
                             "foreach() argument must be of type array|object, {} given",
@@ -274,12 +280,13 @@ impl Vm {
                 }
             }
         }
-        let keys = self.visible_props(&o);
+        let keys = self.visible_props(&o)?;
         if keys.is_empty() {
             return Ok(ForeachIter::Empty);
         }
         Ok(ForeachIter::Props {
-            obj: o,
+            target: std::rc::Rc::downgrade(o.rc()),
+            subject: Value::Object(o),
             keys,
             pos: 0,
             by_ref,
@@ -342,15 +349,33 @@ impl Vm {
                 }
             }
             ForeachIter::Props {
-                obj,
+                subject,
+                target,
                 keys,
                 pos,
                 by_ref,
             } => {
-                let obj = obj.clone();
                 let by_ref = *by_ref;
+                let obj = match subject.deref() {
+                    Value::Object(o) if by_ref => self.lazy_object_for(&o, None)?,
+                    Value::Object(o) => o,
+                    Value::Array(_) => return Ok(false),
+                    other => {
+                        self.warning(&format!(
+                            "foreach() argument must be of type array|object, {} given",
+                            other.type_name()
+                        ))?;
+                        return Ok(false);
+                    }
+                };
+                let current = std::rc::Rc::downgrade(obj.rc());
+                if !std::rc::Weak::ptr_eq(target, &current) {
+                    *keys = self.visible_props(&obj)?;
+                    *pos = 0;
+                    *target = current;
+                }
                 if *pos >= keys.len() {
-                    for (key, name, private_of) in self.visible_props(&obj) {
+                    for (key, name, private_of) in self.visible_props(&obj)? {
                         if !keys.iter().any(|(_, old_name, old_private)| {
                             *old_name == name && *old_private == private_of
                         }) {
@@ -557,7 +582,7 @@ impl Vm {
                     }
                     return Ok(out);
                 }
-                for (k, name, _) in self.visible_props(o) {
+                for (k, name, _) in self.visible_props(o)? {
                     let v = self.read_property(o, &name, crate::opcode::FetchMode::Is)?;
                     out.push((k, v));
                 }

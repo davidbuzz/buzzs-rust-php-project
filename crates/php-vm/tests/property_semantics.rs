@@ -164,6 +164,150 @@ $r->resetAsLazyProxy($p, function() { return new A; });
 }
 
 #[test]
+fn gh20085_lazy_foreach_rebinding_propagates_uncaught_error() {
+    let output = run(r#"<?php
+class C {
+    public int $a;
+    public function __construct() { $this->a = 1; }
+}
+$obj = new C;
+$reflector = new ReflectionClass(C::class);
+foreach ($obj as &$value) {
+    $obj = $reflector->newLazyGhost(function ($obj) { throw new Error; });
+}
+echo !obj;
+"#);
+    assert!(
+        output.contains("Fatal error: Uncaught Error in t.php:"),
+        "{output}"
+    );
+    assert!(output.contains("Stack trace:"), "{output}");
+    assert!(output.contains("thrown in t.php on line"), "{output}");
+    assert!(!output.contains("Undefined constant"), "{output}");
+}
+
+#[test]
+fn lazy_foreach_rebinding_exceptions_leave_ghosts_and_proxies_retryable() {
+    assert_eq!(
+        run(r#"<?php
+class C { public int $a = 1; }
+$r = new ReflectionClass(C::class);
+foreach ([false, true] as $proxy) {
+    $o = new C;
+    $alias =& $o;
+    $attempts = 0;
+    $initialize = function ($obj) use (&$attempts) {
+        echo "init:", ++$attempts, "\n";
+        throw new Error("lazy failure");
+    };
+    $steps = 0;
+    try {
+        foreach ($o as &$value) {
+            echo "body:", ++$steps, ":", $value, "\n";
+            if ($steps > 1) break;
+            $alias = $proxy ? $r->newLazyProxy($initialize) : $r->newLazyGhost($initialize);
+        }
+        echo "missed\n";
+    } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    unset($value);
+    var_dump($r->isUninitializedLazyObject($o));
+    try {
+        foreach ($o as &$value) { echo "unexpected\n"; break; }
+    } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    unset($value);
+    foreach ([7] as &$value) { echo "after:", $value, "\n"; }
+    unset($value, $alias);
+}
+"#),
+        "body:1:1\ninit:1\nlazy failure\nbool(true)\ninit:2\nlazy failure\nafter:7\n\
+         body:1:1\ninit:1\nlazy failure\nbool(true)\ninit:2\nlazy failure\nafter:7\n"
+    );
+}
+
+#[test]
+fn lazy_foreach_rebinding_restarts_at_the_resolved_property_table() {
+    assert_eq!(
+        run(r#"<?php
+class C { public int $a = 1; public int $b = 2; }
+$r = new ReflectionClass(C::class);
+foreach ([false, true] as $proxy) {
+    $o = new C;
+    $steps = 0;
+    foreach ($o as $key => &$value) {
+        echo $key, ":", $value, "\n";
+        if (++$steps === 1) {
+            $o = $proxy
+                ? $r->newLazyProxy(function ($obj) { echo "init\n"; $real = new C; $real->a = 3; $real->b = 4; return $real; })
+                : $r->newLazyGhost(function ($obj) { echo "init\n"; $obj->a = 3; $obj->b = 4; });
+        }
+        if ($steps > 3) break;
+        $value += 10;
+    }
+    unset($value);
+    var_dump($o->a, $o->b);
+}
+"#),
+        "a:1\ninit\na:3\nb:4\nint(13)\nint(14)\n\
+         a:1\ninit\na:3\nb:4\nint(13)\nint(14)\n"
+    );
+}
+
+#[test]
+fn property_foreach_rebinding_refreshes_keys_without_changing_value_iteration() {
+    assert_eq!(
+        run(r#"<?php
+class C { public int $a = 1; }
+$o = new C;
+$alias =& $o;
+$steps = 0;
+foreach ($o as $key => &$value) {
+    echo $key, ":", $value, "\n";
+    if (++$steps === 1) $alias = (object) ["b" => 2, "c" => 3];
+    if ($steps > 3) break;
+    $value += 10;
+}
+unset($value, $alias);
+var_dump($o->b, $o->c);
+$r = new ReflectionClass(C::class);
+$o = new C;
+$steps = 0;
+foreach ($o as $value) {
+    echo "value:", $value, "\n";
+    if (++$steps === 1) {
+        $o = $r->newLazyGhost(function ($obj) { throw new Error("must not initialize"); });
+    }
+    if ($steps > 1) break;
+}
+var_dump($r->isUninitializedLazyObject($o));
+"#),
+        "a:1\nb:2\nc:3\nint(12)\nint(13)\nvalue:1\nbool(true)\n"
+    );
+}
+
+#[test]
+fn property_foreach_rebinding_does_not_retain_the_previous_object() {
+    assert_eq!(
+        run(r#"<?php
+class C {
+    public int $a = 1;
+    function __destruct() { echo "released\n"; }
+}
+$o = new C;
+$steps = 0;
+foreach ($o as &$value) {
+    echo "body\n";
+    if (++$steps === 1) $o = (object) [];
+    if ($steps > 1) break;
+    echo "rebound\n";
+}
+unset($value);
+echo "done\n";
+"#),
+        "body\nreleased\nrebound\ndone\n"
+    );
+}
+
+#[test]
 fn lazy_initialization_detects_released_objects_and_chains_errors() {
     assert_eq!(
         run(r#"<?php

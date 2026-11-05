@@ -243,8 +243,10 @@ pub enum ForeachIter {
     },
     /// Over an object's properties.
     Props {
-        /// The object.
-        obj: Obj,
+        /// The object, or the reference holding it for by-reference iteration.
+        subject: Value,
+        /// Identity of the last property target, without keeping it alive.
+        target: std::rc::Weak<dyn php_runtime::PhpObject>,
         /// Snapshot of (key, name) pairs.
         keys: Vec<(Value, ZStr, Option<ZStr>)>,
         /// Next index.

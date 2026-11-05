@@ -219,9 +219,8 @@ fn frame(v: &mut GcVisitor<'_>, f: &Frame) {
         match it {
             ForeachIter::Array { arr, .. } => v.array(arr),
             ForeachIter::ArrayRef { r, .. } => v.reference(r),
-            ForeachIter::Props { obj, .. }
-            | ForeachIter::Iterator { obj, .. }
-            | ForeachIter::Generator { obj, .. } => v.obj(obj),
+            ForeachIter::Props { subject, .. } => v.value(subject),
+            ForeachIter::Iterator { obj, .. } | ForeachIter::Generator { obj, .. } => v.obj(obj),
             // Native iterators keep their own handles.
             ForeachIter::Native(..) | ForeachIter::Empty => {}
         }
