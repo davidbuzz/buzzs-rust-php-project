@@ -379,3 +379,24 @@ try { new D; } catch (Error $e) { echo $e->getMessage(), "\n"; }
         "AB\nAB\nCannot declare self-referencing constant self::Y\n"
     );
 }
+
+/// `forward_static_call[_array]()` (`ext/standard/basic_functions.c`) keep
+/// the caller's called scope when it derives from the callback's class;
+/// `forward_static_call()` needs an active class scope.
+#[test]
+fn forward_static_call_forwards_called_scope() {
+    let out = run(r#"<?php
+class A { static function t() { echo static::class, "\n"; } }
+class B extends A { static function go() { forward_static_call(['A', 't']); forward_static_call_array('A::t', []); call_user_func(['A', 't']); } }
+function f() { echo "f\n"; }
+class C { static function go() { forward_static_call('f'); } }
+B::go();
+C::go();
+function g() { try { forward_static_call(['A', 't']); } catch (Error $e) { echo $e->getMessage(), "\n"; } }
+g();
+"#);
+    assert_eq!(
+        out,
+        "B\nB\nA\nf\nCannot call forward_static_call() when no class scope is active\n"
+    );
+}

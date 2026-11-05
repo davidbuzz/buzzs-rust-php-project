@@ -5,7 +5,7 @@ use super::{alias, constant, reg};
 use crate::class::Class;
 use crate::func::{flags, Args, Func};
 use crate::object;
-use crate::vm::{ErrorHandler, FrameKind, Throw, Vm, VmResult};
+use crate::vm::{ErrorHandler, FrameKind, PendingCall, Throw, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, PropertyPurpose, Value, ZArray, ZStr};
 use std::rc::Rc;
 
@@ -1375,7 +1375,14 @@ fn call_user_func(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
-    let arr = arr(a, 1);
+    let (args, named) = cufa_args(vm, &arr(a, 1))?;
+    cuf_call(vm, &cb, args, named, "call_user_func_array")
+}
+
+/// Splits a `call_user_func_array()` argument array into positional and
+/// named arguments (`zend_fcall_info.named_params`).
+#[allow(clippy::type_complexity)]
+fn cufa_args(vm: &mut Vm, arr: &ZArray) -> VmResult<(Vec<Value>, Vec<(ZStr, Value)>)> {
     let mut args = Vec::new();
     let mut named = Vec::new();
     for (k, v) in arr.iter() {
@@ -1392,7 +1399,83 @@ fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             ArrayKey::Str(s) => named.push((s.clone(), v.clone())),
         }
     }
-    cuf_call(vm, &cb, args, named, "call_user_func_array")
+    Ok((args, named))
+}
+
+/// `PHP_FUNCTION(forward_static_call)` (`ext/standard/basic_functions.c`):
+/// like `call_user_func()`, but only from a class scope, and the callee
+/// keeps the caller's called scope (`static::`) when it derives from the
+/// callback's class.
+fn forward_static_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cb = a.at(0);
+    let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
+    let named = std::mem::take(&mut a.named);
+    let call = fsc_resolve(vm, &cb)?;
+    let caller_has_scope = vm
+        .frames
+        .len()
+        .checked_sub(2)
+        .and_then(|i| vm.frames.get(i))
+        .is_some_and(|f| f.scope.is_some());
+    if !caller_has_scope {
+        return Err(vm.make_throw(
+            "Error",
+            "Cannot call forward_static_call() when no class scope is active",
+        ));
+    }
+    let call = fsc_forward_called_scope(vm, call);
+    vm.call_resolved_named(call, args, named)
+}
+
+/// `PHP_FUNCTION(forward_static_call_array)`: [`forward_static_call`] with
+/// the arguments in an array, and without the class scope check.
+fn forward_static_call_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cb = a.at(0);
+    let call = fsc_resolve(vm, &cb)?;
+    let (args, named) = cufa_args(vm, &arr(a, 1))?;
+    let call = fsc_forward_called_scope(vm, call);
+    vm.call_resolved_named(call, args, named)
+}
+
+/// `Z_PARAM_FUNC` of the `forward_static_call*()` functions.
+fn fsc_resolve(vm: &mut Vm, cb: &Value) -> VmResult<PendingCall> {
+    match vm.zend_is_callable(cb, false)? {
+        Ok(call) => Ok(call),
+        Err(reason) => Err(vm.make_throw("TypeError", &reason)),
+    }
+}
+
+/// `zend_get_called_scope(execute_data)` (`Zend/zend_execute_API.c`) seen
+/// from the builtin's frame replaces the callback's called scope when it
+/// is an instance of the callback's class (`fci_cache.calling_scope`).
+/// A callback bound to an object keeps the object's class.
+fn fsc_forward_called_scope(vm: &Vm, mut call: PendingCall) -> PendingCall {
+    if call.this.is_some() {
+        return call;
+    }
+    let Some(calling) = call.called.clone().or_else(|| call.scope.clone()) else {
+        return call;
+    };
+    let mut called = None;
+    for f in vm.frames.iter().rev() {
+        if let Some(o) = &f.this {
+            called = Some(object::class_of(o).clone());
+            break;
+        }
+        if let Some(c) = &f.called {
+            called = Some(c.clone());
+            break;
+        }
+        if f.kind != FrameKind::Builtin || f.scope.is_some() {
+            break;
+        }
+    }
+    if let Some(c) = called {
+        if c.is_subclass_of(&calling) {
+            call.called = Some(c);
+        }
+    }
+    call
 }
 
 /// Calls the callback of `call_user_func[_array]()`. A direct call compiles
@@ -2383,12 +2466,12 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(
         vm,
         "forward_static_call(callable $callback, mixed ...$args): mixed",
-        call_user_func,
+        forward_static_call,
     );
     reg(
         vm,
         "forward_static_call_array(callable $callback, array $args): mixed",
-        call_user_func_array,
+        forward_static_call_array,
     );
     reg(
         vm,
