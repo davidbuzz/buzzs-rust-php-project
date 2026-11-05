@@ -125,6 +125,20 @@ impl Vm {
         self.trace_args_list(&args)
     }
 
+    /// Under `error_include_args`, a library diagnostic that already starts
+    /// with the running builtin's `name(): ` origin gets the arguments put
+    /// into it, as `php_verror` builds the origin itself
+    /// (`zend_trace_current_function_args_string`).
+    pub(crate) fn origin_with_args(&mut self, msg: &str) -> Option<String> {
+        if !self.ini.get_bool("error_include_args") {
+            return None;
+        }
+        let name = self.docref_function_name()?;
+        let rest = msg.strip_prefix(name.as_str())?.strip_prefix("(): ")?;
+        let args = self.docref_args();
+        Some(format!("{name}({args}): {rest}"))
+    }
+
     /// The origin `include`/`require` warnings are prefixed with:
     /// `include()`, or `include('name')` under `error_include_args`
     /// (`php_verror` while `ZEND_INCLUDE_OR_EVAL` executes).

@@ -222,7 +222,11 @@ impl Vm {
 
 impl RuntimeContext for Vm {
     fn diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
-        self.error(level.bits(), message).map_err(|t| self.to_rt(t))
+        let r = match self.origin_with_args(message) {
+            Some(m) => self.error(level.bits(), &m),
+            None => self.error(level.bits(), message),
+        };
+        r.map_err(|t| self.to_rt(t))
     }
 
     fn precision(&self) -> i64 {
