@@ -18,7 +18,7 @@ use crate::class::{cflags, Class, PropInfo};
 use crate::func::{flags, Args};
 use crate::object;
 use crate::typecheck::{given_type, TypeCtx};
-use crate::vm::{Vm, VmResult};
+use crate::vm::{Throw, Vm, VmResult};
 use php_runtime::dump::unmangle_property_name;
 use php_runtime::float::zend_gcvt;
 use php_runtime::numeric::{handle_numeric_str, strtod};
@@ -82,14 +82,67 @@ thread_local! {
     static LOCK: Cell<u32> = const { Cell::new(0) };
     static SER: RefCell<(u32, Option<SerRc>)> = const { RefCell::new((0, None)) };
     static UNSER: RefCell<(u32, Option<UnserRc>)> = const { RefCell::new((0, None)) };
+    static ABANDONED_SER: RefCell<Vec<SerRc>> = const { RefCell::new(Vec::new()) };
+    static ABANDONED_UNSER: RefCell<Vec<UnserRc>> = const { RefCell::new(Vec::new()) };
+}
+
+/// `php_basic_early_rinit()` / `PHP_RINIT(basic)`: discard contexts left
+/// behind by a bailout before any request hooks can deserialize sessions.
+fn request_startup(_vm: &mut Vm) {
+    LOCK.with(|l| l.set(0));
+    let ser = SER.with(|s| std::mem::replace(&mut *s.borrow_mut(), (0, None)));
+    let unser = UNSER.with(|s| std::mem::replace(&mut *s.borrow_mut(), (0, None)));
+    let abandoned_ser = ABANDONED_SER.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    let abandoned_unser = ABANDONED_UNSER.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    drop((ser, unser, abandoned_ser, abandoned_unser));
+}
+
+impl Vm {
+    /// Opens a real serialization context, then abandons it as
+    /// `zend_test_serialization_bailout()` does before `zend_bailout()`.
+    pub fn serialization_bailout(&mut self, unserialize: bool, locked: bool) -> Throw {
+        if unserialize {
+            let (d, _) = unser_init(self);
+            ABANDONED_UNSER.with(|u| u.borrow_mut().push(d));
+        } else {
+            let d = ser_init();
+            ABANDONED_SER.with(|s| s.borrow_mut().push(d));
+        }
+        if locked {
+            LOCK.with(|l| l.set(l.get() + 1));
+        }
+        Throw::Fatal
+    }
+
+    /// The actual `BG(serialize_lock)`, `BG(serialize)` and
+    /// `BG(unserialize)` state exposed by zend_test.
+    pub fn serialization_state(&self) -> ZArray {
+        let (ser_level, ser_data) = SER.with(|s| {
+            let s = s.borrow();
+            (s.0, s.1.is_some())
+        });
+        let (unser_level, unser_data) = UNSER.with(|u| {
+            let u = u.borrow();
+            (u.0, u.1.is_some())
+        });
+        ZArray::from_pairs([
+            ("lock", Value::Int(i64::from(LOCK.with(Cell::get)))),
+            ("serialize_level", Value::Int(i64::from(ser_level))),
+            ("serialize_data", Value::Bool(ser_data)),
+            ("unserialize_level", Value::Int(i64::from(unser_level))),
+            ("unserialize_data", Value::Bool(unser_data)),
+        ])
+    }
 }
 
 /// Runs `f` with `BG(serialize_lock)` raised (user callbacks get a fresh
 /// context).
-fn locked<R>(f: impl FnOnce() -> R) -> R {
+fn locked<R>(f: impl FnOnce() -> VmResult<R>) -> VmResult<R> {
     LOCK.with(|l| l.set(l.get() + 1));
     let r = f();
-    LOCK.with(|l| l.set(l.get().saturating_sub(1)));
+    if !matches!(r, Err(Throw::Fatal)) {
+        LOCK.with(|l| l.set(l.get().saturating_sub(1)));
+    }
     r
 }
 
@@ -541,6 +594,10 @@ fn serialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     // The root: a by-value argument is never a reference.
     let r = s.value(vm, &v.deref());
+    if matches!(r, Err(Throw::Fatal)) {
+        ABANDONED_SER.with(|s| s.borrow_mut().push(d.clone()));
+        return Err(Throw::Fatal);
+    }
     ser_destroy();
     r?;
     Ok(sv(s.buf))
@@ -1709,7 +1766,8 @@ fn unser_destroy(vm: &mut Vm, d: &UnserRc, outermost: bool, run: bool) -> VmResu
     // With an exception pending the calls do not run (and count as failed).
     let mut failed = !run;
     let mut result = Ok(());
-    for dt in dtors {
+    let mut dtors = dtors.into_iter();
+    while let Some(dt) = dtors.next() {
         match dt {
             Dtor::Keep(_) => {}
             Dtor::Wakeup(o) => {
@@ -1720,6 +1778,11 @@ fn unser_destroy(vm: &mut Vm, d: &UnserRc, outermost: bool, run: bool) -> VmResu
                 let cls = object::class_of(&o).clone();
                 if let Some(m) = cls.magic.wakeup.clone() {
                     if let Err(t) = locked(|| vm.call_method(&o, &m, Vec::new())) {
+                        if matches!(t, Throw::Fatal) {
+                            d.borrow_mut().dtors.extend(dtors);
+                            ABANDONED_UNSER.with(|u| u.borrow_mut().push(d.clone()));
+                            return Err(t);
+                        }
                         failed = true;
                         mark_destructed(&o);
                         result = Err(t);
@@ -1744,6 +1807,11 @@ fn unser_destroy(vm: &mut Vm, d: &UnserRc, outermost: bool, run: bool) -> VmResu
                     Ok(())
                 };
                 if let Err(t) = r {
+                    if matches!(t, Throw::Fatal) {
+                        d.borrow_mut().dtors.extend(dtors);
+                        ABANDONED_UNSER.with(|u| u.borrow_mut().push(d.clone()));
+                        return Err(t);
+                    }
                     failed = true;
                     mark_destructed(&o);
                     result = Err(t);
@@ -1848,6 +1916,10 @@ fn unserialize_with_options(vm: &mut Vm, buf: &[u8], opts: Option<&ZArray>) -> V
         d: d.clone(),
     };
     let parsed = u.value(vm, None);
+    if matches!(parsed, Err(Throw::Fatal)) {
+        ABANDONED_UNSER.with(|u| u.borrow_mut().push(d));
+        return Err(Throw::Fatal);
+    }
     let pos = u.cur.pos;
     let result = match parsed {
         Ok(Some(v)) => {
@@ -1939,6 +2011,10 @@ impl Vm {
     ) -> VmResult<R> {
         let (d, outermost) = unser_init(self);
         let r = f(self);
+        if matches!(r, Err(Throw::Fatal)) {
+            ABANDONED_UNSER.with(|u| u.borrow_mut().push(d));
+            return Err(Throw::Fatal);
+        }
         let ok = r.is_ok();
         let destroyed = unser_destroy(self, &d, outermost, ok);
         match (r, destroyed) {
@@ -1959,6 +2035,10 @@ impl Vm {
             d: d.clone(),
         };
         let parsed = u.value(self, None);
+        if matches!(parsed, Err(Throw::Fatal)) {
+            ABANDONED_UNSER.with(|u| u.borrow_mut().push(d));
+            return Err(Throw::Fatal);
+        }
         let pos = u.cur.pos;
         let mut value = match parsed {
             Ok(Some(v)) => Some(v),
@@ -2004,6 +2084,7 @@ fn unserialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers `serialize()` / `unserialize()`.
 pub(crate) fn register(vm: &mut Vm) {
+    vm.startup_hooks.push(request_startup);
     super::reg(vm, "serialize(mixed $value): string", serialize);
     super::reg(
         vm,

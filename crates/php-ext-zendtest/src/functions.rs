@@ -33,6 +33,14 @@ fn trigger_bailout(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+fn serialization_bailout(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Err(vm.serialization_bailout(a.bool(0), a.bool(1)))
+}
+
+fn serialization_state(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Array(vm.serialization_state()))
+}
+
 /// `zend_test_array_return()`: returns nothing although declared `array`
 /// (a release build hands back `null`).
 fn array_return(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -580,6 +588,11 @@ fn cast_fread(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 #[allow(clippy::too_many_lines)]
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     m.function("zend_trigger_bailout(): never", trigger_bailout);
+    m.function(
+        "zend_test_serialization_bailout(bool $unserialize, bool $locked): never",
+        serialization_bailout,
+    );
+    m.function("zend_test_serialization_state(): array", serialization_state);
     m.function("zend_test_array_return(): array", array_return);
     m.function("zend_test_nullable_array_return(): ?array", none);
     m.function("zend_test_void_return(): void", none);
