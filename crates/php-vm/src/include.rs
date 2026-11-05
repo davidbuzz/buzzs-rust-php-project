@@ -154,7 +154,22 @@ impl Vm {
             anon_base: self.anon_counter,
             ct_constants: Some(self.ct_constants()),
         };
-        let unit = match compiler::compile(&program, Rc::from(src), opts) {
+        let halt_compiler_offset = program.halt_compiler_offset;
+        // A multibyte script's AST is kept for the semantic text of
+        // diagnostics; any other is released statement by statement while
+        // it compiles.
+        let (compiled, kept) = if program.multibyte {
+            (
+                compiler::compile(&program, Rc::from(src), opts),
+                Some(program),
+            )
+        } else {
+            (
+                compiler::compile_program(program, Rc::from(src), opts),
+                None,
+            )
+        };
+        let unit = match compiled {
             Ok(u) => {
                 self.anon_counter = u.anon_end;
                 u
@@ -167,7 +182,7 @@ impl Vm {
                 return Ok(CompileOutcome::Fatal);
             }
         };
-        if let Some(off) = program.halt_compiler_offset {
+        if let Some(off) = halt_compiler_offset {
             self.ext
                 .halt_offsets
                 .insert(filename.clone(), i64::try_from(off).unwrap_or(0));
@@ -175,7 +190,7 @@ impl Vm {
         for (level, msg, line) in &unit.warnings {
             self.error_at(*level, msg, filename, *line)?;
         }
-        if program.multibyte {
+        if let Some(program) = kept {
             self.parsed_sources
                 .borrow_mut()
                 .insert(filename.clone(), Rc::new(program));
