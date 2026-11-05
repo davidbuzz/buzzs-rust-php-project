@@ -424,9 +424,16 @@ pub(crate) fn descend(
                     } else {
                         KeyCtx::Write
                     };
-                    let key = match key_of(k, diags, ctx) {
-                        Ok(k) => k,
-                        Err(e) => return Step::Err(e),
+                    // ZEND_UNSET_DIM maps a null offset to "" without the
+                    // null-offset deprecation; intermediate unset fetches
+                    // (FETCH_DIM_UNSET) still raise it.
+                    let key = if is_unset && last && matches!(k, Value::Null) {
+                        ArrayKey::Str(ZStr::empty())
+                    } else {
+                        match key_of(k, diags, ctx) {
+                            Ok(k) => k,
+                            Err(e) => return Step::Err(e),
+                        }
                     };
                     if is_unset {
                         if last {

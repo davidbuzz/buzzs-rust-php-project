@@ -975,9 +975,13 @@ name = "php-ext-zendtest"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-cli-server",
+ "php-ext-streams",
  "php-memlimit",
  "php-parser",
  "php-runtime",
+ "php-stdmisc",
+ "php-streams",
  "php-support",
  "php-vm",
 ]

@@ -12,6 +12,10 @@ php-runtime = { path = "../php-runtime" }
 php-support = { path = "../php-support" }
 php-parser = { path = "../php-parser" }
 php-memlimit = { path = "../php-memlimit" }
+php-streams = { path = "../php-streams" }
+php-ext-streams = { path = "../php-ext-streams" }
+php-stdmisc = { path = "../php-stdmisc" }
+php-cli-server = { path = "../php-cli-server" }
 libc = "0.2"
 
 [features]
