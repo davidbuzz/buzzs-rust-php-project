@@ -154,6 +154,7 @@ impl Vm {
             last_error: None,
             last_fatal_error_backtrace: None,
             pending_throw: None,
+            output_handler_threw: false,
             script_path: ZStr::empty(),
             argv: Vec::new(),
             bound_decls: HashMap::new(),

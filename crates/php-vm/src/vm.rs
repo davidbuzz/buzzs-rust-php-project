@@ -659,6 +659,9 @@ pub struct Vm {
     pub last_fatal_error_backtrace: Option<php_runtime::ZArray>,
     /// Exceptions/bailouts raised inside runtime callbacks.
     pub pending_throw: Option<Throw>,
+    /// The last user output handler call threw (`retval` UNDEF), even if
+    /// the user exception handler took the exception at shutdown.
+    pub(crate) output_handler_threw: bool,
     /// The main script path.
     pub script_path: ZStr,
     /// Command line arguments.

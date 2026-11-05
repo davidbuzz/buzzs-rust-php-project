@@ -749,6 +749,7 @@ impl OutputHost for Vm {
     }
 
     fn call_handler(&mut self, callback: &mut Value, buffer: &[u8], mode: i32) -> Option<Vec<u8>> {
+        self.output_handler_threw = false;
         // Named native handlers (`php_output_handler_alias`).
         let alias = match callback {
             Value::Str(n) => self.output_handler_aliases.get(n).copied(),
@@ -777,12 +778,14 @@ impl OutputHost for Vm {
             Err(Throw::Exception(e))
                 if !self.is_executing() && !crate::fiber::is_graceful_exit(&e) =>
             {
+                self.output_handler_threw = true;
                 if let Err(t) = self.uncaught_exception(e) {
                     self.pending_throw = Some(t);
                 }
                 None
             }
             Err(t) => {
+                self.output_handler_threw = true;
                 if self.pending_throw.is_none() {
                     self.pending_throw = Some(t);
                 }
@@ -822,6 +825,10 @@ impl OutputHost for Vm {
 
     fn has_pending_exception(&self) -> bool {
         self.pending_throw.is_some()
+    }
+
+    fn handler_threw(&self) -> bool {
+        self.output_handler_threw || self.pending_throw.is_some()
     }
 
     fn has_pending_fatal(&self) -> bool {

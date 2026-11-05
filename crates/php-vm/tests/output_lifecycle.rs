@@ -96,3 +96,21 @@ fn destructors_run_in_a_new_vm_after_an_earlier_request_on_the_thread() {
     assert_eq!(status, 0);
     assert_eq!(output, b"d|");
 }
+
+/// gh10695_6: a handler that throws while the buffers are flushed at
+/// shutdown hands the exception to the user exception handler; its output
+/// passes through the failed handler, and no "Producing output"
+/// deprecation follows because the call threw (`retval` is UNDEF).
+#[test]
+fn gh10695_6_shutdown_handler_exception_has_no_output_deprecation() {
+    let (_status, output) = run(r#"<?php
+set_exception_handler(function (\Throwable $exception) {
+    echo 'Caught: ' . $exception->getMessage() . "\n";
+});
+
+ob_start(function () {
+    throw new \Exception('ob_start');
+});
+"#);
+    assert_eq!(output, b"Caught: ob_start\n");
+}

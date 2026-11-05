@@ -382,6 +382,14 @@ pub trait OutputHost {
         false
     }
 
+    /// Whether the last [`call_handler`](Self::call_handler) threw
+    /// (`Z_TYPE(retval) == IS_UNDEF` in `php_output_handler_op`), even if
+    /// the exception was handled meanwhile (by the user exception handler
+    /// when no frame is executing, at request shutdown).
+    fn handler_threw(&self) -> bool {
+        self.has_pending_exception()
+    }
+
     /// Whether a callback bailed out rather than throwing an exception.
     fn has_pending_fatal(&self) -> bool {
         false
@@ -670,7 +678,7 @@ fn handler_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Context) 
             .is_some_and(|h| h.flags & flags::PRODUCED_OUTPUT != 0);
         // main/output.c skips the deprecation only when the call threw
         // (retval UNDEF); a handler that returned false still gets it.
-        if is_user && produced && (retval.is_some() || !host.has_pending_exception()) {
+        if is_user && produced && (retval.is_some() || !host.handler_threw()) {
             let name = {
                 let h = host.output().find_mut(id);
                 h.map(|h| {
