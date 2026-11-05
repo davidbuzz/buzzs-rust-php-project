@@ -1448,6 +1448,31 @@ fn chdir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
+/// `ZEND_FUNCTION(exit)` (`Zend/zend_builtin_functions.c`). Since PHP 8.4
+/// `exit`/`die` compile to an ordinary call of `\exit()`, so the argument
+/// goes through `Z_PARAM_STR_OR_LONG` (null and float deprecations,
+/// `TypeError`s, `strict_types`) and the function can be named as a
+/// callable or called with a named argument.
+fn exit_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    match a.at(0) {
+        Value::Str(s) => {
+            if !s.is_empty() {
+                vm.echo(s.as_bytes());
+                // An exception might be emitted by an output handler.
+                vm.take_pending_throw()?;
+            }
+        }
+        Value::Int(n) => {
+            // `EG(exit_status)` is a C `int`.
+            #[allow(clippy::cast_possible_truncation)]
+            let status = n as i32;
+            vm.exit_status = status;
+        }
+        _ => {}
+    }
+    Err(Throw::Exit)
+}
+
 fn clone_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.at(0);
     let r = vm.clone_value(v)?;
@@ -2442,6 +2467,8 @@ pub(crate) fn register(vm: &mut Vm) {
         "clone(object $object, array $withProperties = []): object",
         clone_fn,
     );
+    reg(vm, "exit(string|int $status = 0): never", exit_fn);
+    alias(vm, "die", "exit");
     reg(vm, "func_num_args(): int", func_num_args);
     reg(vm, "func_get_arg(int $position): mixed", func_get_arg);
     reg(vm, "func_get_args(): array", func_get_args);
