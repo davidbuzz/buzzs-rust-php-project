@@ -23,7 +23,7 @@ pub(crate) const SKIP_INITIALIZATION_ON_SERIALIZE: i64 = 8;
 pub(crate) const SKIP_DESTRUCTOR: i64 = 16;
 
 fn info(o: &Obj) -> Option<LazyInfo> {
-    object::data(o).lazy.borrow().clone()
+    object::data(o).lazy.borrow().as_deref().cloned()
 }
 
 /// `zend_object_is_lazy() && !zend_lazy_object_initialized()`.
@@ -105,11 +105,11 @@ pub(crate) fn force_init(vm: &mut Vm, o: &Obj) -> VmResult<Obj> {
 }
 
 fn set_info(o: &Obj, i: Option<LazyInfo>) {
-    *object::data(o).lazy.borrow_mut() = i;
+    *object::data(o).lazy.borrow_mut() = i.map(Box::new);
 }
 
 fn with_info(o: &Obj, f: impl FnOnce(&mut LazyInfo)) {
-    if let Some(i) = object::data(o).lazy.borrow_mut().as_mut() {
+    if let Some(i) = object::data(o).lazy.borrow_mut().as_deref_mut() {
         f(i);
     }
 }
