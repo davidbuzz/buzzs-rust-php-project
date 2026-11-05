@@ -398,7 +398,8 @@ session_start();
 "#,
         &[("fatal_error_backtraces", "0")],
     );
-    let expected = "\nFatal error: Default value for property of type int may not be null. Use the \
+    let expected =
+        "\nFatal error: Default value for property of type int may not be null. Use the \
          nullable type ?int to allow null default value in test.php(13) : eval()'d code on line 1\n\
          \nWarning: Unknown: Failed to decode session object. Session has been destroyed in \
          Unknown on line 0\n";
