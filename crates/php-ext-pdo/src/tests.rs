@@ -120,6 +120,46 @@ fn pdorow_cannot_be_constructed() {
     assert_eq!(out, "You may not create a PDORow manually");
 }
 
+/// pdo_035: `&$row[0]` reads the column with the "Indirect modification"
+/// notice; `&$row[]` throws from `row_dim_read`.
+#[test]
+fn pdorow_dimension_fetch_by_reference() {
+    let out = run(r#"
+        set_error_handler(function ($no, $msg) { echo $no, ':', $msg, ';'; return true; });
+        $db = new PDO('sqlite::memory:');
+        $row = $db->query('SELECT 1 AS a')->fetch(PDO::FETCH_LAZY);
+        try { $r = &$row[0]; echo 'ok;'; } catch (Error $e) { echo $e->getMessage(), ';'; }
+        try { $r = &$row[]; } catch (Error $e) { echo $e->getMessage(), ';'; }
+        echo $row[0];
+    "#);
+    assert_eq!(
+        out,
+        "8:Indirect modification of overloaded element of PDORow has no effect;ok;\
+         Cannot append to PDORow offset;1"
+    );
+}
+
+/// pdo_fetch_func_001: `zend_is_callable()` on the `FETCH_FUNC` callable
+/// raises the relative-callable deprecation once, in the caller's scope.
+#[test]
+fn fetch_func_relative_callable_deprecation() {
+    let out = run(r#"
+        set_error_handler(function ($no, $msg) { echo $no, ':', $msg, ';'; return true; });
+        class Foo { public function m($x) { return __METHOD__ . "($x)"; } }
+        class Bar extends Foo {
+            public function run($db) {
+                $st = $db->query('SELECT 1 UNION ALL SELECT 2');
+                echo implode(',', $st->fetchAll(PDO::FETCH_FUNC, [$this, 'parent::m']));
+            }
+        }
+        (new Bar)->run(new PDO('sqlite::memory:'));
+    "#);
+    assert_eq!(
+        out,
+        "8192:Callables of the form [\"Bar\", \"parent::m\"] are deprecated;Foo::m(1),Foo::m(2)"
+    );
+}
+
 #[test]
 fn blob_stream_resource() {
     let out = run(r#"

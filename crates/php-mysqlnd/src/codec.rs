@@ -388,9 +388,20 @@ fn binary_value(field: &Field, r: &mut Reader<'_>) -> Option<Value> {
             Some(from_1_to_8_bytes(field, b))
         }
         _ => {
+            // `ps_fetch_string`: `ZVAL_STRINGL_FAST`.
             let (b, _) = var_len(r, pack_len)?;
-            Some(Value::Str(ZStr::from(b)))
+            Some(Value::Str(zstr_fast(b)))
         }
+    }
+}
+
+/// `zend_string_init_fast` (`ZVAL_STRINGL_FAST`): empty and one-byte
+/// values are the shared interned `ZSTR_EMPTY_ALLOC()` / `ZSTR_CHAR(c)`.
+fn zstr_fast(b: &[u8]) -> ZStr {
+    match b {
+        [] => ZStr::empty(),
+        [c] => ZStr::from_byte(*c),
+        _ => ZStr::from(b),
     }
 }
 
@@ -479,7 +490,7 @@ pub fn decode_text_row(
         } else if as_int_or_float && php_type == PhpType::Double {
             Value::Float(php_runtime::numeric::strtod(data).0)
         } else {
-            Value::Str(ZStr::from(data))
+            Value::Str(zstr_fast(data))
         };
         out.push(v);
     }
@@ -522,6 +533,25 @@ mod tests {
         let row = text_row(&[Some(b"42"), Some(b"1.5"), None]);
         let v = decode_text_row(&row, &f, false, &mut st).unwrap();
         assert_eq!(crate::render_all(&v), ["s:42", "s:1.5", "N"]);
+    }
+
+    /// `ZVAL_STRINGL_FAST`: empty and one-byte values are interned
+    /// (mysqli_result_references_mysqlnd).
+    #[test]
+    fn text_short_strings_interned() {
+        let mut st = Stats::default();
+        let f = [
+            field(MYSQL_TYPE_VAR_STRING, 0),
+            field(MYSQL_TYPE_VAR_STRING, 0),
+            field(MYSQL_TYPE_VAR_STRING, 0),
+        ];
+        let row = text_row(&[Some(b"a"), Some(b""), Some(b"ab")]);
+        let v = decode_text_row(&row, &f, false, &mut st).unwrap();
+        let interned: Vec<bool> = v
+            .iter()
+            .map(|v| matches!(v, Value::Str(s) if s.is_interned()))
+            .collect();
+        assert_eq!(interned, [true, true, false]);
     }
 
     #[test]

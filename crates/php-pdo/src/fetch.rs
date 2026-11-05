@@ -936,7 +936,10 @@ impl PdoStatement {
                     cx.throw(f.type_error(2, "must be a callable, null given"));
                     return None;
                 };
-                if let Err(msg) = cx.host().check_callable(&callable) {
+                // `pdo_get_fcc_from_zval`: `zend_is_callable()` raises the
+                // callable deprecations (pdo_fetch_func_001).
+                let checked = cx.host().check_callable_with_deprecations(&callable);
+                if let Err(msg) = cx.check(checked)? {
                     cx.throw_type_error(msg);
                     return None;
                 }

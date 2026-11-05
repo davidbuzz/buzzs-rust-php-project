@@ -77,6 +77,18 @@ pub trait PdoHost: RuntimeContext {
     /// `"function \"nope\" not found or invalid function name"`).
     fn check_callable(&mut self, callable: &Value) -> Result<(), String>;
 
+    /// `zend_is_callable(callable, fcc, &error)` (no
+    /// `IS_CALLABLE_SUPPRESS_DEPRECATIONS`): like [`Self::check_callable`],
+    /// but raising the callable deprecations (`["bar", "parent::method"]`)
+    /// in the calling scope; the outer `Err` is an exception thrown by an
+    /// error handler.
+    fn check_callable_with_deprecations(
+        &mut self,
+        callable: &Value,
+    ) -> RtResult<Result<(), String>> {
+        Ok(self.check_callable(callable))
+    }
+
     /// `php_error_docref(NULL, level, msg)`: the VM prefixes the active
     /// function name (`"PDOStatement::execute(): "`).
     fn docref(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {

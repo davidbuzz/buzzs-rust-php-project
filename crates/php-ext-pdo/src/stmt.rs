@@ -4,7 +4,9 @@ use crate::host::{raw_prop, stmt_of, with_host, VmHost};
 use php_pdo::consts::{FETCH_DEFAULT, FETCH_ORI_NEXT, PARAM_STR};
 use php_pdo::{ParamId, PdoRow, PdoStatement, StmtIterator};
 use php_runtime::{Obj, PropertyPurpose, Value, ZArray, ZStr};
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, NativeIterator, VmResult};
+use php_vm::ext::{
+    acc, class_flags, Args, ClassBuilder, ClassHooks, DimensionCtx, NativeIterator, VmResult,
+};
 use php_vm::func::Func;
 use php_vm::object::class_of;
 use php_vm::Vm;
@@ -319,9 +321,26 @@ fn row_unset_property(vm: &mut Vm, _o: &Obj, _name: &ZStr) -> VmResult<bool> {
     Err(crate::host::rt_throw(vm, PdoRow::unset_property_error()))
 }
 
+/// `row_dim_read` as reached from `zend_fetch_dimension_address`: `&$row[]`
+/// (no offset) throws "Cannot append", and a write-context fetch of a
+/// scalar column raises the "Indirect modification" notice.
 fn row_read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
+    let ctx = vm.dimension_context();
+    let offset = (!matches!(ctx, DimensionCtx::Append | DimensionCtx::AppendRw)).then_some(k);
     let row = row_of(o);
-    with_host(vm, |h| row.read_dimension(h, Some(k))).map(Some)
+    let v = with_host(vm, |h| row.read_dimension(h, offset))?;
+    if !matches!(ctx, DimensionCtx::Read | DimensionCtx::Is)
+        && !matches!(v, Value::Reference(_) | Value::Object(_))
+    {
+        vm.raise(
+            8,
+            &format!(
+                "Indirect modification of overloaded element of {} has no effect",
+                o.class_name().to_string_lossy()
+            ),
+        )?;
+    }
+    Ok(Some(v))
 }
 
 fn row_write_dimension(vm: &mut Vm, _o: &Obj, k: Option<&Value>, _v: &Value) -> VmResult<bool> {

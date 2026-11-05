@@ -1,7 +1,8 @@
-//! A small zlib (RFC 1950) / DEFLATE (RFC 1951) decoder for the compressed
-//! client/server protocol (`CLIENT_COMPRESS`). Modelled on zlib's `puff.c`.
-//! The client never needs to compress: it may always send packets with an
-//! "uncompressed length" of 0, which the server accepts verbatim.
+//! A small zlib (RFC 1950) / DEFLATE (RFC 1951) codec for the compressed
+//! client/server protocol (`CLIENT_COMPRESS`). The decoder is modelled on
+//! zlib's `puff.c`; the encoder ([`compress`]) emits one fixed-Huffman block
+//! with greedy LZ77 matching, standing in for zlib `compress()` in
+//! `mysqlnd_pfc::encode` (ref: ext/mysqlnd/mysqlnd_protocol_frame_codec.c).
 
 /// Why a stream could not be decoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -333,6 +334,152 @@ pub fn compress_stored(data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// LSB-first bit writer (RFC 1951 section 3.1.1).
+struct BitWriter {
+    out: Vec<u8>,
+    buf: u64,
+    cnt: u32,
+}
+
+impl BitWriter {
+    /// Appends the low `n` bits of `val`, least significant first.
+    fn put(&mut self, val: u32, n: u32) {
+        self.buf |= u64::from(val) << self.cnt;
+        self.cnt += n;
+        while self.cnt >= 8 {
+            #[allow(clippy::cast_possible_truncation)]
+            self.out.push(self.buf as u8);
+            self.buf >>= 8;
+            self.cnt -= 8;
+        }
+    }
+
+    /// Appends a Huffman code of `len` (1..=15) bits, most significant
+    /// bit first.
+    fn put_code(&mut self, code: u32, len: u32) {
+        self.put(code.reverse_bits() >> (32 - len), len);
+    }
+
+    /// The fixed literal/length code of `sym` (RFC 1951 section 3.2.6).
+    fn put_litlen(&mut self, sym: u32) {
+        match sym {
+            0..=143 => self.put_code(0x30 + sym, 8),
+            144..=255 => self.put_code(0x190 + sym - 144, 9),
+            256..=279 => self.put_code(sym - 256, 7),
+            _ => self.put_code(0xC0 + sym - 280, 8),
+        }
+    }
+
+    /// A back-reference of `len` (3..=258) bytes, `dist` (1..=32768) back.
+    fn put_match(&mut self, len: usize, dist: usize) {
+        let li = LBASE
+            .iter()
+            .rposition(|&b| usize::from(b) <= len)
+            .unwrap_or(0);
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            self.put_litlen(257 + li as u32);
+            self.put((len - usize::from(LBASE[li])) as u32, u32::from(LEXT[li]));
+        }
+        let di = DBASE
+            .iter()
+            .rposition(|&b| usize::from(b) <= dist)
+            .unwrap_or(0);
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            self.put_code(di as u32, 5);
+            self.put((dist - usize::from(DBASE[di])) as u32, u32::from(DEXT[di]));
+        }
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        if self.cnt > 0 {
+            #[allow(clippy::cast_possible_truncation)]
+            self.out.push(self.buf as u8);
+        }
+        self.out
+    }
+}
+
+const WSIZE: usize = 32768;
+const HASH_BITS: u32 = 15;
+const MIN_MATCH: usize = 3;
+const MAX_MATCH: usize = 258;
+const MAX_CHAIN: usize = 64;
+
+fn hash3(d: &[u8]) -> usize {
+    ((usize::from(d[0]) << 10) ^ (usize::from(d[1]) << 5) ^ usize::from(d[2]))
+        & ((1 << HASH_BITS) - 1)
+}
+
+/// zlib `compress()` (as called by `mysqlnd_pfc::encode`): a zlib stream
+/// holding one fixed-Huffman DEFLATE block with greedy LZ77 matches over a
+/// 32 KiB window. The bytes differ from zlib's, but any inflater (the
+/// server's included) decodes them.
+#[must_use]
+pub fn compress(data: &[u8]) -> Vec<u8> {
+    let mut w = BitWriter {
+        out: Vec::with_capacity(data.len() / 2 + 16),
+        buf: 0,
+        cnt: 0,
+    };
+    w.out.extend_from_slice(&[0x78, 0x9c]);
+    // BFINAL = 1, BTYPE = 01 (fixed Huffman codes).
+    w.put(1, 1);
+    w.put(1, 2);
+    let mut head = vec![usize::MAX; 1 << HASH_BITS];
+    let mut prev = vec![usize::MAX; WSIZE];
+    let mut i = 0;
+    while i < data.len() {
+        let (mut best_len, mut best_dist) = (0, 0);
+        if i + MIN_MATCH <= data.len() {
+            let max = (data.len() - i).min(MAX_MATCH);
+            let mut cand = head[hash3(&data[i..])];
+            let mut chain = MAX_CHAIN;
+            while cand < i && i - cand <= WSIZE && chain > 0 {
+                let l = data[cand..]
+                    .iter()
+                    .zip(&data[i..i + max])
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                if l > best_len {
+                    best_len = l;
+                    best_dist = i - cand;
+                    if l == max {
+                        break;
+                    }
+                }
+                let next = prev[cand % WSIZE];
+                // A slot reused by a newer position ends the chain.
+                if next >= cand {
+                    break;
+                }
+                cand = next;
+                chain -= 1;
+            }
+        }
+        let step = if best_len >= MIN_MATCH {
+            w.put_match(best_len, best_dist);
+            best_len
+        } else {
+            w.put_litlen(u32::from(data[i]));
+            1
+        };
+        for p in i..i + step {
+            if p + MIN_MATCH <= data.len() {
+                let h = hash3(&data[p..]);
+                prev[p % WSIZE] = head[h];
+                head[h] = p;
+            }
+        }
+        i += step;
+    }
+    w.put_litlen(256);
+    let mut out = w.finish();
+    out.extend_from_slice(&adler32(data).to_be_bytes());
+    out
+}
+
 #[cfg(test)]
 #[allow(clippy::cast_possible_truncation, clippy::format_collect)]
 mod tests {
@@ -385,6 +532,38 @@ mod tests {
         let n = z.len();
         z[n - 1] ^= 1;
         assert_eq!(uncompress(&z, 0), Err(InflateError::Checksum));
+    }
+
+    #[test]
+    fn compress_roundtrip() {
+        let mut cases: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            b"a".to_vec(),
+            b"hello hello hello hello".to_vec(),
+            vec![b'x'; 100_000],
+        ];
+        // Pseudo-random bytes (no matches) and a long text with matches
+        // spanning more than one window.
+        let mut x: u32 = 12345;
+        cases.push(
+            (0..70_000)
+                .map(|_| {
+                    x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                    (x >> 16) as u8
+                })
+                .collect(),
+        );
+        cases.push(
+            (0..5000)
+                .map(|i| format!("row {i}: the quick brown fox {}\n", i % 97))
+                .collect::<String>()
+                .into_bytes(),
+        );
+        for data in cases {
+            let z = compress(&data);
+            assert_eq!(uncompress(&z, data.len()).unwrap(), data);
+        }
+        assert!(compress(&[b'x'; 100_000]).len() < 1000);
     }
 
     #[test]
