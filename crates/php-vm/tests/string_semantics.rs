@@ -105,3 +105,27 @@ fn folded_array_short_string_literals_are_interned() {
     assert!(out.contains("string(1) \"b\" interned\n"), "{out}");
     assert!(out.contains("string(3) \"abc\" refcount(1)\n"), "{out}");
 }
+
+/// A constant array operand of `.` is cast to string before the
+/// concatenation runs (`zend_compile_binary_op` emits `ZEND_CAST`), so its
+/// warning precedes the other operand's conversion; a variable array is
+/// converted in operand order (php-src `Zend/tests/operator_unsupported_types.phpt`).
+#[test]
+fn concat_casts_constant_array_operands_first() {
+    assert_eq!(
+        run(r#"<?php
+set_error_handler(function ($no, $str) { echo "W: $str\n"; });
+class T { function __toString(): string { echo "toString\n"; return "t"; } }
+try { $r = new stdClass . []; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$a = [];
+try { $r = new stdClass . $a; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo new T . [], "\n";
+echo [] . new T, "\n";
+"#),
+        "W: Array to string conversion\n\
+         Object of class stdClass could not be converted to string\n\
+         Object of class stdClass could not be converted to string\n\
+         W: Array to string conversion\ntoString\ntArray\n\
+         W: Array to string conversion\ntoString\nArrayt\n"
+    );
+}
