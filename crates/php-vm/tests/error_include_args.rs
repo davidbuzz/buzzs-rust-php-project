@@ -132,3 +132,15 @@ fn assert_callback_and_exception() {
         "Invalid callback nope, function \"nope\" not found or invalid function name"
     );
 }
+
+/// `ini_set()` takes any scalar even under `strict_types` and rejects
+/// other types itself (`Z_TYPE_P(new_value) > IS_STRING`, php-src
+/// `ext/standard/tests/general_functions/ini_set_types.phpt`).
+#[test]
+fn ini_set_value_types() {
+    let src = "<?php declare(strict_types=1);\nini_set('precision', 6); echo ini_get('precision'), \"\\n\";\ntry { ini_set('foo', []); } catch (TypeError $e) { echo $e->getMessage(); }";
+    assert_eq!(
+        run(src, &[]),
+        "6\nini_set(): Argument #2 ($value) must be of type string|int|float|bool|null"
+    );
+}

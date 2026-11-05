@@ -56,14 +56,14 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     if let Some(b) = vm.native_function("ini_set") {
         ORIG_INI_SET.with(|c| c.set(Some(b.handler)));
         vm.register_function(
-            "ini_set(string $option, string|int|float|bool|null $value): string|false",
+            "ini_set(string $option, mixed $value): string|false",
             ini_set_hook,
         );
     }
     if let Some(b) = vm.native_function("ini_alter") {
         ORIG_INI_ALTER.with(|c| c.set(Some(b.handler)));
         vm.register_function(
-            "ini_alter(string $option, string|int|float|bool|null $value): string|false",
+            "ini_alter(string $option, mixed $value): string|false",
             ini_alter_hook,
         );
     }

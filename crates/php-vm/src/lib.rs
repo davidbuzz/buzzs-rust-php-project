@@ -479,8 +479,14 @@ impl php_support::ini::IniParserCallback for DefineCollector {
             String::from_utf8_lossy(&v).into_owned(),
         ));
     }
-    fn pop_entry(&mut self, key: &[u8], value: php_support::ini::IniScalar, _offset: &[u8]) {
-        self.entry(key, Some(value));
+    /// `name[offset]=value` keeps its offset in the name (`ary[a]`) for
+    /// the SAPI's configuration hash (`ZEND_INI_PARSER_POP_ENTRY`).
+    fn pop_entry(&mut self, key: &[u8], value: php_support::ini::IniScalar, offset: &[u8]) {
+        let mut name = key.to_vec();
+        name.push(b'[');
+        name.extend_from_slice(offset);
+        name.push(b']');
+        self.entry(&name, Some(value));
     }
 }
 
@@ -554,5 +560,7 @@ mod cli_define_tests {
             one("error_reporting=E_ALL & ~E_DEPRECATED"),
             ("error_reporting".into(), "22527".into())
         );
+        assert_eq!(one("ary[a]=1"), ("ary[a]".into(), "1".into()));
+        assert_eq!(one("ary[]=x"), ("ary[]".into(), "x".into()));
     }
 }

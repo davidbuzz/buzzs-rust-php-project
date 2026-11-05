@@ -1027,6 +1027,18 @@ fn ini_get(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn ini_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = s(a, 0).to_string_lossy();
     let v = a.at(1);
+    // `Z_PARAM_ZVAL(new_value)` + `Z_TYPE_P(new_value) > IS_STRING`.
+    if matches!(
+        v,
+        Value::Array(_) | Value::Object(_) | Value::Resource(_) | Value::Reference(_)
+    ) {
+        return Err(super::util::type_error(
+            vm,
+            a,
+            2,
+            "must be of type string|int|float|bool|null",
+        ));
+    }
     let val: Vec<u8> = match &v {
         Value::Bool(b) => {
             if *b {
@@ -2373,7 +2385,7 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "ini_get(string $option): string|false", ini_get);
     reg(
         vm,
-        "ini_set(string $option, string|int|float|bool|null $value): string|false",
+        "ini_set(string $option, mixed $value): string|false",
         ini_set,
     );
     alias(vm, "ini_alter", "ini_set");
