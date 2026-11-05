@@ -213,3 +213,68 @@ A::missing();
 "#);
     assert_eq!(out, "B\nA\n");
 }
+
+#[test]
+fn redeclaration_rules_for_interfaces_constants_and_static_properties() {
+    let cases = [
+        (
+            "<?php\ninterface I {}\nclass C implements I, I {}\n",
+            "Fatal error: Class C cannot implement previously implemented interface I in t.php on line 3",
+        ),
+        (
+            "<?php\ninterface I {}\ninterface J extends I, I {}\n",
+            "Fatal error: Interface J cannot implement previously implemented interface I in t.php on line 3",
+        ),
+        (
+            "<?php\ninterface I {\n    protected const X = 1;\n}\n",
+            "Fatal error: Access type for interface constant I::X must be public in t.php on line 3",
+        ),
+        (
+            "<?php\nclass A { protected const X = 1; }\nclass B extends A { private const X = 2; }\n",
+            "Fatal error: Access level to B::X must be protected (as in class A) or weaker in t.php on line 3",
+        ),
+        (
+            "<?php\ninterface I { const X = 1; }\nclass B implements I { protected const X = 2; }\n",
+            "Fatal error: Access level to B::X must be public (as in interface I) in t.php on line 3",
+        ),
+        (
+            "<?php\nclass A { public $p; }\nclass B extends A { public static $p; }\n",
+            "Fatal error: Cannot redeclare non static A::$p as static B::$p in t.php on line 3",
+        ),
+        (
+            "<?php\nclass A { protected static $p; }\nclass B extends A { private static $p; }\n",
+            "Fatal error: Access level to B::$p must be protected (as in class A) or weaker in t.php on line 3",
+        ),
+    ];
+    for (src, expected) in cases {
+        let (status, out) = run_status(src);
+        assert_ne!(status, 0, "{src}");
+        assert!(out.contains(expected), "{src}: {out}");
+    }
+    assert_eq!(
+        run("<?php\nclass A { private $p; }\nclass B extends A { public static $p; }\nclass C { public static $q; }\nclass D extends C { public static $q; }\necho \"ok\\n\";\n"),
+        "ok\n"
+    );
+}
+
+#[test]
+fn method_visibility_errors_name_the_declaring_class_and_scope_call_wins() {
+    assert_eq!(
+        run(r#"<?php
+class A { function __call($n, $a) { echo "A::__call($n)\n"; } }
+class B extends A {
+    function __call($n, $a) { echo "B::__call($n)\n"; }
+    function t() { A::x(); parent::y(); }
+}
+(new B)->t();
+class P { private function m() {} private static function s() {} }
+class C extends P { function t() { $this->M(); } static function u() { C::s(); } }
+try { (new C)->t(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { C::u(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+class K { private function __construct() {} static function f() { return new D; } }
+class D extends K { function __construct() { parent::__construct(); } }
+try { K::f(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#),
+        "B::__call(x)\nB::__call(y)\nCall to private method P::M() from scope C\nCall to private method P::s() from scope C\nCannot call private K::__construct()\n"
+    );
+}
