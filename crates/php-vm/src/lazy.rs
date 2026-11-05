@@ -136,7 +136,7 @@ pub(crate) fn copy_stale_slots(from: &ObjectData, to: &ObjectData) {
         mark_props_built(to);
     }
     if let Some(s) = stale_slots(from) {
-        let prev = set_stale_slots(to, Some(s.as_ref().clone()));
+        let prev = set_stale_slots(to, Some(s.to_vec()));
         drop(prev);
     }
 }
@@ -159,8 +159,8 @@ fn separate_props(o: &Obj, name: &ZStr) {
             return;
         };
         // A declared property's slot is written in place.
-        let declared = d.class.prop_map.contains_key(name)
-            || d.class.props.iter().any(|p| p.name == *name);
+        let declared =
+            d.class.prop_map.contains_key(name) || d.class.props.iter().any(|p| p.name == *name);
         if !i.initializing || !i.props_shared || declared {
             return;
         }
