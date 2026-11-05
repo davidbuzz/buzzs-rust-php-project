@@ -1433,10 +1433,19 @@ impl Unserializer<'_> {
         };
         if candidate {
             let n = ZStr::from(name);
+            // `ce->properties_info` also holds the private properties a
+            // class inherits (under their plain name, nearest declaration
+            // first), which `prop_map` leaves out.
             if let Some(pi) = cls
                 .prop_map
                 .get(&n)
                 .filter(|p| p.flags & flags::STATIC == 0)
+                .or_else(|| {
+                    cls.props
+                        .iter()
+                        .rev()
+                        .find(|p| p.flags & flags::STATIC == 0 && p.name.as_bytes() == name)
+                })
             {
                 if pi.is_virtual() {
                     vm.docref(
@@ -2266,6 +2275,22 @@ mod tests {
              The script tried to modify a pr\n\
              The script tried to modify a pr\n\
              The script tried to call a meth\n"
+        );
+    }
+
+    #[test]
+    fn plain_keys_reach_inherited_private_properties() {
+        // `is_property_visibility_changed`: `properties_info` of C holds
+        // P's private properties under their plain names.
+        let out = run("<?php class P { private ?array $h = null; private $u; }\n\
+             #[AllowDynamicProperties] class C extends P {}\n\
+             var_dump(unserialize('O:1:\"C\":1:{s:1:\"u\";s:1:\"a\";}'));\n\
+             try { unserialize('O:1:\"C\":1:{s:1:\"h\";i:5;}'); }\n\
+             catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; }");
+        assert_eq!(
+            out,
+            "object(C)#1 (2) {\n  [\"h\":\"P\":private]=>\n  NULL\n  [\"u\":\"P\":private]=>\n  string(1) \"a\"\n}\n\
+             Cannot assign int to property P::$h of type ?array\n"
         );
     }
 
