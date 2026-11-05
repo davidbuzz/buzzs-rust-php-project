@@ -1661,12 +1661,17 @@ impl Vm {
                 &format!("{fname}(): never-returning {what} must not implicitly return"),
             ));
         }
-        let fname = func
-            .as_ref()
-            .map_or_else(String::new, |f| self.func_display(f, scope.as_ref()));
         if rt.is_void() {
             return Ok(Value::Null);
         }
+        // Return type errors print the scope and function name separately with `%s`.
+        let fname = func.as_ref().map_or_else(String::new, |f| {
+            let name = object::display_name(f.name());
+            match scope.as_ref() {
+                Some(c) => format!("{}::{name}", object::display_name(&c.name)),
+                None => name.to_string_lossy(),
+            }
+        });
         let tyname = rt.display(
             scope.as_ref().map(|s| &s.name),
             scope.as_ref().and_then(|s| s.parent_name()),

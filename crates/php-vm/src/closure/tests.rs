@@ -47,6 +47,54 @@ fn debug_info_statics_and_uses() {
 }
 
 #[test]
+fn named_method_closure_return_error_name_and_trace() {
+    let out = run(
+        "<?php\n\
+         class foo {\n\
+             public function bar(): callable {\n\
+                 $test = 'one';\n\
+                 return function() use ($test): array {\n\
+                     return null;\n\
+                 };\n\
+             }\n\
+         }\n\
+         $baz = new foo;\n\
+         $func = $baz->bar();\n\
+         try { $func(); } catch (TypeError $e) {\n\
+             echo $e->getMessage(), \"\\n\", $e->getTraceAsString(), \"\\n\";\n\
+         }\n",
+    );
+    assert_eq!(
+        out,
+        "foo::{closure:foo::bar():5}(): Return value must be of type array, null returned\n\
+         #0 t.php(12): foo->{closure:foo::bar():5}()\n\
+         #1 {main}\n"
+    );
+}
+
+#[test]
+fn anonymous_method_closure_return_error_name_and_trace() {
+    let out = run(
+        "<?php\n\
+         $obj = new class {\n\
+             public function bar(): callable {\n\
+                 return function(): array { return null; };\n\
+             }\n\
+         };\n\
+         $func = $obj->bar();\n\
+         try { $func(); } catch (TypeError $e) {\n\
+             echo $e->getMessage(), \"\\n\", $e->getTraceAsString(), \"\\n\";\n\
+         }\n",
+    );
+    assert_eq!(
+        out,
+        "class@anonymous::{closure:class@anonymous(): Return value must be of type array, null returned\n\
+         #0 t.php(8): class@anonymous->{closure:class@anonymous\0t.php:2$0::bar():4}()\n\
+         #1 {main}\n"
+    );
+}
+
+#[test]
 fn bind_warnings() {
     let out = run(
         "<?php class A { function m() {} static function s() {} } class B {}\n\
