@@ -20,9 +20,9 @@
 //! `zend_array_dup` semantics: references with refcount 1 are unwrapped).
 
 use crate::numeric::handle_numeric_str;
-use crate::sort::zend_sort;
+use crate::sort::{zend_sort, zend_sort_by, SortAccess};
 use crate::string::ZStr;
-use crate::value::Value;
+use crate::value::{PhpRef, Value};
 use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
@@ -1105,23 +1105,41 @@ impl HashTable {
 
     /// Port of `zend_hash_sort_internal`.
     fn sort_impl(&mut self, cmp: &mut SortCmp<'_>, renumber: bool) {
+        let Some(mut items) = self.sort_begin(renumber) else {
+            return;
+        };
+        zend_sort(&mut items, cmp);
+        self.sort_finish(items, renumber);
+    }
+
+    /// The first half of `zend_hash_sort_internal`: the early exits for
+    /// tables that need no sorting, then the buckets without holes, each
+    /// paired with its original position (`Z_EXTRA`, the stability
+    /// tie-break). `None` when there is nothing to sort.
+    fn sort_begin(&mut self, renumber: bool) -> Option<Vec<(Bucket, u32)>> {
         if self.num_elements <= 1 {
             if !renumber || self.num_elements == 0 {
-                return;
+                return None;
             }
             if self.kind == Kind::Packed && self.is_without_holes() {
                 self.internal_ptr = 0;
                 self.next_free = 1;
-                return;
+                return None;
             }
         }
-        let mut items: Vec<(Bucket, u32)> = std::mem::take(&mut self.data)
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .map(|(i, b)| (b, to_u32(i)))
-            .collect();
-        zend_sort(&mut items, cmp);
+        Some(
+            std::mem::take(&mut self.data)
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, b)| (b, to_u32(i)))
+                .collect(),
+        )
+    }
+
+    /// The second half of `zend_hash_sort_internal`: stores the sorted
+    /// buckets back, renumbering them or rebuilding the hash index.
+    fn sort_finish(&mut self, items: Vec<(Bucket, u32)>, renumber: bool) {
         self.internal_ptr = 0;
         let n = items.len();
         if renumber {
@@ -1144,6 +1162,54 @@ impl HashTable {
             }
             self.rehash_without_compaction();
         }
+    }
+
+    /// [`HashTable::sort_by`] for a table that the reference `bound` holds
+    /// while it is sorted (`zend_array_sort` on a by-reference argument) and
+    /// that the comparisons can reach through `bound`, e.g. because one of
+    /// its elements is `bound` itself.
+    ///
+    /// php-src sorts `arData` in place after `HT_HASH_RESET`
+    /// (`zend_hash_sort_internal`, which cites Zend/tests/bug63882_2.phpt),
+    /// so whatever reaches the table mid-sort sees its elements in their
+    /// current, half-sorted order while every key lookup in it misses. Before
+    /// each comparison `bound` is therefore made to hold such a view of the
+    /// table: the buckets in their current order (with the renumbering swap,
+    /// `zend_hash_bucket_renum_swap`, keys stay in place and only values
+    /// move) and an empty hash index. Once PHP code replaces the value of
+    /// `bound` (any write separates the shared table), views stop being
+    /// published and comparisons see whatever `bound` then holds.
+    ///
+    /// Returns whether `bound` still holds the table being sorted. When it
+    /// does not, php-src drops the sorted table, so the caller should not
+    /// store it.
+    pub fn sort_by_in_ref<F>(&mut self, bound: &PhpRef, mut cmp: F, renumber: bool) -> bool
+    where
+        F: FnMut(&ArrayKey, &Value, &ArrayKey, &Value) -> i32,
+    {
+        let Some(items) = self.sort_begin(renumber) else {
+            return true;
+        };
+        let n = items.len();
+        let slot_keys = if renumber {
+            items.iter().map(|(b, _)| b.key.clone()).collect()
+        } else {
+            Vec::new()
+        };
+        let mut live = LiveSort {
+            items,
+            slot_keys,
+            table_size: self.table_size,
+            next_free: self.next_free,
+            bound,
+            published: None,
+            attached: true,
+            cmp: &mut cmp,
+        };
+        zend_sort_by(&mut live, n);
+        let attached = live.attached && live.published.as_ref().is_none_or(|p| holds(bound, p));
+        self.sort_finish(live.items, renumber);
+        attached
     }
 
     /// `array_splice` core (`php_splice`): removes `length` elements starting
@@ -1423,6 +1489,103 @@ pub fn copy_for_insert(v: &Value) -> Value {
 
 /// Comparator over `(bucket, original position)` pairs used by sorting.
 type SortCmp<'a> = dyn FnMut(&(Bucket, u32), &(Bucket, u32)) -> i32 + 'a;
+
+/// Whether `r` holds exactly the table `a`.
+fn holds(r: &PhpRef, a: &ZArray) -> bool {
+    r.try_borrow()
+        .is_some_and(|v| matches!(&*v, Value::Array(b) if ZArray::ptr_eq(a, b)))
+}
+
+/// The table of [`HashTable::sort_by_in_ref`] being sorted in place: the
+/// comparisons and swaps of `zend_sort` over its buckets, publishing the
+/// live view into the bound reference before every comparison.
+struct LiveSort<'a, F: ?Sized> {
+    /// `(bucket, original position)` in their current order.
+    items: Vec<(Bucket, u32)>,
+    /// With renumbering, the keys by position (they do not move).
+    slot_keys: Vec<ArrayKey>,
+    table_size: u32,
+    next_free: i64,
+    bound: &'a PhpRef,
+    /// The view `bound` was last given.
+    published: Option<ZArray>,
+    /// Whether `bound` still holds the table (no PHP code replaced it).
+    attached: bool,
+    cmp: &'a mut F,
+}
+
+impl<F> LiveSort<'_, F>
+where
+    F: FnMut(&ArrayKey, &Value, &ArrayKey, &Value) -> i32 + ?Sized,
+{
+    /// The table as php-src's `arData` stands mid-sort: buckets in their
+    /// current order, no holes, and a reset hash index (every lookup
+    /// misses).
+    fn view(&self) -> HashTable {
+        let data = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, (b, _))| {
+                Some(Bucket {
+                    key: self.slot_keys.get(i).unwrap_or(&b.key).clone(),
+                    val: b.val.clone(),
+                    next: INVALID,
+                })
+            })
+            .collect();
+        HashTable {
+            data,
+            index: vec![INVALID; (self.table_size as usize) * 2],
+            num_elements: to_u32(self.items.len()),
+            table_size: self.table_size,
+            next_free: self.next_free,
+            internal_ptr: 0,
+            kind: Kind::Hash,
+            iterators: Vec::new(),
+        }
+    }
+
+    /// Makes `bound` hold the current view, unless PHP code replaced its
+    /// value since the last one.
+    fn publish(&mut self) {
+        if !self.attached {
+            return;
+        }
+        if let Some(prev) = &self.published {
+            if !holds(self.bound, prev) {
+                self.attached = false;
+                self.published = None;
+                return;
+            }
+        }
+        let view = ZArray::from_table(self.view());
+        let old = self.bound.set(Value::Array(view.clone()));
+        self.published = Some(view);
+        drop(old);
+    }
+}
+
+impl<F> SortAccess for LiveSort<'_, F>
+where
+    F: FnMut(&ArrayKey, &Value, &ArrayKey, &Value) -> i32 + ?Sized,
+{
+    fn compare(&mut self, a: usize, b: usize) -> i32 {
+        self.publish();
+        let Self { items, cmp, .. } = self;
+        let (x, y) = (&items[a], &items[b]);
+        let r = cmp(&x.0.key, &x.0.val, &y.0.key, &y.0.val);
+        if r != 0 {
+            r
+        } else {
+            i32::from(x.1 > y.1) - i32::from(x.1 < y.1)
+        }
+    }
+
+    fn swap(&mut self, a: usize, b: usize) {
+        self.items.swap(a, b);
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -1997,5 +2160,104 @@ mod tests {
                 let _ = next_free;
             }
         }
+    }
+
+    /// `"k=v,..."` for an array of integers.
+    fn render(t: &HashTable) -> String {
+        t.iter()
+            .map(|(k, v)| {
+                let k = String::from_utf8_lossy(&k.to_bytes()).into_owned();
+                match v {
+                    Value::Int(i) => format!("{k}={i}"),
+                    _ => format!("{k}=?"),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn int_cmp(a: &Value, b: &Value) -> i32 {
+        match (a, b) {
+            (Value::Int(x), Value::Int(y)) => i32::from(x > y) - i32::from(x < y),
+            _ => 0,
+        }
+    }
+
+    fn xyz() -> HashTable {
+        let mut t = HashTable::new();
+        t.insert("x", Value::Int(3));
+        t.insert("y", Value::Int(1));
+        t.insert("z", Value::Int(2));
+        t
+    }
+
+    /// Runs `sort_by_in_ref` on `xyz()` bound to a reference, logging what
+    /// the reference holds at every comparison and whether a key lookup in
+    /// it succeeds.
+    fn live_sort_log(renumber: bool) -> (HashTable, bool, Vec<String>) {
+        let mut t = xyz();
+        let r = PhpRef::new(Value::Array(ZArray::from_table(t.clone())));
+        let mut log = Vec::new();
+        let attached = t.sort_by_in_ref(
+            &r,
+            |_, a, _, b| {
+                if let Value::Array(live) = r.get() {
+                    let found = live.get(&ArrayKey::from("x")).is_some();
+                    log.push(format!("{} found={found}", render(&live)));
+                }
+                int_cmp(a, b)
+            },
+            renumber,
+        );
+        (t, attached, log)
+    }
+
+    #[test]
+    fn sort_in_ref_shows_the_live_table_without_lookups() {
+        // sort3: compares (3,1), (2,1), swaps x/y, compares (3,2), swaps.
+        let (t, attached, log) = live_sort_log(false);
+        assert!(attached);
+        assert_eq!(
+            log,
+            [
+                "x=3,y=1,z=2 found=false",
+                "x=3,y=1,z=2 found=false",
+                "y=1,x=3,z=2 found=false",
+            ]
+        );
+        assert_eq!(render(&t), "y=1,z=2,x=3");
+        assert!(matches!(t.get(&ArrayKey::from("x")), Some(Value::Int(3))));
+    }
+
+    #[test]
+    fn sort_in_ref_renumber_keeps_keys_in_place() {
+        // zend_hash_bucket_renum_swap moves values only.
+        let (t, attached, log) = live_sort_log(true);
+        assert!(attached);
+        assert_eq!(log[2], "x=1,y=3,z=2 found=false");
+        assert_eq!(render(&t), "0=1,1=2,2=3");
+    }
+
+    #[test]
+    fn sort_in_ref_detaches_when_the_reference_is_replaced() {
+        let mut t = xyz();
+        let r = PhpRef::new(Value::Array(ZArray::from_table(t.clone())));
+        let mut calls = 0;
+        let attached = t.sort_by_in_ref(
+            &r,
+            |_, a, _, b| {
+                calls += 1;
+                if calls == 1 {
+                    r.set(Value::Int(7));
+                }
+                int_cmp(a, b)
+            },
+            false,
+        );
+        assert!(!attached);
+        assert_eq!(calls, 3);
+        // No further views were published over the PHP code's write.
+        assert!(matches!(r.get(), Value::Int(7)));
+        assert_eq!(render(&t), "y=1,z=2,x=3");
     }
 }
