@@ -957,6 +957,31 @@ impl Vm {
         destructed
     }
 
+    /// `ZEND_TRY_ASSIGN_REF_*` on by-reference argument `n`: like
+    /// [`Vm::try_array_init_arg`], the variable is set to `null` before
+    /// its old value is destroyed (`zval_ptr_safe_dtor`), so a destructor
+    /// running then sees `null` (GH-17442); afterwards it holds `v`. A
+    /// typed reference is assigned through [`Args::set_ref`].
+    ///
+    /// # Errors
+    /// An exception thrown by a destructor of the old value (the variable
+    /// still ends up holding `v`).
+    pub fn try_assign_ref_arg(&mut self, a: &Args, n: usize, v: Value) -> VmResult<()> {
+        let Some(r) = a.reference(n) else {
+            return Ok(());
+        };
+        if crate::typed_refs::has_type_sources(&r) {
+            a.set_ref(n, v);
+            return Ok(());
+        }
+        let old = r.set(Value::Null);
+        drop(old);
+        let destructed = self.run_released_destructors();
+        let old = r.set(v);
+        drop(old);
+        destructed
+    }
+
     /// Calls a callable resolved by [`Vm::resolve_callable`] with
     /// positional arguments (`zend_call_function` with a cached
     /// `zend_fcall_info_cache`).

@@ -963,6 +963,17 @@ mod tests {
     }
 
     #[test]
+    fn by_ref_output_is_null_while_old_value_destructs() {
+        // GH-17442: `zval_ptr_safe_dtor` in `ZEND_TRY_ASSIGN_REF_*`.
+        let out = run("<?php $map = new WeakMap; $obj = new stdClass;\n\
+             $map[$obj] = new class { function __destruct() { global $obj, $l;\n\
+             var_dump($obj, $l); throw new Exception('T'); } };\n\
+             try { headers_sent($obj, $l); } catch (Exception $e) { echo $e->getMessage(), \"\\n\"; }\n\
+             var_dump($obj, $l);");
+        assert_eq!(out, "NULL\nNULL\nT\nstring(0) \"\"\nint(0)\n");
+    }
+
+    #[test]
     fn weakmap_clone_and_debug_dump() {
         let out = run(
             "<?php $m = new WeakMap; $o = new stdClass; $m[$o] = 1; $c = clone $m; unset($o);\n\

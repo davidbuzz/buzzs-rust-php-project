@@ -227,12 +227,20 @@ fn headers_sent(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     } else {
         (ZStr::empty(), 0)
     };
+    // `ZEND_TRY_ASSIGN_REF_STRING`/`_LONG`: each old value is destroyed
+    // after its variable became null; a destructor exception surfaces
+    // once both outputs are assigned.
+    let mut thrown = Ok(());
     if a.has(0) {
-        a.set_ref(0, Value::Str(file));
+        thrown = vm.try_assign_ref_arg(a, 0, Value::Str(file));
     }
     if a.has(1) {
-        a.set_ref(1, Value::Int(i64::from(line)));
+        let r = vm.try_assign_ref_arg(a, 1, Value::Int(i64::from(line)));
+        if thrown.is_ok() {
+            thrown = r;
+        }
     }
+    thrown?;
     Ok(Value::Bool(sent))
 }
 
