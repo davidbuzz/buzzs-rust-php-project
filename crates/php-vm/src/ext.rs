@@ -951,6 +951,20 @@ impl Vm {
         destructed
     }
 
+    /// Calls a callable resolved by [`Vm::resolve_callable`] with
+    /// positional arguments (`zend_call_function` with a cached
+    /// `zend_fcall_info_cache`).
+    ///
+    /// # Errors
+    /// Whatever the callee throws.
+    pub fn call_resolved(
+        &mut self,
+        call: crate::vm::PendingCall,
+        args: Vec<Value>,
+    ) -> VmResult<Value> {
+        self.call_resolved_named(call, args, Vec::new())
+    }
+
     /// Creates an instance of a class (without calling the constructor).
     pub fn new_object(&mut self, class: &Rc<Class>) -> VmResult<Obj> {
         self.instantiate_unchecked(class)

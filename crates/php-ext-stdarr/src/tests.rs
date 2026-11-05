@@ -436,3 +436,27 @@ fn memory_and_stack_limits() {
         "{limited}"
     );
 }
+
+/// `Z_PARAM_FUNC`: method callables are resolved in the calling scope,
+/// with the `self`/`parent`/`static` deprecations raised once per call of
+/// the array function.
+#[test]
+fn keyword_callables_resolve_in_calling_scope() {
+    let out = run(r#"
+class A { public function foo($x) { echo static::class, $x, "\n"; return $x; } }
+class B extends A {
+    function t() {
+        array_map("parent::foo", [1, 2]);
+        array_map(["self", "foo"], [3]);
+        array_map([$this, "A::foo"], [4]);
+    }
+}
+(new B)->t();
+"#);
+    assert_eq!(
+        out,
+        "\nDeprecated: Use of \"parent\" in callables is deprecated in test.php on line 6\nB1\nB2\n\
+         \nDeprecated: Use of \"self\" in callables is deprecated in test.php on line 7\nB3\n\
+         \nDeprecated: Callables of the form [\"B\", \"A::foo\"] are deprecated in test.php on line 8\nB4\n"
+    );
+}

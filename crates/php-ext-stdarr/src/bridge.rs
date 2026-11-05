@@ -4,6 +4,7 @@
 use php_runtime::{ArrayKey, PhpRef, RtResult, Value, ZStr};
 use php_stdarr::OwnedArgs;
 use php_vm::ext::{Args, VmResult};
+use php_vm::vm::PendingCall;
 use php_vm::Vm;
 
 /// Lifts a php-stdarr result into the VM.
@@ -13,11 +14,40 @@ pub fn rt<T>(vm: &mut Vm, r: RtResult<T>) -> VmResult<T> {
 
 /// A php-stdarr callback calling the PHP callable `cb`. The arguments are
 /// moved into the call (`OwnedArgs`), so the callee sees PHP's refcounts.
+///
+/// `"C::m"` and array callables are resolved once, in the calling scope,
+/// like `Z_PARAM_FUNC`'s `zend_is_callable_ex` (which accepts
+/// `self`/`parent`/`static` and raises their deprecations), and the cached
+/// call is reused; plain function names and closures are called directly.
 pub fn callback(cb: Value) -> OwnedArgs<impl FnMut(&mut Vm, Vec<Value>) -> RtResult<Value>> {
+    let mut resolve = needs_resolution(&cb);
+    let mut resolved: Option<PendingCall> = None;
     OwnedArgs(move |vm: &mut Vm, args: Vec<Value>| {
-        vm.call_value(&cb, args)
-            .map_err(|t| vm.runtime_error_from(t))
+        if resolve {
+            resolve = false;
+            match vm.resolve_callable(&cb) {
+                Ok(Ok(call)) => resolved = Some(call),
+                // Not callable that way: the direct path reports it.
+                Ok(Err(_)) => {}
+                Err(t) => return Err(vm.runtime_error_from(t)),
+            }
+        }
+        let r = match &resolved {
+            Some(call) => vm.call_resolved(call.clone(), args),
+            None => vm.call_value(&cb, args),
+        };
+        r.map_err(|t| vm.runtime_error_from(t))
     })
+}
+
+/// Whether a callable names a method (`"C::m"`, `[class_or_object, m]`),
+/// whose class part depends on the calling scope.
+fn needs_resolution(cb: &Value) -> bool {
+    match cb {
+        Value::Str(s) => s.as_bytes().windows(2).any(|w| w == b"::"),
+        Value::Array(_) => true,
+        _ => false,
+    }
 }
 
 /// The reference bound to by-reference argument `n` (a fresh reference
