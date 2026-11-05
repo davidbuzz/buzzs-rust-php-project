@@ -1153,6 +1153,17 @@ impl Vm {
                         self.error(i64::from(*level), &m)?;
                         Flow::Next
                     }
+                    Op::ConstPropCheck { obj, name, dst } => {
+                        let n = self.read(*name)?;
+                        let n = self.to_zstr(&n)?;
+                        self.set_tmp(*dst, Value::Str(n));
+                        if let Value::Object(o) = self.read(*obj)? {
+                            if !object::class_of(&o).is_enum() {
+                                return Err(self.non_enum_const_prop());
+                            }
+                        }
+                        Flow::Next
+                    }
                     Op::AssertCheck { dst, skip } => {
                         let a = self.ini.get_long("zend.assertions");
                         if a != 1 {
@@ -1576,6 +1587,16 @@ impl Vm {
     }
 
     /// Creates an exception of an internal class and returns the throw.
+    /// `Fetching properties on non-enums in constant expressions is not
+    /// allowed` (`zend_ast_evaluate_ex`, `ZEND_AST_PROP`).
+    #[cold]
+    fn non_enum_const_prop(&mut self) -> Throw {
+        self.make_throw(
+            "Error",
+            "Fetching properties on non-enums in constant expressions is not allowed",
+        )
+    }
+
     pub(crate) fn make_throw(&mut self, class: &str, msg: &str) -> Throw {
         match self.create_exception(class, msg, 0) {
             Ok(o) => Throw::Exception(o),

@@ -758,6 +758,32 @@ impl Compiler {
         })
     }
 
+    /// A property fetch in a constant expression (`ZEND_AST_PROP` of
+    /// `zend_ast_evaluate_ex`): the object is fetched, then the name is
+    /// evaluated, then non-enum objects are rejected.
+    #[cold]
+    fn const_prop_place(&mut self, p: Place, name: &MemberName) -> CResult<Place> {
+        let direct = match &p.base {
+            PlaceBase::Value(op) if p.segs.is_empty() => Some(*op),
+            _ => None,
+        };
+        let v = match direct {
+            Some(op) => op,
+            None => self.fetch_place(p, FetchMode::Read),
+        };
+        let n = self.member_name(name)?;
+        let dst = self.tmp();
+        self.emit(Op::ConstPropCheck {
+            obj: Compiler::keep(v),
+            name: n,
+            dst,
+        });
+        Ok(Place {
+            base: PlaceBase::Value(v),
+            segs: vec![Seg::Prop(Operand::Tmp(dst))],
+        })
+    }
+
     /// Compiles a writable expression into a place (offsets evaluated now).
     pub(crate) fn compile_place(&mut self, e: &Expr, _for_unset: bool) -> CResult<Place> {
         self.f().line = e.span.line;
@@ -852,6 +878,9 @@ impl Compiler {
                         base: PlaceBase::Value(v),
                         segs: Vec::new(),
                     };
+                }
+                if self.in_evaluated_const_expr() {
+                    return self.const_prop_place(p, name);
                 }
                 let n = self.member_name(name)?;
                 p.segs.push(Seg::Prop(n));

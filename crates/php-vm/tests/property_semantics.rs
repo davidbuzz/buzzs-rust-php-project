@@ -855,3 +855,42 @@ var_dump(get_object_vars(new FallbackVars), get_object_vars(new EmptyVars));
         b"native table failure\narray(1) {\n  [0]=>\n  int(42)\n}\narray(0) {\n}\n"
     );
 }
+
+/// `ZEND_AST_PROP` in `zend_ast_evaluate_ex`: constant expressions (global
+/// constants and parameter defaults included) only fetch properties of
+/// enum cases, after converting the name; closure bodies are not affected.
+#[test]
+fn constant_expression_property_fetch_requires_enum() {
+    let out = run(r#"<?php
+class A { public $prop = 42; }
+class B {}
+enum E: int { case X = 1; }
+function f($p = (new A)->prop) {}
+function h($p = (new A)->{new B}) {}
+function g($c = static function () { return (new A)->prop; }) { return $c(); }
+foreach (['f', 'f', 'h'] as $fn) {
+    try { $fn(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+const V = E::X->value;
+const N = (null)?->prop;
+echo V, g(), N === null ? "null" : "set", "\n";
+const P = (new A)?->prop;
+echo "unreachable\n";
+"#);
+    assert!(
+        out.starts_with(
+            "Fetching properties on non-enums in constant expressions is not allowed\n\
+             Fetching properties on non-enums in constant expressions is not allowed\n\
+             Object of class B could not be converted to string\n\
+             142null\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "Uncaught Error: Fetching properties on non-enums in constant expressions is not allowed in t.php:14"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("unreachable"), "{out}");
+}

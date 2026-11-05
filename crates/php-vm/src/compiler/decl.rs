@@ -607,8 +607,10 @@ impl Compiler {
             } else if let Some(d) = &p.default {
                 let at = self.emit(Op::RecvInit { n, cv, skip: 0 });
                 let saved = std::mem::replace(&mut self.in_const_default, true);
+                let depth = std::mem::replace(&mut self.inline_const_depth, self.fns.len());
                 let v = self.compile_expr(d);
                 self.in_const_default = saved;
+                self.inline_const_depth = depth;
                 let v = v?;
                 self.f().line = p.span.line;
                 self.emit(Op::RecvDefault { n, cv, val: v });

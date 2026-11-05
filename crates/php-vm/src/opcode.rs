@@ -530,6 +530,14 @@ pub enum Op {
     /// `assert()`: when assertions are disabled at runtime, stores `true`
     /// in `dst` and jumps to `skip`.
     AssertCheck { dst: u32, skip: Label },
+    /// The checks of `ZEND_AST_PROP` in `zend_ast_evaluate_ex`: converts
+    /// `name` to a string (into `dst`), then throws when the (kept) `obj`
+    /// of a constant-expression property fetch is a non-enum object.
+    ConstPropCheck {
+        obj: Operand,
+        name: Operand,
+        dst: u32,
+    },
 }
 
 /// A try/catch/finally region.
