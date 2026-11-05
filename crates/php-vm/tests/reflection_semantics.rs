@@ -1,6 +1,8 @@
 //! End-to-end checks of reflection (and closely related engine builtins)
 //! against the outputs of the php-src `ext/reflection` `.phpt` tests.
 
+use php_runtime::Value;
+use php_vm::ext::{Extension, ModuleBuilder};
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;
@@ -242,5 +244,46 @@ foreach ([Q::class, ErrorException::class] as $c) {
 }
 "#),
         "b a \nmessage code file line severity \n"
+    );
+}
+
+/// An extension with internal defaults that name (deprecated) constants.
+struct Defaults;
+
+impl Extension for Defaults {
+    fn name(&self) -> &'static str {
+        "reflection_defaults_test"
+    }
+
+    fn register(&self, module: &mut ModuleBuilder<'_>) {
+        module.constant("RD_A", Value::Int(1));
+        module.constant("RD_B", Value::Int(4));
+        module.constant_deprecated("RD_OLD", Value::Int(2), "8.4", "use RD_A");
+        module.function(
+            "rd_flags(int $flags = RD_A|RD_B, int $old = RD_OLD): int",
+            |_vm, _args| Ok(Value::Int(0)),
+        );
+    }
+}
+
+/// internal_parameter_default_value/check_all.phpt: flag combinations
+/// evaluate to their bitwise or, and deprecated constants warn.
+#[test]
+fn internal_defaults_evaluate_flags_and_deprecated_constants() {
+    let sink = Sink::default();
+    let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &[&Defaults]);
+    vm.run_script(
+        br"<?php
+foreach ((new ReflectionFunction('rd_flags'))->getParameters() as $p) {
+    var_dump($p->getDefaultValue());
+}
+",
+        "t.php",
+    );
+    drop(vm);
+    let output = String::from_utf8(sink.0.borrow().clone()).expect("UTF-8 output");
+    assert_eq!(
+        output,
+        "int(5)\n\nDeprecated: Constant RD_OLD is deprecated since 8.4, use RD_A in t.php on line 3\nint(2)\n"
     );
 }
