@@ -107,15 +107,28 @@ fn noop_construct(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
-fn sensitive_value_construct(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+/// `SensitiveParameterValue::__construct()`: initializes the private
+/// readonly `$value` (property slot 0, Zend/zend_attributes.c).
+fn sensitive_value_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
-    crate::object::set_internal(&o, a.at(0));
+    let d = crate::object::data(&o);
+    if d.slots.borrow().first().is_some_and(Option::is_some) {
+        return Err(vm.make_throw(
+            "Error",
+            "Cannot modify readonly property SensitiveParameterValue::$value",
+        ));
+    }
+    if let Some(slot) = d.slots.borrow_mut().first_mut() {
+        *slot = Some(a.at(0));
+    }
     Ok(Value::Null)
 }
 
 fn sensitive_value_get(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
-    Ok(crate::object::internal::<Value, _>(&o, |v| v.clone()).unwrap_or_default())
+    let d = crate::object::data(&o);
+    let v = d.slots.borrow().first().and_then(|s| s.as_ref().map(Value::deref));
+    Ok(v.unwrap_or_default())
 }
 
 fn sensitive_value_debug_info(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -268,7 +281,8 @@ pub(crate) fn register(vm: &mut Vm) {
         )
         .register(vm);
     ClassBuilder::new("SensitiveParameterValue")
-        .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE)
+        .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE | cflags::NO_DYNAMIC_PROPERTIES)
+        .prop("value", flags::PRIVATE | flags::READONLY, Some("mixed"), None)
         .method("__construct(mixed $value)", PUB, sensitive_value_construct)
         .method("getValue(): mixed", PUB, sensitive_value_get)
         .method("__debugInfo(): array", PUB, sensitive_value_debug_info)

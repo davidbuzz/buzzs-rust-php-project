@@ -136,3 +136,25 @@ array(2) {
 "#
     );
 }
+
+/// `SensitiveParameterValue` keeps its value in the private readonly
+/// `$value` property (Zend/zend_attributes.stub.php), so clones and
+/// reflection see it, and it is `@strict-properties`.
+#[test]
+fn sensitive_parameter_value_is_a_readonly_property() {
+    let src = r#"<?php
+$v = new SensitiveParameterValue('secret');
+$c = clone $v;
+echo $c->getValue(), "\n";
+echo (new ReflectionProperty($v, 'value'))->getValue($v), "\n";
+try { $v->foo = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { $v->__construct('x'); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+function s(#[\SensitiveParameter] $p) { return debug_backtrace()[0]['args'][0]; }
+echo s('pw')->getValue(), "\n";
+var_dump($v);
+"#;
+    assert_eq!(
+        run(src),
+        "secret\nsecret\nCannot create dynamic property SensitiveParameterValue::$foo\nCannot modify readonly property SensitiveParameterValue::$value\npw\nobject(SensitiveParameterValue)#1 (0) {\n}\n"
+    );
+}

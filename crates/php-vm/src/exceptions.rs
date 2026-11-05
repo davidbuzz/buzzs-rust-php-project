@@ -438,7 +438,10 @@ impl Vm {
             let v = match (&sensitive_cls, sensitive) {
                 (Some(cls), true) => match self.instantiate_unchecked(cls) {
                     Ok(o) => {
-                        object::set_internal(&o, v);
+                        // The private readonly `$value` (slot 0).
+                        if let Some(slot) = object::data(&o).slots.borrow_mut().first_mut() {
+                            *slot = Some(v);
+                        }
                         Value::Object(o)
                     }
                     Err(_) => Value::Null,
