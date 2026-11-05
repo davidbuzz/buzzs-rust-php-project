@@ -309,3 +309,34 @@ if (true) { function nested() {} class C extends A {} }",
         ]
     );
 }
+
+#[test]
+fn delegating_generators_are_not_observed_while_the_leaf_runs() {
+    // ext/zend_test/tests/observer_generator_03.phpt
+    let log = observe(
+        r"<?php
+function inner() { yield 1; yield 2; }
+function outer() { yield 0; yield from inner(); }
+foreach (outer() as $v) {}
+",
+        false,
+    );
+    let begins: Vec<_> = log
+        .iter()
+        .filter(|e| e.starts_with("begin ") && (e.contains("inner") || e.contains("outer")))
+        .cloned()
+        .collect();
+    // `yield 0`; `yield from` (outer ends at the delegation); inner's two
+    // yields and its return; outer resumed to finish.
+    assert_eq!(
+        begins,
+        [
+            "begin outer",
+            "begin outer",
+            "begin inner",
+            "begin inner",
+            "begin inner",
+            "begin outer",
+        ]
+    );
+}

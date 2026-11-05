@@ -751,8 +751,9 @@ impl Vm {
             })
             .flatten();
             if let Some(f) = frame {
+                // Placeholders only: observers see the leaf generator
+                // run, not the ones delegating to it.
                 self.frames.push(*f);
-                self.observer_begin_top();
                 lent.push(g);
             }
         }
