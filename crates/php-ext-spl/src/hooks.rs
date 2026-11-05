@@ -371,7 +371,10 @@ fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIt
             "An iterator cannot be used with foreach by reference",
         ));
     }
-    let it = with_host(vm, |host| php_spl::iter::get_iterator(host, o, by_ref))?;
+    // The VM's `foreach` reserves the iterator's object handle itself.
+    let it = with_host(vm, |host| {
+        php_spl::iter::get_iterator_unhandled(host, o, by_ref)
+    })?;
     Ok(Box::new(SplNativeIter::new(it)))
 }
 

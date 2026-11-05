@@ -376,6 +376,110 @@ fn foreach_over_spl_objects_numbers_handles_like_zend() {
     assert_eq!(out, "4,3\np=1\n");
 }
 
+/// `id()` in the handle-numbering scripts below: the handle a new object
+/// gets (it is freed again at once).
+const NEXT_ID: &str = "<?php function id() { return spl_object_id(new stdClass); }\n";
+
+fn run_ids(code: &str) -> String {
+    run(&format!("{NEXT_ID}{code}"))
+}
+
+#[test]
+fn dual_iterator_inner_iterator_takes_a_handle() {
+    // `spl_dual_it_construct` keeps a `get_iterator()` iterator (#3), freed
+    // before the inner object and the dual iterator (`free_storage`).
+    let out = run_ids(
+        r#"$it = new IteratorIterator(new ArrayIterator([1]));
+echo id(), "\n";
+unset($it);
+$x = new stdClass; $y = new stdClass; $z = new stdClass;
+echo spl_object_id($x), spl_object_id($y), spl_object_id($z), "\n";
+"#,
+    );
+    assert_eq!(out, "4\n123\n");
+}
+
+#[test]
+fn recursive_iterator_levels_take_handles() {
+    // One iterator per level, plus the `foreach` iterator; an exhausted
+    // level frees its object, then its iterator.
+    let out = run_ids(
+        r#"$r = new RecursiveIteratorIterator(new RecursiveArrayIterator([1, [2, [3]], 4]));
+echo id(), "\n";
+foreach ($r as $v) { echo $v, "@", $r->getDepth(), "=", id(), "\n"; }
+echo id(), "\n";
+"#,
+    );
+    assert_eq!(out, "4\n1@0=5\n2@1=7\n3@2=9\n4@0=6\n4\n");
+}
+
+#[test]
+fn foreach_iterator_release_truncates_recursive_levels() {
+    // `spl_recursive_it_dtor`: leaving the loop early frees the levels below
+    // the top one (each iterator before its object), then the loop's
+    // iterator.
+    let out = run_ids(
+        r#"$r = new RecursiveIteratorIterator(new RecursiveArrayIterator([1, [2, [3]], 4]));
+foreach ($r as $v) { if ($v == 3) break; }
+echo $r->getDepth(), " ", id(), "\n";
+$x = new stdClass; $y = new stdClass; $z = new stdClass;
+echo spl_object_id($x), spl_object_id($y), spl_object_id($z), "\n";
+"#,
+    );
+    assert_eq!(out, "0 4\n456\n");
+}
+
+#[test]
+fn recursive_iterator_rewind_and_free_release_levels_in_zend_order() {
+    let out = run_ids(
+        r#"$r = new RecursiveIteratorIterator(new RecursiveArrayIterator([1, [2, [3]], 4]));
+$r->rewind(); $r->next(); $r->next();
+echo $r->getDepth(), " ", id(), "\n";
+$r->rewind();
+$x = new stdClass; $y = new stdClass; $z = new stdClass;
+echo spl_object_id($x), spl_object_id($y), spl_object_id($z), "\n";
+"#,
+    );
+    assert_eq!(out, "2 8\n456\n");
+    let out = run_ids(
+        r#"$r = new RecursiveIteratorIterator(new RecursiveArrayIterator([1, [2, [3]], 4]));
+$r->rewind(); $r->next(); $r->next();
+unset($r);
+$a = []; for ($i = 0; $i < 6; $i++) { $a[] = new stdClass; echo spl_object_id(end($a)); }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "123456\n");
+}
+
+#[test]
+fn append_and_internal_iterators_take_handles() {
+    let out = run_ids(
+        r#"$ap = new AppendIterator();
+$ap->append(new ArrayIterator([1]));
+$ap->append(new ArrayIterator([2]));
+echo id(), "\n";
+foreach ($ap as $v) { echo $v, "=", id(), "\n"; }
+unset($ap);
+$a = []; for ($i = 0; $i < 6; $i++) { $a[] = new stdClass; echo spl_object_id(end($a)); }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "7\n1=8\n2=8\n126437\n");
+    // `zend_create_internal_iterator_zval`: the wrapped iterator's handle
+    // comes before the `InternalIterator`'s and is freed first.
+    let out = run_ids(
+        r#"$f = SplFixedArray::fromArray([1]);
+$gi = $f->getIterator();
+echo spl_object_id($gi), " ", id(), "\n";
+unset($gi);
+$x = new stdClass; $y = new stdClass; $z = new stdClass;
+echo spl_object_id($x), spl_object_id($y), spl_object_id($z), "\n";
+"#,
+    );
+    assert_eq!(out, "3 4\n324\n");
+}
+
 #[test]
 fn array_object_element_references_match_zend() {
     // A compound assignment leaves no visible reference in a wrapped

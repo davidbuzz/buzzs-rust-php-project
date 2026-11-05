@@ -343,6 +343,10 @@ impl SplHost for Interp {
         class_info(&tobj(obj).class)
     }
 
+    fn reserve_iterator_handle(&mut self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(IterHandle::reserve()))
+    }
+
     fn new_internal_iterator(&mut self, it: Box<dyn ObjectIterator>) -> RtResult<Value> {
         let cls = self
             .find_class(b"InternalIterator")

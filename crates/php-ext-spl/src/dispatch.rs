@@ -556,7 +556,12 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             // `zend_create_internal_iterator_zval` over the class's own
             // iterator: `php-spl` resolves it through `get_iterator`, which
             // re-enters a user `getIterator()` override (infinite recursion).
-            let it = Box::new(php_spl::fixedarray::FixedArrayIter::new(obj, st));
+            // `spl_fixedarray_get_iterator` takes its own object handle
+            // (`zend_iterator_init`) before the `InternalIterator` object.
+            let it = php_spl::iter::with_handle(
+                Box::new(php_spl::fixedarray::FixedArrayIter::new(obj, st)),
+                Box::new(php_vm::object::HandleGuard::reserve()),
+            );
             return crate::iter::new_internal_iterator(vm, it);
         }
     }

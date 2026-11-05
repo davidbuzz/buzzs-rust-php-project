@@ -36,6 +36,23 @@ fn alloc_handle() -> u32 {
     })
 }
 
+/// An object handle held by a `zend_object_iterator`
+/// (`SplHost::reserve_iterator_handle`); freed when dropped.
+pub struct IterHandle(u32);
+
+impl IterHandle {
+    pub fn reserve() -> Self {
+        IterHandle(alloc_handle())
+    }
+}
+
+impl Drop for IterHandle {
+    fn drop(&mut self) {
+        let h = self.0;
+        let _ = FREE_HANDLES.try_with(|f| f.borrow_mut().push(h));
+    }
+}
+
 pub enum Extra {
     None,
     Closure(Rc<ClosureData>),

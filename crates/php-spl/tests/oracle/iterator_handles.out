@@ -1,0 +1,14 @@
+IteratorIterator: 4
+RecursiveIteratorIterator: 7
+1 at depth 0: 8
+2 at depth 1: 10
+3 at depth 2: 12
+4 at depth 0: 9
+after foreach: 7
+break at depth 2
+after break: depth 0, 7
+7 9 8
+manual: depth 2, 14
+manual: depth 0, 10
+getIterator: 10 13 12
+iterator_count: 1 4, 12

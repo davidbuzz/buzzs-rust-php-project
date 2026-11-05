@@ -405,7 +405,7 @@ pub fn native_iterator(
                 return Ok(None);
             }
             crate::iterators::check_recursive_initialized(&st)?;
-            Box::new(crate::iterators::RecursiveItIter::new(obj.clone()))
+            Box::new(crate::iterators::RecursiveItIter::new(obj.clone(), st))
         }
         Family::File => match crate::directory::native_iterator(host, obj, &st)? {
             Some(it) => it,
