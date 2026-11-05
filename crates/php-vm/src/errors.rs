@@ -218,16 +218,19 @@ impl Vm {
                 }
             }
         }
-        self.last_error = Some(LastError {
-            level,
-            message: msg.to_vec(),
-            file: file.clone(),
-            line,
-        });
-        if self.error_reporting & level != 0
-            || level & (level::CORE_ERROR | level::CORE_WARNING) != 0
-        {
-            self.display_error(level, msg, file, line);
+        // `php_error_cb`: a repeated error is neither stored nor shown.
+        if !self.is_repeated_error(msg, file, line) {
+            self.last_error = Some(LastError {
+                level,
+                message: msg.to_vec(),
+                file: file.clone(),
+                line,
+            });
+            if self.error_reporting & level != 0
+                || level & (level::CORE_ERROR | level::CORE_WARNING) != 0
+            {
+                self.display_error(level, msg, file, line);
+            }
         }
         if is_fatal(level) {
             self.exit_status = 255;
@@ -235,6 +238,20 @@ impl Vm {
             return Err(Throw::Fatal);
         }
         Ok(())
+    }
+
+    /// `php_error_cb`'s repeated-error check: under
+    /// `ignore_repeated_errors`, an error whose message equals the last
+    /// stored one (and, unless `ignore_repeated_source` is on, whose file
+    /// and line match too) is neither stored nor displayed or logged.
+    fn is_repeated_error(&self, msg: &[u8], file: &ZStr, line: u32) -> bool {
+        let Some(last) = &self.last_error else {
+            return false;
+        };
+        if last.message != msg || !self.ini.get_bool("ignore_repeated_errors") {
+            return false;
+        }
+        self.ini.get_bool("ignore_repeated_source") || (last.line == line && last.file == *file)
     }
 
     /// Displays/logs an error according to the ini settings.
