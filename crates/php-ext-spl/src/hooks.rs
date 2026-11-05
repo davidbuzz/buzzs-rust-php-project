@@ -65,7 +65,18 @@ fn gc_traverse(st: &Rc<php_spl::SplObject>, v: &mut php_vm::gc::GcVisitor<'_>) {
     }
     let r = st.with(|s| match s {
         php_spl::SplState::Array(a) => v.value(&a.array),
-        php_spl::SplState::Storage(s) => v.table(&s.storage),
+        php_spl::SplState::Storage(s) => {
+            // `spl_object_storage_get_gc` reports each element's object and
+            // information directly: the `[object, info]` pair arrays of this
+            // representation are not garbage PHP counts (bug #53071). A
+            // pair shared with user code stays a node of its own.
+            for e in s.storage.values() {
+                match e {
+                    Value::Array(pair) if pair.refcount() == 1 => v.table(pair),
+                    other => v.value(other),
+                }
+            }
+        }
         php_spl::SplState::FixedArray(f) => v.values(&f.elements),
         _ => {}
     });

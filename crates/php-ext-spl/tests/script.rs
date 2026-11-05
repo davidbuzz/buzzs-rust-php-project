@@ -466,3 +466,22 @@ call_user_func(function () {
          object(SplFixedArray)#3 (1) refcount(4){\n  [0]=>\n  *RECURSION*\n}\n"
     );
 }
+
+#[test]
+fn object_storage_cycle_counts_only_objects() {
+    // Bug #53071: the collected cycle is the three objects.
+    let out = run(r#"<?php
+class C { public $member; }
+function scope() {
+    $a = new C();
+    $b = new SplObjectStorage();
+    $c = new C();
+    $c->member = $a;
+    $b->offsetSet($c);
+    $a->member = $b;
+}
+scope();
+var_dump(gc_collect_cycles());
+"#);
+    assert_eq!(out, "int(3)\n");
+}
