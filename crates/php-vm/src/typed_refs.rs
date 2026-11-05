@@ -751,7 +751,7 @@ impl Vm {
     /// the regular property path (untyped, hooked, readonly or
     /// asymmetric-visibility properties, inaccessible ones, properties
     /// `unset()` since, lazy objects).
-    fn uninit_typed_slot(&mut self, o: &Obj, name: &ZStr) -> Option<Rc<PropInfo>> {
+    pub(crate) fn uninit_typed_slot(&mut self, o: &Obj, name: &ZStr) -> Option<Rc<PropInfo>> {
         let cls = object::class_of(o).clone();
         let scope = self.scope();
         let crate::props::PropLookup::Found(pi) = self.lookup_prop(&cls, name, scope.as_ref())
