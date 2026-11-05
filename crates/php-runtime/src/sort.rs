@@ -8,94 +8,119 @@
 //!
 //! The comparison function returns an `i32` where only `> 0` is inspected,
 //! exactly like the C code.
+//!
+//! The algorithm is written against [`SortAccess`], the `(base, cmp, swp)`
+//! triple the C functions take: [`zend_sort`] / [`zend_insert_sort`] sort a
+//! slice with an element comparator, while [`zend_sort_by`] lets a caller
+//! whose comparisons must see the whole sequence as it stands mid-sort (a
+//! hash table sorted in place while PHP code can reach it) drive the same
+//! comparisons and swaps through indices.
+
+/// Index-based access to the sequence being sorted, the `cmp` / `swp`
+/// callbacks of `zend_sort(base, nmemb, siz, cmp, swp)`.
+pub trait SortAccess {
+    /// `cmp(base + a * siz, base + b * siz)`: only `> 0` is inspected.
+    fn compare(&mut self, a: usize, b: usize) -> i32;
+    /// `swp(base + a * siz, base + b * siz)`.
+    fn swap(&mut self, a: usize, b: usize);
+}
+
+/// A slice with an element comparator.
+struct SliceAccess<'a, T, F: ?Sized> {
+    v: &'a mut [T],
+    cmp: &'a mut F,
+}
+
+impl<T, F: FnMut(&T, &T) -> i32 + ?Sized> SortAccess for SliceAccess<'_, T, F> {
+    #[inline]
+    fn compare(&mut self, a: usize, b: usize) -> i32 {
+        let Self { v, cmp } = self;
+        cmp(&v[a], &v[b])
+    }
+
+    #[inline]
+    fn swap(&mut self, a: usize, b: usize) {
+        self.v.swap(a, b);
+    }
+}
 
 /// Sorts `v` with PHP's hybrid insertion sort (used for up to 16 elements).
 pub fn zend_insert_sort<T, F>(v: &mut [T], cmp: &mut F)
 where
     F: FnMut(&T, &T) -> i32 + ?Sized,
 {
-    insert_sort_range(v, 0, v.len(), cmp);
+    let n = v.len();
+    insert_sort_range(&mut SliceAccess { v, cmp }, 0, n);
 }
 
-fn sort2<T, F: FnMut(&T, &T) -> i32 + ?Sized>(v: &mut [T], a: usize, b: usize, cmp: &mut F) {
-    if cmp(&v[a], &v[b]) > 0 {
-        v.swap(a, b);
+fn sort2<S: SortAccess + ?Sized>(s: &mut S, a: usize, b: usize) {
+    if s.compare(a, b) > 0 {
+        s.swap(a, b);
     }
 }
 
-fn sort3<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
-    v: &mut [T],
-    a: usize,
-    b: usize,
-    c: usize,
-    cmp: &mut F,
-) {
-    if cmp(&v[a], &v[b]) <= 0 {
-        if cmp(&v[b], &v[c]) <= 0 {
+fn sort3<S: SortAccess + ?Sized>(s: &mut S, a: usize, b: usize, c: usize) {
+    if s.compare(a, b) <= 0 {
+        if s.compare(b, c) <= 0 {
             return;
         }
-        v.swap(b, c);
-        if cmp(&v[a], &v[b]) > 0 {
-            v.swap(a, b);
+        s.swap(b, c);
+        if s.compare(a, b) > 0 {
+            s.swap(a, b);
         }
         return;
     }
-    if cmp(&v[c], &v[b]) <= 0 {
-        v.swap(a, c);
+    if s.compare(c, b) <= 0 {
+        s.swap(a, c);
         return;
     }
-    v.swap(a, b);
-    if cmp(&v[b], &v[c]) > 0 {
-        v.swap(b, c);
+    s.swap(a, b);
+    if s.compare(b, c) > 0 {
+        s.swap(b, c);
     }
 }
 
 #[allow(clippy::many_single_char_names)]
-fn sort4<T, F: FnMut(&T, &T) -> i32 + ?Sized>(v: &mut [T], idx: [usize; 4], cmp: &mut F) {
+fn sort4<S: SortAccess + ?Sized>(s: &mut S, idx: [usize; 4]) {
     let [a, b, c, d] = idx;
-    sort3(v, a, b, c, cmp);
-    if cmp(&v[c], &v[d]) > 0 {
-        v.swap(c, d);
-        if cmp(&v[b], &v[c]) > 0 {
-            v.swap(b, c);
-            if cmp(&v[a], &v[b]) > 0 {
-                v.swap(a, b);
+    sort3(s, a, b, c);
+    if s.compare(c, d) > 0 {
+        s.swap(c, d);
+        if s.compare(b, c) > 0 {
+            s.swap(b, c);
+            if s.compare(a, b) > 0 {
+                s.swap(a, b);
             }
         }
     }
 }
 
 #[allow(clippy::many_single_char_names)]
-fn sort5<T, F: FnMut(&T, &T) -> i32 + ?Sized>(v: &mut [T], idx: [usize; 5], cmp: &mut F) {
+fn sort5<S: SortAccess + ?Sized>(s: &mut S, idx: [usize; 5]) {
     let [a, b, c, d, e] = idx;
-    sort4(v, [a, b, c, d], cmp);
-    if cmp(&v[d], &v[e]) > 0 {
-        v.swap(d, e);
-        if cmp(&v[c], &v[d]) > 0 {
-            v.swap(c, d);
-            if cmp(&v[b], &v[c]) > 0 {
-                v.swap(b, c);
-                if cmp(&v[a], &v[b]) > 0 {
-                    v.swap(a, b);
+    sort4(s, [a, b, c, d]);
+    if s.compare(d, e) > 0 {
+        s.swap(d, e);
+        if s.compare(c, d) > 0 {
+            s.swap(c, d);
+            if s.compare(b, c) > 0 {
+                s.swap(b, c);
+                if s.compare(a, b) > 0 {
+                    s.swap(a, b);
                 }
             }
         }
     }
 }
 
-/// `zend_insert_sort` on `v[start..start + nmemb]`.
-fn insert_sort_range<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
-    v: &mut [T],
-    start: usize,
-    nmemb: usize,
-    cmp: &mut F,
-) {
+/// `zend_insert_sort` on the elements `start..start + nmemb`.
+fn insert_sort_range<S: SortAccess + ?Sized>(s: &mut S, start: usize, nmemb: usize) {
     match nmemb {
         0 | 1 => {}
-        2 => sort2(v, start, start + 1, cmp),
-        3 => sort3(v, start, start + 1, start + 2, cmp),
-        4 => sort4(v, [start, start + 1, start + 2, start + 3], cmp),
-        5 => sort5(v, [start, start + 1, start + 2, start + 3, start + 4], cmp),
+        2 => sort2(s, start, start + 1),
+        3 => sort3(s, start, start + 1, start + 2),
+        4 => sort4(s, [start, start + 1, start + 2, start + 3]),
+        5 => sort5(s, [start, start + 1, start + 2, start + 3, start + 4]),
         _ => {
             let end = start + nmemb;
             let sentry = start + 6;
@@ -103,20 +128,20 @@ fn insert_sort_range<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
             let mut i = start + 1;
             while i < sentry {
                 let mut j = i - 1;
-                if cmp(&v[j], &v[i]) <= 0 {
+                if s.compare(j, i) <= 0 {
                     i += 1;
                     continue;
                 }
                 while j != start {
                     j -= 1;
-                    if cmp(&v[j], &v[i]) <= 0 {
+                    if s.compare(j, i) <= 0 {
                         j += 1;
                         break;
                     }
                 }
                 let mut k = i;
                 while k > j {
-                    v.swap(k, k - 1);
+                    s.swap(k, k - 1);
                     k -= 1;
                 }
                 i += 1;
@@ -125,15 +150,15 @@ fn insert_sort_range<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
             let mut i = sentry;
             while i < end {
                 let mut j = i - 1;
-                if cmp(&v[j], &v[i]) <= 0 {
+                if s.compare(j, i) <= 0 {
                     i += 1;
                     continue;
                 }
                 loop {
                     j -= 2;
-                    if cmp(&v[j], &v[i]) <= 0 {
+                    if s.compare(j, i) <= 0 {
                         j += 1;
-                        if cmp(&v[j], &v[i]) <= 0 {
+                        if s.compare(j, i) <= 0 {
                             j += 1;
                         }
                         break;
@@ -143,7 +168,7 @@ fn insert_sort_range<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
                     }
                     if j == start + 1 {
                         j -= 1;
-                        if cmp(&v[i], &v[j]) > 0 {
+                        if s.compare(i, j) > 0 {
                             j += 1;
                         }
                         break;
@@ -151,7 +176,7 @@ fn insert_sort_range<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
                 }
                 let mut k = i;
                 while k > j {
-                    v.swap(k, k - 1);
+                    s.swap(k, k - 1);
                     k -= 1;
                 }
                 i += 1;
@@ -165,18 +190,20 @@ pub fn zend_sort<T, F>(v: &mut [T], cmp: &mut F)
 where
     F: FnMut(&T, &T) -> i32 + ?Sized,
 {
-    sort_range(v, 0, v.len(), cmp);
+    let n = v.len();
+    sort_range(&mut SliceAccess { v, cmp }, 0, n);
 }
 
-fn sort_range<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
-    v: &mut [T],
-    mut base: usize,
-    mut nmemb: usize,
-    cmp: &mut F,
-) {
+/// `zend_sort` over the elements `0..nmemb` of an index-based sequence:
+/// the same comparisons and swaps as [`zend_sort`], issued through `s`.
+pub fn zend_sort_by<S: SortAccess + ?Sized>(s: &mut S, nmemb: usize) {
+    sort_range(s, 0, nmemb);
+}
+
+fn sort_range<S: SortAccess + ?Sized>(s: &mut S, mut base: usize, mut nmemb: usize) {
     loop {
         if nmemb <= 16 {
-            insert_sort_range(v, base, nmemb, cmp);
+            insert_sort_range(s, base, nmemb);
             return;
         }
         let start = base;
@@ -185,20 +212,16 @@ fn sort_range<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
         let pivot0 = start + offset;
         if nmemb >> 10 != 0 {
             let delta = offset >> 1;
-            sort5(
-                v,
-                [start, start + delta, pivot0, pivot0 + delta, end - 1],
-                cmp,
-            );
+            sort5(s, [start, start + delta, pivot0, pivot0 + delta, end - 1]);
         } else {
-            sort3(v, start, pivot0, end - 1, cmp);
+            sort3(s, start, pivot0, end - 1);
         }
-        v.swap(start + 1, pivot0);
+        s.swap(start + 1, pivot0);
         let pivot = start + 1;
         let mut i = pivot + 1;
         let mut j = end - 1;
         'outer: loop {
-            while cmp(&v[pivot], &v[i]) > 0 {
+            while s.compare(pivot, i) > 0 {
                 i += 1;
                 if i == j {
                     break 'outer;
@@ -208,25 +231,25 @@ fn sort_range<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
             if j == i {
                 break 'outer;
             }
-            while cmp(&v[j], &v[pivot]) > 0 {
+            while s.compare(j, pivot) > 0 {
                 j -= 1;
                 if j == i {
                     break 'outer;
                 }
             }
-            v.swap(i, j);
+            s.swap(i, j);
             i += 1;
             if i == j {
                 break 'outer;
             }
         }
-        v.swap(pivot, i - 1);
+        s.swap(pivot, i - 1);
         if (i - 1) - start < end - i {
-            sort_range(v, start, (i - start) - 1, cmp);
+            sort_range(s, start, (i - start) - 1);
             base = i;
             nmemb = end - i;
         } else {
-            sort_range(v, i, end - i, cmp);
+            sort_range(s, i, end - i);
             nmemb = (i - start) - 1;
         }
     }
@@ -304,6 +327,46 @@ mod tests {
         sorted.sort_unstable();
         assert_eq!(v, sorted);
         calls.join(" ")
+    }
+
+    /// An index-based sequence that logs its comparisons and swaps.
+    struct Logged {
+        v: Vec<i32>,
+        log: Vec<String>,
+    }
+
+    impl SortAccess for Logged {
+        fn compare(&mut self, a: usize, b: usize) -> i32 {
+            self.log.push(format!("{},{}", self.v[a], self.v[b]));
+            self.v[a] - self.v[b]
+        }
+
+        fn swap(&mut self, a: usize, b: usize) {
+            self.v.swap(a, b);
+        }
+    }
+
+    #[test]
+    fn index_access_matches_slice_sort() {
+        let mut rng = Rng(99);
+        for n in [0usize, 1, 2, 5, 6, 7, 16, 17, 40, 1100] {
+            let input: Vec<i32> = (0..n)
+                .map(|_| i32::try_from(rng.next() % 30).unwrap_or(0))
+                .collect();
+            let mut by_slice = input.clone();
+            let mut slice_log = Vec::new();
+            zend_sort(&mut by_slice, &mut |a: &i32, b: &i32| {
+                slice_log.push(format!("{a},{b}"));
+                a - b
+            });
+            let mut logged = Logged {
+                v: input,
+                log: Vec::new(),
+            };
+            zend_sort_by(&mut logged, n);
+            assert_eq!(logged.v, by_slice, "n={n}");
+            assert_eq!(logged.log, slice_log, "n={n}");
+        }
     }
 
     #[test]
