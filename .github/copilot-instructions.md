@@ -92,14 +92,40 @@ Cargo workspace, ~100 crates, strictly layered:
   runs as background tasks and use the wait time productively: update documentation, make
   pending git commits, review diffs, or plan the next work items. Check results when the
   background task completes, not by blocking on it.
+- Keep chat responsive while background work runs. Do not hold a turn open waiting for
+  workers or commands: launch asynchronously, report status, and return control to the user.
+  Handle new requests while existing work continues, coordinating file ownership and
+  resource limits. Read results after completion notifications rather than blocking or
+  polling; a new message does not cancel existing work unless the user redirects it.
 
 ## Parallel agents
 
-Several agents work concurrently, one crate each:
+For substantial multi-part tasks, target **six concurrent subagents**, each with its own
+Git worktree and branch:
 
-- Only edit files inside your own crate, plus your row(s) in FEATURE_GAP.md.
+- Create each worker's worktree from an agreed integration commit before launching it.
+  Give the worker an explicit worktree path and bounded work package.
+- Workers edit only their assigned crate(s) in their own worktree. Independent VM work
+  packages may run concurrently in separate worktrees; do not serialize them merely
+  because they touch the same crate. Coordinate shared APIs and overlapping changes.
+- Use background agents and give regular user-facing progress updates throughout execution,
+  not only a final summary. At each meaningful milestone, report each worker's work package,
+  current status, verified test/performance results, blockers, and next step. Clearly
+  distinguish implementation in progress from validated and integrated completion.
+- Integrate worker commits deliberately, resolve conflicts, and rerun affected tests and
+  performance workloads on the combined result. Worktree isolation does not remove the
+  need for integration validation.
+- Workers make edits and perform source/diff review in parallel, without per-worker
+  builds or test runs. Integrate all worker changes first, then run one consolidated
+  build and combined affected-crate/PHPT/performance validation at the end. Preserve
+  resource limits. If validation fails, fix the combined result and rerun only the
+  necessary checks; do not claim unvalidated worker commits are complete.
+- The coordinating agent updates FEATURE_GAP.md and the baseline from verified results
+  after integration; workers report evidence rather than competing to edit those files.
 - Never edit the workspace `Cargo.toml`; crates are pre-registered.
 - Commit with `git add crates/<yours>` only.
+- Remove worker worktrees only after their changes are integrated or explicitly retained,
+  and their worktrees are clean. Do not force-remove uncommitted work.
 
 ## Resource limits (the box has OOM-crashed once)
 

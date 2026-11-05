@@ -1,24 +1,61 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # phprust
 
-A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test suite.
+A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test suite, byte for byte,
+and to run as fast as the C implementation or faster (see "Performance").
 `modules/php-src/` is a READ-ONLY reference clone of https://github.com/php/php-src (never edit it; it is gitignored).
 `modules/php-rust/` is a READ-ONLY clone of https://github.com/francescotinti/php-rust — the competing project (phprust.com); for study/comparison only, never edit it, never copy code from it (its license must be respected; use it for measured comparisons and ideas, not code).
-`/usr/bin/php` (the C implementation) is installed and may be used as an oracle to check expected behaviour.
+`/usr/bin/php` (the C implementation, PHP 8.3.6) is installed and may be used as an oracle to check expected behaviour. Where 8.3 and php-src master differ, follow master.
 
-## Layout (cargo workspace)
+## Commands
+
+```sh
+cargo build -p php-cli -p phpt-runner            # target/debug/php and target/debug/phpt-runner
+target/debug/php -r 'echo 1+2, "\n";'            # smoke test
+
+# Required before declaring work done (scope with -p; combine several -p in one command):
+cargo fmt && cargo clippy --all-targets -p <crate> && cargo test -p <crate>
+cargo test -p <crate> <test_name_substring>      # one Rust test
+
+# .phpt tests, the real acceptance criterion (file or directory):
+target/debug/phpt-runner --php target/debug/php modules/php-src/Zend/tests/foo.phpt
+env -u LANGUAGE target/debug/phpt-runner --php target/debug/php -j 8 -q --no-artifacts \
+    --summary-depth 2 modules/php-src/ext/json
+```
+
+- Runner flags worth knowing: `--show-diff` (expected vs actual), `--filter <substr>` (repeatable), `--list`, `-d NAME=VALUE`, `--env KEY=VALUE`, `--resume <file.jsonl>` for long runs. The runner snapshots the binary before running, so rebuilding mid-run is safe.
+- `env -u LANGUAGE` matters if the shell exports `LANGUAGE`: it overrides `LC_ALL` in gettext and fails ext/gettext tests under any PHP.
+- `phpt-baseline.txt` lists known failures; `--baseline phpt-baseline.txt` fails only on regressions, `--update-baseline` refreshes it.
+- `phpt-scope.txt` lists out-of-scope path prefixes (opcache, FPM, pgsql, ffi, …). The runner reads it by default; those tests report `OUT` and are excluded from pass rates and the baseline. `--no-scope` runs everything.
+- `--json report.json` then `scripts/update_feature_gap.py report.json` rewrites FEATURE_GAP.md's `%` column from a run.
+- Use dev builds for correctness and scoped PHPT runs. Reserve `--release` (thin LTO, one codegen unit, slow to rebuild) for performance measurement. Avoid `cargo clean` in edit/test loops.
+- When behaviour is unclear, run a small script through the oracle (`/usr/bin/php -d memory_limit=1G x.php`) rather than guessing.
+
+## Architecture
+
+The workspace has ~100 crates in strict layers:
+
+1. **Engine pipeline**: `php-lexer` → `php-parser` (AST with exact parse-error messages) → `php-vm` (`compiler/` lowers AST to op arrays; `exec.rs` is the interpreter loop `execute_ex`; classes, exceptions, generators, fibers, GC, reflection live alongside) → `php-cli` (the `php` binary). `php-cli-server` (`php -S`) and `php-sapi-apache2` (mod_php) are the other SAPIs.
+2. **`php-runtime`** is the shared vocabulary: `Value` (zval), `ZStr` (zend_string), `ZArray` (ordered hash table), operators and type juggling, var_dump/serialize. Crates coordinate only through its types.
+3. **Library / binding split.** Each PHP extension is two crates:
+   - `php-<name>` holds the pure logic. It is VM-independent and has its own oracle-driven test suite.
+   - `php-ext-<name>` is a thin binding through `php_vm::ext` (`Extension`, `ModuleBuilder`, `ClassBuilder`, `Args`/ZPP). Native functions are registered from PHP stub signatures. The library calls back into the VM through a host trait that the ext crate implements; `crates/php-ext-json/src/host.rs` is the reference example, including how VM throws and runtime errors convert both ways.
+   - Per-request extension state lives in thread-locals reset at request shutdown.
+   - `crates/php-cli/src/extensions.rs` lists every extension; `startup.rs` registers them. A new ext crate is not live until it is added there.
+4. **`phpt-runner`** ports `run-tests.php`: all `.phpt` sections, parallel scheduling, baseline and scope handling.
+
+Every crate's doc comments cite the php-src file(s) it ports (e.g. `ref: Zend/zend_hash.c`); match that C source's observable behaviour.
+
+### Crates and the php-src code each one ports
 - `crates/php-lexer`   — tokenizer (ref: Zend/zend_language_scanner.l)
 - `crates/php-parser`  — AST + parser (ref: Zend/zend_language_parser.y, zend_ast.c)
 - `crates/php-runtime` — values, strings, ordered hash table, operators/type juggling (ref: zend_types.h, zend_hash.c, zend_operators.c)
 - `crates/php-vm`      — compiler + executor, classes, exceptions, output (ref: zend_compile.c, zend_execute.c)
 - `crates/php-cli`     — the `php` binary (ref: sapi/cli)
 - `crates/phpt-runner` — runs `.phpt` files from modules/php-src against our binary (ref: run-tests.php)
-
-## Rules
-- Idiomatic, best-practice Rust: clippy pedantic clean, no `unsafe` unless justified in a comment, no `unwrap()` in library code paths that can fail, thorough unit tests in every crate.
-- Match PHP output byte-for-byte: error/warning message text, line numbers, `var_dump` formatting, float printing.
-- Each crate owns its public API; coordinate via the types in `php-runtime`.
-- Track progress in `FEATURE_GAP.md` (update the % column for rows you advance).
-- Run `cargo fmt && cargo clippy --all-targets && cargo test` before declaring work done.
 - `crates/php-support` — INI parser, output-buffering stack, printf/sprintf format engine (ref: Zend/zend_ini_*, main/output.c, main/snprintf.c, ext/standard/formatted_print.c)
 - `crates/php-hash`    — hash()/md5/sha*/crc32 etc. (ref: ext/hash, ext/standard/{md5,sha1,crc32}.c)
 - `crates/php-random`  — Mt19937/PCG/Xoshiro/Secure engines, rand/mt_rand/lcg exact sequences (ref: ext/random)
@@ -70,14 +107,31 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-gd`       — libgd binding with ext/gd semantics (system libgd 2.3.3; GD_BUNDLED is false) (ref: ext/gd)
 - `crates/php-ext-zendtest` — ext/zend_test: the engine test extension gating `--EXTENSIONS-- zend_test` tests (ref: ext/zend_test)
 
+## Rules
+- Idiomatic, best-practice Rust: clippy pedantic clean, no `unsafe` unless justified in a comment (in practice only in FFI modules), no `unwrap()` in library code paths that can fail, thorough unit tests in every crate.
+- Match PHP output byte-for-byte: error/warning message text, line numbers, `var_dump` formatting, float printing.
+- Each crate owns its public API; coordinate via the types in `php-runtime`.
+- Track progress in `FEATURE_GAP.md` (update the % column for rows you advance; keep rows at 100% as the completion record).
+- Run `cargo fmt && cargo clippy --all-targets && cargo test` (scoped with `-p`) before declaring work done.
+
+## Performance
+The target is parity or better with `/usr/bin/php`. `scripts/perf_gate.sh` builds a release `php` (in `~/.cache/phprust-perf-gate`, outside the repo) and compares user-space instruction counts per workload against `/usr/bin/php`. It fails when any ratio exceeds its budget in `perf/bench/budgets.tsv`. Run it after touching hot paths: the VM executor and php-runtime value/array/string code. Options: `--filter RX`, `GATE_SET=zend,micro,suite,ops`, `PHP_BIN=<path>` to skip the build. `perf/README.md` explains the measuring method (instruction counts, not wall clock, because the box is loaded). In hot paths, avoid needless allocation, cloning and indirection.
+
 ## Parallel work
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.
 
+When coordinating subagents on a large task:
+- Give each worker its own git worktree and branch, created from one agreed integration commit, and a bounded work package.
+- Workers edit and review in parallel but do not build or test. The coordinator integrates all worker commits, then runs one consolidated build plus the affected crate, PHPT and perf checks.
+- Only the coordinator updates FEATURE_GAP.md and `phpt-baseline.txt`, from verified results after integration.
+- Remove a worktree only once its changes are integrated and it is clean. Never force-remove uncommitted work.
+- Run long builds, test suites and phpt runs in the background instead of blocking on them.
+
 ## Resource limits (the box has OOM-crashed once)
 - `.cargo/config.toml` caps `cargo` at 6 jobs; never override it with `-j`.
-- EVERY invocation of `/usr/bin/php` (oracle scripts, fixture generators) MUST pass `-d memory_limit=1G`. Ubuntu's CLI php.ini sets `memory_limit=-1`, and one unbounded script took the machine down.
+- EVERY invocation of `/usr/bin/php` (oracle scripts, fixture generators) MUST pass `-d memory_limit=1G`. Ubuntu's CLI php.ini sets `memory_limit=-1`, and one unbounded script took the machine down. (Our own `php` caps its address space with `RLIMIT_AS` in `crates/php-cli/src/main.rs`.)
 - Do not run more than one `cargo test`/`cargo build` at a time from a single agent; do not run the whole php-src suite with `--php /usr/bin/php` (use subsets).
 
 ## Test services
-- MariaDB 10.11 is installed for ext/mysqli tests: database `test`, user `phptest` / password `phptest` on 127.0.0.1:3306 (set `MYSQL_TEST_HOST=127.0.0.1 MYSQL_TEST_USER=phptest MYSQL_TEST_PASSWD=phptest MYSQL_TEST_DB=test` when running those tests). Start/stop with `sudo systemctl start|stop mariadb`.
+- MariaDB 10.11 is installed for ext/mysqli tests: database `test`, user `phptest` / password `phptest` on 127.0.0.1:3306 (set `MYSQL_TEST_HOST=127.0.0.1 MYSQL_TEST_USER=phptest MYSQL_TEST_PASSWD=phptest MYSQL_TEST_DB=test` when running those tests, e.g. via the runner's `--env`). Start/stop with `sudo systemctl start|stop mariadb`.
 - Apache 2.4 + apache2-dev (`apxs`) are installed for the mod_php SAPI; keep `apache2` stopped unless testing it.
