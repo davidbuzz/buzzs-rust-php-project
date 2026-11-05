@@ -277,6 +277,21 @@ fn string_container_step(
     };
     if last {
         if let WOp::Assign(val) = wop {
+            if dim.is_null() {
+                if let Some(cv) = take_pending_undef_dim(segs) {
+                    // `zend_assign_to_string_offset` separates the string
+                    // and holds it across `zend_check_string_offset`'s
+                    // warnings: the VM raises them (`Vm::undef_dim_diags`).
+                    if let Value::Str(s) = v {
+                        if s.is_interned() || s.refcount() != 1 {
+                            *s = ZStr::new(s.as_bytes().to_vec());
+                        }
+                        let hit = UndefDimHit::Str(s.clone());
+                        UNDEF_DIM_HIT.with(|c| c.set(Some((cv, hit))));
+                    }
+                    return Step::Done(Value::Null);
+                }
+            }
             let val = val.clone();
             return match assign_string_offset(v, dim, &val, diags) {
                 Ok(r) => Step::Done(r),
@@ -300,6 +315,23 @@ fn string_container_step(
         "Cannot use string offset as an array"
     };
     Step::Err(WalkErr::Error(msg.into()))
+}
+
+/// The string form of a value written to a string offset; its first byte
+/// is stored (`zend_assign_to_string_offset`).
+fn string_offset_value_bytes(val: &Value) -> Vec<u8> {
+    match val {
+        Value::Str(v) => v.as_bytes().to_vec(),
+        Value::Int(i) => i.to_string().into_bytes(),
+        Value::Bool(true) => b"1".to_vec(),
+        Value::Bool(false) | Value::Null => Vec::new(),
+        Value::Float(f) => php_runtime::float::format_double(*f, 17, false).into_bytes(),
+        Value::Array(_) => b"Array".to_vec(),
+        Value::Resource(r) => format!("Resource id #{}", r.handle()).into_bytes(),
+        // Objects are converted by `__toString()` on the retry path
+        // (`assign_string_offset` reports `StringOffsetObject`).
+        Value::Object(_) | Value::Reference(_) => b"A".to_vec(),
+    }
 }
 
 /// Writes one byte of a string (`zend_assign_to_string_offset`).
@@ -500,6 +532,17 @@ pub(crate) fn descend(
                     }
                 }
                 RSeg::Dim(k) => {
+                    if last && k.is_null() && matches!(wop, WOp::Assign(_)) {
+                        if let Some(cv) = take_pending_undef_dim(segs) {
+                            // `slow_index_convert_w` holds the (separated)
+                            // array across the "Undefined variable" warning
+                            // and the null-offset deprecation.
+                            arr.make_mut();
+                            let hit = UndefDimHit::Array(arr.clone());
+                            UNDEF_DIM_HIT.with(|c| c.set(Some((cv, hit))));
+                            return Step::Done(Value::Null);
+                        }
+                    }
                     // Only the final ZEND_UNSET_DIM reports "Cannot unset
                     // offset"; FETCH_DIM_UNSET converts like a write fetch.
                     let ctx = if is_unset && last {
@@ -598,6 +641,19 @@ thread_local! {
     /// `Vm::assign_property_ref` once the walk reaches the property.
     static PENDING_NONVAR_REF: std::cell::Cell<Option<usize>> =
         const { std::cell::Cell::new(None) };
+    /// The final offset of a `place = v` walk that is an undefined
+    /// compiled variable, keyed by the walk's segments (their address):
+    /// set by `Vm::assign_undef_dim`. `ZEND_ASSIGN_DIM` reads the offset
+    /// only once it has the container, so the "Undefined variable" warning
+    /// follows the earlier fetches' diagnostics, is not raised for a
+    /// scalar container, and comes from inside `zend_check_string_offset`
+    /// for a string.
+    static PENDING_UNDEF_DIM: std::cell::Cell<Option<(*const RSeg, u32)>> =
+        const { std::cell::Cell::new(None) };
+    /// The container a walk stopped at for that offset, with the variable
+    /// (see [`UndefDimHit`]).
+    static UNDEF_DIM_HIT: std::cell::Cell<Option<(u32, UndefDimHit)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// Whether the property reference assignment at frame depth `depth` is the
@@ -611,6 +667,28 @@ pub(crate) fn take_nonvar_ref(depth: usize) -> bool {
         } else {
             false
         }
+    })
+}
+
+/// The container a `place = v` walk reached at an undefined-variable final
+/// offset; the walk stops there without writing, the VM raises the offset
+/// diagnostics, and the assignment is redone silently unless the error
+/// handler destroyed (or, for an array, shared) the container.
+enum UndefDimHit {
+    /// An array: `slow_index_convert_w`'s `GC_ADDREF(ht)`.
+    Array(ZArray),
+    /// A string: `zend_assign_to_string_offset`'s `GC_ADDREF(s)`.
+    Str(ZStr),
+}
+
+/// Takes the pending undefined final offset of the walk over `segs`.
+fn take_pending_undef_dim(segs: &[RSeg]) -> Option<u32> {
+    PENDING_UNDEF_DIM.with(|c| match c.get() {
+        Some((ptr, cv)) if std::ptr::eq(ptr, segs.as_ptr()) => {
+            c.set(None);
+            Some(cv)
+        }
+        _ => None,
     })
 }
 
@@ -696,24 +774,41 @@ impl Vm {
         pid: PlaceId,
         write: bool,
     ) -> VmResult<(RBase, Vec<RSeg>)> {
-        self.resolve_place_ex(pid, write, false)
+        self.resolve_place_ex(pid, write, false, None)
     }
 
     /// [`Vm::resolve_place`]; `quiet` is the `BP_VAR_IS` fetch of
     /// `isset()`/`empty()`, where an undeclared or inaccessible static
     /// property base resolves to an undefined base without an error.
+    ///
+    /// With `undef_last_dim`, a final offset that is an undefined compiled
+    /// variable resolves to null without the warning and the variable is
+    /// stored there (see `PENDING_UNDEF_DIM`).
     fn resolve_place_ex(
         &mut self,
         pid: PlaceId,
         write: bool,
         quiet: bool,
+        mut undef_last_dim: Option<&mut Option<u32>>,
     ) -> VmResult<(RBase, Vec<RSeg>)> {
         let code = self.frame().code.clone();
         let p = &code.places[pid as usize];
         let base = self.resolve_base(&p.base, write, quiet)?;
-        let mut segs = Vec::with_capacity(p.segs.len());
-        for s in &p.segs {
+        let n = p.segs.len();
+        let mut segs = Vec::with_capacity(n);
+        for (j, s) in p.segs.iter().enumerate() {
             segs.push(match s {
+                Seg::Dim(Operand::Cv(cv)) if j + 1 == n && undef_last_dim.is_some() => {
+                    match self.read_cv_defined(*cv) {
+                        Some(v) => RSeg::Dim(v),
+                        None => {
+                            if let Some(slot) = undef_last_dim.as_deref_mut() {
+                                *slot = Some(*cv);
+                            }
+                            RSeg::Dim(Value::Null)
+                        }
+                    }
+                }
                 Seg::Dim(op) => RSeg::Dim(self.read_dim_operand(*op)?),
                 Seg::Append => RSeg::Append,
                 Seg::Prop(op) => {
@@ -1068,14 +1163,45 @@ impl Vm {
     ) -> VmResult<Value> {
         let mut diags = Vec::new();
         let mut w = wop;
+        // A hit pending in an outer walk (whose diagnostics are being
+        // reported) is not this walk's.
+        let outer_hit = UNDEF_DIM_HIT.with(std::cell::Cell::take);
         let s = walk(&mut w, &mut diags);
+        let hit = UNDEF_DIM_HIT.with(|c| c.replace(outer_hit));
         let flushed = self.flush_diags(diags);
         let changed = rw_container_changed(&w);
         flushed?;
         if changed {
             return Ok(Value::Null);
         }
+        if let Some((cv, hit)) = hit {
+            return self.descend_undef_dim(cv, hit, segs, w, walk);
+        }
         self.finish_native(s, segs, w, walk)
+    }
+
+    /// [`Vm::assign_undef_dim`] for a walk stopped inside a container
+    /// reached through an object: the container is walked again rather
+    /// than the place, so object handlers run once.
+    #[cold]
+    #[inline(never)]
+    fn descend_undef_dim(
+        &mut self,
+        cv: u32,
+        hit: UndefDimHit,
+        segs: &[RSeg],
+        wop: WOp,
+        mut walk: impl FnMut(&mut WOp, &mut Diags) -> Step,
+    ) -> VmResult<Value> {
+        let WOp::Assign(v) = &wop else {
+            return Ok(Value::Null);
+        };
+        if !self.undef_dim_diags(cv, hit, v)? {
+            return Ok(Value::Null);
+        }
+        let mut w = wop;
+        let s = walk(&mut w, &mut Vec::new());
+        self.finish_step(s, segs, w)
     }
 
     /// Continues a write walk at segment `i` inside a reference.
@@ -1269,6 +1395,9 @@ impl Vm {
                 }
             }
             seg @ (RSeg::Dim(_) | RSeg::Append) => {
+                if last && matches!(seg, RSeg::Dim(Value::Null)) && matches!(wop, WOp::Assign(_)) {
+                    self.take_pending_undef_dim_warn(segs)?;
+                }
                 let key = match seg {
                     RSeg::Dim(k) => k.clone(),
                     _ => Value::Null,
@@ -1463,8 +1592,99 @@ impl Vm {
 
     /// `place = v`
     pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
-        let (base, segs) = self.resolve_place(pid, true)?;
+        let mut undef_dim = None;
+        let (base, segs) = self.resolve_place_ex(pid, true, false, Some(&mut undef_dim))?;
+        if let Some(cv) = undef_dim {
+            return self.assign_undef_dim(base, &segs, v, cv);
+        }
         self.write_place(base, &segs, WOp::Assign(v))
+    }
+
+    /// `place[$undef] = v` (`ZEND_ASSIGN_DIM` with an undefined CV offset):
+    /// the walk stops at the final container without writing (see
+    /// `PENDING_UNDEF_DIM`); the offset diagnostics are raised with the
+    /// container held, and the assignment is then redone silently unless
+    /// the error handler destroyed it.
+    #[cold]
+    #[inline(never)]
+    fn assign_undef_dim(
+        &mut self,
+        base: RBase,
+        segs: &[RSeg],
+        v: Value,
+        cv: u32,
+    ) -> VmResult<Value> {
+        let again = base.clone();
+        let saved = PENDING_UNDEF_DIM.with(|c| c.replace(Some((segs.as_ptr(), cv))));
+        let saved_hit = UNDEF_DIM_HIT.with(std::cell::Cell::take);
+        let r = self.write_place(base, segs, WOp::Assign(v.clone()));
+        let unconsumed = PENDING_UNDEF_DIM.with(|c| c.replace(saved)).is_some();
+        let hit = UNDEF_DIM_HIT.with(|c| c.replace(saved_hit));
+        let r = r?;
+        let Some((cv, hit)) = hit else {
+            if unconsumed {
+                // A container this walk does not stop at: warn late
+                // rather than never.
+                self.undef_dim_warning(cv)?;
+            }
+            return Ok(r);
+        };
+        if !self.undef_dim_diags(cv, hit, &v)? {
+            return Ok(Value::Null);
+        }
+        let r = self.write_place_inner(again, segs, WOp::Assign(v), true);
+        flush_deferred_ref_assigns();
+        r
+    }
+
+    /// The "Undefined variable" warning of a final offset.
+    fn undef_dim_warning(&mut self, cv: u32) -> VmResult<()> {
+        let name = self.frame().code.cv_names[cv as usize].clone();
+        self.warning(&crate::exec::undefined_var_msg(&name))
+    }
+
+    /// Raises the diagnostics of an undefined-variable final offset at the
+    /// container the walk stopped at: `slow_index_convert_w` (array) or
+    /// `zend_assign_to_string_offset` (string). `false` when the error
+    /// handler destroyed the container (or shared the array): the write is
+    /// abandoned and the assignment yields null.
+    #[cold]
+    fn undef_dim_diags(&mut self, cv: u32, hit: UndefDimHit, v: &Value) -> VmResult<bool> {
+        self.undef_dim_warning(cv)?;
+        match hit {
+            UndefDimHit::Array(held) => {
+                if held.refcount() != 2 {
+                    return Ok(false);
+                }
+                self.deprecated(
+                    "Using null as an array offset is deprecated, use an empty string instead",
+                )?;
+                Ok(held.refcount() == 2)
+            }
+            UndefDimHit::Str(held) => {
+                self.warning("String offset cast occurred")?;
+                if held.refcount() == 1 {
+                    return Ok(false);
+                }
+                if string_offset_value_bytes(v).len() > 1 {
+                    self.warning("Only the first byte will be assigned to the string offset")?;
+                    if held.refcount() == 1 {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+        }
+    }
+
+    /// Raises the pending undefined final offset's warning of the walk
+    /// over `segs` before an object's `write_dimension` (`ZEND_ASSIGN_DIM`
+    /// reads the offset before calling it).
+    fn take_pending_undef_dim_warn(&mut self, segs: &[RSeg]) -> VmResult<()> {
+        match take_pending_undef_dim(segs) {
+            Some(cv) => self.undef_dim_warning(cv),
+            None => Ok(()),
+        }
     }
 
     /// The `BP_VAR_RW` read of a compound assignment's property

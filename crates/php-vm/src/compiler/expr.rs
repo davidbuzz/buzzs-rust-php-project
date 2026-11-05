@@ -1250,6 +1250,27 @@ impl Compiler {
         Ok(Operand::Tmp(t))
     }
 
+    /// `zend_compile_binary_op` (`ZEND_CONCAT`): a constant array operand
+    /// is cast to string by a `ZEND_CAST` emitted after both operands and
+    /// before the concatenation, so its "Array to string conversion"
+    /// warning precedes the other operand's conversion error
+    /// (`operator_unsupported_types.phpt`: `new stdClass . []`).
+    fn concat_cast_array_literal(&mut self, operand: Operand) -> Operand {
+        let Operand::Lit(i) = operand else {
+            return operand;
+        };
+        if !matches!(self.fref().literals.get(i as usize), Some(Value::Array(_))) {
+            return operand;
+        }
+        let dst = self.tmp();
+        self.emit(Op::Cast {
+            kind: CastKind::String,
+            a: operand,
+            dst,
+        });
+        Operand::Tmp(dst)
+    }
+
     fn compile_binary(&mut self, op: AB, left: &Expr, right: &Expr) -> CResult<Operand> {
         let t = self.tmp();
         match op {
@@ -1333,6 +1354,13 @@ impl Compiler {
             _ => {
                 let l = self.compile_expr(left)?;
                 let r = self.compile_expr(right)?;
+                let (l, r) = if op == AB::Concat {
+                    self.f().line = left.span.line;
+                    let l = self.concat_cast_array_literal(l);
+                    (l, self.concat_cast_array_literal(r))
+                } else {
+                    (l, r)
+                };
                 let (l, r) = if (matches!(op, AB::Identical | AB::NotIdentical)
                     && matches!(l, Operand::Lit(_))
                     && !matches!(r, Operand::Lit(_)))

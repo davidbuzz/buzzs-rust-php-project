@@ -260,3 +260,78 @@ fn appending_to_globals_is_a_compile_error() {
         );
     }
 }
+
+/// `ZEND_ASSIGN_DIM` reads an undefined final offset only at its
+/// container: the warning follows the earlier fetches' diagnostics, is not
+/// raised for a scalar, and for a string comes from
+/// `zend_check_string_offset` (expected output: php-src master, which adds
+/// the null-offset deprecation to PHP 8.3's).
+#[test]
+fn undefined_final_offsets_warn_at_the_container() {
+    assert_eq!(
+        run(r#"<?php
+set_error_handler(function ($no, $str) { echo "W: $str\n"; });
+$i = 5;
+try { $i[$u] = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$f = false;
+$f[$u] = 1;
+$a = [1];
+$a[1.5][$u] = 2;
+$s = "abc";
+$s[$u] = "xy";
+echo $s, "\n";
+class AA implements ArrayAccess {
+    function offsetGet($o): mixed { return 1; }
+    function offsetSet($o, $v): void { echo "set "; var_dump($o); }
+    function offsetExists($o): bool { return true; }
+    function offsetUnset($o): void {}
+}
+$o = new AA;
+$o[$u] = 1;
+var_dump($f, $a[1]);
+"#),
+        "Cannot use a scalar value as an array\n\
+         W: Automatic conversion of false to array is deprecated\n\
+         W: Undefined variable $u\n\
+         W: Using null as an array offset is deprecated, use an empty string instead\n\
+         W: Implicit conversion from float 1.5 to int loses precision\n\
+         W: Undefined variable $u\n\
+         W: Using null as an array offset is deprecated, use an empty string instead\n\
+         W: Undefined variable $u\n\
+         W: String offset cast occurred\n\
+         W: Only the first byte will be assigned to the string offset\n\
+         xbc\n\
+         W: Undefined variable $u\n\
+         set NULL\n\
+         array(1) {\n  [\"\"]=>\n  int(1)\n}\narray(1) {\n  [\"\"]=>\n  int(2)\n}\n"
+    );
+}
+
+/// An error handler that destroys the string container while its undefined
+/// offset is reported abandons the write (`zend_assign_to_string_offset`'s
+/// `GC_ADDREF`; php-src `Zend/tests/str_offset_006.phpt`, `str_offset_007.phpt`).
+#[test]
+fn string_offset_write_is_abandoned_when_the_handler_frees_the_string() {
+    assert_eq!(
+        run(r#"<?php
+set_error_handler(function($code, $msg) {
+    echo "Err: $msg\n";
+    $GLOBALS['a'] = null;
+});
+$a[$y] = $a .= ($y);
+var_dump($a);
+set_error_handler(function($code, $msg) {
+    echo "Err: $msg\n";
+    $GLOBALS['b'] = '';
+});
+$b = ['b'];
+$b[0][$d] = 'c';
+var_dump($b);
+$x = ($b[$d] = 'z');
+var_dump($x, $b);
+"#),
+        "Err: Undefined variable $y\nErr: Undefined variable $y\nErr: String offset cast occurred\nNULL\n\
+         Err: Undefined variable $d\nErr: String offset cast occurred\nstring(0) \"\"\n\
+         Err: Undefined variable $d\nErr: String offset cast occurred\nNULL\nstring(0) \"\"\n"
+    );
+}
