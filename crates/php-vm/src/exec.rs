@@ -1785,6 +1785,12 @@ impl Vm {
                         (_, e) => e,
                     });
                 }
+                // Freed here unless the destructor stored it somewhere;
+                // either way the handles of the objects whose release
+                // queued it are free now.
+                let h = o.handle();
+                drop(o);
+                object::release_deferred_handles(h);
             }
             if let Some(e) = pending_err {
                 return Err(e);

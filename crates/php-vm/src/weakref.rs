@@ -974,6 +974,25 @@ mod tests {
     }
 
     #[test]
+    fn handles_freed_after_the_destructed_objects_they_released() {
+        // `zend_object_std_dtor` destructs and frees nested objects (and
+        // WeakMap values) before the outer handle joins the free list.
+        let out = run(
+            "<?php class D { function __destruct() { echo \"D\\n\"; } }\n\
+             $o = new stdClass; $o->p = new D; unset($o);\n\
+             $a = new stdClass; $b = new stdClass;\n\
+             echo spl_object_id($a), spl_object_id($b), \"\\n\"; unset($a, $b);\n\
+             $m = new WeakMap; $k = new stdClass; $m[$k] = new D; unset($k);\n\
+             $x = new stdClass; echo spl_object_id($x), \"\\n\";\n\
+             class E { public $d; function __construct() { $this->d = new D; }\n\
+             function __destruct() { echo \"E\\n\"; } }\n\
+             $e = new E; unset($e); $a = new stdClass; $b = new stdClass;\n\
+             echo spl_object_id($a), spl_object_id($b), \"\\n\";",
+        );
+        assert_eq!(out, "D\n12\nD\n1\nE\nD\n34\n");
+    }
+
+    #[test]
     fn weakmap_clone_and_debug_dump() {
         let out = run(
             "<?php $m = new WeakMap; $o = new stdClass; $m[$o] = 1; $c = clone $m; unset($o);\n\
