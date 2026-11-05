@@ -11,6 +11,9 @@ use std::any::Any;
 use std::rc::{Rc, Weak};
 use std::time::Instant;
 
+/// Values emptied out of garbage nodes are released this many at a time.
+const TRASH_BATCH: usize = 4096;
+
 /// What a run considers.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Mode {
@@ -217,7 +220,10 @@ impl Vm {
         // (no destructor can run before the destructor phase below, and
         // nothing here can reach a zero count: every node is still held by
         // its cycle).
-        let mut to_free: Vec<(Handle, Option<Obj>)> = Vec::new();
+        // The edges and indexes are done with: release them before the
+        // garbage handles are moved out (peak memory on large heaps).
+        g.drop_edges();
+        let mut to_free: Vec<(Handle, Option<Obj>)> = Vec::with_capacity(garbage);
         for (i, node) in g.nodes.iter_mut().enumerate() {
             if !node.live && !removed[i] {
                 to_free.push((
@@ -252,6 +258,13 @@ impl Vm {
                     }
                 }
                 Handle::Arr(_) | Handle::Taken => {}
+            }
+            // Released in batches (bounded memory on large heaps):
+            // `to_free` still holds every node being freed, so this only
+            // releases values outside it; graphs below the batch size keep
+            // the single release after the loop (and its free order).
+            if trash.len() >= TRASH_BATCH {
+                drop(std::mem::take(&mut trash));
             }
         }
         drop(to_free);

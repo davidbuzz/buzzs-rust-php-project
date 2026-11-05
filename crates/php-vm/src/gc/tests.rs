@@ -267,3 +267,16 @@ fn threshold_run_leaves_the_crossing_root() {
          var_dump($s['runs'], $s['collected'], $s['roots'], gc_collect_cycles());");
     assert_eq!(out, "int(1)\nint(10000)\nint(1)\nint(1)\n");
 }
+
+/// A cycle spanning several node chunks and trash batches of the
+/// collector (`graph::Nodes`, `TRASH_BATCH`).
+#[test]
+fn large_cycle_is_collected() {
+    let out = run("<?php class N { public $next; public $a; }\n\
+         $first = new N; $cur = $first;\n\
+         for ($i = 1; $i < 10000; $i++) { $n = new N; $cur->next = $n; $cur = $n; }\n\
+         $cur->next = $first; unset($first, $cur, $n);\n\
+         var_dump(gc_collect_cycles());\n\
+         $o = new N; var_dump(spl_object_id($o) <= 10000);");
+    assert_eq!(out, "int(10000)\nbool(true)\n");
+}
