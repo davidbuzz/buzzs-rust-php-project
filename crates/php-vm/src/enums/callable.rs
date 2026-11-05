@@ -382,6 +382,16 @@ impl Vm {
                     .is_some_and(|m| self.can_access_method(m, ctx.scope.as_ref()));
                 if let (Some(m), true) = (m.clone(), accessible) {
                     handler = Some(Handler::Method(m));
+                } else if let Some(t) = ctx.this.as_ref().filter(|t| {
+                    cs.magic.call.is_some() && instance_of(object::class_of(t), cs)
+                }) {
+                    handler = object::class_of(t)
+                        .magic
+                        .call
+                        .clone()
+                        .map(|c| Handler::Magic(c, mname.clone()));
+                    via_handler = true;
+                    fcc.object = Some(t.clone());
                 } else if m.is_some() && cs.magic.call_static.is_none() {
                     handler = None;
                 } else if let Some(c) = cs.magic.call_static.clone() {
@@ -391,17 +401,6 @@ impl Vm {
                         if let Some(t) = &ctx.this {
                             if instance_of(object::class_of(t), cs) {
                                 fcc.object = Some(t.clone());
-                            }
-                        }
-                    }
-                }
-                if handler.is_none() && m.is_none() {
-                    if let (Some(c), Some(t)) = (cs.magic.call.clone(), ctx.this.clone()) {
-                        if instance_of(object::class_of(&t), cs) {
-                            handler = Some(Handler::Magic(c, mname.clone()));
-                            via_handler = true;
-                            if fcc.object.is_none() {
-                                fcc.object = Some(t);
                             }
                         }
                     }

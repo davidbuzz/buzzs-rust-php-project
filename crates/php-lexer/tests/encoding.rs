@@ -178,5 +178,48 @@ fn scanned_offset_maps_back_to_wide_input() {
         .collect();
     let mut lexer = Lexer::with_script_encoding(&src, options(), &config);
     while lexer.next_token().unwrap().kind != TokenKind::Semicolon {}
-    assert_eq!(lexer.scanned_file_offset(), src.len());
+    // zend_get_scanned_file_offset accepts the incomplete trailing code unit:
+    // its replacement character makes the converted prefix the target length.
+    assert_eq!(lexer.scanned_file_offset(), src.len() - 1);
+}
+
+#[test]
+fn scanned_offset_uses_master_prefix_conversion_for_wide_encodings() {
+    for (name, width, bom) in [
+        (&b"UTF-16LE"[..], 2, &b"\xFF\xFE"[..]),
+        (&b"UTF-16BE"[..], 2, &b"\xFE\xFF"[..]),
+        (&b"UTF-32LE"[..], 4, &b"\xFF\xFE\0\0"[..]),
+        (&b"UTF-32BE"[..], 4, &b"\0\0\xFE\xFF"[..]),
+    ] {
+        let scripts = [encoding(name)];
+        let prefix = "<?php __halt_compiler();";
+        let body = php_mbstring::convert::fast_convert(
+            format!("{prefix}payload").as_bytes(),
+            utf8(),
+            scripts[0],
+            0x3F,
+            ErrorMode::Char,
+        )
+        .0;
+        for detect_unicode in [false, true] {
+            let mut src = Vec::new();
+            if detect_unicode {
+                src.extend_from_slice(bom);
+            }
+            src.extend_from_slice(&body);
+            let config = ScriptEncodingOptions {
+                script_encodings: &scripts,
+                detect_unicode,
+                ..ScriptEncodingOptions::default()
+            };
+            let mut lexer = Lexer::with_script_encoding(&src, options(), &config);
+            while lexer.next_token().unwrap().kind != TokenKind::Semicolon {}
+            assert_eq!(
+                lexer.scanned_file_offset(),
+                prefix.len() * width - (width - 1),
+                "{} (BOM: {detect_unicode})",
+                String::from_utf8_lossy(name)
+            );
+        }
+    }
 }

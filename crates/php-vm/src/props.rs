@@ -659,7 +659,11 @@ impl Vm {
             let msg = if op == "unset" {
                 format!("Cannot unset readonly property {}::${}", pi.class, pi.name)
             } else {
-                format!("Cannot modify readonly property {}::${}", pi.class, pi.name)
+                format!(
+                    "Cannot modify readonly property {}::${}",
+                    object::display_name(&pi.class),
+                    pi.name
+                )
             };
             return Err(self.make_throw("Error", &msg));
         }

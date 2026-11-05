@@ -124,7 +124,7 @@ impl Vm {
             .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
         if let Some(func) = cached {
             let mut call = PendingCall::new(func);
-            call.direct = true;
+            call.direct = fallback.is_none();
             self.push_pending(call);
             return Ok(());
         }
@@ -156,7 +156,7 @@ impl Vm {
             cache[slot] = Some(crate::opcode::CachedFunc::new(&func));
         }
         let mut call = PendingCall::new(func);
-        call.direct = true;
+        call.direct = fallback.is_none();
         self.push_pending(call);
         Ok(())
     }

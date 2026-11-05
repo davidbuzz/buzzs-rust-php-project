@@ -1524,6 +1524,19 @@ impl Compiler {
                                 c.span.line,
                             );
                         }
+                        if c.name.eq_ignore_case("namespace") {
+                            let object_type = match kind {
+                                ClassKind::Class => "class",
+                                ClassKind::Interface => "interface",
+                                ClassKind::Trait => "trait",
+                                ClassKind::Enum => "enum",
+                            };
+                            self.warnings.push((
+                                8192,
+                                format!("Declaring {object_type} constant called 'namespace' is deprecated"),
+                                c.span.line,
+                            ));
+                        }
                         if consts
                             .iter()
                             .any(|q: &ConstDecl| q.name.as_bytes() == c.name.name.as_slice())
