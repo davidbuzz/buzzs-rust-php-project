@@ -703,3 +703,22 @@ echo spl_object_id(new stdClass), "\n";
         "3,2,4,3\n"
     );
 }
+
+#[test]
+fn constant_strlen_folds_without_changing_results() {
+    // zend_compile_func_strlen: constant strings fold at compile time; a
+    // namespaced unqualified call resolves at run time and is not folded.
+    assert_eq!(
+        run(r#"<?php
+namespace A {
+    function strlen($s) { return 42; }
+    echo strlen("x"), " ", \strlen("x"), "\n";
+}
+namespace {
+    $s = "abcd";
+    echo strlen("hallo"), " ", strlen("a" . "bc"), " ", strlen($s), " ", strlen(""), "\n";
+}
+"#),
+        "42 1\n5 3 4 0\n"
+    );
+}

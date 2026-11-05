@@ -821,6 +821,10 @@ impl Vm {
                 self.functions.get(&ZStr::from("array_map")),
                 Some(Func::Builtin(_))
             ),
+            strlen_builtin: matches!(
+                self.functions.get(&ZStr::from("strlen")),
+                Some(Func::Builtin(_))
+            ),
             anon_base: self.anon_counter,
         };
         match crate::compiler::compile(&program, Rc::from(src), opts) {

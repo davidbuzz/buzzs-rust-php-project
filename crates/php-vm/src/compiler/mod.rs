@@ -85,6 +85,10 @@ pub struct CompileOptions {
     /// Whether `array_map` is currently registered as an internal function
     /// (`zend_compile_func_array_map()` needs its arginfo).
     pub array_map_builtin: bool,
+    /// Whether `strlen` is currently registered as an internal function
+    /// (`zend_try_compile_special_func()` only applies to internal
+    /// functions found at compile time).
+    pub strlen_builtin: bool,
     /// The request-wide anonymous class counter at the start of this
     /// compilation (`CG(rtd_key_counter)`), so recompiling a file or eval
     /// string names its anonymous classes afresh.
