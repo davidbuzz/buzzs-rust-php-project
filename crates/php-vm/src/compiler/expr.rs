@@ -996,6 +996,18 @@ impl Compiler {
                     }
                 }
                 let mut p = self.compile_place_base(base)?;
+                // `zend_ast_evaluate_ex` rejects an object container of a
+                // constant-expression dimension fetch (it could run
+                // arbitrary code through `offsetGet()`) before evaluating
+                // the offset. Only a container computed into a temporary
+                // can be an object (nested fetches are not checked).
+                if let (Some(_), PlaceBase::Value(v @ Operand::Tmp(_))) = (index, &p.base) {
+                    if p.segs.is_empty() && self.in_evaluated_const_expr() {
+                        self.emit(Op::ConstDimCheck {
+                            obj: Compiler::keep(*v),
+                        });
+                    }
+                }
                 let seg = match index {
                     Some(i) => Seg::Dim(self.compile_expr(i)?),
                     None => Seg::Append,

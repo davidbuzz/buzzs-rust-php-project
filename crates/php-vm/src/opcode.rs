@@ -577,6 +577,10 @@ pub enum Op {
         name: Operand,
         dst: u32,
     },
+    /// The object check of `ZEND_AST_DIM` in `zend_ast_evaluate_ex`:
+    /// throws when the (kept) container `obj` of a constant-expression
+    /// dimension fetch is an object, before the offset is evaluated.
+    ConstDimCheck { obj: Operand },
 }
 
 /// A temporary that an exception thrown by an op in `start..end` releases

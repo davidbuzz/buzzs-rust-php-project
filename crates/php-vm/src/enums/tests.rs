@@ -120,3 +120,108 @@ fn callable_resolution_errors() {
          bool(false)\nbool(false)\n"
     );
 }
+
+#[test]
+fn from_parses_its_argument_like_zpp() {
+    // `zend_enum_from_base`: Z_PARAM_LONG / Z_PARAM_STR under strict_types.
+    let out = run(&format!(
+        "<?php declare(strict_types=1); enum I: int {{ case A = 42; }} enum S: string {{ case A = '42'; }}\n\
+         try {{ S::from(42); }} {CATCH}\n\
+         try {{ S::tryFrom(1.5); }} {CATCH}\n\
+         try {{ I::from('42'); }} {CATCH}\n\
+         try {{ I::from(42.0); }} {CATCH}\n\
+         var_dump(I::from(42), S::from('42'));"
+    ));
+    assert_eq!(
+        out,
+        "TypeError: S::from(): Argument #1 ($value) must be of type string, int given\n\
+         TypeError: S::tryFrom(): Argument #1 ($value) must be of type string, float given\n\
+         TypeError: I::from(): Argument #1 ($value) must be of type int, string given\n\
+         TypeError: I::from(): Argument #1 ($value) must be of type int, float given\n\
+         enum(I::A)\nenum(S::A)\n"
+    );
+    // Weak mode: Z_PARAM_LONG / Z_PARAM_STR_OR_LONG.
+    let out = run(&format!(
+        "<?php enum I: int {{ case A = 42; }} enum S: string {{ case A = '42'; case B = '1.0E+30'; }}\n\
+         var_dump(S::from(42), I::from('42'), I::from(42.0), S::from(1e30));\n\
+         try {{ I::from([]); }} {CATCH}\n\
+         try {{ S::from([]); }} {CATCH}\n\
+         try {{ I::from(1e30); }} {CATCH}"
+    ));
+    assert_eq!(
+        out,
+        "enum(S::A)\nenum(I::A)\nenum(I::A)\nenum(S::B)\n\
+         TypeError: I::from(): Argument #1 ($value) must be of type int, array given\n\
+         TypeError: S::from(): Argument #1 ($value) must be of type string|int, array given\n\
+         TypeError: I::from(): Argument #1 ($value) must be of type int, float given\n"
+    );
+}
+
+#[test]
+fn link_time_enum_errors() {
+    let cases = [
+        (
+            "<?php enum Foo { case Bar; public static function cases(): array { return []; } }",
+            "Fatal error: Cannot redeclare Foo::cases()",
+        ),
+        (
+            "<?php enum Foo: int { case Bar = 0; public static function tryFrom(int|string $v): ?self { return null; } }",
+            "Fatal error: Cannot redeclare Foo::tryfrom()",
+        ),
+        (
+            "<?php class Foo implements BackedEnum {}",
+            "Fatal error: Non-enum class Foo cannot implement interface UnitEnum",
+        ),
+        (
+            "<?php enum Foo implements BackedEnum {}",
+            "Fatal error: Non-backed enum Foo cannot implement interface BackedEnum",
+        ),
+        (
+            "<?php enum Foo implements Traversable {}",
+            "Fatal error: Enum Foo must implement interface Traversable as part of either Iterator or IteratorAggregate in Unknown on line 0",
+        ),
+    ];
+    for (src, want) in cases {
+        let out = run(src);
+        assert!(out.contains(want), "{src}: {out}");
+    }
+    // The Serializable deprecation comes from the interface hook, before
+    // `zend_verify_enum` rejects the enum.
+    let out = run("<?php enum Foo implements Serializable { case Bar;\n\
+         public function serialize() {} public function unserialize($d) {} }");
+    let dep = out.find("Deprecated: Foo implements the Serializable interface");
+    let fatal = out.find("Fatal error: Enum Foo cannot implement the Serializable interface");
+    assert!(matches!((dep, fatal), (Some(d), Some(f)) if d < f), "{out}");
+}
+
+#[test]
+fn dim_on_object_in_constant_expression() {
+    let out = run(&format!(
+        "<?php enum Foo implements ArrayAccess {{ case Bar;\n\
+         public function offsetGet($k): mixed {{ return 42; }}\n\
+         public function offsetExists($k): bool {{ return true; }}\n\
+         public function offsetSet($k, $v): void {{}}\n\
+         public function offsetUnset($k): void {{}} }}\n\
+         class X {{ const A = [1, [2, 3]]; const B = X::A[1][0]; const C = Foo::Bar[0]; }}\n\
+         var_dump(X::B);\n\
+         try {{ var_dump(X::C); }} {CATCH}"
+    ));
+    assert_eq!(
+        out,
+        "int(2)\nError: Cannot use [] on objects in constant expression\n"
+    );
+}
+
+#[test]
+fn case_objects_are_owned_by_their_constant() {
+    // Zend/tests/enum/cases-refcount.phpt and unserialize-refcount.phpt.
+    let out = run("<?php enum Foo { case Bar; }\n\
+         function callCases() { Foo::cases(); }\n\
+         callCases(); debug_zval_dump(Foo::Bar);\n\
+         $foo = Foo::Bar; $bar = unserialize('E:7:\"Foo:Bar\";'); debug_zval_dump($foo);");
+    assert_eq!(
+        out,
+        "object(Foo)#1 (1) refcount(2){\n  [\"name\"]=>\n  string(3) \"Bar\" interned\n}\n\
+         object(Foo)#1 (1) refcount(4){\n  [\"name\"]=>\n  string(3) \"Bar\" interned\n}\n"
+    );
+}

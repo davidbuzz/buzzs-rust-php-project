@@ -19,12 +19,11 @@ thread_local! {
 }
 
 impl Vm {
-    /// The object for enum case `name`.
+    /// The object for enum case `name`. Like the class constant zval of
+    /// php-src, the case constant's value is the only owner of the object
+    /// (so `debug_zval_dump(Foo::Bar)` shows refcount 2).
     pub(crate) fn enum_case(&mut self, cls: &Rc<Class>, name: &ZStr) -> VmResult<Value> {
-        if let Some(v) = cls.enum_cases.borrow().get(name) {
-            return Ok(v.clone());
-        }
-        let Some(c) = cls.find_const(name.as_bytes()).cloned() else {
+        let Some(c) = cls.find_const(name.as_bytes()) else {
             return Err(self.make_throw(
                 "Error",
                 &format!(
@@ -40,11 +39,15 @@ impl Vm {
                 &format!("{}::{} is not a case", cls.name, name.to_string_lossy()),
             ));
         }
+        if let Some(v) = c.value.borrow().as_ref() {
+            return Ok(v.clone());
+        }
+        let c = c.clone();
         // `ZEND_FETCH_CLASS_CONSTANT` builds the whole backed table only for
         // user enums; an internal enum's case is created on its own.
         if cls.backing.is_some() && cls.flags & cflags::INTERNAL == 0 {
             self.enum_ensure_backed_table(cls)?;
-            if let Some(v) = cls.enum_cases.borrow().get(name) {
+            if let Some(v) = c.value.borrow().as_ref() {
                 return Ok(v.clone());
             }
         }
@@ -81,9 +84,13 @@ impl Vm {
     /// Builds the backed-enum table unless all cases already exist (or it is
     /// being built further up the stack).
     fn enum_ensure_backed_table(&mut self, cls: &Rc<Class>) -> VmResult<()> {
-        let total = cls.consts.iter().filter(|c| c.is_case).count();
+        let complete = cls
+            .consts
+            .iter()
+            .filter(|c| c.is_case)
+            .all(|c| c.value.borrow().is_some());
         let ptr = Rc::as_ptr(cls);
-        if cls.enum_cases.borrow().len() >= total || BUILDING.with(|b| b.borrow().contains(&ptr)) {
+        if complete || BUILDING.with(|b| b.borrow().contains(&ptr)) {
             return Ok(());
         }
         BUILDING.with(|b| b.borrow_mut().push(ptr));
@@ -98,7 +105,7 @@ impl Vm {
         let cases: Vec<Rc<ClassConst>> = cls.consts.iter().filter(|c| c.is_case).cloned().collect();
         let mut values: Vec<Value> = Vec::with_capacity(cases.len());
         for c in &cases {
-            let existing = cls.enum_cases.borrow().get(&c.name).cloned();
+            let existing = c.value.borrow().clone();
             let v = match existing {
                 Some(Value::Object(o)) => Self::enum_case_value(&o).unwrap_or_default(),
                 _ => self.enum_case_backing_value(cls, c)?,
@@ -115,7 +122,7 @@ impl Vm {
             values.push(v);
         }
         for (c, v) in cases.iter().zip(values) {
-            if !cls.enum_cases.borrow().contains_key(&c.name) {
+            if c.value.borrow().is_none() {
                 Self::enum_create_case(cls, c, Some(v));
             }
         }
@@ -126,7 +133,8 @@ impl Vm {
     fn enum_create_case(cls: &Rc<Class>, c: &ClassConst, value: Option<Value>) -> Value {
         let mut slots = vec![None; cls.props.len()];
         if let Some(pi) = cls.prop_map.get(&ZStr::from("name")) {
-            slots[pi.slot as usize] = Some(Value::Str(c.name.clone()));
+            // The case name is the (interned) constant name.
+            slots[pi.slot as usize] = Some(Value::Str(c.name.interned()));
         }
         if let (Some(v), Some(pi)) = (value, cls.prop_map.get(&ZStr::from("value"))) {
             slots[pi.slot as usize] = Some(v);
@@ -136,9 +144,6 @@ impl Vm {
         d.flags
             .set(d.flags.get() | object::oflags::ENUM_CASE | object::oflags::DESTRUCTED);
         let v = Value::Object(o);
-        cls.enum_cases
-            .borrow_mut()
-            .insert(c.name.clone(), v.clone());
         *c.value.borrow_mut() = Some(v.clone());
         v
     }
@@ -237,48 +242,9 @@ impl Vm {
         Ok(Value::Array(ZArray::from_values(out)))
     }
 
-    /// `Enum::from()` / `Enum::tryFrom()`.
+    /// `Enum::from()` / `Enum::tryFrom()` (`zend_enum_from_base`).
     pub(crate) fn enum_from(&mut self, cls: &Rc<Class>, v: Value, try_: bool) -> VmResult<Value> {
-        let is_int = cls.backing == Some(mask::LONG);
-        let v = if is_int {
-            match v {
-                Value::Str(s) => {
-                    let parsed = php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false)
-                        .map(|n| n.value);
-                    match parsed {
-                        Some(php_runtime::numeric::Number::Int(i)) => Value::Int(i),
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-                        Some(php_runtime::numeric::Number::Float(f))
-                            if f.is_finite() && f >= i64::MIN as f64 && f < i64::MAX as f64 =>
-                        {
-                            if f.fract() != 0.0 {
-                                self.deprecated(&format!(
-                                    "Implicit conversion from float-string \"{}\" to int loses precision",
-                                    s.to_string_lossy()
-                                ))?;
-                            }
-                            Value::Int(f as i64)
-                        }
-                        _ => {
-                            return Err(self.make_throw(
-                                "TypeError",
-                                &format!(
-                                "{}::{}(): Argument #1 ($value) must be of type int, string given",
-                                cls.name,
-                                if try_ { "tryFrom" } else { "from" }
-                            ),
-                            ))
-                        }
-                    }
-                }
-                other => other,
-            }
-        } else {
-            match v {
-                Value::Str(_) => v,
-                other => Value::Str(self.to_zstr(&other)?),
-            }
-        };
+        let v = self.enum_from_key(cls, &v, try_)?;
         self.enum_ensure_backed_table(cls)?;
         let names: Vec<ZStr> = cls
             .consts
@@ -306,6 +272,76 @@ impl Vm {
             "ValueError",
             &format!("{desc} is not a valid backing value for enum {}", cls.name),
         ))
+    }
+
+    /// The argument parsing of `zend_enum_from_base`: `Z_PARAM_LONG` for
+    /// an int-backed enum; `Z_PARAM_STR` under `strict_types`, otherwise
+    /// `Z_PARAM_STR_OR_LONG`, for a string-backed one (an int key is then
+    /// converted to a string). The parameter is `@unchecked`: the declared
+    /// `int|string` is arginfo only, so the value arrives as passed.
+    fn enum_from_key(&mut self, cls: &Rc<Class>, v: &Value, try_: bool) -> VmResult<Value> {
+        let is_int = cls.backing == Some(mask::LONG);
+        let strict = self.builtin_caller_strict();
+        let fname = if try_ { "tryFrom" } else { "from" };
+        let key = match v {
+            Value::Int(_) if is_int || !strict => Some(v.clone()),
+            Value::Str(_) if !is_int => Some(v.clone()),
+            _ if strict => None,
+            Value::Null => {
+                // `zend_null_arg_deprecated` names the arginfo type.
+                self.deprecated(&format!(
+                    "{}::{fname}(): Passing null to parameter #1 ($value) of type string|int is deprecated",
+                    cls.name
+                ))?;
+                Some(Value::Int(0))
+            }
+            other => match self.parse_arg_long_weak(other)? {
+                Some(l) => Some(Value::Int(l)),
+                None if is_int => None,
+                // `zend_parse_arg_str_or_long_slow`: then as a string.
+                None => {
+                    let mut s = other.clone();
+                    if self.weak_scalar_coerce(mask::STRING, &mut s)? {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                }
+            },
+        };
+        let Some(key) = key else {
+            let expected = if is_int {
+                "int"
+            } else if strict {
+                "string"
+            } else {
+                "string|int"
+            };
+            return Err(self.make_throw(
+                "TypeError",
+                &format!(
+                    "{}::{fname}(): Argument #1 ($value) must be of type {expected}, {} given",
+                    cls.name,
+                    crate::typecheck::given_type(v)
+                ),
+            ));
+        };
+        Ok(match key {
+            Value::Int(i) if !is_int => Value::Str(php_runtime::convert::long_to_zstr(i)),
+            k => k,
+        })
+    }
+
+    /// `ZEND_ARG_USES_STRICT_TYPES()`: whether the caller of the running
+    /// builtin (the frame below its own) is user code declared with
+    /// `strict_types=1`; an internal caller passes its arguments weakly.
+    fn builtin_caller_strict(&self) -> bool {
+        let n = self.frames.len();
+        n >= 2
+            && self
+                .frames
+                .get(n - 2)
+                .is_some_and(|f| f.kind != crate::vm::FrameKind::Builtin && f.code.strict_types)
     }
 
     /// Custom property table of internal objects (closures).
