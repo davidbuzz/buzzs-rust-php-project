@@ -698,32 +698,10 @@ impl SplHost for VmHost<'_> {
     }
 
     fn run_pending_destructors(&mut self) -> RtResult<()> {
-        let mut first: Option<Throw> = None;
-        loop {
-            let pending = php_vm::object::take_pending_destructors();
-            if pending.is_empty() {
-                break;
-            }
-            for o in pending {
-                let cls = class_of(&o).clone();
-                let r = if cls.magic.destruct.is_some() {
-                    self.vm
-                        .call_method_by_name(&o, "__destruct", Vec::new())
-                        .map(|_| ())
-                } else if let Some(f) = cls.hooks.as_ref().and_then(|h| h.destruct) {
-                    f(self.vm, &o)
-                } else {
-                    Ok(())
-                };
-                if let Err(t) = r {
-                    first.get_or_insert(t);
-                }
-            }
-        }
-        match first {
-            Some(t) => Err(to_rt(self.vm, t)),
-            None => Ok(()),
-        }
+        // The VM's own queue walk: native `dtor_obj` hooks after any
+        // `__destruct`, later exceptions chained to earlier ones.
+        let r = self.vm.run_released_destructors();
+        self.vm_rt(r)
     }
 
     fn write_output(&mut self, bytes: &[u8]) -> RtResult<()> {

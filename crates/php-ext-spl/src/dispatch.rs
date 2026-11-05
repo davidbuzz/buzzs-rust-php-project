@@ -213,6 +213,13 @@ fn uncloneable(name: &str) -> bool {
         || php_spl::classes::is_subclass_of(name, "RecursiveIteratorIterator")
 }
 
+/// Classes whose objects own a directory or file stream, closed by their
+/// `dtor_obj` (`spl_filesystem_object_destroy_object`).
+fn owns_stream(name: &str) -> bool {
+    php_spl::classes::is_subclass_of(name, "DirectoryIterator")
+        || php_spl::classes::is_subclass_of(name, "SplFileObject")
+}
+
 /// Registers one SPL class or interface.
 fn register_class(vm: &mut Vm, c: &'static ClassDef) {
     let sigs = signatures();
@@ -254,7 +261,11 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
         }
     }
     if c.kind != ClassKind::Interface {
-        b = b.hooks(crate::hooks::class_hooks());
+        b = b.hooks(if owns_stream(c.name) {
+            crate::hooks::filesystem_class_hooks()
+        } else {
+            crate::hooks::class_hooks()
+        });
     }
     if matches!(c.name, "IteratorIterator" | "RecursiveIteratorIterator") {
         // `spl_dual_it_get_method` / `spl_recursive_it_get_method` forward

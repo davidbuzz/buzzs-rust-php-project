@@ -37,6 +37,25 @@ pub fn class_hooks() -> ClassHooks {
     }
 }
 
+/// The hooks of the classes whose objects own a directory or file stream
+/// (`DirectoryIterator`, `SplFileObject` and their subclasses): the SPL
+/// handlers plus `dtor_obj`, which closes the stream.
+#[must_use]
+pub fn filesystem_class_hooks() -> ClassHooks {
+    ClassHooks {
+        destruct: Some(filesystem_destroy),
+        ..class_hooks()
+    }
+}
+
+/// `spl_filesystem_object_destroy_object`.
+fn filesystem_destroy(vm: &mut Vm, o: &Obj) -> VmResult<()> {
+    match spl_state_of(o) {
+        Some(st) => crate::files::destroy(vm, &st),
+        None => Ok(()),
+    }
+}
+
 thread_local! {
     /// The stateful SPL base of each class seen by [`create`], keyed by
     /// the class address (classes live for the whole request).
