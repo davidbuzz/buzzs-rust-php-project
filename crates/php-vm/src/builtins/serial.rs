@@ -877,8 +877,17 @@ impl Unserializer<'_> {
                 if tag == b'S' {
                     vm.docref(E_DEPRECATED, "Unserializing the 'S' format is deprecated")?;
                 }
-                let _ = is_key;
-                Ok(Some(Value::Str(ZStr::from(bytes))))
+                // `zend_string_finit_fast`: empty and one-byte `s:` values
+                // are the interned `ZSTR_EMPTY_ALLOC()` / `ZSTR_CHAR(c)`
+                // (keys go through `zend_string_finit_existing_interned`).
+                let s = if tag == b's' && !is_key && bytes.len() <= 1 {
+                    bytes
+                        .first()
+                        .map_or_else(ZStr::empty, |&c| ZStr::from_byte(c))
+                } else {
+                    ZStr::from(bytes)
+                };
+                Ok(Some(Value::Str(s)))
             }
             _ => Ok(None),
         }
@@ -990,7 +999,12 @@ impl Unserializer<'_> {
     }
 
     fn nested_array_inner(&mut self, vm: &mut Vm, elements: i64) -> VmResult<Option<HashTable>> {
-        let mut t = HashTable::new();
+        // `array_finit_size_mixed`: never packed, since `var_hash` may keep
+        // pointers to the elements.
+        let cap = usize::try_from(elements)
+            .unwrap_or(0)
+            .min(self.cur.max().saturating_sub(self.cur.pos));
+        let mut t = HashTable::with_capacity_mixed(cap);
         let mut remaining = elements;
         while remaining > 0 {
             remaining -= 1;

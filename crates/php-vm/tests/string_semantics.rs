@@ -164,3 +164,17 @@ echo [] . new T, "\n";
          W: Array to string conversion\ntoString\nArrayt\n"
     );
 }
+
+/// `unserialize()` builds non-empty arrays with `array_finit_size_mixed`
+/// (never packed) and `s:` values with `zend_string_finit_fast` (empty and
+/// one-byte strings interned), as in ext/mysqli/tests/mysqli_result_references.
+#[test]
+fn unserialize_arrays_are_mixed_and_short_strings_interned() {
+    let out = run(
+        r#"<?php debug_zval_dump(unserialize('a:3:{i:0;s:1:"z";i:1;s:0:"";i:2;a:1:{i:0;s:2:"ab";}}'));"#,
+    );
+    assert!(!out.contains("packed"), "{out}");
+    assert!(out.contains("string(1) \"z\" interned\n"), "{out}");
+    assert!(out.contains("string(0) \"\" interned\n"), "{out}");
+    assert!(out.contains("string(2) \"ab\" refcount("), "{out}");
+}
