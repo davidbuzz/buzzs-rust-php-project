@@ -559,3 +559,60 @@ fn ini_access_constants() {
         echo INI_USER, INI_PERDIR, INI_SYSTEM, INI_ALL, \INI_ALL, constant("INI_ALL");"#);
     assert_eq!(out, "124777");
 }
+
+/// `ext/standard/assert.c`: the startup values of the `assert.*`
+/// directives raise their deprecations, and the startup
+/// `assert.callback` (`ASSERTG(cb)`) is called with four arguments.
+#[test]
+fn assert_startup_deprecations_and_ini_callback() {
+    let opts = VmOptions {
+        ini: [
+            ("assert.warning", "0"),
+            ("assert.callback", "f1"),
+            ("assert.bail", "0"),
+            ("assert.exception", "0"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect(),
+    };
+    let ext = php_ext_stdmisc::StdMisc;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let out = run_with(
+        &opts,
+        &exts,
+        r#"function f1($f, $l, $u, $d) { echo "f1 $l $d\n"; } var_dump(assert(0));"#,
+    );
+    assert_eq!(
+        out,
+        "\nDeprecated: PHP Startup: assert.warning INI setting is deprecated in Unknown on line 0\n\
+         \nDeprecated: PHP Startup: assert.callback INI setting is deprecated in Unknown on line 0\n\
+         \nDeprecated: PHP Startup: assert.exception INI setting is deprecated in Unknown on line 0\n\
+         f1 1 assert(0)\nbool(false)\n"
+    );
+}
+
+/// `assert_options(ASSERT_CALLBACK)` keeps any callable (`ASSERTG(callback)`)
+/// apart from the INI value; `ini_set('assert.callback')` replaces it and
+/// is deprecated; the `ASSERT_*` constants are deprecated.
+#[test]
+fn assert_options_callback_state() {
+    let out = run(
+        r#"class C { static function cb($f, $l, $u, $d) { echo "C $d\n"; } }
+assert_options(ASSERT_CALLBACK, ['C', 'cb']);
+echo ini_get('assert.callback'), "|\n";
+try { assert(false); } catch (AssertionError $e) { echo $e->getMessage(), "\n"; }
+ini_set('assert.callback', 'nope');
+try { assert(false); } catch (Error $e) { echo $e::class, ':', $e->getPrevious()->getMessage(), "\n"; }"#,
+    );
+    let dep = "\nDeprecated: Constant ASSERT_CALLBACK is deprecated since 8.3, as assert_options() is deprecated in test.php on line 2\n\
+               \nDeprecated: Function assert_options() is deprecated since 8.3 in test.php on line 2\n";
+    assert_eq!(
+        out,
+        format!(
+            "{dep}|\nC assert(false)\nassert(false)\n\
+             \nDeprecated: ini_set(): assert.callback INI setting is deprecated in test.php on line 5\n\
+             AssertionError:Invalid callback nope, function \"nope\" not found or invalid function name\n"
+        )
+    );
+}
