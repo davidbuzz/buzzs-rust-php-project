@@ -130,6 +130,14 @@ let out = input.repeat(mult);
   (any size the script picks).
 - Keep the non-limit errors (`Possible integer overflow in memory allocation`)
   in the bindings; they are not limit checks.
+- Memory that php-src obtains from a library's own `malloc` (not `emalloc`)
+  is invisible to `memory_limit` and `memory_get_usage()`. Run such code in
+  `php_memlimit::uncounted(|| ...)`: huge blocks (> 2 MiB − 4 KiB) allocated
+  inside are registered by address and stay out of usage, peak, the soft
+  limit and the hard ceiling until freed (wherever that happens); smaller
+  blocks are counted as usual. php-ext-gmp wraps every handler this way
+  (libgmp allocates limbs with the system `malloc`). Only `RLIMIT_AS`
+  bounds uncounted blocks.
 
 ## 5. Userland functions (php-vm `builtins/core.rs`)
 
