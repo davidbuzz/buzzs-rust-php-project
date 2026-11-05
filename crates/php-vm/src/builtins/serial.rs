@@ -1199,9 +1199,10 @@ impl Unserializer<'_> {
             return Ok(None);
         }
         self.cur.pos = n_end + 2;
-        let has_unserialize = !incomplete
-            && (cls.magic.unserialize.is_some()
-                || cls.hooks.as_ref().is_some_and(|h| h.unserialize.is_some()));
+        // `ce->__unserialize`: a native `unserialize` hook only stands in
+        // for the method (it declines without one), so SPL classes such as
+        // `RegexIterator` restore plain properties (gc_043).
+        let has_unserialize = !incomplete && cls.magic.unserialize.is_some();
         if !incomplete && cls.instance_of_name(b"serializable") && !has_unserialize {
             vm.warning(&format!(
                 "Erroneous data format for unserializing '{}'",

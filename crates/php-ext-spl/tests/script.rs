@@ -758,3 +758,14 @@ catch (InvalidArgumentException $e) { echo $e->getMessage(), "\n"; }
         "\nDeprecated: ArrayObject::unserialize(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants in test.php on line 3\n\nDeprecated: Creation of dynamic property ArrayObject::$0 is deprecated in test.php on line 3\nOverloaded object of type SplFixedArray is not compatible with ArrayObject\n"
     );
 }
+
+/// gc_043: an SPL class without `__unserialize()` (its native unserialize
+/// hook declines) restores its serialized members as properties.
+#[test]
+fn unserialize_restores_properties_of_spl_classes_without_unserialize_method() {
+    let out = run(r#"<?php
+$o = unserialize('O:16:"IteratorIterator":1:{s:1:"x";i:3;}');
+var_dump($o->x);
+"#);
+    assert_eq!(out, "int(3)\n");
+}
