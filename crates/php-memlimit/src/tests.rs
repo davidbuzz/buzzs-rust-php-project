@@ -533,3 +533,101 @@ fn cross_thread_accounting_is_exact() {
     drop(mine);
     assert_eq!(a.raw_usage(), 0);
 }
+
+#[test]
+fn uncounted_scope_hides_huge_blocks() {
+    let a = CountingAlloc::new(System);
+    a.request_start(Some(4 * M)).expect("limit");
+    let base = a.usage();
+    let small = uncounted(|| alloc(&a, 1000));
+    assert_eq!(a.usage(), base + 1000, "small blocks stay counted");
+    let mut big = uncounted(|| alloc(&a, 16 * M));
+    assert!(
+        !big.p.is_null(),
+        "neither limit applies to uncounted blocks"
+    );
+    assert_eq!(a.usage(), base + 1000);
+    assert_eq!(a.uncounted_bytes(), 16 * M);
+    assert_eq!(a.check(), None, "no soft-limit violation is recorded");
+    // Growing it outside the scope keeps it uncounted, past the hard
+    // ceiling (2 x 4 MiB) too.
+    grow(&mut big, 32 * M);
+    assert_eq!(big.layout.size(), 32 * M);
+    assert_eq!(a.usage(), base + 1000);
+    assert_eq!(a.uncounted_bytes(), 32 * M);
+    assert_eq!(a.check(), None);
+    assert!(a.peak() < base + M, "uncounted blocks never reach the peak");
+    // Shrinking below the huge threshold makes it an ordinary block.
+    grow(&mut big, 1024);
+    assert_eq!(big.layout.size(), 1024);
+    assert_eq!(a.uncounted_bytes(), 0);
+    assert_eq!(a.usage(), base + 1000 + 1024);
+    drop(big);
+    drop(small);
+    assert_eq!(a.usage(), base);
+    assert_eq!(a.stats().current, 0);
+}
+
+#[test]
+fn uncounted_blocks_freed_outside_the_scope() {
+    let a = CountingAlloc::new(System);
+    let b = uncounted(|| alloc(&a, 8 * M));
+    let layout = Layout::from_size_align(4 * M, 8).expect("layout");
+    // SAFETY: non-zero size.
+    let z = uncounted(|| unsafe { a.alloc_zeroed(layout) });
+    assert!(!z.is_null());
+    // SAFETY: `z` points to `4 * M` zeroed bytes.
+    let (first, last) = unsafe { (*z, *z.add(4 * M - 1)) };
+    assert_eq!((first, last), (0, 0));
+    assert_eq!(a.stats().current, 0);
+    assert_eq!(a.uncounted_bytes(), 12 * M);
+    assert_eq!(a.stats().allocs, 2);
+    drop(b);
+    // SAFETY: `z` came from `a.alloc_zeroed(layout)`.
+    unsafe { a.dealloc(z, layout) };
+    assert_eq!(a.stats().current, 0, "frees do not underflow the counters");
+    assert_eq!(a.uncounted_bytes(), 0);
+    assert_eq!(a.stats().frees, 2);
+}
+
+#[test]
+fn huge_blocks_outside_the_scope_stay_counted() {
+    let a = CountingAlloc::new(System);
+    let mut b = alloc(&a, 8 * M);
+    assert_eq!(a.stats().current, 8 * M);
+    grow(&mut b, 16 * M);
+    assert_eq!(a.stats().current, 16 * M);
+    assert_eq!(a.uncounted_bytes(), 0);
+    drop(b);
+    assert_eq!(a.stats().current, 0);
+}
+
+#[test]
+fn counted_block_grown_huge_in_scope_leaves_the_accounting() {
+    let a = CountingAlloc::new(System);
+    let mut b = alloc(&a, M);
+    assert_eq!(a.stats().current, M);
+    uncounted(|| grow(&mut b, 8 * M));
+    assert_eq!(b.layout.size(), 8 * M);
+    assert_eq!(a.stats().current, 0);
+    assert_eq!(a.uncounted_bytes(), 8 * M);
+    drop(b);
+    assert_eq!(a.stats().current, 0);
+    assert_eq!(a.uncounted_bytes(), 0);
+}
+
+#[test]
+fn full_uncounted_registry_falls_back_to_counting() {
+    let a = CountingAlloc::new(System);
+    let size = 3 * M;
+    let blocks: Vec<Block<'_>> = (0..64).map(|_| uncounted(|| alloc(&a, size))).collect();
+    assert!(blocks.iter().all(|b| !b.p.is_null()));
+    assert_eq!(a.uncounted_bytes(), 64 * size);
+    assert_eq!(a.stats().current, 0);
+    let extra = uncounted(|| alloc(&a, size));
+    assert_eq!(a.stats().current, size, "the 65th huge block is counted");
+    drop(blocks);
+    assert_eq!(a.uncounted_bytes(), 0);
+    drop(extra);
+    assert_eq!(a.stats().current, 0);
+}

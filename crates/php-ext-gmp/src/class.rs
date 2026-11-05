@@ -129,7 +129,13 @@ fn finish_shift(
     new_gmp(vm, gmp::count_op(op, &base, count))
 }
 
+/// The object handlers run in an uncounted allocation scope like the
+/// functions (see `uncounted!`): they build, copy and format numbers.
 fn do_operation(vm: &mut Vm, op: BinaryOp, l: &Value, r: &Value) -> VmResult<Option<Value>> {
+    php_memlimit::uncounted(|| do_operation_impl(vm, op, l, r))
+}
+
+fn do_operation_impl(vm: &mut Vm, op: BinaryOp, l: &Value, r: &Value) -> VmResult<Option<Value>> {
     let op = match op {
         BinaryOp::Add => GmpOp::Add,
         BinaryOp::Sub => GmpOp::Sub,
@@ -163,6 +169,10 @@ fn do_operation(vm: &mut Vm, op: BinaryOp, l: &Value, r: &Value) -> VmResult<Opt
 }
 
 fn compare(vm: &mut Vm, l: &Value, r: &Value) -> VmResult<Option<i32>> {
+    php_memlimit::uncounted(|| compare_impl(vm, l, r))
+}
+
+fn compare_impl(vm: &mut Vm, l: &Value, r: &Value) -> VmResult<Option<i32>> {
     let (l, r) = (l.deref(), r.deref());
     match (&l, &r) {
         (Value::Null, _) => return Ok(Some(-1)),
@@ -175,6 +185,10 @@ fn compare(vm: &mut Vm, l: &Value, r: &Value) -> VmResult<Option<i32>> {
 }
 
 fn cast(_vm: &mut Vm, o: &Obj, target: CastTarget) -> VmResult<Option<Value>> {
+    php_memlimit::uncounted(|| cast_impl(o, target))
+}
+
+fn cast_impl(o: &Obj, target: CastTarget) -> VmResult<Option<Value>> {
     let Some(m) = mpz_of(o) else {
         return Ok(None);
     };
@@ -198,6 +212,10 @@ fn std_props(o: &Obj) -> HashTable {
 }
 
 fn properties_for(_vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
+    php_memlimit::uncounted(|| properties_for_impl(o, purpose))
+}
+
+fn properties_for_impl(o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
     if purpose != PropertyPurpose::Debug {
         return Ok(None);
     }
@@ -222,7 +240,7 @@ fn create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
 }
 
 fn clone(_vm: &mut Vm, old: &Obj, new: &Obj) -> VmResult<()> {
-    set_internal(new, GmpState(mpz_of(old).unwrap_or_default()));
+    php_memlimit::uncounted(|| set_internal(new, GmpState(mpz_of(old).unwrap_or_default())));
     Ok(())
 }
 
@@ -347,14 +365,18 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .method(
             "__construct(int|string $num = 0, int $base = 0)",
             acc::PUBLIC,
-            construct,
+            uncounted!(construct),
         )
-        .method("__serialize(): array", acc::PUBLIC, serialize)
-        .method("__unserialize(array $data): void", acc::PUBLIC, unserialize)
+        .method("__serialize(): array", acc::PUBLIC, uncounted!(serialize))
+        .method(
+            "__unserialize(array $data): void",
+            acc::PUBLIC,
+            uncounted!(unserialize),
+        )
         .method(
             "unserialize(string $data): void",
             acc::PRIVATE,
-            unserialize_legacy,
+            uncounted!(unserialize_legacy),
         )
         .hooks(hooks)
         .register(vm);

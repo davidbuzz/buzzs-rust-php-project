@@ -12,6 +12,26 @@
 // Handlers follow the usual short names (a = args, o = object, m = number).
 #![allow(clippy::many_single_char_names)]
 
+/// Turns the native handler `$f` into one that runs inside
+/// [`php_memlimit::uncounted`].
+///
+/// php-src's `ext/gmp` leaves libgmp on the system allocator (it never
+/// calls `mp_set_memory_functions`), so the limbs of a GMP number never
+/// count toward `memory_limit` or `memory_get_usage()`; running every
+/// handler of the extension in an uncounted scope gives php-gmp's limb
+/// buffers the same status.
+macro_rules! uncounted {
+    ($f:ident) => {{
+        fn uncounted_handler(
+            vm: &mut php_vm::Vm,
+            a: &mut php_vm::ext::Args,
+        ) -> php_vm::ext::VmResult<php_runtime::Value> {
+            php_memlimit::uncounted(|| $f(vm, a))
+        }
+        uncounted_handler as php_vm::ext::NativeFn
+    }};
+}
+
 mod class;
 mod funcs;
 
@@ -89,18 +109,21 @@ pub(crate) fn float_to_long(vm: &mut Vm, d: f64) -> VmResult<Option<i64>> {
     Ok(Some(l))
 }
 
-/// Refuses to build a number of `bits` bits when it would not fit in
-/// `memory_limit` (4 GiB when unlimited).
+/// libgmp's size limit for an `mpz_t`: `INT_MAX` limbs of 64 bits
+/// (`mpz_realloc` aborts with "gmp: overflow in mpz type" beyond it).
+const MPZ_MAX_BITS: u128 = 0x7fff_ffff * 64;
+
+/// Refuses to build a number of `bits` bits that libgmp could not
+/// represent ([`MPZ_MAX_BITS`]) or that cannot fit in the process's
+/// address space (`RLIMIT_AS`, which `php-cli` caps).
 ///
-/// libgmp ignores PHP's memory limit (and aborts the process past 2^37
-/// bits); the VM process must not be taken down by `gmp_pow(2, 2**40)`,
-/// so such requests end with PHP's out-of-memory fatal error instead.
+/// libgmp allocates through the system `malloc`, outside the Zend heap, so
+/// `memory_limit` plays no part (see `uncounted!`); past those bounds
+/// php-src aborts the process (libgmp's "overflow in mpz type" or "Cannot
+/// allocate memory"). We end such requests with PHP's out-of-memory fatal
+/// error instead, so `gmp_pow(2, 2**40)` does not take the VM down.
 pub(crate) fn check_bits(vm: &mut Vm, bits: u128) -> VmResult<()> {
-    let limit = vm
-        .ini_string("memory_limit")
-        .map(|raw| php_support_quantity(&raw))
-        .filter(|&l| l > 0)
-        .map_or(1u128 << 32, |l| u128::from(l.unsigned_abs()));
+    let limit = address_space_limit().map_or(MPZ_MAX_BITS / 8, |l| l.min(MPZ_MAX_BITS / 8));
     let bytes = bits / 8 + 32;
     if bytes > limit {
         return Err(vm.fatal(&format!(
@@ -110,19 +133,21 @@ pub(crate) fn check_bits(vm: &mut Vm, bits: u128) -> VmResult<()> {
     Ok(())
 }
 
-/// `zend_ini_parse_quantity` for `memory_limit` (`128M`, `1G`, `-1`).
-fn php_support_quantity(raw: &[u8]) -> i64 {
-    let s = String::from_utf8_lossy(raw);
-    let s = s.trim();
-    let (num, mul) = match s.as_bytes().last().map(u8::to_ascii_lowercase) {
-        Some(b'k') => (&s[..s.len() - 1], 1i64 << 10),
-        Some(b'm') => (&s[..s.len() - 1], 1i64 << 20),
-        Some(b'g') => (&s[..s.len() - 1], 1i64 << 30),
-        _ => (s, 1),
+/// The soft `RLIMIT_AS` in bytes, `None` when unlimited or unknown.
+fn address_space_limit() -> Option<u128> {
+    let mut rl = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
     };
-    num.trim()
-        .parse::<i64>()
-        .map_or(0, |n| n.saturating_mul(mul))
+    // SAFETY: getrlimit only writes into the struct we own.
+    if unsafe { libc::getrlimit(libc::RLIMIT_AS, &raw mut rl) } != 0 {
+        return None;
+    }
+    if rl.rlim_cur == libc::RLIM_INFINITY {
+        None
+    } else {
+        Some(u128::from(rl.rlim_cur))
+    }
 }
 
 /// `E_DEPRECATED`.

@@ -39,6 +39,23 @@ fn from_twos(mut v: Vec<u64>, neg: bool) -> Mpz {
     Mpz::from_parts(neg, v)
 }
 
+/// Extends `v` with zero limbs to `len` (`MPZ_REALLOC` + `MPN_ZERO` in
+/// `mpz_setbit`). A large jump gets a fresh zeroed buffer instead of
+/// `resize`'s reallocation copy plus zero fill: the allocator hands out
+/// fresh zero pages lazily, so `gmp_setbit($n, 2**36 - 1)` only touches the
+/// limbs it copies, not the whole 8 GiB.
+fn grow_zeroed(v: &mut Vec<u64>, len: usize) {
+    /// 2 MiB of limbs: below this, `resize`'s amortized growth wins.
+    const LARGE: usize = 1 << 18;
+    if len > LARGE && len / 2 > v.capacity() {
+        let mut fresh = vec![0u64; len];
+        fresh[..v.len()].copy_from_slice(v);
+        *v = fresh;
+    } else {
+        v.resize(len, 0);
+    }
+}
+
 fn bitwise(a: &Mpz, b: &Mpz, f: impl Fn(u64, u64) -> u64, neg: bool) -> Mpz {
     let n = a.mag.len().max(b.mag.len()) + 1;
     let (ta, tb) = (twos(a, n), twos(b, n));
@@ -83,7 +100,7 @@ impl Mpz {
         if !self.neg {
             let li = usize::try_from(index / 64).expect("bit index too large");
             if li >= self.mag.len() {
-                self.mag.resize(li + 1, 0);
+                grow_zeroed(&mut self.mag, li + 1);
             }
             self.mag[li] |= 1 << (index % 64);
         } else if !self.test_bit(index) {
@@ -195,5 +212,21 @@ mod tests {
         assert_eq!(c, &Mpz::from(-1) - &Mpz::pow2(70));
         c.set_bit(70);
         assert_eq!(c, Mpz::from(-1));
+    }
+
+    #[test]
+    fn set_bit_far_above_the_top() {
+        let index = 64 * (1u64 << 19) + 5;
+        let mut m = Mpz::from(5);
+        m.set_bit(index);
+        assert_eq!(m.bit_len(), index + 1);
+        assert_eq!(m.limbs().len(), (1 << 19) + 1);
+        assert!(m.test_bit(0) && !m.test_bit(1) && m.test_bit(2));
+        assert!(m.limbs()[1..1 << 19].iter().all(|&l| l == 0));
+        assert_eq!(m.popcount(), 3);
+        // A small step above the top goes through `resize`.
+        m.set_bit(index + 64);
+        assert_eq!(m.bit_len(), index + 65);
+        assert_eq!(m.popcount(), 4);
     }
 }

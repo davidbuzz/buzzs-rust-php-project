@@ -38,11 +38,24 @@ fn bump(counter: &AtomicUsize) {
     counter.store(counter.load(Relaxed).wrapping_add(1), Relaxed);
 }
 
+/// Capacity of the registry of [uncounted](crate::uncounted) blocks. Huge
+/// allocations made in an uncounted scope while it is full are counted
+/// as usual.
+const UNCOUNTED_SLOTS: usize = 64;
+
+/// Registry slot states besides a block address.
+const SLOT_FREE: usize = 0;
+/// Reserved for a block being (re)allocated; never a block address.
+const SLOT_CLAIMED: usize = usize::MAX;
+
 thread_local! {
     /// Nesting depth of [`crate::fallible`] on this thread. Const-initialised
     /// and without a destructor, so reading it from inside the allocator
     /// never allocates.
     static FALLIBLE_DEPTH: Cell<u32> = const { Cell::new(0) };
+    /// Nesting depth of [`crate::uncounted`] on this thread (same
+    /// constraints as `FALLIBLE_DEPTH`).
+    static UNCOUNTED_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Runs `f` with soft-limit-exceeding allocations made *fallible*: instead
@@ -62,6 +75,48 @@ pub fn fallible<R>(f: impl FnOnce() -> R) -> R {
     FALLIBLE_DEPTH.with(|d| d.set(d.get().saturating_add(1)));
     let _guard = Guard;
     f()
+}
+
+/// Runs `f` with *huge* allocations (above `ZEND_MM_MAX_LARGE_SIZE`,
+/// 2 MiB − 4 KiB) left out of
+/// the accounting: they neither count toward `memory_get_usage()` and the
+/// peak nor are checked against the soft limit or the hard ceiling, for
+/// their whole lifetime — reallocations and the final free stay uncounted
+/// wherever they happen. Smaller allocations are counted as usual.
+///
+/// This models memory a PHP extension obtains from a library's own
+/// `malloc` rather than from the Zend heap: `ext/gmp` leaves libgmp on the
+/// system allocator (it never calls `mp_set_memory_functions`), so a GMP
+/// number of any size is invisible to `memory_limit`. Only the address
+/// space limit (`RLIMIT_AS`, set by `php-cli`) bounds such blocks.
+///
+/// At most 64 uncounted blocks are live at a time; beyond that, huge
+/// allocations made in the scope are counted normally.
+pub fn uncounted<R>(f: impl FnOnce() -> R) -> R {
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            UNCOUNTED_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        }
+    }
+    UNCOUNTED_DEPTH.with(|d| d.set(d.get().saturating_add(1)));
+    let _guard = Guard;
+    f()
+}
+
+fn in_uncounted_scope() -> bool {
+    UNCOUNTED_DEPTH.try_with(|d| d.get() > 0).unwrap_or(false)
+}
+
+/// What [`CountingAlloc::admit`] decided about an allocation.
+enum Admit {
+    /// Counted; proceed.
+    Counted,
+    /// Must fail (hard ceiling, or a fallible soft overrun).
+    Refused,
+    /// Huge and [uncounted](uncounted): not accounted; the registry slot
+    /// reserved for it.
+    Uncounted(usize),
 }
 
 /// A non-zero value unique to each live thread: the address of this
@@ -170,14 +225,27 @@ pub struct CountingAlloc<A> {
     forgiven: AtomicUsize,
     /// Of [`forgiven`](Self::forgiven), the part that was a huge block.
     forgiven_huge: AtomicUsize,
-    /// Live bytes in huge blocks (requests over `ZEND_MM_MAX_LARGE_SIZE`),
-    /// which Zend maps on their own instead of carving out of chunks.
+    /// Live counted bytes in huge blocks (requests over
+    /// `ZEND_MM_MAX_LARGE_SIZE`), which Zend maps on their own instead of
+    /// carving out of chunks.
     huge: AtomicUsize,
+    /// [`huge`](Self::huge) at the baseline: huge blocks allocated before
+    /// the request (VM structures) do not count, like the rest of the
+    /// baseline.
+    huge_base: AtomicUsize,
     hard_handler: OnceLock<HardLimitHandler>,
     in_hard_handler: AtomicBool,
     /// Zend's tracked allocator (`USE_ZEND_ALLOC=0 USE_TRACKED_ALLOC=1`):
     /// real usage is the exact live-byte count, not whole chunks.
     tracked: AtomicBool,
+    /// Addresses of live [uncounted](uncounted) blocks (`SLOT_FREE`,
+    /// `SLOT_CLAIMED` or an address).
+    uncounted_slots: [AtomicUsize; UNCOUNTED_SLOTS],
+    /// Slots not `SLOT_FREE`: lets frees of huge counted blocks skip the
+    /// registry scan while no uncounted block is live.
+    uncounted_used: AtomicUsize,
+    /// Bytes held by live uncounted blocks.
+    uncounted_bytes: AtomicUsize,
 }
 
 impl<A> CountingAlloc<A> {
@@ -203,9 +271,13 @@ impl<A> CountingAlloc<A> {
             forgiven: AtomicUsize::new(0),
             forgiven_huge: AtomicUsize::new(0),
             huge: AtomicUsize::new(0),
+            huge_base: AtomicUsize::new(0),
             hard_handler: OnceLock::new(),
             in_hard_handler: AtomicBool::new(false),
             tracked: AtomicBool::new(false),
+            uncounted_slots: [const { AtomicUsize::new(SLOT_FREE) }; UNCOUNTED_SLOTS],
+            uncounted_used: AtomicUsize::new(0),
+            uncounted_bytes: AtomicUsize::new(0),
         }
     }
 
@@ -225,6 +297,12 @@ impl<A> CountingAlloc<A> {
             frees: self.frees.load(Relaxed),
             reallocs: self.reallocs.load(Relaxed),
         }
+    }
+
+    /// Bytes held by live [uncounted](uncounted) blocks (not part of any
+    /// usage figure).
+    pub fn uncounted_bytes(&self) -> usize {
+        self.uncounted_bytes.load(Relaxed)
     }
 
     /// Whether this allocator has served any allocation, i.e. whether it is
@@ -255,7 +333,7 @@ impl<A> CountingAlloc<A> {
         }
         // `heap->real_size`: whole chunks for small/large blocks plus the
         // huge blocks' own pages.
-        let huge = self.huge.load(Relaxed);
+        let huge = self.request_huge();
         round_to_chunks(self.usage().saturating_sub(huge)).saturating_add(huge)
     }
 
@@ -319,6 +397,7 @@ impl<A> CountingAlloc<A> {
     pub fn set_baseline(&self) {
         let now = self.raw_usage();
         self.baseline.store(now, Relaxed);
+        self.huge_base.store(self.huge.load(Relaxed), Relaxed);
         self.peak.store(now, Relaxed);
         self.update_thresholds();
     }
@@ -418,7 +497,7 @@ impl<A> CountingAlloc<A> {
                 } else {
                     // A small block fails once the small/large usage would
                     // need a chunk past what the huge blocks leave free.
-                    let huge = self.huge.load(Relaxed);
+                    let huge = self.request_huge();
                     let forgiven_huge = self.forgiven_huge.load(Relaxed);
                     let huge_eff = huge.saturating_sub(forgiven_huge);
                     chunk_floor(l.saturating_sub(huge_eff))
@@ -519,8 +598,7 @@ impl<A> CountingAlloc<A> {
             return usage.saturating_add(size) <= limit;
         }
         let huge = self
-            .huge
-            .load(Relaxed)
+            .request_huge()
             .saturating_sub(self.forgiven_huge.load(Relaxed));
         let small = usage.saturating_sub(huge);
         // A realloc growing into a huge block is checked as a huge request.
@@ -609,24 +687,45 @@ impl<A> CountingAlloc<A> {
         self.force_limit(None);
         self.clear();
         self.baseline.store(0, Relaxed);
+        self.huge_base.store(0, Relaxed);
         self.reset_peak();
         self.update_thresholds();
     }
 
     // ---- allocator hot path -----------------------------------------
 
-    /// Accounts `size` more live bytes; `false` if the allocation must fail.
+    /// Accounts `size` more live bytes, unless the allocation must fail or
+    /// is a huge one made in an [uncounted](uncounted) scope.
     #[inline]
-    fn admit(&self, size: usize, huge: bool) -> bool {
+    fn admit(&self, size: usize, huge: bool) -> Admit {
         let new = self.add_live(size);
-        if (new > self.soft_raw.load(Relaxed) || huge) && !self.admit_over_soft(new, size, huge) {
-            self.release(size);
-            return false;
+        if new > self.soft_raw.load(Relaxed) || huge {
+            return self.admit_slow(new, size, huge);
         }
         if new > self.peak.load(Relaxed) {
             self.peak.fetch_max(new, Relaxed);
         }
-        true
+        Admit::Counted
+    }
+
+    /// [`admit`](Self::admit) past the soft threshold or for a huge block.
+    #[cold]
+    #[inline(never)]
+    fn admit_slow(&self, new: usize, size: usize, huge: bool) -> Admit {
+        if size > MAX_LARGE_SIZE && in_uncounted_scope() {
+            if let Some(slot) = self.claim_uncounted_slot() {
+                self.release(size);
+                return Admit::Uncounted(slot);
+            }
+        }
+        if !self.admit_over_soft(new, size, huge) {
+            self.release(size);
+            return Admit::Refused;
+        }
+        if new > self.peak.load(Relaxed) {
+            self.peak.fetch_max(new, Relaxed);
+        }
+        Admit::Counted
     }
 
     #[cold]
@@ -686,6 +785,75 @@ impl<A> CountingAlloc<A> {
         self.update_thresholds();
     }
 
+    /// Live huge-block bytes allocated since the baseline.
+    fn request_huge(&self) -> usize {
+        self.huge
+            .load(Relaxed)
+            .saturating_sub(self.huge_base.load(Relaxed))
+    }
+
+    // ---- uncounted-block registry ------------------------------------
+
+    /// Reserves a free registry slot (`SLOT_CLAIMED`), `None` when full.
+    fn claim_uncounted_slot(&self) -> Option<usize> {
+        let slot = self.uncounted_slots.iter().position(|s| {
+            s.compare_exchange(SLOT_FREE, SLOT_CLAIMED, Relaxed, Relaxed)
+                .is_ok()
+        })?;
+        self.uncounted_used.fetch_add(1, Relaxed);
+        Some(slot)
+    }
+
+    /// Returns `slot` to the free pool.
+    fn free_uncounted_slot(&self, slot: usize) {
+        self.uncounted_slots[slot].store(SLOT_FREE, Relaxed);
+        self.uncounted_used.fetch_sub(1, Relaxed);
+    }
+
+    /// Records the uncounted block `p` of `size` bytes in its claimed
+    /// `slot`, or frees the slot if the inner allocation failed.
+    fn register_uncounted(&self, slot: usize, p: *mut u8, size: usize) {
+        if p.is_null() {
+            self.free_uncounted_slot(slot);
+        } else {
+            self.uncounted_slots[slot].store(p.addr(), Relaxed);
+            self.uncounted_bytes.fetch_add(size, Relaxed);
+        }
+    }
+
+    /// The registry slot holding block `p`, if it is uncounted.
+    fn uncounted_slot_of(&self, p: *mut u8) -> Option<usize> {
+        if self.uncounted_used.load(Relaxed) == 0 {
+            return None;
+        }
+        let addr = p.addr();
+        self.uncounted_slots
+            .iter()
+            .position(|s| s.load(Relaxed) == addr)
+    }
+
+    /// If the huge block `p` of `size` bytes about to be freed is
+    /// uncounted, drops it from the registry and returns `true`.
+    #[cold]
+    #[inline(never)]
+    fn forget_uncounted(&self, p: *mut u8, size: usize) -> bool {
+        let Some(slot) = self.uncounted_slot_of(p) else {
+            return false;
+        };
+        self.free_uncounted_slot(slot);
+        self.uncounted_bytes.fetch_sub(size, Relaxed);
+        true
+    }
+
+    /// Accounts `size` live bytes without any limit check (a block that
+    /// leaves the registry by shrinking).
+    fn count_granted(&self, size: usize) {
+        let new = self.add_live(size);
+        if new > self.peak.load(Relaxed) {
+            self.peak.fetch_max(new, Relaxed);
+        }
+    }
+
     #[inline]
     fn is_owner(&self) -> bool {
         self.owner.load(Relaxed) == thread_token()
@@ -732,6 +900,141 @@ impl<A> CountingAlloc<A> {
     }
 }
 
+impl<A: GlobalAlloc> CountingAlloc<A> {
+    /// `realloc` when the old or the new size is huge: keeps uncounted
+    /// blocks out of the accounting, moves a counted block that grows huge
+    /// inside an [uncounted](uncounted) scope into the registry, and
+    /// otherwise defers to [`realloc_counted`](Self::realloc_counted).
+    ///
+    /// # Safety
+    ///
+    /// The caller upholds `GlobalAlloc::realloc`'s contract.
+    #[cold]
+    #[inline(never)]
+    unsafe fn realloc_huge(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let old_size = layout.size();
+        if old_size > MAX_LARGE_SIZE {
+            if let Some(slot) = self.uncounted_slot_of(ptr) {
+                // Park the slot while the block moves, so a concurrent free
+                // of a counted block reusing the old address cannot match.
+                self.uncounted_slots[slot].store(SLOT_CLAIMED, Relaxed);
+                // SAFETY: caller upholds `GlobalAlloc::realloc`'s contract.
+                let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
+                if p.is_null() {
+                    self.uncounted_slots[slot].store(ptr.addr(), Relaxed);
+                    return p;
+                }
+                bump(&self.reallocs);
+                self.uncounted_bytes.fetch_sub(old_size, Relaxed);
+                if new_size > MAX_LARGE_SIZE {
+                    self.register_uncounted(slot, p, new_size);
+                } else {
+                    // `dealloc` only consults the registry for huge sizes.
+                    self.free_uncounted_slot(slot);
+                    self.count_granted(new_size);
+                }
+                return p;
+            }
+        }
+        if new_size > old_size && new_size > MAX_LARGE_SIZE && in_uncounted_scope() {
+            if let Some(slot) = self.claim_uncounted_slot() {
+                // SAFETY: caller upholds `GlobalAlloc::realloc`'s contract.
+                let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
+                self.register_uncounted(slot, p, new_size);
+                if !p.is_null() {
+                    self.release(old_size);
+                    bump(&self.reallocs);
+                    if old_size > MAX_LARGE_SIZE {
+                        self.huge_change(0, old_size);
+                    }
+                }
+                return p;
+            }
+        }
+        // SAFETY: forwarded unchanged.
+        unsafe { self.realloc_counted(ptr, layout, new_size) }
+    }
+
+    /// `realloc` of a counted block.
+    ///
+    /// # Safety
+    ///
+    /// The caller upholds `GlobalAlloc::realloc`'s contract.
+    #[inline]
+    unsafe fn realloc_counted(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let old_size = layout.size();
+        if new_size > old_size {
+            let grow = new_size - old_size;
+            match self.admit(grow, new_size > MAX_LARGE_SIZE) {
+                Admit::Counted => {}
+                Admit::Refused => return ptr::null_mut(),
+                // Only a huge growth in an uncounted scope whose registry
+                // was full a moment ago gets here: count it after all.
+                Admit::Uncounted(slot) => {
+                    self.free_uncounted_slot(slot);
+                    self.count_granted(grow);
+                }
+            }
+            // SAFETY: caller upholds `GlobalAlloc::realloc`'s contract.
+            let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
+            if p.is_null() {
+                self.release(grow);
+            } else {
+                bump(&self.reallocs);
+                self.huge_realloc(old_size, new_size);
+            }
+            p
+        } else {
+            // SAFETY: caller upholds `GlobalAlloc::realloc`'s contract.
+            let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
+            if !p.is_null() {
+                self.release(old_size - new_size);
+                bump(&self.reallocs);
+                self.huge_realloc(old_size, new_size);
+            }
+            p
+        }
+    }
+
+    /// Huge-block bookkeeping after a counted realloc from `old_size` to
+    /// `new_size` bytes.
+    #[inline]
+    fn huge_realloc(&self, old_size: usize, new_size: usize) {
+        let old_huge = old_size > MAX_LARGE_SIZE;
+        let new_huge = new_size > MAX_LARGE_SIZE;
+        if old_huge || new_huge {
+            self.huge_change(
+                if new_huge { new_size } else { 0 },
+                if old_huge { old_size } else { 0 },
+            );
+        }
+    }
+
+    /// `alloc`/`alloc_zeroed` of an [uncounted](uncounted) block whose
+    /// registry `slot` [`admit`](Self::admit) reserved.
+    ///
+    /// # Safety
+    ///
+    /// The caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
+    #[cold]
+    #[inline(never)]
+    unsafe fn alloc_uncounted(&self, layout: Layout, slot: usize, zeroed: bool) -> *mut u8 {
+        // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
+        let p = unsafe {
+            if zeroed {
+                self.inner.alloc_zeroed(layout)
+            } else {
+                self.inner.alloc(layout)
+            }
+        };
+        self.register_uncounted(slot, p, layout.size());
+        if !p.is_null() {
+            bump(&self.allocs);
+        }
+        p
+    }
+}
+
 impl<A> fmt::Debug for CountingAlloc<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CountingAlloc")
@@ -751,8 +1054,11 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
     #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let huge = layout.size() > MAX_LARGE_SIZE;
-        if !self.admit(layout.size(), huge) {
-            return ptr::null_mut();
+        match self.admit(layout.size(), huge) {
+            Admit::Counted => {}
+            Admit::Refused => return ptr::null_mut(),
+            // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
+            Admit::Uncounted(slot) => return unsafe { self.alloc_uncounted(layout, slot, false) },
         }
         // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
         let p = unsafe { self.inner.alloc(layout) };
@@ -770,8 +1076,11 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
     #[inline]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         let huge = layout.size() > MAX_LARGE_SIZE;
-        if !self.admit(layout.size(), huge) {
-            return ptr::null_mut();
+        match self.admit(layout.size(), huge) {
+            Admit::Counted => {}
+            Admit::Refused => return ptr::null_mut(),
+            // SAFETY: caller upholds `GlobalAlloc::alloc_zeroed`'s contract.
+            Admit::Uncounted(slot) => return unsafe { self.alloc_uncounted(layout, slot, true) },
         }
         // SAFETY: caller upholds `GlobalAlloc::alloc_zeroed`'s contract.
         let p = unsafe { self.inner.alloc_zeroed(layout) };
@@ -788,55 +1097,29 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
 
     #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        let size = layout.size();
+        // Unregister before the block can be reused by another thread.
+        let uncounted = size > MAX_LARGE_SIZE && self.forget_uncounted(ptr, size);
         // SAFETY: caller guarantees `ptr` was allocated by this allocator
         // (hence by `inner`) with `layout`.
         unsafe { self.inner.dealloc(ptr, layout) };
-        self.release(layout.size());
-        bump(&self.frees);
-        if layout.size() > MAX_LARGE_SIZE {
-            self.huge_change(0, layout.size());
+        if !uncounted {
+            self.release(size);
+            if size > MAX_LARGE_SIZE {
+                self.huge_change(0, size);
+            }
         }
+        bump(&self.frees);
     }
 
     #[inline]
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let old_size = layout.size();
-        let old_huge = old_size > MAX_LARGE_SIZE;
-        let new_huge = new_size > MAX_LARGE_SIZE;
-        if new_size > old_size {
-            let grow = new_size - old_size;
-            if !self.admit(grow, new_huge) {
-                return ptr::null_mut();
-            }
+        if layout.size().max(new_size) > MAX_LARGE_SIZE {
             // SAFETY: caller upholds `GlobalAlloc::realloc`'s contract.
-            let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
-            if p.is_null() {
-                self.release(grow);
-            } else {
-                bump(&self.reallocs);
-                if old_huge || new_huge {
-                    self.huge_change(
-                        if new_huge { new_size } else { 0 },
-                        if old_huge { old_size } else { 0 },
-                    );
-                }
-            }
-            p
-        } else {
-            // SAFETY: caller upholds `GlobalAlloc::realloc`'s contract.
-            let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
-            if !p.is_null() {
-                self.release(old_size - new_size);
-                bump(&self.reallocs);
-                if old_huge || new_huge {
-                    self.huge_change(
-                        if new_huge { new_size } else { 0 },
-                        if old_huge { old_size } else { 0 },
-                    );
-                }
-            }
-            p
+            return unsafe { self.realloc_huge(ptr, layout, new_size) };
         }
+        // SAFETY: caller upholds `GlobalAlloc::realloc`'s contract.
+        unsafe { self.realloc_counted(ptr, layout, new_size) }
     }
 }
 

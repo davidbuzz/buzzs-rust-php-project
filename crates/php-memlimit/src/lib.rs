@@ -15,6 +15,9 @@
 //! * builtins about to allocate a known large amount call [`try_reserve`]
 //!   first (PHP's fallible allocations + `RETURN_OOM()`), or wrap Rust's
 //!   `try_reserve` APIs in [`fallible`];
+//! * huge allocations made inside [`uncounted`] (an extension's library
+//!   allocating through its own `malloc`, like libgmp under `ext/gmp`) are
+//!   left out of usage and both limits for their whole lifetime;
 //! * an allocation that crosses the hard ceiling (2× the limit by default)
 //!   calls the [hard-limit handler](set_hard_limit_handler) or fails, which
 //!   aborts the process — the backstop against runaway memory use.
@@ -26,7 +29,7 @@ mod limit;
 
 pub use mimalloc::MiMalloc;
 
-pub use counting::{fallible, CountingAlloc, HardLimitHandler, Stats};
+pub use counting::{fallible, uncounted, CountingAlloc, HardLimitHandler, Stats};
 pub use limit::{
     clamp_to_max_warning, hard_limit_for, limit_from_ini, round_to_chunks, scale_by_percent,
     HardLimitExceeded, HardLimitPercentError, MemoryLimitIni, OverLimit, SetLimitError, CHUNK_SIZE,
@@ -59,6 +62,11 @@ pub fn usage() -> usize {
 /// `memory_get_usage(true)` on [`GLOBAL`].
 pub fn real_usage() -> usize {
     GLOBAL.real_usage()
+}
+
+/// [`CountingAlloc::uncounted_bytes`] on [`GLOBAL`].
+pub fn uncounted_bytes() -> usize {
+    GLOBAL.uncounted_bytes()
 }
 
 /// `memory_get_usage($real_usage)` on [`GLOBAL`].
