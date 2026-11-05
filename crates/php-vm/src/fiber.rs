@@ -168,6 +168,29 @@ pub(crate) fn is_graceful_exit(o: &Obj) -> bool {
     })
 }
 
+/// `builtin_name` of the code-less frame standing for a fiber's bottom
+/// frame (`zend_fiber_function`) when it is started by the engine itself
+/// rather than by `Fiber->start()` (`zend_fiber_start` from the collector):
+/// it attributes the fiber's first call to "[internal function]" and shows
+/// no entry of its own.
+const BOTTOM_FRAME: &str = "{fiber}";
+
+/// `builtin_name` of the bottom frame of a suspended fiber resumed by its
+/// destruction: `Fiber::suspend()` clears `stack_bottom->prev_execute_data`
+/// and `zend_fiber_object_destroy` does not set it again, so backtraces
+/// taken while the fiber unwinds end there (see [`ends_backtrace`]).
+const DETACHED_FRAME: &str = "{detached fiber}";
+
+/// Whether backtraces stop at `f` (the bottom of a fiber whose
+/// `prev_execute_data` is `NULL`).
+pub(crate) fn ends_backtrace(f: &Frame) -> bool {
+    f.kind == FrameKind::Builtin
+        && f.func.is_none()
+        && f.builtin_name
+            .as_ref()
+            .is_some_and(|n| n.as_bytes() == DETACHED_FRAME.as_bytes())
+}
+
 pub(crate) fn create_graceful_exit() -> Option<Obj> {
     let cls = GRACEFUL_EXIT.with(|g| g.borrow().clone())?;
     Some(object::new_object(cls, Vec::new()))
@@ -400,6 +423,38 @@ impl Vm {
         out.unwrap_or(Ok(Value::Null))
     }
 
+    /// A code-less internal frame named `name` (no backtrace entry).
+    fn hidden_frame(&self, name: &str) -> Frame {
+        let mut f = Frame::with_vars(
+            self.empty_code.clone(),
+            FrameKind::Builtin,
+            self.empty_vars.clone(),
+            None,
+        );
+        f.builtin_name = Some(ZStr::from(name));
+        f
+    }
+
+    /// `zend_fiber_start` called by the engine (the collector's destructor
+    /// fiber, `gc_create_destructor_fiber`): starts `fiber` without a
+    /// `Fiber->start()` frame. The fiber's bottom frame links to the
+    /// current frame, so its backtraces continue with the caller (e.g.
+    /// `gc_collect_cycles()`). Returns what the fiber passes back when it
+    /// suspends or terminates.
+    pub(crate) fn fiber_start_internal(&mut self, fiber: &Obj) -> VmResult<Value> {
+        if state_of(fiber) != FiberState::Init {
+            return Err(self.fiber_error("Cannot start a fiber that has already been started"));
+        }
+        let bottom = self.hidden_frame(BOTTOM_FRAME);
+        self.frames.push(bottom);
+        let depth = self.frames.len();
+        let r = self
+            .fiber_create_context(fiber, Vec::new(), Vec::new())
+            .and_then(|()| self.fiber_switch_in(fiber, Ok(Value::Null)));
+        self.frames.truncate(depth - 1);
+        r
+    }
+
     /// Adds the `start()` arguments to the resolved call (the named
     /// argument rules of `zend_call_function`).
     fn fiber_bind_args(
@@ -554,6 +609,7 @@ fn fiber_body(vm: &mut Vm, s: Suspender, call: PendingCall) {
     let Some(fiber) = vm.fibers.last().cloned() else {
         return;
     };
+    let r = release_callable(vm, &fiber, r);
     let destroyed = with(&fiber, |d| d.destroyed).unwrap_or(false);
     let out = match r {
         Ok(v) => {
@@ -581,6 +637,48 @@ fn fiber_body(vm: &mut Vm, s: Suspender, call: PendingCall) {
         let from = context_of(&fiber, None);
         let to = vm.fiber_stack_context(depth - 1);
         vm.observer_fiber_switch(&from, &to);
+    }
+}
+
+/// `zend_fiber_release_callable`, still inside the fiber once its function
+/// returned: the callable (a closure with its bound variables, the object
+/// of `[$obj, 'm']`) is released, so the destructors it triggers — and a
+/// collection when the released values fill the root buffer — run in the
+/// fiber; what they throw is thrown by the fiber (chained to the exception
+/// the function threw, `zend_objects_destroy_object`).
+fn release_callable(vm: &mut Vm, fiber: &Obj, r: VmResult<Value>) -> VmResult<Value> {
+    let Some(callable) = with(fiber, |d| std::mem::take(&mut d.callable)) else {
+        return r;
+    };
+    // A function name owns nothing (the collector's destructor fiber).
+    if !matches!(callable, Value::Object(_) | Value::Array(_)) {
+        return r;
+    }
+    crate::gc::release_value(&callable);
+    drop(callable);
+    let mut r = r;
+    if object::has_pending_destructors() {
+        r = merge_release_error(r, vm.run_pending_destructors());
+    }
+    if crate::gc::wants_run() && !crate::gc::running() {
+        r = merge_release_error(r, vm.gc_safe_point());
+    }
+    r
+}
+
+/// Combines the outcome of a fiber's function with an error raised while
+/// releasing its callable.
+fn merge_release_error(r: VmResult<Value>, e: VmResult<()>) -> VmResult<Value> {
+    match (r, e) {
+        (r, Ok(())) => r,
+        (Err(Throw::Exception(old)), Err(Throw::Exception(new))) => {
+            if !is_graceful_exit(&old) {
+                crate::exceptions::chain_previous(&new, &old);
+            }
+            Err(Throw::Exception(new))
+        }
+        (Ok(_), Err(e)) | (Err(Throw::Exception(_)), Err(e)) => Err(e),
+        (Err(t), Err(_)) => Err(t),
     }
 }
 
@@ -747,14 +845,11 @@ fn fiber_destroy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // php-src destroys from the `dtor_obj` handler, without a call frame:
     // replace our `__destruct` frame by an internal call-site boundary.
     // Its name stops caller lookup, but no function means no trace entry.
+    // The fiber was suspended, which cleared its link to the resumer
+    // (`stack_bottom->prev_execute_data = NULL`), and destruction resumes
+    // it without setting a new one: its backtraces end at this frame.
     let own = vm.frames.pop();
-    let mut hidden = Frame::with_vars(
-        vm.empty_code.clone(),
-        FrameKind::Builtin,
-        vm.empty_vars.clone(),
-        None,
-    );
-    hidden.builtin_name = Some(ZStr::from("__destruct"));
+    let hidden = vm.hidden_frame(DETACHED_FRAME);
     vm.frames.push(hidden);
     let r = vm.fiber_switch_in(&o, Err(Throw::Exception(g)));
     vm.frames.pop();

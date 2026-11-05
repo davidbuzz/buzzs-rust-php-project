@@ -275,6 +275,7 @@ impl Vm {
             let f = &self.frames[idx];
             if f.kind == FrameKind::Main
                 || (idx == 0 && !matches!(f.kind, FrameKind::Function | FrameKind::Builtin))
+                || crate::fiber::ends_backtrace(f)
             {
                 break;
             }

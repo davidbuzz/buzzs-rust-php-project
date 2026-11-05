@@ -494,6 +494,9 @@ impl Vm {
             };
             let popped = self.frames.pop();
             if let Some(p) = &popped {
+                // `i_free_compiled_variables`: released values may be
+                // cycle roots (and may fill the root buffer).
+                crate::gc::frame_released(p);
                 if let Some(g) = &p.generator {
                     crate::generator::mark_finished(g);
                 }
@@ -604,14 +607,43 @@ impl Vm {
         exc: php_runtime::Obj,
     ) -> Result<php_runtime::Obj, Throw> {
         if !object::has_pending_destructors() {
+            if crate::gc::wants_run() {
+                return self.collect_while_unwinding(exc);
+            }
             return Ok(exc);
         }
-        match self.run_pending_destructors() {
-            Ok(()) => Ok(exc),
+        let exc = match self.run_pending_destructors() {
+            Ok(()) => exc,
             Err(Throw::Exception(new)) if !self.is_executing() => {
                 self.destructor_threw_without_frame(new)?;
-                Ok(exc)
+                exc
             }
+            Err(Throw::Exception(new)) => {
+                crate::exceptions::chain_previous(&new, &exc);
+                new
+            }
+            Err(t) => return Err(t),
+        };
+        if crate::gc::wants_run() {
+            return self.collect_while_unwinding(exc);
+        }
+        Ok(exc)
+    }
+
+    /// The values released while `exc` unwinds filled the root buffer
+    /// (`gc_possible_root_when_full` inside `i_free_compiled_variables`):
+    /// the collection runs now, before a handler is found. An exception
+    /// thrown by a garbage destructor gets `exc` as its previous one and
+    /// continues the unwinding in its place (`zend_objects_destroy_object`,
+    /// `remember_prev_exception` in a fiber).
+    #[cold]
+    #[inline(never)]
+    fn collect_while_unwinding(
+        &mut self,
+        exc: php_runtime::Obj,
+    ) -> Result<php_runtime::Obj, Throw> {
+        match self.gc_safe_point() {
+            Ok(()) => Ok(exc),
             Err(Throw::Exception(new)) => {
                 crate::exceptions::chain_previous(&new, &exc);
                 Ok(new)
