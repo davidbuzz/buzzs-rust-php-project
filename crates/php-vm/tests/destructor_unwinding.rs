@@ -423,3 +423,27 @@ echo "end\n";
 "#);
     assert_eq!(output, "Unknown named parameter $unknown\narg\nend\n");
 }
+
+#[test]
+fn shutdown_destructor_local_throwing_is_reported_unchained() {
+    // OSS-Fuzz #456317305: the local of a destructor run at shutdown is
+    // released with no frame current, so its own exception is reported at
+    // once instead of being chained to the one in flight.
+    let (status, output) = run(r#"<?php
+class C {
+    public function __destruct() {
+        static $again = true;
+        if ($again) {
+            $again = false;
+            $c = new C;
+        }
+        throw new Exception;
+    }
+}
+$c = new C;
+"#);
+    assert_eq!(status, 255, "{output}");
+    assert!(output.contains("Fatal error: Uncaught Exception in test.php:9"), "{output}");
+    assert!(output.contains("#0 [internal function]: C->__destruct()"), "{output}");
+    assert!(!output.contains("Next Exception"), "{output}");
+}
