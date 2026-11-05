@@ -1810,12 +1810,13 @@ impl Compiler {
                 let check = self.emit(Op::AssertCheck { dst: t, skip: 0 });
                 self.emit_init_fcall(n);
                 self.compile_args(args)?;
-                if args.args.len() == 1
-                    && matches!(
-                        args.args[0].kind,
-                        ArgKind::Positional(_) | ArgKind::Named { .. }
-                    )
-                {
+                if args.args.len() == 1 {
+                    if matches!(args.args[0].kind, ArgKind::Unpack(_)) {
+                        return self.err(
+                            "Cannot use positional argument after argument unpacking",
+                            line,
+                        );
+                    }
                     let msg = php_parser::export::assert_message(&args.args[0]);
                     let l = self.lit(Value::Str(ZStr::from(msg)));
                     if matches!(args.args[0].kind, ArgKind::Named { .. }) {

@@ -170,14 +170,9 @@ fn by_ref_void_function_emits_compile_deprecation() {
 }
 
 #[test]
-fn unpacked_assertion_preserves_explicit_description() {
-    assert_eq!(
-        run(r#"<?php
-try { assert(...["assertion" => false, "description" => "explicit"]); }
-catch (AssertionError $e) { echo $e->getMessage(), "\n"; }
-"#),
-        "explicit\n"
-    );
+fn unpacked_assertion_rejects_generated_positional_description() {
+    let output = run("<?php assert(...[false, \"explicit\"]);");
+    assert!(output.contains("Cannot use positional argument after argument unpacking"));
 }
 
 fn reference_phpt(path: &str) {

@@ -154,7 +154,7 @@ fn recursion_is_detected() {
 fn memory_limit_stops_json_output_growth() {
     for code in [
         r#"ini_set("memory_limit", "8M"); $subject = str_repeat("\x01", 2 * 1024 * 1024); json_encode($subject); echo "not reached";"#,
-        r#"ini_set("memory_limit", "8M"); $subject = array_fill(0, 200, str_repeat("\x01", 20000)); json_encode($subject, JSON_PARTIAL_OUTPUT_ON_ERROR); echo "not reached";"#,
+        r#"ini_set("memory_limit", "8M"); $subject = []; $item = str_repeat("\x01", 20000); for ($i = 0; $i < 200; $i++) { $subject[] = $item; } json_encode($subject, JSON_PARTIAL_OUTPUT_ON_ERROR); echo "not reached";"#,
     ] {
         let out = run(code);
         assert!(
