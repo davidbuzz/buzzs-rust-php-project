@@ -365,3 +365,26 @@ fn generator_constructor_and_destructor_are_deprecated() {
         "\nDeprecated: Making a constructor a Generator is deprecated in t.php on line 4\n\nDeprecated: Making a destructor a Generator is deprecated in t.php on line 6\n"
     );
 }
+
+/// `zend_is_first_statement(ast, /* allow_nop */ true)`: empty statements
+/// (`;`, a bare `?>`) may precede `declare(strict_types=1)`, other code may
+/// not (Zend/tests/declare/gh19719.phpt).
+#[test]
+fn empty_statements_may_precede_strict_types() {
+    let out = run(
+        "<?php\n// comment\n?>\n<?php\n;\ndeclare(strict_types=1);\nfunction takesInt(int $x) {}\ntry { takesInt('42'); } catch (TypeError $e) { echo \"strict\\n\"; }\n",
+    );
+    assert_eq!(out, "strict\n");
+    let out = run("<?php\necho 1;\ndeclare(strict_types=1);\n");
+    assert!(
+        out.contains(
+            "Fatal error: strict_types declaration must be the very first statement in the script in t.php on line 3"
+        ),
+        "{out}"
+    );
+    let out = run("leading html\n<?php\ndeclare(strict_types=1);\n");
+    assert!(
+        out.contains("Fatal error: strict_types declaration must be the very first statement"),
+        "{out}"
+    );
+}
