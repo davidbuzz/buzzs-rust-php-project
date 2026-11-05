@@ -212,6 +212,7 @@ impl Vm {
             const_deprecation_guard: std::collections::HashSet::new(),
             const_attributes: std::collections::HashMap::new(),
             const_files: std::collections::HashMap::new(),
+            const_names: std::collections::HashMap::new(),
             deprecated_constants: std::collections::HashMap::new(),
             const_deprecation_filter: std::cell::RefCell::new((0, Vec::new())),
             pending_call_dst: None,

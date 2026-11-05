@@ -801,6 +801,10 @@ pub struct Vm {
     pub const_attributes: HashMap<ZStr, Rc<Vec<crate::class::AttributeInfo>>>,
     /// File that defined each user constant (`ReflectionConstant::getFileName`).
     pub const_files: HashMap<ZStr, ZStr>,
+    /// `zend_constant.name` of user constants whose name differs from
+    /// their `EG(zend_constants)` key (`define()` lowercases the key's
+    /// namespace part only; GH-11423).
+    pub const_names: HashMap<ZStr, ZStr>,
     /// Deprecated native constants: name → " since X, msg" suffix.
     pub deprecated_constants: HashMap<ZStr, Vec<u8>>,
     /// `(entries, sorted hashes)` of the names in `deprecated_constants`

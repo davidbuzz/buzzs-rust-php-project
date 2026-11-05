@@ -123,7 +123,9 @@ fn define(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         },
         other => other,
     };
-    // `zend_register_constant()`: the namespace part is case-insensitive.
+    // `zend_register_constant()`: the namespace part is case-insensitive
+    // in the key; the constant keeps the name as given.
+    let given = name.clone();
     let bytes = name.as_bytes();
     let name = match bytes.iter().rposition(|&c| c == b'\\') {
         Some(p) => {
@@ -144,7 +146,10 @@ fn define(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         ))?;
         return Ok(Value::Bool(false));
     }
-    let ok = vm.declare_constant(name, v)?;
+    let ok = vm.declare_constant(name.clone(), v)?;
+    if ok && name != given {
+        vm.const_names.insert(name, given);
+    }
     Ok(Value::Bool(ok))
 }
 

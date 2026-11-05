@@ -254,11 +254,13 @@ fn get_defined_constants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         all.push((n.clone(), "user".to_string()));
     }
     let value_of = |n: &ZStr| vm.constants.get(n).cloned();
+    // `zend_constant.name`, not the hash key (GH-11423).
+    let name_of = |n: &ZStr| vm.const_names.get(n).unwrap_or(n).clone();
     if !categorize {
         let mut t = HashTable::new();
         for (n, _) in &all {
             if let Some(v) = value_of(n) {
-                t.insert(ArrayKey::Str(n.clone()), v);
+                t.insert(ArrayKey::Str(name_of(n)), v);
             }
         }
         return Ok(Value::Array(ZArray::from_table(t)));
@@ -274,7 +276,7 @@ fn get_defined_constants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             groups.push((m.clone(), HashTable::new()));
             groups.len() - 1
         };
-        groups[idx].1.insert(ArrayKey::Str(n.clone()), v);
+        groups[idx].1.insert(ArrayKey::Str(name_of(n)), v);
     }
     let mut t = HashTable::new();
     for (g, h) in groups {
