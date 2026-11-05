@@ -3221,6 +3221,19 @@ fn build_class(
                 display, pd.name
             ));
         }
+        // `zend_verify_hooked_property`: a virtual property with only one
+        // hook cannot have a separate set visibility.
+        if pi.is_virtual() && pflags & flags::SET_MASK != 0 && err.is_none() {
+            if let Some(h) = pi.hooks.as_ref() {
+                if h.get.is_none() || h.set.is_none() {
+                    let only = if h.get.is_none() { "set" } else { "get" };
+                    *err = Some(format!(
+                        "{only}-only virtual property {display}::${} must not specify asymmetric visibility",
+                        pd.name
+                    ));
+                }
+            }
+        }
         if (slot as usize) < props.len() {
             props[slot as usize] = pi.clone();
         } else {
