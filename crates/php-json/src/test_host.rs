@@ -1,6 +1,6 @@
 //! A small object model implementing [`JsonHost`] for the unit tests.
 
-use crate::host::JsonHost;
+use crate::host::{GuardKey, JsonHost};
 use php_runtime::{
     ArrayKey, Diagnostic, ErrorLevel, HashTable, Obj, ObjectDump, ObjectKind, PhpObject,
     PropertyPurpose, PropertySlot, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
@@ -16,6 +16,7 @@ pub(crate) type SerializeFn = Rc<dyn Fn(&mut TestHost, &Obj) -> RtResult<Value>>
 #[derive(Clone)]
 pub(crate) enum Kind {
     Plain,
+    RebuiltProperties,
     Serializable(SerializeFn),
     UnitEnum(ZStr),
     BackedEnum(ZStr, Value),
@@ -182,6 +183,15 @@ impl RuntimeContext for TestHost {
 }
 
 impl JsonHost for TestHost {
+    fn json_native_properties(&mut self, obj: &Obj) -> RtResult<Option<(ZArray, GuardKey)>> {
+        if !matches!(obj_ref(obj).kind, Kind::RebuiltProperties) {
+            return Ok(None);
+        }
+        let table = ZArray::from_table(obj_ref(obj).props.borrow().clone());
+        let guard = GuardKey::array(&table);
+        Ok(Some((table, guard)))
+    }
+
     fn is_json_serializable(&mut self, obj: &Obj) -> bool {
         matches!(obj_ref(obj).kind, Kind::Serializable(_))
     }

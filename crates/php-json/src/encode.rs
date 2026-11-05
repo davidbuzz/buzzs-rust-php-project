@@ -277,13 +277,23 @@ impl<'h> Encoder<'h> {
             }
             return Ok(false);
         }
+        let native = match val {
+            Value::Object(o) => self.host.json_native_properties(o)?,
+            _ => None,
+        };
         let (guard, encode_as_object, is_object) = match val {
             Value::Array(a) => (
                 GuardKey::array(a),
                 options & FORCE_OBJECT != 0 || !a.is_list(),
                 false,
             ),
-            Value::Object(o) => (GuardKey::object(o), true, true),
+            Value::Object(o) => (
+                native
+                    .as_ref()
+                    .map_or_else(|| GuardKey::object(o), |(_, key)| *key),
+                true,
+                true,
+            ),
             _ => unreachable!("encode_array on a scalar"),
         };
         if !self.host.json_protect(guard) {
@@ -291,9 +301,10 @@ impl<'h> Encoder<'h> {
             self.append_output(buf, b"null")?;
             return Ok(false);
         }
-        let table: Option<ZArray> = match val {
-            Value::Array(a) => Some(a.clone()),
-            Value::Object(o) => match self.host.json_properties(o) {
+        let table: Option<ZArray> = match (val, native) {
+            (_, Some((table, _))) => Some(table),
+            (Value::Array(a), _) => Some(a.clone()),
+            (Value::Object(o), _) => match self.host.json_properties(o) {
                 Ok(t) => t,
                 Err(e) => {
                     self.host.json_unprotect(guard);

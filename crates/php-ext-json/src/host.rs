@@ -1,7 +1,7 @@
 //! [`VmJsonHost`]: the [`JsonHost`] implementation over the VM, plus the
 //! conversions between VM throws and runtime errors.
 
-use php_json::JsonHost;
+use php_json::{GuardKey, JsonHost};
 use php_runtime::serialize::SerializedObject;
 use php_runtime::{
     BinaryOp, CastTarget, ErrorLevel, Obj, ObjectDump, PropertyPurpose, RtResult, RuntimeContext,
@@ -155,7 +155,23 @@ impl JsonHost for VmJsonHost<'_> {
     /// properties without `get` absent, non-public names mangled so the
     /// encoder skips them, dynamic properties appended).
     fn json_properties(&mut self, obj: &Obj) -> RtResult<Option<ZArray>> {
-        self.vm.object_properties(obj, PropertyPurpose::Json)
+        self.vm.standard_json_properties(obj)
+    }
+
+    fn json_native_properties(&mut self, obj: &Obj) -> RtResult<Option<(ZArray, GuardKey)>> {
+        let cls = class_of(obj);
+        let Some(handler) = cls.hooks.as_ref().and_then(|h| h.properties_for) else {
+            return Ok(None);
+        };
+        let table = handler(self.vm, obj, PropertyPurpose::Json).map_err(|t| to_rt(self.vm, t))?;
+        Ok(table.map(|table| {
+            let guard = if cls.props.iter().any(|p| p.hooks.is_some()) {
+                GuardKey::object(obj)
+            } else {
+                GuardKey::array(&table)
+            };
+            (table, guard)
+        }))
     }
 
     fn std_class_write(&mut self, obj: &Value, name: ZStr, value: Value) -> RtResult<()> {

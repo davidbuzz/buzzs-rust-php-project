@@ -200,6 +200,44 @@ fn recursion() {
 }
 
 #[test]
+fn rebuilt_property_tables_keep_their_recursion_identity() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let mut h = TestHost::new();
+            let o = h.object("Rebuilt", Kind::RebuiltProperties, &[]);
+            TestHost::set_prop(&o, b"self", o.clone());
+            assert_eq!(
+                enc(&mut h, &o, 0),
+                ("false".into(), 1, "Maximum stack depth exceeded".into())
+            );
+
+            // The rebuilt table is fresh, but its array property is shared.
+            TestHost::set_prop(&o, b"self", list(vec![o.clone()]));
+            assert_eq!(
+                enc(&mut h, &o, 0),
+                ("false".into(), 6, "Recursion detected".into())
+            );
+            assert_eq!(
+                enc(&mut h, &o, PARTIAL_OUTPUT_ON_ERROR),
+                (
+                    "{\"self\":[{\"self\":null}]}".into(),
+                    6,
+                    "Recursion detected".into()
+                )
+            );
+            TestHost::set_prop(&o, b"self", Value::Null);
+            assert_eq!(
+                enc(&mut h, &o, 0),
+                ("{\"self\":null}".into(), 0, "No error".into())
+            );
+        })
+        .expect("spawn")
+        .join()
+        .expect("rebuilt property stack thread");
+}
+
+#[test]
 fn resources_are_unsupported() {
     let mut h = TestHost::new();
     let fp = Value::Resource(Resource::with_handle(5, "stream", None));

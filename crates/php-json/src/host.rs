@@ -24,7 +24,7 @@ pub const DEFAULT_MAX_NESTING: usize = 3000;
 /// The `usize` is an identity address ([`ZArray::addr`] or [`Obj::addr`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GuardKey {
-    /// An array being encoded (protects its hash table).
+    /// An array or native property table being encoded (protects its hash table).
     Array(usize),
     /// An object whose properties are being encoded.
     Object(usize),
@@ -130,6 +130,16 @@ pub trait JsonHost: RuntimeContext {
     /// `Ok(None)` encodes as `{}`.
     fn json_properties(&mut self, obj: &Obj) -> RtResult<Option<ZArray>> {
         self.object_properties(obj, PropertyPurpose::Json)
+    }
+
+    /// A native property handler's table and recursion identity. Unhooked
+    /// handlers protect the table, which may be rebuilt on each visit;
+    /// hooked properties protect the object instead. `None` falls back to
+    /// ordinary property snapshots from [`json_properties`](Self::json_properties),
+    /// protected by the object identity.
+    fn json_native_properties(&mut self, obj: &Obj) -> RtResult<Option<(ZArray, GuardKey)>> {
+        let _ = obj;
+        Ok(None)
     }
 
     /// Creates an empty `stdClass` object (`object_init`) for `json_decode`.

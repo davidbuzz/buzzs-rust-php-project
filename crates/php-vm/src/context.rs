@@ -70,6 +70,21 @@ impl Vm {
                 return Ok(Some(t));
             }
         }
+        self.standard_props_for(o, purpose)
+    }
+
+    /// The JSON fallback after a native property handler declined the purpose.
+    pub fn standard_json_properties(&mut self, o: &Obj) -> RtResult<Option<ZArray>> {
+        self.standard_props_for(o, PropertyPurpose::Json)
+            .map_err(|t| self.to_rt(t))
+    }
+
+    fn standard_props_for(
+        &mut self,
+        o: &Obj,
+        purpose: PropertyPurpose,
+    ) -> VmResult<Option<ZArray>> {
+        let cls = object::class_of(o).clone();
         if purpose == PropertyPurpose::Debug {
             if let Some(m) = cls.magic.debug_info.clone() {
                 let r = self.call_method(o, &m, Vec::new())?;
