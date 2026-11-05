@@ -735,7 +735,7 @@ impl Parser<'_> {
                             Expr::new(
                                 ExprKind::Call {
                                     callee: Box::new(Callee::Name(name)),
-                                    args,
+                                    args: Box::new(args),
                                 },
                                 span,
                             ),
@@ -775,7 +775,7 @@ impl Parser<'_> {
                     Expr::new(
                         ExprKind::Call {
                             callee: Box::new(Callee::Name(name)),
-                            args,
+                            args: Box::new(args),
                         },
                         span,
                     ),
@@ -891,7 +891,7 @@ impl Parser<'_> {
                     Expr::new(
                         ExprKind::Call {
                             callee: Box::new(Callee::Name(name)),
-                            args,
+                            args: Box::new(args),
                         },
                         span,
                     ),
@@ -1002,7 +1002,7 @@ impl Parser<'_> {
                             ExprKind::MethodCall {
                                 object: bx(e),
                                 name,
-                                args,
+                                args: Box::new(args),
                                 nullsafe,
                             },
                             span,
@@ -1045,7 +1045,7 @@ impl Parser<'_> {
                     e = Expr::new(
                         ExprKind::Call {
                             callee: Box::new(Callee::Expr(e)),
-                            args,
+                            args: Box::new(args),
                         },
                         span,
                     );
@@ -1073,7 +1073,7 @@ impl Parser<'_> {
                             ExprKind::StaticCall {
                                 class: Box::new(class),
                                 name: MemberName::Expr(bx(var)),
-                                args,
+                                args: Box::new(args),
                             },
                             span,
                         ),
@@ -1105,7 +1105,7 @@ impl Parser<'_> {
                             ExprKind::StaticCall {
                                 class: Box::new(class),
                                 name: MemberName::Expr(bx(name_expr)),
-                                args,
+                                args: Box::new(args),
                             },
                             span,
                         ),
@@ -1135,7 +1135,7 @@ impl Parser<'_> {
                             ExprKind::StaticCall {
                                 class: Box::new(class),
                                 name: MemberName::Ident(ident),
-                                args,
+                                args: Box::new(args),
                             },
                             span,
                         ),
@@ -1298,7 +1298,7 @@ impl Parser<'_> {
                 Expr::new(
                     ExprKind::New {
                         class: Box::new(NewClass::Anonymous(decl)),
-                        args,
+                        args: Box::new(args),
                     },
                     span,
                 ),
@@ -1329,7 +1329,7 @@ impl Parser<'_> {
                 Expr::new(
                     ExprKind::New {
                         class: Box::new(class),
-                        args,
+                        args: Box::new(args),
                     },
                     span,
                 ),
@@ -1342,10 +1342,10 @@ impl Parser<'_> {
             Expr::new(
                 ExprKind::New {
                     class: Box::new(class),
-                    args: ArgList {
+                    args: Box::new(ArgList {
                         args: Vec::new(),
                         span: Span::new(end.end, end.end, self.prev_end_line),
-                    },
+                    }),
                 },
                 span,
             ),
@@ -1365,7 +1365,7 @@ impl Parser<'_> {
             Expr::new(
                 ExprKind::Call {
                     callee: Box::new(Callee::Name(name.clone())),
-                    args,
+                    args: Box::new(args),
                 },
                 p.span_from(start),
             )

@@ -318,7 +318,7 @@ fn name_closures(e: &mut Expr, names: &mut std::slice::Iter<'_, ZStr>) {
         }
         ExprKind::New { args, .. }
         | ExprKind::Call { args, .. }
-        | ExprKind::StaticCall { args, .. } => name_args(args, names),
+        | ExprKind::StaticCall { args, .. } => name_args(&mut **args, names),
         _ => {}
     }
 }

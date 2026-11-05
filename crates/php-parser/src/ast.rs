@@ -957,11 +957,15 @@ pub enum ExprKind {
         parenthesized: bool,
     },
     /// A function call.
+    ///
+    /// The argument lists of `Call`, `MethodCall`, `StaticCall` and `New`
+    /// are boxed: inline they made [`ExprKind`] 112 bytes, and every
+    /// expression node paid for it.
     Call {
         /// The callee.
         callee: Box<Callee>,
         /// The arguments.
-        args: ArgList,
+        args: Box<ArgList>,
     },
     /// `$a->b()` or `$a?->b()`.
     MethodCall {
@@ -970,7 +974,7 @@ pub enum ExprKind {
         /// The method name.
         name: MemberName,
         /// The arguments.
-        args: ArgList,
+        args: Box<ArgList>,
         /// `?->`
         nullsafe: bool,
     },
@@ -981,14 +985,14 @@ pub enum ExprKind {
         /// The method name.
         name: MemberName,
         /// The arguments.
-        args: ArgList,
+        args: Box<ArgList>,
     },
     /// `new A(args)` or `new class {}`.
     New {
         /// The class.
         class: Box<NewClass>,
         /// Constructor arguments (empty when no parentheses were written).
-        args: ArgList,
+        args: Box<ArgList>,
     },
     /// `a = b`.
     Assign {
