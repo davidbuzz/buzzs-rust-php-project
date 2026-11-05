@@ -233,6 +233,9 @@ pub(crate) struct Compiler {
     /// evaluated, as `zend_compile_const_expr_*` do not call
     /// `zend_ensure_valid_class_fetch_type()`.
     pub in_const_default: bool,
+    /// Compiling the value of a top-level `const` statement, which PHP
+    /// evaluates as a constant-expression AST (`zend_compile_const_decl`).
+    pub in_const_decl: bool,
 }
 
 /// Compiles a parsed program.
@@ -263,6 +266,7 @@ pub fn compile(
         hook_prop: None,
         closure_depth: 0,
         in_const_default: false,
+        in_const_decl: false,
     };
     for w in &program.warnings {
         let level = match w.level {

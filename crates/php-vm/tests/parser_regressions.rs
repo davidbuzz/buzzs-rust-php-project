@@ -166,3 +166,41 @@ var_dump(is_array(get_defined_functions(exclude_disabled: true)['user']));
          bool(true)\n"
     );
 }
+
+/// `ZEND_SEND_UNPACK` raises a `TypeError`; `ZEND_ADD_ARRAY_UNPACK` appends
+/// numeric string keys; constant expressions spread arrays only
+/// (`zend_ast_add_unpacked_element`); `zend_try_ct_eval_array` rejects a
+/// constant non-array spread at compile time.
+#[test]
+fn unpack_errors_and_numeric_string_keys() {
+    let out = run(r#"<?php
+function t(...$a) {}
+try { t(...null); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+function g() { yield "42" => 1; yield "foo" => 2; yield 7 => 3; }
+var_dump([...g()]);
+class It implements IteratorAggregate { function getIterator(): Iterator { yield 1; } }
+const A = [...[1, 2], ...['k' => 3]];
+var_dump(A);
+const C = [...new It];
+"#);
+    assert!(
+        out.starts_with(
+            "TypeError: Only arrays and Traversables can be unpacked, null given\n\
+             array(3) {\n  [0]=>\n  int(1)\n  [\"foo\"]=>\n  int(2)\n  [1]=>\n  int(3)\n}\n\
+             array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [\"k\"]=>\n  int(3)\n}\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "Fatal error: Uncaught Error: Only arrays can be unpacked in constant expression in t.php:9"
+        ),
+        "{out}"
+    );
+    let out = run("<?php\necho 1;\nvar_dump([...42]);\n");
+    assert!(
+        out.contains("Fatal error: Only arrays and Traversables can be unpacked, int given in t.php on line 3"),
+        "{out}"
+    );
+    assert!(!out.starts_with('1'), "{out}");
+}

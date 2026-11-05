@@ -351,7 +351,10 @@ impl Compiler {
                     let full = self.ns_prefixed_pub(&c.name.name);
                     let name = self.lit_str(&full);
                     self.check_const_expr(&c.value, true)?;
-                    let val = self.compile_expr(&c.value)?;
+                    let saved = std::mem::replace(&mut self.in_const_decl, true);
+                    let val = self.compile_expr(&c.value);
+                    self.in_const_decl = saved;
+                    let val = val?;
                     self.emit(Op::DeclareConst { name, val, attrs });
                 }
             }

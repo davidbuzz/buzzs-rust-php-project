@@ -815,8 +815,9 @@ impl Vm {
             Value::Array(a) => a.iter().map(|(k, v)| (k.to_value(), v.clone())).collect(),
             Value::Object(o) if self.instance_of(o, b"traversable") => self.iterate_to_vec(&v)?,
             _ => {
+                // ZEND_SEND_UNPACK raises zend_type_error.
                 return Err(self.make_throw(
-                    "Error",
+                    "TypeError",
                     &format!(
                         "Only arrays and Traversables can be unpacked, {} given",
                         given_type(&v)

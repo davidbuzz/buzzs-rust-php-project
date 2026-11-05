@@ -264,6 +264,9 @@ pub enum Op {
     },
     /// Spreads `src` into the array in `arr` (`...$x`).
     ArrayUnpack { arr: u32, src: Operand },
+    /// `...$x` inside a constant expression: only arrays may be spread
+    /// (`zend_ast_add_unpacked_element`, Zend/zend_ast.c).
+    ConstArrayUnpack { arr: u32, src: Operand },
 
     /// Unconditional jump.
     Jmp(Label),

@@ -644,6 +644,9 @@ impl Compiler {
     }
 
     fn compile_array(&mut self, items: &[Option<ArrayItem>], line: u32) -> CResult<Operand> {
+        if items.iter().flatten().any(|it| it.unpack) {
+            self.check_const_array_unpack(items, line)?;
+        }
         let t = self.tmp();
         self.emit(Op::InitArray { dst: t });
         for it in items {
@@ -656,7 +659,11 @@ impl Compiler {
                     return self.err("Cannot assign reference to non referenceable value", line);
                 }
                 let v = self.compile_expr(&it.value)?;
-                self.emit(Op::ArrayUnpack { arr: t, src: v });
+                if self.in_const_expr() || self.in_const_decl {
+                    self.emit(Op::ConstArrayUnpack { arr: t, src: v });
+                } else {
+                    self.emit(Op::ArrayUnpack { arr: t, src: v });
+                }
                 continue;
             }
             let key = match &it.key {
@@ -687,6 +694,42 @@ impl Compiler {
             }
         }
         Ok(Operand::Tmp(t))
+    }
+
+    /// `zend_try_ct_eval_array`: an array literal whose elements are all
+    /// compile-time constants is evaluated while compiling, so unpacking a
+    /// constant non-array (`[...42]`) is a compile error rather than the
+    /// runtime `Error` of `ZEND_ADD_ARRAY_UNPACK`.
+    #[cold]
+    fn check_const_array_unpack(&self, items: &[Option<ArrayItem>], line: u32) -> CResult<()> {
+        let mut bad = None;
+        for it in items {
+            // A hole is reported by `compile_array` itself.
+            let Some(it) = it else { return Ok(()) };
+            if it.unpack {
+                let Some(v) = self.try_fold(&it.value) else {
+                    return Ok(());
+                };
+                if bad.is_none() && !matches!(v, Value::Array(_)) {
+                    bad = Some(v);
+                }
+            } else if it.by_ref
+                || self.try_fold(&it.value).is_none()
+                || it.key.as_ref().is_some_and(|k| self.try_fold(k).is_none())
+            {
+                return Ok(());
+            }
+        }
+        match bad {
+            Some(v) => self.err(
+                format!(
+                    "Only arrays and Traversables can be unpacked, {} given",
+                    crate::typecheck::given_type(&v)
+                ),
+                line,
+            ),
+            None => Ok(()),
+        }
     }
 
     fn compile_magic(&mut self, m: MagicConst, line: u32) -> CResult<Operand> {

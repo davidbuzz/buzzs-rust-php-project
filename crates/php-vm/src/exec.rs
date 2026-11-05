@@ -561,6 +561,11 @@ impl Vm {
                         self.array_unpack(*arr, v)?;
                         Flow::Next
                     }
+                    Op::ConstArrayUnpack { arr, src } => {
+                        let v = self.read(*src)?;
+                        self.const_array_unpack(*arr, v)?;
+                        Flow::Next
+                    }
                     Op::Jmp(t) => {
                         self.frame_mut().ip = *t as usize;
                         Flow::Next
@@ -1358,6 +1363,20 @@ impl Vm {
         res
     }
 
+    /// `zend_ast_add_unpacked_element` (Zend/zend_ast.c): a constant
+    /// expression spreads arrays only, never Traversables.
+    #[cold]
+    fn const_array_unpack(&mut self, arr: u32, src: Value) -> VmResult<()> {
+        let src = src.deref();
+        if !matches!(src, Value::Array(_)) {
+            return Err(self.make_throw(
+                "Error",
+                "Only arrays can be unpacked in constant expression",
+            ));
+        }
+        self.array_unpack(arr, src)
+    }
+
     fn array_unpack(&mut self, arr: u32, src: Value) -> VmResult<()> {
         match src {
             Value::Array(s) => {
@@ -1395,9 +1414,16 @@ impl Vm {
                             Value::Int(_) => {
                                 let _ = t.push(v);
                             }
-                            Value::Str(s) => {
-                                t.insert(php_runtime::ArrayKey::from_zstr(&s), v);
-                            }
+                            // ZEND_ADD_ARRAY_UNPACK: a numeric string key
+                            // (ZEND_HANDLE_NUMERIC) is appended, not kept.
+                            Value::Str(s) => match php_runtime::ArrayKey::from_zstr(&s) {
+                                k @ php_runtime::ArrayKey::Str(_) => {
+                                    t.insert(k, v);
+                                }
+                                php_runtime::ArrayKey::Int(_) => {
+                                    let _ = t.push(v);
+                                }
+                            },
                             other => {
                                 self.frame_mut().tmps[arr as usize] = a;
                                 return Err(self.make_throw(
