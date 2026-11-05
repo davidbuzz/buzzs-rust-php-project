@@ -1394,6 +1394,8 @@ fn legacy_unserialize(
         return Err(err(1));
     }
     let mut p = 2usize;
+    // An exception `spl_array_set_array()` left pending (thrown on return).
+    let mut pending = None;
     let (zflags, np) = serial::unserialize_at(host, buf, p).map_err(err)?;
     let Value::Int(flags) = zflags else {
         return Err(err(np));
@@ -1427,8 +1429,14 @@ fn legacy_unserialize(
                 s.array = array;
                 s.ht_iter = None;
             })?;
-        } else {
-            set_array(host, func, this, st, &array, 0, true)?;
+        } else if let Err(e) = set_array(host, func, this, st, &array, 0, true) {
+            // `spl_array_set_array()` leaves its exception pending and
+            // `ArrayObject::unserialize` goes on to load the members
+            // (bug #70155): only a bailout stops it here.
+            if matches!(e, RuntimeError::Fatal(_)) {
+                return Err(e);
+            }
+            pending = Some(e);
         }
         if buf.get(p) != Some(&b';') {
             return Err(err(p));
@@ -1448,7 +1456,7 @@ fn legacy_unserialize(
         return Err(err(np));
     };
     host.properties_load(this, &members)?;
-    Ok(())
+    pending.map_or(Ok(()), Err)
 }
 
 /// The value name used by `TypeError` messages (re-exported helper).

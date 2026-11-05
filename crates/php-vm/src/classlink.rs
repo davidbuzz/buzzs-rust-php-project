@@ -194,8 +194,15 @@ impl Vm {
         }
     }
 
-    /// `A::class` and friends.
-    pub(crate) fn op_fetch_class_name(&mut self, spec: &ClassSpec) -> VmResult<Value> {
+    /// `A::class` and friends. `const_expr` marks a fetch compiled inline
+    /// in an evaluated constant expression (see [`Op::FetchClassName`]).
+    ///
+    /// [`Op::FetchClassName`]: crate::opcode::Op::FetchClassName
+    pub(crate) fn op_fetch_class_name(
+        &mut self,
+        spec: &ClassSpec,
+        const_expr: bool,
+    ) -> VmResult<Value> {
         if let ClassSpec::Dyn(op) = spec {
             let v = self.read(*op)?;
             return match v {
@@ -220,7 +227,7 @@ impl Vm {
         };
         if !kw.is_empty() {
             let Some(scope) = self.scope() else {
-                let msg = if self.frame().kind == FrameKind::ConstExpr {
+                let msg = if const_expr || self.frame().kind == FrameKind::ConstExpr {
                     "Cannot use \"self\" when no class scope is active".to_string()
                 } else {
                     format!("Cannot use \"{kw}\" in the global scope")

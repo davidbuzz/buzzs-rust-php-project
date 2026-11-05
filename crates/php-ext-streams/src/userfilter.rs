@@ -38,6 +38,26 @@ thread_local! {
     /// (`bucket->brigade`).
     static BUCKET_HOME: RefCell<std::collections::HashMap<u64, Weak<RefCell<Brigade>>>> =
         RefCell::new(std::collections::HashMap::new());
+    /// Generation of `BG(user_filter_map)`: bumped when the map is
+    /// destroyed at request shutdown (`PHP_RSHUTDOWN(user_filters)`), so
+    /// classes registered before that can no longer be instantiated while
+    /// the resource list is closed.
+    static MAP_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// `PHP_RSHUTDOWN_FUNCTION(user_filters)`: destroys `BG(user_filter_map)`.
+/// The filter factories stay registered (`FG(stream_filters)` lives until
+/// the end of `php_request_shutdown()`), so a user filter appended while
+/// the remaining streams are closed fails with "Unable to create or locate
+/// filter" (GH-22449, GH-22818).
+pub fn shutdown() {
+    MAP_EPOCH.with(|e| e.set(e.get().wrapping_add(1)));
+}
+
+/// Whether a class registered in map generation `epoch` is still in
+/// `BG(user_filter_map)`.
+fn in_user_filter_map(epoch: u64) -> bool {
+    MAP_EPOCH.with(std::cell::Cell::get) == epoch
 }
 
 /// A filter attached with `stream_filter_append()`/`prepend()`.
@@ -50,6 +70,8 @@ struct FilterRes {
 #[derive(Debug)]
 struct FilterClass {
     class: Rc<Class>,
+    /// The `BG(user_filter_map)` generation the class was registered in.
+    epoch: u64,
 }
 
 #[derive(Debug)]
@@ -64,6 +86,10 @@ impl UserFilterClass for FilterClass {
         params: Option<&SValue>,
     ) -> Option<(Box<dyn UserFilterObject>, UserCall)> {
         let vm_params = PENDING_PARAMS.with(|p| p.borrow_mut().take());
+        // `BG(user_filter_map) == NULL`: destroyed at request shutdown.
+        if !in_user_filter_map(self.epoch) {
+            return None;
+        }
         bridge::with_vm(|vm| {
             bridge::flush_diags(vm);
             if bridge::has_pending() {
@@ -434,7 +460,11 @@ fn stream_filter_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if class.is_interface() || class.is_trait() || class.is_abstract() || class.is_enum() {
         return Err(a.value_error(vm, 2, "must be a concrete class"));
     }
-    let factory = Rc::new(UserFilterFactory::new(Rc::new(FilterClass { class })));
+    let epoch = MAP_EPOCH.with(std::cell::Cell::get);
+    let factory = Rc::new(UserFilterFactory::new(Rc::new(FilterClass {
+        class,
+        epoch,
+    })));
     Ok(Value::Bool(wrapper::register_filter_volatile(
         &name, factory,
     )))

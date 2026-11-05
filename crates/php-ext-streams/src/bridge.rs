@@ -99,6 +99,12 @@ pub fn has_pending() -> bool {
     PENDING.with(|p| p.borrow().is_some())
 }
 
+/// Whether a callback raised a fatal error (`zend_bailout()`): unlike an
+/// exception, a bailout skips the cleanup of the native frames it crosses.
+pub fn pending_is_fatal() -> bool {
+    PENDING.with(|p| matches!(*p.borrow(), Some(Throw::Fatal)))
+}
+
 /// Takes the pending throw.
 pub fn take_pending() -> Option<Throw> {
     PENDING.with(|p| p.borrow_mut().take())

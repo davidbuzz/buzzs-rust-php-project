@@ -1124,6 +1124,16 @@ impl Args {
     }
 }
 
+/// Callback reporting how many references an extension's internal
+/// structures hold to a resource (`GC_ADDREF` on the `zend_resource`).
+pub type ResourceRefsFn = fn(&php_runtime::Resource) -> usize;
+
+/// Installs the [`ResourceRefsFn`] `debug_zval_dump()` adds to a
+/// resource's refcount (e.g. the streams keeping a context alive).
+pub fn set_resource_refs_hook(f: ResourceRefsFn) {
+    crate::builtins::dump::set_resource_refs_hook(f);
+}
+
 /// Parses a stub signature (exposed for tests of extensions).
 pub fn check_signature(sig: &str) -> (String, usize) {
     let s = parse_sig(sig);

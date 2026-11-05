@@ -262,9 +262,11 @@ fn report_in(vm: &mut Vm, ctx: Option<&ContextRef>, diags: Vec<Diagnostic>) {
                         bridge::set_pending(t);
                     }
                 } else if !bridge::has_pending() {
+                    // `zend_is_callable()`'s error text says why.
+                    let why = vm.callable_error_message(&handler);
                     let t = vm.throw(
                         "TypeError",
-                        "stream error handler must be a valid callback, no array or string given",
+                        &format!("stream error handler must be a valid callback, {why}"),
                     );
                     bridge::set_pending(t);
                 }
@@ -431,4 +433,57 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
     CLASSES.with(|c| *c.borrow_mut() = vec![error, exception]);
     m.function("stream_last_errors(): array", stream_last_errors)
         .function("stream_clear_errors(): void", stream_clear_errors);
+}
+
+#[cfg(test)]
+mod tests {
+    use php_vm::ext::Extension;
+    use php_vm::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// `php_stream_call_error_handler()`: the TypeError for a handler that
+    /// is not callable carries `zend_is_callable()`'s reason.
+    #[test]
+    fn invalid_error_handler_names_the_reason() {
+        let sink = Sink::default();
+        let streams = crate::Streams;
+        let exts: [&dyn Extension; 1] = [&streams];
+        let mut vm = Vm::with_extensions(&VmOptions { ini: vec![] }, Box::new(sink.clone()), &exts);
+        vm.run_script(
+            br#"<?php
+$ctx = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_handler' => 'no_such_handler',
+]]);
+try {
+    fopen('/nonexistent-ws20/x', 'r', false, $ctx);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+            "test.php",
+        );
+        drop(vm);
+        let bytes = sink.0.borrow().clone();
+        assert_eq!(
+            String::from_utf8_lossy(&bytes),
+            "stream error handler must be a valid callback, function \"no_such_handler\" not found or invalid function name\n"
+        );
+    }
 }

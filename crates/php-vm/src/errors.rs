@@ -147,12 +147,74 @@ impl Vm {
         match self.docref_function_name() {
             Some(n) => {
                 let args = self.docref_args();
+                if self.ini.get_bool("html_errors") {
+                    return self.docref_html(level, &format!("{n}({args})"), &n, msg);
+                }
                 let mut m = format!("{n}({args}): ").into_bytes();
                 m.extend_from_slice(msg);
                 self.error_bytes(level, &m)
             }
             None => self.error_bytes(level, msg),
         }
+    }
+
+    /// `php_verror` under `html_errors`: the origin and the message are
+    /// HTML-escaped, and with a non-empty `docref_root` the manual link
+    /// `[<a href='{root}{page}{ext}'>{page}{ext}</a>]` follows the origin.
+    /// `function` names the page: `function.name` or `class.method` (see
+    /// [`docref_page`]).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn docref_html(
+        &mut self,
+        level: i64,
+        origin: &str,
+        function: &str,
+        msg: &[u8],
+    ) -> VmResult<()> {
+        let mut m = self.error_html_escape(origin.as_bytes());
+        let root = self
+            .ini
+            .get("docref_root")
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
+        if !root.is_empty() {
+            let mut page = docref_page(function).into_bytes();
+            if let Some(ext) = self.ini.get("docref_ext") {
+                page.extend_from_slice(ext);
+            }
+            m.extend_from_slice(b" [<a href='");
+            m.extend_from_slice(&root);
+            m.extend_from_slice(&page);
+            m.extend_from_slice(b"'>");
+            m.extend_from_slice(&page);
+            m.extend_from_slice(b"</a>]");
+        }
+        m.extend_from_slice(b": ");
+        m.extend_from_slice(&self.error_html_escape(msg));
+        self.error_msg_html_ready = true;
+        self.error_bytes(level, &m)
+    }
+
+    /// A warning raised while `include`/`require` executes (`php_verror`
+    /// with the opline on `ZEND_INCLUDE_OR_EVAL`): `kind()` or
+    /// `kind('name')` prefixes it, and under `html_errors` it is escaped and
+    /// linked to the `function.kind` manual page.
+    pub(crate) fn include_warning(&mut self, kind: &str, name: &[u8], msg: &str) -> VmResult<()> {
+        let origin = self.include_error_origin(kind, name);
+        if self.ini.get_bool("html_errors") {
+            return self.docref_html(level::WARNING, &origin, kind, msg.as_bytes());
+        }
+        self.error(level::WARNING, &format!("{origin}: {msg}"))
+    }
+
+    /// `escape_html` of `main/main.c` with the request's charset.
+    fn error_html_escape(&self, msg: &[u8]) -> Vec<u8> {
+        let internal_encoding = self.ini.get("internal_encoding");
+        let default_charset = self.ini.get("default_charset");
+        let charset =
+            php_stdstr::html::effective_charset_hint(None, internal_encoding, default_charset);
+        html_escape(msg, charset)
     }
 
     /// Reports an error at a given location.
@@ -175,6 +237,9 @@ impl Vm {
         file: &ZStr,
         line: u32,
     ) -> VmResult<()> {
+        // A message `php_verror` composed as HTML applies to this report
+        // only, not to errors raised by the user handler below.
+        let html_ready = std::mem::take(&mut self.error_msg_html_ready);
         // User error handler.
         let handleable = level
             & (level::ERROR
@@ -230,7 +295,9 @@ impl Vm {
         if self.error_reporting & level != 0
             || level & (level::CORE_ERROR | level::CORE_WARNING) != 0
         {
+            self.error_msg_html_ready = html_ready;
             self.display_error(level, msg, file, line);
+            self.error_msg_html_ready = false;
         }
         if is_fatal(level) {
             self.exit_status = 255;
@@ -289,12 +356,13 @@ impl Vm {
         if self.ini.get_bool("html_errors") {
             let mut out = prepend.clone();
             out.extend_from_slice(format!("<br />\n<b>{lbl}</b>:  ").as_bytes());
-            // `php_error_cb`: the message is HTML-escaped with html_errors.
-            let internal_encoding = self.ini.get("internal_encoding");
-            let default_charset = self.ini.get("default_charset");
-            let charset =
-                php_stdstr::html::effective_charset_hint(None, internal_encoding, default_charset);
-            out.extend_from_slice(&html_escape(msg, charset));
+            // `php_error_cb`: the message is HTML-escaped with html_errors,
+            // unless `php_verror` already escaped it (docref messages).
+            if std::mem::take(&mut self.error_msg_html_ready) {
+                out.extend_from_slice(msg);
+            } else {
+                out.extend_from_slice(&self.error_html_escape(msg));
+            }
             out.extend_from_slice(
                 format!(" in <b>{file_s}</b> on line <b>{line}</b><br />\n").as_bytes(),
             );
@@ -505,6 +573,17 @@ impl Vm {
     }
 }
 
+/// The manual page `php_verror` links a docref error to: `function.name`,
+/// or `class.method` for `Class::method`, with leading underscores of the
+/// function stripped, `_` turned into `-` and lowercased.
+fn docref_page(function: &str) -> String {
+    let page = match function.split_once("::") {
+        Some((class, method)) => format!("{class}.{}", method.trim_start_matches('_')),
+        None => format!("function.{}", function.trim_start_matches('_')),
+    };
+    page.replace('_', "-").to_ascii_lowercase()
+}
+
 /// `escape_html` of `php_error_cb`: retry invalid input with substitution.
 fn html_escape(msg: &[u8], charset: Option<&[u8]>) -> Vec<u8> {
     use php_stdstr::html::{escape_html_entities, ENT_COMPAT, ENT_SUBSTITUTE};
@@ -533,4 +612,20 @@ fn html_escape(msg: &[u8], charset: Option<&[u8]>) -> Vec<u8> {
         );
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::docref_page;
+
+    #[test]
+    fn docref_pages_follow_php_verror() {
+        assert_eq!(docref_page("require_once"), "function.require-once");
+        assert_eq!(docref_page("_strlen"), "function.strlen");
+        assert_eq!(
+            docref_page("SplFileObject::__construct"),
+            "splfileobject.construct"
+        );
+        assert_eq!(docref_page("Foo_Bar::do_it"), "foo-bar.do-it");
+    }
 }

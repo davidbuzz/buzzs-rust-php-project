@@ -1079,6 +1079,19 @@ impl Vm {
                         let r = self.place_make_ref(*place)?;
                         self.op_yield(k, Some(Value::Reference(r)), *dst, base)?
                     }
+                    Op::YieldByRefValue {
+                        key,
+                        val,
+                        call,
+                        dst,
+                    } => {
+                        let k = match key {
+                            Some(k) => Some(self.read(*k)?),
+                            None => None,
+                        };
+                        let v = self.read_raw(*val)?;
+                        self.op_yield_by_ref_value(k, v, *call, *dst, base)?
+                    }
                     Op::YieldFrom { src, dst } => {
                         let v = self.read_raw(*src)?;
                         self.op_yield_from(v, *dst, base)?
@@ -1132,8 +1145,12 @@ impl Vm {
                         self.set_tmp(*dst, v);
                         Flow::Next
                     }
-                    Op::FetchClassName { class, dst } => {
-                        let v = self.op_fetch_class_name(class)?;
+                    Op::FetchClassName {
+                        class,
+                        dst,
+                        const_expr,
+                    } => {
+                        let v = self.op_fetch_class_name(class, *const_expr)?;
                         self.set_tmp(*dst, v);
                         Flow::Next
                     }
@@ -2024,7 +2041,17 @@ impl Vm {
         let site = OOM_SITE.with(|s| s.borrow_mut().take());
         if let Some(over) = php_memlimit::take() {
             let (file, line) = site.unwrap_or_else(|| self.current_location());
-            self.error_at(crate::errors::level::ERROR, &over.to_string(), &file, line)?;
+            // `php_error_cb` (main/main.c) while the memory-limit error is
+            // reported: the output buffers are discarded, unless a handler
+            // is running, so the message reaches the SAPI and the buffered
+            // output is neither printed nor copied again.
+            self.reporting_oom = true;
+            if self.output.status() & php_support::output::status::LOCKED == 0 {
+                php_support::output::discard_all(self);
+            }
+            let r = self.error_at(crate::errors::level::ERROR, &over.to_string(), &file, line);
+            self.reporting_oom = false;
+            r?;
         }
         Ok(())
     }
