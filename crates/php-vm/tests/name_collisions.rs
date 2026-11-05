@@ -123,6 +123,12 @@ fn imports_collide_with_declarations() {
     for (src, expected) in cases {
         assert_contains(src, expected);
     }
+    // Each namespace declaration resets the imports and the seen symbols
+    // (GH-15244, Zend/tests/use_function/ns_end_resets_seen_symbols_*).
+    assert_eq!(
+        run("<?php\nnamespace Ns {\n    class C {}\n}\nnamespace Ns {\n    use C;\n    echo 'ok';\n}\n"),
+        "ok"
+    );
     // Importing the declared class itself is allowed.
     assert_eq!(
         run("<?php\nnamespace N;\nclass Foo {}\nuse N\\Foo;\necho Foo::class;\n"),

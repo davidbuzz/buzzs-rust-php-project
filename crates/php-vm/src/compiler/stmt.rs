@@ -49,9 +49,11 @@ impl Compiler {
             StmtKind::Class(cd) => self.compile_class_stmt(cd, true),
             StmtKind::Namespace { name, body } => {
                 self.namespace = name.as_ref().map(|n| n.name.clone()).unwrap_or_default();
+                // `zend_reset_import_tables` also forgets the seen symbols.
                 self.class_uses.clear();
                 self.fn_uses.clear();
                 self.const_uses.clear();
+                self.seen_symbols.clear();
                 if let Some(b) = body {
                     for st in b {
                         self.compile_stmt_top(st)?;
