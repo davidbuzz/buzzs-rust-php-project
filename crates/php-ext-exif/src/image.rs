@@ -28,8 +28,10 @@ fn getimagesize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let path = res::path_arg(vm, a, 0)?;
     let want_info = a.has(1);
     if want_info {
-        // `zend_try_array_init()` happens before the file is opened.
-        a.set_ref(1, Value::Array(ZArray::new()));
+        // `zend_try_array_init()` happens before the file is opened; a
+        // destructor of the old value that throws leaves the exception
+        // pending, so the open reports nothing (GH-17162).
+        vm.try_array_init_arg(a, 1)?;
     }
     if path.is_empty() {
         return Err(vm.throw("ValueError", php_streams::open::EMPTY_PATH_ERROR));
@@ -59,7 +61,7 @@ fn getimagesizefromstring(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let data = a.str(0);
     let want_info = a.has(1);
     if want_info {
-        a.set_ref(1, Value::Array(ZArray::new()));
+        vm.try_array_init_arg(a, 1)?;
     }
     let out = getimagesizefromstring_limited(data.as_bytes(), want_info, memory_limit(vm));
     finish(vm, a, &out)
