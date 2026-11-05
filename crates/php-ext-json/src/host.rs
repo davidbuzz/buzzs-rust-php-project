@@ -4,8 +4,8 @@
 use php_json::JsonHost;
 use php_runtime::serialize::SerializedObject;
 use php_runtime::{
-    ArrayKey, BinaryOp, CastTarget, ErrorLevel, HashTable, Obj, ObjectDump, PropertyPurpose,
-    RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
+    BinaryOp, CastTarget, ErrorLevel, Obj, ObjectDump, PropertyPurpose, RtResult, RuntimeContext,
+    RuntimeError, Value, ZArray, ZStr,
 };
 use php_vm::object::class_of;
 use php_vm::{Throw, Vm};
@@ -138,50 +138,12 @@ impl JsonHost for VmJsonHost<'_> {
         self.vm.get_property(obj, "value").ok()
     }
 
-    /// `zend_get_properties_for(obj, ZEND_PROP_PURPOSE_JSON)`; for classes
-    /// with property hooks the table is built here like
-    /// `zend_std_get_properties` does it (declared properties in order, with
-    /// `get` hooks run through `zend_read_property`), followed by the
-    /// dynamic properties.
+    /// `zend_get_properties_for(obj, ZEND_PROP_PURPOSE_JSON)`: the VM's JSON
+    /// property table (lazy objects initialized, `get` hooks run, virtual
+    /// properties without `get` absent, non-public names mangled so the
+    /// encoder skips them, dynamic properties appended).
     fn json_properties(&mut self, obj: &Obj) -> RtResult<Option<ZArray>> {
-        let cls = class_of(obj).clone();
-        let hooked = cls.props.iter().any(|p| p.hooks.is_some());
-        if !hooked
-            || cls
-                .hooks
-                .as_ref()
-                .is_some_and(|h| h.properties_for.is_some())
-        {
-            return self.vm.object_properties(obj, PropertyPurpose::Json);
-        }
-        let mut table = HashTable::new();
-        for pi in &cls.props {
-            if pi.visibility() != php_vm::ext::acc::PUBLIC {
-                continue;
-            }
-            let has_get = pi.hooks.as_ref().is_some_and(|h| h.get.is_some());
-            let value = if has_get {
-                let name = pi.name.to_string_lossy();
-                self.vm
-                    .get_property(obj, &name)
-                    .map_err(|t| to_rt(self.vm, t))?
-            } else if pi.is_virtual() {
-                continue;
-            } else {
-                let slots = php_vm::object::data(obj).slots.borrow();
-                match slots.get(pi.slot as usize).cloned().flatten() {
-                    Some(v) => v,
-                    None => continue,
-                }
-            };
-            table.insert(ArrayKey::Str(pi.name.clone()), value);
-        }
-        if let Some(dynamic) = php_vm::object::data(obj).dynamic.borrow().as_ref() {
-            for (k, v) in dynamic {
-                table.insert(k.clone(), v.clone());
-            }
-        }
-        Ok(Some(ZArray::from_table(table)))
+        self.vm.object_properties(obj, PropertyPurpose::Json)
     }
 
     fn std_class_write(&mut self, obj: &Value, name: ZStr, value: Value) -> RtResult<()> {

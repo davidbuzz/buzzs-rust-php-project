@@ -96,6 +96,50 @@ fn hooked_properties_use_get_hooks() {
 }
 
 #[test]
+fn lazy_objects_with_hooks_are_initialized() {
+    let out = run(r#"#[AllowDynamicProperties]
+        class C {
+            public int $a;
+            public int $b { get => $this->b * 10; set(int $v) { $this->b = $v; } }
+            public int $c { get => $this->a + 1; }
+            protected int $p = 7;
+            private int $q { get => 8; }
+            public function __construct() { echo 'ctor|'; $this->a = 1; $this->b = 2; $this->d = 4; }
+        }
+        $r = new ReflectionClass(C::class);
+        $g = $r->newLazyGhost(function ($o) { echo 'ghost|'; $o->__construct(); });
+        echo json_encode($g), '|';
+        $p = $r->newLazyProxy(function ($o) { echo 'proxy|'; return new C; });
+        echo json_encode($p), '|';
+        echo json_encode($p);"#);
+    assert_eq!(
+        out,
+        r#"ghost|ctor|{"a":1,"b":20,"c":2,"d":4}|proxy|ctor|{"a":1,"b":20,"c":2,"d":4}|{"a":1,"b":20,"c":2,"d":4}"#
+    );
+}
+
+#[test]
+fn lazy_initializer_exception_aborts_encoding() {
+    let out = run(r#"class C { public $b = 0; public $a { get => $this->b; } }
+        $o = (new ReflectionClass(C::class))->newLazyProxy(function () { throw new Exception('init'); });
+        try { var_dump(json_encode($o)); } catch (Exception $e) { echo get_class($e), ':', $e->getMessage(); }"#);
+    assert_eq!(out, "Exception:init");
+}
+
+#[test]
+fn hooked_non_public_and_uninitialized_properties_are_absent() {
+    let out = run(r#"class C {
+            public int $u;
+            public $a = 1 { get => $this->a + 1; set { $this->a = $value; } }
+            protected $b { get => 3; }
+            private $c { get => 4; }
+            public function enc() { return json_encode($this); }
+        }
+        echo json_encode(new C), (new C)->enc();"#);
+    assert_eq!(out, r#"{"a":2}{"a":2}"#);
+}
+
+#[test]
 fn recursion_is_detected() {
     let out = run(r#"$a = ['x' => 1]; $a['self'] = &$a;
         var_dump(json_encode($a), json_last_error_msg());
