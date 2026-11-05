@@ -165,6 +165,9 @@ pub struct CountingAlloc<A> {
     over_tried: AtomicUsize,
     hard_handler: OnceLock<HardLimitHandler>,
     in_hard_handler: AtomicBool,
+    /// Zend's tracked allocator (`USE_ZEND_ALLOC=0 USE_TRACKED_ALLOC=1`):
+    /// real usage is the exact live-byte count, not whole chunks.
+    tracked: AtomicBool,
 }
 
 impl<A> CountingAlloc<A> {
@@ -189,6 +192,7 @@ impl<A> CountingAlloc<A> {
             over_tried: AtomicUsize::new(0),
             hard_handler: OnceLock::new(),
             in_hard_handler: AtomicBool::new(false),
+            tracked: AtomicBool::new(false),
         }
     }
 
@@ -230,9 +234,31 @@ impl<A> CountingAlloc<A> {
     }
 
     /// `memory_get_usage(true)`: [`usage`](Self::usage) rounded up to 2 MiB
-    /// chunks.
+    /// chunks, or exactly [`usage`](Self::usage) in
+    /// [tracked mode](Self::set_tracked).
     pub fn real_usage(&self) -> usize {
-        round_to_chunks(self.usage())
+        self.to_real(self.usage())
+    }
+
+    fn to_real(&self, bytes: usize) -> usize {
+        if self.is_tracked() {
+            bytes
+        } else {
+            round_to_chunks(bytes)
+        }
+    }
+
+    /// Emulates Zend's tracked allocator (`tracked_malloc`, selected by
+    /// `USE_ZEND_ALLOC=0` plus `USE_TRACKED_ALLOC=1`): `heap->real_size`
+    /// equals `heap->size`, so real usage — which `memory_limit` changes are
+    /// checked against — is no longer rounded to [`CHUNK_SIZE`](crate::CHUNK_SIZE).
+    pub fn set_tracked(&self, tracked: bool) {
+        self.tracked.store(tracked, Relaxed);
+    }
+
+    /// Whether [tracked mode](Self::set_tracked) is on.
+    pub fn is_tracked(&self) -> bool {
+        self.tracked.load(Relaxed)
     }
 
     /// `memory_get_peak_usage(false)`.
@@ -242,7 +268,7 @@ impl<A> CountingAlloc<A> {
 
     /// `memory_get_peak_usage(true)`.
     pub fn real_peak(&self) -> usize {
-        round_to_chunks(self.peak())
+        self.to_real(self.peak())
     }
 
     /// `memory_get_usage($real_usage)`.

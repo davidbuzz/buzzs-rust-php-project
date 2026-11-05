@@ -50,11 +50,56 @@ fn unicode_boms_precede_script_encoding() {
             ..ScriptEncodingOptions::default()
         };
         let mut lexer = Lexer::with_script_encoding(&src, options(), &config);
-        let open = lexer.next_token().unwrap();
+        let mut open = lexer.next_token().unwrap();
+        if name == b"UTF-8" {
+            // UTF-8 matches the internal encoding, so no input filter runs
+            // and Zend scans the unstripped buffer: the BOM is inline HTML.
+            assert_eq!(open.kind, TokenKind::InlineHtml);
+            assert_eq!(lexer.token_text(open).as_ref(), bom);
+            open = lexer.next_token().unwrap();
+            assert_eq!(open.span.start, bom.len());
+        } else {
+            assert_eq!(open.span.start, 0);
+        }
         assert_eq!(open.kind, TokenKind::OpenTag);
-        assert_eq!(open.span.start, 0);
         assert_eq!(string_value(&mut lexer), "é".as_bytes());
     }
+}
+
+#[test]
+fn utf8_bom_is_stripped_only_by_an_input_filter() {
+    let src = b"\xEF\xBB\xBF<?php __halt_compiler();";
+    // No filter (internal UTF-8): BOM kept, halt offset counts it.
+    let mut lexer = Lexer::with_script_encoding(src, options(), &ScriptEncodingOptions::default());
+    assert_eq!(lexer.source(), src);
+    assert_eq!(lexer.next_token().unwrap().kind, TokenKind::InlineHtml);
+    while lexer.next_token().unwrap().kind != TokenKind::Semicolon {}
+    assert_eq!(lexer.scanned_file_offset(), src.len());
+    // UTF-8 -> ISO-8859-1 input filter: converts the BOM-stripped script.
+    let config = ScriptEncodingOptions {
+        internal_encoding: Some(encoding(b"ISO-8859-1")),
+        ..ScriptEncodingOptions::default()
+    };
+    let mut lexer = Lexer::with_script_encoding(src, options(), &config);
+    assert_eq!(lexer.source(), &src[3..]);
+    assert_eq!(lexer.next_token().unwrap().kind, TokenKind::OpenTag);
+    while lexer.next_token().unwrap().kind != TokenKind::Semicolon {}
+    assert_eq!(lexer.scanned_file_offset(), src.len() - 3);
+}
+
+#[test]
+fn declare_rescan_after_unfiltered_bom_reads_stripped_script() {
+    // zend_multibyte_yyinput_again keeps the numeric cursor but switches to
+    // the BOM-stripped, converted script, so scanning resumes 3 bytes later.
+    let src = b"\xEF\xBB\xBF<?php declare(encoding='ISO-8859-1'); echo 1;";
+    let mut lexer = Lexer::with_script_encoding(src, options(), &ScriptEncodingOptions::default());
+    assert_eq!(lexer.next_token().unwrap().kind, TokenKind::InlineHtml);
+    while lexer.next_token().unwrap().kind != TokenKind::RParen {}
+    assert!(lexer.set_script_encoding(encoding(b"ISO-8859-1")));
+    assert_eq!(lexer.source(), &src[3..]);
+    let next = lexer.next_token().unwrap();
+    assert_eq!(next.kind, TokenKind::String);
+    assert_eq!(next.text(lexer.source()), b"cho");
 }
 
 #[test]

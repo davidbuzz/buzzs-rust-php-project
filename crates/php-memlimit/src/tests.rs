@@ -114,6 +114,50 @@ fn baseline_and_real_usage() {
 }
 
 #[test]
+fn tracked_mode_reports_exact_real_usage() {
+    // token_get_all_TOKEN_PARSE_oom_feedback.phpt: under USE_TRACKED_ALLOC
+    // `ini_set('memory_limit', memory_get_usage() + 1024)` succeeds and the
+    // next allocations exhaust it.
+    let a = CountingAlloc::new(System);
+    a.set_baseline();
+    assert!(!a.is_tracked());
+    a.set_tracked(true);
+    assert_eq!(a.real_usage(), PHP_BASELINE);
+    assert_eq!(a.memory_usage(true), a.usage());
+    assert_eq!(a.set_limit(Some(PHP_BASELINE + 1024)), Ok(()));
+    let over = alloc(&a, 4096);
+    assert_eq!(
+        a.check(),
+        Some(OverLimit {
+            limit: PHP_BASELINE + 1024,
+            tried: 4096
+        })
+    );
+    assert_eq!(a.real_peak(), PHP_BASELINE + 4096);
+    drop(over);
+    a.clear();
+    a.set_tracked(false);
+    assert_eq!(a.real_usage(), CHUNK_SIZE);
+}
+
+#[test]
+fn tracked_mode_env_selection() {
+    let on = |zend: Option<&str>, tracked: Option<&str>| {
+        tracked_from_env(zend.map(str::as_bytes), tracked.map(str::as_bytes))
+    };
+    assert!(on(Some("0"), Some("1")));
+    assert!(on(Some(""), Some(" 2x")));
+    assert!(on(Some("off"), Some("-1")));
+    assert!(!on(Some("1"), Some("1")));
+    assert!(!on(Some("0"), Some("0")));
+    assert!(!on(Some("0"), None));
+    assert!(!on(None, Some("1")));
+    assert_eq!(atol(b"  +42abc"), 42);
+    assert_eq!(atol(b"-7"), -7);
+    assert_eq!(atol(b"x1"), 0);
+}
+
+#[test]
 fn usage_saturates_below_baseline() {
     let a = CountingAlloc::new(System);
     let b = alloc(&a, M);
