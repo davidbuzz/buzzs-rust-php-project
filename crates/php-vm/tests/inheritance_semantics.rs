@@ -400,3 +400,19 @@ g();
         "B\nB\nA\nf\nCannot call forward_static_call() when no class scope is active\n"
     );
 }
+
+/// `is_a_impl` (`Zend/zend_builtin_functions.c`): a string first argument
+/// without `$allow_string` is deprecated and yields false.
+#[test]
+fn is_a_with_string_without_allow_string_is_deprecated() {
+    let out = run(r#"<?php
+class A {}
+var_dump(is_a('A', 'A'), is_a('A', 'A', true), is_subclass_of('A', 'A', false), is_a(1, 'A'));
+"#);
+    assert_eq!(
+        out,
+        "\nDeprecated: Calling is_a() with a string when $allow_string is false in t.php on line 3\n\
+         \nDeprecated: Calling is_subclass_of() with a string when $allow_string is false in t.php on line 3\n\
+         bool(false)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+}

@@ -822,6 +822,15 @@ fn is_a_impl(vm: &mut Vm, a: &Args, subclass_only: bool) -> VmResult<Value> {
             Some(c) => c,
             None => return Ok(Value::Bool(false)),
         },
+        // `is_a_impl` (`Zend/zend_builtin_functions.c`).
+        Value::Str(_) => {
+            vm.deprecated(if subclass_only {
+                "Calling is_subclass_of() with a string when $allow_string is false"
+            } else {
+                "Calling is_a() with a string when $allow_string is false"
+            })?;
+            return Ok(Value::Bool(false));
+        }
         _ => return Ok(Value::Bool(false)),
     };
     let target = s(a, 1);
