@@ -9,59 +9,43 @@ Right now it is the TODO list. Once items are done, it becomes the itemised reco
 
 Keep rows when they reach 100%; they become the completion record. Add rows as gaps are found.
 
-## Current TODO: high-priority rows above 90% (5 Nov 2026)
+## Recent results (5 Nov 2026)
 
-Result (consolidated build + test + PHPT pass of 5 Nov, master 362afbc): see the Status column. Goal: every high-priority row above 90% reaches 100% of its run `.phpt` tests. One editing
-worker per row works in its own worktree (`ws18/<row>`), without builds; the coordinator then
-integrates all branches and runs one consolidated build, Rust test and PHPT pass, and only
-that pass updates the `%` column. "Known failures" are the row's entries in
-`phpt-baseline.txt` before this batch; several were targeted by the 5 Nov integration below
-and may already pass.
+Latest validation (master 0c8a95a): build and clippy pass; Rust tests 3,792 passed, 1 failed
+(a test-isolation race in php-ext-streams, fixed in 853d1e8), 67 ignored. PHPT in scope:
+19,920 pass + 4 WARN of 20,180 run (98.7%; 21,582 in scope, 1,402 skip), 252 FAIL + 1 BORK.
+`phpt-baseline.txt` has 253 entries. Performance gate: all 82 workloads within budget,
+geometric mean instruction ratio 14.58.
 
-| Row | % | Known failures | Status |
-|---|---:|---|---|
-| Parser and AST | 100% | `grammar/semi_reserved_005` | **Done.** Fixed by 0991e78; 46/46 run pass on master f2b174c (grammar 42, ast 4). |
-| Partial function application | 100% | `constexpr_015`, `observers`, `preloading` | **Done.** 134/134 run pass (149 total; 15 skip need opcache). Observer hooks + preload persistence (fae9ada, 2fec5da). |
-| Type system | 100% | `union_types/anonymous_class`, `object_types/invalid_default_value` | **Done.** Both already pass on master; 620/620 run pass (623 total; 3 skips need a debug or 32-bit build). |
-| Output buffering | 100% | `bug74725`, `ob_015`, `oom_in_internal_output_handler` | **Done.** 75/75 run pass (95 total). |
-| CLI (`php` binary) | 100% | `008`, `serialization_context_request_reset` | **Done.** 112/112 run pass (127 total). |
-| ext/standard strings/math/url | 100% | `strings/{007, gh18823_strict, gh20906_1..3, htmlspecialchars_unchanged, sprintf_rope_optimization_001..002}`, `math/clamp` | **Done.** All pass on master after fdee13b/9444065; 901/901 run pass (strings 708, math 161, url 32; 64 skips: 48 32-bit-only, 8 Windows-only, 6 need de_DE/is_IS-style locales not installed here, 2 resource-heavy). |
-| ext/standard arrays | 100% | `bug25708`, `bug31158`, `bug33989`, `bug72369`, `extract_negative_keys`, `extract_typed_ref`, `extract_variation1` | **Done.** All already pass on master; 825/825 run pass (834 total; 7 skips are 32-bit only, 1 needs ext/ffi, `sort/locale_sort` needs an `fr_FR` locale this machine lacks). |
-| ext/pcre | 100% | `bug72685` | **Done.** 172/172 run pass (bug72685 passes with the cheaper matching path, c0bd947). |
-| ext/date | 100% | `bug-gh20503`, `bug65672`, `date_period_properties`, `time/duration/readonly` | **Done.** All pass on master after d3b6bfb/9c8e040/077671b; 728/728 run pass (744 total; 16 skips are Windows- or 32-bit-only). |
-| Inheritance, interfaces, traits | 100% | 22 in `Zend/tests/{inheritance,interfaces,traits,lsb}` | **Done.** 315/315 run pass (316 total). |
-| ext/spl | 99% | 39 in `ext/spl/tests` | 815/818 run pass (99%); engine fixes for object property order, arginfo-only types, file-object destruction and destructor timing landed (asort/ksort_basic2, bug71412, bug79710, bug73423 pass). Left: `bug70155`, `gh10519`, `gh24264_5`. |
-| ext/reflection | 100% | 27 in `ext/reflection/tests` | **Done.** 575/575 run pass. |
-| Autoloading | 100% | 1 in `Zend/tests/autoload` | **Done.** 12/12 run pass; `ext/spl/tests/autoloading` also fixed. |
-| Superglobals and request variables | 100% | 4 in `tests/basic` | **Done.** 52/52 run pass (140 total; 85 skips need php-cgi, out of scope). |
-| Lexer | 100% | see row | **Done.** `ext/tokenizer` + `Zend/tests/multibyte` 62/62 run pass; the row's listed gaps were already implemented. |
-| File functions (ext/standard file.c, filestat.c, dir.c, link.c) | 100% | `ext/standard/tests/{file,dir,security}` | **Done.** 673/673 run pass (986 total). Realpath cache ported. |
-| ext/standard: var_dump/print_r/var_export/serialize | 100% | 6 in `ext/standard/tests/serialize` | **Done.** 183/183 run pass (184 total). |
-| ext/standard — string/url/math algorithms (php-stdstr) | 100% | see row | **Done** on the same 901/901 run scope. Its locale-dependent paths (non-ASCII `basename`, `setlocale`) stay unverified until the box has the locales the skipped tests need. |
-| PHP language test suite overall; ext/standard | 99%; 99% | umbrella rows | Rise with their component rows; no separate worker. |
+Known risk: interned string literals are never freed, so long-running SAPIs (`php -S`,
+mod_php) that `eval` unique code grow without bound.
 
-Doc-only corrections from the full master run of 5 Nov (f2b174c), rows whose estimate was
-stale and whose scope has no failing test:
-
-| Row | % | Measured |
+| Row | % | Status |
 |---|---:|---|
-| Type juggling and comparison | 100% | 100%: `Zend/tests/{comparison,numeric_strings,type_coercion}` 85/85 run pass (94 total, 9 skip). |
-| ext/filter | 100% | 100%: `ext/filter/tests` 106 pass + 1 WARN (passes; SKIPIF warning) + 1 XFAIL (expected failure in php-src) of 108 run (129 total, 21 skip). |
-| ext/libxml | 100% | 100%: `ext/libxml/tests` 27/27 run pass (33 total, 6 skip). |
+| Parser and AST | 100% | **Done.** Fixed by 0991e78; 46/46 run pass on master f2b174c (grammar 42, ast 4). |
+| Partial function application | 100% | **Done.** 134/134 run pass (149 total; 15 skip need opcache). Observer hooks + preload persistence (fae9ada, 2fec5da). |
+| Type system | 100% | **Done.** 620/620 run pass (623 total; 3 skips need a debug or 32-bit build). |
+| Output buffering | 100% | **Done.** 75/75 run pass (95 total). |
+| CLI (`php` binary) | 100% | **Done.** 112/112 run pass (127 total). |
+| ext/standard strings/math/url | 100% | **Done.** All pass on master after fdee13b/9444065; 901/901 run pass (strings 708, math 161, url 32; 64 skips: 48 32-bit-only, 8 Windows-only, 6 need de_DE/is_IS-style locales not installed here, 2 resource-heavy). |
+| ext/standard arrays | 100% | **Done.** All already pass on master; 825/825 run pass (834 total; 7 skips are 32-bit only, 1 needs ext/ffi, `sort/locale_sort` needs an `fr_FR` locale this machine lacks). |
+| ext/pcre | 100% | **Done.** 172/172 run pass (bug72685 passes with the cheaper matching path, c0bd947). |
+| ext/date | 100% | **Done.** All pass on master after d3b6bfb/9c8e040/077671b; 728/728 run pass (744 total; 16 skips are Windows- or 32-bit-only). |
+| Inheritance, interfaces, traits | 100% | **Done.** 315/315 run pass (316 total). |
+| ext/spl | 99% | 815/818 run pass (99%); engine fixes for object property order, arginfo-only types, file-object destruction and destructor timing landed (asort/ksort_basic2, bug71412, bug79710, bug73423 pass). Left: `bug70155`, `gh10519`, `gh24264_5`. |
+| ext/reflection | 100% | **Done.** 575/575 run pass. |
+| Autoloading | 100% | **Done.** 12/12 run pass; `ext/spl/tests/autoloading` also fixed. |
+| Superglobals and request variables | 100% | **Done.** 52/52 run pass (140 total; 85 skips need php-cgi, out of scope). |
+| Lexer | 100% | **Done.** `ext/tokenizer` + `Zend/tests/multibyte` 62/62 run pass; the row's listed gaps were already implemented. |
+| File functions (ext/standard file.c, filestat.c, dir.c, link.c) | 100% | **Done.** 673/673 run pass (986 total). Realpath cache ported. |
+| ext/standard: var_dump/print_r/var_export/serialize | 100% | **Done.** 183/183 run pass (184 total). |
+| ext/standard — string/url/math algorithms (php-stdstr) | 100% | **Done** on the same 901/901 run scope. Its locale-dependent paths (non-ASCII `basename`, `setlocale`) stay unverified until the box has the locales the skipped tests need. |
+| Type juggling and comparison | 100% | **Done.** `Zend/tests/{comparison,numeric_strings,type_coercion}` 85/85 run pass (94 total, 9 skip). |
+| ext/filter | 100% | **Done.** `ext/filter/tests` 106 pass + 1 WARN (passes; SKIPIF warning) + 1 XFAIL (expected failure in php-src) of 108 run (129 total, 21 skip). |
+| ext/libxml | 100% | **Done.** `ext/libxml/tests` 27/27 run pass (33 total, 6 skip). |
+| PHP language test suite overall; ext/standard | 99%; 99% | Umbrella rows; they rise with their component rows. |
 
-Consolidated validation of the batch (5 Nov, master 362afbc + 9020d67): build and clippy
-pass (no errors); Rust tests 3,620 passed, 0 failed after the stdstr harness fix, 67 ignored;
-PHPT in scope 19,459 pass + 4 WARN of 20,180 run (96.4%; 21,582 in scope, 1,402 skip), 713 FAIL +
-1 BORK. `phpt-baseline.txt` regenerated from this run: 714 entries (was 926; 271 now pass, 59
-`ext/zend_test` failures recorded for the first time). Performance gate: all 82 workloads within
-budget, geometric mean instruction ratio 14.89 (was 15.16).
-
-Batch 2 (5 Nov, high priority only, 15 packages in two waves of at most 10 workers; branches
-ws19/*). Consolidated validation of master 0c8a95a: build and clippy pass; Rust tests 3,792
-passed, 1 failed (a test-isolation race in php-ext-streams, fixed in 853d1e8), 67 ignored;
-PHPT in scope 19,920 pass + 4 WARN of 20,180 run (98.7%; was 96.4%), 252 FAIL + 1 BORK;
-`phpt-baseline.txt` 714 -> 253 entries (461 now pass, none added). Performance gate: all 82
-workloads within budget, geometric mean instruction ratio 14.58 (was 14.89).
+Packages within the Zend and PHP language suites:
 
 | Package | Failing | Result |
 |---|---:|---|
@@ -80,89 +64,6 @@ workloads within budget, geometric mean instruction ratio 14.58 (was 14.89).
 | Zend/tests top level, n-z and digits | 16 | 192/208 run pass. 16 left: memory per value (`oom_SplFixedArray___wakeup`, `runtime_compile_time_binary_operands`), `new_oom` (fatal backtraces), string-offset and classes leftovers. |
 | ext/standard assert, general_functions, misc | 2 | 322/324 run pass. Left: `error_get_last_002` (fatal backtraces), `debug_zval_dump_o` (default-property refcounts). |
 | ext/standard http, class_object, filters | 0 | **Done.** 212/212 run pass. |
-
-5 Nov integration (master `c81e6d7`, unvalidated by a full build when merged): the stopped
-ws13–ws16 workers' committed fixes plus their three unfinished worktrees were reviewed,
-completed and merged: zend_observer hooks and opcache-style preload for PFA (zero cost
-without observers), sprintf-as-rope compilation and interned literals, output-handler failure
-semantics, `get_object_vars()` through `PropertyPurpose::GetObjectVars` (DatePeriod and
-BcMath\Number only), JSON native-table recursion identity, builtin backtrace buffer pooling,
-`get_defined_vars()` snapshot semantics, serialization bailout state, static-property
-visibility, and date/readonly/anonymous-class diagnostics. Known risk: interned literals are
-never freed, so long-running SAPIs (`php -S`, mod_php) that `eval` unique code grow without
-bound.
-
-High-priority completion batch integrated (validation pending): multibyte scanner
-filters are wired through files, includes, eval, CLI lint and reflection; startup
-configuration preserves arrays, sections and binary data for `get_cfg_var()`.
-The batch also adds native output aliases and shared header/handler state,
-per-match `strtr()` conversion, scanner stream reads, strict locale validation,
-mixed-value `clamp()`, typed extraction/writeback, current-locale array sorting,
-date diagnostic/restoration fixes, JSON native-stack checks and random-engine
-allocation reduction. Existing percentages below remain prior measurements until
-the combined Rust/PHPT/performance report is accepted. (PFA preload persistence
-and engine observer callbacks were implemented on 5 Nov; see the TODO section above.)
-
-First combined completion-batch report (not accepted): build and affected-crate
-clippy passed. Rust tests: 1,633 passed, 4 failed, 42 ignored. PHPT: 10,659
-total, 9,630 passing (including one WARN), 629 failed, 398 skipped, 2 XFAIL.
-Baseline comparison found 80 newly passing entries and 5 new failures; neither
-baseline nor percentages has been refreshed from this run. Type-system scope
-620/620 ran, JSON 109/109, random 70/70 and hash 86/86 passed. The full
-82-workload performance gate passed all unchanged budgets at a 15.16 geometric
-mean instruction ratio; the exact PCRE repeated UTF-8 test passed in release.
-Corrections to failed Rust fixtures and new PHPT failures are in progress.
-
-Current progress (5 Nov 2026): typed references, trait linking/variance rewrite,
-property-hook inheritance, and native stack-limit checks added 405 passing tests across
-Zend/tests, tests/, ext/standard, ext/date and ext/openssl. The baseline now contains
-949 known-failure entry paths, down from 1,187 after 238 paths verified passing in
-scoped reports were removed. This baseline update is not a new full-suite result.
-
-Scoped validation passed: formatting, build, and clippy for php-runtime, php-vm,
-php-stdarr, php-ext-json and php-ext-spl (existing clippy warnings). Their tests reported
-294 passed, 13 ignored, 0 failed.
-
-Subsequent six-worktree delivery: combined dev build, clippy and tests passed
-for php-runtime, php-vm, php-json, php-ext-json, php-spl and php-ext-spl
-(306 Rust tests passed, 15 ignored). Scoped PHPT acceptance: 1,571 total,
-1,517 pass, 28 known failures, 25 skip, 1 XFAIL, zero new failures; 82 newly
-passing baseline entries removed. Type declarations now pass 508/510 ran,
-property hooks 217/217, lazy objects 226/228, named parameters 33/33,
-JSON 109/109 ran, and ArrayObject 96/111 total (14 fail, 1 XFAIL).
-The configured ArrayObject iterator dispatch is implemented, but its exact
-`arrayObject_getIteratorClass_basic1.phpt` still fails on object-handle reuse.
-This is not a new full-suite result. Fixes cover call/reference diagnostics,
-declaration checks and ordering, lazy release detection, internal enum cases,
-JSON output-growth guards, and configured ArrayObject iterator dispatch.
-
-Next integrated worktree batch: 338 Rust tests passed (15 ignored), and scoped
-PHPT acceptance covered 1,918 tests with 1,842 pass, 49 known failures, 26 skip,
-1 XFAIL, zero new failures. Seven additional baseline entries removed.
-Return types: 88/88 ran; coercion: 70/70 ran; type declarations: 509/510 ran;
-lazy objects: 227/228 ran. Method-closure and never-return diagnostics, warning
-ordering, callback coercion, lazy iterator rebinding and fiber destructor traces
-are covered. The remaining lazy dynamic assignment expectation is JIT-specific;
-non-JIT ghost/proxy ordering is preserved and regression-tested.
-
-The final language report covers 1,348 tests: 1,224 pass, 95 fail, 29 skip. The
-seven-language scope covers 1,281 tests: 1,173 pass, 85 fail, 23 skip—138 more passes
-than the prior 1,035 pass, 223 fail, 23 skip. Across the scoped language, JSON, SPL
-selector and walk reports, 1,616 tests yielded 1,473 pass, 111 fail, 31 skip and 1 XFAIL;
-these are scoped totals, not an overall-suite rate. There were zero new baseline failures.
-
-PFA: 131/134 run pass (149 total: 3 fail, 15 skip); remaining cases are
-`constexpr_015.phpt` and `preloading.phpt` (preload unsupported), and `observers.phpt`
-(observer output unsupported). Property hooks: 217/217 pass. Lazy objects: 226/228 run
-pass (230 total: 2 fail, 2 skip). Type declarations: 508/510 run pass (512 total;
-2 fail, 2 skip). Type coercion: 67/73; return types: 86/89; nullable types: 11/11.
-The named-parameter, call-user-function, JSON and SPL-selector scoped results include
-6, 4, 2 and 14 known failures, respectively.
-
-The latest 13-workload selected performance gate passed all 13 workloads.
-Suite-props measured 19.14 against its unchanged 21.10 budget; suite-calls
-measured 18.62 against 21.64. Selected geometric-mean instruction ratio: 16.68.
-This is not a new full 82-workload gate.
 
 ### Latest full-suite snapshot
 
