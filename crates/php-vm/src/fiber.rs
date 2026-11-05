@@ -650,13 +650,17 @@ fn release_callable(vm: &mut Vm, fiber: &Obj, r: VmResult<Value>) -> VmResult<Va
     let Some(callable) = with(fiber, |d| std::mem::take(&mut d.callable)) else {
         return r;
     };
+    // A function name owns nothing (the collector's destructor fiber).
+    if !matches!(callable, Value::Object(_) | Value::Array(_)) {
+        return r;
+    }
     crate::gc::release_value(&callable);
     drop(callable);
     let mut r = r;
     if object::has_pending_destructors() {
         r = merge_release_error(r, vm.run_pending_destructors());
     }
-    if crate::gc::wants_run() {
+    if crate::gc::wants_run() && !crate::gc::running() {
         r = merge_release_error(r, vm.gc_safe_point());
     }
     r
