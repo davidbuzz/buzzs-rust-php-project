@@ -247,12 +247,12 @@ fn rcc_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 fn rcc_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (c, cc) = this_const(vm, a)?;
-    Ok(const_doc_comment(&c, &cc).map_or(Value::Bool(false), Value::Str))
+    Ok(const_doc_comment(vm, &c, &cc).map_or(Value::Bool(false), Value::Str))
 }
 
 /// The doc comment of a constant (enum case doc comments come from the
 /// source, the compiler does not keep them).
-pub(crate) fn const_doc_comment(c: &Class, cc: &ClassConst) -> Option<ZStr> {
+pub(crate) fn const_doc_comment(vm: &Vm, c: &Class, cc: &ClassConst) -> Option<ZStr> {
     if let Some(d) = &cc.doc_comment {
         return Some(d.clone());
     }
