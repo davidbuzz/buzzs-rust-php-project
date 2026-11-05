@@ -538,7 +538,13 @@ pub(crate) fn descend(
                                 *slot = r.clone();
                                 Step::Done(r)
                             }
-                            _ => apply_final(slot, wop),
+                            _ => {
+                                let step = apply_final(slot, wop);
+                                if !existed && rw {
+                                    watch_rw_container(arr);
+                                }
+                                step
+                            }
                         }
                     } else {
                         descend(slot, segs, i + 1, wop, diags, !existed)
@@ -563,11 +569,42 @@ thread_local! {
     /// `Vm::obj_walk`, taken by `Vm::fetch_rw`.
     static OVERLOADED_RW: std::cell::Cell<Option<(Obj, Value)>> =
         const { std::cell::Cell::new(None) };
+    /// The array whose missing key a read-modify-write walk added, held
+    /// across the "Undefined array key" warning like
+    /// `zend_undefined_index_write`'s `GC_ADDREF`: an error handler that
+    /// writes to or frees the array leaves this the only owner.
+    static RW_UNDEF_WATCH: std::cell::Cell<Option<ZArray>> = const { std::cell::Cell::new(None) };
+    /// Set when a `WOp::FetchRw` walk was abandoned that way (read by
+    /// `Vm::fetch_rw`).
+    static RW_SKIPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The undefined compiled variable (and frame depth) a
     /// `place = $undef` walk through a property still has to warn about:
     /// set by `Vm::place_assign_undef_cv`.
     static PENDING_UNDEF_VALUE: std::cell::Cell<Option<(u32, usize)>> =
         const { std::cell::Cell::new(None) };
+}
+
+/// See `RW_UNDEF_WATCH`.
+#[cold]
+fn watch_rw_container(arr: &ZArray) {
+    RW_UNDEF_WATCH.with(|w| w.set(Some(arr.clone())));
+}
+
+/// After a read-modify-write walk's diagnostics: whether the error handler
+/// wrote to or freed the array whose missing key the walk added
+/// (`zend_undefined_index_write` / `zend_undefined_offset_write` then
+/// return NULL and the operation is skipped; bug70662, bug78598).
+fn rw_container_changed(wop: &WOp) -> bool {
+    if !matches!(wop, WOp::FetchRw | WOp::AssignOp(..)) {
+        return false;
+    }
+    let changed = RW_UNDEF_WATCH
+        .with(std::cell::Cell::take)
+        .is_some_and(|a| a.refcount() == 1);
+    if changed && matches!(wop, WOp::FetchRw) {
+        RW_SKIPPED.with(|c| c.set(true));
+    }
+    changed
 }
 
 /// Performs deferred reference assignments; called once a write walk has
@@ -845,8 +882,15 @@ impl Vm {
             }
             RBase::Undef(_) => return Ok(Value::Null),
         };
-        if !quiet {
-            self.flush_diags(diags)?;
+        let flushed = if quiet {
+            Ok(())
+        } else {
+            self.flush_diags(diags)
+        };
+        let changed = rw_container_changed(&wop);
+        flushed?;
+        if changed {
+            return Ok(Value::Null);
         }
         if let (Step::Done(cur), WOp::AssignOp(op, rhs), Some(again)) = (&step, &wop, again) {
             // The final slot lies inside the base's container: write the
@@ -894,7 +938,12 @@ impl Vm {
         let mut diags = Vec::new();
         let mut w = wop;
         let s = walk(&mut w, &mut diags);
-        self.flush_diags(diags)?;
+        let flushed = self.flush_diags(diags);
+        let changed = rw_container_changed(&w);
+        flushed?;
+        if changed {
+            return Ok(Value::Null);
+        }
         self.finish_native(s, segs, w, walk)
     }
 
@@ -1387,16 +1436,25 @@ impl Vm {
 
     /// The read half of a read-modify-write: the current value and, when
     /// the walk ended on an `ArrayAccess` offset, that object and offset.
-    fn fetch_rw(&mut self, base: RBase, segs: &[RSeg]) -> VmResult<(Value, Option<(Obj, Value)>)> {
+    /// `None` when the walk was abandoned because an error handler changed
+    /// the array (see `rw_container_changed`).
+    fn fetch_rw(
+        &mut self,
+        base: RBase,
+        segs: &[RSeg],
+    ) -> VmResult<Option<(Value, Option<(Obj, Value)>)>> {
         if !matches!(segs.last(), Some(RSeg::Dim(_) | RSeg::Append)) {
-            return Ok((self.write_place(base, segs, WOp::FetchRw)?, None));
+            return Ok(Some((self.write_place(base, segs, WOp::FetchRw)?, None)));
         }
         // Save and restore around the walk: user code it runs (offsetGet,
         // destructors) may perform read-modify-writes of its own.
         let saved = OVERLOADED_RW.with(std::cell::Cell::take);
+        let saved_skip = RW_SKIPPED.with(|c| c.replace(false));
         let r = self.write_place(base, segs, WOp::FetchRw);
         let mine = OVERLOADED_RW.with(|c| c.replace(saved));
-        Ok((r?, mine))
+        let skipped = RW_SKIPPED.with(|c| c.replace(saved_skip));
+        let r = r?;
+        Ok((!skipped).then_some((r, mine)))
     }
 
     /// `++place` etc.
@@ -1456,7 +1514,16 @@ impl Vm {
                 }
             }
         }
-        let (cur, overloaded) = self.fetch_rw(base, &segs)?;
+        let Some((cur, overloaded)) = self.fetch_rw(base, &segs)? else {
+            // FETCH_DIM_RW yielded a null temporary: ++/-- act on it alone.
+            let mut nv = Value::Null;
+            if kind.is_inc() {
+                ops::increment(&mut nv, self).map_err(|e| self.rt_throw(e))?;
+            } else {
+                ops::decrement(&mut nv, self).map_err(|e| self.rt_throw(e))?;
+            }
+            return Ok(if kind.is_post() { Value::Null } else { nv });
+        };
         // `FETCH_DIM_RW` on an object: a non-reference result is a
         // temporary, so the increment is not written back.
         let temporary = match &overloaded {

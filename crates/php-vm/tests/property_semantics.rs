@@ -1215,3 +1215,38 @@ unset($a->b->c['d']);
 var_dump($a);
 "#), "object(stdClass)#1 (1) {\n  [\"b\"]=>\n  NULL\n}\n");
 }
+
+#[test]
+fn read_modify_write_skips_when_the_handler_changes_the_array() {
+    // bug70662 / bug78598: zend_undefined_index_write returns NULL when the
+    // "Undefined array key" handler wrote to or freed the array.
+    assert_eq!(run(r#"<?php
+$a = [];
+set_error_handler(function () use (&$a) { $a['b'] = 2; });
+$a['b'] += 1;
+var_dump($a);
+$m = null;
+set_error_handler(function () use (&$m) { $m = 0; });
+$m["foo"]["bar"] .= "xyz";
+var_dump($m);
+restore_error_handler();
+set_error_handler(function ($n, $s) { echo $s, "\n"; });
+$c = [];
+$c['k'] .= "x";
+$c['n']++;
+var_dump($c);
+"#), "array(1) {
+  [\"b\"]=>
+  int(2)
+}
+int(0)
+Undefined array key \"k\"
+Undefined array key \"n\"
+array(2) {
+  [\"k\"]=>
+  string(1) \"x\"
+  [\"n\"]=>
+  int(1)
+}
+");
+}
