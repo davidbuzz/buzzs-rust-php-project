@@ -291,6 +291,18 @@ pub fn localeconv() -> ZArray {
     out
 }
 
+/// `localeconv_decimal_point()` (`ext/standard/string.c`): the first byte of
+/// the current `localeconv()->decimal_point` (NUL when it is empty), which
+/// PHP's `%f`/`%g` formatting uses (`LCONV_DECIMAL_POINT`).
+#[must_use]
+pub fn decimal_point() -> u8 {
+    sys::localeconv()
+        .strings
+        .iter()
+        .find(|(k, _)| *k == "decimal_point")
+        .map_or(b'.', |(_, v)| v.first().copied().unwrap_or(0))
+}
+
 /// `nl_langinfo($item)`: `false` (with a warning) for items PHP does not
 /// accept.
 pub fn nl_langinfo(item: i64, ctx: &mut (impl RuntimeContext + ?Sized)) -> RtResult<Value> {
