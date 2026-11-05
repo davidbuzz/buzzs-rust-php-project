@@ -1686,6 +1686,10 @@ fn cuf_call(
     named: Vec<(ZStr, Value)>,
     fname: &str,
 ) -> VmResult<Value> {
+    // A direct call compiles to `ZEND_INIT_USER_CALL` + `ZEND_DO_FCALL`
+    // (frameless here), whose unused result triggers `#[\NoDiscard]`.
+    let discarded =
+        vm.pending_call_dst.is_none() && vm.frames.last().is_some_and(|f| f.builtin_name.is_none());
     let call = match vm.zend_is_callable(cb, false) {
         Ok(Ok(call)) => call,
         Ok(Err(reason)) => return Err(vm.make_throw("TypeError", &reason)),
@@ -1697,6 +1701,9 @@ fn cuf_call(
         }
         Err(t) => return Err(t),
     };
+    if discarded && call.func.flags() & flags::NODISCARD != 0 {
+        vm.check_nodiscard_call(&call)?;
+    }
     vm.call_resolved_named(call, args, named)
 }
 

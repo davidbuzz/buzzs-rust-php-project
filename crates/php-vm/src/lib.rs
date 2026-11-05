@@ -215,6 +215,7 @@ impl Vm {
             deprecated_constants: std::collections::HashMap::new(),
             const_deprecation_filter: std::cell::RefCell::new((0, Vec::new())),
             pending_call_dst: None,
+            builtin_deprecation_reported: false,
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
             prop_guards: HashSet::new(),

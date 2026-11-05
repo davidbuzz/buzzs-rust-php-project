@@ -732,6 +732,9 @@ pub struct Vm {
     pub fibers: Vec<Obj>,
     /// Destination temporary of the builtin call in progress (fibers).
     pub pending_call_dst: Option<u32>,
+    /// Set by `op_do_call_nodiscard` when it already reported a native
+    /// function's deprecation (`call_builtin_impl` consumes it).
+    pub(crate) builtin_deprecation_reported: bool,
     /// Names of registered extensions.
     pub loaded_extensions: Vec<String>,
     /// Request shutdown hooks of extensions.

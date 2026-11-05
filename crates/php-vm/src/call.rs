@@ -1099,13 +1099,29 @@ impl Vm {
         let call = self.frame_mut().calls.pop().expect("pending call");
         let strict = self.frame().code.strict_types;
         if dst.is_none() && call.func.flags() & flags::NODISCARD != 0 {
-            if call.func.flags() & flags::DEPRECATED != 0 && matches!(call.func, Func::User(_)) {
-                self.check_deprecated_call(&call)?;
-            }
-            self.check_nodiscard_call(&call)?;
-            return self.op_do_call_checked(call, dst, strict);
+            return self.op_do_call_nodiscard(call, strict);
         }
         self.op_do_call_checked(call, dst, strict)
+    }
+
+    /// `ZEND_DO_FCALL` of a `#[\NoDiscard]` function whose result is
+    /// unused: `zend_deprecated_function` first, then
+    /// `zend_nodiscard_function`, both before the call.
+    #[cold]
+    #[inline(never)]
+    fn op_do_call_nodiscard(&mut self, call: PendingCall, strict: bool) -> VmResult<bool> {
+        let deprecated = call.func.flags() & flags::DEPRECATED != 0;
+        if deprecated {
+            self.check_deprecated_call(&call)?;
+        }
+        self.check_nodiscard_call(&call)?;
+        if deprecated && matches!(call.func, Func::Builtin(_)) {
+            // Already reported: `call_builtin_impl` must not repeat it.
+            self.builtin_deprecation_reported = true;
+        }
+        let r = self.op_do_call_checked(call, None, strict);
+        self.builtin_deprecation_reported = false;
+        r
     }
 
     /// Avoids native argument snapshots only for the float-key lifetime case.
@@ -1185,10 +1201,29 @@ impl Vm {
     }
 
     /// `zend_nodiscard_function`.
-    fn check_nodiscard_call(&mut self, call: &PendingCall) -> VmResult<()> {
+    pub(crate) fn check_nodiscard_call(&mut self, call: &PendingCall) -> VmResult<()> {
         let (attrs, code) = match &call.func {
             Func::User(uf) => (uf.attributes.clone(), crate::errors::level::USER_WARNING),
-            Func::Builtin(_) => (Vec::new(), crate::errors::level::WARNING),
+            Func::Builtin(b) => {
+                // Stub attributes (`zend_add_function_attribute`), keyed
+                // like `builtin_key`: lowercase `name` or `class::method`.
+                let name = b.name.as_bytes().to_ascii_lowercase();
+                let key = match &call.scope {
+                    Some(sc) => {
+                        let mut k = sc.lc_name.as_bytes().to_vec();
+                        k.extend_from_slice(b"::");
+                        k.extend_from_slice(&name);
+                        ZStr::from(k)
+                    }
+                    None => ZStr::from(name),
+                };
+                let attrs = self
+                    .builtin_attributes
+                    .get(&key)
+                    .map(|v| (**v).clone())
+                    .unwrap_or_default();
+                (attrs, crate::errors::level::WARNING)
+            }
         };
         let mut suffix = Vec::new();
         if let Some(info) = attrs
@@ -1433,7 +1468,9 @@ impl Vm {
             passed.reserve(npassed);
             (values, passed)
         };
-        if b.flags & flags::DEPRECATED != 0 {
+        if b.flags & flags::DEPRECATED != 0
+            && !std::mem::take(&mut self.builtin_deprecation_reported)
+        {
             // Before zpp, like ZEND_DO_ICALL.
             self.check_deprecated_call(&call)?;
         }
