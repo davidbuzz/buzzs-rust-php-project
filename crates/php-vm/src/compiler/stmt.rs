@@ -684,22 +684,9 @@ impl Compiler {
         let target_idx = nloops - depth;
         let mut is_break = is_break;
         if !is_break && self.fref().loops[target_idx].kind == LoopKind::Switch {
-            // "continue" targeting switch is equivalent to "break".
-            if depth == 1 {
-                self.warnings.push((
-                    128,
-                    "\"continue\" targeting switch is equivalent to \"break\"".to_string(),
-                    line,
-                ));
-            } else {
-                self.warnings.push((
-                    128,
-                    format!(
-                        "\"continue {depth}\" targeting switch is equivalent to \"break {depth}\""
-                    ),
-                    line,
-                ));
-            }
+            // "continue" targeting switch is equivalent to "break"; the
+            // warning (`zend_compile_break_continue`) comes from
+            // `php_parser::validate`.
             is_break = true;
         }
         // `zend_check_finally_breakout` (pass two): the target loop

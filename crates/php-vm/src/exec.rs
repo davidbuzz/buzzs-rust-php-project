@@ -2246,7 +2246,7 @@ impl Vm {
 /// whose constructor call an exception abandons before it was made is
 /// never destructed (`zend_object_store_ctor_failed`).
 #[cold]
-fn ctor_failed_unfinished(calls: &[crate::vm::PendingCall]) {
+pub(crate) fn ctor_failed_unfinished(calls: &[crate::vm::PendingCall]) {
     for c in calls {
         if c.is_ctor {
             if let Some(t) = &c.this {

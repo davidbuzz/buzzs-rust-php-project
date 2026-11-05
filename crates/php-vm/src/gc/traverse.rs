@@ -259,7 +259,7 @@ impl GcTraverse for ClosureData {
 }
 
 /// `zend_generator_get_gc`: the suspended frame, current key/value, return
-/// value, `yield from` delegate and parent generator.
+/// value, `yield from` delegate, parent generator and closure.
 impl GcTraverse for GenData {
     fn gc_traverse(&self, v: &mut GcVisitor<'_>) {
         if let Some(f) = &self.frame {
@@ -273,6 +273,9 @@ impl GcTraverse for GenData {
         }
         if let Some(p) = &self.parent {
             v.obj(p);
+        }
+        if let Some(c) = &self.closure {
+            v.obj(c);
         }
     }
 }
