@@ -535,7 +535,11 @@ pub(crate) fn function_string(
     }
     let params = f.func.params();
     let required = f.func.required() as usize;
-    if !params.is_empty() || !f.is_user() || f.func.return_type().is_some() {
+    // `_function_parameter_string()` prints nothing without arginfo: user
+    // code (including the `Closure::__invoke` trampoline, which borrows the
+    // closure's arginfo) has none when it declares no parameters and no
+    // return type; internal functions always have it.
+    if !params.is_empty() || !f.func.is_user() || f.func.return_type().is_some() {
         b.c(b'\n');
         b.s(&pind)
             .s(&format!("- Parameters [{}] {{\n", params.len()));

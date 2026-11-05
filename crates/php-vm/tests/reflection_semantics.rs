@@ -103,3 +103,19 @@ var_dump(ReflectionReference::fromArrayElement($a, 0) instanceof ReflectionRefer
         "Call to private ReflectionReference::__construct() from global scope\nbool(true)\n"
     );
 }
+
+/// bug74949.phpt: `Closure::__invoke` of a closure without parameters or
+/// return type has no arginfo, so `__toString()` prints no parameter list.
+#[test]
+fn closure_invoke_without_arginfo_prints_no_parameters() {
+    assert_eq!(
+        run(r#"<?php
+$f = function () {};
+echo new ReflectionMethod($f, "__invoke");
+$g = function (): int {};
+echo new ReflectionMethod($g, "__invoke");
+"#),
+        "Method [ <internal> public method __invoke ] {\n}\n\
+Method [ <internal> public method __invoke ] {\n\n  - Parameters [0] {\n  }\n  - Return [ int ]\n}\n"
+    );
+}
