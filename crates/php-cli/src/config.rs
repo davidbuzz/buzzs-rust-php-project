@@ -4,7 +4,8 @@
 //! `php-cli.ini`, then `php.ini`), `$PHP_INI_SCAN_DIR`, then the
 //! hard-coded CLI entries and the `-d` defines.
 
-use php_support::ini::{self, IniHooks, IniParserCallback, IniScalar, ScannerMode};
+use php_support::ini::configuration::IniConfiguration;
+use php_support::ini::{IniHooks, IniKey, IniScalar, IniValue};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -28,10 +29,13 @@ pub const HARDCODED_INI: &[(&str, &str)] = &[
 ];
 
 /// The result of `php_init_config()`.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Config {
     /// The configuration hash in insertion order (later entries win).
     pub entries: Vec<(String, String)>,
+    /// Complete configuration hash, including arrays and PATH/HOST sections.
+    /// CLI requests do not activate per-directory or per-host overrides.
+    pub configuration: IniConfiguration,
     /// `php_ini_opened_path`.
     pub opened_path: Option<Vec<u8>>,
     /// `php_ini_scanned_path`.
@@ -73,8 +77,17 @@ impl Config {
 
     /// Builds the configuration hash.
     #[must_use]
-    #[allow(clippy::too_many_lines)]
     pub fn load(opts: &Options) -> Config {
+        let phprc = std::env::var_os("PHPRC").map(|v| v.as_bytes().to_vec());
+        let scan = std::env::var_os("PHP_INI_SCAN_DIR").map_or_else(
+            || CONFIG_FILE_SCAN_DIR.as_bytes().to_vec(),
+            |v| v.as_bytes().to_vec(),
+        );
+        Self::load_from_environment(opts, phprc.as_deref(), &scan)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn load_from_environment(opts: &Options, phprc: Option<&[u8]>, scan: &[u8]) -> Config {
         let mut cfg = Config {
             entries: vec![("display_errors".into(), "1".into())],
             ..Config::default()
@@ -85,10 +98,9 @@ impl Config {
             file_name = Some(p.clone());
             search = split_search_path(p);
         } else if !opts.ignore {
-            if let Some(env) = std::env::var_os("PHPRC").filter(|v| !v.is_empty()) {
-                let env = env.as_bytes().to_vec();
-                search.extend(split_search_path(&env));
-                file_name = Some(env);
+            if let Some(env) = phprc.filter(|v| !v.is_empty()) {
+                search.extend(split_search_path(env));
+                file_name = Some(env.to_vec());
             }
             if let Some(dir) = opts.binary.as_ref().and_then(|b| b.parent()) {
                 if !dir.as_os_str().is_empty() {
@@ -112,7 +124,11 @@ impl Config {
                 }
                 found = search.iter().find_map(|dir| {
                     let p = Path::new(std::ffi::OsStr::from_bytes(dir)).join(name);
-                    (p.is_file() && std::fs::File::open(&p).is_ok()).then_some(p)
+                    if p.is_file() && std::fs::File::open(&p).is_ok() {
+                        absolute(&p)
+                    } else {
+                        None
+                    }
                 });
             }
             if let Some(p) = found {
@@ -127,10 +143,6 @@ impl Config {
                 }
             }
         }
-        let scan = std::env::var_os("PHP_INI_SCAN_DIR").map_or_else(
-            || CONFIG_FILE_SCAN_DIR.as_bytes().to_vec(),
-            |v| v.as_bytes().to_vec(),
-        );
         if !opts.ignore && !scan.is_empty() {
             let mut files: Vec<Vec<u8>> = Vec::new();
             for dir in scan.split(|&c| c == b':') {
@@ -176,7 +188,7 @@ impl Config {
                 }
                 cfg.scanned_files = Some(s);
             }
-            cfg.scanned_path = Some(scan);
+            cfg.scanned_path = Some(scan.to_vec());
         }
         for (k, v) in HARDCODED_INI {
             cfg.entries.push(((*k).to_string(), (*v).to_string()));
@@ -190,26 +202,58 @@ impl Config {
                 cfg.entries.push((k.clone(), v.clone()));
             }
         }
+        for (key, value) in &cfg.entries {
+            cfg.configuration.values.insert(
+                IniKey::Str(key.as_bytes().to_vec()),
+                IniValue::Scalar(IniScalar::Str(value.as_bytes().to_vec())),
+            );
+        }
+        cfg.configuration.extensions = cfg.extensions.iter().map(|v| v.as_bytes().to_vec()).collect();
+        cfg.configuration.zend_extensions = cfg
+            .zend_extensions
+            .iter()
+            .map(|v| v.as_bytes().to_vec())
+            .collect();
         cfg
     }
 
     /// Parses one ini file into the hash; false on a syntax error.
     fn parse(&mut self, data: &[u8], filename: &str) -> bool {
-        let mut collector = Collector {
-            cfg: self,
-            special_section: false,
-        };
-        let mut hooks = Hooks {
-            entries: Vec::new(),
-        };
-        hooks.entries.clone_from(&collector.cfg.entries);
-        match ini::parse_ini(
-            data,
-            filename,
-            ScannerMode::Normal,
-            &mut hooks,
-            &mut collector,
-        ) {
+        for (key, value) in &self.entries {
+            self.configuration.values.insert(
+                IniKey::Str(key.as_bytes().to_vec()),
+                IniValue::Scalar(IniScalar::Str(value.as_bytes().to_vec())),
+            );
+        }
+        let result = self.configuration.parse(data, filename, &mut Hooks);
+        self.entries = self
+            .configuration
+            .values
+            .iter()
+            .filter_map(|(key, value)| {
+                if let (IniKey::Str(key), IniValue::Scalar(value)) = (key, value) {
+                    Some((
+                        String::from_utf8_lossy(key).into_owned(),
+                        String::from_utf8_lossy(&value.to_bytes()).into_owned(),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.extensions = self
+            .configuration
+            .extensions
+            .iter()
+            .map(|v| String::from_utf8_lossy(v).into_owned())
+            .collect();
+        self.zend_extensions = self
+            .configuration
+            .zend_extensions
+            .iter()
+            .map(|v| String::from_utf8_lossy(v).into_owned())
+            .collect();
+        match result {
             Ok(()) => true,
             Err(d) => {
                 self.warnings.push(d.message.trim_end().to_string());
@@ -262,62 +306,13 @@ fn absolute(p: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(std::ffi::OsStr::from_bytes(&out)))
 }
 
-struct Collector<'a> {
-    cfg: &'a mut Config,
-    special_section: bool,
-}
-
-fn scalar_bytes(v: &IniScalar) -> Vec<u8> {
-    match v {
-        IniScalar::Str(s) => s.clone(),
-        other => other.to_bytes(),
-    }
-}
-
-impl IniParserCallback for Collector<'_> {
-    fn section(&mut self, name: &[u8]) {
-        let upper = name.to_ascii_uppercase();
-        self.special_section = upper.starts_with(b"PATH") || upper.starts_with(b"HOST");
-    }
-
-    fn entry(&mut self, key: &[u8], value: Option<IniScalar>) {
-        let Some(value) = value else {
-            return;
-        };
-        if self.special_section {
-            return;
-        }
-        let key = String::from_utf8_lossy(key).into_owned();
-        let value = String::from_utf8_lossy(&scalar_bytes(&value)).into_owned();
-        if key.eq_ignore_ascii_case("extension") {
-            self.cfg.extensions.push(value);
-        } else if key.eq_ignore_ascii_case("zend_extension") {
-            self.cfg.zend_extensions.push(value);
-        } else {
-            self.cfg.entries.push((key, value));
-        }
-    }
-
-    fn pop_entry(&mut self, _key: &[u8], _value: IniScalar, _offset: &[u8]) {}
-}
-
 /// Constants and `${var}` lookups available while the configuration is
 /// parsed (core constants registered before `php_init_config()`).
-struct Hooks {
-    entries: Vec<(String, String)>,
-}
+struct Hooks;
 
 impl IniHooks for Hooks {
     fn constant(&mut self, name: &[u8]) -> Option<Vec<u8>> {
         startup_constant(name)
-    }
-
-    fn variable(&mut self, name: &[u8]) -> Option<Vec<u8>> {
-        let n = String::from_utf8_lossy(name);
-        if let Some((_, v)) = self.entries.iter().rev().find(|(k, _)| *k == n) {
-            return Some(v.as_bytes().to_vec());
-        }
-        std::env::var_os(n.as_ref()).map(|v| v.as_bytes().to_vec())
     }
 }
 
@@ -414,6 +409,123 @@ mod tests {
             cfg.get("cfg_file_path").map(|s| s.ends_with("php.ini")),
             Some(true)
         );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn binary_directory_discovery_normalises_paths() {
+        let d = tmpdir("binary");
+        std::fs::write(d.join("php-cli.ini"), "source=binary\n").unwrap();
+        let cfg = Config::load_from_environment(
+            &Options {
+                binary: Some(d.join(".").join("php")),
+                ..Options::default()
+            },
+            None,
+            b"",
+        );
+        assert_eq!(cfg.get("source"), Some("binary"));
+        assert_eq!(
+            cfg.opened_path,
+            Some(d.join("php-cli.ini").as_os_str().as_bytes().to_vec())
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn phprc_and_sapi_file_precedence() {
+        let d = tmpdir("phprc");
+        std::fs::write(d.join("php.ini"), "source=generic\n").unwrap();
+        std::fs::write(d.join("php-cli.ini"), "source=cli\n").unwrap();
+        let opts = Options::default();
+        let cfg = Config::load_from_environment(&opts, Some(d.as_os_str().as_bytes()), b"");
+        assert_eq!(cfg.get("source"), Some("cli"));
+        assert_eq!(
+            cfg.opened_path,
+            Some(d.join("php-cli.ini").as_os_str().as_bytes().to_vec())
+        );
+        let explicit = d.join("php.ini");
+        let cfg = Config::load_from_environment(&opts, Some(explicit.as_os_str().as_bytes()), b"");
+        assert_eq!(cfg.get("source"), Some("generic"));
+        let cfg = Config::load_from_environment(
+            &Options {
+                path_override: Some(explicit.as_os_str().as_bytes().to_vec()),
+                ..Options::default()
+            },
+            Some(d.as_os_str().as_bytes()),
+            b"",
+        );
+        assert_eq!(cfg.get("source"), Some("generic"));
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn scan_order_interpolation_sections_and_defines() {
+        let d = tmpdir("scan");
+        let primary = d.join("primary.ini");
+        let scan = d.join("conf.d");
+        std::fs::create_dir_all(&scan).unwrap();
+        std::fs::write(
+            &primary,
+            "base=/first\nextension=first\n[PATH=/app]\nprecision=8\n",
+        )
+        .unwrap();
+        std::fs::write(scan.join("20-last.ini"), "precision=10\nextension=last\n").unwrap();
+        std::fs::write(scan.join("10-first.ini"), "copy=${base}/copy\nprecision=9\nextension=middle\n[HOST=EXAMPLE.COM]\nprecision=12\n").unwrap();
+        std::fs::write(scan.join("30-bad.ini"), "partial=kept\nbroken=(\n").unwrap();
+        std::fs::write(scan.join("ignored.INI"), "precision=2\n").unwrap();
+        let cfg = Config::load_from_environment(
+            &Options {
+                path_override: Some(primary.as_os_str().as_bytes().to_vec()),
+                defines: vec![
+                    ("precision".into(), "11".into()),
+                    ("extension".into(), "defined".into()),
+                ],
+                ..Options::default()
+            },
+            None,
+            scan.as_os_str().as_bytes(),
+        );
+        assert_eq!(cfg.get("copy"), Some("/first/copy"));
+        assert_eq!(cfg.get("precision"), Some("11"));
+        assert_eq!(cfg.get("partial"), Some("kept"));
+        assert_eq!(cfg.extensions, vec!["first", "middle", "last", "defined"]);
+        assert!(cfg.get("extension").is_none());
+        assert!(cfg.configuration.values.get_str("/app").is_some());
+        assert!(cfg.configuration.values.get_str("example.com").is_some());
+        assert_eq!(cfg.warnings.len(), 1);
+        assert_eq!(
+            cfg.scanned_files,
+            Some(
+                format!(
+                    "{}/10-first.ini,\n{}/20-last.ini\n",
+                    scan.display(),
+                    scan.display()
+                )
+                .into_bytes()
+            )
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn ignore_still_loads_override_but_not_scan() {
+        let d = tmpdir("ignore-scan");
+        let primary = d.join("primary.ini");
+        std::fs::write(&primary, "precision=8\n").unwrap();
+        std::fs::write(d.join("extra.ini"), "precision=9\n").unwrap();
+        let cfg = Config::load_from_environment(
+            &Options {
+                path_override: Some(primary.as_os_str().as_bytes().to_vec()),
+                ignore: true,
+                ..Options::default()
+            },
+            None,
+            d.as_os_str().as_bytes(),
+        );
+        assert_eq!(cfg.get("precision"), Some("8"));
+        assert!(cfg.scanned_path.is_none());
+        assert!(cfg.scanned_files.is_none());
         let _ = std::fs::remove_dir_all(d);
     }
 

@@ -12,6 +12,7 @@
 //!   `ini_restore`, `ini_get_all`) with PHP's core directives.
 //! * [`quantity`]: `zend_ini_parse_quantity()` and `zend_ini_parse_bool()`.
 
+pub mod configuration;
 mod parser;
 pub mod quantity;
 pub mod registry;
