@@ -99,9 +99,19 @@ pub(crate) fn node_object(vm: &mut Vm, n: &Node) -> VmResult<Obj> {
     if let Some(o) = existing_node_object(n) {
         return Ok(o);
     }
+    // A `DOMNameSpaceNode` holds a reference to its element's object
+    // (`parent_intern`), which php-src creates first ("Make sure parent dom
+    // object exists", ext/dom/xpath.c) — this fixes handle numbering.
+    let parent = match n.namespace_parent() {
+        Some(p) => Some(node_object(vm, &p)?),
+        None => None,
+    };
     let class = n.class_name();
     let o = new_dom_object(vm, &class, n.builtin_class(), DomObject::Node(n.clone()))?;
     bind_node_object(n, &o);
+    if let Some(p) = parent {
+        internal::<DomState, _>(&o, |s| s.keep.push(Value::Object(p)));
+    }
     Ok(o)
 }
 

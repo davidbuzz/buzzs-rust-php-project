@@ -96,17 +96,17 @@ fn clone(vm: &mut Vm, old: &Obj, new: &Obj) -> VmResult<()> {
     let Some(c) = check(vm, r, Some(&ctx))? else {
         return Ok(());
     };
+    let mut keep = Vec::new();
     if let DomObject::Node(n) = &c {
         n.set_class_name(display_name(&class_of(new).name).to_string_lossy());
         bind_node_object(n, new);
+        // `dom_object_namespace_node_clone_obj`: the clone also holds the
+        // element's object (`GC_ADDREF(parent_intern)`).
+        if let Some(p) = n.namespace_parent() {
+            keep.push(Value::Object(crate::state::node_object(vm, &p)?));
+        }
     }
-    set_internal(
-        new,
-        DomState {
-            obj: Some(c),
-            keep: Vec::new(),
-        },
-    );
+    set_internal(new, DomState { obj: Some(c), keep });
     Ok(())
 }
 
