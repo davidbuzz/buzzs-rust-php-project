@@ -72,7 +72,7 @@ pub struct CtConstants(Rc<HashMap<ZStr, Value>>);
 
 impl CtConstants {
     /// Wraps a name → value table.
-    pub fn new(constants: HashMap<ZStr, Value>) -> Self {
+    pub(crate) fn new(constants: HashMap<ZStr, Value>) -> Self {
         Self(Rc::new(constants))
     }
 
