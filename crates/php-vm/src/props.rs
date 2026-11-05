@@ -307,15 +307,17 @@ impl Vm {
         r
     }
 
-    /// Whether `name` is a declared virtual property of `o`'s class (a
-    /// native property without storage, such as DOM's).
+    /// Whether a value the native `read_property` hook returned for `name`
+    /// stands in for `get_property_ptr_ptr` returning NULL: the property is
+    /// declared virtual (no storage), or readonly / `private(set)`, where
+    /// the standard storage could not be modified indirectly anyway (DOM's
+    /// `previousSibling`, `classList`).
     #[cold]
     #[inline(never)]
-    pub(crate) fn is_virtual_prop(o: &Obj, name: &ZStr) -> bool {
-        object::class_of(o)
-            .prop_map
-            .get(name)
-            .is_some_and(|pi| pi.is_virtual())
+    pub(crate) fn native_prop_without_ptr(o: &Obj, name: &ZStr) -> bool {
+        object::class_of(o).prop_map.get(name).is_some_and(|pi| {
+            pi.is_virtual() || pi.flags & (flags::READONLY | flags::SET_MASK) != 0
+        })
     }
 
     /// Initialized plain public slots need no lazy, native or visibility dispatch.
@@ -1141,10 +1143,10 @@ impl Vm {
     pub(crate) fn property_ref(&mut self, o: &Obj, name: &ZStr) -> VmResult<PhpRef> {
         match self.native_read_property(o, name, crate::ext::PropCtx::Ref)? {
             Some(Value::Reference(r)) => return Ok(r),
-            // `get_property_ptr_ptr` NULL on a virtual native property:
+            // `get_property_ptr_ptr` NULL on a native property:
             // `read_property`'s temporary (`foreach ($el->classList as &$v)`
             // reaches the iterator's by-reference check).
-            Some(v) if Self::is_virtual_prop(o, name) => return Ok(PhpRef::new(v)),
+            Some(v) if Self::native_prop_without_ptr(o, name) => return Ok(PhpRef::new(v)),
             _ => {}
         }
         // The slot of the real instance (a lazy proxy forwards).
