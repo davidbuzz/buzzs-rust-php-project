@@ -198,6 +198,29 @@ impl Vm {
         self.run_top_level(src, path, false)
     }
 
+    /// Models `zend_call_stack_overflowed()` in `zend_hash_compare` as a
+    /// nesting limit for array comparisons: the usable stack
+    /// (`zend.max_allowed_stack_size` minus `zend.reserved_stack_size`,
+    /// whose 0 default is 48 KiB) over the C stack one nesting level of
+    /// `zend_compare` takes.
+    #[cold]
+    fn apply_compare_depth_limit(&mut self) {
+        /// Approximate C stack bytes per nesting level of `zend_compare` /
+        /// `zend_hash_compare_impl` / `hash_zval_compare_function`.
+        const COMPARE_FRAME_BYTES: usize = 256;
+        let max = self.ini.get_long("zend.max_allowed_stack_size");
+        let reserved = match usize::try_from(self.ini.get_long("zend.reserved_stack_size")) {
+            Ok(0) | Err(_) => 48 << 10,
+            Ok(r) => r,
+        };
+        let limit = match usize::try_from(max) {
+            Err(_) => usize::MAX,
+            Ok(0) => self.native_stack_size.saturating_sub(reserved) / COMPARE_FRAME_BYTES,
+            Ok(m) => m.saturating_sub(reserved) / COMPARE_FRAME_BYTES,
+        };
+        php_runtime::ops::set_compare_depth_limit(limit.max(1));
+    }
+
     /// Runs top-level eval input, as CLI `-r`, `-B`, `-R`, and `-E` do.
     /// Input has no opening tag and uses Zend's configured internal encoding.
     pub fn run_eval(&mut self, src: &[u8], path: &ZStr) -> Result<(), Throw> {
@@ -206,6 +229,7 @@ impl Vm {
 
     fn run_top_level(&mut self, src: &[u8], path: &ZStr, is_eval: bool) -> Result<(), Throw> {
         self.script_path = path.clone();
+        self.apply_compare_depth_limit();
         let src = if is_eval {
             src.to_vec()
         } else {
