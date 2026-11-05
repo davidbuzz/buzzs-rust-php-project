@@ -559,3 +559,25 @@ fn ini_access_constants() {
         echo INI_USER, INI_PERDIR, INI_SYSTEM, INI_ALL, \INI_ALL, constant("INI_ALL");"#);
     assert_eq!(out, "124777");
 }
+
+/// GH-20583: under `zend.max_allowed_stack_size`, deeply nested data makes
+/// `http_build_query()` throw (`php_url_check_stack_limit`).
+#[test]
+fn http_build_query_honours_the_stack_limit() {
+    let ext = php_ext_stdmisc::StdMisc;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let code = r#"$a = null;
+        for ($i = 0; $i < 3000; $i++) { $a = [$i => $a]; }
+        try { http_build_query($a, 'p'); } catch (Throwable $e) { echo $e::class, ": ", $e->getMessage(), "|"; }
+        $b = null;
+        for ($i = 0; $i < 100; $i++) { $b = [$i => $b]; }
+        var_dump(http_build_query($b));"#;
+    let opts = VmOptions {
+        ini: vec![("zend.max_allowed_stack_size".to_string(), "256K".to_string())],
+    };
+    assert_eq!(
+        run_with(&opts, &exts, code),
+        "Error: Maximum call stack size reached.|string(0) \"\"\n"
+    );
+    assert_eq!(run(code), "string(0) \"\"\n");
+}
