@@ -894,3 +894,28 @@ echo "unreachable\n";
     );
     assert!(!out.contains("unreachable"), "{out}");
 }
+
+/// `zend_compile_prop_decl` sets `active_property_info_name` while it
+/// compiles each property's default and attributes, so `__PROPERTY__`
+/// names the property there too (GH-17222).
+#[test]
+fn property_magic_constant_in_defaults_and_attributes() {
+    let out = run(r#"<?php
+#[Attribute]
+class MyAttr { public function __construct(public string $msg) {} }
+class Foo {
+    #[MyAttr(__PROPERTY__)]
+    public $a = __PROPERTY__, $b = __PROPERTY__;
+    public static $s = __PROPERTY__;
+    public $c = [__PROPERTY__];
+}
+$f = new Foo;
+echo $f->a, $f->b, Foo::$s, $f->c[0], "\n";
+$r = new ReflectionClass(Foo::class);
+foreach (['a', 'b'] as $p) {
+    echo $r->getProperty($p)->getAttributes()[0]->getArguments()[0];
+}
+echo "\n";
+"#);
+    assert_eq!(out, "absc\nab\n");
+}

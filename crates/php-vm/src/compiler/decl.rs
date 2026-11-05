@@ -1415,7 +1415,14 @@ impl Compiler {
                         }
                         None => None,
                     };
-                    let attrs = self.attributes(&pg.attributes)?;
+                    // `zend_compile_prop_decl` compiles the default and the
+                    // attributes with `active_property_info_name` set
+                    // (`__PROPERTY__`).
+                    let first = pg.props.first().map(|p| p.name.name.clone());
+                    let saved_prop = std::mem::replace(&mut self.hook_prop, first);
+                    let attrs = self.attributes(&pg.attributes);
+                    self.hook_prop = saved_prop;
+                    let attrs = attrs?;
                     self.validate_attributes(
                         &attrs,
                         super::attrs::target::PROPERTY,
@@ -1423,7 +1430,7 @@ impl Compiler {
                         None,
                         false,
                     )?;
-                    for p in &pg.props {
+                    for (pi, p) in pg.props.iter().enumerate() {
                         self.f().line = p.span.line;
                         if props
                             .iter()
@@ -1457,7 +1464,13 @@ impl Compiler {
                         let default = match &p.default {
                             Some(d) => {
                                 self.check_const_expr(d, false)?;
-                                Some(self.const_expr(d)?)
+                                let saved_prop = std::mem::replace(
+                                    &mut self.hook_prop,
+                                    Some(p.name.name.clone()),
+                                );
+                                let v = self.const_expr(d);
+                                self.hook_prop = saved_prop;
+                                Some(v?)
                             }
                             None => {
                                 if ty.is_none() {
@@ -1511,13 +1524,22 @@ impl Compiler {
                         } else {
                             default
                         };
+                        let attributes = if pi == 0 || pg.attributes.is_empty() {
+                            attrs.clone()
+                        } else {
+                            let saved_prop =
+                                std::mem::replace(&mut self.hook_prop, Some(p.name.name.clone()));
+                            let a = self.attributes(&pg.attributes);
+                            self.hook_prop = saved_prop;
+                            a?
+                        };
                         props.push(PropDecl {
                             name: ZStr::from(p.name.name.as_slice()),
                             default,
                             flags: fl,
                             ty: ty.clone(),
                             doc_comment: p.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
-                            attributes: attrs.clone(),
+                            attributes,
                             line: p.span.line,
                             hooks,
                         });
