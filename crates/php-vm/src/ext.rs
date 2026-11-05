@@ -869,6 +869,26 @@ impl Vm {
         self.call_method_name(o, name, args)
     }
 
+    /// `zend_call_method(NULL, ce, ...)`: calls method `name` of `class`
+    /// without an object (`$this` is unset, even for an instance method)
+    /// and with `class` as the called scope; `None` when there is no such
+    /// method.
+    pub fn call_class_method(
+        &mut self,
+        class: &Rc<Class>,
+        name: &str,
+        args: Vec<Value>,
+    ) -> Option<VmResult<Value>> {
+        let m = class.find_method(name.as_bytes())?.clone();
+        let call = crate::vm::PendingCall {
+            scope: Some(m.scope()),
+            called: Some(class.clone()),
+            args: args.into_iter().map(Some).collect(),
+            ..crate::vm::PendingCall::new(m.func.clone())
+        };
+        Some(self.call_pending(call))
+    }
+
     /// Creates an instance of a class (without calling the constructor).
     pub fn new_object(&mut self, class: &Rc<Class>) -> VmResult<Obj> {
         self.instantiate_unchecked(class)

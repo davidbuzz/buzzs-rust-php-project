@@ -218,6 +218,11 @@ fn call_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 )?;
                 return Ok(Value::Null);
             };
+            // Without an object, even an instance method runs (without
+            // `$this`) with the class as the called scope.
+            if let Some(r) = vm.call_class_method(&c, &method.to_string_lossy(), args.clone()) {
+                return r;
+            }
             Value::Array(ZArray::from_values([
                 Value::Str(c.name.clone()),
                 Value::Str(method),

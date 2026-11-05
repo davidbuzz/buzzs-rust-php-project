@@ -280,3 +280,13 @@ try { zend_test_internal_dnf_arguments(new stdClass); } catch (TypeError $e) { e
          Iterator|(Traversable&Countable), stdClass given"
     );
 }
+
+#[test]
+fn zend_call_method_on_a_class_uses_it_as_called_scope() {
+    // internal-call-internal-static-return.phpt
+    let out = run(r#"
+class StillReturnsStatic extends _ZendTestClass {}
+echo get_class(zend_call_method(_ZendTestClass::class, "returnsStatic")), '|',
+    get_class(zend_call_method(StillReturnsStatic::class, "returnsStatic"));"#);
+    assert_eq!(out, "_ZendTestClass|StillReturnsStatic");
+}
