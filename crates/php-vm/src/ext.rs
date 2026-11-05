@@ -614,7 +614,9 @@ impl Vm {
     }
 
     /// `zend_disable_functions`: functions named in `disable_functions`
-    /// are removed after module startup.
+    /// are removed after module startup. `exit`, `die` and `clone` cannot
+    /// be disabled (the SAPI reports the "Cannot disable function"
+    /// warning).
     pub(crate) fn disable_functions(&mut self) {
         let list = self
             .ini
@@ -623,7 +625,8 @@ impl Vm {
             .unwrap_or_default();
         for name in list
             .split(|&c| c == b',' || c == b' ' || c == b'\t')
-            .filter(|n| !n.is_empty())
+            // `zend_disable_function` compares case-sensitively.
+            .filter(|n| !n.is_empty() && !matches!(*n, b"exit" | b"die" | b"clone"))
         {
             self.functions
                 .remove(&ZStr::from(name.to_ascii_lowercase()));
