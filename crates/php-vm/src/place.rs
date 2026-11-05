@@ -810,7 +810,7 @@ impl Vm {
         };
         let s = self.to_zstr(&val.deref())?;
         let first = match s.as_bytes() {
-            [] => s.clone(),
+            [] => ZStr::empty(),
             [c] => ZStr::from_byte(*c),
             [c, ..] => {
                 let c = *c;
