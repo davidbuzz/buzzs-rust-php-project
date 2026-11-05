@@ -2685,8 +2685,32 @@ impl Compiler {
                 }
                 Some(Value::Str(ZStr::from(out)))
             }
+            ExprKind::ClassName(class) => self.fold_class_name(class),
             _ => None,
         }
+    }
+
+    /// `zend_try_compile_const_expr_resolve_class_name`: `X::class` of a
+    /// plain class name, or `self::class` where the scope is known, is a
+    /// string literal (so `[A::class, 'm']` is an immutable array literal,
+    /// which the cycle collector never counts). The same cases
+    /// `compile_expr_inner` compiles to a literal.
+    fn fold_class_name(&self, class: &ast::ClassRef) -> Option<Value> {
+        let ast::ClassRef::Name(n) = class else {
+            return None;
+        };
+        let lc = n.name.to_ascii_lowercase();
+        if n.kind != ast::NameKind::Unqualified
+            || !matches!(lc.as_slice(), b"self" | b"static" | b"parent")
+        {
+            return Some(Value::Str(ZStr::from(self.resolve_class_name(n))));
+        }
+        if lc.as_slice() != b"self" || self.in_const_expr() {
+            // `compile_expr_inner` validates `self` in constant expressions.
+            return None;
+        }
+        let c = self.current_class()?;
+        (!c.is_trait && !c.is_anon && self.closure_depth == 0).then(|| Value::Str(c.name.clone()))
     }
 }
 

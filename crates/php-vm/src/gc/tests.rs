@@ -297,3 +297,18 @@ fn abandoned_destructor_fiber_is_destroyed_detached() {
          thrown\npending\n"
     );
 }
+
+/// `[A::class, 'm']` is a compile-time literal (`A::class` folds to a
+/// string), so the collector counts only the object and the fiber of a
+/// cycle through a fiber's callable.
+#[test]
+fn class_name_callable_array_is_a_literal() {
+    let out = run(
+        "<?php class A { public $fiber; function m() {}\n\
+         function keep() { $this->fiber = new Fiber([A::class, 'm']); }\n\
+         function nested() { $x = [self::class, 'm']; $this->fiber = [$x]; $this->self = $this; } }\n\
+         $a = new A; $a->keep(); unset($a); var_dump(gc_collect_cycles());\n\
+         $a = new A; @$a->nested(); unset($a); var_dump(gc_collect_cycles());",
+    );
+    assert_eq!(out, "int(2)\nint(2)\n");
+}
