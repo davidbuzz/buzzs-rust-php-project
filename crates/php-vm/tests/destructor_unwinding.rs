@@ -208,3 +208,36 @@ function f() {
         "{output}"
     );
 }
+
+/// `cleanup_live_vars(throw_op, catch_op)`: an exception caught in the
+/// frame it was thrown in releases the iterators of the loops it leaves,
+/// outermost first, before the catch block runs.
+#[test]
+fn caught_exception_releases_the_iterators_of_the_loops_it_leaves() {
+    let (status, output) = run(r#"<?php
+class A {
+    function __construct(public $n) {}
+    function __destruct() { echo "destruct{$this->n}\n"; }
+}
+function f() {
+    try {
+        foreach ([new A(1)] as $a) {
+            $a = null;
+            foreach ([new A(2)] as $a) {
+                $a = null;
+                foreach ([new A(3)] as $a) {
+                    $a = null;
+                    throw new Exception("x");
+                }
+            }
+        }
+    } catch (Exception $e) {
+        echo "catch\n";
+    }
+    echo "after\n";
+}
+f();
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(output, "destruct1\ndestruct2\ndestruct3\ncatch\nafter\n");
+}

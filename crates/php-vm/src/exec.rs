@@ -355,6 +355,11 @@ impl Vm {
                 let in_try = throw_ip >= entry.try_start && throw_ip < entry.try_end;
                 if in_try {
                     if let Some(cs) = entry.catch_start {
+                        exc = match self.free_left_iterators(&code, throw_ip, cs, exc) {
+                            Ok(e) => e,
+                            Err(t) => return Err(self.abandon_unwinding(t, base)),
+                        };
+                        let f = self.frame_mut();
                         f.pending_exc = Some(exc);
                         f.ip = cs as usize;
                         f.calls.clear();
@@ -363,12 +368,18 @@ impl Vm {
                 }
                 if let Some((fin, fs, fe)) = entry.finally {
                     if throw_ip >= entry.try_start && throw_ip < entry.catch_end {
+                        exc = match self.free_left_iterators(&code, throw_ip, fs, exc) {
+                            Ok(e) => e,
+                            Err(t) => return Err(self.abandon_unwinding(t, base)),
+                        };
+                        let f = self.frame_mut();
                         f.fins[fin as usize] = FinState::Exception(exc);
                         f.ip = fs as usize;
                         f.calls.clear();
                         return Ok(());
                     }
                     if throw_ip >= fs && throw_ip < fe {
+                        let f = self.frame_mut();
                         let prev = std::mem::take(&mut f.fins[fin as usize]);
                         if let FinState::Exception(p) = prev {
                             crate::exceptions::chain_previous(&exc, &p);
@@ -414,6 +425,35 @@ impl Vm {
                 return Err(Throw::Exception(exc));
             }
         }
+    }
+
+    /// `cleanup_live_vars(op_num, catch_op_num)` for foreach iterators: an
+    /// exception handled in the frame it was thrown in first releases the
+    /// iterators of the loops it leaves (outermost first, the order of
+    /// the live-range table), and their destructors run with `exc` in
+    /// flight (`zend_objects_destroy_object`).
+    #[cold]
+    fn free_left_iterators(
+        &mut self,
+        code: &crate::opcode::OpArray,
+        throw_ip: u32,
+        target: u32,
+        exc: php_runtime::Obj,
+    ) -> Result<php_runtime::Obj, Throw> {
+        if self.frame().iters.iter().all(Option::is_none) {
+            return Ok(exc);
+        }
+        for (at, op) in code.ops.iter().enumerate() {
+            if let Op::FeReset { iter, end, .. } = op {
+                // Live from after FE_RESET up to (excluding) the FE_FREE.
+                let start = u32::try_from(at).unwrap_or(u32::MAX);
+                let live = |ip: u32| start < ip && ip < *end;
+                if live(throw_ip) && !live(target) {
+                    self.op_fe_free(*iter);
+                }
+            }
+        }
+        self.destruct_while_unwinding(exc)
     }
 
     /// Releases the temporaries, foreach iterators and unfinished calls of
