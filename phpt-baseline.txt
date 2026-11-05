@@ -316,7 +316,6 @@ Zend/tests/gh23088.phpt
 Zend/tests/gh23896.phpt
 Zend/tests/global_to_string_exception.phpt
 Zend/tests/global_with_side_effect_name.phpt
-Zend/tests/grammar/semi_reserved_005.phpt
 Zend/tests/ignore_repeated_errors.phpt
 Zend/tests/ignore_repeated_source.phpt
 Zend/tests/in-de-crement/oss_fuzz_63802.phpt

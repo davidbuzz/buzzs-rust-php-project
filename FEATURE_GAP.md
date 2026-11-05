@@ -9,6 +9,38 @@ Right now it is the TODO list. Once items are done, it becomes the itemised reco
 
 Keep rows when they reach 100%; they become the completion record. Add rows as gaps are found.
 
+## Current TODO: high-priority rows above 95% (5 Nov 2026)
+
+Goal: every high-priority row above 95% reaches 100% of its run `.phpt` tests. One editing
+worker per row works in its own worktree (`ws18/<row>`), without builds; the coordinator then
+integrates all branches and runs one consolidated build, Rust test and PHPT pass, and only
+that pass updates the `%` column. "Known failures" are the row's entries in
+`phpt-baseline.txt` before this batch; several were targeted by the 5 Nov integration below
+and may already pass.
+
+| Row | % (before) | Known failures | Status |
+|---|---:|---|---|
+| Parser and AST | 100% | `grammar/semi_reserved_005` | **Done.** Fixed by 0991e78; 46/46 run pass on master f2b174c (grammar 42, ast 4). |
+| Partial function application | 97.8% | `constexpr_015`, `observers`, `preloading` | In progress (`ws18/pfa`); observer hooks and preload persistence landed in fae9ada. |
+| Type system | 99.6% | `union_types/anonymous_class`, `object_types/invalid_default_value` | In progress (`ws18/types`). |
+| Output buffering | 96% | `bug74725`, `ob_015`, `oom_in_internal_output_handler` | In progress (`ws18/output`); handler-failure rework landed in fdee13b. |
+| CLI (`php` binary) | 98% | `008`, `serialization_context_request_reset` | In progress (`ws18/cli`); serialization bailout state landed in 14d35c5. |
+| ext/standard strings/math/url | 98% | `strings/{007, gh18823_strict, gh20906_1..3, htmlspecialchars_unchanged, sprintf_rope_optimization_001..002}`, `math/clamp` | In progress (`ws18/stdstr`); sprintf rope and literal interning landed in 9444065. |
+| ext/standard arrays | 98% | `bug25708`, `bug31158`, `bug33989`, `bug72369`, `extract_negative_keys`, `extract_typed_ref`, `extract_variation1` | In progress (`ws18/stdarr`). |
+| ext/pcre | 99% | `bug72685` | In progress (`ws18/pcre`). |
+| ext/date | 99% | `bug-gh20503`, `bug65672`, `date_period_properties`, `time/duration/readonly` | In progress (`ws18/date`). |
+
+5 Nov integration (master `c81e6d7`, unvalidated by a full build when merged): the stopped
+ws13–ws16 workers' committed fixes plus their three unfinished worktrees were reviewed,
+completed and merged: zend_observer hooks and opcache-style preload for PFA (zero cost
+without observers), sprintf-as-rope compilation and interned literals, output-handler failure
+semantics, `get_object_vars()` through `PropertyPurpose::GetObjectVars` (DatePeriod and
+BcMath\Number only), JSON native-table recursion identity, builtin backtrace buffer pooling,
+`get_defined_vars()` snapshot semantics, serialization bailout state, static-property
+visibility, and date/readonly/anonymous-class diagnostics. Known risk: interned literals are
+never freed, so long-running SAPIs (`php -S`, mod_php) that `eval` unique code grow without
+bound.
+
 High-priority completion batch integrated (validation pending): multibyte scanner
 filters are wired through files, includes, eval, CLI lint and reflection; startup
 configuration preserves arrays, sections and binary data for `get_cfg_var()`.
@@ -17,8 +49,8 @@ per-match `strtr()` conversion, scanner stream reads, strict locale validation,
 mixed-value `clamp()`, typed extraction/writeback, current-locale array sorting,
 date diagnostic/restoration fixes, JSON native-stack checks and random-engine
 allocation reduction. Existing percentages below remain prior measurements until
-the combined Rust/PHPT/performance report is accepted. PFA preload persistence
-and engine observer callbacks remain genuine infrastructure gaps.
+the combined Rust/PHPT/performance report is accepted. (PFA preload persistence
+and engine observer callbacks were implemented on 5 Nov; see the TODO section above.)
 
 First combined completion-batch report (not accepted): build and affected-crate
 clippy passed. Rust tests: 1,633 passed, 4 failed, 42 ignored. PHPT: 10,659
@@ -120,7 +152,7 @@ The 2,514 tests in out-of-scope directories are excluded.
 | Pass-rate reporting | 100% | med | `phpt-runner --json` + `scripts/update_feature_gap.py report.json [--dry-run] [--denominator all\|ran]` rewrites the % of mapped rows (directory-prefix → row mapping in the script; unmapped and out-of-scope rows untouched, OUT tests never counted); `--summary` prints the in-scope headline table. |
 | **Language front end** | | | |
 | Lexer | 95% | high | Tokens, inline HTML, `<?php`/`<?=`/`?>`, heredoc/nowdoc, string interpolation, casts, comments, `__halt_compiler`. Ref: `Zend/zend_language_scanner.l`. **Done** (`crates/php-lexer`): full php-src master token set incl. 8.4+ tokens, tokenizer and parser modes, flexible heredoc/nowdoc with scan-ahead, numeric overflow rules, escape processing, exact scanner error messages/lines, warnings, `token_get_all()` API. `token_get_all()` output is identical to PHP 8.3 for all 23,476 comparable `.phpt` FILE sections. **Missing**: `zend.multibyte`/`declare(encoding=...)` input re-encoding and `zend.detect_unicode` BOM detection; `TOKEN_PARSE` mode needs parser feedback (ext/tokenizer). |
-| Parser and AST | 96% | high | Full PHP 8.x grammar, AST and source positions for errors. Ref: `Zend/zend_language_parser.y`, `Zend/zend_ast.c`, `Zend/tests/grammar`. `crates/php-parser`: hand-written parser for the php-src master grammar (hooks, asymmetric visibility, pipes, PFA, `clone` args, `(void)`), bison-identical syntax error messages, `zend_ast_export` port, AST visitor. Corpus (Zend/tests, tests, ext/standard/tests FILE sections, 10,696 files) agrees with `php -l`/expected output on 99.95%; gaps: `zend.multibyte` input encodings. |
+| Parser and AST | 100% | high | Full PHP 8.x grammar, AST and source positions for errors. Ref: `Zend/zend_language_parser.y`, `Zend/zend_ast.c`, `Zend/tests/grammar`. `crates/php-parser`: hand-written parser for the php-src master grammar (hooks, asymmetric visibility, pipes, PFA, `clone` args, `(void)`), bison-identical syntax error messages, `zend_ast_export` port, AST visitor. Corpus (Zend/tests, tests, ext/standard/tests FILE sections, 10,696 files) agrees with `php -l`/expected output on 99.95%; gaps: `zend.multibyte` input encodings. |
 | Compiler (AST → IR/opcodes) | 80% | high | Scope resolution, constant folding, compile-time errors that exactly match PHP's messages. Ref: `Zend/zend_compile.c`. `crates/php-vm/src/compiler`: AST → register-style op arrays (CV/TMP/literal operands, place descriptors), declarations (classes/enums/traits/hooks/asymmetric visibility/promotion), magic-method signature checks, attribute validation (`zend_compile_attributes` targets/repetition/validators, DelayedTargetValidation), constant-expression validation (`zend_compile_const_expr`), partial function application (PFA), `declare(ticks)`, constant `&&`/`||` short-circuit. Missing: some by-ref yield/return notices and goto edge cases. |
 | Compile-time diagnostics | 87% | high | Fatal/parse error text and line numbers that match byte for byte, since most tests compare output exactly. Ref: `Zend/tests/errmsg`. Done (`php-parser`): all parse errors, parser-action compile errors (modifiers, encoding, `__halt_compiler`), and `validate.rs` context-free `zend_compile.c` checks + deprecations (~230 of ~920 corpus compile-error tests). Left for the compiler: inheritance/signature, type redundancy, constant-expression, goto, attribute validation errors. |
 | **Runtime core** | | | |
