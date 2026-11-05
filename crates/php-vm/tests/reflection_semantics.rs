@@ -289,3 +289,18 @@ foreach ((new ReflectionFunction('rd_flags'))->getParameters() as $p) {
         "int(5)\n\nDeprecated: Constant RD_OLD is deprecated since 8.4, use RD_A in t.php on line 3\nint(2)\n"
     );
 }
+
+#[test]
+fn call_trampoline_closure_reflects_variadic_arguments() {
+    // trampoline_closure_named_arguments: `zend_call_trampoline_arginfo`.
+    let out = run(r#"<?php
+class Test {
+    public static function __callStatic($name, $args) {}
+}
+$rf = new ReflectionFunction(Test::fail(...));
+$params = $rf->getParameters();
+echo isset($params[1]) ? "many" : "one", " ", $rf->getName(), " ", $params[0]->getName(), "\n";
+var_dump($params[0]->isVariadic(), $params[0]->getType()->getName());
+"#);
+    assert_eq!(out, "one fail arguments\nbool(true)\nstring(5) \"mixed\"\n");
+}

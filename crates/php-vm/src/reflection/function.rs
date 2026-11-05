@@ -263,7 +263,7 @@ fn rf_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = this(a);
     let f = match a.at(0) {
         Value::Object(c) => match vm.closure_data(&c) {
-            Some(d) => FnRef { func: d.func.clone(), method: None, class: None, closure: Some(c.clone()) },
+            Some(d) => FnRef::of_closure(&c, &d),
             None => {
                 return Err(vm.make_throw(
                     "TypeError",
