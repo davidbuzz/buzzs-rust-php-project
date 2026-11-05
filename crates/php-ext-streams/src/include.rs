@@ -68,7 +68,8 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
             Severity::Deprecated => 8192,
             Severity::Error => 1,
         };
-        vm.raise(level, &format!("{kind}(): {}", d.text()))?;
+        let origin = vm.include_error_origin(kind, name);
+        vm.raise(level, &format!("{origin}: {}", d.text()))?;
     }
     if let Some(t) = pending {
         return Err(t);

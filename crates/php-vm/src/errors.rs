@@ -106,11 +106,43 @@ impl Vm {
             })
     }
 
+    /// The parenthesised part of a `php_error_docref()` origin: the
+    /// running builtin's arguments rendered as in stack traces when
+    /// `error_include_args` is on (`zend_trace_current_function_args_string`),
+    /// else empty.
+    pub(crate) fn docref_args(&mut self) -> String {
+        if !self.ini.get_bool("error_include_args") {
+            return String::new();
+        }
+        let Some(idx) = self
+            .frames
+            .iter()
+            .rposition(|f| f.kind == FrameKind::Builtin)
+        else {
+            return String::new();
+        };
+        let args = self.trace_frame_args(idx);
+        self.trace_args_list(&args)
+    }
+
+    /// The origin `include`/`require` warnings are prefixed with:
+    /// `include()`, or `include('name')` under `error_include_args`
+    /// (`php_verror` while `ZEND_INCLUDE_OR_EVAL` executes).
+    pub fn include_error_origin(&mut self, kind: &str, name: &[u8]) -> String {
+        if self.ini.get_bool("error_include_args") {
+            let arg = self.trace_arg(&Value::Str(ZStr::from(name)));
+            format!("{kind}({arg})")
+        } else {
+            format!("{kind}()")
+        }
+    }
+
     /// Binary-safe [`Vm::docref`].
     pub(crate) fn docref_bytes(&mut self, level: i64, msg: &[u8]) -> VmResult<()> {
         match self.docref_function_name() {
             Some(n) => {
-                let mut m = format!("{n}(): ").into_bytes();
+                let args = self.docref_args();
+                let mut m = format!("{n}({args}): ").into_bytes();
                 m.extend_from_slice(msg);
                 self.error_bytes(level, &m)
             }
