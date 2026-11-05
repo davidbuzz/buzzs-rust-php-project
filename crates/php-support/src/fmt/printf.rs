@@ -245,7 +245,9 @@ pub enum ArgSource {
 pub struct FormatOptions {
     /// Argument origin (controls the missing-argument error).
     pub source: ArgSource,
-    /// `localeconv()->decimal_point`, used by `%f`, `%g` and `%G`.
+    /// `localeconv()->decimal_point`, used by `%f`, `%g` and `%G`
+    /// (`%F`, `%e`, `%E`, `%h` and `%H` always use `.`). Bindings pass
+    /// [`super::locale::decimal_point`]; the default is `.` (C locale).
     pub decimal_point: u8,
 }
 

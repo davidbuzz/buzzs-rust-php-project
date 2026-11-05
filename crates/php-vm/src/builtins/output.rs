@@ -94,7 +94,7 @@ fn do_format(vm: &mut Vm, fmt: &[u8], vals: &[Value], source: ArgSource) -> VmRe
     let mut diags: Vec<php_support::Diagnostic> = Vec::new();
     let opts = FormatOptions {
         source,
-        decimal_point: b'.',
+        decimal_point: php_support::fmt::locale::decimal_point(),
     };
     let r = php_formatted_print(fmt, &refs, opts, &mut diags);
     for d in diags {

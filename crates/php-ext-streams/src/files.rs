@@ -779,7 +779,7 @@ fn format(vm: &mut Vm, fmt: &[u8], vals: &[Value], variadic: bool) -> VmResult<V
         } else {
             ArgSource::Array
         },
-        decimal_point: b'.',
+        decimal_point: php_support::fmt::locale::decimal_point(),
     };
     let r = php_formatted_print(fmt, &refs, opts, &mut diags);
     for d in diags {
