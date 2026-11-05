@@ -1096,14 +1096,20 @@ impl Unserializer<'_> {
             return Ok(incomplete(vm));
         }
         let f = Value::Str(ZStr::from(func.as_slice()));
-        if !vm.is_callable_value(&f) {
-            let err = vm.callable_error(&f);
-            return Err(vm.make_throw(
-                "Error",
-                &format!("Invalid callback {}, {err}", String::from_utf8_lossy(&func)),
-            ));
-        }
-        locked(|| vm.call_value(&f, vec![Value::Str(name.clone())]))?;
+        // `call_user_function()`: `zend_is_callable_ex()` in the calling
+        // user frame's scope, deprecations ("Use of \"parent\" in
+        // callables …") included.
+        let mut call = match vm.zend_is_callable(&f, false)? {
+            Ok(call) => call,
+            Err(err) => {
+                return Err(vm.make_throw(
+                    "Error",
+                    &format!("Invalid callback {}, {err}", String::from_utf8_lossy(&func)),
+                ));
+            }
+        };
+        call.args = vec![Some(Value::Str(name.clone()))];
+        locked(|| vm.call_pending(call))?;
         if let Some(c) = locked(|| vm.lookup_class(name))? {
             Ok(Some((c, false)))
         } else {
@@ -2109,6 +2115,59 @@ pub(crate) fn register(vm: &mut Vm) {
 #[cfg(test)]
 mod tests {
     use super::{unescape, valid_class_name};
+    use crate::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn run(src: &str) -> String {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(src.as_bytes(), "t.php");
+        drop(vm);
+        let out = sink.0.borrow().clone();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    #[test]
+    fn callback_func_name_with_nul_is_cut_in_the_reason() {
+        let out = run("<?php ini_set('unserialize_callback_func', \"foo\\0butno\");\n\
+             function foo($n) {}\n\
+             try { unserialize('O:3:\"FOO\":0:{}'); }\n\
+             catch (Error $e) { echo $e->getMessage(); }");
+        assert_eq!(
+            out,
+            "Invalid callback foo\0butno, function \"foo\" not found or invalid function name"
+        );
+    }
+
+    #[test]
+    fn callback_func_resolves_parent_in_the_calling_scope() {
+        let out = run("<?php ini_set('unserialize_callback_func', 'parent::cb');\n\
+             class P { static function cb($n) { echo __CLASS__, \" $n\\n\"; eval('class Foo {}'); } }\n\
+             class C extends P { function u($s) { return unserialize($s); } }\n\
+             try { unserialize('O:3:\"Bar\":0:{}'); }\n\
+             catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
+             echo get_class((new C)->u('O:3:\"Foo\":0:{}'));");
+        assert!(out.starts_with(
+            "Invalid callback parent::cb, cannot access \"parent\" when no class scope is active\n"
+        ));
+        assert!(out.contains("Use of \"parent\" in callables is deprecated"));
+        assert!(out.ends_with("P Foo\nFoo"), "{out}");
+    }
 
     #[test]
     fn class_names() {
