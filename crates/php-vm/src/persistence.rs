@@ -189,6 +189,7 @@ impl ImageBuilder {
             hoisted_classes: original.hoisted_classes.clone(),
             decls: self.table(&original.decls),
             warnings: original.warnings.clone(),
+            anon_end: original.anon_end,
         })
     }
 

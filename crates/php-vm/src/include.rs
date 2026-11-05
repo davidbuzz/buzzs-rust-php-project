@@ -111,9 +111,13 @@ impl Vm {
                 self.functions.get(&ZStr::from("array_map")),
                 Some(crate::func::Func::Builtin(_))
             ),
+            anon_base: self.anon_counter,
         };
         let unit = match compiler::compile(&program, Rc::from(src), opts) {
-            Ok(u) => u,
+            Ok(u) => {
+                self.anon_counter = u.anon_end;
+                u
+            }
             Err(e) => {
                 for (level, msg, line) in &e.warnings {
                     self.error_at(*level, msg, filename, *line)?;

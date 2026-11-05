@@ -58,6 +58,9 @@ pub struct CompiledUnit {
     /// Compile-time warnings (level bits, message, line) to emit before
     /// execution.
     pub warnings: Vec<(i64, String, u32)>,
+    /// The anonymous class counter after this unit (see
+    /// [`CompileOptions::anon_base`]).
+    pub anon_end: u32,
 }
 
 /// Options for [`compile`].
@@ -82,6 +85,10 @@ pub struct CompileOptions {
     /// Whether `array_map` is currently registered as an internal function
     /// (`zend_compile_func_array_map()` needs its arginfo).
     pub array_map_builtin: bool,
+    /// The request-wide anonymous class counter at the start of this
+    /// compilation (`CG(rtd_key_counter)`), so recompiling a file or eval
+    /// string names its anonymous classes afresh.
+    pub anon_base: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -317,7 +324,7 @@ pub fn compile(
         hoisted_functions: Vec::new(),
         hoisted_classes: Vec::new(),
         warnings: Vec::new(),
-        anon_counter: 0,
+        anon_counter: opts.anon_base,
         opts,
         declared_functions: HashMap::new(),
         source,
@@ -380,6 +387,7 @@ pub fn compile(
         hoisted_classes: c.hoisted_classes,
         decls: c.decls,
         warnings: c.warnings,
+        anon_end: c.anon_counter,
     })
 }
 

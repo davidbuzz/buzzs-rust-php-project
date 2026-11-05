@@ -1386,3 +1386,18 @@ fn require_once_of_the_primary_script_is_a_no_op() {
     let output = sink.0.borrow().clone();
     assert_eq!(String::from_utf8(output).expect("UTF-8 output"), "bool(true)\ndone\n");
 }
+
+#[test]
+fn recompiled_anonymous_classes_get_fresh_names() {
+    // bug73816: CG(rtd_key_counter) is request-wide.
+    assert_eq!(run(r#"<?php
+function anon() {
+    static $i = 0;
+    $i++;
+    return eval('return new class { public $prop' . $i . '; };');
+}
+foreach ([anon(), anon()] as $o) {
+    foreach (get_object_vars($o) as $k => $v) { echo $k, "\n"; }
+}
+"#), "prop1\nprop2\n");
+}

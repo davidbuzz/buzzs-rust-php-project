@@ -821,9 +821,11 @@ impl Vm {
                 self.functions.get(&ZStr::from("array_map")),
                 Some(Func::Builtin(_))
             ),
+            anon_base: self.anon_counter,
         };
         match crate::compiler::compile(&program, Rc::from(src), opts) {
             Ok(u) => {
+                self.anon_counter = u.anon_end;
                 for (level, message, line) in &u.warnings {
                     self.error_at(*level, message, file, *line)?;
                 }
