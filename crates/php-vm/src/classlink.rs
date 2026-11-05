@@ -2584,11 +2584,11 @@ fn check_method_inheritance(cls: &Rc<Class>) -> Option<(String, u32)> {
 
 /// `do_inherit_method` for the methods of interfaces the parent does not
 /// already implement: an implementing method (own, from a trait or
-/// inherited) must be public and keep the staticness.
+/// inherited) must be public and keep the staticness. Interfaces are
+/// checked too: an own method, or one taken from an earlier parent
+/// interface, against each parent interface's method
+/// (`do_interface_implementation`).
 fn check_interface_methods(cls: &Rc<Class>) -> Option<(String, u32)> {
-    if cls.is_interface() {
-        return None;
-    }
     for iface in &cls.interfaces {
         if cls
             .parent

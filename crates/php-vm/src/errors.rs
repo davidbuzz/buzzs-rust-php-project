@@ -125,6 +125,20 @@ impl Vm {
         self.trace_args_list(&args)
     }
 
+    /// Under `error_include_args`, a library diagnostic that already starts
+    /// with the running builtin's `name(): ` origin gets the arguments put
+    /// into it, as `php_verror` builds the origin itself
+    /// (`zend_trace_current_function_args_string`).
+    pub(crate) fn origin_with_args(&mut self, msg: &str) -> Option<String> {
+        if !self.ini.get_bool("error_include_args") {
+            return None;
+        }
+        let name = self.docref_function_name()?;
+        let rest = msg.strip_prefix(name.as_str())?.strip_prefix("(): ")?;
+        let args = self.docref_args();
+        Some(format!("{name}({args}): {rest}"))
+    }
+
     /// The origin `include`/`require` warnings are prefixed with:
     /// `include()`, or `include('name')` under `error_include_args`
     /// (`php_verror` while `ZEND_INCLUDE_OR_EVAL` executes).
@@ -287,18 +301,21 @@ impl Vm {
         if is_fatal(level) {
             crate::classlink::emit_recorded_before_fatal(self);
         }
-        self.last_error = Some(LastError {
-            level,
-            message: msg.to_vec(),
-            file: file.clone(),
-            line,
-        });
-        if self.error_reporting & level != 0
-            || level & (level::CORE_ERROR | level::CORE_WARNING) != 0
-        {
-            self.error_msg_html_ready = html_ready;
-            self.display_error(level, msg, file, line);
-            self.error_msg_html_ready = false;
+        // `php_error_cb`: a repeated error is neither stored nor shown.
+        if !self.is_repeated_error(msg, file, line) {
+            self.last_error = Some(LastError {
+                level,
+                message: msg.to_vec(),
+                file: file.clone(),
+                line,
+            });
+            if self.error_reporting & level != 0
+                || level & (level::CORE_ERROR | level::CORE_WARNING) != 0
+            {
+                self.error_msg_html_ready = html_ready;
+                self.display_error(level, msg, file, line);
+                self.error_msg_html_ready = false;
+            }
         }
         if is_fatal(level) {
             self.exit_status = 255;
@@ -343,6 +360,20 @@ impl Vm {
             }
             None => String::new(),
         }
+    }
+
+    /// `php_error_cb`'s repeated-error check: under
+    /// `ignore_repeated_errors`, an error whose message equals the last
+    /// stored one (and, unless `ignore_repeated_source` is on, whose file
+    /// and line match too) is neither stored nor displayed or logged.
+    fn is_repeated_error(&self, msg: &[u8], file: &ZStr, line: u32) -> bool {
+        let Some(last) = &self.last_error else {
+            return false;
+        };
+        if last.message != msg || !self.ini.get_bool("ignore_repeated_errors") {
+            return false;
+        }
+        self.ini.get_bool("ignore_repeated_source") || (last.line == line && last.file == *file)
     }
 
     /// Displays/logs an error according to the ini settings.

@@ -542,10 +542,14 @@ fn create_throwing_resource(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     )))
 }
 
-/// `get_open_basedir()`.
+/// `get_open_basedir()`: `PG(open_basedir)`, which holds the expanded
+/// directories of a runtime `ini_set()` (`OnUpdateBaseDir`), not the INI
+/// string.
 fn open_basedir(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(match vm.ini_string("open_basedir") {
-        Some(v) if !v.is_empty() => Value::Str(ZStr::from(v)),
+        Some(v) if !v.is_empty() => {
+            Value::Str(ZStr::from(php_ext_streams::ini::effective_open_basedir(v)))
+        }
         _ => Value::Null,
     })
 }

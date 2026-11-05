@@ -927,6 +927,45 @@ impl Vm {
         crate::weakref::ii_destruct(self, o)
     }
 
+    /// `zend_try_array_init()` on by-reference argument `n`: the variable
+    /// is set to `null` before its old value is destroyed
+    /// (`zval_ptr_safe_dtor`), so a destructor running then sees `null`;
+    /// afterwards it holds an empty array. A typed reference is assigned
+    /// the array directly (`zend_try_assign_typed_ref_arr`).
+    ///
+    /// # Errors
+    /// An exception thrown by a destructor of the old value (the variable
+    /// still ends up an empty array).
+    pub fn try_array_init_arg(&mut self, a: &Args, n: usize) -> VmResult<()> {
+        let Some(r) = a.reference(n) else {
+            return Ok(());
+        };
+        if crate::typed_refs::has_type_sources(&r) {
+            a.set_ref(n, Value::Array(ZArray::new()));
+            return Ok(());
+        }
+        let old = r.set(Value::Null);
+        drop(old);
+        let destructed = self.run_released_destructors();
+        let old = r.set(Value::Array(ZArray::new()));
+        drop(old);
+        destructed
+    }
+
+    /// Calls a callable resolved by [`Vm::resolve_callable`] with
+    /// positional arguments (`zend_call_function` with a cached
+    /// `zend_fcall_info_cache`).
+    ///
+    /// # Errors
+    /// Whatever the callee throws.
+    pub fn call_resolved(
+        &mut self,
+        call: crate::vm::PendingCall,
+        args: Vec<Value>,
+    ) -> VmResult<Value> {
+        self.call_resolved_named(call, args, Vec::new())
+    }
+
     /// Creates an instance of a class (without calling the constructor).
     pub fn new_object(&mut self, class: &Rc<Class>) -> VmResult<Obj> {
         self.instantiate_unchecked(class)
