@@ -71,6 +71,21 @@ pub fn rt_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
     }
 }
 
+/// Applies the `pcre.*` INI settings (registered by ext/pcre, when loaded)
+/// to SPL's own PCRE state: `RegexIterator` matches honour
+/// `pcre.backtrack_limit` like `preg_*` (GH-14290).
+fn sync_pcre_ini(vm: &Vm, p: &mut php_pcre::Pcre) {
+    if vm.ini_string("pcre.backtrack_limit").is_some() {
+        p.set_backtrack_limit(vm.ini_long("pcre.backtrack_limit"));
+    }
+    if vm.ini_string("pcre.recursion_limit").is_some() {
+        p.set_recursion_limit(vm.ini_long("pcre.recursion_limit"));
+    }
+    if vm.ini_string("pcre.jit").is_some() {
+        p.set_jit(vm.ini_bool("pcre.jit"));
+    }
+}
+
 /// The SPL state attached to an object by the `create` hook.
 #[must_use]
 pub fn spl_state_of(obj: &Obj) -> Option<Rc<SplObject>> {
@@ -659,8 +674,9 @@ impl SplHost for VmHost<'_> {
 
     fn pcre(&mut self) -> &mut php_pcre::Pcre {
         if self.pcre.is_none() {
-            let p = PCRE.with(|s| s.borrow_mut().take());
-            self.pcre = Some(p.unwrap_or_default());
+            let mut p = PCRE.with(|s| s.borrow_mut().take()).unwrap_or_default();
+            sync_pcre_ini(self.vm, &mut p);
+            self.pcre = Some(p);
         }
         self.pcre.get_or_insert_with(php_pcre::Pcre::new)
     }
@@ -932,8 +948,9 @@ impl SplHost for BridgedHost {
     }
     fn pcre(&mut self) -> &mut php_pcre::Pcre {
         if self.pcre.is_none() {
-            let p = PCRE.with(|s| s.borrow_mut().take());
-            self.pcre = Some(p.unwrap_or_default());
+            let mut p = PCRE.with(|s| s.borrow_mut().take()).unwrap_or_default();
+            lent(|h| sync_pcre_ini(h.vm, &mut p));
+            self.pcre = Some(p);
         }
         self.pcre.get_or_insert_with(php_pcre::Pcre::new)
     }
