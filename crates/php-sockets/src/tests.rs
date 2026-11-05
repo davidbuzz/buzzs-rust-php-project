@@ -799,6 +799,18 @@ fn socket_options() {
         &Value::Int(36),
     )
     .unwrap();
+    // socket_reuseport_cbpf_detach.phpt: SKF_AD_QUEUE is 24
+    // (<linux/filter.h>), and 0 detaches.
+    for k in [24, 0] {
+        st.set_option(
+            F,
+            &mut s,
+            SOL_SOCKET,
+            i64::from(libc::SO_ATTACH_REUSEPORT_CBPF),
+            &Value::Int(k),
+        )
+        .unwrap();
+    }
 }
 
 #[test]

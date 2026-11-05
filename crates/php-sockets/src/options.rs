@@ -18,7 +18,7 @@ const UDP_SEGMENT: i64 = 103;
 const TCP_CONGESTION: i64 = libc::TCP_CONGESTION as i64;
 const TCP_USER_TIMEOUT: i64 = libc::TCP_USER_TIMEOUT as i64;
 const SKF_AD_CPU: u32 = 36;
-const SKF_AD_QUEUE: u32 = 8;
+const SKF_AD_QUEUE: u32 = 24;
 
 const MCAST_JOIN_GROUP: i64 = libc::MCAST_JOIN_GROUP as i64;
 const MCAST_BLOCK_SOURCE: i64 = libc::MCAST_BLOCK_SOURCE as i64;
