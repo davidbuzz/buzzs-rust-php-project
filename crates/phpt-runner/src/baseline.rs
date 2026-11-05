@@ -132,6 +132,8 @@ mod tests {
             info: String::new(),
             duration_ms: 0,
             diff: None,
+            title: None,
+            junit_message: None,
         }
     }
 

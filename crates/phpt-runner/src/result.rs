@@ -75,6 +75,14 @@ pub struct TestResult {
     /// The diff for failures (not serialized; written to `.diff` files instead).
     #[serde(skip)]
     pub diff: Option<String>,
+    /// The test's `--TEST--` title when `name` holds something else (a BORK's message), for
+    /// the `JUnit` test case name. Not serialized: resumed results fall back to `name`.
+    #[serde(skip)]
+    pub title: Option<String>,
+    /// run-tests.php's `JUnit` message when it differs from `name` (a CLEAN BORK reports the
+    /// CLEAN output there but the test output on the result line). Not serialized.
+    #[serde(skip)]
+    pub junit_message: Option<String>,
 }
 
 impl TestResult {
