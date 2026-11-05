@@ -112,3 +112,99 @@ echo "hmm\n";
     assert_eq!(status, 255);
     assert_eq!(output, "No crash.\n");
 }
+
+/// `zend_compile_goto` + `zend_resolve_goto_label`: a goto frees the loops
+/// and calls the finally blocks it leaves, and only those.
+#[test]
+fn goto_frees_left_loops_and_calls_left_finally_blocks() {
+    let (status, output) = run(r#"<?php
+class A {
+    function __construct(public $n) {}
+    function __destruct() { echo "destruct{$this->n}\n"; }
+}
+function f() {
+    foreach ([new A(1)] as $a) {
+        $a = null;
+        try {
+            foreach ([new A(2)] as $a) {
+                $a = null;
+                goto out;
+            }
+        } finally {
+            echo "finally\n";
+        }
+out:
+        echo "out\n";
+    }
+    try {
+        goto end;
+    } finally {
+        echo "finally2\n";
+    }
+end:
+    echo "end\n";
+}
+f();
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(
+        output,
+        "destruct2\nfinally\nout\ndestruct1\nfinally2\nend\n"
+    );
+}
+
+/// `zend_handle_loops_and_finally_ex`: `break 2` calls the finally block
+/// before freeing the loops, and a destructor exception from the freed
+/// iterator is thrown from the loop (`ZEND_FREE_ON_RETURN`), outside the
+/// try the `break` is in.
+#[test]
+fn break_calls_finally_before_freeing_loops_outside_the_try() {
+    let (status, output) = run(r#"<?php
+class T {
+    function __destruct() { throw new Exception("dtor"); }
+}
+function f() {
+    foreach ([0] as $_) {
+        foreach ([new T] as $v) {
+            $v = null;
+            try {
+                break 2;
+            } catch (Exception $e) {
+                echo "inner catch\n";
+            } finally {
+                echo "finally\n";
+            }
+        }
+    }
+}
+try {
+    f();
+} catch (Exception $e) {
+    echo "outer catch: ", $e->getMessage(), "\n";
+}
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(output, "finally\nouter catch: dtor\n");
+}
+
+/// `zend_check_finally_breakout`: a `break` in a finally block may not
+/// leave it.
+#[test]
+fn break_out_of_a_finally_block_is_a_compile_error() {
+    let (_, output) = run(r"<?php
+function f() {
+    while (true) {
+        try {
+        } finally {
+            break;
+        }
+    }
+}
+");
+    assert!(
+        output.contains(
+            "Fatal error: jump out of a finally block is disallowed in test.php on line 6"
+        ),
+        "{output}"
+    );
+}

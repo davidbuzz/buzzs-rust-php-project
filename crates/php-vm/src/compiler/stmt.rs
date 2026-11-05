@@ -1,6 +1,6 @@
 //! Statement compilation.
 
-use super::{CResult, Cleanup, Compiler, FnKind, LoopInfo, LoopKind};
+use super::{CResult, Cleanup, Compiler, FnKind, GotoUnwind, LoopInfo, LoopKind, PendingGoto};
 use crate::ast::{self, Expr, ExprKind, Stmt, StmtKind, VarName};
 use crate::opcode::{ArgSrc, BinKind, ForeachKind, Op, Operand, Place, PlaceBase, TryEntry};
 use php_runtime::{Value, ZStr};
@@ -305,11 +305,16 @@ impl Compiler {
                 finally,
             } => self.compile_try(body, catches, finally.as_deref())?,
             StmtKind::Goto(label) => {
+                let unwind = self.emit_goto_unwind();
                 let at = self.emit(Op::Jmp(0));
                 let loops = self.f().loop_ids.clone();
-                self.f()
-                    .gotos
-                    .push((at, label.name.clone(), s.span.line, loops));
+                self.f().gotos.push(PendingGoto {
+                    at,
+                    label: label.name.clone(),
+                    line: s.span.line,
+                    loops,
+                    unwind,
+                });
             }
             StmtKind::Label(label) => {
                 let here = self.here();
@@ -487,12 +492,14 @@ impl Compiler {
     pub(crate) fn push_loop(&mut self, kind: LoopKind, cleanup: Cleanup) {
         let depth = self.fref().finally_stack.len();
         let f = self.f();
+        let in_finally = f.in_finally;
         f.loops.push(LoopInfo {
             kind,
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             cleanup,
             finally_depth: depth,
+            in_finally,
         });
         let id = f.next_loop_id;
         f.next_loop_id += 1;
@@ -566,33 +573,31 @@ impl Compiler {
             }
             is_break = true;
         }
-        // Cleanups of crossed loops.
-        let upto = if is_break { target_idx } else { target_idx + 1 };
-        let cleanups: Vec<Cleanup> = self.fref().loops[upto..]
-            .iter()
-            .rev()
-            .map(|l| l.cleanup)
-            .collect();
-        for c in cleanups {
-            match c {
-                Cleanup::None => {}
-                Cleanup::FeFree(i) => {
-                    self.emit(Op::FeFree { iter: i });
-                }
-                Cleanup::FreeTmp(t) => {
-                    self.emit(Op::Free(Operand::Tmp(t)));
-                }
-            }
+        // `zend_check_finally_breakout` (pass two): the target loop
+        // encloses the finally block the jump is in.
+        if self.fref().in_finally > self.fref().loops[target_idx].in_finally {
+            return self.err("jump out of a finally block is disallowed", line);
         }
-        // Finally blocks crossed.
-        let fdepth = self.fref().loops[target_idx].finally_depth;
-        let fins: Vec<u32> = self.fref().finally_stack[fdepth..]
-            .iter()
-            .rev()
-            .copied()
-            .collect();
-        for fin in fins {
-            self.emit_fast_call(fin);
+        // `zend_handle_loops_and_finally_ex(depth)`: from the innermost
+        // construct out, finally blocks are called and the variables of the
+        // crossed loops freed (`ZEND_FREE_ON_RETURN`, so an exception from a
+        // destructor is thrown from the loop, not from the try it is in).
+        // A break also frees the target loop (it jumps past its FE_FREE).
+        let upto = if is_break { target_idx } else { target_idx + 1 };
+        let finally_stack = self.fref().finally_stack.clone();
+        let mut pending = finally_stack.len();
+        for i in (target_idx..nloops).rev() {
+            let (depth, cleanup) = {
+                let l = &self.fref().loops[i];
+                (l.finally_depth, l.cleanup)
+            };
+            while pending > depth {
+                pending -= 1;
+                self.emit_fast_call(finally_stack[pending]);
+            }
+            if i >= upto {
+                self.emit_cleanups_of(&[cleanup]);
+            }
         }
         let j = self.emit(Op::Jmp(0));
         let l = &mut self.f().loops[target_idx];
@@ -719,6 +724,47 @@ impl Compiler {
             pending -= 1;
             self.emit_fast_call(finally_stack[pending]);
         }
+    }
+
+    /// `zend_handle_loops_and_finally` for `goto`: every enclosing loop
+    /// variable is freed and every enclosing finally block called,
+    /// innermost first; `finish_fn` turns the ones the jump does not leave
+    /// into NOPs (`zend_resolve_goto_label`).
+    fn emit_goto_unwind(&mut self) -> Vec<(usize, GotoUnwind)> {
+        let finally_stack: Vec<u32> = self.fref().finally_stack.clone();
+        let loops: Vec<(usize, usize, Cleanup)> = self
+            .fref()
+            .loops
+            .iter()
+            .zip(&self.fref().loop_ids)
+            .rev()
+            .map(|(l, &id)| (id, l.finally_depth, l.cleanup))
+            .collect();
+        let mut unwind = Vec::new();
+        let mut pending = finally_stack.len();
+        for (id, depth, cleanup) in loops {
+            while pending > depth {
+                pending -= 1;
+                unwind.push((
+                    self.fref().ops.len(),
+                    GotoUnwind::Finally(finally_stack[pending]),
+                ));
+                self.emit_fast_call(finally_stack[pending]);
+            }
+            if cleanup != Cleanup::None {
+                unwind.push((self.fref().ops.len(), GotoUnwind::Loop(id)));
+                self.emit_cleanups_of(&[cleanup]);
+            }
+        }
+        while pending > 0 {
+            pending -= 1;
+            unwind.push((
+                self.fref().ops.len(),
+                GotoUnwind::Finally(finally_stack[pending]),
+            ));
+            self.emit_fast_call(finally_stack[pending]);
+        }
+        unwind
     }
 
     fn emit_cleanup_on_return(&mut self, c: Cleanup) {
