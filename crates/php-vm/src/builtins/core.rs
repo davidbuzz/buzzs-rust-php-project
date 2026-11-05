@@ -506,6 +506,8 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let scope = vm.scope();
     let cls = object::class_of(&o).clone();
     let mut t = object::PropTableBuilder::new(object::data(&o));
+    crate::lazy::mark_props_built(object::data(&o));
+    let stale = crate::lazy::stale_slots(object::data(&o));
     for pi in cls.props.clone() {
         let name = pi.name.clone();
         if !property_visible(vm, &cls, &pi, scope.as_ref()) {
@@ -516,6 +518,12 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 continue;
             }
             vm.read_property(&o, &name, crate::opcode::FetchMode::Is)?
+        } else if let Some(frozen) = &stale {
+            // Frozen copies in the properties table (`lazy::stale_slots`).
+            match frozen.get(pi.slot as usize).cloned().flatten() {
+                Some(v) => v,
+                None => continue,
+            }
         } else {
             let d = object::data(&o);
             let slot = d

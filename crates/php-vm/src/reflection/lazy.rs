@@ -138,7 +138,18 @@ fn revert(o: &Obj, s: Snapshot) {
     let d = object::data(o);
     *d.slots.borrow_mut() = s.slots;
     *d.dynamic.borrow_mut() = s.dynamic;
-    with_info(o, |i| i.initializing = false);
+    let mut separated = false;
+    with_info(o, |i| {
+        i.initializing = false;
+        separated = std::mem::take(&mut i.props_separated);
+        i.props_shared = false;
+    });
+    // `zend_lazy_object_revert_init` puts the snapshot table back: the
+    // frozen copies of a table the initializer separated go away.
+    if separated {
+        let frozen = crate::lazy::set_stale_slots(d, None);
+        drop(frozen);
+    }
 }
 
 /// `zend_lazy_object_init`.
@@ -222,6 +233,10 @@ fn init_uninit(vm: &mut Vm, o: &Obj, i: &LazyInfo) -> VmResult<Obj> {
         for s in d.slots.borrow_mut().iter_mut() {
             *s = None;
         }
+        // `zend_object_dtor_dynamic_properties(obj); obj->properties = NULL`.
+        d.flags.set(d.flags.get() & !oflags::PROPS_BUILT);
+        let frozen = crate::lazy::set_stale_slots(d, None);
+        drop(frozen);
         with_info(o, |x| {
             x.initialized = true;
             x.initializing = false;
@@ -246,6 +261,13 @@ fn init_uninit(vm: &mut Vm, o: &Obj, i: &LazyInfo) -> VmResult<Obj> {
             }
         }
     }
+    // Snapshot of the properties table (`GC_TRY_ADDREF(properties_snapshot)`):
+    // while the initializer runs, a write to an existing table separates it.
+    let shared = crate::lazy::props_built(object::data(o));
+    with_info(o, |x| {
+        x.props_shared = shared;
+        x.props_separated = false;
+    });
     let r = vm.call_value(&i.initializer, vec![Value::Object(o.clone())]);
     match r {
         Err(e) => {
@@ -376,6 +398,17 @@ fn make_lazy(
             clear_destructed(&o);
             let oc = object::class_of(&o).clone();
             let d = object::data(&o);
+            // php-src keeps `obj->properties` and removes its trailing
+            // plain entries (`zlo_hash_remove_dyn_props_func`): the dynamic
+            // properties, and in a table holding frozen copies of the
+            // declared properties, those copies too.
+            if d.dynamic.borrow().is_some() {
+                crate::lazy::mark_props_built(d);
+            }
+            if let Some(frozen) = crate::lazy::stale_slots(d) {
+                let prev = crate::lazy::set_stale_slots(d, Some(vec![None; frozen.len()]));
+                drop((frozen, prev));
+            }
             *d.dynamic.borrow_mut() = None;
             object::set_prop_order(d, None);
             let mut lazy = vec![false; oc.props.len()];
@@ -425,6 +458,8 @@ fn make_lazy(
             instance: None,
             initializing: false,
             lazy_slots,
+            props_shared: false,
+            props_separated: false,
         }),
     );
     Ok(o)

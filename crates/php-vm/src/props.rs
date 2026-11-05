@@ -1018,7 +1018,7 @@ impl Vm {
                 return Ok(v);
             }
         }
-        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let lazy_target = self.lazy_object_for_write(o, name)?;
         let caller = o;
         let o = &lazy_target;
         let cls = object::class_of(o).clone();
@@ -1296,7 +1296,7 @@ impl Vm {
             _ => {}
         }
         // The slot of the real instance (a lazy proxy forwards).
-        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let lazy_target = self.lazy_object_for_write(o, name)?;
         if !Obj::ptr_eq(o, &lazy_target)
             && !self
                 .prop_guards
@@ -1356,7 +1356,7 @@ impl Vm {
         rw: bool,
         caller_temps: usize,
     ) -> VmResult<PropContainer> {
-        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let lazy_target = self.lazy_object_for_write(o, name)?;
         let o = &lazy_target;
         let cls = object::class_of(o).clone();
         let scope = self.scope();
@@ -1599,7 +1599,7 @@ impl Vm {
         {
             f(self, o, name)?;
         }
-        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let lazy_target = self.lazy_object_for_write(o, name)?;
         let o = &lazy_target;
         if crate::place::take_nonvar_ref(self.frames.len()) {
             return self.assign_property_nonvar_ref(o, name, r.deref());
@@ -1735,7 +1735,7 @@ impl Vm {
 
     /// `unset($o->name)`.
     pub(crate) fn unset_property(&mut self, o: &Obj, name: &ZStr) -> VmResult<()> {
-        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let lazy_target = self.lazy_object_for_write(o, name)?;
         let o = &lazy_target;
         let cls = object::class_of(o).clone();
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.unset_property) {
@@ -2114,24 +2114,48 @@ impl Vm {
         Ok(Value::Object(object::new_object(cls, Vec::new())))
     }
 
-    /// The property table with mangled names (`(array)` cast, `var_dump`).
+    /// The property table with mangled names (`var_dump`,
+    /// `get_mangled_object_vars`): php-src lists `zobj->properties`,
+    /// building it first (see `lazy::props_built`).
     pub(crate) fn object_prop_table(
         &mut self,
         o: &Obj,
         include_uninit: bool,
     ) -> Vec<(ArrayKey, Option<Value>, Option<Rc<PropInfo>>)> {
+        self.prop_table_entries(o, include_uninit, true)
+    }
+
+    /// [`Vm::object_prop_table`]; with `build` false the listing does not
+    /// count as building `zobj->properties` (the `(array)` fast path,
+    /// `zend_std_build_object_properties_array`).
+    fn prop_table_entries(
+        &mut self,
+        o: &Obj,
+        include_uninit: bool,
+        build: bool,
+    ) -> Vec<(ArrayKey, Option<Value>, Option<Rc<PropInfo>>)> {
         if let Some(instance) = crate::reflection::lazy::proxy_instance(o) {
-            return self.object_prop_table(&instance, include_uninit);
+            return self.prop_table_entries(&instance, include_uninit, build);
         }
         let cls = object::class_of(o).clone();
         let d = object::data(o);
+        if build {
+            crate::lazy::mark_props_built(d);
+        }
+        // A table of frozen copies lists them, and has no entries for
+        // properties that were undefined when it was copied.
+        let stale = crate::lazy::stale_slots(d);
+        let include_uninit = include_uninit && stale.is_none();
         let slots = d.slots.borrow();
         let mut out = Vec::new();
         for pi in &cls.props {
             if pi.is_virtual() {
                 continue;
             }
-            let v = slots.get(pi.slot as usize).cloned().flatten();
+            let v = match &stale {
+                Some(frozen) => frozen.get(pi.slot as usize).cloned().flatten(),
+                None => slots.get(pi.slot as usize).cloned().flatten(),
+            };
             if v.is_none() && !(include_uninit && pi.ty.is_some()) {
                 continue;
             }
@@ -2173,7 +2197,7 @@ impl Vm {
         if let Some(a) = self.internal_object_array(o)? {
             return Ok(a);
         }
-        let entries = self.object_prop_table(o, false);
+        let entries = self.prop_table_entries(o, false, false);
         // A reference only the property holds is unwrapped
         // (`zend_std_build_object_properties_array`, `zend_array_dup`, the
         // conversion of `zend_proptable_to_symtable`), except when a plain
@@ -2280,6 +2304,7 @@ impl Vm {
         *nd.readonly_init.borrow_mut() = d.readonly_init.borrow().clone();
         *nd.dynamic.borrow_mut() = d.dynamic.borrow().clone();
         object::copy_prop_order(d, nd);
+        crate::lazy::copy_stale_slots(d, nd);
         self.clone_internal(&o, &n)?;
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.clone) {
             f(self, &o, &n)?;

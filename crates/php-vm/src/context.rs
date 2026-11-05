@@ -136,6 +136,7 @@ impl Vm {
         }
         if matches!(purpose, PropertyPurpose::VarExport | PropertyPurpose::Json) {
             let mut t = object::PropTableBuilder::new(object::data(o));
+            let stale = crate::lazy::stale_slots(object::data(o));
             for pi in object::class_of(o).props.clone() {
                 if purpose == PropertyPurpose::Json && pi.visibility() != flags::PUBLIC {
                     continue;
@@ -145,6 +146,8 @@ impl Vm {
                         Some(self.call_hook(o, getter, &pi, Vec::new())?.deref())
                     } else if pi.is_virtual() {
                         None
+                    } else if let Some(frozen) = &stale {
+                        frozen.get(pi.slot as usize).cloned().flatten()
                     } else {
                         object::data(o)
                             .slots
