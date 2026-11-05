@@ -498,6 +498,47 @@ impl Vm {
         cls: &Rc<Class>,
         name: &ZStr,
     ) -> VmResult<Rc<RefCell<Value>>> {
+        // Zend checks visibility even when the declaration is not static.
+        if cls.find_static(name.as_bytes()).is_none() {
+            if let Some(pi) = cls.prop_map.get(name) {
+                let scope = self.scope();
+                let mut decl = self.find_class(pi.class.as_bytes());
+                if pi.flags & flags::PROTECTED != 0 {
+                    while let Some(parent) = decl.as_ref().and_then(|d| d.parent.clone()) {
+                        if parent.prop_map.get(name).is_some_and(|p| {
+                            p.visibility() != flags::PRIVATE && p.flags & flags::STATIC == 0
+                        }) {
+                            decl = Some(parent);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                let accessible = match (pi.flags & flags::VISIBILITY, &scope, &decl) {
+                    (flags::PUBLIC, _, _) => true,
+                    (flags::PRIVATE, Some(s), Some(d)) => Rc::ptr_eq(s, d),
+                    (flags::PROTECTED, Some(s), Some(d)) => {
+                        s.is_subclass_of(d) || d.is_subclass_of(s)
+                    }
+                    _ => false,
+                };
+                if !accessible {
+                    let vis = if pi.flags & flags::PRIVATE != 0 {
+                        "private"
+                    } else {
+                        "protected"
+                    };
+                    return Err(self.make_throw(
+                        "Error",
+                        &format!(
+                            "Cannot access {vis} property {}::${}",
+                            object::display_name(&cls.name),
+                            name.to_string_lossy()
+                        ),
+                    ));
+                }
+            }
+        }
         let Some(sp) = cls.find_static(name.as_bytes()).cloned() else {
             return Err(self.make_throw(
                 "Error",
