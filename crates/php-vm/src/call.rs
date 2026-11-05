@@ -577,6 +577,9 @@ impl Vm {
             }));
             let mut call = PendingCall::new(func);
             call.is_ctor = true;
+            // Never called; marks the object constructor-failed when an
+            // argument throws (`ZEND_LIVE_NEW`).
+            call.this = Some(o);
             self.push_pending(call);
             return Ok(true);
         };

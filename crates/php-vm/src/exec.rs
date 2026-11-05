@@ -357,6 +357,7 @@ impl Vm {
                     if let Some(cs) = entry.catch_start {
                         f.pending_exc = Some(exc);
                         f.ip = cs as usize;
+                        ctors_failed(&f.calls);
                         f.calls.clear();
                         return Ok(());
                     }
@@ -365,6 +366,7 @@ impl Vm {
                     if throw_ip >= entry.try_start && throw_ip < entry.catch_end {
                         f.fins[fin as usize] = FinState::Exception(exc);
                         f.ip = fs as usize;
+                        ctors_failed(&f.calls);
                         f.calls.clear();
                         return Ok(());
                     }
@@ -426,6 +428,7 @@ impl Vm {
         let f = self.frame_mut();
         let tmps: Vec<Value> = f.tmps.iter_mut().map(std::mem::take).collect();
         let calls = std::mem::take(&mut f.calls);
+        ctors_failed(&calls);
         drop((tmps, calls));
     }
 
@@ -1624,6 +1627,19 @@ pub(crate) enum KeyCtx {
 }
 
 /// "scope X" / "global scope" for messages.
+/// `cleanup_live_vars` for `ZEND_LIVE_NEW`: an object whose constructor
+/// call never started (an argument threw) is never destructed
+/// (`zend_object_store_ctor_failed`).
+#[cold]
+fn ctors_failed(calls: &[crate::vm::PendingCall]) {
+    for c in calls.iter().filter(|c| c.is_ctor) {
+        if let Some(t) = &c.this {
+            let d = object::data(t);
+            d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
+        }
+    }
+}
+
 pub(crate) fn scope_display(scope: Option<&Rc<crate::class::Class>>) -> String {
     match scope {
         Some(c) => format!("scope {}", object::display_name(&c.name)),

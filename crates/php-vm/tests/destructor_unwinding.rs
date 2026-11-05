@@ -112,3 +112,20 @@ echo "hmm\n";
     assert_eq!(status, 255);
     assert_eq!(output, "No crash.\n");
 }
+
+#[test]
+fn objects_whose_constructor_never_ran_are_not_destructed() {
+    // zend_object_init_with_constructor_classes_without_constructor.phpt
+    let (_, output) = run(r#"<?php
+class NoCtor { public function __destruct() { echo "destructed NoCtor\n"; } }
+class WithCtor {
+    public function __construct($a) {}
+    public function __destruct() { echo "destructed WithCtor\n"; }
+}
+function boom() { throw new Exception("arg"); }
+try { $o = new NoCtor(unknown: 1); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { $o = new WithCtor(boom()); } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+echo "end\n";
+"#);
+    assert_eq!(output, "Unknown named parameter $unknown\narg\nend\n");
+}
