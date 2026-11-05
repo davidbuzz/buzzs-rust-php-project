@@ -980,8 +980,10 @@ fn rc_set_static_property_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let r = cell.borrow().clone();
     match r {
+        // `zend_assign_to_variable()`: a reference with typed sources
+        // checks the value against every one of them (non-strict).
         Value::Reference(r) => {
-            r.set(v);
+            vm.assign_ref_ex(&r, v, Some(false))?;
         }
         _ => *cell.borrow_mut() = v,
     }

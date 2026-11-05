@@ -43,3 +43,26 @@ var_dump(property_exists('B', 'b'), property_exists('B', 'c'), property_exists('
         "bool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\n"
     );
 }
+
+/// ReflectionClass_setStaticPropertyValue_003.phpt /
+/// ReflectionProperty_typed_static.phpt: writes through a static property
+/// that holds a typed reference honour the reference's type sources.
+#[test]
+fn static_setters_check_typed_reference_sources() {
+    assert_eq!(
+        run(r#"<?php
+class Test { public static $x; public static int $y = 2; }
+Test::$x =& Test::$y;
+$rc = new ReflectionClass('Test');
+try { $rc->setStaticPropertyValue("x", "foo"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$rc->setStaticPropertyValue("x", "42");
+var_dump(Test::$y);
+$rp = new ReflectionProperty('Test', 'x');
+try { $rp->setValue(null, "bar"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$rp->setValue(null, "7");
+var_dump(Test::$y);
+"#),
+        "Cannot assign string to reference held by property Test::$y of type int\nint(42)\n\
+Cannot assign string to reference held by property Test::$y of type int\nint(7)\n"
+    );
+}

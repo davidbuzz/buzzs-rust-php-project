@@ -313,8 +313,10 @@ fn rp_set_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         };
         let cur = cell.borrow().clone();
         match cur {
+            // `zend_update_static_property_ex()` assigns through a typed
+            // reference with its type checks (non-strict).
             Value::Reference(r) => {
-                r.set(v);
+                vm.assign_ref_ex(&r, v, Some(false))?;
             }
             _ => *cell.borrow_mut() = v,
         }
