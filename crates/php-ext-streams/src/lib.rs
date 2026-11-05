@@ -97,13 +97,21 @@ impl Extension for Streams {
         io_poll::register(m);
         process::register(m);
         for (n, v) in CONSTANTS {
-            m.constant(n, Value::Int(*v));
+            if DEPRECATED_CONSTANTS.contains(n) {
+                // `#[\Deprecated(since: '8.1', message: 'as the constant has no effect')]`
+                m.constant_deprecated(n, Value::Int(*v), "8.1", "as the constant has no effect");
+            } else {
+                m.constant(n, Value::Int(*v));
+            }
         }
         m.on_request_shutdown(shutdown);
         include::install(m.vm());
         ini::register(m);
     }
 }
+
+/// Constants of [`CONSTANTS`] that `file.stub.php` marks deprecated.
+const DEPRECATED_CONSTANTS: &[&str] = &["FILE_TEXT", "FILE_BINARY"];
 
 /// Integer constants of `file.stub.php`, `userspace.stub.php` and
 /// `basic_functions.stub.php` owned by this extension.
@@ -209,5 +217,12 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len());
+    }
+
+    #[test]
+    fn deprecated_constants_are_registered() {
+        for n in DEPRECATED_CONSTANTS {
+            assert!(CONSTANTS.iter().any(|(c, v)| c == n && *v == 0), "{n}");
+        }
     }
 }
