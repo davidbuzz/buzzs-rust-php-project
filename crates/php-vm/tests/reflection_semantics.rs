@@ -89,3 +89,17 @@ clone new A;
         "bool(false)\nbool(true)\nbool(false)\n"
     );
 }
+
+/// ReflectionReference_errors.phpt: the private constructor is what
+/// rejects `new ReflectionReference()`.
+#[test]
+fn reflection_reference_constructor_is_private() {
+    assert_eq!(
+        run(r#"<?php
+try { new ReflectionReference(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$a = [1]; $r = &$a[0];
+var_dump(ReflectionReference::fromArrayElement($a, 0) instanceof ReflectionReference);
+"#),
+        "Call to private ReflectionReference::__construct() from global scope\nbool(true)\n"
+    );
+}

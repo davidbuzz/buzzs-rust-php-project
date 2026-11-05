@@ -846,8 +846,10 @@ fn rr_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// Registers `ReflectionReference`.
 pub(crate) fn register_reference(vm: &mut Vm) {
+    // Not `NO_NEW`: `new ReflectionReference()` reaches the private
+    // constructor and fails its visibility check, as in php-src.
     ClassBuilder::new("ReflectionReference")
-        .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE | cflags::NO_NEW)
+        .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE)
         .method(
             "fromArrayElement(array $array, int|string $key): ?ReflectionReference",
             STAT,
