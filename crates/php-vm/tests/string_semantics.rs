@@ -94,3 +94,14 @@ try { str_repeat('', -1); } catch (ValueError $e) { echo $e->getMessage(), "\n";
          str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n"
     );
 }
+
+/// Empty and one-byte string literals inside a compile-time array are the
+/// interned `ZSTR_EMPTY_ALLOC()`/`ZSTR_CHAR()` strings; longer ones are not
+/// (php-src `ext/standard/tests/general_functions/debug_zval_dump_b.phpt`).
+#[test]
+fn folded_array_short_string_literals_are_interned() {
+    let out = run("<?php $a = [[\"\"], ['abc', 'b']]; debug_zval_dump($a);");
+    assert!(out.contains("string(0) \"\" interned\n"), "{out}");
+    assert!(out.contains("string(1) \"b\" interned\n"), "{out}");
+    assert!(out.contains("string(3) \"abc\" refcount(1)\n"), "{out}");
+}
