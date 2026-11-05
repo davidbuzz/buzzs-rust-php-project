@@ -34,9 +34,18 @@ pub(crate) fn hashed(n: usize) -> usize {
 /// Approximate bytes PHP allocates for `v` (strings of one byte or less
 /// are interned).
 pub(crate) fn value_size(v: &Value) -> usize {
+    value_size_in(v, &mut Vec::new())
+}
+
+/// [`value_size`]; `open` holds the arrays being measured, so an array
+/// that contains itself (`$t = &$a; $a[] = $t;`) is counted once.
+fn value_size_in(v: &Value, open: &mut Vec<usize>) -> usize {
     match v {
         Value::Str(s) if s.as_bytes().len() > 1 => zstr(s.as_bytes().len()),
         Value::Array(a) => {
+            if open.contains(&a.addr()) {
+                return 0;
+            }
             let base = if a.is_list() {
                 packed(a.len())
             } else {
@@ -48,7 +57,10 @@ pub(crate) fn value_size(v: &Value) -> usize {
                         })
                         .sum::<usize>()
             };
-            base + a.values().map(value_size).sum::<usize>()
+            open.push(a.addr());
+            let nested = a.values().map(|e| value_size_in(e, open)).sum::<usize>();
+            open.pop();
+            base + nested
         }
         _ => 0,
     }
@@ -101,5 +113,9 @@ mod tests {
         assert_eq!(value_size(&Value::Str(ZStr::from("abc"))), 32);
         let arr = ZArray::from_values([Value::from("abc"), Value::Int(1)]);
         assert_eq!(value_size(&Value::Array(arr)), packed(2) + 32);
+        // An array containing itself is measured once (leaks the cycle).
+        let mut own = ZArray::from_values([Value::from("abc"), Value::Null]);
+        assert!(own.store_self_at(&[None]).is_some());
+        assert_eq!(value_size(&Value::Array(own)), packed(2) + 32);
     }
 }
