@@ -447,25 +447,30 @@ impl MbState {
         };
     }
 
+    /// `php_get_{internal,input,output}_encoding()` (main/main.c): the
+    /// core INI setting if non-empty, else a non-empty `default_charset`,
+    /// else `"UTF-8"`.
+    fn php_encoding(&self, setting: Option<&[u8]>) -> Vec<u8> {
+        match setting {
+            Some(v) if !v.is_empty() => v.to_vec(),
+            _ if !self.default_charset.is_empty() => self.default_charset.clone(),
+            _ => b"UTF-8".to_vec(),
+        }
+    }
+
     /// `php_get_internal_encoding()`.
     fn php_internal(&self) -> Vec<u8> {
-        self.php_internal_encoding
-            .clone()
-            .unwrap_or_else(|| self.default_charset.clone())
+        self.php_encoding(self.php_internal_encoding.as_deref())
     }
 
     /// `php_get_input_encoding()`.
     fn php_input(&self) -> Vec<u8> {
-        self.php_input_encoding
-            .clone()
-            .unwrap_or_else(|| self.default_charset.clone())
+        self.php_encoding(self.php_input_encoding.as_deref())
     }
 
     /// `php_get_output_encoding()`.
     fn php_output(&self) -> Vec<u8> {
-        self.php_output_encoding
-            .clone()
-            .unwrap_or_else(|| self.default_charset.clone())
+        self.php_encoding(self.php_output_encoding.as_deref())
     }
 
     fn internal_encoding_changed_hook(&mut self) {
@@ -1160,6 +1165,16 @@ mod tests {
         );
         assert_eq!(s.mb_http_input(None).unwrap(), HttpInput::False);
         assert_eq!(s.mb_substitute_character_get(), SubstituteChar::Char(63));
+    }
+
+    #[test]
+    fn empty_default_charset_falls_back_to_utf8() {
+        // phar_dotted_path.phpt: `default_charset=` is not an unknown
+        // encoding (php_get_internal_encoding() returns "UTF-8").
+        let s = MbState::with_ini(&[("default_charset", b"")]);
+        assert!(s.diagnostics.is_empty());
+        assert_eq!(s.mb_internal_encoding_get(), "UTF-8");
+        assert_eq!(s.mb_http_output_get(), "UTF-8");
     }
 
     #[test]
