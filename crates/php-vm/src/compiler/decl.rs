@@ -608,7 +608,10 @@ impl Compiler {
                 self.emit(Op::RecvVariadic { n, cv });
             } else if let Some(d) = &p.default {
                 let at = self.emit(Op::RecvInit { n, cv, skip: 0 });
-                let v = self.compile_expr(d)?;
+                let saved = std::mem::replace(&mut self.in_const_default, true);
+                let v = self.compile_expr(d);
+                self.in_const_default = saved;
+                let v = v?;
                 self.f().line = p.span.line;
                 self.emit(Op::RecvDefault { n, cv, val: v });
                 self.patch_here(at);

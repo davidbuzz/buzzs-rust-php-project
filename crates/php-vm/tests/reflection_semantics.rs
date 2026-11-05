@@ -119,3 +119,53 @@ echo new ReflectionMethod($g, "__invoke");
 Method [ <internal> public method __invoke ] {\n\n  - Parameters [0] {\n  }\n  - Return [ int ]\n}\n"
     );
 }
+
+/// gh9447.phpt: `new parent()` in a parameter default is a constant
+/// expression, checked only when evaluated (Zend/tests/constexpr/
+/// new_self_parent.phpt, invalid_parent_const_ref_leak.phpt).
+#[test]
+fn relative_class_names_in_constant_expressions_resolve_lazily() {
+    assert_eq!(
+        run(r#"<?php
+namespace App;
+class Foo {
+    public function bar($c = new parent(), $d = new self(), $e = parent::X) {}
+    const B = parent::C;
+}
+foreach ((new \ReflectionMethod(Foo::class, 'bar'))->getParameters() as $p) {
+    echo $p, "\n";
+}
+function invalid($x = new self) {}
+try { invalid(); } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+try { (new Foo)->bar(); } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+try { Foo::B; } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+"#),
+        "Parameter #0 [ <optional> $c = new parent() ]\n\
+Parameter #1 [ <optional> $d = new self() ]\n\
+Parameter #2 [ <optional> $e = parent::X ]\n\
+Cannot access \"self\" when no class scope is active\n\
+Cannot access \"parent\" when current class scope has no parent\n\
+Cannot access \"parent\" when current class scope has no parent\n"
+    );
+}
+
+/// Zend/tests/bug70918.phpt, class_name_as_scalar_error_00[5-7].phpt: file
+/// scope does not know its class scope at compile time, so relative class
+/// names fail when executed.
+#[test]
+fn relative_class_names_in_file_scope_fail_at_runtime() {
+    assert_eq!(
+        run(r#"<?php
+try { static::x; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { parent::x; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { new self; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { var_dump(self::class); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { var_dump(parent::class); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#),
+        "Cannot access \"static\" when no class scope is active\n\
+Cannot access \"parent\" when no class scope is active\n\
+Cannot access \"self\" when no class scope is active\n\
+Cannot use \"self\" in the global scope\n\
+Cannot use \"parent\" in the global scope\n"
+    );
+}

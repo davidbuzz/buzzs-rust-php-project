@@ -226,6 +226,12 @@ impl Compiler {
                         let r = self.resolve_class_name(n);
                         return Ok(self.lit(Value::Str(ZStr::from(r))));
                     }
+                    // `zend_try_compile_const_expr_resolve_class_name()`
+                    // checks `X::class` even in constant expressions.
+                    if self.in_const_expr() {
+                        let what = String::from_utf8_lossy(&lc).into_owned();
+                        self.ensure_valid_class_fetch(&what, n.span.line)?;
+                    }
                     if lc.as_slice() == b"self" {
                         if let Some(c) = self.current_class() {
                             if !c.is_trait && !c.is_anon && self.closure_depth == 0 {
