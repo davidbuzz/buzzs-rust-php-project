@@ -608,6 +608,25 @@ mod tests {
     }
 
     #[test]
+    fn store_free_list_grows_with_the_store() {
+        let mut s = ObjectStore::default();
+        assert!(s.objects.capacity() >= STORE_INITIAL);
+        assert!(s.free.capacity() >= STORE_INITIAL);
+        for _ in 0..=STORE_INITIAL {
+            let _ = s.take_handle();
+        }
+        assert!(s.objects.capacity() >= 2 * STORE_INITIAL);
+        assert!(s.free.capacity() >= s.objects.capacity());
+        // Freeing every handle never reallocates the free list.
+        let cap = s.free.capacity();
+        for h in 1..=u32::try_from(s.objects.len()).unwrap() {
+            s.free.push(h);
+        }
+        assert_eq!(s.free.capacity(), cap);
+        assert_eq!(s.take_handle(), u32::try_from(STORE_INITIAL + 1).unwrap());
+    }
+
+    #[test]
     fn prop_order_ranks_slots_and_dynamic_keys() {
         let order = PropOrder::from_keys([
             PropKey::Dynamic(key("d")),
