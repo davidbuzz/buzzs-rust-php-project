@@ -104,6 +104,11 @@ impl StreamFilter for DecompressFilter {
             let data = bucket.data;
             let mut bin = 0usize;
             while bin < data.len() {
+                // Output is unbounded relative to the input: stop once a
+                // memory_limit violation is pending (`ZEND_HAS_OOM()`).
+                if php_memlimit::is_pending() {
+                    break;
+                }
                 if self.state == State::Uninitialized {
                     match RawStream::decompress_init(self.small) {
                         Ok(s) => self.strm = Some(s),
@@ -140,7 +145,7 @@ impl StreamFilter for DecompressFilter {
         }
         if self.state == State::Running && flags.is_closing() {
             let mut status = BZ_OK;
-            while status == BZ_OK {
+            while status == BZ_OK && !php_memlimit::is_pending() {
                 let (st, _, produced) = self.decompress(&[]);
                 status = st;
                 if emit(&self.outbuf, produced, output) {

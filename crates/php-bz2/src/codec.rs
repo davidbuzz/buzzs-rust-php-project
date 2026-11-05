@@ -37,6 +37,21 @@ fn buff_to_buff_compress(
     }
 }
 
+/// Resizes `buf` to `new_len` bytes (zero-filled) through a fallible
+/// allocation, like PHP's `zend_string_safe_frealloc(..., fallible)`:
+/// `false`, with `buf` unchanged, when the growth would exceed
+/// `memory_limit`. The violation stays recorded (`ZEND_HAS_OOM()`), so the
+/// VM raises "Allowed memory size of N bytes exhausted" once the builtin
+/// returns.
+fn fallible_resize(buf: &mut Vec<u8>, new_len: usize) -> bool {
+    let additional = new_len.saturating_sub(buf.len());
+    if php_memlimit::fallible(|| buf.try_reserve(additional)).is_err() {
+        return false;
+    }
+    buf.resize(new_len, 0);
+    true
+}
+
 /// `bzcompress(string $data, int $block_size = 4, int $work_factor = 0):
 /// string|int`.
 pub fn bzcompress(data: &[u8], block_size: i64, work_factor: i64) -> Result<Output> {
@@ -92,7 +107,16 @@ pub fn bzdecompress(data: &[u8], small: bool) -> Result<Output> {
     let Ok(mut z) = RawStream::decompress_init(small) else {
         return Ok(Output::False);
     };
-    let mut dest = vec![0u8; data.len() * 2];
+    // In most cases bz2 offers at least 2:1 compression. Both this buffer
+    // and its growth are fallible allocations (`zend_string_safe_falloc`,
+    // `zend_string_safe_frealloc`): past `memory_limit` the function gives
+    // up (`goto failure`) and the VM raises the recorded "Allowed memory
+    // size" fatal, instead of the output growing towards the hard limit.
+    let mut dest = Vec::new();
+    if !fallible_resize(&mut dest, data.len().saturating_mul(2)) {
+        z.end();
+        return Ok(Output::False);
+    }
     let mut used = 0usize;
     let mut pos = 0usize;
     let mut status;
@@ -105,7 +129,10 @@ pub fn bzdecompress(data: &[u8], small: bool) -> Result<Output> {
             break;
         }
         // Compression is better than 2:1: grow by the input size.
-        dest.resize(used + data.len(), 0);
+        if !fallible_resize(&mut dest, used.saturating_add(data.len())) {
+            z.end();
+            return Ok(Output::False);
+        }
     }
     z.end();
     if status == BZ_STREAM_END || status == BZ_OK {
@@ -170,6 +197,24 @@ mod tests {
         // stream never ends; PHP returns what it has.
         let r = bzdecompress(&d[..d.len() - 4], false).unwrap();
         assert!(matches!(r, Output::Data(_)));
+    }
+
+    #[test]
+    fn fallible_resize_grows_and_shrinks() {
+        let mut v = vec![1u8, 2];
+        assert!(fallible_resize(&mut v, 5));
+        assert_eq!(v, [1, 2, 0, 0, 0]);
+        assert!(fallible_resize(&mut v, 1));
+        assert_eq!(v, [1]);
+    }
+
+    #[test]
+    fn decompress_grows_past_two_to_one() {
+        // Highly compressible input needs many growth rounds.
+        let text = vec![0u8; 1 << 20];
+        let d = data(bzcompress(&text, 9, 0).unwrap());
+        assert!(d.len() * 2 < text.len());
+        assert_eq!(data(bzdecompress(&d, false).unwrap()), text);
     }
 
     #[test]
