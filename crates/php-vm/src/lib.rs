@@ -209,7 +209,7 @@ impl Vm {
             const_attributes: std::collections::HashMap::new(),
             const_files: std::collections::HashMap::new(),
             deprecated_constants: std::collections::HashMap::new(),
-            const_deprecation_filter: std::cell::Cell::new((0, 0)),
+            const_deprecation_filter: std::cell::RefCell::new((0, Vec::new())),
             pending_call_dst: None,
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),

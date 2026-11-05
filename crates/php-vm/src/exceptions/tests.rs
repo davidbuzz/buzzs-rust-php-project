@@ -182,7 +182,10 @@ function f() { include 'nonexistent_zz.php'; }
 f();
 "#;
     let out = run(src);
-    assert!(out.starts_with("{closure}@8\ninclude@8\nf@9\n"), "{out}");
+    assert!(
+        out.starts_with("{closure:t.php:2}@8\ninclude@8\nf@9\n"),
+        "{out}"
+    );
 }
 
 /// `zend_user_exception_handler`: a handler that installs another keeps it

@@ -2445,7 +2445,7 @@ pub(crate) fn register(vm: &mut Vm) {
     );
     reg(
         vm,
-        "get_class_methods(object|string $object_or_class): array",
+        "get_class_methods(@unchecked object|string $object_or_class): array",
         get_class_methods,
     );
     reg(

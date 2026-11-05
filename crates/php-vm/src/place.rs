@@ -1062,7 +1062,7 @@ impl Vm {
                                 crate::ext::PropCtx::ReadWrite,
                             )? {
                                 Some(v) => v.deref(),
-                                None => self.read_property(&obj, name, FetchMode::Read)?,
+                                None => self.fetch_property_rw(&obj, name)?,
                             };
                             let nv = self.assign_op_value(op, &cur, &rhs)?;
                             drop(cur);

@@ -701,6 +701,7 @@ impl Vm {
 
     /// The tail of a static property fetch once `sp` is known accessible:
     /// the trait deprecation, lazy default evaluation and the slot.
+    #[inline]
     fn static_prop_slot(
         &mut self,
         cls: &Rc<Class>,

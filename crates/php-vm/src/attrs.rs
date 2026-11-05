@@ -201,7 +201,7 @@ mod tests {
 
 impl Vm {
     /// `zend_deprecated_constant` for a global constant being read.
-    /// Called on every constant fetch: a 64-bit filter of the names'
+    /// Called on every constant fetch: a sorted list of the names' cached
     /// hashes skips both map lookups for the (common) undeprecated case.
     #[inline]
     pub(crate) fn constant_deprecation(&mut self, name: &ZStr) -> VmResult<()> {
@@ -209,16 +209,22 @@ impl Vm {
         if total == 0 {
             return Ok(());
         }
-        let (len, mut mask) = self.const_deprecation_filter.get();
-        if len != total {
-            mask = self
-                .deprecated_constants
-                .keys()
-                .chain(self.const_attributes.keys())
-                .fold(0, |m, k| m | (1u64 << (k.hash_value() & 63)));
-            self.const_deprecation_filter.set((total, mask));
-        }
-        if mask & (1u64 << (name.hash_value() & 63)) == 0 {
+        let h = name.hash_value();
+        let hit = {
+            let mut f = self.const_deprecation_filter.borrow_mut();
+            if f.0 != total {
+                let mut hashes: Vec<u64> = self
+                    .deprecated_constants
+                    .keys()
+                    .chain(self.const_attributes.keys())
+                    .map(ZStr::hash_value)
+                    .collect();
+                hashes.sort_unstable();
+                *f = (total, hashes);
+            }
+            f.1.binary_search(&h).is_ok()
+        };
+        if !hit {
             return Ok(());
         }
         self.constant_deprecation_slow(name)
