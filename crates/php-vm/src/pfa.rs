@@ -813,6 +813,10 @@ impl Vm {
             eval_parent: scope.and_then(|s| s.parent_name().cloned()),
             closure_name: Some(name.clone()),
             strict_types: strict,
+            sprintf_builtin: matches!(
+                self.functions.get(&ZStr::from("sprintf")),
+                Some(Func::Builtin(_))
+            ),
         };
         match crate::compiler::compile(&program, Rc::from(src), opts) {
             Ok(u) => {

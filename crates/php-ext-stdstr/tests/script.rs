@@ -173,6 +173,150 @@ fn printf_family_converts_lazily() {
 }
 
 #[test]
+fn sprintf_rope_evaluates_arguments_before_converting_in_order() {
+    let out = run(r#"
+        class S {
+            function __construct() { echo "constructed\n"; }
+            function __toString(): string { echo "converted\n"; return 'S'; }
+        }
+        echo sprintf('%s/%s/%d/%%', new S, new S, 12), "\n";
+        set_error_handler(function($n, $s) { throw new ErrorException($s); });
+        try { sprintf('%s-%s', new stdClass, []); }
+        catch (Throwable $e) { echo $e->getMessage(), "\n", $e->getTraceAsString(), "\n"; }
+        try { sprintf('%s-%s', [], new stdClass); }
+        catch (Throwable $e) { echo $e->getMessage(), "\n"; }
+    "#);
+    assert_eq!(
+        out,
+        "constructed\nconstructed\nconverted\nconverted\nS/S/12/%\n\
+         Object of class stdClass could not be converted to string\n#0 {main}\n\
+         Array to string conversion\n"
+    );
+}
+
+#[test]
+fn sprintf_rope_values_constants_and_fallbacks() {
+    let out = run(r#"
+        debug_zval_dump(sprintf('const'), sprintf('%s', 'literal'), sprintf('%%s'), sprintf(''));
+        echo sprintf('%s/%s', sprintf('%s:%s', 'foo', 'bar'), sprintf('%s-%s', 'BAZ', 'BAZ')), "\n";
+        echo sprintf('%s-%s-%s', true, false, true), "\n";
+        echo sprintf("%s\0%s", 'a', 'b'), "\n";
+        echo sprintf('%%s', 'unused'), "\n";
+        try { sprintf('%s/%s', 'one'); }
+        catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+        $f = 'sprintf';
+        try { $f('%s', new stdClass); }
+        catch (Error $e) { echo str_contains($e->getTraceAsString(), 'sprintf(') ? "dynamic call\n" : "rope\n"; }
+        try { sprintf('%02s', new stdClass); }
+        catch (Error $e) { echo str_contains($e->getTraceAsString(), 'sprintf(') ? "width call\n" : "rope\n"; }
+        try { sprintf('%s', new stdClass, 'extra'); }
+        catch (Error $e) { echo str_contains($e->getTraceAsString(), 'sprintf(') ? "extra call\n" : "rope\n"; }
+        try { sprintf(format: '%s', values: new stdClass); }
+        catch (Error $e) { echo str_contains($e->getTraceAsString(), 'sprintf(') ? "named call\n" : "rope\n"; }
+        $g = sprintf(...);
+        echo $g('%s/%s', 'a', 'b'), "\n";
+        function format_string() { echo "format evaluated\n"; return 'plain'; }
+        echo sprintf(format_string()), "\n";
+    "#);
+    assert_eq!(
+        out,
+        "string(5) \"const\" interned\nstring(7) \"literal\" interned\n\
+         string(2) \"%s\" refcount(1)\nstring(0) \"\" interned\n\
+         foo:bar/BAZ-BAZ\n1--1\na\0b\n%s\n3 arguments are required, 2 given\n\
+         dynamic call\nwidth call\nextra call\nnamed call\na/b\nformat evaluated\nplain\n"
+    );
+}
+
+#[test]
+fn sprintf_rope_rejects_long_and_malformed_constant_formats() {
+    let long = "a".repeat(254) + "%s";
+    let out = run(&format!(
+        r#"
+            try {{ sprintf('{long}', new stdClass); }}
+            catch (Error $e) {{ echo str_contains($e->getTraceAsString(), 'sprintf(') ? "long call\n" : "rope\n"; }}
+            try {{ sprintf('%'); }}
+            catch (ValueError $e) {{ echo $e->getMessage(), "\n"; }}
+        "#
+    ));
+    assert_eq!(
+        out,
+        "long call\nMissing format specifier at end of string\n"
+    );
+}
+
+#[test]
+fn sprintf_rope_respects_namespaced_and_disabled_functions() {
+    assert_eq!(
+        run(r#"
+            namespace N;
+            function sprintf(...$args) { return 'user'; }
+            echo sprintf('%s', 'ignored'), "\n", \sprintf('%s', 'global'), "\n";
+        "#),
+        "user\nglobal\n"
+    );
+    assert_eq!(
+        run_with(
+            &[("disable_functions", "sprintf")],
+            "function sprintf(...$args) { return 'replacement'; } echo sprintf('%s', 'a');",
+        ),
+        "replacement"
+    );
+}
+
+#[test]
+fn unchanged_htmlspecialchars_preserves_literal_and_dynamic_identity() {
+    let out = run(r#"
+        $s = str_repeat('abc', 10);
+        $s[0] = 'x';
+        $r = htmlspecialchars($s);
+        debug_zval_dump($s);
+        $r = htmlspecialchars("caf\u{E9}");
+        debug_zval_dump($r);
+        $s = str_repeat('"it\'s" ', 4);
+        $s[0] = '"';
+        $r = htmlspecialchars($s, ENT_NOQUOTES);
+        debug_zval_dump($s);
+    "#);
+    assert_eq!(
+        out,
+        "string(30) \"xbcabcabcabcabcabcabcabcabcabc\" refcount(3)\n\
+         string(5) \"café\" interned\n\
+         string(28) \"\"it's\" \"it's\" \"it's\" \"it's\" \" refcount(3)\n"
+    );
+}
+
+#[test]
+fn str_repeat_one_preserves_string_storage() {
+    use php_runtime::{Value, ZStr};
+
+    let ext = php_ext_stdstr::StdStr;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(std::io::sink()), &exts);
+    for input in [
+        ZStr::new(b"binary\0\xff".to_vec()),
+        ZStr::new(b"literal".to_vec()),
+        ZStr::intern(b"literal"),
+    ] {
+        let repeated = vm
+            .call_function("str_repeat", vec![Value::Str(input.clone()), Value::Int(1)])
+            .expect("str_repeat");
+        let Value::Str(repeated) = repeated else {
+            panic!("string result");
+        };
+        assert!(ZStr::ptr_eq(&input, &repeated));
+        assert_eq!(input.is_interned(), repeated.is_interned());
+    }
+    assert_eq!(
+        run(r#"
+            debug_zval_dump(str_repeat('abc', 1), str_repeat('abc', 0), str_repeat('', 2));
+            try { str_repeat('', -1); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+        "#),
+        "string(3) \"abc\" interned\nstring(0) \"\" interned\nstring(0) \"\" interned\n\
+         str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n"
+    );
+}
+
+#[test]
 fn math_functions() {
     let out = run(r#"
         var_dump(round(2.5), round(-2.5), round(1234.5678, -2), round(5, 1), round(2.5, 0, PHP_ROUND_HALF_EVEN));

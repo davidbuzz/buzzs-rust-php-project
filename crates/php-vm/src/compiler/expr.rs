@@ -1786,6 +1786,9 @@ impl Compiler {
             .collect();
         let only_positional = positional.len() == args.args.len();
         match lc.as_slice() {
+            b"sprintf" if fb.is_none() && only_positional && self.opts.sprintf_builtin => {
+                self.compile_sprintf_rope(&positional, line)
+            }
             b"array_key_exists" if fb.is_none() && only_positional && positional.len() == 2 => {
                 if !matches!(
                     positional[0].kind,
@@ -1859,6 +1862,103 @@ impl Compiler {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Lowers the constant formats accepted by `zend_compile_func_sprintf()`.
+    fn compile_sprintf_rope(&mut self, args: &[&Expr], line: u32) -> CResult<Option<Operand>> {
+        let Some(format) = args.first().and_then(|e| self.try_fold(e)) else {
+            return Ok(None);
+        };
+        let Value::Str(format) = format else {
+            return Ok(None);
+        };
+        let format = format.as_bytes();
+        if format.len() >= 256 {
+            return Ok(None);
+        }
+        let mut directives = Vec::new();
+        let mut i = 0;
+        while i < format.len() {
+            if format[i] == b'%' {
+                let Some(&kind) = format.get(i + 1) else {
+                    return Ok(None);
+                };
+                if !matches!(kind, b's' | b'd' | b'%') {
+                    return Ok(None);
+                }
+                directives.push((i, kind));
+                i += 1;
+            }
+            i += 1;
+        }
+        if directives.iter().filter(|(_, kind)| *kind != b'%').count() != args.len() - 1 {
+            return Ok(None);
+        }
+        // Evaluate every argument before performing any conversion, just as
+        // a function call does. Conversions then run in placeholder order.
+        let mut values = Vec::new();
+        for arg in &args[1..] {
+            values.push(self.compile_expr(arg)?);
+        }
+        // The conversions report the line the arguments left behind.
+        self.f().line = args.last().map_or(line, |e| e.span.line);
+        let mut parts = Vec::new();
+        let mut offset = 0;
+        let mut values = values.into_iter();
+        for (pos, kind) in directives {
+            let end = pos + usize::from(kind == b'%');
+            if end != offset {
+                parts.push(self.lit(Value::Str(ZStr::from(&format[offset..end]))));
+            }
+            offset = pos + 2;
+            if kind == b'%' {
+                continue;
+            }
+            let mut value = values.next().expect("validated placeholder count");
+            if kind == b'd' {
+                let dst = self.tmp();
+                self.emit(Op::Cast {
+                    kind: CastKind::Int,
+                    a: value,
+                    dst,
+                });
+                value = Operand::Tmp(dst);
+            }
+            if let Operand::Lit(idx) = value {
+                let constant = &self.fref().literals[idx as usize];
+                // Arrays warn at run time; floats follow the runtime
+                // `precision` INI setting.
+                if !matches!(constant, Value::Array(_) | Value::Float(_)) {
+                    if let Ok(string) = constant.to_zstr(&mut CollectingContext::new()) {
+                        parts.push(self.lit(Value::Str(string)));
+                        continue;
+                    }
+                }
+            }
+            let dst = self.tmp();
+            self.emit(Op::Cast {
+                kind: CastKind::String,
+                a: value,
+                dst,
+            });
+            parts.push(Operand::Tmp(dst));
+        }
+        if offset != format.len() {
+            parts.push(self.lit(Value::Str(ZStr::from(&format[offset..]))));
+        }
+        let result = match parts.len() {
+            0 => self.lit(Value::Str(ZStr::empty())),
+            1 => parts[0],
+            _ => {
+                let dst = self.tmp();
+                self.emit(Op::Rope {
+                    parts: parts.into_boxed_slice(),
+                    dst,
+                });
+                Operand::Tmp(dst)
+            }
+        };
+        Ok(Some(result))
     }
 
     /// Constant folding of simple expressions.

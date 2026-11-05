@@ -723,6 +723,12 @@ fn strip_tags_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
     let times = a.int(1);
+    if times >= 0 && (s.is_empty() || times == 0) {
+        return Ok(Value::Str(ZStr::empty()));
+    }
+    if times == 1 {
+        return Ok(Value::Str(s));
+    }
     if times > 0 {
         let total = s
             .len()

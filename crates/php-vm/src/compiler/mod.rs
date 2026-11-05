@@ -75,6 +75,8 @@ pub struct CompileOptions {
     pub closure_name: Option<ZStr>,
     /// Initial `strict_types`.
     pub strict_types: bool,
+    /// Whether `sprintf` is currently registered as an internal function.
+    pub sprintf_builtin: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -353,7 +355,7 @@ impl Compiler {
             }
             let i = u32::try_from(f.literals.len()).unwrap_or(u32::MAX);
             f.lit_strs.insert(s.as_bytes().to_vec(), i);
-            f.literals.push(v);
+            f.literals.push(Value::Str(s.interned()));
             return i;
         }
         f.literals.push(v);
@@ -690,6 +692,10 @@ impl Compiler {
     /// Compiles a constant expression into a [`ConstExpr`].
     pub(crate) fn const_expr(&mut self, e: &ast::Expr) -> CResult<ConstExpr> {
         if let Some(v) = self.try_fold(e) {
+            let v = match v {
+                Value::Str(s) => Value::Str(s.interned()),
+                other => other,
+            };
             return Ok(ConstExpr::Value(v));
         }
         let mut f = FnCtx::new(FnKind::ConstExpr);

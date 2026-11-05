@@ -304,7 +304,15 @@ fn str_pad(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = transform::str_repeat(s(a, 0).as_bytes(), i(a, 1));
+    let input = s(a, 0);
+    let times = i(a, 1);
+    if times >= 0 && (input.is_empty() || times == 0) {
+        return Ok(Value::Str(ZStr::empty()));
+    }
+    if times == 1 {
+        return Ok(Value::Str(input));
+    }
+    let r = transform::str_repeat(input.as_bytes(), times);
     Ok(bytes(vm.std(r)?))
 }
 
@@ -544,15 +552,24 @@ fn htmlspecialchars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let fl = if a.has(1) { i(a, 1) } else { 3 | 8 };
     let de = !a.has(3) || b(a, 3);
     let cs = opt(a, 2).map(|_| s(a, 2));
+    let input = s(a, 0);
     let mut n = Notices::new();
     let r = html::htmlspecialchars(
-        s(a, 0).as_bytes(),
+        input.as_bytes(),
         fl,
         cs.as_ref().map(ZStr::as_bytes),
         de,
         &mut n,
     );
     vm.std_notices(n)?;
+    // php_escape_html_entities_ex: an empty input is the shared empty
+    // string; unchanged input is returned as is unless ENT_DISALLOWED.
+    if input.is_empty() {
+        return Ok(Value::Str(ZStr::empty()));
+    }
+    if fl & 128 == 0 && r == input.as_bytes() {
+        return Ok(Value::Str(input));
+    }
     Ok(bytes(r))
 }
 

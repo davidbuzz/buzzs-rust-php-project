@@ -95,6 +95,10 @@ impl Vm {
             eval_parent: None,
             closure_name: None,
             strict_types: false,
+            sprintf_builtin: matches!(
+                self.functions.get(&ZStr::from("sprintf")),
+                Some(crate::func::Func::Builtin(_))
+            ),
         };
         let unit = match compiler::compile(&program, Rc::from(src), opts) {
             Ok(u) => u,
