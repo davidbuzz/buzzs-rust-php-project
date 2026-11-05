@@ -1502,23 +1502,8 @@ impl Vm {
             }
             return Ok(());
         };
-        if m.visibility() != crate::func::flags::PUBLIC && !self.in_shutdown {
-            // Calling a private/protected destructor from the wrong scope.
-            let scope = self.frames.last().and_then(|f| f.scope.clone());
-            let allowed = scope.is_some_and(|s| self.can_access_method(&m, Some(&s)));
-            if !allowed {
-                let vis = if m.visibility() == crate::func::flags::PRIVATE {
-                    "private"
-                } else {
-                    "protected"
-                };
-                let scope_name = scope_display(self.frames.last().and_then(|f| f.scope.as_ref()));
-                self.warning(&format!(
-                    "Call to {vis} {}::__destruct() from {scope_name} during shutdown ignored",
-                    cls.name
-                ))?;
-                return Ok(());
-            }
+        if m.visibility() != crate::func::flags::PUBLIC && !self.destructor_accessible(&cls, &m)? {
+            return Ok(());
         }
         self.call_method(o, &m, Vec::new())?;
         // A native destructor hook also runs after a user `__destruct`
@@ -1527,6 +1512,42 @@ impl Vm {
             f(self, o)?;
         }
         Ok(())
+    }
+
+    /// The visibility check of `zend_objects_destroy_object` for a
+    /// private/protected `__destruct`: while code executes, an inaccessible
+    /// destructor throws an `Error`; with nothing executing (request
+    /// shutdown) it is skipped with a warning. `Ok(false)` skips the call.
+    #[cold]
+    fn destructor_accessible(
+        &mut self,
+        cls: &Rc<crate::class::Class>,
+        m: &crate::func::Method,
+    ) -> VmResult<bool> {
+        let vis = if m.visibility() == crate::func::flags::PRIVATE {
+            "private"
+        } else {
+            "protected"
+        };
+        if !self.is_executing() {
+            self.warning(&format!(
+                "Call to {vis} {}::__destruct() from global scope during shutdown ignored",
+                cls.name
+            ))?;
+            return Ok(false);
+        }
+        let scope = self.scope();
+        if self.can_access_method(m, scope.as_ref()) {
+            return Ok(true);
+        }
+        Err(self.make_throw(
+            "Error",
+            &format!(
+                "Call to {vis} {}::__destruct() from {}",
+                cls.name,
+                scope_display(scope.as_ref())
+            ),
+        ))
     }
 
     /// The type of `ZEND_RETURN`: finishes the current frame.
