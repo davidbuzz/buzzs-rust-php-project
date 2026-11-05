@@ -997,6 +997,13 @@ impl NodeList {
         Rc::as_ptr(&self.0) as usize
     }
 
+    /// The node the list is rooted at (php-src's `baseobj`, whose object
+    /// the list object keeps alive).
+    #[must_use]
+    pub fn base_node(&self) -> Option<Node> {
+        self.0.base.clone()
+    }
+
     /// The node objects of a fixed list (`XPath` results), which PHP
     /// materializes before the list object itself; `None` for live lists.
     pub fn fixed_nodes(&self) -> Option<Vec<Node>> {
@@ -1086,6 +1093,12 @@ impl NamedNodeMap {
     /// The PHP class.
     pub fn class_name(&self) -> &'static str {
         self.0.class
+    }
+
+    /// The node the map belongs to (php-src's `baseobj`).
+    #[must_use]
+    pub fn base_node(&self) -> Option<Node> {
+        self.0.base.clone()
     }
 
     /// `$length` / `count()`.

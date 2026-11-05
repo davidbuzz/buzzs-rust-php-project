@@ -168,6 +168,10 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
                     }
                 }
             }
+            // `mapptr->baseobj` holds a reference to the base node's object.
+            if let Some(b) = l.base_node().as_ref().and_then(existing_node_object) {
+                keep.push(Value::Object(b));
+            }
             let class = l.class_name();
             let o = new_dom_object(vm, class, class, DomObject::NodeList(l))?;
             internal::<DomState, _>(&o, |s| s.keep = keep);
@@ -175,13 +179,13 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
             Value::Object(o)
         }
         DomValue::NamedNodeMap(m) => {
+            let base = m.base_node().as_ref().and_then(existing_node_object);
             let class = m.class_name();
-            Value::Object(new_dom_object(
-                vm,
-                class,
-                class,
-                DomObject::NamedNodeMap(m),
-            )?)
+            let o = new_dom_object(vm, class, class, DomObject::NamedNodeMap(m))?;
+            if let Some(b) = base {
+                internal::<DomState, _>(&o, |s| s.keep.push(Value::Object(b)));
+            }
+            Value::Object(o)
         }
         DomValue::Implementation(i) => {
             let id = i.identity();
