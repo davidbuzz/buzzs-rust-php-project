@@ -47,6 +47,17 @@ pub(crate) fn set_uploaded(files: Vec<PathBuf>) {
     STATE.with(|s| s.borrow_mut().uploaded = files);
 }
 
+/// Whether `path` is the temporary file of a parsed upload
+/// (`zend_hash_exists(SG(rfc1867_uploaded_files), path)`).
+pub(crate) fn is_uploaded(path: &std::path::Path) -> bool {
+    STATE.with(|s| s.borrow().uploaded.iter().any(|f| f == path))
+}
+
+/// Forgets an upload whose file was moved away.
+pub(crate) fn forget_uploaded(path: &std::path::Path) {
+    STATE.with(|s| s.borrow_mut().uploaded.retain(|f| f != path));
+}
+
 /// Takes the recorded upload files (to delete them).
 pub(crate) fn take_uploaded() -> Vec<PathBuf> {
     STATE.with(|s| std::mem::take(&mut s.borrow_mut().uploaded))
