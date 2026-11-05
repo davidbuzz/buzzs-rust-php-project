@@ -27,8 +27,8 @@ use php_support::ini::IniDirective;
 use std::rc::Rc;
 
 pub use crate::builtins::classbuilder::ClassBuilder;
+pub use crate::fiber::{register_zend_test_fiber, FiberState};
 pub use crate::func::{Args, BuiltinFn as NativeFn};
-pub use crate::fiber::FiberState;
 pub use crate::observer::{FiberContext, ObservedFrame, ObserverHooks};
 pub use crate::vm::{Throw, VmResult};
 

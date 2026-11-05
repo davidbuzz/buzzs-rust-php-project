@@ -43,9 +43,24 @@ pub enum FiberState {
     Dead,
 }
 
+/// The class a fiber object implements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FiberKind {
+    /// `Fiber`: `Fiber::suspend()` suspends the innermost one
+    /// (`EG(active_fiber)`).
+    Fiber,
+    /// zend_test's `_ZendTestFiber` (`ext/zend_test/fiber.c`), a symmetric
+    /// coroutine with its own active-fiber pointer (`ZT_G(active_fiber)`):
+    /// suspending either kind from inside the other suspends the contexts
+    /// running above it together with it.
+    Test,
+}
+
 /// Internal state of a `Fiber`.
 #[derive(Debug)]
 pub struct FiberData {
+    /// `Fiber` or `_ZendTestFiber`.
+    kind: FiberKind,
     /// The callable resolved by the constructor (`fci`/`fcc`: keeps the
     /// object a `[A::class, 'm']` callable bound to); taken by `start()`.
     call: Option<PendingCall>,
@@ -76,11 +91,22 @@ pub struct FiberData {
     transfer: Option<VmResult<Value>>,
     /// Return value.
     pub ret: Value,
+    /// Fibers that were running above this one when it was suspended from
+    /// inside them (a `Fiber::suspend()` inside a `_ZendTestFiber`, or the
+    /// reverse), innermost last; resumed together with it.
+    nested: Vec<Obj>,
+    /// `_ZendTestFiber::pipeTo()`: started with this fiber's return value
+    /// when it returns.
+    target: Option<Obj>,
+    /// Whether this is the target of another fiber's `pipeTo()`
+    /// (`fiber->previous != NULL` before `start()`).
+    is_target: bool,
 }
 
 impl FiberData {
-    fn new(call: PendingCall, callable: Value) -> Self {
+    fn new(call: PendingCall, callable: Value, kind: FiberKind) -> Self {
         FiberData {
+            kind,
             call: Some(call),
             callable,
             state: FiberState::Init,
@@ -95,6 +121,9 @@ impl FiberData {
             error_reporting: 0,
             transfer: None,
             ret: Value::Null,
+            nested: Vec::new(),
+            target: None,
+            is_target: false,
         }
     }
 }
@@ -157,11 +186,11 @@ enum Prefix {
 
 /// The observer view of `fiber`'s context, with `caller` as `fiber->caller`.
 fn context_of(fiber: &Obj, caller: Option<usize>) -> FiberContext {
-    let (status, destroyed, threw) =
-        with(fiber, |d| (d.state, d.destroyed, d.threw)).unwrap_or((FiberState::Init, false, false));
+    let (status, destroyed, threw, kind) = with(fiber, |d| (d.state, d.destroyed, d.threw, d.kind))
+        .unwrap_or((FiberState::Init, false, false, FiberKind::Fiber));
     FiberContext {
         id: fiber.addr(),
-        is_fiber: true,
+        is_fiber: kind == FiberKind::Fiber,
         status,
         destroyed,
         threw,
@@ -294,7 +323,7 @@ impl Vm {
             let to = context_of(fiber, Some(from.id));
             self.observer_fiber_switch(&from, &to);
         }
-        let Some((co, base, frames, depth, er)) = with(fiber, |d| {
+        let Some((co, base, frames, depth, er, nested)) = with(fiber, |d| {
             d.state = FiberState::Running;
             d.transfer = Some(input);
             (
@@ -303,6 +332,7 @@ impl Vm {
                 std::mem::take(&mut d.frames),
                 d.depth,
                 d.error_reporting,
+                std::mem::take(&mut d.nested),
             )
         }) else {
             return Ok(Value::Null);
@@ -314,7 +344,9 @@ impl Vm {
         self.frames.extend(frames);
         let saved_depth = std::mem::replace(&mut self.depth, depth);
         let saved_er = std::mem::replace(&mut self.error_reporting, er);
+        let active = self.fibers.len();
         self.fibers.push(fiber.clone());
+        self.fibers.extend(nested);
         // The fiber runs on its own native stack: stack-limit checks
         // measure from its first execution there (approximate on resume).
         let fiber_stack = match self.ini.typed("fiber.stack_size") {
@@ -330,7 +362,14 @@ impl Vm {
         let finished = co.resume();
         self.native_stack_base = saved_stack.0;
         self.native_stack_size = saved_stack.1;
-        self.fibers.pop();
+        // `fiber` and, when it was suspended from inside fibers it started
+        // (of the other kind), those fibers.
+        let mut nested = self.fibers.split_off(active.min(self.fibers.len()));
+        let nested = if nested.is_empty() {
+            nested
+        } else {
+            nested.split_off(1)
+        };
         let fiber_depth = std::mem::replace(&mut self.depth, saved_depth);
         let fiber_er = std::mem::replace(&mut self.error_reporting, saved_er);
         let frames = if self.frames.len() > base {
@@ -348,6 +387,7 @@ impl Vm {
                 d.frames = frames;
                 d.depth = fiber_depth;
                 d.error_reporting = fiber_er;
+                d.nested = nested;
             }
             d.transfer.take()
         })
@@ -488,14 +528,29 @@ impl Vm {
 fn fiber_body(vm: &mut Vm, s: Suspender, call: PendingCall) {
     // No strong reference to the fiber may live on its own stack, or an
     // unreferenced suspended fiber would never be destroyed.
-    let Some(()) = vm
-        .fibers
-        .last()
-        .and_then(|f| with(f, |d| d.suspender = Some(s)))
-    else {
+    let Some(kind) = vm.fibers.last().and_then(|f| {
+        with(f, |d| {
+            d.suspender = Some(s);
+            d.kind
+        })
+    }) else {
         return;
     };
+    // `zend_test_fiber_execute` starts its VM stack with a zeroed frame
+    // without `prev_execute_data`: backtraces end inside the fiber.
+    let bottom = (kind == FiberKind::Test).then(|| {
+        vm.frames.push(Frame::with_vars(
+            vm.empty_code.clone(),
+            FrameKind::Main,
+            vm.empty_vars.clone(),
+            None,
+        ));
+        vm.frames.len()
+    });
     let r = vm.call_pending(call);
+    if let Some(n) = bottom {
+        vm.frames.truncate(n - 1);
+    }
     let Some(fiber) = vm.fibers.last().cloned() else {
         return;
     };
@@ -540,7 +595,7 @@ fn fiber_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let callable = a.at(0);
     let call = vm.resolve_callable_for_call(&callable)?;
-    object::set_internal(&o, FiberData::new(call, callable));
+    object::set_internal(&o, FiberData::new(call, callable, FiberKind::Fiber));
     Ok(Value::Null)
 }
 
@@ -622,20 +677,35 @@ fn fiber_is_terminated(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(state_of(&a.this_obj()) == FiberState::Dead))
 }
 
+/// Index in `vm.fibers` of the innermost running fiber of `kind`
+/// (`EG(active_fiber)` / `ZT_G(active_fiber)`).
+fn innermost(vm: &Vm, kind: FiberKind) -> Option<usize> {
+    vm.fibers
+        .iter()
+        .rposition(|f| with(f, |d| d.kind == kind).unwrap_or(false))
+}
+
 fn fiber_suspend(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.get(0).unwrap_or(Value::Null);
-    let Some(fiber) = vm.fibers.last().cloned() else {
+    suspend_innermost(vm, v, FiberKind::Fiber)
+}
+
+/// `Fiber::suspend()` / `_ZendTestFiber::suspend()`: suspends the innermost
+/// fiber of `kind` together with any fibers of the other kind running
+/// above it, which are resumed with it (`fiber->previous`).
+fn suspend_innermost(vm: &mut Vm, v: Value, kind: FiberKind) -> VmResult<Value> {
+    let Some(index) = innermost(vm, kind) else {
         return Err(vm.fiber_error("Cannot suspend outside of a fiber"));
     };
-    if with(&fiber, |d| d.destroyed).unwrap_or(false) {
+    let fiber = vm.fibers[index].clone();
+    if kind == FiberKind::Fiber && with(&fiber, |d| d.destroyed).unwrap_or(false) {
         return Err(vm.fiber_error("Cannot suspend in a force-closed fiber"));
     }
     check_switch(vm)?;
     if vm.observer.enabled {
         // `zend_fiber_suspend_internal` clears `caller` before switching.
-        let depth = vm.fibers.len();
         let from = context_of(&fiber, None);
-        let to = vm.fiber_stack_context(depth - 1);
+        let to = vm.fiber_stack_context(index);
         vm.observer_fiber_switch(&from, &to);
     }
     let Some(s) = with(&fiber, |d| {
@@ -649,15 +719,18 @@ fn fiber_suspend(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // Do not keep the fiber alive from its own stack while suspended.
     drop(fiber);
     s.suspend();
-    vm.fibers
-        .last()
-        .and_then(|f| with(f, |d| d.transfer.take()).flatten())
+    // Resumed: the same fiber is again the innermost of its kind.
+    innermost(vm, kind)
+        .and_then(|i| with(&vm.fibers[i], |d| d.transfer.take()).flatten())
         .unwrap_or(Ok(Value::Null))
 }
 
 #[allow(clippy::unnecessary_wraps)] // builtin signature
 fn fiber_get_current(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(vm.fibers.last().cloned().map_or(Value::Null, Value::Object))
+    Ok(
+        innermost(vm, FiberKind::Fiber)
+            .map_or(Value::Null, |i| Value::Object(vm.fibers[i].clone())),
+    )
 }
 
 /// `zend_fiber_object_destroy` (the `dtor_obj` handler): unwinds a
@@ -718,6 +791,9 @@ fn gc_traverse(d: &FiberData, v: &mut crate::gc::GcVisitor<'_>) {
         v.value(x);
     }
     v.value(&d.ret);
+    for o in d.nested.iter().chain(&d.target) {
+        v.obj(o);
+    }
 }
 
 pub(crate) fn register(vm: &mut Vm) {
@@ -777,4 +853,118 @@ pub(crate) fn register(vm: &mut Vm) {
 /// The callable a fiber was constructed with (`None` for a non-fiber).
 pub(crate) fn fiber_callable(o: &Obj) -> Option<Value> {
     object::internal::<FiberData, _>(o, |d| d.callable.clone())
+}
+
+// --- `_ZendTestFiber` (`ext/zend_test/fiber.c`) ---------------------------
+
+fn test_fiber_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let o = a.this_obj();
+    let callable = a.at(0);
+    let call = vm.resolve_callable_for_call(&callable)?;
+    object::set_internal(&o, FiberData::new(call, callable, FiberKind::Test));
+    Ok(Value::Null)
+}
+
+/// `delegate_transfer_result`: a fiber that terminated returns `NULL`
+/// from the call that resumed it; then its `pipeTo()` target starts with
+/// its return value, in the caller's context.
+fn test_fiber_delegate(vm: &mut Vm, fiber: &Obj, r: VmResult<Value>) -> VmResult<Value> {
+    let v = r?;
+    if state_of(fiber) != FiberState::Dead {
+        return Ok(v);
+    }
+    let Some((target, ret)) = with(fiber, |d| {
+        let threw = d.threw || d.bailout;
+        d.target
+            .take()
+            .filter(|_| !threw)
+            .map(|t| (t, d.ret.clone()))
+    })
+    .flatten() else {
+        return Ok(Value::Null);
+    };
+    vm.fiber_create_context(&target, vec![ret], Vec::new())?;
+    let r = vm.fiber_switch_in(&target, Ok(Value::Null));
+    test_fiber_delegate(vm, &target, r).map(|_| Value::Null)
+}
+
+fn test_fiber_start(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let o = a.this_obj();
+    if with(&o, |d| d.is_target).unwrap_or(false) {
+        return Err(vm.make_throw(
+            "Error",
+            "Cannot start a fiber that is the target of another fiber",
+        ));
+    }
+    if state_of(&o) != FiberState::Init {
+        return Err(vm.fiber_error("Cannot start a fiber that has already been started"));
+    }
+    let args: Vec<Value> = a.values.clone();
+    let named = std::mem::take(&mut a.named);
+    vm.fiber_create_context(&o, args, named)?;
+    let r = vm.fiber_switch_in(&o, Ok(Value::Null));
+    test_fiber_delegate(vm, &o, r)
+}
+
+fn test_fiber_resume(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let o = a.this_obj();
+    if state_of(&o) != FiberState::Suspended {
+        return Err(vm.make_throw("Error", "Cannot resume a fiber that is not suspended"));
+    }
+    let v = a.get(0).unwrap_or(Value::Null);
+    let r = vm.fiber_switch_in(&o, Ok(v));
+    test_fiber_delegate(vm, &o, r)
+}
+
+fn test_fiber_pipe_to(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let o = a.this_obj();
+    let callable = a.at(0);
+    let call = vm.resolve_callable_for_call(&callable)?;
+    let target = object::new_object(object::class_of(&o).clone(), Vec::new());
+    let mut data = FiberData::new(call, callable, FiberKind::Test);
+    data.is_target = true;
+    object::set_internal(&target, data);
+    with(&o, |d| d.target = Some(target.clone()));
+    Ok(Value::Object(target))
+}
+
+fn test_fiber_suspend(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.get(0).unwrap_or(Value::Null);
+    suspend_innermost(vm, v, FiberKind::Test)
+}
+
+/// Registers zend_test's `_ZendTestFiber` (`zend_test_fiber_init`): a
+/// fiber class with its own active-fiber pointer, so that it and `Fiber`
+/// can suspend each other's callers.
+pub fn register_zend_test_fiber(vm: &mut Vm) {
+    ClassBuilder::new("_ZendTestFiber")
+        .flags(cflags::FINAL | cflags::NO_CLONE)
+        .method(
+            "__construct(callable $callback)",
+            flags::PUBLIC,
+            test_fiber_construct,
+        )
+        .method(
+            "start(mixed ...$args): mixed",
+            flags::PUBLIC,
+            test_fiber_start,
+        )
+        .method(
+            "resume(mixed $value = null): mixed",
+            flags::PUBLIC,
+            test_fiber_resume,
+        )
+        .method(
+            "pipeTo(callable $callback): _ZendTestFiber",
+            flags::PUBLIC,
+            test_fiber_pipe_to,
+        )
+        .method(
+            "suspend(mixed $value = null): mixed",
+            flags::PUBLIC | flags::STATIC,
+            test_fiber_suspend,
+        )
+        // The `dtor_obj` handler (`zend_test_fiber_object_destroy`).
+        .method("__destruct(): void", flags::PUBLIC, fiber_destroy)
+        .register(vm);
 }

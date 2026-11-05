@@ -312,7 +312,11 @@ impl Vm {
                     ArrayKey::Str(ZStr::from("line")),
                     Value::Int(i64::from(*line)),
                 );
-            } else if let Some(prev) = prev.filter(|p| p.kind != FrameKind::Builtin) {
+            } else if let Some(prev) = prev.filter(|p| {
+                // Nor the code-less bottom frame of a `_ZendTestFiber`.
+                p.kind != FrameKind::Builtin
+                    && !(p.kind == FrameKind::Main && Rc::ptr_eq(&p.code, &self.empty_code))
+            }) {
                 entry.insert(
                     ArrayKey::Str(ZStr::from("file")),
                     Value::Str(prev.code.filename.clone()),

@@ -1264,10 +1264,12 @@ impl Vm {
         if self.observer.enabled {
             f.observer_hidden = quiet
                 || (b.name.as_bytes() == b"__destruct"
-                    && call
-                        .scope
-                        .as_ref()
-                        .is_some_and(|c| matches!(c.name.as_bytes(), b"Generator" | b"Fiber")))
+                    && call.scope.as_ref().is_some_and(|c| {
+                        matches!(
+                            c.name.as_bytes(),
+                            b"Generator" | b"Fiber" | b"_ZendTestFiber"
+                        )
+                    }))
                 || self.compiles_to_opcode(b, &call);
         }
         self.frames.push(f);

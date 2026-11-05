@@ -383,8 +383,7 @@ fn module_startup(vm: &mut Vm) {
         internal_leave: execute_internal
             .then_some(internal_leave as fn(&mut Vm, &ObservedFrame, Option<&Value>)),
         fiber_init: enabled.then_some(fiber_init as fn(&mut Vm, &FiberContext)),
-        fiber_switch: enabled
-            .then_some(fiber_switch as fn(&mut Vm, &FiberContext, &FiberContext)),
+        fiber_switch: enabled.then_some(fiber_switch as fn(&mut Vm, &FiberContext, &FiberContext)),
         fiber_destroy: enabled.then_some(fiber_destroy as fn(&mut Vm, &FiberContext)),
     });
     if ini(vm, "set_vm_interrupt_on_end") {
