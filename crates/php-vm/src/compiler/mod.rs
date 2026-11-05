@@ -239,6 +239,10 @@ pub(crate) struct Compiler {
     /// Compiling the value of a top-level `const` statement, which runs
     /// inline rather than as a constant-expression op array.
     pub in_global_const: bool,
+    /// While compiling a function's or method's attributes: its display
+    /// name (`foo()`, `C::m()`), which names the closures in the attribute
+    /// arguments as `CG(active_op_array)` is already the function.
+    pub attr_owner: Option<String>,
 }
 
 /// Compiles a parsed program.
@@ -270,6 +274,7 @@ pub fn compile(
         closure_depth: 0,
         in_const_default: false,
         in_global_const: false,
+        attr_owner: None,
     };
     for w in &program.warnings {
         let level = match w.level {
