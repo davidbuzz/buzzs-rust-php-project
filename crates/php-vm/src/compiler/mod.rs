@@ -9,7 +9,9 @@ mod stmt;
 use crate::ast::{self, Name, NameKind};
 use crate::class::{AttributeInfo, ClassDecl, ConstExpr};
 use crate::func::UserFunction;
-use crate::opcode::{ClassSpec, DeclTable, Label, Op, OpArray, Operand, Place, PlaceId, TryEntry};
+use crate::opcode::{
+    ClassSpec, DeclTable, Label, Op, OpArray, Operand, Place, PlaceBase, PlaceId, TryEntry,
+};
 use crate::types::TypeDecl;
 use php_runtime::{Value, ZStr};
 use std::collections::HashMap;
@@ -163,6 +165,10 @@ pub(crate) struct FnCtx {
     pub in_finally: u32,
     /// Pending `FastCall` patches: (finally id, op index).
     pub fast_calls: Vec<(u32, usize)>,
+    /// `CG(context).has_assigned_to_http_response_header`: once this op
+    /// array writes `$http_response_header` (or takes it as a parameter),
+    /// later reads no longer raise the deprecation.
+    pub http_response_header_assigned: bool,
 }
 
 impl FnCtx {
@@ -205,6 +211,7 @@ impl FnCtx {
             live_tmps: Vec::new(),
             in_finally: 0,
             fast_calls: Vec::new(),
+            http_response_header_assigned: false,
         }
     }
 }
@@ -401,6 +408,68 @@ impl Compiler {
         f.cv_names.push(ZStr::from(name));
         f.cv_map.insert(name.to_vec(), i);
         i
+    }
+
+    /// `zend_try_compile_cv` with `BP_VAR_R` (`Zend/zend_compile.c`):
+    /// reading the CV `$http_response_header` before this op array has
+    /// assigned it raises the compile-time deprecation.
+    pub(crate) fn note_cv_read(&mut self, name: &[u8], line: u32) {
+        if name == b"http_response_header" {
+            self.http_response_header_read(line);
+        }
+    }
+
+    #[cold]
+    fn http_response_header_read(&mut self, line: u32) {
+        if !self.f().http_response_header_assigned {
+            self.push_http_response_header_deprecation(line);
+        }
+    }
+
+    /// `zend_try_compile_cv` with `BP_VAR_W` and `zend_compile_params`:
+    /// writing `$http_response_header` silences later reads in this op
+    /// array.
+    pub(crate) fn note_cv_write(&mut self, name: &[u8]) {
+        if name == b"http_response_header" {
+            self.f().http_response_header_assigned = true;
+        }
+    }
+
+    /// The read side of a compiled place: a CV base goes through
+    /// [`Self::note_cv_read`], and a `${'http_response_header'}` base with
+    /// a constant name always warns (`zend_compile_simple_var_no_cv`).
+    pub(crate) fn note_place_read(&mut self, p: &Place, line: u32) {
+        match p.base {
+            PlaceBase::Cv(i) => {
+                let is_hrh = self
+                    .fref()
+                    .cv_names
+                    .get(i as usize)
+                    .is_some_and(|n| n.as_bytes() == b"http_response_header");
+                if is_hrh {
+                    self.http_response_header_read(line);
+                }
+            }
+            PlaceBase::VarVar(Operand::Lit(i)) => {
+                let is_hrh = matches!(
+                    self.fref().literals.get(i as usize),
+                    Some(Value::Str(s)) if s.as_bytes() == b"http_response_header"
+                );
+                if is_hrh {
+                    self.push_http_response_header_deprecation(line);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[cold]
+    fn push_http_response_header_deprecation(&mut self, line: u32) {
+        self.warnings.push((
+            8192,
+            "The predefined locally scoped $http_response_header variable is deprecated, call http_get_last_response_headers() instead".to_string(),
+            line,
+        ));
     }
 
     pub(crate) fn has_cv(&self, name: &[u8]) -> bool {

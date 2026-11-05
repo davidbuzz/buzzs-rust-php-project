@@ -531,6 +531,7 @@ impl Compiler {
                 );
             }
             self.cv(&p.name.name);
+            self.note_cv_write(&p.name.name);
             let mut ty = match &p.ty {
                 Some(t) => Some(self.resolve_type(t)?),
                 None => None,

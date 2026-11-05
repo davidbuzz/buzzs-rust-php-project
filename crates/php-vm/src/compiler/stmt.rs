@@ -1263,6 +1263,7 @@ impl Compiler {
                 return Ok(ArgSrc::Val(op));
             }
             let p = self.compile_place(e, false)?;
+            self.note_place_read(&p, e.span.line);
             Ok(ArgSrc::Place(self.place(p)))
         } else if matches!(
             e.kind,
