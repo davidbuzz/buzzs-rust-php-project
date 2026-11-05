@@ -144,3 +144,42 @@ fn ini_set_value_types() {
         "6\nini_set(): Argument #2 ($value) must be of type string|int|float|bool|null"
     );
 }
+
+/// The `error_log` file timestamp comes from the date extension's
+/// `date('d-M-Y H:i:s e')` (the default timezone, php-src
+/// `ext/standard/tests/general_functions/bug60723.phpt`).
+#[test]
+fn error_log_file_uses_date_for_the_timestamp() {
+    fn fake_date(
+        _vm: &mut Vm,
+        a: &mut php_vm::ext::Args,
+    ) -> php_vm::ext::VmResult<php_runtime::Value> {
+        let format = a.str(0).to_string_lossy();
+        Ok(php_runtime::Value::from(format!("<{format}>").as_str()))
+    }
+    let log = std::env::temp_dir().join(format!("phprust-log-date-{}.log", std::process::id()));
+    let _ = std::fs::remove_file(&log);
+    let sink = Sink::default();
+    let options = VmOptions {
+        ini: [
+            ("log_errors".to_string(), "1".to_string()),
+            ("display_errors".to_string(), "0".to_string()),
+            ("error_log".to_string(), log.display().to_string()),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    let mut vm = Vm::new(&options, Box::new(sink.clone()));
+    vm.register_function(
+        "date(string $format, ?int $timestamp = null): string",
+        fake_date,
+    );
+    let _status = vm.run_script(b"<?php echo $undefined;", "t.php");
+    drop(vm);
+    let logged = std::fs::read_to_string(&log).unwrap_or_default();
+    let _ = std::fs::remove_file(&log);
+    assert_eq!(
+        logged,
+        "[<d-M-Y H:i:s e>] PHP Warning:  Undefined variable $undefined in t.php on line 1\n"
+    );
+}

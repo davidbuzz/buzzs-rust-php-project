@@ -116,6 +116,26 @@ pub(crate) fn constant(vm: &mut Vm, name: &str, v: Value) {
     }
 }
 
+/// The error log timestamp, `php_format_date("d-M-Y H:i:s e", time(), 1)`
+/// (`php_log_err_with_severity`, main/main.c): the date extension's
+/// `date()` in the default timezone, or UTC without it.
+#[cold]
+pub(crate) fn log_time_string(vm: &mut Vm) -> String {
+    let date = ZStr::from("date");
+    if matches!(vm.functions.get(&date), Some(Func::Builtin(_))) {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+        if let Ok(Value::Str(s)) = vm.call_value(
+            &Value::Str(date),
+            vec![Value::from("d-M-Y H:i:s e"), Value::Int(secs)],
+        ) {
+            return s.to_string_lossy();
+        }
+    }
+    time_now_string()
+}
+
 /// The current time formatted like PHP's error log (`d-M-Y H:i:s UTC`).
 pub(crate) fn time_now_string() -> String {
     let secs = std::time::SystemTime::now()
