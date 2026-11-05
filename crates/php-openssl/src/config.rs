@@ -143,7 +143,7 @@ impl OpenSsl {
         let config_filename = a
             .config
             .clone()
-            .unwrap_or_else(|| self.default_conf.clone());
+            .unwrap_or_else(|| self.default_config_file().to_vec());
         let section_name = a
             .config_section_name
             .clone()
@@ -151,7 +151,7 @@ impl OpenSsl {
 
         let global_config = Conf::new();
         if let Some(g) = &global_config {
-            if !g.load(&self.default_conf) {
+            if !g.load(self.default_config_file()) {
                 self.store_errors();
             }
         }
