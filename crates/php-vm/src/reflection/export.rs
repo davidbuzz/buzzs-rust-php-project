@@ -362,7 +362,6 @@ pub(crate) fn export_const_expr_in(text: &str, ns: &[u8], self_name: Option<&[u8
     }
 }
 
-
 /// The namespace a function or class was declared in.
 pub(crate) fn namespace_of(name: &ZStr) -> Vec<u8> {
     let b = name.as_bytes();

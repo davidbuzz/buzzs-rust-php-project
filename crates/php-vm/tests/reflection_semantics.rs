@@ -347,8 +347,11 @@ var_dump($params[0]->isVariadic(), $params[0]->getType()->getName());
 #[test]
 fn array_map_with_first_class_callable_is_inlined() {
     let sink = Sink::default();
-    let mut vm =
-        Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &[&ArrayMapStub]);
+    let mut vm = Vm::with_extensions(
+        &VmOptions::default(),
+        Box::new(sink.clone()),
+        &[&ArrayMapStub],
+    );
     vm.run_script(
         br"<?php
 function foo($v) { return $v . '!'; }

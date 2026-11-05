@@ -280,5 +280,8 @@ eval(<<<EOT
 echo __FILE__, "\\n";
 EOT);
 "#;
-    assert_eq!(run(src), "t.php(4) : eval()'d code\nt.php(7) : eval()'d code\n");
+    assert_eq!(
+        run(src),
+        "t.php(4) : eval()'d code\nt.php(7) : eval()'d code\n"
+    );
 }

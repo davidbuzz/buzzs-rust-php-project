@@ -1025,8 +1025,11 @@ impl Compiler {
                     // zend_delayed_compile_prop converts a constant name to
                     // a string at compile time.
                     MemberName::Expr(e) if matches!(self.try_fold(e), Some(Value::Array(_))) => {
-                        self.warnings
-                            .push((2, "Array to string conversion".to_string(), e.span.line));
+                        self.warnings.push((
+                            2,
+                            "Array to string conversion".to_string(),
+                            e.span.line,
+                        ));
                         self.lit(Value::Str(ZStr::from("Array")))
                     }
                     _ => self.member_name(name)?,
@@ -1847,7 +1850,10 @@ impl Compiler {
                 // zend_compile_method_call(): a callable conversion inside a
                 // short-circuiting chain.
                 if args.is_partial() && self.f().sc_jumps.len() != checkpoint {
-                    return self.err("Cannot combine nullsafe operator with Closure creation", line);
+                    return self.err(
+                        "Cannot combine nullsafe operator with Closure creation",
+                        line,
+                    );
                 }
                 let n = self.method_member_name(name, line)?;
                 self.f().line = line;
@@ -1976,8 +1982,8 @@ impl Compiler {
         if args.is_first_class_callable() {
             let t = self.tmp();
             self.f().line = line;
-            let const_expr = self.in_const_expr()
-                || (self.in_global_const && self.fref().kind == FnKind::Main);
+            let const_expr =
+                self.in_const_expr() || (self.in_global_const && self.fref().kind == FnKind::Main);
             self.emit(Op::CallableConvert { dst: t, const_expr });
             return Ok(Some(Operand::Tmp(t)));
         }
@@ -2177,10 +2183,9 @@ impl Compiler {
                 name: MemberName::Ident(id),
                 args,
             } if args.is_first_class_callable() => match &**class {
-                ast::ClassRef::Name(cn) => Target::Static(
-                    self.class_spec_name(cn)?,
-                    ZStr::from(id.name.as_slice()),
-                ),
+                ast::ClassRef::Name(cn) => {
+                    Target::Static(self.class_spec_name(cn)?, ZStr::from(id.name.as_slice()))
+                }
                 ast::ClassRef::Expr(_) => return Ok(None),
             },
             _ => return Ok(None),

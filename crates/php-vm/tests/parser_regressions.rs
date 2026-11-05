@@ -274,7 +274,8 @@ $arr = [1];
 change([&$e] = $arr);
 var_dump($arr);
 "#);
-    let notice = "\nNotice: Attempting to set reference to non referenceable value in t.php on line";
+    let notice =
+        "\nNotice: Attempting to set reference to non referenceable value in t.php on line";
     let string = "\nWarning: Cannot use string as array in t.php on line 2\n";
     assert_eq!(
         out,

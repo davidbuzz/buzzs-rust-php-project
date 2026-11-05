@@ -127,7 +127,11 @@ fn sensitive_value_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn sensitive_value_get(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
     let d = crate::object::data(&o);
-    let v = d.slots.borrow().first().and_then(|s| s.as_ref().map(Value::deref));
+    let v = d
+        .slots
+        .borrow()
+        .first()
+        .and_then(|s| s.as_ref().map(Value::deref));
     Ok(v.unwrap_or_default())
 }
 
@@ -284,7 +288,12 @@ pub(crate) fn register(vm: &mut Vm) {
         .register(vm);
     ClassBuilder::new("SensitiveParameterValue")
         .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE | cflags::NO_DYNAMIC_PROPERTIES)
-        .prop("value", flags::PRIVATE | flags::READONLY, Some("mixed"), None)
+        .prop(
+            "value",
+            flags::PRIVATE | flags::READONLY,
+            Some("mixed"),
+            None,
+        )
         .method("__construct(mixed $value)", PUB, sensitive_value_construct)
         .method("getValue(): mixed", PUB, sensitive_value_get)
         .method("__debugInfo(): array", PUB, sensitive_value_debug_info)

@@ -199,7 +199,10 @@ fn recursive_static_initializer_keeps_inner_value() {
 /// (zend_compile_method_call(); first_class_callable_012/013.phpt).
 #[test]
 fn nullsafe_closure_creation_is_compile_error() {
-    for src in ["<?php\n$foo?->bar(...);\n", "<?php\n$foo?->foo->bar(...);\n"] {
+    for src in [
+        "<?php\n$foo?->bar(...);\n",
+        "<?php\n$foo?->foo->bar(...);\n",
+    ] {
         assert_eq!(
             run(src),
             "\nFatal error: Cannot combine nullsafe operator with Closure creation in t.php on line 2\n"
@@ -214,9 +217,18 @@ fn nullsafe_closure_creation_is_compile_error() {
 #[test]
 fn attribute_closure_error_uses_declaration_line() {
     let msg = "\nFatal error: Cannot create Closure as attribute argument in t.php on line ";
-    assert_eq!(run("<?php\n#[Attribute(...)]\nclass Foo {\n\n}\n"), format!("{msg}3\n"));
-    assert_eq!(run("<?php\n#[Attribute(...)]\n\nfunction f() {\n}\n"), format!("{msg}4\n"));
-    assert_eq!(run("<?php\nfunction g(\n#[A(...)]\n\n$x) {}\n"), format!("{msg}2\n"));
+    assert_eq!(
+        run("<?php\n#[Attribute(...)]\nclass Foo {\n\n}\n"),
+        format!("{msg}3\n")
+    );
+    assert_eq!(
+        run("<?php\n#[Attribute(...)]\n\nfunction f() {\n}\n"),
+        format!("{msg}4\n")
+    );
+    assert_eq!(
+        run("<?php\nfunction g(\n#[A(...)]\n\n$x) {}\n"),
+        format!("{msg}2\n")
+    );
 }
 
 /// `ZEND_ADD_ARRAY_ELEMENT` with an object key raises

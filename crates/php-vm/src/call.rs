@@ -994,7 +994,7 @@ impl Vm {
                         "Only arrays and Traversables can be unpacked, {} given",
                         given_type(&v)
                     ),
-                ))
+                ));
             }
         };
         let mut changed = false;
