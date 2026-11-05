@@ -27,6 +27,12 @@ pub struct ParseError {
     pub line: u32,
     /// Non-fatal diagnostics raised before the error.
     pub warnings: Vec<Diagnostic>,
+    /// A [`ErrorKind::Compile`] error PHP raises with
+    /// `zend_throw_exception(zend_ce_compile_error, ...)` (modifier
+    /// checks, nested `__HALT_COMPILER()`, a non-literal encoding): an
+    /// `eval()` or `include` caller can catch it as a `CompileError`,
+    /// where the others are fatal.
+    pub thrown: bool,
 }
 
 impl ParseError {
@@ -37,6 +43,7 @@ impl ParseError {
             message: message.into(),
             line,
             warnings: Vec::new(),
+            thrown: true,
         }
     }
 
@@ -47,6 +54,16 @@ impl ParseError {
             message: message.into(),
             line,
             warnings: Vec::new(),
+            thrown: false,
+        }
+    }
+
+    /// Creates a `CompileError` thrown as an exception (see
+    /// [`ParseError::thrown`]).
+    pub fn compile_exception(message: impl Into<String>, line: u32) -> Self {
+        Self {
+            thrown: true,
+            ..Self::compile(message, line)
         }
     }
 

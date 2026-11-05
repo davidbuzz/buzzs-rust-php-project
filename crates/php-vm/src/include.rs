@@ -10,7 +10,7 @@ use std::rc::Rc;
 /// Outcome of compiling source code.
 pub(crate) enum CompileOutcome {
     Ok(Rc<CompiledUnit>),
-    /// A `ParseError` exception was created.
+    /// A `ParseError` (or thrown `CompileError`) exception was created.
     ParseError(php_runtime::Obj),
     /// A fatal error was reported.
     Fatal,
@@ -76,6 +76,14 @@ impl Vm {
                 return match e.kind {
                     php_parser::ErrorKind::Parse => {
                         let o = self.create_exception("ParseError", &e.message, 0)?;
+                        self.set_exc_prop(&o, "file", Value::Str(filename.clone()));
+                        self.set_exc_prop(&o, "line", Value::Int(i64::from(e.line)));
+                        Ok(CompileOutcome::ParseError(o))
+                    }
+                    // `zend_throw_exception(zend_ce_compile_error, ...)`
+                    // during parsing (bug75218).
+                    php_parser::ErrorKind::Compile if e.thrown => {
+                        let o = self.create_exception("CompileError", &e.message, 0)?;
                         self.set_exc_prop(&o, "file", Value::Str(filename.clone()));
                         self.set_exc_prop(&o, "line", Value::Int(i64::from(e.line)));
                         Ok(CompileOutcome::ParseError(o))

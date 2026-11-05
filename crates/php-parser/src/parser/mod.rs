@@ -311,12 +311,6 @@ impl<'a> Parser<'a> {
         ParseError::parse(syntax_error_message(tok.kind, text, expected), tok.end_line)
     }
 
-    /// A compile error at the current line (`CG(zend_lineno)` after the
-    /// last scanned token).
-    pub fn compile_error(&mut self, msg: impl Into<String>) -> ParseError {
-        ParseError::compile(msg, self.prev_end_line)
-    }
-
     // ---- helpers ---------------------------------------------------------
 
     /// Span from `start` to the end of the last consumed token.

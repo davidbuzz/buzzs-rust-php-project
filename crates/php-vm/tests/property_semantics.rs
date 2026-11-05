@@ -1270,3 +1270,25 @@ float(1.5)
 int(1)
 ");
 }
+
+#[test]
+fn eval_parser_compile_errors_are_catchable() {
+    // bug75218: parser-action CompileErrors are exceptions.
+    assert_eq!(run(r#"<?php
+function try_eval($code) {
+    try {
+        eval($code);
+    } catch (Throwable $e) {
+        echo $e::class, ': ', $e->getMessage(), "\n";
+    }
+}
+try_eval('if (false) {class C { final final function foo($fff) {}}}');
+try_eval('if (false) {class C { private protected $x; }}');
+try_eval('if (true) { __HALT_COMPILER(); }');
+try_eval('declare(encoding=[]);');
+"#), "CompileError: Multiple final modifiers are not allowed
+CompileError: Multiple access type modifiers are not allowed
+CompileError: __HALT_COMPILER() can only be used from the outermost scope
+CompileError: Encoding must be a literal
+");
+}
