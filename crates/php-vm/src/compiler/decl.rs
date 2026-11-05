@@ -1229,8 +1229,16 @@ impl Compiler {
         let r = self.compile_class_members(cd, &name, kind, cflag);
         self.closure_depth = saved_closure_depth;
         self.classes.pop();
-        let (consts, props, methods, traits, trait_rules, cases, case_attributes, case_doc_comments) =
-            r?;
+        let (
+            consts,
+            props,
+            methods,
+            traits,
+            trait_rules,
+            cases,
+            case_attributes,
+            case_doc_comments,
+        ) = r?;
         let backing = match &cd.backing_type {
             Some(t) => {
                 let ty = self.resolve_type(t)?;
@@ -1940,7 +1948,9 @@ impl Compiler {
                 }
             }
         }
-        Ok((consts, props, methods, traits, rules, cases, case_attrs, case_docs))
+        Ok((
+            consts, props, methods, traits, rules, cases, case_attrs, case_docs,
+        ))
     }
 }
 

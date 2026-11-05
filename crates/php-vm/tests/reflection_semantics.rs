@@ -178,10 +178,12 @@ Cannot use \"parent\" in the global scope\n"
 #[test]
 fn enum_case_doc_comments_survive_eval() {
     assert_eq!(
-        run("<?php eval(\"enum Demo {\\n /** F\\0oo */\\n case C;\\n case D;\\n}\");
+        run(
+            "<?php eval(\"enum Demo {\\n /** F\\0oo */\\n case C;\\n case D;\\n}\");
 var_dump((new ReflectionEnumUnitCase(Demo::class, 'C'))->getDocComment());
 var_dump((new ReflectionEnumUnitCase(Demo::class, 'D'))->getDocComment());
-"),
+"
+        ),
         "string(11) \"/** F\0oo */\"\nbool(false)\n"
     );
 }

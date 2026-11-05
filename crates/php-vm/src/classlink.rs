@@ -119,13 +119,13 @@ impl Vm {
                 cache[slot] = Rc::downgrade(&c);
                 Ok(c)
             }
-            ClassSpec::SelfClass => {
-                match self.scope() {
-                    Some(c) => Ok(c),
-                    None => Err(self
-                        .make_throw("Error", "Cannot access \"self\" when no class scope is active")),
-                }
-            }
+            ClassSpec::SelfClass => match self.scope() {
+                Some(c) => Ok(c),
+                None => Err(self.make_throw(
+                    "Error",
+                    "Cannot access \"self\" when no class scope is active",
+                )),
+            },
             ClassSpec::Parent => match self.scope() {
                 Some(c) => match &c.parent {
                     Some(p) => Ok(p.clone()),
