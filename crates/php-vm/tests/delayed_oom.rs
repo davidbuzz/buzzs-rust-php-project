@@ -89,4 +89,30 @@ echo "not reached\n";
         "{out}"
     );
     assert!(out.ends_with(" bytes) in t.php on line 10\n"), "{out}");
+
+    // bug45392.phpt: reporting the memory-limit fatal discards the output
+    // buffers without running user handlers (`php_error_cb`), so neither
+    // the buffered text nor the handler's output is printed.
+    let out = run(
+        r#"<?php
+echo "2\n";
+ob_start(function ($buffer) { return "handler ran\n"; });
+ob_start();
+$i = 0;
+while ($i++ < 5000) {
+    echo str_repeat("may not be displayed ", 42);
+}
+ob_end_clean();
+echo "not reached\n";
+"#,
+        "2M",
+    );
+    assert!(
+        out.starts_with("2\n\nFatal error: Allowed memory size of 2097152 bytes exhausted"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("may not be displayed") && !out.contains("handler ran"),
+        "{out}"
+    );
 }

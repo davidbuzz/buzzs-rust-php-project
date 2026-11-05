@@ -162,6 +162,7 @@ impl Vm {
             in_shutdown: false,
             in_error_handler: 0,
             error_msg_html_ready: false,
+            reporting_oom: false,
             ext: builtins::ExtState::default(),
             anon_counter: 0,
             depth: 0,

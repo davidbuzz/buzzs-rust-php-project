@@ -676,6 +676,10 @@ pub struct Vm {
     /// HTML-escaped (and may have given a docref link) under `html_errors`;
     /// consumed by the next report so the display does not escape it again.
     pub(crate) error_msg_html_ready: bool,
+    /// A delayed `memory_limit` fatal is being reported
+    /// (`zend_handle_delayed_oom`, heap `overflow` set): user output
+    /// handlers do not run while its buffers are discarded.
+    pub(crate) reporting_oom: bool,
     /// Builtin-specific state.
     pub ext: crate::builtins::ExtState,
     /// Anonymous class counter.
