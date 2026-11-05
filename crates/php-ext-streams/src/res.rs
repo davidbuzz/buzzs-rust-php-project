@@ -177,6 +177,23 @@ pub struct CtxCell {
     handle: i64,
 }
 
+impl Drop for CtxCell {
+    fn drop(&mut self) {
+        // Forget the registry entry of a released context: its `Weak`
+        // would keep the cell's allocation alive (`zend_list_free` frees
+        // the context with its resource, so `memory_get_usage()` does not
+        // grow with every context created; bug #75306).
+        let key = Rc::as_ptr(&self.ctx) as usize;
+        let _ = CONTEXTS.try_with(|m| {
+            if let Ok(mut m) = m.try_borrow_mut() {
+                if m.get(&key).is_some_and(|w| w.strong_count() == 0) {
+                    m.remove(&key);
+                }
+            }
+        });
+    }
+}
+
 /// The resource payload of a stream context.
 #[derive(Debug)]
 pub struct CtxRes(pub Rc<CtxCell>);
@@ -824,6 +841,25 @@ mod tests {
         drop(alias);
         drop(v);
         assert!(stream_value_by_id(id).is_none());
+    }
+
+    #[test]
+    fn released_contexts_leave_the_registry() {
+        let before = CONTEXTS.with(|m| m.borrow().len());
+        let v = new_context(StreamContext::new());
+        let Some(cell) = (match &v {
+            Value::Resource(r) => ctx_cell_of(r),
+            _ => None,
+        }) else {
+            panic!("context resource expected")
+        };
+        let lib = Rc::clone(&cell.ctx);
+        assert!(ctx_cell_of_lib(&lib).is_some());
+        assert_eq!(CONTEXTS.with(|m| m.borrow().len()), before + 1);
+        drop(cell);
+        drop(v);
+        assert!(ctx_cell_of_lib(&lib).is_none());
+        assert_eq!(CONTEXTS.with(|m| m.borrow().len()), before);
     }
 
     #[test]
