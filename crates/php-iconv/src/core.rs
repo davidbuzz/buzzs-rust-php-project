@@ -152,9 +152,10 @@ pub fn iconv_string(
             }
             if errno == libc::E2BIG && !inp.is_empty() {
                 bsz += in_len;
+                let extra = bsz - buf.len();
                 if let Err(e) = limit
                     .check(bsz)
-                    .and_then(|()| reserve_exact(&mut buf, bsz - buf.len()))
+                    .and_then(|()| reserve_exact(&mut buf, extra))
                 {
                     return StringResult {
                         err: Some(e),
