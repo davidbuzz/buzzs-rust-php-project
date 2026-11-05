@@ -178,17 +178,22 @@ pub(crate) fn class_module(vm: &Vm, c: &Rc<Class>) -> Option<String> {
     if c.flags & cflags::INTERNAL == 0 {
         return None;
     }
-    if let Some(m) = MODULES.with(|m| m.borrow().classes.get(c.lc_name.as_bytes()).cloned()) {
+    let n = c.lc_name.as_bytes();
+    // ext/standard classes some other extension may declare on its behalf
+    // (bcmath declares `RoundingMode` when it registers first).
+    if STANDARD_CLASSES.contains(&n) {
+        return Some("standard".into());
+    }
+    if let Some(m) = MODULES.with(|m| m.borrow().classes.get(n).cloned()) {
         return Some(m);
     }
     let _ = vm;
     // Classes registered by the VM itself: the reflection classes and the
     // engine's (`Closure`, `Exception`, ...).
-    let n = c.lc_name.as_bytes();
     if n.starts_with(b"reflect") || n == b"propertyhooktype" {
         return Some("Reflection".into());
     }
-    if STANDARD_CLASSES.contains(&n) || n.starts_with(b"io\\") {
+    if n.starts_with(b"io\\") {
         return Some("standard".into());
     }
     Some("Core".into())

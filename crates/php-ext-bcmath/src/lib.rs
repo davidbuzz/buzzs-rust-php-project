@@ -17,7 +17,7 @@ mod number;
 use php_bcmath::{BcError, BcMath, ErrorKind, RoundingMode};
 use php_runtime::{Obj, Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
-use php_vm::ext::{Args, Extension, ModuleBuilder, Throw, VmResult};
+use php_vm::ext::{Args, ClassBuilder, Extension, ModuleBuilder, Throw, VmResult};
 use php_vm::Vm;
 
 /// The `bcmath` extension.
@@ -188,21 +188,17 @@ fn bcround(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     lift(vm, r).map(|s| str_value(&s))
 }
 
-/// Declares `enum RoundingMode` unless another extension already has.
-/// The extension API cannot build enums natively, so the declaration is
-/// compiled from PHP source (like `Random\IntervalBoundary`).
+/// Declares the internal `enum RoundingMode` (ext/standard's
+/// `math.stub.php` in php-src master) unless another extension already has.
 fn register_rounding_mode(vm: &mut Vm) {
     if vm.find_class(b"RoundingMode").is_some() {
         return;
     }
-    let mut src = String::from("<?php enum RoundingMode {");
+    let mut b = ClassBuilder::new("RoundingMode").unit_enum();
     for m in RoundingMode::ALL {
-        src.push_str(" case ");
-        src.push_str(m.name());
-        src.push(';');
+        b = b.case(m.name(), None);
     }
-    src.push_str(" }");
-    let _ = vm.run_main(src.as_bytes(), &ZStr::from("[ext/standard]"));
+    b.register(vm);
 }
 
 /// Whether `o` is a `BcMath\Number`.
