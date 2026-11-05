@@ -289,9 +289,13 @@ fn is_bogus_locale(name: &[u8]) -> bool {
 }
 
 fn accept_from_http(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    // `PHP_INTL_FUNCTION_WITH_ERROR_RESET`: the reset precedes argument
+    // parsing (the parameters are `@unchecked`, see `registry::sig_override`).
     core::reset_global();
+    let header = core::zpp_string(vm, a, 0)?;
+    let available = core::zpp_array_or_null(vm, a, 1)?;
     // The per-element checks of php-src, including the bogus-locale one.
-    if let Some(Value::Array(arr)) = a.opt(1) {
+    if let Some(arr) = &available {
         for v in arr.values() {
             match v.deref() {
                 Value::Str(z)
@@ -311,12 +315,9 @@ fn accept_from_http(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
         }
     }
-    let avail = a.opt(1).map(|v| match v {
-        Value::Array(arr) => entries(&arr),
-        _ => Vec::new(),
-    });
+    let avail = available.as_ref().map(entries);
     let view = avail.as_deref().map(as_lookup);
-    let r = lib::accept_from_http(a.str(0).as_bytes(), view.as_deref());
+    let r = lib::accept_from_http(header.as_bytes(), view.as_deref());
     finish(vm, a, r, Value::Bool(false), Value::Bool(false))
 }
 

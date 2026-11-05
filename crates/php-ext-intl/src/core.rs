@@ -396,6 +396,86 @@ pub(crate) fn type_name(v: &Value) -> String {
     }
 }
 
+/// `ZEND_ARG_USES_STRICT_TYPES()`: whether the code calling the running
+/// builtin (the innermost non-builtin frame) declares `strict_types=1`.
+pub(crate) fn caller_strict(vm: &Vm) -> bool {
+    vm.frames
+        .iter()
+        .rev()
+        .find(|f| f.kind != FrameKind::Builtin)
+        .is_some_and(|f| f.code.strict_types)
+}
+
+/// The declared name of parameter `n` (0-based) of the running builtin.
+fn param_name(a: &Args, n: usize) -> String {
+    a.func
+        .as_ref()
+        .and_then(|f| f.params.get(n))
+        .map(|p| p.name.to_string_lossy())
+        .unwrap_or_default()
+}
+
+/// `Z_PARAM_STRING` for parameter `n` (0-based) declared `@unchecked
+/// string`. The functions that reset the intl error *before* parsing their
+/// arguments (`PHP_INTL_FUNCTION_WITH_ERROR_RESET`, `msgfmt_ctor`) take
+/// their arguments unchecked from the VM and parse them here, after the
+/// reset, with `zend_parse_arg_str_slow`'s rules: strings as is; in weak
+/// mode `null` (deprecated), scalars and stringable objects converted;
+/// anything else a `TypeError`.
+pub(crate) fn zpp_string(vm: &mut Vm, a: &Args, n: usize) -> VmResult<ZStr> {
+    let v = a.at(n);
+    if let Value::Str(s) = &v {
+        return Ok(s.clone());
+    }
+    if !caller_strict(vm) {
+        match &v {
+            Value::Null => {
+                vm.php_deprecated(&format!(
+                    "Passing null to parameter #{} (${}) of type string is deprecated",
+                    n + 1,
+                    param_name(a, n)
+                ))?;
+                return Ok(ZStr::empty());
+            }
+            Value::Bool(_) | Value::Int(_) | Value::Float(_) => return vm.value_to_string(&v),
+            Value::Object(o) if object::class_of(o).find_method(b"__tostring").is_some() => {
+                return vm.value_to_string(&v);
+            }
+            _ => {}
+        }
+    }
+    let given = type_name(&v);
+    Err(type_error(
+        vm,
+        a,
+        n + 1,
+        &format!("must be of type string, {given} given"),
+    ))
+}
+
+/// `Z_PARAM_ARRAY_HT_OR_NULL` for parameter `n` (0-based) declared
+/// `@unchecked ?array` (see [`zpp_string`]); `None` for `null` or an
+/// omitted argument.
+pub(crate) fn zpp_array_or_null(
+    vm: &mut Vm,
+    a: &Args,
+    n: usize,
+) -> VmResult<Option<php_runtime::ZArray>> {
+    match a.at(n) {
+        Value::Null => Ok(None),
+        Value::Array(arr) => Ok(Some(arr)),
+        other => {
+            let given = type_name(&other);
+            Err(type_error(
+                vm,
+                a,
+                n + 1,
+                &format!("must be of type ?array, {given} given"),
+            ))
+        }
+    }
+}
+
 /// `zend_argument_value_error(n, msg)` (the VM prefixes `Class::method`).
 pub(crate) fn value_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> Throw {
     a.value_error(vm, n, msg)

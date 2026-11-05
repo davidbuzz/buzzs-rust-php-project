@@ -110,6 +110,30 @@ fn sig_override(key: &str, sig: &'static str) -> &'static str {
         "intlcal_set" if sig.starts_with("set(") => {
             "set(int $year, int $month, int $dayOfMonth = UNKNOWN, int $hour = UNKNOWN, int $minute = UNKNOWN, int $second = UNKNOWN, ...$__extra): true"
         }
+        // Reset the intl error before parsing their arguments
+        // (`PHP_INTL_FUNCTION_WITH_ERROR_RESET`, `msgfmt_ctor`), so the
+        // handlers parse them (`core::zpp_*`) and the VM must not.
+        "Locale::acceptFromHttp" => match sig.split('(').next() {
+            Some("acceptFromHttp") => {
+                "acceptFromHttp(@unchecked string $header, @unchecked ?array $availableLocales = null): string|false"
+            }
+            Some("locale_accept_from_http") => {
+                "locale_accept_from_http(@unchecked string $header, @unchecked ?array $availableLocales = null): string|false"
+            }
+            _ => sig,
+        },
+        "MessageFormatter::__construct" => {
+            "__construct(@unchecked string $locale, @unchecked string $pattern)"
+        }
+        "MessageFormatter::create" => match sig.split('(').next() {
+            Some("create") => {
+                "create(@unchecked string $locale, @unchecked string $pattern): ?MessageFormatter"
+            }
+            Some("msgfmt_create") => {
+                "msgfmt_create(@unchecked string $locale, @unchecked string $pattern): ?MessageFormatter"
+            }
+            _ => sig,
+        },
         _ => sig,
     }
 }

@@ -10,10 +10,12 @@ use crate::core::{self, s};
 use crate::dt;
 use crate::locale::text;
 
+/// `msgfmt_ctor`: the global error is reset before the arguments are
+/// parsed (they are `@unchecked`, see `registry::sig_override`).
 fn ctor(vm: &mut Vm, a: &Args, o: &Obj) -> VmResult<bool> {
     core::reset_global();
-    let loc = text(&a.str(0));
-    let pat = a.str(1);
+    let loc = text(&core::zpp_string(vm, a, 0)?);
+    let pat = core::zpp_string(vm, a, 1)?;
     match MessageFormatter::new(&loc, pat.as_bytes()) {
         Ok(f) => {
             core::set_data(o, f);
