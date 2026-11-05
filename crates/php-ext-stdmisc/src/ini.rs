@@ -156,6 +156,28 @@ fn parse_ini_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     parse_result(vm, r)
 }
 
+/// `zend_stream_open()` of `zend_parse_ini_file()`:
+/// `php_stream_open_for_zend_ex()` searches the include path and goes
+/// through stream wrappers, warning "Failed to open stream: ..." itself.
+fn read_ini_file(vm: &mut Vm, path: &[u8]) -> VmResult<Option<Vec<u8>>> {
+    use php_streams::wrapper::{REPORT_ERRORS, STREAM_OPEN_FOR_INCLUDE, USE_PATH};
+    php_ext_streams::bridge::run(vm, || {
+        let mut opened = None;
+        php_streams::open::open_wrapper(
+            path,
+            "rb",
+            USE_PATH | REPORT_ERRORS | STREAM_OPEN_FOR_INCLUDE,
+            &mut opened,
+            None,
+        )
+        .map(|mut s| {
+            let contents = s.copy_to_mem(None).unwrap_or_default();
+            s.close();
+            contents
+        })
+    })
+}
+
 fn parse_ini_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let path = a.str(0);
     if path.is_empty() {
@@ -166,17 +188,8 @@ fn parse_ini_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let sections = a.has(1) && a.bool(1);
     let mode = scanner_mode(vm, a)?;
-    let p = std::ffi::OsStr::from_bytes(path.as_bytes());
-    let contents = match std::fs::read(p) {
-        Ok(c) => c,
-        Err(e) => {
-            let reason = match e.kind() {
-                std::io::ErrorKind::PermissionDenied => "Permission denied",
-                _ => "No such file or directory",
-            };
-            vm.php_warning(&format!("Failed to open stream: {reason}"))?;
-            return Ok(Value::Bool(false));
-        }
+    let Some(contents) = read_ini_file(vm, path.as_bytes())? else {
+        return Ok(Value::Bool(false));
     };
     let name = path.to_string_lossy();
     let r = ini::parse_ini_contents(&contents, &name, sections, mode, &mut VmHooks { vm });
