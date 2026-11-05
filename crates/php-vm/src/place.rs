@@ -491,8 +491,6 @@ pub(crate) fn descend(
             match seg {
                 RSeg::Append => {
                     let t = arr.make_mut();
-                    // The key `push_mut` uses (`nNextFreeElement`).
-                    let slot_key = t.next_index();
                     if last {
                         match wop {
                             WOp::Assign(val) => {
@@ -513,21 +511,24 @@ pub(crate) fn descend(
                                 }
                                 Step::Done(r)
                             }
-                            _ => match t.push_mut(Value::Null) {
-                                Ok(slot) => {
-                                    if matches!(wop, WOp::AssignOp(..)) {
-                                        record_append(i, slot_key);
+                            _ => {
+                                // The key `push_mut` uses (`nNextFreeElement`).
+                                let slot_key = t.next_index();
+                                match t.push_mut(Value::Null) {
+                                    Ok(slot) => {
+                                        if matches!(wop, WOp::AssignOp(..)) {
+                                            record_append(i, slot_key);
+                                        }
+                                        apply_final(slot, wop)
                                     }
-                                    apply_final(slot, wop)
-                                }
-                                Err(_) => {
-                                    Step::Err(WalkErr::Error(
+                                    Err(_) => Step::Err(WalkErr::Error(
                                         "Cannot add element to the array as the next element is already occupied".into(),
-                                    ))
+                                    )),
                                 }
-                            },
+                            }
                         }
                     } else {
+                        let slot_key = t.next_index();
                         match t.push_mut(Value::Null) {
                             Ok(slot) => {
                                 if matches!(wop, WOp::AssignOp(..)) {
