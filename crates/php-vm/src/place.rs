@@ -386,10 +386,18 @@ pub(crate) fn descend(
                 let tn = other.value_name();
                 let tn = if undef { "null".to_string() } else { tn };
                 // `zend_throw_non_object_error`: ASSIGN_OBJ and
-                // ASSIGN_OBJ_OP "assign", FETCH_OBJ_W/RW "modify".
+                // ASSIGN_OBJ_OP "assign", PRE/POST_INC/DEC_OBJ
+                // "increment/decrement", FETCH_OBJ_W/RW "modify".
                 if last && matches!(wop, WOp::Assign(_) | WOp::AssignOp(..)) {
                     Step::Err(WalkErr::Error(format!(
                         "Attempt to assign property \"{}\" on {tn}",
+                        name.to_string_lossy()
+                    )))
+                } else if last && matches!(wop, WOp::FetchRw) {
+                    // A final FetchRw walk is the read of `++`/`--`
+                    // (compound assignments walk with `WOp::AssignOp`).
+                    Step::Err(WalkErr::Error(format!(
+                        "Attempt to increment/decrement property \"{}\" on {tn}",
                         name.to_string_lossy()
                     )))
                 } else {
@@ -765,6 +773,17 @@ impl Vm {
                         drop(st);
                         self.warning(&crate::exec::undefined_var_msg(&name))?;
                         st = store.borrow_mut();
+                    }
+                    if matches!(segs[0], RSeg::Prop(_)) {
+                        // `ASSIGN_OBJ`/`FETCH_OBJ_W` on an undefined CV
+                        // throw without defining it (`zend_throw_non_object_error`).
+                        drop(st);
+                        let mut null = Value::Null;
+                        let s = descend(&mut null, segs, 0, &mut wop, &mut diags, true);
+                        if !quiet {
+                            self.flush_diags(diags)?;
+                        }
+                        return self.finish_step(s, segs, wop);
                     }
                     st.slots[idx] = Some(Value::Null);
                 }

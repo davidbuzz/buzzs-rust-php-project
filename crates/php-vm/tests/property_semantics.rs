@@ -1071,4 +1071,40 @@ fn public_set_readonly_property_leaves_interface_set_abstract() {
         out.contains("Fatal error: Class C contains 1 abstract method and must therefore be declared abstract or implement the remaining method (I::$prop::set) in t.php on line"),
         "{out}"
     );
+#[test]
+fn non_object_property_and_string_offset_errors_follow_the_opcode() {
+    assert_eq!(run(r#"<?php
+$t = true;
+$s = "ab";
+foreach ([
+    fn() => $t->p = 1,
+    fn() => $t->p += 1,
+    fn() => $t->p++,
+    fn() => $t->p[0] = 1,
+    fn() => $s[0]++,
+    fn() => $s[0] .= "x",
+    fn() => $s[0][0] = "x",
+    fn() => $s[0]->p = "x",
+] as $f) {
+    try { $f(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+try { $u->p = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+var_dump(isset($u));
+try { $u->p--; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+var_dump(isset($u));
+"#), "Attempt to assign property \"p\" on true
+Attempt to assign property \"p\" on true
+Attempt to increment/decrement property \"p\" on true
+Attempt to modify property \"p\" on true
+Cannot increment/decrement string offsets
+Cannot use assign-op operators with string offsets
+Cannot use string offset as an array
+Cannot use string offset as an object
+Attempt to assign property \"p\" on null
+bool(false)
+
+Warning: Undefined variable $u in t.php on line 18
+Attempt to increment/decrement property \"p\" on null
+bool(false)
+");
 }
