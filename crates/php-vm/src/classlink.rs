@@ -775,10 +775,13 @@ impl Vm {
         }
         let lc = ZStr::from(decl.name.to_ascii_lowercase());
         if let Some(old) = self.classes.get(&lc) {
-            // `zend_class_redeclaration_error`: names the class already
-            // declared under that name (its kind and spelling).
+            // `zend_class_redeclaration_error(E_COMPILE_ERROR, ...)`: names
+            // the class already declared under that name (its kind and
+            // spelling).
             let msg = class_redeclaration_message(&old.name, old);
-            return Err(self.fatal_at(&msg, decl.line_start));
+            let (file, _) = self.current_location();
+            self.report_compile_error(&msg, &file, decl.line_start, false);
+            return Err(Throw::Fatal);
         }
         let (cls, recorded) = self.link_class(decl, is_anon)?;
         self.bound_decls.insert(key, cls.clone());

@@ -654,6 +654,9 @@ pub struct Vm {
     pub shutdown_functions: Vec<(Value, Vec<Value>)>,
     /// The last error.
     pub last_error: Option<LastError>,
+    /// `EG(last_fatal_error_backtrace)`: the stack recorded for the last
+    /// fatal error under `fatal_error_backtraces` (cleared by every error).
+    pub last_fatal_error_backtrace: Option<php_runtime::ZArray>,
     /// Exceptions/bailouts raised inside runtime callbacks.
     pub pending_throw: Option<Throw>,
     /// The main script path.

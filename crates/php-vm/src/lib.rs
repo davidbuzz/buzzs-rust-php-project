@@ -152,6 +152,7 @@ impl Vm {
             exit_status: 0,
             shutdown_functions: Vec::new(),
             last_error: None,
+            last_fatal_error_backtrace: None,
             pending_throw: None,
             script_path: ZStr::empty(),
             argv: Vec::new(),

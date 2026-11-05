@@ -251,3 +251,85 @@ t(fn() => [] + new stdClass);
          Unsupported operand types: array + stdClass\n"
     );
 }
+
+fn run_ini(source: &str, ini: &[(&str, &str)]) -> String {
+    let sink = Sink::default();
+    let options = VmOptions {
+        ini: ini
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect(),
+    };
+    let mut vm = Vm::new(&options, Box::new(sink.clone()));
+    let _status = vm.run_script(source.as_bytes(), "t.php");
+    drop(vm);
+    let out = sink.0.borrow().clone();
+    String::from_utf8(out).expect("UTF-8 output")
+}
+
+const FATAL_IN_EVAL: &str = r#"<?php
+function trigger_fatal(#[\SensitiveParameter] $unused) {
+    eval("class Foo {}; class Foo {}");
+}
+function show($v) {
+    if (is_object($v)) return get_class($v);
+    if (!is_array($v)) return (string) $v;
+    $s = '';
+    foreach ($v as $k => $x) $s .= "$k:" . show($x) . ' ';
+    return "[$s]";
+}
+register_shutdown_function(function () {
+    $e = error_get_last();
+    echo show($e['type']), ' ', show($e['trace'] ?? '-'), "\n";
+});
+trigger_fatal("bar");
+"#;
+
+/// `fatal_error_backtraces` (on by default in master): `zend_error_impl`
+/// records the stack of a fatal error, `php_error_cb` prints it after the
+/// message and `error_get_last()` returns it as `trace`
+/// (`Zend/tests/backtrace/fatal_error_backtraces_00*`, `error_get_last_002`).
+/// Class redeclaration is an `E_COMPILE_ERROR`.
+#[test]
+fn fatal_errors_print_and_record_a_backtrace() {
+    let head = "\nFatal error: Cannot redeclare class Foo (previously declared in t.php(3) : eval()'d code:1) in t.php(3) : eval()'d code on line 1\n";
+    assert_eq!(
+        run_ini(FATAL_IN_EVAL, &[]),
+        format!(
+            "{head}Stack trace:\n#0 t.php(3): eval()\n#1 t.php(16): trigger_fatal(Object(SensitiveParameterValue))\n#2 {{main}}\n\
+             64 [0:[file:t.php line:3 function:eval ] 1:[file:t.php line:16 function:trigger_fatal args:[0:SensitiveParameterValue ] ] ]\n"
+        )
+    );
+    assert_eq!(
+        run_ini(FATAL_IN_EVAL, &[("zend.exception_ignore_args", "1")]),
+        format!(
+            "{head}Stack trace:\n#0 t.php(3): eval()\n#1 t.php(16): trigger_fatal()\n#2 {{main}}\n\
+             64 [0:[file:t.php line:3 function:eval ] 1:[file:t.php line:16 function:trigger_fatal ] ]\n"
+        )
+    );
+    // run-tests.php's setting.
+    assert_eq!(
+        run_ini(FATAL_IN_EVAL, &[("fatal_error_backtraces", "0")]),
+        format!("{head}64 -\n")
+    );
+}
+
+/// An uncaught exception carries its own trace: no fatal backtrace is
+/// printed or recorded (`zend_exception_error` clears it).
+#[test]
+fn uncaught_exceptions_have_no_fatal_backtrace() {
+    let out = run_ini(
+        r#"<?php
+register_shutdown_function(function () {
+    echo isset(error_get_last()['trace']) ? 'trace' : 'none', "\n";
+});
+function f() { throw new Exception("x"); }
+f();
+"#,
+        &[],
+    );
+    assert_eq!(
+        out,
+        "\nFatal error: Uncaught Exception: x in t.php:5\nStack trace:\n#0 t.php(6): f()\n#1 {main}\n  thrown in t.php on line 5\nnone\n"
+    );
+}

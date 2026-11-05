@@ -19,7 +19,11 @@ impl Write for Sink {
 
 fn run(source: &str) -> (i32, Vec<u8>) {
     let sink = Sink::default();
-    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    // As run-tests.php runs the .phpt tests these port.
+    let options = VmOptions {
+        ini: vec![("fatal_error_backtraces".to_string(), "0".to_string())],
+    };
+    let mut vm = Vm::new(&options, Box::new(sink.clone()));
     let status = vm.run_script(source.as_bytes(), "test.php");
     drop(vm);
     let output = sink.0.borrow().clone();

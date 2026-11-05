@@ -29,6 +29,8 @@ fn run(source: &str, memory_limit: &str) -> String {
         ini: [
             ("display_errors".to_string(), "1".to_string()),
             ("memory_limit".to_string(), memory_limit.to_string()),
+            // As run-tests.php runs the .phpt tests these port.
+            ("fatal_error_backtraces".to_string(), "0".to_string()),
         ]
         .into_iter()
         .collect(),
