@@ -123,3 +123,27 @@ fn compound_dim_assignment_warns_for_undefined_container_first() {
         .collect();
     assert_eq!(order, ["$a", "$b", "$c", "$d"], "{out}");
 }
+
+/// `FETCH_DIM_W` of the target runs before `ZEND_ASSIGN_REF` raises "Only
+/// variables should be assigned by reference" (`assign_ref_error_var_handling`).
+#[test]
+fn by_ref_assignment_target_error_precedes_only_variables_notice() {
+    let out = run(r#"<?php
+function val() { return 42; }
+$arr = [PHP_INT_MAX => "foo"];
+try {
+    var_dump($arr[] =& val());
+} catch (Throwable $e) {
+    echo $e::class, ': ', $e->getMessage(), "\n";
+}
+$b = [];
+var_dump($b['k'] =& val());
+var_dump($b);
+"#);
+    assert_eq!(
+        out,
+        "Error: Cannot add element to the array as the next element is already occupied\n\
+         \nNotice: Only variables should be assigned by reference in t.php on line 10\n\
+         int(42)\narray(1) {\n  [\"k\"]=>\n  int(42)\n}\n"
+    );
+}

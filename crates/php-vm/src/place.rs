@@ -1650,12 +1650,29 @@ impl Vm {
         let v = match v {
             Value::Reference(r) => Value::Reference(r),
             other => {
+                let segs = &self.frame().code.places[pid as usize].segs;
+                if !segs.is_empty() && !segs.iter().any(|s| matches!(s, Seg::Prop(_))) {
+                    return self.assign_non_ref_to_dim(pid, other);
+                }
                 self.notice("Only variables should be assigned by reference")?;
                 return self.place_assign(pid, other);
             }
         };
         let (base, segs) = self.resolve_place(pid, true)?;
         self.write_place(base, &segs, WOp::AssignRef(v))
+    }
+
+    /// `$a[...] =& f()` where `f()` did not return a reference:
+    /// `FETCH_DIM_W` runs first, so its errors ("Cannot add element to the
+    /// array as the next element is already occupied") take precedence;
+    /// then `zend_wrong_assign_to_variable_reference()` raises the notice
+    /// and assigns the value to the fetched element.
+    #[cold]
+    #[inline(never)]
+    fn assign_non_ref_to_dim(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+        let r = self.place_make_ref(pid)?;
+        self.notice("Only variables should be assigned by reference")?;
+        self.assign_ref(&r, v)
     }
 
     /// Makes a place a reference.
