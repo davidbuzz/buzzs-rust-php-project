@@ -896,11 +896,14 @@ impl Vm {
     /// statement runs, where the check can report the error.
     fn has_unresolved_variance(&self, decl: &ClassDecl) -> bool {
         fn names(f: &UserFunction, out: &mut Vec<Vec<u8>>) {
-            let types = f
-                .params
-                .iter()
-                .filter_map(|p| p.ty.as_ref())
-                .chain(f.return_type.as_ref());
+            sig_names(&f.params, f.return_type.as_ref(), out);
+        }
+        fn sig_names(
+            params: &[crate::opcode::ParamInfo],
+            ret: Option<&crate::types::TypeDecl>,
+            out: &mut Vec<Vec<u8>>,
+        ) {
+            let types = params.iter().filter_map(|p| p.ty.as_ref()).chain(ret);
             for t in types {
                 for n in t.classes.iter().chain(t.intersections.iter().flatten()) {
                     out.push(n.as_bytes().to_ascii_lowercase());
@@ -966,15 +969,22 @@ impl Vm {
             let Some(pm) = parent.find_method(&md.name.as_bytes().to_ascii_lowercase()) else {
                 return false;
             };
-            let Func::User(pf) = &pm.func else {
-                return false;
-            };
             if pm.visibility() == flags::PRIVATE {
+                return false;
+            }
+            // A non-abstract parent constructor is not signature-checked.
+            if md.name.eq_ignore_ascii_case(b"__construct") && !pm.is_abstract() {
                 return false;
             }
             let (mut a, mut b) = (Vec::new(), Vec::new());
             names(&md.func, &mut a);
-            names(pf, &mut b);
+            // An internal parent's arginfo types count too (GH-13680:
+            // `DateTime::createFromFormat()` overridden with an undeclared
+            // return class).
+            match &pm.func {
+                Func::User(pf) => names(pf, &mut b),
+                Func::Builtin(pb) => sig_names(&pb.params, pb.return_type.as_ref(), &mut b),
+            }
             a.iter()
                 .filter(|n| !b.contains(n))
                 .chain(b.iter().filter(|n| !a.contains(n)))

@@ -2,9 +2,12 @@
 //! `SessionUpdateTimestampHandlerInterface` and `SessionHandler`
 //! (`mod_user_class.c`), plus the `PHP_SESSION_*` constants.
 
-use php_runtime::Value;
+use std::rc::Rc;
+
+use php_runtime::{ErrorLevel, Value, ZStr};
 use php_session::class;
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ModuleBuilder, VmResult};
+use php_vm::class::Class;
+use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
 use crate::funcs::call;
@@ -17,6 +20,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     let vm = m.vm();
     ClassBuilder::new("SessionHandlerInterface")
         .flags(class_flags::INTERFACE)
+        .hooks(ClassHooks {
+            interface_gets_implemented: Some(handler_interface_implemented),
+            ..ClassHooks::default()
+        })
         .abstract_method("open(string $path, string $name): bool", acc::PUBLIC)
         .abstract_method("close(): bool", acc::PUBLIC)
         .abstract_method("read(string $id): string|false", acc::PUBLIC)
@@ -47,6 +54,35 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .method("create_sid(): string", acc::PUBLIC, create_sid)
         .method("validateId(string $id): bool", acc::PUBLIC, validate_id)
         .register(vm);
+}
+
+/// `session_handler_interface_gets_implemented()` (session.c): the PHP 9
+/// `create_sid()` / `validateId()` warnings for a class implementing
+/// `SessionHandlerInterface`. The method lookups see inherited methods;
+/// the interface checks use `instanceof` on every implemented interface
+/// (`session_interfaces_include`), so the interface order does not matter.
+fn handler_interface_implemented(vm: &mut Vm, cls: &Rc<Class>) -> VmResult<()> {
+    let implements = |lc: &[u8]| cls.interfaces.iter().any(|i| i.instance_of_name(lc));
+    let warnings = class::handler_interface_implemented(
+        &php_vm::object::display_name(&cls.name).to_string_lossy(),
+        cls.find_method(b"create_sid").is_some(),
+        implements(b"sessionidinterface"),
+        cls.find_method(b"validateid").is_some(),
+        implements(b"sessionupdatetimestamphandlerinterface"),
+    );
+    if warnings.is_empty() {
+        return Ok(());
+    }
+    // `zend_error()` while the class is compiled: the declaration's file
+    // and line.
+    let file = cls
+        .filename
+        .clone()
+        .unwrap_or_else(|| ZStr::from("Unknown"));
+    for w in warnings {
+        vm.error_at(ErrorLevel::Warning.bits(), &w, &file, cls.line_start)?;
+    }
+    Ok(())
 }
 
 fn open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

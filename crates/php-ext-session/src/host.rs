@@ -320,6 +320,18 @@ impl SessionHost for VmHost<'_> {
         self.vm.unserialize_options_in_effect()
     }
 
+    fn begin_unserialize(&mut self) -> bool {
+        self.vm.begin_unserialize_context();
+        true
+    }
+
+    fn end_unserialize(&mut self, run: bool, bailout: bool) -> RtResult<()> {
+        self.parked(|vm| {
+            vm.end_unserialize_context(run, bailout)
+                .map_err(|t| to_rt(vm, t))
+        })
+    }
+
     fn unserialize_shared(
         &mut self,
         data: &[u8],
@@ -334,8 +346,36 @@ impl SessionHost for VmHost<'_> {
         }))
     }
 
+    fn serialize_shared(
+        &mut self,
+        vars: &ZArray,
+        keys: Option<&[ZStr]>,
+    ) -> Option<RtResult<Vec<Vec<u8>>>> {
+        let whole;
+        let values: Vec<&Value> = match keys {
+            Some(keys) => keys
+                .iter()
+                .filter_map(|k| vars.get_str(k.as_bytes()))
+                .collect(),
+            None => {
+                whole = Value::Array(vars.clone());
+                vec![&whole]
+            }
+        };
+        Some(self.parked(|vm| vm.serialize_values(&values).map_err(|t| to_rt(vm, t))))
+    }
+
     fn emit_diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
         self.parked(|vm| docref(vm, level.bits(), message.as_bytes()).map_err(|t| to_rt(vm, t)))
+    }
+
+    fn emit_diagnostic_after_bailout(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+        self.parked(|vm| {
+            let mut m = b"Unknown: ".to_vec();
+            m.extend_from_slice(message.as_bytes());
+            vm.error_at_bytes(level.bits(), &m, &ZStr::from("Unknown"), 0)
+                .map_err(|t| to_rt(vm, t))
+        })
     }
 
     fn call_handler(&mut self, callable: &Value, args: &[Value]) -> RtResult<Option<Value>> {
@@ -390,12 +430,33 @@ impl SessionHost for VmHost<'_> {
         self.vm.headers_sent
     }
 
+    fn output_start(&self) -> Option<(String, u32)> {
+        self.vm
+            .output_started()
+            .map(|(file, line)| (file.to_string_lossy(), line))
+    }
+
     fn add_header(&mut self, line: &[u8], replace: bool) {
         crate::headers::add(line, replace);
+        // `sapi_add_header_ex()` through the active SAPI: `php -S` and
+        // apache2handler send it, the CLI drops it.
+        let r = self.parked(|vm| {
+            vm.add_response_header(line, replace)
+                .map(drop)
+                .map_err(|t| to_rt(vm, t))
+        });
+        if let Err(e) = r {
+            self.state().set_exception(e);
+        }
     }
 
     fn delete_header_prefix(&mut self, prefix: &[u8]) {
         crate::headers::delete_prefix(prefix);
+        let r = self
+            .parked(|vm| crate::headers::sapi_delete_prefix(vm, prefix).map_err(|t| to_rt(vm, t)));
+        if let Err(e) = r {
+            self.state().set_exception(e);
+        }
     }
 
     fn request_global(&mut self, name: &str) -> Option<ZArray> {
@@ -446,6 +507,9 @@ impl SessionHost for VmHost<'_> {
         if basedir.is_empty() {
             return false;
         }
+        // `PG(open_basedir)` holds the directories a runtime `ini_set()`
+        // expanded (`OnUpdateBaseDir`), not the INI string.
+        let basedir = php_ext_streams::ini::effective_open_basedir(basedir);
         php_streams::state::update_settings(|s| s.open_basedir.clone_from(&basedir));
         if php_streams::paths::check_open_basedir_ex(path, false) {
             return false;

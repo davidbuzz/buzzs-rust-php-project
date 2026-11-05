@@ -2,7 +2,9 @@
 
 use crate::state::SessionState;
 use php_runtime::serialize::UnserializeOptions;
-use php_runtime::{ErrorLevel, Obj, PhpRef, RtResult, RuntimeContext, RuntimeError, Value, ZArray};
+use php_runtime::{
+    ErrorLevel, Obj, PhpRef, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
+};
 use std::path::PathBuf;
 
 /// What the session module needs from the VM and the SAPI.
@@ -29,6 +31,26 @@ pub trait SessionHost: RuntimeContext {
         UnserializeOptions::default()
     }
 
+    /// `PHP_VAR_UNSERIALIZE_INIT` around one session decode: until
+    /// [`SessionHost::end_unserialize`], [`SessionHost::unserialize_shared`]
+    /// parses every value in one `var_hash`, which `unserialize()` calls
+    /// made from `Serializable::unserialize()` join. Returns whether a
+    /// context was opened (the default: no; the module then parses the
+    /// data itself).
+    fn begin_unserialize(&mut self) -> bool {
+        false
+    }
+
+    /// `PHP_VAR_UNSERIALIZE_DESTROY` of the context of
+    /// [`SessionHost::begin_unserialize`]: runs the delayed `__wakeup()` /
+    /// `__unserialize()` calls when `run` (no exception is pending), or
+    /// abandons the context after a fatal error (`bailout`). `Err` is an
+    /// exception thrown by a delayed call.
+    fn end_unserialize(&mut self, run: bool, bailout: bool) -> RtResult<()> {
+        let _ = (run, bailout);
+        Ok(())
+    }
+
     /// `php_var_unserialize()` of the one value at `offset` in `data` within
     /// the active `unserialize()` call's shared `var_hash` (so a
     /// `Serializable::unserialize()` calling `session_decode()` resolves
@@ -45,10 +67,33 @@ pub trait SessionHost: RuntimeContext {
         None
     }
 
+    /// `php_var_serialize()` of the `$_SESSION` entries `keys` (in order),
+    /// or of the whole array for `None`, with one shared `var_hash`
+    /// (`PHP_VAR_SERIALIZE_INIT`), which a `serialize()` made from a
+    /// `Serializable::serialize()` joins (bug #79031): one payload per
+    /// value, or `Err` for an exception. `None` (the default) makes the
+    /// module serialize with php-runtime's serializer.
+    fn serialize_shared(
+        &mut self,
+        vars: &ZArray,
+        keys: Option<&[ZStr]>,
+    ) -> Option<RtResult<Vec<Vec<u8>>>> {
+        let _ = (vars, keys);
+        None
+    }
+
     /// `php_error_docref(NULL, level, "%s", message)`. Returning `Err`
     /// models a user error handler throwing; the session module keeps going
     /// and reports the exception when the current entry point returns.
     fn emit_diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()>;
+
+    /// `php_error_docref()` from a `zend_catch` block: `_zend_bailout()`
+    /// cleared `EG(current_execute_data)`, so there is no active function
+    /// and no location (`"Unknown: <message>"` in Unknown on line 0). The
+    /// default is [`SessionHost::emit_diagnostic`].
+    fn emit_diagnostic_after_bailout(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+        self.emit_diagnostic(level, message)
+    }
 
     /// `call_user_function()` on a user save-handler callable (a string, an
     /// `[object, "method"]` array or a closure). `Ok(None)` means the call

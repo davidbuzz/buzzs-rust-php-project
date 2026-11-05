@@ -650,3 +650,18 @@ fn implicitly_required_parameter_cannot_be_skipped_by_named_args() {
         "{out}"
     );
 }
+
+/// `zend_try_early_bind`: an override of an internal parent method whose
+/// signature names an undeclared class is `INHERITANCE_UNRESOLVED`, so the
+/// class is declared when its statement runs (GH-13680).
+#[test]
+fn unresolved_variance_against_internal_parent_delays_binding() {
+    let (status, output) = run_status(
+        "<?php\necho \"a\\n\";\nclass R extends ReflectionClass {\n    function getParentClass(): Wrong {}\n}\n",
+    );
+    assert_eq!(status, 255, "{output}");
+    assert_eq!(
+        output,
+        "a\n\nFatal error: Could not check compatibility between R::getParentClass(): Wrong and ReflectionClass::getParentClass(): ReflectionClass|false, because class Wrong is not available in t.php on line 4\nStack trace:\n#0 {main}\n"
+    );
+}

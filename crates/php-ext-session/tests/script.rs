@@ -347,3 +347,158 @@ fn upload_progress_is_stored_before_request_startup() {
         "bool(true)\nint(100)\nstring(5) \"a.txt\"\nstring(14) \"/tmp/phpUpload\"\n"
     );
 }
+
+#[test]
+fn handler_interface_warns_about_missing_php9_methods() {
+    let out = run_with(
+        r#"<?php
+interface Combined extends SessionIdInterface, SessionUpdateTimestampHandlerInterface {}
+abstract class Fine implements SessionHandlerInterface, Combined {}
+abstract class Sub extends SessionHandler {}
+abstract class MissingBoth implements SessionHandlerInterface {}
+abstract class MissingValidateId implements SessionHandlerInterface, SessionIdInterface {}
+echo "Done\n";"#,
+        &[],
+    );
+    let expected = "\nWarning: Class MissingBoth implementing SessionHandlerInterface is missing the create_sid() method which will be required in PHP 9.0 in test.php on line 5\n\
+         \nWarning: Class MissingBoth implementing SessionHandlerInterface is missing the validateId() method which will be required in PHP 9.0 in test.php on line 5\n\
+         \nWarning: Class MissingValidateId implementing SessionHandlerInterface is missing the validateId() method which will be required in PHP 9.0 in test.php on line 6\n\
+         Done\n";
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn headers_sent_warning_names_where_output_started() {
+    let out = run_with("<?php\necho \"out\\n\";\nvar_dump(session_start());\n", &[]);
+    let expected = "out\n\nWarning: session_start(): Session cannot be started after headers have \
+         already been sent (sent from test.php on line 2) in test.php on line 3\nbool(false)\n";
+    assert_eq!(out, expected);
+}
+
+/// GH-12504: a fatal error while decoding bails out; `php_session_decode`'s
+/// `zend_catch` then reports the failure with no active function or location.
+#[test]
+fn decode_failure_after_bailout_has_no_location() {
+    let out = run_with(
+        r#"<?php
+class H implements SessionHandlerInterface, SessionIdInterface, SessionUpdateTimestampHandlerInterface {
+    function open($p, $n): bool { return true; }
+    function close(): bool { return true; }
+    function read($id): string|false { return 'a|O:4:"Test":0:{}'; }
+    function write($id, $d): bool { echo "write\n"; return true; }
+    function destroy($id): bool { return true; }
+    function gc($m): int|false { return 0; }
+    function create_sid(): string { return "abc"; }
+    function validateId($id): bool { return true; }
+    function updateTimestamp($id, $d): bool { return true; }
+}
+spl_autoload_register(function () { eval('class Test {public int $v = null;}'); });
+session_set_save_handler(new H, false);
+session_start();
+"#,
+        &[("fatal_error_backtraces", "0")],
+    );
+    let expected =
+        "\nFatal error: Default value for property of type int may not be null. Use the \
+         nullable type ?int to allow null default value in test.php(13) : eval()'d code on line 1\n\
+         \nWarning: Unknown: Failed to decode session object. Session has been destroyed in \
+         Unknown on line 0\n";
+    assert_eq!(out, expected);
+}
+
+/// Bug #79031: `serialize()`/`unserialize()` called from a
+/// `Serializable` share the session encoder's/decoder's `var_hash`.
+#[test]
+fn nested_serialize_shares_the_session_var_hash() {
+    let out = run_with(
+        r#"<?php ob_start();
+class S implements Serializable {
+    public $p;
+    function __construct($p) { $this->p = $p; }
+    function serialize() { return serialize(get_object_vars($this)); }
+    function unserialize($d) { $this->p = unserialize($d)['p']; }
+}
+$o = new stdClass;
+session_start();
+$_SESSION = ['a' => new S($o), 'b' => new S($o)];
+$enc = session_encode();
+echo $enc, "\n";
+session_decode($enc);
+var_dump($_SESSION['a']->p === $_SESSION['b']->p);"#,
+        &[("error_reporting", "24575"), ("session.use_cookies", "0")],
+    );
+    assert_eq!(
+        out,
+        "a|C:1:\"S\":33:{a:1:{s:1:\"p\";O:8:\"stdClass\":0:{}}}b|C:1:\"S\":18:{a:1:{s:1:\"p\";r:3;}}\nbool(true)\n"
+    );
+}
+
+/// `php_set_session_var()`: each decoded entry replaces the old value
+/// before the next one is parsed, so the freed object handle is reused.
+#[test]
+fn decoded_entries_are_stored_one_by_one() {
+    let out = run_with(
+        r#"<?php ob_start();
+session_start();
+session_decode('x|O:8:"stdClass":0:{}y|O:8:"stdClass":0:{}');
+session_decode('x|O:8:"stdClass":0:{}y|O:8:"stdClass":0:{}');
+var_dump($_SESSION);"#,
+        &[("session.use_cookies", "0")],
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [\"x\"]=>\n  object(stdClass)#3 (0) {\n  }\n  [\"y\"]=>\n  object(stdClass)#1 (0) {\n  }\n}\n"
+    );
+}
+
+thread_local! {
+    static SAPI_HEADERS: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn record_sapi_header(
+    _vm: &mut Vm,
+    line: &[u8],
+    _replace: bool,
+    _code: i64,
+) -> php_vm::VmResult<bool> {
+    SAPI_HEADERS.with(|h| h.borrow_mut().push(line.to_vec()));
+    Ok(true)
+}
+
+/// `php_session_send_cookie()` / the cache limiter use `sapi_add_header_ex`:
+/// the headers reach the active SAPI (`php -S`, apache2handler).
+#[test]
+fn session_headers_reach_the_sapi() {
+    let dir = save_dir("sapi-headers");
+    let sink = Sink::default();
+    let ext = php_ext_session::Session;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let opts = VmOptions {
+        ini: vec![(
+            "session.save_path".to_string(),
+            dir.to_string_lossy().into_owned(),
+        )],
+    };
+    let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
+    vm.response_header_hook = Some(record_sapi_header);
+    vm.run_script(
+        b"<?php session_start(); echo session_id() === '' ? 'no' : 'ok';",
+        "test.php",
+    );
+    drop(vm);
+    assert_eq!(&*sink.0.borrow(), b"ok");
+    let headers = SAPI_HEADERS.with(|h| h.borrow().clone());
+    assert!(
+        headers
+            .iter()
+            .any(|l| l.starts_with(b"Set-Cookie: PHPSESSID=")),
+        "{headers:?}"
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|l| l.starts_with(b"Cache-Control: no-store")),
+        "{headers:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
