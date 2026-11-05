@@ -855,3 +855,71 @@ var_dump(get_object_vars(new FallbackVars), get_object_vars(new EmptyVars));
         b"native table failure\narray(1) {\n  [0]=>\n  int(42)\n}\narray(0) {\n}\n"
     );
 }
+
+#[test]
+fn array_access_read_modify_write_fetches_each_container_once() {
+    assert_eq!(
+        run(r#"<?php
+class A implements ArrayAccess {
+    function offsetGet($k): mixed { echo "get($k)\n"; return 1; }
+    function offsetSet($k, $v): void { echo "set($k,$v)\n"; }
+    function offsetExists($k): bool { return true; }
+    function offsetUnset($k): void {}
+}
+class P implements ArrayAccess {
+    function offsetGet($k): mixed { echo "P::get($k)\n"; return new A; }
+    function offsetSet($k, $v): void { echo "P::set\n"; }
+    function offsetExists($k): bool { return true; }
+    function offsetUnset($k): void {}
+}
+$a = new A;
+var_dump($a['x']++);
+var_dump(--$a['y']);
+$a['z'] .= 'b';
+$p = new P;
+$p[0]['n'] .= 'c';
+$t = 1;
+try { $a['r'] = &$t; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#),
+        "get(x)\n\nNotice: Indirect modification of overloaded element of A has no effect in t.php on line 15\nint(1)\n\
+get(y)\n\nNotice: Indirect modification of overloaded element of A has no effect in t.php on line 16\nint(0)\n\
+get(z)\nset(z,1b)\nP::get(0)\nget(n)\nset(n,1c)\nget(r)\n\
+\nNotice: Indirect modification of overloaded element of A has no effect in t.php on line 21\n\
+Cannot assign by reference to an array dimension of an object\n"
+    );
+}
+
+#[test]
+fn clone_destructor_and_static_isset_follow_zend_checks() {
+    assert_eq!(
+        run(r#"<?php
+foreach ([0, null, []] as $v) {
+    try { clone $v; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+class Q { private function __clone() {} }
+try { clone new Q; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$ref = 'r';
+$with = ['x' => &$ref];
+try { clone(new stdClass, $with); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+unset($ref);
+$c = clone(new stdClass, $with);
+var_dump($c->x);
+class R { protected function __destruct() {} }
+$r = new R;
+try { $r = null; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+class S {}
+class T { private static $q = 1; }
+var_dump(isset(S::$p), empty(S::$p), isset(T::$q));
+$keep = new R;
+"#),
+        "clone(): Argument #1 ($object) must be of type object, int given\n\
+clone(): Argument #1 ($object) must be of type object, null given\n\
+clone(): Argument #1 ($object) must be of type object, array given\n\
+Call to private method Q::__clone() from global scope\n\
+Cannot assign by reference when cloning with updated properties\n\
+string(1) \"r\"\n\
+Call to protected R::__destruct() from global scope\n\
+bool(false)\nbool(true)\nbool(false)\n\
+\nWarning: Call to protected R::__destruct() from global scope during shutdown ignored in Unknown on line 0\n"
+    );
+}

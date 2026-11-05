@@ -485,6 +485,14 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+thread_local! {
+    /// The `ArrayAccess` object and offset a read-modify-write walk ended
+    /// on (`FETCH_DIM_RW` on an object yields a temporary): set by
+    /// `Vm::obj_walk`, taken by `Vm::fetch_rw`.
+    static OVERLOADED_RW: std::cell::Cell<Option<(Obj, Value)>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// Performs deferred reference assignments; called once a write walk has
 /// dropped its borrows.
 pub(crate) fn flush_deferred_ref_assigns() {
@@ -543,6 +551,18 @@ impl Vm {
         pid: PlaceId,
         write: bool,
     ) -> VmResult<(RBase, Vec<RSeg>)> {
+        self.resolve_place_ex(pid, write, false)
+    }
+
+    /// [`Vm::resolve_place`]; `quiet` is the `BP_VAR_IS` fetch of
+    /// `isset()`/`empty()`, where an undeclared or inaccessible static
+    /// property base resolves to an undefined base without an error.
+    fn resolve_place_ex(
+        &mut self,
+        pid: PlaceId,
+        write: bool,
+        quiet: bool,
+    ) -> VmResult<(RBase, Vec<RSeg>)> {
         let code = self.frame().code.clone();
         let p = &code.places[pid as usize];
         let base = match &p.base {
@@ -588,8 +608,14 @@ impl Vm {
                 let n = self.read(*name)?;
                 let n = self.to_zstr(&n)?;
                 let cls = self.resolve_class_spec(class)?;
-                let cell = self.static_prop_cell(&cls, &n)?;
-                RBase::Cell(cell)
+                if quiet {
+                    match self.static_prop_cell_is(&cls, &n)? {
+                        Some(cell) => RBase::Cell(cell),
+                        None => RBase::Undef(n),
+                    }
+                } else {
+                    RBase::Cell(self.static_prop_cell(&cls, &n)?)
+                }
             }
             PlaceBase::Value(op) => {
                 let v = self.read_raw(*op)?;
@@ -1003,6 +1029,7 @@ impl Vm {
                     ));
                 }
                 if last {
+                    let assign_ref = matches!(wop, WOp::AssignRef(_));
                     return match wop {
                         WOp::Assign(v) => {
                             self.call_method_name(&obj, "offsetSet", vec![key, v.clone()])?;
@@ -1012,7 +1039,10 @@ impl Vm {
                             if matches!(seg, RSeg::Append) {
                                 return Err(self.make_throw("Error", "Cannot use [] for reading"));
                             }
-                            self.call_method_name_raw(&obj, "offsetGet", vec![key])
+                            let v =
+                                self.call_method_name_raw(&obj, "offsetGet", vec![key.clone()])?;
+                            OVERLOADED_RW.with(|c| c.set(Some((obj, key))));
+                            Ok(v)
                         }
                         WOp::Unset => {
                             self.call_method_name(&obj, "offsetUnset", vec![key])?;
@@ -1020,16 +1050,29 @@ impl Vm {
                         }
                         WOp::MakeRef | WOp::AssignRef(_) => {
                             let r = self.call_method_name_raw(&obj, "offsetGet", vec![key])?;
-                            match r {
-                                Value::Reference(r) => Ok(Value::Reference(r)),
+                            let r = match r {
+                                Value::Reference(r) => r,
                                 other => {
-                                    self.notice(&format!(
-                                        "Indirect modification of overloaded element of {} has no effect",
-                                        object::display_name(&object::class_of(&obj).name)
-                                    ))?;
-                                    Ok(Value::Reference(PhpRef::new(other)))
+                                    // `zend_fetch_dimension_address` (W): an
+                                    // object result is still usable.
+                                    if !matches!(other, Value::Object(_)) {
+                                        self.notice(&format!(
+                                            "Indirect modification of overloaded element of {} has no effect",
+                                            object::display_name(&object::class_of(&obj).name)
+                                        ))?;
+                                    }
+                                    PhpRef::new(other)
                                 }
+                            };
+                            if assign_ref {
+                                // `ZEND_ASSIGN_REF`: the fetched dimension
+                                // is not an INDIRECT slot.
+                                return Err(self.make_throw(
+                                    "Error",
+                                    "Cannot assign by reference to an array dimension of an object",
+                                ));
                             }
+                            Ok(Value::Reference(r))
                         }
                     };
                 }
@@ -1108,10 +1151,31 @@ impl Vm {
                 }
             }
         }
-        let cur = self.write_place(base, &segs, WOp::FetchRw)?;
+        let (cur, overloaded) = self.fetch_rw(base, &segs)?;
+        if let Some((obj, key)) = overloaded {
+            // `zend_binary_assign_op_obj_dim`: offsetGet, op, offsetSet.
+            let nv = ops::binary_op(op, &cur.deref(), &v, self).map_err(|e| self.rt_throw(e))?;
+            drop(cur);
+            self.call_method_name(&obj, "offsetSet", vec![key, nv.clone()])?;
+            return Ok(nv);
+        }
         let nv = ops::binary_op(op, &cur, &v, self).map_err(|e| self.rt_throw(e))?;
         drop(cur);
         self.write_place(base2, &segs, WOp::Assign(nv))
+    }
+
+    /// The read half of a read-modify-write: the current value and, when
+    /// the walk ended on an `ArrayAccess` offset, that object and offset.
+    fn fetch_rw(&mut self, base: RBase, segs: &[RSeg]) -> VmResult<(Value, Option<(Obj, Value)>)> {
+        if !matches!(segs.last(), Some(RSeg::Dim(_) | RSeg::Append)) {
+            return Ok((self.write_place(base, segs, WOp::FetchRw)?, None));
+        }
+        // Save and restore around the walk: user code it runs (offsetGet,
+        // destructors) may perform read-modify-writes of its own.
+        let saved = OVERLOADED_RW.with(std::cell::Cell::take);
+        let r = self.write_place(base, segs, WOp::FetchRw);
+        let mine = OVERLOADED_RW.with(|c| c.replace(saved));
+        Ok((r?, mine))
     }
 
     /// `++place` etc.
@@ -1171,7 +1235,21 @@ impl Vm {
                 }
             }
         }
-        let cur = self.write_place(base, &segs, WOp::FetchRw)?;
+        let (cur, overloaded) = self.fetch_rw(base, &segs)?;
+        // `FETCH_DIM_RW` on an object: a non-reference result is a
+        // temporary, so the increment is not written back.
+        let temporary = match &overloaded {
+            Some((obj, _)) if !matches!(cur, Value::Reference(_)) => {
+                if !matches!(cur, Value::Object(_)) {
+                    self.notice(&format!(
+                        "Indirect modification of overloaded element of {} has no effect",
+                        object::display_name(&object::class_of(obj).name)
+                    ))?;
+                }
+                true
+            }
+            _ => false,
+        };
         // Objects: property inc/dec of undefined, string offsets checked.
         let mut nv = cur.deref();
         if kind.is_inc() {
@@ -1180,6 +1258,9 @@ impl Vm {
             ops::decrement(&mut nv, self).map_err(|e| self.rt_throw(e))?;
         }
         let old = cur.deref();
+        if temporary {
+            return Ok(if kind.is_post() { old } else { nv });
+        }
         let guard = crate::typed_refs::IncDecGuard::new(kind.is_inc(), &old, &nv);
         let res = if let Value::Reference(r) = &cur {
             self.assign_ref(r, nv)
@@ -1456,7 +1537,7 @@ impl Vm {
     /// `isset(place)` / `empty(place)` (returns the isset or empty result).
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
-        let (base, segs) = self.resolve_place(pid, false)?;
+        let (base, segs) = self.resolve_place_ex(pid, false, true)?;
         let mut cur = match base {
             RBase::Var(store, idx) => store.borrow().slots[idx].as_ref().map(Value::deref),
             RBase::This(o) => o.map(Value::Object),
