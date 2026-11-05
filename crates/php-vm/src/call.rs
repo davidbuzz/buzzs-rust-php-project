@@ -1905,7 +1905,9 @@ impl Vm {
                     matches!(name.as_bytes(), b"call_user_func" | b"call_user_func_array")
                 })
         });
-        if (!internal || through_call_user_func) && self.frames.len() >= 2 {
+        if let Some((file, line)) = self.attribute_caller_site() {
+            msg.push_str(&format!(", called in {file} on line {line}"));
+        } else if (!internal || through_call_user_func) && self.frames.len() >= 2 {
             let caller = self
                 .frames
                 .iter()
@@ -1983,6 +1985,19 @@ impl Vm {
         }
     }
 
+    /// The attribute a constructor frame was called for: the dummy frame
+    /// of `zend_get_attribute_object()` is user code at the attribute's
+    /// file and line, so argument errors report it as the caller.
+    #[cold]
+    fn attribute_caller_site(&self) -> Option<(ZStr, u32)> {
+        let caller = self.frames.len().checked_sub(2)?;
+        self.attribute_call_sites
+            .iter()
+            .rev()
+            .find(|s| s.0 == caller)
+            .map(|s| (s.1.clone(), s.2))
+    }
+
     fn missing_arg_error(&mut self, n: u32) -> Throw {
         let f = self.frame();
         let uf = f.ufunc.clone().expect("user frame");
@@ -2014,7 +2029,9 @@ impl Vm {
                     matches!(name.as_bytes(), b"call_user_func" | b"call_user_func_array")
                 })
         });
-        if !internal || through_call_user_func {
+        if let Some((file, line)) = self.attribute_caller_site() {
+            msg.push_str(&format!(" in {file} on line {line}"));
+        } else if !internal || through_call_user_func {
             if let Some(caller) = caller {
                 msg.push_str(&format!(
                     " in {} on line {}",

@@ -455,6 +455,8 @@ fn ra_new_instance(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 this: Some(o.clone()),
                 scope: Some(m.scope()),
                 called: Some(c.clone()),
+                // `ZEND_ATTRIBUTE_STRICT_TYPES`: the use site's mode.
+                strict: r.info.strict,
                 ..PendingCall::new(m.func.clone())
             };
             if let Err(e) = bind_args(vm, &mut call, pos, named) {
