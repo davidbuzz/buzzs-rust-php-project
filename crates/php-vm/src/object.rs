@@ -106,6 +106,7 @@ impl Default for ObjectStore {
             objects: Vec::with_capacity(STORE_INITIAL),
             free: Vec::with_capacity(STORE_INITIAL),
             no_reuse: false,
+            followers: HashMap::new(),
         }
     }
 }
