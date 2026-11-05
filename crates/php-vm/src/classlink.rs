@@ -1382,10 +1382,17 @@ impl Vm {
             if decl.kind == ClassKind::Class
                 && (ic.lc_name.as_bytes() == b"unitenum" || ic.lc_name.as_bytes() == b"backedenum")
             {
+                // `do_interface_implementation` implements the parent
+                // interfaces (UnitEnum of BackedEnum) before the interface.
+                let first = ic
+                    .interfaces
+                    .iter()
+                    .find(|i| i.lc_name.as_bytes() == b"unitenum")
+                    .unwrap_or(&ic);
                 return Err(self.fatal_at(
                     &format!(
                         "Non-enum class {display} cannot implement interface {}",
-                        ic.name
+                        first.name
                     ),
                     line,
                 ));
@@ -1411,7 +1418,7 @@ impl Vm {
         // Traversable must be implemented via Iterator or IteratorAggregate.
         // (`zend_implement_traversable`: an abstract class may implement
         // Traversable alone; the error is an E_CORE_ERROR without location.)
-        if decl.kind == ClassKind::Class
+        if matches!(decl.kind, ClassKind::Class | ClassKind::Enum)
             && decl.flags & cflags::EXPLICIT_ABSTRACT == 0
             && interfaces
                 .iter()
@@ -1423,9 +1430,15 @@ impl Vm {
                 .as_ref()
                 .is_some_and(|p| p.flags & cflags::INTERNAL != 0)
         {
+            // `zend_get_object_type_uc`.
+            let what = if decl.kind == ClassKind::Enum {
+                "Enum"
+            } else {
+                "Class"
+            };
             self.report_fatal(
                 &format!(
-                    "Class {display} must implement interface Traversable as part of either Iterator or IteratorAggregate"
+                    "{what} {display} must implement interface Traversable as part of either Iterator or IteratorAggregate"
                 ),
                 &ZStr::from("Unknown"),
                 0,
@@ -1449,6 +1462,22 @@ impl Vm {
                 ),
                 line,
             ));
+        }
+        // `zend_implement_backed_enum`: BackedEnum (named directly or
+        // through another interface) needs a backed enum.
+        if decl.kind == ClassKind::Enum && decl.backing.is_none() {
+            if let Some(ic) = interfaces
+                .iter()
+                .find(|i| i.lc_name.as_bytes() == b"backedenum")
+            {
+                return Err(self.fatal_at(
+                    &format!(
+                        "Non-backed enum {display} cannot implement interface {}",
+                        ic.name
+                    ),
+                    line,
+                ));
+            }
         }
         // An enum-only interface reached through another interface
         // (`zend_implement_unit_enum` runs for every implemented interface).
@@ -1625,6 +1654,24 @@ impl Vm {
                 f(self, &cls)?;
             }
         }
+        // `zend_implement_serializable` (the Serializable hook, run while
+        // binding the interfaces: before `zend_verify_abstract_class` and
+        // `zend_verify_enum`).
+        if cls.flags & cflags::EXPLICIT_ABSTRACT == 0
+            && !cls.is_interface()
+            && cls
+                .interfaces
+                .iter()
+                .any(|i| i.lc_name.as_bytes() == b"serializable")
+            && (cls.find_method(b"__serialize").is_none()
+                || cls.find_method(b"__unserialize").is_none())
+        {
+            let msg = format!(
+                "{} implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary)",
+                object::display_name(&cls.name)
+            );
+            recorded.push((crate::errors::level::DEPRECATED, msg, line));
+        }
         // Abstract method check.
         // (`zend_verify_abstract_class`: an explicitly abstract class must
         // still implement its private abstract methods.)
@@ -1729,22 +1776,6 @@ impl Vm {
         }
         if let Some((e, l)) = crate::attrs::check_override(&cls) {
             return Err(self.fatal_at(&e, if l == 0 { line } else { l }));
-        }
-        // `zend_implement_serializable`.
-        if cls.flags & cflags::EXPLICIT_ABSTRACT == 0
-            && !cls.is_interface()
-            && cls
-                .interfaces
-                .iter()
-                .any(|i| i.lc_name.as_bytes() == b"serializable")
-            && (cls.find_method(b"__serialize").is_none()
-                || cls.find_method(b"__unserialize").is_none())
-        {
-            let msg = format!(
-                "{} implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary)",
-                object::display_name(&cls.name)
-            );
-            recorded.push((crate::errors::level::DEPRECATED, msg, line));
         }
         if !cc.pending.is_empty()
             || !cc.pending_props.is_empty()
@@ -3257,6 +3288,11 @@ fn build_class(
             let s = crate::builtins::sig::parse_sig(sig);
             let lc = ZStr::from(s.name.to_ascii_lowercase());
             if methods.contains_key(&lc) {
+                // `zend_enum_register_func` (the name is the known string
+                // it registers: `cases`, `from`, `tryfrom`).
+                if err.is_none() {
+                    *err = Some(format!("Cannot redeclare {display}::{lc}()"));
+                }
                 continue;
             }
             let b = crate::func::Builtin {

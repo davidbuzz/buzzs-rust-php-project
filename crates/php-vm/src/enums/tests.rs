@@ -156,3 +156,40 @@ fn from_parses_its_argument_like_zpp() {
          TypeError: I::from(): Argument #1 ($value) must be of type int, float given\n"
     );
 }
+
+#[test]
+fn link_time_enum_errors() {
+    let cases = [
+        (
+            "<?php enum Foo { case Bar; public static function cases(): array { return []; } }",
+            "Fatal error: Cannot redeclare Foo::cases()",
+        ),
+        (
+            "<?php enum Foo: int { case Bar = 0; public static function tryFrom(int|string $v): ?self { return null; } }",
+            "Fatal error: Cannot redeclare Foo::tryfrom()",
+        ),
+        (
+            "<?php class Foo implements BackedEnum {}",
+            "Fatal error: Non-enum class Foo cannot implement interface UnitEnum",
+        ),
+        (
+            "<?php enum Foo implements BackedEnum {}",
+            "Fatal error: Non-backed enum Foo cannot implement interface BackedEnum",
+        ),
+        (
+            "<?php enum Foo implements Traversable {}",
+            "Fatal error: Enum Foo must implement interface Traversable as part of either Iterator or IteratorAggregate in Unknown on line 0",
+        ),
+    ];
+    for (src, want) in cases {
+        let out = run(src);
+        assert!(out.contains(want), "{src}: {out}");
+    }
+    // The Serializable deprecation comes from the interface hook, before
+    // `zend_verify_enum` rejects the enum.
+    let out = run("<?php enum Foo implements Serializable { case Bar;\n\
+         public function serialize() {} public function unserialize($d) {} }");
+    let dep = out.find("Deprecated: Foo implements the Serializable interface");
+    let fatal = out.find("Fatal error: Enum Foo cannot implement the Serializable interface");
+    assert!(matches!((dep, fatal), (Some(d), Some(f)) if d < f), "{out}");
+}
