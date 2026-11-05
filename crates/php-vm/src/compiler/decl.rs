@@ -1,7 +1,7 @@
 //! Function, closure and class declarations; parameters and types.
 
 use super::{CResult, ClassCtx, Compiler, FnCtx, FnKind};
-use crate::ast::{self, ClassMemberKind, Expr, ExprKind, Stmt, StmtKind, TypeKind};
+use crate::ast::{self, ClassMemberKind, Expr, Stmt, StmtKind, TypeKind};
 use crate::class::{
     cflags, AttributeInfo, ClassDecl, ClassKind, ConstDecl, ConstExpr, MethodDecl, PropDecl,
     PropHooks, TraitRule,
@@ -383,7 +383,14 @@ impl Compiler {
     ) -> CResult<(Vec<ParamInfo>, u32, Option<TypeDecl>, Vec<ClosureUse>)> {
         // Parameters occupy the first CVs.
         let mut params = Vec::new();
-        for p in spec.params {
+        // Required count: up to the last required parameter.
+        let mut required = 0u32;
+        for (i, p) in spec.params.iter().enumerate() {
+            if p.default.is_none() && !p.variadic {
+                required = u32::try_from(i + 1).unwrap_or(0);
+            }
+        }
+        for (i, p) in spec.params.iter().enumerate() {
             if p.name.name == b"this" {
                 return self.err("Cannot use $this as parameter", p.span.line);
             }
@@ -411,6 +418,7 @@ impl Compiler {
                 None => None,
             };
             let folded_default = p.default.as_ref().and_then(|d| self.try_fold(d));
+            let mut forced = false;
             if let (Some(t), Some(Value::Null)) = (&mut ty, &folded_default) {
                 if p.modifiers.is_empty() && p.hooks.is_none() && !t.allows_null() && !t.is_mixed()
                 {
@@ -423,6 +431,7 @@ impl Compiler {
                     }
                     t.mask |= mask::NULL;
                     t.pure_intersection = false;
+                    forced = true;
                     self.warnings.push((
                         8192,
                         format!(
@@ -488,6 +497,26 @@ impl Compiler {
                 None,
                 false,
             )?;
+            // `Type $p = null` (PHP 5 style, `forced_allow_nullable`) is
+            // exempt from the optional-before-required notice.
+            if p.default.is_some() && !forced && (i as u32) < required {
+                // php-src names the last required parameter.
+                let later = (required as usize)
+                    .checked_sub(1)
+                    .and_then(|r| spec.params.get(r))
+                    .map(|q| q.name.as_str_lossy().into_owned())
+                    .unwrap_or_default();
+                self.warnings.push((
+                    8192,
+                    format!(
+                        "{}(): Optional parameter ${} declared before required parameter ${} is implicitly treated as a required parameter",
+                        self.fn_display_name(),
+                        p.name.as_str_lossy(),
+                        later
+                    ),
+                    p.span.line,
+                ));
+            }
             params.push(ParamInfo {
                 name: ZStr::from(p.name.name.as_slice()),
                 by_ref: p.by_ref,
@@ -514,37 +543,6 @@ impl Compiler {
                 },
                 attributes: attrs,
             });
-        }
-        // Required count: up to the last required parameter.
-        let mut required = 0u32;
-        for (i, p) in spec.params.iter().enumerate() {
-            if p.default.is_none() && !p.variadic {
-                required = u32::try_from(i + 1).unwrap_or(0);
-            }
-        }
-        // Deprecation for optional-before-required.
-        for (i, p) in spec.params.iter().enumerate() {
-            if let Some(d) = &p.default {
-                if (i as u32) < required {
-                    let is_nullable_null = is_null_literal(d) && p.ty.is_some();
-                    let _ = is_nullable_null;
-                    let later = spec.params[i + 1..]
-                        .iter()
-                        .find(|q| q.default.is_none() && !q.variadic)
-                        .map(|q| q.name.as_str_lossy().into_owned())
-                        .unwrap_or_default();
-                    self.warnings.push((
-                        8192,
-                        format!(
-                            "{}(): Optional parameter ${} declared before required parameter ${} is implicitly treated as a required parameter",
-                            self.fn_display_name(),
-                            p.name.as_str_lossy(),
-                            later
-                        ),
-                        p.span.line,
-                    ));
-                }
-            }
         }
         // Closure uses after params.
         let mut uses = Vec::new();
@@ -1082,6 +1080,32 @@ impl Compiler {
     }
 
     /// Compiles a class-like declaration; returns its index.
+    /// `zend_resolve_const_class_name_reference()`: a class reference
+    /// (`extends`, `implements`, `use`, trait rules) may not be one of the
+    /// `self`/`parent`/`static` fetch keywords.
+    fn resolve_class_reference(&self, name: &ast::Name, ty: &str) -> CResult<ZStr> {
+        if is_class_fetch_keyword(name) {
+            return self.err(
+                format!(
+                    "Cannot use \"{}\" as {ty}, as it is reserved",
+                    String::from_utf8_lossy(&name.name)
+                ),
+                name.span.line,
+            );
+        }
+        // `zend_resolve_class_name()`: `\static` is not a class name either.
+        if name.kind == ast::NameKind::FullyQualified && is_fetch_keyword(&name.name) {
+            return self.err(
+                format!(
+                    "'\\{}' is an invalid class name",
+                    String::from_utf8_lossy(&name.name)
+                ),
+                name.span.line,
+            );
+        }
+        Ok(ZStr::from(self.resolve_class_name(name)))
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn compile_class_decl(
         &mut self,
@@ -1094,10 +1118,10 @@ impl Compiler {
             ast::ClassKind::Trait => ClassKind::Trait,
             ast::ClassKind::Enum => ClassKind::Enum,
         };
-        let parent = cd
-            .extends
-            .as_ref()
-            .map(|n| ZStr::from(self.resolve_class_name(n)));
+        let parent = match &cd.extends {
+            Some(n) => Some(self.resolve_class_reference(n, "class name")?),
+            None => None,
+        };
         let name: ZStr = if is_anon {
             self.anon_counter += 1;
             let prefix = parent.as_ref().map_or_else(
@@ -1161,18 +1185,6 @@ impl Compiler {
             }
             ZStr::from(self.ns_prefixed_pub(&n))
         };
-        if let Some(p) = &parent {
-            let lc = p.to_ascii_lowercase();
-            if matches!(lc.as_bytes(), b"self" | b"parent" | b"static") {
-                return self.err(
-                    format!(
-                        "Cannot use '{}' as class name, as it is reserved",
-                        p.to_string_lossy()
-                    ),
-                    cd.span.line,
-                );
-            }
-        }
         let mut cflag = 0u32;
         match kind {
             ClassKind::Interface => cflag |= cflags::INTERFACE,
@@ -1209,11 +1221,11 @@ impl Compiler {
         {
             cflag |= cflags::ALLOW_DYNAMIC;
         }
-        let interfaces: Vec<ZStr> = cd
+        let interfaces = cd
             .implements
             .iter()
-            .map(|n| ZStr::from(self.resolve_class_name(n)))
-            .collect();
+            .map(|n| self.resolve_class_reference(n, "interface name"))
+            .collect::<CResult<Vec<ZStr>>>()?;
         self.classes.push(ClassCtx {
             name: name.clone(),
             parent: parent.clone(),
@@ -1658,16 +1670,8 @@ impl Compiler {
                             md.span.line,
                         );
                     }
-                    if fl & flags::PRIVATE != 0
-                        && fl & flags::FINAL != 0
-                        && !md.name.eq_ignore_case("__construct")
-                    {
-                        self.warnings.push((
-                            128,
-                            "Private methods cannot be final as they are never overridden by other classes".to_string(),
-                            md.span.line,
-                        ));
-                    }
+                    // "Private methods cannot be final ..." is a parser
+                    // diagnostic (`php_parser::validate`).
                     let is_ctor = md.name.eq_ignore_case("__construct");
                     if !is_ctor
                         && md
@@ -1821,25 +1825,25 @@ impl Compiler {
                         );
                     }
                     for t in &tu.traits {
-                        traits.push(ZStr::from(self.resolve_class_name(t)));
+                        traits.push(self.resolve_class_reference(t, "trait name")?);
                     }
                     for a in &tu.adaptations {
                         match a {
                             ast::TraitAdaptation::Precedence {
                                 method, insteadof, ..
                             } => {
-                                let tn = method
-                                    .trait_name
-                                    .as_ref()
-                                    .map(|n| ZStr::from(self.resolve_class_name(n)))
-                                    .unwrap_or_default();
+                                let tn = match &method.trait_name {
+                                    Some(n) => self.resolve_class_reference(n, "trait name")?,
+                                    None => ZStr::default(),
+                                };
+                                let insteadof = insteadof
+                                    .iter()
+                                    .map(|n| self.resolve_class_reference(n, "trait name"))
+                                    .collect::<CResult<Vec<ZStr>>>()?;
                                 rules.push(TraitRule::Precedence {
                                     trait_name: tn,
                                     method: ZStr::from(method.method.name.as_slice()),
-                                    insteadof: insteadof
-                                        .iter()
-                                        .map(|n| ZStr::from(self.resolve_class_name(n)))
-                                        .collect(),
+                                    insteadof,
                                 });
                             }
                             ast::TraitAdaptation::Alias {
@@ -1857,11 +1861,12 @@ impl Compiler {
                                     }
                                     f
                                 };
+                                let trait_name = match &method.trait_name {
+                                    Some(n) => Some(self.resolve_class_reference(n, "trait name")?),
+                                    None => None,
+                                };
                                 rules.push(TraitRule::Alias {
-                                    trait_name: method
-                                        .trait_name
-                                        .as_ref()
-                                        .map(|n| ZStr::from(self.resolve_class_name(n))),
+                                    trait_name,
                                     method: ZStr::from(method.method.name.as_slice()),
                                     flags: f,
                                     alias: alias.as_ref().map(|a| ZStr::from(a.name.as_slice())),
@@ -2502,10 +2507,6 @@ enum BodyKind<'a> {
     None,
 }
 
-fn is_null_literal(e: &Expr) -> bool {
-    matches!(&e.kind, ExprKind::Const(n) if n.kind != ast::NameKind::Qualified && n.name.eq_ignore_ascii_case(b"null"))
-}
-
 fn is_superglobal_or_globals(n: &[u8]) -> bool {
     super::expr::is_superglobal(n) || n == b"GLOBALS"
 }
@@ -2529,6 +2530,20 @@ fn is_builtin_type(lc: &[u8]) -> bool {
             | b"callable"
             | b"static"
     )
+}
+
+/// `zend_get_class_fetch_type_ast() != ZEND_FETCH_CLASS_DEFAULT`: an
+/// unqualified (or `namespace\`-relative) `self`, `parent` or `static`.
+fn is_class_fetch_keyword(name: &ast::Name) -> bool {
+    matches!(name.kind, ast::NameKind::Unqualified | ast::NameKind::Relative)
+        && is_fetch_keyword(&name.name)
+}
+
+/// `self`, `parent` or `static` (case-insensitive).
+fn is_fetch_keyword(n: &[u8]) -> bool {
+    n.eq_ignore_ascii_case(b"self")
+        || n.eq_ignore_ascii_case(b"parent")
+        || n.eq_ignore_ascii_case(b"static")
 }
 
 pub(super) fn is_reserved_class_name(lc: &[u8]) -> bool {

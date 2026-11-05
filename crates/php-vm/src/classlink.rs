@@ -560,7 +560,14 @@ impl Vm {
                 }
             }
         }
-        let Some(sp) = cls.find_static(name.as_bytes()).cloned() else {
+        // Zend's `properties_info` also carries an ancestor's private
+        // statics, so `B::$x` naming `A`'s private `$x` is a visibility
+        // error (or `A`'s own slot when accessed from `A`).
+        let Some(sp) = cls
+            .find_static(name.as_bytes())
+            .cloned()
+            .or_else(|| inherited_private_static(cls, name.as_bytes()))
+        else {
             return Err(self.make_throw(
                 "Error",
                 &format!(
@@ -1903,11 +1910,7 @@ impl TraitMethodBinder<'_> {
                 _ => {}
             }
         }
-        let proto = self
-            .parent
-            .and_then(|p| p.methods.get(&key))
-            .filter(|m| m.visibility() != flags::PRIVATE)
-            .map_or_else(|| self.weak.clone(), |m| m.proto_scope.clone());
+        let proto = inherited_proto_scope(self.parent, &key, self.weak);
         let m = Rc::new(Method {
             name: name.clone(),
             func: trait_method_copy(&tm.func, name),
@@ -1932,6 +1935,47 @@ struct TraitRules {
     /// For each rule of the declaration: the index of the trait an `as`
     /// rule applies to (`None` for precedence rules).
     alias_trait: Vec<Option<usize>>,
+}
+
+/// The nearest ancestor's private static `$name` that `cls` does not
+/// inherit into its own static table.
+fn inherited_private_static(cls: &Class, name: &[u8]) -> Option<StaticProp> {
+    let mut cur = cls.parent.clone();
+    while let Some(c) = cur {
+        if let Some(sp) = c.find_static(name) {
+            return (sp.flags & flags::PRIVATE != 0).then(|| sp.clone());
+        }
+        cur = c.parent.clone();
+    }
+    None
+}
+
+/// The prototype root (`zend_get_function_root_class()`) of a method that
+/// overrides the parent's same-named one (`do_inheritance_check_on_method()`):
+/// a private parent method gives none, and a constructor only keeps an
+/// abstract prototype (declared abstract or by an interface).
+fn inherited_proto_scope(
+    parent: Option<&Rc<Class>>,
+    lc: &ZStr,
+    own: &Weak<Class>,
+) -> Weak<Class> {
+    let Some(pm) = parent.and_then(|p| p.methods.get(lc)) else {
+        return own.clone();
+    };
+    if pm.visibility() == flags::PRIVATE {
+        return own.clone();
+    }
+    if lc.as_bytes() == b"__construct"
+        && !pm.is_abstract()
+        && !pm
+            .proto_scope
+            .upgrade()
+            .and_then(|p| p.methods.get(lc).cloned())
+            .is_some_and(|m| m.is_abstract())
+    {
+        return own.clone();
+    }
+    pm.proto_scope.clone()
 }
 
 fn is_valid_class_name(n: &[u8]) -> bool {
@@ -2712,11 +2756,7 @@ fn build_class(
     // then inherited ones.
     for md in &decl.methods {
         let lc = ZStr::from(md.name.to_ascii_lowercase());
-        let proto = parent
-            .as_ref()
-            .and_then(|p| p.methods.get(&lc))
-            .filter(|m| m.visibility() != flags::PRIVATE)
-            .map_or_else(|| weak.clone(), |m| m.proto_scope.clone());
+        let proto = inherited_proto_scope(parent.as_ref(), &lc, weak);
         let m = Rc::new(Method {
             name: md.name.clone(),
             func: Func::User(md.func.clone()),

@@ -440,7 +440,10 @@ impl Vm {
                     }
                 }
                 if let Some(cs) = cls.magic.call_static.clone() {
-                    return Ok(self.magic_call(&cs, None, cls.clone(), name));
+                    // The trampoline forwards the called scope like a
+                    // resolved static method would.
+                    let called = forwarded_called(cur_called, cls, forward);
+                    return Ok(self.magic_call(&cs, None, called, name));
                 }
                 return Err(match other {
                     Some(m) => {
@@ -481,13 +484,7 @@ impl Vm {
             ));
         }
         if m.is_static() {
-            let called = if forward {
-                cur_called
-                    .filter(|c| c.is_subclass_of(cls))
-                    .unwrap_or_else(|| cls.clone())
-            } else {
-                cls.clone()
-            };
+            let called = forwarded_called(cur_called, cls, forward);
             return Ok(PendingCall {
                 scope: Some(m.scope()),
                 called: Some(called),
@@ -526,6 +523,23 @@ impl Vm {
         );
         let cls = self.resolve_class_spec(class)?;
         let call = self.static_method_call(&cls, &name, forward)?;
+        if cls.is_trait() {
+            // `zend_std_get_static_method()`: the resolved method (or the
+            // `__callStatic` trampoline) is scoped to the trait itself.
+            let fname = match &call.magic_name {
+                Some(n) => n.clone(),
+                None => cls
+                    .find_method(name.as_bytes())
+                    .map_or_else(|| name.clone(), |m| m.name.clone()),
+            };
+            self.error(
+                crate::errors::level::DEPRECATED,
+                &format!(
+                    "Calling static trait method {}::{fname} is deprecated, it should only be called on a class using the trait",
+                    object::display_name(&cls.name)
+                ),
+            )?;
+        }
         self.push_pending(call);
         Ok(())
     }
@@ -571,8 +585,9 @@ impl Vm {
             return Err(self.make_throw(
                 "Error",
                 &format!(
-                    "Call to {vis} {}::__construct() from {}",
-                    object::display_name(&cls.name),
+                    "Call to {vis} {}::{}() from {}",
+                    object::display_name(&ctor.scope().name),
+                    ctor.name,
                     scope_display(scope.as_ref())
                 ),
             ));
@@ -2045,6 +2060,18 @@ impl Vm {
         let result = self.call_pending(call);
         self.observer.quiet_builtin = saved;
         result
+    }
+}
+
+/// The called scope of a static call to `cls`: `self::`/`parent::`/
+/// `static::` (`forward`) keep the caller's called scope when it is a
+/// subclass of `cls`.
+fn forwarded_called(cur: Option<Rc<Class>>, cls: &Rc<Class>, forward: bool) -> Rc<Class> {
+    if forward {
+        cur.filter(|c| c.is_subclass_of(cls))
+            .unwrap_or_else(|| cls.clone())
+    } else {
+        cls.clone()
     }
 }
 

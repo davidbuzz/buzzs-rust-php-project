@@ -137,15 +137,87 @@ fn define(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(ok))
 }
 
+/// The class part of `defined("C::X")` / `constant("C::X")`
+/// (`zend_get_class_constant_ex()`): `self`, `parent` and `static` follow
+/// the calling frame; `Ok(None)` is a missing class under `silent`
+/// (`ZEND_FETCH_CLASS_SILENT`).
+fn constant_class(vm: &mut Vm, name: &[u8], silent: bool) -> VmResult<Option<Rc<Class>>> {
+    let name = name.strip_prefix(b"\\").unwrap_or(name);
+    if name.eq_ignore_ascii_case(b"self") {
+        return match vm.scope() {
+            Some(s) => Ok(Some(s)),
+            None => Err(vm.make_throw(
+                "Error",
+                "Cannot access \"self\" when no class scope is active",
+            )),
+        };
+    }
+    if name.eq_ignore_ascii_case(b"parent") {
+        let Some(scope) = vm.scope() else {
+            return Err(vm.make_throw(
+                "Error",
+                "Cannot access \"parent\" when no class scope is active",
+            ));
+        };
+        return match scope.parent.clone() {
+            Some(p) => Ok(Some(p)),
+            None => Err(vm.make_throw(
+                "Error",
+                "Cannot access \"parent\" when current class scope has no parent",
+            )),
+        };
+    }
+    if name.eq_ignore_ascii_case(b"static") {
+        let called = vm
+            .frames
+            .iter()
+            .rev()
+            .find(|f| f.kind != FrameKind::Builtin)
+            .and_then(|f| match &f.this {
+                Some(t) => Some(object::class_of(t).clone()),
+                None => f.called.clone(),
+            });
+        return match called {
+            Some(c) => Ok(Some(c)),
+            None => Err(vm.make_throw(
+                "Error",
+                "Cannot access \"static\" when no class scope is active",
+            )),
+        };
+    }
+    let cls = ZStr::from(name);
+    if silent {
+        vm.lookup_class(&cls)
+    } else {
+        vm.lookup_class_or_error(&cls).map(Some)
+    }
+}
+
+/// `zend_verify_const_access()` from the calling scope.
+fn const_accessible(vm: &Vm, c: &crate::class::ClassConst) -> bool {
+    match c.flags & flags::VISIBILITY {
+        flags::PUBLIC => true,
+        vis => match (vm.scope(), vm.find_class(c.class.as_bytes())) {
+            (Some(s), Some(d)) if vis == flags::PRIVATE => Rc::ptr_eq(&s, &d),
+            (Some(s), Some(d)) => s.is_subclass_of(&d) || d.is_subclass_of(&s),
+            _ => false,
+        },
+    }
+}
+
 fn defined(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = s(a, 0);
     if let Some(p) = crate::call::find_double_colon(name.as_bytes()) {
-        let cls = ZStr::from(&name.as_bytes()[..p]);
         let cn = &name.as_bytes()[p + 2..];
-        return Ok(Value::Bool(match vm.lookup_class(&cls)? {
-            Some(c) => c.find_const(cn).is_some(),
-            None => false,
-        }));
+        // Missing, inaccessible and trait constants are all "not defined".
+        return Ok(Value::Bool(
+            match constant_class(vm, &name.as_bytes()[..p], true)? {
+                Some(c) => {
+                    !c.is_trait() && c.find_const(cn).is_some_and(|k| const_accessible(vm, k))
+                }
+                None => false,
+            },
+        ));
     }
     let n = name
         .as_bytes()
@@ -158,9 +230,29 @@ fn constant_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = s(a, 0);
     if let Some(p) = crate::call::find_double_colon(name.as_bytes()) {
         let cb = &name.as_bytes()[..p];
-        let cls = ZStr::from(cb.strip_prefix(b"\\").unwrap_or(cb));
         let cn = ZStr::from(&name.as_bytes()[p + 2..]);
-        let c = vm.lookup_class_or_error(&cls)?;
+        let Some(c) = constant_class(vm, cb, false)? else {
+            return Err(vm.make_throw(
+                "Error",
+                &format!("Class \"{}\" not found", String::from_utf8_lossy(cb)),
+            ));
+        };
+        // Trait constants are only reachable through a using class; the
+        // undefined/visibility errors come first.
+        if c.is_trait()
+            && c
+                .find_const(cn.as_bytes())
+                .is_some_and(|k| const_accessible(vm, k))
+        {
+            return Err(vm.make_throw(
+                "Error",
+                &format!(
+                    "Cannot access trait constant {}::{} directly",
+                    String::from_utf8_lossy(cb.strip_prefix(b"\\").unwrap_or(cb)),
+                    cn.to_string_lossy()
+                ),
+            ));
+        }
         return vm.fetch_class_constant(&c, &cn);
     }
     let n = name
@@ -1274,7 +1366,9 @@ fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             _ => false,
         }
     } else {
-        vm.is_callable_value(&v)
+        // `zend_is_callable_ex(var, NULL, 0, ...)`: deprecations (`"static"`
+        // in callables) are emitted and exceptions propagate.
+        matches!(vm.zend_is_callable(&v, false)?, Ok(_))
     };
     if a.has(2) {
         let name = vm.callable_name(&v);
