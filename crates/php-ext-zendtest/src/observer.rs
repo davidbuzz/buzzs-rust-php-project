@@ -119,6 +119,14 @@ fn show_init_backtrace(vm: &mut Vm) {
     out(vm, &s);
 }
 
+/// `observer_show_opcode`: the current opline of user code.
+fn show_opcode(vm: &mut Vm, f: &ObservedFrame) {
+    if let (Some(op), true) = (f.opcode, ini(vm, "show_opcode")) {
+        let line = format!("{}<!-- opcode: '{op}' -->\n", indent(0));
+        out(vm, &line);
+    }
+}
+
 /// `observer_fcall_init`: called once per function, on its first call.
 fn init(vm: &mut Vm, f: &ObservedFrame) -> bool {
     if ini(vm, "show_output") {
@@ -130,6 +138,7 @@ fn init(vm: &mut Vm, f: &ObservedFrame) -> bool {
         if ini(vm, "show_init_backtrace") {
             show_init_backtrace(vm);
         }
+        show_opcode(vm, f);
     }
     true
 }
@@ -147,6 +156,7 @@ fn begin(vm: &mut Vm, f: &ObservedFrame) {
     };
     out(vm, &line);
     DEPTH.with(|d| d.set(d.get() + 1));
+    show_opcode(vm, f);
 }
 
 /// `php_var_export_ex(retval, level, buf)`.
@@ -259,6 +269,7 @@ fn end(vm: &mut Vm, f: &ObservedFrame, retval: Option<&Value>) {
         );
         out(vm, &line);
     }
+    show_opcode(vm, f);
     DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
     let line = match display(f) {
         Some(n) => format!("{}</{n}{}>\n", indent(0), retval_info(vm, retval)),

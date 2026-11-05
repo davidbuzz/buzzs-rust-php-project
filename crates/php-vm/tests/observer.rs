@@ -340,3 +340,27 @@ foreach (outer() as $v) {}
         ]
     );
 }
+
+#[test]
+fn begin_and_end_report_the_current_zend_opcode() {
+    // ext/zend_test/tests/observer_opline_01.phpt
+    LOG.with(|l| l.borrow_mut().clear());
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+    vm.set_observer(ObserverHooks {
+        init: Some(|_, f| f.filename.is_some()),
+        begin: Some(|_, f| log(format!("begin {} {:?}", name(f), f.opcode))),
+        end: Some(|_, f, _| log(format!("end {} {:?}", name(f), f.opcode))),
+        ..ObserverHooks::default()
+    });
+    vm.run_script(b"<?php function foo() { echo 'x'; } foo();", "op.php");
+    drop(vm);
+    assert_eq!(
+        LOG.with(|l| l.borrow().clone()),
+        [
+            "begin {main} Some(\"ZEND_INIT_FCALL\")",
+            "begin foo Some(\"ZEND_ECHO\")",
+            "end foo Some(\"ZEND_RETURN\")",
+            "end {main} Some(\"ZEND_RETURN\")",
+        ]
+    );
+}

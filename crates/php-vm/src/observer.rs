@@ -3,7 +3,7 @@
 
 use crate::fiber::FiberState;
 use crate::func::Func;
-use crate::opcode::OpArray;
+use crate::opcode::{Op, OpArray};
 use crate::vm::{Frame, FrameKind, Throw, Vm};
 use php_runtime::{Obj, Value, ZStr};
 use std::collections::HashMap;
@@ -18,6 +18,36 @@ pub struct ObservedFrame {
     pub scope: Option<ZStr>,
     /// Source file.
     pub filename: Option<ZStr>,
+    /// The Zend name of the frame's current opline (`EX(opline)`: the
+    /// first one at `begin`, the returning one at `end`) for user code,
+    /// when it maps onto a Zend opcode.
+    pub opcode: Option<&'static str>,
+}
+
+/// `zend_get_opcode_name` of the Zend opcode an [`Op`] implements (only
+/// the ones that begin or end an op array).
+fn zend_opcode_name(op: &Op) -> Option<&'static str> {
+    Some(match op {
+        Op::InitFCall { .. } => "ZEND_INIT_FCALL",
+        Op::InitDynCall { .. } => "ZEND_INIT_DYNAMIC_CALL",
+        Op::InitMethodCall { .. } => "ZEND_INIT_METHOD_CALL",
+        Op::InitStaticCall { .. } => "ZEND_INIT_STATIC_METHOD_CALL",
+        Op::New { .. } => "ZEND_NEW",
+        Op::DoCall { .. } => "ZEND_DO_FCALL",
+        Op::Recv { .. } => "ZEND_RECV",
+        Op::RecvInit { .. } => "ZEND_RECV_INIT",
+        Op::RecvVariadic { .. } => "ZEND_RECV_VARIADIC",
+        Op::Return { .. } => "ZEND_RETURN",
+        Op::ReturnRef { .. } | Op::ReturnByRefValue { .. } => "ZEND_RETURN_BY_REF",
+        Op::GeneratorCreate => "ZEND_GENERATOR_CREATE",
+        Op::Yield { .. } => "ZEND_YIELD",
+        Op::YieldFrom { .. } => "ZEND_YIELD_FROM",
+        Op::Include { .. } => "ZEND_INCLUDE_OR_EVAL",
+        Op::Echo(_) => "ZEND_ECHO",
+        Op::Throw(_) => "ZEND_THROW",
+        Op::Exit(_) => "ZEND_EXIT",
+        _ => return None,
+    })
 }
 
 /// A fiber context as the fiber observers see it (`zend_fiber_context`,
@@ -97,8 +127,16 @@ pub(crate) struct ObserverState {
 }
 
 impl ObservedFrame {
-    fn from_frame(f: &Frame) -> Self {
+    /// `at_end`: the opline is the one just executed (the return).
+    fn from_frame(f: &Frame, at_end: bool) -> Self {
+        let opcode = if f.kind == FrameKind::Builtin {
+            None
+        } else {
+            let ip = if at_end { f.ip.saturating_sub(1) } else { f.ip };
+            f.code.ops.get(ip).and_then(zend_opcode_name)
+        };
         Self {
+            opcode,
             function: f.func.as_ref().map(|func| func.name().clone()),
             scope: f
                 .func
@@ -152,7 +190,7 @@ impl Vm {
             |f| Identity::Function(f.clone()),
         );
         let key = identity.key();
-        let info = ObservedFrame::from_frame(frame);
+        let info = ObservedFrame::from_frame(frame, false);
         self.observer.in_hook = true;
         #[allow(clippy::single_match_else)] // the None arm is a multi-line computation
         let selected = match self.observer.initialized.get(&key) {
@@ -199,7 +237,7 @@ impl Vm {
         if !std::mem::take(&mut frame.observed) {
             return;
         }
-        let info = ObservedFrame::from_frame(frame);
+        let info = ObservedFrame::from_frame(frame, true);
         let Some(end) = self.observer.hooks.and_then(|h| h.end) else {
             return;
         };
@@ -246,7 +284,7 @@ impl Vm {
         let Some(frame) = self.frames.get(index).filter(|f| !f.observer_hidden) else {
             return;
         };
-        let info = ObservedFrame::from_frame(frame);
+        let info = ObservedFrame::from_frame(frame, false);
         let saved = self.observer.exception.take();
         self.observer.exception = match result {
             Some(Err(Throw::Exception(e))) => Some(e.clone()),
