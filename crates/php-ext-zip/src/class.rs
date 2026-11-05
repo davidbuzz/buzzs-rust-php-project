@@ -505,6 +505,11 @@ fn mangle(pi: &php_vm::class::PropInfo) -> ZStr {
 /// `php_zip_get_properties()`: the standard table with the virtual
 /// properties' current values.
 fn properties_for(_vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
+    // php-src: only DatePeriod answers ZEND_PROP_PURPOSE_GET_OBJECT_VARS;
+    // everything else falls back to `get_properties`.
+    if purpose == PropertyPurpose::GetObjectVars {
+        return Ok(None);
+    }
     let d = object::data(o);
     if purpose == PropertyPurpose::Debug && d.class.magic.debug_info.is_some() {
         return Ok(None);

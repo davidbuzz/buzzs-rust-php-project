@@ -221,6 +221,11 @@ fn create_hook(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
 
 /// `date_object_get_properties_interval()`.
 fn properties_for(_vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
+    // php-src: only DatePeriod answers ZEND_PROP_PURPOSE_GET_OBJECT_VARS;
+    // everything else falls back to `get_properties`.
+    if purpose == PropertyPurpose::GetObjectVars {
+        return Ok(None);
+    }
     if purpose == PropertyPurpose::Debug && object::class_of(o).magic.debug_info.is_some() {
         return Ok(None);
     }

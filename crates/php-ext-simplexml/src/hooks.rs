@@ -64,6 +64,11 @@ fn clone(vm: &mut Vm, old: &Obj, new: &Obj) -> VmResult<()> {
 }
 
 fn properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
+    // php-src: only DatePeriod answers ZEND_PROP_PURPOSE_GET_OBJECT_VARS;
+    // everything else falls back to `get_properties`.
+    if purpose == PropertyPurpose::GetObjectVars {
+        return Ok(None);
+    }
     let Some(st) = sxe_of(o) else {
         return Ok(None);
     };
