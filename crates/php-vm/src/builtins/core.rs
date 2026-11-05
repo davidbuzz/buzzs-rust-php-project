@@ -502,7 +502,11 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             vm.read_property(&o, &name, crate::opcode::FetchMode::Is)?
         } else {
             let d = object::data(&o);
-            let slot = d.slots.borrow().get(pi.slot as usize).cloned().flatten();
+            let slot = d
+                .slots
+                .borrow()
+                .get(pi.slot as usize)
+                .and_then(|s| s.as_ref().map(unref_singly_held));
             match slot {
                 Some(v) => v,
                 None => continue, // uninitialized typed property
@@ -516,11 +520,21 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 ArrayKey::Str(s) => ArrayKey::from_zstr(s),
                 k => k.clone(),
             };
-            t.push_renamed(None, k, key, v.clone());
+            t.push_renamed(None, k, key, unref_singly_held(v));
         }
     }
     let t = t.finish();
     Ok(Value::Array(ZArray::from_table(t)))
+}
+
+/// `get_object_vars()` copies a reference nothing else holds as its value
+/// (`Z_ISREF_P(value) && Z_REFCOUNT_P(value) == 1`), e.g. the one left by
+/// passing the property by reference.
+fn unref_singly_held(v: &Value) -> Value {
+    match v {
+        Value::Reference(r) if r.refcount() == 1 => r.get(),
+        v => v.clone(),
+    }
 }
 
 /// A property in `properties_info` order: (name, declaring class, flags,
@@ -909,6 +923,16 @@ fn set_error_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn restore_error_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     vm.error_handlers.pop();
     Ok(Value::Bool(true))
+}
+
+/// `get_error_handler()` (`Zend/zend_builtin_functions.c`): the current
+/// `EG(user_error_handler)`, or null.
+fn get_error_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(vm
+        .error_handlers
+        .last()
+        .map(|h| h.callback.clone())
+        .unwrap_or_default())
 }
 
 fn set_exception_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1346,7 +1370,7 @@ fn call_user_func(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
     let named = std::mem::take(&mut a.named);
-    vm.call_value_named(&cb, args, named)
+    cuf_call(vm, &cb, args, named, "call_user_func")
 }
 
 fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1368,7 +1392,69 @@ fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             ArrayKey::Str(s) => named.push((s.clone(), v.clone())),
         }
     }
-    vm.call_value_named(&cb, args, named)
+    cuf_call(vm, &cb, args, named, "call_user_func_array")
+}
+
+/// Calls the callback of `call_user_func[_array]()`. A direct call compiles
+/// to `ZEND_INIT_USER_CALL` (`zend_compile_func_cuf`, `Zend/zend_compile.c`):
+/// when an error handler throws on the "Use of "self" in callables"
+/// deprecation, `zend_is_callable_check_class` (`Zend/zend_API.c`) fails
+/// with "cannot use "self"/"parent"/"static" in callables" and the opcode
+/// throws that `TypeError` chained to the pending exception. Through zpp
+/// (a dynamic call) the pending exception propagates alone.
+fn cuf_call(
+    vm: &mut Vm,
+    cb: &Value,
+    args: Vec<Value>,
+    named: Vec<(ZStr, Value)>,
+    fname: &str,
+) -> VmResult<Value> {
+    let call = match vm.zend_is_callable(cb, false) {
+        Ok(Ok(call)) => call,
+        Ok(Err(reason)) => return Err(vm.make_throw("TypeError", &reason)),
+        Err(Throw::Exception(prev))
+            if vm.frames.last().is_some_and(|f| f.builtin_name.is_none())
+                && names_callable_keyword(cb) =>
+        {
+            return Err(cuf_keyword_error(vm, fname, &prev));
+        }
+        Err(t) => return Err(t),
+    };
+    vm.call_resolved_named(call, args, named)
+}
+
+/// Whether the callable's class part is `self`, `parent` or `static`.
+fn names_callable_keyword(cb: &Value) -> bool {
+    let class = match cb.deref() {
+        Value::Str(s) => {
+            let b = s.as_bytes();
+            match b.windows(2).rposition(|w| w == b"::") {
+                Some(p) => b[..p].to_ascii_lowercase(),
+                None => return false,
+            }
+        }
+        Value::Array(a) => match a.get(&ArrayKey::Int(0)).map(Value::deref) {
+            Some(Value::Str(c)) => c.as_bytes().to_ascii_lowercase(),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    matches!(class.as_slice(), b"self" | b"parent" | b"static")
+}
+
+#[cold]
+fn cuf_keyword_error(vm: &mut Vm, fname: &str, prev: &php_runtime::Obj) -> Throw {
+    let e = vm.make_throw(
+        "TypeError",
+        &format!(
+            "{fname}(): Argument #1 ($callback) must be a valid callback, \
+             cannot use \"self\"/\"parent\"/\"static\" in callables"
+        ),
+    );
+    if let Throw::Exception(o) = &e {
+        crate::exceptions::chain_previous(o, prev);
+    }
+    e
 }
 
 fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -2187,6 +2273,7 @@ pub(crate) fn register(vm: &mut Vm) {
         set_error_handler,
     );
     reg(vm, "restore_error_handler(): true", restore_error_handler);
+    reg(vm, "get_error_handler(): ?callable", get_error_handler);
     reg(
         vm,
         "set_exception_handler(?callable $callback)",

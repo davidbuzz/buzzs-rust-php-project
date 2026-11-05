@@ -934,7 +934,53 @@ impl Compiler {
                 );
             }
         }
+        let mut inner = e;
+        while let ExprKind::Dim { base: next, .. } | ExprKind::Prop { object: next, .. } =
+            &inner.kind
+        {
+            inner = &**next;
+        }
+        if !std::ptr::eq(inner, e) && self.is_opcode_builtin_call(inner) {
+            return self.err(
+                "Cannot use result of built-in function in write context",
+                e.span.line,
+            );
+        }
         self.compile_place(e, false)
+    }
+
+    /// Whether `e` calls a builtin that `zend_try_compile_special_func_ex`
+    /// (`Zend/zend_compile.c`) compiles to an opcode with a TMP result,
+    /// which `zend_separate_if_call_and_write` and `zend_compile_assign_ref`
+    /// reject in write context. Only the forms that depend on the argument
+    /// count alone are recognised.
+    fn is_opcode_builtin_call(&self, e: &Expr) -> bool {
+        let ExprKind::Call { callee, args } = &e.kind else {
+            return false;
+        };
+        let Callee::Name(n) = &**callee else {
+            return false;
+        };
+        if !args
+            .args
+            .iter()
+            .all(|a| matches!(a.kind, ArgKind::Positional(_)))
+        {
+            return false;
+        }
+        let (resolved, fallback) = self.resolve_function_name(n);
+        if fallback.is_some() {
+            // Runtime resolution (`ZEND_INIT_NS_FCALL_BY_NAME`).
+            return false;
+        }
+        let argc = args.args.len();
+        match resolved.to_ascii_lowercase().as_slice() {
+            b"strlen" | b"is_null" | b"is_bool" | b"is_int" | b"is_float" | b"is_string"
+            | b"is_array" | b"is_object" | b"is_resource" | b"is_scalar" | b"boolval"
+            | b"intval" | b"floatval" | b"strval" | b"gettype" => argc == 1,
+            b"get_called_class" => argc == 0,
+            _ => false,
+        }
     }
 
     fn compile_isset_one(&mut self, v: &Expr) -> CResult<Operand> {
@@ -1296,6 +1342,12 @@ impl Compiler {
         }
         if let ExprKind::Array { .. } = target.kind {
             return self.err("Cannot assign reference to array destructuring", line);
+        }
+        if self.is_opcode_builtin_call(value) {
+            return self.err(
+                "Cannot use result of built-in function in write context",
+                line,
+            );
         }
         let src = if is_ref_expr(value) {
             let p = self.compile_place(value, false)?;

@@ -179,7 +179,7 @@ impl Vm {
                 | level::COMPILE_ERROR
                 | level::COMPILE_WARNING)
             == 0;
-        if handleable && self.in_error_handler == 0 {
+        if handleable {
             if let Some(h) = self.error_handlers.last().cloned() {
                 if !h.callback.is_null() && h.mask & level != 0 {
                     self.in_error_handler += 1;
@@ -189,7 +189,19 @@ impl Vm {
                         Value::Str(file.clone()),
                         Value::Int(i64::from(line)),
                     ];
+                    // zend_error_impl: EG(user_error_handler) is UNDEF while
+                    // the handler runs (so its own errors take the default
+                    // path, or a handler it installs), and is put back
+                    // afterwards unless the handler installed another one.
+                    if let Some(top) = self.error_handlers.last_mut() {
+                        top.callback = Value::Null;
+                    }
                     let r = self.call_value(&h.callback, args);
+                    match self.error_handlers.last_mut() {
+                        Some(top) if top.callback.is_null() => top.callback = h.callback,
+                        Some(_) => {}
+                        None => self.error_handlers.push(h),
+                    }
                     self.in_error_handler -= 1;
                     let r = r?;
                     if !matches!(r, Value::Bool(false)) {

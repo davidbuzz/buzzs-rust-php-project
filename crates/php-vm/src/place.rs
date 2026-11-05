@@ -349,12 +349,22 @@ pub(crate) fn descend(
                                 Err(e) => Step::Err(e),
                             }
                         }
-                        WOp::FetchRw => Step::Err(WalkErr::Error(
-                            "Cannot use assign-op operators with string offsets".into(),
-                        )),
-                        WOp::MakeRef | WOp::AssignRef(_) => Step::Err(WalkErr::Error(
-                            "Cannot create references to/from string offsets".into(),
-                        )),
+                        // `zend_check_string_offset` runs first: its
+                        // warnings (which an error handler may turn into
+                        // an exception) and offset type errors precede
+                        // `zend_wrong_string_offset_error`.
+                        WOp::FetchRw => match string_offset(dim, diags, true) {
+                            Ok(_) => Step::Err(WalkErr::Error(
+                                "Cannot use assign-op operators with string offsets".into(),
+                            )),
+                            Err(e) => Step::Err(e),
+                        },
+                        WOp::MakeRef | WOp::AssignRef(_) => match string_offset(dim, diags, true) {
+                            Ok(_) => Step::Err(WalkErr::Error(
+                                "Cannot create references to/from string offsets".into(),
+                            )),
+                            Err(e) => Step::Err(e),
+                        },
                         WOp::Unset => {
                             Step::Err(WalkErr::Error("Cannot unset string offsets".into()))
                         }
@@ -832,7 +842,7 @@ impl Vm {
                             crate::ext::PropCtx::ReadWrite,
                         )? {
                             Some(v) => Ok(v.deref()),
-                            None => self.read_property(&obj, name, FetchMode::Read),
+                            None => self.fetch_property_rw(&obj, name),
                         },
                         WOp::MakeRef => self.property_ref(&obj, name).map(Value::Reference),
                         WOp::AssignRef(r) => self.assign_property_ref(&obj, name, r),
@@ -1118,6 +1128,39 @@ impl Vm {
     /// `place = v`
     pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
         let (base, segs) = self.resolve_place(pid, true)?;
+        self.write_place(base, &segs, WOp::Assign(v))
+    }
+
+    /// The `BP_VAR_RW` read of a compound assignment's property
+    /// (`zend_std_get_property_ptr_ptr`, `Zend/zend_object_handlers.c`):
+    /// an error handler run by the "Undefined property" warning may define
+    /// the property, and the operation then works on that value
+    /// (`zend_assign_op_overloaded_property`).
+    fn fetch_property_rw(&mut self, obj: &Obj, name: &ZStr) -> VmResult<Value> {
+        let v = self.read_property(obj, name, FetchMode::Read)?;
+        if !matches!(v, Value::Null) || self.error_handlers.is_empty() {
+            return Ok(v);
+        }
+        Ok(stored_property(obj, name).unwrap_or(v))
+    }
+
+    /// `place = $cv` where `$cv` is undefined. `ZEND_ASSIGN_DIM`
+    /// (`Zend/zend_vm_def.h`) fetches the dimension before reading
+    /// `OP_DATA`, so the offsets' "Undefined variable" warnings come first
+    /// (an error handler that throws on them never sees the value's
+    /// warning); `ZEND_ASSIGN_OBJ` reads `OP_DATA` before the property name.
+    #[cold]
+    pub(crate) fn place_assign_undef_cv(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
+        let last_is_prop = matches!(
+            self.frame().code.places[pid as usize].segs.last(),
+            Some(Seg::Prop(_))
+        );
+        if last_is_prop {
+            let v = self.read_cv(cv)?;
+            return self.place_assign(pid, v);
+        }
+        let (base, segs) = self.resolve_place(pid, true)?;
+        let v = self.read_cv(cv)?;
         self.write_place(base, &segs, WOp::Assign(v))
     }
 
@@ -1718,4 +1761,27 @@ pub(crate) enum PropContainer {
     Dynamic(ArrayKey),
     /// A value returned by `__get` (modifications are lost).
     Value(Value),
+}
+
+/// The value stored for `$obj->name` (a declared slot without hooks, or a
+/// dynamic property), bypassing magic; `None` when unset or when `__get()`
+/// or a lazy initializer would be involved.
+fn stored_property(obj: &Obj, name: &ZStr) -> Option<Value> {
+    let d = object::data(obj);
+    if d.class.magic.get.is_some() || d.lazy.borrow().is_some() {
+        return None;
+    }
+    match d.class.prop_map.get(name) {
+        Some(pi) if pi.hooks.is_none() => d
+            .slots
+            .borrow()
+            .get(pi.slot as usize)
+            .and_then(|s| s.as_ref().map(Value::deref)),
+        Some(_) => None,
+        None => d
+            .dynamic
+            .borrow()
+            .as_ref()
+            .and_then(|t| t.get(&ArrayKey::Str(name.clone())).map(Value::deref)),
+    }
 }

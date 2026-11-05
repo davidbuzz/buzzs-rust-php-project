@@ -207,6 +207,19 @@ impl Vm {
         }
     }
 
+    /// [`Vm::read_cv`] for a defined variable (dereferenced); `None` when
+    /// undefined, leaving the warning to the caller.
+    #[inline]
+    pub(crate) fn read_cv_defined(&self, cv: u32) -> Option<Value> {
+        let f = self.frame();
+        let idx = f.cv_idx(cv);
+        f.vars
+            .borrow()
+            .slots
+            .get(idx)
+            .and_then(|s| s.as_ref().map(Value::deref))
+    }
+
     /// Reads a compiled variable without warning (`None` if undefined).
     pub(crate) fn cv_get(&self, cv: u32) -> Option<Value> {
         let f = self.frame();
@@ -344,9 +357,13 @@ impl Vm {
             let fidx = self.frames.len() - 1;
             let f = self.frames.last_mut().expect("frame");
             if !f.silence_saved.is_empty() {
-                let saved = f.silence_saved[0];
-                f.silence_saved.clear();
-                self.error_reporting = saved;
+                // `cleanup_live_vars` for ZEND_LIVE_SILENCE ranges
+                // (Zend/zend_execute.c): each pending `@` restores its
+                // saved mask only while the current one is still silenced.
+                let saved = std::mem::take(&mut f.silence_saved);
+                for old in saved.into_iter().rev() {
+                    self.error_reporting = silence_restore(self.error_reporting, old);
+                }
             }
             let f = self.frames.last_mut().expect("frame");
             let throw_ip = f.ip.saturating_sub(1) as u32;
@@ -653,9 +670,17 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Assign { place, val, dst } => {
-                        let v = self.read(*val)?;
-                        let v = self.copy_on_assign(v);
-                        let r = self.place_assign(*place, v)?;
+                        let r = match *val {
+                            Operand::Cv(cv) => match self.read_cv_defined(cv) {
+                                Some(v) => self.place_assign(*place, v)?,
+                                None => self.place_assign_undef_cv(*place, cv)?,
+                            },
+                            other => {
+                                let v = self.read(other)?;
+                                let v = self.copy_on_assign(v);
+                                self.place_assign(*place, v)?
+                            }
+                        };
                         self.set_dst(*dst, r);
                         Flow::Next
                     }
@@ -1070,19 +1095,18 @@ impl Vm {
                         let old = self.error_reporting;
                         self.frame_mut().silence_saved.push(old);
                         self.set_tmp(*dst, Value::Int(old));
-                        // E_ERROR | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR | E_PARSE
-                        self.error_reporting = old & 4437;
+                        // ZEND_BEGIN_SILENCE: fatal errors are never silenced,
+                        // and an already-silenced mask is left alone.
+                        if !has_only_fatal_errors(old) {
+                            self.error_reporting = old & E_FATAL_ERRORS;
+                        }
                         Flow::Next
                     }
                     Op::EndSilence { saved } => {
                         let v = self.read(*saved)?;
                         self.frame_mut().silence_saved.pop();
                         if let Value::Int(old) = v {
-                            // Keep changes made inside the silenced expression
-                            // only if they are not the silence mask.
-                            if self.error_reporting == (old & 4437) {
-                                self.error_reporting = old;
-                            }
+                            self.error_reporting = silence_restore(self.error_reporting, old);
                         }
                         Flow::Next
                     }
@@ -1642,6 +1666,26 @@ pub(crate) enum KeyCtx {
     Isset,
     /// unset.
     Unset,
+}
+
+/// `E_FATAL_ERRORS` (`Zend/zend_errors.h`): `E_ERROR | E_CORE_ERROR |
+/// E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR | E_PARSE`.
+const E_FATAL_ERRORS: i64 = 1 | 16 | 64 | 256 | 4096 | 4;
+
+/// `E_HAS_ONLY_FATAL_ERRORS(mask)` (`Zend/zend_errors.h`).
+const fn has_only_fatal_errors(mask: i64) -> bool {
+    mask & !E_FATAL_ERRORS == 0
+}
+
+/// The mask after leaving an `@` whose saved mask is `old`
+/// (`ZEND_END_SILENCE` / `ZEND_LIVE_SILENCE` cleanup): restored only when the
+/// silenced expression did not set a non-silenced mask of its own.
+pub(crate) const fn silence_restore(current: i64, old: i64) -> i64 {
+    if has_only_fatal_errors(current) && !has_only_fatal_errors(old) {
+        old
+    } else {
+        current
+    }
 }
 
 /// "scope X" / "global scope" for messages.
