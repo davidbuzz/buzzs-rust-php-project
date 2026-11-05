@@ -564,6 +564,18 @@ fn ini_access_constants() {
 /// `http_build_query()` throw (`php_url_check_stack_limit`).
 #[test]
 fn http_build_query_honours_the_stack_limit() {
+    // The default limit is derived from the main thread's stack and the
+    // explicit one assumes release-build frames; the test harness threads
+    // are smaller, so run both on a thread sized like a CLI's.
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(http_build_query_stack_limit_cases)
+        .expect("spawn")
+        .join()
+        .expect("join");
+}
+
+fn http_build_query_stack_limit_cases() {
     let ext = php_ext_stdmisc::StdMisc;
     let exts: [&dyn Extension; 1] = [&ext];
     let code = r#"$a = null;
@@ -582,15 +594,7 @@ fn http_build_query_honours_the_stack_limit() {
         run_with(&opts, &exts, code),
         "Error: Maximum call stack size reached.|string(0) \"\"\n"
     );
-    // The default limit is derived from the main thread's stack; the test
-    // harness threads are smaller, so run it on one sized like a CLI's.
-    let out = std::thread::Builder::new()
-        .stack_size(64 << 20)
-        .spawn(move || run(code))
-        .expect("spawn")
-        .join()
-        .expect("join");
-    assert_eq!(out, "string(0) \"\"\n");
+    assert_eq!(run(code), "string(0) \"\"\n");
 }
 
 /// `request_parse_body()` (`ext/standard/http.c`) validates `$options`

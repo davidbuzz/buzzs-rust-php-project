@@ -76,7 +76,7 @@ fn builtin_display(vm: &Vm, a: &Args) -> String {
     a.func_name()
 }
 
-/// Throws a `ValueError` "func(): Argument #n ($name) msg".
+/// Throws a `ValueError` "`func()`: Argument #n ($name) msg".
 pub(crate) fn value_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> crate::vm::Throw {
     let fname = builtin_display(vm, a);
     let pname = a
@@ -90,7 +90,7 @@ pub(crate) fn value_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> crate::
     )
 }
 
-/// Throws a `TypeError` "func(): Argument #n ($name) msg".
+/// Throws a `TypeError` "`func()`: Argument #n ($name) msg".
 pub(crate) fn type_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> crate::vm::Throw {
     let fname = builtin_display(vm, a);
     let pname = a

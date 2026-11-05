@@ -1,4 +1,4 @@
-//! Locale sorting runs in its own test process: LC_COLLATE is process-global.
+//! Locale sorting runs in its own test process: `LC_COLLATE` is process-global.
 
 use php_runtime::{ArrayKey, CollectingContext, PhpRef, Value, ZArray};
 use php_stdarr::{compare, setops, sort, SORT_DESC, SORT_FLAG_CASE, SORT_LOCALE_STRING};

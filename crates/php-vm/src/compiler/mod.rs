@@ -180,7 +180,7 @@ pub(crate) struct FnCtx {
     pub labels: HashMap<Vec<u8>, (Label, Vec<usize>)>,
     pub gotos: Vec<PendingGoto>,
     pub loop_ids: Vec<usize>,
-    /// FE_RESET op of each foreach iterator (exceptions thrown while a
+    /// `FE_RESET` op of each foreach iterator (exceptions thrown while a
     /// `return` frees the loop are dispatched from the loop's position).
     pub iter_starts: HashMap<u32, u32>,
     next_loop_id: usize,

@@ -322,7 +322,7 @@ pub enum Op {
     },
     /// Makes `place` a reference and stores it in `dst`.
     MakeRef { place: PlaceId, dst: u32 },
-    /// ZEND_FETCH_LIST_W (+ `ZEND_MAKE_REF` into `dst`) of a destructuring
+    /// `ZEND_FETCH_LIST_W` (+ `ZEND_MAKE_REF` into `dst`) of a destructuring
     /// element whose source is a call result: unless the result is a
     /// reference, notices and reads the element by value instead.
     ListFetchRef { place: PlaceId, dst: Option<u32> },
@@ -532,7 +532,7 @@ pub enum Op {
     },
     /// Releases a foreach iterator.
     FeFree { iter: u32 },
-    /// FE_FREE emitted by `return` (`ZEND_FREE_ON_RETURN`): an exception
+    /// `FE_FREE` emitted by `return` (`ZEND_FREE_ON_RETURN`): an exception
     /// from the freed iterator is dispatched from the loop (`loop_at`),
     /// not from inside the try blocks the `return` is in.
     FeFreeOnReturn { iter: u32, loop_at: u32 },

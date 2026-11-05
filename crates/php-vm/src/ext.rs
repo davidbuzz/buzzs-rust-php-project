@@ -11,7 +11,7 @@
 //! (`ArgumentCountError`), named arguments, by-reference parameters,
 //! scalar coercion following the caller's `strict_types`, the
 //! "Passing null to parameter #N" deprecation and the
-//! "func(): Argument #N ($x) must be of type T, U given" `TypeError`. The
+//! "`func()`: Argument #N ($x) must be of type T, U given" `TypeError`. The
 //! handler then receives already-coerced values in [`Args`].
 //!
 //! See `crates/php-vm/EXTENSIONS.md` for a walkthrough.
@@ -136,7 +136,7 @@ pub enum IncludeOpen {
 }
 
 /// `zend_stream_open_function`: opens `include`/`require` targets
-/// (receives the name as written and "include"/"require_once"/...).
+/// (receives the name as written and "`include"/"require_once`"/...).
 pub type IncludeOpenerFn = fn(&mut Vm, &[u8], &str) -> VmResult<IncludeOpen>;
 
 /// Transforms script source before compilation (main script and
@@ -544,7 +544,7 @@ pub struct ClassHooks {
     pub unserialize: Option<fn(&mut Vm, &Obj, ZArray) -> VmResult<bool>>,
     /// `get_constructor`: runs before the constructor on `new`; throw
     /// here for classes that cannot be constructed ("Cannot directly
-    /// construct X, use Y()").
+    /// construct X, use `Y()`").
     pub get_constructor: Option<fn(&mut Vm, &Obj) -> VmResult<()>>,
     /// `dtor_obj`: runs when the object is released (and at shutdown),
     /// after the class's `__destruct` if it has one. Classes without it

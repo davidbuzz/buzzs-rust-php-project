@@ -243,7 +243,7 @@ var_dump($o->bar);
     }
 }
 
-/// list() semantics of zend_compile_list_assign / `ZEND_FETCH_LIST`_[RW]:
+/// `list()` semantics of `zend_compile_list_assign` / `ZEND_FETCH_LIST`_[RW]:
 /// strings are not destructured; a by-value call result notices; foreach
 /// with a referencing list iterates by reference; the source is made a
 /// reference before any target rebinds it; the result of a referencing

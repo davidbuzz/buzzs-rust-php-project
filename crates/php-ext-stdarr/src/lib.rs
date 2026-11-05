@@ -189,7 +189,7 @@ impl Extension for StdArray {
 #[cfg(test)]
 mod tests;
 
-/// Declares the `SortDirection` unit enum (basic_functions.stub.php).
+/// Declares the `SortDirection` unit enum (`basic_functions.stub.php`).
 fn register_sort_direction(m: &mut ModuleBuilder<'_>) {
     let mut b = ClassBuilder::new("SortDirection").unit_enum();
     for case in ["Ascending", "Descending"] {

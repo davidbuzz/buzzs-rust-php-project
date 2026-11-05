@@ -91,7 +91,7 @@ foreach ($obj as $k => $v) { echo "$k=$v\n"; }
 }
 
 /// A by-reference arrow function over a non-variable returns by value with
-/// the ZEND_RETURN_BY_REF notice (`oss_fuzz_58181`).
+/// the `ZEND_RETURN_BY_REF` notice (`oss_fuzz_58181`).
 #[test]
 fn by_ref_arrow_fn_on_value_notices() {
     let out = run("<?php\n$f = fn&() => true;\n$x = $f();\nvar_dump($x);\n");

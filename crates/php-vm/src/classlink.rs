@@ -624,8 +624,7 @@ impl Vm {
     ) -> VmResult<Option<Rc<RefCell<Value>>>> {
         if let Some(sp) = cls.find_static(name.as_bytes()) {
             if sp.flags & flags::VISIBILITY == flags::PUBLIC {
-                let sp = sp.clone();
-                return self.static_prop_slot(cls, name, &sp).map(Some);
+                return self.static_prop_slot(cls, name, sp).map(Some);
             }
         }
         self.static_prop_cell_is_slow(cls, name)
@@ -666,11 +665,16 @@ impl Vm {
         cls: &Rc<Class>,
         name: &ZStr,
     ) -> VmResult<Rc<RefCell<Value>>> {
-        // One lookup on the hot path; misses (instance-property visibility
-        // errors, ancestors' private statics, undeclared) are cold.
+        // One lookup on the hot path, borrowing from `cls` (owned by the
+        // caller, not the VM); misses (instance-property visibility errors,
+        // ancestors' private statics, undeclared) are cold.
+        let missed;
         let sp = match cls.find_static(name.as_bytes()) {
-            Some(sp) => sp.clone(),
-            None => self.static_prop_miss(cls, name)?,
+            Some(sp) => sp,
+            None => {
+                missed = self.static_prop_miss(cls, name)?;
+                &missed
+            }
         };
         if sp.flags & flags::VISIBILITY != flags::PUBLIC {
             let scope = self.scope();
@@ -696,7 +700,7 @@ impl Vm {
                 ));
             }
         }
-        self.static_prop_slot(cls, name, &sp)
+        self.static_prop_slot(cls, name, sp)
     }
 
     /// The tail of a static property fetch once `sp` is known accessible:
@@ -2423,6 +2427,7 @@ fn visibility_name(f: u32) -> &'static str {
 /// `name`: an inherited non-static property cannot become static, and an
 /// inherited static one may only widen its visibility.
 #[cold]
+#[allow(clippy::mutable_key_type)] // ZStr's cached-hash cell never changes Hash/Eq
 fn static_prop_override_error(
     pd: &crate::class::PropDecl,
     name: &ZStr,

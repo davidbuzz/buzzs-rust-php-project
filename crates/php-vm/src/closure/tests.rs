@@ -196,7 +196,7 @@ fn recursive_static_initializer_keeps_inner_value() {
 }
 
 /// A callable conversion inside a nullsafe chain is a compile error
-/// (zend_compile_method_call(); `first_class_callable_012/013.phpt`).
+/// (`zend_compile_method_call()`; `first_class_callable_012/013.phpt`).
 #[test]
 fn nullsafe_closure_creation_is_compile_error() {
     for src in [
@@ -213,7 +213,7 @@ fn nullsafe_closure_creation_is_compile_error() {
 }
 
 /// Attribute argument-list errors are reported on the declaration's line
-/// (`CG(zend_lineno)` in zend_compile_attributes(); `first_class_callable_011`).
+/// (`CG(zend_lineno)` in `zend_compile_attributes()`; `first_class_callable_011`).
 #[test]
 fn attribute_closure_error_uses_declaration_line() {
     let msg = "\nFatal error: Cannot create Closure as attribute argument in t.php on line ";
@@ -232,7 +232,7 @@ fn attribute_closure_error_uses_declaration_line() {
 }
 
 /// `ZEND_ADD_ARRAY_ELEMENT` with an object key raises
-/// zend_illegal_array_offset_access() (`closure_array_key_error.phpt`).
+/// `zend_illegal_array_offset_access()` (`closure_array_key_error.phpt`).
 #[test]
 fn closure_as_array_literal_key() {
     let out = run(
@@ -242,7 +242,7 @@ fn closure_as_array_literal_key() {
 }
 
 /// A first-class callable reflects as `Closure [ ... ]`: the fake closure's
-/// function carries ZEND_ACC_CLOSURE (`first_class_callable_signature.phpt`).
+/// function carries `ZEND_ACC_CLOSURE` (`first_class_callable_signature.phpt`).
 #[test]
 fn fake_closure_reflection_string() {
     let out = run("<?php function test(int $a) {}\necho new ReflectionFunction(test(...));");
@@ -276,7 +276,7 @@ echo strrev('x'), PHP_EOL;
 
 /// Constant-expression first-class callables: compile-time name checks
 /// and the `__callStatic` runtime error (`zend_compile_const_expr_fcc()`,
-/// zend_ast_evaluate_inner(); `first_class_callable/constexpr/error`_*).
+/// `zend_ast_evaluate_inner()`; `first_class_callable/constexpr/error`_*).
 #[test]
 fn const_expr_callable_errors() {
     assert_eq!(

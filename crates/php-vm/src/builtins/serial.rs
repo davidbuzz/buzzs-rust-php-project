@@ -2098,7 +2098,7 @@ impl Vm {
     /// `php_var_unserialize()` of one value of `data` starting at
     /// `offset`, sharing the active `unserialize()` call's `var_hash`
     /// (back-references `R:`/`r:` cross into and out of a native
-    /// `Serializable::unserialize()` payload such as SplObjectStorage's)
+    /// `Serializable::unserialize()` payload such as `SplObjectStorage`'s)
     /// and its options. Returns the value and the offset after it, or the
     /// failure offset. Outside an `unserialize()` call a fresh context is
     /// used (and its delayed `__wakeup()`/`__unserialize()` calls run).

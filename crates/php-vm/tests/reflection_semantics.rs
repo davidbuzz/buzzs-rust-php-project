@@ -30,7 +30,7 @@ fn run(source: &str) -> String {
     String::from_utf8(output).expect("UTF-8 output")
 }
 
-/// bug49719.phpt / property_exists.phpt: a parent's private property is
+/// bug49719.phpt / `property_exists.phpt`: a parent's private property is
 /// not a property of the subclass.
 #[test]
 fn property_exists_ignores_inherited_private_properties() {
@@ -46,8 +46,8 @@ var_dump(property_exists('B', 'b'), property_exists('B', 'c'), property_exists('
     );
 }
 
-/// ReflectionClass_setStaticPropertyValue_003.phpt /
-/// ReflectionProperty_typed_static.phpt: writes through a static property
+/// `ReflectionClass_setStaticPropertyValue_003.phpt` /
+/// `ReflectionProperty_typed_static.phpt`: writes through a static property
 /// that holds a typed reference honour the reference's type sources.
 #[test]
 fn static_setters_check_typed_reference_sources() {
@@ -69,7 +69,7 @@ Cannot assign string to reference held by property Test::$y of type int\nint(7)\
     );
 }
 
-/// ReflectionProperty_isWritable_readonly.phpt: an initialized readonly
+/// `ReflectionProperty_isWritable_readonly.phpt`: an initialized readonly
 /// property is writable once inside `__clone()`.
 #[test]
 fn is_writable_sees_reinitable_readonly_properties_while_cloning() {
@@ -92,7 +92,7 @@ clone new A;
     );
 }
 
-/// ReflectionReference_errors.phpt: the private constructor is what
+/// `ReflectionReference_errors.phpt`: the private constructor is what
 /// rejects `new ReflectionReference()`.
 #[test]
 fn reflection_reference_constructor_is_private() {
@@ -124,7 +124,7 @@ Method [ <internal> public method __invoke ] {\n\n  - Parameters [0] {\n  }\n  -
 
 /// gh9447.phpt: `new parent()` in a parameter default is a constant
 /// expression, checked only when evaluated (Zend/tests/constexpr/
-/// new_self_parent.phpt, invalid_parent_const_ref_leak.phpt).
+/// `new_self_parent.phpt`, `invalid_parent_const_ref_leak.phpt`).
 #[test]
 fn relative_class_names_in_constant_expressions_resolve_lazily() {
     assert_eq!(
@@ -151,7 +151,7 @@ Cannot access \"parent\" when current class scope has no parent\n"
     );
 }
 
-/// Zend/tests/bug70918.phpt, class_name_as_scalar_error_00[5-7].phpt: file
+/// Zend/tests/bug70918.phpt, `class_name_as_scalar_error_00`[5-7].phpt: file
 /// scope does not know its class scope at compile time, so relative class
 /// names fail when executed.
 #[test]
@@ -172,7 +172,7 @@ Cannot use \"parent\" in the global scope\n"
     );
 }
 
-/// gh22681/ReflectionEnum_case_doc_comment.phpt: enum case doc comments are
+/// `gh22681/ReflectionEnum_case_doc_comment.phpt`: enum case doc comments are
 /// kept by the compiler (also for `eval()`'d code, which has no file to
 /// re-read), NUL bytes included.
 #[test]
@@ -188,7 +188,7 @@ var_dump((new ReflectionEnumUnitCase(Demo::class, 'D'))->getDocComment());
     );
 }
 
-/// attributes/ReflectionAttribute_newInstance_exception.phpt: the attribute
+/// `attributes/ReflectionAttribute_newInstance_exception.phpt`: the attribute
 /// constructor is called from the attribute's location.
 #[test]
 fn attribute_constructor_is_called_from_the_attribute_location() {
@@ -212,7 +212,7 @@ try {
     );
 }
 
-/// ReflectionFiber_bug_gh11121_*.phpt: a multi-line method call is made
+/// `ReflectionFiber_bug_gh11121`_*.phpt: a multi-line method call is made
 /// from the line of the method name.
 #[test]
 fn method_call_site_is_the_method_name_line() {
@@ -234,7 +234,7 @@ X::
 }
 
 /// gh21768.phpt: an internal class lists its inherited properties first
-/// (DOMDocument after DOMNode's), a user class its own first.
+/// (`DOMDocument` after `DOMNode`'s), a user class its own first.
 #[test]
 fn internal_classes_list_inherited_properties_first() {
     assert_eq!(
@@ -268,7 +268,7 @@ impl Extension for Defaults {
     }
 }
 
-/// internal_parameter_default_value/check_all.phpt: flag combinations
+/// `internal_parameter_default_value/check_all.phpt`: flag combinations
 /// evaluate to their bitwise or, and deprecated constants warn.
 #[test]
 fn internal_defaults_evaluate_flags_and_deprecated_constants() {
@@ -391,7 +391,7 @@ var_dump(array_map('foo', [1]), array_map(foo(...), 'lit'));
 /// Attribute arguments print like `zend_ast_export` after
 /// `zend_compile_const_expr`_*(): closures as `Closure(name)` (named after
 /// the function whose attributes they are in), first-class-callable
-/// function names resolved (closure_const_expr and `first_class_callable`
+/// function names resolved (`closure_const_expr` and `first_class_callable`
 /// `attributes_ast_printing_runtime.phpt`). The printer re-reads the
 /// declaring file, so the scripts are written to disk.
 #[test]

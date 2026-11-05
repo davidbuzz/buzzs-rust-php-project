@@ -1830,7 +1830,7 @@ impl Vm {
         Ok(Value::Object(object::new_object(cls, Vec::new())))
     }
 
-    /// The property table with mangled names (`(array)` cast, var_dump).
+    /// The property table with mangled names (`(array)` cast, `var_dump`).
     pub(crate) fn object_prop_table(
         &mut self,
         o: &Obj,

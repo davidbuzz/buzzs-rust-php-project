@@ -190,7 +190,7 @@ pub struct PendingCall {
     pub magic_name: Option<ZStr>,
     /// Whether named arguments were used.
     pub has_named: bool,
-    /// Whether INIT_FCALL resolved a statically named call.
+    /// Whether `INIT_FCALL` resolved a statically named call.
     pub direct: bool,
     /// Whether this is a constructor call from `new`.
     pub is_ctor: bool,

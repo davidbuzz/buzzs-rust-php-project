@@ -138,7 +138,7 @@ impl Compiler {
 
     /// The class of `X::$p` / `X::m()`: a dynamic class expression belongs
     /// to the enclosing nullsafe chain (`zend_ast_is_short_circuited`
-    /// follows `child[0]` of ZEND_AST_STATIC_PROP / `ZEND_AST_STATIC_CALL`).
+    /// follows `child[0]` of `ZEND_AST_STATIC_PROP` / `ZEND_AST_STATIC_CALL`).
     fn chain_class_spec(&mut self, cref: &ast::ClassRef) -> CResult<ClassSpec> {
         match cref {
             ast::ClassRef::Expr(e) => {

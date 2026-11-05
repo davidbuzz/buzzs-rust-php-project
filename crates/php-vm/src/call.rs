@@ -470,7 +470,7 @@ impl Vm {
 
     /// `X::__construct()` on an inaccessible private constructor
     /// (`ZEND_INIT_STATIC_METHOD_CALL` with an unused op2): "Cannot call
-    /// private X::__`construct()`" unless `$this` is exactly the constructor's
+    /// private `X::`__`construct()`" unless `$this` is exactly the constructor's
     /// class.
     #[cold]
     fn private_ctor_call_error(
