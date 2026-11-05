@@ -335,7 +335,18 @@ impl Vm {
         while i < self.shutdown_functions.len() {
             let (cb, args) = self.shutdown_functions[i].clone();
             i += 1;
-            match self.call_value(&cb, args) {
+            // `user_shutdown_function_call()` goes through
+            // `zend_call_function()`, which marks the call
+            // `ZEND_CALL_DYNAMIC` (`get_defined_vars()` refuses it).
+            let r = match self.resolve_callable_for_call(&cb) {
+                Ok(mut call) => {
+                    call.dynamic = true;
+                    call.args = args.into_iter().map(Some).collect();
+                    self.call_pending(call)
+                }
+                Err(e) => Err(e),
+            };
+            match r {
                 Ok(_) => {}
                 Err(Throw::Exception(e)) => {
                     if self.uncaught_exception(e).is_err() {

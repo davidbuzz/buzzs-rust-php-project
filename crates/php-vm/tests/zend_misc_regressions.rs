@@ -1,0 +1,74 @@
+//! Regressions from the top-level `Zend/tests` files (`bug*.phpt` and
+//! friends) that do not belong to a feature directory.
+use php_vm::{Vm, VmOptions};
+use std::cell::RefCell;
+use std::io::Write;
+use std::rc::Rc;
+
+#[derive(Clone, Default)]
+struct Sink(Rc<RefCell<Vec<u8>>>);
+
+impl Write for Sink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Runs `source` as `t.php`, returning the exit status and the output.
+fn run_status(source: &str) -> (i32, String) {
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    let status = vm.run_script(source.as_bytes(), "t.php");
+    drop(vm);
+    let output = sink.0.borrow().clone();
+    (status, String::from_utf8(output).expect("UTF-8 output"))
+}
+
+/// Runs `source` and returns its output.
+fn run(source: &str) -> String {
+    run_status(source).1
+}
+
+/// `ZEND_FE_FETCH_RW` warns when the loop body replaced the iterated
+/// variable with a non-array (`bug79792`).
+#[test]
+fn by_ref_foreach_over_variable_overwritten_with_null_warns() {
+    let out = run("<?php\n$a = [42];\nforeach ($a as &$c) {\n    unset($a[0]);\n    $a = null;\n}\necho \"done\";\n");
+    assert_eq!(
+        out,
+        "\nWarning: foreach() argument must be of type array|object, null given in t.php on line 3\ndone"
+    );
+}
+
+/// `register_shutdown_function()` resolves `"self"` in the registering
+/// scope (`bug41026`).
+#[test]
+fn shutdown_function_self_callable_is_resolved_at_registration() {
+    let out = run(r#"<?php
+class C {
+    static function main() { register_shutdown_function(["self", "down"]); }
+    private static function down() { echo "down\n"; }
+}
+C::main();
+echo "Done\n";
+"#);
+    assert_eq!(
+        out,
+        "\nDeprecated: Use of \"self\" in callables is deprecated in t.php on line 3\nDone\ndown\n"
+    );
+}
+
+/// Shutdown functions run through `zend_call_function()`, a dynamic call
+/// (`bug71221`).
+#[test]
+fn shutdown_function_get_defined_vars_is_a_dynamic_call() {
+    let out = run("<?php\nregister_shutdown_function(\"get_defined_vars\");\n");
+    assert!(
+        out.contains("Uncaught Error: Cannot call get_defined_vars() dynamically"),
+        "{out}"
+    );
+}

@@ -1731,17 +1731,22 @@ fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(r))
 }
 
+/// `register_shutdown_function()` (`ext/standard/basic_functions.c`): the
+/// callback is resolved by `Z_PARAM_FUNC` in the registering scope, so
+/// `"self::m"` raises its deprecation here and still names the class at
+/// shutdown, when no scope is active.
 fn register_shutdown_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let cb = a.at(0);
-    if !vm.is_callable_value(&cb) {
-        let desc = vm.callable_error(&cb);
-        return Err(super::util::type_error(
-            vm,
-            a,
-            1,
-            &format!("must be a valid callback, {desc}"),
-        ));
-    }
+    let cb = match vm.resolve_callable_value(&a.at(0))? {
+        Ok(cb) => cb,
+        Err(desc) => {
+            return Err(super::util::type_error(
+                vm,
+                a,
+                1,
+                &format!("must be a valid callback, {desc}"),
+            ))
+        }
+    };
     let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
     vm.shutdown_functions.push((cb, args));
     Ok(Value::Null)

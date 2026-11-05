@@ -192,9 +192,17 @@ fn char_from_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     finish(vm, a, r, Value::Int, Value::Null)
 }
 
+/// `Z_PARAM_FUNC`: the callback is resolved once, in the caller's scope
+/// (`"self::m"` raises its deprecation once and reaches private methods).
+fn callback(vm: &mut Vm, cb: &Value) -> VmResult<Value> {
+    Ok(vm
+        .resolve_callable_value(cb)?
+        .unwrap_or_else(|_| cb.clone()))
+}
+
 fn enum_char_types(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
-    let cb = a.at(0);
+    let cb = callback(vm, &a.at(0))?;
     let mut err = None;
     lib::enum_char_types(&mut |start, limit, ty| match vm.call_value(
         &cb,
@@ -215,7 +223,7 @@ fn enum_char_types(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn enum_char_names(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
     let (start, end) = (Cp::of(&a.at(0)), Cp::of(&a.at(1)));
-    let cb = a.at(2);
+    let cb = callback(vm, &a.at(2))?;
     let mut err = None;
     let r = lib::enum_char_names(
         start.view(),
