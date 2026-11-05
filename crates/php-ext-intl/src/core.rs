@@ -132,6 +132,17 @@ pub(crate) fn with_global<R>(f: impl FnOnce(&mut ErrorState) -> R) -> R {
     GLOBAL.with(|g| f(&mut g.borrow_mut()))
 }
 
+/// The `get_gc` handlers of the intl classes: reports the PHP handles a
+/// payload owns (see `php_vm::gc` for the contract). Payloads not listed
+/// here report nothing, which keeps their targets alive.
+pub(crate) fn gc_traverse(s: &IntlObj, v: &mut php_vm::gc::GcVisitor<'_>) {
+    let Some(d) = s.data.as_deref() else {
+        return;
+    };
+    crate::newfmt::gc_payload(d, v);
+    crate::iter::gc_payload(d, v);
+}
+
 /// `intl_error_reset(NULL)`.
 pub(crate) fn reset_global() {
     with_global(ErrorState::reset);

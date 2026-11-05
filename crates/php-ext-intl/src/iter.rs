@@ -34,6 +34,20 @@ pub(crate) struct IterState {
     pub src: Box<dyn IterSource>,
     /// `zend_object_iterator::index`.
     pub index: i64,
+    /// `zoi_with_current::wrapping_obj` of a string enumeration: the
+    /// iterator references its own object, a cycle only the collector
+    /// breaks (reported by [`gc_payload`]).
+    pub wrapping: Option<Obj>,
+}
+
+/// `IntlIterator_object_get_gc` / `zoi_with_current_get_gc`.
+pub(crate) fn gc_payload(d: &dyn std::any::Any, v: &mut php_vm::gc::GcVisitor<'_>) {
+    if let Some(IterState {
+        wrapping: Some(o), ..
+    }) = d.downcast_ref::<IterState>()
+    {
+        v.obj(o);
+    }
 }
 
 /// A string enumeration (a list fetched up front).
@@ -87,17 +101,24 @@ impl IterSource for StringList {
 /// Creates an `IntlIterator` (or subclass) object around `src`.
 pub(crate) fn wrap(vm: &mut Vm, class: &str, src: Box<dyn IterSource>) -> VmResult<Obj> {
     let o = core::instantiate(vm, class)?;
-    core::set_data(&o, IterState { src, index: 0 });
+    core::set_data(
+        &o,
+        IterState {
+            src,
+            index: 0,
+            wrapping: None,
+        },
+    );
     Ok(o)
 }
 
 /// Creates an `IntlIterator` over strings (`IntlIterator_from_StringEnumeration`).
 pub(crate) fn from_strings(vm: &mut Vm, items: Vec<String>) -> VmResult<Value> {
-    Ok(Value::Object(wrap(
-        vm,
-        "IntlIterator",
-        Box::new(StringList::new(items)),
-    )?))
+    let o = wrap(vm, "IntlIterator", Box::new(StringList::new(items)))?;
+    // `ZVAL_OBJ_COPY(&zoi->wrapping_obj, Z_OBJ_P(object))`.
+    let this = o.clone();
+    core::with::<IterState, _>(&o, |s| s.wrapping = Some(this));
+    Ok(Value::Object(o))
 }
 
 fn fetch(vm: &mut Vm, a: &Args) -> VmResult<Obj> {

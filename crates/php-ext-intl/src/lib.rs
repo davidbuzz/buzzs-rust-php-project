@@ -248,6 +248,7 @@ impl Extension for Intl {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        php_vm::gc::register_traverse_with::<core::IntlObj>(core::gc_traverse);
         m.ini(IniDirective::new(
             "intl.default_locale",
             None,
