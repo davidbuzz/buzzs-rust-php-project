@@ -8,7 +8,8 @@ API docs: `cargo doc -p php-memlimit`. Reference: `Zend/zend_alloc.c`
 
 ## Model in one paragraph
 
-`php_memlimit::GLOBAL` is a `CountingAlloc<System>` that counts every live
+`php_memlimit::GLOBAL` is a `CountingAlloc<MiMalloc>` (mimalloc as the base
+allocator) that counts every live
 byte. Crossing `memory_limit` never fails an ordinary allocation (Rust would
 abort); it **records** an `OverLimit { limit, tried }` (first one wins) that
 the VM turns into the PHP fatal at its next safe point — exactly PHP's

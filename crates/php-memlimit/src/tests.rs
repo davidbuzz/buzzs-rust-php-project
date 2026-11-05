@@ -2,7 +2,7 @@
 //! is not installed in the library's test binary).
 
 use super::*;
-use std::alloc::{GlobalAlloc, Layout};
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::ptr;
 
 const M: usize = 1024 * 1024;

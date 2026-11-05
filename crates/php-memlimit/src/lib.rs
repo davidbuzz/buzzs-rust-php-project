@@ -24,7 +24,7 @@
 mod counting;
 mod limit;
 
-use std::alloc::System;
+pub use mimalloc::MiMalloc;
 
 pub use counting::{fallible, CountingAlloc, HardLimitHandler, Stats};
 pub use limit::{
@@ -33,12 +33,12 @@ pub use limit::{
     DEFAULT_LIMIT, LIMIT_MAX, PHP_BASELINE,
 };
 
-/// The process-wide accounting allocator over [`System`].
+/// The process-wide accounting allocator over [`MiMalloc`] (mimalloc).
 ///
 /// It only sees allocations once installed with
 /// [`install_global_allocator!`]; until then usage reads as
 /// [`PHP_BASELINE`] and only [`try_reserve`] enforces the limit.
-pub static GLOBAL: CountingAlloc<System> = CountingAlloc::new(System);
+pub static GLOBAL: CountingAlloc<MiMalloc> = CountingAlloc::new(MiMalloc);
 
 /// Declares [`GLOBAL`] as the program's `#[global_allocator]`. Invoke once,
 /// at item level, in the binary crate (`php-cli`'s `main.rs`).
@@ -46,7 +46,7 @@ pub static GLOBAL: CountingAlloc<System> = CountingAlloc::new(System);
 macro_rules! install_global_allocator {
     () => {
         #[global_allocator]
-        static PHP_MEMLIMIT_GLOBAL_ALLOCATOR: &'static $crate::CountingAlloc<::std::alloc::System> =
+        static PHP_MEMLIMIT_GLOBAL_ALLOCATOR: &'static $crate::CountingAlloc<$crate::MiMalloc> =
             &$crate::GLOBAL;
     };
 }
