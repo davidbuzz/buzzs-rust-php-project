@@ -338,37 +338,15 @@ impl Vm {
         }
         let resolved = self.resolve_include_path(name);
         let Some(path) = resolved else {
-            let n = s.to_string_lossy();
-            let ip = self
-                .ini
-                .get("include_path")
-                .map(|v| String::from_utf8_lossy(v).into_owned())
-                .unwrap_or_default();
             if name.is_empty() {
                 self.warning(&format!("{kind_name}(): Filename cannot be empty"))?;
             } else {
+                let origin = self.include_error_origin(kind_name, name);
                 self.warning(&format!(
-                    "{kind_name}({n}): Failed to open stream: No such file or directory"
+                    "{origin}: Failed to open stream: No such file or directory"
                 ))?;
             }
-            if matches!(kind, IncludeKind::Require | IncludeKind::RequireOnce) {
-                let msg =
-                    format!("Uncaught Error: Failed opening required '{n}' (include_path='{ip}')");
-                let _ = msg;
-                let (file, line) = self.current_location();
-                self.report_compile_error(
-                    &format!("{kind_name}(): Failed opening required '{n}' (include_path='{ip}')"),
-                    &file,
-                    line,
-                    false,
-                );
-                return Err(Throw::Fatal);
-            }
-            self.warning(&format!(
-                "{kind_name}(): Failed opening '{n}' for inclusion (include_path='{ip}')"
-            ))?;
-            self.set_tmp(dst, Value::Bool(false));
-            return Ok(false);
+            return self.include_failed(kind, kind_name, &s, dst);
         };
         let real = std::fs::canonicalize(&path).unwrap_or(path.clone());
         use std::os::unix::ffi::OsStrExt;
@@ -382,10 +360,12 @@ impl Vm {
         let src = match std::fs::read(&path) {
             Ok(s) => s,
             Err(e) => {
-                let n = s.to_string_lossy();
-                self.warning(&format!("{kind_name}({n}): Failed to open stream: {e}"))?;
-                self.set_tmp(dst, Value::Bool(false));
-                return Ok(false);
+                // strerror() text, without Rust's " (os error N)" suffix.
+                let text = e.to_string();
+                let text = text.split(" (os error").next().unwrap_or_default();
+                let origin = self.include_error_origin(kind_name, name);
+                self.warning(&format!("{origin}: Failed to open stream: {text}"))?;
+                return self.include_failed(kind, kind_name, &s, dst);
             }
         };
         let display_path = if path.is_absolute() {
@@ -453,18 +433,16 @@ impl Vm {
             .get("include_path")
             .map(|v| String::from_utf8_lossy(v).into_owned())
             .unwrap_or_default();
+        // `php_message_handler_for_zend`: ZMSG_FAILED_REQUIRE_FOPEN throws.
         if matches!(kind, IncludeKind::Require | IncludeKind::RequireOnce) {
-            let (file, line) = self.current_location();
-            self.report_compile_error(
-                &format!("{kind_name}(): Failed opening required '{n}' (include_path='{ip}')"),
-                &file,
-                line,
-                false,
-            );
-            return Err(Throw::Fatal);
+            return Err(self.make_throw(
+                "Error",
+                &format!("Failed opening required '{n}' (include_path='{ip}')"),
+            ));
         }
+        let origin = self.include_error_origin(kind_name, s.as_bytes());
         self.warning(&format!(
-            "{kind_name}(): Failed opening '{n}' for inclusion (include_path='{ip}')"
+            "{origin}: Failed opening '{n}' for inclusion (include_path='{ip}')"
         ))?;
         self.set_tmp(dst, Value::Bool(false));
         Ok(false)

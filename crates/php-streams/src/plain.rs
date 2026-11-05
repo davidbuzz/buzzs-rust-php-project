@@ -623,7 +623,9 @@ impl Wrapper for PlainFilesWrapper {
             );
             return Some(false);
         }
+        // php_clear_stat_cache(1, NULL, 0): the realpath cache too.
         state::clear_stat_cache();
+        crate::vcwd::cache_clean();
         Some(true)
     }
 
@@ -651,7 +653,9 @@ impl Wrapper for PlainFilesWrapper {
             );
             return Some(false);
         }
+        // php_clear_stat_cache(1, NULL, 0): the realpath cache too.
         state::clear_stat_cache();
+        crate::vcwd::cache_clean();
         Some(true)
     }
 
@@ -679,7 +683,9 @@ impl Wrapper for PlainFilesWrapper {
             );
             return Some(false);
         }
+        // php_clear_stat_cache(1, NULL, 0): the realpath cache too.
         state::clear_stat_cache();
+        crate::vcwd::cache_clean();
         Some(true)
     }
 

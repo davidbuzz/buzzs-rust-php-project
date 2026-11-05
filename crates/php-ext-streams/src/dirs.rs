@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use php_runtime::{Resource, Value, ZArray};
+use php_runtime::{ArrayKey, Resource, Value, ZArray, ZStr};
 use php_streams::open::{self, ScandirSort};
 use php_streams::stream::flags;
 use php_streams::wrapper::REPORT_ERRORS;
@@ -287,11 +287,38 @@ fn chdir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn realpath_cache_get(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Array(ZArray::new()))
+    let mut arr = ZArray::new();
+    for b in php_streams::vcwd::cache_entries() {
+        let mut entry = ZArray::new();
+        let e = entry.make_mut();
+        // `bucket->key` is unsigned: a double beyond ZEND_LONG_MAX.
+        #[allow(clippy::cast_precision_loss)]
+        let key = i64::try_from(b.key).map_or(Value::Float(b.key as f64), Value::Int);
+        e.insert(ArrayKey::Str(ZStr::from("key")), key);
+        e.insert(ArrayKey::Str(ZStr::from("is_dir")), Value::Bool(b.is_dir));
+        e.insert(ArrayKey::Str(ZStr::from("realpath")), bytes(b.realpath));
+        e.insert(ArrayKey::Str(ZStr::from("expires")), Value::Int(b.expires));
+        arr.make_mut()
+            .insert_str_raw(ZStr::from(b.path), Value::Array(entry));
+    }
+    Ok(Value::Array(arr))
 }
 
 fn realpath_cache_size(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(0))
+    Ok(Value::Int(php_streams::vcwd::cache_size()))
+}
+
+/// `php_execute_script()` resolves the primary script with
+/// `expand_filepath()`, which leaves its directories in the realpath cache.
+fn prime_realpath_cache(vm: &mut Vm) {
+    let script = vm.script_path.as_bytes().to_vec();
+    if script.is_empty() || !php_streams::util::os_path(&script).is_file() {
+        return;
+    }
+    let _ = bridge::run(vm, || {
+        let cwd = php_streams::sys::getcwd().unwrap_or_default();
+        php_streams::vcwd::virtual_file_ex(&cwd, &script, php_streams::vcwd::Resolve::FilePath)
+    });
 }
 
 /// Registers the functions, constants and the `Directory` class.
@@ -308,7 +335,8 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
         .function("glob(string $pattern, int $flags = 0): array|false", glob_fn)
         .function("chdir(string $directory): bool", chdir)
         .function("realpath_cache_get(): array", realpath_cache_get)
-        .function("realpath_cache_size(): int", realpath_cache_size);
+        .function("realpath_cache_size(): int", realpath_cache_size)
+        .on_request_startup(prime_realpath_cache);
     for (name, v) in [
         ("GLOB_BRACE", glob::GLOB_BRACE),
         ("GLOB_ERR", glob::GLOB_ERR),

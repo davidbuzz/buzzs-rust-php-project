@@ -426,7 +426,7 @@ impl Vm {
 
     /// The arguments of frame `idx` for a backtrace: `#[\SensitiveParameter]`
     /// values are wrapped in `SensitiveParameterValue` objects.
-    fn trace_frame_args(&mut self, idx: usize) -> ZArray {
+    pub(crate) fn trace_frame_args(&mut self, idx: usize) -> ZArray {
         let list = self.frame_arg_list(idx);
         let sensitive_cls = if list.iter().any(|(_, _, s)| *s) {
             self.find_class(b"SensitiveParameterValue")
@@ -586,19 +586,8 @@ impl Vm {
         s.push('(');
         match get("args") {
             Some(Value::Array(args)) => {
-                let mut first = true;
-                for (k, a) in args.iter() {
-                    if !first {
-                        s.push_str(", ");
-                    }
-                    first = false;
-                    if let ArrayKey::Str(name) = k {
-                        s.push_str(&name.to_string_lossy());
-                        s.push_str(": ");
-                    }
-                    let rendered = self.trace_arg(&a.deref());
-                    s.push_str(&rendered);
-                }
+                let rendered = self.trace_args_list(&args);
+                s.push_str(&rendered);
             }
             Some(_) => {
                 let _ = self.warning("args element is not an array");
@@ -608,8 +597,25 @@ impl Vm {
         s.push_str(")\n");
     }
 
+    /// `build_trace_args_list`: a frame's `args` as `a, b, name: c`.
+    pub(crate) fn trace_args_list(&mut self, args: &ZArray) -> String {
+        let mut s = String::new();
+        for (k, a) in args.iter() {
+            if !s.is_empty() {
+                s.push_str(", ");
+            }
+            if let ArrayKey::Str(name) = k {
+                s.push_str(&name.to_string_lossy());
+                s.push_str(": ");
+            }
+            let rendered = self.trace_arg(&a.deref());
+            s.push_str(&rendered);
+        }
+        s
+    }
+
     #[allow(clippy::many_single_char_names)]
-    fn trace_arg(&mut self, v: &Value) -> String {
+    pub(crate) fn trace_arg(&mut self, v: &Value) -> String {
         let maxlen =
             usize::try_from(self.ini.get_long("zend.exception_string_param_max_len")).unwrap_or(15);
         match v {

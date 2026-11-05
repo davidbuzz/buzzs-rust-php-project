@@ -103,6 +103,9 @@ pub enum ModifyHandler {
     GcEnabled,
     /// `OnUpdateMailCrLfMode` (`crlf`/`lf`/`mixed`/`os`).
     MailCrLfMode,
+    /// `OnUpdateAutoDetectLineEndings`: `OnUpdateBool` plus an
+    /// "auto_detect_line_endings is deprecated" `E_DEPRECATED` for true values.
+    AutoDetectLineEndings,
 }
 
 /// Static description of a directive (`zend_ini_entry_def`).
@@ -571,6 +574,16 @@ impl IniRegistry {
         Ok(match entry.def.handler {
             ModifyHandler::None | ModifyHandler::String => (IniTyped::None, None),
             ModifyHandler::Bool | ModifyHandler::GcEnabled => (IniTyped::Bool(parse_bool(v)), None),
+            ModifyHandler::AutoDetectLineEndings => {
+                let on = parse_bool(v);
+                if on && stage != Stage::Deactivate {
+                    diag.report(Diagnostic::new(
+                        ErrorLevel::DEPRECATED,
+                        "auto_detect_line_endings is deprecated",
+                    ));
+                }
+                (IniTyped::Bool(on), None)
+            }
             ModifyHandler::Long => (IniTyped::Long(quantity(diag, v)), None),
             ModifyHandler::LongGEZero => {
                 let t = quantity(diag, v);
@@ -910,7 +923,7 @@ pub fn core_directives() -> Vec<IniDirective> {
         s("user_agent", None, A::ALL, H::String),
         s("from", None, A::ALL, H::String),
         s("default_socket_timeout", Some("60"), A::ALL, H::Long),
-        s("auto_detect_line_endings", Some("0"), A::ALL, H::Bool),
+        s("auto_detect_line_endings", Some("0"), A::ALL, H::AutoDetectLineEndings),
         s("unserialize_max_depth", Some("4096"), A::ALL, H::Long),
         s("url_rewriter.tags", Some("form="), A::ALL, H::String),
         s("url_rewriter.hosts", Some(""), A::ALL, H::String),
@@ -995,6 +1008,32 @@ mod tests {
         r.deactivate(&mut d);
         assert_eq!(r.get("html_errors"), Some(&b"0"[..]));
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn auto_detect_line_endings_deprecation() {
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        assert_eq!(
+            r.ini_set("auto_detect_line_endings", b"0", &mut d),
+            Some(b"0".to_vec())
+        );
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(
+            r.ini_set("auto_detect_line_endings", b"on", &mut d),
+            Some(b"0".to_vec())
+        );
+        assert_eq!(r.get("auto_detect_line_endings"), Some(&b"on"[..]));
+        assert!(r.get_bool("auto_detect_line_endings"));
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].level, ErrorLevel::DEPRECATED);
+        assert_eq!(d[0].message, "auto_detect_line_endings is deprecated");
+        assert!(!d[0].docref);
+        let mut startup: Vec<Diagnostic> = Vec::new();
+        let _ = IniRegistry::with_core([("auto_detect_line_endings", "1")], &mut startup);
+        assert!(startup
+            .iter()
+            .any(|x| x.message == "auto_detect_line_endings is deprecated"));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! `passthru`, `shell_exec`, `proc_nice`.
 
 use crate::ctx::RtExt;
-use php_runtime::{Value, ZStr};
+use php_runtime::{ErrorLevel, RtResult, RuntimeContext, Value, ZStr};
 use php_stdmisc::exec;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
@@ -23,7 +23,9 @@ fn exec_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cmd = a.str(0);
     let output = a.has(1).then(|| a.at(1));
     vm.flush_stdout();
-    let (ret, out, status) = exec::exec(cmd.as_bytes(), output, vm).vm(vm)?;
+    let r = exec::exec(cmd.as_bytes(), output, vm);
+    pipe_read_done();
+    let (ret, out, status) = r.vm(vm)?;
     if let Some(out) = out {
         a.set_ref(1, Value::Array(out));
     }
@@ -33,17 +35,45 @@ fn exec_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(ret)
 }
 
-/// `exec::system` / `exec::passthru` over the VM.
-type Runner = fn(&[u8], &mut dyn FnMut(&[u8]), &mut Vm) -> php_runtime::RtResult<exec::ExecResult>;
+/// PHP reads the command's output through a popen() stream, whose reads
+/// clear the stat cache (`php_stdiop_read`): a file the command changed
+/// is stat()ed afresh (bug #72666).
+fn pipe_read_done() {
+    php_streams::state::clear_stat_cache();
+}
 
-/// Runs `system()`/`passthru()` with the child's output collected and
-/// written through the output layer.
+/// `exec::system` / `exec::passthru` with a diagnostics collector as the
+/// context, so the output callback can hold the VM.
+type Runner = fn(
+    &[u8],
+    &mut dyn FnMut(&[u8]),
+    &mut DeferredDiagnostics,
+) -> RtResult<exec::ExecResult>;
+
+/// Collects the library's diagnostics (only "Unable to fork", raised before
+/// any output) to be reported once the command finished.
+#[derive(Default)]
+struct DeferredDiagnostics(Vec<(ErrorLevel, String)>);
+
+impl RuntimeContext for DeferredDiagnostics {
+    fn diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+        self.0.push((level, message.to_string()));
+        Ok(())
+    }
+}
+
+/// Runs `system()`/`passthru()` writing the child's output through the
+/// output layer as it arrives (`PHPWRITE` per read), so large outputs
+/// never accumulate in memory.
 fn run_printing(vm: &mut Vm, a: &Args, f: Runner) -> VmResult<Value> {
     let cmd = a.str(0);
     vm.flush_stdout();
-    let mut buf = Vec::new();
-    let r = f(cmd.as_bytes(), &mut |b: &[u8]| buf.extend_from_slice(b), vm);
-    vm.output(&buf);
+    let mut diags = DeferredDiagnostics::default();
+    let r = f(cmd.as_bytes(), &mut |b: &[u8]| vm.output(b), &mut diags);
+    pipe_read_done();
+    for (level, message) in diags.0 {
+        vm.raise(level.bits(), &message)?;
+    }
     let r = r.vm(vm)?;
     if a.has(1) {
         a.set_ref(1, Value::Int(r.status));
@@ -67,7 +97,9 @@ fn passthru(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn shell_exec(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cmd = a.str(0);
     vm.flush_stdout();
-    exec::shell_exec(cmd.as_bytes(), vm).vm(vm)
+    let r = exec::shell_exec(cmd.as_bytes(), vm);
+    pipe_read_done();
+    r.vm(vm)
 }
 
 fn proc_nice(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -92,4 +124,28 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         )
         .function("shell_exec(string $command): string|false|null", shell_exec)
         .function("proc_nice(int $priority): bool", proc_nice);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn passthru_streams_output_and_defers_diagnostics() {
+        let mut diags = DeferredDiagnostics::default();
+        let mut chunks: Vec<Vec<u8>> = Vec::new();
+        let r = exec::passthru(
+            b"printf ab; printf cd",
+            &mut |b: &[u8]| chunks.push(b.to_vec()),
+            &mut diags,
+        )
+        .expect("passthru");
+        assert_eq!(r.status, 0);
+        assert_eq!(chunks.concat(), b"abcd");
+        assert!(diags.0.is_empty());
+        diags
+            .diagnostic(ErrorLevel::Warning, "passthru(): Unable to fork [x]")
+            .expect("deferred");
+        assert_eq!(diags.0.len(), 1);
+    }
 }

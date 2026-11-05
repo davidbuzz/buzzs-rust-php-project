@@ -117,6 +117,11 @@ fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         // `php_stream_open_wrapper()` on an empty path.
         return Err(vm.throw("ValueError", "Path must not be empty"));
     }
+    if ty == 3 {
+        if let Some(path) = dest.as_ref().filter(|d| !d.as_bytes().contains(&0)) {
+            return Ok(Value::Bool(error_log_to_file(vm, path.as_bytes(), message.as_bytes())?));
+        }
+    }
     let mail_settings = mail_settings(vm);
     let script = script_info(vm);
     let mut target = VmLog {
@@ -136,6 +141,27 @@ fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     )
     .vm(vm)
     .map(Value::Bool)
+}
+
+/// `_php_error_log_ex()` type 3: `php_stream_open_wrapper(dest, "a",
+/// REPORT_ERRORS)`, so wrappers and `open_basedir` apply and failures
+/// warn as `error_log(): ...`. Succeeds once the stream opened.
+fn error_log_to_file(vm: &mut Vm, path: &[u8], message: &[u8]) -> VmResult<bool> {
+    php_ext_streams::bridge::run(vm, || {
+        let mut opened = None;
+        php_streams::open::open_wrapper(
+            path,
+            "a",
+            php_streams::wrapper::REPORT_ERRORS,
+            &mut opened,
+            None,
+        )
+        .is_some_and(|mut s| {
+            let _ = s.write(message);
+            s.close();
+            true
+        })
+    })
 }
 
 thread_local! {

@@ -75,12 +75,9 @@ pub fn expand_filepath_relative(path: &[u8], relative_to: Option<&[u8]>) -> Opti
 }
 
 /// `realpath()` / `tsrm_realpath()`: canonical absolute path of an
-/// existing file.
+/// existing file, through the realpath cache ([`crate::vcwd`]).
 pub fn realpath(path: &[u8]) -> Option<Vec<u8>> {
-    let p = if path.is_empty() { b"." as &[u8] } else { path };
-    std::fs::canonicalize(os_path(p))
-        .ok()
-        .map(|p| path_bytes(&p))
+    crate::vcwd::tsrm_realpath(path)
 }
 
 fn readlink(path: &[u8]) -> Option<Vec<u8>> {

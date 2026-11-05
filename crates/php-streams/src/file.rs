@@ -241,10 +241,10 @@ pub fn file(
     let Some(mut stream) = open_rb(filename, flags & FILE_USE_INCLUDE_PATH != 0, context) else {
         return Ok(None);
     };
-    let mut out = Vec::new();
+    let mut out = Some(Vec::new());
     if let Some(buf) = stream.copy_to_mem(None) {
         let mac = crate::state::settings().auto_detect_line_endings && detect_mac(&buf);
-        out = split_lines(
+        out = split_lines_reserving(
             &buf,
             if mac { b'\r' } else { b'\n' },
             include_new_line,
@@ -252,7 +252,7 @@ pub fn file(
         );
     }
     stream.close();
-    Ok(Some(out))
+    Ok(out)
 }
 
 fn detect_mac(buf: &[u8]) -> bool {
@@ -264,19 +264,59 @@ fn detect_mac(buf: &[u8]) -> bool {
 /// The line splitting of `file()` for a given EOL marker.
 pub fn split_lines(buf: &[u8], eol: u8, include_new_line: bool, skip_blank: bool) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
+    for_each_line(buf, eol, include_new_line, skip_blank, |line| {
+        out.push(line.to_vec());
+        true
+    });
+    out
+}
+
+/// [`split_lines`] under `memory_limit`: every line costs PHP a
+/// `zend_string` plus a packed-array slot, so once those no longer fit the
+/// split stops with `None` (the violation stays recorded and the VM raises
+/// "Allowed memory size of N bytes exhausted") instead of growing towards
+/// the hard ceiling.
+pub fn split_lines_reserving(
+    buf: &[u8],
+    eol: u8,
+    include_new_line: bool,
+    skip_blank: bool,
+) -> Option<Vec<Vec<u8>>> {
+    let mut out = Vec::new();
+    let complete = for_each_line(buf, eol, include_new_line, skip_blank, |line| {
+        if php_memlimit::try_reserve(zend_string_size(line.len()) + ZVAL_SIZE).is_err() {
+            return false;
+        }
+        out.push(line.to_vec());
+        true
+    });
+    complete.then_some(out)
+}
+
+/// `sizeof(zval)`: one packed hash table slot.
+const ZVAL_SIZE: usize = 16;
+
+/// Feeds the lines of `buf` to `f` as `file()` splits them; stops (and
+/// returns `false`) as soon as `f` does.
+fn for_each_line(
+    buf: &[u8],
+    eol: u8,
+    include_new_line: bool,
+    skip_blank: bool,
+    mut f: impl FnMut(&[u8]) -> bool,
+) -> bool {
     let mut s = 0usize;
     let e = buf.len();
     let Some(first) = buf.iter().position(|&c| c == eol) else {
-        if e > 0 {
-            out.push(buf.to_vec());
-        }
-        return out;
+        return e == 0 || f(buf);
     };
     let mut p = first;
     if include_new_line {
         loop {
             p += 1;
-            out.push(buf[s..p].to_vec());
+            if !f(&buf[s..p]) {
+                return false;
+            }
             s = p;
             match buf[p..].iter().position(|&c| c == eol) {
                 Some(i) => p += i,
@@ -290,7 +330,9 @@ pub fn split_lines(buf: &[u8], eol: u8, include_new_line: bool, skip_blank: bool
                 p += 1;
                 s = p;
             } else {
-                out.push(buf[s..p - windows].to_vec());
+                if !f(&buf[s..p - windows]) {
+                    return false;
+                }
                 p += 1;
                 s = p;
             }
@@ -300,10 +342,7 @@ pub fn split_lines(buf: &[u8], eol: u8, include_new_line: bool, skip_blank: bool
             }
         }
     }
-    if s != e {
-        out.push(buf[s..e].to_vec());
-    }
-    out
+    s == e || f(&buf[s..e])
 }
 
 /// `readfile()`: passes the file to `out`, returning the byte count.
@@ -483,7 +522,20 @@ pub fn fread(stream: &mut Stream, length: i64) -> Result<Option<Vec<u8>>, ArgErr
     if length <= 0 {
         return Err(ArgError::new(2, "($length) must be greater than 0"));
     }
-    Ok(stream.read_vec(usize::try_from(length).unwrap_or(usize::MAX)))
+    let len = usize::try_from(length).unwrap_or(usize::MAX);
+    // `php_stream_read_to_str()` allocates the whole `zend_string` up
+    // front: a length beyond `memory_limit` is the "Allowed memory size"
+    // fatal (left recorded for the VM), never a real allocation.
+    if php_memlimit::try_reserve(zend_string_size(len)).is_err() {
+        return Ok(None);
+    }
+    Ok(stream.read_vec(len))
+}
+
+/// `_ZSTR_STRUCT_SIZE(len)` rounded like `zend_mm`: the 24-byte header, the
+/// bytes and the terminating NUL, in 8-byte units.
+fn zend_string_size(len: usize) -> usize {
+    len.saturating_add(24 + 1).saturating_add(7) & !7
 }
 
 /// `fwrite($stream, $data, $length)`.
@@ -708,7 +760,15 @@ pub fn fgetcsv<R>(
                 "($length) must be between 0 and 9223372036854775806",
             ))
         }
-        Some(l) => stream.get_line(Some(usize::try_from(l).unwrap_or(usize::MAX - 1) + 1)),
+        Some(l) => {
+            let size = usize::try_from(l).unwrap_or(usize::MAX - 1) + 1;
+            // `emalloc(len + 1)` before reading: beyond `memory_limit` that
+            // is the "Allowed memory size" fatal (left recorded for the VM).
+            if php_memlimit::try_reserve(size).is_err() {
+                return Ok(None);
+            }
+            stream.get_line(Some(size))
+        }
     };
     let Some(line) = line else {
         return Ok(None);

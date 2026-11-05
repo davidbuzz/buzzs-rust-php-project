@@ -63,6 +63,7 @@ pub mod transports;
 pub mod user;
 pub mod util;
 pub mod value;
+pub mod vcwd;
 pub mod wrapper;
 
 #[cfg(test)]

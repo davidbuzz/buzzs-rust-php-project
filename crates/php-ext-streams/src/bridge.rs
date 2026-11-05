@@ -229,6 +229,8 @@ fn sync_settings(vm: &Vm) {
     let html_errors = vm.ini_bool("html_errors");
     let user_agent = vm.ini_string("user_agent").filter(|v| !v.is_empty());
     let from_address = vm.ini_string("from").filter(|v| !v.is_empty());
+    let realpath_cache_size_limit = vm.ini_long("realpath_cache_size");
+    let realpath_cache_ttl = vm.ini_long("realpath_cache_ttl");
     state::update_settings(|s| {
         s.include_path = include_path;
         s.open_basedir = open_basedir;
@@ -242,6 +244,8 @@ fn sync_settings(vm: &Vm) {
         s.sapi_is_cli = true;
         s.user_agent = user_agent;
         s.from_address = from_address;
+        s.realpath_cache_size_limit = realpath_cache_size_limit;
+        s.realpath_cache_ttl = realpath_cache_ttl;
     });
 }
 
