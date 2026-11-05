@@ -32,6 +32,20 @@ pub(crate) fn attributes_array_in(
     file: Option<ZStr>,
     a: &Args,
 ) -> VmResult<Value> {
+    attributes_array_decl(vm, attrs, tgt, scope, file, false, a)
+}
+
+/// [`attributes_array_in`] noting whether the declaration is a property
+/// hook (validators reject some attributes there).
+pub(crate) fn attributes_array_decl(
+    vm: &mut Vm,
+    attrs: &[AttributeInfo],
+    tgt: i64,
+    scope: Option<&Rc<Class>>,
+    file: Option<ZStr>,
+    hook: bool,
+    a: &Args,
+) -> VmResult<Value> {
     let name = match a.get(0) {
         Some(Value::Str(s)) => Some(s),
         _ => None,
@@ -87,6 +101,7 @@ pub(crate) fn attributes_array_in(
             repeated,
             scope: scope.cloned(),
             file: file.clone(),
+            hook,
         };
         out.push(super::new_refl(
             vm,
@@ -263,6 +278,10 @@ fn source_arg(vm: &Vm, r: &AttrRef, i: usize) -> Option<Vec<u8>> {
 /// The error of an internal attribute's validator, kept for
 /// `#[\DelayedTargetValidation]` (`zend_attribute.validation_error`).
 fn delayed_validation_error(c: &Class, r: &AttrRef) -> Option<String> {
+    if r.hook && c.lc_name.as_bytes() == b"nodiscard" {
+        // `validate_nodiscard`.
+        return Some("#[\\NoDiscard] is not supported for property hooks".to_string());
+    }
     let scope = r.scope.as_ref()?;
     if r.target != target::CLASS {
         return None;
