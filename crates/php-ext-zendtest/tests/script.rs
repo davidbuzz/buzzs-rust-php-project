@@ -101,6 +101,23 @@ fn object_handlers() {
     assert_eq!(out, "bool(true)\nbool(true)\nstring(1) \"k\"\n");
 }
 
+/// `read_dimension` contexts (`Zend/tests/offsets/internal_handlers.phpt`):
+/// a compound assignment reads with `BP_VAR_R` and writes back, `??` reads
+/// with `BP_VAR_IS` only, and write fetches (also `&$o[]`) notice the
+/// temporary.
+#[test]
+fn dimension_handler_fetch_contexts() {
+    let out = run(r#"
+$o = new DimensionHandlersNoArrayAccess; $o['foo'] += 10; var_dump($o->read, $o->write, $o->readType);
+$o = new DimensionHandlersNoArrayAccess; $r = $o['foo'] ?? 'd'; var_dump($o->has, $o->readType);
+$o = new DimensionHandlersNoArrayAccess; try { $o['foo']['bar'] = true; } catch (\Error $e) { echo $e->getMessage(), "\n"; } var_dump($o->readType);
+$o = new DimensionHandlersNoArrayAccess; $r = &$o[]; var_dump($o->hasOffset, $o->readType);"#);
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nint(0)\nbool(false)\nint(3)\n\nNotice: Indirect modification of overloaded element of DimensionHandlersNoArrayAccess has no effect in test.php on line 4\nCannot use a scalar value as an array\nint(1)\n\nNotice: Indirect modification of overloaded element of DimensionHandlersNoArrayAccess has no effect in test.php on line 5\nbool(false)\nint(1)\n"
+    );
+}
+
 #[test]
 fn ini_directives() {
     let out = run(

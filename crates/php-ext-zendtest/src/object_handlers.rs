@@ -144,6 +144,17 @@ fn dim_read(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
         php_vm::ext::DimensionCtx::Unset => 5,
     };
     set_slot(o, READ_TYPE, Value::Int(ty));
+    if matches!(ty, 1 | 2 | 5) {
+        // `zend_fetch_dimension_address`: a write-context fetch got a
+        // temporary (the VM leaves this notice to the handler).
+        vm.raise(
+            8,
+            &format!(
+                "Indirect modification of overloaded element of {} has no effect",
+                o.class_name().to_string_lossy()
+            ),
+        )?;
+    }
     Ok(Some(Value::Bool(true)))
 }
 
@@ -232,6 +243,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .prop("offset", acc::PUBLIC, Some("mixed"), None)
         .hooks(ClassHooks {
             read_dimension: Some(dim_read),
+            read_dimension_is: true,
             write_dimension: Some(dim_write),
             has_dimension: Some(dim_has),
             unset_dimension: Some(dim_unset),

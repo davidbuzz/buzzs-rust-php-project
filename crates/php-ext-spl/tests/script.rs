@@ -653,3 +653,21 @@ var_dump((new ReflectionMethod('ArrayObject', 'uasort'))->getParameters()[0]->is
          bool(false)\n"
     );
 }
+
+/// Quiet reads reach `read_dimension` as `BP_VAR_IS` directly (no separate
+/// `has_dimension`), compound assignments read the container once, and an
+/// illegal offset in an unset fetch still gets the engine's notice.
+#[test]
+fn array_object_dimension_fetch_contexts() {
+    let out = run(r#"<?php error_reporting(E_ALL);
+$ao = new ArrayObject([1 => [1 => 5]]);
+var_dump(isset($ao[1.5][1.5]), $ao[1.5] ?? 'd', $ao[7] ?? 'd');
+$ao[1.5][1.5] += 1;
+var_dump($ao[1][1]);
+try { unset($ao[[]][0]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "\nDeprecated: Implicit conversion from float 1.5 to int loses precision in test.php on line 3\n\nDeprecated: Implicit conversion from float 1.5 to int loses precision in test.php on line 3\n\nDeprecated: Implicit conversion from float 1.5 to int loses precision in test.php on line 3\nbool(true)\narray(1) {\n  [1]=>\n  int(5)\n}\nstring(1) \"d\"\n\nDeprecated: Implicit conversion from float 1.5 to int loses precision in test.php on line 4\n\nDeprecated: Implicit conversion from float 1.5 to int loses precision in test.php on line 4\nint(6)\n\nNotice: Indirect modification of overloaded element of ArrayObject has no effect in test.php on line 6\nCannot unset offset of type array on ArrayObject\n"
+    );
+}

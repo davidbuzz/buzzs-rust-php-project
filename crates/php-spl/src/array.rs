@@ -276,7 +276,20 @@ fn get_dimension(
     }
     let (tgt, is_obj) = target(host, this, st)?;
     let Some(key) = hash_key(host, offset, is_obj)? else {
-        return Err(illegal_offset(this, offset, kind));
+        let e = illegal_offset(this, offset, kind);
+        if kind == DimKind::Unset {
+            // `spl_array_get_dimension_ptr` hands BP_VAR_UNSET the
+            // uninitialized zval with the exception pending, so the
+            // engine's write-fetch notice still follows.
+            host.diagnostic(
+                ErrorLevel::Notice,
+                &format!(
+                    "Indirect modification of overloaded element of {} has no effect",
+                    this.class_name()
+                ),
+            )?;
+        }
+        return Err(e);
     };
     let existing = table(host, &tgt)?.get(&key).cloned();
     match existing {

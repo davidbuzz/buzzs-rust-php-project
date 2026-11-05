@@ -1087,7 +1087,7 @@ impl Vm {
                 drop(old);
                 Ok(Some(v))
             }
-            WOp::FetchRw => {
+            WOp::FetchRw | WOp::AssignOp(..) => {
                 if uninit {
                     return Err(self.uninit_static_error(&info.prop));
                 }
