@@ -1358,29 +1358,52 @@ impl Compiler {
 /// fetch cannot be sent by reference.
 fn on_temporary(e: &Expr) -> bool {
     let mut cur = e;
+    let mut through_prop = false;
     loop {
         match &cur.kind {
             ExprKind::Dim { base, .. } => cur = &**base,
-            ExprKind::Prop { object, .. } => cur = &**object,
+            ExprKind::Prop { object, .. } => {
+                through_prop = true;
+                cur = &**object;
+            }
             _ => break,
         }
     }
-    !std::ptr::eq(cur, e)
-        && matches!(
-            cur.kind,
+    if std::ptr::eq(cur, e) {
+        return false;
+    }
+    match &cur.kind {
+        // `zend_mark_const_object_fetch`: a constant under a property
+        // fetch is copied to a VAR (QM_ASSIGN) in write context (GH-10497).
+        ExprKind::Const(_) | ExprKind::ClassConst { .. } => !through_prop,
+        // Special-compiled ZEND_FUNC_GET_ARGS / ZEND_FUNC_NUM_ARGS yield a
+        // TMP (GH-12102).
+        ExprKind::Call { callee, args } => match &**callee {
+            ast::Callee::Name(n) => {
+                args.args.is_empty()
+                    && matches!(
+                        n.kind,
+                        ast::NameKind::Unqualified | ast::NameKind::FullyQualified
+                    )
+                    && (n.name.eq_ignore_ascii_case(b"func_get_args")
+                        || n.name.eq_ignore_ascii_case(b"func_num_args"))
+            }
+            ast::Callee::Expr(_) => false,
+        },
+        kind => matches!(
+            kind,
             ExprKind::Int(_)
                 | ExprKind::Float(_)
                 | ExprKind::String(_)
                 | ExprKind::Interpolated(_)
                 | ExprKind::Array { .. }
-                | ExprKind::Const(_)
-                | ExprKind::ClassConst { .. }
                 | ExprKind::MagicConst(_)
                 | ExprKind::Binary { .. }
                 | ExprKind::Unary { .. }
                 | ExprKind::Cast { .. }
                 | ExprKind::Conditional { .. }
-        )
+        ),
+    }
 }
 
 /// Whether an expression denotes a variable that can be referenced.

@@ -1346,3 +1346,27 @@ try {
 }
 "#), "Error: Cannot use [] for reading\n");
 }
+
+#[test]
+fn temporary_dimension_sent_by_reference_is_an_error() {
+    // GH-12102: FETCH_DIM_FUNC_ARG on a TMP/CONST container.
+    assert_eq!(run(r#"<?php
+function test() {
+    byVal(func_get_args()[0]);
+    try { byRef(func_get_args()[0]); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+    byVal(C[0]);
+    try { byRef(C[0]); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+    byRef(f()[0]);
+}
+const C = ['foo'];
+function f() { return ['bar']; }
+function byVal($arg) { var_dump($arg); }
+function byRef(&$arg) { var_dump($arg); }
+test('y');
+"#), "string(1) \"y\"
+Error: Cannot use temporary expression in write context
+string(3) \"foo\"
+Error: Cannot use temporary expression in write context
+string(3) \"bar\"
+");
+}
