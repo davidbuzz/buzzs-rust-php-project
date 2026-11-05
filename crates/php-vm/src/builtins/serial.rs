@@ -1706,6 +1706,19 @@ fn unser_init(vm: &Vm) -> (UnserRc, bool) {
 }
 
 impl Vm {
+    /// Whether a `php_var_unserialize()` made by native code now joins an
+    /// active `unserialize()` call's `var_hash` (`PHP_VAR_UNSERIALIZE_INIT`
+    /// sharing `BG(unserialize)`): inside one and not under the serialize
+    /// lock.
+    #[must_use]
+    pub fn unserialize_context_active(&self) -> bool {
+        !is_locked()
+            && UNSER.with(|u| {
+                let u = u.borrow();
+                u.0 > 0 && u.1.is_some()
+            })
+    }
+
     /// The `var_hash` options a `php_var_unserialize()` made by native code
     /// (a native `Serializable::unserialize()` such as `ArrayObject`'s legacy
     /// format, `session_decode()`) runs with: those of the active

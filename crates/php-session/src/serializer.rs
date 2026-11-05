@@ -298,6 +298,66 @@ pub fn decode_with(
     Ok(Decoded::Merge { entries, ok })
 }
 
+/// One `php_var_unserialize()` of the value at an offset of the session
+/// data: `Ok(Ok((value, end)))`, `Ok(Err(failure_offset))`, or `Err` for an
+/// exception; `None` declines (see [`decode_nested`]).
+pub type NestedUnserialize<'a> =
+    dyn FnMut(&[u8], usize) -> Option<RtResult<Result<(Value, usize), usize>>> + 'a;
+
+/// Decodes session data value by value with `nested`, the embedder's
+/// `php_var_unserialize()` joining an active `unserialize()` call's shared
+/// `var_hash` (a `Serializable::unserialize()` calling `session_decode()`):
+/// `r:`/`R:` back-references then resolve against that call's slots, as
+/// `PHP_VAR_UNSERIALIZE_INIT` shares `BG(unserialize)` (bug #70219).
+/// Returns `None` when `nested` declines, i.e. no such call is active, and
+/// [`decode_with`] applies.
+pub fn decode_nested(
+    ser: Serializer,
+    data: &[u8],
+    nested: &mut NestedUnserialize<'_>,
+) -> Option<RtResult<Decoded>> {
+    if ser == Serializer::PhpSerialize {
+        return Some(nested(data, 0)?.map(|r| match r {
+            Ok((value, _)) => Decoded::Replace { value, ok: true },
+            Err(_) => Decoded::Replace {
+                value: Value::empty_array(),
+                ok: data.is_empty(),
+            },
+        }));
+    }
+    let mut entries = Vec::new();
+    let mut ok = true;
+    let mut p = 0;
+    while p < data.len() {
+        let (name, value_start) = if ser == Serializer::Php {
+            let Some(off) = data[p..].iter().position(|&c| c == PS_DELIMITER) else {
+                ok = false;
+                break;
+            };
+            (ZStr::from(&data[p..p + off]), p + off + 1)
+        } else {
+            let namelen = usize::from(data[p] & !PS_BIN_UNDEF);
+            if p + namelen >= data.len() {
+                ok = false;
+                break;
+            }
+            (ZStr::from(&data[p + 1..=p + namelen]), p + 1 + namelen)
+        };
+        match nested(data, value_start)? {
+            Ok(Ok((value, end))) => {
+                entries.push((name, value));
+                p = end;
+            }
+            Ok(Err(_)) => {
+                ok = false;
+                break;
+            }
+            Err(e) => return Some(Err(e)),
+        }
+    }
+    Some(Ok(Decoded::Merge { entries, ok }))
+}
+
 /// A context wrapper that hides the `unserialize()` "Error at offset" /
 /// "Extra data" warnings: `php_var_unserialize()` itself is silent.
 struct Quiet<'a, C: RuntimeContext + ?Sized>(&'a mut C);
@@ -671,6 +731,72 @@ mod tests {
             assert!(!ok, "{bad:?}");
         }
         assert!(ctx.diagnostics.is_empty(), "{:?}", ctx.diagnostics);
+    }
+
+    /// A stand-in for the VM's shared-`var_hash` parser: scalars `i:N;`
+    /// only, recording the offsets it was asked to parse.
+    fn int_parser(
+        seen: &mut Vec<usize>,
+        data: &[u8],
+        off: usize,
+    ) -> Result<(Value, usize), usize> {
+        seen.push(off);
+        let rest = &data[off..];
+        let end = rest.iter().position(|&c| c == b';').ok_or(off)?;
+        let digits = rest.strip_prefix(b"i:").ok_or(off)?;
+        let n = std::str::from_utf8(&digits[..end - 2])
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .ok_or(off)?;
+        Ok((Value::Int(n), off + end + 1))
+    }
+
+    #[test]
+    fn decode_nested_parses_each_value_at_its_offset() {
+        let mut seen = Vec::new();
+        let data = b"a|i:1;bb|i:22;";
+        let r = decode_nested(Serializer::Php, data, &mut |d: &[u8], off: usize| {
+            Some(Ok(int_parser(&mut seen, d, off)))
+        });
+        let Some(Ok(Decoded::Merge { entries, ok })) = r else {
+            panic!("expected a merge")
+        };
+        assert!(ok);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0.as_bytes(), b"a");
+        assert!(matches!(entries[1].1, Value::Int(22)));
+        assert_eq!(seen, vec![2, 9]);
+
+        // php_binary: length byte, name, value; a failing value stops.
+        let mut seen = Vec::new();
+        let data = b"\x01xi:5;\x01yz";
+        let r = decode_nested(Serializer::PhpBinary, data, &mut |d: &[u8], off: usize| {
+            Some(Ok(int_parser(&mut seen, d, off)))
+        });
+        let Some(Ok(Decoded::Merge { entries, ok })) = r else {
+            panic!("expected a merge")
+        };
+        assert!(!ok);
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(entries[0].1, Value::Int(5)));
+    }
+
+    #[test]
+    fn decode_nested_php_serialize_and_decline() {
+        let r = decode_nested(Serializer::PhpSerialize, b"r:2;", &mut |_: &[u8], _: usize| {
+            Some(Ok(Ok((Value::Int(7), 4))))
+        });
+        assert!(matches!(
+            r,
+            Some(Ok(Decoded::Replace { value: Value::Int(7), ok: true }))
+        ));
+        let r = decode_nested(Serializer::PhpSerialize, b"x", &mut |_: &[u8], _: usize| {
+            Some(Ok(Err(0)))
+        });
+        assert!(matches!(r, Some(Ok(Decoded::Replace { ok: false, .. }))));
+        // No active unserialize() call: the caller falls back to decode_with.
+        let r = decode_nested(Serializer::Php, b"a|i:1;", &mut |_: &[u8], _: usize| None);
+        assert!(r.is_none());
     }
 
     #[test]
