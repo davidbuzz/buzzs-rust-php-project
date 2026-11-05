@@ -58,6 +58,14 @@ For multiple affected crates, combine their `-p` selectors in one command.
 repeated non-incremental Rust compilation, but does not cache final linking or
 replace Cargo's incremental dev builds.
 
+With `sccache` installed and configured for local disk storage, use it explicitly
+for non-incremental release builds rather than disabling incremental dev builds:
+
+```sh
+RUSTC_WRAPPER=sccache cargo build --release -p php-cli
+sccache --show-stats
+```
+
 ## Reference source
 
 `modules/php-src/` is a READ-ONLY clone of https://github.com/php/php-src — the specification
