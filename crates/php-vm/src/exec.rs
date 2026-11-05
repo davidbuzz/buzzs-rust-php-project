@@ -1474,9 +1474,14 @@ impl Vm {
         }
     }
 
+    /// `ZEND_THROW` + `zend_throw_exception_object`.
     fn op_throw(&mut self, v: Value) -> Throw {
         match v {
             Value::Object(o) if self.instance_of(&o, b"throwable") => Throw::Exception(o),
+            Value::Object(_) => self.make_throw(
+                "Error",
+                "Cannot throw objects that do not implement Throwable",
+            ),
             _ => self.make_throw("Error", "Can only throw objects"),
         }
     }

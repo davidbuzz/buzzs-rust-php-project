@@ -136,3 +136,17 @@ array(2) {
 "#
     );
 }
+
+/// `zend_throw_exception_object`: throwing a non-Throwable object.
+#[test]
+fn throwing_a_non_throwable_object_is_an_error() {
+    let src = r#"<?php
+class Foo {}
+try { throw new Foo; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { throw 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#;
+    assert_eq!(
+        run(src),
+        "Cannot throw objects that do not implement Throwable\nCan only throw objects\n"
+    );
+}
