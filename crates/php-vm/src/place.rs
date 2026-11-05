@@ -60,6 +60,52 @@ pub(crate) enum WOp {
     MakeRef,
     AssignRef(Value),
     Unset,
+    /// `place = $cv` where `$cv` is a reference to null, false or an array:
+    /// `ZEND_ASSIGN_DIM` reads `OP_DATA` only after fetching the container
+    /// for writing, so the value is read at the final slot (see
+    /// [`Vm::place_assign_cv_ref`]). Boxed: rare, and `WOp` stays small.
+    AssignDeref(Box<DeferredRead>),
+}
+
+/// The source of a [`WOp::AssignDeref`] and what the walk found.
+pub(crate) struct DeferredRead {
+    /// The reference whose value is assigned.
+    src: PhpRef,
+    hit: DeferredHit,
+}
+
+/// Where a [`WOp::AssignDeref`] walk left the assignment.
+enum DeferredHit {
+    /// Not reached the final slot, or the value was assigned there (the
+    /// source was not a container on the walked path).
+    None,
+    /// The source is a container on the path (its borrow is held by the
+    /// walk): a placeholder was stored in the final slot, which then
+    /// receives a handle to the source's array (`$t = &$a; $a[] = $t;`).
+    Slot,
+    /// As `Slot`, but the final slot is this reference: the source's value
+    /// is assigned through it once the walk has released its borrows.
+    Ref(PhpRef),
+}
+
+impl WOp {
+    /// Turns a [`WOp::AssignDeref`] into a plain assignment of the source's
+    /// current value (an object handler continues the walk, or the walk is
+    /// over), releasing the source handle without making it a GC root.
+    pub(crate) fn resolve_deferred(self) -> WOp {
+        match self {
+            WOp::AssignDeref(d) => {
+                let DeferredRead { src, hit } = *d;
+                if let DeferredHit::Ref(r) = hit {
+                    crate::gc::release_duplicate(Value::Reference(r));
+                }
+                let v = src.try_borrow().map_or(Value::Null, |b| b.clone());
+                crate::gc::release_duplicate(Value::Reference(src));
+                WOp::Assign(v)
+            }
+            other => other,
+        }
+    }
 }
 
 /// How a static property base is fetched for writing, for the check of
@@ -300,6 +346,16 @@ fn string_container_step(
         ));
     };
     if last {
+        if let WOp::AssignDeref(d) = wop {
+            // The source is null, false or an array (one holding this
+            // string when the walk holds its borrow): converting any array
+            // to a string offset value behaves alike.
+            let val = d
+                .src
+                .try_borrow()
+                .map_or_else(|| Value::Array(ZArray::new()), |b| b.clone());
+            return string_container_step(v, segs, i, &mut WOp::Assign(val), diags);
+        }
         if let WOp::Assign(val) = wop {
             if dim.is_null() {
                 if let Some(cv) = take_pending_undef_dim(segs) {
@@ -458,7 +514,12 @@ pub(crate) fn descend(
                 // `zend_throw_non_object_error`: ASSIGN_OBJ and
                 // ASSIGN_OBJ_OP "assign", PRE/POST_INC/DEC_OBJ
                 // "increment/decrement", FETCH_OBJ_W/RW "modify".
-                if last && matches!(wop, WOp::Assign(_) | WOp::AssignOp(..)) {
+                if last
+                    && matches!(
+                        wop,
+                        WOp::Assign(_) | WOp::AssignOp(..) | WOp::AssignDeref(_)
+                    )
+                {
                     Step::Err(WalkErr::Error(format!(
                         "Attempt to assign property \"{}\" on {tn}",
                         name.to_string_lossy()
@@ -909,6 +970,112 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
         WOp::Unset => {
             *v = Value::Null;
             Step::Done(Value::Null)
+        }
+        WOp::AssignDeref(d) => {
+            if let Some(cur) = d.src.try_borrow() {
+                // Not a container of this walk: read it now, after the
+                // containers were fetched for writing.
+                let val = cur.clone();
+                drop(cur);
+                return apply_final(v, &mut WOp::Assign(val));
+            }
+            match v {
+                Value::Reference(r) => d.hit = DeferredHit::Ref(r.clone()),
+                _ => {
+                    let old = std::mem::take(v);
+                    drop(old);
+                    d.hit = DeferredHit::Slot;
+                }
+            }
+            Step::Done(Value::Null)
+        }
+    }
+}
+
+/// The index of the segment whose container the walk over `segs` (from
+/// `v`, the container of segment `i`) reached last through `src`, or
+/// `None` when the path does not run through it. Used after a
+/// [`WOp::AssignDeref`] walk, whose containers are unshared arrays.
+fn last_entry(v: &Value, segs: &[RSeg], i: usize, src: &PhpRef) -> Option<usize> {
+    if i >= segs.len() {
+        return None;
+    }
+    match v {
+        Value::Reference(r) => {
+            let deeper = r
+                .try_borrow()
+                .and_then(|inner| last_entry(&inner, segs, i, src));
+            deeper.or_else(|| PhpRef::ptr_eq(r, src).then_some(i))
+        }
+        Value::Array(a) => {
+            // A `[]` segment appended the table's last element.
+            let key = match &segs[i] {
+                RSeg::Append => a.last().map(|(k, _)| k.clone())?,
+                RSeg::Dim(k) => key_of(k, &mut Vec::new(), KeyCtx::Write).ok()?,
+                RSeg::Prop(_) => return None,
+            };
+            last_entry(a.get(&key)?, segs, i + 1, src)
+        }
+        _ => None,
+    }
+}
+
+/// Completes a [`DeferredHit::Slot`]: stores a handle to `src`'s array in
+/// the final slot, which `segs` (the path from that array, the walk's
+/// last entry into `src`) leads to: `$t = &$a; $a[] = $t;` makes `$a`
+/// contain itself, like php-src. Returns the assigned value.
+fn store_self_reference(segs: &[RSeg], src: &PhpRef) -> Option<Value> {
+    let mut path = Vec::with_capacity(segs.len());
+    for seg in segs {
+        path.push(match seg {
+            RSeg::Append => None,
+            RSeg::Dim(k) => Some(key_of(k, &mut Vec::new(), KeyCtx::Write).ok()?),
+            RSeg::Prop(_) => return None,
+        });
+    }
+    let mut b = src.try_borrow_mut()?;
+    let stored = match &mut *b {
+        Value::Array(a) => a.store_self_at(&path),
+        _ => None,
+    };
+    drop(b);
+    stored
+}
+
+/// Completes a [`WOp::AssignDeref`] walk over `segs` from variable slot
+/// `idx` of `store` that returned `done`, once its borrows are released.
+fn finish_deferred(
+    done: Value,
+    d: &mut DeferredRead,
+    store: &Rc<RefCell<VarStore>>,
+    idx: usize,
+    segs: &[RSeg],
+) -> Step {
+    match std::mem::replace(&mut d.hit, DeferredHit::None) {
+        DeferredHit::None => Step::Done(done),
+        DeferredHit::Ref(r) => {
+            // The final slot is a reference: assign the source's value
+            // through it.
+            let v = d.src.try_borrow().map_or(Value::Null, |b| b.clone());
+            if crate::typed_refs::has_type_sources(&r) {
+                Step::TypedRefAssign(r, v)
+            } else {
+                let old = r.set(v.clone());
+                drop(old);
+                crate::gc::release_duplicate(Value::Reference(r));
+                Step::Done(v)
+            }
+        }
+        DeferredHit::Slot => {
+            let entry = {
+                let st = store.borrow();
+                st.slots
+                    .get(idx)
+                    .and_then(Option::as_ref)
+                    .and_then(|b| last_entry(b, segs, 0, &d.src))
+            };
+            let v = entry.and_then(|e| store_self_reference(&segs[e..], &d.src));
+            Step::Done(v.unwrap_or(Value::Null))
         }
     }
 }
@@ -1481,6 +1648,7 @@ impl Vm {
                 drop(old);
                 Ok(Value::Null)
             }
+            w @ WOp::AssignDeref(_) => self.write_var_root(store, idx, w.resolve_deferred()),
         }
     }
 
@@ -1528,6 +1696,9 @@ impl Vm {
                         WOp::Unset => {
                             self.unset_property(&obj, name)?;
                             Ok(Value::Null)
+                        }
+                        w @ WOp::AssignDeref(_) => {
+                            self.obj_walk(obj, segs, i, w.resolve_deferred())
                         }
                     };
                 }
@@ -1768,6 +1939,9 @@ impl Vm {
                             }
                             Ok(Value::Reference(r))
                         }
+                        w @ WOp::AssignDeref(_) => {
+                            self.obj_walk(obj, segs, i, w.resolve_deferred())
+                        }
                     };
                 }
                 let r = self.call_method_name_raw(&obj, "offsetGet", vec![key])?;
@@ -1799,6 +1973,93 @@ impl Vm {
     // ------------------------------------------------------------------
     // Public place operations
     // ------------------------------------------------------------------
+
+    /// `place = $cv` where `$cv` is a reference to null, false or an array
+    /// ([`crate::exec::CvOpData::Deferred`]). `ZEND_ASSIGN_DIM`
+    /// (`Zend/zend_vm_def.h`) fetches the container for writing (creating
+    /// and separating arrays) before it reads `OP_DATA`, so when the
+    /// reference is a container on the path, the array ends up holding
+    /// itself rather than a copy: `$t = &$a; $a[] = $t;` (gh16318,
+    /// mb_check_encoding_array). The value is therefore read at the final
+    /// slot ([`WOp::AssignDeref`]). Places on a static property or through
+    /// a property, and the special offset cases of [`Vm::place_assign`],
+    /// read it first, as before.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn place_assign_cv_ref(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
+        // `$a[] = $a` (`zend_is_assign_to_self`): php-src copies the value
+        // into a temporary before fetching the container.
+        let to_self = matches!(
+            self.frame().code.places[pid as usize].base,
+            PlaceBase::Cv(b) if b == cv
+        );
+        let src = match self.cv_get(cv) {
+            Some(Value::Reference(r)) if !to_self => r,
+            Some(v) => {
+                let d = v.deref();
+                crate::gc::release_duplicate(v);
+                return self.place_assign(pid, d);
+            }
+            None => return self.place_assign_undef_cv(pid, cv),
+        };
+        let mut undef_dim = None;
+        let resolved =
+            self.resolve_place_ex(pid, true, false, Some(&mut undef_dim), PlaceOp::Assign);
+        let (base, segs) = match resolved {
+            Ok(r) => r,
+            Err(e) => {
+                crate::gc::release_duplicate(Value::Reference(src));
+                return Err(e);
+            }
+        };
+        let noisy = !self.error_handlers.is_empty() && final_dim_converts_noisily(segs.last());
+        let target = match &base {
+            RBase::Var(store, idx)
+                if undef_dim.is_none()
+                    && !noisy
+                    && !segs.is_empty()
+                    && !segs.iter().any(|s| matches!(s, RSeg::Prop(_)))
+                    && store.borrow().slots.get(*idx).is_some_and(Option::is_some) =>
+            {
+                Some((store.clone(), *idx))
+            }
+            _ => None,
+        };
+        let Some((store, idx)) = target else {
+            let v = src.get();
+            crate::gc::release_duplicate(Value::Reference(src));
+            if let Some(cv) = undef_dim {
+                return self.assign_undef_dim(base, &segs, v, cv);
+            }
+            if noisy {
+                return self.assign_converted_dim(base, &segs, v);
+            }
+            return self.write_place(base, &segs, WOp::Assign(v));
+        };
+        let mut wop = WOp::AssignDeref(Box::new(DeferredRead {
+            src,
+            hit: DeferredHit::None,
+        }));
+        let mut diags = Vec::new();
+        let mut st = store.borrow_mut();
+        let step = match st.slots.get_mut(idx).and_then(Option::as_mut) {
+            Some(slot) => descend(slot, &segs, 0, &mut wop, &mut diags, false),
+            None => Step::Done(Value::Null),
+        };
+        drop(st);
+        let step = match (step, &mut wop) {
+            (Step::Done(v), WOp::AssignDeref(d)) => finish_deferred(v, d, &store, idx, &segs),
+            (s, _) => s,
+        };
+        let flushed = self.flush_diags(diags);
+        let wop = wop.resolve_deferred();
+        let r = match flushed {
+            Ok(()) => self.finish_step(step, &segs, wop),
+            Err(e) => Err(e),
+        };
+        flush_deferred_ref_assigns();
+        r
+    }
 
     /// `place = v`
     pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
@@ -2895,3 +3156,6 @@ fn stored_property(obj: &Obj, name: &ZStr) -> Option<Value> {
             .and_then(|t| t.get(&ArrayKey::Str(name.clone())).map(Value::deref)),
     }
 }
+
+#[cfg(test)]
+mod tests;
