@@ -23,6 +23,7 @@ use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, Class};
 use crate::func::{flags, Args};
 use crate::object;
+use crate::observer::FiberContext;
 use crate::vm::{Frame, FrameKind, PendingCall, Throw, Vm, VmResult};
 use php_runtime::{Obj, Value, ZStr};
 use stack::{Coroutine, StackError, Suspender};
@@ -154,7 +155,57 @@ enum Prefix {
     Stash(Vec<Frame>),
 }
 
+/// The observer view of `fiber`'s context, with `caller` as `fiber->caller`.
+fn context_of(fiber: &Obj, caller: Option<usize>) -> FiberContext {
+    let (status, destroyed, threw) =
+        with(fiber, |d| (d.state, d.destroyed, d.threw)).unwrap_or((FiberState::Init, false, false));
+    FiberContext {
+        id: fiber.addr(),
+        is_fiber: true,
+        status,
+        destroyed,
+        threw,
+        caller,
+    }
+}
+
 impl Vm {
+    /// Identity of the context running with `depth` fibers active: the
+    /// main context (`EG(main_fiber_context)`) for 0.
+    fn fiber_context_id(&self, depth: usize) -> usize {
+        depth
+            .checked_sub(1)
+            .and_then(|i| self.fibers.get(i))
+            .map_or(std::ptr::from_ref(self) as usize, Obj::addr)
+    }
+
+    /// The observer view of the context running with `depth` fibers active
+    /// (a running fiber's caller is the context that resumed it).
+    fn fiber_stack_context(&self, depth: usize) -> FiberContext {
+        match depth.checked_sub(1).and_then(|i| self.fibers.get(i)) {
+            Some(f) => context_of(f, Some(self.fiber_context_id(depth - 1))),
+            None => FiberContext {
+                id: self.fiber_context_id(0),
+                is_fiber: false,
+                status: FiberState::Running,
+                destroyed: false,
+                threw: false,
+                caller: None,
+            },
+        }
+    }
+
+    /// Indices in `vm.frames` of the first frame of each running fiber,
+    /// outermost first (where php-src's fiber stacks start with their
+    /// `{main}`-like bottom frame, `zend_fiber_execute`).
+    #[must_use]
+    pub fn running_fiber_bases(&self) -> Vec<usize> {
+        self.fibers
+            .iter()
+            .filter_map(|f| with(f, |d| d.base))
+            .collect()
+    }
+
     fn fiber_error(&mut self, msg: &str) -> Throw {
         self.make_throw("FiberError", msg)
     }
@@ -237,6 +288,12 @@ impl Vm {
     /// (the value `Fiber::suspend()` returns, or the error it throws), and
     /// returns what the fiber passes back when it suspends or terminates.
     fn fiber_switch_in(&mut self, fiber: &Obj, input: VmResult<Value>) -> VmResult<Value> {
+        if self.observer.enabled && with(fiber, |d| d.co.is_some()).unwrap_or(false) {
+            // `zend_fiber_switch_context`: notified before the statuses change.
+            let from = self.fiber_stack_context(self.fibers.len());
+            let to = context_of(fiber, Some(from.id));
+            self.observer_fiber_switch(&from, &to);
+        }
         let Some((co, base, frames, depth, er)) = with(fiber, |d| {
             d.state = FiberState::Running;
             d.transfer = Some(input);
@@ -296,6 +353,10 @@ impl Vm {
         })
         .flatten();
         drop(co);
+        if finished && self.observer.enabled {
+            // `zend_fiber_destroy_context`, after switching back.
+            self.observer_fiber_lifecycle(&context_of(fiber, None), true);
+        }
         out.unwrap_or(Ok(Value::Null))
     }
 
@@ -399,6 +460,10 @@ impl Vm {
                     d.depth = MAX_DEPTH - budget;
                     d.error_reporting = er;
                 });
+                if self.observer.enabled {
+                    // `zend_fiber_init_context`.
+                    self.observer_fiber_lifecycle(&context_of(fiber, None), false);
+                }
                 Ok(())
             }
             Err(StackError::TooSmall) => Err(self.make_throw(
@@ -455,6 +520,13 @@ fn fiber_body(vm: &mut Vm, s: Suspender, call: PendingCall) {
         d.transfer = Some(out);
         d.state = FiberState::Dead;
     });
+    if vm.observer.enabled {
+        // The final switch back to the caller (`zend_fiber_trampoline`).
+        let depth = vm.fibers.len();
+        let from = context_of(&fiber, None);
+        let to = vm.fiber_stack_context(depth - 1);
+        vm.observer_fiber_switch(&from, &to);
+    }
 }
 
 fn state_of(o: &Obj) -> FiberState {
@@ -559,6 +631,13 @@ fn fiber_suspend(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(vm.fiber_error("Cannot suspend in a force-closed fiber"));
     }
     check_switch(vm)?;
+    if vm.observer.enabled {
+        // `zend_fiber_suspend_internal` clears `caller` before switching.
+        let depth = vm.fibers.len();
+        let from = context_of(&fiber, None);
+        let to = vm.fiber_stack_context(depth - 1);
+        vm.observer_fiber_switch(&from, &to);
+    }
     let Some(s) = with(&fiber, |d| {
         d.transfer = Some(Ok(v));
         d.state = FiberState::Suspended;
@@ -687,7 +766,7 @@ pub(crate) fn register(vm: &mut Vm) {
         .register(vm);
     // The graceful-exit unwinder: a hidden class outside the Throwable
     // hierarchy, so no `catch` matches it.
-    let cls = ClassBuilder::new("FiberGracefulExit")
+    let cls = ClassBuilder::new("GracefulExit")
         .flags(cflags::FINAL)
         .register(vm);
     vm.classes.remove(&cls.lc_name);

@@ -103,8 +103,8 @@ foreach (gen() as $v) {}
 fn internal_enter_precedes_argument_errors() {
     let log = observe(
         r#"<?php
-strlen("abc");
-try { strlen(); } catch (ArgumentCountError $e) {}
+strcmp("abc", "abd");
+try { strcmp(); } catch (ArgumentCountError $e) {}
 "#,
         true,
     );
@@ -116,10 +116,10 @@ try { strlen(); } catch (ArgumentCountError $e) {}
     assert_eq!(
         internal,
         [
-            "enter strlen",
-            "leave strlen ok",
-            "enter strlen",
-            "leave strlen err"
+            "enter strcmp",
+            "leave strcmp ok",
+            "enter strcmp",
+            "leave strcmp err"
         ]
     );
 }
@@ -137,7 +137,7 @@ fn no_observer_means_no_notifications() {
 fn func_num_args_and_func_get_args_in_functions_are_opcodes() {
     let log = observe(
         r#"<?php
-function f() { \func_num_args(); func_get_args(); strlen("x"); }
+function f() { \func_num_args(); func_get_args(); strcmp("x", "y"); }
 f(1);
 try { func_num_args(); } catch (Error $e) {}
 "#,
@@ -152,8 +152,8 @@ try { func_num_args(); } catch (Error $e) {}
     assert_eq!(
         internal,
         [
-            "enter strlen",
-            "leave strlen ok",
+            "enter strcmp",
+            "leave strcmp ok",
             "enter func_num_args",
             "leave func_num_args err"
         ]
@@ -187,4 +187,70 @@ fn engine_reads_of_the_sapi_header_state_are_not_observed() {
     assert!(!vm.response_headers_sent().expect("headers_sent"));
     drop(vm);
     assert!(LOG.with(|l| l.borrow().is_empty()));
+}
+
+#[test]
+fn direct_call_user_func_and_strlen_are_opcodes() {
+    let log = observe(
+        r#"<?php
+function cb() { return 1; }
+call_user_func('cb');
+call_user_func_array('cb', []);
+strlen("x");
+$f = 'call_user_func';
+$f('cb');
+"#,
+        true,
+    );
+    let internal: Vec<_> = log
+        .iter()
+        .filter(|e| e.starts_with("enter") || e.starts_with("begin cb"))
+        .cloned()
+        .collect();
+    // zend_compile_func_cuf()/cufa() call the callback directly; only the
+    // dynamic call is a real internal call.
+    assert_eq!(
+        internal,
+        ["begin cb", "begin cb", "enter call_user_func", "begin cb"]
+    );
+}
+
+#[test]
+fn fiber_switches_are_notified_before_each_switch() {
+    use php_vm::ext::{FiberContext, FiberState};
+    fn describe(c: &FiberContext) -> String {
+        format!(
+            "{}:{:?}{}",
+            if c.is_fiber { "fiber" } else { "main" },
+            c.status,
+            if c.caller.is_some() { "+caller" } else { "" }
+        )
+    }
+    LOG.with(|l| l.borrow_mut().clear());
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+    vm.set_observer(ObserverHooks {
+        init: Some(|_, _| false),
+        fiber_init: Some(|_, c| log(format!("init {}", describe(c)))),
+        fiber_switch: Some(|_, from, to| {
+            log(format!("switch {} -> {}", describe(from), describe(to)));
+        }),
+        fiber_destroy: Some(|_, c| log(format!("destroy {}", describe(c)))),
+        ..ObserverHooks::default()
+    });
+    vm.run_script(
+        b"<?php $f = new Fiber(function () { Fiber::suspend(); }); $f->start(); $f->resume();",
+        "fiber.php",
+    );
+    drop(vm);
+    assert_eq!(
+        LOG.with(|l| l.borrow().clone()),
+        [
+            "init fiber:Init",
+            "switch main:Running -> fiber:Init+caller",
+            "switch fiber:Running -> main:Running",
+            "switch main:Running -> fiber:Suspended+caller",
+            "switch fiber:Dead -> main:Running",
+            "destroy fiber:Dead",
+        ]
+    );
 }

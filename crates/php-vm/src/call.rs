@@ -1168,20 +1168,32 @@ impl Vm {
         result
     }
 
-    /// `zend_compile_func_num_args()` / `zend_compile_func_get_args()`:
-    /// inside a function body, a statically named zero-argument call
-    /// compiles to `ZEND_FUNC_NUM_ARGS` / `ZEND_FUNC_GET_ARGS`, so no
-    /// internal call exists for observers to see. (Only consulted while
-    /// observers are enabled.)
+    /// `zend_try_compile_special_func()`: statically named calls without
+    /// named arguments that php-src compiles to dedicated opcodes, so no
+    /// internal call exists for observers to see. Inside a function body,
+    /// `func_num_args()` / `func_get_args()` become `ZEND_FUNC_NUM_ARGS` /
+    /// `ZEND_FUNC_GET_ARGS`; `strlen($x)` becomes `ZEND_STRLEN`; and
+    /// `call_user_func()` / `call_user_func_array()` become
+    /// `ZEND_INIT_USER_CALL` + `ZEND_SEND_USER`/`ZEND_SEND_ARRAY`
+    /// (`zend_compile_func_cuf()` / `zend_compile_func_cufa()`), calling
+    /// the callback directly. (Only consulted while observers are enabled.)
     fn compiles_to_opcode(&self, b: &Builtin, call: &PendingCall) -> bool {
-        call.direct
-            && call.args.is_empty()
-            && !call.has_named
-            && matches!(b.name.as_bytes(), b"func_num_args" | b"func_get_args")
-            && self
-                .frames
-                .last()
-                .is_some_and(|caller| caller.kind == FrameKind::Function)
+        if !call.direct || call.has_named {
+            return false;
+        }
+        match b.name.as_bytes() {
+            b"func_num_args" | b"func_get_args" => {
+                call.args.is_empty()
+                    && self
+                        .frames
+                        .last()
+                        .is_some_and(|caller| caller.kind == FrameKind::Function)
+            }
+            b"strlen" => call.args.len() == 1,
+            b"call_user_func" => !call.args.is_empty(),
+            b"call_user_func_array" => call.args.len() == 2,
+            _ => false,
+        }
     }
 
     #[allow(clippy::too_many_lines)] // the builtin call protocol (zend_execute_internal)
@@ -1255,7 +1267,7 @@ impl Vm {
                     && call
                         .scope
                         .as_ref()
-                        .is_some_and(|c| c.name.as_bytes() == b"Generator"))
+                        .is_some_and(|c| matches!(c.name.as_bytes(), b"Generator" | b"Fiber")))
                 || self.compiles_to_opcode(b, &call);
         }
         self.frames.push(f);

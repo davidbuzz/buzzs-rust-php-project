@@ -28,7 +28,8 @@ use std::rc::Rc;
 
 pub use crate::builtins::classbuilder::ClassBuilder;
 pub use crate::func::{Args, BuiltinFn as NativeFn};
-pub use crate::observer::{ObservedFrame, ObserverHooks};
+pub use crate::fiber::FiberState;
+pub use crate::observer::{FiberContext, ObservedFrame, ObserverHooks};
 pub use crate::vm::{Throw, VmResult};
 
 /// Method/property flag bits for [`ClassBuilder`].
