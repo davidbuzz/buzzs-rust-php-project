@@ -278,3 +278,104 @@ try { K::f(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
         "B::__call(x)\nB::__call(y)\nCall to private method P::M() from scope C\nCall to private method P::s() from scope C\nCannot call private K::__construct()\n"
     );
 }
+
+/// `do_inherit_constant_check`: ambiguous constants inherited from two
+/// sources and weakened constant visibility are compile errors, while a
+/// redeclaring class or an interface reached twice is fine.
+#[test]
+fn inherited_constant_conflicts_and_visibility() {
+    let cases = [
+        (
+            "interface I1 { const C = 1; } interface I2 { const C = 1; } class C implements I1, I2 {}",
+            "Class C inherits both I1::C and I2::C, which is ambiguous",
+        ),
+        (
+            "class C { const C = 1; } interface I { const C = 1; } class C2 extends C implements I {}",
+            "Class C2 inherits both C::C and I::C, which is ambiguous",
+        ),
+        (
+            "interface I1 { const C = 1; } interface I2 { const C = 2; } interface I3 extends I1, I2 {}",
+            "Interface I3 inherits both I1::C and I2::C, which is ambiguous",
+        ),
+        (
+            "interface I { public const FOO = 1; } class C implements I { protected const FOO = 1; }",
+            "Access level to C::FOO must be public (as in interface I)",
+        ),
+        (
+            "class P { protected const X = 1; } class C extends P { private const X = 2; }",
+            "Access level to C::X must be protected (as in class P) or weaker",
+        ),
+        (
+            "trait T { protected const X = 1; } interface I { const X = 1; } class C implements I { use T; }",
+            "Access level to C::X must be public (as in interface I)",
+        ),
+        (
+            "interface I { final public const X = 1; } class C implements I { const X = 2; }",
+            "C::X cannot override final constant I::X",
+        ),
+    ];
+    for (src, msg) in cases {
+        let (status, out) = run_status(&format!("<?php\n{src}\n"));
+        assert_ne!(status, 0, "{src}");
+        assert!(
+            out.contains(&format!("Fatal error: {msg} in t.php on line 2")),
+            "{src}: {out}"
+        );
+    }
+    let ok = "<?php\ninterface I1 { const C = 1; } interface I2 { const C = 2; }\n\
+              class C implements I1, I2 { const C = 3; }\n\
+              interface E { final public const T = 1; } interface K extends E {} interface S extends E {}\n\
+              class T implements K, S {} class P implements E {} class Q extends P implements E {}\n\
+              echo C::C, Q::T, \"\\n\";\n";
+    assert_eq!(run(ok), "31\n");
+}
+
+/// `zend_class_redeclaration_error` names the kind and name of the class
+/// already declared, with its declaration site for user classes.
+#[test]
+fn class_redeclaration_names_the_existing_class() {
+    let (status, out) = run_status("<?php\nclass stdclass {}\n");
+    assert_ne!(status, 0);
+    assert!(
+        out.contains("Fatal error: Cannot redeclare class stdClass in t.php on line 2"),
+        "{out}"
+    );
+    let (status, out) = run_status("<?php\ninterface A {}\ntrait A {}\n");
+    assert_ne!(status, 0);
+    assert!(
+        out.contains("Fatal error: Cannot redeclare interface A (previously declared in t.php:2) in t.php on line 3"),
+        "{out}"
+    );
+}
+
+/// `E_STRICT` is `#[\Deprecated]` in Zend/zend_constants.stub.php.
+#[test]
+fn e_strict_constant_is_deprecated() {
+    let out = run("<?php\necho E_ALL, \"\\n\";\necho E_STRICT, \"\\n\";\n");
+    assert_eq!(
+        out,
+        "30719\n\nDeprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed in t.php on line 3\n2048\n"
+    );
+}
+
+/// `zend_update_class_constants` (instantiation) evaluates constants
+/// without the recursion mark of `zend_get_class_constant_ex`, so an
+/// autoloader may read the constant being updated (GH-10709).
+#[test]
+fn class_constant_update_does_not_mark_recursion() {
+    let out = run(r#"<?php
+class B { const C = A::C . "B"; }
+spl_autoload_register(function ($class) {
+    class A { const C = "A"; }
+    echo B::C, "\n";
+});
+new B();
+echo B::C, "\n";
+class D { const X = self::Y; const Y = self::X; }
+try { new D; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "AB\nAB\nCannot declare self-referencing constant self::Y\n"
+    );
+}

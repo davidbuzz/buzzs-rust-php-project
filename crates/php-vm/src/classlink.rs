@@ -308,6 +308,9 @@ impl Vm {
         spec: &ClassSpec,
         name: Value,
     ) -> VmResult<Value> {
+        // `ZEND_FETCH_CLASS_CONSTANT` fetches the class before checking the
+        // name's type.
+        let cls = self.resolve_class_spec(spec)?;
         let name = match name {
             Value::Str(s) => s,
             other => {
@@ -320,7 +323,6 @@ impl Vm {
                 ))
             }
         };
-        let cls = self.resolve_class_spec(spec)?;
         // Trait constants are only reachable through a using class.
         if cls.is_trait()
             && cls
@@ -365,6 +367,14 @@ impl Vm {
     /// Reads a class constant (evaluating it lazily).
     pub(crate) fn class_constant(&mut self, cls: &Rc<Class>, name: &ZStr) -> VmResult<Value> {
         self.class_constant_ex(cls, name, None, true)
+    }
+
+    /// `zend_update_class_constant` (from `zend_update_class_constants`):
+    /// evaluates a constant without marking it as visited, so a nested
+    /// read of it (say, from an autoloader) evaluates it again.
+    pub(crate) fn update_class_constant(&mut self, cls: &Rc<Class>, name: &ZStr) -> VmResult<()> {
+        self.class_constant_ex(cls, name, None, false)?;
+        Ok(())
     }
 
     /// [`Self::class_constant`] with the class named `shown` in errors
@@ -2136,6 +2146,75 @@ fn inherit_prop_hooks(
     Some(Rc::new(h))
 }
 
+/// The `inherits both ... which is ambiguous` (or final override) error
+/// of `do_inherit_constant_check` for an interface constant `c` whose name
+/// is already inherited (`existing`) from the parent or another interface.
+#[cold]
+fn inherited_constant_conflict(
+    decl: &ClassDecl,
+    display: &ZStr,
+    existing: &ClassConst,
+    c: &ClassConst,
+) -> Option<String> {
+    if existing.class == c.class {
+        return None;
+    }
+    if c.flags & flags::FINAL != 0 {
+        return Some(format!(
+            "{}::{} cannot override final constant {}::{}",
+            object::display_name(&existing.class),
+            c.name,
+            object::display_name(&c.class),
+            c.name
+        ));
+    }
+    // `zend_get_object_type_uc(ce)`.
+    let kind = match decl.kind {
+        ClassKind::Interface => "Interface",
+        ClassKind::Trait => "Trait",
+        ClassKind::Enum => "Enum",
+        ClassKind::Class => "Class",
+    };
+    Some(format!(
+        "{kind} {display} inherits both {}::{} and {}::{}, which is ambiguous",
+        object::display_name(&existing.class),
+        c.name,
+        object::display_name(&c.class),
+        c.name
+    ))
+}
+
+/// The `Access level to C::X must be ... (as in class P)` check of
+/// `do_inherit_constant_check` for an own constant (`name`, `fl`) overriding the
+/// inherited `parent`.
+fn constant_access_level_error(
+    display: &ZStr,
+    (name, fl): (&ZStr, u32),
+    parent: &ClassConst,
+    interfaces: &[Rc<Class>],
+) -> Option<String> {
+    let pv = parent.flags & flags::VISIBILITY;
+    if fl & flags::VISIBILITY <= pv {
+        return None;
+    }
+    // `zend_get_object_type(parent_constant->ce)`.
+    let kind = if interfaces.iter().any(|i| i.name == parent.class) {
+        "interface"
+    } else {
+        "class"
+    };
+    Some(format!(
+        "Access level to {display}::{name} must be {} (as in {kind} {}){}",
+        visibility_name(pv),
+        object::display_name(&parent.class),
+        if pv == flags::PUBLIC {
+            ""
+        } else {
+            " or weaker"
+        }
+    ))
+}
+
 /// `do_trait_constant_check` for trait constant `tc` of `traits[ti]` that
 /// meets `existing`, a constant the class already has (its own, an enum
 /// case or one of an earlier trait). Values that need evaluating are
@@ -2511,9 +2590,25 @@ fn build_class(
             }
         }
     }
+    // `do_inherit_iface_constant` / `do_inherit_constant_check`: own and
+    // trait constants (bound first in `zend_do_link_class`) shadow the
+    // interface ones, which are only checked against them below.
+    let is_own = |n: &ZStr| {
+        decl.consts.iter().any(|cd| cd.name == *n)
+            || traits
+                .iter()
+                .any(|t| t.consts.iter().any(|tc| tc.name == *n))
+    };
+    let mut iface_overridden: Vec<Rc<ClassConst>> = Vec::new();
     for i in &interfaces {
         for c in &i.consts {
-            if !const_map.contains_key(&c.name) {
+            if is_own(&c.name) {
+                iface_overridden.push(c.clone());
+            } else if let Some(&idx) = const_map.get(&c.name) {
+                if err.is_none() {
+                    *err = inherited_constant_conflict(decl, &display, &consts[idx], c);
+                }
+            } else {
                 add_const(c.clone(), &mut consts, &mut const_map);
             }
         }
@@ -2530,25 +2625,26 @@ fn build_class(
                     cd.name
                 ));
             }
-            // `do_inherit_constant_check`: the visibility may only widen.
-            let parent_vis = existing.flags & flags::VISIBILITY;
-            if cd.flags & flags::VISIBILITY > parent_vis && err.is_none() {
-                let kind = if interfaces.iter().any(|i| i.name == existing.class) {
-                    "interface"
-                } else {
-                    "class"
-                };
+            if err.is_none() {
+                *err = constant_access_level_error(
+                    &display,
+                    (&cd.name, cd.flags),
+                    existing,
+                    &interfaces,
+                );
+            }
+        }
+        for ic in iface_overridden.iter().filter(|c| c.name == cd.name) {
+            if ic.flags & flags::FINAL != 0 && err.is_none() {
                 *err = Some(format!(
-                    "Access level to {display}::{} must be {} (as in {kind} {}){}",
+                    "{display}::{} cannot override final constant {}::{}",
                     cd.name,
-                    visibility_name(existing.flags),
-                    object::display_name(&existing.class),
-                    if parent_vis == flags::PUBLIC {
-                        ""
-                    } else {
-                        " or weaker"
-                    }
+                    object::display_name(&ic.class),
+                    cd.name
                 ));
+            }
+            if err.is_none() {
+                *err = constant_access_level_error(&display, (&cd.name, cd.flags), ic, &interfaces);
             }
         }
         let value = match &cd.value {
@@ -2611,6 +2707,20 @@ fn build_class(
                         object::display_name(&existing.class),
                         c.name
                     ));
+                }
+            }
+            for ic in iface_overridden.iter().filter(|ic| ic.name == c.name) {
+                if ic.flags & flags::FINAL != 0 && err.is_none() {
+                    *err = Some(format!(
+                        "{display}::{} cannot override final constant {}::{}",
+                        c.name,
+                        object::display_name(&ic.class),
+                        c.name
+                    ));
+                }
+                if err.is_none() {
+                    *err =
+                        constant_access_level_error(&display, (&c.name, c.flags), ic, &interfaces);
                 }
             }
             let nc = ClassConst {

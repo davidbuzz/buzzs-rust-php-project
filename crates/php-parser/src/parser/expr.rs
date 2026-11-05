@@ -1604,7 +1604,8 @@ impl Parser<'_> {
         }
         // `zend_ast_list_rtrim` drops the one implicit empty element after
         // the final comma, which this loop never pushes: `[1, 2, ,]` keeps
-        // its explicit hole (zend_language_parser.y `array_pair_list`).
+        // its explicit hole and `[,]` its empty element (zend_language_parser.y
+        // `array_pair_list`; "Cannot use empty array elements in arrays").
         Ok(items)
     }
 

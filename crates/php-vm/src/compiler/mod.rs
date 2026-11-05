@@ -246,6 +246,10 @@ pub(crate) struct Compiler {
     /// Compiling the value of a top-level `const` statement, which PHP
     /// evaluates as a constant-expression AST (`zend_compile_const_decl`).
     pub in_const_decl: bool,
+    /// `fns.len()` while a global `const` value or a parameter default is
+    /// compiled inline (0 otherwise): these are constant expressions in
+    /// php-src, evaluated by `zend_ast_evaluate_ex`.
+    pub inline_const_depth: usize,
 }
 
 /// Compiles a parsed program.
@@ -278,6 +282,7 @@ pub fn compile(
         closure_depth: 0,
         in_const_default: false,
         in_const_decl: false,
+        inline_const_depth: 0,
     };
     for w in &program.warnings {
         let level = match w.level {
@@ -620,6 +625,12 @@ impl Compiler {
     /// Whether a constant expression is being compiled.
     pub(crate) fn in_const_expr(&self) -> bool {
         self.in_const_default || self.fref().kind == FnKind::ConstExpr
+    }
+
+    /// Whether the code being compiled is a constant expression evaluated
+    /// by `zend_ast_evaluate_ex` (not a closure body inside one).
+    pub(crate) fn in_evaluated_const_expr(&self) -> bool {
+        self.fref().kind == FnKind::ConstExpr || self.inline_const_depth == self.fns.len()
     }
 
     /// `zend_ensure_valid_class_fetch_type()`: `self`/`parent`/`static`

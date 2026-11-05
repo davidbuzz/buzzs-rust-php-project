@@ -1719,7 +1719,7 @@ impl Vm {
                     .class_by_name(&constant.class)
                     .unwrap_or_else(|| cls.clone());
                 crate::reflection::with_scope(self, Some(scope), |vm| {
-                    vm.class_constant(cls, &constant.name)
+                    vm.update_class_constant(cls, &constant.name)
                 })?;
             }
         }
@@ -1738,6 +1738,19 @@ impl Vm {
                 }
             };
             out.push(v);
+        }
+        // `zend_update_class_constants` then evaluates the static property
+        // initializers.
+        for sp in &cls.static_props {
+            if sp.initialized.get() {
+                continue;
+            }
+            if let Some(d) = &sp.default {
+                let decl = self.class_by_name(&sp.class).unwrap_or_else(|| cls.clone());
+                let v = self.eval_const_expr(d, Some(&decl))?;
+                *sp.cell.borrow_mut() = v;
+            }
+            sp.initialized.set(true);
         }
         *cls.defaults.borrow_mut() = Some(out.clone());
         Ok(out)

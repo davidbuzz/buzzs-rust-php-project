@@ -923,3 +923,90 @@ bool(false)\nbool(true)\nbool(false)\n\
 \nWarning: Call to protected R::__destruct() from global scope during shutdown ignored in Unknown on line 0\n"
     );
 }
+
+/// `ZEND_AST_PROP` in `zend_ast_evaluate_ex`: constant expressions (global
+/// constants and parameter defaults included) only fetch properties of
+/// enum cases, after converting the name; closure bodies are not affected.
+#[test]
+fn constant_expression_property_fetch_requires_enum() {
+    let out = run(r#"<?php
+class A { public $prop = 42; }
+class B {}
+enum E: int { case X = 1; }
+function f($p = (new A)->prop) {}
+function h($p = (new A)->{new B}) {}
+function g($c = static function () { return (new A)->prop; }) { return $c(); }
+foreach (['f', 'f', 'h'] as $fn) {
+    try { $fn(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+const V = E::X->value;
+const N = (null)?->prop;
+echo V, g(), N === null ? "null" : "set", "\n";
+const P = (new A)?->prop;
+echo "unreachable\n";
+"#);
+    assert!(
+        out.starts_with(
+            "Fetching properties on non-enums in constant expressions is not allowed\n\
+             Fetching properties on non-enums in constant expressions is not allowed\n\
+             Object of class B could not be converted to string\n\
+             142null\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "Uncaught Error: Fetching properties on non-enums in constant expressions is not allowed in t.php:14"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("unreachable"), "{out}");
+}
+
+/// `zend_compile_prop_decl` sets `active_property_info_name` while it
+/// compiles each property's default and attributes, so `__PROPERTY__`
+/// names the property there too (GH-17222).
+#[test]
+fn property_magic_constant_in_defaults_and_attributes() {
+    let out = run(r#"<?php
+#[Attribute]
+class MyAttr { public function __construct(public string $msg) {} }
+class Foo {
+    #[MyAttr(__PROPERTY__)]
+    public $a = __PROPERTY__, $b = __PROPERTY__;
+    public static $s = __PROPERTY__;
+    public $c = [__PROPERTY__];
+}
+$f = new Foo;
+echo $f->a, $f->b, Foo::$s, $f->c[0], "\n";
+$r = new ReflectionClass(Foo::class);
+foreach (['a', 'b'] as $p) {
+    echo $r->getProperty($p)->getAttributes()[0]->getArguments()[0];
+}
+echo "\n";
+"#);
+    assert_eq!(out, "absc\nab\n");
+}
+
+/// Instantiation evaluates static property initializers as well
+/// (`zend_update_class_constants`); a failed one is retried (GH-10356).
+#[test]
+fn instantiation_evaluates_static_property_initializers() {
+    let out = run(r#"<?php
+class Foo {
+    public static $foo = [
+        'foo' => DOES_NOT_EXIST,
+    ];
+}
+for ($i = 0; $i < 2; $i++) {
+    try { new Foo(); } catch (Error $e) { echo $e->getMessage(), " @", $e->getLine(), "\n"; }
+}
+define('DOES_NOT_EXIST', 1);
+new Foo();
+echo Foo::$foo['foo'], "\n";
+"#);
+    assert_eq!(
+        out,
+        "Undefined constant \"DOES_NOT_EXIST\" @4\nUndefined constant \"DOES_NOT_EXIST\" @4\n1\n"
+    );
+}

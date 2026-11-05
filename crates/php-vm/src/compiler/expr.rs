@@ -675,6 +675,14 @@ impl Compiler {
         if items.iter().flatten().any(|it| it.unpack) {
             self.check_const_array_unpack(items, line)?;
         }
+        if items.iter().flatten().any(|it| {
+            matches!(
+                it.key.as_ref().map(|k| &k.kind),
+                Some(ExprKind::Array { .. })
+            )
+        }) {
+            self.check_ct_array_keys(items, line)?;
+        }
         let t = self.tmp();
         self.emit(Op::InitArray { dst: t });
         for it in items {
@@ -829,6 +837,55 @@ impl Compiler {
         })
     }
 
+    /// `zend_try_ct_eval_array`: an all-constant array literal with an
+    /// array key is a compile error.
+    #[cold]
+    fn check_ct_array_keys(&self, items: &[Option<ArrayItem>], line: u32) -> CResult<()> {
+        let mut keys = Vec::new();
+        for it in items {
+            let Some(it) = it else { return Ok(()) };
+            if it.by_ref || it.unpack || self.try_fold(&it.value).is_none() {
+                return Ok(());
+            }
+            if let Some(k) = &it.key {
+                match self.try_fold(k) {
+                    Some(v) => keys.push(v),
+                    None => return Ok(()),
+                }
+            }
+        }
+        if keys.iter().any(|k| matches!(k, Value::Array(_))) {
+            return self.err("Illegal offset type", line);
+        }
+        Ok(())
+    }
+
+    /// A property fetch in a constant expression (`ZEND_AST_PROP` of
+    /// `zend_ast_evaluate_ex`): the object is fetched, then the name is
+    /// evaluated, then non-enum objects are rejected.
+    #[cold]
+    fn const_prop_place(&mut self, p: Place, name: &MemberName) -> CResult<Place> {
+        let direct = match &p.base {
+            PlaceBase::Value(op) if p.segs.is_empty() => Some(*op),
+            _ => None,
+        };
+        let v = match direct {
+            Some(op) => op,
+            None => self.fetch_place(p, FetchMode::Read),
+        };
+        let n = self.member_name(name)?;
+        let dst = self.tmp();
+        self.emit(Op::ConstPropCheck {
+            obj: Compiler::keep(v),
+            name: n,
+            dst,
+        });
+        Ok(Place {
+            base: PlaceBase::Value(v),
+            segs: vec![Seg::Prop(Operand::Tmp(dst))],
+        })
+    }
+
     /// Compiles a writable expression into a place (offsets evaluated now).
     pub(crate) fn compile_place(&mut self, e: &Expr, _for_unset: bool) -> CResult<Place> {
         self.f().line = e.span.line;
@@ -929,6 +986,9 @@ impl Compiler {
                         base: PlaceBase::Value(v),
                         segs: Vec::new(),
                     };
+                }
+                if self.in_evaluated_const_expr() {
+                    return self.const_prop_place(p, name);
                 }
                 let n = self.member_name(name)?;
                 p.segs.push(Seg::Prop(n));

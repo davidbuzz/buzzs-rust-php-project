@@ -394,6 +394,9 @@ $a = new class {} 1;	Parse error: syntax error, unexpected integer "1" on line 1
 $a = (new A) 1;	Parse error: syntax error, unexpected integer "1" on line 1
 list() = $a 1;	Parse error: syntax error, unexpected integer "1" on line 1
 [,] = $a;	Fatal error: Cannot use empty list on line 1
+$a = [,];	Fatal error: Cannot use empty array elements in arrays on line 1
+$a = [1,,];	Fatal error: Cannot use empty array elements in arrays on line 1
+[$a,,] = $b;	OK
 $a = [...];	Parse error: syntax error, unexpected token "]" on line 1
 $a = [... 1 2];	Parse error: syntax error, unexpected integer "2", expecting "]" on line 1
 $a = [1 => &];	Parse error: syntax error, unexpected token "]" on line 1

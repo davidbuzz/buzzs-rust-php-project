@@ -20,6 +20,77 @@ pub(crate) fn export_expr_text(source: &[u8], e: &Expr) -> String {
     String::from_utf8_lossy(&source[s..end]).into_owned()
 }
 
+/// Collects the class and constant names of an expression that `use`
+/// imports resolve differently from the namespace prefix: `(start, end,
+/// resolved name)`.
+struct ImportedNames<'c> {
+    c: &'c Compiler,
+    out: Vec<(usize, usize, Vec<u8>)>,
+}
+
+impl ImportedNames<'_> {
+    fn class(&mut self, n: &ast::Name) {
+        let special = n.kind == ast::NameKind::Unqualified
+            && (n.name.eq_ignore_ascii_case(b"self")
+                || n.name.eq_ignore_ascii_case(b"parent")
+                || n.name.eq_ignore_ascii_case(b"static"));
+        if special
+            || !matches!(
+                n.kind,
+                ast::NameKind::Unqualified | ast::NameKind::Qualified
+            )
+        {
+            return;
+        }
+        let r = self.c.resolve_class_name(n);
+        if r != self.c.ns_prefixed(&n.name) {
+            self.out.push((n.span.start, n.span.end, r));
+        }
+    }
+
+    fn constant(&mut self, n: &ast::Name) {
+        let r = match n.kind {
+            ast::NameKind::Unqualified => match self.c.const_uses.get(&n.name) {
+                Some(i) => i.clone(),
+                None => return,
+            },
+            ast::NameKind::Qualified => {
+                let r = self.c.resolve_class_name(n);
+                if r == self.c.ns_prefixed(&n.name) {
+                    return;
+                }
+                r
+            }
+            _ => return,
+        };
+        self.out.push((n.span.start, n.span.end, r));
+    }
+}
+
+impl php_parser::visit::Visitor for ImportedNames<'_> {
+    fn visit_expr(&mut self, e: &Expr) {
+        match &e.kind {
+            ast::ExprKind::Closure(_) | ast::ExprKind::ArrowFn(_) => return,
+            ast::ExprKind::New { class, .. } => {
+                if let ast::NewClass::Name(n) = &**class {
+                    self.class(n);
+                }
+            }
+            ast::ExprKind::ClassConst { class, .. }
+            | ast::ExprKind::ClassName(class)
+            | ast::ExprKind::StaticProp { class, .. }
+            | ast::ExprKind::StaticCall { class, .. } => {
+                if let ast::ClassRef::Name(n) = &**class {
+                    self.class(n);
+                }
+            }
+            ast::ExprKind::Const(n) => self.constant(n),
+            _ => {}
+        }
+        php_parser::visit::walk_expr(self, e);
+    }
+}
+
 fn modifiers_to_flags(m: ast::Modifiers) -> u32 {
     let mut f = 0;
     if m.contains(ast::Modifiers::PUBLIC) || m.contains(ast::Modifiers::VAR) {
@@ -283,6 +354,37 @@ impl Compiler {
         Ok(Operand::Tmp(t))
     }
 
+    /// The source text of a parameter default with the names that `use`
+    /// imports resolve spliced in fully qualified: the reflection export
+    /// re-resolves the text against the namespace only, while php-src
+    /// exports the compiled AST (GH-9447).
+    fn default_text_with_imports(&self, d: &Expr) -> String {
+        let mut names = ImportedNames {
+            c: self,
+            out: Vec::new(),
+        };
+        php_parser::visit::Visitor::visit_expr(&mut names, d);
+        if names.out.is_empty() {
+            return export_expr_text(&self.source, d);
+        }
+        let s = d.span.start.min(self.source.len());
+        let end = d.span.end.min(self.source.len()).max(s);
+        names.out.sort_by_key(|r| r.0);
+        let mut text = Vec::with_capacity(end - s + 16);
+        let mut at = s;
+        for (a, b, resolved) in names.out {
+            if a < at || b > end {
+                continue;
+            }
+            text.extend_from_slice(&self.source[at..a]);
+            text.push(b'\\');
+            text.extend_from_slice(&resolved);
+            at = b;
+        }
+        text.extend_from_slice(&self.source[at..end]);
+        String::from_utf8_lossy(&text).into_owned()
+    }
+
     #[allow(clippy::too_many_lines)]
     fn compile_body(&mut self, spec: &BodySpec<'_>, body: BodyKind<'_>) -> CResult<UserFunction> {
         let saved_hook = if spec.kind != FnKind::Method || !spec.name.as_bytes().starts_with(b"$") {
@@ -543,7 +645,7 @@ impl Compiler {
                     if self.multibyte {
                         String::from_utf8_lossy(&php_parser::export::export_expr(d)).into_owned()
                     } else {
-                        export_expr_text(&self.source, d)
+                        self.default_text_with_imports(d)
                     }
                 }),
                 promote,
@@ -623,8 +725,10 @@ impl Compiler {
             } else if let Some(d) = &p.default {
                 let at = self.emit(Op::RecvInit { n, cv, skip: 0 });
                 let saved = std::mem::replace(&mut self.in_const_default, true);
+                let depth = std::mem::replace(&mut self.inline_const_depth, self.fns.len());
                 let v = self.compile_expr(d);
                 self.in_const_default = saved;
+                self.inline_const_depth = depth;
                 let v = v?;
                 self.f().line = p.span.line;
                 self.emit(Op::RecvDefault { n, cv, val: v });
@@ -1446,7 +1550,14 @@ impl Compiler {
                         }
                         None => None,
                     };
-                    let attrs = self.attributes(&pg.attributes)?;
+                    // `zend_compile_prop_decl` compiles the default and the
+                    // attributes with `active_property_info_name` set
+                    // (`__PROPERTY__`).
+                    let first = pg.props.first().map(|p| p.name.name.clone());
+                    let saved_prop = std::mem::replace(&mut self.hook_prop, first);
+                    let attrs = self.attributes(&pg.attributes);
+                    self.hook_prop = saved_prop;
+                    let attrs = attrs?;
                     self.validate_attributes(
                         &attrs,
                         super::attrs::target::PROPERTY,
@@ -1454,7 +1565,7 @@ impl Compiler {
                         None,
                         false,
                     )?;
-                    for p in &pg.props {
+                    for (pi, p) in pg.props.iter().enumerate() {
                         self.f().line = p.span.line;
                         if props
                             .iter()
@@ -1488,7 +1599,13 @@ impl Compiler {
                         let default = match &p.default {
                             Some(d) => {
                                 self.check_const_expr(d, false)?;
-                                Some(self.const_expr(d)?)
+                                let saved_prop = std::mem::replace(
+                                    &mut self.hook_prop,
+                                    Some(p.name.name.clone()),
+                                );
+                                let v = self.const_expr(d);
+                                self.hook_prop = saved_prop;
+                                Some(v?)
                             }
                             None => {
                                 if ty.is_none() {
@@ -1542,13 +1659,22 @@ impl Compiler {
                         } else {
                             default
                         };
+                        let attributes = if pi == 0 || pg.attributes.is_empty() {
+                            attrs.clone()
+                        } else {
+                            let saved_prop =
+                                std::mem::replace(&mut self.hook_prop, Some(p.name.name.clone()));
+                            let a = self.attributes(&pg.attributes);
+                            self.hook_prop = saved_prop;
+                            a?
+                        };
                         props.push(PropDecl {
                             name: ZStr::from(p.name.name.as_slice()),
                             default,
                             flags: fl,
                             ty: ty.clone(),
                             doc_comment: p.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
-                            attributes: attrs.clone(),
+                            attributes,
                             line: p.span.line,
                             hooks,
                         });

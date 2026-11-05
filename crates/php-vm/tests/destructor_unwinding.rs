@@ -112,3 +112,22 @@ echo "hmm\n";
     assert_eq!(status, 255);
     assert_eq!(output, "No crash.\n");
 }
+
+/// Unwinding releases a frame's unfinished calls (arguments first) before
+/// its live temporaries, as `cleanup_unfinished_calls` runs before
+/// `cleanup_live_vars`: that decides which object handles are reused first.
+#[test]
+fn unwinding_releases_call_arguments_before_live_temporaries() {
+    let (_, out) = run(r#"<?php
+class Test {
+    public function __construct(public $a, public $b) {}
+}
+$x = new stdClass; $y = new stdClass; $z = new stdClass;
+unset($x, $y, $z);
+function f() { return new Test(new stdClass, [] + 0); }
+try { f(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$a = new stdClass; $b = new stdClass; $c = new stdClass;
+echo spl_object_id($a), spl_object_id($b), spl_object_id($c), "\n";
+"#);
+    assert_eq!(out, "Unsupported operand types: array + int\n324\n");
+}
