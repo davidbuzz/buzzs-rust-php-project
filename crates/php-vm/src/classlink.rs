@@ -308,6 +308,9 @@ impl Vm {
         spec: &ClassSpec,
         name: Value,
     ) -> VmResult<Value> {
+        // `ZEND_FETCH_CLASS_CONSTANT` fetches the class before checking the
+        // name's type.
+        let cls = self.resolve_class_spec(spec)?;
         let name = match name {
             Value::Str(s) => s,
             other => {
@@ -320,7 +323,6 @@ impl Vm {
                 ))
             }
         };
-        let cls = self.resolve_class_spec(spec)?;
         // Trait constants are only reachable through a using class.
         if cls.is_trait()
             && cls

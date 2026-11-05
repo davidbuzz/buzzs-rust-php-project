@@ -192,3 +192,18 @@ try { $a = [C1, [] => 1]; } catch (TypeError $e) { echo $e->getMessage(), "\n"; 
          Cannot access offset of type array on array\n"
     );
 }
+
+/// `ZEND_FETCH_CLASS_CONSTANT` resolves the class before it checks the
+/// type of a dynamic constant name (Zend/tests/constants/gh10486.phpt).
+#[test]
+fn dynamic_class_constant_fetch_resolves_class_first() {
+    let out = run(r#"<?php
+class A { const X = 1; }
+try { y::{5}::y; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { A::{5}; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "Error: Class \"y\" not found\nTypeError: Cannot use value of type int as class constant name\n"
+    );
+}
