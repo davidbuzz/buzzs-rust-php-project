@@ -1,44 +1,118 @@
-//! `Phar::webPhar()` over the CLI SAPI.
+//! `Phar::webPhar()` over the VM's SAPI.
 //!
-//! The CLI has no request (`SG(request_info).request_method` is `NULL`), so
-//! after opening the executing archive `webPhar()` returns without routing.
-//! The host still implements every [`WebHost`] service for completeness.
+//! Under the CLI there is no request (`SG(request_info).request_method` is
+//! `NULL`), so after opening the executing archive `webPhar()` returns
+//! without routing. Under a web SAPI (`php -S`: `PHP_SAPI` is
+//! `cli-server`) the request comes from `$_SERVER` (`REQUEST_METHOD`,
+//! `REQUEST_URI`, which the SAPI fills from `SG(request_info)`) and
+//! response headers go through the SAPI's header operation.
 
 use php_phar::web::{MimeOverride, Rewrite, ServerValue, WebHost, WebPharArgs, WebResult};
-use php_runtime::Value;
+use php_runtime::{Value, ZArray, ZStr};
 use php_vm::ext::{Args, VmResult};
 use php_vm::Vm;
 
 use crate::util::{bytes, executed, halt_defined, opt_str, run};
 
-/// The CLI web host: no request, output through the VM.
+/// The web host: the request of the running SAPI, output through the VM.
 struct CliHost<'a> {
     vm: &'a mut Vm,
     rewrite: Option<Value>,
+    /// `sapi_module.name` (the `PHP_SAPI` constant).
+    sapi: String,
+}
+
+/// `sapi_module.name`: the `PHP_SAPI` constant the SAPI registered.
+fn sapi_name(vm: &Vm) -> String {
+    match vm.constants.get(b"PHP_SAPI".as_slice()) {
+        Some(Value::Str(s)) => s.to_string_lossy(),
+        _ => "cli".into(),
+    }
+}
+
+/// `$_SERVER`, if the request has one.
+fn server_array(vm: &Vm) -> Option<ZArray> {
+    let mut g = vm.globals.borrow_mut();
+    let i = g.find(b"_SERVER")?;
+    match g.slots.get(i as usize)?.as_ref()?.deref() {
+        Value::Array(a) => Some(a),
+        _ => None,
+    }
+}
+
+impl CliHost<'_> {
+    /// Whether a web SAPI serves a request (anything but the CLI).
+    fn is_web(&self) -> bool {
+        self.sapi != "cli"
+    }
+
+    /// `$_SERVER[$key]` under a web SAPI.
+    fn server_value(&self, key: &str) -> Option<Value> {
+        if !self.is_web() {
+            return None;
+        }
+        server_array(self.vm)?
+            .get(&php_runtime::ArrayKey::Str(ZStr::from(key)))
+            .cloned()
+    }
+
+    /// A string `$_SERVER[$key]` (the `SG(request_info)` field it mirrors).
+    fn server_str(&self, key: &str) -> Option<Vec<u8>> {
+        match self.server_value(key)?.deref() {
+            Value::Str(s) => Some(s.as_bytes().to_vec()),
+            _ => None,
+        }
+    }
 }
 
 impl WebHost for CliHost<'_> {
     fn sapi_name(&self) -> String {
-        "cli".into()
+        self.sapi.clone()
     }
     fn request_method(&self) -> Option<Vec<u8>> {
-        None
+        self.server_str("REQUEST_METHOD")
     }
     fn request_uri(&self) -> Option<Vec<u8>> {
-        None
+        self.server_str("REQUEST_URI")
     }
     fn has_server(&self) -> bool {
-        false
+        self.is_web() && server_array(self.vm).is_some()
     }
-    fn server_get(&self, _key: &str) -> Option<ServerValue> {
-        None
+    fn server_get(&self, key: &str) -> Option<ServerValue> {
+        self.server_value(key).map(|v| match v.deref() {
+            Value::Str(s) => ServerValue::Str(s.as_bytes().to_vec()),
+            _ => ServerValue::Other,
+        })
     }
-    fn server_set(&mut self, _key: &str, _value: Vec<u8>) {}
+    fn server_set(&mut self, key: &str, value: Vec<u8>) {
+        if !self.is_web() {
+            return;
+        }
+        let mut g = self.vm.globals.borrow_mut();
+        let Some(i) = g.find(b"_SERVER") else {
+            return;
+        };
+        if let Some(Some(Value::Array(arr))) = g.slots.get_mut(i as usize) {
+            arr.make_mut()
+                .insert(ZStr::from(key), Value::Str(ZStr::from(value)));
+        }
+    }
     fn getenv(&self, key: &str) -> Option<Vec<u8>> {
         use std::os::unix::ffi::OsStringExt;
         std::env::var_os(key).map(OsStringExt::into_vec)
     }
-    fn header(&mut self, _line: &[u8], _response_code: Option<u16>) {}
+    fn header(&mut self, line: &[u8], response_code: Option<u16>) {
+        // `sapi_header_op(SAPI_HEADER_REPLACE)`: the CLI ignores headers.
+        let Some(hook) = self.vm.response_header_hook else {
+            return;
+        };
+        let code = i64::from(response_code.unwrap_or(0));
+        if let Err(t) = hook(self.vm, line, true, code) {
+            if self.vm.pending_throw.is_none() {
+                self.vm.pending_throw = Some(t);
+            }
+        }
+    }
     fn send_headers(&mut self) -> bool {
         true
     }
@@ -102,7 +176,8 @@ pub fn web_phar(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         has_rewrite: rewrite.is_some(),
     };
     let res = {
-        let mut host = CliHost { vm, rewrite };
+        let sapi = sapi_name(vm);
+        let mut host = CliHost { vm, rewrite, sapi };
         php_phar::web::web_phar(&mut host, ex.as_deref(), halt, &args)
     };
     if let Some(t) = vm.pending_throw.take() {
