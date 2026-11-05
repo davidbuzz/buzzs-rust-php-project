@@ -1401,3 +1401,14 @@ foreach ([anon(), anon()] as $o) {
 }
 "#), "prop1\nprop2\n");
 }
+
+#[test]
+fn constant_under_property_sent_by_reference_is_a_var() {
+    // GH-10497: zend_mark_const_object_fetch copies the constant to a VAR,
+    // so the fetch reports the non-object rather than a temporary.
+    assert_eq!(run(r#"<?php
+class C { const INT = 5; }
+function byRef(&$v) {}
+try { byRef(C::INT->prop); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#), "Attempt to modify property \"prop\" on int\n");
+}
