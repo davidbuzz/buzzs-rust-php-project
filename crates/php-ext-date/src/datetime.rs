@@ -7,10 +7,11 @@ use php_date::api;
 use php_date::parse::TimezoneSpec;
 use php_date::Time;
 use php_runtime::{ArrayKey, Obj, PropertyPurpose, Value, ZArray, ZStr};
-use php_vm::class::{cflags, Class};
+use php_vm::class::{cflags, AttributeInfo, Class, ConstExpr};
 use php_vm::ext::{
     acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, Throw, VmResult,
 };
+use php_vm::func::flags;
 use php_vm::object;
 use php_vm::Vm;
 
@@ -813,6 +814,19 @@ fn implement_date_interface(vm: &mut Vm, cls: &Rc<Class>) -> VmResult<()> {
 
 /// Registers the interface and both classes.
 #[allow(clippy::too_many_lines)]
+/// The `DateTimeImmutable` methods declared `#[\NoDiscard]`.
+const NODISCARD_METHODS: [&str; 9] = [
+    "modify",
+    "add",
+    "sub",
+    "setTimezone",
+    "setTime",
+    "setDate",
+    "setISODate",
+    "setTimestamp",
+    "setMicrosecond",
+];
+
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, v) in FORMATS {
         let cname = format!("DATE_{name}");
@@ -925,6 +939,25 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .hooks(hooks())
         .register(vm);
 
+    // `#[\NoDiscard(message: "as DateTimeImmutable::X() does not modify
+    // the object itself")]` on the withers (php_date.stub.php).
+    let nd = p | flags::NODISCARD;
+    for n in NODISCARD_METHODS {
+        vm.builtin_attributes.insert(
+            ZStr::from(format!("datetimeimmutable::{}", n.to_ascii_lowercase())),
+            Rc::new(vec![AttributeInfo {
+                name: ZStr::from("NoDiscard"),
+                args: vec![(
+                    Some(ZStr::from("message")),
+                    ConstExpr::Value(Value::Str(ZStr::from(format!(
+                        "as DateTimeImmutable::{n}() does not modify the object itself"
+                    )))),
+                )],
+                line: 0,
+                strict: false,
+            }]),
+        );
+    }
     ClassBuilder::new("DateTimeImmutable")
         .implements(vm, &["DateTimeInterface"])
         .method(
@@ -957,23 +990,23 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             p,
             diff,
         )
-        .method("modify(string $modifier): static", p, modify)
-        .method("add(DateInterval $interval): static", p, add)
-        .method("sub(DateInterval $interval): static", p, sub)
-        .method("setTimezone(DateTimeZone $timezone): static", p, set_timezone)
+        .method("modify(string $modifier): static", nd, modify)
+        .method("add(DateInterval $interval): static", nd, add)
+        .method("sub(DateInterval $interval): static", nd, sub)
+        .method("setTimezone(DateTimeZone $timezone): static", nd, set_timezone)
         .method(
             "setTime(int $hour, int $minute, int $second = 0, int $microsecond = 0): static",
-            p,
+            nd,
             set_time_m,
         )
-        .method("setDate(int $year, int $month, int $day): static", p, set_date_m)
+        .method("setDate(int $year, int $month, int $day): static", nd, set_date_m)
         .method(
             "setISODate(int $year, int $week, int $dayOfWeek = 1): static",
-            p,
+            nd,
             set_isodate_m,
         )
-        .method("setTimestamp(int $timestamp): static", p, set_timestamp_m)
-        .method("setMicrosecond(int $microsecond): static", p, set_microsecond)
+        .method("setTimestamp(int $timestamp): static", nd, set_timestamp_m)
+        .method("setMicrosecond(int $microsecond): static", nd, set_microsecond)
         .method("createFromMutable(DateTime $object): static", ps, dti_create_from_other)
         .method(
             "createFromInterface(DateTimeInterface $object): static",
