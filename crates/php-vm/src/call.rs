@@ -148,10 +148,15 @@ impl Vm {
             ));
         };
         if cacheable {
-            let mut cache = self.frame().code.fcall_cache.borrow_mut();
             let slot = name as usize;
+            // Sized for every literal at the first miss, like the run-time
+            // cache `init_func_run_time_cache()` allocates up front: later
+            // call sites never grow it while the code runs (which
+            // `memory_get_usage()` deltas would show, bug #81142).
+            let size = self.frame().code.literals.len().max(slot + 1);
+            let mut cache = self.frame().code.fcall_cache.borrow_mut();
             if cache.len() <= slot {
-                cache.resize(slot + 1, None);
+                cache.resize(size, None);
             }
             cache[slot] = Some(crate::opcode::CachedFunc::new(&func));
         }

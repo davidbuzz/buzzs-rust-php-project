@@ -1664,6 +1664,19 @@ struct Unwrapper {
     slot_counts: HashMap<usize, usize>,
 }
 
+/// Drops parse-cell handles without offering them to the cycle collector's
+/// possible-root buffer. php-src's `var_hash` holds no refcounts, so its
+/// teardown never buffers roots; here a buffered weak handle would also
+/// keep the cell's allocation alive until the buffer is compacted, which
+/// `memory_get_usage()` sees as a leak (bug #81142). Shared cells are
+/// buffered when the user later releases the result.
+fn without_root_recording<R>(f: impl FnOnce() -> R) -> R {
+    let prev = php_runtime::ref_roots::set_recording(false);
+    let r = f();
+    php_runtime::ref_roots::set_recording(prev);
+    r
+}
+
 impl Unwrapper {
     fn value(&mut self, v: &mut Value) {
         match v {
@@ -1673,7 +1686,7 @@ impl Unwrapper {
                     let mut inner = r.set(Value::Null);
                     self.value(&mut inner);
                     r.set(inner.clone());
-                    *v = inner;
+                    without_root_recording(|| *v = inner);
                 } else if self.seen_refs.insert(r.addr()) {
                     let mut inner = r.set(Value::Null);
                     self.value(&mut inner);
@@ -1818,7 +1831,7 @@ fn unser_destroy(vm: &mut Vm, d: &UnserRc, outermost: bool, run: bool) -> VmResu
         return Ok(());
     }
     let dtors = std::mem::take(&mut d.borrow_mut().dtors);
-    d.borrow_mut().slots.clear();
+    without_root_recording(|| d.borrow_mut().slots.clear());
     // With an exception pending the calls do not run (and count as failed).
     let mut failed = !run;
     let mut result = Ok(());
@@ -2240,6 +2253,24 @@ mod tests {
              Reference with value of type int held by property D::$a of type int is not compatible with property D::$b of type float\n\
              Cannot assign float to property D::$a of type int\n"
         );
+    }
+
+    #[test]
+    fn parse_cell_teardown_buffers_no_possible_roots() {
+        use php_runtime::{ref_roots, PhpRef, Value};
+        let prev = ref_roots::set_recording(true);
+        drop(ref_roots::take());
+        let cell = PhpRef::new(Value::empty_array());
+        let table_handle = cell.clone();
+        super::without_root_recording(|| drop(cell));
+        assert_eq!(ref_roots::len(), 0);
+        // Recording is restored afterwards.
+        let again = table_handle.clone();
+        drop(again);
+        assert_eq!(ref_roots::len(), 1);
+        drop(ref_roots::take());
+        drop(table_handle);
+        ref_roots::set_recording(prev);
     }
 
     #[test]
