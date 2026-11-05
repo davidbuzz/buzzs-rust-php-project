@@ -29,7 +29,6 @@ fn run_status(source: &str) -> (i32, String) {
 }
 
 /// Runs `source`, asserting a clean exit, and returns its output.
-#[allow(dead_code)]
 fn run(source: &str) -> String {
     let (status, output) = run_status(source);
     assert_eq!(status, 0, "{output}");
@@ -53,4 +52,26 @@ fn class_cannot_be_both_iterator_and_aggregate() {
     // Interfaces may extend both.
     let out = run("<?php\ninterface I extends Iterator, IteratorAggregate {}\necho \"ok\";\n");
     assert_eq!(out, "ok");
+}
+
+/// `get_object_vars()` applies `zend_check_property_access()` to dynamic
+/// properties too (foreach_shadowed_dyn_property).
+#[test]
+fn get_object_vars_hides_dynamic_property_shadowed_by_private() {
+    let out = run(r#"<?php
+class Test {
+    private $prop = "Test";
+    function run() {
+        foreach ($this as $k => $v) { echo "$k => $v\n"; }
+        foreach (get_object_vars($this) as $k => $v) { echo "$k: $v\n"; }
+    }
+}
+#[AllowDynamicProperties]
+class Test2 extends Test {}
+$t = new Test2;
+$t->prop = "Test2";
+$t->run();
+foreach (get_object_vars($t) as $k => $v) { echo "outside $k: $v\n"; }
+"#);
+    assert_eq!(out, "prop => Test\nprop: Test\noutside prop: Test2\n");
 }

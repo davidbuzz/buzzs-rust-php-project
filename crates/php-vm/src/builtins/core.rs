@@ -511,9 +511,17 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         t.push(Some(pi.slot), ArrayKey::from_zstr(&name), v);
     }
     if let Some(dyn_t) = object::data(&o).dynamic.borrow().as_ref() {
+        let declared = !cls.props.is_empty();
         for (k, v) in dyn_t.iter() {
             let key = match k {
-                ArrayKey::Str(s) => ArrayKey::from_zstr(s),
+                ArrayKey::Str(s) => {
+                    // A dynamic property shadowed by a declared one the
+                    // scope sees (`foreach_shadowed_dyn_property`).
+                    if declared && !dynamic_property_visible(vm, &cls, s, scope.as_ref()) {
+                        continue;
+                    }
+                    ArrayKey::from_zstr(s)
+                }
                 k => k.clone(),
             };
             t.push_renamed(None, k, key, v.clone());
@@ -521,6 +529,28 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let t = t.finish();
     Ok(Value::Array(ZArray::from_table(t)))
+}
+
+/// `zend_check_property_access(zobj, key, is_dynamic = 1)`: a dynamic
+/// property is hidden when `zend_get_property_info()` resolves its name to
+/// a declared non-public property (or denies access to one); a parent's
+/// private property seen from outside its class counts as dynamic.
+fn dynamic_property_visible(
+    vm: &Vm,
+    cls: &Rc<Class>,
+    name: &ZStr,
+    scope: Option<&Rc<Class>>,
+) -> bool {
+    if name.as_bytes().first() == Some(&0) {
+        return true;
+    }
+    match vm.lookup_prop(cls, name, scope) {
+        crate::props::PropLookup::NotFound => true,
+        crate::props::PropLookup::Found(pi) => pi.visibility() == flags::PUBLIC,
+        crate::props::PropLookup::Inaccessible(pi) => {
+            pi.visibility() == flags::PRIVATE && !pi.class.eq_ignore_ascii_case(cls.name.as_bytes())
+        }
+    }
 }
 
 /// A property in `properties_info` order: (name, declaring class, flags,
