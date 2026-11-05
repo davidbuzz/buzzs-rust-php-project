@@ -644,6 +644,14 @@ impl Compiler {
     }
 
     fn compile_array(&mut self, items: &[Option<ArrayItem>], line: u32) -> CResult<Operand> {
+        if items.iter().flatten().any(|it| {
+            matches!(
+                it.key.as_ref().map(|k| &k.kind),
+                Some(ExprKind::Array { .. })
+            )
+        }) {
+            self.check_ct_array_keys(items, line)?;
+        }
         let t = self.tmp();
         self.emit(Op::InitArray { dst: t });
         for it in items {
@@ -756,6 +764,29 @@ impl Compiler {
             MemberName::Ident(id) => self.lit(Value::Str(ZStr::from(id.name.as_slice()))),
             MemberName::Expr(e) => self.compile_expr(e)?,
         })
+    }
+
+    /// `zend_try_ct_eval_array`: an all-constant array literal with an
+    /// array key is a compile error.
+    #[cold]
+    fn check_ct_array_keys(&self, items: &[Option<ArrayItem>], line: u32) -> CResult<()> {
+        let mut keys = Vec::new();
+        for it in items {
+            let Some(it) = it else { return Ok(()) };
+            if it.by_ref || it.unpack || self.try_fold(&it.value).is_none() {
+                return Ok(());
+            }
+            if let Some(k) = &it.key {
+                match self.try_fold(k) {
+                    Some(v) => keys.push(v),
+                    None => return Ok(()),
+                }
+            }
+        }
+        if keys.iter().any(|k| matches!(k, Value::Array(_))) {
+            return self.err("Illegal offset type", line);
+        }
+        Ok(())
     }
 
     /// A property fetch in a constant expression (`ZEND_AST_PROP` of

@@ -166,3 +166,29 @@ var_dump(is_array(get_defined_functions(exclude_disabled: true)['user']));
          bool(true)\n"
     );
 }
+
+/// Array literal keys: `zend_try_ct_eval_array` rejects an array key at
+/// compile time; at runtime `ZEND_ADD_ARRAY_ELEMENT` throws
+/// `Cannot access offset of type T on array`.
+#[test]
+fn array_literal_offset_type_errors() {
+    let out = run("<?php\necho 1;\n$a = [[] => 1];\n");
+    assert!(
+        out.contains("Fatal error: Illegal offset type in t.php on line 3")
+            && !out.starts_with('1'),
+        "{out}"
+    );
+    let out = run(r#"<?php
+$k = [];
+try { $a = [1, $k => 1]; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $a = [new stdClass => 1]; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+const C1 = 1;
+try { $a = [C1, [] => 1]; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "Cannot access offset of type array on array\n\
+         Cannot access offset of type stdClass on array\n\
+         Cannot access offset of type array on array\n"
+    );
+}
