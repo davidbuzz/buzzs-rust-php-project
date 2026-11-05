@@ -49,7 +49,15 @@ pub struct UserTick {
 
 /// `(Re)arms` the execution-time limit: after `seconds` (0 = none) the
 /// executor raises "Maximum execution time of N seconds exceeded".
-pub(crate) fn arm_timer(seconds: i64) {
+///
+/// `hard` is `hard_timeout`: like `zend_timeout_handler`, each expiry
+/// re-arms the timer for that many seconds, so code that still runs after
+/// the timeout fatal (shutdown functions, destructors) times out again.
+/// php-src kills the process (exit 124) when that second expiry finds the
+/// first one still unhandled; this timer counts wall-clock time rather than
+/// `ITIMER_PROF` CPU time (a blocking builtin is not burning CPU), so it
+/// stops instead.
+pub(crate) fn arm_timer(seconds: i64, hard: i64) {
     let gen = TIMER_GEN.fetch_add(1, Ordering::AcqRel) + 1;
     TIMED_OUT.store(false, Ordering::Release);
     let Ok(secs) = u64::try_from(seconds) else {
@@ -58,15 +66,33 @@ pub(crate) fn arm_timer(seconds: i64) {
     if secs == 0 {
         return;
     }
+    let hard = u64::try_from(hard).unwrap_or(0);
     let _ = std::thread::Builder::new()
         .name("php-timeout".into())
         .spawn(move || {
-            std::thread::sleep(Duration::from_secs(secs));
-            if TIMER_GEN.load(Ordering::Acquire) == gen {
-                TIMED_OUT.store(true, Ordering::Release);
-                request_interrupt();
+            let mut wait = secs;
+            loop {
+                std::thread::sleep(Duration::from_secs(wait));
+                match timer_expired(&TIMER_GEN, &TIMED_OUT, gen, hard) {
+                    Some(next) => wait = next,
+                    None => return,
+                }
             }
         });
+}
+
+/// One expiry of the timer armed as generation `gen`
+/// (`zend_timeout_handler`): flags the timeout and requests an interrupt
+/// unless the timer was re-armed since or the previous timeout is still
+/// pending. Returns the seconds until the next expiry (`hard_timeout`), or
+/// `None` when the timer thread should stop.
+fn timer_expired(current: &AtomicU64, timed_out: &AtomicBool, gen: u64, hard: u64) -> Option<u64> {
+    if current.load(Ordering::Acquire) != gen || timed_out.load(Ordering::Acquire) {
+        return None;
+    }
+    timed_out.store(true, Ordering::Release);
+    request_interrupt();
+    (hard > 0).then_some(hard)
 }
 
 impl Vm {
@@ -143,7 +169,7 @@ impl Vm {
     /// `set_time_limit()` / `max_execution_time`: restarts the timer.
     pub(crate) fn set_time_limit(&mut self, seconds: i64) {
         self.timeout_seconds = seconds;
-        arm_timer(seconds);
+        arm_timer(seconds, self.ini.get_long("hard_timeout"));
     }
 }
 
@@ -266,12 +292,34 @@ pub(crate) fn set_time_limit(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult
 
 #[cfg(test)]
 mod tests {
-    use super::{request_interrupt, INTERRUPT};
-    use std::sync::atomic::Ordering;
+    use super::{request_interrupt, timer_expired, INTERRUPT};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     #[test]
     fn flag_round_trip() {
         request_interrupt();
         assert!(INTERRUPT.swap(false, Ordering::AcqRel));
+    }
+
+    #[test]
+    fn timer_rearms_for_hard_timeout_after_a_handled_timeout() {
+        let gen = AtomicU64::new(7);
+        let timed_out = AtomicBool::new(false);
+        // First expiry: flagged, re-armed for hard_timeout.
+        assert_eq!(timer_expired(&gen, &timed_out, 7, 2), Some(2));
+        assert!(timed_out.load(Ordering::Acquire));
+        // Not handled yet: the timer stops (php-src would hard-kill).
+        assert_eq!(timer_expired(&gen, &timed_out, 7, 2), None);
+        // Handled (zend_timeout clears the flag): it fires again.
+        timed_out.store(false, Ordering::Release);
+        assert_eq!(timer_expired(&gen, &timed_out, 7, 2), Some(2));
+        // hard_timeout=0: one expiry only.
+        timed_out.store(false, Ordering::Release);
+        assert_eq!(timer_expired(&gen, &timed_out, 7, 0), None);
+        assert!(timed_out.load(Ordering::Acquire));
+        // Re-armed since (set_time_limit): the old timer does nothing.
+        timed_out.store(false, Ordering::Release);
+        assert_eq!(timer_expired(&gen, &timed_out, 6, 2), None);
+        assert!(!timed_out.load(Ordering::Acquire));
     }
 }

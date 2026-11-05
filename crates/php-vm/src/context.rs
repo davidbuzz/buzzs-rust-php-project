@@ -754,6 +754,12 @@ impl OutputHost for Vm {
             Value::Str(n) => self.output_handler_aliases.get(n).copied(),
             _ => None,
         };
+        // `zend_handle_delayed_oom` leaves an unwind exit pending, and
+        // `zend_call_function` runs no user code under a pending exception:
+        // a user handler fails while the OOM fatal discards its buffer.
+        if self.reporting_oom && alias.is_none() {
+            return None;
+        }
         let r = if let Some(f) = alias {
             (f.handler)(self, buffer, mode)
         } else {
