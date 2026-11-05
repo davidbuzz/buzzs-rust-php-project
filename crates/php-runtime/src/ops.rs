@@ -979,10 +979,10 @@ pub fn is_identical(a: &Value, b: &Value) -> RtResult<bool> {
 }
 
 fn tables_identical(a: &HashTable, b: &HashTable) -> RtResult<bool> {
+    let _guard = RecursionGuard::enter(std::ptr::from_ref(a) as usize)?;
     if a.len() != b.len() {
         return Ok(false);
     }
-    let _guard = RecursionGuard::enter(std::ptr::from_ref(a) as usize)?;
     for ((k1, v1), (k2, v2)) in a.iter().zip(b.iter()) {
         if k1 != k2 || !is_identical(v1, v2)? {
             return Ok(false);
@@ -1022,7 +1022,11 @@ where
                 Value::Int(_) => CastTarget::Int,
                 Value::Float(_) => CastTarget::Float,
                 Value::Str(_) => CastTarget::String,
-                _ => CastTarget::Array,
+                Value::Array(_) => CastTarget::Array,
+                Value::Resource(_) => return Ok(if obj_lhs { 1 } else { -1 }),
+                Value::Object(_) | Value::Reference(_) => {
+                    unreachable!("object and references were handled above")
+                }
             };
             let casted = match ctx.cast_object(o, target)? {
                 Some(v) => v,
