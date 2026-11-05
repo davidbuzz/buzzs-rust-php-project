@@ -436,6 +436,28 @@ fn fatal_in_native_callback_keeps_running_handler_until_deactivation() {
 }
 
 #[test]
+fn bailout_in_handler_aborts_end_all_for_good() {
+    // oom_in_internal_output_handler: the fatal raised while a handler runs
+    // at shutdown is buffered in that handler and lost with it; a second
+    // `php_output_end_all()` must not re-enter the stack (lock error).
+    let mut h = TestHost::default();
+    h.ob_start_cb(
+        "{closure}",
+        0,
+        0x70,
+        cb(|h, _, _| {
+            h.report(Diagnostic::new(ErrorLevel::ERROR, "out of memory"));
+            Some(b"must not be sent".to_vec())
+        }),
+    );
+    h.echo("buffered");
+    end_all(&mut h);
+    assert!(h.fatal);
+    assert!(h.stack.running_flags().is_some());
+    assert_eq!(h.finish(), "");
+}
+
+#[test]
 fn ob_012_nesting() {
     let mut h = TestHost::default();
     h.echo("0");

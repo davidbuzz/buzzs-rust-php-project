@@ -124,6 +124,9 @@ impl Vm {
         for d in extra_directives() {
             ini.register(d, &mut sink);
         }
+        // A new executor (`init_executor()`): a fatal error or the shutdown
+        // of an earlier request on this thread disabled destructors.
+        object::set_destructors_enabled(true);
         let empty_code = Rc::new(opcode::OpArray::default());
         let mut vm = Vm {
             frames: Vec::new(),
