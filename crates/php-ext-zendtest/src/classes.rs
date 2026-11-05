@@ -7,6 +7,7 @@ use php_runtime::{Value, ZArray, ZStr};
 use php_vm::class::{cflags, ClassConst, ClassDecl, ClassKind, ConstExpr, PropDecl, StaticProp};
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ModuleBuilder, VmResult};
 use php_vm::types::TypeDecl;
+use php_vm::vm::FrameKind;
 use php_vm::Vm;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -686,8 +687,58 @@ fn register_traits(vm: &mut Vm) {
 
 /// `zend_forbid_dynamic_call()` needs the caller's call flags, which the
 /// VM does not expose to native methods; the methods are no-ops.
-fn forbid_dynamic_call(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+/// `ZendTestForbidDynamicCall::call()` / `callStatic()`:
+/// `zend_forbid_dynamic_call()`.
+fn forbid_dynamic_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if is_dynamic_call(vm) {
+        let method = a
+            .func
+            .as_ref()
+            .map_or_else(String::new, |f| f.name.to_string_lossy());
+        return Err(vm.throw(
+            "Error",
+            &format!("Cannot call ZendTestForbidDynamicCall::{method}() dynamically"),
+        ));
+    }
     Ok(Value::Null)
+}
+
+/// `ZEND_CALL_INFO(EX) & ZEND_CALL_DYNAMIC` for the running native call:
+/// set for calls through a callable value (`$f()`, `call_user_func()`,
+/// callbacks of internal functions), recognised by the opcode that started
+/// the call in the calling user code.
+fn is_dynamic_call(vm: &Vm) -> bool {
+    use php_vm::opcode::Op;
+    let n = vm.frames.len();
+    let Some(caller) = n.checked_sub(2).and_then(|i| vm.frames.get(i)) else {
+        return false;
+    };
+    if caller.kind == FrameKind::Builtin {
+        return true;
+    }
+    // The caller is executing the `DoCall` at `ip - 1`: find its `Init*`,
+    // skipping the nested calls of its arguments.
+    let ops = &caller.code.ops;
+    let mut nested = 0_usize;
+    let mut i = caller.ip.saturating_sub(1).min(ops.len());
+    while i > 0 {
+        i -= 1;
+        match &ops[i] {
+            Op::DoCall { .. } => nested += 1,
+            Op::InitDynCall { .. }
+            | Op::InitFCall { .. }
+            | Op::InitMethodCall { .. }
+            | Op::InitStaticCall { .. }
+            | Op::New { .. } => {
+                if nested == 0 {
+                    return matches!(ops[i], Op::InitDynCall { .. });
+                }
+                nested -= 1;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------

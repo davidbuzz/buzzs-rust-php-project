@@ -322,3 +322,22 @@ $f = "f"; $o = "o";
 var_dump(zend_test_is_string_marked_as_valid_utf8($f . $o . $o));"#);
     assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\n");
 }
+
+#[test]
+fn forbidden_dynamic_calls() {
+    // zend_forbid_dynamic_call.phpt
+    let out = run(r#"
+$o = new ZendTestForbidDynamicCall();
+$o->call();
+ZendTestForbidDynamicCall::callStatic();
+foreach ([[$o, 'call'], [ZendTestForbidDynamicCall::class, 'callStatic']] as $c) {
+    try { $c(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+try { call_user_func([$o, 'call']); } catch (Error $e) { echo $e->getMessage(), "\n"; }"#);
+    assert_eq!(
+        out,
+        "Cannot call ZendTestForbidDynamicCall::call() dynamically\n\
+         Cannot call ZendTestForbidDynamicCall::callStatic() dynamically\n\
+         Cannot call ZendTestForbidDynamicCall::call() dynamically\n"
+    );
+}
