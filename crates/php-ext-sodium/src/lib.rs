@@ -64,6 +64,14 @@ fn scrub_trace(o: &Obj) {
     }
 }
 
+/// Whether the function scrubs the backtrace when `zend_parse_parameters`
+/// fails: every function taking parameters except
+/// `sodium_crypto_pwhash_str_needs_rehash` (the parameterless ones use
+/// `zend_parse_parameters_none()`, which does not).
+fn scrubs_arg_errors(sig: &str) -> bool {
+    !sig.contains("()") && !sig.starts_with("sodium_crypto_pwhash_str_needs_rehash(")
+}
+
 /// Scrubs the trace of a thrown exception (no-op for exit/fatal unwinds).
 fn scrubbed(t: Throw) -> Throw {
     if let Throw::Exception(o) = &t {
@@ -696,6 +704,9 @@ impl Extension for Sodium {
             .register(m.vm());
         for &(sig, f) in FUNCTIONS {
             m.function(sig, f);
+            if scrubs_arg_errors(sig) {
+                m.scrub_arg_error_trace();
+            }
         }
         register_constants(m);
         m.info(info);
@@ -724,6 +735,17 @@ mod tests {
             let (name, _) = php_vm::ext::check_signature(sig);
             assert!(name.starts_with("sodium_"), "{sig}");
         }
+    }
+
+    #[test]
+    fn arg_error_scrubbing_follows_php_src() {
+        assert!(scrubs_arg_errors(
+            "sodium_crypto_shorthash(string $message, #[\\SensitiveParameter] string $key): string"
+        ));
+        assert!(!scrubs_arg_errors("sodium_crypto_box_keypair(): string"));
+        assert!(!scrubs_arg_errors(
+            "sodium_crypto_pwhash_str_needs_rehash(string $password, int $opslimit, int $memlimit): bool"
+        ));
     }
 
     #[test]

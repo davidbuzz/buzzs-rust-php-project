@@ -1788,6 +1788,13 @@ impl Vm {
     /// An argument error raised before a builtin's handler ran: the
     /// internal-leave notification, then the frame pop.
     fn builtin_arg_error(&mut self, depth: usize, e: Throw) -> VmResult<Value> {
+        if let (Throw::Exception(o), Some(Func::Builtin(b))) =
+            (&e, self.frames.get(depth - 1).and_then(|f| f.func.as_ref()))
+        {
+            if b.flags & flags::SCRUB_ARG_ERROR_TRACE != 0 {
+                scrub_trace_args(o);
+            }
+        }
         let r = Err(e);
         self.observer_internal(depth - 1, Some(&r));
         self.pop_frames_to(depth);
@@ -2429,6 +2436,35 @@ fn frame_args(values: &[Value], out: &mut Vec<Option<Value>>) {
     out.clear();
     for v in values {
         out.push(Some(v.clone()));
+    }
+}
+
+/// `sodium_remove_param_values_from_backtrace()`: replaces the `args` of
+/// every frame in the exception's `trace` with an empty array.
+#[cold]
+#[inline(never)]
+fn scrub_trace_args(o: &Obj) {
+    let class = object::class_of(o);
+    let Some(slot) = class
+        .props
+        .iter()
+        .find(|p| p.name.as_bytes() == b"trace")
+        .map(|p| p.slot as usize)
+    else {
+        return;
+    };
+    let data = object::data(o);
+    let mut slots = data.slots.borrow_mut();
+    let Some(Some(Value::Array(trace))) = slots.get_mut(slot) else {
+        return;
+    };
+    let key = ArrayKey::from("args");
+    for (_, frame) in trace.make_mut().iter_mut() {
+        if let Value::Array(frame) = frame {
+            if frame.contains_key(&key) {
+                frame.make_mut().insert("args", Value::Array(ZArray::new()));
+            }
+        }
     }
 }
 
