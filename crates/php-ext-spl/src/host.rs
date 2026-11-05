@@ -9,7 +9,7 @@ use php_runtime::{
 use php_spl::{ClassInfo, HostIterator, NativeOp, ObjectIterator, SplHost, SplObject};
 use php_stdarr::ArrayContext;
 use php_vm::class::Class;
-use php_vm::ext::NativeIterator;
+use php_vm::ext::{NativeIterator, VmResult};
 use php_vm::func::{flags, Func};
 use php_vm::object::{class_of, data};
 use php_vm::vm::FrameKind;
@@ -234,6 +234,56 @@ pub fn set_std_properties(obj: &Obj, props: &ZArray) {
     if had_dynamic || !dynamic.is_empty() {
         *d.dynamic.borrow_mut() = Some(dynamic);
     }
+}
+
+/// Binds newly installed references before the raw property-table writeback.
+fn set_std_properties_checked(vm: &mut Vm, obj: &Obj, props: &ZArray) -> VmResult<()> {
+    let mut target = obj.clone();
+    let current = build_properties(obj);
+    let mut original = None;
+    let mut prepared: Vec<(php_runtime::PhpRef, Value)> = Vec::new();
+    for (key, value) in props.iter() {
+        let Value::Reference(r) = value else {
+            continue;
+        };
+        if matches!(current.get(key), Some(Value::Reference(old)) if php_runtime::PhpRef::ptr_eq(old, r))
+        {
+            continue;
+        }
+        let old = r.get();
+        target = match vm.prepare_property_table_reference(&target, key, r) {
+            Ok(target) => target,
+            Err(t) => {
+                if let Some(original) = original {
+                    set_std_properties(&target, &original);
+                }
+                // Restored slots no longer hold the newly added type sources.
+                for (r, value) in prepared.into_iter().rev() {
+                    r.set(value);
+                }
+                return Err(t);
+            }
+        };
+        original.get_or_insert_with(|| std_properties(&target));
+        // The type source must be live before preparing another reference.
+        let cls = class_of(&target);
+        let d = data(&target);
+        if let Some(pi) = cls.props.iter().find(|pi| {
+            !pi.is_virtual()
+                && pi.flags & flags::STATIC == 0
+                && ArrayKey::Str(mangle(pi.flags, &pi.class, &pi.name)) == *key
+        }) {
+            d.slots.borrow_mut()[pi.slot as usize] = Some(value.clone());
+        } else {
+            d.dynamic
+                .borrow_mut()
+                .get_or_insert_with(HashTable::new)
+                .insert(key.clone(), value.clone());
+        }
+        prepared.push((r.clone(), old));
+    }
+    set_std_properties(&target, props);
+    Ok(())
 }
 
 /// `zend_std_has_property(obj, name, ZEND_PROPERTY_EXISTS)` from `scope`:
@@ -526,8 +576,8 @@ impl SplHost for VmHost<'_> {
     }
 
     fn set_std_properties(&mut self, obj: &Obj, props: ZArray) -> RtResult<()> {
-        set_std_properties(obj, &props);
-        Ok(())
+        let r = set_std_properties_checked(self.vm, obj, &props);
+        self.vm_rt(r)
     }
 
     fn class_info(&mut self, name: &ZStr, autoload: bool) -> Option<ClassInfo> {
@@ -827,8 +877,7 @@ impl SplHost for BridgedHost {
         lent(|h| h.std_has_property(obj, name)).unwrap_or(false)
     }
     fn set_std_properties(&mut self, obj: &Obj, props: ZArray) -> RtResult<()> {
-        set_std_properties(obj, &props);
-        Ok(())
+        lent_rt(|h| h.set_std_properties(obj, props))
     }
     fn class_info(&mut self, name: &ZStr, autoload: bool) -> Option<ClassInfo> {
         lent(|h| h.class_info(name, autoload)).flatten()
