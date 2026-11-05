@@ -1,6 +1,6 @@
 //! `SplFixedArray`'s fallible element allocation (`safe_femalloc(...,
-//! fallible)` + `RETURN_OOM()`). One test: the pending violation is
-//! process-wide.
+//! fallible)` + `RETURN_OOM()`). One test function: the pending violation
+//! is process-wide.
 
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
@@ -47,4 +47,30 @@ fn from_array_refuses_a_block_over_the_limit() {
         "{out}"
     );
     assert!(out.ends_with(" bytes) in test.php on line 3\n"), "{out}");
+
+    // `oom_SplFixedArray___wakeup.phpt`: `__wakeup()` allocates the elements
+    // for the property table before copying it (`spl_fixedarray_init`).
+    let sink = Sink::default();
+    let options = VmOptions {
+        ini: vec![
+            ("display_errors".into(), "1".into()),
+            ("memory_limit".into(), "4M".into()),
+        ],
+    };
+    let mut vm = Vm::with_extensions(&options, Box::new(sink.clone()), &[&php_ext_spl::Spl]);
+    let status = vm.run_script(
+        b"<?php\n$a = new SplFixedArray();\nfor ($i = 0; $i < 200000; $i++) { @$a->{$i} = 0; }\necho \"filled\\n\";\n$a->__wakeup();\necho \"not reached\\n\";\n",
+        "test.php",
+    );
+    drop(vm);
+    let out = String::from_utf8(sink.0.borrow().clone()).expect("UTF-8 output");
+    assert_eq!(status, 255, "{out}");
+    assert!(out.starts_with("filled\n"), "{out}");
+    assert!(
+        out.contains(
+            "\nFatal error: Allowed memory size of 4194304 bytes exhausted (tried to allocate "
+        ),
+        "{out}"
+    );
+    assert!(out.ends_with(" bytes) in test.php on line 5\n"), "{out}");
 }

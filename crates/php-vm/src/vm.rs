@@ -676,7 +676,9 @@ pub struct Vm {
     pub argv: Vec<ZStr>,
     /// Class declarations already bound (by address).
     pub bound_decls: HashMap<usize, Rc<Class>>,
-    /// Compiled units kept alive.
+    /// Compiled units that declare functions, closures, classes or
+    /// attributed constants (Reflection finds closures here; preloading
+    /// images them). Units declaring nothing are freed once run.
     pub units: Vec<Rc<CompiledUnit>>,
     /// `precision`.
     pub precision: i64,

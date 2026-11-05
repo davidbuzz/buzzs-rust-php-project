@@ -71,6 +71,7 @@ impl Parser<'_> {
             }
             stmts.push(s);
         }
+        stmts.shrink_to_fit();
         Ok((stmts, halt))
     }
 
@@ -80,6 +81,7 @@ impl Parser<'_> {
         loop {
             let k = self.peek();
             if k == T::RBrace {
+                stmts.shrink_to_fit();
                 return Ok(stmts);
             }
             if !starts_top_statement(k) {
@@ -114,6 +116,10 @@ impl Parser<'_> {
         loop {
             let k = self.peek();
             if terminators.contains(&k) {
+                // Most lists are short: `Vec`'s first allocation holds four
+                // statements, and the AST of a large file is held whole
+                // while it compiles.
+                stmts.shrink_to_fit();
                 return Ok(stmts);
             }
             if !starts_inner_statement(k) {
@@ -385,6 +391,7 @@ impl Parser<'_> {
                     }
                 }
                 self.bump();
+                exprs.shrink_to_fit();
                 StmtKind::Echo(exprs)
             }
             T::InlineHtml => {
@@ -669,9 +676,9 @@ impl Parser<'_> {
         let body = self.parse_loop_body(T::EndForeach)?;
         Ok(Stmt {
             kind: StmtKind::Foreach {
-                subject,
+                subject: Box::new(subject),
                 key,
-                value,
+                value: Box::new(value),
                 by_ref,
                 body: Box::new(body),
             },

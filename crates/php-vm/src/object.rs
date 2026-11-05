@@ -49,8 +49,9 @@ pub struct ObjectData {
     /// Readonly slots that have been initialized (by slot index) — used to
     /// detect "Cannot modify readonly property".
     pub readonly_init: RefCell<Vec<bool>>,
-    /// Lazy-object state (`ReflectionClass::newLazyGhost()` & co).
-    pub lazy: RefCell<Option<crate::lazy::LazyInfo>>,
+    /// Lazy-object state (`ReflectionClass::newLazyGhost()` & co). Boxed:
+    /// few objects are lazy, and inline it added ~70 bytes to every object.
+    pub lazy: RefCell<Option<Box<crate::lazy::LazyInfo>>>,
 }
 
 impl fmt::Debug for ObjectData {
