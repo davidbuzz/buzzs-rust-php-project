@@ -636,3 +636,17 @@ var_dump(class_exists('A', false));
 "#);
     assert_eq!(output, "load I\nbool(false)\nbool(true)\n");
 }
+
+/// `zend_compile_params`: a parameter with a default before a required
+/// one is compiled without its default, so named arguments cannot skip it
+/// (Zend/tests/required_param_after_optional_named_args).
+#[test]
+fn implicitly_required_parameter_cannot_be_skipped_by_named_args() {
+    let out = run(
+        "<?php\nfunction t(?int $a = null, $b) { var_dump($a, $b); }\ntry { t(b: 2); } catch (ArgumentCountError $e) { echo $e->getMessage(), \"\\n\"; }\nt(null, 3);\n",
+    );
+    assert!(
+        out.ends_with("\nt(): Argument #1 ($a) not passed\nNULL\nint(3)\n"),
+        "{out}"
+    );
+}
