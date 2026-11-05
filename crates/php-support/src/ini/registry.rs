@@ -483,14 +483,22 @@ impl IniRegistry {
         }
     }
 
+    /// `zend_ini_sort_entries()`: persistently sorts the shared directive
+    /// table case-insensitively, including entries outside a queried module.
+    pub fn sort_entries(&mut self) {
+        self.order.sort_by(|a, b| strcasecmp(a, b));
+    }
+
     /// `ini_get_all($extension, $details)` rows, sorted like PHP
     /// (case-insensitive).  `Err` carries the "Extension \"%s\" cannot be
-    /// found" warning.
+    /// found" warning. The PHP binding calls [`Self::sort_entries`] first;
+    /// this read-only query does not change the shared table order.
     pub fn ini_get_all(&self, extension: Option<&str>) -> Result<Vec<IniEntryInfo>, Diagnostic> {
         self.rows(extension, true)
     }
 
-    /// The same rows as [`Self::ini_get_all`] but in registration order,
+    /// The same rows as [`Self::ini_get_all`] but in current table order
+    /// (registration order until [`Self::sort_entries`] is called),
     /// as `php --re`/`--ri` and `ReflectionExtension::getINIEntries()`
     /// list them (`zend_ini_directives` iteration order).
     pub fn ini_entries_registered(
@@ -1140,6 +1148,39 @@ mod tests {
             .all(|e| ["user_agent", "from"].contains(&e.name.as_str())
                 || e.name.contains('_')
                 || e.name.contains('.')));
+    }
+
+    #[test]
+    fn sorting_persists_across_module_queries_and_registration() {
+        let mut r = IniRegistry::new();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        for (name, module) in [("zeta", "first"), ("Beta", "second"), ("alpha", "first")] {
+            assert!(r.register(
+                IniDirective::new(name, Some("1"), Access::ALL, ModifyHandler::Long, module),
+                &mut d,
+            ));
+        }
+        assert_eq!(r.order, ["zeta", "Beta", "alpha"]);
+        assert_eq!(r.ini_set("zeta", b"2", &mut d), Some(b"1".to_vec()));
+        r.sort_entries();
+        assert_eq!(r.order, ["alpha", "Beta", "zeta"]);
+        let first = r.ini_entries_registered(Some("first")).unwrap();
+        assert_eq!(first[0].name, "alpha");
+        assert_eq!(first[1].name, "zeta");
+        assert_eq!(first[1].global_value, Some(b"1".to_vec()));
+        assert_eq!(first[1].local_value, Some(b"2".to_vec()));
+        assert_eq!(r.get_long("zeta"), 2);
+        assert!(r.ini_get_all(Some("missing")).is_err());
+        assert_eq!(r.order, ["alpha", "Beta", "zeta"]);
+        assert!(r.register(
+            IniDirective::new("aardvark", None, Access::ALL, ModifyHandler::None, "second"),
+            &mut d,
+        ));
+        assert_eq!(r.order, ["alpha", "Beta", "zeta", "aardvark"]);
+        r.sort_entries();
+        assert_eq!(r.order, ["aardvark", "alpha", "Beta", "zeta"]);
+        r.ini_restore("zeta", &mut d);
+        assert_eq!(r.get_long("zeta"), 1);
     }
 
     #[test]

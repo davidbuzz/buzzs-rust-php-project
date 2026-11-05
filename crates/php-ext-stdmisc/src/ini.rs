@@ -30,6 +30,8 @@ fn opt_str(v: Option<Vec<u8>>) -> Value {
 fn ini_get_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let ext = a.opt(0).map(|_| a.str(0).to_string_lossy());
     let details = !a.has(1) || a.bool(1);
+    // PHP sorts EG(ini_directives) before even checking the module name.
+    vm.ini.sort_entries();
     // Every loaded extension is a module for `ini_get_all($extension)`,
     // even without INI entries.
     let names: Vec<String> = php_vm::LOADED_EXTENSIONS

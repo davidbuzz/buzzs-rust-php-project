@@ -122,6 +122,83 @@ fn ini_functions() {
 }
 
 #[test]
+fn ini_get_all_sorts_the_shared_reflection_table() {
+    struct IniFixture;
+
+    impl Extension for IniFixture {
+        fn name(&self) -> &'static str {
+            "ini_sort_test"
+        }
+
+        fn register(&self, m: &mut php_vm::ext::ModuleBuilder<'_>) {
+            use php_support::ini::{Access, IniDirective, ModifyHandler};
+
+            for name in ["fixture.zeta", "fixture.Beta", "fixture.alpha"] {
+                m.ini(IniDirective::new(
+                    name,
+                    Some("1"),
+                    Access::ALL,
+                    ModifyHandler::Long,
+                    "ini_sort_test",
+                ));
+            }
+            m.ini(IniDirective::new(
+                "fixture.other",
+                Some("1"),
+                Access::ALL,
+                ModifyHandler::Long,
+                "other_sort_test",
+            ));
+        }
+    }
+
+    for query in [
+        "ini_get_all('ini_sort_test', false);",
+        "ini_get_all(null, true);",
+        "@ini_get_all('missing_sort_fixture', false);",
+        "ini_get_all('other_sort_test', true);",
+    ] {
+        let sink = Sink::default();
+        let ext = php_ext_stdmisc::StdMisc;
+        let fixture = IniFixture;
+        let exts: [&dyn Extension; 2] = [&ext, &fixture];
+        let mut vm =
+            Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
+        let code = format!(
+            "<?php
+            $r = new ReflectionExtension('ini_sort_test');
+            foreach ($r->getINIEntries() as $k => $v) {{ echo $k, ';'; }}
+            echo \"\\n\", (string)$r, \"\\nAFTER\\n\";
+            {query}
+            foreach ($r->getINIEntries() as $k => $v) {{ echo $k, ';'; }}
+            echo \"\\n\", (string)$r;"
+        );
+        vm.run_script(code.as_bytes(), "test.php");
+        drop(vm);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        let (before, after) = out.split_once("\nAFTER\n").expect("reflection output");
+        assert!(
+            before.starts_with("fixture.zeta;fixture.Beta;fixture.alpha;\n"),
+            "{query}: {before}"
+        );
+        assert!(
+            after.starts_with("fixture.alpha;fixture.Beta;fixture.zeta;\n"),
+            "{query}: {after}"
+        );
+        for (text, names) in [
+            (before, ["fixture.zeta", "fixture.Beta", "fixture.alpha"]),
+            (after, ["fixture.alpha", "fixture.Beta", "fixture.zeta"]),
+        ] {
+            let positions = names.map(|n| {
+                text.find(&format!("Entry [ {n} <ALL> ]"))
+                    .expect("INI entry in extension string")
+            });
+            assert!(positions[0] < positions[1] && positions[1] < positions[2]);
+        }
+    }
+}
+
+#[test]
 fn credits_and_info() {
     let out = run(r#"phpcredits(CREDITS_GROUP); phpinfo(INFO_LICENSE);"#);
     assert!(out.starts_with("PHP Credits\n"), "{out}");
