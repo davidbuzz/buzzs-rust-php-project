@@ -25,10 +25,7 @@ fn run_status(source: &str) -> (i32, String) {
     let status = vm.run_script(source.as_bytes(), "t.php");
     drop(vm);
     let output = sink.0.borrow().clone();
-    (
-        status,
-        String::from_utf8(output).expect("UTF-8 output"),
-    )
+    (status, String::from_utf8(output).expect("UTF-8 output"))
 }
 
 fn run(source: &str) -> String {
@@ -57,7 +54,9 @@ fn class_references_reject_fetch_keywords() {
         let (status, out) = run_status(src);
         assert_ne!(status, 0, "{src}");
         assert!(
-            out.contains(&format!("Fatal error: Cannot use {what}, as it is reserved in t.php")),
+            out.contains(&format!(
+                "Fatal error: Cannot use {what}, as it is reserved in t.php"
+            )),
             "{src}: {out}"
         );
     }

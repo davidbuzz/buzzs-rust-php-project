@@ -2553,8 +2553,10 @@ fn is_builtin_type(lc: &[u8]) -> bool {
 /// `zend_get_class_fetch_type_ast() != ZEND_FETCH_CLASS_DEFAULT`: an
 /// unqualified (or `namespace\`-relative) `self`, `parent` or `static`.
 fn is_class_fetch_keyword(name: &ast::Name) -> bool {
-    matches!(name.kind, ast::NameKind::Unqualified | ast::NameKind::Relative)
-        && is_fetch_keyword(&name.name)
+    matches!(
+        name.kind,
+        ast::NameKind::Unqualified | ast::NameKind::Relative
+    ) && is_fetch_keyword(&name.name)
 }
 
 /// `self`, `parent` or `static` (case-insensitive).

@@ -97,7 +97,10 @@ pub(crate) fn unnamed_subpats(m: MatchRef<'_>, num_subpats: usize, flags: i64) -
         out.insert(ArrayKey::Int(php_offset(i)), val);
     }
     if let Some(mark) = mark {
-        out.insert(ArrayKey::Str(ZStr::from("MARK")), Value::Str(str_fast(mark)));
+        out.insert(
+            ArrayKey::Str(ZStr::from("MARK")),
+            Value::Str(str_fast(mark)),
+        );
     }
     ZArray::from(out)
 }

@@ -777,9 +777,9 @@ impl Vm {
                 continue;
             }
             let shown = match k {
-                ArrayKey::Str(s) => ZStr::from(
-                    php_runtime::dump::unmangle_property_name(s.as_bytes()).1,
-                ),
+                ArrayKey::Str(s) => {
+                    ZStr::from(php_runtime::dump::unmangle_property_name(s.as_bytes()).1)
+                }
                 ArrayKey::Int(i) => ZStr::from(i.to_string()),
             };
             if cls.flags & cflags::NO_DYNAMIC_PROPERTIES != 0 {

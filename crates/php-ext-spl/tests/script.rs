@@ -384,7 +384,9 @@ $ao = new ArrayObject;
 foreach ([1, 2] as $i => $var) { $ao[$i] = &$var; }
 var_dump($ao->getArrayCopy());
 "#);
-    assert_eq!(out, r#"object(stdClass)#1 (2) {
+    assert_eq!(
+        out,
+        r#"object(stdClass)#1 (2) {
   ["x"]=>
   int(2)
   ["y"]=>
@@ -402,7 +404,8 @@ array(2) {
   [1]=>
   &int(2)
 }
-"#);
+"#
+    );
 }
 
 #[test]
@@ -518,7 +521,10 @@ foreach ((new ReflectionClass('RecursiveArrayIterator'))->getConstants() as $k =
     echo $k, "=", $v, "\n";
 }
 "#);
-    assert_eq!(out, "STD_PROP_LIST=1\nARRAY_AS_PROPS=2\nCHILD_ARRAYS_ONLY=4\n");
+    assert_eq!(
+        out,
+        "STD_PROP_LIST=1\nARRAY_AS_PROPS=2\nCHILD_ARRAYS_ONLY=4\n"
+    );
 }
 
 #[test]

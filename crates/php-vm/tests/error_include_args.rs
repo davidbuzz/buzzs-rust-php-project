@@ -81,7 +81,9 @@ fn require_failure_throws_error() {
         "{out}"
     );
     assert!(
-        out.contains(&format!("Error: Failed opening required '{MISSING}' (include_path=")),
+        out.contains(&format!(
+            "Error: Failed opening required '{MISSING}' (include_path="
+        )),
         "{out}"
     );
 }

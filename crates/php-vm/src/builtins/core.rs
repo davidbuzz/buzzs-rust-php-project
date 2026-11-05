@@ -240,8 +240,7 @@ fn constant_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         // Trait constants are only reachable through a using class; the
         // undefined/visibility errors come first.
         if c.is_trait()
-            && c
-                .find_const(cn.as_bytes())
+            && c.find_const(cn.as_bytes())
                 .is_some_and(|k| const_accessible(vm, k))
         {
             return Err(vm.make_throw(

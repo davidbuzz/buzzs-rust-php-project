@@ -119,7 +119,11 @@ fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     if ty == 3 {
         if let Some(path) = dest.as_ref().filter(|d| !d.as_bytes().contains(&0)) {
-            return Ok(Value::Bool(error_log_to_file(vm, path.as_bytes(), message.as_bytes())?));
+            return Ok(Value::Bool(error_log_to_file(
+                vm,
+                path.as_bytes(),
+                message.as_bytes(),
+            )?));
         }
     }
     let mail_settings = mail_settings(vm);

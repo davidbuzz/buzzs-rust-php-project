@@ -237,7 +237,14 @@ pub(crate) fn handle_post_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     multipart::cleanup(&state::take_uploaded());
     let mut post = ZArray::new();
     let mut files = ZArray::new();
-    let result = handle(vm, &cell, &content_type, content_length, &mut post, &mut files);
+    let result = handle(
+        vm,
+        &cell,
+        &content_type,
+        content_length,
+        &mut post,
+        &mut files,
+    );
     publish(vm, b"_POST", post);
     publish(vm, b"_FILES", files);
     result.map(|()| Value::Null)

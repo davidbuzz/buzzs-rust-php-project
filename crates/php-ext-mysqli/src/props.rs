@@ -326,7 +326,12 @@ pub fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value
 /// `has_property` handler (`mysqli_object_has_property`): `isset()` is
 /// "readable and not null", `empty()` asks "readable and truthy",
 /// `property_exists()` only whether the property is in the table.
-pub fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResult<Option<bool>> {
+pub fn has_property(
+    vm: &mut Vm,
+    o: &Obj,
+    name: &ZStr,
+    check_empty: bool,
+) -> VmResult<Option<bool>> {
     if vm.property_context() == PropCtx::Exists {
         let known = kind_of(o).is_some_and(|k| table(k).contains(&name.to_string_lossy().as_str()));
         return Ok(known.then_some(true));

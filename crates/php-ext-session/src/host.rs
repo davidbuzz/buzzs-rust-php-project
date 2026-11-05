@@ -328,7 +328,10 @@ impl SessionHost for VmHost<'_> {
         if !self.vm.unserialize_context_active() {
             return None;
         }
-        Some(self.parked(|vm| vm.unserialize_nested(data, offset).map_err(|t| to_rt(vm, t))))
+        Some(self.parked(|vm| {
+            vm.unserialize_nested(data, offset)
+                .map_err(|t| to_rt(vm, t))
+        }))
     }
 
     fn emit_diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {

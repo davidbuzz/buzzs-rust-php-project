@@ -923,7 +923,12 @@ pub fn core_directives() -> Vec<IniDirective> {
         s("user_agent", None, A::ALL, H::String),
         s("from", None, A::ALL, H::String),
         s("default_socket_timeout", Some("60"), A::ALL, H::Long),
-        s("auto_detect_line_endings", Some("0"), A::ALL, H::AutoDetectLineEndings),
+        s(
+            "auto_detect_line_endings",
+            Some("0"),
+            A::ALL,
+            H::AutoDetectLineEndings,
+        ),
         s("unserialize_max_depth", Some("4096"), A::ALL, H::Long),
         s("url_rewriter.tags", Some("form="), A::ALL, H::String),
         s("url_rewriter.hosts", Some(""), A::ALL, H::String),

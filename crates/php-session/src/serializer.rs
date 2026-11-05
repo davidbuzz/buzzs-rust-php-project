@@ -735,11 +735,7 @@ mod tests {
 
     /// A stand-in for the VM's shared-`var_hash` parser: scalars `i:N;`
     /// only, recording the offsets it was asked to parse.
-    fn int_parser(
-        seen: &mut Vec<usize>,
-        data: &[u8],
-        off: usize,
-    ) -> Result<(Value, usize), usize> {
+    fn int_parser(seen: &mut Vec<usize>, data: &[u8], off: usize) -> Result<(Value, usize), usize> {
         seen.push(off);
         let rest = &data[off..];
         let end = rest.iter().position(|&c| c == b';').ok_or(off)?;
@@ -783,12 +779,17 @@ mod tests {
 
     #[test]
     fn decode_nested_php_serialize_and_decline() {
-        let r = decode_nested(Serializer::PhpSerialize, b"r:2;", &mut |_: &[u8], _: usize| {
-            Some(Ok(Ok((Value::Int(7), 4))))
-        });
+        let r = decode_nested(
+            Serializer::PhpSerialize,
+            b"r:2;",
+            &mut |_: &[u8], _: usize| Some(Ok(Ok((Value::Int(7), 4)))),
+        );
         assert!(matches!(
             r,
-            Some(Ok(Decoded::Replace { value: Value::Int(7), ok: true }))
+            Some(Ok(Decoded::Replace {
+                value: Value::Int(7),
+                ok: true
+            }))
         ));
         let r = decode_nested(Serializer::PhpSerialize, b"x", &mut |_: &[u8], _: usize| {
             Some(Ok(Err(0)))

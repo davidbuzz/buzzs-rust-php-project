@@ -44,11 +44,8 @@ fn pipe_read_done() {
 
 /// `exec::system` / `exec::passthru` with a diagnostics collector as the
 /// context, so the output callback can hold the VM.
-type Runner = fn(
-    &[u8],
-    &mut dyn FnMut(&[u8]),
-    &mut DeferredDiagnostics,
-) -> RtResult<exec::ExecResult>;
+type Runner =
+    fn(&[u8], &mut dyn FnMut(&[u8]), &mut DeferredDiagnostics) -> RtResult<exec::ExecResult>;
 
 /// Collects the library's diagnostics (only "Unable to fork", raised before
 /// any output) to be reported once the command finished.

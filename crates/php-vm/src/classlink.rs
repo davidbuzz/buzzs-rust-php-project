@@ -1988,11 +1988,7 @@ fn inherited_private_static(cls: &Class, name: &[u8]) -> Option<StaticProp> {
 /// overrides the parent's same-named one (`do_inheritance_check_on_method()`):
 /// a private parent method gives none, and a constructor only keeps an
 /// abstract prototype (declared abstract or by an interface).
-fn inherited_proto_scope(
-    parent: Option<&Rc<Class>>,
-    lc: &ZStr,
-    own: &Weak<Class>,
-) -> Weak<Class> {
+fn inherited_proto_scope(parent: Option<&Rc<Class>>, lc: &ZStr, own: &Weak<Class>) -> Weak<Class> {
     let Some(pm) = parent.and_then(|p| p.methods.get(lc)) else {
         return own.clone();
     };

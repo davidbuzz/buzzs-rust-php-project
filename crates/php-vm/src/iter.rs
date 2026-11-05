@@ -197,7 +197,11 @@ impl Vm {
             let mut it = f(self, &o, by_ref)?;
             let handle = object::HandleGuard::reserve();
             it.rewind(self)?;
-            return Ok(ForeachIter::Native(crate::vm::NativeIter(it), false, handle));
+            return Ok(ForeachIter::Native(
+                crate::vm::NativeIter(it),
+                false,
+                handle,
+            ));
         }
         if object::has_internal::<crate::generator::GenData>(&o) {
             if by_ref

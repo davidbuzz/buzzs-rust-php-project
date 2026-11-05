@@ -2194,10 +2194,12 @@ mod tests {
 
     #[test]
     fn callback_func_name_with_nul_is_cut_in_the_reason() {
-        let out = run("<?php ini_set('unserialize_callback_func', \"foo\\0butno\");\n\
+        let out = run(
+            "<?php ini_set('unserialize_callback_func', \"foo\\0butno\");\n\
              function foo($n) {}\n\
              try { unserialize('O:3:\"FOO\":0:{}'); }\n\
-             catch (Error $e) { echo $e->getMessage(); }");
+             catch (Error $e) { echo $e->getMessage(); }",
+        );
         assert_eq!(
             out,
             "Invalid callback foo\0butno, function \"foo\" not found or invalid function name"

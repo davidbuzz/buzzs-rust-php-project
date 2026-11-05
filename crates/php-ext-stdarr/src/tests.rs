@@ -127,12 +127,14 @@ fn extract_and_compact_use_the_callers_scope() {
 #[test]
 fn extract_negative_keys_preserves_the_callers_snapshot() {
     assert_eq!(
-        run("$a = [-5 => 'hello', 'world', 2 => 'positive', 'check' => 'extracted'];
+        run(
+            "$a = [-5 => 'hello', 'world', 2 => 'positive', 'check' => 'extracted'];
             function foo(array $a) {
                 extract($a, EXTR_PREFIX_ALL, 'prefix');
                 var_dump(get_defined_vars());
             }
-            foo($a);"),
+            foo($a);"
+        ),
         concat!(
             "array(3) {\n",
             "  [\"a\"]=>\n",

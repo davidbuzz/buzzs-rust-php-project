@@ -316,7 +316,9 @@ impl Walk {
                     if self.links > LINK_MAX {
                         return None;
                     }
-                    let target = std::fs::read_link(os_path(&tmp)).ok().map(|t| path_bytes(&t))?;
+                    let target = std::fs::read_link(os_path(&tmp))
+                        .ok()
+                        .map(|t| path_bytes(&t))?;
                     let n = target.len();
                     if n >= MAXPATHLEN - 1 {
                         return None;
@@ -373,7 +375,14 @@ impl Walk {
             };
             if save && start != 0 && self.limit != 0 {
                 // Save the absolute path in the cache.
-                cache_add(&tmp, &self.path[..j], directory, self.t, self.ttl, self.limit);
+                cache_add(
+                    &tmp,
+                    &self.path[..j],
+                    directory,
+                    self.t,
+                    self.ttl,
+                    self.limit,
+                );
             }
             return Some(j);
         }
@@ -415,7 +424,11 @@ pub fn virtual_file_ex(cwd: &[u8], path: &[u8], mode: Resolve) -> Option<Vec<u8>
     let mut walk = Walk {
         path: buf,
         links: 0,
-        t: if settings.realpath_cache_ttl != 0 { 0 } else { -1 },
+        t: if settings.realpath_cache_ttl != 0 {
+            0
+        } else {
+            -1
+        },
         ttl: settings.realpath_cache_ttl,
         limit: settings.realpath_cache_size_limit,
     };
