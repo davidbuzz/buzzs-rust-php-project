@@ -289,6 +289,24 @@ fn get_mangled_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(ZArray::from_table(t)))
 }
 
+/// `zend_check_property_access()` for a declared instance property of
+/// `cls` seen from `scope`.
+fn property_visible(
+    vm: &Vm,
+    cls: &Rc<Class>,
+    pi: &crate::class::PropInfo,
+    scope: Option<&Rc<Class>>,
+) -> bool {
+    match vm.lookup_prop(cls, &pi.name, scope) {
+        crate::props::PropLookup::Found(found) if found.slot == pi.slot => true,
+        // A parent's private property from the parent's scope.
+        _ => {
+            pi.visibility() == flags::PRIVATE
+                && scope.is_some_and(|s| s.name.eq_ignore_ascii_case(pi.class.as_bytes()))
+        }
+    }
+}
+
 fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Value::Object(o) = a.at(0) else {
         return Ok(Value::Null);
@@ -309,37 +327,46 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                     ArrayKey::Str(key) => {
                         let (declaring, name) =
                             php_runtime::dump::unmangle_property_name(key.as_bytes());
-                        if declaring.is_some()
-                            && !cls.props.iter().any(|pi| {
-                                crate::props::mangle(pi) == ArrayKey::Str(key.clone())
-                            })
-                        {
-                            let key = ArrayKey::from_zstr(key);
-                            if !t.contains_key(&key) {
-                                t.insert(key, value);
-                            }
-                            continue;
-                        }
                         let name = ZStr::from(name);
-                        match vm.lookup_prop(&cls, &name, scope.as_ref()) {
-                            crate::props::PropLookup::Found(pi) => {
-                                if declaring.is_some() {
-                                    if crate::props::mangle(&pi) != ArrayKey::Str(key.clone()) {
+                        let declared = if declaring.is_some() {
+                            // A mangled key names one declared property:
+                            // `zend_check_property_access()` on that slot.
+                            let Some(pi) = cls
+                                .props
+                                .iter()
+                                .find(|pi| crate::props::mangle(pi) == ArrayKey::Str(key.clone()))
+                                .cloned()
+                            else {
+                                let key = ArrayKey::from_zstr(key);
+                                if !t.contains_key(&key) {
+                                    t.insert(key, value);
+                                }
+                                continue;
+                            };
+                            if !property_visible(vm, &cls, &pi, scope.as_ref()) {
+                                continue;
+                            }
+                            Some(pi)
+                        } else {
+                            match vm.lookup_prop(&cls, &name, scope.as_ref()) {
+                                crate::props::PropLookup::Found(pi) => {
+                                    if pi.visibility() != flags::PUBLIC {
                                         continue;
                                     }
-                                } else if pi.visibility() != flags::PUBLIC {
+                                    Some(pi)
+                                }
+                                crate::props::PropLookup::Inaccessible(_) => continue,
+                                crate::props::PropLookup::NotFound => None,
+                            }
+                        };
+                        if let Some(pi) = declared {
+                            if let Some(h) = &pi.hooks {
+                                if pi.is_virtual() && h.get.is_none() {
                                     continue;
                                 }
-                                if let Some(h) = &pi.hooks {
-                                    if pi.is_virtual() && h.get.is_none() {
-                                        continue;
-                                    }
-                                    value =
-                                        vm.read_property(&o, &name, crate::opcode::FetchMode::Is)?;
-                                }
+                                value =
+                                    vm.read_property(&o, &name, crate::opcode::FetchMode::Is)?;
                             }
-                            crate::props::PropLookup::Inaccessible(_) => continue,
-                            crate::props::PropLookup::NotFound => {}
                         }
                         if declaring.is_some() {
                             ArrayKey::Str(name)
@@ -374,17 +401,7 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut t = HashTable::new();
     for pi in cls.props.clone() {
         let name = pi.name.clone();
-        let visible = match vm.lookup_prop(&cls, &name, scope.as_ref()) {
-            crate::props::PropLookup::Found(found) if found.slot == pi.slot => true,
-            // A parent's private property from the parent's scope.
-            _ => {
-                pi.visibility() == flags::PRIVATE
-                    && scope
-                        .as_ref()
-                        .is_some_and(|s| s.name.eq_ignore_ascii_case(pi.class.as_bytes()))
-            }
-        };
-        if !visible {
+        if !property_visible(vm, &cls, &pi, scope.as_ref()) {
             continue;
         }
         let v = if let Some(h) = &pi.hooks {
