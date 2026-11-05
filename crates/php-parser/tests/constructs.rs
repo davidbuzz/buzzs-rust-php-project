@@ -535,6 +535,23 @@ fn encoding_declare_warning() {
 }
 
 #[test]
+fn reserved_class_name_error_keeps_earlier_deprecation() {
+    // GH-15976: `class _ {}` deprecates before `class bool {}` fails.
+    let opts = ParseOptions::default();
+    let e = php_parser::parse(b"<?php\nclass _ {}\nclass bool {}\n", &opts).unwrap_err();
+    assert_eq!(e.message, "Cannot use \"bool\" as a class name as it is reserved");
+    assert_eq!(e.warnings.len(), 1);
+    assert_eq!(
+        e.warnings[0].message,
+        "Using \"_\" as a class name is deprecated since 8.4"
+    );
+    assert_eq!(e.warnings[0].line, 2);
+    // On success the compiler raises it, so the validator drops its copy.
+    let p = php_parser::parse(b"<?php\ntrait _ {}\n", &opts).unwrap();
+    assert!(p.warnings.is_empty());
+}
+
+#[test]
 fn identifier_tokens() {
     let src = "<?php namespace list; class A { const FOR = 1; function list() {} use T { T::if as public; } } A::class; A::FOR; $a->list(); f(array: 1); readonly(1); enum E { case Default; } function readonly() {} $x?->foreach; f(new: 1);";
     let opts = ParseOptions {
