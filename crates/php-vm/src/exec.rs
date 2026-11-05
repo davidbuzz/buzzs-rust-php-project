@@ -362,6 +362,7 @@ impl Vm {
                         let f = self.frame_mut();
                         f.pending_exc = Some(exc);
                         f.ip = cs as usize;
+                        ctor_failed_unfinished(&f.calls);
                         f.calls.clear();
                         return Ok(());
                     }
@@ -375,6 +376,7 @@ impl Vm {
                         let f = self.frame_mut();
                         f.fins[fin as usize] = FinState::Exception(exc);
                         f.ip = fs as usize;
+                        ctor_failed_unfinished(&f.calls);
                         f.calls.clear();
                         return Ok(());
                     }
@@ -430,8 +432,9 @@ impl Vm {
     /// `cleanup_live_vars(op_num, catch_op_num)` for foreach iterators: an
     /// exception handled in the frame it was thrown in first releases the
     /// iterators of the loops it leaves (outermost first, the order of
-    /// the live-range table), and their destructors run with `exc` in
-    /// flight (`zend_objects_destroy_object`).
+    /// the live-range table). Their destructors, and those of the operands
+    /// the throwing op freed, run with `exc` in flight before the handler
+    /// (`zend_objects_destroy_object`), so their exceptions chain to it.
     #[cold]
     fn free_left_iterators(
         &mut self,
@@ -440,16 +443,15 @@ impl Vm {
         target: u32,
         exc: php_runtime::Obj,
     ) -> Result<php_runtime::Obj, Throw> {
-        if self.frame().iters.iter().all(Option::is_none) {
-            return Ok(exc);
-        }
-        for (at, op) in code.ops.iter().enumerate() {
-            if let Op::FeReset { iter, end, .. } = op {
-                // Live from after FE_RESET up to (excluding) the FE_FREE.
-                let start = u32::try_from(at).unwrap_or(u32::MAX);
-                let live = |ip: u32| start < ip && ip < *end;
-                if live(throw_ip) && !live(target) {
-                    self.op_fe_free(*iter);
+        if self.frame().iters.iter().any(Option::is_some) {
+            for (at, op) in code.ops.iter().enumerate() {
+                if let Op::FeReset { iter, end, .. } = op {
+                    // Live from after FE_RESET up to (excluding) the FE_FREE.
+                    let start = u32::try_from(at).unwrap_or(u32::MAX);
+                    let live = |ip: u32| start < ip && ip < *end;
+                    if live(throw_ip) && !live(target) {
+                        self.op_fe_free(*iter);
+                    }
                 }
             }
         }
@@ -466,6 +468,7 @@ impl Vm {
         let f = self.frame_mut();
         let tmps: Vec<Value> = f.tmps.iter_mut().map(std::mem::take).collect();
         let calls = std::mem::take(&mut f.calls);
+        ctor_failed_unfinished(&calls);
         drop((tmps, calls));
     }
 
@@ -1746,5 +1749,20 @@ impl Vm {
     /// CLI's large VM stack); the default assumes 8 MiB.
     pub fn set_native_stack_size(&mut self, bytes: usize) {
         self.native_stack_size = bytes;
+    }
+}
+
+/// `cleanup_unfinished_calls` + `ZEND_LIVE_NEW`: the object of a `new`
+/// whose constructor call an exception abandons before it was made is
+/// never destructed (`zend_object_store_ctor_failed`).
+#[cold]
+fn ctor_failed_unfinished(calls: &[crate::vm::PendingCall]) {
+    for c in calls {
+        if c.is_ctor {
+            if let Some(t) = &c.this {
+                let d = object::data(t);
+                d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
+            }
+        }
     }
 }

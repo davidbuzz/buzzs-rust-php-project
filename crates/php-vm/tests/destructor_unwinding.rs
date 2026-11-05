@@ -241,3 +241,47 @@ f();
     assert_eq!(status, 0);
     assert_eq!(output, "destruct1\ndestruct2\ndestruct3\ncatch\nafter\n");
 }
+
+/// `ZEND_LIVE_NEW` + `zend_object_store_ctor_failed`: an object whose
+/// constructor call is abandoned while its arguments are evaluated is
+/// never destructed.
+#[test]
+fn object_of_an_abandoned_constructor_call_is_not_destructed() {
+    let (status, output) = run(r#"<?php
+class D {
+    function __construct() { echo "ctor\n"; }
+    function __destruct() { echo "dtor\n"; }
+}
+function fail() { throw new Exception("arg"); }
+try {
+    $d = new D(fail());
+} catch (Exception $e) {
+    echo "caught ", $e->getMessage(), "\n";
+}
+echo "end\n";
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(output, "caught arg\nend\n");
+}
+
+/// Operands freed by a throwing op are destructed before the handler in
+/// the same frame runs; their exceptions chain to the one in flight.
+#[test]
+fn destructor_exceptions_of_freed_operands_chain_before_the_catch() {
+    let (status, output) = run(r#"<?php
+class T { function __destruct() { throw new Exception("dtor"); } }
+try {
+    new T + new T;
+} catch (Exception $e) {
+    for ($x = $e; $x; $x = $x->getPrevious()) {
+        echo $x::class, ": ", $x->getMessage(), "\n";
+    }
+}
+echo "end\n";
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(
+        output,
+        "Exception: dtor\nException: dtor\nTypeError: Unsupported operand types: T + T\nend\n"
+    );
+}
