@@ -140,7 +140,11 @@ impl Drop for StreamCell {
         let id = s.id();
         let _ = RELEASED.try_with(|r| r.borrow_mut().insert(id));
         if needs_vm(&s) && !bridge::has_vm() {
+            // Released by the executor itself (a CV going out of scope):
+            // the close runs PHP code, so it waits for the next safe point
+            // (`zend_list_free` closes at once in php-src).
             let _ = DEFERRED.try_with(|d| d.borrow_mut().push(s));
+            php_vm::interrupt::request_interrupt();
         } else {
             s.close();
             let _ = RELEASED.try_with(|r| r.borrow_mut().remove(&id));
@@ -354,6 +358,15 @@ pub fn close_deferred(vm: &mut Vm) {
             RELEASED.with(|r| r.borrow_mut().remove(&id));
         }
     }
+}
+
+/// Interrupt handler: closes the streams [`StreamCell`]'s `Drop` deferred
+/// right after the opcode that released them.
+pub fn close_deferred_on_interrupt(vm: &mut Vm) -> VmResult<()> {
+    if DEFERRED.with(|d| !d.borrow().is_empty()) {
+        close_deferred(vm);
+    }
+    Ok(())
 }
 
 /// Request shutdown: closes every stream still open, most recent first

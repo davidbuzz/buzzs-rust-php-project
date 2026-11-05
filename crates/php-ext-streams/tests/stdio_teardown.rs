@@ -88,3 +88,21 @@ echo "end\n";"#);
         "bool(true)\nCannot create dynamic property SensitiveParameter::$params|Cannot create dynamic property SensitiveParameter::$filtername\nend\n"
     );
 }
+
+/// GH-15836: a stream released when a function returns is closed right
+/// after that opcode (not at shutdown), and its user filters see
+/// `$this->stream === null` during the close flush.
+#[test]
+fn released_filtered_stream_closes_before_next_statement() {
+    let out = run(r#"class F extends php_user_filter {
+    function filter($in, $out, &$consumed, $closing): int {
+        if ($closing) { echo "closing "; var_dump($this->stream); }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("f", "F");
+function run() { $s = fopen("php://memory", "w+"); stream_filter_append($s, "f", STREAM_FILTER_WRITE); }
+run();
+echo "after\n";"#);
+    assert_eq!(out, "closing NULL\nafter\n");
+}
