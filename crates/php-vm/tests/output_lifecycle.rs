@@ -81,3 +81,14 @@ fn html_fatal_uses_charset_and_substitutes_invalid_utf8() {
         .windows(b"\xef\xbf\xbd&lt;&amp;&quot;".len())
         .any(|bytes| bytes == b"\xef\xbf\xbd&lt;&amp;&quot;"));
 }
+
+#[test]
+fn destructors_run_in_a_new_vm_after_an_earlier_request_on_the_thread() {
+    // Request shutdown (and any fatal error) disables destructors for the
+    // rest of that request only.
+    run("<?php undefined_function();");
+    let (status, output) =
+        run("<?php class A { function __destruct() { echo 'd'; } } new A; echo '|';");
+    assert_eq!(status, 0);
+    assert_eq!(output, b"d|");
+}

@@ -1007,6 +1007,14 @@ pub fn end<H: OutputHost + ?Sized>(host: &mut H) -> bool {
 
 /// `php_output_end_all()`: flushes and removes all buffers (shutdown).
 pub fn end_all<H: OutputHost + ?Sized>(host: &mut H) {
+    // A handler that bailed out (fatal error, frameless `exit`) is still
+    // marked running. In php-src the bailout leaves `php_output_end_all()`
+    // for good; a second call (a module's RSHUTDOWN ended the buffers
+    // before the VM's own shutdown step) must not re-enter the stack and
+    // report a spurious lock error.
+    if host.output().running.is_some() && host.has_pending_fatal() {
+        return;
+    }
     while host.output().active.is_some() && stack_pop(host, POP_FORCE) {}
 }
 
