@@ -592,7 +592,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         "zend_test_serialization_bailout(bool $unserialize, bool $locked): never",
         serialization_bailout,
     );
-    m.function("zend_test_serialization_state(): array", serialization_state);
+    m.function(
+        "zend_test_serialization_state(): array",
+        serialization_state,
+    );
     m.function("zend_test_array_return(): array", array_return);
     m.function("zend_test_nullable_array_return(): ?array", none);
     m.function("zend_test_void_return(): void", none);

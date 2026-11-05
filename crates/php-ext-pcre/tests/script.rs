@@ -100,8 +100,7 @@ fn callbacks_reenter_and_count() {
 
 #[test]
 fn callback_backtraces_keep_arguments_through_native_reentry_and_unwind() {
-    let out = run(
-        r#"foreach ([false, true] as $fail) {
+    let out = run(r#"foreach ([false, true] as $fail) {
             try {
                 $result = preg_replace_callback('/./', function($m) use ($fail) {
                     $trace = debug_backtrace();
@@ -113,8 +112,7 @@ fn callback_backtraces_keep_arguments_through_native_reentry_and_unwind() {
                 echo $result, "\n";
             } catch (Exception $e) { echo $e->getMessage(), "\n"; }
         }
-        echo preg_replace('/b/', '-', 'abc'), "\n";"#,
-    );
+        echo preg_replace('/b/', '-', 'abc'), "\n";"#);
     assert_eq!(
         out,
         "preg_replace_callback:a\npreg_replace_callback:b\npreg_replace_callback:c\nABC\npreg_replace_callback:a\nstop\na-c\n"
