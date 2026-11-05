@@ -234,7 +234,9 @@ fn sprintf_rope_rejects_long_and_malformed_constant_formats() {
         r#"
             try {{ sprintf('{long}', new stdClass); }}
             catch (Error $e) {{ echo str_contains($e->getTraceAsString(), 'sprintf(') ? "long call\n" : "rope\n"; }}
-            try {{ sprintf('%'); }}
+            // With no argument the trailing `%` counts as a missing argument
+            // first (ArgumentCountError); with one it is a ValueError.
+            try {{ sprintf('%', 'x'); }}
             catch (ValueError $e) {{ echo $e->getMessage(), "\n"; }}
         "#
     ));

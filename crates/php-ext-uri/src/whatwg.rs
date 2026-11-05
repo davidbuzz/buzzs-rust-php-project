@@ -439,7 +439,10 @@ fn exception_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     } else {
         Value::Array(php_runtime::ZArray::new())
     };
-    vm.set_property(&o, "errors", errors)?;
+    // `zend_update_property_ex()` writes with the class as (fake) scope:
+    // the implicit protected(set) of the readonly property allows it once.
+    let scope = common::class(vm, INVALID_URL_EXCEPTION)?;
+    vm.set_property_scoped(&o, "errors", errors, &scope)?;
     Ok(Value::Null)
 }
 
@@ -447,9 +450,11 @@ fn exception_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// UrlValidationErrorType $type, bool $failure)`.
 fn validation_error_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
-    vm.set_property(&o, "context", Value::Str(a.str(0)))?;
-    vm.set_property(&o, "type", a.at(1))?;
-    vm.set_property(&o, "failure", Value::Bool(a.bool(2)))?;
+    // Written with the class as scope, like `zend_update_property_ex()`.
+    let scope = common::class(vm, common::VALIDATION_ERROR_CLASS)?;
+    vm.set_property_scoped(&o, "context", Value::Str(a.str(0)), &scope)?;
+    vm.set_property_scoped(&o, "type", a.at(1), &scope)?;
+    vm.set_property_scoped(&o, "failure", Value::Bool(a.bool(2)), &scope)?;
     Ok(Value::Null)
 }
 

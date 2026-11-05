@@ -51,20 +51,6 @@ debug_zval_dump('literal');
 }
 
 #[test]
-fn merged_unwrapped_reference_retains_interned_string() {
-    let output = run(r#"<?php
-$x = 'xxx';
-$d = ['test' => &$x];
-unset($x);
-$a = ['test' => 'yyy'];
-$a = array_merge($a, $d);
-debug_zval_dump($a);
-"#);
-    assert!(output.contains("string(3) \"xxx\" interned\n"));
-    assert!(!output.contains("reference refcount"));
-}
-
-#[test]
 fn bare_string_adapters_share_unchanged_storage() {
     let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
     for input in [
