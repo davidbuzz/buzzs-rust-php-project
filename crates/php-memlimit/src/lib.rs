@@ -66,6 +66,38 @@ pub fn memory_get_usage(real_usage: bool) -> usize {
     GLOBAL.memory_usage(real_usage)
 }
 
+/// [`CountingAlloc::set_tracked`] on [`GLOBAL`].
+pub fn set_tracked(tracked: bool) {
+    GLOBAL.set_tracked(tracked);
+}
+
+/// Zend's allocator selection from the environment (`zend_mm_init` /
+/// `alloc_globals_ctor`): tracked mode when `USE_ZEND_ALLOC` parses (like
+/// `ZEND_ATOL`) to 0 and `USE_TRACKED_ALLOC` to non-zero.
+pub fn tracked_from_env(use_zend_alloc: Option<&[u8]>, use_tracked_alloc: Option<&[u8]>) -> bool {
+    use_zend_alloc.is_some_and(|v| atol(v) == 0) && use_tracked_alloc.is_some_and(|v| atol(v) != 0)
+}
+
+/// `ZEND_ATOL`/`strtol(s, NULL, 10)`: leading whitespace, optional sign,
+/// decimal digits; anything unparsable is 0.
+fn atol(s: &[u8]) -> i64 {
+    let s = s.trim_ascii_start();
+    let (neg, digits) = match s.split_first() {
+        Some((b'-', rest)) => (true, rest),
+        Some((b'+', rest)) => (false, rest),
+        _ => (false, s),
+    };
+    let mut n: i64 = 0;
+    for &b in digits.iter().take_while(|b| b.is_ascii_digit()) {
+        n = n.saturating_mul(10).saturating_add(i64::from(b - b'0'));
+    }
+    if neg {
+        -n
+    } else {
+        n
+    }
+}
+
 /// `memory_get_peak_usage(false)` on [`GLOBAL`].
 pub fn peak() -> usize {
     GLOBAL.peak()
