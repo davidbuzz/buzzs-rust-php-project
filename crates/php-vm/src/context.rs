@@ -761,6 +761,7 @@ impl OutputHost for Vm {
         // `zend_call_function` runs no user code under a pending exception:
         // a user handler fails while the OOM fatal discards its buffer.
         if self.reporting_oom && alias.is_none() {
+            self.output_handler_threw = false;
             return None;
         }
         let r = if let Some(f) = alias {
