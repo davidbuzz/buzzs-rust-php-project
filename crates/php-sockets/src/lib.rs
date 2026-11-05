@@ -241,6 +241,11 @@ pub struct SocketName {
     pub port: Option<i64>,
 }
 
+/// Marks a queued warning from [`Sockets::take_warnings`] raised with
+/// `zend_error()` rather than `php_error_docref()`: emit the rest of the
+/// message without the `"func(): "` prefix.
+pub const PLAIN_WARNING: char = '\u{1}';
+
 /// The module globals plus the warning sink.
 #[derive(Debug, Default)]
 pub struct Sockets {
@@ -278,6 +283,30 @@ impl Sockets {
 
     pub(crate) fn warn(&mut self, msg: impl Into<String>) {
         self.warnings.push(msg.into());
+    }
+
+    /// Queues a `zend_error(E_WARNING, ...)` (no function prefix): the
+    /// message starts with [`PLAIN_WARNING`], which the VM strips.
+    pub(crate) fn warn_plain(&mut self, msg: &str) {
+        self.warnings.push(format!("{PLAIN_WARNING}{msg}"));
+    }
+
+    /// `zval_get_long()`: like [`Value::to_long`], plus the engine's
+    /// "Object of class X could not be converted to int" warning for
+    /// objects (`convert_object_to_type` without a cast handler).
+    pub(crate) fn long_of(&mut self, v: &Value) -> i64 {
+        match v {
+            Value::Object { class, .. } => {
+                self.warn_plain(&format!(
+                    "Object of class {class} could not be converted to int"
+                ));
+            }
+            Value::Socket { .. } => {
+                self.warn_plain("Object of class Socket could not be converted to int");
+            }
+            _ => {}
+        }
+        v.to_long()
     }
 
     /// `PHP_SOCKET_ERROR(sock, msg, errno)`.

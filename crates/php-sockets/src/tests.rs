@@ -615,6 +615,23 @@ fn socket_options() {
         .unwrap();
     assert_eq!(g.get("sec").and_then(OutValue::as_int), Some(1));
     assert_eq!(g.get("usec").and_then(OutValue::as_int), Some(0));
+    // socket_set_option_timeo_error.phpt: zval_get_long() of an object.
+    let _ = st.take_warnings();
+    let obj = Value::Object {
+        class: "stdClass".into(),
+        props: Vec::new(),
+        string: None,
+    };
+    let tv = Value::assoc(vec![("sec", obj), ("usec", Value::str("1"))]);
+    st.set_option(F, &mut s, SOL_SOCKET, i64::from(libc::SO_SNDTIMEO), &tv)
+        .unwrap();
+    assert_eq!(
+        st.take_warnings(),
+        [format!(
+            "{}Object of class stdClass could not be converted to int",
+            crate::PLAIN_WARNING
+        )]
+    );
     // Plain ints (socket_setopt_basic.phpt, TCP_NODELAY, SO_REUSEPORT).
     for (lvl, opt) in [
         (SOL_SOCKET, libc::SO_REUSEADDR),

@@ -203,7 +203,7 @@ impl Sockets {
                 return sys::setsockopt(fd, lvl, opt, s).map_err(|e| self.set_err(socket, e));
             }
             if option == TCP_USER_TIMEOUT {
-                let t = value.to_long();
+                let t = self.long_of(value);
                 let t = u32::try_from(t).map_err(|_| {
                     arg_value_error(
                         func,
@@ -217,7 +217,7 @@ impl Sockets {
             }
         }
         let bytes: Vec<u8> = match option {
-            _ if skip_switch => c_int(value.to_long()).to_ne_bytes().to_vec(),
+            _ if skip_switch => c_int(self.long_of(value)).to_ne_bytes().to_vec(),
             SO_LINGER => {
                 let t = Self::option_table(func, value, "SO_LINGER")?;
                 let onoff = crate::value::find(t, "l_onoff").ok_or_else(|| {
@@ -226,7 +226,7 @@ impl Sockets {
                 let linger = crate::value::find(t, "l_linger").ok_or_else(|| {
                     arg_value_error(func, 4, "value", "must have key \"l_linger\"")
                 })?;
-                let (on, li) = (onoff.to_long(), linger.to_long());
+                let (on, li) = (self.long_of(onoff), self.long_of(linger));
                 if !(0..=65535).contains(&on) {
                     return Err(arg_value_error(
                         func,
@@ -258,8 +258,9 @@ impl Sockets {
                     .ok_or_else(|| arg_value_error(func, 4, "value", "must have key \"sec\""))?;
                 let usec = crate::value::find(t, "usec")
                     .ok_or_else(|| arg_value_error(func, 4, "value", "must have key \"usec\""))?;
-                let mut b = sec.to_long().to_ne_bytes().to_vec();
-                b.extend_from_slice(&usec.to_long().to_ne_bytes());
+                let (sec, usec) = (self.long_of(sec), self.long_of(usec));
+                let mut b = sec.to_ne_bytes().to_vec();
+                b.extend_from_slice(&usec.to_ne_bytes());
                 b
             }
             SO_BINDTODEVICE => {
@@ -296,7 +297,7 @@ impl Sockets {
                 }
             }
             UDP_SEGMENT => {
-                let ov = c_int(value.to_long());
+                let ov = c_int(self.long_of(value));
                 if !(0..=65535).contains(&ov) {
                     return Err(arg_value_error(
                         func,
@@ -307,7 +308,7 @@ impl Sockets {
                 }
                 ov.to_ne_bytes().to_vec()
             }
-            _ => c_int(value.to_long()).to_ne_bytes().to_vec(),
+            _ => c_int(self.long_of(value)).to_ne_bytes().to_vec(),
         };
         sys::setsockopt(fd, lvl, opt, &bytes).map_err(|e| self.set_err(socket, e))
     }
