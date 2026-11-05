@@ -13,7 +13,7 @@ use crate::class::{cflags, Class};
 use crate::func::{flags, Args};
 use crate::lazy::LazyInfo;
 use crate::object::{self, oflags};
-use crate::vm::{Vm, VmResult};
+use crate::vm::{Throw, Vm, VmResult};
 use php_runtime::{HashTable, Obj, Value, ZStr};
 use std::rc::Rc;
 
@@ -152,6 +152,24 @@ pub(crate) fn init(vm: &mut Vm, o: &Obj) -> VmResult<Obj> {
             None => Ok(o.clone()),
         };
     }
+    let r = init_uninit(vm, o, &i);
+    // `GC_DELREF(obj) == 0`: the initializer dropped every reference but
+    // the handle the caller borrowed `o` through (the counterpart of
+    // php-src's `GC_ADDREF` around the initializer).
+    let returned = usize::from(matches!(&r, Ok(x) if Obj::ptr_eq(x, o)));
+    if o.refcount() - returned > 1 || matches!(&r, Err(e) if !matches!(e, Throw::Exception(_))) {
+        return r;
+    }
+    let e = vm.make_throw("Error", "Lazy object was released during initialization");
+    if let (Throw::Exception(new), Err(Throw::Exception(prev))) = (&e, &r) {
+        crate::exceptions::chain_previous(new, prev);
+    }
+    Err(e)
+}
+
+/// `zend_lazy_object_init` / `zend_lazy_object_init_proxy` on an
+/// uninitialized lazy object.
+fn init_uninit(vm: &mut Vm, o: &Obj, i: &LazyInfo) -> VmResult<Obj> {
     let cls = object::class_of(o).clone();
     with_info(o, |i| i.initializing = true);
     let snap = snapshot(o);

@@ -1,6 +1,6 @@
 //! Enums (`Zend/zend_enum.c`), internal object hooks and callable checks.
 
-use crate::class::{Class, ClassConst};
+use crate::class::{cflags, Class, ClassConst};
 use crate::object;
 use crate::types::mask;
 use crate::vm::{Vm, VmResult};
@@ -40,7 +40,9 @@ impl Vm {
                 &format!("{}::{} is not a case", cls.name, name.to_string_lossy()),
             ));
         }
-        if cls.backing.is_some() {
+        // `ZEND_FETCH_CLASS_CONSTANT` builds the whole backed table only for
+        // user enums; an internal enum's case is created on its own.
+        if cls.backing.is_some() && cls.flags & cflags::INTERNAL == 0 {
             self.enum_ensure_backed_table(cls)?;
             if let Some(v) = cls.enum_cases.borrow().get(name) {
                 return Ok(v.clone());

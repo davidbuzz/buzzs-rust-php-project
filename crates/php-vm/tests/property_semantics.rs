@@ -164,6 +164,48 @@ $r->resetAsLazyProxy($p, function() { return new A; });
 }
 
 #[test]
+fn lazy_initialization_detects_released_objects_and_chains_errors() {
+    assert_eq!(
+        run(r#"<?php
+class C { public $s; }
+$r = new ReflectionClass(C::class);
+
+$o = $r->newLazyGhost(function ($obj) { global $o; $o = null; });
+try { $o->s = new stdClass; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+
+$o = $r->newLazyProxy(function ($obj) { global $o; $o = null; return new C; });
+try { $o->s = new stdClass; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+
+$o = $r->newLazyGhost(function ($obj) { global $o; $o = null; return new stdClass; });
+try { $o->s = new stdClass; } catch (Error $e) {
+    do { echo $e->getMessage(), "\n"; } while ($e = $e->getPrevious());
+}
+"#),
+        "Lazy object was released during initialization\n\
+         Lazy object was released during initialization\n\
+         Lazy object was released during initialization\n\
+         Lazy object initializer must return NULL or no value\n"
+    );
+}
+
+#[test]
+fn lazy_hook_fetch_does_not_initialize_when_the_hook_ignores_state() {
+    assert_eq!(
+        run(r#"<?php
+class C {
+    public $value { get => 42; }
+    public int $state = 1;
+}
+$r = new ReflectionClass(C::class);
+$o = $r->newLazyGhost(function ($obj) { echo "initialized\n"; });
+echo $o->value, "\n";
+var_dump($r->isUninitializedLazyObject($o));
+"#),
+        "42\nbool(true)\n"
+    );
+}
+
+#[test]
 fn constructing_an_object_resolves_unevaluated_class_constants() {
     assert_eq!(
         run(r#"<?php

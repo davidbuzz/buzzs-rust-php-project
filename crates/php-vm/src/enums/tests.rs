@@ -1,6 +1,8 @@
 //! Script-level tests of enums and callable resolution.
 
+use crate::builtins::classbuilder::ClassBuilder;
 use crate::{Vm, VmOptions};
+use php_runtime::Value;
 use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
@@ -63,6 +65,26 @@ fn duplicate_and_mismatched_backing_values() {
          TypeError: Enum case type string does not match enum backing type int\n\
          TypeError: Enum case type string does not match enum backing type int\n"
     );
+}
+
+#[test]
+fn internal_backed_enum_cases_are_materialized_individually() {
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    ClassBuilder::new("InternalBackedEnum")
+        .backed_enum("string")
+        .case("First", Some(Value::Str("same".into())))
+        .case("Second", Some(Value::Str("same".into())))
+        .register(&mut vm);
+    let script = concat!(
+        "<?php echo InternalBackedEnum::First->name, '|', ",
+        "InternalBackedEnum::First->value, '|', InternalBackedEnum::Second->name, '|', ",
+        "InternalBackedEnum::Second->value;"
+    );
+    vm.run_script(script.as_bytes(), "t.php");
+    drop(vm);
+    let out = sink.0.borrow().clone();
+    assert_eq!(String::from_utf8_lossy(&out), "First|same|Second|same");
 }
 
 #[test]
