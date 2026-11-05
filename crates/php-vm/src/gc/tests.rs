@@ -243,3 +243,57 @@ fn freed_objects_leave_the_root_buffer() {
     assert_eq!(sink.0.borrow().as_slice(), b"ok");
     assert!(len < 16, "{len} buffered entries");
 }
+
+/// Destructors collected inside a fiber run in the collector's own fiber,
+/// started by the engine (`zend_fiber_start`): their backtraces continue
+/// with `gc_collect_cycles()`, without a `Fiber->start()` frame.
+#[test]
+fn destructor_fiber_backtrace_continues_with_the_collection() {
+    let out = run(
+        "<?php class C { public $s; function __construct() { $this->s = $this; }\n\
+         function __destruct() { echo (new Exception)->getTraceAsString(), \"\\n\"; } }\n\
+         $f = new Fiber(function () {\n\
+         new C; gc_collect_cycles();\n\
+         });\n\
+         $f->start();",
+    );
+    assert_eq!(
+        out,
+        "#0 [internal function]: C->__destruct()\n\
+         #1 [internal function]: gc_destructor_fiber()\n\
+         #2 t.php(4): gc_collect_cycles()\n\
+         #3 [internal function]: {closure:t.php:3}()\n\
+         #4 t.php(6): Fiber->start()\n\
+         #5 {main}\n"
+    );
+}
+
+/// oss-fuzz-471533782: an abandoned destructor fiber (its destructor
+/// suspended it) is destroyed before the next one starts; its unwinding
+/// has no caller (`prev_execute_data` is `NULL`), and what it throws is
+/// chained to the destructors' exceptions (`remember_prev_exception`).
+#[test]
+fn abandoned_destructor_fiber_is_destroyed_detached() {
+    let out = run(
+        "<?php class C { public static $pending; public $s; function __construct() { $this->s = $this; }\n\
+         function __destruct() {\n\
+         if (self::$pending === null) {\n\
+         try { Fiber::suspend(); } finally { self::$pending = new RuntimeException('pending'); throw self::$pending; }\n\
+         }\n\
+         throw new LogicException('thrown', 0, self::$pending); } }\n\
+         $f = new Fiber(function () {\n\
+         new C; new C;\n\
+         try { gc_collect_cycles(); } catch (Throwable $t) {\n\
+         echo $t->getPrevious()->getTraceAsString(), \"\\n\";\n\
+         for (; $t !== null; $t = $t->getPrevious()) { echo $t->getMessage(), \"\\n\"; } }\n\
+         });\n\
+         $f->start();",
+    );
+    assert_eq!(
+        out,
+        "#0 [internal function]: C->__destruct()\n\
+         #1 [internal function]: gc_destructor_fiber()\n\
+         #2 {main}\n\
+         thrown\npending\n"
+    );
+}

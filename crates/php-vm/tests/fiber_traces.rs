@@ -226,3 +226,26 @@ trigger_error(123, "512");
         "array(2) {\n  [0]=>\n  string(3) \"123\"\n  [1]=>\n  string(3) \"512\"\n}\n"
     );
 }
+
+/// `Fiber::suspend()` clears the bottom frame's `prev_execute_data` and
+/// destruction does not set it again: a fiber destroyed from inside nested
+/// calls unwinds with a backtrace that ends inside the fiber.
+#[test]
+fn destroyed_fiber_backtrace_ends_inside_the_fiber() {
+    let (status, output) = run(r#"<?php
+function g() {
+    $fiber = new Fiber(function () {
+        try { Fiber::suspend(); } finally { echo (new Exception)->getTraceAsString(), "\n"; }
+    });
+    $fiber->start();
+    unset($fiber);
+}
+function h() { g(); }
+h();
+"#);
+    assert_eq!(status, 0, "{output}");
+    assert_eq!(
+        output,
+        "#0 [internal function]: {closure:g():3}()\n#1 {main}\n"
+    );
+}

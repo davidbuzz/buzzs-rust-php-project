@@ -118,7 +118,9 @@ impl Vm {
             self.functions.remove(&lc);
             let fiber = fiber?;
             STARTING.with(|s| s.set(generation));
-            self.call_method_name(&fiber, "start", Vec::new())?;
+            // `zend_fiber_start`, not `Fiber->start()`: the destructors'
+            // backtraces continue with the frame that ran the collection.
+            self.fiber_start_internal(&fiber)?;
             let done = QUEUE.with(|q| {
                 let mut q = q.borrow_mut();
                 if !q.done {
@@ -130,6 +132,31 @@ impl Vm {
             if done {
                 return Ok(());
             }
+            // `zend_object_release(&fiber->std)`: unless the application
+            // kept it, the abandoned fiber is destroyed now, before the next
+            // one starts; what its unwinding throws is remembered with the
+            // destructors' exceptions (`remember_prev_exception`).
+            drop(fiber);
+            if let Err(e) = self.run_pending_destructors() {
+                remember_exception(e)?;
+            }
         }
     }
+}
+
+/// `remember_prev_exception`: chains an exception thrown while the
+/// collector switches destructor fibers to the ones already collected.
+/// Other unwinds (exit, fatal errors) are returned.
+fn remember_exception(e: Throw) -> VmResult<()> {
+    let Throw::Exception(new) = e else {
+        return Err(e);
+    };
+    QUEUE.with(|q| {
+        let mut q = q.borrow_mut();
+        if let Some(Throw::Exception(old)) = &q.err {
+            crate::exceptions::chain_previous(&new, old);
+        }
+        q.err = Some(Throw::Exception(new));
+    });
+    Ok(())
 }
