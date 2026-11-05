@@ -2,9 +2,10 @@
 //! mirrored into the VM's (`Vm::autoloaders`), which performs autoloading.
 
 use crate::host::VmHost;
-use php_runtime::Value;
+use php_runtime::{Value, ZStr};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
-use php_vm::Vm;
+use php_vm::vm::PendingCall;
+use php_vm::{ClassLoader, Vm};
 use std::sync::OnceLock;
 
 /// Calls the `php-spl` implementation of the running function.
@@ -18,12 +19,18 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let n = a.passed.iter().rposition(|&p| p).map_or(0, |i| i + 1);
     let mut args: Vec<Value> = a.values.iter().take(n).cloned().collect();
+    let mut fcc = None;
     if matches!(
         name.as_str(),
         "spl_autoload_register" | "spl_autoload_unregister"
     ) {
         if let Some(cb) = args.first_mut() {
-            *cb = static_method_callable(cb);
+            if !cb.is_null() {
+                // `Z_PARAM_FUNC`: the callable is resolved (and its
+                // deprecations raised) in the registering scope.
+                fcc = vm.resolve_callable(&*cb)?.ok();
+                *cb = scope_keyword_callable(vm, &static_method_callable(cb));
+            }
         }
     }
     let r = {
@@ -35,9 +42,77 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(vm.throw("Error", &format!("Call to undefined function {name}()")));
     };
     if name.starts_with("spl_autoload_") {
-        vm.autoloaders = php_spl::functions::autoloaders();
+        let registered = if name == "spl_autoload_register" {
+            fcc
+        } else {
+            None
+        };
+        sync_autoloaders(vm, registered.as_ref());
     }
     crate::iter::finish(vm, r)
+}
+
+/// Mirrors the `php-spl` registry into the VM's loader table. Loaders
+/// that stay registered keep the call they were resolved to; a newly
+/// registered one gets `registered`.
+fn sync_autoloaders(vm: &mut Vm, registered: Option<&PendingCall>) {
+    let mut old: Vec<Option<ClassLoader>> = std::mem::take(&mut vm.autoloaders)
+        .into_iter()
+        .map(Some)
+        .collect();
+    vm.autoloaders = php_spl::functions::autoloaders()
+        .into_iter()
+        .map(|callable| {
+            let loader = ClassLoader::unresolved(callable);
+            let kept = old
+                .iter()
+                .position(|o| o.as_ref().is_some_and(|o| o.is_same(&loader)));
+            let fcc = match kept {
+                Some(i) => old[i].take().and_then(|o| o.fcc),
+                None => registered.cloned(),
+            };
+            ClassLoader { fcc, ..loader }
+        })
+        .collect();
+}
+
+/// `zend_get_callable_zval_from_fcc` for `['self' | 'parent' | 'static',
+/// 'm']` and `'self::m'`: the registry stores and reports the class the
+/// keyword stands for in the registering scope, so the same method name
+/// registered from two classes is two loaders.
+fn scope_keyword_callable(vm: &Vm, cb: &Value) -> Value {
+    match cb.deref() {
+        Value::Array(arr) if arr.len() == 2 => {
+            let (Some(Value::Str(keyword)), Some(method)) = (
+                arr.get_int(0).map(Value::deref),
+                arr.get_int(1).map(Value::deref),
+            ) else {
+                return cb.clone();
+            };
+            match vm.callable_keyword_class(keyword.as_bytes()) {
+                Some(cls) => Value::Array(php_runtime::ZArray::from_values(vec![
+                    Value::Str(cls.name.clone()),
+                    method,
+                ])),
+                None => cb.clone(),
+            }
+        }
+        Value::Str(s) => {
+            let b = s.as_bytes();
+            let Some(p) = b.windows(2).position(|w| w == b"::") else {
+                return cb.clone();
+            };
+            match vm.callable_keyword_class(&b[..p]) {
+                Some(cls) => {
+                    let mut out = cls.name.as_bytes().to_vec();
+                    out.extend_from_slice(&b[p..]);
+                    Value::Str(ZStr::from(out))
+                }
+                None => cb.clone(),
+            }
+        }
+        _ => cb.clone(),
+    }
 }
 
 /// `[$object, 'staticMethod']` resolves to a function call without an

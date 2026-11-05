@@ -180,7 +180,7 @@ impl Vm {
         }
         let Some(func) = &f.func else { return false };
         let name = func.name().as_bytes();
-        self.autoloaders.iter().any(|l| match l.deref() {
+        self.autoloaders.iter().any(|l| match l.callable.deref() {
             Value::Object(o) => {
                 f.closure.as_ref().is_some_and(|c| Obj::ptr_eq(c, &o))
                     || f.this.as_ref().is_some_and(|t| Obj::ptr_eq(t, &o))

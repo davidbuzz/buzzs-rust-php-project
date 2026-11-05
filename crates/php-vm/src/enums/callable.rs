@@ -60,6 +60,28 @@ impl Vm {
         }
     }
 
+    /// `Z_PARAM_FUNC` for extension functions that keep the callable
+    /// (`zend_fcall_info_cache`): resolves `v` in the calling user
+    /// frame's scope, emitting the callable deprecations. `Ok(Err(reason))`
+    /// when `v` is not callable there.
+    pub fn resolve_callable(&mut self, v: &Value) -> VmResult<Result<PendingCall, String>> {
+        self.zend_is_callable(v, false)
+    }
+
+    /// The class a `self`/`parent`/`static` callable target stands for in
+    /// the calling user frame (`fcc->calling_scope`); `None` for other
+    /// names or when no such class is in scope.
+    #[must_use]
+    pub fn callable_keyword_class(&self, keyword: &[u8]) -> Option<Rc<Class>> {
+        let ctx = self.callable_frame_ctx();
+        match keyword.to_ascii_lowercase().as_slice() {
+            b"self" => ctx.scope,
+            b"parent" => ctx.scope.and_then(|s| s.parent.clone()),
+            b"static" => ctx.called,
+            _ => None,
+        }
+    }
+
     /// `zend_is_callable_ex`: resolves `v` in the current scope.
     /// Deprecations ("Use of \"self\" in callables …") are emitted unless
     /// `suppress_deprecations`.

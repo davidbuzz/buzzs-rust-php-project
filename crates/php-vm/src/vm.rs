@@ -137,6 +137,38 @@ pub enum FrameKind {
     ConstExpr,
 }
 
+/// A registered class loader: the callable as `spl_autoload_functions()`
+/// reports it and the call it was resolved to when it was registered
+/// (`zend_fcall_info_cache`). The resolution happens in the registering
+/// scope, so a loader that names a method inaccessible from the code
+/// triggering the autoload (or a `__call` trampoline) is still called
+/// as registered.
+#[derive(Debug, Clone)]
+pub struct ClassLoader {
+    /// The callable value.
+    pub callable: Value,
+    /// The resolved call; `None` resolves `callable` at call time.
+    pub fcc: Option<PendingCall>,
+}
+
+impl ClassLoader {
+    /// A loader resolved at call time.
+    #[must_use]
+    pub fn unresolved(callable: Value) -> Self {
+        Self {
+            callable,
+            fcc: None,
+        }
+    }
+
+    /// Whether both entries stand for the same registered callable
+    /// (identical values).
+    #[must_use]
+    pub fn is_same(&self, other: &Self) -> bool {
+        php_runtime::ops::is_identical(&self.callable, &other.callable).unwrap_or(false)
+    }
+}
+
 /// A call being prepared (`INIT_FCALL` .. `DO_FCALL`).
 #[derive(Debug, Clone)]
 pub struct PendingCall {
@@ -598,8 +630,9 @@ pub struct Vm {
     pub included: Vec<ZStr>,
     /// Set of included files.
     pub included_set: HashSet<ZStr>,
-    /// Autoload callables.
-    pub autoloaders: Vec<Value>,
+    /// Registered class loaders, in call order
+    /// (`zend_class_autoload_functions`).
+    pub autoloaders: Vec<ClassLoader>,
     /// Classes currently being autoloaded.
     pub autoloading: HashSet<ZStr>,
     /// Exit status.
