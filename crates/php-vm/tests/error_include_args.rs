@@ -183,3 +183,26 @@ fn error_log_file_uses_date_for_the_timestamp() {
         "[<d-M-Y H:i:s e>] PHP Warning:  Undefined variable $undefined in t.php on line 1\n"
     );
 }
+
+/// Shutdown functions run without a previous frame: `func_*_args()` see a
+/// dynamic call and `forward_static_call()` has no class scope (php-src
+/// `register_shutdown_functions_without_previous_call_frame_0[123].phpt`).
+#[test]
+fn builtins_called_without_a_previous_frame() {
+    for f in ["func_get_args", "func_num_args"] {
+        let out = run(
+            &format!("<?php register_shutdown_function('{f}'); echo 'Done';"),
+            &[("display_errors", "1")],
+        );
+        assert!(
+            out.starts_with("Done")
+                && out.contains(&format!("Uncaught Error: Cannot call {f}() dynamically")),
+            "{out}"
+        );
+    }
+    let src = "<?php class A { static function t() { return forward_static_call('strlen', 'abc'); } }\necho A::t();\ntry { forward_static_call('strlen', 'x'); } catch (Error $e) { echo $e->getMessage(); }";
+    assert_eq!(
+        run(src, &[]),
+        "3Cannot call forward_static_call() when no class scope is active"
+    );
+}

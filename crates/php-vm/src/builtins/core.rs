@@ -17,9 +17,17 @@ fn caller_idx(vm: &Vm) -> Option<usize> {
     Some(n - 2)
 }
 
+/// `zend_forbid_dynamic_call()` for a call without a previous frame (a
+/// shutdown function or other `zend_call_function()` call from outside
+/// any frame is `ZEND_CALL_DYNAMIC`).
+#[cold]
+fn called_dynamically(vm: &mut Vm, name: &str) -> Throw {
+    vm.make_throw("Error", &format!("Cannot call {name}() dynamically"))
+}
+
 fn func_get_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let Some(idx) = caller_idx(vm) else {
-        return Ok(Value::Null);
+        return Err(called_dynamically(vm, "func_get_args"));
     };
     if vm.frames[idx].kind != FrameKind::Function {
         return Err(vm.make_throw(
@@ -32,7 +40,7 @@ fn func_get_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let Some(idx) = caller_idx(vm) else {
-        return Ok(Value::Int(-1));
+        return Err(called_dynamically(vm, "func_num_args"));
     };
     if vm.frames[idx].kind != FrameKind::Function {
         return Err(vm.make_throw(
@@ -48,7 +56,10 @@ fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn func_get_arg(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = i(a, 0);
     let Some(idx) = caller_idx(vm) else {
-        return Ok(Value::Null);
+        if n < 0 {
+            return Err(value_error(vm, a, 1, "must be greater than or equal to 0"));
+        }
+        return Err(called_dynamically(vm, "func_get_arg"));
     };
     if vm.frames[idx].kind != FrameKind::Function {
         return Err(vm.make_throw(
@@ -1464,6 +1475,18 @@ fn call_user_func(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     cuf_call(vm, &cb, args, named, "call_user_func")
 }
 
+/// `PHP_FUNCTION(forward_static_call)`: the calling frame
+/// (`EX(prev_execute_data)`) must have a class scope.
+fn forward_static_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if !caller_idx(vm).is_some_and(|i| vm.frames[i].scope.is_some()) {
+        return Err(vm.make_throw(
+            "Error",
+            "Cannot call forward_static_call() when no class scope is active",
+        ));
+    }
+    call_user_func(vm, a)
+}
+
 fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     let arr = arr(a, 1);
@@ -2474,7 +2497,7 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(
         vm,
         "forward_static_call(callable $callback, mixed ...$args): mixed",
-        call_user_func,
+        forward_static_call,
     );
     reg(
         vm,
