@@ -470,6 +470,8 @@ class B extends A { function m(): Y {} }
         "{out}"
     );
     assert!(out.contains("#1 {main} in t.php on line "), "{out}");
+}
+
 #[test]
 fn core_introspection_follows_php_src_master() {
     // method_exists() skips inherited private methods for class names;

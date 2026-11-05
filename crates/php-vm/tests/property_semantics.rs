@@ -1071,6 +1071,8 @@ fn public_set_readonly_property_leaves_interface_set_abstract() {
         out.contains("Fatal error: Class C contains 1 abstract method and must therefore be declared abstract or implement the remaining method (I::$prop::set) in t.php on line"),
         "{out}"
     );
+}
+
 #[test]
 fn non_object_property_and_string_offset_errors_follow_the_opcode() {
     assert_eq!(run(r#"<?php
