@@ -87,13 +87,21 @@ impl VarStore {
         i
     }
 
-    /// The defined variables as an array (`get_defined_vars`).
+    /// The variables as the array a `$GLOBALS` read yields
+    /// (`ZEND_FETCH_GLOBALS` -> `zend_proptable_to_symtable(.., 1)`):
+    /// undefined slots (php-src's UNDEF `INDIRECT` entries) are skipped, a
+    /// reference only the table holds (refcount 1) is copied as its value
+    /// (`zend_array_dup_value`), and canonical numeric names such as
+    /// `${'1'}` become integer keys (`ZEND_HANDLE_NUMERIC`).
     pub fn to_array(&self) -> HashTable {
         let mut t = HashTable::new();
         for (n, v) in self.names.iter().zip(&self.slots) {
-            if let Some(v) = v {
-                t.insert(php_runtime::ArrayKey::Str(n.clone()), v.clone());
-            }
+            let Some(v) = v else { continue };
+            let v = match v {
+                Value::Reference(r) if r.refcount() == 1 => r.get(),
+                other => other.clone(),
+            };
+            t.insert(php_runtime::ArrayKey::from_zstr(n), v);
         }
         t
     }
