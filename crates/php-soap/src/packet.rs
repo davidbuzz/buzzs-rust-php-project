@@ -352,6 +352,9 @@ pub fn serialize_function_call(
         }
     }
     ctx.finish();
+    if let Some(e) = ctx.take_pending_error() {
+        return Err(SoapError::Runtime(e));
+    }
     Ok(doc)
 }
 
@@ -1832,6 +1835,9 @@ pub fn serialize_response_call(
         }
     }
     ctx.finish();
+    if let Some(e) = ctx.take_pending_error() {
+        return Err(SoapError::Runtime(e));
+    }
     if function.is_some_and(|f| f.response_name.is_none())
         && doc.first_child(body).is_none()
         && head.is_none()
