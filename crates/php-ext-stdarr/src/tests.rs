@@ -164,6 +164,70 @@ fn clamp_preserves_values_and_validates_bounds() {
 }
 
 #[test]
+fn clamp_source_matrix_matches_direct_and_dynamic_calls() {
+    assert_eq!(
+        run("declare(strict_types=1);
+            $f = clamp(...);
+            $cases = [
+                [2, 1, 3, 2], [0, 1, 3, 1], [6, 1, 3, 3],
+                [2, 1.3, 3.4, 2], [2.5, 1, 3, 2.5],
+                [2.5, 1.3, 3.4, 2.5], [0, 1.3, 3.4, 1.3],
+                [M_PI, -INF, INF, M_PI], [NAN, 4, 6, NAN],
+                ['a', 'c', 'g', 'c'], ['d', 'c', 'g', 'd'],
+                ['2025-08-01', '2025-08-15', '2025-09-15', '2025-08-15'],
+                ['2025-08-20', '2025-08-15', '2025-09-15', '2025-08-20'],
+                [null, -1, 1, -1], [null, 1, 3, 1], [null, -3, -1, -3],
+                [-9999, null, 10, -9999], [12, null, 10, 10]
+            ];
+            foreach ($cases as [$value, $min, $max, $expected]) {
+                $direct = clamp($value, $min, $max);
+                $dynamic = $f($value, $min, $max);
+                if (is_float($expected) && is_nan($expected)) {
+                    if (!is_nan($direct) || !is_nan($dynamic)) { echo 'bad NAN'; }
+                } elseif ($direct !== $expected || $dynamic !== $expected) {
+                    echo 'bad value';
+                }
+            }
+            $a = new InvalidArgumentException('a');
+            $b = new RuntimeException('b');
+            $c = new LogicException('c');
+            foreach ([[$a, $b, $c], [$b, $a, $c], [$c, $a, $b]] as [$value, $min, $max]) {
+                if (clamp($value, $min, $max) !== $value || $f($value, $min, $max) !== $value) {
+                    echo 'bad object';
+                }
+            }
+            echo 'done';"),
+        "done"
+    );
+}
+
+#[test]
+fn clamp_source_errors_match_direct_and_dynamic_calls() {
+    assert_eq!(
+        run("$f = clamp(...);
+            foreach ([[4, NAN, 6], [7, 6, NAN], [1, 3, 2], [-9999, 5, null], [12, -5, null]]
+                as [$value, $min, $max]) {
+                try { clamp($value, $min, $max); }
+                catch (ValueError $e) { echo $e->getMessage(), '|'; }
+                try { $f($value, $min, $max); }
+                catch (ValueError $e) { echo $e->getMessage(), '|'; }
+            }"),
+        concat!(
+            "clamp(): Argument #2 ($min) must not be NAN|",
+            "clamp(): Argument #2 ($min) must not be NAN|",
+            "clamp(): Argument #3 ($max) must not be NAN|",
+            "clamp(): Argument #3 ($max) must not be NAN|",
+            "clamp(): Argument #2 ($min) must be smaller than or equal to argument #3 ($max)|",
+            "clamp(): Argument #2 ($min) must be smaller than or equal to argument #3 ($max)|",
+            "clamp(): Argument #2 ($min) must be smaller than or equal to argument #3 ($max)|",
+            "clamp(): Argument #2 ($min) must be smaller than or equal to argument #3 ($max)|",
+            "clamp(): Argument #2 ($min) must be smaller than or equal to argument #3 ($max)|",
+            "clamp(): Argument #2 ($min) must be smaller than or equal to argument #3 ($max)|",
+        )
+    );
+}
+
+#[test]
 fn globals_prefer_ref_uses_a_snapshot() {
     assert_eq!(
         run("$marker = 1;
