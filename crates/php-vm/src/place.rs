@@ -593,6 +593,25 @@ thread_local! {
     /// set by `Vm::place_assign_undef_cv`.
     static PENDING_UNDEF_VALUE: std::cell::Cell<Option<(u32, usize)>> =
         const { std::cell::Cell::new(None) };
+    /// The frame depth of a `$o->p =& f()` walk whose value is not a
+    /// reference: set by `Vm::place_assign_ref_nonvar_prop`, taken by
+    /// `Vm::assign_property_ref` once the walk reaches the property.
+    static PENDING_NONVAR_REF: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Whether the property reference assignment at frame depth `depth` is the
+/// `ZEND_RETURNS_FUNCTION` case of [`Vm::place_assign_ref`] (a call result
+/// that is not a reference); clears the mark.
+pub(crate) fn take_nonvar_ref(depth: usize) -> bool {
+    PENDING_NONVAR_REF.with(|c| {
+        if c.get() == Some(depth) {
+            c.set(None);
+            true
+        } else {
+            false
+        }
+    })
 }
 
 /// See `RW_UNDEF_WATCH`.
@@ -1779,7 +1798,12 @@ impl Vm {
             Value::Reference(r) => Value::Reference(r),
             other => {
                 let segs = &self.frame().code.places[pid as usize].segs;
-                if !segs.is_empty() && !segs.iter().any(|s| matches!(s, Seg::Prop(_))) {
+                let to_prop = matches!(segs.last(), Some(Seg::Prop(_)));
+                let to_dim = !segs.is_empty() && !segs.iter().any(|s| matches!(s, Seg::Prop(_)));
+                if to_prop {
+                    return self.place_assign_ref_nonvar_prop(pid, other);
+                }
+                if to_dim {
                     return self.assign_non_ref_to_dim(pid, other);
                 }
                 self.notice("Only variables should be assigned by reference")?;
@@ -1801,6 +1825,28 @@ impl Vm {
         let r = self.place_make_ref(pid)?;
         self.notice("Only variables should be assigned by reference")?;
         self.assign_ref(&r, v)
+    }
+
+    /// `$o->p =& f()` where `f()` returned a value: `ZEND_ASSIGN_OBJ_REF`
+    /// (`zend_assign_to_property_reference`, `Zend/zend_execute.c`) fetches
+    /// the property for writing before it looks at the value, so `__get()`
+    /// runs first and a value it hands out throws "Cannot assign by
+    /// reference to overloaded object" instead of the notice (bug69732).
+    /// The walk carries the value as a fresh reference and marks itself
+    /// for [`Vm::assign_property_ref`] (see [`take_nonvar_ref`]).
+    #[cold]
+    #[inline(never)]
+    fn place_assign_ref_nonvar_prop(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+        let (base, segs) = self.resolve_place(pid, true)?;
+        let depth = self.frames.len();
+        let saved = PENDING_NONVAR_REF.with(|c| c.replace(Some(depth)));
+        let r = self.write_place(
+            base,
+            &segs,
+            WOp::AssignRef(Value::Reference(PhpRef::new(v))),
+        );
+        PENDING_NONVAR_REF.with(|c| c.set(saved));
+        r
     }
 
     /// Makes a place a reference.

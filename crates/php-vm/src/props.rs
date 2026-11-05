@@ -1427,6 +1427,9 @@ impl Vm {
         }
         let lazy_target = self.lazy_object_for(o, Some(name))?;
         let o = &lazy_target;
+        if crate::place::take_nonvar_ref(self.frames.len()) {
+            return self.assign_property_nonvar_ref(o, name, r.deref());
+        }
         if let Some(r) = self.assign_uninit_typed_prop_ref(o, name, &r)? {
             return Ok(r);
         }
@@ -1465,6 +1468,59 @@ impl Vm {
                 Err(self.make_throw("Error", "Cannot assign by reference to overloaded object"))
             }
         }
+    }
+
+    /// `$o->name =& f()` where `f()` returned a value
+    /// (`zend_assign_to_property_reference` with `ZEND_RETURNS_FUNCTION`):
+    /// the property is fetched for writing first, so a hook or `__get()`
+    /// handing out a value throws "Cannot assign by reference to
+    /// overloaded object"; a real slot gets the "Only variables should be
+    /// assigned by reference" notice and an assignment by value
+    /// (`zend_wrong_assign_to_variable_reference`).
+    #[cold]
+    #[inline(never)]
+    fn assign_property_nonvar_ref(&mut self, o: &Obj, name: &ZStr, v: Value) -> VmResult<Value> {
+        if let Some((pi, h)) = self.hooked_outside_hook(o, name) {
+            self.hooked_write_fetch(o, &pi, &h)?;
+            return Err(self.make_throw("Error", "Cannot assign by reference to overloaded object"));
+        }
+        // An uninitialized typed slot is handed out as is for writes
+        // (`zend_std_get_property_ptr_ptr`).
+        let slot_ready = self.uninit_backing_slot_in_hook(o, name).is_some()
+            || self.uninit_typed_slot(o, name).is_some();
+        let new_dynamic = if slot_ready {
+            None
+        } else {
+            match self.property_container(o, name, false)? {
+                PropContainer::Declared(_) => None,
+                PropContainer::Dynamic(key) => Some(key),
+                PropContainer::Value(_) => {
+                    return Err(
+                        self.make_throw("Error", "Cannot assign by reference to overloaded object")
+                    );
+                }
+            }
+        };
+        self.notice("Only variables should be assigned by reference")?;
+        // A dynamic property that does not exist yet was already checked
+        // (and its creation deprecation raised) by the fetch.
+        let new_dynamic = new_dynamic.filter(|key| {
+            !object::data(o)
+                .dynamic
+                .borrow()
+                .as_ref()
+                .is_some_and(|t| t.contains_key(key))
+        });
+        let Some(key) = new_dynamic else {
+            return self.write_property(o, name, v);
+        };
+        let old = object::data(o)
+            .dynamic
+            .borrow_mut()
+            .get_or_insert_with(HashTable::new)
+            .insert(key, v.clone());
+        drop(old);
+        Ok(v)
     }
 
     /// The accessible hooked property `name` when accessed from outside

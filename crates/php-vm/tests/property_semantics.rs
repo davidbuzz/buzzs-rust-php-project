@@ -1497,3 +1497,38 @@ debug_zval_dump($c);
         "array(1) refcount(3){\n  [\"x\"]=>\n  int(1)\n}\nobject(C)#2 (2) refcount(2){\n  [\"o\"]=>\n  object(A)#1 (2) refcount(3){\n    [\"a\"]=>\n    array(1) refcount(3){\n      [\"x\"]=>\n      int(1)\n    }\n    [\"b\"]=>\n    array(1) refcount(3){\n      [\"x\"]=>\n      int(1)\n    }\n  }\n  [\"p\"]=>\n  object(A)#1 (2) refcount(3){\n    [\"a\"]=>\n    array(1) refcount(3){\n      [\"x\"]=>\n      int(1)\n    }\n    [\"b\"]=>\n    array(1) refcount(3){\n      [\"x\"]=>\n      int(1)\n    }\n  }\n}\n"
     );
 }
+
+/// Bug #69732: `$o->p =& f()` with a non-reference result fetches the
+/// property for writing first (`zend_assign_to_property_reference`):
+/// `__get()` handing out a value throws instead of the "Only variables"
+/// notice; real slots (dynamic, typed uninitialized) get the notice and a
+/// by-value assignment.
+#[test]
+fn property_reference_assignment_of_call_result_fetches_property_first() {
+    let out = run(r#"<?php error_reporting(E_ALL);
+class M { public function __get($n) { return "v"; } }
+function f() { return 1; }
+$m = new M;
+try { $m->x =& f(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$o = new stdClass;
+$o->y =& f();
+var_dump($o->y);
+class T { public int $i; }
+$t = new T;
+$t->i =& f();
+var_dump($t->i);
+class D {}
+$d = new D;
+$d->z =& f();
+var_dump($d->z);
+"#);
+    assert_eq!(
+        out,
+        "\nNotice: Indirect modification of overloaded property M::$x has no effect in t.php on line 5\n\
+         Cannot assign by reference to overloaded object\n\
+         \nNotice: Only variables should be assigned by reference in t.php on line 7\nint(1)\n\
+         \nNotice: Only variables should be assigned by reference in t.php on line 11\nint(1)\n\
+         \nDeprecated: Creation of dynamic property D::$z is deprecated in t.php on line 15\n\
+         \nNotice: Only variables should be assigned by reference in t.php on line 15\nint(1)\n"
+    );
+}
