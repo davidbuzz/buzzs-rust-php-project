@@ -144,14 +144,22 @@ impl VmHandlers<'_> {
 }
 
 impl XmlHandlers for VmHandlers<'_> {
+    /// `xml_handler_aborted()`: `EG(exception)` or `ZEND_HAS_OOM()` (the
+    /// soft memory limit was crossed; the VM raises the fatal error once
+    /// `xml_parse()` returns).
     fn aborted(&self) -> bool {
-        self.pending.is_some() || self.budget.exhausted.get().is_some()
+        self.pending.is_some()
+            || self.budget.exhausted.get().is_some()
+            || php_memlimit::is_pending()
     }
 
     fn start_element(&mut self, name: &[u8], attributes: &[(Vec<u8>, Vec<u8>)]) {
         let mut attrs = ZArray::new();
         for (k, v) in attributes {
             attrs.make_mut().insert(ArrayKey::from_bytes(k), bytes(v));
+            if php_memlimit::is_pending() {
+                return;
+            }
         }
         self.call(
             HandlerKind::StartElement,

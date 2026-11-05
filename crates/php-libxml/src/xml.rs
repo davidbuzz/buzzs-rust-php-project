@@ -728,9 +728,18 @@ impl StructSink for StructBuilder {
 /// Builds the PHP attribute array for one start-element event: keys are
 /// decoded (and case-folded), duplicates keep their first position with the
 /// last value (`zend_hash_update`). Linear in the number of attributes.
-fn decode_attrs(p: &XmlParser, attrs: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(attrs.len());
-    let mut positions: HashMap<Vec<u8>, usize> = HashMap::with_capacity(attrs.len());
+/// The decoded attribute list (later duplicates overwrite earlier ones, as
+/// `zend_hash_update` does); `None` once the handlers abort mid-way
+/// (`ZEND_HAS_OOM()` between attributes). The tables grow with the list,
+/// like the PHP array, so the abort comes before a large up-front
+/// allocation could cross the hard memory limit.
+fn decode_attrs(
+    p: &XmlParser,
+    attrs: &[(Vec<u8>, Vec<u8>)],
+    handlers: &dyn XmlHandlers,
+) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
+    let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut positions: HashMap<Vec<u8>, usize> = HashMap::new();
     for (k, v) in attrs {
         let key = p.decode_tag(k);
         let value = p.decode(v);
@@ -740,8 +749,11 @@ fn decode_attrs(p: &XmlParser, attrs: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Ve
             positions.insert(key.clone(), out.len());
             out.push((key, value));
         }
+        if handlers.aborted() {
+            return None;
+        }
     }
-    out
+    Some(out)
 }
 
 /// An `XMLParser` object.
@@ -1040,6 +1052,10 @@ impl Adapter<'_, '_, '_> {
 }
 
 impl ExpatSink for Adapter<'_, '_, '_> {
+    fn aborted(&self) -> bool {
+        self.handlers.aborted()
+    }
+
     fn start_element(&mut self, name: &[u8], attrs: &[(Vec<u8>, Vec<u8>)]) {
         let p = self.parser;
         if self.handlers.aborted() {
@@ -1052,7 +1068,9 @@ impl ExpatSink for Adapter<'_, '_, '_> {
         let decoding = (p.case_folding.get(), p.target_encoding.get());
         let mut decoded = None;
         if p.has_handler(HandlerKind::StartElement) {
-            let list = decode_attrs(p, attrs);
+            let Some(list) = decode_attrs(p, attrs, &*self.handlers) else {
+                return;
+            };
             self.handlers.start_element(&p.stripped(&tag_name), &list);
             decoded = Some(list);
         }
@@ -1073,7 +1091,10 @@ impl ExpatSink for Adapter<'_, '_, '_> {
             p.last_was_open.set(true);
             let attributes = match decoded {
                 Some(list) if decoding == (p.case_folding.get(), p.target_encoding.get()) => list,
-                _ => decode_attrs(p, attrs),
+                _ => match decode_attrs(p, attrs, &*self.handlers) {
+                    Some(list) => list,
+                    None => return,
+                },
             };
             if !attributes.is_empty() {
                 entry.set("attributes", StructValue::Attributes(attributes));
