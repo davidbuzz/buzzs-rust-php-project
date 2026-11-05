@@ -61,6 +61,11 @@ while (1) { $a[] = 1; }
         ),
         "{out}"
     );
-    assert!(out.ends_with(" in t.php on line 9\nnot called\n"), "{out}");
+    // php-src master records a backtrace for every fatal (fatal_error_backtraces
+    // defaults to On, Zend/zend.c zend_error_impl), the memory-limit one too.
+    assert!(
+        out.ends_with(" in t.php on line 9\nStack trace:\n#0 {main}\nnot called\n"),
+        "{out}"
+    );
     assert!(!out.contains("buffered"), "{out}");
 }

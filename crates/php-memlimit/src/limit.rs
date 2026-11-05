@@ -59,21 +59,25 @@ pub const PAGE_SIZE: usize = 4096;
 /// carved out of 2 MiB chunks.
 pub const MAX_LARGE_SIZE: usize = CHUNK_SIZE - PAGE_SIZE;
 
-/// Whether a request of `size` bytes, made while `usage` bytes are live (not
-/// counting it), passes `zend_mm_check_limit` under `limit`.
+/// Whether a request of `size` bytes passes `zend_mm_check_limit` under
+/// `limit`, with `small` bytes live in small/large blocks and `huge` bytes in
+/// huge blocks (neither counting the request).
 ///
-/// Zend checks the limit against `heap->real_size` — whole chunks plus huge
-/// blocks — only when it needs more memory from the OS: a new chunk for
-/// small and large requests (`zend_mm_alloc_pages`), the page-aligned block
-/// itself for huge ones (`zend_mm_alloc_huge`). A small request served from
-/// an existing chunk never fails. `real_size` is modelled as `usage` rounded
-/// up to whole chunks.
-pub fn zend_limit_allows(usage: usize, size: usize, limit: usize) -> bool {
+/// Zend checks the limit against `heap->real_size` — whole 2 MiB chunks for
+/// small and large blocks plus each huge block's own pages — and only when it
+/// needs more memory from the OS: a new chunk for small and large requests
+/// (`zend_mm_alloc_pages`), the page-aligned block itself for huge ones
+/// (`zend_mm_alloc_huge`). A small request served from an existing chunk
+/// never fails.
+pub fn zend_limit_allows(small: usize, huge: usize, size: usize, limit: usize) -> bool {
     if size > MAX_LARGE_SIZE {
         let block = size.div_ceil(PAGE_SIZE).saturating_mul(PAGE_SIZE);
-        round_to_chunks(usage).saturating_add(block) <= limit
+        round_to_chunks(small)
+            .saturating_add(huge)
+            .saturating_add(block)
+            <= limit
     } else {
-        usage.saturating_add(size) <= chunk_floor(limit)
+        round_to_chunks(small.saturating_add(size)).saturating_add(huge) <= limit
     }
 }
 
@@ -242,19 +246,26 @@ mod tests {
     const M: usize = 1024 * 1024;
 
     /// `zend_mm_check_limit` granularity: small requests only fail when a
-    /// new chunk would pass the limit, huge ones when their pages would.
+    /// new chunk would pass the limit, huge ones when their pages would;
+    /// huge blocks count at their own size, not rounded into chunks.
     #[test]
     fn zend_limit_is_chunk_and_page_granular() {
         // 8M = 4 chunks: small blocks fit until usage would pass 8M.
-        assert!(zend_limit_allows(8 * M - 11, 11, 8 * M));
-        assert!(!zend_limit_allows(8 * M - 10, 11, 8 * M));
+        assert!(zend_limit_allows(8 * M - 11, 0, 11, 8 * M));
+        assert!(!zend_limit_allows(8 * M - 10, 0, 11, 8 * M));
         // 9M still holds only 4 whole chunks.
-        assert!(!zend_limit_allows(8 * M, 1, 9 * M));
+        assert!(!zend_limit_allows(8 * M, 0, 1, 9 * M));
         assert_eq!(chunk_floor(9 * M), 8 * M);
         // Huge: whole chunks in use plus the page-aligned block.
-        assert!(zend_limit_allows(M, 6 * M, 8 * M)); // 2M + 6M
-        assert!(!zend_limit_allows(2 * M + 1, 6 * M, 8 * M)); // 4M + 6M
-        assert!(!zend_limit_allows(M, 6 * M + 1, 8 * M)); // 2M + 6M + 4K
+        assert!(zend_limit_allows(M, 0, 6 * M, 8 * M)); // 2M + 6M
+        assert!(!zend_limit_allows(2 * M + 1, 0, 6 * M, 8 * M)); // 4M + 6M
+        assert!(!zend_limit_allows(M, 0, 6 * M + 1, 8 * M)); // 2M + 6M + 4K
+
+        // Live huge blocks add their own size (oom_json_decode_007: two 3M
+        // strings next to a few hundred KiB of small blocks fit in 10M).
+        assert!(zend_limit_allows(M, 3 * M + 4096, 3 * M + 4, 10 * M));
+        assert!(zend_limit_allows(M - 64, 6 * M, 64, 8 * M));
+        assert!(!zend_limit_allows(2 * M, 6 * M, 1, 8 * M));
         assert_eq!(MAX_LARGE_SIZE, 2 * M - PAGE_SIZE);
     }
 

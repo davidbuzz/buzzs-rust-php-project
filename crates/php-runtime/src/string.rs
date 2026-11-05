@@ -195,6 +195,24 @@ impl ZStr {
         *self = ZStr::new(v);
     }
 
+    /// `ZEND_CONCAT` with a temporary left operand: when this handle is the
+    /// only owner (and the string is not interned) the buffer is extended
+    /// in place to exactly the new length (`zend_string_extend`), so the
+    /// operand and the result never exist side by side; otherwise a new
+    /// exactly sized string is built.
+    #[must_use]
+    pub fn concat_owned(mut self, other: &[u8]) -> Self {
+        if !self.0.interned {
+            if let Some(inner) = Rc::get_mut(&mut self.0) {
+                inner.bytes.reserve_exact(other.len());
+                inner.bytes.extend_from_slice(other);
+                inner.hash.set(0);
+                return self;
+            }
+        }
+        Self::concat(self.as_bytes(), other)
+    }
+
     /// Concatenates two byte slices into a new string.
     #[must_use]
     pub fn concat(a: &[u8], b: &[u8]) -> Self {

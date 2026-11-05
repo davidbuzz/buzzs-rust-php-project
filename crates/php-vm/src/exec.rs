@@ -156,8 +156,18 @@ impl Vm {
     fn bin_slow(&mut self, op: BinKind, a: Operand, b: Operand, dst: u32) -> VmResult<()> {
         let x = self.read(a)?;
         let y = self.read(b)?;
-        let r = self.binary(op, &x, &y)?;
-        drop((x, y));
+        let r = match (op, a, x, y) {
+            // `ZEND_CONCAT` with a TMP op1: a string nothing else holds is
+            // extended in place (`zend_string_extend`), not copied.
+            (BinKind::Arith(BinaryOp::Concat), Operand::Tmp(_), Value::Str(s), Value::Str(t)) => {
+                Value::Str(s.concat_owned(t.as_bytes()))
+            }
+            (_, _, x, y) => {
+                let r = self.binary(op, &x, &y)?;
+                drop((x, y));
+                r
+            }
+        };
         self.set_tmp(dst, r);
         Ok(())
     }
