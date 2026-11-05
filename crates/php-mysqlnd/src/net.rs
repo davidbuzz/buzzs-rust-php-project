@@ -572,8 +572,10 @@ impl Net {
         }
     }
 
-    /// Wraps an already framed packet into a compressed envelope, sending it
-    /// uncompressed (uncompressed-length 0), which every server accepts.
+    /// `write_compressed_packet`: wraps an already framed packet into a
+    /// compressed envelope. The payload is deflated when that fits in its
+    /// own size (`mysqlnd_pfc::encode` into a `to_be_sent`-byte buffer);
+    /// otherwise it goes verbatim with an uncompressed length of 0.
     fn write_compressed(&mut self, frame: &[u8]) -> bool {
         let mut chunks: Vec<&[u8]> = Vec::new();
         if frame.len() > MAX_PACKET_SIZE {
@@ -584,13 +586,21 @@ impl Net {
             chunks.push(frame);
         }
         for c in chunks {
+            let z = inflate::compress(c);
+            let (payload, unc_len) = if z.len() <= c.len() {
+                (z.as_slice(), c.len())
+            } else {
+                (c, 0)
+            };
             #[allow(clippy::cast_possible_truncation)]
-            let len = (c.len() as u32).to_le_bytes();
-            let mut out = Vec::with_capacity(c.len() + 7);
+            let len = (payload.len() as u32).to_le_bytes();
+            #[allow(clippy::cast_possible_truncation)]
+            let unc = (unc_len as u32).to_le_bytes();
+            let mut out = Vec::with_capacity(payload.len() + 7);
             out.extend_from_slice(&len[..3]);
             out.push(self.compressed_envelope_packet_no);
-            out.extend_from_slice(&[0, 0, 0]);
-            out.extend_from_slice(c);
+            out.extend_from_slice(&unc[..3]);
+            out.extend_from_slice(payload);
             if !self.network_write(&out) {
                 return false;
             }
