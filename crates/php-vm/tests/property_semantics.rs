@@ -1317,3 +1317,17 @@ array(2) {
 }
 ");
 }
+
+#[test]
+fn array_cast_unwraps_references_only_the_property_holds() {
+    // GH-8655: zend_std_build_object_properties_array unwraps rc=1 refs.
+    assert_eq!(run(r#"<?php
+class Foo { public $foo; }
+function hydrate($p, $o) { foreach ($p as $n => &$v) { $o->$n = &$v; } }
+$o = new Foo; hydrate(["foo" => 123], $o);
+$a = (array) $o;
+$o->foo = 234;
+echo $a["foo"], "\n";
+$x = 1; $o->foo = &$x; $b = (array) $o; $x = 2; echo $b["foo"], "\n";
+"#), "123\n2\n");
+}
