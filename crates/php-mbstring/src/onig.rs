@@ -653,25 +653,25 @@ mod tests {
         use crate::mbregex::ENC_NAME_MAP;
         assert_eq!(ENC_NAME_MAP.len(), 28);
         for (name, idx) in [
-            (&b"EUC-JP"[..], 0),
-            (b"UTF-8", 1),
-            (b"UTF-16", 2),
-            (b"UTF-16LE", 3),
-            (b"UCS-4", 4),
-            (b"UCS-4LE", 5),
-            (b"SJIS", 6),
-            (b"BIG5", 7),
-            (b"EUC-CN", 8),
-            (b"EUC-TW", 9),
-            (b"EUC-KR", 10),
-            (b"KOI8-R", 11),
-            (b"ISO-8859-1", 12),
-            (b"ISO-8859-11", 22),
-            (b"ISO-8859-13", 23),
-            (b"ISO-8859-16", 26),
-            (b"ASCII", 27),
+            ("EUC-JP", 0),
+            ("UTF-8", 1),
+            ("UTF-16", 2),
+            ("UTF-16LE", 3),
+            ("UCS-4", 4),
+            ("UCS-4LE", 5),
+            ("SJIS", 6),
+            ("BIG5", 7),
+            ("EUC-CN", 8),
+            ("EUC-TW", 9),
+            ("EUC-KR", 10),
+            ("KOI8-R", 11),
+            ("ISO-8859-1", 12),
+            ("ISO-8859-11", 22),
+            ("ISO-8859-13", 23),
+            ("ISO-8859-16", 26),
+            ("ASCII", 27),
         ] {
-            assert_eq!(name2mbctype(name), Some(idx));
+            assert_eq!(name2mbctype(name.as_bytes()), Some(idx), "{name}");
         }
         // UTF-16LE: "a" is 61 00; a big-endian pattern would not match it.
         let le = Regex::new(b"a\0", DEFAULT, 3, Syntax::Ruby).unwrap();
