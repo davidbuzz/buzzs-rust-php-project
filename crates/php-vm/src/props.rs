@@ -307,6 +307,17 @@ impl Vm {
         r
     }
 
+    /// Whether `name` is a declared virtual property of `o`'s class (a
+    /// native property without storage, such as DOM's).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn is_virtual_prop(o: &Obj, name: &ZStr) -> bool {
+        object::class_of(o)
+            .prop_map
+            .get(name)
+            .is_some_and(|pi| pi.is_virtual())
+    }
+
     /// Initialized plain public slots need no lazy, native or visibility dispatch.
     fn plain_property_slot(o: &Obj, name: &ZStr, write: bool) -> Option<usize> {
         let data = object::data(o);
@@ -1128,10 +1139,13 @@ impl Vm {
 
     /// Makes `$o->name` a reference and returns it.
     pub(crate) fn property_ref(&mut self, o: &Obj, name: &ZStr) -> VmResult<PhpRef> {
-        if let Some(Value::Reference(r)) =
-            self.native_read_property(o, name, crate::ext::PropCtx::Ref)?
-        {
-            return Ok(r);
+        match self.native_read_property(o, name, crate::ext::PropCtx::Ref)? {
+            Some(Value::Reference(r)) => return Ok(r),
+            // `get_property_ptr_ptr` NULL on a virtual native property:
+            // `read_property`'s temporary (`foreach ($el->classList as &$v)`
+            // reaches the iterator's by-reference check).
+            Some(v) if Self::is_virtual_prop(o, name) => return Ok(PhpRef::new(v)),
+            _ => {}
         }
         // The slot of the real instance (a lazy proxy forwards).
         let lazy_target = self.lazy_object_for(o, Some(name))?;
