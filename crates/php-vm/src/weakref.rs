@@ -418,6 +418,13 @@ fn map_create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
 /// `read_dimension`. The engine uses this hook both for reads and as the
 /// target of nested writes, so the slot is handed out as a reference.
 fn map_read_dimension(vm: &mut Vm, o: &Obj, key: &Value) -> VmResult<Option<Value>> {
+    // `zend_weakmap_read_dimension`: a null offset (`$map[][..] = v`).
+    if matches!(
+        vm.dimension_context(),
+        crate::ext::DimensionCtx::Append | crate::ext::DimensionCtx::AppendRw
+    ) {
+        return Err(vm.make_throw("Error", "Cannot append to WeakMap"));
+    }
     let key = key_object(vm, key)?;
     let map = map_state(vm, o)?;
     let mut st = map.borrow_mut();
@@ -947,10 +954,11 @@ mod tests {
         let out = run("<?php $m = new WeakMap;\n\
              try { $m[1] = 1; } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; }\n\
              try { $m[] = 1; } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
+             try { $m[][1] = 1; } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
              try { $m[new stdClass]; } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }");
         assert_eq!(
             out,
-            "WeakMap key must be an object\nCannot append to WeakMap\nObject stdClass#2 not contained in WeakMap\n"
+            "WeakMap key must be an object\nCannot append to WeakMap\nCannot append to WeakMap\nObject stdClass#2 not contained in WeakMap\n"
         );
     }
 
