@@ -47,6 +47,10 @@ fn run(source: &str) -> String {
     assert!(vm.arm_auto_global(b"_ENV", create));
     assert!(vm.arm_auto_global(b"_REQUEST", create));
     assert!(!vm.arm_auto_global(b"argv", create));
+    // `array_keys` is not a php-vm builtin.
+    let source = format!(
+        "{source}\nfunction keys() {{ $o = []; foreach ($GLOBALS as $k => $v) {{ $o[] = $k; }} return implode(',', $o); }}\n"
+    );
     vm.run_script(source.as_bytes(), "t.php");
     drop(vm);
     let output = sink.0.borrow().clone();
@@ -57,7 +61,7 @@ fn run(source: &str) -> String {
 fn unreferenced_jit_auto_globals_are_absent() {
     assert_eq!(
         run(r#"<?php
-echo implode(",", array_keys($GLOBALS)), "\n";
+echo keys(), "\n";
 $x = "_ENV";
 var_dump(isset($$x), isset($GLOBALS["_REQUEST"]));
 "#),
@@ -69,7 +73,7 @@ var_dump(isset($$x), isset($GLOBALS["_REQUEST"]));
 fn compiled_references_create_them_in_first_seen_order() {
     assert_eq!(
         run(r#"<?php
-echo implode(",", array_keys($GLOBALS)), "\n";
+echo keys(), "\n";
 function f() { return $_REQUEST; }
 $_ENV['x'] = 1;
 echo $_ENV['made'], " ", f()['made'], "\n";
@@ -86,7 +90,7 @@ fn eval_and_constant_var_var_names_create_them() {
         run(r#"<?php
 echo count($GLOBALS), "\n";
 eval('$_ENV;');
-echo implode(",", array_keys($GLOBALS)), "\n";
+echo keys(), "\n";
 function g() { return ${'_REQUEST'}['made']; }
 echo g(), "\n";
 "#),
