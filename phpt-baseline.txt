@@ -829,7 +829,6 @@ ext/standard/tests/http/request_parse_body/multipart_options_invalid_quantity.ph
 ext/standard/tests/http/request_parse_body/multipart_options_invalid_value_type.phpt
 ext/standard/tests/http/request_parse_body/options_array_references.phpt
 ext/standard/tests/mail/gh7875.phpt
-ext/standard/tests/math/clamp.phpt
 ext/standard/tests/misc/bug65550.phpt
 ext/standard/tests/misc/bug69983.phpt
 ext/standard/tests/misc/bug77338.phpt
@@ -850,14 +849,6 @@ ext/standard/tests/streams/bug61115-1.phpt
 ext/standard/tests/streams/gh20286.phpt
 ext/standard/tests/streams/stream_errors_handler_outside_operation.phpt
 ext/standard/tests/streams/stream_errors_legacy_handler_raises_error.phpt
-ext/standard/tests/strings/007.phpt
-ext/standard/tests/strings/gh18823_strict.phpt
-ext/standard/tests/strings/gh20906_1.phpt
-ext/standard/tests/strings/gh20906_2.phpt
-ext/standard/tests/strings/gh20906_3.phpt
-ext/standard/tests/strings/htmlspecialchars_unchanged.phpt
-ext/standard/tests/strings/sprintf_rope_optimization_001.phpt
-ext/standard/tests/strings/sprintf_rope_optimization_002.phpt
 ext/tokenizer/tests/token_get_all_TOKEN_PARSE_oom_feedback.phpt
 ext/uri/tests/whatwg/builder/build_error_soft_errors_typed_reference_with_base.phpt
 ext/uri/tests/whatwg/parsing/errors_error_typed_property_reference.phpt
