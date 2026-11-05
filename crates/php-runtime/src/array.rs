@@ -1170,7 +1170,7 @@ impl HashTable {
     /// its elements is `bound` itself.
     ///
     /// php-src sorts `arData` in place after `HT_HASH_RESET`
-    /// (`zend_hash_sort_internal`, which cites Zend/tests/bug63882_2.phpt),
+    /// (`zend_hash_sort_internal`, which cites `Zend/tests/bug63882_2.phpt`),
     /// so whatever reaches the table mid-sort sees its elements in their
     /// current, half-sorted order while every key lookup in it misses. Before
     /// each comparison `bound` is therefore made to hold such a view of the
