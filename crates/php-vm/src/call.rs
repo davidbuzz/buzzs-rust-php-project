@@ -1441,7 +1441,7 @@ impl Vm {
         // pushed before zpp so arity and argument errors show it. It is
         // pushed first and filled in place: a `Frame` is a few hundred
         // bytes, and every move of one is a `memcpy`.
-        let frame_args = if call.args.is_empty() {
+        let pushed_args = if call.args.is_empty() {
             Vec::new()
         } else {
             let mut fa = self.call_bufs.args.pop().unwrap_or_default();
@@ -1478,7 +1478,7 @@ impl Vm {
             f.func = Some(Func::Builtin(b.clone()));
             f.builtin_name = builtin_name;
             f.named.clone_from(&call.named);
-            install_buffer(&mut f.args, frame_args);
+            install_buffer(&mut f.args, pushed_args);
             f.this.clone_from(&call.this);
             f.scope.clone_from(&call.scope);
             f.called.clone_from(&call.called);
