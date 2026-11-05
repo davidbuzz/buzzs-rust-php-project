@@ -1229,7 +1229,8 @@ impl Compiler {
         let r = self.compile_class_members(cd, &name, kind, cflag);
         self.closure_depth = saved_closure_depth;
         self.classes.pop();
-        let (consts, props, methods, traits, trait_rules, cases, case_attributes) = r?;
+        let (consts, props, methods, traits, trait_rules, cases, case_attributes, case_doc_comments) =
+            r?;
         let backing = match &cd.backing_type {
             Some(t) => {
                 let ty = self.resolve_type(t)?;
@@ -1262,6 +1263,7 @@ impl Compiler {
             methods,
             cases,
             case_attributes,
+            case_doc_comments,
             backing,
             attributes,
             doc_comment: cd.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
@@ -1287,6 +1289,7 @@ impl Compiler {
         Vec<TraitRule>,
         Vec<(ZStr, Option<ConstExpr>, u32)>,
         Vec<Vec<AttributeInfo>>,
+        Vec<Option<ZStr>>,
     )> {
         let mut consts = Vec::new();
         let mut props: Vec<PropDecl> = Vec::new();
@@ -1295,6 +1298,7 @@ impl Compiler {
         let mut rules = Vec::new();
         let mut cases = Vec::new();
         let mut case_attrs = Vec::new();
+        let mut case_docs = Vec::new();
         let display = |n: &ZStr| {
             let b = n.as_bytes();
             match b.iter().position(|&c| c == 0) {
@@ -1931,11 +1935,12 @@ impl Compiler {
                         false,
                     )?;
                     case_attrs.push(attrs);
+                    case_docs.push(ec.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())));
                     cases.push((ZStr::from(ec.name.name.as_slice()), v, m.span.line));
                 }
             }
         }
-        Ok((consts, props, methods, traits, rules, cases, case_attrs))
+        Ok((consts, props, methods, traits, rules, cases, case_attrs, case_docs))
     }
 }
 

@@ -169,3 +169,17 @@ Cannot use \"self\" in the global scope\n\
 Cannot use \"parent\" in the global scope\n"
     );
 }
+
+/// gh22681/ReflectionEnum_case_doc_comment.phpt: enum case doc comments are
+/// kept by the compiler (also for `eval()`'d code, which has no file to
+/// re-read), NUL bytes included.
+#[test]
+fn enum_case_doc_comments_survive_eval() {
+    assert_eq!(
+        run("<?php eval(\"enum Demo {\\n /** F\\0oo */\\n case C;\\n case D;\\n}\");
+var_dump((new ReflectionEnumUnitCase(Demo::class, 'C'))->getDocComment());
+var_dump((new ReflectionEnumUnitCase(Demo::class, 'D'))->getDocComment());
+"),
+        "string(11) \"/** F\0oo */\"\nbool(false)\n"
+    );
+}

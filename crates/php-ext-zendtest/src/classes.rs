@@ -577,6 +577,7 @@ fn trait_decl(name: &str, props: Vec<PropDecl>) -> Rc<ClassDecl> {
         methods: Vec::new(),
         cases: Vec::new(),
         case_attributes: Vec::new(),
+        case_doc_comments: Vec::new(),
         backing: None,
         attributes: Vec::new(),
         doc_comment: None,

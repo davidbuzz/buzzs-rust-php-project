@@ -2375,7 +2375,7 @@ fn build_class(
                 ty: None,
                 is_case: true,
                 evaluating: Cell::new(false),
-                doc_comment: None,
+                doc_comment: decl.case_doc_comments.get(i).cloned().flatten(),
                 attributes: decl.case_attributes.get(i).cloned().unwrap_or_default(),
             }),
             &mut consts,
