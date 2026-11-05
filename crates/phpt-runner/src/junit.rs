@@ -143,7 +143,7 @@ fn mark_test(cases: &mut String, r: &TestResult) -> Tally {
             } else {
                 "FAILED"
             };
-            let details = r.diff.as_deref().map(escape_details).unwrap_or_default();
+            let details = r.diff.as_deref().map_or_else(String::new, escape_details);
             let _ = writeln!(
                 cases,
                 "<failure type='{kind}' message='{msg}'>{details}</failure>"
