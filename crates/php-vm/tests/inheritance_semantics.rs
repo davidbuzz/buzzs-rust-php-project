@@ -213,3 +213,54 @@ A::missing();
 "#);
     assert_eq!(out, "B\nA\n");
 }
+
+/// `do_inherit_constant_check`: ambiguous constants inherited from two
+/// sources and weakened constant visibility are compile errors, while a
+/// redeclaring class or an interface reached twice is fine.
+#[test]
+fn inherited_constant_conflicts_and_visibility() {
+    let cases = [
+        (
+            "interface I1 { const C = 1; } interface I2 { const C = 1; } class C implements I1, I2 {}",
+            "Class C inherits both I1::C and I2::C, which is ambiguous",
+        ),
+        (
+            "class C { const C = 1; } interface I { const C = 1; } class C2 extends C implements I {}",
+            "Class C2 inherits both C::C and I::C, which is ambiguous",
+        ),
+        (
+            "interface I1 { const C = 1; } interface I2 { const C = 2; } interface I3 extends I1, I2 {}",
+            "Interface I3 inherits both I1::C and I2::C, which is ambiguous",
+        ),
+        (
+            "interface I { public const FOO = 1; } class C implements I { protected const FOO = 1; }",
+            "Access level to C::FOO must be public (as in interface I)",
+        ),
+        (
+            "class P { protected const X = 1; } class C extends P { private const X = 2; }",
+            "Access level to C::X must be protected (as in class P) or weaker",
+        ),
+        (
+            "trait T { protected const X = 1; } interface I { const X = 1; } class C implements I { use T; }",
+            "Access level to C::X must be public (as in interface I)",
+        ),
+        (
+            "interface I { final public const X = 1; } class C implements I { const X = 2; }",
+            "C::X cannot override final constant I::X",
+        ),
+    ];
+    for (src, msg) in cases {
+        let (status, out) = run_status(&format!("<?php\n{src}\n"));
+        assert_ne!(status, 0, "{src}");
+        assert!(
+            out.contains(&format!("Fatal error: {msg} in t.php on line 2")),
+            "{src}: {out}"
+        );
+    }
+    let ok = "<?php\ninterface I1 { const C = 1; } interface I2 { const C = 2; }\n\
+              class C implements I1, I2 { const C = 3; }\n\
+              interface E { final public const T = 1; } interface K extends E {} interface S extends E {}\n\
+              class T implements K, S {} class P implements E {} class Q extends P implements E {}\n\
+              echo C::C, Q::T, \"\\n\";\n";
+    assert_eq!(run(ok), "31\n");
+}
