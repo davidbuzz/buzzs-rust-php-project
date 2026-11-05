@@ -1283,16 +1283,20 @@ impl Vm {
     pub(crate) fn push_user_frame(
         &mut self,
         uf: &Rc<UserFunction>,
-        call: PendingCall,
+        mut call: PendingCall,
         ret: RetTarget,
         caller_strict: bool,
         from_internal: bool,
     ) -> VmResult<()> {
         if self.frames.len() > 50_000 {
-            return Err(self.make_throw(
+            // The error object is created before the arguments are released
+            // (object handle reuse is observable).
+            let e = self.make_throw(
                 "Error",
                 "Maximum call stack size reached. Infinite recursion?",
-            ));
+            );
+            self.put_arg_vec(std::mem::take(&mut call.args));
+            return Err(e);
         }
         let idx = self.frames.len();
         match self.call_bufs.user_frames.pop() {
