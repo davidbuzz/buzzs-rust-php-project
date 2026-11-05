@@ -911,6 +911,16 @@ fn restore_error_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(true))
 }
 
+/// `get_error_handler()` (`Zend/zend_builtin_functions.c`): the current
+/// `EG(user_error_handler)`, or null.
+fn get_error_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(vm
+        .error_handlers
+        .last()
+        .map(|h| h.callback.clone())
+        .unwrap_or_default())
+}
+
 fn set_exception_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     if !cb.is_null() && !vm.is_callable_value(&cb) {
@@ -2186,6 +2196,7 @@ pub(crate) fn register(vm: &mut Vm) {
         set_error_handler,
     );
     reg(vm, "restore_error_handler(): true", restore_error_handler);
+    reg(vm, "get_error_handler(): ?callable", get_error_handler);
     reg(
         vm,
         "set_exception_handler(?callable $callback)",
