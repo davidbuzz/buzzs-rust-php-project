@@ -1,4 +1,5 @@
 //! The php.ini configuration hash, extension queues and request overrides.
+//! Reference: `main/php_ini.c`.
 
 use std::cell::RefCell;
 

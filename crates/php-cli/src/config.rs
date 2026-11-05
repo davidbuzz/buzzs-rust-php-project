@@ -92,6 +92,10 @@ impl Config {
             entries: vec![("display_errors".into(), "1".into())],
             ..Config::default()
         };
+        cfg.configuration.values.insert(
+            IniKey::Str(b"display_errors".to_vec()),
+            IniValue::Scalar(IniScalar::Str(b"1".to_vec())),
+        );
         let mut file_name: Option<Vec<u8>> = None;
         let mut search: Vec<Vec<u8>> = Vec::new();
         if let Some(p) = &opts.path_override {
@@ -139,6 +143,10 @@ impl Config {
                         "cfg_file_path".into(),
                         String::from_utf8_lossy(&shown).into_owned(),
                     ));
+                    cfg.configuration.values.insert(
+                        IniKey::Str(b"cfg_file_path".to_vec()),
+                        IniValue::Scalar(IniScalar::Str(shown.clone())),
+                    );
                     cfg.opened_path = Some(shown);
                 }
             }
@@ -192,39 +200,31 @@ impl Config {
         }
         for (k, v) in HARDCODED_INI {
             cfg.entries.push(((*k).to_string(), (*v).to_string()));
+            cfg.configuration.values.insert(
+                IniKey::Str(k.as_bytes().to_vec()),
+                IniValue::Scalar(IniScalar::Str(v.as_bytes().to_vec())),
+            );
         }
         for (k, v) in &opts.defines {
             if k.eq_ignore_ascii_case("extension") {
                 cfg.extensions.push(v.clone());
+                cfg.configuration.extensions.push(v.as_bytes().to_vec());
             } else if k.eq_ignore_ascii_case("zend_extension") {
                 cfg.zend_extensions.push(v.clone());
+                cfg.configuration.zend_extensions.push(v.as_bytes().to_vec());
             } else {
                 cfg.entries.push((k.clone(), v.clone()));
+                cfg.configuration.values.insert(
+                    IniKey::Str(k.as_bytes().to_vec()),
+                    IniValue::Scalar(IniScalar::Str(v.as_bytes().to_vec())),
+                );
             }
         }
-        for (key, value) in &cfg.entries {
-            cfg.configuration.values.insert(
-                IniKey::Str(key.as_bytes().to_vec()),
-                IniValue::Scalar(IniScalar::Str(value.as_bytes().to_vec())),
-            );
-        }
-        cfg.configuration.extensions = cfg.extensions.iter().map(|v| v.as_bytes().to_vec()).collect();
-        cfg.configuration.zend_extensions = cfg
-            .zend_extensions
-            .iter()
-            .map(|v| v.as_bytes().to_vec())
-            .collect();
         cfg
     }
 
     /// Parses one ini file into the hash; false on a syntax error.
     fn parse(&mut self, data: &[u8], filename: &str) -> bool {
-        for (key, value) in &self.entries {
-            self.configuration.values.insert(
-                IniKey::Str(key.as_bytes().to_vec()),
-                IniValue::Scalar(IniScalar::Str(value.as_bytes().to_vec())),
-            );
-        }
         let result = self.configuration.parse(data, filename, &mut Hooks);
         self.entries = self
             .configuration
@@ -505,6 +505,66 @@ mod tests {
                 .into_bytes()
             )
         );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn new_vm_preserves_non_utf8_configuration_across_scan_files() {
+        use php_runtime::{Value, ZStr};
+
+        let d = tmpdir("non-utf8");
+        let primary = d.join("primary.ini");
+        let scan = d.join("conf.d");
+        std::fs::create_dir_all(&scan).unwrap();
+        std::fs::write(
+            &primary,
+            b"key\xff=\"value\xfe\"\nplain=\"value\xfd\"\nextension=\"ext\xfc\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            scan.join("10-copy.ini"),
+            b"copy=${plain}\nsecond\xfe=\"scan\xfc\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            scan.join("20-copy.ini"),
+            b"again=${copy}\nzend_extension=\"engine\xfb\"\n",
+        )
+        .unwrap();
+        let cfg = Config::load_from_environment(
+            &Options {
+                path_override: Some(primary.as_os_str().as_bytes().to_vec()),
+                defines: vec![("precision".into(), "11".into())],
+                ..Options::default()
+            },
+            None,
+            scan.as_os_str().as_bytes(),
+        );
+        assert_eq!(cfg.configuration.extensions, vec![b"ext\xfc".to_vec()]);
+        assert_eq!(cfg.configuration.zend_extensions, vec![b"engine\xfb".to_vec()]);
+        // The scalar registry still uses its existing lossy String representation.
+        assert_eq!(cfg.get("plain"), Some("value\u{fffd}"));
+        let mut vm = crate::new_vm(&cfg);
+        for (key, expected) in [
+            (&b"key\xff"[..], &b"value\xfe"[..]),
+            (&b"plain"[..], &b"value\xfd"[..]),
+            (&b"copy"[..], &b"value\xfd"[..]),
+            (&b"again"[..], &b"value\xfd"[..]),
+            (&b"second\xfe"[..], &b"scan\xfc"[..]),
+            (&b"precision"[..], &b"11"[..]),
+            (&b"html_errors"[..], &b"0"[..]),
+        ] {
+            let value = vm
+                .call_function("get_cfg_var", vec![Value::Str(ZStr::from(key))])
+                .unwrap();
+            assert!(matches!(value, Value::Str(value) if value.as_bytes() == expected));
+        }
+        for key in ["key\u{fffd}", "second\u{fffd}"] {
+            let value = vm
+                .call_function("get_cfg_var", vec![Value::from(key)])
+                .unwrap();
+            assert!(matches!(value, Value::Bool(false)));
+        }
         let _ = std::fs::remove_dir_all(d);
     }
 

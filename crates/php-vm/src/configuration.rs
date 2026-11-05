@@ -1,4 +1,5 @@
 //! Startup configuration returned by `get_cfg_var()`, distinct from INI values.
+//! References: `main/php_ini.c`, `ext/standard/basic_functions.c`.
 
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_support::ini::{IniKey, IniMap, IniValue};
