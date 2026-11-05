@@ -312,3 +312,57 @@ fn class_name_callable_array_is_a_literal() {
     );
     assert_eq!(out, "int(2)\nint(2)\n");
 }
+
+/// Releasing the last handle of an array releases its elements
+/// (`zend_array_destroy`): objects referenced elsewhere become roots, and
+/// enough of them trigger a collection right after the releasing op.
+#[test]
+fn released_array_elements_are_roots_and_fill_the_buffer() {
+    let out = run(
+        "<?php $o = new stdClass; $a = [$o, [$o]]; $a = null; var_dump(gc_status()['roots']);\n\
+         class C { public $s; function __construct() { $this->s = $this; }\n\
+         function __destruct() { echo \"C\\n\"; throw new Exception('c'); } }\n\
+         $all = []; for ($i = 0; $i < 10001; $i++) $all[] = new stdClass;\n\
+         function g() { global $all; $copy = [...$all]; new C;\n\
+         try { $copy = null; echo \"not reached\\n\"; } catch (Exception $e) { echo 'caught ', $e->getMessage(), \"\\n\"; } }\n\
+         g();",
+    );
+    assert_eq!(out, "int(1)\nC\ncaught c\n");
+}
+
+/// destructors_014: the compiled variables released while an exception
+/// unwinds a fiber's frame fill the root buffer; the collection runs before
+/// a handler is found, and the destructor's exception replaces the one in
+/// flight, with it as its previous one.
+#[test]
+fn collection_while_unwinding_chains_the_exception_in_flight() {
+    let out = run(
+        "<?php class C { public $s; function __construct() { $this->s = $this; }\n\
+         function __destruct() { echo \"C\\n\"; throw new Exception('c'); } }\n\
+         $all = []; for ($i = 0; $i < 10001; $i++) $all[] = new stdClass;\n\
+         function f() { global $all; $copy = [...$all]; new C; throw new Exception('f'); }\n\
+         $fiber = new Fiber(function () {\n\
+         try { f(); } catch (Exception $e) { echo $e->getMessage(), ' ', $e->getPrevious()->getMessage(), \"\\n\"; }\n\
+         });\n\
+         $fiber->start();",
+    );
+    assert_eq!(out, "C\nc f\n");
+}
+
+/// destructors_015: a fiber releases its callable (`zend_fiber_release_callable`)
+/// inside the fiber once its function returned; values released with a
+/// closure's bound variables can fill the root buffer, and the exception
+/// of the collection's destructor is thrown by the fiber.
+#[test]
+fn fiber_releases_its_callable_when_its_function_returns() {
+    let out = run(
+        "<?php class C { public $s; function __construct() { $this->s = $this; }\n\
+         function __destruct() { echo \"C\\n\"; throw new Exception('c'); } }\n\
+         $all = []; for ($i = 0; $i < 10001; $i++) $all[] = new stdClass;\n\
+         function make() { global $all; $copy = [...$all];\n\
+         return new Fiber(function () use ($copy) { new C; echo \"return\\n\"; }); }\n\
+         $fiber = make();\n\
+         try { $fiber->start(); echo \"not reached\\n\"; } catch (Exception $e) { echo 'caught ', $e->getMessage(), \"\\n\"; }",
+    );
+    assert_eq!(out, "return\nC\ncaught c\n");
+}

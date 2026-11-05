@@ -329,7 +329,10 @@ pub fn add_root_provider(p: RootProvider) {
 /// *before* dropping it. Only objects are buffered here; references are
 /// recorded by a `php-runtime` [`RootProvider`], and arrays never close a
 /// cycle on their own (in this value model every cycle passes through an
-/// object or a reference). Cheap when the value is not an object.
+/// object or a reference). Releasing the last handle of an array releases
+/// its elements (`zend_array_destroy`), which buffers the objects among
+/// them that are still referenced elsewhere. Cheap when the value is not
+/// an object or an unshared non-empty array.
 pub fn possible_root(v: &Value) {
     match v {
         Value::Object(o) => root_obj(o),
@@ -341,7 +344,84 @@ pub fn possible_root(v: &Value) {
                 }
             }
         }
+        Value::Array(a) if a.refcount() == 1 && !a.is_empty() => released_array(a),
         _ => {}
+    }
+}
+
+/// `zend_array_destroy` → `i_zval_ptr_dtor` on every element of an array
+/// whose last handle is being released: objects that stay referenced become
+/// possible roots; unshared nested arrays are released in turn.
+#[cold]
+#[inline(never)]
+fn released_array(a: &php_runtime::ZArray) {
+    if !with_state(|s| !s.protected).unwrap_or(false) {
+        return;
+    }
+    let mut pending: Vec<&php_runtime::ZArray> = vec![a];
+    while let Some(arr) = pending.pop() {
+        for v in arr.values() {
+            match v {
+                Value::Array(inner) if inner.refcount() == 1 && !inner.is_empty() => {
+                    pending.push(inner);
+                }
+                Value::Object(_) | Value::Reference(_) => possible_root(v),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Nesting limit of [`release_value`]'s walk through unshared objects.
+const RELEASE_DEPTH: u32 = 64;
+
+/// `zval_ptr_dtor` of `v`, a handle about to be dropped: like
+/// [`possible_root`], and when it is the last handle of an object, the
+/// object is freed (`zend_object_std_dtor`), releasing its properties and
+/// a closure's bound variables and `$this` the same way. Call it before
+/// dropping `v`.
+pub(crate) fn release_value(v: &Value) {
+    release_value_at(v, 0);
+}
+
+fn release_value_at(v: &Value, depth: u32) {
+    match v {
+        Value::Object(o) if o.refcount() == 1 && depth < RELEASE_DEPTH => {
+            released_object(o, depth + 1);
+        }
+        _ => possible_root(v),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn released_object(o: &Obj, depth: u32) {
+    if o.downcast_ref::<ObjBox>().is_none() {
+        return;
+    }
+    let d = crate::object::data(o);
+    if let Ok(slots) = d.slots.try_borrow() {
+        for v in slots.iter().flatten() {
+            release_value_at(v, depth);
+        }
+    }
+    if let Ok(dynamic) = d.dynamic.try_borrow() {
+        for v in dynamic.iter().flat_map(|t| t.values()) {
+            release_value_at(v, depth);
+        }
+    }
+    if let Ok(state) = d.internal.try_borrow() {
+        if let Some(c) = state
+            .as_ref()
+            .and_then(|s| s.downcast_ref::<crate::closure::ClosureData>())
+        {
+            for (_, v) in &c.vars {
+                release_value_at(v, depth);
+            }
+            if let Some(this) = &c.this {
+                root_obj(this);
+            }
+        }
     }
 }
 

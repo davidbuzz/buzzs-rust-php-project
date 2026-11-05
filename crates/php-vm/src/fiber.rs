@@ -609,6 +609,7 @@ fn fiber_body(vm: &mut Vm, s: Suspender, call: PendingCall) {
     let Some(fiber) = vm.fibers.last().cloned() else {
         return;
     };
+    let r = release_callable(vm, &fiber, r);
     let destroyed = with(&fiber, |d| d.destroyed).unwrap_or(false);
     let out = match r {
         Ok(v) => {
@@ -636,6 +637,44 @@ fn fiber_body(vm: &mut Vm, s: Suspender, call: PendingCall) {
         let from = context_of(&fiber, None);
         let to = vm.fiber_stack_context(depth - 1);
         vm.observer_fiber_switch(&from, &to);
+    }
+}
+
+/// `zend_fiber_release_callable`, still inside the fiber once its function
+/// returned: the callable (a closure with its bound variables, the object
+/// of `[$obj, 'm']`) is released, so the destructors it triggers — and a
+/// collection when the released values fill the root buffer — run in the
+/// fiber; what they throw is thrown by the fiber (chained to the exception
+/// the function threw, `zend_objects_destroy_object`).
+fn release_callable(vm: &mut Vm, fiber: &Obj, r: VmResult<Value>) -> VmResult<Value> {
+    let Some(callable) = with(fiber, |d| std::mem::take(&mut d.callable)) else {
+        return r;
+    };
+    crate::gc::release_value(&callable);
+    drop(callable);
+    let mut r = r;
+    if object::has_pending_destructors() {
+        r = merge_release_error(r, vm.run_pending_destructors());
+    }
+    if crate::gc::wants_run() {
+        r = merge_release_error(r, vm.gc_safe_point());
+    }
+    r
+}
+
+/// Combines the outcome of a fiber's function with an error raised while
+/// releasing its callable.
+fn merge_release_error(r: VmResult<Value>, e: VmResult<()>) -> VmResult<Value> {
+    match (r, e) {
+        (r, Ok(())) => r,
+        (Err(Throw::Exception(old)), Err(Throw::Exception(new))) => {
+            if !is_graceful_exit(&old) {
+                crate::exceptions::chain_previous(&new, &old);
+            }
+            Err(Throw::Exception(new))
+        }
+        (Ok(_), Err(e)) | (Err(Throw::Exception(_)), Err(e)) => Err(e),
+        (Err(t), Err(_)) => Err(t),
     }
 }
 
