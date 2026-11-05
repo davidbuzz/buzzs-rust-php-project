@@ -136,7 +136,7 @@ fn init_finish(
 /// `date_period_init_iso8601_string()`; returns the recurrence count.
 fn init_iso(vm: &mut Vm, p: &mut PeriodObj, base: &str, iso: &[u8], func: &str) -> VmResult<i64> {
     let r = parse_iso_interval(iso);
-    let s = lossy(iso);
+    let s = lossy(iso.split(|&b| b == 0).next().unwrap_or_default());
     if !r.errors.errors.is_empty() {
         return Err(vm.throw(
             "DateMalformedPeriodStringException",

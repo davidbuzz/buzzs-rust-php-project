@@ -464,3 +464,119 @@ fn duration() {
          DivisionByZeroError: Division by zero\n"
     );
 }
+
+#[test]
+fn nul_parser_diagnostics() {
+    assert_eq!(
+        run(r#"
+            $s = "2000-01-01\0bad";
+            foreach (['DateTime', 'DateTimeImmutable'] as $class) {
+                try { new $class($s); } catch (Throwable $e) {
+                    echo $e->getMessage(), "\n";
+                }
+                $d = new $class('2000-01-01 12:34:56.789012', new DateTimeZone('Europe/Paris'));
+                try { $d->modify($s); } catch (Throwable $e) {
+                    echo $e->getMessage(), "\n";
+                }
+                echo $d->format('Y-m-d H:i:s.u e'), "\n";
+                $errors = $class::getLastErrors();
+                echo $errors['error_count'], ' ', implode(',', array_keys($errors['errors'])), "\n";
+            }
+            try { new DateInterval("P\0tail"); } catch (Throwable $e) {
+                echo $e->getMessage(), "\n";
+            }
+            foreach (["bad\0tail", "P1D\0"] as $s) {
+                try { DatePeriod::createFromISO8601String($s); } catch (Throwable $e) {
+                    echo $e->getMessage(), "\n";
+                }
+            }
+        "#),
+        "Failed to parse time string (2000-01-01) at position 11 (b): The timezone could not be found in the database\n\
+         DateTime::modify(): Failed to parse time string (2000-01-01) at position 11 (b): The timezone could not be found in the database\n\
+         2000-01-01 12:34:56.789012 Europe/Paris\n\
+         1 11\n\
+         Failed to parse time string (2000-01-01) at position 11 (b): The timezone could not be found in the database\n\
+         DateTimeImmutable::modify(): Failed to parse time string (2000-01-01) at position 11 (b): The timezone could not be found in the database\n\
+         2000-01-01 12:34:56.789012 Europe/Paris\n\
+         1 11\n\
+         Unknown or bad format (P)\n\
+         Unknown or bad format (bad)\n\
+         DatePeriod::createFromISO8601String(): ISO interval must contain a start date, \"P1D\" given\n"
+    );
+}
+
+// Master's %pS messages are binary-safe, unlike the older installed oracle.
+#[test]
+fn binary_safe_relative_interval_diagnostics() {
+    assert_eq!(
+        run(r#"
+            try { DateInterval::createFromDateString("bad\0tail"); } catch (Throwable $e) {
+                echo str_replace("\0", '<NUL>', $e->getMessage()), "\n";
+            }
+            try { DateInterval::createFromDateString("2000-01-01\0"); } catch (Throwable $e) {
+                echo str_replace("\0", '<NUL>', $e->getMessage()), "\n";
+            }
+            $i = new DateInterval('P1D');
+            try { $i->__unserialize(['date_string' => "bad\0tail"]); } catch (Throwable $e) {
+                echo str_replace("\0", '<NUL>', $e->getMessage()), "\n";
+            }
+        "#),
+        "Unknown or bad format (bad<NUL>tail) at position 0 (b): The timezone could not be found in the database\n\
+         String '2000-01-01<NUL>' contains non-relative elements\n\
+         Unknown or bad format (bad<NUL>tail) at position 0 (b) while unserializing: The timezone could not be found in the database\n"
+    );
+}
+
+#[test]
+fn restored_interval_signed_days_format() {
+    assert_eq!(
+        run(r#"
+            foreach (["\v-9223372036854775808tail", "-9223372036854775808",
+                      "-9223372036854775809", "9223372036854775807",
+                      "9223372036854775808", "--1", "+12.5", "\0-12",
+                      "1e3", "-9999999"] as $s) {
+                $i = DateInterval::__set_state(['days' => $s]);
+                echo $i->days === false ? 'false' : $i->days, ' ', $i->format('%a'), "\n";
+                $j = new DateInterval('P1D');
+                $j->__unserialize(['days' => $s]);
+                echo $j->days === false ? 'false' : $j->days, ' ', date_interval_format($j, '%a'), "\n";
+            }
+        "#),
+        "-9223372036854775808 0\n-9223372036854775808 0\n\
+         -9223372036854775808 0\n-9223372036854775808 0\n\
+         -9223372036854775808 0\n-9223372036854775808 0\n\
+         9223372036854775807 -1\n9223372036854775807 -1\n\
+         9223372036854775807 -1\n9223372036854775807 -1\n\
+         0 0\n0 0\n12 12\n12 12\n0 0\n0 0\n1 1\n1 1\n\
+         false (unknown)\nfalse (unknown)\n"
+    );
+}
+
+#[test]
+fn restored_interval_unsigned_relative_arithmetic() {
+    assert_eq!(
+        run(r#"
+            $base = ['y' => 0, 'm' => 0, 'd' => 0, 'h' => 0, 'i' => 0, 's' => 0];
+            foreach ([
+                ['special_type' => 4294967297, 'special_amount' => 1, 'have_special_relative' => 1],
+                ['special_type' => -4294967295, 'special_amount' => 1, 'have_special_relative' => 1],
+                ['special_type' => 1, 'special_amount' => 1, 'have_special_relative' => 4294967296],
+                ['weekday' => 1, 'weekday_behavior' => 1, 'have_weekday_relative' => 4294967296],
+                ['special_type' => 1, 'special_amount' => 1, 'have_special_relative' => 4294967297]
+            ] as $h) {
+                $i = DateInterval::__set_state($h + $base);
+                $d = new DateTimeImmutable('2024-01-05 12:34:56', new DateTimeZone('UTC'));
+                echo $d->add($i)->format('Y-m-d H:i:s'), ' ';
+                try { echo $d->sub($i)->format('Y-m-d H:i:s'); } catch (Throwable $e) {
+                    echo get_class($e), ': ', $e->getMessage();
+                }
+                echo "\n";
+            }
+        "#),
+        "2024-01-08 12:34:56 DateInvalidOperationException: DateTimeImmutable::sub(): Only non-special relative time specifications are supported for subtraction\n\
+         2024-01-08 12:34:56 DateInvalidOperationException: DateTimeImmutable::sub(): Only non-special relative time specifications are supported for subtraction\n\
+         2024-01-05 12:34:56 2024-01-05 12:34:56\n\
+         2024-01-05 12:34:56 2024-01-05 12:34:56\n\
+         2024-01-08 12:34:56 DateInvalidOperationException: DateTimeImmutable::sub(): Only non-special relative time specifications are supported for subtraction\n"
+    );
+}

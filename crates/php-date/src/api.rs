@@ -788,7 +788,7 @@ pub fn date_initialize(
 /// (the VM prefixes `Class::method(): ` where PHP does).
 pub fn parse_failure_message(time_str: &[u8], errors: &Errors) -> Vec<u8> {
     let mut m = b"Failed to parse time string (".to_vec();
-    m.extend_from_slice(time_str);
+    m.extend_from_slice(time_str.split(|&b| b == 0).next().unwrap_or_default());
     m.extend_from_slice(b") ");
     m.extend_from_slice(&errors.first_error_description().unwrap_or_default());
     m
@@ -1118,7 +1118,7 @@ pub fn interval_from_iso(spec: &[u8]) -> Result<Interval, Vec<u8>> {
     let r = parse_iso_interval(spec);
     let msg = |prefix: &str| {
         let mut m = prefix.as_bytes().to_vec();
-        m.extend_from_slice(spec);
+        m.extend_from_slice(spec.split(|&b| b == 0).next().unwrap_or_default());
         m.push(b')');
         m
     };
@@ -1424,7 +1424,7 @@ impl DatePeriod {
     /// the function-name prefix where PHP adds one.
     pub fn from_iso(isostr: &[u8], options: i64) -> Result<Self, String> {
         let r = parse_iso_interval(isostr);
-        let s = String::from_utf8_lossy(isostr);
+        let s = String::from_utf8_lossy(isostr.split(|&b| b == 0).next().unwrap_or_default());
         if !r.errors.errors.is_empty() {
             return Err(format!("Unknown or bad format ({s})"));
         }
@@ -1678,6 +1678,78 @@ mod tests {
         assert_eq!(
             parse_failure_message(b"foo", &e),
             b"Failed to parse time string (foo) at position 0 (f): The timezone could not be found in the database".to_vec()
+        );
+    }
+
+    #[test]
+    fn nul_diagnostics_preserve_parser_input() {
+        for (s, prefix, position) in [
+            (&b"bad\0tail"[..], "bad", 0),
+            (&b"2000-01-01\0bad"[..], "2000-01-01", 11),
+            (&b"\0bad"[..], "", 1),
+        ] {
+            let (_, errors) = parse_strtotime(s);
+            assert_eq!(errors.errors[0].position, position);
+            assert_eq!(errors.errors[0].character, b'b');
+            assert_eq!(
+                parse_failure_message(s, &errors),
+                format!(
+                    "Failed to parse time string ({prefix}) at position {position} (b): The timezone could not be found in the database"
+                )
+                .into_bytes()
+            );
+        }
+        assert_eq!(
+            interval_from_iso(b"P\0tail").unwrap_err(),
+            b"Unknown or bad format (P)"
+        );
+        assert_eq!(
+            DatePeriod::from_iso(b"bad\0tail", 0).unwrap_err(),
+            "Unknown or bad format (bad)"
+        );
+        assert_eq!(
+            DatePeriod::from_iso(b"P1D\0", 0).unwrap_err(),
+            "ISO interval must contain a start date, \"P1D\" given"
+        );
+
+        // Master's %pS diagnostics retain the complete interval string.
+        let s = b"bad\0tail";
+        let expected = b"Unknown or bad format (bad\0tail) at position 0 (b): The timezone could not be found in the database";
+        assert_eq!(
+            interval_from_date_string(s).unwrap_err(),
+            DateStringIntervalError::BadFormat(expected.to_vec())
+        );
+        assert_eq!(
+            Interval::from_date_string_property(s).unwrap_err(),
+            b"Unknown or bad format (bad\0tail) at position 0 (b) while unserializing: The timezone could not be found in the database"
+        );
+        assert_eq!(
+            interval_from_date_string(b"2000-01-01\0").unwrap_err(),
+            DateStringIntervalError::NonRelative(
+                b"String '2000-01-01\0' contains non-relative elements".to_vec()
+            )
+        );
+    }
+
+    #[test]
+    fn failed_nul_modify_preserves_date() {
+        let (t, errors) = date_initialize(
+            b"2000-01-01 12:34:56.789012 Europe/Paris",
+            None,
+            None,
+            &utc(),
+            0,
+            0,
+        );
+        assert!(errors.is_empty());
+        let original = t.unwrap();
+        let mut t = original.clone();
+        let errors = modify(&mut t, b"2000-01-01\0bad").unwrap_err();
+        assert_eq!(errors.errors[0].position, 11);
+        assert_eq!(t, original);
+        assert_eq!(
+            format(&t, b"Y-m-d H:i:s.u e"),
+            b"2000-01-01 12:34:56.789012 Europe/Paris"
         );
     }
 

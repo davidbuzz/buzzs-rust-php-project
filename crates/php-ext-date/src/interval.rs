@@ -100,7 +100,7 @@ fn a64i(vm: &mut Vm, v: &Value) -> VmResult<i64> {
     let s = vm.value_to_string(v)?;
     let b = s.as_bytes();
     let mut i = 0;
-    while i < b.len() && b[i].is_ascii_whitespace() {
+    while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
         i += 1;
     }
     let neg = i < b.len() && b[i] == b'-';
@@ -109,14 +109,19 @@ fn a64i(vm: &mut Vm, v: &Value) -> VmResult<i64> {
     }
     let mut n: i64 = 0;
     while i < b.len() && b[i].is_ascii_digit() {
-        n = n.saturating_mul(10).saturating_add(i64::from(b[i] - b'0'));
+        let digit = i64::from(b[i] - b'0');
+        n = if neg {
+            n.saturating_mul(10).saturating_sub(digit)
+        } else {
+            n.saturating_mul(10).saturating_add(digit)
+        };
         i += 1;
     }
-    Ok(if neg { -n } else { n })
+    Ok(n)
 }
 
 /// `php_date_interval_initialize_from_hash()`.
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn from_hash(vm: &mut Vm, h: &ZArray) -> VmResult<Interval> {
     if let Some(Value::Str(s)) = get_str(h, "date_string").cloned() {
         return match Interval::from_date_string_property(s.as_bytes()) {
@@ -150,13 +155,13 @@ fn from_hash(vm: &mut Vm, h: &ZArray) -> VmResult<Interval> {
         Some(v) if scalar(&v) => a64i(vm, &v)?,
         _ => -1,
     };
-    r.special_type = u32::try_from(long(vm, "special_type", 0)?).unwrap_or(0);
+    r.special_type = long(vm, "special_type", 0)? as u32;
     r.special_amount = match get_str(h, "special_amount").cloned() {
         Some(v) if scalar(&v) => a64i(vm, &v)?,
         _ => -1,
     };
-    r.have_weekday_relative = long(vm, "have_weekday_relative", 0)? != 0;
-    r.have_special_relative = long(vm, "have_special_relative", 0)? != 0;
+    r.have_weekday_relative = long(vm, "have_weekday_relative", 0)? as u32 != 0;
+    r.have_special_relative = long(vm, "have_special_relative", 0)? as u32 != 0;
     let kind = match get_str(h, "civil_or_wall").map(Value::deref) {
         Some(v) if get_long(vm, &v)? == 2 => IntervalKind::Wall,
         _ => IntervalKind::Civil,
@@ -320,4 +325,57 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         "date_interval_format(DateInterval $object, string $format): string",
         format,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use php_vm::VmOptions;
+
+    #[test]
+    fn restore_signed_i64_fields() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        for (s, expected) in [
+            (&b"-9223372036854775808"[..], i64::MIN),
+            (&b"-9223372036854775809"[..], i64::MIN),
+            (&b"-999999999999999999999999"[..], i64::MIN),
+            (&b"9223372036854775807"[..], i64::MAX),
+            (&b"9223372036854775808"[..], i64::MAX),
+            (&b"\x0b-9223372036854775808tail"[..], i64::MIN),
+            (&b"\r\n\t\x0c +12.5"[..], 12),
+            (&b"--1"[..], 0),
+            (&b"\0-12"[..], 0),
+            (&b"1e3"[..], 1),
+        ] {
+            let mut h = ZArray::new();
+            crate::common::set_str(&mut h, "days", Value::Str(ZStr::from(s)));
+            crate::common::set_str(&mut h, "special_amount", Value::Str(ZStr::from(s)));
+            let iv = from_hash(&mut vm, &h).unwrap();
+            assert_eq!(iv.rel.days, expected, "{s:?}");
+            assert_eq!(iv.rel.special_amount, expected, "{s:?}");
+        }
+    }
+
+    #[test]
+    fn restore_unsigned_relative_fields() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        for (value, narrowed, enabled) in [
+            (0, 0, false),
+            (-1, u32::MAX, true),
+            (4_294_967_296, 0, false),
+            (4_294_967_297, 1, true),
+            (-4_294_967_295, 1, true),
+            (i64::MIN, 0, false),
+            (i64::MAX, u32::MAX, true),
+        ] {
+            let mut h = ZArray::new();
+            for name in ["special_type", "have_weekday_relative", "have_special_relative"] {
+                crate::common::set_str(&mut h, name, Value::Int(value));
+            }
+            let iv = from_hash(&mut vm, &h).unwrap();
+            assert_eq!(iv.rel.special_type, narrowed);
+            assert_eq!(iv.rel.have_weekday_relative, enabled);
+            assert_eq!(iv.rel.have_special_relative, enabled);
+        }
+    }
 }
