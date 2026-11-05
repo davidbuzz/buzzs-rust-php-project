@@ -29,7 +29,8 @@
 //!
 //! Lower layers are usable directly: [`encoding`] (registry and lookup),
 //! [`convert`] (decode/encode with substitution), [`unicode`] (properties,
-//! case mapping, display width), [`detect`] (encoding detection).
+//! case mapping, display width), [`detect`] (encoding detection), [`onig`]
+//! (the system Oniguruma behind `mb_ereg*`).
 //!
 //! Ref: `ext/mbstring/` (`mbstring.c`, `php_unicode.c`, `libmbfl/`).
 
@@ -43,6 +44,7 @@ pub mod legacy;
 pub mod mbregex;
 pub mod mime;
 pub mod numericentity;
+pub mod onig;
 pub mod state;
 pub mod strcut;
 pub mod strings;
