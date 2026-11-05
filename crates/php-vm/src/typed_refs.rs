@@ -617,7 +617,19 @@ impl Vm {
         r: &PhpRef,
     ) -> VmResult<()> {
         let mut v = Value::Reference(r.clone());
-        self.verify_prop_assignable_by_ref_ex(pi, &mut v, false)
+        self.verify_prop_assignable_by_ref_ex(pi, &mut v, false, None)
+    }
+
+    /// `zend_verify_prop_assignable_by_ref(info, data, /* strict */ 1)` of
+    /// `unserialize()`: `v` (a reference or a plain value) checked against
+    /// property `pi` in strict mode; a reference already typed by another
+    /// property must satisfy it without coercion. Throws the `TypeError`.
+    pub(crate) fn verify_prop_assignable_by_ref_strict(
+        &mut self,
+        pi: &Rc<PropInfo>,
+        v: &mut Value,
+    ) -> VmResult<()> {
+        self.verify_prop_assignable_by_ref_ex(pi, v, false, Some(true))
     }
 
     /// The value returned by `__get()` for an unset typed property
@@ -628,17 +640,18 @@ impl Vm {
         pi: &Rc<PropInfo>,
         v: &mut Value,
     ) -> VmResult<()> {
-        self.verify_prop_assignable_by_ref_ex(pi, v, true)
+        self.verify_prop_assignable_by_ref_ex(pi, v, true, None)
     }
 
     /// `zend_verify_prop_assignable_by_ref_ex`: `v` is a reference or a
     /// plain value (coerced in place, through the reference when not
-    /// typed).
+    /// typed). `strict` defaults to the calling code's `strict_types`.
     fn verify_prop_assignable_by_ref_ex(
         &mut self,
         pi: &Rc<PropInfo>,
         v: &mut Value,
         magic_get: bool,
+        strict: Option<bool>,
     ) -> VmResult<()> {
         if !is_checked_type(pi) {
             return Ok(());
@@ -648,7 +661,7 @@ impl Vm {
             prop: pi.clone(),
             decl,
         };
-        let strict = self.uses_strict_types();
+        let strict = strict.unwrap_or_else(|| self.uses_strict_types());
         let r = match v {
             Value::Reference(r) => Some(r.clone()),
             _ => None,

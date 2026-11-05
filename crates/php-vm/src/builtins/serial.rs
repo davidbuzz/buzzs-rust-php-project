@@ -1288,13 +1288,36 @@ impl Unserializer<'_> {
                     _ => None,
                 },
             };
+            // A reused location (duplicate key) drops its old value, and
+            // with it this slot's type source.
+            let reused = loc.is_some();
             let Some(v) = self.value(vm, loc)? else {
                 return Ok(false);
             };
             match &target {
                 Target::Declared(pi) => {
-                    if let Some(ty) = pi.ty.clone() {
+                    let cell = match &v {
+                        Value::Reference(c) => Some(c.clone()),
+                        _ => None,
+                    };
+                    let typed_ref = !reused
+                        && cell
+                            .as_ref()
+                            .is_some_and(crate::typed_refs::has_type_sources);
+                    if typed_ref && pi.ty.is_some() {
+                        // `R:` to a value an earlier typed property holds:
+                        // the reference must satisfy this type too,
+                        // without coercion.
+                        let info = cls
+                            .props
+                            .get(pi.slot as usize)
+                            .cloned()
+                            .unwrap_or_else(|| Rc::new(pi.clone()));
+                        let mut checked = v.clone();
+                        vm.verify_prop_assignable_by_ref_strict(&info, &mut checked)?;
+                    } else if let Some(ty) = pi.ty.clone() {
                         let mut inner = v.deref();
+                        let was_int = matches!(inner, Value::Int(_));
                         let decl = vm.find_class(pi.class.as_bytes());
                         let ctx = TypeCtx {
                             scope: decl.as_ref(),
@@ -1318,6 +1341,12 @@ impl Unserializer<'_> {
                                 ),
                             ));
                         }
+                        // The strict-mode int -> float coercion is kept.
+                        if was_int && matches!(inner, Value::Float(_)) {
+                            if let Some(c) = &cell {
+                                c.set(inner);
+                            }
+                        }
                     }
                     let d = object::data(o);
                     let mut slots = d.slots.borrow_mut();
@@ -1332,6 +1361,14 @@ impl Unserializer<'_> {
                     }
                     if let Some(r) = d.readonly_init.borrow_mut().get_mut(pi.slot as usize) {
                         *r = true;
+                    }
+                    // `ZEND_REF_ADD_TYPE_SOURCE` / `ref_props`: the parse
+                    // cell becomes a typed reference if a later `R:`
+                    // shares it (a source only counts while the slot
+                    // still holds the cell, i.e. after unwrapping only
+                    // for shared cells).
+                    if let Some(c) = &cell {
+                        vm.add_slot_type_source(o, pi.slot as usize, c);
                     }
                 }
                 Target::Dynamic(k) => {
@@ -2181,6 +2218,27 @@ mod tests {
              The script tried to modify a pr\n\
              The script tried to modify a pr\n\
              The script tried to call a meth\n"
+        );
+    }
+
+    #[test]
+    fn typed_property_references() {
+        let out = run("<?php class A { public int $a; public $b; }\n\
+             class D { public int $a; public float $b; }\n\
+             $o = unserialize('O:1:\"A\":2:{s:1:\"a\";i:1;s:1:\"b\";R:2;}');\n\
+             try { $o->b = 'x'; } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; }\n\
+             var_dump(unserialize('O:1:\"D\":1:{s:1:\"b\";i:1;}')->b);\n\
+             var_dump(unserialize('O:1:\"D\":2:{s:1:\"b\";i:1;s:1:\"b\";i:2;}')->b);\n\
+             foreach (['O:1:\"D\":2:{s:1:\"a\";i:1;s:1:\"b\";R:2;}',\n\
+                       'O:1:\"D\":2:{s:1:\"b\";i:1;s:1:\"a\";R:2;}'] as $s) {\n\
+             try { unserialize($s); } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; } }");
+        assert_eq!(
+            out,
+            "Cannot assign string to reference held by property A::$a of type int\n\
+             float(1)\n\
+             float(2)\n\
+             Reference with value of type int held by property D::$a of type int is not compatible with property D::$b of type float\n\
+             Cannot assign float to property D::$a of type int\n"
         );
     }
 
