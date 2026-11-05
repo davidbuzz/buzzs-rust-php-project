@@ -186,12 +186,12 @@ impl Vm {
                 )
             }),
             Value::Array(a) if a.len() == 2 => {
-                match (
-                    a.get(&ArrayKey::Int(0)).map(Value::deref),
-                    a.get(&ArrayKey::Int(1)).map(Value::deref),
-                ) {
-                    (Some(Value::Str(c)), Some(Value::Str(m))) => Some((c, m)),
-                    _ => None,
+                let target = a.get(&ArrayKey::Int(0)).map(Value::deref);
+                let method = a.get(&ArrayKey::Int(1)).map(Value::deref);
+                if let (Some(Value::Str(c)), Some(Value::Str(m))) = (target, method) {
+                    Some((c, m))
+                } else {
+                    None
                 }
             }
             _ => None,
