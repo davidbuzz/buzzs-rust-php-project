@@ -2,7 +2,7 @@
 
 use crate::ctx::{RtExt, VmQuery};
 use php_lexer::WarningKind;
-use php_runtime::{HashTable, RtResult, Value, ZArray, ZStr};
+use php_runtime::{CastTarget, HashTable, RtResult, RuntimeContext, Value, ZArray, ZStr};
 use php_stdmisc::highlight::{self, HighlightColors};
 use php_stdmisc::locale::{self, LocaleState};
 use php_stdmisc::query::{self, InputSettings};
@@ -54,50 +54,29 @@ fn highlight_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(emit(vm, &html, ret))
 }
 
-/// Whether `path` names a stream wrapper URL (`scheme://...` or `data:`).
-fn is_url(path: &[u8]) -> bool {
-    path.starts_with(b"data:")
-        || path.iter().position(|&c| c == b':').is_some_and(|i| {
-            i > 1
-                && path[i..].starts_with(b"://")
-                && path[..i]
-                    .iter()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
-        })
-}
-
 /// Reads a script for highlighting/stripping like `zend_stream_open()`:
-/// plain files directly, URLs through the stream layer's
-/// `file_get_contents()` (when linked). Reports "Failed to open stream" on
-/// failure.
+/// uses the include path and enforces wrapper access restrictions.
 fn read_script(vm: &mut Vm, path: &[u8]) -> VmResult<Option<Vec<u8>>> {
-    use std::os::unix::ffi::OsStrExt;
-    if is_url(path) && vm.native_function("file_get_contents").is_some() {
-        let saved = vm.error_reporting;
-        vm.error_reporting = 0;
-        let r = vm.call_value(
-            &Value::from("file_get_contents"),
-            vec![Value::Str(ZStr::from(path))],
+    use php_streams::wrapper::{REPORT_ERRORS, STREAM_OPEN_FOR_INCLUDE, USE_PATH};
+
+    if path.is_empty() {
+        return Err(vm.throw("ValueError", php_streams::open::EMPTY_PATH_ERROR));
+    }
+    php_ext_streams::bridge::run(vm, || {
+        let mut opened = None;
+        let stream = php_streams::open::open_wrapper(
+            path,
+            "rb",
+            USE_PATH | REPORT_ERRORS | STREAM_OPEN_FOR_INCLUDE,
+            &mut opened,
+            None,
         );
-        vm.error_reporting = saved;
-        if let Value::Str(s) = r? {
-            return Ok(Some(s.as_bytes().to_vec()));
-        }
-    }
-    let p = std::ffi::OsStr::from_bytes(path);
-    match std::fs::read(p) {
-        Ok(s) => Ok(Some(s)),
-        Err(e) => {
-            let reason = match e.kind() {
-                std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
-                std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
-                _ if std::fs::metadata(p).is_ok_and(|m| m.is_dir()) => "Is a directory".to_string(),
-                _ => e.to_string(),
-            };
-            vm.php_warning(&format!("Failed to open stream: {reason}"))?;
-            Ok(None)
-        }
-    }
+        stream.map(|mut s| {
+            let source = s.copy_to_mem(None).unwrap_or_default();
+            s.close();
+            source
+        })
+    })
 }
 
 fn highlight_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -226,26 +205,36 @@ fn parse_str(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
-/// Checks one of `setlocale()`'s variadic `$rest` arguments (argument
-/// number `n`) like `try_setlocale_zval()` does when it reaches it:
-/// `?string` with path semantics, reported without a parameter name.
-/// Objects are converted to strings.
-fn rest_arg(vm: &mut Vm, n: usize, v: Value) -> VmResult<Value> {
-    let v = match v {
-        Value::Array(_) => {
-            return Err(vm.throw(
-                "TypeError",
-                &format!("setlocale(): Argument #{n} must be of type ?string, array given"),
-            ))
+/// `zend_parse_arg_path_str()` for a scalar locale argument.
+fn locale_arg(vm: &mut Vm, n: usize, v: Value, strict: bool) -> VmResult<Value> {
+    let label = if n == 2 {
+        "#2 ($locales)".to_string()
+    } else {
+        format!("#{n}")
+    };
+    let expected = if n == 2 { "array|string|null" } else { "?string" };
+    let parsed = match &v {
+        Value::Null | Value::Str(_) => Some(v.clone()),
+        Value::Int(_) | Value::Float(_) | Value::Bool(_) if !strict => {
+            Some(Value::Str(vm.value_to_string(&v)?))
         }
-        Value::Object(_) => Value::Str(vm.value_to_string(&v)?),
-        other => other,
+        Value::Object(o) if !strict => vm.cast_object(o, CastTarget::String).vm(vm)?,
+        _ => None,
+    };
+    let Some(v) = parsed else {
+        return Err(vm.throw(
+            "TypeError",
+            &format!(
+                "setlocale(): Argument {label} must be of type {expected}, {} given",
+                v.value_name()
+            ),
+        ));
     };
     if let Value::Str(s) = &v {
         if s.as_bytes().contains(&0) {
             return Err(vm.throw(
                 "ValueError",
-                &format!("setlocale(): Argument #{n} must not contain any null bytes"),
+                &format!("setlocale(): Argument {label} must not contain any null bytes"),
             ));
         }
     }
@@ -253,31 +242,40 @@ fn rest_arg(vm: &mut Vm, n: usize, v: Value) -> VmResult<Value> {
 }
 
 /// `setlocale($category, $locales, ...$rest)`: the arguments are tried in
-/// order and each `$rest` argument is only validated when it is reached.
+/// order after all scalar arguments have been validated.
 fn setlocale(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cat = a.int(0);
-    let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
-    let call = |vm: &mut Vm, args: &[Value]| {
-        LOCALE
-            .with(|l| {
-                let mut st = l.borrow().clone();
-                let r = st.setlocale(cat, args, vm);
-                *l.borrow_mut() = st;
-                r
-            })
-            .vm(vm)
-    };
-    if args.len() < 2 || matches!(args[0], Value::Array(_)) {
-        return call(vm, &args);
-    }
-    for (i, v) in args.into_iter().enumerate() {
-        let v = if i == 0 { v } else { rest_arg(vm, i + 2, v)? };
-        let r = call(vm, std::slice::from_ref(&v))?;
-        if !matches!(r, Value::Bool(false)) {
-            return Ok(r);
+    let strict = vm
+        .frames
+        .iter()
+        .rev()
+        .nth(1)
+        .is_some_and(|f| f.kind != php_vm::vm::FrameKind::Builtin && f.code.strict_types);
+    let mut args = Vec::with_capacity(a.values.len().saturating_sub(1));
+    for (i, v) in a.values.iter().skip(1).map(Value::deref).enumerate() {
+        if i == 0 && matches!(v, Value::Array(_)) {
+            if a.values.len() > 2 {
+                return Err(vm.throw(
+                    "ArgumentCountError",
+                    &format!(
+                        "setlocale() expects exactly 2 arguments when argument #2 ($locales) is an array, {} given",
+                        a.values.len()
+                    ),
+                ));
+            }
+            args.push(v);
+        } else {
+            args.push(locale_arg(vm, i + 2, v, strict)?);
         }
     }
-    Ok(Value::Bool(false))
+    LOCALE
+        .with(|l| {
+            let mut st = l.borrow().clone();
+            let r = st.setlocale(cat, &args, vm);
+            *l.borrow_mut() = st;
+            r
+        })
+        .vm(vm)
 }
 
 #[allow(clippy::unnecessary_wraps)] // native handler signature

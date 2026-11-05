@@ -26,10 +26,14 @@ impl Write for Sink {
 }
 
 fn run(code: &str) -> String {
-    let sink = Sink::default();
     let ext = php_ext_stdmisc::StdMisc;
     let exts: [&dyn Extension; 1] = [&ext];
-    let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
+    run_with(&VmOptions::default(), &exts, code)
+}
+
+fn run_with(opts: &VmOptions, exts: &[&dyn Extension], code: &str) -> String {
+    let sink = Sink::default();
+    let mut vm = Vm::with_extensions(opts, Box::new(sink.clone()), exts);
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
     drop(vm);
     let out = sink.0.borrow().clone();
@@ -102,13 +106,138 @@ fn highlighting() {
 }
 
 #[test]
-fn setlocale_rest_args_are_checked_lazily() {
-    let out = run(r#"echo setlocale(LC_ALL, "C", ["ignored"]), '|';
-        try { setlocale(LC_ALL, "zz_ZZ.nope", ["C"]); } catch (TypeError $e) { echo $e->getMessage(); }"#);
+fn setlocale_validates_all_scalar_args_before_trying_locales() {
+    let out = run(r#"
+        setlocale(LC_ALL, 0, '0');
+        setlocale(LC_ALL, '0', 0);
+        foreach (['C', 'zz_ZZ.nope'] as $first) {
+            try { setlocale(LC_ALL, $first, ['C']); }
+            catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        }
+        class LocaleName {
+            function __toString(): string { echo "converted\n"; return 'C'; }
+        }
+        echo setlocale(LC_ALL, 'C', new LocaleName), "\n";
+        try { setlocale(LC_ALL, 'C', "bad\0locale"); }
+        catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+        try { setlocale(LC_ALL, ['C'], 'C'); }
+        catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+        echo setlocale(LC_ALL, ['zz_ZZ.nope', new LocaleName]), "\n";
+        class ThrowingLocale {
+            function __toString(): string { throw new Error('conversion failed'); }
+        }
+        try { setlocale(LC_ALL, 'C', new ThrowingLocale); }
+        catch (Error $e) { echo $e->getMessage(), "\n"; }
+    "#);
     assert_eq!(
         out,
-        "C|setlocale(): Argument #3 must be of type ?string, array given"
+        "setlocale(): Argument #3 must be of type ?string, array given\n\
+         setlocale(): Argument #3 must be of type ?string, array given\n\
+         converted\nC\nsetlocale(): Argument #3 must not contain any null bytes\n\
+         setlocale() expects exactly 2 arguments when argument #2 ($locales) is an array, 3 given\n\
+         converted\nC\nconversion failed\n"
     );
+}
+
+#[test]
+fn setlocale_strict_scalar_args_and_weak_array_elements() {
+    let out = run(r#"declare(strict_types=1);
+        try { setlocale(LC_ALL, 0, '0'); }
+        catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        try { setlocale(LC_ALL, '0', 0); }
+        catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        class LocaleName {
+            function __toString(): string { echo "converted\n"; return 'C'; }
+        }
+        try { setlocale(LC_ALL, new LocaleName); }
+        catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        try { setlocale(LC_ALL, 'C', new LocaleName); }
+        catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        echo setlocale(LC_ALL, [new LocaleName]), "\n";
+        setlocale(LC_ALL, 'C', null);
+        echo "nullable\n";
+    "#);
+    assert_eq!(
+        out,
+        "setlocale(): Argument #2 ($locales) must be of type array|string|null, int given\n\
+         setlocale(): Argument #3 must be of type ?string, int given\n\
+         setlocale(): Argument #2 ($locales) must be of type array|string|null, LocaleName given\n\
+         setlocale(): Argument #3 must be of type ?string, LocaleName given\n\
+         converted\nC\nnullable\n"
+    );
+}
+
+#[test]
+fn scanner_open_failures_use_php_stream_errors() {
+    let out = run(r#"
+        set_error_handler(function($n, $s) { echo $s, "\n"; });
+        var_dump(php_strip_whitespace(str_repeat('A', 300)));
+        var_dump(ob_get_contents());
+        try { php_strip_whitespace(''); }
+        catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+        try { php_strip_whitespace("bad\0path"); }
+        catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+    "#);
+    assert_eq!(
+        out,
+        "php_strip_whitespace(): Failed to open stream: File name too long\n\
+         string(0) \"\"\nbool(false)\nPath must not be empty\n\
+         php_strip_whitespace(): Argument #1 ($filename) must not contain any null bytes\n"
+    );
+}
+
+#[test]
+fn scanner_reads_wrappers_and_include_path() {
+    let misc = php_ext_stdmisc::StdMisc;
+    let streams = php_ext_streams::Streams;
+    let opts = VmOptions {
+        ini: vec![("allow_url_include".to_string(), "1".to_string())],
+    };
+    let out = run_with(&opts, &[&streams, &misc], r#"
+        class SourceWrapper {
+            public $context;
+            private $source = '<?php /* comment */ echo 1; ?>';
+            private $position = 0;
+            function stream_open($path, $mode, $options, &$opened_path) {
+                echo $path, "\n";
+                $opened_path = $path;
+                return true;
+            }
+            function stream_read($length) {
+                $piece = substr($this->source, $this->position, 3);
+                $this->position += strlen($piece);
+                return $piece;
+            }
+            function stream_eof() { return $this->position >= strlen($this->source); }
+            function stream_stat() { return ['mode' => 0100644, 'size' => strlen($this->source)]; }
+            function url_stat($path, $flags) { return $this->stream_stat(); }
+        }
+        stream_wrapper_register('source', SourceWrapper::class);
+        set_include_path('source://root');
+        echo php_strip_whitespace('file.php'), "\n";
+        set_include_path('.');
+        echo php_strip_whitespace('data:text/plain,%3C%3Fphp%20echo%202%3B%20%3F%3E'), "\n";
+        class ThrowingSource {
+            public $context;
+            function stream_open($path, $mode, $options, &$opened_path) {
+                throw new Error('open failed');
+            }
+        }
+        stream_wrapper_register('throwing', ThrowingSource::class);
+        try { php_strip_whitespace('throwing://file.php'); }
+        catch (Error $e) { echo $e->getMessage(), "\n"; }
+    "#);
+    assert_eq!(
+        out,
+        "source://root/file.php\n<?php  echo 1; ?>\n<?php echo 2; ?>\nopen failed\n"
+    );
+    let out = run_with(&VmOptions::default(), &[&streams, &misc], r#"
+        $warnings = [];
+        set_error_handler(function($n, $s) use (&$warnings) { $warnings[] = $s; });
+        var_dump(php_strip_whitespace('data:text/plain,%3C%3Fphp%20echo%202%3B') === '');
+        var_dump(strpos(implode('|', $warnings), 'allow_url_include=0') !== false);
+    "#);
+    assert_eq!(out, "bool(true)\nbool(true)\n");
 }
 
 #[test]
