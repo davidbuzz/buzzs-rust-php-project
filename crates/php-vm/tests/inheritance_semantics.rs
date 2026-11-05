@@ -604,3 +604,17 @@ fn throwable_is_only_implemented_through_exception_or_error() {
     );
     assert_eq!(output, "E\n");
 }
+
+/// `zend_error_impl`: the deprecations recorded while a class links are
+/// emitted before a fatal error of the same link (tentative_type_early_binding).
+#[test]
+fn recorded_link_deprecations_precede_a_link_fatal() {
+    let (status, output) = run_status(
+        "<?php\ninterface I { function f(): X; }\nclass A implements Serializable, I {\n    function serialize() {}\n    function unserialize($s) {}\n    function f(): Unknown {}\n}\n",
+    );
+    assert_eq!(status, 255, "{output}");
+    assert_eq!(
+        output,
+        "\nDeprecated: A implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary) in t.php on line 3\n\nFatal error: Could not check compatibility between A::f(): Unknown and I::f(): X, because class Unknown is not available in t.php on line 6\n"
+    );
+}

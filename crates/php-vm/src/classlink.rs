@@ -1165,7 +1165,7 @@ impl Vm {
     fn resolve_pending(
         &mut self,
         cls: &Rc<Class>,
-        mut recorded: Option<&mut Vec<(i64, String, u32)>>,
+        recorded: Option<&RecordedErrors>,
     ) -> VmResult<()> {
         let Some(p) = LINK_STATE.with(|st| {
             let mut st = st.borrow_mut();
@@ -1184,8 +1184,7 @@ impl Vm {
             let st = ob.check(self, cls, &mut unresolved);
             match ob.message(st, unresolved.first()) {
                 None => {}
-                Some((m, file, l)) if st == crate::variance::Status::Warning => match &mut recorded
-                {
+                Some((m, file, l)) if st == crate::variance::Status::Warning => match recorded {
                     Some(r) => r.push((crate::errors::level::DEPRECATED, m, l)),
                     None => self.error_at(crate::errors::level::DEPRECATED, &m, &file, l)?,
                 },
@@ -1541,11 +1540,14 @@ impl Vm {
         if let Some(e) = err {
             return Err(self.fatal_at(&e, line));
         }
-        let mut recorded: Vec<(i64, String, u32)> = link_out
-            .warnings
-            .iter()
-            .map(|w| (crate::errors::level::COMPILE_WARNING, w.clone(), line))
-            .collect();
+        let recorded = RecordedErrors::begin(
+            decl.filename.clone(),
+            link_out
+                .warnings
+                .iter()
+                .map(|w| (crate::errors::level::COMPILE_WARNING, w.clone(), line))
+                .collect(),
+        );
         for (a, b, msg) in &link_out.value_checks {
             // A failed evaluation makes the values incompatible.
             let mut eval = |e: &ConstExpr| match self.eval_const_expr(e, Some(&cls)) {
@@ -1582,12 +1584,14 @@ impl Vm {
         if cc.error.is_none() {
             crate::variance::check_class(self, &cls, &mut cc);
         }
+        // Deprecations of the checks before a failing one are emitted
+        // ahead of its fatal error.
+        for (w, l) in std::mem::take(&mut cc.warnings) {
+            recorded.push((crate::errors::level::DEPRECATED, w, l));
+        }
         if let Some((e, file, l)) = cc.error.take() {
             self.report_fatal(&e, &file, l);
             return Err(Throw::Fatal);
-        }
-        for (w, l) in std::mem::take(&mut cc.warnings) {
-            recorded.push((crate::errors::level::DEPRECATED, w, l));
         }
         // `do_implement_interface` runs the interface hooks while binding
         // the interfaces, before `zend_verify_abstract_class` (not for an
@@ -1763,10 +1767,10 @@ impl Vm {
             });
             self.load_delayed_classes(&cls.name)?;
             if is_pending(&cls) {
-                self.resolve_pending(&cls, Some(&mut recorded))?;
+                self.resolve_pending(&cls, Some(&recorded))?;
             }
         }
-        Ok((cls, recorded))
+        Ok((cls, recorded.finish()))
     }
 }
 
@@ -1800,9 +1804,83 @@ struct PendingClass {
 
 thread_local! {
     static LINK_STATE: RefCell<LinkState> = RefCell::new(LinkState::default());
+    /// `EG(errors)` while `EG(record_errors)`: the warnings recorded by the
+    /// classes being linked (outermost first), with their file.
+    static RECORDED: RefCell<Vec<(ZStr, Recorded)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A class whose linking is in progress, by name.
+/// Recorded link-time errors: (level, message, line).
+type Recorded = Vec<(i64, String, u32)>;
+
+/// The errors one class link records (`zend_begin_record_errors`): they are
+/// emitted once the class is declared, or before a fatal error raised in
+/// the meantime ([`emit_recorded_before_fatal`]). Dropping it (any exit)
+/// discards them (`zend_free_recorded_errors`).
+pub(crate) struct RecordedErrors {
+    depth: usize,
+}
+
+impl RecordedErrors {
+    fn begin(file: ZStr, initial: Recorded) -> Self {
+        RECORDED.with(|r| {
+            let mut r = r.borrow_mut();
+            r.push((file, initial));
+            Self { depth: r.len() }
+        })
+    }
+
+    fn push(&self, e: (i64, String, u32)) {
+        RECORDED.with(|r| {
+            if let Some((_, v)) = r.borrow_mut().get_mut(self.depth - 1) {
+                v.push(e);
+            }
+        });
+    }
+
+    /// The errors to emit after the class is declared.
+    fn finish(self) -> Recorded {
+        RECORDED.with(|r| {
+            r.borrow_mut()
+                .get_mut(self.depth - 1)
+                .map(|(_, v)| std::mem::take(v))
+                .unwrap_or_default()
+        })
+    }
+}
+
+impl Drop for RecordedErrors {
+    fn drop(&mut self) {
+        RECORDED.with(|r| r.borrow_mut().truncate(self.depth - 1));
+    }
+}
+
+/// `zend_error_impl` before a fatal error: the errors recorded by the
+/// classes being linked are emitted first, with the user error handler
+/// disabled (Zend/zend.c, "Emit any delayed error before handling fatal
+/// error").
+#[cold]
+#[inline(never)]
+pub(crate) fn emit_recorded_before_fatal(vm: &mut Vm) {
+    let pending: Vec<(ZStr, Recorded)> = RECORDED.with(|r| {
+        r.borrow_mut()
+            .iter_mut()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(f, v)| (f.clone(), std::mem::take(v)))
+            .collect()
+    });
+    if pending.is_empty() {
+        return;
+    }
+    let handlers = std::mem::take(&mut vm.error_handlers);
+    for (file, errors) in pending {
+        for (level, msg, line) in errors {
+            let _ = vm.error_at(level, &msg, &file, line);
+        }
+    }
+    vm.error_handlers = handlers;
+}
+
 pub(crate) fn unlinked_decl(name: &[u8]) -> Option<Rc<ClassDecl>> {
     LINK_STATE.with(|st| {
         st.borrow()

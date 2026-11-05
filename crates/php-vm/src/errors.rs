@@ -218,6 +218,9 @@ impl Vm {
                 }
             }
         }
+        if is_fatal(level) {
+            crate::classlink::emit_recorded_before_fatal(self);
+        }
         self.last_error = Some(LastError {
             level,
             message: msg.to_vec(),
@@ -359,6 +362,7 @@ impl Vm {
     }
 
     fn report_fatal_bytes(&mut self, msg: &[u8], file: &ZStr, line: u32) {
+        crate::classlink::emit_recorded_before_fatal(self);
         self.display_fatal_bytes(msg, file, line);
         object::set_destructors_enabled(false);
     }
@@ -387,6 +391,7 @@ impl Vm {
         } else {
             level::COMPILE_ERROR
         };
+        crate::classlink::emit_recorded_before_fatal(self);
         self.last_error = Some(LastError {
             level: lv,
             message: msg.as_bytes().to_vec(),
