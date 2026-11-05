@@ -243,3 +243,27 @@ fn freed_objects_leave_the_root_buffer() {
     assert_eq!(sink.0.borrow().as_slice(), b"ok");
     assert!(len < 16, "{len} buffered entries");
 }
+
+/// Binding a reference (`$a[$i][0] = &$a[$i]`, `$y = &$x`) releases no
+/// handle in php-src, so it buffers no possible root.
+#[test]
+fn binding_references_buffers_no_roots() {
+    let out = run(
+        "<?php $a = []; for ($i = 0; $i < 3; $i++) { $a[$i] = [[]]; $a[$i][0] = &$a[$i]; }\n\
+         $x = [1]; $y = &$x; $z = &$x;\n\
+         var_dump(gc_status()['roots']);",
+    );
+    assert_eq!(out, "int(0)\n");
+}
+
+/// gc_023: the automatic run collects the roots buffered when the
+/// threshold was reached, not the root that crossed it
+/// (`gc_possible_root_when_full`).
+#[test]
+fn threshold_run_leaves_the_crossing_root() {
+    let out = run("<?php $a = [];\n\
+         for ($i = 0; $i < 10001; $i++) { $a[$i] = [[]]; $a[$i][0] = &$a[$i]; }\n\
+         unset($a); $s = gc_status();\n\
+         var_dump($s['runs'], $s['collected'], $s['roots'], gc_collect_cycles());");
+    assert_eq!(out, "int(1)\nint(10000)\nint(1)\nint(1)\n");
+}

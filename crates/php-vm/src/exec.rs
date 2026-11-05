@@ -881,7 +881,13 @@ impl Vm {
                     Op::AssignRef { place, src, dst } => {
                         let v = self.read_raw(*src)?;
                         let r = self.place_assign_ref(*place, v)?;
-                        self.set_dst(*dst, r);
+                        if dst.is_some() {
+                            self.set_dst(*dst, r);
+                        } else {
+                            // An unused result is a duplicate handle of the
+                            // reference just bound: not a GC possible root.
+                            crate::gc::release_duplicate(r);
+                        }
                         Flow::Next
                     }
                     Op::MakeRef { place, dst } => {

@@ -118,6 +118,83 @@ pub fn len() -> usize {
     .unwrap_or(0)
 }
 
+/// Buffered references set aside by [`stash`], held weakly: the roots a
+/// due collection will look at, kept apart from roots buffered after it
+/// became due (`gc_possible_root_when_full` collects before buffering).
+#[derive(Default)]
+pub struct Stash(Vec<Weak<RefInner>>);
+
+impl Stash {
+    /// Number of set-aside references still alive.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.iter().filter(|w| w.strong_count() > 0).count()
+    }
+
+    /// Whether no set-aside reference is alive.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl std::fmt::Debug for Stash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Stash({})", self.0.len())
+    }
+}
+
+/// Moves every buffered reference out of the buffer, weakly.
+#[must_use]
+pub fn stash() -> Stash {
+    let entries = BUF
+        .try_with(|b| {
+            b.try_borrow_mut()
+                .map(|mut b| {
+                    b.index.clear();
+                    std::mem::take(&mut b.entries)
+                })
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    Stash(
+        entries
+            .into_iter()
+            .filter(|w| w.strong_count() > 0)
+            .collect(),
+    )
+}
+
+/// Puts set-aside references back, ahead of those buffered since (they
+/// were buffered first). References freed in the meantime are dropped,
+/// and one buffered again is kept once.
+pub fn unstash(s: Stash) {
+    if s.0.is_empty() {
+        return;
+    }
+    let _ = BUF.try_with(|b| {
+        if let Ok(mut b) = b.try_borrow_mut() {
+            let newer = std::mem::take(&mut b.entries);
+            let mut entries = Vec::with_capacity(s.0.len() + newer.len());
+            let mut index = HashMap::with_capacity(s.0.len() + newer.len());
+            for w in s.0.into_iter().chain(newer) {
+                if w.strong_count() == 0 {
+                    continue;
+                }
+                let addr = w.as_ptr() as usize;
+                if index.contains_key(&addr) {
+                    continue;
+                }
+                index.insert(addr, entries.len());
+                entries.push(w);
+            }
+            b.entries = entries;
+            b.index = index;
+            b.compact_at = b.compact_at.max(b.entries.len() * 2);
+        }
+    });
+}
+
 /// Turns recording on or off; returns the previous setting.
 pub fn set_recording(on: bool) -> bool {
     RECORDING.try_with(|r| r.replace(on)).unwrap_or(false)
@@ -146,6 +223,27 @@ mod tests {
         assert_eq!(len(), 0);
         drop(roots);
         drop(r);
+        set_recording(false);
+    }
+
+    #[test]
+    fn stash_sets_roots_aside_and_unstash_puts_them_first() {
+        set_recording(true);
+        drop(take());
+        let a = PhpRef::new(Value::empty_array());
+        let b = PhpRef::new(Value::empty_array());
+        drop(a.clone());
+        let s = stash();
+        assert_eq!((s.len(), len()), (1, 0));
+        drop(b.clone());
+        drop(a.clone());
+        assert_eq!(len(), 2);
+        unstash(s);
+        assert_eq!(len(), 2);
+        let roots = take();
+        assert!(matches!(&roots[0], Value::Reference(r) if PhpRef::ptr_eq(r, &a)));
+        assert!(matches!(&roots[1], Value::Reference(r) if PhpRef::ptr_eq(r, &b)));
+        drop(roots);
         set_recording(false);
     }
 

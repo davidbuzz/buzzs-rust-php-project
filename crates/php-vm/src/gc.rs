@@ -173,6 +173,36 @@ impl RootBuffer {
         self.entries.iter().filter(|e| e.strong_count() > 0).count()
     }
 
+    /// Moves the live entries out, weakly (see [`Frozen`]).
+    fn take_weak(&mut self) -> Vec<Weak<dyn PhpObject>> {
+        self.index.clear();
+        let mut v = std::mem::take(&mut self.entries);
+        v.retain(|e| e.strong_count() > 0);
+        v
+    }
+
+    /// Puts entries taken by [`RootBuffer::take_weak`] back ahead of the
+    /// current ones; freed ones are dropped, re-buffered ones kept once.
+    fn restore_weak(&mut self, older: Vec<Weak<dyn PhpObject>>) {
+        if older.is_empty() {
+            return;
+        }
+        let newer = std::mem::take(&mut self.entries);
+        self.index.clear();
+        for e in older.into_iter().chain(newer) {
+            if e.strong_count() == 0 {
+                continue;
+            }
+            let addr = e.as_ptr().cast::<u8>() as usize;
+            if self.index.contains_key(&addr) {
+                continue;
+            }
+            self.index.insert(addr, self.entries.len());
+            self.entries.push(e);
+        }
+        self.compact_at = self.compact_at.max(self.entries.len() * 2);
+    }
+
     fn take(&mut self) -> Vec<Value> {
         self.index.clear();
         std::mem::take(&mut self.entries)
@@ -180,6 +210,23 @@ impl RootBuffer {
             .filter_map(|e| e.upgrade())
             .map(|rc| Value::Object(Obj::from_rc(rc)))
             .collect()
+    }
+}
+
+/// The roots buffered when the threshold was reached
+/// (`gc_possible_root_when_full`): php-src collects exactly these, before
+/// buffering the root that crossed the threshold. The run itself waits
+/// for the next safe point, so the buffers are set aside (weakly) until
+/// then and the roots released meanwhile are buffered separately.
+#[derive(Default)]
+struct Frozen {
+    objs: Vec<Weak<dyn PhpObject>>,
+    refs: php_runtime::ref_roots::Stash,
+}
+
+impl Frozen {
+    fn len(&self) -> usize {
+        self.objs.iter().filter(|e| e.strong_count() > 0).count() + self.refs.len()
     }
 }
 
@@ -211,6 +258,8 @@ struct GcState {
     /// The buffer reached the threshold: an automatic run is due at the
     /// next safe point (`gc_possible_root_when_full`).
     due: bool,
+    /// The roots of the due run, set aside when it became due.
+    frozen: Option<Frozen>,
     /// External root providers.
     providers: Vec<RootProvider>,
     /// `activated_at`.
@@ -237,6 +286,7 @@ impl Default for GcState {
             roots: RootBuffer::default(),
             pending: 0,
             due: false,
+            frozen: None,
             providers: Vec::new(),
             activated_at: Instant::now(),
             collector_time: Duration::ZERO,
@@ -345,6 +395,27 @@ pub fn possible_root(v: &Value) {
     }
 }
 
+/// Drops `v`, an extra handle of a reference that stays bound elsewhere
+/// (e.g. the unused result of `$a = &$b`), without buffering the
+/// reference as a possible root: php-src never counted that handle, so
+/// releasing it is no `GC_DELREF`.
+#[inline]
+pub(crate) fn release_duplicate(v: Value) {
+    let quiet = match &v {
+        Value::Reference(r) => {
+            r.refcount() > 1
+                && r.try_borrow()
+                    .is_some_and(|x| matches!(*x, Value::Array(_) | Value::Object(_)))
+        }
+        _ => false,
+    };
+    if quiet {
+        let was = php_runtime::ref_roots::set_recording(false);
+        drop(v);
+        php_runtime::ref_roots::set_recording(was);
+    }
+}
+
 /// Buffers `o`, one handle of which is about to be released.
 fn root_obj(o: &Obj) {
     // A count of 1 drops to zero: the object is freed, not a root.
@@ -359,7 +430,7 @@ fn root_obj(o: &Obj) {
             d.flags
                 .set(d.flags.get() | crate::object::oflags::GC_BUFFERED);
             if !s.active {
-                note_new_root(s);
+                note_new_root(s, Some(o));
             }
         }
     });
@@ -400,12 +471,14 @@ pub fn frame_released(f: &crate::vm::Frame) {
 pub fn note_possible_root() {
     with_state(|s| {
         if !s.protected && !s.active {
-            note_new_root(s);
+            note_new_root(s, None);
         }
     });
 }
 
-fn note_new_root(s: &mut GcState) {
+/// Counts a new root; `newest` is an object root already pushed to the
+/// buffer (a reference root is buffered after this call).
+fn note_new_root(s: &mut GcState, newest: Option<&Obj>) {
     s.pending += 1;
     if s.pending > s.buf_size {
         grow_buffer(s);
@@ -413,10 +486,42 @@ fn note_new_root(s: &mut GcState) {
     // The buffer holds `threshold - 1` roots when the next one triggers a
     // run (`GC_HAS_NEXT_UNUSED_UNDER_THRESHOLD`). The run cannot happen
     // inside the release (it may be in `Drop`): it is due at the next safe
-    // point, over the roots buffered by then.
+    // point, over the roots buffered until now (frozen), not the new one.
     if s.enabled && !s.due && s.pending >= s.threshold {
         s.due = true;
+        freeze(s, newest);
         WANT_RUN.with(|w| w.set(true));
+    }
+}
+
+/// Sets the buffered roots aside for the due run (see [`Frozen`]); only
+/// `newest`, the root that crossed the threshold, stays buffered.
+#[cold]
+#[inline(never)]
+fn freeze(s: &mut GcState, newest: Option<&Obj>) {
+    // Roots still frozen for a run that did not happen stay the oldest.
+    thaw(s);
+    let mut objs = s.roots.take_weak();
+    if let Some(o) = newest {
+        let addr = o.addr();
+        if let Some(i) = objs
+            .iter()
+            .rposition(|e| e.as_ptr().cast::<u8>() as usize == addr)
+        {
+            objs.remove(i);
+        }
+        s.roots.push(o);
+    }
+    let refs = php_runtime::ref_roots::stash();
+    s.frozen = Some(Frozen { objs, refs });
+    s.pending = 1;
+}
+
+/// Puts frozen roots back into the buffers (ahead of the newer ones).
+fn thaw(s: &mut GcState) {
+    if let Some(f) = s.frozen.take() {
+        s.roots.restore_weak(f.objs);
+        php_runtime::ref_roots::unstash(f.refs);
     }
 }
 
@@ -457,8 +562,13 @@ fn adjust_threshold(s: &mut GcState, count: i64) {
 /// Number of buffered possible roots (`num_roots`).
 #[must_use]
 pub fn num_roots() -> usize {
-    let (mine, providers) =
-        with_state(|s| (s.roots.live_len(), s.providers.clone())).unwrap_or_default();
+    let (mine, providers) = with_state(|s| {
+        (
+            s.roots.live_len() + s.frozen.as_ref().map_or(0, Frozen::len),
+            s.providers.clone(),
+        )
+    })
+    .unwrap_or_default();
     mine + providers.iter().map(|p| (p.len)()).sum::<usize>()
 }
 
@@ -564,11 +674,35 @@ impl Vm {
     /// Propagates exceptions thrown by destructors of garbage objects.
     pub fn gc_safe_point(&mut self) -> VmResult<()> {
         WANT_RUN.with(|w| w.set(false));
-        let due = with_state(|s| std::mem::take(&mut s.due) && !s.active && s.enabled);
-        if due != Some(true) {
+        // The run looks at the frozen roots only: those buffered since
+        // (`late`) are set aside until it is over.
+        let due = with_state(|s| {
+            let due = std::mem::take(&mut s.due) && !s.active && s.enabled;
+            if !due {
+                thaw(s);
+                return None;
+            }
+            let Some(f) = s.frozen.take() else {
+                return Some(Frozen::default());
+            };
+            let late = Frozen {
+                objs: s.roots.take_weak(),
+                refs: php_runtime::ref_roots::stash(),
+            };
+            s.roots.restore_weak(f.objs);
+            php_runtime::ref_roots::unstash(f.refs);
+            Some(late)
+        });
+        let Some(Some(late)) = due else {
             return Ok(());
-        }
-        let count = self.gc_run(collect::Mode::Auto)?;
+        };
+        let r = self.gc_run(collect::Mode::Auto);
+        with_state(|s| {
+            s.roots.restore_weak(late.objs);
+            php_runtime::ref_roots::unstash(late.refs);
+            s.pending = s.roots.live_len() + php_runtime::ref_roots::len();
+        });
+        let count = r?;
         with_state(|s| adjust_threshold(s, count));
         Ok(())
     }
@@ -580,7 +714,10 @@ impl Vm {
     /// Propagates exceptions thrown by destructors of garbage objects.
     pub fn gc_collect_cycles(&mut self) -> VmResult<i64> {
         WANT_RUN.with(|w| w.set(false));
-        with_state(|s| s.due = false);
+        with_state(|s| {
+            s.due = false;
+            thaw(s);
+        });
         self.gc_run(collect::Mode::Full)
     }
 }
