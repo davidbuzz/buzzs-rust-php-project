@@ -815,8 +815,14 @@ impl Vm {
                         self.set_tmp(*dst, c);
                         Flow::Next
                     }
-                    Op::CallableConvert { dst } => {
+                    Op::CallableConvert { dst, const_expr } => {
                         let call = self.frame_mut().calls.pop().expect("pending call");
+                        if *const_expr && call.magic_name.is_some() {
+                            return Err(self.make_throw(
+                                "Error",
+                                "Creating a callable for the magic __callStatic() method is not supported in constant expressions",
+                            ));
+                        }
                         let c = self.make_closure_from_call(call)?;
                         self.set_tmp(*dst, c);
                         Flow::Next

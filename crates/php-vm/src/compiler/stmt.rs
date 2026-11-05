@@ -351,7 +351,10 @@ impl Compiler {
                     let full = self.ns_prefixed_pub(&c.name.name);
                     let name = self.lit_str(&full);
                     self.check_const_expr(&c.value, true)?;
-                    let val = self.compile_expr(&c.value)?;
+                    self.in_global_const = true;
+                    let val = self.compile_expr(&c.value);
+                    self.in_global_const = false;
+                    let val = val?;
                     self.emit(Op::DeclareConst { name, val, attrs });
                 }
             }

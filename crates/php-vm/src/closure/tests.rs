@@ -261,3 +261,22 @@ echo strrev('x'), PHP_EOL;
 ");
     assert_eq!(out, "badcfe\nbadcfe\nns\nns\n");
 }
+
+/// Constant-expression first-class callables: compile-time name checks
+/// and the `__callStatic` runtime error (zend_compile_const_expr_fcc(),
+/// zend_ast_evaluate_inner(); first_class_callable/constexpr/error_*).
+#[test]
+fn const_expr_callable_errors() {
+    assert_eq!(
+        run("<?php\nclass Foo {\n    public const C = static::m(...);\n}\n"),
+        "\nFatal error: \"static\" is not allowed in compile-time constants in t.php on line 3\n"
+    );
+    assert_eq!(
+        run("<?php\n\nconst C = (0)(...);\n"),
+        "\nFatal error: Illegal function name in t.php on line 3\n"
+    );
+    assert_eq!(
+        run("<?php\nclass Foo { public static function __callStatic($n, $a) {} }\nconst C = Foo::m(...);\n"),
+        "\nFatal error: Uncaught Error: Creating a callable for the magic __callStatic() method is not supported in constant expressions in t.php:3\nStack trace:\n#0 {main}\n  thrown in t.php on line 3\n"
+    );
+}

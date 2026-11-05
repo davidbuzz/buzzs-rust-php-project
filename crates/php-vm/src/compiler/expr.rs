@@ -1615,7 +1615,9 @@ impl Compiler {
         if args.is_first_class_callable() {
             let t = self.tmp();
             self.f().line = line;
-            self.emit(Op::CallableConvert { dst: t });
+            let const_expr = self.in_const_expr()
+                || (self.in_global_const && self.fref().kind == FnKind::Main);
+            self.emit(Op::CallableConvert { dst: t, const_expr });
             return Ok(Some(Operand::Tmp(t)));
         }
         if args.is_partial() {

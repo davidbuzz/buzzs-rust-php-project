@@ -371,7 +371,12 @@ pub enum Op {
     /// Performs the pending call.
     DoCall { dst: Option<u32> },
     /// Turns the pending call into a closure (`f(...)`).
-    CallableConvert { dst: u32 },
+    CallableConvert {
+        dst: u32,
+        /// Compiled in a constant expression, where a `__callStatic`
+        /// trampoline is an `Error` (zend_ast_evaluate_inner()).
+        const_expr: bool,
+    },
     /// `ZEND_SEND_PLACEHOLDER` (`?` or `name: ?`) of a partial application.
     SendPlaceholder { name: Option<u32> },
     /// `ZEND_CALLABLE_CONVERT_PARTIAL`: turns the pending call into a
