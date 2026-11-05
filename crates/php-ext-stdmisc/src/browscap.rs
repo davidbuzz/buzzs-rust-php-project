@@ -87,12 +87,9 @@ fn load_table(vm: &mut Vm, file: &[u8]) -> VmResult<Option<Rc<Browscap>>> {
 
 /// `$_SERVER['HTTP_USER_AGENT']`.
 fn server_user_agent(vm: &Vm) -> Option<Value> {
-    let server = {
-        let g = vm.globals.borrow();
-        let i = g.find(b"_SERVER")?;
-        g.slots.get(i as usize)?.as_ref()?.deref()
-    };
-    match server {
+    let mut g = vm.globals.borrow_mut();
+    let i = g.find(b"_SERVER")?;
+    match g.slots.get(i as usize)?.as_ref()?.deref() {
         Value::Array(a) => a.get_str(b"HTTP_USER_AGENT").map(Value::deref),
         _ => None,
     }
