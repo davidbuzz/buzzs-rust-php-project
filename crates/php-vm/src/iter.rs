@@ -339,6 +339,9 @@ impl Vm {
             }
             ForeachIter::ArrayRef { r, id } => {
                 let id = *id;
+                // `ZEND_FE_FETCH_RW`: the iterated variable may have been
+                // overwritten by the loop body with a non-array.
+                let mut not_array = None;
                 let item = {
                     let mut b = r.borrow_mut();
                     match &mut *b {
@@ -356,9 +359,19 @@ impl Vm {
                                 None => None,
                             }
                         }
-                        _ => None,
+                        Value::Object(_) => None,
+                        other => {
+                            not_array = Some(other.type_name());
+                            None
+                        }
                     }
                 };
+                if let Some(ty) = not_array {
+                    self.warning(&format!(
+                        "foreach() argument must be of type array|object, {ty} given"
+                    ))?;
+                    return Ok(false);
+                }
                 match item {
                     Some((k, rf)) => {
                         self.set_tmp(val, Value::Reference(rf));
