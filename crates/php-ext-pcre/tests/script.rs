@@ -99,6 +99,29 @@ fn callbacks_reenter_and_count() {
 }
 
 #[test]
+fn callback_backtraces_keep_arguments_through_native_reentry_and_unwind() {
+    let out = run(
+        r#"foreach ([false, true] as $fail) {
+            try {
+                $result = preg_replace_callback('/./', function($m) use ($fail) {
+                    $trace = debug_backtrace();
+                    echo $trace[1]['function'], ':', $trace[0]['args'][0][0], "\n";
+                    strlen(123);
+                    if ($fail) { throw new Exception('stop'); }
+                    return strtoupper($m[0]);
+                }, 'abc');
+                echo $result, "\n";
+            } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+        }
+        echo preg_replace('/b/', '-', 'abc'), "\n";"#,
+    );
+    assert_eq!(
+        out,
+        "preg_replace_callback:a\npreg_replace_callback:b\npreg_replace_callback:c\nABC\npreg_replace_callback:a\nstop\na-c\n"
+    );
+}
+
+#[test]
 fn callback_array_keys_must_be_patterns() {
     let out = run(
         r"try { preg_replace_callback_array([fn() => 'x'], 'a'); } catch (TypeError $e) { echo $e->getMessage(); }",

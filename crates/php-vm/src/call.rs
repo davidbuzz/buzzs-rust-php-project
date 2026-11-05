@@ -70,12 +70,24 @@ impl Vm {
         }
     }
 
-    /// Returns an argument buffer to the pool.
+    /// Returns an argument buffer to the pool, keeping larger capacities when
+    /// small Rust-origin callback buffers compete with prewarmed buffers.
     #[inline]
     fn put_arg_vec(&mut self, mut v: Vec<Option<Value>>) {
-        if v.capacity() > 0 && v.capacity() <= 256 && self.call_bufs.args.len() < 4 {
+        if v.capacity() > 0 && v.capacity() <= 256 {
             v.clear();
-            self.call_bufs.args.push(v);
+            if self.call_bufs.args.len() < 4 {
+                self.call_bufs.args.push(v);
+            } else if let Some(smallest) = self
+                .call_bufs
+                .args
+                .iter_mut()
+                .min_by_key(|buffer| buffer.capacity())
+            {
+                if smallest.capacity() < v.capacity() {
+                    *smallest = v;
+                }
+            }
         }
     }
 
@@ -1251,7 +1263,7 @@ impl Vm {
         // make `values` differ from the copy taken when the frame was pushed.
         if call.has_named {
             if let Some(f) = self.frames.get_mut(depth - 1) {
-                f.args = frame_args(&values[..nframe_args]);
+                frame_args(&values[..nframe_args], &mut f.args);
             }
         }
         // Array variadics use Z_PARAM_VARIADIC, not Z_PARAM_VARIADIC_WITH_NAMED.
@@ -1358,7 +1370,7 @@ impl Vm {
         }
         if coerced {
             if let Some(f) = self.frames.get_mut(depth - 1) {
-                f.args = frame_args(&values[..nframe_args]);
+                frame_args(&values[..nframe_args], &mut f.args);
             }
         }
         let mut args = Args {
@@ -1398,9 +1410,7 @@ impl Vm {
                 };
             }
         }
-        if self.frames.len() >= depth {
-            self.frames.truncate(depth - 1);
-        }
+        self.pop_frames_to(depth);
         // `zend_object_store_ctor_failed` for native constructors.
         if r.is_err() {
             if let Some(t) = &ctor_this {
@@ -1438,7 +1448,9 @@ impl Vm {
     /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
     fn pop_frames_to(&mut self, depth: usize) {
         if self.frames.len() >= depth {
+            let args = std::mem::take(&mut self.frames[depth - 1].args);
             self.frames.truncate(depth - 1);
+            self.put_arg_vec(args);
         }
     }
 
@@ -2001,10 +2013,88 @@ fn accepts_without_coercion(m: u32, v: &Value) -> bool {
 
 /// The backtrace copy of a builtin's arguments (a plain loop: the iterator
 /// chain this replaces is a dozen non-inlined calls per element in debug).
-fn frame_args(values: &[Value]) -> Vec<Option<Value>> {
-    let mut out = Vec::with_capacity(values.len());
+fn frame_args(values: &[Value], out: &mut Vec<Option<Value>>) {
+    out.clear();
     for v in values {
         out.push(Some(v.clone()));
     }
-    out
+}
+
+#[cfg(test)]
+mod buffer_tests {
+    use super::*;
+    use crate::VmOptions;
+
+    fn capacities(vm: &Vm) -> Vec<usize> {
+        let mut capacities: Vec<_> = vm.call_bufs.args.iter().map(Vec::capacity).collect();
+        capacities.sort_unstable();
+        capacities
+    }
+
+    #[test]
+    fn builtin_backtrace_buffers_survive_coercion_named_args_and_callbacks() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        let before = capacities(&vm);
+        let status = vm.run_script(
+            br#"<?php
+strlen("abc");
+strlen(123);
+strlen(string: "abc");
+set_error_handler(function() { debug_backtrace(); });
+trigger_error("callback");
+restore_error_handler();
+"#,
+            "buffers.php",
+        );
+        assert_eq!(status, 0);
+        assert_eq!(capacities(&vm), before);
+        assert!(vm.call_bufs.args.iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn builtin_error_cleanup_recycles_backtrace_buffers_and_drops_values() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        let before = capacities(&vm);
+        let held = ZStr::from("backtrace argument");
+        let mut frame = Frame::with_vars(
+            vm.empty_code.clone(),
+            FrameKind::Builtin,
+            vm.empty_vars.clone(),
+            None,
+        );
+        frame.args = vm.call_bufs.args.pop().expect("prewarmed buffer");
+        frame.args.push(Some(Value::Str(held.clone())));
+        vm.frames.push(frame);
+        let depth = vm.frames.len();
+        vm.pop_frames_to(depth);
+        assert_eq!(capacities(&vm), before);
+        assert_eq!(held.refcount(), 1);
+        assert!(vm.frames.is_empty());
+    }
+
+    #[test]
+    fn smaller_callback_buffers_do_not_displace_prewarmed_capacity() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        let before = capacities(&vm);
+        let mut borrowed = vm.call_bufs.args.pop().expect("prewarmed buffer");
+        let held = ZStr::from("temporary argument");
+        borrowed.push(Some(Value::Str(held.clone())));
+        vm.put_arg_vec(vec![Some(Value::Str(held.clone()))]);
+        vm.put_arg_vec(borrowed);
+        assert_eq!(capacities(&vm), before);
+        assert_eq!(held.refcount(), 1);
+        assert!(vm.call_bufs.args.iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn backtrace_refresh_preserves_capacity_and_releases_old_values() {
+        let held = ZStr::from("old argument");
+        let mut args = Vec::with_capacity(8);
+        args.push(Some(Value::Str(held.clone())));
+        let capacity = args.capacity();
+        frame_args(&[Value::Int(123)], &mut args);
+        assert_eq!(args.capacity(), capacity);
+        assert_eq!(held.refcount(), 1);
+        assert!(matches!(args.as_slice(), [Some(Value::Int(123))]));
+    }
 }
