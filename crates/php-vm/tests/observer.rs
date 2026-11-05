@@ -254,3 +254,27 @@ fn fiber_switches_are_notified_before_each_switch() {
         ]
     );
 }
+
+#[test]
+fn exception_to_string_calls_get_trace_as_string() {
+    // ext/zend_test/tests/observer_exception_01.phpt
+    let log = observe(
+        r"<?php
+$s = (string) new Exception('x');
+",
+        true,
+    );
+    let internal: Vec<_> = log
+        .iter()
+        .filter(|e| e.starts_with("enter"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        internal,
+        [
+            "enter __construct",
+            "enter __toString",
+            "enter getTraceAsString"
+        ]
+    );
+}

@@ -886,6 +886,23 @@ fn trace_as_string(vm: &mut Vm, o: &Obj) -> VmResult<String> {
     })
 }
 
+/// `Exception::__toString` calls `getTraceAsString()` through
+/// `zend_call_function`: a real call, which observers see.
+#[cold]
+fn observed_trace_as_string(vm: &mut Vm, o: &Obj) -> VmResult<String> {
+    let m = object::class_of(o)
+        .methods
+        .get(&ZStr::from("gettraceasstring"))
+        .cloned();
+    let Some(m) = m else {
+        return trace_as_string(vm, o);
+    };
+    Ok(match vm.call_method(o, &m, Vec::new())? {
+        Value::Str(s) => s.to_string_lossy(),
+        _ => String::new(),
+    })
+}
+
 fn get_trace_as_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = trace_as_string(vm, &a.this_obj())?;
     Ok(Value::Str(ZStr::from(s)))
@@ -906,7 +923,11 @@ fn exc_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let file = vm.to_zstr(&file_v)?;
         let line_v = read_prop(vm, &e, "line")?;
         let line = vm.to_long(&line_v)?;
-        let trace = trace_as_string(vm, &e)?;
+        let trace = if vm.observer.enabled {
+            observed_trace_as_string(vm, &e)?
+        } else {
+            trace_as_string(vm, &e)?
+        };
         let trace = if trace.is_empty() {
             "#0 {main}\n".to_string()
         } else {
