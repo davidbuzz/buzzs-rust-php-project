@@ -184,3 +184,24 @@ f();
     let out = run(src);
     assert!(out.starts_with("{closure}@8\ninclude@8\nf@9\n"), "{out}");
 }
+
+/// `zend_user_exception_handler`: a handler that installs another keeps it
+/// current, and an exception it throws goes to that handler (GH-10695,
+/// GH-13446).
+#[test]
+fn exception_handler_installed_by_the_handler_stays_and_catches_its_throw() {
+    let src = r#"<?php
+function h1($e) {
+    echo "h1: ", $e->getMessage(), "\n";
+    set_exception_handler('h2');
+    throw new Exception("from h1");
+}
+function h2($e) { echo "h2: ", $e->getMessage(), "\n"; }
+set_exception_handler('h1');
+register_shutdown_function(function () {
+    echo set_exception_handler(null), "\n";
+});
+throw new Exception("main");
+"#;
+    assert_eq!(run(src), "h1: main\nh2: from h1\nh2\n");
+}

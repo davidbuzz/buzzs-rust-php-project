@@ -377,21 +377,25 @@ impl Vm {
 
     /// Handles an exception that escaped all frames: the user exception
     /// handler or the "Uncaught" fatal error.
+    ///
+    /// `zend_user_exception_handler`: the handler is pushed and none is
+    /// current while it runs; afterwards it becomes current again unless
+    /// it installed another one (or restored an older one). An exception
+    /// the handler throws goes to the handler current at that point
+    /// (`zend_throw_exception_internal` without a frame), else is fatal.
     pub(crate) fn uncaught_exception(&mut self, e: Obj) -> Result<(), Throw> {
         if let Some(h) = self.exception_handlers.last().cloned() {
             if !h.is_null() {
-                // The handler is removed while it runs.
-                self.exception_handlers.pop();
-                let r = self.call_value(&h, vec![Value::Object(e)]);
-                self.exception_handlers.push(h);
-                return match r {
+                self.exception_handlers.push(Value::Null);
+                let r = match self.call_value(&h, vec![Value::Object(e)]) {
                     Ok(_) => Ok(()),
-                    Err(Throw::Exception(e2)) => {
-                        self.report_uncaught(&e2);
-                        Err(Throw::Fatal)
-                    }
+                    Err(Throw::Exception(e2)) => self.uncaught_exception(e2),
                     Err(t) => Err(t),
                 };
+                if self.exception_handlers.last().is_some_and(Value::is_null) {
+                    self.exception_handlers.pop();
+                }
+                return r;
             }
         }
         self.report_uncaught(&e);
