@@ -164,9 +164,19 @@ fn source_return_buffers_obey_the_output_handler_lock() {
         ("highlight_file", "highlight_file(__FILE__, true)"),
         ("highlight_string", "highlight_string(__FILE__, true)"),
     ] {
-        let out = run(&format!(
-            "ob_start(function($s) {{\n{call};\nreturn $s;\n}});\necho 'discarded';\nob_end_flush();"
-        ));
+        // As run-tests.php runs the .phpt tests: no fatal error backtrace.
+        let opts = VmOptions {
+            ini: vec![("fatal_error_backtraces".to_string(), "0".to_string())],
+        };
+        let ext = php_ext_stdmisc::StdMisc;
+        let exts: [&dyn Extension; 1] = [&ext];
+        let out = run_with(
+            &opts,
+            &exts,
+            &format!(
+                "ob_start(function($s) {{\n{call};\nreturn $s;\n}});\necho 'discarded';\nob_end_flush();"
+            ),
+        );
         assert_eq!(
             out,
             format!(

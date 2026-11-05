@@ -240,6 +240,7 @@ impl Vm {
         // A message `php_verror` composed as HTML applies to this report
         // only, not to errors raised by the user handler below.
         let html_ready = std::mem::take(&mut self.error_msg_html_ready);
+        self.note_error_backtrace(level);
         // User error handler.
         let handleable = level
             & (level::ERROR
@@ -304,13 +305,51 @@ impl Vm {
         Ok(())
     }
 
+    /// `zend_error_impl`: every reported error clears
+    /// `EG(last_fatal_error_backtrace)`; a fatal one (`E_FATAL_ERRORS`)
+    /// records the stack for `php_error_cb` and `error_get_last()` when
+    /// `fatal_error_backtraces` is on.
+    fn note_error_backtrace(&mut self, level: i64) {
+        if is_fatal(level) {
+            self.record_fatal_backtrace();
+        } else if self.last_fatal_error_backtrace.is_some() {
+            self.last_fatal_error_backtrace = None;
+        }
+    }
+
+    /// `zend_fetch_debug_backtrace(&EG(last_fatal_error_backtrace), 0,
+    /// EG(exception_ignore_args) ? DEBUG_BACKTRACE_IGNORE_ARGS : 0, 0)`.
+    #[cold]
+    #[inline(never)]
+    fn record_fatal_backtrace(&mut self) {
+        self.last_fatal_error_backtrace = None;
+        if self.ini.get_bool("fatal_error_backtraces") {
+            let ignore_args = self.ini.get_bool("zend.exception_ignore_args");
+            self.last_fatal_error_backtrace = Some(self.backtrace(false, ignore_args, false, 0));
+        }
+    }
+
+    /// The `"\nStack trace:\n#0 ...\n#N {main}"` suffix `php_error_cb`
+    /// appends to an error while a fatal backtrace is recorded
+    /// (`zend_trace_to_string(..., include_main = true)`), else empty.
+    fn fatal_backtrace_suffix(&mut self) -> String {
+        match self.last_fatal_error_backtrace.clone() {
+            Some(trace) => {
+                let s = self.trace_to_string(&trace, true);
+                format!("\nStack trace:\n{s}")
+            }
+            None => String::new(),
+        }
+    }
+
     /// Displays/logs an error according to the ini settings.
     pub(crate) fn display_error(&mut self, level: i64, msg: &[u8], file: &ZStr, line: u32) {
         let lbl = label(level);
         let file_s = file.to_string_lossy();
+        let trace = self.fatal_backtrace_suffix();
         if self.ini.get_bool("log_errors") {
             let log = format!(
-                "PHP {lbl}:  {} in {file_s} on line {line}",
+                "PHP {lbl}:  {} in {file_s} on line {line}{trace}",
                 String::from_utf8_lossy(msg)
             );
             self.log_error(&log);
@@ -360,8 +399,14 @@ impl Vm {
             } else {
                 out.extend_from_slice(&self.error_html_escape(msg));
             }
+            // The `E_ERROR`/`E_PARSE` format has no stack trace.
+            let trace = if matches!(level, level::ERROR | level::PARSE) {
+                ""
+            } else {
+                trace.as_str()
+            };
             out.extend_from_slice(
-                format!(" in <b>{file_s}</b> on line <b>{line}</b><br />\n").as_bytes(),
+                format!(" in <b>{file_s}</b> on line <b>{line}</b><br />{trace}\n").as_bytes(),
             );
             out.extend_from_slice(&append);
             self.echo(&out);
@@ -371,14 +416,14 @@ impl Vm {
             self.flush_stdout();
             let mut s = format!("{lbl}: ").into_bytes();
             s.extend_from_slice(msg);
-            s.extend_from_slice(format!(" in {file_s} on line {line}\n").as_bytes());
+            s.extend_from_slice(format!(" in {file_s} on line {line}{trace}\n").as_bytes());
             let _ = std::io::Write::write_all(&mut std::io::stderr(), &s);
             return;
         }
         let mut out = prepend;
         out.extend_from_slice(format!("\n{lbl}: ").as_bytes());
         out.extend_from_slice(msg);
-        out.extend_from_slice(format!(" in {file_s} on line {line}\n").as_bytes());
+        out.extend_from_slice(format!(" in {file_s} on line {line}{trace}\n").as_bytes());
         out.extend_from_slice(&append);
         self.echo(&out);
     }
@@ -427,6 +472,7 @@ impl Vm {
     }
 
     fn report_fatal_bytes(&mut self, msg: &[u8], file: &ZStr, line: u32) {
+        self.note_error_backtrace(level::ERROR);
         self.display_fatal_bytes(msg, file, line);
         object::set_destructors_enabled(false);
     }
@@ -448,13 +494,21 @@ impl Vm {
         self.exit_status = 255;
     }
 
-    /// Reports a compile error (`E_COMPILE_ERROR`).
+    /// Reports a compile error (`E_COMPILE_ERROR`, or `E_PARSE`) raised
+    /// with `zend_error_noreturn()`.
     pub(crate) fn report_compile_error(&mut self, msg: &str, file: &ZStr, line: u32, parse: bool) {
         let lv = if parse {
             level::PARSE
         } else {
             level::COMPILE_ERROR
         };
+        self.note_error_backtrace(lv);
+        self.show_compile_error(lv, msg, file, line);
+    }
+
+    /// Records and displays a compile error and bails out (destructors
+    /// are disabled), without touching the fatal backtrace.
+    fn show_compile_error(&mut self, lv: i64, msg: &str, file: &ZStr, line: u32) {
         self.last_error = Some(LastError {
             level: lv,
             message: msg.as_bytes().to_vec(),
@@ -497,6 +551,9 @@ impl Vm {
 
     /// Prints "Fatal error: Uncaught ...".
     pub(crate) fn report_uncaught(&mut self, e: &Obj) {
+        // `zend_exception_error`: an uncaught exception is reported
+        // without a fatal backtrace (its own trace is in the message).
+        self.last_fatal_error_backtrace = None;
         let cls = object::class_of(e).clone();
         if cls.lc_name.as_bytes() == b"parseerror" || cls.lc_name.as_bytes() == b"compileerror" {
             let msg = self.exc_prop(e, "message");
@@ -507,7 +564,12 @@ impl Vm {
             let line = u32::try_from(line.as_int().unwrap_or(0)).unwrap_or(0);
             // Reported with `E_DONT_BAIL` as well: the destructors still run.
             let enabled = object::destructors_enabled();
-            self.report_compile_error(&msg, &file, line, cls.lc_name.as_bytes() == b"parseerror");
+            let lv = if cls.lc_name.as_bytes() == b"parseerror" {
+                level::PARSE
+            } else {
+                level::COMPILE_ERROR
+            };
+            self.show_compile_error(lv, &msg, &file, line);
             object::set_destructors_enabled(enabled);
             return;
         }

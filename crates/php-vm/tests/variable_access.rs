@@ -179,7 +179,7 @@ fn writing_through_special_builtin_result_is_a_compile_error() {
         run(r#"<?php
 strlen("foo")[0] ??= 123;
 "#),
-        "\nFatal error: Cannot use result of built-in function in write context in t.php on line 2\n"
+        "\nFatal error: Cannot use result of built-in function in write context in t.php on line 2\nStack trace:\n#0 {main}\n"
     );
 }
 

@@ -1030,7 +1030,7 @@ fn promoted_property_cannot_be_callable() {
     let out = run("<?php\nclass T {\n    public function __construct(\n        public ?callable $c\n    ) {}\n}\n");
     assert_eq!(
         out,
-        "\nFatal error: Property T::$c cannot have type ?callable in t.php on line 4\n"
+        "\nFatal error: Property T::$c cannot have type ?callable in t.php on line 4\nStack trace:\n#0 {main}\n"
     );
 }
 

@@ -19,7 +19,11 @@ impl Write for Sink {
 
 fn run(source: &str) -> (i32, Vec<u8>) {
     let sink = Sink::default();
-    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    // As run-tests.php runs the .phpt tests these port.
+    let options = VmOptions {
+        ini: vec![("fatal_error_backtraces".to_string(), "0".to_string())],
+    };
+    let mut vm = Vm::new(&options, Box::new(sink.clone()));
     let status = vm.run_script(source.as_bytes(), "test.php");
     drop(vm);
     let output = sink.0.borrow().clone();
@@ -91,4 +95,22 @@ fn destructors_run_in_a_new_vm_after_an_earlier_request_on_the_thread() {
         run("<?php class A { function __destruct() { echo 'd'; } } new A; echo '|';");
     assert_eq!(status, 0);
     assert_eq!(output, b"d|");
+}
+
+/// gh10695_6: a handler that throws while the buffers are flushed at
+/// shutdown hands the exception to the user exception handler; its output
+/// passes through the failed handler, and no "Producing output"
+/// deprecation follows because the call threw (`retval` is UNDEF).
+#[test]
+fn gh10695_6_shutdown_handler_exception_has_no_output_deprecation() {
+    let (_status, output) = run(r#"<?php
+set_exception_handler(function (\Throwable $exception) {
+    echo 'Caught: ' . $exception->getMessage() . "\n";
+});
+
+ob_start(function () {
+    throw new \Exception('ob_start');
+});
+"#);
+    assert_eq!(output, b"Caught: ob_start\n");
 }

@@ -1073,11 +1073,19 @@ fn error_get_last(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         ArrayKey::Str(ZStr::from("line")),
         Value::Int(i64::from(e.line)),
     );
+    // `EG(last_fatal_error_backtrace)` (`fatal_error_backtraces`).
+    if let Some(trace) = &vm.last_fatal_error_backtrace {
+        t.insert(
+            ArrayKey::Str(ZStr::from("trace")),
+            Value::Array(trace.clone()),
+        );
+    }
     Ok(Value::Array(ZArray::from_table(t)))
 }
 
 fn error_clear_last(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     vm.last_error = None;
+    vm.last_fatal_error_backtrace = None;
     Ok(Value::Null)
 }
 

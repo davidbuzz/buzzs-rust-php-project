@@ -662,8 +662,14 @@ pub struct Vm {
     pub shutdown_functions: Vec<(Value, Vec<Value>)>,
     /// The last error.
     pub last_error: Option<LastError>,
+    /// `EG(last_fatal_error_backtrace)`: the stack recorded for the last
+    /// fatal error under `fatal_error_backtraces` (cleared by every error).
+    pub last_fatal_error_backtrace: Option<php_runtime::ZArray>,
     /// Exceptions/bailouts raised inside runtime callbacks.
     pub pending_throw: Option<Throw>,
+    /// The last user output handler call threw (`retval` UNDEF), even if
+    /// the user exception handler took the exception at shutdown.
+    pub(crate) output_handler_threw: bool,
     /// The main script path.
     pub script_path: ZStr,
     /// Command line arguments.

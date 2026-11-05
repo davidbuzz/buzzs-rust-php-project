@@ -461,7 +461,7 @@ echo "unreachable\n";
     assert_eq!(error.line, 4);
     assert_eq!(
         run(src),
-        "\nDeprecated: foo(): Implicitly marking parameter $iterable as nullable is deprecated, the explicit nullable type must be used instead in t.php on line 2\n\nFatal error: Cannot use int as default value for parameter $iterable of type Traversable|array in t.php on line 4\n"
+        "\nDeprecated: foo(): Implicitly marking parameter $iterable as nullable is deprecated, the explicit nullable type must be used instead in t.php on line 2\n\nFatal error: Cannot use int as default value for parameter $iterable of type Traversable|array in t.php on line 4\nStack trace:\n#0 {main}\n"
     );
 }
 

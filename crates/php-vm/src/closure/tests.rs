@@ -205,7 +205,7 @@ fn nullsafe_closure_creation_is_compile_error() {
     ] {
         assert_eq!(
             run(src),
-            "\nFatal error: Cannot combine nullsafe operator with Closure creation in t.php on line 2\n"
+            "\nFatal error: Cannot combine nullsafe operator with Closure creation in t.php on line 2\nStack trace:\n#0 {main}\n"
         );
     }
     // A nullsafe access applied to the conversion's result is fine.
@@ -219,15 +219,15 @@ fn attribute_closure_error_uses_declaration_line() {
     let msg = "\nFatal error: Cannot create Closure as attribute argument in t.php on line ";
     assert_eq!(
         run("<?php\n#[Attribute(...)]\nclass Foo {\n\n}\n"),
-        format!("{msg}3\n")
+        format!("{msg}3\nStack trace:\n#0 {{main}}\n")
     );
     assert_eq!(
         run("<?php\n#[Attribute(...)]\n\nfunction f() {\n}\n"),
-        format!("{msg}4\n")
+        format!("{msg}4\nStack trace:\n#0 {{main}}\n")
     );
     assert_eq!(
         run("<?php\nfunction g(\n#[A(...)]\n\n$x) {}\n"),
-        format!("{msg}2\n")
+        format!("{msg}2\nStack trace:\n#0 {{main}}\n")
     );
 }
 
@@ -281,11 +281,11 @@ echo strrev('x'), PHP_EOL;
 fn const_expr_callable_errors() {
     assert_eq!(
         run("<?php\nclass Foo {\n    public const C = static::m(...);\n}\n"),
-        "\nFatal error: \"static\" is not allowed in compile-time constants in t.php on line 3\n"
+        "\nFatal error: \"static\" is not allowed in compile-time constants in t.php on line 3\nStack trace:\n#0 {main}\n"
     );
     assert_eq!(
         run("<?php\n\nconst C = (0)(...);\n"),
-        "\nFatal error: Illegal function name in t.php on line 3\n"
+        "\nFatal error: Illegal function name in t.php on line 3\nStack trace:\n#0 {main}\n"
     );
     assert_eq!(
         run("<?php\nclass Foo { public static function __callStatic($n, $a) {} }\nconst C = Foo::m(...);\n"),

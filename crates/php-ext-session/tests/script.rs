@@ -265,7 +265,8 @@ fn rewrite_var_start_inside_a_handler_bails_out() {
         });
         echo "discarded";
         ob_end_flush();"#,
-        &[],
+        // As run-tests.php runs the .phpt tests: no fatal error backtrace.
+        &[("fatal_error_backtraces", "0")],
     );
     assert_eq!(
         out,

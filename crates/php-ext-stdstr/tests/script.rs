@@ -399,7 +399,12 @@ fn deprecated_functions_and_strings() {
 #[test]
 fn memory_limit_is_enforced_for_large_results() {
     let out = run_with(
-        &[("display_errors", "1"), ("memory_limit", "8M")],
+        &[
+            ("display_errors", "1"),
+            ("memory_limit", "8M"),
+            // As run-tests.php runs the .phpt tests: no fatal error backtrace.
+            ("fatal_error_backtraces", "0"),
+        ],
         "echo strlen(str_repeat('ab', 1000)), \"\\n\"; str_pad('x', 100000000);",
     );
     assert_eq!(
