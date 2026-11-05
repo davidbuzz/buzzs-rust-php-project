@@ -276,7 +276,20 @@ fn get_dimension(
     }
     let (tgt, is_obj) = target(host, this, st)?;
     let Some(key) = hash_key(host, offset, is_obj)? else {
-        return Err(illegal_offset(this, offset, kind));
+        let e = illegal_offset(this, offset, kind);
+        if kind == DimKind::Unset {
+            // `spl_array_get_dimension_ptr` hands BP_VAR_UNSET the
+            // uninitialized zval with the exception pending, so the
+            // engine's write-fetch notice still follows.
+            host.diagnostic(
+                ErrorLevel::Notice,
+                &format!(
+                    "Indirect modification of overloaded element of {} has no effect",
+                    this.class_name()
+                ),
+            )?;
+        }
+        return Err(e);
     };
     let existing = table(host, &tgt)?.get(&key).cloned();
     match existing {
@@ -328,8 +341,23 @@ fn read_dimension_ex(
                 }
             }
             if user_get {
-                let off = offset.cloned().unwrap_or_default();
-                return host.call_method(this, "offsetGet", &[off]);
+                // `$o[]` in a write fetch passes an undefined offset.
+                let r = match offset {
+                    Some(off) => host.call_method(this, "offsetGet", std::slice::from_ref(off)),
+                    None => host.call_method_undef(this, "offsetGet"),
+                };
+                if r.is_err() && !matches!(kind, DimKind::Read | DimKind::Is) {
+                    // `rv` stays undefined: the engine gets the
+                    // uninitialized zval and notices the write fetch.
+                    host.diagnostic(
+                        ErrorLevel::Notice,
+                        &format!(
+                            "Indirect modification of overloaded element of {} has no effect",
+                            this.class_name()
+                        ),
+                    )?;
+                }
+                return r;
             }
         }
     }

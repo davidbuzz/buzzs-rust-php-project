@@ -69,6 +69,13 @@ pub trait SplHost: ArrayContext {
     /// routes the call back to [`crate::call_method`].
     fn call_method(&mut self, obj: &Obj, name: &str, args: &[Value]) -> RtResult<Value>;
 
+    /// [`SplHost::call_method`] with one undefined argument (`ZVAL_UNDEF`,
+    /// what `spl_array_read_dimension_ex` passes `offsetGet()` for `$o[]`):
+    /// a user method reports "Argument #1 (...) not passed".
+    fn call_method_undef(&mut self, obj: &Obj, name: &str) -> RtResult<Value> {
+        self.call_method(obj, name, &[Value::Null])
+    }
+
     /// Whether the method `name` (any case) of the object's class is
     /// implemented in user code, i.e. a user subclass overrides the SPL
     /// implementation (the `fptr_* != NULL` checks of the C code).

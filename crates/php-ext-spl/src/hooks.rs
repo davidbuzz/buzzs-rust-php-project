@@ -27,6 +27,7 @@ pub fn class_hooks() -> ClassHooks {
         has_property: Some(has_property),
         unset_property: Some(unset_property),
         read_dimension: Some(read_dimension),
+        read_dimension_is: true,
         write_dimension: Some(write_dimension),
         has_dimension: Some(has_dimension),
         unset_dimension: Some(unset_dimension),
@@ -289,18 +290,21 @@ fn read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
     if spl_state_of(o).is_none() {
         return Ok(None);
     }
-    // The VM checks `has_dimension` before an `Is` read itself, so that
-    // read is a plain one here (no second `offsetExists()` call).
+    // `read_dimension_is`: quiet reads arrive here directly (BP_VAR_IS).
     let (kind, offset) = match vm.dimension_context() {
-        DimensionCtx::Read | DimensionCtx::Is => (DimKind::Read, Some(k)),
+        DimensionCtx::Read => (DimKind::Read, Some(k)),
+        DimensionCtx::Is => (DimKind::Is, Some(k)),
         DimensionCtx::Write => (DimKind::Write, Some(k)),
         DimensionCtx::ReadWrite => (DimKind::ReadWrite, Some(k)),
         DimensionCtx::Unset => (DimKind::Unset, Some(k)),
         DimensionCtx::Append => (DimKind::Write, None),
+        DimensionCtx::AppendRw => (DimKind::ReadWrite, None),
     };
     let v = with_host(vm, |host| h::read_dimension(host, o, offset, kind))?;
     if let Some(v) = &v {
-        if kind != DimKind::Read && !matches!(v, Value::Reference(_) | Value::Object(_)) {
+        if !matches!(kind, DimKind::Read | DimKind::Is)
+            && !matches!(v, Value::Reference(_) | Value::Object(_))
+        {
             // `zend_fetch_dimension_address` on an object in a write
             // context.
             vm.raise(

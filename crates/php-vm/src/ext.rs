@@ -90,6 +90,9 @@ pub enum DimensionCtx {
     Unset,
     /// `$o[][..] = v`: the key passed is null.
     Append,
+    /// `$o[][..] .= v` (`BP_VAR_RW` without an offset): the key passed is
+    /// null.
+    AppendRw,
 }
 
 /// Why [`ClassHooks::read_property`] is being called (`BP_VAR_*` of
@@ -523,6 +526,10 @@ pub struct ClassHooks {
     pub unset_property: Option<fn(&mut Vm, &Obj, &ZStr) -> VmResult<bool>>,
     /// `read_dimension` (`$o[$k]`); `Ok(None)` falls back to `ArrayAccess`.
     pub read_dimension: Option<fn(&mut Vm, &Obj, &Value) -> VmResult<Option<Value>>>,
+    /// Whether `read_dimension` implements `BP_VAR_IS` itself
+    /// ([`DimensionCtx::Is`]: quiet for missing offsets). Otherwise quiet
+    /// reads (`??`, nested `isset()`) ask `has_dimension` first.
+    pub read_dimension_is: bool,
     /// `write_dimension` (`$o[$k] = $v`, key `None` for `$o[] = $v`).
     pub write_dimension: Option<fn(&mut Vm, &Obj, Option<&Value>, &Value) -> VmResult<bool>>,
     /// `has_dimension` (`isset`/`empty`, with `check_empty`).

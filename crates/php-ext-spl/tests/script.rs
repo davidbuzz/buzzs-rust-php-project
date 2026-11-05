@@ -678,3 +678,40 @@ echo "done\n";
 "#);
     assert_eq!(out, "a,b\nd\ndone\n");
 }
+
+/// Quiet reads reach `read_dimension` as `BP_VAR_IS` directly (no separate
+/// `has_dimension`), compound assignments read the container once, and an
+/// illegal offset in an unset fetch still gets the engine's notice.
+#[test]
+fn array_object_dimension_fetch_contexts() {
+    let out = run(r#"<?php error_reporting(E_ALL);
+$ao = new ArrayObject([1 => [1 => 5]]);
+var_dump(isset($ao[1.5][1.5]), $ao[1.5] ?? 'd', $ao[7] ?? 'd');
+$ao[1.5][1.5] += 1;
+var_dump($ao[1][1]);
+try { unset($ao[[]][0]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "\nDeprecated: Implicit conversion from float 1.5 to int loses precision in test.php on line 3\n\nDeprecated: Implicit conversion from float 1.5 to int loses precision in test.php on line 3\n\nDeprecated: Implicit conversion from float 1.5 to int loses precision in test.php on line 3\nbool(true)\narray(1) {\n  [1]=>\n  int(5)\n}\nstring(1) \"d\"\n\nDeprecated: Implicit conversion from float 1.5 to int loses precision in test.php on line 4\n\nDeprecated: Implicit conversion from float 1.5 to int loses precision in test.php on line 4\nint(6)\n\nNotice: Indirect modification of overloaded element of ArrayObject has no effect in test.php on line 6\nCannot unset offset of type array on ArrayObject\n"
+    );
+}
+
+/// `$o[]` in a write fetch: a user `offsetGet()` gets an undefined offset
+/// (`spl_array_read_dimension_ex`), and the engine still notices.
+#[test]
+fn array_object_append_fetch_passes_undefined_offset() {
+    let out = run(r#"<?php error_reporting(E_ALL);
+class B extends ArrayObject { public function offsetGet($offset): mixed { echo "get\n"; return 5; } }
+$b = new B;
+try { $b[][5] = 'v'; } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+try { $r = &$b[]; } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+$a = new ArrayObject;
+$r = &$a[];
+var_dump($r);
+"#);
+    assert_eq!(
+        out,
+        "\nNotice: Indirect modification of overloaded element of B has no effect in test.php on line 4\nB::offsetGet(): Argument #1 ($offset) not passed\n\nNotice: Indirect modification of overloaded element of B has no effect in test.php on line 5\nB::offsetGet(): Argument #1 ($offset) not passed\n\nNotice: Indirect modification of overloaded element of ArrayObject has no effect in test.php on line 7\nNULL\n"
+    );
+}

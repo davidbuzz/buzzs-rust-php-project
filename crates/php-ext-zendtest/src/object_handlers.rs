@@ -131,19 +131,31 @@ fn dim_common(o: &Obj, offset: Option<&Value>, which: usize) {
 }
 
 fn dim_read(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
-    let offset = (!matches!(k, Value::Null)
-        || vm.dimension_context() != php_vm::ext::DimensionCtx::Append)
-        .then_some(k);
+    use php_vm::ext::DimensionCtx;
+    let ctx = vm.dimension_context();
+    let appended = matches!(ctx, DimensionCtx::Append | DimensionCtx::AppendRw);
+    let offset = (!matches!(k, Value::Null) || !appended).then_some(k);
     dim_common(o, offset, READ);
     // BP_VAR_R / W / RW / IS / FUNC_ARG / UNSET.
-    let ty = match vm.dimension_context() {
-        php_vm::ext::DimensionCtx::Read => 0,
-        php_vm::ext::DimensionCtx::Write | php_vm::ext::DimensionCtx::Append => 1,
-        php_vm::ext::DimensionCtx::ReadWrite => 2,
-        php_vm::ext::DimensionCtx::Is => 3,
-        php_vm::ext::DimensionCtx::Unset => 5,
+    let ty = match ctx {
+        DimensionCtx::Read => 0,
+        DimensionCtx::Write | DimensionCtx::Append => 1,
+        DimensionCtx::ReadWrite | DimensionCtx::AppendRw => 2,
+        DimensionCtx::Is => 3,
+        DimensionCtx::Unset => 5,
     };
     set_slot(o, READ_TYPE, Value::Int(ty));
+    if matches!(ty, 1 | 2 | 5) {
+        // `zend_fetch_dimension_address`: a write-context fetch got a
+        // temporary (the VM leaves this notice to the handler).
+        vm.raise(
+            8,
+            &format!(
+                "Indirect modification of overloaded element of {} has no effect",
+                o.class_name().to_string_lossy()
+            ),
+        )?;
+    }
     Ok(Some(Value::Bool(true)))
 }
 
@@ -232,6 +244,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .prop("offset", acc::PUBLIC, Some("mixed"), None)
         .hooks(ClassHooks {
             read_dimension: Some(dim_read),
+            read_dimension_is: true,
             write_dimension: Some(dim_write),
             has_dimension: Some(dim_has),
             unset_dimension: Some(dim_unset),

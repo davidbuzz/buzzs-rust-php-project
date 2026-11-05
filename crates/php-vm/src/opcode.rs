@@ -213,6 +213,10 @@ pub enum ArgSrc {
     CallResult(Operand),
     /// A variable: passed by reference if the parameter is by-ref.
     Place(PlaceId),
+    /// A dimension or property of a temporary expression (`[0, 1][0]`):
+    /// by value only; a by-ref parameter throws "Cannot use temporary
+    /// expression in write context" (FETCH_DIM/OBJ_FUNC_ARG on a TMP).
+    TempPlace(PlaceId),
 }
 
 /// The kind of a `foreach` loop.

@@ -580,6 +580,11 @@ impl SplHost for VmHost<'_> {
         self.vm_rt(r)
     }
 
+    fn call_method_undef(&mut self, obj: &Obj, name: &str) -> RtResult<Value> {
+        let r = self.vm.call_method_with_undef(obj, name, vec![None]);
+        self.vm_rt(r)
+    }
+
     fn has_user_method(&mut self, obj: &Obj, name: &str) -> bool {
         is_user_method(class_of(obj), name)
     }
@@ -933,6 +938,9 @@ impl SplHost for BridgedHost {
     }
     fn call_method(&mut self, obj: &Obj, name: &str, args: &[Value]) -> RtResult<Value> {
         lent_rt(|h| h.call_method(obj, name, args))
+    }
+    fn call_method_undef(&mut self, obj: &Obj, name: &str) -> RtResult<Value> {
+        lent_rt(|h| h.call_method_undef(obj, name))
     }
     fn has_user_method(&mut self, obj: &Obj, name: &str) -> bool {
         is_user_method(class_of(obj), name)

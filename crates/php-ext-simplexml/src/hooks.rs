@@ -205,10 +205,10 @@ fn read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
     let mode = match ctx {
         DimensionCtx::Read | DimensionCtx::Unset | DimensionCtx::ReadWrite => FetchMode::Read,
         DimensionCtx::Is => FetchMode::IsSet,
-        DimensionCtx::Write | DimensionCtx::Append => FetchMode::Write,
+        DimensionCtx::Write | DimensionCtx::Append | DimensionCtx::AppendRw => FetchMode::Write,
     };
     let key = k.deref();
-    let offset = (ctx != DimensionCtx::Append).then_some(&key);
+    let offset = (!matches!(ctx, DimensionCtx::Append | DimensionCtx::AppendRw)).then_some(&key);
     let v = direct(vm, |h| Sxe::read_dimension(&st, h, offset, mode))?;
     if mode == FetchMode::Write && !matches!(v, Value::Object(_) | Value::Reference(_)) {
         // `zend_fetch_dimension_address` on an object in a write context.

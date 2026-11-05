@@ -17,6 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 /// A resolved place base.
+#[derive(Clone)]
 pub(crate) enum RBase {
     /// A variable slot.
     Var(Rc<RefCell<VarStore>>, usize),
@@ -49,6 +50,13 @@ pub(crate) enum WOp {
     /// Read the current value for a read-modify-write (creates missing
     /// elements with a warning).
     FetchRw,
+    /// `place op= v` (`ZEND_ASSIGN_DIM_OP` / `ZEND_ASSIGN_OBJ_OP`): walks
+    /// like [`WOp::FetchRw`] once, so offset diagnostics and object
+    /// handlers run a single time. Object handlers at the last segment
+    /// read, operate and write back themselves; a final slot inside a
+    /// container yields its current value (`Step::Done`) and is then
+    /// written by a silent second walk (see `Vm::finish_native`).
+    AssignOp(BinaryOp, Value),
     MakeRef,
     AssignRef(Value),
     Unset,
@@ -74,9 +82,6 @@ pub(crate) enum Step {
     /// An assignment through a typed reference, performed once the walk
     /// has released its borrows (`zend_assign_to_typed_ref`).
     TypedRefAssign(PhpRef, Value),
-    /// Need the value of a string offset write with a non-string value:
-    /// (string slot handled) — not used.
-    Nothing,
 }
 
 const E_WARNING: i64 = 2;
@@ -162,14 +167,16 @@ fn undefined_key_msg(k: &ArrayKey) -> String {
     }
 }
 
-/// String offset conversion (`zend_check_string_offset`).
-fn string_offset(dim: &Value, diags: &mut Diags, write: bool) -> Result<i64, WalkErr> {
+/// String offset conversion (`zend_check_string_offset`). `unset` is the
+/// `BP_VAR_UNSET` fetch type: no leading-numeric warning, and illegal
+/// offsets report "Cannot unset string offsets".
+fn string_offset(dim: &Value, diags: &mut Diags, unset: bool) -> Result<i64, WalkErr> {
     match dim {
         Value::Int(i) => Ok(*i),
         Value::Str(s) => {
             if let Some(n) = php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), true) {
                 if let php_runtime::numeric::Number::Int(i) = n.value {
-                    if n.trailing_data {
+                    if n.trailing_data && !unset {
                         diags.push((
                             E_WARNING,
                             format!("Illegal string offset \"{}\"", s.to_string_lossy()),
@@ -177,6 +184,9 @@ fn string_offset(dim: &Value, diags: &mut Diags, write: bool) -> Result<i64, Wal
                     }
                     return Ok(i);
                 }
+            }
+            if unset {
+                return Err(WalkErr::Error("Cannot unset string offsets".into()));
             }
             Err(WalkErr::TypeError(
                 "Cannot access offset of type string on string".to_string(),
@@ -193,12 +203,98 @@ fn string_offset(dim: &Value, diags: &mut Diags, write: bool) -> Result<i64, Wal
                 _ => 0,
             })
         }
-        Value::Reference(r) => string_offset(&r.get(), diags, write),
+        Value::Reference(r) => string_offset(&r.get(), diags, unset),
+        _ if unset => Err(WalkErr::Error("Cannot unset string offsets".into())),
         other => Err(WalkErr::TypeError(format!(
             "Cannot access offset of type {} on string",
             crate::typecheck::given_type(other)
         ))),
     }
+}
+
+/// String offset conversion of a quiet read (`zend_fetch_dimension_address_read`
+/// with `BP_VAR_IS`): casts are silent and a non-numeric string gives
+/// `None`, but a leading-numeric string still warns and an illegal offset
+/// type still throws.
+fn string_offset_is(dim: &Value, diags: &mut Diags) -> Result<Option<i64>, WalkErr> {
+    use php_runtime::numeric::Number;
+    match dim {
+        Value::Int(i) => Ok(Some(*i)),
+        Value::Str(s) => match php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), true) {
+            Some(n) => match n.value {
+                Number::Int(i) => {
+                    if n.trailing_data {
+                        diags.push((
+                            E_WARNING,
+                            format!("Illegal string offset \"{}\"", s.to_string_lossy()),
+                        ));
+                    }
+                    Ok(Some(i))
+                }
+                Number::Float(_) => Ok(None),
+            },
+            None => Ok(None),
+        },
+        Value::Float(d) => Ok(Some(php_runtime::convert::dval_to_lval_silent(*d))),
+        Value::Bool(b) => Ok(Some(i64::from(*b))),
+        Value::Null => Ok(Some(0)),
+        Value::Reference(r) => string_offset_is(&r.get(), diags),
+        other => Err(WalkErr::TypeError(format!(
+            "Cannot access offset of type {} on string",
+            crate::typecheck::given_type(other)
+        ))),
+    }
+}
+
+/// A string container in a write walk. Only a final plain assignment
+/// writes (`zend_assign_to_string_offset`); every other context checks the
+/// offset first (`zend_check_string_offset`, with its warnings) and then
+/// throws the context's error: `zend_use_new_element_for_string`,
+/// `ZEND_UNSET_DIM`'s "Cannot unset string offsets" and
+/// `zend_wrong_string_offset_error`.
+#[cold]
+fn string_container_step(
+    v: &mut Value,
+    segs: &[RSeg],
+    i: usize,
+    wop: &mut WOp,
+    diags: &mut Diags,
+) -> Step {
+    let last = i + 1 == segs.len();
+    let unset = matches!(wop, WOp::Unset);
+    if unset && last {
+        return Step::Err(WalkErr::Error("Cannot unset string offsets".into()));
+    }
+    let RSeg::Dim(dim) = &segs[i] else {
+        return Step::Err(WalkErr::Error(
+            "[] operator not supported for strings".into(),
+        ));
+    };
+    if last {
+        if let WOp::Assign(val) = wop {
+            let val = val.clone();
+            return match assign_string_offset(v, dim, &val, diags) {
+                Ok(r) => Step::Done(r),
+                Err(e) => Step::Err(e),
+            };
+        }
+    }
+    if let Err(e) = string_offset(dim, diags, unset) {
+        return Step::Err(e);
+    }
+    let msg = if last {
+        match wop {
+            WOp::FetchRw => "Cannot increment/decrement string offsets",
+            WOp::MakeRef | WOp::AssignRef(_) => "Cannot create references to/from string offsets",
+            _ => "Cannot use assign-op operators with string offsets",
+        }
+    } else if matches!(segs[i + 1], RSeg::Prop(_)) {
+        // FETCH_DIM_W/RW/UNSET feeding a property or dimension fetch.
+        "Cannot use string offset as an object"
+    } else {
+        "Cannot use string offset as an array"
+    };
+    Step::Err(WalkErr::Error(msg.into()))
 }
 
 /// Writes one byte of a string (`zend_assign_to_string_offset`).
@@ -211,7 +307,7 @@ fn assign_string_offset(
     let Value::Str(str) = s else {
         return Ok(Value::Null);
     };
-    let offset = string_offset(dim, diags, true)?;
+    let offset = string_offset(dim, diags, false)?;
     let len = i64::try_from(str.len()).unwrap_or(i64::MAX);
     if offset < -len {
         diags.push((E_WARNING, format!("Illegal string offset {offset}")));
@@ -289,7 +385,9 @@ pub(crate) fn descend(
                 }
                 let tn = other.value_name();
                 let tn = if undef { "null".to_string() } else { tn };
-                if last && matches!(wop, WOp::Assign(_)) {
+                // `zend_throw_non_object_error`: ASSIGN_OBJ and
+                // ASSIGN_OBJ_OP "assign", FETCH_OBJ_W/RW "modify".
+                if last && matches!(wop, WOp::Assign(_) | WOp::AssignOp(..)) {
                     Step::Err(WalkErr::Error(format!(
                         "Attempt to assign property \"{}\" on {tn}",
                         name.to_string_lossy()
@@ -312,65 +410,18 @@ pub(crate) fn descend(
                     *v = Value::Array(ZArray::new());
                 }
                 Value::Bool(false) => {
-                    if is_unset {
-                        return Step::Done(Value::Null);
-                    }
                     diags.push((
                         E_DEPRECATED,
                         "Automatic conversion of false to array is deprecated".into(),
                     ));
+                    if is_unset {
+                        // UNSET_DIM / FETCH_DIM_UNSET leave `false` alone.
+                        return Step::Done(Value::Null);
+                    }
                     *v = Value::Array(ZArray::new());
                 }
                 Value::Object(o) => return Step::Obj(o.clone(), i),
-                Value::Str(s) => {
-                    if is_unset {
-                        if last {
-                            return Step::Err(WalkErr::Error("Cannot unset string offsets".into()));
-                        }
-                        return Step::Err(WalkErr::Error("Cannot unset string offsets".into()));
-                    }
-                    if !last {
-                        return Step::Err(WalkErr::Error(
-                            "Cannot use string offset as an array".into(),
-                        ));
-                    }
-                    let RSeg::Dim(dim) = seg else {
-                        return Step::Err(WalkErr::Error(
-                            "[] operator not supported for strings".into(),
-                        ));
-                    };
-                    return match wop {
-                        WOp::Assign(val) => {
-                            if s.is_empty() && false {
-                                return Step::Nothing;
-                            }
-                            let val = val.clone();
-                            match assign_string_offset(v, dim, &val, diags) {
-                                Ok(r) => Step::Done(r),
-                                Err(e) => Step::Err(e),
-                            }
-                        }
-                        // `zend_check_string_offset` runs first: its
-                        // warnings (which an error handler may turn into
-                        // an exception) and offset type errors precede
-                        // `zend_wrong_string_offset_error`.
-                        WOp::FetchRw => match string_offset(dim, diags, true) {
-                            Ok(_) => Step::Err(WalkErr::Error(
-                                "Cannot use assign-op operators with string offsets".into(),
-                            )),
-                            Err(e) => Step::Err(e),
-                        },
-                        WOp::MakeRef | WOp::AssignRef(_) => match string_offset(dim, diags, true) {
-                            Ok(_) => Step::Err(WalkErr::Error(
-                                "Cannot create references to/from string offsets".into(),
-                            )),
-                            Err(e) => Step::Err(e),
-                        },
-                        WOp::Unset => {
-                            Step::Err(WalkErr::Error("Cannot unset string offsets".into()))
-                        }
-                    };
-                }
+                Value::Str(_) => return string_container_step(v, segs, i, wop, diags),
                 other => {
                     if is_unset {
                         return Step::Err(WalkErr::Error(
@@ -430,7 +481,9 @@ pub(crate) fn descend(
                     }
                 }
                 RSeg::Dim(k) => {
-                    let ctx = if is_unset {
+                    // Only the final ZEND_UNSET_DIM reports "Cannot unset
+                    // offset"; FETCH_DIM_UNSET converts like a write fetch.
+                    let ctx = if is_unset && last {
                         KeyCtx::Unset
                     } else {
                         KeyCtx::Write
@@ -464,7 +517,7 @@ pub(crate) fn descend(
                         return descend(slot, segs, i + 1, wop, diags, false);
                     }
                     let t = arr.make_mut();
-                    let rw = matches!(wop, WOp::FetchRw);
+                    let rw = matches!(wop, WOp::FetchRw | WOp::AssignOp(..));
                     let (slot, inserted) = t.lookup_ex(key.clone());
                     let existed = !inserted;
                     if !existed && rw {
@@ -541,7 +594,7 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
             }
             Step::Done(val)
         }
-        WOp::FetchRw => Step::Done(v.deref()),
+        WOp::FetchRw | WOp::AssignOp(..) => Step::Done(v.deref()),
         WOp::MakeRef => Step::Done(Value::Reference(v.make_ref())),
         WOp::AssignRef(r) => {
             let r = std::mem::take(r);
@@ -577,7 +630,27 @@ impl Vm {
     ) -> VmResult<(RBase, Vec<RSeg>)> {
         let code = self.frame().code.clone();
         let p = &code.places[pid as usize];
-        let base = match &p.base {
+        let base = self.resolve_base(&p.base, write, quiet)?;
+        let mut segs = Vec::with_capacity(p.segs.len());
+        for s in &p.segs {
+            segs.push(match s {
+                Seg::Dim(op) => RSeg::Dim(self.read_dim_operand(*op)?),
+                Seg::Append => RSeg::Append,
+                Seg::Prop(op) => {
+                    let v = self.read(*op)?;
+                    RSeg::Prop(self.to_zstr(&v)?)
+                }
+            });
+        }
+        Ok((base, segs))
+    }
+
+    /// Resolves a place's base: the variable, `$this`, a static property
+    /// cell or a temporary (reading the name operands of `$$n`/`A::$n`).
+    /// `quiet` is `BP_VAR_IS`: an undeclared or inaccessible static
+    /// property base resolves to an undefined base without an error.
+    fn resolve_base(&mut self, base: &PlaceBase, write: bool, quiet: bool) -> VmResult<RBase> {
+        Ok(match base {
             PlaceBase::Cv(cv) => {
                 let f = self.frame();
                 RBase::Var(f.vars.clone(), f.cv_idx(*cv))
@@ -633,19 +706,7 @@ impl Vm {
                 let v = self.read_raw(*op)?;
                 RBase::Value(v)
             }
-        };
-        let mut segs = Vec::with_capacity(p.segs.len());
-        for s in &p.segs {
-            segs.push(match s {
-                Seg::Dim(op) => RSeg::Dim(self.read_dim_operand(*op)?),
-                Seg::Append => RSeg::Append,
-                Seg::Prop(op) => {
-                    let v = self.read(*op)?;
-                    RSeg::Prop(self.to_zstr(&v)?)
-                }
-            });
-        }
-        Ok((base, segs))
+        })
     }
 
     fn read_dim_operand(&mut self, op: Operand) -> VmResult<Value> {
@@ -670,19 +731,29 @@ impl Vm {
     /// Runs a write operation on a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn write_place(&mut self, base: RBase, segs: &[RSeg], wop: WOp) -> VmResult<Value> {
-        let r = self.write_place_inner(base, segs, wop);
+        let r = self.write_place_inner(base, segs, wop, false);
         flush_deferred_ref_assigns();
         r
     }
 
-    fn write_place_inner(&mut self, base: RBase, segs: &[RSeg], mut wop: WOp) -> VmResult<Value> {
+    /// `quiet` drops the walk's deferred diagnostics: the write-back walk
+    /// of a compound assignment repeats offset conversions the first walk
+    /// already reported.
+    fn write_place_inner(
+        &mut self,
+        base: RBase,
+        segs: &[RSeg],
+        mut wop: WOp,
+        quiet: bool,
+    ) -> VmResult<Value> {
+        let again = matches!(wop, WOp::AssignOp(..)).then(|| base.clone());
         let mut diags = Vec::new();
         let step = match base {
             RBase::Var(store, idx) => {
                 if segs.is_empty() {
                     return self.write_var_root(&store, idx, wop);
                 }
-                let rw = matches!(wop, WOp::FetchRw);
+                let rw = matches!(wop, WOp::FetchRw | WOp::AssignOp(..));
                 let mut st = store.borrow_mut();
                 let undef = st.slots[idx].is_none();
                 if undef {
@@ -736,7 +807,7 @@ impl Vm {
                             Value::Reference(r) => Value::Reference(r),
                             other => Value::Reference(PhpRef::new(other)),
                         },
-                        WOp::FetchRw => v.deref(),
+                        WOp::FetchRw | WOp::AssignOp(..) => v.deref(),
                         _ => Value::Null,
                     });
                 }
@@ -750,14 +821,76 @@ impl Vm {
             }
             RBase::Undef(_) => return Ok(Value::Null),
         };
-        self.flush_diags(diags)?;
+        if !quiet {
+            self.flush_diags(diags)?;
+        }
+        if let (Step::Done(cur), WOp::AssignOp(op, rhs), Some(again)) = (&step, &wop, again) {
+            // The final slot lies inside the base's container: write the
+            // result back with a second, silent walk.
+            let nv = self.assign_op_value(*op, cur, rhs)?;
+            return self.write_place_inner(again, segs, WOp::Assign(nv), true);
+        }
         self.finish_step(step, segs, wop)
+    }
+
+    /// The binary operation of a compound assignment.
+    fn assign_op_value(&mut self, op: BinaryOp, cur: &Value, rhs: &Value) -> VmResult<Value> {
+        ops::binary_op(op, cur, rhs, self).map_err(|e| self.rt_throw(e))
+    }
+
+    /// Finishes a walk step taken inside a container reached through an
+    /// object (a property slot, a reference or a handler's result). For
+    /// [`WOp::AssignOp`] a final slot's current value comes back as
+    /// `Step::Done`: the result is computed with all borrows released and
+    /// written by walking the same container again (`walk`) silently.
+    fn finish_native(
+        &mut self,
+        step: Step,
+        segs: &[RSeg],
+        wop: WOp,
+        mut walk: impl FnMut(&mut WOp, &mut Diags) -> Step,
+    ) -> VmResult<Value> {
+        if let (Step::Done(cur), WOp::AssignOp(op, rhs)) = (&step, &wop) {
+            let nv = self.assign_op_value(*op, cur, rhs)?;
+            let mut w = WOp::Assign(nv);
+            let s = walk(&mut w, &mut Vec::new());
+            return self.finish_step(s, segs, w);
+        }
+        self.finish_step(step, segs, wop)
+    }
+
+    /// Walks inside one container (`walk` borrows it for the duration of
+    /// a call), reports the walk's diagnostics and finishes the step.
+    fn descend_with(
+        &mut self,
+        segs: &[RSeg],
+        wop: WOp,
+        mut walk: impl FnMut(&mut WOp, &mut Diags) -> Step,
+    ) -> VmResult<Value> {
+        let mut diags = Vec::new();
+        let mut w = wop;
+        let s = walk(&mut w, &mut diags);
+        self.flush_diags(diags)?;
+        self.finish_native(s, segs, w, walk)
+    }
+
+    /// Continues a write walk at segment `i` inside a reference.
+    fn descend_ref(&mut self, r: &PhpRef, segs: &[RSeg], i: usize, wop: WOp) -> VmResult<Value> {
+        self.descend_with(segs, wop, |w, d| {
+            let mut b = r.borrow_mut();
+            descend(&mut b, segs, i, w, d, false)
+        })
+    }
+
+    /// Continues a write walk at segment `i` inside a temporary (a
+    /// handler's non-reference result: the modification is lost).
+    fn descend_temp(&mut self, mut v: Value, segs: &[RSeg], i: usize, wop: WOp) -> VmResult<Value> {
+        self.descend_with(segs, wop, |w, d| descend(&mut v, segs, i, w, d, false))
     }
 
     fn finish_step(&mut self, step: Step, segs: &[RSeg], wop: WOp) -> VmResult<Value> {
         match step {
             Step::Done(v) => Ok(v),
-            Step::Nothing => Ok(Value::Null),
             Step::Err(e) => Err(self.walk_err(e)),
             Step::TypedRefAssign(r, v) => self.assign_ref(&r, v),
             Step::Obj(o, i) => self.obj_walk(o, segs, i, wop),
@@ -788,7 +921,7 @@ impl Vm {
                 drop(old);
                 Ok(v)
             }
-            WOp::FetchRw => {
+            WOp::FetchRw | WOp::AssignOp(..) => {
                 let cur = store.borrow().slots[idx].as_ref().map(Value::deref);
                 match cur {
                     Some(v) => Ok(v),
@@ -846,6 +979,22 @@ impl Vm {
                             Some(v) => Ok(v.deref()),
                             None => self.fetch_property_rw(&obj, name),
                         },
+                        WOp::AssignOp(op, rhs) => {
+                            // `zend_assign_op_overloaded_property` and the
+                            // `get_property_ptr_ptr` path alike: read, operate,
+                            // write back through the property handlers.
+                            let cur = match self.native_read_property(
+                                &obj,
+                                name,
+                                crate::ext::PropCtx::ReadWrite,
+                            )? {
+                                Some(v) => v.deref(),
+                                None => self.read_property(&obj, name, FetchMode::Read)?,
+                            };
+                            let nv = self.assign_op_value(op, &cur, &rhs)?;
+                            drop(cur);
+                            self.write_property(&obj, name, nv)
+                        }
                         WOp::MakeRef => self.property_ref(&obj, name).map(Value::Reference),
                         WOp::AssignRef(r) => self.assign_property_ref(&obj, name, r),
                         WOp::Unset => {
@@ -858,23 +1007,14 @@ impl Vm {
                 // read_property (`get_property_ptr_ptr` returning NULL).
                 let ctx = match wop {
                     WOp::Unset => crate::ext::PropCtx::Unset,
-                    WOp::FetchRw => crate::ext::PropCtx::ReadWrite,
+                    WOp::FetchRw | WOp::AssignOp(..) => crate::ext::PropCtx::ReadWrite,
                     _ => crate::ext::PropCtx::Write,
                 };
                 // Objects and references continue the walk; other values
                 // fall back to the standard property storage.
                 match self.native_read_property(&obj, name, ctx)? {
                     Some(Value::Object(o2)) => return self.obj_walk(o2, segs, i + 1, wop),
-                    Some(Value::Reference(r)) => {
-                        let mut diags = Vec::new();
-                        let mut w = wop;
-                        let s = {
-                            let mut b = r.borrow_mut();
-                            descend(&mut b, segs, i + 1, &mut w, &mut diags, false)
-                        };
-                        self.flush_diags(diags)?;
-                        return self.finish_step(s, segs, w);
-                    }
+                    Some(Value::Reference(r)) => return self.descend_ref(&r, segs, i + 1, wop),
                     _ => {}
                 }
                 if matches!(wop, WOp::Unset) {
@@ -895,43 +1035,32 @@ impl Vm {
                     };
                 }
                 self.typed_prop_dim_write_check(&obj, name, &segs[i + 1], &wop)?;
-                match self.property_container(&obj, name, matches!(wop, WOp::FetchRw))? {
+                let rw = matches!(wop, WOp::FetchRw | WOp::AssignOp(..));
+                match self.property_container(&obj, name, rw)? {
                     PropContainer::Declared(idx) => {
                         let obj = self.lazy_object_for(&obj, Some(name))?;
-                        let mut diags = Vec::new();
-                        let mut w = wop;
-                        let s = {
-                            let d = object::data(&obj);
-                            let mut slots = d.slots.borrow_mut();
+                        let walk = |w: &mut WOp, d: &mut Diags| {
+                            let data = object::data(&obj);
+                            let mut slots = data.slots.borrow_mut();
                             let slot = slots[idx].get_or_insert(Value::Null);
-                            descend(slot, segs, i + 1, &mut w, &mut diags, false)
+                            descend(slot, segs, i + 1, w, d, false)
                         };
-                        self.flush_diags(diags)?;
-                        self.finish_step(s, segs, w)
+                        self.descend_with(segs, wop, walk)
                     }
                     PropContainer::Dynamic(key) => {
                         let obj = self.lazy_object_for(&obj, Some(name))?;
-                        let mut diags = Vec::new();
-                        let mut w = wop;
-                        let s = {
-                            let d = object::data(&obj);
-                            let mut dynp = d.dynamic.borrow_mut();
+                        let walk = |w: &mut WOp, d: &mut Diags| {
+                            let data = object::data(&obj);
+                            let mut dynp = data.dynamic.borrow_mut();
                             let t = dynp.get_or_insert_with(php_runtime::HashTable::new);
-                            let slot = t.lookup(key);
-                            descend(slot, segs, i + 1, &mut w, &mut diags, false)
+                            let slot = t.lookup(key.clone());
+                            descend(slot, segs, i + 1, w, d, false)
                         };
-                        self.flush_diags(diags)?;
-                        self.finish_step(s, segs, w)
+                        self.descend_with(segs, wop, walk)
                     }
                     PropContainer::Value(v) => match v {
                         Value::Object(o2) => self.obj_walk(o2, segs, i + 1, wop),
-                        mut other => {
-                            let mut diags = Vec::new();
-                            let mut w = wop;
-                            let s = descend(&mut other, segs, i + 1, &mut w, &mut diags, false);
-                            self.flush_diags(diags)?;
-                            self.finish_step(s, segs, w)
-                        }
+                        other => self.descend_temp(other, segs, i + 1, wop),
                     },
                 }
             }
@@ -968,25 +1097,44 @@ impl Vm {
                                     }
                                 }
                             }
+                            WOp::AssignOp(op, rhs) => {
+                                // `zend_binary_assign_op_obj_dim`: read_dimension
+                                // with BP_VAR_R (the hook context outside hook
+                                // calls), operate, then write_dimension.
+                                if let (Some(f), Some(k)) = (h.read_dimension, keyopt) {
+                                    if let Some(cur) = f(self, &obj, k)? {
+                                        let nv = self.assign_op_value(*op, &cur.deref(), rhs)?;
+                                        drop(cur);
+                                        return self.obj_walk(
+                                            obj.clone(),
+                                            segs,
+                                            i,
+                                            WOp::Assign(nv),
+                                        );
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                     }
-                    // `$o[][..] = v` reads the appended dimension (key null).
-                    let read_key = if keyopt.is_none() && !last {
+                    // `$o[][..] = v` and `&$o[]` read the appended dimension
+                    // (no offset).
+                    let read_key = if keyopt.is_none() && (!last || matches!(wop, WOp::MakeRef)) {
                         Some(&key)
                     } else {
                         keyopt
                     };
                     if let (Some(f), Some(k)) = (h.read_dimension, read_key) {
                         if !last || matches!(wop, WOp::FetchRw | WOp::MakeRef) {
-                            self.dim_ctx = if keyopt.is_none() {
-                                crate::ext::DimensionCtx::Append
-                            } else {
-                                match (&wop, last) {
-                                    (WOp::FetchRw, _) => crate::ext::DimensionCtx::ReadWrite,
-                                    (WOp::Unset, false) => crate::ext::DimensionCtx::Unset,
-                                    _ => crate::ext::DimensionCtx::Write,
+                            let rw = matches!(wop, WOp::FetchRw | WOp::AssignOp(..));
+                            self.dim_ctx = match (keyopt.is_none(), rw, &wop, last) {
+                                (true, true, ..) => crate::ext::DimensionCtx::AppendRw,
+                                (true, false, ..) => crate::ext::DimensionCtx::Append,
+                                (false, true, ..) => crate::ext::DimensionCtx::ReadWrite,
+                                (false, false, WOp::Unset, false) => {
+                                    crate::ext::DimensionCtx::Unset
                                 }
+                                _ => crate::ext::DimensionCtx::Write,
                             };
                             let r = f(self, &obj, k);
                             self.dim_ctx = crate::ext::DimensionCtx::Read;
@@ -1002,30 +1150,8 @@ impl Vm {
                                 }
                                 return match v {
                                     Value::Object(o2) => self.obj_walk(o2, segs, i + 1, wop),
-                                    Value::Reference(rf) => {
-                                        let mut diags = Vec::new();
-                                        let mut w = wop;
-                                        let s = {
-                                            let mut b = rf.borrow_mut();
-                                            descend(&mut b, segs, i + 1, &mut w, &mut diags, false)
-                                        };
-                                        self.flush_diags(diags)?;
-                                        self.finish_step(s, segs, w)
-                                    }
-                                    mut other => {
-                                        let mut diags = Vec::new();
-                                        let mut w = wop;
-                                        let s = descend(
-                                            &mut other,
-                                            segs,
-                                            i + 1,
-                                            &mut w,
-                                            &mut diags,
-                                            false,
-                                        );
-                                        self.flush_diags(diags)?;
-                                        self.finish_step(s, segs, w)
-                                    }
+                                    Value::Reference(rf) => self.descend_ref(&rf, segs, i + 1, wop),
+                                    other => self.descend_temp(other, segs, i + 1, wop),
                                 };
                             }
                         }
@@ -1055,6 +1181,17 @@ impl Vm {
                                 self.call_method_name_raw(&obj, "offsetGet", vec![key.clone()])?;
                             OVERLOADED_RW.with(|c| c.set(Some((obj, key))));
                             Ok(v)
+                        }
+                        WOp::AssignOp(op, rhs) => {
+                            // `zend_binary_assign_op_obj_dim` over
+                            // `zend_std_read_dimension`/`write_dimension`
+                            // (`$o[] op= v` passes a null offset to both).
+                            let cur =
+                                self.call_method_name_raw(&obj, "offsetGet", vec![key.clone()])?;
+                            let nv = self.assign_op_value(op, &cur.deref(), &rhs)?;
+                            drop(cur);
+                            self.call_method_name(&obj, "offsetSet", vec![key, nv.clone()])?;
+                            Ok(nv)
                         }
                         WOp::Unset => {
                             self.call_method_name(&obj, "offsetUnset", vec![key])?;
@@ -1096,27 +1233,18 @@ impl Vm {
                         if let Value::Object(o2) = inner {
                             return self.obj_walk(o2, segs, i + 1, wop);
                         }
-                        let mut diags = Vec::new();
-                        let mut w = wop;
-                        let s = {
-                            let mut b = rf.borrow_mut();
-                            descend(&mut b, segs, i + 1, &mut w, &mut diags, false)
-                        };
-                        self.flush_diags(diags)?;
-                        self.finish_step(s, segs, w)
+                        self.descend_ref(&rf, segs, i + 1, wop)
                     }
-                    mut other => {
+                    other => {
+                        // An increment walks twice (read, then write): the
+                        // write walk reports.
                         if !matches!(wop, WOp::FetchRw) {
                             self.notice(&format!(
                                 "Indirect modification of overloaded element of {} has no effect",
                                 object::display_name(&object::class_of(&obj).name)
                             ))?;
                         }
-                        let mut diags = Vec::new();
-                        let mut w = wop;
-                        let s = descend(&mut other, segs, i + 1, &mut w, &mut diags, false);
-                        self.flush_diags(diags)?;
-                        self.finish_step(s, segs, w)
+                        self.descend_temp(other, segs, i + 1, wop)
                     }
                 }
             }
@@ -1174,36 +1302,24 @@ impl Vm {
         v: Value,
     ) -> VmResult<Value> {
         let (base, segs) = self.resolve_place(pid, true)?;
+        if !segs.is_empty() {
+            // One walk: offsets convert and object handlers run once.
+            return self.write_place(base, &segs, WOp::AssignOp(op, v));
+        }
         // Fast path: plain variable holding a string being appended to.
-        let base2 = match &base {
-            RBase::Var(s, i) => RBase::Var(s.clone(), *i),
-            RBase::This(o) => RBase::This(o.clone()),
-            RBase::Cell(c) => RBase::Cell(c.clone()),
-            RBase::Value(v) => RBase::Value(v.clone()),
-            RBase::Globals => RBase::Globals,
-            RBase::Undef(n) => RBase::Undef(n.clone()),
-        };
-        if segs.is_empty() {
-            if let RBase::Var(store, idx) = &base {
-                if op == BinaryOp::Concat {
-                    if let Value::Str(add) = &v {
-                        let mut st = store.borrow_mut();
-                        if let Some(Value::Str(s)) = &mut st.slots[*idx] {
-                            s.append(add.as_bytes());
-                            return Ok(Value::Str(s.clone()));
-                        }
+        if let RBase::Var(store, idx) = &base {
+            if op == BinaryOp::Concat {
+                if let Value::Str(add) = &v {
+                    let mut st = store.borrow_mut();
+                    if let Some(Value::Str(s)) = &mut st.slots[*idx] {
+                        s.append(add.as_bytes());
+                        return Ok(Value::Str(s.clone()));
                     }
                 }
             }
         }
-        let (cur, overloaded) = self.fetch_rw(base, &segs)?;
-        if let Some((obj, key)) = overloaded {
-            // `zend_binary_assign_op_obj_dim`: offsetGet, op, offsetSet.
-            let nv = ops::binary_op(op, &cur.deref(), &v, self).map_err(|e| self.rt_throw(e))?;
-            drop(cur);
-            self.call_method_name(&obj, "offsetSet", vec![key, nv.clone()])?;
-            return Ok(nv);
-        }
+        let base2 = base.clone();
+        let cur = self.write_place(base, &segs, WOp::FetchRw)?;
         let nv = ops::binary_op(op, &cur, &v, self).map_err(|e| self.rt_throw(e))?;
         drop(cur);
         self.write_place(base2, &segs, WOp::Assign(nv))
@@ -1377,6 +1493,22 @@ impl Vm {
         if let RBase::Undef(_) = &base {
             return Ok(());
         }
+        if let RBase::Var(store, idx) = &base {
+            // UNSET_DIM, FETCH_DIM_UNSET and FETCH_OBJ_UNSET on an
+            // undefined CV warn (ZVAL_UNDEFINED_OP1); a lone UNSET_OBJ
+            // does not.
+            let warns = !segs.is_empty() && !matches!(segs.as_slice(), [RSeg::Prop(_)]);
+            if warns
+                && store.borrow().slots[*idx].is_none()
+                && matches!(
+                    self.frame().code.places[pid as usize].base,
+                    PlaceBase::Cv(_)
+                )
+            {
+                let name = store.borrow().names[*idx].clone();
+                return self.warning(&crate::exec::undefined_var_msg(&name));
+            }
+        }
         if segs.is_empty() {
             if let RBase::Cell(_) = base {
                 return Err(self.make_throw("Error", "Attempt to unset static property"));
@@ -1421,7 +1553,10 @@ impl Vm {
                 return self.read_cv(cv);
             }
         }
-        let (base, segs) = self.resolve_place_ex(pid, false, mode == FetchMode::Is)?;
+        let code = self.frame().code.clone();
+        let place = &code.places[pid as usize];
+        let base = self.resolve_base(&place.base, false, mode == FetchMode::Is)?;
+        let segs = &place.segs;
         let mut cur = match base {
             RBase::Var(store, idx) => {
                 let v = store.borrow().slots[idx].as_ref().map(Value::deref);
@@ -1439,7 +1574,8 @@ impl Vm {
             RBase::This(o) => match o {
                 Some(o) => Value::Object(o),
                 None => {
-                    if mode == FetchMode::Is {
+                    // FETCH_OBJ_IS / FETCH_DIM_IS on `$this` still need it.
+                    if mode == FetchMode::Is && segs.is_empty() {
                         Value::Null
                     } else {
                         return Err(
@@ -1461,28 +1597,46 @@ impl Vm {
             }
             RBase::Globals => Value::Array(ZArray::from_table(self.globals.borrow().to_array())),
         };
-        for seg in segs.iter() {
-            cur = match seg {
-                RSeg::Dim(k) => self.fetch_dim(cur, k, mode)?,
-                RSeg::Append => {
+        // Each offset/name operand is read when its FETCH_DIM_*/FETCH_OBJ_*
+        // runs (after the container's warnings); a quiet chain that reached
+        // null still reads, and reports, the remaining operands.
+        let mut settled = false;
+        for seg in segs {
+            match seg {
+                Seg::Dim(op) => {
+                    let k = self.read_dim_operand(*op)?;
+                    if !settled {
+                        cur = self.fetch_dim(cur, &k, mode)?;
+                    }
+                }
+                Seg::Append => {
                     return Err(self.make_throw("Error", "Cannot use [] for reading"));
                 }
-                RSeg::Prop(name) => match cur {
-                    Value::Object(o) => self.read_property(&o, name, mode)?,
-                    other => {
-                        if mode == FetchMode::Read {
-                            self.warning(&format!(
-                                "Attempt to read property \"{}\" on {}",
-                                name.to_string_lossy(),
-                                other.value_name()
-                            ))?;
-                        }
-                        Value::Null
+                Seg::Prop(op) => {
+                    let v = self.read(*op)?;
+                    if !settled {
+                        cur = match cur {
+                            Value::Object(o) => {
+                                let name = self.to_zstr(&v)?;
+                                self.read_property(&o, &name, mode)?
+                            }
+                            other => {
+                                if mode == FetchMode::Read {
+                                    let name = self.to_zstr(&v)?;
+                                    self.warning(&format!(
+                                        "Attempt to read property \"{}\" on {}",
+                                        name.to_string_lossy(),
+                                        other.value_name()
+                                    ))?;
+                                }
+                                Value::Null
+                            }
+                        };
                     }
-                },
-            };
+                }
+            }
             if mode == FetchMode::Is && cur.is_null() {
-                return Ok(Value::Null);
+                settled = true;
             }
         }
         Ok(cur)
@@ -1493,20 +1647,13 @@ impl Vm {
         match cur {
             Value::Array(a) => {
                 let mut diags = Vec::new();
-                let ctx = if mode == FetchMode::Is {
-                    KeyCtx::Isset
-                } else {
-                    KeyCtx::Read
-                };
-                let key = match key_of(k, &mut diags, ctx) {
+                // FETCH_DIM_IS (`??`, the containers of a nested isset())
+                // converts like a read: only the final ISSET_ISEMPTY_DIM_OBJ
+                // says "in isset or empty".
+                let key = match key_of(k, &mut diags, KeyCtx::Read) {
                     Ok(k) => k,
                     Err(e) => {
                         self.flush_diags(diags)?;
-                        if mode == FetchMode::Is {
-                            if let WalkErr::TypeError(_) = e {
-                                // isset() with illegal offset type throws too.
-                            }
-                        }
                         return Err(self.walk_err(e));
                     }
                 };
@@ -1529,37 +1676,17 @@ impl Vm {
                     return Ok(Value::Null);
                 }
                 let mut diags = Vec::new();
-                let off = match k {
-                    Value::Str(ks) if mode == FetchMode::Is => {
-                        match php_runtime::numeric::is_numeric_string_ex(ks.as_bytes(), true) {
-                            Some(n) if !n.trailing_data => match n.value {
-                                php_runtime::numeric::Number::Int(i) => i,
-                                php_runtime::numeric::Number::Float(_) => return Ok(Value::Null),
-                            },
-                            _ => return Ok(Value::Null),
-                        }
-                    }
-                    _ => {
-                        if mode == FetchMode::Is {
-                            match k {
-                                Value::Int(i) => *i,
-                                Value::Float(d) => php_runtime::convert::dval_to_lval_silent(*d),
-                                Value::Bool(b) => i64::from(*b),
-                                Value::Null => 0,
-                                _ => return Ok(Value::Null),
-                            }
-                        } else {
-                            match string_offset(k, &mut diags, false) {
-                                Ok(o) => o,
-                                Err(e) => {
-                                    self.flush_diags(diags)?;
-                                    return Err(self.walk_err(e));
-                                }
-                            }
-                        }
-                    }
+                let off = if mode == FetchMode::Is {
+                    string_offset_is(k, &mut diags)
+                } else {
+                    string_offset(k, &mut diags, false).map(Some)
                 };
                 self.flush_diags(diags)?;
+                let off = match off {
+                    Ok(Some(o)) => o,
+                    Ok(None) => return Ok(Value::Null),
+                    Err(e) => return Err(self.walk_err(e)),
+                };
                 let len = i64::try_from(s.len()).unwrap_or(i64::MAX);
                 let real = if off < 0 { off + len } else { off };
                 if real < 0 || real >= len {
@@ -1575,7 +1702,7 @@ impl Vm {
             }
             Value::Object(o) => {
                 if let Some(h) = crate::ext::hooks_of(&o) {
-                    if mode == FetchMode::Is {
+                    if mode == FetchMode::Is && !h.read_dimension_is {
                         if let Some(f) = h.has_dimension {
                             if let Some(false) = f(self, &o, k, false)? {
                                 return Ok(Value::Null);
@@ -1639,9 +1766,17 @@ impl Vm {
     /// `isset(place)` / `empty(place)` (returns the isset or empty result).
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
-        let (base, segs) = self.resolve_place_ex(pid, false, true)?;
+        let code = self.frame().code.clone();
+        let place = &code.places[pid as usize];
+        let base = self.resolve_base(&place.base, false, true)?;
+        let segs = &place.segs;
         let mut cur = match base {
             RBase::Var(store, idx) => store.borrow().slots[idx].as_ref().map(Value::deref),
+            // ZEND_ISSET_ISEMPTY_PROP_OBJ / FETCH_*_IS on an unset `$this`
+            // (zend_this_not_in_object_context_helper).
+            RBase::This(None) if !segs.is_empty() => {
+                return Err(self.make_throw("Error", "Using $this when not in object context"));
+            }
             RBase::This(o) => o.map(Value::Object),
             RBase::Cell(c) => {
                 (!crate::typed_refs::static_cell_uninit(&c)).then(|| c.borrow().deref())
@@ -1665,22 +1800,38 @@ impl Vm {
                 }
             });
         }
+        // Each operand is read when its opcode runs, also once the result
+        // is known (an undefined offset variable still warns); property
+        // names convert only when an object is reached.
+        let mut settled = false;
         for (i, seg) in segs.iter().enumerate() {
-            let Some(c) = cur.take() else {
-                return Ok(empty);
+            let raw = match seg {
+                Seg::Dim(op) => self.read_dim_operand(*op)?,
+                Seg::Prop(op) => self.read(*op)?,
+                Seg::Append => Value::Null,
             };
-            if c.is_null() {
-                return Ok(empty);
+            if settled {
+                continue;
             }
+            let c = match cur.take() {
+                Some(c) if !c.is_null() => c,
+                _ => {
+                    settled = true;
+                    continue;
+                }
+            };
             let last = i + 1 == n;
             if !last {
                 let v = match seg {
-                    RSeg::Dim(k) => self.fetch_dim(c, k, FetchMode::Is)?,
-                    RSeg::Prop(name) => match c {
-                        Value::Object(o) => self.read_property(&o, name, FetchMode::Is)?,
+                    Seg::Dim(_) => self.fetch_dim(c, &raw, FetchMode::Is)?,
+                    Seg::Prop(_) => match c {
+                        Value::Object(o) => {
+                            let name = self.to_zstr(&raw)?;
+                            self.read_property(&o, &name, FetchMode::Is)?
+                        }
                         _ => Value::Null,
                     },
-                    RSeg::Append => {
+                    Seg::Append => {
                         return Err(self.make_throw("Error", "Cannot use [] for reading"))
                     }
                 };
@@ -1688,8 +1839,9 @@ impl Vm {
                 continue;
             }
             // Last segment.
+            let k = &raw;
             return match seg {
-                RSeg::Dim(k) => match c {
+                Seg::Dim(_) => match c {
                     Value::Array(a) => {
                         // The lookup snapshot is Zend's temporary GC addref,
                         // not an owner that survives a diagnostic callback.
@@ -1730,7 +1882,7 @@ impl Vm {
                                 },
                                 None => None,
                             },
-                            Value::Float(d) => Some(php_runtime::convert::dval_to_lval_silent(*d)),
+                            Value::Float(d) => Some(self.isset_float_string_offset(*d)?),
                             Value::Bool(b) => Some(i64::from(*b)),
                             Value::Null => Some(0),
                             _ => None,
@@ -1778,14 +1930,38 @@ impl Vm {
                     }
                     _ => Ok(empty),
                 },
-                RSeg::Prop(name) => match c {
-                    Value::Object(o) => self.has_property(&o, name, empty),
+                Seg::Prop(_) => match c {
+                    Value::Object(o) => {
+                        let name = self.to_zstr(k)?;
+                        self.has_property(&o, &name, empty)
+                    }
                     _ => Ok(empty),
                 },
-                RSeg::Append => Err(self.make_throw("Error", "Cannot use [] for reading")),
+                Seg::Append => Err(self.make_throw("Error", "Cannot use [] for reading")),
             };
         }
         Ok(empty)
+    }
+
+    /// `zval_get_long_ex(offset, /* is_strict */ true)` on a float offset
+    /// of a string in isset()/empty() (`zend_isset_dim_slow`): the
+    /// not-representable warning, then the precision-loss deprecation.
+    #[cold]
+    fn isset_float_string_offset(&mut self, d: f64) -> VmResult<i64> {
+        let l = php_runtime::convert::dval_to_lval_silent(d);
+        let shown = php_runtime::float::format_double(d, -1, false);
+        if !d.is_finite() || !crate::typecheck::fits_long(d) {
+            self.warning(&format!(
+                "The float {shown} is not representable as an int, cast occurred"
+            ))?;
+        }
+        if !php_runtime::convert::is_long_compatible(d, l) {
+            self.error(
+                E_DEPRECATED,
+                &format!("Implicit conversion from float {shown} to int loses precision"),
+            )?;
+        }
+        Ok(l)
     }
 
     /// A reference to a global variable (`global $x`).

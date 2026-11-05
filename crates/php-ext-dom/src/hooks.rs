@@ -411,7 +411,10 @@ fn read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
     let Some(d) = dom_object(o) else {
         return Ok(None);
     };
-    if vm.dimension_context() == DimensionCtx::Append {
+    if matches!(
+        vm.dimension_context(),
+        DimensionCtx::Append | DimensionCtx::AppendRw
+    ) {
         let class = display_name(&class_of(o).name).to_string_lossy();
         let msg = if d.builtin_class().starts_with("Dom\\") {
             format!("Cannot append to {class}")
