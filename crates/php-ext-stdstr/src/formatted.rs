@@ -112,7 +112,7 @@ fn emit_diags(vm: &mut Vm, diags: Vec<Diagnostic>) -> VmResult<()> {
 pub fn format(vm: &mut Vm, fmt: &[u8], values: &[Value], source: ArgSource) -> VmResult<Vec<u8>> {
     let opts = FormatOptions {
         source,
-        decimal_point: b'.',
+        decimal_point: php_support::fmt::locale::decimal_point(),
     };
     let values: Vec<Value> = values.iter().map(Value::deref).collect();
     let exact = |v: &Value| match v {

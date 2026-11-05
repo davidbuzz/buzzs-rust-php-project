@@ -142,7 +142,7 @@ impl Vm {
                     other => {
                         self.warning(&format!(
                             "foreach() argument must be of type array|object, {} given",
-                            other.type_name()
+                            other.value_name()
                         ))?;
                         return Ok(false);
                     }
@@ -177,7 +177,7 @@ impl Vm {
                     other => {
                         self.warning(&format!(
                             "foreach() argument must be of type array|object, {} given",
-                            other.type_name()
+                            other.value_name()
                         ))?;
                         return Ok(false);
                     }
@@ -398,7 +398,7 @@ impl Vm {
                     other => {
                         self.warning(&format!(
                             "foreach() argument must be of type array|object, {} given",
-                            other.type_name()
+                            other.value_name()
                         ))?;
                         return Ok(false);
                     }

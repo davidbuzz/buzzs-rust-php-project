@@ -182,3 +182,41 @@ strlen("foo")[0] ??= 123;
         "\nFatal error: Cannot use result of built-in function in write context in t.php on line 2\n"
     );
 }
+
+/// `ZEND_FETCH_GLOBALS` copies the symbol table with
+/// `zend_proptable_to_symtable(.., 1)`: a reference held only by the table
+/// is copied as a value, a shared one stays shared, numeric names become
+/// integer keys, and unset or never-assigned variables are absent.
+#[test]
+fn globals_read_copies_the_symbol_table_like_zend_array_dup() {
+    assert_eq!(
+        run(r#"<?php
+$a = 1; $r = &$a; unset($r); $g = $GLOBALS; $a = 2; var_dump($g['a']);
+$b = 1; $rb = &$b; $g = $GLOBALS; $b = 2; var_dump($g['b']);
+${'1'} = 5; var_dump(array_key_last($GLOBALS)); var_dump(array_key_last(get_defined_vars()));
+unset($b); var_dump(array_key_exists('b', $GLOBALS), array_key_exists('later', $GLOBALS));
+$later = 1;
+"#),
+        "int(1)\nint(2)\nint(1)\nstring(1) \"1\"\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// `zend_delayed_compile_dim`: `$GLOBALS[]` in any write context is a
+/// compile error (`restrict_globals/invalid_append`).
+#[test]
+fn appending_to_globals_is_a_compile_error() {
+    for stmt in [
+        "$GLOBALS[] = 1;",
+        "$GLOBALS[][1] = 2;",
+        "$GLOBALS[] .= 1;",
+        "$GLOBALS[]++;",
+        "$x = &$GLOBALS[];",
+        "foreach ([1] as $GLOBALS[]) {}",
+    ] {
+        assert_eq!(
+            run(&format!("<?php\necho \"x\";\n{stmt}\n")),
+            "\nFatal error: Cannot append to $GLOBALS in t.php on line 3\n",
+            "{stmt}"
+        );
+    }
+}

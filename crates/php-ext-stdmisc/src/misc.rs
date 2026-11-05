@@ -3,7 +3,7 @@
 
 use crate::credits;
 use crate::ctx::{global, RtExt};
-use php_runtime::{Value, ZArray, ZStr};
+use php_runtime::{RtResult, Value, ZArray, ZStr};
 use php_stdmisc::info::{self, InfoModule, InfoPrinter, InfoSource};
 use php_stdmisc::mail::{self, ErrorLogSettings, HeadersArg, LogTarget, MailSettings, ScriptInfo};
 use php_stdmisc::misc::{self, AssertState};
@@ -71,7 +71,7 @@ fn mail_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let settings = mail_settings(vm);
     let script = script_info(vm);
     let date = log_date(vm, now());
-    mail::mail(
+    mail::mail_ex(
         to.as_bytes(),
         subject.as_bytes(),
         message.as_bytes(),
@@ -81,9 +81,31 @@ fn mail_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         &script,
         &|_| date.clone(),
         vm,
+        &mut append_mail_log,
     )
     .vm(vm)
     .map(Value::Bool)
+}
+
+/// `php_mail_log_to_file()`: `php_stream_open_wrapper(filename, "a",
+/// REPORT_ERRORS | STREAM_DISABLE_OPEN_BASEDIR)`, so an open failure warns
+/// as `mail(): Failed to open stream: ...`; an exception thrown by the
+/// error handler for it stops the mail from being sent (GH-7875).
+fn append_mail_log(vm: &mut Vm, filename: &[u8], line: &[u8]) -> RtResult<()> {
+    php_ext_streams::bridge::run(vm, || {
+        let mut opened = None;
+        if let Some(mut s) = php_streams::open::open_wrapper(
+            filename,
+            "a",
+            php_streams::wrapper::REPORT_ERRORS | php_streams::wrapper::STREAM_DISABLE_OPEN_BASEDIR,
+            &mut opened,
+            None,
+        ) {
+            let _ = s.write(line);
+            s.close();
+        }
+    })
+    .map_err(|t| vm.runtime_error_from(t))
 }
 
 /// The CLI logger with dates from the date extension.

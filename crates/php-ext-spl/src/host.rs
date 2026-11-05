@@ -39,9 +39,19 @@ thread_local! {
 
 /// Converts a VM throw into a runtime error. Bailouts (`exit`, fatal
 /// errors) are parked in [`Vm::pending_throw`] and come back out of
-/// [`rt_throw`].
+/// [`rt_throw`]. So is the unwinder of a destroyed fiber (the hidden
+/// graceful-exit object, the only throwable value outside the `Throwable`
+/// hierarchy): like `zend_is_unwind_exit()`/`zend_is_graceful_exit()` in
+/// `spl_iterators.c` (GH-24264), `CATCH_GET_CHILD` and the other SPL
+/// exception sinks must never swallow it.
 pub fn to_rt(vm: &mut Vm, t: Throw) -> RuntimeError {
     match t {
+        Throw::Exception(o) if is_unwinder(&o) => {
+            if vm.pending_throw.is_none() {
+                vm.pending_throw = Some(Throw::Exception(o));
+            }
+            RuntimeError::Fatal(String::new())
+        }
         Throw::Exception(o) => RuntimeError::Thrown(Value::Object(o)),
         other => {
             if vm.pending_throw.is_none() {
@@ -50,6 +60,12 @@ pub fn to_rt(vm: &mut Vm, t: Throw) -> RuntimeError {
             RuntimeError::Fatal(String::new())
         }
     }
+}
+
+/// Whether a thrown object is an internal unwinder (the fiber
+/// graceful exit) rather than a `Throwable` user code can catch.
+fn is_unwinder(o: &Obj) -> bool {
+    !class_of(o).instance_of_name(b"throwable")
 }
 
 /// Converts a runtime error into a VM throw, creating the exception object

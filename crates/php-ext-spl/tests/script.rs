@@ -732,3 +732,46 @@ foreach ($it as $v) {
 "#);
     assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\n1\n1\n1\n");
 }
+
+/// GH-24264: destroying a fiber suspended in a `getChildren()` called by
+/// `RecursiveIteratorIterator` unwinds through the iterator even with
+/// `CATCH_GET_CHILD`; the graceful exit is never swallowed.
+#[test]
+fn catch_get_child_lets_destroyed_fiber_unwind() {
+    let out = run(r#"<?php
+class ReproIterator extends RecursiveArrayIterator {
+    public function getChildren(): ?RecursiveArrayIterator {
+        try { Fiber::suspend(); } finally { echo "finally\n"; }
+    }
+}
+$fiber = new Fiber(function () {
+    $it = new RecursiveIteratorIterator(
+        new ReproIterator([[1], [2]]),
+        RecursiveIteratorIterator::LEAVES_ONLY,
+        RecursiveIteratorIterator::CATCH_GET_CHILD,
+    );
+    foreach ($it as $_) {}
+    echo "Not reached\n";
+});
+$fiber->start();
+unset($fiber);
+echo "Done\n";
+"#);
+    assert_eq!(out, "finally\nDone\n");
+}
+
+/// Bug #70155: `ArrayObject::unserialize()` keeps loading the members after
+/// `spl_array_set_array()` rejected an overloaded backing object; the
+/// exception is thrown once the method returns.
+#[test]
+fn unserialize_loads_members_after_rejected_backing_object() {
+    let out = run(r#"<?php error_reporting(E_ALL);
+$inner = 'x:i:0;O:13:"SplFixedArray":0:{};m:a:1:{i:0;R:2;}';
+try { unserialize('C:11:"ArrayObject":' . strlen($inner) . ':{' . $inner . '}'); }
+catch (InvalidArgumentException $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "\nDeprecated: ArrayObject::unserialize(): Using an object as a backing array for ArrayObject is deprecated, as it allows violating class constraints and invariants in test.php on line 3\n\nDeprecated: Creation of dynamic property ArrayObject::$0 is deprecated in test.php on line 3\nOverloaded object of type SplFixedArray is not compatible with ArrayObject\n"
+    );
+}

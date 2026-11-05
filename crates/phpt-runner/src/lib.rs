@@ -10,6 +10,7 @@ pub mod diff;
 pub mod discover;
 pub mod expectf;
 pub mod ini;
+pub mod junit;
 pub mod phpt;
 pub mod process;
 pub mod report;

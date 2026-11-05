@@ -241,6 +241,36 @@ f();
     );
 }
 
+/// `zend_compile_try`: a label right before `try` lies outside the try
+/// range, so jumping to it leaves the try and calls the finally block, while
+/// a label inside the try does not (`finally_goto_005`).
+#[test]
+fn goto_to_label_before_try_calls_finally() {
+    let (status, output) = run(r#"<?php
+function f() {
+    $n = 0;
+    label: try {
+        echo "try\n";
+        if (++$n < 3) goto label;
+    } finally {
+        echo "finally\n";
+    }
+    try {
+        inner: echo "inner\n";
+        if (++$n < 5) goto inner;
+    } finally {
+        echo "finally2\n";
+    }
+}
+f();
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(
+        output,
+        "try\nfinally\ntry\nfinally\ntry\nfinally\ninner\ninner\nfinally2\n"
+    );
+}
+
 /// `zend_handle_loops_and_finally_ex`: `break 2` calls the finally block
 /// before freeing the loops, and a destructor exception from the freed
 /// iterator is thrown from the loop (`ZEND_FREE_ON_RETURN`), outside the

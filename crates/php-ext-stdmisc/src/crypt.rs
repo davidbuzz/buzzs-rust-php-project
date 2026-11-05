@@ -71,9 +71,9 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, v) in password::STR_CONSTANTS {
         m.constant(name, Value::from(*v));
     }
-    m.function("crypt(string $string, string $salt): string", crypt_fn)
+    m.function("crypt(#[\\SensitiveParameter] string $string, string $salt): string", crypt_fn)
         .function(
-            "password_hash(string $password, string|int|null $algo, array $options = []): string",
+            "password_hash(#[\\SensitiveParameter] string $password, string|int|null $algo, array $options = []): string",
             password_hash,
         )
         .function(
@@ -81,7 +81,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             password_needs_rehash,
         )
         .function(
-            "password_verify(string $password, string $hash): bool",
+            "password_verify(#[\\SensitiveParameter] string $password, string $hash): bool",
             password_verify,
         )
         .function("password_get_info(string $hash): array", password_get_info)

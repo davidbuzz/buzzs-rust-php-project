@@ -4,8 +4,10 @@
 //!   `php_conv_fp()` and [`format_double`] (float → string).
 //! * [`printf`] — the `sprintf()` family (`ext/standard/formatted_print.c`).
 //! * [`number`] — `round()` and `number_format()` (`ext/standard/math.c`).
+//! * [`locale`] — the `LC_NUMERIC` decimal point (`LCONV_DECIMAL_POINT`).
 
 pub mod double;
+pub mod locale;
 pub mod number;
 pub mod printf;
 

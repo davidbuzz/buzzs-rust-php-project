@@ -19,11 +19,13 @@ impl Compiler {
             if let StmtKind::Declare { directives, .. } = &s.kind {
                 for d in directives {
                     if d.name.eq_ignore_case("strict_types") && i != 0 {
-                        // Only the very first statement may declare strict_types
-                        // (an opening inline HTML is not allowed either).
+                        // `zend_is_first_statement(ast, /* allow_nop */ true)`: only
+                        // other declares and empty statements (`;`, a bare `?>`) may
+                        // precede strict_types (GH-19719); an opening inline HTML
+                        // or any other statement may not.
                         let first_non_decl = stmts[..i]
                             .iter()
-                            .any(|p| !matches!(p.kind, StmtKind::Declare { .. }));
+                            .any(|p| !matches!(p.kind, StmtKind::Declare { .. } | StmtKind::Nop));
                         if first_non_decl {
                             return self.err(
                                 "strict_types declaration must be the very first statement in the script",
@@ -1119,6 +1121,13 @@ impl Compiler {
         } else {
             None
         };
+        // zend_compile_try: `label: try { }` must not be equal to
+        // `try { label: }`, so a label right before the try gets a NOP of
+        // its own (outside the try range).
+        let here = self.here();
+        if self.fref().labels.values().any(|(l, _)| *l == here) {
+            self.emit(Op::Nop);
+        }
         let try_start = self.here();
         if let Some(fid) = fin_id {
             self.f().finally_stack.push(fid);
