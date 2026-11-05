@@ -291,9 +291,11 @@ impl Compiler {
                 }
                 let spec = self.class_spec(class)?;
                 let t = self.tmp();
+                let const_expr = self.in_evaluated_const_expr();
                 self.emit(Op::FetchClassName {
                     class: spec,
                     dst: t,
+                    const_expr,
                 });
                 Operand::Tmp(t)
             }
@@ -804,6 +806,7 @@ impl Compiler {
                         self.emit(Op::FetchClassName {
                             class: ClassSpec::SelfClass,
                             dst: t,
+                            const_expr: false,
                         });
                         return Ok(Operand::Tmp(t));
                     }
