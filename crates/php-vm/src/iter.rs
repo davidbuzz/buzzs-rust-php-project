@@ -533,21 +533,56 @@ impl Vm {
     }
 
     pub(crate) fn op_fe_free(&mut self, iter: u32) {
+        drop(self.fe_take(iter));
+    }
+
+    /// `FE_FREE` outside unwinding: the iterated object is released and its
+    /// destructor runs before the `zend_object_iterator`'s own handle is
+    /// released (`zend_objects_store_del` frees the inner object first), so
+    /// handle numbers are reused in Zend's order.
+    pub(crate) fn op_fe_free_and_destruct(&mut self, iter: u32) -> VmResult<()> {
+        let handle = match self.fe_take(iter) {
+            Some(
+                ForeachIter::Iterator { obj, handle, .. }
+                | ForeachIter::Generator { obj, handle, .. },
+            ) => {
+                drop(obj);
+                handle
+            }
+            Some(ForeachIter::Native(it, _, handle)) => {
+                drop(it);
+                handle
+            }
+            _ => return Ok(()),
+        };
+        let r = if object::has_pending_destructors() {
+            self.run_pending_destructors()
+        } else {
+            Ok(())
+        };
+        drop(handle);
+        r
+    }
+
+    /// Takes iterator `iter` out of the frame, detaching a by-reference
+    /// array iterator from its array.
+    fn fe_take(&mut self, iter: u32) -> Option<ForeachIter> {
         let it = self
             .frame_mut()
             .iters
             .get_mut(iter as usize)
             .and_then(Option::take);
-        if let Some(ForeachIter::ArrayRef { r, id }) = it {
+        if let Some(ForeachIter::ArrayRef { r, id }) = &it {
             if r.try_borrow().is_some() {
                 let mut b = r.borrow_mut();
                 if let Value::Array(a) = &mut *b {
                     if a.has_iterators() {
-                        a.make_mut().iterator_del(id);
+                        a.make_mut().iterator_del(*id);
                     }
                 }
             }
         }
+        it
     }
 
     /// Collects the (key, value) pairs of an array or `Traversable`.

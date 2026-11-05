@@ -844,6 +844,8 @@ dependencies = [
 name = "php-ext-spl"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdarr",
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-pcre",
  "php-runtime",

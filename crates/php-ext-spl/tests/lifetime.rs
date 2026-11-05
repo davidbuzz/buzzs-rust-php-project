@@ -30,7 +30,8 @@ fn run(code: &str) -> (i32, String) {
     // The stream layer (`php://temp`, directory streams) as in the CLI.
     let streams = php_ext_streams::Streams;
     let spl = php_ext_spl::Spl;
-    let exts: [&dyn Extension; 2] = [&streams, &spl];
+    let arrays = php_ext_stdarr::StdArray;
+    let exts: [&dyn Extension; 3] = [&streams, &spl, &arrays];
     let mut vm = Vm::with_extensions(&options, Box::new(sink.clone()), &exts);
     let status = vm.run_script(code.as_bytes(), "test.php");
     drop(vm);

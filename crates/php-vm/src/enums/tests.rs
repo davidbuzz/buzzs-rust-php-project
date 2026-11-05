@@ -116,6 +116,7 @@ fn callable_resolution_errors() {
          Failed to create closure from callable: cannot access \"self\" when no class scope is active\n\
          Failed to create closure from callable: array callback must have exactly two members\n\
          Failed to create closure from callable: no array or string given\n\
+         \nDeprecated: Use of \"self\" in callables is deprecated in t.php on line 2\n\
          bool(false)\nbool(false)\n"
     );
 }

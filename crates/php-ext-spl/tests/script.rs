@@ -27,7 +27,15 @@ fn vm() -> (Vm, Sink) {
     let options = VmOptions {
         ini: vec![("error_reporting".into(), "8191".into())],
     };
-    let vm = Vm::with_extensions(&options, Box::new(sink.clone()), &[&php_ext_spl::Spl]);
+    let vm = Vm::with_extensions(
+        &options,
+        Box::new(sink.clone()),
+        &[
+            &php_ext_spl::Spl,
+            &php_ext_stdarr::StdArray,
+            &php_ext_stdstr::StdStr,
+        ],
+    );
     (vm, sink)
 }
 

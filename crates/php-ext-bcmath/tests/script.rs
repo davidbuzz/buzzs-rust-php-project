@@ -87,7 +87,9 @@ fn rounding_mode_enum() {
 fn rounding_mode_is_an_internal_standard_enum() {
     assert_eq!(
         run(r"$r = new ReflectionClass('RoundingMode');
-            var_dump($r->isInternal(), $r->getExtensionName(), count(RoundingMode::cases()));"),
+            $n = 0;
+            foreach (RoundingMode::cases() as $case) { $n++; }
+            var_dump($r->isInternal(), $r->getExtensionName(), $n);"),
         "bool(true)\nstring(8) \"standard\"\nint(8)\n"
     );
 }

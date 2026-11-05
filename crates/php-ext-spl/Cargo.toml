@@ -15,5 +15,10 @@ php-pcre = { path = "../php-pcre" }
 php-streams = { path = "../php-streams" }
 php-ext-streams = { path = "../php-ext-streams" }
 
+[dev-dependencies]
+# Script tests use standard array/string functions (count, implode, reset...).
+php-ext-stdarr = { path = "../php-ext-stdarr" }
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+
 [lints]
 workspace = true

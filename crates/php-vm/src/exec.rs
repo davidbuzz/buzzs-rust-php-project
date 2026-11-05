@@ -1120,11 +1120,16 @@ impl Vm {
                         Flow::Next
                     }
                     Op::FeFree { iter } => {
-                        self.op_fe_free(*iter);
+                        self.op_fe_free_and_destruct(*iter)?;
                         Flow::Next
                     }
                     Op::FeFreeOnReturn { iter, loop_at } => {
-                        self.op_fe_free(*iter);
+                        if let Err(e) = self.op_fe_free_and_destruct(*iter) {
+                            if *loop_at != u32::MAX {
+                                self.frame_mut().ip = *loop_at as usize + 1;
+                            }
+                            return Err(e);
+                        }
                         if object::has_pending_destructors() {
                             if let Err(e) = self.run_pending_destructors() {
                                 if *loop_at != u32::MAX {
