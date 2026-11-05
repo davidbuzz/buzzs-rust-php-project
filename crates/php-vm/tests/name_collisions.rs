@@ -157,3 +157,15 @@ fn class_name_of_constant_operand_is_a_compile_error() {
         "Fatal error: Cannot use \"::class\" on array in t.php on line 3",
     );
 }
+
+/// `zend_objects_store_call_destructors` (Zend/tests/class_alias/bug54268):
+/// an object created by a shutdown destructor is destructed as well.
+#[test]
+fn shutdown_destructs_objects_created_by_destructors() {
+    assert_eq!(
+        run("<?php\nclass D { public function __destruct() { echo \"D\\n\"; } }\n\
+             class C { public $t; public function __destruct() { echo \"C\\n\"; $this->t = new D; } }\n\
+             class T { public static $s; }\nT::$s = new C;\necho \"end\\n\";\n"),
+        "end\nC\nD\n"
+    );
+}

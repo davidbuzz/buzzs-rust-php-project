@@ -389,18 +389,28 @@ impl Vm {
                 break;
             }
         }
-        // Remaining objects in creation order.
-        for d in object::live_objects() {
-            if d.flags.get() & object::oflags::DESTRUCTED != 0 || !d.class.has_destructor() {
-                continue;
+        // Remaining objects in creation order. `zend_objects_store_call_destructors`
+        // walks up to the store's current top (handles are not reused
+        // meanwhile), so objects created by these destructors are
+        // destructed too: repeat until a pass finds none.
+        loop {
+            let mut called = false;
+            for d in object::live_objects() {
+                if d.flags.get() & object::oflags::DESTRUCTED != 0 || !d.class.has_destructor() {
+                    continue;
+                }
+                called = true;
+                d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
+                let o = object::revive(d);
+                if let Err(e) = self.call_destructor(&o) {
+                    return self.destructor_error(e);
+                }
+                if let Err(e) = self.run_pending_destructors() {
+                    return self.destructor_error(e);
+                }
             }
-            d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
-            let o = object::revive(d);
-            if let Err(e) = self.call_destructor(&o) {
-                return self.destructor_error(e);
-            }
-            if let Err(e) = self.run_pending_destructors() {
-                return self.destructor_error(e);
+            if !called {
+                break;
             }
         }
         Ok(())
