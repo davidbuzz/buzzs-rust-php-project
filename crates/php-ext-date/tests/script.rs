@@ -480,7 +480,9 @@ fn nul_parser_diagnostics() {
                 }
                 echo $d->format('Y-m-d H:i:s.u e'), "\n";
                 $errors = $class::getLastErrors();
-                echo $errors['error_count'], ' ', implode(',', array_keys($errors['errors'])), "\n";
+                echo $errors['error_count'], ' ';
+                foreach ($errors['errors'] as $position => $message) { echo $position; }
+                echo "\n";
             }
             try { new DateInterval("P\0tail"); } catch (Throwable $e) {
                 echo $e->getMessage(), "\n";
