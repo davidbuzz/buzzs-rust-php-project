@@ -26,6 +26,7 @@ unsafe extern "C" {
     pub fn magic_setflags(ms: magic_t, flags: c_int) -> c_int;
     pub fn magic_version() -> c_int;
     pub fn magic_load(ms: magic_t, path: *const c_char) -> c_int;
+    pub fn magic_getpath(magicfile: *const c_char, action: c_int) -> *const c_char;
     pub fn magic_load_buffers(
         ms: magic_t,
         bufs: *mut *mut c_void,

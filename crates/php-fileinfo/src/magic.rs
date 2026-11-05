@@ -92,6 +92,15 @@ pub fn version() -> i32 {
     unsafe { ffi::magic_version() }
 }
 
+/// `magic_getpath(NULL, FILE_LOAD)`: the `:`-separated database list
+/// `magic_load(NULL)` would read (`$MAGIC`, else the library default such
+/// as `/etc/magic:/usr/share/misc/magic`, plus `~/.magic*` when present).
+pub fn default_path() -> Option<Vec<u8>> {
+    // SAFETY: a null `magicfile` asks for the default; the result is null
+    // or a static/environment string, copied before anything can change it.
+    owned(unsafe { ffi::magic_getpath(std::ptr::null(), 0) })
+}
+
 /// Copies a C string returned by libmagic (which owns it).
 fn owned(p: *const c_char) -> Option<Vec<u8>> {
     if p.is_null() {
