@@ -968,6 +968,7 @@ fn walk_object_properties() {
         inner: CollectingContext,
         props: ZArray,
         writes: Vec<(String, Value)>,
+        purposes: Vec<php_runtime::PropertyPurpose>,
     }
     impl php_runtime::RuntimeContext for ObjCtx {
         fn diagnostic(&mut self, l: php_runtime::ErrorLevel, m: &str) -> RtResult<()> {
@@ -976,8 +977,9 @@ fn walk_object_properties() {
         fn object_properties(
             &mut self,
             _: &Obj,
-            _: php_runtime::PropertyPurpose,
+            purpose: php_runtime::PropertyPurpose,
         ) -> RtResult<Option<ZArray>> {
+            self.purposes.push(purpose);
             Ok(Some(self.props.clone()))
         }
         fn property_write(&mut self, _: &Obj, name: &ZStr, value: Value) -> RtResult<()> {
@@ -998,6 +1000,7 @@ fn walk_object_properties() {
             ("c", Value::Int(3)),
         ]),
         writes: Vec::new(),
+        purposes: Vec::new(),
     };
     let obj = PhpRef::new(Value::Object(Obj::new(TestObj)));
     let mut cb = |c: &mut ObjCtx, a: &[Value]| {
@@ -1014,8 +1017,114 @@ fn walk_object_properties() {
     assert_eq!(ctx.writes.len(), 1);
     assert_eq!(ctx.writes[0].0, "\0Foo\0b");
     assert_eq!(ctx.writes[0].1.as_int(), Some(20));
+    assert_eq!(ctx.purposes, [php_runtime::PropertyPurpose::ArrayCast; 7]);
     assert_eq!(
         ctx.inner.messages(),
         ["Deprecated: array_walk(): Passing an object for argument #1 $array to array_walk() is deprecated, call get_object_vars() first instead"]
     );
+}
+
+/// `array_walk()` prepares a lazy object once, then walks only its live
+/// `ArrayCast` table, including callback additions and excluding removals.
+#[test]
+fn walk_object_initializes_before_walking_cast_table() {
+    use php_runtime::PropertyPurpose;
+    struct LazyCtx {
+        inner: CollectingContext,
+        preparations: usize,
+        slots: Vec<(ArrayKey, PhpRef)>,
+        purposes: Vec<PropertyPurpose>,
+        bound: Vec<ArrayKey>,
+    }
+    impl php_runtime::RuntimeContext for LazyCtx {
+        fn diagnostic(&mut self, l: php_runtime::ErrorLevel, m: &str) -> RtResult<()> {
+            self.inner.diagnostic(l, m)
+        }
+        fn object_properties(
+            &mut self,
+            _: &Obj,
+            purpose: PropertyPurpose,
+        ) -> RtResult<Option<ZArray>> {
+            self.purposes.push(purpose);
+            assert_eq!(purpose, PropertyPurpose::ArrayCast);
+            assert_eq!(self.preparations, 1);
+            let mut t = HashTable::new();
+            for (k, r) in &self.slots {
+                t.insert(k.clone(), r.get());
+            }
+            Ok(Some(ZArray::from_table(t)))
+        }
+    }
+    impl ArrayContext for LazyCtx {
+        fn prepare_object_walk(&mut self, _: &Obj) -> RtResult<()> {
+            assert!(self.purposes.is_empty());
+            self.preparations += 1;
+            Ok(())
+        }
+
+        fn property_reference(&mut self, _: &Obj, key: &ArrayKey) -> RtResult<Option<PropertyRef>> {
+            self.bound.push(key.clone());
+            Ok(self
+                .slots
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, r)| PropertyRef::Bound(r.clone())))
+        }
+    }
+    for mutate in [false, true] {
+        let a = PhpRef::new(Value::Int(1));
+        let b = PhpRef::new(Value::Int(2));
+        let removed = PhpRef::new(Value::Int(3));
+        let added = PhpRef::new(Value::Int(4));
+        let mut ctx = LazyCtx {
+            inner: CollectingContext::new(),
+            preparations: 0,
+            slots: vec![
+                (ArrayKey::from("a"), a.clone()),
+                (ArrayKey::from("\0C\0b"), b.clone()),
+            ],
+            purposes: Vec::new(),
+            bound: Vec::new(),
+        };
+        if mutate {
+            ctx.slots.push((ArrayKey::from("removed"), removed.clone()));
+        }
+        let obj = PhpRef::new(Value::Object(Obj::new(TestObj)));
+        let mut seen = Vec::new();
+        let mut cb = |c: &mut LazyCtx, args: &[Value]| {
+            seen.push(args[1].as_str().unwrap().to_string_lossy());
+            if mutate && args[1].as_str().map(ZStr::as_bytes) == Some(&b"a"[..]) {
+                c.slots.retain(|(k, _)| k != &ArrayKey::from("removed"));
+                c.slots.push((ArrayKey::from("added"), added.clone()));
+            }
+            if let Value::Reference(r) = &args[0] {
+                let v = php_runtime::ops::mul(&r.get(), &Value::Int(10), c)?;
+                r.set(v);
+            }
+            Ok(Value::Null)
+        };
+        callback::array_walk(&mut ctx, &obj, &mut cb, None).unwrap();
+        assert_eq!(ctx.preparations, 1);
+        assert_eq!(a.get().as_int(), Some(10));
+        assert_eq!(b.get().as_int(), Some(20));
+        assert_eq!(removed.get().as_int(), Some(3));
+        assert_eq!(added.get().as_int(), Some(if mutate { 40 } else { 4 }));
+        let mut expected = vec![ArrayKey::from("a"), ArrayKey::from("\0C\0b")];
+        if mutate {
+            expected.push(ArrayKey::from("added"));
+        }
+        assert_eq!(ctx.bound, expected);
+        assert_eq!(
+            seen,
+            expected
+                .iter()
+                .map(ArrayKey::to_zstr)
+                .map(|s| s.to_string_lossy())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            ctx.purposes,
+            vec![PropertyPurpose::ArrayCast; expected.len() + 1]
+        );
+    }
 }

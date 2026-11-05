@@ -164,6 +164,14 @@ pub trait ArrayContext: RuntimeContext {
         None
     }
 
+    /// Prepares an object for `array_walk()` before reading its live
+    /// `ArrayCast` property table. The VM may initialize a lazy object here,
+    /// which may run user code; the default does nothing.
+    fn prepare_object_walk(&mut self, obj: &Obj) -> RtResult<()> {
+        let _ = obj;
+        Ok(())
+    }
+
     /// `array_walk()` over an object: binds the live property slot `key` (a
     /// property-table key, mangled for private/protected properties) to a
     /// reference — `ZVAL_MAKE_REF` on the slot, adding the typed property's

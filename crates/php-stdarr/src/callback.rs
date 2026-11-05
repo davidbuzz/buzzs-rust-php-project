@@ -128,6 +128,9 @@ fn walk_inner<C: ArrayContext + ?Sized>(
 /// re-reads the table (the callback may add or remove properties) and
 /// continues after the previously visited key; every property slot is
 /// bound to a reference through [`ArrayContext::property_reference`].
+///
+/// [`ArrayContext::prepare_object_walk`] prepares the object once before
+/// the walk reads its live `ArrayCast` table.
 fn walk_object<C: ArrayContext + ?Sized>(
     ctx: &mut C,
     obj: &Obj,
@@ -136,6 +139,7 @@ fn walk_object<C: ArrayContext + ?Sized>(
     recursive: bool,
     guard: &mut Guard,
 ) -> RtResult<()> {
+    ctx.prepare_object_walk(obj)?;
     let mut last: Option<(ArrayKey, u32)> = None;
     loop {
         let table = ctx
