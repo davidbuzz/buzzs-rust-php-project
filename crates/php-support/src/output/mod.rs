@@ -631,7 +631,14 @@ fn handler_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Context) 
         let Some(h) = o.find_mut(id) else {
             return Status::Failure;
         };
-        let buffer = h.buffer.clone();
+        // A user callback gets a copy (it may read the buffer through
+        // `ob_get_contents()` while it runs); internal handlers take the
+        // buffer itself below.
+        let buffer = if matches!(h.func, HandlerFunc::User(_)) {
+            h.buffer.clone()
+        } else {
+            Vec::new()
+        };
         match &mut h.func {
             HandlerFunc::User(c) => (true, buffer, c.take(), None, None),
             HandlerFunc::Internal(f) => (false, buffer, None, f.take(), None),
@@ -711,13 +718,24 @@ fn handler_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Context) 
             }
         };
     } else {
-        ctx.input.clone_from(&buffer);
+        // `php_output_context_feed()`: an internal handler reads the
+        // buffer in place. Moving it instead of copying matters at the
+        // memory_limit fatal, which discards the buffers through here.
+        let mut buffer = host
+            .output()
+            .find_mut(id)
+            .map(|h| std::mem::take(&mut h.buffer))
+            .unwrap_or_default();
+        ctx.input.clear();
         let result = match (passthrough, taken_internal) {
-            (Some(true), _) => Some(buffer),
+            (Some(true), _) => Some(std::mem::take(&mut buffer)),
             (Some(false), _) => Some(Vec::new()),
             (None, Some(mut f)) => {
                 let r = f(&buffer, ctx.op);
                 if !host.output().is_activated() || host.has_pending_fatal() {
+                    if let Some(h) = host.output().find_mut(id) {
+                        h.buffer = buffer;
+                    }
                     return Status::Failure;
                 }
                 if let Some(h) = host.output().find_mut(id) {
@@ -729,6 +747,12 @@ fn handler_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Context) 
             }
             (None, None) => None,
         };
+        if result.is_none() {
+            // A failing handler hands the buffered data on (below).
+            if let Some(h) = host.output().find_mut(id) {
+                h.buffer = buffer;
+            }
+        }
         status = match result {
             Some(v) if v.is_empty() => Status::NoData,
             Some(v) => {
