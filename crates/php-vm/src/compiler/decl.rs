@@ -155,6 +155,7 @@ impl Compiler {
     ) -> CResult<()> {
         let name = self.ns_prefixed_pub(&fd.name.name);
         let lc = name.to_ascii_lowercase();
+        let known_key = lc.clone();
         // `zend_begin_func_decl`: the unqualified name must not name a
         // different function imported by `use function`.
         if self
@@ -233,6 +234,9 @@ impl Compiler {
         let idx = self.add_function(uf);
         if top_level {
             self.hoisted_functions.push(idx);
+            // `pass_two()` done: later calls in this file know its arginfo.
+            let params = fd.params.iter().map(|p| (p.by_ref, p.variadic)).collect();
+            self.known_functions.insert(known_key, params);
         } else {
             self.f().line = fd.span.line;
             self.emit(Op::DeclareFunction(idx));

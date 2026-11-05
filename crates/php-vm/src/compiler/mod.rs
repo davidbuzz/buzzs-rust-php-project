@@ -280,6 +280,11 @@ pub(crate) struct Compiler {
     pub opts: CompileOptions,
     /// Names of functions declared in this file (for redeclare errors).
     pub declared_functions: HashMap<Vec<u8>, u32>,
+    /// `CG(function_table)` entries finalized so far: the top-level
+    /// functions of this file whose compilation finished, by lower-case
+    /// name, with each parameter's (by-reference, variadic) flags.
+    /// `zend_compile_args` knows their arginfo (`fbc`).
+    pub known_functions: HashMap<Vec<u8>, Vec<(bool, bool)>>,
     pub source: Rc<[u8]>,
     /// Original source offsets cannot recover multibyte semantic text.
     pub multibyte: bool,
@@ -331,6 +336,7 @@ pub fn compile(
         anon_counter: opts.anon_base,
         opts,
         declared_functions: HashMap::new(),
+        known_functions: HashMap::new(),
         source,
         multibyte: program.multibyte,
         hook_prop: None,

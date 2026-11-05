@@ -1522,6 +1522,9 @@ impl Vm {
         op: BinaryOp,
         v: Value,
     ) -> VmResult<Value> {
+        if let Some(cv) = self.rw_undef_cv_container(pid) {
+            self.rw_undef_container_first(cv)?;
+        }
         let (base, segs) = self.resolve_place(pid, true)?;
         if matches!(
             self.frame().code.places[pid as usize].base,
@@ -1566,6 +1569,41 @@ impl Vm {
         let nv = ops::binary_op(op, &cur, &v, self).map_err(|e| self.rt_throw(e))?;
         drop(cur);
         self.write_place(base2, &segs, WOp::Assign(nv))
+    }
+
+    /// The undefined compiled variable a read-modify-write of `pid` fetches
+    /// as a dimension container (`$a[$k] op= v`, `$a[$k]++`).
+    #[inline]
+    fn rw_undef_cv_container(&self, pid: PlaceId) -> Option<u32> {
+        let f = self.frame();
+        let p = &f.code.places[pid as usize];
+        let PlaceBase::Cv(cv) = p.base else {
+            return None;
+        };
+        if !matches!(p.segs.first(), Some(Seg::Dim(_) | Seg::Append)) {
+            return None;
+        }
+        let undef = matches!(f.vars.borrow().slots.get(f.cv_idx(cv)), Some(None));
+        undef.then_some(cv)
+    }
+
+    /// `ZEND_ASSIGN_DIM_OP` / `ZEND_FETCH_DIM_RW` (`Zend/zend_vm_def.h`)
+    /// fetch the container (`BP_VAR_RW`: "Undefined variable", then null)
+    /// before reading the offset, so an undefined container warns before
+    /// an undefined offset variable does.
+    #[cold]
+    #[inline(never)]
+    fn rw_undef_container_first(&mut self, cv: u32) -> VmResult<()> {
+        self.read_cv(cv)?;
+        let f = self.frame();
+        let idx = f.cv_idx(cv);
+        let vars = f.vars.clone();
+        if let Some(slot) = vars.borrow_mut().slots.get_mut(idx) {
+            if slot.is_none() {
+                *slot = Some(Value::Null);
+            }
+        }
+        Ok(())
     }
 
     /// The read half of a read-modify-write: the current value and, when
@@ -1615,6 +1653,9 @@ impl Vm {
                     }
                 }
             }
+        }
+        if let Some(cv) = self.rw_undef_cv_container(pid) {
+            self.rw_undef_container_first(cv)?;
         }
         let (base, segs) = self.resolve_place(pid, true)?;
         if matches!(
@@ -1737,12 +1778,29 @@ impl Vm {
         let v = match v {
             Value::Reference(r) => Value::Reference(r),
             other => {
+                let segs = &self.frame().code.places[pid as usize].segs;
+                if !segs.is_empty() && !segs.iter().any(|s| matches!(s, Seg::Prop(_))) {
+                    return self.assign_non_ref_to_dim(pid, other);
+                }
                 self.notice("Only variables should be assigned by reference")?;
                 return self.place_assign(pid, other);
             }
         };
         let (base, segs) = self.resolve_place(pid, true)?;
         self.write_place(base, &segs, WOp::AssignRef(v))
+    }
+
+    /// `$a[...] =& f()` where `f()` did not return a reference:
+    /// `FETCH_DIM_W` runs first, so its errors ("Cannot add element to the
+    /// array as the next element is already occupied") take precedence;
+    /// then `zend_wrong_assign_to_variable_reference()` raises the notice
+    /// and assigns the value to the fetched element.
+    #[cold]
+    #[inline(never)]
+    fn assign_non_ref_to_dim(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+        let r = self.place_make_ref(pid)?;
+        self.notice("Only variables should be assigned by reference")?;
+        self.assign_ref(&r, v)
     }
 
     /// Makes a place a reference.

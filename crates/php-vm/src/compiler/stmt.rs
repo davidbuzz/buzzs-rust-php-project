@@ -1354,6 +1354,15 @@ impl Compiler {
                 | ExprKind::AssignRef { .. }
         ) {
             let op = self.compile_expr(e)?;
+            // zend_compile_args: a function call compiled into a builtin
+            // instruction (`strlen()`, `func_get_args()`, ...) yields a
+            // CONST/TMP, sent with SEND_VAL_EX ("could not be passed by
+            // reference" for a by-reference parameter).
+            if matches!(e.kind, ExprKind::Call { .. })
+                && !matches!(self.fref().ops.last(), Some(Op::DoCall { .. }))
+            {
+                return Ok(ArgSrc::Val(op));
+            }
             Ok(ArgSrc::CallResult(op))
         } else {
             let op = self.compile_expr(e)?;

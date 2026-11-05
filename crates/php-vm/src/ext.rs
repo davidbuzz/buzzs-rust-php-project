@@ -561,6 +561,11 @@ pub struct ClassHooks {
     /// `get_method`: runs before `$obj->m()` resolves the method (also for
     /// user methods of subclasses); throw to refuse the call.
     pub get_method: Option<fn(&mut Vm, &Obj, &ZStr) -> VmResult<()>>,
+    /// A `get_method` that resolves names missing from the class to the
+    /// methods of another object (`spl_dual_it_get_method`: the inner
+    /// iterator): that object, whose methods `method_exists()` also
+    /// reports. `Ok(None)` when there is none.
+    pub forward_methods_to: Option<fn(&mut Vm, &Obj) -> VmResult<Option<Obj>>>,
     /// `get_property_ptr_ptr` for `$o->p = &$v`: runs before the property
     /// slot is rebound; throw to refuse. (Other reference fetches ask
     /// [`ClassHooks::read_property`] with [`PropCtx::Ref`].)

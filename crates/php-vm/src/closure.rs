@@ -172,6 +172,26 @@ impl Vm {
         Value::Object(self.new_closure_object(data))
     }
 
+    /// `Z_PARAM_FUNC` for a callable kept past the call that received it
+    /// (`zend_fcall_info_cache`): resolves `v` once in the calling user
+    /// frame's scope, raising the `self`/`parent`/`static` deprecations
+    /// there, and returns a value that calls the resolved function from
+    /// any context. Plain function names and `Closure` objects are
+    /// returned as they are; other callables become a fake closure bound to
+    /// the resolved scope, `$this` and called class. `Ok(Err(reason))` when
+    /// `v` is not callable.
+    pub fn resolve_callable_value(&mut self, v: &Value) -> VmResult<Result<Value, String>> {
+        let call = match self.zend_is_callable(v, false)? {
+            Ok(call) => call,
+            Err(reason) => return Ok(Err(reason)),
+        };
+        Ok(Ok(match v.deref() {
+            Value::Str(s) if !s.as_bytes().windows(2).any(|w| w == b"::") => v.deref(),
+            Value::Object(o) if object::has_internal::<ClosureData>(&o) => Value::Object(o),
+            _ => self.fake_closure(call),
+        }))
+    }
+
     /// `Closure::fromCallable()`.
     pub(crate) fn closure_from_callable_value(&mut self, v: &Value) -> VmResult<Value> {
         if let Value::Array(a) = v {
@@ -623,6 +643,28 @@ fn closure_invoke(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 .collect()
         })
         .unwrap_or_default();
+    // `zend_handle_undef_args()` on the trampoline: it copies the arginfo of
+    // an internal closure function, so a required parameter skipped by
+    // named arguments is reported for `Closure::__invoke()` (user arginfo
+    // is left to the closure itself).
+    if let Some(last) = a.passed.iter().rposition(|&p| p) {
+        if let Some(gap) = a.passed[..last].iter().position(|&p| !p) {
+            if let Some(Func::Builtin(inner)) = vm.closure_data(&c).map(|d| d.func) {
+                if gap < inner.required as usize {
+                    let name = params
+                        .get(gap)
+                        .map_or_else(String::new, |p| p.1.to_string_lossy());
+                    return Err(vm.make_throw(
+                        "ArgumentCountError",
+                        &format!(
+                            "Closure::__invoke(): Argument #{} (${name}) not passed",
+                            gap + 1
+                        ),
+                    ));
+                }
+            }
+        }
+    }
     let mut args = Vec::with_capacity(a.values.len());
     let mut named = std::mem::take(&mut a.named);
     for (i, v) in std::mem::take(&mut a.values).into_iter().enumerate() {

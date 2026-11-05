@@ -748,7 +748,36 @@ fn method_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if cls.lc_name.as_bytes() == b"closure" && m.eq_ignore_ascii_case(b"__invoke") {
         return Ok(Value::Bool(true));
     }
+    if let Value::Object(o) = &v {
+        return Ok(Value::Bool(forwarded_method_exists(vm, o, &m)?));
+    }
     Ok(Value::Bool(false))
+}
+
+/// `method_exists()` on an object asks its `get_method` handler, which for
+/// `IteratorIterator` & co. (`spl_dual_it_get_method`) finds the inner
+/// iterator's real methods (its `__call` trampoline does not count).
+#[cold]
+fn forwarded_method_exists(vm: &mut Vm, o: &php_runtime::Obj, m: &ZStr) -> VmResult<bool> {
+    let mut cur = o.clone();
+    // Bounded: a chain of wrappers cannot loop, but stay defensive.
+    for _ in 0..64 {
+        let Some(forward) = object::class_of(&cur)
+            .hooks
+            .as_ref()
+            .and_then(|h| h.forward_methods_to)
+        else {
+            return Ok(false);
+        };
+        let Some(inner) = forward(vm, &cur)? else {
+            return Ok(false);
+        };
+        if object::class_of(&inner).find_method(m.as_bytes()).is_some() {
+            return Ok(true);
+        }
+        cur = inner;
+    }
+    Ok(false)
 }
 
 fn property_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1739,17 +1768,22 @@ fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(r))
 }
 
+/// `register_shutdown_function()` (`ext/standard/basic_functions.c`): the
+/// callback is resolved by `Z_PARAM_FUNC` in the registering scope, so
+/// `"self::m"` raises its deprecation here and still names the class at
+/// shutdown, when no scope is active.
 fn register_shutdown_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let cb = a.at(0);
-    if !vm.is_callable_value(&cb) {
-        let desc = vm.callable_error(&cb);
-        return Err(super::util::type_error(
-            vm,
-            a,
-            1,
-            &format!("must be a valid callback, {desc}"),
-        ));
-    }
+    let cb = match vm.resolve_callable_value(&a.at(0))? {
+        Ok(cb) => cb,
+        Err(desc) => {
+            return Err(super::util::type_error(
+                vm,
+                a,
+                1,
+                &format!("must be a valid callback, {desc}"),
+            ))
+        }
+    };
     let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
     vm.shutdown_functions.push((cb, args));
     Ok(Value::Null)
