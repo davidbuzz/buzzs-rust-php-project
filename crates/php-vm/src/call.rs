@@ -995,6 +995,15 @@ impl Vm {
         };
         let mut changed = false;
         for (k, val) in items {
+            // ZEND_SEND_UNPACK: a Traversable's numeric string keys
+            // (ZEND_HANDLE_NUMERIC) are positional (GH-18581).
+            let k = match k {
+                Value::Str(s) if traversable => match ArrayKey::from_zstr(&s) {
+                    ArrayKey::Int(i) => Value::Int(i),
+                    ArrayKey::Str(s) => Value::Str(s),
+                },
+                k => k,
+            };
             let (pos, name) = match &k {
                 Value::Str(s) => (self.arg_position(s)?, Some(s.clone())),
                 Value::Int(_) => {

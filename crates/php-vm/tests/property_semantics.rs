@@ -1292,3 +1292,28 @@ CompileError: __HALT_COMPILER() can only be used from the outermost scope
 CompileError: Encoding must be a literal
 ");
 }
+
+#[test]
+fn traversable_unpack_numeric_string_keys_are_positional() {
+    // GH-18581: ZEND_SEND_UNPACK applies ZEND_HANDLE_NUMERIC to iterator keys.
+    assert_eq!(run(r#"<?php
+function g() {
+    yield '100' => 'first';
+    yield '101' => 'second';
+    yield '102' => 'third';
+    yield 'named' => 'fourth';
+}
+function test($x = null, $y = null, ...$z) {
+    var_dump($x, $y, $z);
+}
+test(...g());
+"#), "string(5) \"first\"
+string(6) \"second\"
+array(2) {
+  [0]=>
+  string(5) \"third\"
+  [\"named\"]=>
+  string(6) \"fourth\"
+}
+");
+}
