@@ -1161,3 +1161,29 @@ int(43)
 Warning: Undefined global variable $nope in t.php on line 12
 ");
 }
+
+#[test]
+fn compile_time_name_conversions_and_strict_string_offsets() {
+    // zend_compile_enum_case -> zend_declare_typed_class_constant;
+    // zend_delayed_compile_prop's convert_to_string; zend_isempty_dim_slow's
+    // zval_get_long_ex(offset, true).
+    assert_eq!(run(r#"<?php
+enum E: string { case namespace = 'x'; }
+$o = new stdClass;
+echo "run\n";
+var_dump($o->{[]} ?? 'none');
+$s = "abc";
+var_dump(empty($s[1.5]));
+var_dump(isset($s[0.0]));
+"#), "
+Deprecated: Declaring enum constant called 'namespace' is deprecated in t.php on line 2
+
+Warning: Array to string conversion in t.php on line 5
+run
+string(4) \"none\"
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 7
+bool(false)
+bool(true)
+");
+}

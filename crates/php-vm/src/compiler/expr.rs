@@ -1021,7 +1021,16 @@ impl Compiler {
                 if self.in_evaluated_const_expr() {
                     return self.const_prop_place(p, name);
                 }
-                let n = self.member_name(name)?;
+                let n = match name {
+                    // zend_delayed_compile_prop converts a constant name to
+                    // a string at compile time.
+                    MemberName::Expr(e) if matches!(self.try_fold(e), Some(Value::Array(_))) => {
+                        self.warnings
+                            .push((2, "Array to string conversion".to_string(), e.span.line));
+                        self.lit(Value::Str(ZStr::from("Array")))
+                    }
+                    _ => self.member_name(name)?,
+                };
                 p.segs.push(Seg::Prop(n));
                 p
             }

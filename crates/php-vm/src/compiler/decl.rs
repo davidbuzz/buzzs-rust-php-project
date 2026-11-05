@@ -2173,6 +2173,14 @@ impl Compiler {
                         }
                         _ => {}
                     }
+                    // zend_declare_typed_class_constant (via zend_compile_enum_case).
+                    if ec.name.eq_ignore_case("namespace") {
+                        self.warnings.push((
+                            8192,
+                            "Declaring enum constant called 'namespace' is deprecated".to_string(),
+                            m.span.line,
+                        ));
+                    }
                     if cases
                         .iter()
                         .any(|(n, _, _): &(ZStr, Option<ConstExpr>, u32)| {
