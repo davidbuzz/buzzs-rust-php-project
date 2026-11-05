@@ -147,3 +147,29 @@ f();
         "Cannot re-assign $this\nCannot re-assign $this\nC\nCannot re-assign $this\n\nWarning: Undefined variable $this in t.php on line 13\nNULL\n"
     );
 }
+
+/// `slow_index_convert_w` holds the array across a float offset's
+/// diagnostic: an error handler that captures the array makes the write
+/// a no-op (`array_offset_002`); otherwise the element is written.
+#[test]
+fn float_offset_diagnostic_handler_capturing_array_skips_write() {
+    let out = run(r#"<?php
+set_error_handler(function ($code, $msg) {
+    echo "Err: $msg\n";
+    if ($GLOBALS['capture']) { $GLOBALS['c'] = $GLOBALS['y']; }
+});
+$capture = true;
+$y = [];
+$y[1e20] = 1;
+echo count($y), "\n";
+$capture = false;
+$z = [];
+$z[1.5] = 2;
+echo count($z), $z[1], "\n";
+"#);
+    assert_eq!(
+        out,
+        "Err: The float 1.0E+20 is not representable as an int, cast occurred\n0\n\
+         Err: Implicit conversion from float 1.5 to int loses precision\n12\n"
+    );
+}

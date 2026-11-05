@@ -555,6 +555,27 @@ pub(crate) fn descend(
                             return Step::Done(Value::Null);
                         }
                     }
+                    if last
+                        && matches!(
+                            k,
+                            Value::Float(_)
+                                | Value::Null
+                                | Value::Resource(_)
+                                | Value::Reference(_)
+                        )
+                        && matches!(wop, WOp::Assign(_))
+                        && take_pending_convert_dim(segs)
+                    {
+                        // `slow_index_convert_w` holds the (separated)
+                        // array across the conversion's diagnostic; the
+                        // write is redone once it has been raised.
+                        if let Err(e) = key_of(k, diags, KeyCtx::Write) {
+                            return Step::Err(e);
+                        }
+                        arr.make_mut();
+                        CONVERT_DIM_HIT.with(|c| c.set(Some(arr.clone())));
+                        return Step::Done(Value::Null);
+                    }
                     // Only the final ZEND_UNSET_DIM reports "Cannot unset
                     // offset"; FETCH_DIM_UNSET converts like a write fetch.
                     let ctx = if is_unset && last {
@@ -705,6 +726,45 @@ thread_local! {
     /// (see [`UndefDimHit`]).
     static UNDEF_DIM_HIT: std::cell::Cell<Option<(u32, UndefDimHit)>> =
         const { std::cell::Cell::new(None) };
+    /// The final offset of a `place = v` walk whose conversion raises a
+    /// diagnostic (a fractional or out-of-range float, null or a resource)
+    /// while an error handler is set, keyed by the walk's segments (their
+    /// address): set by `Vm::assign_converted_dim`.
+    static PENDING_CONVERT_DIM: std::cell::Cell<Option<*const RSeg>> =
+        const { std::cell::Cell::new(None) };
+    /// The array such a walk stopped at (`slow_index_convert_w`'s
+    /// `GC_ADDREF(ht)`).
+    static CONVERT_DIM_HIT: std::cell::Cell<Option<ZArray>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Takes the pending converted final offset of the walk over `segs`.
+fn take_pending_convert_dim(segs: &[RSeg]) -> bool {
+    PENDING_CONVERT_DIM.with(|c| match c.get() {
+        Some(ptr) if std::ptr::eq(ptr, segs.as_ptr()) => {
+            c.set(None);
+            true
+        }
+        _ => false,
+    })
+}
+
+/// Whether converting the final offset `seg` of an assignment raises a
+/// diagnostic (`slow_index_convert_w`).
+#[cold]
+#[inline(never)]
+fn final_dim_converts_noisily(seg: Option<&RSeg>) -> bool {
+    let Some(RSeg::Dim(k)) = seg else {
+        return false;
+    };
+    if !matches!(
+        k,
+        Value::Float(_) | Value::Null | Value::Resource(_) | Value::Reference(_)
+    ) {
+        return false;
+    }
+    let mut diags = Vec::new();
+    key_of(k, &mut diags, KeyCtx::Write).is_ok() && !diags.is_empty()
 }
 
 /// Whether the property reference assignment at frame depth `depth` is the
@@ -1671,7 +1731,40 @@ impl Vm {
         if let Some(cv) = undef_dim {
             return self.assign_undef_dim(base, &segs, v, cv);
         }
+        if !self.error_handlers.is_empty() && final_dim_converts_noisily(segs.last()) {
+            return self.assign_converted_dim(base, &segs, v);
+        }
         self.write_place(base, &segs, WOp::Assign(v))
+    }
+
+    /// `place[k] = v` where converting `k` raises a diagnostic and an error
+    /// handler is set: `slow_index_convert_w` (`Zend/zend_execute.c`)
+    /// holds the array across the diagnostic and skips the write (the
+    /// assignment yields null) when the handler captured or destroyed it
+    /// (`array_offset_002`). The walk stops at the final array without
+    /// writing (see `PENDING_CONVERT_DIM`); once its diagnostics have been
+    /// raised the assignment is redone silently.
+    #[cold]
+    #[inline(never)]
+    fn assign_converted_dim(&mut self, base: RBase, segs: &[RSeg], v: Value) -> VmResult<Value> {
+        let again = base.clone();
+        let saved = PENDING_CONVERT_DIM.with(|c| c.replace(Some(segs.as_ptr())));
+        let saved_hit = CONVERT_DIM_HIT.with(std::cell::Cell::take);
+        let r = self.write_place(base, segs, WOp::Assign(v.clone()));
+        PENDING_CONVERT_DIM.with(|c| c.set(saved));
+        let hit = CONVERT_DIM_HIT.with(|c| c.replace(saved_hit));
+        let r = r?;
+        let Some(held) = hit else {
+            return Ok(r);
+        };
+        // The variable's slot and `held`.
+        if held.refcount() != 2 {
+            return Ok(Value::Null);
+        }
+        drop(held);
+        let r = self.write_place_inner(again, segs, WOp::Assign(v), true);
+        flush_deferred_ref_assigns();
+        r
     }
 
     /// `place[$undef] = v` (`ZEND_ASSIGN_DIM` with an undefined CV offset):
