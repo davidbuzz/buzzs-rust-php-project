@@ -73,13 +73,8 @@ impl Vm {
         let unit = match compiler::compile(&program, Rc::from(src), opts) {
             Ok(u) => u,
             Err(e) => {
-                for w in &program.warnings {
-                    let level = match w.level {
-                        php_parser::ast::DiagnosticLevel::CompileWarning => 128,
-                        php_parser::ast::DiagnosticLevel::Deprecated => 8192,
-                        php_parser::ast::DiagnosticLevel::Warning => 2,
-                    };
-                    self.error_at(level, &w.message, filename, w.line)?;
+                for (level, msg, line) in &e.warnings {
+                    self.error_at(*level, msg, filename, *line)?;
                 }
                 self.report_compile_error(&e.message, filename, e.line, e.is_parse);
                 return Ok(CompileOutcome::Fatal);

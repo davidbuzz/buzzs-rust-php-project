@@ -822,6 +822,9 @@ impl Vm {
             }
 
             Err(e) => {
+                for (level, message, line) in &e.warnings {
+                    self.error_at(*level, message, file, *line)?;
+                }
                 self.report_compile_error(&e.message, file, e.line, e.is_parse);
                 Ok(CompileOutcome::Fatal)
             }

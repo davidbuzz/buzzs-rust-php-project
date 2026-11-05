@@ -241,6 +241,43 @@ fn invalid_parameter_types_and_defaults() {
 }
 
 #[test]
+fn iterable_defaults_warn_before_fatal() {
+    let src = r#"<?php
+function foo(iterable $iterable = null) {}
+function bar(iterable $iterable = []) {}
+function baz(iterable $iterable = 1) {}
+echo "unreachable\n";
+"#;
+    let error = compile(src).expect_err("invalid iterable default");
+    assert_eq!(
+        error.warnings,
+        vec![(
+            8192,
+            "foo(): Implicitly marking parameter $iterable as nullable is deprecated, the explicit nullable type must be used instead".into(),
+            2,
+        )]
+    );
+    assert_eq!(error.line, 4);
+    assert_eq!(
+        run(src),
+        "\nDeprecated: foo(): Implicitly marking parameter $iterable as nullable is deprecated, the explicit nullable type must be used instead in t.php on line 2\n\nFatal error: Cannot use int as default value for parameter $iterable of type Traversable|array in t.php on line 4\n"
+    );
+}
+
+#[test]
+fn iterable_null_and_array_defaults_remain_valid() {
+    assert_eq!(
+        run(r#"<?php
+function foo(iterable $iterable = null) { var_dump($iterable); }
+function bar(iterable $iterable = []) { var_dump($iterable); }
+function baz(?iterable $iterable = null) { var_dump($iterable); }
+foo(); bar(); baz();
+"#),
+        "\nDeprecated: foo(): Implicitly marking parameter $iterable as nullable is deprecated, the explicit nullable type must be used instead in t.php on line 2\nNULL\narray(0) {\n}\nNULL\n"
+    );
+}
+
+#[test]
 fn explicit_return_declaration_errors() {
     for (ty, body, message) in [
         ("void", "return null;", "A void function must not return a value (did you mean \"return;\" instead of \"return null;\"?)"),

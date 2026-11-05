@@ -24,14 +24,17 @@ pub struct CompileError {
     pub line: u32,
     /// `E_COMPILE_ERROR` (false) or `E_ERROR`-class… kept for display.
     pub is_parse: bool,
+    /// Compile-time warnings accumulated before the fatal error.
+    pub warnings: Vec<(i64, String, u32)>,
 }
 
 impl CompileError {
-    fn new(message: impl Into<String>, line: u32) -> Self {
+    fn new(message: impl Into<String>, line: u32, warnings: Vec<(i64, String, u32)>) -> Self {
         CompileError {
             message: message.into(),
             line,
             is_parse: false,
+            warnings,
         }
     }
 }
@@ -314,7 +317,7 @@ impl Compiler {
     }
 
     pub(crate) fn err<T>(&self, msg: impl Into<String>, line: u32) -> CResult<T> {
-        Err(CompileError::new(msg, line))
+        Err(CompileError::new(msg, line, self.warnings.clone()))
     }
 
     pub(crate) fn emit(&mut self, op: Op) -> usize {
