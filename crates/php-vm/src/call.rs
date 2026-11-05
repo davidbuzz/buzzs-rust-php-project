@@ -56,17 +56,21 @@ impl Vm {
 
     /// Installs a pooled argument buffer into the pending call before its
     /// first argument, so the SEND ops do not allocate (php-src's VM-stack
-    /// call frames). Zero-argument calls never touch the pool.
+    /// call frames). Zero-argument calls never touch the pool, and later
+    /// arguments of a call that already has a buffer leave it alone.
     #[inline]
     fn pooled_args(&mut self) {
-        let Some(v) = self.call_bufs.args.pop() else {
+        let Some(frame) = self.frames.last_mut() else {
             return;
         };
-        let call = self.frame_mut().calls.last_mut().expect("pending call");
-        if call.args.capacity() == 0 {
+        let Some(call) = frame.calls.last_mut() else {
+            return;
+        };
+        if call.args.capacity() != 0 {
+            return;
+        }
+        if let Some(v) = self.call_bufs.args.pop() {
             call.args = v;
-        } else if self.call_bufs.args.len() < 4 {
-            self.call_bufs.args.push(v);
         }
     }
 
@@ -1270,6 +1274,12 @@ impl Vm {
     }
 
     /// Pushes a frame for a user function call.
+    ///
+    /// The frame is set up where it lives on the frame stack, like
+    /// `zend_vm_stack_push_call_frame` + `i_init_func_execute_data`: a
+    /// `Frame` is a few hundred bytes and every move of one is a `memcpy`,
+    /// so the pooled frame is moved once (pool to stack) and then
+    /// initialized in place.
     pub(crate) fn push_user_frame(
         &mut self,
         uf: &Rc<UserFunction>,
@@ -1278,13 +1288,23 @@ impl Vm {
         caller_strict: bool,
         from_internal: bool,
     ) -> VmResult<()> {
-        let mut f = match self.call_bufs.user_frames.pop() {
-            Some(mut f) => {
-                f.reinit_for_user(uf.code.clone(), FrameKind::Function);
-                f
+        if self.frames.len() > 50_000 {
+            return Err(self.make_throw(
+                "Error",
+                "Maximum call stack size reached. Infinite recursion?",
+            ));
+        }
+        let idx = self.frames.len();
+        match self.call_bufs.user_frames.pop() {
+            Some(f) => {
+                self.frames.push(f);
+                self.frames[idx].reinit_for_user(uf.code.clone(), FrameKind::Function);
             }
-            None => Frame::new(uf.code.clone(), FrameKind::Function),
-        };
+            None => self
+                .frames
+                .push(Frame::new(uf.code.clone(), FrameKind::Function)),
+        }
+        let f = &mut self.frames[idx];
         f.func = Some(call.func);
         f.ufunc = Some(uf.clone());
         f.this = call.this;
@@ -1294,7 +1314,7 @@ impl Vm {
         f.caller_strict = caller_strict;
         f.called_from_internal = from_internal;
         f.is_ctor = call.is_ctor;
-        if let Some(name) = call.magic_name {
+        let spare_args = if let Some(name) = call.magic_name {
             // __call($name, $args). `ZEND_CALL_TRAMPOLINE` packs the
             // arguments as sent: `zend_call_function` does not unwrap
             // references for a trampoline (bug #50394), the VM's sends
@@ -1306,28 +1326,23 @@ impl Vm {
             for (k, v) in call.named {
                 arr.insert(ArrayKey::Str(k), v);
             }
-            self.put_arg_vec(std::mem::take(&mut f.args));
-            f.args = vec![
-                Some(Value::Str(name.clone())),
-                Some(Value::Array(ZArray::from_table(arr))),
-            ];
-            f.magic_name = Some(name);
+            f.magic_name = Some(name.clone());
+            std::mem::replace(
+                &mut f.args,
+                vec![
+                    Some(Value::Str(name)),
+                    Some(Value::Array(ZArray::from_table(arr))),
+                ],
+            )
         } else {
-            self.put_arg_vec(std::mem::take(&mut f.args));
-            f.args = call.args;
             f.named = call.named;
+            std::mem::replace(&mut f.args, call.args)
+        };
+        self.put_arg_vec(spare_args);
+        if let Some(c) = call.closure {
+            self.bind_closure_vars(idx, &c);
+            self.frames[idx].closure = Some(c);
         }
-        if let Some(c) = &call.closure {
-            self.bind_closure_vars(&mut f, c);
-            f.closure = Some(c.clone());
-        }
-        if self.frames.len() > 50_000 {
-            return Err(self.make_throw(
-                "Error",
-                "Maximum call stack size reached. Infinite recursion?",
-            ));
-        }
-        self.frames.push(f);
         if self.observer.enabled && !uf.is_generator() {
             self.observer_begin_top();
         }
@@ -1419,36 +1434,26 @@ impl Vm {
             self.check_deprecated_call(&call)?;
         }
         // Builtin frame (for backtraces and func_get_args of callers),
-        // pushed before zpp so arity and argument errors show it.
-        let mut f = Frame::with_vars(
-            self.empty_code.clone(),
-            FrameKind::Builtin,
-            self.empty_vars.clone(),
-            None,
-        );
-        f.func = Some(Func::Builtin(b.clone()));
-        // Direct call_user_func calls compile to frameless call forwarding in Zend.
-        if !call.direct
-            || !matches!(
-                b.name.as_bytes(),
-                b"call_user_func" | b"call_user_func_array"
-            )
-        {
-            f.builtin_name = Some(b.name.clone());
-        }
-        f.named.clone_from(&call.named);
-        f.args = if call.args.is_empty() {
+        // pushed before zpp so arity and argument errors show it. It is
+        // pushed first and filled in place: a `Frame` is a few hundred
+        // bytes, and every move of one is a `memcpy`.
+        let frame_args = if call.args.is_empty() {
             Vec::new()
         } else {
             let mut fa = self.call_bufs.args.pop().unwrap_or_default();
             fa.extend(call.args.iter().cloned());
             fa
         };
-        f.this.clone_from(&call.this);
-        f.scope = call.scope.clone();
-        f.called.clone_from(&call.called);
-        if self.observer.enabled {
-            f.observer_hidden = quiet
+        // Direct call_user_func calls compile to frameless call forwarding in Zend.
+        let builtin_name = (!call.direct
+            || !matches!(
+                b.name.as_bytes(),
+                b"call_user_func" | b"call_user_func_array"
+            ))
+        .then(|| b.name.clone());
+        // Computed before the push: `compiles_to_opcode` inspects the caller.
+        let observer_hidden = self.observer.enabled
+            && (quiet
                 || (b.name.as_bytes() == b"__destruct"
                     && call.scope.as_ref().is_some_and(|c| {
                         matches!(
@@ -1456,10 +1461,25 @@ impl Vm {
                             b"Generator" | b"Fiber" | b"_ZendTestFiber"
                         )
                     }))
-                || self.compiles_to_opcode(b, &call);
-        }
-        self.frames.push(f);
+                || self.compiles_to_opcode(b, &call));
+        self.frames.push(Frame::with_vars(
+            self.empty_code.clone(),
+            FrameKind::Builtin,
+            self.empty_vars.clone(),
+            None,
+        ));
         let depth = self.frames.len();
+        {
+            let f = &mut self.frames[depth - 1];
+            f.func = Some(Func::Builtin(b.clone()));
+            f.builtin_name = builtin_name;
+            f.named.clone_from(&call.named);
+            f.args = frame_args;
+            f.this.clone_from(&call.this);
+            f.scope.clone_from(&call.scope);
+            f.called.clone_from(&call.called);
+            f.observer_hidden = observer_hidden;
+        }
         self.observer_begin_top();
         // `zend_execute_internal` wraps the handler, which parses its own
         // arguments: internal enter precedes arity and type checks.
