@@ -1215,6 +1215,11 @@ impl Vm {
 
     /// `unset(place)`
     pub(crate) fn place_unset(&mut self, pid: PlaceId) -> VmResult<()> {
+        let code = self.frame().code.clone();
+        let p = &code.places[pid as usize];
+        if let (PlaceBase::StaticProp { class, name }, true) = (&p.base, p.segs.is_empty()) {
+            return Err(self.unset_static_prop(class, *name));
+        }
         let (base, segs) = self.resolve_place(pid, false)?;
         if let RBase::Undef(_) = &base {
             return Ok(());
@@ -1228,6 +1233,28 @@ impl Vm {
             }
         }
         self.write_place(base, &segs, WOp::Unset).map(|_| ())
+    }
+
+    /// `ZEND_UNSET_STATIC_PROP`: the class is fetched, then the name, and
+    /// `zend_std_unset_static_property` always throws.
+    #[cold]
+    fn unset_static_prop(&mut self, class: &crate::opcode::ClassSpec, name: Operand) -> Throw {
+        let cls = match self.resolve_class_spec(class) {
+            Ok(c) => c,
+            Err(t) => return t,
+        };
+        let n = match self.read(name).and_then(|v| self.to_zstr(&v)) {
+            Ok(n) => n,
+            Err(t) => return t,
+        };
+        self.make_throw(
+            "Error",
+            &format!(
+                "Attempt to unset static property {}::${}",
+                object::display_name(&cls.name),
+                n.to_string_lossy()
+            ),
+        )
     }
 
     /// Reads a place.

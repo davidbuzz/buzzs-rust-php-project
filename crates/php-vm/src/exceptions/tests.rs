@@ -150,3 +150,19 @@ try { throw 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
         "Cannot throw objects that do not implement Throwable\nCan only throw objects\n"
     );
 }
+
+/// `ZEND_UNSET_STATIC_PROP` → `zend_std_unset_static_property` throws,
+/// whether or not the property is declared (the class is fetched first).
+#[test]
+fn unsetting_a_static_property_throws() {
+    let src = r#"<?php
+class C { public static $p = 1; }
+try { unset(C::$a); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { unset(C::$p); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { unset(D::$p); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#;
+    assert_eq!(
+        run(src),
+        "Attempt to unset static property C::$a\nAttempt to unset static property C::$p\nClass \"D\" not found\n"
+    );
+}
