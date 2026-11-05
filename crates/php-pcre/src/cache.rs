@@ -2,7 +2,9 @@
 //! (`PCRE_G(pcre_cache)`, `pcre.backtrack_limit`, `pcre.recursion_limit`,
 //! `pcre.jit`).
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Arc;
 
 use crate::error::CompileError;
@@ -70,13 +72,43 @@ impl Default for MatchConfig {
     }
 }
 
+/// FNV-1a over the cache key.
+///
+/// Every `preg_*` call looks its pattern up, so the hash is on the hot path
+/// of tight matching loops; SipHash's flooding resistance buys nothing for
+/// keys that are the script's own pattern literals (PHP hashes them with
+/// plain DJBX33A) and costs most of a cache hit.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PatternHasher(u64);
+
+impl Default for PatternHasher {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl Hasher for PatternHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut h = self.0;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        self.0 = h;
+    }
+}
+
 /// The compiled-pattern cache.  Like PHP it is keyed by the exact pattern
 /// bytes (prefixed with the `LC_CTYPE` name for locale-aware patterns) and,
 /// when it reaches [`PCRE_CACHE_SIZE`] entries, drops the oldest
 /// `PCRE_CACHE_SIZE / 8` entries that are not currently in use.
 #[derive(Debug, Default)]
 pub struct RegexCache {
-    map: HashMap<Vec<u8>, Regex>,
+    map: HashMap<Vec<u8>, Regex, BuildHasherDefault<PatternHasher>>,
     order: Vec<Vec<u8>>,
 }
 
@@ -240,9 +272,10 @@ impl Pcre {
         pattern: &[u8],
         ctype_locale: Option<&[u8]>,
     ) -> Result<Regex, CompileError> {
-        let key: Vec<u8> = match ctype_locale {
-            Some(loc) => [loc, pattern].concat(),
-            None => pattern.to_vec(),
+        // A cache hit (the common case) allocates nothing.
+        let key: Cow<'_, [u8]> = match ctype_locale {
+            Some(loc) => Cow::Owned([loc, pattern].concat()),
+            None => Cow::Borrowed(pattern),
         };
         if let Some(re) = self.cache.get(&key) {
             return Ok(re);
@@ -250,7 +283,7 @@ impl Pcre {
         let result = self.compile_uncached(pattern, ctype_locale);
         match result {
             Ok(re) => {
-                self.cache.insert(key, re.clone());
+                self.cache.insert(key.into_owned(), re.clone());
                 Ok(re)
             }
             Err(e) => {
@@ -347,6 +380,26 @@ mod tests {
             .cache()
             .contains(format!("/{}/", PCRE_CACHE_SIZE / 8 + 1).as_bytes()));
         drop(first);
+    }
+
+    #[test]
+    fn unlocalised_compiles_share_one_entry() {
+        let mut pcre = Pcre::new();
+        let plain = pcre.compile(b"/a+/").unwrap();
+        assert!(pcre.cache().contains(b"/a+/"));
+        assert!(!pcre.cache().contains(b"C/a+/"));
+        let again = pcre.compile_with_locale(b"/a+/", None).unwrap();
+        assert!(Regex::ptr_eq(&plain, &again));
+        assert_eq!(pcre.cache().len(), 1);
+    }
+
+    #[test]
+    fn pattern_hasher_is_fnv1a() {
+        let mut h = PatternHasher::default();
+        h.write(b"");
+        assert_eq!(h.finish(), 0xcbf2_9ce4_8422_2325);
+        h.write(b"a");
+        assert_eq!(h.finish(), 0xaf63_dc4c_8601_ec8c);
     }
 
     #[test]

@@ -5,7 +5,7 @@ use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_vm::ext::{Args, ModuleBuilder, Throw, VmResult};
 use php_vm::Vm;
 
-use crate::convert::to_zarray;
+use crate::convert::{to_zarray, unnamed_subpats};
 use crate::memory;
 use crate::state;
 
@@ -95,22 +95,50 @@ fn do_match(vm: &mut Vm, a: &Args, global: bool) -> VmResult<Value> {
     if capture {
         memory::check(vm, memory::spans_size(&spans, &re, global, flags))?;
     }
-    let out = spans.into_outcome();
-    if out.subject_valid_utf8 {
+    // `$matches` is `None` when PHP leaves the variable untouched (only for
+    // an invalid offset). The common single match without named groups is
+    // built straight from the offsets; everything else goes through
+    // `php-pcre`'s general array model.
+    let (result, last_error, warning, valid_utf8, matches) =
+        if capture && !global && re.name_count() == 0 {
+            let result = spans.result();
+            let matches = (result != Err(MatchFailure::InvalidOffset)).then(|| {
+                spans.matches().next().map_or_else(
+                    || ZArray::from(HashTable::new()),
+                    |m| unnamed_subpats(m, re.capture_count() + 1, flags),
+                )
+            });
+            (
+                result,
+                spans.last_error(),
+                spans.warning(),
+                spans.subject_valid_utf8(),
+                matches,
+            )
+        } else {
+            let out = spans.into_outcome();
+            let matches = out.matches.filter(|_| capture).map(to_zarray);
+            (
+                out.result,
+                out.last_error,
+                out.warning,
+                out.subject_valid_utf8,
+                matches,
+            )
+        };
+    if valid_utf8 {
         state::remember_valid_utf8(&subject);
     }
-    if let Some(e) = out.last_error {
+    if let Some(e) = last_error {
         state::set_last_error(e);
     }
-    if capture {
-        if let Some(m) = out.matches {
-            a.set_ref(2, Value::Array(to_zarray(m)));
-        }
+    if let Some(m) = matches {
+        a.set_ref(2, Value::Array(m));
     }
-    if let Some(w) = out.warning {
+    if let Some(w) = warning {
         vm.php_warning(w)?;
     }
-    match out.result {
+    match result {
         Ok(n) => Ok(Value::Int(i64::try_from(n).unwrap_or(i64::MAX))),
         Err(MatchFailure::InvalidFlags) => Err(a.value_error(vm, 4, "must be a PREG_* constant")),
         Err(MatchFailure::InvalidOffset) => {
