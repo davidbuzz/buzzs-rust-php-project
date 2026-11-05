@@ -115,6 +115,14 @@ impl Vm {
         fallback: Option<u32>,
         display: u32,
     ) -> VmResult<()> {
+        // A site that resolved to the global fallback keeps it, even after
+        // another site cached a later-declared `ns\foo` under the literal.
+        if fallback.is_some() {
+            if let Some(func) = self.fallback_site_cached() {
+                self.push_pending(PendingCall::new(func));
+                return Ok(());
+            }
+        }
         let cached = self
             .frame()
             .code
@@ -130,14 +138,18 @@ impl Vm {
         }
         let lc = self.lit_str(name);
         let mut f = self.functions.get(&lc).cloned();
-        // Only primary-name hits are cached: literals are shared between
-        // call sites, and a later `ns\foo` declaration must win over the
-        // global fallback at sites that have not run yet.
+        // Primary-name hits are cached by literal; global-fallback hits are
+        // cached per call site (literals are shared between call sites, and
+        // a later `ns\foo` declaration must win over the global fallback at
+        // sites that have not run yet).
         let cacheable = f.is_some();
         if f.is_none() {
             if let Some(fb) = fallback {
                 let fbn = self.lit_str(fb);
                 f = self.functions.get(&fbn).cloned();
+                if let Some(func) = &f {
+                    self.cache_fallback_site(func);
+                }
             }
         }
         let Some(func) = f else {
@@ -164,6 +176,39 @@ impl Vm {
         call.direct = fallback.is_none();
         self.push_pending(call);
         Ok(())
+    }
+
+    /// The `fcall_cache` slot of the running `InitFCall` when it resolved
+    /// to the global fallback: `ZEND_INIT_NS_FCALL_BY_NAME` caches the
+    /// function in the call site's run-time cache slot, so the site keeps
+    /// calling it after a same-named namespaced function is declared.
+    /// Slots past the literals are indexed by op.
+    fn fallback_site_slot(&self) -> usize {
+        let f = self.frame();
+        f.code.literals.len() + f.ip
+    }
+
+    #[inline]
+    fn fallback_site_cached(&self) -> Option<Func> {
+        let slot = self.fallback_site_slot();
+        self.frame()
+            .code
+            .fcall_cache
+            .borrow()
+            .get(slot)
+            .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get))
+    }
+
+    #[cold]
+    fn cache_fallback_site(&self, func: &Func) {
+        let slot = self.fallback_site_slot();
+        let code = &self.frame().code;
+        let size = (code.literals.len() + code.ops.len()).max(slot + 1);
+        let mut cache = code.fcall_cache.borrow_mut();
+        if cache.len() <= slot {
+            cache.resize(size, None);
+        }
+        cache[slot] = Some(crate::opcode::CachedFunc::new(func));
     }
 
     pub(crate) fn op_init_dyn_call(&mut self, callee: Value) -> VmResult<()> {

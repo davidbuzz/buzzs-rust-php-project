@@ -239,3 +239,25 @@ fn fake_closure_reflection_string() {
         "Closure [ <user> function test ] {\n  @@ t.php 1 - 1\n\n  - Parameters [1] {\n    Parameter #0 [ <required> int $a ]\n  }\n}\n"
     );
 }
+
+/// `ZEND_INIT_NS_FCALL_BY_NAME` caches the global fallback in the call
+/// site's run-time cache, so sites that already ran keep calling it after
+/// `ns\strrev` is declared (first_class_callable/constexpr/namespace_004).
+#[test]
+fn namespaced_fallback_is_cached_per_call_site() {
+    let out = run(r"<?php
+namespace Foo;
+function f(\Closure $c = strrev(...)) {
+    echo strrev('ab'), $c('cd'), strrev(...)('ef'), PHP_EOL;
+}
+f();
+function g() { echo strrev('gh'), PHP_EOL; }
+if (true) {
+    function strrev($v) { return 'ns'; }
+}
+f();
+g();
+echo strrev('x'), PHP_EOL;
+");
+    assert_eq!(out, "badcfe\nbadcfe\nns\nns\n");
+}
