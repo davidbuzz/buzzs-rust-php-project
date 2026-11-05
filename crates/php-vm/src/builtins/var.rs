@@ -9,48 +9,61 @@ use crate::vm::{Vm, VmResult};
 use php_runtime::{Value, ZArray, ZStr};
 
 fn var_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let _scope = dump::begin_dump();
     for i in 0..a.values.len() {
         let v = a.values[i].deref();
         let mut out = Out::stream();
         let r = dump::var_dump(vm, &mut out, &v, 1, None);
         out.flush(vm);
+        if r.is_err() {
+            dump::clear_deferred_throw();
+        }
         r?;
     }
-    // An exception a `get_debug_info` handler left pending while still
-    // returning its table (`xmlreader_get_debug_info`) surfaces once the
-    // dump is written.
-    vm.take_pending_throw()?;
+    raise_after_dump(vm)?;
     Ok(Value::Null)
 }
 
 fn debug_zval_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let _scope = dump::begin_dump();
     for i in 0..a.values.len() {
         let v = a.values[i].clone();
         let mut out = Out::stream();
         // Our clone and the VM's argument copy are not counted by PHP.
         let r = dump::debug_zval_dump(vm, &mut out, &v, 2);
         out.flush(vm);
+        if r.is_err() {
+            dump::clear_deferred_throw();
+        }
         r?;
     }
-    vm.take_pending_throw()?;
+    raise_after_dump(vm)?;
     Ok(Value::Null)
 }
 
 fn print_r(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let _scope = dump::begin_dump();
     let v = a.at(0);
     if b(a, 1) {
         // Output produced by `__debugInfo()` is not captured.
         let mut out = Out::collect();
-        dump::print_r(vm, &mut out, &v, 0)?;
-        let printed = sv(out.finish(vm));
-        vm.take_pending_throw()?;
-        return Ok(printed);
+        let r = dump::print_r(vm, &mut out, &v, 0);
+        if r.is_err() {
+            dump::clear_deferred_throw();
+        }
+        r?;
+        let s = out.finish(vm);
+        raise_after_dump(vm)?;
+        return Ok(sv(s));
     }
     let mut out = Out::stream();
     let r = dump::print_r(vm, &mut out, &v, 0);
     out.flush(vm);
+    if r.is_err() {
+        dump::clear_deferred_throw();
+    }
     r?;
-    vm.take_pending_throw()?;
+    raise_after_dump(vm)?;
     Ok(Value::Bool(true))
 }
 
@@ -366,4 +379,14 @@ pub(crate) fn register(vm: &mut Vm) {
     deprecate(vm, "is_integer", "8.6", "use is_int() instead");
     deprecate(vm, "is_long", "8.6", "use is_int() instead");
     deprecate(vm, "is_double", "8.6", "use is_float() instead");
+}
+
+/// Raises an exception a native debug-info handler left pending, once the
+/// dump is written: one parked with `php_vm::ext::defer_handler_throw`
+/// (dom) or left in the VM's pending throw (`xmlreader_get_debug_info`).
+/// Both are taken, so neither leaks into a later dump.
+fn raise_after_dump(vm: &mut Vm) -> VmResult<()> {
+    let deferred = dump::take_deferred_throw();
+    vm.take_pending_throw()?;
+    deferred
 }

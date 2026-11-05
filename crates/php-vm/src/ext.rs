@@ -1224,6 +1224,16 @@ pub fn set_resource_refs_hook(f: ResourceRefsFn) {
     crate::builtins::dump::set_resource_refs_hook(f);
 }
 
+/// Reports an exception from a `properties_for` hook that still returns
+/// its table, like a php-src `get_debug_info` handler leaving the
+/// exception in `EG(exception)` (`dom_get_debug_info` on an unconstructed
+/// `DOMXPath`, `XMLReader` property reads before `read()`):
+/// `var_dump()`/`print_r()`/`debug_zval_dump()` print the whole dump,
+/// then throw it. The first exception of a dump wins.
+pub fn defer_handler_throw(t: Throw) {
+    crate::builtins::dump::defer_throw(t);
+}
+
 /// Parses a stub signature (exposed for tests of extensions).
 pub fn check_signature(sig: &str) -> (String, usize) {
     let s = parse_sig(sig);

@@ -16,7 +16,7 @@ use crate::errors::{check, Ctx};
 use crate::hooks::{builtin_of, builtin_of_class};
 use crate::host::VmHost;
 use crate::run;
-use crate::state::{dom_object, set_dom_object, to_dom, to_value};
+use crate::state::{bytes, dom_object, set_dom_object, to_dom, to_value};
 
 /// A method declaration: declaring class and method.
 type MethodDecl = Option<(&'static str, &'static MethodInfo)>;
@@ -199,6 +199,11 @@ fn static_method(vm: &mut Vm, a: &Args) -> VmResult<Value> {
         .and_then(builtin_of_class)
         .unwrap_or("DOMNode");
     let meta = method_meta(a, builtin);
+    if matches!(builtin, "DOMXPath" | "Dom\\XPath") && meta.name.eq_ignore_ascii_case("quote") {
+        if let Some(v) = quote(vm, a)? {
+            return Ok(v);
+        }
+    }
     let dargs = convert_args(vm, a, &meta)?;
     let name = meta.name.clone();
     let r = run::call(vm, a, || {
@@ -207,6 +212,30 @@ fn static_method(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     finish(vm, r, || {
         method_ctx(builtin, &name, meta.decl, builtin.to_string())
     })
+}
+
+/// `DOMXPath::quote()` without intermediate copies of the (possibly huge)
+/// argument: PHP allocates the result with `zend_string_safe_falloc(..,
+/// fallible)` / checks `ZEND_HAS_OOM()` while building the `concat()` form,
+/// so an oversized result raises the memory-limit fatal before it exists
+/// (ref: ext/dom/xpath.c). `None` hands arguments the generic path reports
+/// (null bytes, non-strings) back to it.
+fn quote(vm: &mut Vm, a: &Args) -> VmResult<Option<Value>> {
+    let Some(Value::Str(s)) = a.values.first().map(Value::deref) else {
+        return Ok(None);
+    };
+    let input = s.as_bytes();
+    if input.contains(&0) {
+        return Ok(None);
+    }
+    // zend_string header + bytes + NUL.
+    let size = php_dom::XPath::quoted_len(input).saturating_add(25);
+    if let Err(over) = php_memlimit::try_reserve(size) {
+        // Raised here, so the VM's post-call poll does not raise it again.
+        let _ = php_memlimit::take();
+        return Err(vm.fatal(&over.to_string()));
+    }
+    Ok(Some(bytes(php_dom::XPath::quote(input))))
 }
 
 /// `__construct`.

@@ -96,17 +96,17 @@ fn clone(vm: &mut Vm, old: &Obj, new: &Obj) -> VmResult<()> {
     let Some(c) = check(vm, r, Some(&ctx))? else {
         return Ok(());
     };
+    let mut keep = Vec::new();
     if let DomObject::Node(n) = &c {
         n.set_class_name(display_name(&class_of(new).name).to_string_lossy());
         bind_node_object(n, new);
+        // `dom_object_namespace_node_clone_obj`: the clone also holds the
+        // element's object (`GC_ADDREF(parent_intern)`).
+        if let Some(p) = n.namespace_parent() {
+            keep.push(Value::Object(crate::state::node_object(vm, &p)?));
+        }
     }
-    set_internal(
-        new,
-        DomState {
-            obj: Some(c),
-            keep: Vec::new(),
-        },
-    );
+    set_internal(new, DomState { obj: Some(c), keep });
     Ok(())
 }
 
@@ -147,10 +147,35 @@ fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
     let ctx = obj_ctx(o);
     let r = run::direct(vm, || dispatch::read_property(&d, &n))?;
     match check(vm, r, Some(&ctx))? {
-        Some(PropRead::Value(v)) => Ok(Some(to_value(vm, v)?)),
+        Some(PropRead::Value(v)) => {
+            let modern_impl = matches!(&v, php_dom::DomValue::Implementation(i) if i.modern);
+            let v = to_value(vm, v)?;
+            if modern_impl {
+                keep_cached(o, &v);
+            }
+            Ok(Some(v))
+        }
         Some(PropRead::Uninit) | None => Ok(Some(Value::Null)),
         Some(PropRead::NotHandled) => Ok(None),
     }
+}
+
+/// `dom_modern_document_implementation_read` caches the
+/// `Dom\Implementation` in a property slot of the document object: the
+/// document object keeps it alive (and releases it before its own handle).
+fn keep_cached(o: &Obj, v: &Value) {
+    let Value::Object(io) = v else {
+        return;
+    };
+    php_vm::object::internal::<DomState, _>(o, |s| {
+        let held = s
+            .keep
+            .iter()
+            .any(|k| matches!(k, Value::Object(x) if Obj::ptr_eq(x, io)));
+        if !held {
+            s.keep.push(v.clone());
+        }
+    });
 }
 
 /// The declaration of a DOM property (searching the built-in ancestors).
@@ -371,15 +396,24 @@ fn properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Op
                 ArrayKey::Str(ZStr::from("registerNodeNamespaces")),
                 Value::Bool(true),
             );
+            // Reading `document` failed: the dump throws afterwards.
+            let e = invalid_state(vm);
+            php_vm::ext::defer_handler_throw(e);
             return Ok(Some(ZArray::from_table(t)));
         }
         return Ok(None);
     };
     let mut t = std_properties(o);
-    let items = run::direct(vm, || dispatch::debug_info(&d))?;
+    let (items, pending) = run::direct(vm, || dispatch::debug_info_checked(&d))?;
     for (name, v) in items {
         let v = to_value(vm, v)?;
         t.insert(ArrayKey::Str(ZStr::from(name)), v);
+    }
+    if let Some(e) = pending {
+        let ctx = obj_ctx(o);
+        if let Some(t) = crate::errors::throw(vm, e, Some(&ctx)) {
+            php_vm::ext::defer_handler_throw(t);
+        }
     }
     Ok(Some(ZArray::from_table(t)))
 }

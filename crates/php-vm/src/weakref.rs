@@ -712,6 +712,11 @@ fn map_get_iterator_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 struct InternalIter {
     iter: Option<Box<dyn NativeIterator>>,
     rewound: bool,
+    /// The object handle of the wrapped `zend_object_iterator`
+    /// (`zend_iterator_init` takes one before the `InternalIterator`
+    /// object is created, and `zend_internal_iterator_free` returns it
+    /// before the `InternalIterator`'s own handle).
+    _handle: object::HandleGuard,
 }
 
 /// Wraps a native iterator in an `InternalIterator` object
@@ -721,12 +726,14 @@ pub(crate) fn new_internal_iterator(vm: &mut Vm, it: Box<dyn NativeIterator>) ->
     let Some(cls) = vm.find_class(b"InternalIterator") else {
         return Err(vm.make_throw("Error", "Class \"InternalIterator\" not found"));
     };
+    let handle = object::HandleGuard::reserve();
     let o = vm.new_object(&cls)?;
     object::set_internal(
         &o,
         InternalIter {
             iter: Some(it),
             rewound: false,
+            _handle: handle,
         },
     );
     Ok(o)

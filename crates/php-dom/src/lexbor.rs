@@ -2,7 +2,8 @@
 //! the C glue in `csrc/glue.c`: the HTML5 parser, fragment parser,
 //! encodings, CSS selector engine and read-only lexbor DOM accessors.
 
-use std::ffi::{c_char, c_int, c_void, CStr};
+use std::alloc::Layout;
+use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
 use std::marker::PhantomData;
 use std::ptr::{self, NonNull};
 use std::sync::Once;
@@ -44,7 +45,18 @@ type HtmlErrorFn = unsafe extern "C" fn(*mut c_void, bool, *const c_char, usize,
 type CssCb = unsafe extern "C" fn(*const xmlNode, *mut c_void) -> c_int;
 type WriteFn = unsafe extern "C" fn(*mut c_void, *const c_char, usize);
 
+type LxbMallocFn = unsafe extern "C" fn(usize) -> *mut c_void;
+type LxbReallocFn = unsafe extern "C" fn(*mut c_void, usize) -> *mut c_void;
+type LxbCallocFn = unsafe extern "C" fn(usize, usize) -> *mut c_void;
+type LxbFreeFn = unsafe extern "C" fn(*mut c_void);
+
 extern "C" {
+    fn lexbor_memory_setup(
+        new_malloc: LxbMallocFn,
+        new_realloc: LxbReallocFn,
+        new_calloc: LxbCallocFn,
+        new_free: LxbFreeFn,
+    ) -> c_uint;
     fn phpdom_glue_init(ns_is_fast: NsIsFastFn, ns_html_doc: NsHtmlDocFn);
     fn phpdom_glue_take_exception(code: *mut c_int) -> *const c_char;
 
@@ -166,11 +178,119 @@ unsafe extern "C" fn cb_ns_html_doc(node: *const xmlNode) -> bool {
     })
 }
 
-/// Registers the namespace callbacks used by the selector engine.
+// ---------------------------------------------------------------------
+// lexbor's allocator (ref: ext/lexbor/php_lexbor.c `PHP_MINIT(lexbor)`)
+// ---------------------------------------------------------------------
+
+/// Size of the hidden header in front of every lexbor block: the block's
+/// total size (needed to rebuild its `Layout` on `realloc`/`free`), padded
+/// to `malloc`'s alignment.
+const LXB_HDR: usize = 16;
+
+fn lxb_layout(total: usize) -> Option<Layout> {
+    Layout::from_size_align(total, LXB_HDR).ok()
+}
+
+/// Allocates `size` bytes behind a size header from the Rust global
+/// allocator.
+#[allow(clippy::cast_ptr_alignment)] // the block is LXB_HDR (16)-aligned
+unsafe fn lxb_alloc(size: usize, zeroed: bool) -> *mut c_void {
+    let Some(layout) = size.checked_add(LXB_HDR).and_then(lxb_layout) else {
+        return ptr::null_mut();
+    };
+    // SAFETY: the layout has a non-zero size (at least the header).
+    let base = unsafe {
+        if zeroed {
+            std::alloc::alloc_zeroed(layout)
+        } else {
+            std::alloc::alloc(layout)
+        }
+    };
+    if base.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY: `base` is valid for `layout.size() >= LXB_HDR` bytes and
+    // 16-aligned, so the header write and the offset stay in bounds.
+    unsafe {
+        base.cast::<usize>().write(layout.size());
+        base.add(LXB_HDR).cast()
+    }
+}
+
+unsafe extern "C" fn lxb_malloc(size: usize) -> *mut c_void {
+    // SAFETY: plain allocation.
+    unsafe { lxb_alloc(size, false) }
+}
+
+unsafe extern "C" fn lxb_calloc(num: usize, size: usize) -> *mut c_void {
+    match num.checked_mul(size) {
+        // SAFETY: plain allocation.
+        Some(n) => unsafe { lxb_alloc(n, true) },
+        None => ptr::null_mut(),
+    }
+}
+
+#[allow(clippy::cast_ptr_alignment)] // blocks are LXB_HDR (16)-aligned
+unsafe extern "C" fn lxb_realloc(dst: *mut c_void, size: usize) -> *mut c_void {
+    if dst.is_null() {
+        // SAFETY: plain allocation.
+        return unsafe { lxb_alloc(size, false) };
+    }
+    let Some(new_total) = size
+        .checked_add(LXB_HDR)
+        .filter(|&t| lxb_layout(t).is_some())
+    else {
+        return ptr::null_mut();
+    };
+    // SAFETY: lexbor only passes blocks from `lxb_alloc`/`lxb_realloc`, which
+    // carry their total size in the header in front of them; the new size
+    // forms a valid layout (checked above).
+    unsafe {
+        let base = dst.cast::<u8>().sub(LXB_HDR);
+        let Some(old) = lxb_layout(base.cast::<usize>().read()) else {
+            return ptr::null_mut();
+        };
+        let p = std::alloc::realloc(base, old, new_total);
+        if p.is_null() {
+            return ptr::null_mut();
+        }
+        p.cast::<usize>().write(new_total);
+        p.add(LXB_HDR).cast()
+    }
+}
+
+#[allow(clippy::cast_ptr_alignment)] // blocks are LXB_HDR (16)-aligned
+unsafe extern "C" fn lxb_free(dst: *mut c_void) {
+    if dst.is_null() {
+        return;
+    }
+    // SAFETY: as in `lxb_realloc`: the block came from `lxb_alloc`.
+    unsafe {
+        let base = dst.cast::<u8>().sub(LXB_HDR);
+        if let Some(layout) = lxb_layout(base.cast::<usize>().read()) {
+            std::alloc::dealloc(base, layout);
+        }
+    }
+}
+
+/// Routes lexbor's allocations through the Rust global allocator (php-src
+/// sets `femalloc`/`efree` with `lexbor_memory_setup`), so the lexbor tree
+/// counts towards `memory_limit` and a huge document raises PHP's
+/// "Allowed memory size" fatal (gh25118) instead of growing unaccounted.
+/// Unlike php-src the blocks are not fallible: a soft-limit violation is
+/// recorded and raised after the method returns, and only the hard
+/// ceiling fails an allocation. Then registers the namespace callbacks
+/// used by the selector engine. Runs before the first lexbor allocation:
+/// every entry point that creates lexbor objects calls it first.
 fn init() {
     static INIT: Once = Once::new();
-    // SAFETY: the callbacks are plain functions valid for the program's lifetime.
-    INIT.call_once(|| unsafe { phpdom_glue_init(cb_ns_is_fast, cb_ns_html_doc) });
+    // SAFETY: the callbacks are plain functions valid for the program's
+    // lifetime, and no lexbor block exists yet (so none is freed by a
+    // different allocator than the one that made it).
+    INIT.call_once(|| unsafe {
+        let _ = lexbor_memory_setup(lxb_malloc, lxb_realloc, lxb_calloc, lxb_free);
+        phpdom_glue_init(cb_ns_is_fast, cb_ns_html_doc);
+    });
 }
 
 /// The `DOMException` thrown from inside the selector engine, if any.
@@ -694,5 +814,54 @@ impl Drop for CssQuery {
     fn drop(&mut self) {
         // SAFETY: owned query, freed once.
         unsafe { phpdom_css_free(self.0.as_ptr()) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{lxb_calloc, lxb_free, lxb_malloc, lxb_realloc};
+
+    #[test]
+    fn lexbor_allocator_round_trip() {
+        // SAFETY: blocks are used within their sizes and freed once.
+        unsafe {
+            let p = lxb_malloc(10).cast::<u8>();
+            assert!(!p.is_null());
+            assert_eq!(p.addr() % 16, 0);
+            for i in 0..10 {
+                p.add(i).write(u8::try_from(i).unwrap_or(0));
+            }
+            let q = lxb_realloc(p.cast(), 1000).cast::<u8>();
+            assert!(!q.is_null());
+            for i in 0..10 {
+                assert_eq!(q.add(i).read(), u8::try_from(i).unwrap_or(0));
+            }
+            let q = lxb_realloc(q.cast(), 4).cast::<u8>();
+            assert_eq!(q.add(3).read(), 3);
+            lxb_free(q.cast());
+
+            let z = lxb_calloc(8, 8).cast::<u8>();
+            assert!((0..64).all(|i| z.add(i).read() == 0));
+            lxb_free(z.cast());
+
+            assert!(lxb_calloc(usize::MAX, 2).is_null());
+            assert!(lxb_malloc(usize::MAX).is_null());
+            let r = lxb_realloc(std::ptr::null_mut(), 3);
+            assert!(!r.is_null());
+            lxb_free(r);
+            lxb_free(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn html_parse_after_allocator_setup() {
+        let doc = crate::html::create_from(
+            b"<p>a</p><template><b>x</b></template>",
+            0,
+            None,
+            false,
+            &crate::host::NoHost,
+        );
+        assert!(doc.is_ok());
     }
 }

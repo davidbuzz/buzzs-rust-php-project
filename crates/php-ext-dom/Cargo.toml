@@ -16,6 +16,7 @@ php-ext-streams = { path = "../php-ext-streams" }
 php-streams = { path = "../php-streams" }
 php-ext-xsl = { path = "../php-ext-xsl" }
 php-xsl = { path = "../php-xsl" }
+php-memlimit = { path = "../php-memlimit" }
 
 [lints]
 workspace = true

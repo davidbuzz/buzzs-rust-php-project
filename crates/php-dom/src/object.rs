@@ -581,6 +581,22 @@ impl Node {
         self.n().ok_or(crate::error::DomError::CouldntFetch)
     }
 
+    /// For a `DOMNameSpaceNode`: the element handle the declaration belongs
+    /// to (php-src's `parent_intern`, whose object the namespace node keeps
+    /// alive).
+    #[must_use]
+    pub fn namespace_parent(&self) -> Option<Node> {
+        self.0.ns_parent.borrow().clone()
+    }
+
+    /// `DOM_GET_OBJ` on an argument object: the node, or
+    /// "Couldn't fetch <the argument's class>" (`%pS` of its `ce->name`).
+    pub(crate) fn arg_node(&self) -> crate::error::DomResult<N> {
+        self.n().ok_or_else(|| {
+            crate::error::DomError::Error(format!("Couldn't fetch {}", self.class_name()))
+        })
+    }
+
     /// `DOM_PROP_NODE`: the node, or an `InvalidStateError`.
     pub(crate) fn prop_node(&self) -> crate::error::DomResult<N> {
         self.n().ok_or_else(|| {

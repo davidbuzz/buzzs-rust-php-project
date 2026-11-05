@@ -9,6 +9,7 @@ build = "build.rs"
 
 [dependencies]
 php-libxml = { path = "../php-libxml" }
+php-memlimit = { path = "../php-memlimit" }
 
 [dev-dependencies]
 php-parser = { path = "../php-parser" }

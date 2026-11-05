@@ -1543,6 +1543,18 @@ impl Vm {
                 match self.native_read_property(&obj, name, ctx)? {
                     Some(Value::Object(o2)) => return self.obj_walk(o2, segs, i + 1, wop),
                     Some(Value::Reference(r)) => return self.descend_ref(&r, segs, i + 1, wop),
+                    // A native property without usable storage (virtual or
+                    // write-restricted): as in `zend_fetch_property_address`
+                    // with `get_property_ptr_ptr` returning NULL, the walk goes
+                    // on with `read_property`'s temporary (DOM's
+                    // `$node->previousSibling->nodeValue = ''` on a null
+                    // sibling: "Attempt to assign property on null").
+                    Some(other)
+                        if !matches!(wop, WOp::Unset)
+                            && Self::native_prop_without_ptr(&obj, name) =>
+                    {
+                        return self.descend_temp(other, segs, i + 1, wop);
+                    }
                     _ => {}
                 }
                 if matches!(wop, WOp::Unset) {

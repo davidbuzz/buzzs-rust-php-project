@@ -1711,20 +1711,42 @@ fn write_node_property(n: &Node, name: &str, value: &DomValue) -> DomResult<bool
 /// PHP's order, with objects replaced by `"(object value omitted)"` and
 /// failing handlers skipped (`dom_get_debug_info_helper`).
 pub fn debug_info(obj: &DomObject) -> Vec<(&'static str, DomValue)> {
+    debug_info_checked(obj).0
+}
+
+/// `dom_get_debug_info` plus the exception a failing property read left
+/// in `EG(exception)` (e.g. `Invalid State Error` for an unconstructed
+/// node): php-src skips that property, returns the table and the dump
+/// throws afterwards. With several, the last one is the pending one.
+/// Only `Invalid State Error`s (unconstructed objects) are reported; other
+/// read failures stay silent.
+pub fn debug_info_checked(obj: &DomObject) -> (Vec<(&'static str, DomValue)>, Option<DomError>) {
     let names = crate::classes::property_handlers(obj.builtin_class());
     crate::error::suppressed(|| {
         let mut out = Vec::new();
+        let mut pending = None;
         for name in names {
-            if let Ok(PropRead::Value(v)) = read_property(obj, name) {
-                let v = if v.is_object() {
-                    DomValue::Str(b"(object value omitted)".to_vec())
-                } else {
-                    v
-                };
-                out.push((*name, v));
+            match read_property(obj, name) {
+                Ok(PropRead::Value(v)) => {
+                    let v = if v.is_object() {
+                        DomValue::Str(b"(object value omitted)".to_vec())
+                    } else {
+                        v
+                    };
+                    out.push((*name, v));
+                }
+                // Unconstructed objects (`DOM_PROP_NODE` failing); other
+                // failures stay silent like before.
+                Err(
+                    e @ DomError::Dom {
+                        code: C::InvalidState,
+                        ..
+                    },
+                ) => pending = Some(e),
+                Ok(_) | Err(_) => {}
             }
         }
-        out
+        (out, pending)
     })
 }
 

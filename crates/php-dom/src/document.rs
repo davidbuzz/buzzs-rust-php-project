@@ -527,7 +527,7 @@ impl Node {
     /// `importNode($node, $deep)` / `importLegacyNode()`.
     pub fn import_node(&self, node: &Node, deep: bool) -> DomResult<Node> {
         let docp = self.doc_node()?;
-        let nodep = node.node()?;
+        let nodep = node.arg_node()?;
         let modern = self.is_modern();
         if nodep.is_doc() {
             if modern {

@@ -460,6 +460,14 @@ impl XPath {
                             } else {
                                 items.push(Node::wrap(n));
                             }
+                            // `if (ZEND_HAS_OOM()) goto oom_nodeset;`: stop
+                            // before a huge result runs into the hard limit;
+                            // the method returns and the embedder raises the
+                            // pending memory-limit fatal.
+                            if php_memlimit::is_pending() {
+                                err = Some(DomError::Silent);
+                                break;
+                            }
                         }
                     }
                     if let Some(e) = err {
@@ -560,6 +568,32 @@ impl XPath {
             )
         };
         Ok(())
+    }
+
+    /// Length of [`XPath::quote`]'s result, computed without building it, so
+    /// bindings can check `memory_limit` first (PHP allocates the quoted
+    /// forms with `zend_string_safe_falloc(.., fallible)` and checks
+    /// `ZEND_HAS_OOM()` while appending the `concat()` form; ref:
+    /// ext/dom/xpath.c `PHP_METHOD(DOMXPath, quote)`). Saturates instead of
+    /// overflowing.
+    #[must_use]
+    pub fn quoted_len(input: &[u8]) -> usize {
+        if !input.contains(&b'\'') || !input.contains(&b'"') {
+            return input.len().saturating_add(2);
+        }
+        // "concat(" + per chunk: quote, bytes, quote, ',' (the last ','
+        // becomes ')').
+        let mut len = 7usize;
+        let mut pos = 0;
+        while pos < input.len() {
+            let rest = &input[pos..];
+            let ds = rest.iter().position(|&b| b == b'\'').unwrap_or(rest.len());
+            let dd = rest.iter().position(|&b| b == b'"').unwrap_or(rest.len());
+            let n = ds.max(dd);
+            len = len.saturating_add(n).saturating_add(3);
+            pos += n;
+        }
+        len
     }
 
     /// `DOMXPath::quote($str)`.
@@ -845,3 +879,33 @@ unsafe extern "C" fn ext_function_trampoline(ctxt: *mut ffi::xmlXPathParserConte
 /// Unused import guard.
 #[allow(dead_code)]
 fn _unused(_: HashMap<u8, u8>) {}
+
+#[cfg(test)]
+mod quote_tests {
+    use super::XPath;
+
+    #[test]
+    fn quoted_len_matches_quote() {
+        let cases: &[&[u8]] = &[
+            b"",
+            b"abc",
+            b"a'b",
+            b"a\"b",
+            b"'\"",
+            b"'\"'\"",
+            b"foo'bar\"baz",
+            b"\"\"''\"",
+            b"''''",
+        ];
+        for c in cases {
+            assert_eq!(XPath::quoted_len(c), XPath::quote(c).len(), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn quote_forms() {
+        assert_eq!(XPath::quote(b"ab"), b"'ab'");
+        assert_eq!(XPath::quote(b"a'b"), b"\"a'b\"");
+        assert_eq!(XPath::quote(b"'\""), b"concat(\"'\",'\"')");
+    }
+}

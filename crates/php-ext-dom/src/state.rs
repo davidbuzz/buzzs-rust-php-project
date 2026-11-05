@@ -99,9 +99,19 @@ pub(crate) fn node_object(vm: &mut Vm, n: &Node) -> VmResult<Obj> {
     if let Some(o) = existing_node_object(n) {
         return Ok(o);
     }
+    // A `DOMNameSpaceNode` holds a reference to its element's object
+    // (`parent_intern`), which php-src creates first ("Make sure parent dom
+    // object exists", ext/dom/xpath.c) — this fixes handle numbering.
+    let parent = match n.namespace_parent() {
+        Some(p) => Some(node_object(vm, &p)?),
+        None => None,
+    };
     let class = n.class_name();
     let o = new_dom_object(vm, &class, n.builtin_class(), DomObject::Node(n.clone()))?;
     bind_node_object(n, &o);
+    if let Some(p) = parent {
+        internal::<DomState, _>(&o, |s| s.keep.push(Value::Object(p)));
+    }
     Ok(o)
 }
 
@@ -150,7 +160,17 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
             if let Some(nodes) = l.fixed_nodes() {
                 for n in nodes {
                     keep.push(Value::Object(node_object(vm, &n)?));
+                    // `if (ZEND_HAS_OOM()) goto oom_nodeset;` (ext/dom/xpath.c):
+                    // the VM raises the pending memory-limit fatal after
+                    // the call instead of running into the hard limit.
+                    if php_memlimit::is_pending() {
+                        return Ok(Value::Null);
+                    }
                 }
+            }
+            // `mapptr->baseobj` holds a reference to the base node's object.
+            if let Some(b) = l.base_node().as_ref().and_then(existing_node_object) {
+                keep.push(Value::Object(b));
             }
             let class = l.class_name();
             let o = new_dom_object(vm, class, class, DomObject::NodeList(l))?;
@@ -159,13 +179,13 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
             Value::Object(o)
         }
         DomValue::NamedNodeMap(m) => {
+            let base = m.base_node().as_ref().and_then(existing_node_object);
             let class = m.class_name();
-            Value::Object(new_dom_object(
-                vm,
-                class,
-                class,
-                DomObject::NamedNodeMap(m),
-            )?)
+            let o = new_dom_object(vm, class, class, DomObject::NamedNodeMap(m))?;
+            if let Some(b) = base {
+                internal::<DomState, _>(&o, |s| s.keep.push(Value::Object(b)));
+            }
+            Value::Object(o)
         }
         DomValue::Implementation(i) => {
             let id = i.identity();
