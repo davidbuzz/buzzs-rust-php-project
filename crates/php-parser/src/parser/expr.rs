@@ -1602,10 +1602,9 @@ impl Parser<'_> {
                 _ => return Err(self.unexpected(&[close])),
             }
         }
-        // `zend_ast_list_rtrim`: drop one trailing empty element.
-        if matches!(items.last(), Some(None)) {
-            items.pop();
-        }
+        // `zend_ast_list_rtrim` drops the one implicit empty element after
+        // the final comma, which this loop never pushes: `[1, 2, ,]` keeps
+        // its explicit hole (zend_language_parser.y `array_pair_list`).
         Ok(items)
     }
 

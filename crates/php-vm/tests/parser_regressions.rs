@@ -166,3 +166,150 @@ var_dump(is_array(get_defined_functions(exclude_disabled: true)['user']));
          bool(true)\n"
     );
 }
+
+/// `ZEND_SEND_UNPACK` raises a `TypeError`; `ZEND_ADD_ARRAY_UNPACK` appends
+/// numeric string keys; constant expressions spread arrays only
+/// (`zend_ast_add_unpacked_element`); `zend_try_ct_eval_array` rejects a
+/// constant non-array spread at compile time.
+#[test]
+fn unpack_errors_and_numeric_string_keys() {
+    let out = run(r#"<?php
+function t(...$a) {}
+try { t(...null); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+function g() { yield "42" => 1; yield "foo" => 2; yield 7 => 3; }
+var_dump([...g()]);
+class It implements IteratorAggregate { function getIterator(): Iterator { yield 1; } }
+const A = [...[1, 2], ...['k' => 3]];
+var_dump(A);
+const C = [...new It];
+"#);
+    assert!(
+        out.starts_with(
+            "TypeError: Only arrays and Traversables can be unpacked, null given\n\
+             array(3) {\n  [0]=>\n  int(1)\n  [\"foo\"]=>\n  int(2)\n  [1]=>\n  int(3)\n}\n\
+             array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [\"k\"]=>\n  int(3)\n}\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "Fatal error: Uncaught Error: Only arrays can be unpacked in constant expression in t.php:9"
+        ),
+        "{out}"
+    );
+    let out = run("<?php\necho 1;\nvar_dump([...42]);\n");
+    assert!(
+        out.contains("Fatal error: Only arrays and Traversables can be unpacked, int given in t.php on line 3"),
+        "{out}"
+    );
+    assert!(!out.starts_with('1'), "{out}");
+}
+
+/// `zend_ast_is_short_circuited`: a nullsafe chain passed as an argument,
+/// through `X::$p` / `X::m()`, inside `isset`/`empty`/`??` (fetched in
+/// BP_VAR_IS mode) or iterated by reference behaves as one value; taking a
+/// reference of it is a compile error.
+#[test]
+fn nullsafe_chains_short_circuit_as_one_value() {
+    let out = run(r#"<?php
+class Foo { public $bar; function n() { echo "n\n"; return null; } }
+var_dump(null?->bar()->baz);
+var_dump(null?->bar()::$baz);
+var_dump(null?->bar()::baz(print("no\n")));
+var_dump((new Foo)->n()?->x()::$y);
+var_dump(isset($foo?->bar), empty($foo?->bar->baz), $foo?->bar ?? 'd');
+$o = new Foo;
+foreach ($o?->bar as &$v) {}
+$o->bar = [1];
+foreach ($o?->bar as &$v) { $v++; }
+var_dump($o->bar);
+"#);
+    assert_eq!(
+        out,
+        "NULL\nNULL\nNULL\nn\nNULL\nbool(false)\nbool(true)\nstring(1) \"d\"\n\n\
+         Warning: foreach() argument must be of type array|object, null given in t.php on line 9\n\
+         array(1) {\n  [0]=>\n  int(1)\n}\n"
+    );
+    for src in [
+        "<?php\nfunction &f($o) {\n    return $o?->bar;\n}\n",
+        "<?php\nfunction &g($o) {\n    yield $o->y?->y;\n}\n",
+        "<?php\n[&$y] = $y?->y->y;\n",
+    ] {
+        let out = run(src);
+        assert!(
+            out.contains("Fatal error: Cannot take reference of a nullsafe chain in t.php on line"),
+            "{src}: {out}"
+        );
+    }
+}
+
+/// list() semantics of zend_compile_list_assign / ZEND_FETCH_LIST_[RW]:
+/// strings are not destructured; a by-value call result notices; foreach
+/// with a referencing list iterates by reference; the source is made a
+/// reference before any target rebinds it; the result of a referencing
+/// list assignment can be passed by reference.
+#[test]
+fn list_reference_semantics() {
+    let out = run(r#"<?php
+[$a, $b] = "hi";
+var_dump($a);
+function no_ref($a) { return $a; }
+function &ref_return(&$a) { return $a; }
+$x = [1, 2];
+[&$v] = no_ref($x);
+[[&$w]] = no_ref([[1]]);
+[, &$v] = ref_return($x);
+$v = 9;
+echo $x[1], "\n";
+$c = [[1, 2], [3, 4]];
+foreach ($c as [&$p, $q]) { $p++; $q++; }
+echo $c[0][0], $c[0][1], $c[1][0], "\n";
+$a = [1, 2];
+$r =& $a;
+[&$a, &$b] = $a;
+$a++; $b++;
+echo $r[0], $r[1], "\n";
+function change(&$ref) { $ref = 'changed'; }
+$arr = [1];
+change([&$e] = $arr);
+var_dump($arr);
+"#);
+    let notice = "\nNotice: Attempting to set reference to non referenceable value in t.php on line";
+    let string = "\nWarning: Cannot use string as array in t.php on line 2\n";
+    assert_eq!(
+        out,
+        format!(
+            "{string}{string}NULL\n{notice} 7\n{notice} 8\n{notice} 8\n9\n224\n23\nstring(7) \"changed\"\n"
+        )
+    );
+}
+
+/// `zend_try_compile_list_assign_from_array`: the values are assigned
+/// directly, so a dropped value is released at its assignment, and the
+/// pending values are released before a handler runs (cleanup_live_vars).
+#[test]
+fn list_from_array_literal_lifetimes() {
+    let out = run(r#"<?php
+class D {
+    function __construct(public $n) {}
+    function __destruct() { echo "destruct $this->n\n"; }
+}
+final class Boom { function __destruct() { throw new Exception('boom'); } }
+function boom() { throw new Exception('boom'); }
+$o = new D('o');
+[$o, $p] = [new D('new o'), $o];
+echo $p->n, "\n";
+unset($o, $p);
+$b = 0;
+try { [$a, $a, $b] = [new Boom, new stdClass, 42]; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+var_dump($b);
+try { [$a, $b] = [new D('first'), boom()]; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+try { [$arr[boom()], $b] = [new D('v1'), new D('v2')]; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+echo "done\n";
+"#);
+    assert_eq!(
+        out,
+        "o\ndestruct new o\ndestruct o\nboom\nint(0)\ndestruct first\nboom\n\
+         destruct v1\ndestruct v2\nboom\ndone\n"
+    );
+}

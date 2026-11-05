@@ -361,7 +361,10 @@ impl Compiler {
                     let name = self.lit_str(&full);
                     self.check_const_expr(&c.value, true)?;
                     self.check_const_decl_name(&c.name.name, &full, c.span.line)?;
-                    let val = self.compile_expr(&c.value)?;
+                    let saved = std::mem::replace(&mut self.in_const_decl, true);
+                    let val = self.compile_expr(&c.value);
+                    self.in_const_decl = saved;
+                    let val = val?;
                     self.emit(Op::DeclareConst { name, val, attrs });
                 }
             }
@@ -738,6 +741,10 @@ impl Compiler {
         let fins: Vec<u32> = self.fref().finally_stack.iter().rev().copied().collect();
         if returns_ref && !is_gen {
             if let Some(ex) = e {
+                // zend_compile_return: zend_assert_not_short_circuited.
+                if super::expr::contains_nullsafe(ex) {
+                    return self.err("Cannot take reference of a nullsafe chain", line);
+                }
                 if is_ref_expr(ex) {
                     let p = self.compile_place(ex, false)?;
                     let pid = self.place(p);
@@ -851,6 +858,11 @@ impl Compiler {
         by_ref: bool,
         body: &Stmt,
     ) -> CResult<()> {
+        // zend_compile_foreach: a list() value with references
+        // (zend_propagate_list_refs) iterates by reference.
+        let list_refs = matches!(&value.kind, ExprKind::Array { items, .. }
+            if items.iter().flatten().any(|i| i.by_ref || super::expr::has_nested_ref(i)));
+        let by_ref = by_ref || list_refs;
         let iter = {
             let f = self.f();
             f.num_iters += 1;
@@ -867,7 +879,11 @@ impl Compiler {
             }
         }
         let reset = if by_ref {
+            // zend_compile_foreach: a nullsafe chain is not a writable
+            // variable (zend_can_write_to_variable), so it is iterated as
+            // a temporary copy.
             let p = if subject.is_variable()
+                && !super::expr::contains_nullsafe(subject)
                 && !matches!(
                     subject.kind,
                     ExprKind::Call { .. }
@@ -915,7 +931,17 @@ impl Compiler {
         self.f().line = value.span.line;
         if by_ref {
             if let ExprKind::Array { items, .. } = &value.kind {
-                self.compile_destructure(items, Operand::Tmp(vt), value.span.line)?;
+                if list_refs {
+                    // ZEND_FETCH_LIST_W through the FE_FETCH_RW reference.
+                    let src = Place {
+                        base: PlaceBase::Value(Operand::TmpKeep(vt)),
+                        segs: Vec::new(),
+                    };
+                    self.compile_destructure_ref(items, &src, value.span.line, false)?;
+                    self.emit(Op::Free(Operand::Tmp(vt)));
+                } else {
+                    self.compile_destructure(items, Operand::Tmp(vt), value.span.line)?;
+                }
             } else {
                 let p = self.compile_place(value, false)?;
                 let pid = self.place(p);
@@ -1212,8 +1238,25 @@ impl Compiler {
 
     /// Unused helper kept for `ArgSrc` construction symmetry.
     pub(crate) fn arg_src_for(&mut self, e: &Expr) -> CResult<ArgSrc> {
+        if let ExprKind::Assign { target, value } = &e.kind {
+            // zend_compile_list_assign with references yields the source
+            // VAR (a reference), sent with ZEND_SEND_VAR_NO_REF.
+            if let ExprKind::Array { items, .. } = &target.kind {
+                if (is_ref_expr(value) || super::expr::is_call_expr(value))
+                    && items
+                        .iter()
+                        .flatten()
+                        .any(|i| i.by_ref || super::expr::has_nested_ref(i))
+                {
+                    let op = self.compile_expr(e)?;
+                    return Ok(ArgSrc::CallResult(op));
+                }
+            }
+        }
         if is_ref_expr(e) {
-            if let ExprKind::Prop { nullsafe: true, .. } = e.kind {
+            // zend_compile_args: a short-circuited chain is passed by
+            // value, and its jumps end at the argument.
+            if super::expr::contains_nullsafe(e) {
                 let op = self.compile_expr(e)?;
                 return Ok(ArgSrc::Val(op));
             }

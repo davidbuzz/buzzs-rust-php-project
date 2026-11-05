@@ -155,6 +155,11 @@ pub(crate) struct FnCtx {
     pub is_static: bool,
     /// Short-circuit jumps of the current nullsafe chain.
     pub sc_jumps: Vec<usize>,
+    /// Compiling an `isset()`/`empty()`/`??` operand: nullsafe bases are
+    /// fetched in BP_VAR_IS mode.
+    pub sc_quiet: bool,
+    /// See [`OpArray::live_tmps`].
+    pub live_tmps: Vec<crate::opcode::LiveTmp>,
     pub in_finally: u32,
     /// Pending `FastCall` patches: (finally id, op index).
     pub fast_calls: Vec<(u32, usize)>,
@@ -196,6 +201,8 @@ impl FnCtx {
             method_name: ZStr::empty(),
             is_static: false,
             sc_jumps: Vec::new(),
+            sc_quiet: false,
+            live_tmps: Vec::new(),
             in_finally: 0,
             fast_calls: Vec::new(),
         }
@@ -236,6 +243,9 @@ pub(crate) struct Compiler {
     /// evaluated, as `zend_compile_const_expr_*` do not call
     /// `zend_ensure_valid_class_fetch_type()`.
     pub in_const_default: bool,
+    /// Compiling the value of a top-level `const` statement, which PHP
+    /// evaluates as a constant-expression AST (`zend_compile_const_decl`).
+    pub in_const_decl: bool,
 }
 
 /// Compiles a parsed program.
@@ -267,6 +277,7 @@ pub fn compile(
         hook_prop: None,
         closure_depth: 0,
         in_const_default: false,
+        in_const_decl: false,
     };
     for w in &program.warnings {
         let level = match w.level {
@@ -485,6 +496,7 @@ impl Compiler {
             num_finally: f.num_finally,
             num_statics: f.num_statics,
             try_table: try_table.into_iter().map(|(e, _)| e).collect(),
+            live_tmps: f.live_tmps,
             filename: self.filename.clone(),
             strict_types: self.strict_types,
             decls: self.decls.clone(),
