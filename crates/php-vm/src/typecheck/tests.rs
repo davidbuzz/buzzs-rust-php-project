@@ -69,6 +69,119 @@ fn run_array_lookup(src: &str) -> String {
 }
 
 #[test]
+fn anonymous_self_union_diagnostics() {
+    let src = "<?php\n\
+        $a = new class {\n\
+            public function testParam(self|string $a) {}\n\
+            public function test(): self|string { return new stdClass; }\n\
+        };\n\
+        try { $a->testParam(null); } catch (Throwable $e) {\n\
+            echo $e::class, ': ', $e->getMessage(), \"\\n\";\n\
+        }\n\
+        try { $a->test(); } catch (Throwable $e) {\n\
+            echo $e::class, ': ', $e->getMessage(), \"\\n\";\n\
+        }\n";
+    assert_eq!(
+        run(src),
+        "TypeError: class@anonymous\0t.php:2$0::testParam(): Argument #1 ($a) must be of type class@anonymous|string, null given, called in t.php on line 6\n\
+         TypeError: class@anonymous::test(): Return value must be of type class@anonymous|string, stdClass returned\n"
+    );
+}
+
+#[test]
+fn anonymous_type_names_preserve_union_and_nullable_suffixes() {
+    use crate::types::{mask, TypeDecl};
+    use php_runtime::ZStr;
+
+    let name = ZStr::from("class@anonymous\0t.php:2$0");
+    for class in [ZStr::from("self"), ZStr::from("parent"), name.clone()] {
+        let mut ty = TypeDecl {
+            mask: mask::STRING,
+            classes: vec![class],
+            ..Default::default()
+        };
+        assert_eq!(
+            ty.display(Some(&name), Some(&name), None),
+            "class@anonymous|string"
+        );
+        ty.mask = mask::NULL;
+        assert_eq!(
+            ty.display(Some(&name), Some(&name), None),
+            "?class@anonymous"
+        );
+    }
+    let ty = TypeDecl {
+        mask: mask::STRING,
+        classes: vec![name.clone()],
+        ..Default::default()
+    };
+    assert_eq!(ty.to_php_string(), "class@anonymous|string");
+    // Zend appends the called scope for `static` without class-name resolution.
+    assert_eq!(
+        TypeDecl::simple(mask::STATIC | mask::STRING).display(Some(&name), None, Some(&name)),
+        "class@anonymous\0t.php:2$0|string"
+    );
+}
+
+#[test]
+fn scoped_closure_argument_member_names() {
+    let src = "<?php\n\
+        class C { function callback() { return function(int $value) {}; } }\n\
+        $a = new class { function callback() { return function(int $value) {}; } };\n\
+        foreach ([(new C)->callback(), $a->callback()] as $f) {\n\
+            try { $f(null); } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; }\n\
+        }\n";
+    assert_eq!(
+        run(src),
+        "C::{closure:C::callback():2}(): Argument #1 ($value) must be of type int, null given, called in t.php on line 5\n\
+         class@anonymous\0t.php:3$0::{closure:class@anonymous\0t.php:3$0::callback():3}(): Argument #1 ($value) must be of type int, null given, called in t.php on line 5\n"
+    );
+}
+
+#[test]
+fn anonymous_parent_union_diagnostics() {
+    let src = "<?php\n\
+        $parent = new class {};\n\
+        class_alias($parent::class, 'Base');\n\
+        $child = new class extends Base {\n\
+            function param(parent|string $value) {}\n\
+            function result(): parent|string { return new stdClass; }\n\
+        };\n\
+        $child->param($parent);\n\
+        try { $child->param(null); } catch (TypeError $e) {\n\
+            echo $e->getMessage(), \"\\n\";\n\
+        }\n\
+        try { $child->result(); } catch (TypeError $e) {\n\
+            echo $e->getMessage(), \"\\n\";\n\
+        }\n";
+    assert_eq!(
+        run(src),
+        "Base@anonymous\0t.php:4$1::param(): Argument #1 ($value) must be of type class@anonymous|string, null given, called in t.php on line 9\n\
+         Base@anonymous::result(): Return value must be of type class@anonymous|string, stdClass returned\n"
+    );
+}
+
+#[test]
+fn anonymous_never_and_static_return_diagnostics() {
+    let src = "<?php\n\
+        $a = new class {\n\
+            function neverReturn(): never {}\n\
+            function staticReturn(): static|string { return new stdClass; }\n\
+        };\n\
+        try { $a->neverReturn(); } catch (TypeError $e) {\n\
+            echo $e->getMessage(), \"\\n\";\n\
+        }\n\
+        try { $a->staticReturn(); } catch (TypeError $e) {\n\
+            echo $e->getMessage(), \"\\n\";\n\
+        }\n";
+    assert_eq!(
+        run(src),
+        "class@anonymous\0t.php:2$0::neverReturn(): never-returning method must not implicitly return\n\
+         class@anonymous::staticReturn(): Return value must be of type class@anonymous\0t.php:2$0|string, stdClass returned\n"
+    );
+}
+
+#[test]
 fn weak_mode_coercions() {
     let src = r#"<?php
 function a(int|float $x) { var_dump($x); }

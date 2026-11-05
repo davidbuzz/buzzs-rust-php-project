@@ -1465,7 +1465,12 @@ impl Vm {
                 called.as_ref().map(|c| &c.name),
             )
         });
-        let fname = self.func_display(&func, scope.as_ref());
+        // Argument errors use `%pS` for the complete member name, including
+        // the NUL-separated suffix of an anonymous class.
+        let fname = match scope.as_ref() {
+            Some(c) => format!("{}::{}", c.name, func.name()),
+            None => func.name().to_string_lossy(),
+        };
         let pname = if p.variadic {
             String::new()
         } else {
@@ -1698,7 +1703,7 @@ impl Vm {
         }
         if rt.is_never() {
             let fname = func.as_ref().map_or_else(String::new, |f| match &scope {
-                Some(c) => format!("{}::{}", object::display_name(&c.name), f.name()),
+                Some(c) => format!("{}::{}", c.name, f.name()),
                 None => f.name().to_string_lossy(),
             });
             let what = if scope.is_some() {

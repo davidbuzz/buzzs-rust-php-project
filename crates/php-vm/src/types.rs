@@ -140,10 +140,10 @@ impl TypeDecl {
                 }
             } else if n.eq_ignore_ascii_case(b"parent") {
                 if let Some(p) = parent_name {
-                    return p.to_string_lossy();
+                    return crate::object::display_name(p).to_string_lossy();
                 }
             }
-            n.to_string_lossy()
+            crate::object::display_name(n).to_string_lossy()
         };
         let mut parts: Vec<String> = Vec::new();
         if self.pure_intersection {
