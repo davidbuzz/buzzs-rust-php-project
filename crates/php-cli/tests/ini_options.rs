@@ -44,7 +44,13 @@ fn rextinfo_main_alias_and_case_sensitive_special_name() {
 
 #[test]
 fn ini_diff_reports_cli_defines_against_builtin_defaults() {
-    let output = php(&["-d", "precision=17", "-d", "auto_prepend_file=", "--ini=diff"]);
+    let output = php(&[
+        "-d",
+        "precision=17",
+        "-d",
+        "auto_prepend_file=",
+        "--ini=diff",
+    ]);
     assert!(output.status.success());
     assert!(output.stderr.is_empty(), "{:?}", output.stderr);
     let s = String::from_utf8(output.stdout).unwrap();
@@ -61,11 +67,9 @@ fn ini_diff_reports_cli_defines_against_builtin_defaults() {
         .skip(1)
         .map(|line| line.split(':').next().unwrap())
         .collect();
-    assert!(
-        names
-            .windows(2)
-            .all(|w| w[0].to_ascii_lowercase() <= w[1].to_ascii_lowercase())
-    );
+    assert!(names
+        .windows(2)
+        .all(|w| w[0].to_ascii_lowercase() <= w[1].to_ascii_lowercase()));
 }
 
 #[test]

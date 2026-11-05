@@ -150,9 +150,11 @@ fn constants_and_misc() {
 #[test]
 fn clamp_preserves_values_and_validates_bounds() {
     assert_eq!(
-        run("echo clamp(2, 1.3, 3.4), '|', clamp(0, 1.3, 3.4), '|', clamp('d', 'c', 'g');
+        run(
+            "echo clamp(2, 1.3, 3.4), '|', clamp(0, 1.3, 3.4), '|', clamp('d', 'c', 'g');
             $f = clamp(...); echo '|', $f(value: 'a', min: 'c', max: 'g');
-            echo '|', (int) is_int(clamp(2, 1.3, 3.4)), '|', (int) is_nan(clamp(NAN, 4, 6));"),
+            echo '|', (int) is_int(clamp(2, 1.3, 3.4)), '|', (int) is_nan(clamp(NAN, 4, 6));"
+        ),
         "2|1.3|d|c|1|1"
     );
     assert_eq!(

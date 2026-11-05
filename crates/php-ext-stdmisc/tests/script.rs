@@ -160,12 +160,10 @@ fn source_return_buffers_obey_the_output_handler_lock() {
 
 #[test]
 fn source_return_buffers_capture_open_warnings_and_restore_the_stack() {
-    let out = run(
-        r#"ob_start();
+    let out = run(r#"ob_start();
         set_error_handler(function($n, $m) { var_dump(ob_get_level()); return true; });
         var_dump(highlight_file('/nonexistent-gh20906.php', true), ob_get_level());
-        var_dump(php_strip_whitespace('/nonexistent-gh20906.php'), ob_get_level());"#,
-    );
+        var_dump(php_strip_whitespace('/nonexistent-gh20906.php'), ob_get_level());"#);
     assert_eq!(
         out,
         "int(2)\nint(2)\nbool(false)\nint(1)\nint(2)\nstring(0) \"\"\nint(1)\n"
@@ -174,29 +172,24 @@ fn source_return_buffers_capture_open_warnings_and_restore_the_stack() {
 
 #[test]
 fn source_return_buffers_are_removed_on_an_open_exception() {
-    let out = run(
-        r#"ob_start();
+    let out = run(r#"ob_start();
         set_error_handler(function($n, $m) { throw new Exception($m); });
         try { highlight_file('/nonexistent-gh20906.php', true); } catch (Exception $e) {}
         var_dump(ob_get_level());
         try { php_strip_whitespace('/nonexistent-gh20906.php'); } catch (Exception $e) {}
-        var_dump(ob_get_level());"#,
-    );
+        var_dump(ob_get_level());"#);
     assert_eq!(out, "int(1)\nint(1)\n");
 }
 
 #[test]
 fn highlight_return_buffer_does_not_invoke_the_outer_handler() {
-    let out = run(
-        r#"ob_start(function($s) { return strtoupper($s); }, 1);
+    let out = run(r#"ob_start(function($s) { return strtoupper($s); }, 1);
         $s = highlight_string('x', true);
         $level = ob_get_level();
         ob_end_clean();
-        var_dump($level, str_contains($s, '<code'));"#,
-    );
+        var_dump($level, str_contains($s, '<code'));"#);
     assert_eq!(out, "int(1)\nbool(true)\n");
 }
-
 
 #[test]
 fn setlocale_strict_scalar_args_and_weak_array_elements() {
@@ -252,7 +245,10 @@ fn scanner_reads_wrappers_and_include_path() {
     let opts = VmOptions {
         ini: vec![("allow_url_include".to_string(), "1".to_string())],
     };
-    let out = run_with(&opts, &[&streams, &misc], r#"
+    let out = run_with(
+        &opts,
+        &[&streams, &misc],
+        r#"
         class SourceWrapper {
             public $context;
             private $source = '<?php /* comment */ echo 1; ?>';
@@ -285,17 +281,22 @@ fn scanner_reads_wrappers_and_include_path() {
         stream_wrapper_register('throwing', ThrowingSource::class);
         try { php_strip_whitespace('throwing://file.php'); }
         catch (Error $e) { echo $e->getMessage(), "\n"; }
-    "#);
+    "#,
+    );
     assert_eq!(
         out,
         "source://root/file.php\n<?php  echo 1; ?>\n<?php echo 2; ?>\nopen failed\n"
     );
-    let out = run_with(&VmOptions::default(), &[&streams, &misc], r#"
+    let out = run_with(
+        &VmOptions::default(),
+        &[&streams, &misc],
+        r#"
         $warnings = [];
         set_error_handler(function($n, $s) use (&$warnings) { $warnings[] = $s; });
         var_dump(php_strip_whitespace('data:text/plain,%3C%3Fphp%20echo%202%3B') === '');
         var_dump(strpos(implode('|', $warnings), 'allow_url_include=0') !== false);
-    "#);
+    "#,
+    );
     assert_eq!(out, "bool(true)\nbool(true)\n");
 }
 
@@ -303,7 +304,10 @@ fn scanner_reads_wrappers_and_include_path() {
 fn scanner_distinguishes_read_failure_from_empty_source() {
     let misc = php_ext_stdmisc::StdMisc;
     let streams = php_ext_streams::Streams;
-    let out = run_with(&VmOptions::default(), &[&streams, &misc], r#"
+    let out = run_with(
+        &VmOptions::default(),
+        &[&streams, &misc],
+        r#"
         class ReadSource {
             public $context;
             private $mode;
@@ -335,7 +339,8 @@ fn scanner_distinguishes_read_failure_from_empty_source() {
         var_dump(php_strip_whitespace('readsource://empty'));
         try { php_strip_whitespace('readsource://throw'); }
         catch (Error $e) { echo $e->getMessage(), "\n"; }
-    "#);
+    "#,
+    );
     assert_eq!(
         out,
         "highlight_file(): Failed opening 'readsource://failed' for highlighting\nbool(false)\n\
@@ -415,8 +420,7 @@ fn ini_get_all_sorts_the_shared_reflection_table() {
         let ext = php_ext_stdmisc::StdMisc;
         let fixture = IniFixture;
         let exts: [&dyn Extension; 2] = [&ext, &fixture];
-        let mut vm =
-            Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
+        let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
         let code = format!(
             "<?php
             $r = new ReflectionExtension('ini_sort_test');

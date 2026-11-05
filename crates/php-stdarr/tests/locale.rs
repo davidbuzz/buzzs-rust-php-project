@@ -39,8 +39,7 @@ fn locale_sort_uses_current_collation() {
                 expected.into_iter().rev().collect::<Vec<_>>()
             );
 
-            let keyed =
-                ZArray::from_pairs(["b", "A", "a", "ä", "z"].map(|s| (s, Value::from(s))));
+            let keyed = ZArray::from_pairs(["b", "A", "a", "ä", "z"].map(|s| (s, Value::from(s))));
             let a = PhpRef::new(Value::Array(keyed));
             sort::ksort(&mut ctx, &a, flags).unwrap();
             let Value::Array(sorted) = a.get() else {

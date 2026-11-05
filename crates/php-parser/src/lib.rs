@@ -90,8 +90,9 @@ fn parse_on_helper(
         match std::thread::Builder::new()
             .name("php-parser".into())
             .stack_size(size)
-            .spawn_scoped(s, || parse_and_validate(src, opts, encoding, stack::stack_limit()))
-        {
+            .spawn_scoped(s, || {
+                parse_and_validate(src, opts, encoding, stack::stack_limit())
+            }) {
             Ok(handle) => match handle.join() {
                 Ok(r) => r.map_err(|(e, _)| e),
                 Err(panic) => std::panic::resume_unwind(panic),

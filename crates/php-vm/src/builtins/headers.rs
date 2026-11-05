@@ -324,11 +324,7 @@ mod tests {
 
     #[test]
     fn internal_headers_preserve_cli_lists_and_first_mime_type() {
-        let mut vm = Vm::with_extensions(
-            &VmOptions::default(),
-            Box::new(Vec::<u8>::new()),
-            &[],
-        );
+        let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(Vec::<u8>::new()), &[]);
         assert!(vm
             .add_response_header(b"Content-Type: text/plain", true)
             .expect("header"));
@@ -347,11 +343,7 @@ mod tests {
 
     #[test]
     fn rejected_sapi_header_does_not_report_success_or_change_mime() {
-        let mut vm = Vm::with_extensions(
-            &VmOptions::default(),
-            Box::new(Vec::<u8>::new()),
-            &[],
-        );
+        let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(Vec::<u8>::new()), &[]);
         vm.response_header_hook = Some(|_, _, _, _| Ok(false));
         assert!(!vm
             .add_response_header(b"Content-Type: text/plain", true)

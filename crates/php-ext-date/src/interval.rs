@@ -369,7 +369,11 @@ mod tests {
             (i64::MAX, u32::MAX, true),
         ] {
             let mut h = ZArray::new();
-            for name in ["special_type", "have_weekday_relative", "have_special_relative"] {
+            for name in [
+                "special_type",
+                "have_weekday_relative",
+                "have_special_relative",
+            ] {
                 crate::common::set_str(&mut h, name, Value::Int(value));
             }
             let iv = from_hash(&mut vm, &h).unwrap();

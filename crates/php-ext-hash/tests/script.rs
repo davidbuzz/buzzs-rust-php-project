@@ -163,7 +163,8 @@ bool(false)\n"
 #[test]
 fn hash_constant_reflection_attribution() {
     assert_eq!(
-        run(r"$constants = (new ReflectionExtension('hash'))->getConstants();
+        run(
+            r"$constants = (new ReflectionExtension('hash'))->getConstants();
             $valid = count($constants) === 40;
             foreach ($constants as $name => $value) {
                 $r = new ReflectionConstant($name);
@@ -174,7 +175,8 @@ fn hash_constant_reflection_attribution() {
                     && $r->getExtension()->getConstants() === $constants
                     && $r->isDeprecated() === ($name !== 'HASH_HMAC');
             }
-            var_dump($valid);"),
+            var_dump($valid);"
+        ),
         "bool(true)\n"
     );
 }

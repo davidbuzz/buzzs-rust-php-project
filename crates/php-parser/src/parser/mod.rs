@@ -12,7 +12,8 @@ mod stmt;
 use crate::ast::{Diagnostic, DiagnosticLevel, Ident, Name, NameKind, Program, Span};
 use crate::error::{syntax_error_message, ParseError};
 use php_lexer::{
-    LexError, LexMode, Lexer, LexerOptions, ScriptEncodingOptions, TokenKind, TokenValue, WarningKind,
+    LexError, LexMode, Lexer, LexerOptions, ScriptEncodingOptions, TokenKind, TokenValue,
+    WarningKind,
 };
 use std::borrow::Cow;
 use std::collections::VecDeque;

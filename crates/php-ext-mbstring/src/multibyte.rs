@@ -128,7 +128,10 @@ mod tests {
     fn main_script_uses_parser_filters_without_double_conversion() {
         let source = b"<?php declare(encoding='SJIS'); echo \"\x95\x5C\";";
         assert_eq!(
-            run(source, &[("zend.multibyte", "1"), ("internal_encoding", "SJIS")]),
+            run(
+                source,
+                &[("zend.multibyte", "1"), ("internal_encoding", "SJIS")]
+            ),
             b"\x95\x5C"
         );
         assert_eq!(run(source, &[("zend.multibyte", "1")]), "表".as_bytes());
@@ -147,7 +150,10 @@ mod tests {
     fn eval_uses_configured_internal_encoding_not_script_ini() {
         let source = b"<?php ini_set('internal_encoding', 'SJIS'); eval('echo \"\x95\x5C\";');";
         assert_eq!(
-            run(source, &[("zend.multibyte", "1"), ("zend.script_encoding", "UTF-8")]),
+            run(
+                source,
+                &[("zend.multibyte", "1"), ("zend.script_encoding", "UTF-8")]
+            ),
             b"\x95\x5C"
         );
     }
@@ -155,7 +161,9 @@ mod tests {
     #[test]
     fn eval_does_not_detect_unicode_bom() {
         let (vm, _) = vm(&[("zend.multibyte", "1")]);
-        assert!(vm.parse_source(b"\xEF\xBB\xBFecho 'ok';", true, false).is_err());
+        assert!(vm
+            .parse_source(b"\xEF\xBB\xBFecho 'ok';", true, false)
+            .is_err());
     }
 
     #[test]
@@ -175,13 +183,12 @@ mod tests {
     #[test]
     fn file_input_uses_script_encoding_and_detect_unicode_ini() {
         let mut source = b"\xFF\xFE".to_vec();
-        source.extend(
-            "<?php echo 'é';"
-                .encode_utf16()
-                .flat_map(u16::to_le_bytes),
-        );
+        source.extend("<?php echo 'é';".encode_utf16().flat_map(u16::to_le_bytes));
         assert_eq!(
-            run(&source, &[("zend.multibyte", "1"), ("zend.script_encoding", "SJIS")]),
+            run(
+                &source,
+                &[("zend.multibyte", "1"), ("zend.script_encoding", "SJIS")]
+            ),
             "é".as_bytes()
         );
         assert_eq!(
@@ -213,21 +220,25 @@ mod tests {
         )
         .unwrap();
         let program = vm
-            .parse_source(b"<?php declare(encoding='UTF-8'); echo '\xE2\x82\xAC';", false, false)
+            .parse_source(
+                b"<?php declare(encoding='UTF-8'); echo '\xE2\x82\xAC';",
+                false,
+                false,
+            )
             .unwrap();
         let php_parser::ast::StmtKind::Echo(values) = &program.statements[1].kind else {
             panic!("expected echo");
         };
-        assert_eq!(values[0].kind, php_parser::ast::ExprKind::String(b"!".to_vec()));
+        assert_eq!(
+            values[0].kind,
+            php_parser::ast::ExprKind::String(b"!".to_vec())
+        );
     }
 
     #[test]
     fn reflection_preserves_compile_time_encoding_after_runtime_change() {
         let source = b"<?php declare(encoding='SJIS'); function f($x='\x82\xA0') { static $v='\x82\xA0'; } ini_set('internal_encoding', 'ISO-8859-1'); $r = new ReflectionFunction('f'); echo $r->getParameters()[0]->getDefaultValue(); echo $r->getStaticVariables()['v'];";
-        assert_eq!(
-            run(source, &[("zend.multibyte", "1")]),
-            "ああ".as_bytes()
-        );
+        assert_eq!(run(source, &[("zend.multibyte", "1")]), "ああ".as_bytes());
     }
 
     #[test]
@@ -272,7 +283,10 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(result, Value::Bool(false)));
-        assert_eq!(vm.ini_string("zend.script_encoding"), Some(b"SJIS".to_vec()));
+        assert_eq!(
+            vm.ini_string("zend.script_encoding"),
+            Some(b"SJIS".to_vec())
+        );
         assert_eq!(
             settings(&vm).script_encodings,
             vec![php_mbstring::encoding::by_name(b"SJIS").unwrap()]

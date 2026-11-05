@@ -4,8 +4,8 @@
 use std::cell::RefCell;
 
 use super::{
-    parse_ini, Access, IniHooks, IniKey, IniMap, IniParserCallback, IniRegistry, IniScalar, IniValue,
-    ScannerMode, Stage,
+    parse_ini, Access, IniHooks, IniKey, IniMap, IniParserCallback, IniRegistry, IniScalar,
+    IniValue, ScannerMode, Stage,
 };
 use crate::diag::{Diagnostic, DiagnosticSink};
 
@@ -167,7 +167,9 @@ impl IniParserCallback for Collector<'_, '_> {
             .count();
         let key = IniKey::Str(key[start..].to_vec());
         if config.values.get(&key).is_none() {
-            config.values.insert(key.clone(), IniValue::Array(IniMap::new()));
+            config
+                .values
+                .insert(key.clone(), IniValue::Array(IniMap::new()));
         }
         if matches!(config.values.get(&key), Some(IniValue::Array(_))) {
             self.active = Some(key);
@@ -181,7 +183,10 @@ impl IniParserCallback for Collector<'_, '_> {
         if !self.special && key.eq_ignore_ascii_case(b"extension") {
             self.config.borrow_mut().extensions.push(value.to_bytes());
         } else if !self.special && key.eq_ignore_ascii_case(b"zend_extension") {
-            self.config.borrow_mut().zend_extensions.push(value.to_bytes());
+            self.config
+                .borrow_mut()
+                .zend_extensions
+                .push(value.to_bytes());
         } else {
             self.with_target(|target| {
                 target.insert(IniKey::Str(key.to_vec()), IniValue::Scalar(value));
@@ -306,7 +311,10 @@ mod tests {
             .unwrap();
         assert_eq!(scalar(&config.values, "copy"), Some(b"config".to_vec()));
         assert_eq!(scalar(&config.values, "blank"), Some(Vec::new()));
-        assert_eq!(scalar(&config.values, "external"), Some(b"environment".to_vec()));
+        assert_eq!(
+            scalar(&config.values, "external"),
+            Some(b"environment".to_vec())
+        );
         assert_eq!(scalar(&config.values, "number"), Some(b"7".to_vec()));
     }
 }

@@ -273,7 +273,11 @@ fn locale_arg(vm: &mut Vm, n: usize, v: Value, strict: bool) -> VmResult<Value> 
     } else {
         format!("#{n}")
     };
-    let expected = if n == 2 { "array|string|null" } else { "?string" };
+    let expected = if n == 2 {
+        "array|string|null"
+    } else {
+        "?string"
+    };
     let parsed = match &v {
         Value::Null | Value::Str(_) => Some(v.clone()),
         Value::Int(_) | Value::Float(_) | Value::Bool(_) if !strict => {

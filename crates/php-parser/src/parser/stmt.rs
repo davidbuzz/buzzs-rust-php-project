@@ -822,7 +822,10 @@ impl Parser<'_> {
                     if let Some(encoding) = php_mbstring::encoding::by_cname(&name) {
                         self.lexer.set_script_encoding(encoding);
                     } else {
-                        let end = name.iter().position(|&byte| byte == 0).unwrap_or(name.len());
+                        let end = name
+                            .iter()
+                            .position(|&byte| byte == 0)
+                            .unwrap_or(name.len());
                         self.warnings.push(crate::ast::Diagnostic {
                             level: crate::ast::DiagnosticLevel::CompileWarning,
                             message: format!(

@@ -53,7 +53,9 @@ impl VmEnv {
                     .and_then(Option::as_ref)
                     .map(Value::deref)
                 {
-                    Some(Value::Array(a)) => a.get(&ArrayKey::from("HTTP_ACCEPT_ENCODING")).cloned(),
+                    Some(Value::Array(a)) => {
+                        a.get(&ArrayKey::from("HTTP_ACCEPT_ENCODING")).cloned()
+                    }
                     _ => None,
                 }
             })
@@ -125,7 +127,9 @@ fn parse_compression(vm: &mut Vm, value: &[u8]) -> VmResult<i64> {
     }
     let (value, error) = parse_quantity(value);
     if let Some(error) = error {
-        vm.php_warning(&format!("Invalid \"zlib.output_compression\" setting. {error}"))?;
+        vm.php_warning(&format!(
+            "Invalid \"zlib.output_compression\" setting. {error}"
+        ))?;
     }
     Ok(value)
 }
@@ -387,10 +391,7 @@ mod tests {
                 flags::STDFLAGS,
             ));
             let r = vm
-                .call_value(
-                    &Value::from("ob_start"),
-                    vec![Value::from("ob_gzhandler")],
-                )
+                .call_value(&Value::from("ob_start"), vec![Value::from("ob_gzhandler")])
                 .expect("ob_start");
             assert!(matches!(r, Value::Bool(false)), "{old}");
             assert_eq!(vm.output.list_handlers(), vec![old.as_bytes().to_vec()]);

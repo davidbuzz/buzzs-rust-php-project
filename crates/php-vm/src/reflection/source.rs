@@ -105,12 +105,7 @@ pub(crate) fn prop_default(
 
 /// The value expression of class constant `name` declared in the class at
 /// `file:line`.
-pub(crate) fn const_value(
-    vm: &Vm,
-    file: &[u8],
-    line: u32,
-    name: &[u8],
-) -> Option<(Expr, Vec<u8>)> {
+pub(crate) fn const_value(vm: &Vm, file: &[u8], line: u32, name: &[u8]) -> Option<(Expr, Vec<u8>)> {
     let (c, ns) = class_ast(vm, file, line)?;
     for m in &c.members {
         match &m.kind {
@@ -305,7 +300,12 @@ impl php_parser::visit::Visitor for AttributeArgs<'_> {
 
 /// The argument expressions of the attribute `name` written at `file:line`
 /// (the `n`-th attribute of that name in the group).
-pub(crate) fn attribute_args(vm: &Vm, file: &[u8], line: u32, name: &[u8]) -> Option<Vec<ast::Arg>> {
+pub(crate) fn attribute_args(
+    vm: &Vm,
+    file: &[u8],
+    line: u32,
+    name: &[u8],
+) -> Option<Vec<ast::Arg>> {
     let program = program(vm, file)?;
     let mut visitor = AttributeArgs {
         line,
@@ -459,7 +459,12 @@ impl php_parser::visit::Visitor for StaticInits {
 
 /// The initializer expressions of the `static` variables of the function
 /// spanning `file:start-end`.
-pub(crate) fn static_initializers(vm: &Vm, file: &[u8], start: u32, end: u32) -> Vec<(Vec<u8>, Expr)> {
+pub(crate) fn static_initializers(
+    vm: &Vm,
+    file: &[u8],
+    start: u32,
+    end: u32,
+) -> Vec<(Vec<u8>, Expr)> {
     let Some(p) = program(vm, file) else {
         return Vec::new();
     };

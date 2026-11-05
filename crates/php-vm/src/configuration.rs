@@ -22,7 +22,9 @@ impl Vm {
                 .map(configuration_value);
         }
         let name = String::from_utf8_lossy(name);
-        self.ini.config_value(&name).map(|v| Value::Str(ZStr::from(v)))
+        self.ini
+            .config_value(&name)
+            .map(|v| Value::Str(ZStr::from(v)))
     }
 }
 

@@ -875,7 +875,11 @@ fn clamp_mixed_values_and_nan_bounds() {
         Value::Str(s) if s.as_bytes() == b"d"
     ));
     for (min, max, message) in [
-        (f64::NAN, f64::NAN, "clamp(): Argument #2 ($min) must not be NAN"),
+        (
+            f64::NAN,
+            f64::NAN,
+            "clamp(): Argument #2 ($min) must not be NAN",
+        ),
         (1.0, f64::NAN, "clamp(): Argument #3 ($max) must not be NAN"),
         (
             3.0,
@@ -883,8 +887,13 @@ fn clamp_mixed_values_and_nan_bounds() {
             "clamp(): Argument #2 ($min) must be smaller than or equal to argument #3 ($max)",
         ),
     ] {
-        let err = basic::clamp(&mut ctx, &Value::Int(2), &Value::Float(min), &Value::Float(max))
-            .unwrap_err();
+        let err = basic::clamp(
+            &mut ctx,
+            &Value::Int(2),
+            &Value::Float(min),
+            &Value::Float(max),
+        )
+        .unwrap_err();
         assert_eq!(err.message(), Some(message));
     }
 }
@@ -1091,7 +1100,10 @@ fn walk_object_properties() {
         assert_eq!(ctx.writes.len(), 1);
         assert_eq!(ctx.writes[0].0, "a");
         assert_eq!(ctx.writes[0].1.as_int(), Some(99));
-        assert_eq!(ctx.props.get(&ArrayKey::from("b")).unwrap().as_int(), Some(2));
+        assert_eq!(
+            ctx.props.get(&ArrayKey::from("b")).unwrap().as_int(),
+            Some(2)
+        );
     }
 }
 

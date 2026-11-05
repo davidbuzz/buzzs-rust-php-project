@@ -211,7 +211,9 @@ impl Config {
                 cfg.configuration.extensions.push(v.as_bytes().to_vec());
             } else if k.eq_ignore_ascii_case("zend_extension") {
                 cfg.zend_extensions.push(v.clone());
-                cfg.configuration.zend_extensions.push(v.as_bytes().to_vec());
+                cfg.configuration
+                    .zend_extensions
+                    .push(v.as_bytes().to_vec());
             } else {
                 cfg.entries.push((k.clone(), v.clone()));
                 cfg.configuration.values.insert(
@@ -471,7 +473,11 @@ mod tests {
         )
         .unwrap();
         std::fs::write(scan.join("20-last.ini"), "precision=10\nextension=last\n").unwrap();
-        std::fs::write(scan.join("10-first.ini"), "copy=${base}/copy\nprecision=9\nextension=middle\n[HOST=EXAMPLE.COM]\nprecision=12\n").unwrap();
+        std::fs::write(
+            scan.join("10-first.ini"),
+            "copy=${base}/copy\nprecision=9\nextension=middle\n[HOST=EXAMPLE.COM]\nprecision=12\n",
+        )
+        .unwrap();
         std::fs::write(scan.join("30-bad.ini"), "partial=kept\nbroken=(\n").unwrap();
         std::fs::write(scan.join("ignored.INI"), "precision=2\n").unwrap();
         let cfg = Config::load_from_environment(
@@ -541,7 +547,10 @@ mod tests {
             scan.as_os_str().as_bytes(),
         );
         assert_eq!(cfg.configuration.extensions, vec![b"ext\xfc".to_vec()]);
-        assert_eq!(cfg.configuration.zend_extensions, vec![b"engine\xfb".to_vec()]);
+        assert_eq!(
+            cfg.configuration.zend_extensions,
+            vec![b"engine\xfb".to_vec()]
+        );
         // The scalar registry still uses its existing lossy String representation.
         assert_eq!(cfg.get("plain"), Some("value\u{fffd}"));
         let mut vm = crate::new_vm(&cfg);

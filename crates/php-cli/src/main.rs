@@ -837,11 +837,13 @@ fn show_main_ini(ini: &php_support::ini::IniRegistry) -> Vec<u8> {
             s.extend_from_slice(b" => ");
             match def.handler {
                 ModifyHandler::Bool | ModifyHandler::GcEnabled => {
-                    s.extend_from_slice(if php_support::ini::parse_bool(value.unwrap_or_default()) {
-                        b"On"
-                    } else {
-                        b"Off"
-                    });
+                    s.extend_from_slice(
+                        if php_support::ini::parse_bool(value.unwrap_or_default()) {
+                            b"On"
+                        } else {
+                            b"Off"
+                        },
+                    );
                 }
                 ModifyHandler::DisplayErrors => {
                     s.extend_from_slice(display_errors_value(value));
@@ -923,12 +925,9 @@ fn show_ini_diff(ini: &php_support::ini::IniRegistry) -> Vec<u8> {
         }
         s.extend_from_slice(e.name.as_bytes());
         s.extend_from_slice(b": ");
-        for (i, value) in [
-            e.builtin_default_value.as_deref(),
-            e.local_value.as_deref(),
-        ]
-        .into_iter()
-        .enumerate()
+        for (i, value) in [e.builtin_default_value.as_deref(), e.local_value.as_deref()]
+            .into_iter()
+            .enumerate()
         {
             if i != 0 {
                 s.extend_from_slice(b" -> ");
@@ -1293,7 +1292,11 @@ mod tests {
         use php_support::ini::{Access, IniDirective, IniRegistry, ModifyHandler};
         let mut ini = IniRegistry::new();
         let mut diagnostics = Vec::new();
-        for (name, default) in [("z.test", Some("")), ("A.test", None), ("b.test", Some("old"))] {
+        for (name, default) in [
+            ("z.test", Some("")),
+            ("A.test", None),
+            ("b.test", Some("old")),
+        ] {
             ini.register(
                 IniDirective::new(name, default, Access::ALL, ModifyHandler::None, "test"),
                 &mut diagnostics,
@@ -1317,10 +1320,8 @@ mod tests {
 
     #[test]
     fn new_vm_preserves_complete_configuration() {
-        let path = std::env::temp_dir().join(format!(
-            "php-cli-get-cfg-var-{}.ini",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("php-cli-get-cfg-var-{}.ini", std::process::id()));
         std::fs::write(
             &path,
             "items[2]=first\nitems[]=second\n[PATH=/app]\nprecision=8\n",

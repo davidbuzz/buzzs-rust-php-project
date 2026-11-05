@@ -47,9 +47,16 @@ fn declaration_uses_host_internal_encoding() {
 
 #[test]
 fn unknown_encoding_warns_without_changing_input() {
-    let program = parse(b"<?php declare(encoding='missing'\n); echo '\xE9';", &options()).unwrap();
+    let program = parse(
+        b"<?php declare(encoding='missing'\n); echo '\xE9';",
+        &options(),
+    )
+    .unwrap();
     assert_eq!(program.warnings.len(), 1);
-    assert_eq!(program.warnings[0].message, "Unsupported encoding [missing]");
+    assert_eq!(
+        program.warnings[0].message,
+        "Unsupported encoding [missing]"
+    );
     assert_eq!(program.warnings[0].line, 2);
     assert_eq!(echoed_string(&program, 1), b"\xE9");
 
@@ -68,7 +75,10 @@ fn unknown_encoding_warns_without_changing_input() {
         );
     }
     let program = parse(b"<?php declare(encoding=\"missing\\0suffix\");", &options()).unwrap();
-    assert_eq!(program.warnings[0].message, "Unsupported encoding [missing]");
+    assert_eq!(
+        program.warnings[0].message,
+        "Unsupported encoding [missing]"
+    );
 }
 
 #[test]
@@ -89,7 +99,11 @@ fn warnings_survive_subsequent_syntax_and_literal_errors() {
     assert_eq!(error.warnings[0].message, "Unsupported encoding [missing]");
     assert_eq!(error.warnings[0].line, 2);
 
-    let error = parse(b"<?php declare(encoding='missing', encoding=FOO);", &options()).unwrap_err();
+    let error = parse(
+        b"<?php declare(encoding='missing', encoding=FOO);",
+        &options(),
+    )
+    .unwrap_err();
     assert_eq!(error.message, "Encoding must be a literal");
     assert_eq!(error.warnings[0].message, "Unsupported encoding [missing]");
 }
