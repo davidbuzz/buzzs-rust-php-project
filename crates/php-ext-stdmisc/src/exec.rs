@@ -23,7 +23,9 @@ fn exec_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cmd = a.str(0);
     let output = a.has(1).then(|| a.at(1));
     vm.flush_stdout();
-    let (ret, out, status) = exec::exec(cmd.as_bytes(), output, vm).vm(vm)?;
+    let r = exec::exec(cmd.as_bytes(), output, vm);
+    pipe_read_done();
+    let (ret, out, status) = r.vm(vm)?;
     if let Some(out) = out {
         a.set_ref(1, Value::Array(out));
     }
@@ -31,6 +33,13 @@ fn exec_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         a.set_ref(2, Value::Int(status));
     }
     Ok(ret)
+}
+
+/// PHP reads the command's output through a popen() stream, whose reads
+/// clear the stat cache (`php_stdiop_read`): a file the command changed
+/// is stat()ed afresh (bug #72666).
+fn pipe_read_done() {
+    php_streams::state::clear_stat_cache();
 }
 
 /// `exec::system` / `exec::passthru` with a diagnostics collector as the
@@ -61,6 +70,7 @@ fn run_printing(vm: &mut Vm, a: &Args, f: Runner) -> VmResult<Value> {
     vm.flush_stdout();
     let mut diags = DeferredDiagnostics::default();
     let r = f(cmd.as_bytes(), &mut |b: &[u8]| vm.output(b), &mut diags);
+    pipe_read_done();
     for (level, message) in diags.0 {
         vm.raise(level.bits(), &message)?;
     }
@@ -87,7 +97,9 @@ fn passthru(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn shell_exec(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cmd = a.str(0);
     vm.flush_stdout();
-    exec::shell_exec(cmd.as_bytes(), vm).vm(vm)
+    let r = exec::shell_exec(cmd.as_bytes(), vm);
+    pipe_read_done();
+    r.vm(vm)
 }
 
 fn proc_nice(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
