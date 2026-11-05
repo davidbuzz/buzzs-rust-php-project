@@ -72,3 +72,23 @@ fn shutdown_function_get_defined_vars_is_a_dynamic_call() {
         "{out}"
     );
 }
+
+/// The `Closure::__invoke` trampoline of an internal function's closure
+/// reports a required parameter skipped by named arguments under its own
+/// name (`call_function_trampoline_leak`).
+#[test]
+fn closure_invoke_trampoline_reports_skipped_required_parameter() {
+    let out = run(r#"<?php
+$call = 'call_user_func_array';
+try {
+    $call([Closure::fromCallable('strcmp'), '__invoke'], ['string2' => 'b']);
+} catch (Throwable $e) {
+    echo $e::class, ': ', $e->getMessage(), "\n";
+}
+var_dump($call([Closure::fromCallable('strcmp'), '__invoke'], ['string2' => 'b', 'string1' => 'b']));
+"#);
+    assert_eq!(
+        out,
+        "ArgumentCountError: Closure::__invoke(): Argument #1 ($string1) not passed\nint(0)\n"
+    );
+}

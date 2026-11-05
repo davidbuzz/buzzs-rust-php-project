@@ -638,6 +638,28 @@ fn closure_invoke(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 .collect()
         })
         .unwrap_or_default();
+    // `zend_handle_undef_args()` on the trampoline: it copies the arginfo of
+    // an internal closure function, so a required parameter skipped by
+    // named arguments is reported for `Closure::__invoke()` (user arginfo
+    // is left to the closure itself).
+    if let Some(last) = a.passed.iter().rposition(|&p| p) {
+        if let Some(gap) = a.passed[..last].iter().position(|&p| !p) {
+            if let Some(Func::Builtin(inner)) = vm.closure_data(&c).map(|d| d.func) {
+                if gap < inner.required as usize {
+                    let name = params
+                        .get(gap)
+                        .map_or_else(String::new, |p| p.1.to_string_lossy());
+                    return Err(vm.make_throw(
+                        "ArgumentCountError",
+                        &format!(
+                            "Closure::__invoke(): Argument #{} (${name}) not passed",
+                            gap + 1
+                        ),
+                    ));
+                }
+            }
+        }
+    }
     let mut args = Vec::with_capacity(a.values.len());
     let mut named = std::mem::take(&mut a.named);
     for (i, v) in std::mem::take(&mut a.values).into_iter().enumerate() {
