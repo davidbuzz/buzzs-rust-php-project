@@ -109,3 +109,14 @@ echo "kept\n";
          kept\n"
     );
 }
+
+/// The "continue targeting switch" warning is raised once, by
+/// `php_parser::validate` (`continue_targeting_switch_warning`).
+#[test]
+fn continue_targeting_switch_warns_once() {
+    let out = run("<?php\nwhile (true) {\n    switch (1) {\n        case 1:\n            continue;\n    }\n    break;\n}\necho \"ok\";\n");
+    assert_eq!(
+        out,
+        "\nWarning: \"continue\" targeting switch is equivalent to \"break\". Did you mean to use \"continue 2\"? in t.php on line 5\nok"
+    );
+}
