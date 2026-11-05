@@ -237,19 +237,21 @@ pub(crate) fn register(vm: &mut Vm) {
             attribute_construct,
         )
         .register(vm);
-    for n in [
-        "ReturnTypeWillChange",
-        "AllowDynamicProperties",
-        "SensitiveParameter",
-        "Override",
+    // `Zend/zend_attributes_arginfo.h`: the attribute classes declared
+    // `@strict-properties` forbid dynamic properties.
+    for (n, extra) in [
+        ("ReturnTypeWillChange", 0),
+        ("AllowDynamicProperties", 0),
+        ("SensitiveParameter", cflags::NO_DYNAMIC_PROPERTIES),
+        ("Override", cflags::NO_DYNAMIC_PROPERTIES),
     ] {
         ClassBuilder::new(n)
-            .flags(cflags::FINAL)
+            .flags(cflags::FINAL | extra)
             .method("__construct()", PUB, noop_construct)
             .register(vm);
     }
     ClassBuilder::new("Deprecated")
-        .flags(cflags::FINAL)
+        .flags(cflags::FINAL | cflags::NO_DYNAMIC_PROPERTIES)
         .prop("message", PUB | flags::READONLY, Some("?string"), None)
         .prop("since", PUB | flags::READONLY, Some("?string"), None)
         .method(
@@ -259,7 +261,7 @@ pub(crate) fn register(vm: &mut Vm) {
         )
         .register(vm);
     ClassBuilder::new("NoDiscard")
-        .flags(cflags::FINAL)
+        .flags(cflags::FINAL | cflags::NO_DYNAMIC_PROPERTIES)
         .prop("message", PUB | flags::READONLY, Some("?string"), None)
         .method(
             "__construct(?string $message = null)",
@@ -268,7 +270,7 @@ pub(crate) fn register(vm: &mut Vm) {
         )
         .register(vm);
     ClassBuilder::new("SensitiveParameterValue")
-        .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE)
+        .flags(cflags::FINAL | cflags::NO_DYNAMIC_PROPERTIES | cflags::NOT_SERIALIZABLE)
         .method("__construct(mixed $value)", PUB, sensitive_value_construct)
         .method("getValue(): mixed", PUB, sensitive_value_get)
         .method("__debugInfo(): array", PUB, sensitive_value_debug_info)

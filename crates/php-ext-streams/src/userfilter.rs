@@ -12,7 +12,7 @@ use php_streams::value::{UserCall, Value as SValue};
 use php_streams::{file as lib, wrapper};
 use php_vm::class::Class;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ModuleBuilder, VmResult};
-use php_vm::Vm;
+use php_vm::{Throw, Vm};
 
 use crate::bridge::{self, bytes};
 use crate::res::{self, fname, str_arg, stream_arg, StreamCell};
@@ -83,7 +83,7 @@ impl UserFilterClass for FilterClass {
                 bridge::set_pending(t);
             }
             if let Err(t) = vm.set_property(&obj, "params", p) {
-                bridge::set_pending(t);
+                set_pending_chained(vm, t);
             }
             Some(obj)
         })
@@ -105,6 +105,19 @@ impl UserFilterClass for FilterClass {
                 created,
             )
         })
+    }
+}
+
+/// Records `t` like `zend_throw_exception_internal()`: an exception thrown
+/// while another one is pending gets it as its `previous`.
+fn set_pending_chained(vm: &mut Vm, t: Throw) {
+    match (bridge::take_pending(), t) {
+        (Some(Throw::Exception(old)), Throw::Exception(new)) => {
+            vm.chain_exception(&new, &old);
+            bridge::set_pending(Throw::Exception(new));
+        }
+        (Some(old), _) => bridge::set_pending(old),
+        (None, t) => bridge::set_pending(t),
     }
 }
 

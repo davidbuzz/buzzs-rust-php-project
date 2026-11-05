@@ -72,3 +72,19 @@ fn dropping_the_vm_keeps_std_descriptors_but_fclose_closes_them() {
     assert_eq!(out, "bool(true)\n");
     assert!(closed, "fclose(STDIN) must close descriptor 0");
 }
+
+/// `user_filter_factory_create` (`ext/standard/user_filters.c`): on a class
+/// that forbids dynamic properties, the `$params` failure is thrown with
+/// the `$filtername` one as its previous exception.
+#[test]
+fn user_filter_property_errors_are_chained() {
+    let out = run(r#"var_dump(stream_filter_register("f", "SensitiveParameter"));
+$s = fopen("php://memory", "w+");
+try { stream_filter_append($s, "f", STREAM_FILTER_READ); } catch (Error $e) { echo $e->getMessage(), "|", $e->getPrevious()?->getMessage(), "\n"; }
+fclose($s);
+echo "end\n";"#);
+    assert_eq!(
+        out,
+        "bool(true)\nCannot create dynamic property SensitiveParameter::$params|Cannot create dynamic property SensitiveParameter::$filtername\nend\n"
+    );
+}
