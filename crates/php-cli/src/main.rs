@@ -843,11 +843,7 @@ fn show_main_ini(ini: &php_support::ini::IniRegistry) -> Vec<u8> {
                     });
                 }
                 ModifyHandler::DisplayErrors => {
-                    s.extend_from_slice(match ini.get_long("display_errors") {
-                        1 => b"STDOUT",
-                        2 => b"STDERR",
-                        _ => b"Off",
-                    });
+                    s.extend_from_slice(display_errors_value(value));
                 }
                 _ if e.name.starts_with("highlight.") => {
                     if let Some(v) = value {
@@ -877,6 +873,43 @@ fn show_main_ini(ini: &php_support::ini::IniRegistry) -> Vec<u8> {
         s.push(b'\n');
     }
     s
+}
+
+/// `php_get_display_errors_mode()` for the selected local or master value.
+fn display_errors_value(value: Option<&[u8]>) -> &'static [u8] {
+    let Some(value) = value else { return b"STDOUT" };
+    if [b"on".as_slice(), b"yes", b"true", b"stdout"]
+        .iter()
+        .any(|word| value.eq_ignore_ascii_case(word))
+    {
+        return b"STDOUT";
+    }
+    if value.eq_ignore_ascii_case(b"stderr") {
+        return b"STDERR";
+    }
+    let value = value.trim_ascii_start();
+    let negative = value.first() == Some(&b'-');
+    let digits = if matches!(value.first(), Some(b'-' | b'+')) {
+        &value[1..]
+    } else {
+        value
+    };
+    let number = digits
+        .iter()
+        .take_while(|c| c.is_ascii_digit())
+        .fold(0i64, |n, &c| {
+            let digit = i64::from(c - b'0');
+            if negative {
+                n.saturating_mul(10).saturating_sub(digit)
+            } else {
+                n.saturating_mul(10).saturating_add(digit)
+            }
+        });
+    match number.rem_euclid(256) {
+        0 => b"Off",
+        2 => b"STDERR",
+        _ => b"STDOUT",
+    }
 }
 
 /// `--ini=diff`: compare the effective registered value to the definition,
@@ -1165,11 +1198,46 @@ mod tests {
             ("2suffix", "STDERR"),
             ("256", "Off"),
             ("3", "STDOUT"),
+            ("258", "STDERR"),
+            ("-254", "STDERR"),
+            (" \t+2suffix", "STDERR"),
+            ("2e3", "STDERR"),
+            ("999999999999999999999999", "STDOUT"),
+            ("-999999999999999999999999", "Off"),
         ] {
             let ini = ini_registry(&[("display_errors", value)]);
             let s = String::from_utf8(show_main_ini(&ini)).unwrap();
             assert!(s.contains(&format!("display_errors => {shown} => {shown}\n")));
         }
+        assert_eq!(display_errors_value(None), b"STDOUT");
+        assert_eq!(display_errors_value(Some(b"")), b"Off");
+        assert_eq!(display_errors_value(Some(b"stderr\0tail")), b"Off");
+    }
+
+    #[test]
+    fn main_ini_display_errors_distinguishes_local_and_master() {
+        let mut ini = ini_registry(&[("display_errors", "stderr")]);
+        let mut diagnostics = Vec::new();
+        ini.ini_set("display_errors", b"off", &mut diagnostics);
+        let s = String::from_utf8(show_main_ini(&ini)).unwrap();
+        assert!(s.contains("display_errors => Off => STDERR\n"));
+        ini.ini_set("display_errors", b"stdout", &mut diagnostics);
+        let s = String::from_utf8(show_main_ini(&ini)).unwrap();
+        assert!(s.contains("display_errors => STDOUT => STDERR\n"));
+    }
+
+    #[test]
+    fn main_ini_generic_displayer_preserves_embedded_nul() {
+        let mut ini = ini_registry(&[("docref_root", "master")]);
+        let mut diagnostics = Vec::new();
+        ini.ini_set("docref_root", b"local\0\xfftail", &mut diagnostics);
+        let s = show_main_ini(&ini);
+        let row = b"docref_root => local\0\xfftail => master\n";
+        assert!(s.windows(row.len()).any(|w| w == row));
+        ini.ini_set("docref_root", b"\0hidden", &mut diagnostics);
+        let s = show_main_ini(&ini);
+        let row = b"docref_root => no value => master\n";
+        assert!(s.windows(row.len()).any(|w| w == row));
     }
 
     #[test]
