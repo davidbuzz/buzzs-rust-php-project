@@ -16,9 +16,9 @@
 use php_streams::value::{Key, Value};
 
 use crate::codec::{buffer_size_guess, fallible_resize, oom_error, valid_encoding};
-use crate::constants::{z_error, ZLIB_ENCODING_RAW};
+use crate::constants::{ZLIB_ENCODING_RAW, z_error};
 use crate::conv::{find, try_get_long, value_name};
-use crate::error::{arg_type_error, arg_value_error, Error, Result};
+use crate::error::{Error, Result, arg_type_error, arg_value_error};
 use crate::ffi::ZStream;
 
 const Z_OK: i32 = 0;
@@ -434,7 +434,8 @@ impl InflateContext {
                 _ => false,
             };
             if grow {
-                if !fallible_resize(&mut out, out.len() + CHUNK) {
+                let grown = out.len() + CHUNK;
+                if !fallible_resize(&mut out, grown) {
                     return Err(oom_error());
                 }
                 continue;
@@ -491,31 +492,82 @@ mod tests {
 
     #[test]
     fn deflate_init_errors() {
-        assert_eq!(err(DeflateContext::init(42, &[])), "ValueError: deflate_init(): Argument #1 ($encoding) must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE");
+        assert_eq!(
+            err(DeflateContext::init(42, &[])),
+            "ValueError: deflate_init(): Argument #1 ($encoding) must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE"
+        );
         for (k, v, msg) in [
-            ("level", 42, "ValueError: deflate_init(): \"level\" option must be between -1 and 9"),
-            ("level", -2, "ValueError: deflate_init(): \"level\" option must be between -1 and 9"),
-            ("memory", 0, "ValueError: deflate_init(): \"memory\" option must be between 1 and 9"),
-            ("memory", 10, "ValueError: deflate_init(): \"memory\" option must be between 1 and 9"),
-            ("window", 3, "ValueError: deflate_init(): \"window\" option must be between 8 and 15"),
-            ("strategy", 9, "ValueError: deflate_init(): \"strategy\" option must be one of ZLIB_FILTERED, ZLIB_HUFFMAN_ONLY, ZLIB_RLE, ZLIB_FIXED, or ZLIB_DEFAULT_STRATEGY"),
+            (
+                "level",
+                42,
+                "ValueError: deflate_init(): \"level\" option must be between -1 and 9",
+            ),
+            (
+                "level",
+                -2,
+                "ValueError: deflate_init(): \"level\" option must be between -1 and 9",
+            ),
+            (
+                "memory",
+                0,
+                "ValueError: deflate_init(): \"memory\" option must be between 1 and 9",
+            ),
+            (
+                "memory",
+                10,
+                "ValueError: deflate_init(): \"memory\" option must be between 1 and 9",
+            ),
+            (
+                "window",
+                3,
+                "ValueError: deflate_init(): \"window\" option must be between 8 and 15",
+            ),
+            (
+                "strategy",
+                9,
+                "ValueError: deflate_init(): \"strategy\" option must be one of ZLIB_FILTERED, ZLIB_HUFFMAN_ONLY, ZLIB_RLE, ZLIB_FIXED, or ZLIB_DEFAULT_STRATEGY",
+            ),
         ] {
-            assert_eq!(err(DeflateContext::init(ZLIB_ENCODING_DEFLATE, &arr(vec![(k, Value::Int(v))]))), msg);
+            assert_eq!(
+                err(DeflateContext::init(
+                    ZLIB_ENCODING_DEFLATE,
+                    &arr(vec![(k, Value::Int(v))])
+                )),
+                msg
+            );
         }
         assert_eq!(
-            err(DeflateContext::init(ZLIB_ENCODING_DEFLATE, &arr(vec![("level", Value::str("foo"))]))),
+            err(DeflateContext::init(
+                ZLIB_ENCODING_DEFLATE,
+                &arr(vec![("level", Value::str("foo"))])
+            )),
             "TypeError: deflate_init(): Argument #2 ($options) the value for option \"level\" must be of type int, string given"
         );
         assert_eq!(
-            err(DeflateContext::init(ZLIB_ENCODING_DEFLATE, &arr(vec![("window", Value::Object { class: "A".into(), string_value: None })]))),
+            err(DeflateContext::init(
+                ZLIB_ENCODING_DEFLATE,
+                &arr(vec![(
+                    "window",
+                    Value::Object {
+                        class: "A".into(),
+                        string_value: None
+                    }
+                )])
+            )),
             "TypeError: deflate_init(): Argument #2 ($options) the value for option \"window\" must be of type int, A given"
         );
         assert_eq!(
-            err(DeflateContext::init(ZLIB_ENCODING_DEFLATE, &arr(vec![("strategy", Value::Stream(3))]))),
+            err(DeflateContext::init(
+                ZLIB_ENCODING_DEFLATE,
+                &arr(vec![("strategy", Value::Stream(3))])
+            )),
             "TypeError: deflate_init(): Argument #2 ($options) the value for option \"strategy\" must be of type int, resource given"
         );
         assert_eq!(
-            err(DeflateContext::init(ZLIB_ENCODING_DEFLATE, &arr(vec![("dictionary", Value::Int(3))]))),
+            err(DeflateContext::init(
+                ZLIB_ENCODING_DEFLATE,
+                &arr(vec![("dictionary", Value::Int(3))])
+            )),
             "TypeError: deflate_init(): Argument #2 ($options) must be of type zero-terminated string or array, int given"
         );
         let dict = |items: Vec<Value>| {
@@ -538,7 +590,10 @@ mod tests {
             "ValueError: deflate_init(): Argument #2 ($options) must not contain empty strings"
         );
         assert_eq!(
-            err(DeflateContext::init(ZLIB_ENCODING_DEFLATE, &dict(vec![Value::str("hello"), Value::str("wor\0ld")]))),
+            err(DeflateContext::init(
+                ZLIB_ENCODING_DEFLATE,
+                &dict(vec![Value::str("hello"), Value::str("wor\0ld")])
+            )),
             "ValueError: deflate_init(): Argument #2 ($options) must not contain strings with null bytes"
         );
         assert_eq!(
@@ -556,11 +611,17 @@ mod tests {
         );
         // Encoding is checked before the dictionary.
         assert_eq!(
-            err(InflateContext::init(123_456, &arr(vec![("dictionary", Value::str("dict"))]))),
+            err(InflateContext::init(
+                123_456,
+                &arr(vec![("dictionary", Value::str("dict"))])
+            )),
             "ValueError: inflate_init(): Argument #1 ($encoding) must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE"
         );
         assert_eq!(
-            err(InflateContext::init(ZLIB_ENCODING_DEFLATE, &arr(vec![("window", Value::Array(vec![]))]))),
+            err(InflateContext::init(
+                ZLIB_ENCODING_DEFLATE,
+                &arr(vec![("window", Value::Array(vec![]))])
+            )),
             "TypeError: inflate_init(): Argument #2 ($options) the value for option \"window\" must be of type int, array given"
         );
         assert_eq!(
@@ -603,7 +664,10 @@ mod tests {
         }
         let mut ctx =
             DeflateContext::new(ZLIB_ENCODING_DEFLATE, &DeflateOptions::default()).unwrap();
-        assert_eq!(err(ctx.add(b"test", 6789)), "ValueError: deflate_add(): Argument #3 ($flush_mode) must be one of ZLIB_NO_FLUSH, ZLIB_PARTIAL_FLUSH, ZLIB_SYNC_FLUSH, ZLIB_FULL_FLUSH, ZLIB_BLOCK, or ZLIB_FINISH");
+        assert_eq!(
+            err(ctx.add(b"test", 6789)),
+            "ValueError: deflate_add(): Argument #3 ($flush_mode) must be one of ZLIB_NO_FLUSH, ZLIB_PARTIAL_FLUSH, ZLIB_SYNC_FLUSH, ZLIB_FULL_FLUSH, ZLIB_BLOCK, or ZLIB_FINISH"
+        );
     }
 
     #[test]
