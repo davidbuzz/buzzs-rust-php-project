@@ -6,7 +6,7 @@ use crate::class::{cflags, Class, InternalKind};
 use crate::func::{flags, Args, Builtin, Func, UserFunction};
 use crate::object;
 use crate::opcode::{Op, Operand, ParamInfo, PlaceBase};
-use crate::vm::{Frame, FrameKind, PendingCall, Vm, VmResult};
+use crate::vm::{FrameKind, PendingCall, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -264,20 +264,25 @@ impl Vm {
         })
     }
 
-    /// Binds captured variables and statics into a new frame.
-    pub(crate) fn bind_closure_vars(&self, f: &mut Frame, c: &Obj) {
-        if let Some(d) = self.closure_data(c) {
-            {
-                let mut st = f.vars.borrow_mut();
-                for (cv, v) in d.vars {
-                    let idx = cv as usize;
-                    if idx < st.slots.len() {
-                        st.slots[idx] = Some(v);
-                    }
+    /// Binds captured variables and statics into the new frame at index
+    /// `frame` of the frame stack (set up in place by `push_user_frame`).
+    pub(crate) fn bind_closure_vars(&mut self, frame: usize, c: &Obj) {
+        let Some(d) = self.closure_data(c) else {
+            return;
+        };
+        let Some(f) = self.frames.get_mut(frame) else {
+            return;
+        };
+        {
+            let mut st = f.vars.borrow_mut();
+            for (cv, v) in d.vars {
+                let idx = cv as usize;
+                if idx < st.slots.len() {
+                    st.slots[idx] = Some(v);
                 }
             }
-            f.statics = Some(d.statics.clone());
         }
+        f.statics = Some(d.statics);
     }
 
     fn statics_store(&mut self) -> Rc<RefCell<Vec<Option<PhpRef>>>> {

@@ -67,8 +67,10 @@ impl Vm {
 
     /// The current numeric value of a CV or literal operand, without
     /// cloning, warnings or reference traversal (`None` sends the op down
-    /// the generic path).
-    #[inline]
+    /// the generic path). Always inlined into [`Vm::bin_num_fast`]: as a
+    /// call it returns its `Option<Num>` through memory.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // as a call, the `Option<Num>` is returned through memory
     fn peek_num(&self, op: Operand) -> Option<Num> {
         match op {
             Operand::Cv(cv) => {
@@ -265,7 +267,33 @@ impl Vm {
     /// Stores a temporary.
     #[inline]
     pub(crate) fn set_tmp(&mut self, t: u32, v: Value) {
-        self.frame_mut().tmps[t as usize] = v;
+        let old = std::mem::replace(&mut self.frame_mut().tmps[t as usize], v);
+        // The slot almost always holds a scalar (or the `Null` a consuming
+        // read left behind): skip the out-of-line `drop_in_place` call.
+        if matches!(
+            old,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            std::mem::forget(old);
+        }
+    }
+
+    /// The boolean held by temporary `op`, consumed, if it holds one: the
+    /// `IS_TRUE`/`IS_FALSE` fast path of php-src's `ZEND_JMPZ`/`ZEND_JMPNZ`
+    /// handlers (comparison results), without the out-of-line read,
+    /// conversion and drop of the generic path.
+    #[inline]
+    fn take_tmp_bool(&mut self, op: Operand) -> Option<bool> {
+        let Operand::Tmp(t) = op else {
+            return None;
+        };
+        let slot = self.frame_mut().tmps.get_mut(t as usize)?;
+        if let Value::Bool(b) = *slot {
+            *slot = Value::Null;
+            Some(b)
+        } else {
+            None
+        }
     }
 
     /// Stores an optional result.
@@ -699,15 +727,27 @@ impl Vm {
                         Flow::Next
                     }
                     Op::JmpZ(a, t) => {
-                        let v = self.read(*a)?;
-                        if !self.to_bool(&v)? {
+                        let b = match self.take_tmp_bool(*a) {
+                            Some(b) => b,
+                            None => {
+                                let v = self.read(*a)?;
+                                self.to_bool(&v)?
+                            }
+                        };
+                        if !b {
                             self.frame_mut().ip = *t as usize;
                         }
                         Flow::Next
                     }
                     Op::JmpNz(a, t) => {
-                        let v = self.read(*a)?;
-                        if self.to_bool(&v)? {
+                        let b = match self.take_tmp_bool(*a) {
+                            Some(b) => b,
+                            None => {
+                                let v = self.read(*a)?;
+                                self.to_bool(&v)?
+                            }
+                        };
+                        if b {
                             self.frame_mut().ip = *t as usize;
                         }
                         Flow::Next
@@ -1798,31 +1838,43 @@ impl Vm {
         let v = v.unwrap_or_default();
         let fidx = self.frames.len() - 1;
         self.observer_end_frame(fidx, Some(&v), None);
-        let mut frame = self.frames.pop().expect("frame");
-        if let Some(g) = &frame.generator {
-            crate::generator::finish_with(g, v);
+        if self.frames[fidx].generator.is_some() {
+            let frame = self.frames.pop().expect("frame");
+            if let Some(g) = &frame.generator {
+                crate::generator::finish_with(g, v);
+            }
             drop(frame);
             if fidx <= base {
                 return Ok(Flow::Done(Value::Null));
             }
             return Ok(Flow::Reload);
         }
-        let ret = frame.ret;
-        let by_ref = frame
-            .ufunc
-            .as_ref()
-            .is_some_and(|u| u.flags & crate::func::flags::RETURN_REF != 0);
-        crate::gc::frame_released(&frame);
-        let is_user_func = frame.kind == crate::vm::FrameKind::Function && frame.ufunc.is_some();
-        let should_pool = is_user_func
-            && self.call_bufs.user_frames.len() < 8
-            && frame.tmps.capacity() <= 256
-            && frame.calls.capacity() <= 64;
+        // The frame is released where it lives on the frame stack (a
+        // `Frame` is a few hundred bytes, every move of one is a `memcpy`):
+        // only a pooled frame moves, once. Values released here only queue
+        // destructors, which run at the next safe point, after the pop.
+        let (ret, by_ref, should_pool) = {
+            let frame = &self.frames[fidx];
+            crate::gc::frame_released(frame);
+            let by_ref = frame
+                .ufunc
+                .as_ref()
+                .is_some_and(|u| u.flags & crate::func::flags::RETURN_REF != 0);
+            let is_user_func =
+                frame.kind == crate::vm::FrameKind::Function && frame.ufunc.is_some();
+            let should_pool = is_user_func
+                && self.call_bufs.user_frames.len() < 8
+                && frame.tmps.capacity() <= 256
+                && frame.calls.capacity() <= 64;
+            (frame.ret, by_ref, should_pool)
+        };
         if should_pool {
-            frame.clear_for_pool(&self.empty_code);
-            self.call_bufs.user_frames.push(frame);
+            self.frames[fidx].clear_for_pool(&self.empty_code);
+            if let Some(frame) = self.frames.pop() {
+                self.call_bufs.user_frames.push(frame);
+            }
         } else {
-            drop(frame);
+            self.frames.truncate(fidx);
         }
         let v = if by_ref { v } else { self.copy_on_assign(v) };
         if fidx <= base {

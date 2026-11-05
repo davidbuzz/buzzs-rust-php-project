@@ -2344,6 +2344,22 @@ impl Compiler {
             {
                 self.compile_array_map_foreach(positional[0], positional[1], line)
             }
+            // zend_compile_func_strlen: the length of a constant string is
+            // a compile-time constant, and no call is made.
+            b"strlen"
+                if fb.is_none()
+                    && only_positional
+                    && positional.len() == 1
+                    && self.opts.strlen_builtin =>
+            {
+                match self.try_fold(positional[0]) {
+                    Some(Value::Str(s)) => {
+                        let len = i64::try_from(s.len()).unwrap_or(i64::MAX);
+                        Ok(Some(self.lit(Value::Int(len))))
+                    }
+                    _ => Ok(None),
+                }
+            }
             b"exit" | b"die" if only_positional && positional.len() <= 1 => {
                 let v = match positional.first() {
                     Some(e) => self.compile_expr(e)?,
