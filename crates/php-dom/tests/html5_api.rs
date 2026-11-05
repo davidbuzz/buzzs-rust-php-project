@@ -322,3 +322,46 @@ fn xpath_generic_channel_warning() {
         "{msgs:?}"
     );
 }
+
+#[test]
+fn debug_info_of_unconstructed_node_reports_invalid_state() {
+    let n = php_dom::Node::new_unbound("DOMNode", "DOMNode");
+    let (items, pending) = php_dom::dispatch::debug_info_checked(&DomObject::Node(n));
+    assert!(items.is_empty());
+    assert!(matches!(
+        pending,
+        Some(php_dom::DomError::Dom {
+            code: php_dom::DomExceptionCode::InvalidState,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn debug_info_of_document_has_no_pending_error() {
+    let doc = xml("<root a='1'><x/></root>");
+    let (items, pending) = php_dom::dispatch::debug_info_checked(&doc);
+    assert!(!items.is_empty());
+    assert!(pending.is_none());
+}
+
+#[test]
+fn import_of_unconstructed_node_names_its_class() {
+    let doc = xml("<root/>");
+    let n = php_dom::Node::new_unbound("MyNode", "DOMNode");
+    let r = call(&doc, "importNode", &[DomValue::Node(n)], &NoHost);
+    match r {
+        Err(php_dom::DomError::Error(m)) => assert_eq!(m, "Couldn't fetch MyNode"),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn child_nodes_list_knows_its_base() {
+    let doc = xml("<root><a/></root>");
+    let root = node_obj(prop(&doc, "documentElement"));
+    match prop(&root, "childNodes") {
+        DomValue::NodeList(l) => assert!(l.base_node().is_some()),
+        other => panic!("expected a node list, got {other:?}"),
+    }
+}
