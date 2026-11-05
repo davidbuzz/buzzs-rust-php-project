@@ -797,6 +797,12 @@ impl Compiler {
             if val != Operand::Unused {
                 self.emit(Op::Move { src: val, dst: t });
                 val = Operand::Tmp(t);
+                // zend_compile_return emits VERIFY_RETURN_TYPE before
+                // zend_handle_loops_and_finally: the coercion (and its
+                // diagnostics) precede the finally blocks (bug72347).
+                if !fins.is_empty() && !is_gen && !returns_ref && self.fref().has_return_type {
+                    self.emit(Op::VerifyReturn { val });
+                }
             }
             self.emit_return_unwind();
         }

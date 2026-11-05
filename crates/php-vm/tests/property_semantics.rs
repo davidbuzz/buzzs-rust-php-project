@@ -1250,3 +1250,23 @@ array(2) {
 }
 ");
 }
+
+#[test]
+fn return_type_coercion_precedes_finally() {
+    // bug72347: VERIFY_RETURN_TYPE runs before zend_handle_loops_and_finally.
+    assert_eq!(run(r#"<?php
+function test() : int {
+    $d = 1.5;
+    try {
+        return $d;
+    } finally {
+        var_dump($d);
+    }
+}
+var_dump(test());
+"#), "
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 5
+float(1.5)
+int(1)
+");
+}

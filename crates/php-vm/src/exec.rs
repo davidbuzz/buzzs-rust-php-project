@@ -991,7 +991,11 @@ impl Vm {
                         Flow::Next
                     }
                     Op::VerifyReturn { val } => {
-                        let _ = val;
+                        if let Operand::Tmp(t) = *val {
+                            let v = self.read(*val)?;
+                            let v = self.verify_return(Some(v))?;
+                            self.set_tmp(t, v);
+                        }
                         Flow::Next
                     }
                     Op::Return { val } => {
