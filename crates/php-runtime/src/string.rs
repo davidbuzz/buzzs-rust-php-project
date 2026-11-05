@@ -1,6 +1,6 @@
 //! `ZStr`: PHP's refcounted, immutable, binary-safe byte string (`zend_string`).
 //!
-//! A [`ZStr`] is a cheap-to-clone handle (a single `Rc` pointer) to an immutable
+//! A [`ZStr`] is a cheap-to-clone handle (a single thin pointer) to an immutable
 //! byte buffer together with a lazily computed, cached hash (PHP's DJB "times 33"
 //! hash, `zend_inline_hash_func`). Strings can be *interned*: interning returns the
 //! canonical instance for a given byte sequence so that equality checks between
@@ -10,35 +10,72 @@
 //! [`ZStr::append`], which extends the buffer in place when the handle is the
 //! sole owner (mirroring `zend_string_extend` on a refcount-1 string) and
 //! otherwise allocates a new string.
+//!
+//! # Layout (ref: `Zend/zend_types.h` `struct _zend_string`)
+//!
+//! Like `zend_string`, a string is ONE allocation: a 40-byte header
+//! (refcount, cached hash, data pointer, length, capacity + flags) followed
+//! by the bytes, so a short string costs `40 + len` bytes instead of an `Rc`
+//! box plus a separate `Vec` buffer (56 + len). Byte vectors longer than
+//! [`ADOPT_MIN`] handed to [`ZStr::new`] are adopted instead of copied (the
+//! header then points at the vector's buffer), so building a large string
+//! never needs two copies of it at once. The data pointer is stored in both
+//! cases, so reading the bytes never branches on the representation.
 
+use std::alloc::{self, Layout};
 use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+use std::mem::ManuallyDrop;
+use std::ptr::{self, NonNull};
 
-/// The inner, shared part of a [`ZStr`].
-struct StrInner {
+/// `Header::meta` flag: the instance lives in the intern table.
+const INTERNED: usize = 1 << (usize::BITS - 1);
+/// `Header::meta` flag: the bytes live in an adopted `Vec` buffer (`ptr`,
+/// `len`, capacity) rather than inline after the header.
+const EXTERNAL: usize = 1 << (usize::BITS - 2);
+/// `Header::meta` bits holding the capacity.
+const CAP_MASK: usize = EXTERNAL - 1;
+/// Byte vectors longer than this are adopted by [`ZStr::new`]; shorter ones
+/// are copied into the header block (dropping any spare capacity, like
+/// `smart_str_extract`).
+const ADOPT_MIN: usize = 1024;
+
+/// The shared header of a [`ZStr`], followed in the same allocation by the
+/// inline bytes (`EXTERNAL` clear) or by nothing (`EXTERNAL` set).
+#[repr(C)]
+struct Header {
+    /// Number of live handles (`GC_REFCOUNT`).
+    rc: Cell<usize>,
     /// Cached `zend_inline_hash_func` value; `0` means "not computed yet"
     /// (a real hash always has its top bit set, so it is never `0`).
     hash: Cell<u64>,
-    /// Whether this instance lives in the intern table.
-    interned: bool,
-    /// The bytes. A `Vec` (rather than a boxed slice) so that unique owners can
-    /// append in place.
-    bytes: Vec<u8>,
+    /// The first byte: just past the header when inline, the adopted
+    /// vector's buffer when external.
+    ptr: *mut u8,
+    /// Length in bytes.
+    len: usize,
+    /// Capacity in bytes (inline: of the block after the header; external:
+    /// of the vector) in `CAP_MASK`, plus the `INTERNED` / `EXTERNAL` flags.
+    meta: usize,
 }
+
+/// Size of [`Header`]; the inline bytes start at this offset.
+const HEADER: usize = std::mem::size_of::<Header>();
 
 /// A refcounted, immutable, binary-safe PHP string.
 ///
 /// Cloning is O(1). Equality, ordering and hashing are by byte content
 /// (`memcmp` semantics), never by identity.
-#[derive(Clone)]
-pub struct ZStr(Rc<StrInner>);
+///
+/// The handle is a thin pointer (8 bytes, with a niche for `Option`). Like
+/// `Rc`, it is neither `Send` nor `Sync`.
+pub struct ZStr(NonNull<Header>);
 
 thread_local! {
-    static INTERNED: RefCell<HashSet<ZStr>> = RefCell::new(HashSet::new());
+    static INTERNED_SET: RefCell<HashSet<ZStr>> = RefCell::new(HashSet::new());
     static EMPTY: ZStr = ZStr::intern(b"");
     static CHARS: Vec<ZStr> = (0..=255u8).map(|c| ZStr::intern(&[c])).collect();
 }
@@ -55,15 +92,242 @@ pub fn zend_hash_bytes(bytes: &[u8]) -> u64 {
     hash | 0x8000_0000_0000_0000
 }
 
+#[cold]
+#[inline(never)]
+fn capacity_overflow() -> ! {
+    panic!("string capacity overflow")
+}
+
+/// The layout of a header block with `inline_cap` bytes after the header.
+#[inline]
+fn block_layout(inline_cap: usize) -> Layout {
+    let size = HEADER
+        .checked_add(inline_cap)
+        .unwrap_or_else(|| capacity_overflow());
+    Layout::from_size_align(size, std::mem::align_of::<Header>())
+        .unwrap_or_else(|_| capacity_overflow())
+}
+
+/// Allocates an uninitialised header block with room for `inline_cap`
+/// bytes after the header (`zend_string_alloc`).
+#[inline]
+fn alloc_block(inline_cap: usize) -> NonNull<Header> {
+    let layout = block_layout(inline_cap);
+    // SAFETY: the layout's size is at least `HEADER` (> 0).
+    let raw = unsafe { alloc::alloc(layout) };
+    match NonNull::new(raw.cast::<Header>()) {
+        Some(block) => block,
+        None => alloc::handle_alloc_error(layout),
+    }
+}
+
+/// Releases a block whose last handle is gone (`zend_string_free`).
+///
+/// # Safety
+/// `block` must be a live header block with no remaining handles.
+#[inline(never)]
+unsafe fn free_block(block: NonNull<Header>) {
+    // SAFETY: the caller guarantees the block is live.
+    let (data, len, meta) = unsafe {
+        let h = block.as_ref();
+        (h.ptr, h.len, h.meta)
+    };
+    let inline_cap = if meta & EXTERNAL == 0 {
+        meta & CAP_MASK
+    } else {
+        // SAFETY: an external header owns the `Vec` buffer it was built
+        // from (see `ZStr::adopt`), with exactly these parts.
+        drop(unsafe { Vec::from_raw_parts(data, len, meta & CAP_MASK) });
+        0
+    };
+    // SAFETY: the block was allocated by `alloc_block(inline_cap)` (or
+    // reallocated to that layout by `ZStr::extend_unique`).
+    unsafe { alloc::dealloc(block.as_ptr().cast::<u8>(), block_layout(inline_cap)) };
+}
+
 impl ZStr {
     /// Creates a new (non-interned) string from the given bytes.
     #[must_use]
     pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
-        ZStr(Rc::new(StrInner {
-            hash: Cell::new(0),
-            interned: false,
-            bytes: bytes.into(),
-        }))
+        Self::from_vec(bytes.into())
+    }
+
+    /// A string holding a copy of `bytes`, in one allocation.
+    #[inline]
+    fn from_slice(bytes: &[u8]) -> Self {
+        Self::from_parts(bytes, &[], 0)
+    }
+
+    /// A string holding `a` followed by `b`, in one exactly sized
+    /// allocation, with the given `meta` flags.
+    fn from_parts(a: &[u8], b: &[u8], flags: usize) -> Self {
+        let len = a
+            .len()
+            .checked_add(b.len())
+            .filter(|&n| n <= CAP_MASK)
+            .unwrap_or_else(|| capacity_overflow());
+        let block = alloc_block(len);
+        // SAFETY: `block` is a fresh allocation of `HEADER + len` bytes,
+        // aligned for `Header`; the inline area starts right after the
+        // header and has room for exactly `len` bytes, and the sources are
+        // other allocations.
+        unsafe {
+            let data = block.as_ptr().cast::<u8>().add(HEADER);
+            ptr::copy_nonoverlapping(a.as_ptr(), data, a.len());
+            ptr::copy_nonoverlapping(b.as_ptr(), data.add(a.len()), b.len());
+            block.as_ptr().write(Header {
+                rc: Cell::new(1),
+                hash: Cell::new(0),
+                ptr: data,
+                len,
+                meta: len | flags,
+            });
+        }
+        ZStr(block)
+    }
+
+    /// A string over a byte vector: copied inline when short, adopted
+    /// otherwise.
+    fn from_vec(v: Vec<u8>) -> Self {
+        if v.len() <= ADOPT_MIN {
+            return Self::from_slice(&v);
+        }
+        Self::adopt(v)
+    }
+
+    /// A string whose bytes are `v`'s buffer (no copy).
+    fn adopt(v: Vec<u8>) -> Self {
+        let mut v = ManuallyDrop::new(v);
+        let (data, len, cap) = (v.as_mut_ptr(), v.len(), v.capacity());
+        if cap > CAP_MASK {
+            capacity_overflow();
+        }
+        let block = alloc_block(0);
+        // SAFETY: `block` is a fresh header-sized allocation aligned for
+        // `Header`; the header takes ownership of the vector's buffer, which
+        // `free_block` / `take_vec` rebuild from exactly these parts.
+        unsafe {
+            block.as_ptr().write(Header {
+                rc: Cell::new(1),
+                hash: Cell::new(0),
+                ptr: data,
+                len,
+                meta: cap | EXTERNAL,
+            });
+        }
+        ZStr(block)
+    }
+
+    #[inline]
+    fn header(&self) -> &Header {
+        // SAFETY: a handle keeps its block alive (refcount >= 1).
+        unsafe { self.0.as_ref() }
+    }
+
+    /// Whether this handle may mutate the string in place: it is the only
+    /// handle and the string is not interned (`!ZSTR_IS_INTERNED &&
+    /// GC_REFCOUNT == 1`).
+    #[inline]
+    fn is_unique_mutable(&self) -> bool {
+        let h = self.header();
+        h.rc.get() == 1 && h.meta & INTERNED == 0
+    }
+
+    /// Takes the adopted vector out of a unique external string, leaving
+    /// it empty (`len` 0, capacity 0: valid to drop).
+    ///
+    /// # Safety
+    /// `self` must be unique (refcount 1) and external.
+    unsafe fn take_vec(&mut self) -> Vec<u8> {
+        // SAFETY: unique handle, so no other reference to the header exists.
+        let h = unsafe { self.0.as_mut() };
+        // SAFETY: an external header owns a `Vec` with exactly these parts.
+        let v = unsafe { Vec::from_raw_parts(h.ptr, h.len, h.meta & CAP_MASK) };
+        h.ptr = NonNull::<u8>::dangling().as_ptr();
+        h.len = 0;
+        h.meta = (h.meta & !CAP_MASK) | EXTERNAL;
+        v
+    }
+
+    /// Hands `v` back to a unique external string emptied by `take_vec`.
+    ///
+    /// # Safety
+    /// As for [`ZStr::take_vec`].
+    unsafe fn put_vec(&mut self, v: Vec<u8>) {
+        let mut v = ManuallyDrop::new(v);
+        if v.capacity() > CAP_MASK {
+            capacity_overflow();
+        }
+        // SAFETY: unique handle, so no other reference to the header exists.
+        let h = unsafe { self.0.as_mut() };
+        h.ptr = v.as_mut_ptr();
+        h.len = v.len();
+        h.meta = (h.meta & !CAP_MASK) | v.capacity();
+    }
+
+    /// Appends `other` in place to a unique, non-interned string
+    /// (`zend_string_extend`): to exactly the new length with `exact`,
+    /// else with amortized doubling (repeated `.=`).
+    fn extend_unique(&mut self, other: &[u8], exact: bool) {
+        debug_assert!(self.is_unique_mutable());
+        let (len, meta) = {
+            let h = self.header();
+            (h.len, h.meta)
+        };
+        if meta & EXTERNAL != 0 {
+            // SAFETY: unique (caller) and external (just checked).
+            let mut v = unsafe { self.take_vec() };
+            if exact {
+                v.reserve_exact(other.len());
+            }
+            v.extend_from_slice(other);
+            // SAFETY: as above; emptied by `take_vec`.
+            unsafe { self.put_vec(v) };
+        } else {
+            let needed = len
+                .checked_add(other.len())
+                .filter(|&n| n <= CAP_MASK)
+                .unwrap_or_else(|| capacity_overflow());
+            let cap = meta & CAP_MASK;
+            if needed > cap {
+                let new_cap = if exact {
+                    needed
+                } else {
+                    let grown = cap.saturating_mul(2).clamp(16, CAP_MASK);
+                    needed.max(grown)
+                };
+                let new_layout = block_layout(new_cap);
+                // SAFETY: the block was allocated with `block_layout(cap)`;
+                // the new size is non-zero. The handle is unique, so moving
+                // the block invalidates no other pointer to it.
+                let raw = unsafe {
+                    alloc::realloc(
+                        self.0.as_ptr().cast::<u8>(),
+                        block_layout(cap),
+                        new_layout.size(),
+                    )
+                };
+                let Some(block) = NonNull::new(raw.cast::<Header>()) else {
+                    alloc::handle_alloc_error(new_layout)
+                };
+                self.0 = block;
+                // SAFETY: unique handle; the inline area follows the header.
+                unsafe {
+                    let h = self.0.as_mut();
+                    h.ptr = block.as_ptr().cast::<u8>().add(HEADER);
+                    h.meta = (meta & !CAP_MASK) | new_cap;
+                }
+            }
+            // SAFETY: unique handle; the inline area has room for `needed`
+            // bytes and `other` cannot alias it (it would need a second
+            // handle or a shared borrow of `self`).
+            unsafe {
+                let h = self.0.as_mut();
+                ptr::copy_nonoverlapping(other.as_ptr(), h.ptr.add(len), other.len());
+                h.len = needed;
+            }
+        }
+        self.header().hash.set(0);
     }
 
     /// Returns the canonical interned instance for `bytes`, creating it if needed.
@@ -71,15 +335,11 @@ impl ZStr {
     /// Interned strings live for the remainder of the thread.
     #[must_use]
     pub fn intern(bytes: &[u8]) -> Self {
-        INTERNED.with(|set| {
+        INTERNED_SET.with(|set| {
             if let Some(existing) = set.borrow().get(bytes) {
                 return existing.clone();
             }
-            let s = ZStr(Rc::new(StrInner {
-                hash: Cell::new(0),
-                interned: true,
-                bytes: bytes.to_vec(),
-            }));
+            let s = Self::from_parts(bytes, &[], INTERNED);
             set.borrow_mut().insert(s.clone());
             s
         })
@@ -111,39 +371,42 @@ impl ZStr {
     #[inline]
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
-        &self.0.bytes
+        let h = self.header();
+        // SAFETY: `ptr` is valid for `len` initialised bytes for as long as
+        // the block lives, and mutation needs `&mut self` on a unique handle.
+        unsafe { std::slice::from_raw_parts(h.ptr, h.len) }
     }
 
     /// Length in bytes.
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
-        self.0.bytes.len()
+        self.header().len
     }
 
     /// Whether the string is empty.
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.bytes.is_empty()
+        self.header().len == 0
     }
 
     /// Whether this instance is interned.
     #[must_use]
     pub fn is_interned(&self) -> bool {
-        self.0.interned
+        self.header().meta & INTERNED != 0
     }
 
     /// Returns the (cached) PHP hash of the string.
     #[inline]
     #[must_use]
     pub fn hash_value(&self) -> u64 {
-        let h = self.0.hash.get();
+        let h = self.header().hash.get();
         if h != 0 {
             return h;
         }
-        let h = zend_hash_bytes(&self.0.bytes);
-        self.0.hash.set(h);
+        let h = zend_hash_bytes(self.as_bytes());
+        self.header().hash.set(h);
         h
     }
 
@@ -151,25 +414,25 @@ impl ZStr {
     #[inline]
     #[must_use]
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
-        Rc::ptr_eq(&a.0, &b.0)
+        a.0 == b.0
     }
 
     /// Number of live handles to this string instance (the "refcount").
     #[must_use]
     pub fn refcount(&self) -> usize {
-        Rc::strong_count(&self.0)
+        self.header().rc.get()
     }
 
     /// Returns the string as UTF-8, replacing invalid sequences.
     #[must_use]
     pub fn to_string_lossy(&self) -> String {
-        String::from_utf8_lossy(&self.0.bytes).into_owned()
+        String::from_utf8_lossy(self.as_bytes()).into_owned()
     }
 
     /// Returns the string as `&str` if it is valid UTF-8.
     #[must_use]
     pub fn to_str(&self) -> Option<&str> {
-        std::str::from_utf8(&self.0.bytes).ok()
+        std::str::from_utf8(self.as_bytes()).ok()
     }
 
     /// Appends `other` to this string.
@@ -182,17 +445,11 @@ impl ZStr {
         if other.is_empty() {
             return;
         }
-        if !self.0.interned {
-            if let Some(inner) = Rc::get_mut(&mut self.0) {
-                inner.bytes.extend_from_slice(other);
-                inner.hash.set(0);
-                return;
-            }
+        if self.is_unique_mutable() {
+            self.extend_unique(other, false);
+            return;
         }
-        let mut v = Vec::with_capacity(self.len() + other.len());
-        v.extend_from_slice(self.as_bytes());
-        v.extend_from_slice(other);
-        *self = ZStr::new(v);
+        *self = Self::from_parts(self.as_bytes(), other, 0);
     }
 
     /// `ZEND_CONCAT` with a temporary left operand: when this handle is the
@@ -202,13 +459,11 @@ impl ZStr {
     /// exactly sized string is built.
     #[must_use]
     pub fn concat_owned(mut self, other: &[u8]) -> Self {
-        if !self.0.interned {
-            if let Some(inner) = Rc::get_mut(&mut self.0) {
-                inner.bytes.reserve_exact(other.len());
-                inner.bytes.extend_from_slice(other);
-                inner.hash.set(0);
-                return self;
+        if self.is_unique_mutable() {
+            if !other.is_empty() {
+                self.extend_unique(other, true);
             }
+            return self;
         }
         Self::concat(self.as_bytes(), other)
     }
@@ -216,10 +471,7 @@ impl ZStr {
     /// Concatenates two byte slices into a new string.
     #[must_use]
     pub fn concat(a: &[u8], b: &[u8]) -> Self {
-        let mut v = Vec::with_capacity(a.len() + b.len());
-        v.extend_from_slice(a);
-        v.extend_from_slice(b);
-        ZStr::new(v)
+        Self::from_parts(a, b, 0)
     }
 
     /// Returns an ASCII-lowercased copy (`zend_string_tolower`); returns a clone
@@ -250,13 +502,44 @@ impl ZStr {
         self.as_bytes().eq_ignore_ascii_case(other)
     }
 
-    /// Returns the bytes as an owned vector.
+    /// Returns the bytes as an owned vector (without copying when this is
+    /// the only handle to an adopted vector).
     #[must_use]
-    pub fn into_bytes(self) -> Vec<u8> {
-        match Rc::try_unwrap(self.0) {
-            Ok(inner) => inner.bytes,
-            Err(rc) => rc.bytes.clone(),
+    pub fn into_bytes(mut self) -> Vec<u8> {
+        if self.is_unique_mutable() && self.header().meta & EXTERNAL != 0 {
+            // SAFETY: unique and external (just checked); `self` is then
+            // dropped with an empty external header.
+            return unsafe { self.take_vec() };
         }
+        self.as_bytes().to_vec()
+    }
+}
+
+impl Clone for ZStr {
+    #[inline]
+    fn clone(&self) -> Self {
+        let rc = &self.header().rc;
+        let n = rc.get().wrapping_add(1);
+        if n == 0 {
+            // Like `Rc`: an overflowing count would later free a live block.
+            std::process::abort();
+        }
+        rc.set(n);
+        ZStr(self.0)
+    }
+}
+
+impl Drop for ZStr {
+    #[inline]
+    fn drop(&mut self) {
+        let rc = &self.header().rc;
+        let n = rc.get() - 1;
+        if n != 0 {
+            rc.set(n);
+            return;
+        }
+        // SAFETY: this was the last handle to a live block.
+        unsafe { free_block(self.0) };
     }
 }
 
@@ -325,17 +608,18 @@ fn three_way(a: usize, b: usize) -> i32 {
 
 impl PartialEq for ZStr {
     fn eq(&self, other: &Self) -> bool {
-        if Rc::ptr_eq(&self.0, &other.0) {
+        if self.0 == other.0 {
             return true;
         }
-        if self.0.interned && other.0.interned {
+        let (a, b) = (self.header(), other.header());
+        if a.meta & b.meta & INTERNED != 0 {
             return false;
         }
-        let (h1, h2) = (self.0.hash.get(), other.0.hash.get());
+        let (h1, h2) = (a.hash.get(), b.hash.get());
         if h1 != 0 && h2 != 0 && h1 != h2 {
             return false;
         }
-        self.0.bytes == other.0.bytes
+        self.as_bytes() == other.as_bytes()
     }
 }
 
@@ -405,31 +689,31 @@ impl std::ops::Deref for ZStr {
 
 impl From<&str> for ZStr {
     fn from(s: &str) -> Self {
-        ZStr::new(s.as_bytes())
+        ZStr::from_slice(s.as_bytes())
     }
 }
 
 impl From<String> for ZStr {
     fn from(s: String) -> Self {
-        ZStr::new(s.into_bytes())
+        ZStr::from_vec(s.into_bytes())
     }
 }
 
 impl From<&[u8]> for ZStr {
     fn from(s: &[u8]) -> Self {
-        ZStr::new(s)
+        ZStr::from_slice(s)
     }
 }
 
 impl From<Vec<u8>> for ZStr {
     fn from(s: Vec<u8>) -> Self {
-        ZStr::new(s)
+        ZStr::from_vec(s)
     }
 }
 
 impl<const N: usize> From<&[u8; N]> for ZStr {
     fn from(s: &[u8; N]) -> Self {
-        ZStr::new(&s[..])
+        ZStr::from_slice(&s[..])
     }
 }
 
@@ -518,6 +802,97 @@ mod tests {
         let _ = h.hash_value();
         h.append(b"b");
         assert_eq!(h.hash_value(), zend_hash_bytes(b"ab"));
+    }
+
+    #[test]
+    fn thin_handle_layout() {
+        assert_eq!(std::mem::size_of::<ZStr>(), 8);
+        assert_eq!(std::mem::size_of::<Option<ZStr>>(), 8);
+        assert_eq!(HEADER, 40);
+    }
+
+    #[test]
+    fn refcount_and_drop() {
+        let a = ZStr::from("abc");
+        assert_eq!(a.refcount(), 1);
+        let b = a.clone();
+        assert_eq!(a.refcount(), 2);
+        assert!(ZStr::ptr_eq(&a, &b));
+        drop(b);
+        assert_eq!(a.refcount(), 1);
+        // A shared string is never extended in place.
+        let mut c = a.clone();
+        c.append(b"d");
+        assert_eq!(a, "abc");
+        assert_eq!(c, "abcd");
+        assert!(!ZStr::ptr_eq(&a, &c));
+    }
+
+    #[test]
+    fn inline_append_grows_and_keeps_bytes() {
+        let mut s = ZStr::from("x");
+        let mut expected = b"x".to_vec();
+        for i in 0..2000u32 {
+            let piece = i.to_string();
+            s.append(piece.as_bytes());
+            expected.extend_from_slice(piece.as_bytes());
+            assert_eq!(s.len(), expected.len());
+        }
+        assert_eq!(s.as_bytes(), &expected[..]);
+        assert_eq!(s.hash_value(), zend_hash_bytes(&expected));
+        assert_eq!(s.clone().into_bytes(), expected);
+        assert_eq!(s.into_bytes(), expected);
+    }
+
+    #[test]
+    fn adopted_vectors() {
+        let big = vec![b'z'; ADOPT_MIN + 10];
+        let data_ptr = big.as_ptr();
+        let mut s = ZStr::new(big);
+        assert_eq!(s.len(), ADOPT_MIN + 10);
+        assert_eq!(
+            s.as_bytes().as_ptr(),
+            data_ptr,
+            "long vectors are not copied"
+        );
+        s.append(b"tail");
+        assert!(s.as_bytes().ends_with(b"zztail"));
+        let t = s.clone().concat_owned(b"!");
+        assert!(t.as_bytes().ends_with(b"tail!"));
+        assert!(s.as_bytes().ends_with(b"tail"), "shared operand untouched");
+        drop(t);
+        let u = s.concat_owned(b"?");
+        assert_eq!(u.len(), ADOPT_MIN + 15);
+        let v = u.into_bytes();
+        assert_eq!(v.len(), ADOPT_MIN + 15);
+        assert_eq!(v.last(), Some(&b'?'));
+    }
+
+    #[test]
+    fn concat_owned_in_place_and_empty() {
+        let s = ZStr::from("ab");
+        let s = s.concat_owned(b"");
+        assert_eq!(s, "ab");
+        let s = s.concat_owned(b"cd");
+        assert_eq!(s, "abcd");
+        assert_eq!(ZStr::concat(b"", b""), ZStr::empty());
+        assert!(ZStr::from(Vec::new()).is_empty());
+        assert_eq!(ZStr::from(String::from("hi")), "hi");
+        let short = Vec::with_capacity(500);
+        assert!(ZStr::new(short).is_empty());
+    }
+
+    #[test]
+    fn interned_strings_are_not_mutated() {
+        let mut a = ZStr::intern(b"keep");
+        let b = a.clone();
+        a.append(b"!");
+        assert_eq!(b, "keep");
+        assert!(ZStr::intern(b"keep").is_interned());
+        let c = ZStr::intern(b"keep").concat_owned(b"?");
+        assert_eq!(c, "keep?");
+        assert!(!c.is_interned());
+        assert_eq!(ZStr::intern(b"keep"), "keep");
     }
 
     #[test]
