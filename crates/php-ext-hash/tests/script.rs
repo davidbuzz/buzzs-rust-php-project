@@ -97,3 +97,84 @@ fn debug_info_shows_algo() {
         "object(HashContext)#1 (1) {\n  [\"algo\"]=>\n  string(4) \"xxh3\"\n}\n"
     );
 }
+
+#[test]
+fn gh16711_constants_in_registration_order() {
+    assert_eq!(
+        run(r"$r = new ReflectionExtension('HaSh');
+            $constants = $r->getConstants();
+            define('HASH_USER_REGRESSION', 99);
+            var_dump(count($constants));
+            foreach ($constants as $name => $value) {
+                echo $name, '=', $value, PHP_EOL;
+            }
+            var_dump($constants === get_defined_constants(true)['hash']);
+            var_dump($constants === $r->getConstants());
+            var_dump($constants === (new ReflectionExtension('hash'))->getConstants());
+            var_dump(isset($r->getConstants()['HASH_USER_REGRESSION']));"),
+        "int(40)\n\
+HASH_HMAC=1\n\
+MHASH_CRC32=0\n\
+MHASH_MD5=1\n\
+MHASH_SHA1=2\n\
+MHASH_HAVAL256=3\n\
+MHASH_RIPEMD160=5\n\
+MHASH_TIGER=7\n\
+MHASH_GOST=8\n\
+MHASH_CRC32B=9\n\
+MHASH_HAVAL224=10\n\
+MHASH_HAVAL192=11\n\
+MHASH_HAVAL160=12\n\
+MHASH_HAVAL128=13\n\
+MHASH_TIGER128=14\n\
+MHASH_TIGER160=15\n\
+MHASH_MD4=16\n\
+MHASH_SHA256=17\n\
+MHASH_ADLER32=18\n\
+MHASH_SHA224=19\n\
+MHASH_SHA512=20\n\
+MHASH_SHA384=21\n\
+MHASH_WHIRLPOOL=22\n\
+MHASH_RIPEMD128=23\n\
+MHASH_RIPEMD256=24\n\
+MHASH_RIPEMD320=25\n\
+MHASH_SNEFRU256=27\n\
+MHASH_MD2=28\n\
+MHASH_FNV132=29\n\
+MHASH_FNV1A32=30\n\
+MHASH_FNV164=31\n\
+MHASH_FNV1A64=32\n\
+MHASH_JOAAT=33\n\
+MHASH_CRC32C=34\n\
+MHASH_MURMUR3A=35\n\
+MHASH_MURMUR3C=36\n\
+MHASH_MURMUR3F=37\n\
+MHASH_XXH32=38\n\
+MHASH_XXH64=39\n\
+MHASH_XXH3=40\n\
+MHASH_XXH128=41\n\
+bool(true)\n\
+bool(true)\n\
+bool(true)\n\
+bool(false)\n"
+    );
+}
+
+#[test]
+fn hash_constant_reflection_attribution() {
+    assert_eq!(
+        run(r"$constants = (new ReflectionExtension('hash'))->getConstants();
+            $valid = count($constants) === 40;
+            foreach ($constants as $name => $value) {
+                $r = new ReflectionConstant($name);
+                $valid = $valid
+                    && $r->getName() === $name
+                    && $r->getValue() === $value
+                    && $r->getExtensionName() === 'hash'
+                    && $r->getExtension()->getConstants() === $constants
+                    && $r->isDeprecated() === ($name !== 'HASH_HMAC');
+            }
+            var_dump($valid);"),
+        "bool(true)\n"
+    );
+}
