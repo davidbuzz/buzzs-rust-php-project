@@ -114,7 +114,7 @@ fn sensitive_value_properties(
     _vm: &mut Vm,
     o: &Obj,
     purpose: php_runtime::PropertyPurpose,
-) -> std::option::Option<php_runtime::ZArray> {
+) -> VmResult<Option<php_runtime::ZArray>> {
     if purpose == php_runtime::PropertyPurpose::Debug
         && crate::object::class_of(o).magic.debug_info.is_some()
     {
