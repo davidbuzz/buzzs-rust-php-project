@@ -677,11 +677,17 @@ impl Vm {
             }
             ArgSrc::Place(pid) => {
                 let globals = {
-                    let p = &self.frame().code.places[*pid as usize];
+                    let frame = self.frames.last().ok_or(Throw::Fatal)?;
+                    let p = frame.code.places.get(*pid as usize).ok_or(Throw::Fatal)?;
                     matches!(p.base, crate::opcode::PlaceBase::GlobalsArray) && p.segs.is_empty()
                 };
                 if by_ref && globals && !prefer_ref {
-                    let call = self.frame().calls.last().expect("pending call").clone();
+                    let call = self
+                        .frames
+                        .last()
+                        .and_then(|f| f.calls.last())
+                        .ok_or(Throw::Fatal)?
+                        .clone();
                     let p = pos.unwrap_or_else(|| call.func.params().len().saturating_sub(1));
                     let pname = call
                         .func

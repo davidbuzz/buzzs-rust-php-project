@@ -74,6 +74,11 @@ fn locale_sort_uses_current_collation() {
         let unique = setops::array_unique(&mut ctx, &nul, SORT_LOCALE_STRING).unwrap();
         assert_eq!(strings(&unique), ["a\0second", "b"]);
         assert_eq!(compare::strcoll(b"a\0second", b"a\0first"), 0);
+        let long = vec![b'a'; 4096];
+        assert!(compare::strcoll(&long, b"b") < 0);
+        assert_eq!(compare::strcoll(b"", b""), 0);
+        assert!(compare::strcoll(b"", b"a") < 0);
+        assert_eq!(compare::strcoll(b"a", b"a\0ignored"), 0);
         assert_eq!(
             compare::key_compare_locale(&ArrayKey::Int(12), &ArrayKey::from("12")),
             0

@@ -14,6 +14,13 @@ use crate::{SORT_NUMERIC, SORT_STRING};
 use php_runtime::numeric::strtod;
 use php_runtime::string::{binary_strcasecmp, binary_strcmp};
 use php_runtime::{ops, ArrayKey, RtResult, RuntimeContext, Value, ZStr};
+use std::cell::RefCell;
+
+thread_local! {
+    /// Reusable NUL-terminated inputs for libc collation.
+    static COLLATION_INPUTS: RefCell<(Vec<u8>, Vec<u8>)> =
+        const { RefCell::new((Vec::new(), Vec::new())) };
+}
 
 /// The comparison selected by a `SORT_*` flags value, as decoded by
 /// `php_get_key_compare_func` / `php_get_data_compare_func`.
@@ -204,14 +211,20 @@ pub fn strcoll_c(a: &[u8], b: &[u8]) -> i32 {
 /// `strcoll` in the process's current `LC_COLLATE`, ignoring bytes after NUL.
 #[must_use]
 pub fn strcoll(a: &[u8], b: &[u8]) -> i32 {
-    let cstr = |s: &[u8]| {
-        let mut bytes = s.split(|&c| c == 0).next().unwrap_or(&[]).to_vec();
+    let cstr = |bytes: &mut Vec<u8>, s: &[u8]| {
+        bytes.clear();
+        bytes.extend_from_slice(s.split(|&c| c == 0).next().unwrap_or(&[]));
         bytes.push(0);
-        bytes
     };
-    let (a, b) = (cstr(a), cstr(b));
-    // SAFETY: both buffers are NUL-terminated and live throughout the call.
-    unsafe { libc::strcoll(a.as_ptr().cast(), b.as_ptr().cast()) }
+    COLLATION_INPUTS.with(|inputs| {
+        let mut inputs = inputs.borrow_mut();
+        let (left, right) = &mut *inputs;
+        cstr(left, a);
+        cstr(right, b);
+        // SAFETY: both buffers are NUL-terminated and live throughout the call.
+        // strcoll invokes no PHP callbacks, so it cannot reenter these buffers.
+        unsafe { libc::strcoll(left.as_ptr().cast(), right.as_ptr().cast()) }
+    })
 }
 
 // ---------------------------------------------------------------------------
