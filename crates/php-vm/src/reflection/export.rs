@@ -443,6 +443,8 @@ pub(crate) fn function_string(
         if let Some(d) = &u.doc_comment {
             b.s(indent).z(d).c(b'\n');
         }
+    } else if let Some(d) = super::function::builtin_doc_comment(vm, f) {
+        b.s(indent).z(&d).c(b'\n');
     }
     let is_closure = fl & flags::CLOSURE != 0 && f.method.is_none();
     b.s(indent);

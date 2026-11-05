@@ -8,6 +8,7 @@ use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::func::flags;
 use php_vm::vm::FrameKind;
 use php_vm::Vm;
+use std::rc::Rc;
 
 /// Handler of the functions that only parse (no) parameters and return
 /// `null`.
@@ -586,6 +587,57 @@ fn cast_fread(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// `zend_test_uri_parser` and friends are not provided by this binding.
 #[allow(clippy::too_many_lines)]
+/// The attributes (`zend_add_function_attribute`,
+/// `zend_add_global_constant_attribute`) and exposed doc comments that
+/// `test_arginfo.h` attaches to functions and constants.
+fn register_stub_metadata(vm: &mut Vm) {
+    let message = |m: &str| vec![(Some("message"), s(m))];
+    let functions = [
+        (
+            "zend_test_deprecated_attr",
+            vec![attribute("Deprecated", message("custom message"))],
+        ),
+        (
+            "zend_test_nodiscard",
+            vec![attribute("NoDiscard", message("custom message"))],
+        ),
+        (
+            "zend_test_deprecated_nodiscard",
+            vec![
+                attribute("Deprecated", message("custom message")),
+                attribute("NoDiscard", message("custom message 2")),
+            ],
+        ),
+        (
+            "zend_test_attribute_with_named_argument",
+            vec![attribute(
+                "ZendTestAttributeWithArguments",
+                vec![(Some("arg"), s("foo"))],
+            )],
+        ),
+    ];
+    for (name, attrs) in functions {
+        vm.builtin_attributes
+            .insert(ZStr::from(name), Rc::new(attrs));
+    }
+    vm.builtin_doc_comments.insert(
+        ZStr::from("zend_test_nullable_array_return"),
+        ZStr::from(
+            "/**\n     * \"Lorem ipsum\"\n     * @see https://www.php.net\n     * @since 8.3\n     */",
+        ),
+    );
+    vm.const_attributes.insert(
+        ZStr::from("ZEND_TEST_ATTRIBUTED_CONSTANT"),
+        Rc::new(vec![attribute(
+            "Deprecated",
+            vec![
+                (Some("message"), s("use something else")),
+                (Some("since"), s("version 1.5")),
+            ],
+        )]),
+    );
+}
+
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     m.function("zend_trigger_bailout(): never", trigger_bailout);
     m.function(
@@ -787,6 +839,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for f in ["zend_test_nodiscard", "zend_test_deprecated_nodiscard"] {
         edit_function(vm, f, |b| b.flags |= flags::NODISCARD);
     }
+    register_stub_metadata(vm);
     let dnf = crate::classes::type_of(vm, "Iterator|(Traversable&Countable)");
     edit_function(vm, "zend_test_internal_dnf_arguments", |b| {
         if let Some(p) = b.params.first_mut() {

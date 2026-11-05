@@ -194,3 +194,54 @@ var_dump(strlen($_POST['a'] ?? '') < 100 * 1024);
     );
     assert!(out.ends_with("bool(true)\n"), "{out}");
 }
+
+#[test]
+fn stub_attributes_and_doc_comments_of_internal_symbols() {
+    let out = run(r#"
+$a = (new ReflectionFunction('zend_test_attribute_with_named_argument'))->getAttributes()[0];
+echo $a->getName(), '|', $a->newInstance()->arg, '|';
+$m = new ReflectionMethod(ZendAttributeTest::class, 'testMethod');
+echo get_class($m->getAttributes()[0]->newInstance()), '|';
+$d = (new ReflectionConstant('ZEND_TEST_ATTRIBUTED_CONSTANT'))->getAttributes()[0]->newInstance();
+echo $d->since, '|', strlen((new ReflectionFunction('zend_test_nullable_array_return'))->getDocComment()), '|';
+echo (new ReflectionClass(ZendTestPropertyAttribute::class))->isInternal() ? 'internal' : 'user';"#);
+    assert_eq!(
+        out,
+        "ZendTestAttributeWithArguments|foo|ZendTestAttribute|version 1.5|82|internal"
+    );
+}
+
+#[test]
+fn internal_attributes_on_promoted_parameters_follow_their_targets() {
+    // attribute-promotion-{parameter,property}-only.phpt
+    let out = run(r#"
+class AttrTest {
+    public function __construct(
+        #[ZendTestPropertyAttribute('foo')] public $prop,
+        #[ZendTestParameterAttribute('bar')] public $param,
+    ) {}
+}
+$r = new ReflectionClass(AttrTest::class);
+foreach ($r->getConstructor()->getParameters() as $p) {
+    echo 'param ', $p->getName(), ':';
+    foreach ($p->getAttributes() as $a) { echo $a->getName(); }
+    echo ' prop ', $p->getName(), ':';
+    foreach ($r->getProperty($p->getName())->getAttributes() as $a) { echo $a->getName(); }
+    echo ' ';
+}"#);
+    assert_eq!(
+        out,
+        "param prop: prop prop:ZendTestPropertyAttribute \
+         param param:ZendTestParameterAttribute prop param: "
+    );
+}
+
+#[test]
+fn custom_attribute_validator_runs_at_compile_time() {
+    // Zend/tests/attributes/016_custom_attribute_validation.phpt
+    let out = run("#[ZendTestAttribute] function foo() {}");
+    assert!(
+        out.contains("Fatal error: Only classes can be marked with #[ZendTestAttribute]"),
+        "{out}"
+    );
+}

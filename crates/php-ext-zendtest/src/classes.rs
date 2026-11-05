@@ -351,11 +351,6 @@ fn mark_attribute(vm: &mut Vm, name: &str, flags: i64, doc: Option<&str>) {
         return;
     };
     rebuild_class(vm, &cls, |c, _| {
-        // Without the VM's internal attribute registry, a declared
-        // `#[Attribute]` marker is only honoured on non-internal classes.
-        if cfg!(not(feature = "vm-hooks")) {
-            c.flags &= !cflags::INTERNAL;
-        }
         c.attributes = vec![attribute("Attribute", vec![(None, Value::Int(flags))])];
         c.doc_comment = doc.map(ZStr::from);
     });
@@ -424,14 +419,12 @@ fn register_attributes(vm: &mut Vm) {
 }
 
 /// `zend_attribute_validate_zendtestattribute`.
-#[cfg(feature = "vm-hooks")]
 fn validate_zend_test_attribute(target: u32) -> Option<String> {
     (i64::from(target) != target::CLASS)
         .then(|| "Only classes can be marked with #[ZendTestAttribute]".to_string())
 }
 
 /// `zend_mark_internal_attribute()` of the attribute classes.
-#[cfg(feature = "vm-hooks")]
 fn register_internal_attributes(m: &mut ModuleBuilder<'_>) {
     let fl = |f: i64| u32::try_from(f).unwrap_or(0);
     m.internal_attribute(
@@ -510,6 +503,10 @@ fn register_attribute_users(vm: &mut Vm) {
             ];
         });
     });
+    vm.builtin_attributes.insert(
+        ZStr::from("zendattributetest::testmethod"),
+        Rc::new(vec![attribute("ZendTestAttribute", vec![])]),
+    );
 
     let cls = ClassBuilder::new("ZendTestClassWithMethodWithParameterAttribute")
         .method(
@@ -823,7 +820,6 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         }
     });
     register_test_class(vm);
-    #[cfg(feature = "vm-hooks")]
     register_internal_attributes(m);
     let vm = m.vm();
     ClassBuilder::new("ZendTestGenStubFlagCompatibilityTest")

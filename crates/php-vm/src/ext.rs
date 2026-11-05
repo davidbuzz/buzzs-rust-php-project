@@ -27,6 +27,7 @@ use php_support::ini::IniDirective;
 use std::rc::Rc;
 
 pub use crate::builtins::classbuilder::ClassBuilder;
+pub use crate::compiler::attrs::ExtAttributeValidator;
 pub use crate::fiber::{register_zend_test_fiber, FiberState};
 pub use crate::func::{Args, BuiltinFn as NativeFn};
 pub use crate::observer::{FiberContext, ObservedFrame, ObserverHooks};
@@ -434,6 +435,20 @@ impl<'a> ModuleBuilder<'a> {
     /// `multipart/form-data` body, before `RINIT`.
     pub fn on_rfc1867(&mut self, f: Rfc1867Fn) -> &mut Self {
         self.vm.rfc1867_callback = Some(f);
+        self
+    }
+
+    /// Marks the registered class `name` as an internal attribute
+    /// (`zend_mark_internal_attribute`): `flags` are `Attribute::TARGET_*`
+    /// (`| IS_REPEATABLE`), validated at compile time like the core
+    /// attributes; `validator` returns the compile error for a target.
+    pub fn internal_attribute(
+        &mut self,
+        name: &str,
+        flags: u32,
+        validator: Option<ExtAttributeValidator>,
+    ) -> &mut Self {
+        crate::compiler::attrs::register_internal_attribute(name, flags, validator);
         self
     }
 
