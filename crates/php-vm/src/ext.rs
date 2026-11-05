@@ -177,6 +177,52 @@ pub type OutputHandlerHookFn = fn(&mut Vm);
 /// Performs a SAPI header add/replace operation, returning its actual result.
 pub type ResponseHeaderFn = fn(&mut Vm, &[u8], bool, i64) -> VmResult<bool>;
 
+/// An event of the SAPI's `multipart/form-data` parser
+/// (`MULTIPART_EVENT_*` in `main/rfc1867.h`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rfc1867Event<'a> {
+    /// `MULTIPART_EVENT_START`: parsing begins.
+    Start {
+        /// The request's `Content-Length`.
+        content_length: i64,
+    },
+    /// `MULTIPART_EVENT_FORMDATA`: a regular form field.
+    FormData {
+        /// The field name.
+        name: &'a [u8],
+        /// The field value.
+        value: &'a [u8],
+    },
+    /// `MULTIPART_EVENT_FILE_START`: a file upload begins.
+    FileStart {
+        /// The field name.
+        name: &'a [u8],
+        /// The client's file name.
+        filename: &'a [u8],
+    },
+    /// `MULTIPART_EVENT_FILE_DATA`: a chunk of the file was read.
+    FileData {
+        /// Bytes of the file written before this chunk.
+        offset: i64,
+        /// Length of the chunk.
+        length: i64,
+    },
+    /// `MULTIPART_EVENT_FILE_END`: the upload finished.
+    FileEnd {
+        /// The temporary file, if one was created.
+        temp_filename: Option<&'a [u8]>,
+        /// The `UPLOAD_ERR_*` code (0 on success).
+        cancel_upload: i64,
+    },
+    /// `MULTIPART_EVENT_END`: parsing finished.
+    End,
+}
+
+/// `php_rfc1867_callback`: observes the multipart parser's events, given
+/// the body bytes read so far (`SG(read_post_bytes)`). Returning `false`
+/// is `FAILURE` (the field is skipped, or the upload cancelled).
+pub type Rfc1867Fn = fn(&mut Vm, Rfc1867Event<'_>, i64) -> bool;
+
 /// A `PHP_MINFO` callback.
 pub type ModuleInfoFn = fn(&mut Vm) -> Vec<InfoItem>;
 
@@ -379,6 +425,14 @@ impl<'a> ModuleBuilder<'a> {
     /// (`RINIT`): reset per-request state here.
     pub fn on_request_startup(&mut self, f: fn(&mut Vm)) -> &mut Self {
         self.vm.startup_hooks.push(f);
+        self
+    }
+
+    /// Installs the multipart upload observer (`php_rfc1867_callback`,
+    /// which ext/session sets at `MINIT`); SAPIs call it while parsing a
+    /// `multipart/form-data` body, before `RINIT`.
+    pub fn on_rfc1867(&mut self, f: Rfc1867Fn) -> &mut Self {
+        self.vm.rfc1867_callback = Some(f);
         self
     }
 

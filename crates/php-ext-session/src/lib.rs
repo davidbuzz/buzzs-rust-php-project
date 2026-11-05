@@ -13,6 +13,8 @@
 //! * `MINIT`+`RINIT` at registration (the VM has no request-startup hook
 //!   and runs one request per process), `RSHUTDOWN` through
 //!   `on_request_shutdown` ([`shutdown`]).
+//! * upload progress: the multipart parser's events, before `RINIT`
+//!   ([`upload`]).
 //!
 //! `$_SESSION` is a compiled superglobal in the VM; the module binds the
 //! global slot to the session array by reference, so writes from any scope
@@ -26,6 +28,7 @@ mod info;
 mod ini;
 mod rewrite;
 mod shutdown;
+mod upload;
 mod urlscan;
 
 use php_runtime::{ArrayKey, PropertyPurpose, RuntimeContext, Value};
@@ -57,6 +60,7 @@ impl Extension for Session {
         m.on_module_startup(module_startup);
         m.on_request_startup(request_startup);
         m.on_request_shutdown(shutdown::request_shutdown);
+        m.on_rfc1867(upload::callback);
     }
 }
 

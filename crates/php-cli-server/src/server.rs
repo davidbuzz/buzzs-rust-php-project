@@ -574,6 +574,7 @@ fn run_php_forked(
     is_static: bool,
 ) -> Outcome {
     let _ = std::io::stderr().flush();
+    let server_pid = crate::sapi::server_pid();
     // SAFETY: the server thread is the only one doing work; the child only
     // continues on this thread with its copy of the address space and ends
     // with `_exit`.
@@ -582,6 +583,7 @@ fn run_php_forked(
         return run_php(c, Prepared::spawn(config), is_static);
     }
     if pid == 0 {
+        crate::sapi::set_server_pid(server_pid);
         // SAFETY: prctl has no memory-safety preconditions.
         unsafe {
             libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
