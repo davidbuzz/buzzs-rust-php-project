@@ -577,6 +577,19 @@ impl Compiler {
                             });
                             return Ok(Operand::Tmp(t));
                         }
+                        // A constant, a temporary or a call result: ZEND_YIELD
+                        // notices unless a call (ZEND_RETURNS_FUNCTION)
+                        // returned a reference.
+                        let call = is_call_expr(v);
+                        let val = self.compile_expr(v)?;
+                        self.f().line = line;
+                        self.emit(Op::YieldByRefValue {
+                            key: k,
+                            val,
+                            call,
+                            dst: Some(t),
+                        });
+                        return Ok(Operand::Tmp(t));
                     }
                 }
                 let v = match value {
@@ -593,6 +606,13 @@ impl Compiler {
             }
             ExprKind::YieldFrom(inner) => {
                 self.check_yield(line)?;
+                if self.fref().returns_ref {
+                    // zend_compile_yield_from.
+                    return self.err(
+                        "Cannot use \"yield from\" inside a by-reference generator",
+                        line,
+                    );
+                }
                 let v = self.compile_expr(inner)?;
                 self.f().line = line;
                 let t = self.tmp();
