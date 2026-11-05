@@ -347,3 +347,22 @@ fn upload_progress_is_stored_before_request_startup() {
         "bool(true)\nint(100)\nstring(5) \"a.txt\"\nstring(14) \"/tmp/phpUpload\"\n"
     );
 }
+
+#[test]
+fn handler_interface_warns_about_missing_php9_methods() {
+    let out = run_with(
+        r#"<?php
+interface Combined extends SessionIdInterface, SessionUpdateTimestampHandlerInterface {}
+abstract class Fine implements SessionHandlerInterface, Combined {}
+abstract class Sub extends SessionHandler {}
+abstract class MissingBoth implements SessionHandlerInterface {}
+abstract class MissingValidateId implements SessionHandlerInterface, SessionIdInterface {}
+echo "Done\n";"#,
+        &[],
+    );
+    let expected = "\nWarning: Class MissingBoth implementing SessionHandlerInterface is missing the create_sid() method which will be required in PHP 9.0 in test.php on line 5\n\
+         \nWarning: Class MissingBoth implementing SessionHandlerInterface is missing the validateId() method which will be required in PHP 9.0 in test.php on line 5\n\
+         \nWarning: Class MissingValidateId implementing SessionHandlerInterface is missing the validateId() method which will be required in PHP 9.0 in test.php on line 6\n\
+         Done\n";
+    assert_eq!(out, expected);
+}
