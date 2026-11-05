@@ -297,6 +297,7 @@ impl Vm {
         let error_reporting = std::mem::replace(&mut self.error_reporting, 0);
         let linked = classes.iter().try_for_each(|class| {
             self.declare_class(class, class.flags & crate::class::cflags::ANON != 0)
+                .map(drop)
         });
         self.error_reporting = error_reporting;
         linked?;
