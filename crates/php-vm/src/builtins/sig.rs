@@ -267,7 +267,20 @@ pub(crate) fn parse_sig(sig: &str) -> Sig {
             promote: native_bits,
             sensitive,
             default_expr: None,
-            attributes: Vec::new(),
+            // The generated arginfo registers the marker as a real parameter
+            // attribute (`zend_add_parameter_attribute(...,
+            // ZSTR_KNOWN(ZEND_STR_SENSITIVEPARAMETER), 0)`), so Reflection
+            // sees it.
+            attributes: if sensitive {
+                vec![crate::class::AttributeInfo {
+                    name: ZStr::from("SensitiveParameter"),
+                    args: Vec::new(),
+                    line: 0,
+                    strict: false,
+                }]
+            } else {
+                Vec::new()
+            },
         });
         defaults.push(default.and_then(parse_default));
     }
@@ -317,5 +330,22 @@ mod marker_tests {
         assert!(b.by_ref);
         assert_eq!(c.promote, 0);
         assert_eq!(s.required, 2);
+    }
+
+    #[test]
+    fn sensitive_marker_becomes_a_parameter_attribute() {
+        let s = parse_sig("f(#[\\SensitiveParameter] string $n, string $p): string");
+        let [n, p] = &s.params[..] else {
+            panic!("two parameters");
+        };
+        assert!(n.sensitive);
+        let names: Vec<_> = n
+            .attributes
+            .iter()
+            .map(|a| a.name.to_string_lossy())
+            .collect();
+        assert_eq!(names, ["SensitiveParameter"]);
+        assert!(!p.sensitive);
+        assert!(p.attributes.is_empty());
     }
 }
