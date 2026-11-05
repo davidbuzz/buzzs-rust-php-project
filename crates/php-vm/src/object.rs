@@ -136,7 +136,8 @@ impl ObjectData {
         if had_overflow || bits & UNSET_OVERFLOW_BIT != 0 {
             let _ = UNSET_OVERFLOW.try_with(|m| {
                 let mut m = m.borrow_mut();
-                match m.get(&from.handle).cloned() {
+                let src = m.get(&from.handle).cloned();
+                match src {
                     Some(v) if bits & UNSET_OVERFLOW_BIT != 0 => m.insert(self.handle, v),
                     _ => m.remove(&self.handle),
                 }
