@@ -453,6 +453,13 @@ fn request_vars(vm: &Vm) -> (Vec<(&'static str, Vec<u8>)>, Vec<(&'static str, ZA
 
 fn phpinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let flag = if a.has(0) { a.int(0) } else { info::INFO_ALL };
+    if flag & info::INFO_VARIABLES != 0 {
+        // php_print_gpcse_array requests each array (zend_is_auto_global),
+        // creating a still-armed JIT `$_REQUEST`/`$_SERVER`/`$_ENV`.
+        for name in [b"_REQUEST".as_slice(), b"_SERVER", b"_ENV"] {
+            vm.is_auto_global(name);
+        }
+    }
     let version = constant_str(vm, "PHP_VERSION", "8.5.0-dev");
     let uname = system::php_uname(b"a").vm(vm)?;
     let wrappers = string_list(vm, "stream_get_wrappers", DEFAULT_WRAPPERS);

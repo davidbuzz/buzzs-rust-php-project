@@ -98,18 +98,45 @@ fn env_table() -> HashTable {
     t
 }
 
-/// Sets `$argv`, `$argc`, `$_SERVER`, `$_ENV` and the empty request
-/// arrays the way the CLI does (`variables_order` decides whether
-/// `$_SERVER`/`$_ENV` are filled).
-pub fn register_variables(vm: &mut Vm, req: &Request<'_>) {
-    let order = vm.ini_string("variables_order").unwrap_or_default();
-    let has = |c: u8| order.iter().any(|x| x.eq_ignore_ascii_case(&c));
-    let values: Vec<Value> = req.argv.iter().map(|a| str_value(a)).collect();
-    let count = Value::Int(i64::try_from(values.len()).unwrap_or(0));
-    let argv = Value::Array(ZArray::from_values(values));
+/// Whether `variables_order` names the track-vars array `c` (`strchr`
+/// for either case).
+fn variables_order_has(vm: &Vm, c: u8) -> bool {
+    vm.ini_string("variables_order")
+        .unwrap_or_default()
+        .iter()
+        .any(|x| x.eq_ignore_ascii_case(&c))
+}
 
+/// Sets the global `name` to `v` (`zend_hash_update(&EG(symbol_table))`).
+fn set_global_bytes(vm: &Vm, name: &[u8], v: Value) {
+    let mut g = vm.globals.borrow_mut();
+    let i = g.find_or_add(name) as usize;
+    g.slots[i] = Some(v);
+}
+
+/// `php_auto_globals_create_env`: `$_ENV` holds the environment when
+/// `variables_order` contains `E`.
+fn create_env(vm: &mut Vm, name: &[u8]) {
+    let env = if variables_order_has(vm, b'E') {
+        env_table()
+    } else {
+        HashTable::new()
+    };
+    set_global_bytes(vm, name, Value::Array(ZArray::from_table(env)));
+}
+
+/// `php_auto_globals_create_request`: the merge of the GET/POST/COOKIE
+/// track vars, which the CLI never fills.
+fn create_request(vm: &mut Vm, name: &[u8]) {
+    set_global_bytes(vm, name, Value::Array(ZArray::new()));
+}
+
+/// `php_auto_globals_create_server` with `sapi_cli_register_variables`:
+/// the environment, the script names, the request time and `argv`/`argc`
+/// (an empty array unless `variables_order` contains `S`).
+fn server_array(vm: &Vm, req: &Request<'_>, argv: &Value, argc: &Value) -> Value {
     let mut server = HashTable::new();
-    if has(b'S') {
+    if variables_order_has(vm, b'S') {
         server = env_table();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -132,25 +159,45 @@ pub fn register_variables(vm: &mut Vm, req: &Request<'_>) {
             Value::Int(i64::try_from(now.as_secs()).unwrap_or(0)),
         );
         server.insert(ArrayKey::from("argv"), argv.clone());
-        server.insert(ArrayKey::from("argc"), count.clone());
+        server.insert(ArrayKey::from("argc"), argc.clone());
     }
-    let env = if has(b'E') {
-        env_table()
+    Value::Array(ZArray::from_table(server))
+}
+
+/// `php_hash_environment()` for the CLI, in php-src's symbol-table order:
+/// `$argv`/`$argc` (`php_build_argv`), then the auto-globals in
+/// registration order (`zend_activate_auto_globals`), where the JIT ones
+/// (`auto_globals_jit`) are armed instead of created, and finally
+/// `$_SERVER`, which `do_cli` always requests (`zend_is_auto_global`).
+/// A JIT `$_ENV`/`$_REQUEST` appears only once a compiled script names it.
+pub fn register_variables(vm: &mut Vm, req: &Request<'_>) {
+    let values: Vec<Value> = req.argv.iter().map(|a| str_value(a)).collect();
+    let argc = Value::Int(i64::try_from(values.len()).unwrap_or(0));
+    let argv = Value::Array(ZArray::from_values(values));
+    set_global_bytes(vm, b"argv", argv.clone());
+    set_global_bytes(vm, b"argc", argc.clone());
+
+    let jit = vm.ini_bool("auto_globals_jit");
+    // `php_startup_auto_globals` runs before `SG(request_info).argc` is
+    // set, so `$_SERVER` is JIT only without `register_argc_argv`.
+    let server_jit = jit && !vm.ini_bool("register_argc_argv");
+    for name in [b"_GET".as_slice(), b"_POST", b"_COOKIE"] {
+        set_global_bytes(vm, name, Value::Array(ZArray::new()));
+    }
+    if !server_jit {
+        set_global_bytes(vm, b"_SERVER", server_array(vm, req, &argv, &argc));
+    }
+    if jit {
+        vm.arm_auto_global(b"_ENV", create_env);
+        vm.arm_auto_global(b"_REQUEST", create_request);
     } else {
-        HashTable::new()
-    };
-    let mut g = vm.globals.borrow_mut();
-    let mut set = |name: &str, v: Value| {
-        let i = g.find_or_add(name.as_bytes()) as usize;
-        g.slots[i] = Some(v);
-    };
-    for name in ["_GET", "_POST", "_COOKIE", "_FILES", "_REQUEST"] {
-        set(name, Value::Array(ZArray::new()));
+        create_env(vm, b"_ENV");
+        create_request(vm, b"_REQUEST");
     }
-    set("_ENV", Value::Array(ZArray::from_table(env)));
-    set("_SERVER", Value::Array(ZArray::from_table(server)));
-    set("argv", argv);
-    set("argc", count);
+    set_global_bytes(vm, b"_FILES", Value::Array(ZArray::new()));
+    if server_jit {
+        set_global_bytes(vm, b"_SERVER", server_array(vm, req, &argv, &argc));
+    }
 }
 
 /// Sets a global variable (`$argn`, `$argi`).

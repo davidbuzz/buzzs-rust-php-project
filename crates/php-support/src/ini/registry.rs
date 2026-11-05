@@ -942,7 +942,9 @@ pub fn core_directives() -> Vec<IniDirective> {
 }
 
 /// Configuration values the CLI SAPI applies (`HARDCODED_INI` and
-/// `sapi_cli_ini_defaults()` in `sapi/cli/php_cli.c`).
+/// `sapi_cli_ini_defaults()` in `sapi/cli/php_cli.c`). php-src master no
+/// longer hardcodes `register_argc_argv=1`: the CLI registers `$argv` and
+/// `$argc` from `SG(request_info).argc` whatever its value.
 pub const CLI_OVERRIDES: &[(&str, &str)] = &[
     ("display_errors", "1"),
     ("html_errors", "0"),
@@ -950,7 +952,6 @@ pub const CLI_OVERRIDES: &[(&str, &str)] = &[
     ("output_buffering", "0"),
     ("max_execution_time", "0"),
     ("max_input_time", "-1"),
-    ("register_argc_argv", "1"),
 ];
 
 #[cfg(test)]

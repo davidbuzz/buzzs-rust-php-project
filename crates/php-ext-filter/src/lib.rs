@@ -15,7 +15,8 @@
 //! The CLI has no GET/POST/COOKIE input, so those storages are
 //! uninitialised (`filter_input()` returns `null`). `INPUT_SERVER` and
 //! `INPUT_ENV` read the raw `$_SERVER` / `$_ENV` snapshotted at request
-//! startup, before `filter.default` is applied to those superglobals.
+//! startup, before `filter.default` is applied to those superglobals (a
+//! JIT `$_ENV` is snapshotted when it is first created).
 //!
 //! Known gap: `parse_str()` (php-ext-stdmisc) does not apply
 //! `filter.default` (use [`php_filter::apply_default_filter`]).
@@ -125,18 +126,38 @@ fn request_startup(vm: &mut Vm) {
     }
 }
 
-/// The request inputs (`IF_G(*_array)`).
-fn inputs(vm: &Vm) -> FilterInputs {
+/// The request inputs (`IF_G(*_array)`) for `input_type`.
+///
+/// `php_filter_get_storage`: under `auto_globals_jit`, `INPUT_SERVER` and
+/// `INPUT_ENV` first request their auto-global (`zend_is_auto_global`). A
+/// JIT `$_ENV` is created after `RINIT`, so its storage is taken when it
+/// first exists (php-src falls back to `PG(http_globals)[TRACK_VARS_ENV]`).
+fn inputs(vm: &mut Vm, input_type: i64) -> FilterInputs {
+    let auto_global: &[u8] = match input_type {
+        php_filter::constants::INPUT_ENV => b"_ENV",
+        php_filter::constants::INPUT_SERVER => b"_SERVER",
+        _ => b"",
+    };
+    if !auto_global.is_empty() && vm.ini_bool("auto_globals_jit") {
+        vm.is_auto_global(auto_global);
+    }
+    let vm: &Vm = vm;
     INPUTS.with(|i| {
-        i.borrow_mut()
-            .get_or_insert_with(|| FilterInputs {
-                post: None,
-                get: None,
-                cookie: None,
-                env: superglobal(vm, b"_ENV"),
-                server: superglobal(vm, b"_SERVER"),
-            })
-            .clone()
+        let mut i = i.borrow_mut();
+        let inputs = i.get_or_insert_with(|| FilterInputs {
+            post: None,
+            get: None,
+            cookie: None,
+            env: None,
+            server: None,
+        });
+        if inputs.env.is_none() {
+            inputs.env = superglobal(vm, b"_ENV");
+        }
+        if inputs.server.is_none() {
+            inputs.server = superglobal(vm, b"_SERVER");
+        }
+        inputs.clone()
     })
 }
 
@@ -240,8 +261,8 @@ fn filter_var_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn filter_input(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let inputs = inputs(vm);
     let (ty, name) = (a.int(0), a.str(1));
+    let inputs = inputs(vm, ty);
     let filter = int_or(a, 2, php_filter::constants::FILTER_DEFAULT);
     let opts = options(a, 3, 0);
     run(vm, |h| {
@@ -250,8 +271,8 @@ fn filter_input(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn filter_input_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let inputs = inputs(vm);
     let ty = a.int(0);
+    let inputs = inputs(vm, ty);
     let opts = options(a, 1, php_filter::constants::FILTER_DEFAULT);
     let add_empty = bool_or(a, 2, true);
     run(vm, |h| {
@@ -260,8 +281,8 @@ fn filter_input_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn filter_has_var(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let inputs = inputs(vm);
     let (ty, name) = (a.int(0), a.str(1));
+    let inputs = inputs(vm, ty);
     run(vm, |_| {
         php_filter::filter_has_var(&inputs, ty, name.as_bytes()).map(Value::Bool)
     })

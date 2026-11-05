@@ -117,7 +117,9 @@ impl Vm {
             ),
             anon_base: self.anon_counter,
         };
-        let unit = match compiler::compile(&program, Rc::from(src), opts) {
+        let compiled = compiler::compile(&program, Rc::from(src), opts);
+        self.activate_compiled_auto_globals();
+        let unit = match compiled {
             Ok(u) => {
                 self.anon_counter = u.anon_end;
                 u

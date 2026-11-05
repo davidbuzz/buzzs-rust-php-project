@@ -186,6 +186,8 @@ impl Compiler {
                                 return self
                                     .err("Cannot use $this as global variable", v.span.line);
                             }
+                            // `global $_ENV` names the auto-global too.
+                            super::expr::is_superglobal(&id.name);
                             let cv = self.cv(&id.name);
                             let name = self.lit_str(&id.name);
                             self.emit(Op::Global { cv, name });
@@ -1289,10 +1291,14 @@ impl Compiler {
             if id.name == b"this" {
                 return self.err("Cannot re-assign $this", target.span.line);
             }
-            self.note_cv_write(&id.name);
-            let cv = self.cv(&id.name);
-            self.emit(Op::AssignCv { cv, val, dst });
-            return Ok(());
+            // zend_try_compile_cv fails for auto-globals: they are assigned
+            // through a global fetch (the place below), never a local CV.
+            if !super::expr::is_superglobal(&id.name) {
+                self.note_cv_write(&id.name);
+                let cv = self.cv(&id.name);
+                self.emit(Op::AssignCv { cv, val, dst });
+                return Ok(());
+            }
         }
         if let ExprKind::Array { items, .. } = &target.kind {
             self.compile_destructure(items, val, target.span.line)?;

@@ -33,6 +33,8 @@ pub struct ExtState {
     /// `assert_options(ASSERT_CALLBACK)` or a runtime `assert.callback`
     /// change; `None` (`IS_UNDEF`) falls back to the startup INI value.
     pub assert_callback: Option<Value>,
+    /// The JIT auto-globals still armed (`CG(auto_globals)`).
+    pub(crate) auto_globals: crate::auto_globals::AutoGlobals,
 }
 
 /// Registers a builtin function from a stub signature.
