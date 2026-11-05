@@ -95,7 +95,12 @@ fn target(host: &mut dyn SplHost, this: &Obj, st: &Rc<SplObject>) -> RtResult<(T
                 st = state_of(host, &o)?;
                 obj = o;
             }
-            Value::Object(o) => return Ok((Target::Props(o), true)),
+            Value::Object(o) => {
+                // Reading the property table directly initializes a lazy
+                // object (`spl_array_get_hash_table_ptr`).
+                let o = host.init_lazy_object(&o)?;
+                return Ok((Target::Props(o), true));
+            }
             _ => return Ok((Target::Own(st), false)),
         }
     }

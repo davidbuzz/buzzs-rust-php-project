@@ -378,3 +378,25 @@ var_dump($f->foo);
          string(3) \"bar\"\n"
     );
 }
+
+#[test]
+fn array_iterator_initializes_lazy_storage() {
+    // GH-15833: reading a lazy object's property table initializes it
+    // (a proxy reads its real instance; a failing initializer throws).
+    let out = run(r#"<?php
+class C { public int $a = 1; }
+$r = new ReflectionClass(C::class);
+$it = new RecursiveArrayIterator($r->newLazyProxy(fn ($o) => new C()));
+var_dump($it->current());
+$it->next();
+var_dump($it->current());
+$it = new RecursiveArrayIterator($r->newLazyProxy(function ($o) {
+    static $n = 0;
+    throw new Error('nope ' . $n++);
+}));
+for ($i = 0; $i < 2; $i++) {
+    try { $it->current(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+"#);
+    assert_eq!(out, "int(1)\nNULL\nnope 0\nnope 1\n");
+}

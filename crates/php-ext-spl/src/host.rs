@@ -608,6 +608,11 @@ impl SplHost for VmHost<'_> {
         self.vm_rt(r)
     }
 
+    fn init_lazy_object(&mut self, obj: &Obj) -> RtResult<Obj> {
+        let r = self.vm.lazy_object_init(obj);
+        self.vm_rt(r)
+    }
+
     fn class_info(&mut self, name: &ZStr, autoload: bool) -> Option<ClassInfo> {
         let cls = if autoload {
             match self.vm.lookup_class(name) {
@@ -909,6 +914,9 @@ impl SplHost for BridgedHost {
     }
     fn properties_load(&mut self, obj: &Obj, props: &ZArray) -> RtResult<()> {
         lent_rt(|h| h.properties_load(obj, props))
+    }
+    fn init_lazy_object(&mut self, obj: &Obj) -> RtResult<Obj> {
+        lent_rt(|h| h.init_lazy_object(obj))
     }
     fn class_info(&mut self, name: &ZStr, autoload: bool) -> Option<ClassInfo> {
         lent(|h| h.class_info(name, autoload)).flatten()
