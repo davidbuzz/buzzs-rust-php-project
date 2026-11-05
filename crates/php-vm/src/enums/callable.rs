@@ -6,7 +6,7 @@ use crate::class::Class;
 use crate::func::Method;
 use crate::object;
 use crate::vm::{FrameKind, PendingCall, Vm, VmResult};
-use php_runtime::{ArrayKey, Obj, Value, ZStr};
+use php_runtime::{ArrayKey, Obj, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 /// `zend_fcall_info_cache` while resolving.
@@ -58,6 +58,58 @@ impl Vm {
                 None => f.called.clone(),
             }),
         }
+    }
+
+    /// `zend_is_callable_ex` for a callback an extension stores and calls
+    /// later (`spl_autoload_register`'s `zend_fcall_info_cache`): resolves
+    /// `v` in the calling scope, emitting the `"self"`/`"parent"`/`"static"`
+    /// callable deprecations. Returns the form to report (`self` and friends
+    /// replaced by the class they denote) and the form to call: a closure
+    /// bound to the resolved method when only the calling scope reaches it
+    /// (a non-public method or a `__call` trampoline), the reported form
+    /// otherwise. `Ok(Err(reason))` when `v` is not callable.
+    ///
+    /// # Errors
+    /// A throwing deprecation handler or autoloader.
+    pub fn resolve_stored_callable(
+        &mut self,
+        v: &Value,
+    ) -> VmResult<Result<(Value, Value), String>> {
+        let v = v.deref();
+        let ctx = self.callable_frame_ctx();
+        let call = match self.zend_is_callable(&v, false)? {
+            Ok(c) => c,
+            Err(e) => return Ok(Err(e)),
+        };
+        let mut reported = v.clone();
+        if let Value::Array(a) = &v {
+            if let (Some(Value::Str(cn)), Some(m)) = (
+                a.get(&ArrayKey::Int(0)).map(Value::deref),
+                a.get(&ArrayKey::Int(1)),
+            ) {
+                let resolved = match cn.as_bytes().to_ascii_lowercase().as_slice() {
+                    b"self" => ctx.scope.clone(),
+                    b"parent" => ctx.scope.as_ref().and_then(|s| s.parent.clone()),
+                    b"static" => ctx.called.clone(),
+                    _ => None,
+                };
+                if let Some(c) = resolved {
+                    reported = Value::Array(ZArray::from_values(vec![
+                        Value::Str(c.name.clone()),
+                        m.deref(),
+                    ]));
+                }
+            }
+        }
+        let hidden = crate::func::flags::PRIVATE | crate::func::flags::PROTECTED;
+        let scoped = matches!(v, Value::Array(_))
+            && (call.magic_name.is_some() || call.func.flags() & hidden != 0);
+        let callable = if scoped {
+            self.fake_closure(call)
+        } else {
+            reported.clone()
+        };
+        Ok(Ok((reported, callable)))
     }
 
     /// `zend_is_callable_ex`: resolves `v` in the current scope.

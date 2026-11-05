@@ -69,9 +69,12 @@ impl Vm {
             return Ok(());
         }
         self.autoloading.insert(lc.clone());
-        let loaders = self.autoloaders.clone();
+        // `spl_perform_autoload` walks the live registry: a loader
+        // registered by an earlier one runs in the same lookup (bug
+        // #71202); one unregistered before its turn does not.
         let mut r = Ok(());
-        for l in loaders {
+        let mut pos = 0;
+        while let Some(l) = self.autoloaders.get(pos).cloned() {
             if let Err(e) = self.call_value(&l, vec![Value::Str(name.clone())]) {
                 r = Err(e);
                 break;
@@ -79,6 +82,11 @@ impl Vm {
             if self.classes.contains_key(lc) {
                 break;
             }
+            // Continue after the loader just called, wherever it is now.
+            pos = match self.autoloaders.iter().position(|x| same_callable(x, &l)) {
+                Some(i) => i + 1,
+                None => pos,
+            };
         }
         self.autoloading.remove(lc);
         r
@@ -2823,5 +2831,17 @@ fn build_class(
         doc_comment: decl.doc_comment.clone(),
         linked: Cell::new(true),
         hooks,
+    }
+}
+
+/// Identity of two registered autoloaders (the same objects and strings).
+fn same_callable(a: &Value, b: &Value) -> bool {
+    match (a.deref(), b.deref()) {
+        (Value::Object(x), Value::Object(y)) => php_runtime::Obj::ptr_eq(&x, &y),
+        (Value::Str(x), Value::Str(y)) => x.as_bytes() == y.as_bytes(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.values().zip(y.values()).all(|(p, q)| same_callable(p, q))
+        }
+        _ => false,
     }
 }

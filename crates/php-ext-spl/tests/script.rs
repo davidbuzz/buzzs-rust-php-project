@@ -400,3 +400,34 @@ for ($i = 0; $i < 2; $i++) {
 "#);
     assert_eq!(out, "int(1)\nNULL\nnope 0\nnope 1\n");
 }
+
+#[test]
+fn autoload_callbacks_resolve_at_registration() {
+    // `self` resolves (with its deprecation) and a private method stays
+    // callable from the registering scope; a loader registered by another
+    // runs in the same lookup (bug #71202).
+    let out = run(r#"<?php
+error_reporting(E_ALL);
+set_error_handler(function ($n, $m) { echo $m, "\n"; return true; });
+class First {
+    public static function init() { spl_autoload_register(['self', 'load']); }
+    public static function load($c) {}
+}
+First::init();
+foreach (spl_autoload_functions() as $f) { echo implode("::", $f), "\n"; }
+spl_autoload_unregister(['First', 'load']);
+class L {
+    function __construct() { spl_autoload_register([$this, 'load']); }
+    private function load($c) {
+        echo "load $c\n";
+        if ($c === 'A') { spl_autoload_register(function ($c) { echo "inner $c\n"; }); }
+    }
+}
+new L;
+var_dump(class_exists('A'));
+"#);
+    assert_eq!(
+        out,
+        "Use of \"self\" in callables is deprecated\nFirst::load\nload A\ninner A\nbool(false)\n"
+    );
+}

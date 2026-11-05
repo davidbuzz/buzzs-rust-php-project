@@ -5,6 +5,7 @@ use crate::host::VmHost;
 use php_runtime::Value;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
+use std::cell::RefCell;
 use std::sync::OnceLock;
 
 /// Calls the `php-spl` implementation of the running function.
@@ -18,6 +19,19 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let n = a.passed.iter().rposition(|&p| p).map_or(0, |i| i + 1);
     let mut args: Vec<Value> = a.values.iter().take(n).cloned().collect();
+    let mut call_form = None;
+    if name == "spl_autoload_register" {
+        // `zend_fcall_info_cache`: resolve the callback in the calling
+        // scope now ("self" deprecation, private methods, `__call`).
+        if let Some(cb) = args.first_mut().filter(|cb| !cb.is_null()) {
+            if let Ok((reported, callable)) = vm.resolve_stored_callable(cb)? {
+                if !same_value(&reported, &callable) {
+                    call_form = Some(callable);
+                }
+                *cb = reported;
+            }
+        }
+    }
     if matches!(
         name.as_str(),
         "spl_autoload_register" | "spl_autoload_unregister"
@@ -26,6 +40,7 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             *cb = static_method_callable(cb);
         }
     }
+    let before = php_spl::functions::autoloaders().len();
     let r = {
         let _entry = crate::files::enter();
         let mut host = VmHost::new(vm);
@@ -35,9 +50,46 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(vm.throw("Error", &format!("Call to undefined function {name}()")));
     };
     if name.starts_with("spl_autoload_") {
-        vm.autoloaders = php_spl::functions::autoloaders();
+        let loaders = php_spl::functions::autoloaders();
+        if let (Some(c), Some(cb)) = (call_form, args.first()) {
+            if loaders.len() > before {
+                CALL_FORMS.with(|m| m.borrow_mut().push((cb.clone(), c)));
+            }
+        }
+        vm.autoloaders = CALL_FORMS.with(|m| {
+            let mut m = m.borrow_mut();
+            m.retain(|(k, _)| loaders.iter().any(|l| same_value(k, l)));
+            loaders
+                .iter()
+                .map(|l| {
+                    m.iter()
+                        .find(|(k, _)| same_value(k, l))
+                        .map_or_else(|| l.clone(), |(_, c)| c.clone())
+                })
+                .collect()
+        });
     }
     crate::iter::finish(vm, r)
+}
+
+thread_local! {
+    /// Registered autoloaders that must be called through a closure bound
+    /// at registration (`zend_fcall_info_cache` of a non-public method or
+    /// a `__call` trampoline), keyed by the form `spl_autoload_functions()`
+    /// reports.
+    static CALL_FORMS: RefCell<Vec<(Value, Value)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Identity of two callables: the same objects, strings and arrays of them.
+fn same_value(a: &Value, b: &Value) -> bool {
+    match (a.deref(), b.deref()) {
+        (Value::Object(x), Value::Object(y)) => php_runtime::Obj::ptr_eq(&x, &y),
+        (Value::Str(x), Value::Str(y)) => x.as_bytes() == y.as_bytes(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.values().zip(y.values()).all(|(p, q)| same_value(p, q))
+        }
+        _ => false,
+    }
 }
 
 /// `[$object, 'staticMethod']` resolves to a function call without an
