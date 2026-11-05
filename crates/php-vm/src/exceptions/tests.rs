@@ -166,3 +166,21 @@ try { unset(D::$p); } catch (Error $e) { echo $e->getMessage(), "\n"; }
         "Attempt to unset static property C::$a\nAttempt to unset static property C::$p\nClass \"D\" not found\n"
     );
 }
+
+/// `zend_fetch_debug_backtrace` `fake_frame`: a handler called by the
+/// include op itself is followed by an `include` pseudo frame.
+#[test]
+fn backtrace_of_a_handler_called_by_include_has_the_include_frame() {
+    let src = r#"<?php
+set_error_handler(function ($c, $m) {
+    foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $f) {
+        echo $f['function'], '@', $f['line'], "\n";
+    }
+    return true;
+});
+function f() { include 'nonexistent_zz.php'; }
+f();
+"#;
+    let out = run(src);
+    assert!(out.starts_with("{closure}@8\ninclude@8\nf@9\n"), "{out}");
+}
