@@ -105,3 +105,38 @@ fn folded_array_short_string_literals_are_interned() {
     assert!(out.contains("string(1) \"b\" interned\n"), "{out}");
     assert!(out.contains("string(3) \"abc\" refcount(1)\n"), "{out}");
 }
+
+/// `zend_assign_to_string_offset`: a non-string value is converted with
+/// `zval_try_get_string_func` after the offset checks; `__toString()` may
+/// throw (leaving the string unchanged), and only its first byte is
+/// written (`Zend/tests/exceptions/exception_from_toString.phpt`).
+#[test]
+fn string_offset_assignment_converts_objects_and_arrays() {
+    assert_eq!(
+        run(r#"<?php
+class Bad { function __toString(): string { throw new Exception("bad"); } }
+class Good { function __construct(public string $v) {} function __toString(): string { return $this->v; } }
+$s = "abc";
+try { $s[0] = new Bad; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+var_dump($s[1] = new Good("zq"));
+$s[2] = new Good("y");
+try { $s[0] = new Good(""); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { $s[0] = new stdClass; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$s[4] = [1];
+echo $s, "\n";
+$o = new stdClass; $o->p = "xyz";
+$o->p[1] = new Good("Q");
+$r = &$o->p; $r[2] = new Good("R");
+echo $o->p, "\n";
+"#),
+        "bad\n\
+         \nWarning: Only the first byte will be assigned to the string offset in t.php on line 6\n\
+         string(1) \"z\"\n\
+         Cannot assign an empty string to a string offset\n\
+         Object of class stdClass could not be converted to string\n\
+         \nWarning: Array to string conversion in t.php on line 10\n\
+         \nWarning: Only the first byte will be assigned to the string offset in t.php on line 10\n\
+         azy A\n\
+         xQR\n"
+    );
+}

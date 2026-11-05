@@ -69,6 +69,11 @@ type Diags = Vec<(i64, String)>;
 pub(crate) enum WalkErr {
     Error(String),
     TypeError(String),
+    /// A string offset is assigned an object: its string conversion
+    /// (`zval_try_get_string_func`, maybe `__toString()`) needs the VM, so
+    /// the walk stops after the offset checks and the caller converts the
+    /// value and writes its first byte with a silent second walk.
+    StringOffsetObject,
 }
 
 /// Result of walking inside a container.
@@ -314,13 +319,19 @@ fn assign_string_offset(
         return Ok(Value::Null);
     }
     let offset = if offset < 0 { offset + len } else { offset };
-    let bytes: Vec<u8> = match val {
+    let bytes: Vec<u8> = match val.deref() {
         Value::Str(v) => v.as_bytes().to_vec(),
         Value::Int(i) => i.to_string().into_bytes(),
         Value::Bool(true) => b"1".to_vec(),
         Value::Bool(false) | Value::Null => Vec::new(),
-        Value::Float(f) => php_runtime::float::format_double(*f, 17, false).into_bytes(),
-        _ => b"A".to_vec(),
+        Value::Float(f) => php_runtime::float::format_double(f, 17, false).into_bytes(),
+        // `zval_try_get_string_func`.
+        Value::Array(_) => {
+            diags.push((E_WARNING, "Array to string conversion".into()));
+            b"Array".to_vec()
+        }
+        Value::Resource(r) => format!("Resource id #{}", r.handle()).into_bytes(),
+        Value::Object(_) | Value::Reference(_) => return Err(WalkErr::StringOffsetObject),
     };
     if bytes.is_empty() {
         return Err(WalkErr::Error(
@@ -775,7 +786,39 @@ impl Vm {
         match e {
             WalkErr::Error(m) => self.make_throw("Error", &m),
             WalkErr::TypeError(m) => self.make_throw("TypeError", &m),
+            // Only reached when no caller could convert the value.
+            WalkErr::StringOffsetObject => {
+                self.make_throw("Error", "Cannot assign an object to a string offset")
+            }
         }
+    }
+
+    /// The rest of `zend_assign_to_string_offset` for an object value, once
+    /// the walk has checked the offset ([`WalkErr::StringOffsetObject`]):
+    /// converts it (`__toString()` may throw, leaving the string as it
+    /// was), warns when more than one byte results, and writes the first
+    /// byte by walking the place again (`rewalk`) with the converted value.
+    #[cold]
+    #[inline(never)]
+    fn assign_string_offset_object(
+        &mut self,
+        wop: &WOp,
+        rewalk: impl FnOnce(&mut Self, WOp) -> VmResult<Value>,
+    ) -> VmResult<Value> {
+        let WOp::Assign(val) = wop else {
+            return Err(self.walk_err(WalkErr::StringOffsetObject));
+        };
+        let s = self.to_zstr(&val.deref())?;
+        let first = match s.as_bytes() {
+            [] => s.clone(),
+            [c] => ZStr::from_byte(*c),
+            [c, ..] => {
+                let c = *c;
+                self.warning("Only the first byte will be assigned to the string offset")?;
+                ZStr::from_byte(c)
+            }
+        };
+        rewalk(self, WOp::Assign(Value::Str(first)))
     }
 
     /// Runs a write operation on a place.
@@ -796,7 +839,11 @@ impl Vm {
         mut wop: WOp,
         quiet: bool,
     ) -> VmResult<Value> {
-        let again = matches!(wop, WOp::AssignOp(..)).then(|| base.clone());
+        let again = matches!(
+            wop,
+            WOp::AssignOp(..) | WOp::Assign(Value::Object(_) | Value::Reference(_))
+        )
+        .then(|| base.clone());
         let mut diags = Vec::new();
         let step = match base {
             RBase::Var(store, idx) => {
@@ -892,11 +939,19 @@ impl Vm {
         if changed {
             return Ok(Value::Null);
         }
-        if let (Step::Done(cur), WOp::AssignOp(op, rhs), Some(again)) = (&step, &wop, again) {
-            // The final slot lies inside the base's container: write the
-            // result back with a second, silent walk.
-            let nv = self.assign_op_value(*op, cur, rhs)?;
-            return self.write_place_inner(again, segs, WOp::Assign(nv), true);
+        match (&step, &wop, again) {
+            (Step::Done(cur), WOp::AssignOp(op, rhs), Some(again)) => {
+                // The final slot lies inside the base's container: write the
+                // result back with a second, silent walk.
+                let nv = self.assign_op_value(*op, cur, rhs)?;
+                return self.write_place_inner(again, segs, WOp::Assign(nv), true);
+            }
+            (Step::Err(WalkErr::StringOffsetObject), _, Some(again)) => {
+                return self.assign_string_offset_object(&wop, |vm, w| {
+                    vm.write_place_inner(again, segs, w, true)
+                });
+            }
+            _ => {}
         }
         self.finish_step(step, segs, wop)
     }
@@ -923,6 +978,12 @@ impl Vm {
             let mut w = WOp::Assign(nv);
             let s = walk(&mut w, &mut Vec::new());
             return self.finish_step(s, segs, w);
+        }
+        if matches!(step, Step::Err(WalkErr::StringOffsetObject)) {
+            return self.assign_string_offset_object(&wop, |vm, mut w| {
+                let s = walk(&mut w, &mut Vec::new());
+                vm.finish_step(s, segs, w)
+            });
         }
         self.finish_step(step, segs, wop)
     }
