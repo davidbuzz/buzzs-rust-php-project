@@ -486,7 +486,7 @@ impl RuntimeContext for Vm {
     fn create_std_object(&mut self, props: ZArray) -> RtResult<Value> {
         let o = self.create_std_object_vm().map_err(|t| self.to_rt(t))?;
         if let Value::Object(obj) = &o {
-            *object::data(obj).dynamic.borrow_mut() = Some(props.to_proptable());
+            *object::data(obj).dynamic.borrow_mut() = Some(Box::new(props.to_proptable()));
         }
         Ok(o)
     }

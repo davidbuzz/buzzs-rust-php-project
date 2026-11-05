@@ -1739,10 +1739,11 @@ impl ZArray {
         ZArray(Rc::new(HashTable::with_capacity(n)))
     }
 
-    /// Wraps a table.
+    /// Wraps a table (also accepts a boxed table, such as an object's
+    /// dynamic property table).
     #[must_use]
-    pub fn from_table(t: HashTable) -> Self {
-        ZArray(Rc::new(t))
+    pub fn from_table(t: impl Into<HashTable>) -> Self {
+        ZArray(Rc::new(t.into()))
     }
 
     /// Builds a list from values.
@@ -1812,6 +1813,19 @@ impl std::ops::Deref for ZArray {
 impl fmt::Debug for ZArray {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
+/// Unboxes a table (objects keep their dynamic property table boxed).
+impl From<Box<HashTable>> for HashTable {
+    fn from(t: Box<HashTable>) -> Self {
+        *t
+    }
+}
+
+impl From<Box<HashTable>> for ZArray {
+    fn from(t: Box<HashTable>) -> Self {
+        ZArray(Rc::new(*t))
     }
 }
 

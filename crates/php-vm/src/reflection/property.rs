@@ -881,14 +881,7 @@ fn rp_is_readable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                         return Ok(Value::Bool(true));
                     }
                 }
-                if pi.ty.is_none()
-                    || object::data(&o)
-                        .readonly_init
-                        .borrow()
-                        .get(pi.slot as usize)
-                        .copied()
-                        .unwrap_or(false)
-                {
+                if pi.ty.is_none() || object::data(&o).slot_unset(pi.slot as usize) {
                     return Ok(Value::Bool(magic_get_readable(vm, &ce, Some(&o), &p.name)?));
                 }
                 return Ok(Value::Bool(false));

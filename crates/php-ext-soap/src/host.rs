@@ -502,7 +502,7 @@ impl SoapHost for VmHost<'_> {
                 }
             }
         }
-        if let Some(d) = data(obj).dynamic.borrow().as_ref() {
+        if let Some(d) = data(obj).dynamic.borrow().as_deref() {
             let t = out.make_mut();
             for (k, v) in d {
                 t.insert(k.clone(), v.clone());

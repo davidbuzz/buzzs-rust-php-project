@@ -190,7 +190,7 @@ fn std_property_count(obj: &Obj) -> usize {
             })
             .count()
     };
-    declared + d.dynamic.borrow().as_ref().map_or(0, HashTable::len)
+    declared + d.dynamic.borrow().as_deref().map_or(0, HashTable::len)
 }
 
 /// Records the table handed out for `obj`.
@@ -252,7 +252,7 @@ fn build_properties(obj: &Obj) -> ZArray {
             }
         }
     }
-    if let Some(dynp) = d.dynamic.borrow().as_ref() {
+    if let Some(dynp) = d.dynamic.borrow().as_deref() {
         for (k, v) in dynp {
             t.push(None, k.clone(), property_value(v));
         }
@@ -336,7 +336,7 @@ pub fn set_std_properties(obj: &Obj, props: &ZArray) {
     drop(slots);
     let had_dynamic = d.dynamic.borrow().is_some();
     if had_dynamic || !dynamic.is_empty() {
-        *d.dynamic.borrow_mut() = Some(dynamic);
+        *d.dynamic.borrow_mut() = Some(Box::new(dynamic));
     }
     if prop_order(d).is_some() || reordered(&current, props) {
         let order = (!is_default_order(&cls, &order)).then(|| PropOrder::from_keys(order));
@@ -415,7 +415,7 @@ fn set_std_properties_checked(vm: &mut Vm, obj: &Obj, props: &ZArray) -> VmResul
         } else {
             d.dynamic
                 .borrow_mut()
-                .get_or_insert_with(HashTable::new)
+                .get_or_insert_with(Box::default)
                 .insert(key.clone(), value.clone());
         }
         prepared.push((r.clone(), old));

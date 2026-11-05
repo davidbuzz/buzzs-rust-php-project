@@ -415,12 +415,7 @@ impl Vm {
                 if let Some(v) = v {
                     return Ok(v.deref());
                 }
-                let was_unset = object::data(o)
-                    .readonly_init
-                    .borrow()
-                    .get(pi.slot as usize)
-                    .copied()
-                    .unwrap_or(false);
+                let was_unset = object::data(o).slot_unset(pi.slot as usize);
                 if (pi.ty.is_none() || was_unset) && self.has_read_magic(o, name, mode) {
                     let mut v = self.magic_read(o, name, mode)?;
                     if mode != FetchMode::Is {
@@ -1013,7 +1008,7 @@ impl Vm {
         if !matches!(v, Value::Reference(_)) {
             if let Some(slot) = Self::plain_property_slot(o, name, true) {
                 let old = object::data(o).slots.borrow_mut()[slot].replace(v.clone());
-                object::data(o).readonly_init.borrow_mut()[slot] = false;
+                object::data(o).set_slot_unset(slot, false);
                 drop(old);
                 return Ok(v);
             }
@@ -1064,14 +1059,7 @@ impl Vm {
                 };
                 let idx = pi.slot as usize;
                 let cur_defined = object::data(o).slots.borrow()[idx].is_some();
-                let magic_ok = !cur_defined
-                    && (pi.ty.is_none()
-                        || object::data(o)
-                            .readonly_init
-                            .borrow()
-                            .get(idx)
-                            .copied()
-                            .unwrap_or(false));
+                let magic_ok = !cur_defined && (pi.ty.is_none() || object::data(o).slot_unset(idx));
                 if magic_ok && self.has_magic(o, name, G_SET) {
                     return self.magic_write(o, name, v);
                 }
@@ -1091,9 +1079,7 @@ impl Vm {
                         return Err(self.released_while_assigning(&pi));
                     }
                 }
-                if let Some(f) = object::data(o).readonly_init.borrow_mut().get_mut(idx) {
-                    *f = false;
-                }
+                object::data(o).set_slot_unset(idx, false);
                 self.consume_reinit(o, &pi);
                 if let Some(r) = typed_ref {
                     return self.assign_ref(&r, v);
@@ -1153,7 +1139,7 @@ impl Vm {
                 let old = {
                     let d = object::data(o);
                     let mut dynp = d.dynamic.borrow_mut();
-                    let t = dynp.get_or_insert_with(HashTable::new);
+                    let t = dynp.get_or_insert_with(Box::default);
                     match t.get_mut(&key) {
                         Some(Value::Reference(r)) => Some(r.set(v.clone())),
                         _ => t.insert(key, v.clone()),
@@ -1265,7 +1251,7 @@ impl Vm {
         self.undefined_property_warning(o, name)?;
         let d = object::data(o);
         let mut dynp = d.dynamic.borrow_mut();
-        let t = dynp.get_or_insert_with(HashTable::new);
+        let t = dynp.get_or_insert_with(Box::default);
         Ok(Some(t.lookup(key).deref()))
     }
 
@@ -1281,7 +1267,7 @@ impl Vm {
     pub(crate) fn write_dynamic_prop(&mut self, o: &Obj, name: ZStr, v: Value) {
         let d = object::data(o);
         let mut dynp = d.dynamic.borrow_mut();
-        dynp.get_or_insert_with(HashTable::new)
+        dynp.get_or_insert_with(Box::default)
             .insert(ArrayKey::Str(name), v);
     }
 
@@ -1333,7 +1319,7 @@ impl Vm {
             PropContainer::Dynamic(key) => {
                 let d = object::data(o);
                 let mut dynp = d.dynamic.borrow_mut();
-                let t = dynp.get_or_insert_with(HashTable::new);
+                let t = dynp.get_or_insert_with(Box::default);
                 Ok(t.lookup(key).make_ref())
             }
             PropContainer::Value(v) => match v {
@@ -1632,7 +1618,7 @@ impl Vm {
                 let old = d
                     .dynamic
                     .borrow_mut()
-                    .get_or_insert_with(HashTable::new)
+                    .get_or_insert_with(Box::default)
                     .insert(key, r.clone());
                 drop(old);
                 Ok(r)
@@ -1691,7 +1677,7 @@ impl Vm {
         let old = object::data(o)
             .dynamic
             .borrow_mut()
-            .get_or_insert_with(HashTable::new)
+            .get_or_insert_with(Box::default)
             .insert(key, v.clone());
         drop(old);
         Ok(v)
@@ -1766,9 +1752,7 @@ impl Vm {
                 // Unsetting clears `IS_PROP_UNINIT` (`__get()` & co. apply
                 // from now on).
                 let old = object::data(o).slots.borrow_mut()[idx].take();
-                if let Some(f) = object::data(o).readonly_init.borrow_mut().get_mut(idx) {
-                    *f = true;
-                }
+                object::data(o).set_slot_unset(idx, true);
                 drop(old);
                 Ok(())
             }
@@ -1808,12 +1792,7 @@ impl Vm {
     /// `IS_PROP_UNINIT` for an undefined slot).
     #[allow(clippy::unused_self)]
     fn slot_was_unset(&self, o: &Obj, idx: usize) -> bool {
-        object::data(o)
-            .readonly_init
-            .borrow()
-            .get(idx)
-            .copied()
-            .unwrap_or(false)
+        object::data(o).slot_unset(idx)
     }
 
     fn magic_unset(&mut self, o: &Obj, name: &ZStr) -> VmResult<()> {
@@ -2099,7 +2078,7 @@ impl Vm {
         let o = self.create_std_object_vm()?;
         if let Value::Object(obj) = &o {
             let t = a.to_proptable();
-            *object::data(obj).dynamic.borrow_mut() = Some(t);
+            *object::data(obj).dynamic.borrow_mut() = Some(Box::new(t));
         }
         Ok(o)
     }
@@ -2277,7 +2256,7 @@ impl Vm {
         let n = object::new_object(cls.clone(), slots);
         self.add_object_type_sources(&n);
         let nd = object::data(&n);
-        *nd.readonly_init.borrow_mut() = d.readonly_init.borrow().clone();
+        nd.copy_unset_flags(d);
         *nd.dynamic.borrow_mut() = d.dynamic.borrow().clone();
         object::copy_prop_order(d, nd);
         self.clone_internal(&o, &n)?;

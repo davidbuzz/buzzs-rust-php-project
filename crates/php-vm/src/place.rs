@@ -1592,7 +1592,7 @@ impl Vm {
                         let walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
                             let data = object::data(&obj);
                             let mut dynp = data.dynamic.borrow_mut();
-                            let t = dynp.get_or_insert_with(php_runtime::HashTable::new);
+                            let t = dynp.get_or_insert_with(Box::default);
                             let slot = t.lookup(key.clone());
                             descend(slot, sg, i + 1, w, d, false)
                         };

@@ -530,7 +530,7 @@ fn properties_for(_vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<O
                 t.insert(ArrayKey::Str(key), v.deref());
             }
         }
-        if let Some(dynp) = d.dynamic.borrow().as_ref() {
+        if let Some(dynp) = d.dynamic.borrow().as_deref() {
             for (k, v) in dynp {
                 t.insert(k.clone(), v.deref());
             }

@@ -8,7 +8,7 @@ use std::rc::Rc;
 use php_date::api::Interval;
 use php_date::parse::TimezoneSpec;
 use php_date::{RelTime, Time};
-use php_runtime::{ArrayKey, HashTable, Obj, Value, ZArray, ZStr};
+use php_runtime::{ArrayKey, Obj, Value, ZArray, ZStr};
 use php_vm::class::{cflags, Class};
 use php_vm::ext::{Throw, VmResult};
 use php_vm::func::flags;
@@ -166,7 +166,7 @@ pub(crate) fn write_table_prop(o: &Obj, name: &str, v: Value) {
     }
     d.dynamic
         .borrow_mut()
-        .get_or_insert_with(HashTable::new)
+        .get_or_insert_with(Box::default)
         .insert(ArrayKey::Str(key), v);
 }
 
@@ -286,9 +286,7 @@ pub(crate) fn clone_raw(o: &Obj) -> Obj {
     let n = object::new_object(d.class.clone(), slots);
     let nd = object::data(&n);
     nd.dynamic.borrow_mut().clone_from(&d.dynamic.borrow());
-    nd.readonly_init
-        .borrow_mut()
-        .clone_from(&d.readonly_init.borrow());
+    nd.copy_unset_flags(d);
     copy_state(o, &n);
     n
 }
@@ -341,7 +339,7 @@ pub(crate) fn std_props(o: &Obj) -> ZArray {
                 t.insert(ArrayKey::Str(mangle(pi)), v.deref());
             }
         }
-        if let Some(dynp) = d.dynamic.borrow().as_ref() {
+        if let Some(dynp) = d.dynamic.borrow().as_deref() {
             for (k, v) in dynp {
                 t.insert(k.clone(), v.deref());
             }

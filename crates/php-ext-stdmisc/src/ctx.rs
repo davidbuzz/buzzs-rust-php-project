@@ -196,7 +196,7 @@ impl QueryContext for VmQuery<'_> {
                 }
             }
         }
-        if let Some(t) = data(obj).dynamic.borrow().as_ref() {
+        if let Some(t) = data(obj).dynamic.borrow().as_deref() {
             for (k, v) in t {
                 out.push((k.clone(), v.clone()));
             }

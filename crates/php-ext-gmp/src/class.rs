@@ -208,7 +208,12 @@ fn cast_impl(o: &Obj, target: CastTarget) -> VmResult<Option<Value>> {
 /// The standard property table (GMP declares no properties, so these are
 /// the dynamic ones).
 fn std_props(o: &Obj) -> HashTable {
-    data(o).dynamic.borrow().clone().unwrap_or_default()
+    data(o)
+        .dynamic
+        .borrow()
+        .as_deref()
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn properties_for(_vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
@@ -341,7 +346,7 @@ fn unserialize_legacy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         };
         // `zend_hash_copy` into the property table (no deprecation).
         let mut dynamic = data(&o).dynamic.borrow_mut();
-        let t = dynamic.get_or_insert_with(HashTable::new);
+        let t = dynamic.get_or_insert_with(Box::default);
         for (k, v) in props.iter() {
             t.insert(k.clone(), v.clone());
         }
