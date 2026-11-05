@@ -115,7 +115,10 @@ fn alloc_block(inline_cap: usize) -> NonNull<Header> {
     let layout = block_layout(inline_cap);
     // SAFETY: the layout's size is at least `HEADER` (> 0).
     let raw = unsafe { alloc::alloc(layout) };
-    match NonNull::new(raw.cast::<Header>()) {
+    // The allocation is aligned for `Header` (it was requested so).
+    #[allow(clippy::cast_ptr_alignment)]
+    let raw = raw.cast::<Header>();
+    match NonNull::new(raw) {
         Some(block) => block,
         None => alloc::handle_alloc_error(layout),
     }
@@ -307,6 +310,8 @@ impl ZStr {
                         new_layout.size(),
                     )
                 };
+                // `realloc` keeps the layout's (Header) alignment.
+                #[allow(clippy::cast_ptr_alignment)]
                 let Some(block) = NonNull::new(raw.cast::<Header>()) else {
                     alloc::handle_alloc_error(new_layout)
                 };
