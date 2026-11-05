@@ -12,7 +12,7 @@ thread_local! {
 fn name(f: &ObservedFrame) -> String {
     f.function
         .as_ref()
-        .map_or_else(|| "{main}".to_owned(), |n| n.to_string_lossy().into_owned())
+        .map_or_else(|| "{main}".to_owned(), |n| n.to_string_lossy().to_string())
 }
 
 fn log(entry: String) {
