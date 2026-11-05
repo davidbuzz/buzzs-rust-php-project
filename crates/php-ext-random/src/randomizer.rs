@@ -4,7 +4,8 @@
 //! [`EngineRef`]) or a userland `Random\Engine`, whose `generate()` method
 //! is called through the VM (`php_random_algo_user`).
 
-use php_random::{ArraySlots, Engine, IntervalBoundary, RandomError, Randomizer, UserEngine};
+use php_random::engine::{generated_from_bytes, Generated};
+use php_random::{ArraySlots, Engine, IntervalBoundary, RandomError, Randomizer};
 use php_runtime::{HashTable, Obj, Value, ZArray, ZStr};
 use php_vm::ext::{
     acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, Throw, VmResult,
@@ -30,6 +31,30 @@ enum Source {
 #[derive(Debug, Default)]
 struct RandomizerObj {
     source: Option<Source>,
+}
+
+/// Decodes userland output without copying its string into a byte vector.
+struct VmUserEngine<'a> {
+    vm: &'a mut Vm,
+    obj: &'a Obj,
+    pending: &'a mut Option<Throw>,
+}
+
+impl Engine for VmUserEngine<'_> {
+    fn generate(&mut self) -> php_random::Result<Generated> {
+        let result = self
+            .vm
+            .call_method_by_name(self.obj, "generate", Vec::new())
+            .and_then(|v| match v.deref() {
+                Value::Str(s) => Ok(s),
+                other => self.vm.value_to_string(&other),
+            });
+        let bytes = result.map_err(|t| {
+            *self.pending = Some(t);
+            RandomError::Propagated
+        })?;
+        generated_from_bytes(bytes.as_bytes())
+    }
 }
 
 fn create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
@@ -63,19 +88,11 @@ fn run<R>(
         Some(Source::User(obj)) => {
             let mut pending: Option<Throw> = None;
             let r = {
-                let mut generate = || -> php_random::Result<Vec<u8>> {
-                    let v = vm
-                        .call_method_by_name(&obj, "generate", Vec::new())
-                        .and_then(|v| match v.deref() {
-                            Value::Str(s) => Ok(s.as_bytes().to_vec()),
-                            other => vm.value_to_string(&other).map(|s| s.as_bytes().to_vec()),
-                        });
-                    v.map_err(|t| {
-                        pending = Some(t);
-                        RandomError::Propagated
-                    })
+                let mut engine = VmUserEngine {
+                    vm,
+                    obj: &obj,
+                    pending: &mut pending,
                 };
-                let mut engine = UserEngine(&mut generate);
                 f(&mut engine)
             };
             r.map_err(|err| throw_random(vm, &err, pending))

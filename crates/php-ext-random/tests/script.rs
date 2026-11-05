@@ -100,3 +100,79 @@ fn user_engine_errors() {
         "A random engine must return a non-empty string"
     );
 }
+
+#[test]
+fn get_bytes_from_string_wrapper_call_counts() {
+    assert_eq!(
+        run(
+            r"final class Wrapper implements Random\Engine {
+                public int $calls = 0;
+                public function __construct(private Random\Engine $engine) {}
+                public function generate(): string {
+                    $this->calls++;
+                    return $this->engine->generate();
+                }
+            }
+            for ($size = 1; $size <= 256; $size *= 2) {
+                $engine = new Wrapper(new Random\Engine\Xoshiro256StarStar(99));
+                $r = new Random\Randomizer($engine);
+                $source = '';
+                for ($i = 0; $i < $size; $i++) { $source .= chr($i); }
+                $result = $r->getBytesFromString($source, 17);
+                echo strlen($result), ':', $engine->calls, ' ';
+                $r->getBytesFromString($source, 1);
+                echo $engine->calls, ';';
+            }
+            $r->getBytesFromString($source . $source, 17);
+            echo $engine->calls;"
+        ),
+        "17:3 4;17:3 4;17:3 4;17:3 4;17:3 4;17:3 4;17:3 4;17:3 4;17:3 4;21"
+    );
+}
+
+#[test]
+fn get_bytes_from_string_user_output() {
+    assert_eq!(
+        run(
+            r"final class E implements Random\Engine {
+                public int $calls = 0;
+                public function generate(): string {
+                    $this->calls++;
+                    if ($this->calls === 1) { return chr(1); }
+                    if ($this->calls === 2) { return chr(2) . chr(3); }
+                    return chr(0) . chr(1) . chr(2) . chr(3)
+                        . chr(0) . chr(1) . chr(2) . chr(3) . chr(255);
+                }
+            }
+            $engine = new E;
+            $r = new Random\Randomizer($engine);
+            echo $r->getBytesFromString('abcd', 12), ':', $engine->calls, ' ';
+            echo $r->getBytesFromString('abcd', 1), ':', $engine->calls;"
+        ),
+        "bcdabcdabcda:4 a:5"
+    );
+    assert_eq!(
+        run(
+            r"final class E implements Random\Engine {
+                public int $calls = 0;
+                public function generate(): string {
+                    if (++$this->calls === 1) { return 'a'; }
+                    throw new Exception('engine stopped');
+                }
+            }
+            try { (new Random\Randomizer(new E))->getBytesFromString('a', 2); }
+            catch (Exception $e) { echo $e->getMessage(); }"
+        ),
+        "engine stopped"
+    );
+    assert_eq!(
+        run(
+            r"final class E implements Random\Engine {
+                public function generate(): string { return ''; }
+            }
+            try { (new Random\Randomizer(new E))->getBytesFromString('a', 1); }
+            catch (Random\BrokenRandomEngineError $e) { echo $e->getMessage(); }"
+        ),
+        "A random engine must return a non-empty string"
+    );
+}
