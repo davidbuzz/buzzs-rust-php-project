@@ -553,13 +553,18 @@ impl Vm {
     /// `result`; the first failing write's `TypeError` replaces a
     /// successful result.
     pub(crate) fn flush_typed_arg_writes(&mut self, result: VmResult<Value>) -> VmResult<Value> {
+        // Every builtin call passes through here: the common empty case
+        // returns without building and dropping an empty iterator.
         let pending = DEFERRED_ARG_WRITES.with(|d| {
             if d.borrow().is_empty() {
-                Vec::new()
+                None
             } else {
-                std::mem::take(&mut *d.borrow_mut())
+                Some(std::mem::take(&mut *d.borrow_mut()))
             }
         });
+        let Some(pending) = pending else {
+            return result;
+        };
         let mut result = result;
         for (r, v) in pending {
             if let Err(e) = self.assign_ref(&r, v) {

@@ -1166,7 +1166,7 @@ impl Vm {
         let skip_deprecation = dst.is_none() && call.func.flags() & flags::NODISCARD != 0;
         match call.func.clone() {
             Func::User(uf) => {
-                if !skip_deprecation {
+                if !skip_deprecation && uf.flags & flags::DEPRECATED != 0 {
                     self.check_deprecated_call(&call)?;
                 }
                 let ret = dst.map_or(RetTarget::Discard, RetTarget::Tmp);
