@@ -257,6 +257,72 @@ fn explicit_return_declaration_errors() {
 }
 
 #[test]
+fn never_implicit_return_function() {
+    let src = r#"<?php
+function f(): never {
+    if (false) {
+        throw new Exception('bad');
+    }
+}
+try { f(); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+"#;
+    assert_eq!(
+        run(src),
+        "TypeError: f(): never-returning function must not implicitly return\n"
+    );
+}
+
+#[test]
+fn never_implicit_return_methods() {
+    let src = r#"<?php
+class Foo {
+    public static function bar(): never {
+        if (false) {
+            throw new Exception('bad');
+        }
+    }
+    public function baz(): never {}
+}
+class Child extends Foo {}
+try { Foo::bar(); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+try { (new Foo)->baz(); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+try { Child::bar(); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+try { (new Child)->baz(); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+"#;
+    assert_eq!(
+        run(src),
+        "TypeError: Foo::bar(): never-returning method must not implicitly return\n\
+TypeError: Foo::baz(): never-returning method must not implicitly return\n\
+TypeError: Foo::bar(): never-returning method must not implicitly return\n\
+TypeError: Foo::baz(): never-returning method must not implicitly return\n"
+    );
+}
+
+#[test]
+fn never_implicit_return_closure_scope() {
+    let src = r#"<?php
+$plain = function(): never {};
+class Foo {
+    public function closure() { return function(): never {}; }
+    public static function staticClosure() { return static function(): never {}; }
+}
+$o = new Foo;
+foreach ([$plain, $o->closure(), Foo::staticClosure(), $plain->bindTo($o, Foo::class),
+          $o->closure()->bindTo(null, null)] as $call) {
+    try { $call(); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+}
+"#;
+    assert_eq!(
+        run(src),
+        "TypeError: {closure:t.php:2}(): never-returning function must not implicitly return\n\
+TypeError: Foo::{closure:Foo::closure():4}(): never-returning method must not implicitly return\n\
+TypeError: Foo::{closure:Foo::staticClosure():5}(): never-returning method must not implicitly return\n\
+TypeError: Foo::{closure:t.php:2}(): never-returning method must not implicitly return\n\
+TypeError: {closure:Foo::closure():4}(): never-returning function must not implicitly return\n"
+    );
+}
+
+#[test]
 fn dnf_declaration_order_and_implicit_nullability() {
     let unit = compile("<?php function f(A|(B&C)|D|(E&F) $x, B&C $y = null): A|(B&C) {}")
         .expect("valid DNF");

@@ -1650,17 +1650,22 @@ impl Vm {
         if is_gen {
             return Ok(v.unwrap_or_default());
         }
+        if rt.is_never() {
+            let fname = func.as_ref().map_or_else(String::new, |f| match &scope {
+                Some(c) => format!("{}::{}", object::display_name(&c.name), f.name()),
+                None => f.name().to_string_lossy(),
+            });
+            let what = if scope.is_some() { "method" } else { "function" };
+            return Err(self.make_throw(
+                "TypeError",
+                &format!("{fname}(): never-returning {what} must not implicitly return"),
+            ));
+        }
         let fname = func
             .as_ref()
             .map_or_else(String::new, |f| self.func_display(f, scope.as_ref()));
         if rt.is_void() {
             return Ok(Value::Null);
-        }
-        if rt.is_never() {
-            return Err(self.make_throw(
-                "TypeError",
-                &format!("{fname}(): never-returning function must not implicitly return"),
-            ));
         }
         let tyname = rt.display(
             scope.as_ref().map(|s| &s.name),
