@@ -468,11 +468,44 @@ fn fill_packed_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+thread_local! {
+    /// The hidden class standing in for `le_throwing_resource_dtor`.
+    static THROWING_DTOR: std::cell::RefCell<Option<Rc<php_vm::class::Class>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// `le_throwing_resource_dtor`: the native destructor of the hidden object
+/// a throwing resource owns. Releasing the resource releases the object,
+/// so the exception is thrown where the resource is released, the way the
+/// VM runs object destructors.
+fn throwing_resource_dtor(vm: &mut Vm, _o: &php_runtime::Obj) -> VmResult<()> {
+    Err(vm.throw("Exception", "Throwing resource destructor called"))
+}
+
+/// Registers the hidden destructor class (outside the class table).
+fn register_throwing_resource(vm: &mut Vm) {
+    let cls = php_vm::ext::ClassBuilder::new("ZendTestThrowingResourceDtor")
+        .flags(php_vm::ext::class_flags::FINAL)
+        .hooks(php_vm::ext::ClassHooks {
+            destruct: Some(throwing_resource_dtor),
+            ..Default::default()
+        })
+        .register(vm);
+    vm.classes.remove(&cls.lc_name);
+    vm.class_order.retain(|n| *n != cls.lc_name);
+    THROWING_DTOR.with(|c| *c.borrow_mut() = Some(cls));
+}
+
 /// `zend_test_create_throwing_resource()`.
-fn create_throwing_resource(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+fn create_throwing_resource(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let cls = THROWING_DTOR.with(|c| c.borrow().clone());
+    let data = match cls {
+        Some(cls) => Some(Box::new(vm.new_object(&cls)?) as Box<dyn std::any::Any>),
+        None => None,
+    };
     Ok(Value::Resource(php_runtime::Resource::new(
         "throwing resource",
-        None,
+        data,
     )))
 }
 
@@ -852,6 +885,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         edit_function(vm, f, |b| b.flags |= flags::NODISCARD);
     }
     register_stub_metadata(vm);
+    register_throwing_resource(vm);
     let dnf = crate::classes::type_of(vm, "Iterator|(Traversable&Countable)");
     edit_function(vm, "zend_test_internal_dnf_arguments", |b| {
         if let Some(p) = b.params.first_mut() {

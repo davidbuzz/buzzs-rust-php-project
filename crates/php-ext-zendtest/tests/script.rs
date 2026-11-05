@@ -256,3 +256,15 @@ $r = zend_test_call_with_consumed_args(static fn ($a) => $a, [1], 0);
 echo $r["consumed_args"];"#);
     assert_eq!(out, "1|x|0");
 }
+
+#[test]
+fn throwing_resource_destructor_throws_where_released() {
+    // gh17408.phpt
+    let out = run(r#"
+function test() {
+    try { zend_test_create_throwing_resource(); } catch (Exception $e) { echo $e->getMessage(), '|'; }
+    $r = zend_test_create_throwing_resource();
+}
+try { test(); } catch (Exception $e) { echo get_class($e), ':', $e->getLine(); }"#);
+    assert_eq!(out, "Throwing resource destructor called|Exception:5");
+}
