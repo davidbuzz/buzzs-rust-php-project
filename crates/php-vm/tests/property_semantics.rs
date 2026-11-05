@@ -1477,3 +1477,23 @@ try { new PrivateUser(); } catch (Throwable $e) { echo $e::class, ': ', $e->getM
         "Error: Call to private PrivateUser::__construct() from global scope\n"
     );
 }
+
+/// `debug_zval_dump()` counts what php-src counts: a literal property
+/// default is held once by the class (not also by its compiled
+/// declaration and property info), and the dumper's copies of the
+/// property tables it walks are not counted (debug_zval_dump_o.phpt).
+#[test]
+fn debug_zval_dump_ignores_metadata_and_dumper_handles() {
+    assert_eq!(
+        run(r#"<?php
+class A { public $a = ["x" => 1]; public $b; }
+class C { public $o; public $p; }
+$x = new A;
+debug_zval_dump($x->a);
+$x->b = $x->a;
+$c = new C; $c->o = $x; $c->p = $x;
+debug_zval_dump($c);
+"#),
+        "array(1) refcount(3){\n  [\"x\"]=>\n  int(1)\n}\nobject(C)#2 (2) refcount(2){\n  [\"o\"]=>\n  object(A)#1 (2) refcount(3){\n    [\"a\"]=>\n    array(1) refcount(3){\n      [\"x\"]=>\n      int(1)\n    }\n    [\"b\"]=>\n    array(1) refcount(3){\n      [\"x\"]=>\n      int(1)\n    }\n  }\n  [\"p\"]=>\n  object(A)#1 (2) refcount(3){\n    [\"a\"]=>\n    array(1) refcount(3){\n      [\"x\"]=>\n      int(1)\n    }\n    [\"b\"]=>\n    array(1) refcount(3){\n      [\"x\"]=>\n      int(1)\n    }\n  }\n}\n"
+    );
+}
