@@ -108,6 +108,7 @@ impl Extension for Streams {
             }
         }
         m.on_request_shutdown(shutdown);
+        php_vm::ext::set_resource_refs_hook(res::context_refs_held);
         m.vm()
             .register_interrupt_handler(res::close_deferred_on_interrupt);
         include::install(m.vm());

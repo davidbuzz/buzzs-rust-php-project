@@ -543,6 +543,34 @@ pub fn new_context(ctx: StreamContext) -> Value {
     Value::Resource(r)
 }
 
+/// The references open streams hold to context resource `r`
+/// (`php_stream_context_set()`: `GC_ADDREF(context->res)` for
+/// `stream->ctx`), which `debug_zval_dump()` counts (GH-10885). Directory
+/// streams do not attach their context.
+pub fn context_refs_held(r: &Resource) -> usize {
+    let Some(ctx) = ctx_cell_of(r) else {
+        return 0;
+    };
+    let cells: Vec<Rc<StreamCell>> =
+        STREAMS.with(|m| m.borrow().values().filter_map(Weak::upgrade).collect());
+    let holds = |c: &StreamCell| {
+        let keeps = c
+            .ctx_keep
+            .borrow()
+            .as_ref()
+            .is_some_and(|k| Rc::ptr_eq(k, &ctx));
+        keeps
+            && match c.stream.try_borrow() {
+                Ok(s) => s
+                    .as_ref()
+                    .is_some_and(|s| !s.has_flag(php_streams::stream::flags::IS_DIR)),
+                // In use by a running operation: still open.
+                Err(_) => true,
+            }
+    };
+    cells.iter().filter(|c| holds(c)).count()
+}
+
 /// The cell of a context resource.
 pub fn ctx_cell_of(r: &Resource) -> Option<Rc<CtxCell>> {
     if r.is_closed() {
@@ -791,6 +819,22 @@ mod tests {
         let mid = m.id();
         let _mv = new_stream(m, None);
         assert!(ENCLOSED.with(|e| e.borrow().get(&mid).is_none()));
+    }
+
+    #[test]
+    fn open_streams_hold_their_context() {
+        let cv = new_context(StreamContext::new());
+        let Value::Resource(cr) = &cv else { panic!() };
+        let ctx = ctx_cell_of(cr).expect("ctx");
+        assert_eq!(context_refs_held(cr), 0);
+        let mut s = php_streams::memory::memory_create(php_streams::mode::TempMode::Default);
+        s.context = Some(Rc::clone(&ctx.ctx));
+        let sv = new_stream(s, None);
+        let Value::Resource(sr) = &sv else { panic!() };
+        assert_eq!(context_refs_held(cr), 1);
+        let cell = cell_of(sr).expect("cell");
+        drop(cell.take());
+        assert_eq!(context_refs_held(cr), 0);
     }
 
     #[test]
