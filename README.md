@@ -1,4 +1,4 @@
-# phprust
+# buzzrustyphp (brp)
 
 A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test suite.
 

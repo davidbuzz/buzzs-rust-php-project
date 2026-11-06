@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-# phprust
+# buzzrustyphp (brp)
 
 A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test suite, byte for byte,
 and to run as fast as the C implementation or faster (see "Performance").
