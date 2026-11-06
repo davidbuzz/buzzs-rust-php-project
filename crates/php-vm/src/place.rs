@@ -2939,7 +2939,7 @@ impl Vm {
                 }
             }
         } else {
-            let mut walk = walk_slot;
+            let walk = walk_slot;
             walk(&*segs, &mut wop, &mut diags)
         };
         let step = match (step, &mut wop) {

@@ -1211,7 +1211,7 @@ mod tests {
             assert_eq!((*c).free_tail, 7, "page 6 is in use");
             chunk_release(c, 3, 4);
             assert_eq!((*c).free_tail, 2, "over A's free second page");
-            assert!((*c).map[3..7].iter().all(|&info| info == 0));
+            assert!((&(*c).map)[3..7].iter().all(|&info| info == 0));
             chunk_release(c, 1, 1);
             assert_eq!(((*c).free_tail, (*c).free_pages), (1, 511));
             assert_eq!(chunk_take(c, USABLE_PAGES), Some(1));

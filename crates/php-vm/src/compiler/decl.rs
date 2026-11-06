@@ -23,12 +23,12 @@ pub(crate) fn export_expr_text(source: &[u8], e: &Expr) -> String {
 /// Collects the class and constant names of an expression that `use`
 /// imports resolve differently from the namespace prefix: `(start, end,
 /// resolved name)`.
-struct ImportedNames<'c> {
-    c: &'c Compiler,
+struct ImportedNames<'c, 'f> {
+    c: &'c Compiler<'f>,
     out: Vec<(usize, usize, Vec<u8>)>,
 }
 
-impl ImportedNames<'_> {
+impl ImportedNames<'_, '_> {
     fn class(&mut self, n: &ast::Name) {
         let special = n.kind == ast::NameKind::Unqualified
             && (n.name.eq_ignore_ascii_case(b"self")
@@ -67,7 +67,7 @@ impl ImportedNames<'_> {
     }
 }
 
-impl php_parser::visit::Visitor for ImportedNames<'_> {
+impl php_parser::visit::Visitor for ImportedNames<'_, '_> {
     fn visit_expr(&mut self, e: &Expr) {
         match &e.kind {
             ast::ExprKind::Closure(_) | ast::ExprKind::ArrowFn(_) => return,
