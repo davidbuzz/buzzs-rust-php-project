@@ -296,9 +296,10 @@ impl Vm {
         let cls = match spec {
             // `ZEND_INSTANCEOF` caches the class once found (it never
             // autoloads, so a miss is looked up again next time).
-            ClassSpec::Named(l) => match self.peek_named_class(*l) {
-                Some(c) => c,
-                None => {
+            ClassSpec::Named(l) => {
+                if let Some(c) = self.peek_named_class(*l) {
+                    c
+                } else {
                     let n = self.lit_str(*l);
                     match self.find_class(n.as_bytes()) {
                         Some(c) => {
@@ -308,7 +309,7 @@ impl Vm {
                         None => return Ok(false),
                     }
                 }
-            },
+            }
             ClassSpec::Dyn(op) => {
                 let c = self.read(*op)?;
                 match c {
@@ -732,12 +733,11 @@ impl Vm {
         // caller, not the VM); misses (instance-property visibility errors,
         // ancestors' private statics, undeclared) are cold.
         let missed;
-        let sp = match cls.find_static(name.as_bytes()) {
-            Some(sp) => sp,
-            None => {
-                missed = self.static_prop_miss(cls, name)?;
-                &missed
-            }
+        let sp = if let Some(sp) = cls.find_static(name.as_bytes()) {
+            sp
+        } else {
+            missed = self.static_prop_miss(cls, name)?;
+            &missed
         };
         if sp.flags & flags::VISIBILITY != flags::PUBLIC {
             let scope = self.scope();
@@ -806,7 +806,7 @@ impl Vm {
 
     /// Declares a user function.
     pub(crate) fn declare_function(&mut self, f: &Rc<UserFunction>) -> VmResult<()> {
-        let lc = ZStr::from(f.name.to_ascii_lowercase());
+        let lc = f.name.to_ascii_lowercase();
         if let Some(existing) = self.functions.get(&lc) {
             let msg = match existing {
                 Func::User(u) => format!(
@@ -837,7 +837,7 @@ impl Vm {
         if let Some(c) = self.bound_decls.get(&key) {
             return Ok(c.clone());
         }
-        let lc = ZStr::from(decl.name.to_ascii_lowercase());
+        let lc = decl.name.to_ascii_lowercase();
         if let Some(old) = self.classes.get(&lc) {
             // `zend_class_redeclaration_error(E_COMPILE_ERROR, ...)`: names
             // the class already declared under that name (its kind and
@@ -1153,7 +1153,6 @@ impl Vm {
     /// method: the final/static errors (message, file, line), else the
     /// signature check to perform.
     fn check_trait_abstract(
-        &self,
         cls: &Rc<Class>,
         c: &TraitAbstractCheck,
     ) -> Result<crate::variance::Obligation, (String, ZStr, u32)> {
@@ -1328,7 +1327,7 @@ impl Vm {
         &mut self,
         decl: &Rc<ClassDecl>,
         is_anon: bool,
-    ) -> VmResult<(Rc<Class>, Vec<(i64, String, u32)>)> {
+    ) -> VmResult<(Rc<Class>, Recorded)> {
         // While it is linked, the class is visible (unlinked) to the
         // variance checks of the classes its dependencies declare.
         let guard = LinkingGuard::enter(decl);
@@ -1488,9 +1487,9 @@ impl Vm {
             && !interfaces
                 .iter()
                 .any(|i| matches!(i.lc_name.as_bytes(), b"iterator" | b"iteratoraggregate"))
-            && !parent
+            && parent
                 .as_ref()
-                .is_some_and(|p| p.flags & cflags::INTERNAL != 0)
+                .is_none_or(|p| p.flags & cflags::INTERNAL == 0)
         {
             // `zend_get_object_type_uc`.
             let what = if decl.kind == ClassKind::Enum {
@@ -1675,7 +1674,7 @@ impl Vm {
         }
         let mut cc = crate::variance::ClassCheck::default();
         for c in &link_out.trait_checks {
-            match self.check_trait_abstract(&cls, c) {
+            match Self::check_trait_abstract(&cls, c) {
                 Ok(ob) => {
                     if cc.record(self, &cls, ob) {
                         break;
@@ -2550,7 +2549,6 @@ fn trait_prop_decls(t: &Rc<Class>) -> Vec<crate::class::PropDecl> {
 /// `class` in an incompatible way. Traits are bound before inheritance, so
 /// inherited properties are not considered here.
 #[allow(clippy::mutable_key_type, clippy::too_many_arguments)] // `ZStr` keys hash by content only.
-#[allow(clippy::mutable_key_type)] // ZStr's cached-hash cell never changes Hash/Eq
 fn trait_property_conflict(
     class: &ZStr,
     traits: &[Rc<Class>],
@@ -3175,7 +3173,9 @@ fn build_class(
         let existing = prop_map.get(&pd.name).cloned();
         let slot = match &existing {
             Some(e) => {
-                if e.visibility() != flags::PRIVATE {
+                if e.visibility() == flags::PRIVATE {
+                    u32::try_from(props.len()).unwrap_or(0)
+                } else {
                     let weaker = match e.visibility() {
                         flags::PUBLIC => pd.flags & flags::VISIBILITY != flags::PUBLIC,
                         flags::PROTECTED => pd.flags & flags::PRIVATE != 0,
@@ -3249,8 +3249,6 @@ fn build_class(
                         }
                     }
                     e.slot
-                } else {
-                    u32::try_from(props.len()).unwrap_or(0)
                 }
             }
             None => u32::try_from(props.len()).unwrap_or(0),
@@ -3342,7 +3340,7 @@ fn build_class(
     // Own methods first (for get_class_methods order), then trait methods,
     // then inherited ones.
     for md in &decl.methods {
-        let lc = ZStr::from(md.name.to_ascii_lowercase());
+        let lc = md.name.to_ascii_lowercase();
         let proto = inherited_proto_scope(parent.as_ref(), &lc, weak);
         let m = Rc::new(Method {
             name: md.name.clone(),
@@ -3449,7 +3447,7 @@ fn build_class(
     let _ = is_anon;
     let hooks = parent.as_ref().and_then(|p| p.hooks.clone());
     Class {
-        lc_name: ZStr::from(name.to_ascii_lowercase()),
+        lc_name: name.to_ascii_lowercase(),
         name,
         flags: cflag,
         parent,
