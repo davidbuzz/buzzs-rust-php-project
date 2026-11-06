@@ -324,19 +324,17 @@ impl Vm {
     }
 
     /// The array key an offset operand converts to without diagnostics:
-    /// an int, or a string (symbol-table semantics, `"1"` is key 1). A
-    /// consumed temporary only qualifies holding an int, which can stay in
-    /// its slot (like [`Vm::peek_num`]); a string there must be released
-    /// by the generic read.
+    /// an int, or a string (symbol-table semantics, `"1"` is key 1).
+    /// Nothing is consumed: an int in a temporary can stay in its slot
+    /// (like [`Vm::peek_num`]); a string there is cloned into the key and
+    /// the caller releases the temporary once its fast path succeeded
+    /// ([`Vm::release_tmp_str`], the `FREE_OP2` of the dimension fetch),
+    /// or leaves it to the generic read.
     #[inline]
     fn peek_dim_key(&self, dim: Operand) -> Option<ArrayKey> {
         let f = self.frame();
         match dim {
-            Operand::Tmp(t) => match f.tmps.get(t as usize)? {
-                Value::Int(i) => Some(ArrayKey::Int(*i)),
-                _ => None,
-            },
-            Operand::TmpKeep(t) => match f.tmps.get(t as usize)? {
+            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.tmps.get(t as usize)? {
                 Value::Int(i) => Some(ArrayKey::Int(*i)),
                 Value::Str(s) => Some(ArrayKey::from_zstr(s)),
                 _ => None,
@@ -401,6 +399,7 @@ impl Vm {
             self.set_tmp(dst, v);
             return Ok(false);
         };
+        self.release_tmp_str(dim);
         if let Some(to) = to {
             match self.cv_store_plain(to, v) {
                 Ok(()) => return Ok(true),
@@ -457,9 +456,11 @@ impl Vm {
         dst: u32,
         empty: bool,
     ) -> VmResult<()> {
-        let r = match self.isset_dim_cv_fast(cv, dim, empty) {
-            Some(r) => r,
-            None => self.place_isset(place, empty)?,
+        let r = if let Some(r) = self.isset_dim_cv_fast(cv, dim, empty) {
+            self.release_tmp_str(dim);
+            r
+        } else {
+            self.place_isset(place, empty)?
         };
         self.set_tmp(dst, Value::Bool(r));
         Ok(())
@@ -519,7 +520,8 @@ impl Vm {
         let old = std::mem::replace(slot, v);
         drop(vars);
         drop(old);
-        // The OP_DATA temporary is consumed.
+        // The offset and OP_DATA temporaries are consumed.
+        self.release_tmp_str(dim);
         if let Operand::Tmp(t) = val {
             self.set_tmp(t, Value::Null);
         }
@@ -826,6 +828,40 @@ $m = ['q' => 5]; $w = $m['q'] ?? 0; $w2 = $m['zz'] ?? 0; var_dump($w, $w2);
         assert!(out.contains("NAN value was coerced to bool"), "{out}");
         assert!(
             out.ends_with("bool(false)\nyes\nset\nempty\nint(5)\nint(0)\n"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn string_keys_from_temporaries() {
+        let src = r#"<?php
+$X = [];
+for ($i = 0; $i < 5; $i++) { $X["foo_$i"] = $i; }
+$sum = 0;
+for ($i = 0; $i < 5; $i++) { $sum += $X["foo_$i"]; }
+var_dump($sum, count($X));
+$n = 0;
+for ($i = 0; $i < 7; $i++) { if (isset($X["foo_$i"])) { $n++; } }
+var_dump($n);
+$v = $X["foo_" . 2] ?? 'd'; var_dump($v);
+$v = $X["bar_" . 2] ?? 'd'; var_dump($v);
+$v = $X["foo_" . 9]; var_dump($v);
+$k = 3; $X["foo_$k"] = 'three'; var_dump($X["foo_$k"]);
+$Y = [5 => 'five']; var_dump($Y["" . 5], isset($Y[5 . ""]), $Y[strval(5)]);
+$Y["0" . "7"] = 'oh-seven'; var_dump(array_keys($Y));
+$s = "k"; $Z = []; $Z[$s . $s] = 1; $Z[$s . $s] += 2; var_dump($Z);
+echo memory_get_usage() > 0 ? "ok\n" : "bad\n";
+"#;
+        let out = run(src);
+        assert!(
+            out.starts_with("int(10)\nint(5)\nint(5)\nint(2)\nstring(1) \"d\"\n"),
+            "{out}"
+        );
+        assert!(out.contains("Undefined array key \"foo_9\""), "{out}");
+        assert!(
+            out.ends_with(
+                "NULL\nstring(5) \"three\"\nstring(4) \"five\"\nbool(true)\nstring(4) \"five\"\narray(2) {\n  [0]=>\n  int(5)\n  [1]=>\n  string(2) \"07\"\n}\narray(1) {\n  [\"kk\"]=>\n  int(3)\n}\nok\n"
+            ),
             "{out}"
         );
     }
