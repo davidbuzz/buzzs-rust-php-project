@@ -240,9 +240,9 @@ impl fmt::Debug for Value {
             Value::Array(a) => write!(f, "Array({a:?})"),
             Value::Object(o) => write!(f, "{o:?}"),
             Value::Resource(r) => write!(f, "{r:?}"),
-            Value::Reference(r) => match r.0.value.try_borrow() {
-                Ok(v) => write!(f, "Reference({:?})", &*v),
-                Err(_) => f.write_str("Reference(<borrowed>)"),
+            Value::Reference(r) => match r.try_borrow() {
+                Some(v) => write!(f, "Reference({:?})", &*v),
+                None => f.write_str("Reference(<borrowed>)"),
             },
         }
     }
@@ -318,143 +318,7 @@ impl<T: Into<Value>> From<Option<T>> for Value {
 // References
 // ---------------------------------------------------------------------------
 
-pub(crate) struct RefInner {
-    value: RefCell<Value>,
-    /// Opaque slot for the VM (e.g. typed-property type sources,
-    /// `ZEND_REF_HAS_TYPE_SOURCES`).
-    meta: RefCell<Option<Rc<dyn Any>>>,
-}
-
-/// A PHP reference (`zend_reference`): a shared mutable slot holding a value.
-///
-/// Cloning a `PhpRef` creates another handle to the *same* slot (it is how
-/// `$a = &$b` is represented); [`PhpRef::refcount`] reports the number of
-/// handles, which `var_dump` uses to decide whether to print `&`.
-#[derive(Clone)]
-pub struct PhpRef(Rc<RefInner>);
-
-impl PhpRef {
-    /// Creates a new reference holding `value`. A reference never directly
-    /// contains another reference: nested references are unwrapped.
-    #[must_use]
-    pub fn new(value: Value) -> Self {
-        let value = match value {
-            Value::Reference(r) => r.get(),
-            v => v,
-        };
-        PhpRef(Rc::new(RefInner {
-            value: RefCell::new(value),
-            meta: RefCell::new(None),
-        }))
-    }
-
-    /// Returns a clone of the referenced value.
-    #[must_use]
-    pub fn get(&self) -> Value {
-        self.0.value.borrow().clone()
-    }
-
-    /// Replaces the referenced value, returning the old one.
-    pub fn set(&self, value: Value) -> Value {
-        let value = match value {
-            Value::Reference(r) if !PhpRef::ptr_eq(&r, self) => r.get(),
-            Value::Reference(_) => return self.get(),
-            v => v,
-        };
-        std::mem::replace(&mut *self.0.value.borrow_mut(), value)
-    }
-
-    /// Borrows the referenced value.
-    ///
-    /// # Panics
-    /// Panics if the value is currently mutably borrowed.
-    #[must_use]
-    pub fn borrow(&self) -> Ref<'_, Value> {
-        self.0.value.borrow()
-    }
-
-    /// Mutably borrows the referenced value.
-    ///
-    /// # Panics
-    /// Panics if the value is currently borrowed.
-    #[must_use]
-    pub fn borrow_mut(&self) -> RefMut<'_, Value> {
-        self.0.value.borrow_mut()
-    }
-
-    /// Borrows the referenced value unless it is currently mutably borrowed.
-    #[must_use]
-    pub fn try_borrow(&self) -> Option<Ref<'_, Value>> {
-        self.0.value.try_borrow().ok()
-    }
-
-    /// Mutably borrows the referenced value unless it is currently borrowed.
-    #[must_use]
-    pub fn try_borrow_mut(&self) -> Option<RefMut<'_, Value>> {
-        self.0.value.try_borrow_mut().ok()
-    }
-
-    /// Whether two handles denote the same reference.
-    #[must_use]
-    pub fn ptr_eq(a: &Self, b: &Self) -> bool {
-        Rc::ptr_eq(&a.0, &b.0)
-    }
-
-    /// Number of handles to this reference (`GC_REFCOUNT`).
-    #[must_use]
-    pub fn refcount(&self) -> usize {
-        Rc::strong_count(&self.0)
-    }
-
-    /// An address usable as an identity key (for recursion detection and
-    /// serialization back-references).
-    #[must_use]
-    pub fn addr(&self) -> usize {
-        Rc::as_ptr(&self.0).cast::<u8>() as usize
-    }
-
-    /// The VM's metadata attached to this reference, if any.
-    #[must_use]
-    pub fn meta(&self) -> Option<Rc<dyn Any>> {
-        self.0.meta.borrow().clone()
-    }
-
-    /// Attaches (or clears) VM metadata.
-    pub fn set_meta(&self, meta: Option<Rc<dyn Any>>) {
-        *self.0.meta.borrow_mut() = meta;
-    }
-}
-
-impl PhpRef {
-    /// A weak handle (for the cycle collector's root buffer).
-    pub(crate) fn downgrade(&self) -> std::rc::Weak<RefInner> {
-        Rc::downgrade(&self.0)
-    }
-
-    /// Re-wraps an upgraded weak handle.
-    pub(crate) fn from_inner(rc: Rc<RefInner>) -> Self {
-        PhpRef(rc)
-    }
-}
-
-/// Releasing a handle while others remain (`GC_DELREF` to a non-zero
-/// count) makes the reference a possible cycle root
-/// (`gc_check_possible_root`).
-impl Drop for PhpRef {
-    fn drop(&mut self) {
-        // Only a reference to an array or object can close a cycle
-        // (`Z_COLLECTABLE`).
-        if Rc::strong_count(&self.0) > 1 {
-            crate::ref_roots::released(self);
-        }
-    }
-}
-
-impl fmt::Debug for PhpRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PhpRef({:?})", self.get())
-    }
-}
+pub use crate::reference::PhpRef;
 
 // ---------------------------------------------------------------------------
 // Objects
@@ -479,6 +343,17 @@ pub trait PhpObject: Any {
     fn obj_cell_tag(&self) -> Option<ObjCellTag> {
         None
     }
+    /// The last handle of the object, `this`, is being dropped
+    /// (`zend_objects_store_del` on `GC_REFCOUNT == 0`): called by
+    /// [`Obj::drop`] before the count is decremented. The object may keep
+    /// itself alive by cloning `this` (php-src keeps a destructing object
+    /// at refcount 1; the VM queues the handle for its `__destruct` call);
+    /// otherwise it is freed right after. Implementors without destructors
+    /// keep the default.
+    #[doc(hidden)]
+    fn release_last(&self, this: &Obj) {
+        let _ = this;
+    }
 }
 
 /// The claim of an [`Obj`]'s allocation to be one, returned by
@@ -501,8 +376,9 @@ struct ObjHeader {
     /// dropped: `MaybeUninit` has no drop glue); it lends [`Obj::rc`] a real
     /// `&Rc<dyn PhpObject>` and carries the vtable (drop, size, methods).
     this: UnsafeCell<MaybeUninit<Rc<dyn PhpObject>>>,
-    /// `TypeId` of the payload: [`Obj::downcast_ref`] to the payload type
-    /// is one comparison instead of two virtual calls.
+    /// `TypeId` of the payload (or of its family, [`Obj::new_in_family`]):
+    /// [`Obj::downcast_ref`] to that type is one comparison instead of two
+    /// virtual calls.
     type_id: TypeId,
 }
 
@@ -536,6 +412,10 @@ impl<T: PhpObject> PhpObject for ObjCell<T> {
     fn obj_cell_tag(&self) -> Option<ObjCellTag> {
         Some(ObjCellTag(TypeId::of::<Self>()))
     }
+    #[inline]
+    fn release_last(&self, this: &Obj) {
+        self.value.release_last(this);
+    }
 }
 
 /// An `Rc<dyn PhpObject>` that was not made by [`Obj::new`], adopted by
@@ -551,6 +431,9 @@ impl PhpObject for ForeignObj {
     }
     fn as_any(&self) -> &dyn Any {
         self.0.as_any()
+    }
+    fn release_last(&self, this: &Obj) {
+        self.0.release_last(this);
     }
 }
 
@@ -572,10 +455,38 @@ pub struct Obj {
 impl Obj {
     /// Wraps a VM object (one allocation: header + `object`).
     pub fn new<T: PhpObject>(object: T) -> Self {
+        Obj::with_type_id(object, TypeId::of::<T>())
+    }
+
+    /// Wraps a VM object whose payload `T` starts with an `F`: the payload
+    /// is a member of `F`'s family, and [`Obj::downcast_ref`] and
+    /// [`Obj::payload_ptr`] for `F` reach that `F` part with the one type
+    /// check every other payload type gets. php-src's objects are such a
+    /// family: a `zend_object` whose `properties_table` continues past the
+    /// struct, sized for the class, in the same allocation.
+    ///
+    /// # Safety
+    /// `T` must hold a valid `F` at offset 0 for as long as the object
+    /// lives (a `#[repr(C)]` struct with an `F` first field, say), with
+    /// `F`'s alignment (checked at compile time, with the sizes).
+    /// [`Obj::downcast_ref`] for `T` itself does not recognise the payload
+    /// by its header (it looks for `T` through [`PhpObject::as_any`]).
+    #[must_use]
+    pub unsafe fn new_in_family<T: PhpObject, F: 'static>(object: T) -> Self {
+        const {
+            assert!(payload_offset::<T>() == payload_offset::<F>());
+            assert!(std::mem::size_of::<T>() >= std::mem::size_of::<F>());
+        }
+        Obj::with_type_id(object, TypeId::of::<F>())
+    }
+
+    /// [`Obj::new`] with the type the header records for
+    /// [`Obj::downcast_ref`] (`T`'s own, or its family's).
+    fn with_type_id<T: PhpObject>(object: T, type_id: TypeId) -> Self {
         let rc: Rc<dyn PhpObject> = Rc::new(ObjCell {
             header: ObjHeader {
                 this: UnsafeCell::new(MaybeUninit::uninit()),
-                type_id: TypeId::of::<T>(),
+                type_id,
             },
             value: object,
         });
@@ -681,18 +592,42 @@ impl Obj {
         self.rc().class_name()
     }
 
-    /// Downcasts to the VM's concrete object type.
+    /// Downcasts to the VM's concrete object type (or to the family type of
+    /// an object made by [`Obj::new_in_family`]).
     #[inline]
     #[must_use]
     pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
         if self.header().type_id == TypeId::of::<T>() {
-            // SAFETY: the payload's type is `T`, so the allocation is an
-            // `ObjCell<T>` (alive while this handle is); only shared
-            // references to the payload are ever made.
+            // SAFETY: the payload's type is `T`, or it starts with a `T`
+            // and is aligned like one (`Obj::new_in_family`), so a `T` sits
+            // at `payload_offset::<T>()` of the allocation (alive while this
+            // handle is); only shared references to the payload are ever
+            // made.
             Some(unsafe { &(*self.ptr.as_ptr().cast::<ObjCell<T>>()).value })
         } else {
             self.rc().as_any().downcast_ref::<T>()
         }
+    }
+
+    /// The payload, as a raw pointer to its `F` part, if its type or
+    /// family ([`Obj::new_in_family`]) is `F`. Unlike the reference
+    /// [`Obj::downcast_ref`] returns, which covers the `F` part only, the
+    /// pointer may be used to reach the rest of the payload (data a family
+    /// member keeps after the `F` part, inside `UnsafeCell`) while the
+    /// object is alive, except from inside the payload's own `Drop`: the
+    /// drop glue then holds an exclusive reference to the whole cell.
+    #[inline]
+    #[must_use]
+    pub fn payload_ptr<F: 'static>(&self) -> Option<NonNull<F>> {
+        if self.header().type_id != TypeId::of::<F>() {
+            return None;
+        }
+        // SAFETY: as in `downcast_ref`, the allocation holds an `F` at
+        // `payload_offset::<F>()`, so the field projection stays in
+        // bounds; `addr_of!` makes no reference, so the pointer keeps the
+        // provenance of the handle's own pointer (the whole allocation).
+        let p = unsafe { ptr::addr_of!((*self.ptr.as_ptr().cast::<ObjCell<F>>()).value) };
+        NonNull::new(p.cast_mut())
     }
 
     /// Whether two handles denote the same object (`===`).
@@ -739,6 +674,14 @@ impl Clone for Obj {
 impl Drop for Obj {
     #[inline]
     fn drop(&mut self) {
+        let rc = self.rc();
+        if Rc::strong_count(rc) == 1 {
+            // The object's last handle: `zend_objects_store_del`. The object
+            // may clone `this` (a pending destructor keeps it alive at
+            // count 1, as php-src's `GC_SET_REFCOUNT(obj, 1)` does), in
+            // which case the decrement below leaves it alive.
+            rc.release_last(self);
+        }
         // SAFETY: this handle owns one strong count; the bitwise copy of the
         // allocation's own `Rc` is an `Rc` owning exactly that count, and
         // dropping it releases it (and frees the object if it was the last).
@@ -1175,8 +1118,9 @@ mod tests {
         static REVIVED: RefCell<Vec<Obj>> = const { RefCell::new(Vec::new()) };
     }
 
-    /// Like the VM's `ObjBox`: its drop replaces the weak slot that points
-    /// at the object being freed and creates a new object.
+    /// A payload whose drop replaces the weak slot that points at the
+    /// object being freed and creates a new object (the VM's object store
+    /// and destructor queue are touched from inside `Drop` like this).
     struct Reviver(u32);
     impl PhpObject for Reviver {
         fn handle(&self) -> u32 {
@@ -1216,6 +1160,186 @@ mod tests {
         assert!(Obj::ptr_eq(&slot.upgrade().expect("alive"), &revived));
         drop(revived);
         assert!(slot.upgrade().is_none());
+    }
+
+    thread_local! {
+        static QUEUE: RefCell<Vec<Obj>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Like the VM's object data: the first time its last handle goes, it
+    /// queues the handle for a destructor call (`release_last` clones
+    /// `this`), so the same cell stays alive; the second time it is freed.
+    struct Pending {
+        destructed: Cell<bool>,
+        hooks: Rc<Cell<u32>>,
+        drops: Rc<Cell<u32>>,
+    }
+    impl PhpObject for Pending {
+        fn handle(&self) -> u32 {
+            7
+        }
+        fn class_name(&self) -> ZStr {
+            ZStr::from("Pending")
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn release_last(&self, this: &Obj) {
+            self.hooks.set(self.hooks.get() + 1);
+            // php-src: `GC_REFCOUNT(obj) == 0` on entry, 1 during `dtor_obj`.
+            assert_eq!(this.refcount(), 1);
+            if !self.destructed.replace(true) {
+                QUEUE.with(|q| q.borrow_mut().push(this.clone()));
+            }
+        }
+    }
+    impl Drop for Pending {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+
+    #[test]
+    fn release_last_keeps_the_same_cell_alive_for_a_pending_destructor() {
+        let hooks = Rc::new(Cell::new(0));
+        let drops = Rc::new(Cell::new(0));
+        let o = Obj::new(Pending {
+            destructed: Cell::new(false),
+            hooks: hooks.clone(),
+            drops: drops.clone(),
+        });
+        let addr = o.addr();
+        let w = o.downgrade();
+        let std_weak: Weak<dyn PhpObject> = Rc::downgrade(o.rc());
+        // Not the last handle: no hook.
+        drop(o.clone());
+        assert_eq!(hooks.get(), 0);
+        // The last handle: queued instead of freed, identity kept.
+        drop(o);
+        assert_eq!((hooks.get(), drops.get()), (1, 0));
+        let queued = QUEUE.with(|q| q.borrow_mut().pop()).expect("queued");
+        assert_eq!(queued.addr(), addr);
+        assert_eq!(queued.refcount(), 1);
+        assert!(Obj::ptr_eq(&w.upgrade().expect("alive"), &queued));
+        assert!(Obj::ptr_eq(
+            &Obj::from_rc(std_weak.upgrade().expect("alive")),
+            &queued
+        ));
+        assert!(queued
+            .downcast_ref::<Pending>()
+            .is_some_and(|p| p.destructed.get()));
+        // Upgrades made and dropped meanwhile were never the last handle.
+        assert_eq!(hooks.get(), 1);
+        // The queued handle goes: the hook declines to revive, the payload
+        // is dropped exactly once and the cell is gone.
+        drop(queued);
+        assert_eq!((hooks.get(), drops.get()), (2, 1));
+        assert!(w.upgrade().is_none());
+        assert!(std_weak.upgrade().is_none());
+        assert!(QUEUE.with(|q| q.borrow().is_empty()));
+    }
+
+    /// The default hook does nothing: objects without one are freed on
+    /// their last handle, also when adopted through `from_rc`.
+    #[test]
+    fn default_release_last_frees_on_the_last_handle() {
+        let drops = Rc::new(Cell::new(0));
+        let o = Obj::new(Counted(1, drops.clone()));
+        let back = Obj::from_rc(o.rc().clone());
+        drop(o);
+        assert_eq!(drops.get(), 0);
+        drop(back);
+        assert_eq!(drops.get(), 1);
+        let foreign: Rc<dyn PhpObject> = Rc::new(Counted(2, drops.clone()));
+        drop(Obj::from_rc(foreign));
+        assert_eq!(drops.get(), 2);
+    }
+
+    /// The common part of a payload family (like the VM's object data,
+    /// whose property slots follow it inline).
+    struct Head {
+        id: u32,
+        /// Sum of the tail seen by the payload's `Drop`.
+        seen: Rc<Cell<u64>>,
+    }
+
+    /// A family member with room for `N` values after the head.
+    #[repr(C)]
+    struct Tailed<const N: usize> {
+        head: Head,
+        tail: UnsafeCell<[u64; N]>,
+    }
+    impl<const N: usize> PhpObject for Tailed<N> {
+        fn handle(&self) -> u32 {
+            self.head.id
+        }
+        fn class_name(&self) -> ZStr {
+            ZStr::from("Tailed")
+        }
+        fn as_any(&self) -> &dyn Any {
+            &self.head
+        }
+    }
+    impl<const N: usize> Drop for Tailed<N> {
+        fn drop(&mut self) {
+            // Through the drop's own exclusive reference, never through a
+            // pointer made from a handle.
+            let sum = self.tail.get_mut().iter().sum();
+            self.head.seen.set(sum);
+        }
+    }
+
+    #[test]
+    fn family_members_are_recognised_by_their_common_part() {
+        let seen = Rc::new(Cell::new(0));
+        // SAFETY: `Tailed` is `repr(C)` with its `Head` first.
+        let o = unsafe {
+            Obj::new_in_family::<Tailed<3>, Head>(Tailed {
+                head: Head {
+                    id: 5,
+                    seen: seen.clone(),
+                },
+                tail: UnsafeCell::new([1, 2, 3]),
+            })
+        };
+        let p = Obj::new(Counted(6, Rc::new(Cell::new(0))));
+        assert_eq!(o.downcast_ref::<Head>().map(|h| h.id), Some(5));
+        assert_eq!(o.handle(), 5);
+        assert!(p.downcast_ref::<Head>().is_none());
+        // The member type is not what the header records.
+        assert!(o.downcast_ref::<Tailed<3>>().is_none());
+        assert!(o.payload_ptr::<Tailed<3>>().is_none());
+        assert!(p.payload_ptr::<Head>().is_none());
+        // The payload pointer reaches the tail, also while shared
+        // references to the object are around.
+        let base = o.payload_ptr::<Head>().expect("family member");
+        let head: &Head = o.downcast_ref::<Head>().expect("head");
+        // SAFETY: the payload is a `Tailed<3>`; its tail (inside
+        // `UnsafeCell`, so shared references to the payload allow the
+        // writes) is in bounds of the allocation `base` may reach.
+        let tail = unsafe {
+            base.cast::<u8>()
+                .add(std::mem::offset_of!(Tailed<3>, tail))
+                .cast::<u64>()
+        };
+        unsafe { tail.add(1).write(20) };
+        assert_eq!(unsafe { tail.add(1).read() }, 20);
+        assert_eq!(head.id, 5);
+        assert_eq!(o.addr() + payload_offset::<Head>(), base.as_ptr() as usize);
+        assert_eq!(
+            // SAFETY: the payload is a live `Tailed<3>`.
+            Obj::addr_of_payload::<Tailed<3>>(unsafe { &*base.as_ptr().cast() }),
+            o.addr()
+        );
+        // Weak handles and `from_rc` keep the family header.
+        let w = o.downgrade();
+        let back = Obj::from_rc(o.rc().clone());
+        assert!(back.downcast_ref::<Head>().is_some());
+        drop(back);
+        drop(p);
+        drop(o);
+        assert!(w.upgrade().is_none());
+        assert_eq!(seen.get(), 1 + 20 + 3);
     }
 
     #[test]

@@ -688,13 +688,31 @@ fn state_of(o: &Obj) -> FiberState {
 
 fn fiber_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
+    let callable = a.at(0);
+    // `Z_PARAM_FUNC` runs before the "twice" check.
+    let call = resolve_fiber_callable(vm, a, &callable)?;
     if object::has_internal::<FiberData>(&o) {
         return Err(vm.fiber_error("Cannot call constructor twice"));
     }
-    let callable = a.at(0);
-    let call = vm.resolve_callable_for_call(&callable)?;
     object::set_internal(&o, FiberData::new(call, callable, FiberKind::Fiber));
     Ok(Value::Null)
+}
+
+/// `Z_PARAM_FUNC(fiber->fci, fiber->fci_cache)`: `zend_fcall_info_init`
+/// resolves the callable once, in the constructing user frame's scope,
+/// raising its deprecations ("Use of \"parent\" in callables …",
+/// `["C", "P::m"]` forms) there; the fiber calls that resolution from
+/// wherever it is started (`zend_call_function` with the cache, a
+/// `ZEND_CALL_DYNAMIC` call). The `callable` parameter type already
+/// rejected what does not resolve, unless resolving it again failed.
+fn resolve_fiber_callable(vm: &mut Vm, a: &Args, callable: &Value) -> VmResult<PendingCall> {
+    match vm.resolve_callable(callable)? {
+        Ok(mut call) => {
+            call.dynamic = true;
+            Ok(call)
+        }
+        Err(reason) => Err(a.type_error(vm, 1, &format!("must be a valid callback, {reason}"))),
+    }
 }
 
 /// `zend_fiber_switch_blocked()` (ticks, signal handlers).
@@ -955,7 +973,7 @@ pub(crate) fn fiber_callable(o: &Obj) -> Option<Value> {
 fn test_fiber_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
     let callable = a.at(0);
-    let call = vm.resolve_callable_for_call(&callable)?;
+    let call = resolve_fiber_callable(vm, a, &callable)?;
     object::set_internal(&o, FiberData::new(call, callable, FiberKind::Test));
     Ok(Value::Null)
 }
@@ -1014,7 +1032,7 @@ fn test_fiber_resume(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn test_fiber_pipe_to(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
     let callable = a.at(0);
-    let call = vm.resolve_callable_for_call(&callable)?;
+    let call = resolve_fiber_callable(vm, a, &callable)?;
     let target = object::new_object(object::class_of(&o).clone(), Vec::new());
     let mut data = FiberData::new(call, callable, FiberKind::Test);
     data.is_target = true;

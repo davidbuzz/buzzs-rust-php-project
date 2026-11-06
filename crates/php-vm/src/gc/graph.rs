@@ -10,18 +10,17 @@
 //! internal > 0` makes a node live; liveness then propagates along edges.
 
 use super::traverse::{lookup, GcVisitor};
-use crate::object::{ObjBox, ObjectData};
-use php_runtime::{Obj, PhpRef, Value, ZArray};
+use crate::object::{self, ObjectData};
+use php_runtime::{Obj, ObjWeak, PhpRef, Value, ZArray};
 use std::collections::HashMap;
-use std::rc::Rc;
 
 /// No node.
 pub(super) const NONE: u32 = u32::MAX;
 
 /// The graph's handle on a node (the one reference the collector owns).
 pub(super) enum Handle {
-    /// An object's data (its `Obj` handle is [`Node::outer`]).
-    Obj(Rc<ObjectData>),
+    /// An object.
+    Obj(Obj),
     /// An array table.
     Arr(ZArray),
     /// A PHP reference.
@@ -34,16 +33,17 @@ pub(super) enum Handle {
 /// A candidate node.
 pub(super) struct Node {
     pub handle: Handle,
-    /// For objects: the `Obj` handle, once an edge to the object was seen
-    /// (objects found only through the object store have none).
-    pub outer: Option<Obj>,
+    /// For objects: an edge to the object was seen (objects found only
+    /// through the object store were not; every reference to them is
+    /// external).
+    reached: bool,
     /// Children: `edges[start..start + len]`.
     start: u32,
     len: u32,
     /// References from candidate nodes (edges into this node).
     internal: u32,
     /// Must be considered live whatever the counts say (contents could
-    /// not be enumerated, or several `Obj` handles share the data).
+    /// not be enumerated).
     pinned: bool,
     /// Scanned black.
     pub live: bool,
@@ -58,13 +58,16 @@ impl Node {
 
     /// The object handle, if this is an object reached through an edge.
     pub fn obj(&self) -> Option<&Obj> {
-        self.outer.as_ref()
+        match &self.handle {
+            Handle::Obj(o) if self.reached => Some(o),
+            _ => None,
+        }
     }
 
     /// The object data, if this is an object.
-    pub fn data(&self) -> Option<&Rc<ObjectData>> {
+    pub fn data(&self) -> Option<&ObjectData> {
         match &self.handle {
-            Handle::Obj(inner) => Some(inner),
+            Handle::Obj(o) => Some(object::data(o)),
             _ => None,
         }
     }
@@ -163,18 +166,15 @@ impl Graph {
     }
 
     /// Adds a live object from the object store as a candidate root.
-    pub fn add_object(&mut self, d: Rc<ObjectData>) {
-        if self.obj_node(d.handle).is_some() {
+    pub fn add_object(&mut self, o: Obj) {
+        if self.obj_node(object::data(&o).handle).is_some() {
             return;
         }
-        let i = self.push_node(Handle::Obj(d), None);
+        let i = self.push_node(Handle::Obj(o), false);
         self.set_obj_node(i);
     }
 
-    /// The node of the object with handle `h`. The identity of an object
-    /// node is its `ObjectData` (an `Obj` is a second `Rc` around an
-    /// `ObjBox`, which revival may re-create), whose handle is unique
-    /// among live objects.
+    /// The node of the object with handle `h` (unique among live objects).
     fn obj_node(&self, h: u32) -> Option<u32> {
         obj_node_in(&self.obj_index, h)
     }
@@ -190,11 +190,11 @@ impl Graph {
         self.obj_index[h] = i;
     }
 
-    fn push_node(&mut self, handle: Handle, outer: Option<Obj>) -> u32 {
+    fn push_node(&mut self, handle: Handle, reached: bool) -> u32 {
         let i = u32::try_from(self.nodes.len()).unwrap_or(NONE - 1);
         self.nodes.push(Node {
             handle,
-            outer,
+            reached,
             start: 0,
             len: 0,
             internal: 0,
@@ -205,7 +205,7 @@ impl Graph {
     }
 
     fn push(&mut self, key: usize, handle: Handle) -> u32 {
-        let i = self.push_node(handle, None);
+        let i = self.push_node(handle, true);
         self.index.insert(key, i);
         i
     }
@@ -224,17 +224,12 @@ impl Graph {
     pub(super) fn intern_obj(&mut self, o: &Obj) -> Option<u32> {
         // Objects of other `PhpObject` implementations hold nothing the
         // collector knows about: leaves.
-        let b = o.downcast_ref::<ObjBox>()?;
-        if let Some(i) = self.obj_node(b.0.handle) {
-            let n = &mut self.nodes[i as usize];
-            match &n.outer {
-                None => n.outer = Some(o.clone()),
-                Some(prev) if !Obj::ptr_eq(prev, o) => n.pinned = true,
-                Some(_) => {}
-            }
+        let d = o.downcast_ref::<ObjectData>()?;
+        if let Some(i) = self.obj_node(d.handle) {
+            self.nodes[i as usize].reached = true;
             return Some(i);
         }
-        let i = self.push_node(Handle::Obj(b.0.clone()), Some(o.clone()));
+        let i = self.push_node(Handle::Obj(o.clone()), true);
         self.set_obj_node(i);
         Some(i)
     }
@@ -266,12 +261,12 @@ impl Graph {
     }
 
     /// Records a `WeakMap` entry of the map being expanded.
-    pub(super) fn cond_edge(&mut self, map: u32, key: &std::rc::Weak<ObjectData>, v: &Value) {
+    pub(super) fn cond_edge(&mut self, map: u32, key: &ObjWeak, v: &Value) {
         if let Some(t) = self.intern(v) {
             self.nodes[t as usize].internal += 1;
             self.cond.push(CondEdge {
                 map,
-                key_handle: key.upgrade().map(|d| d.handle),
+                key_handle: key.upgrade().map(|o| object::data(&o).handle),
                 key: NONE,
                 value: t,
             });
@@ -297,7 +292,7 @@ impl Graph {
         let start = self.edges.len();
         let me = u32::try_from(i).unwrap_or(NONE - 1);
         match &handle {
-            Handle::Obj(inner) => self.expand_object(me, inner),
+            Handle::Obj(o) => self.expand_object(me, object::data(o)),
             Handle::Arr(a) => {
                 for v in a.values() {
                     self.edge(v);
@@ -430,14 +425,9 @@ fn obj_node_in(obj_index: &[u32], h: u32) -> Option<u32> {
 /// they cannot be determined (the node is then live).
 fn external_refs(n: &Node) -> Option<usize> {
     let strong = match &n.handle {
-        Handle::Obj(inner) => {
-            // One `ObjBox` plus the graph's own `Rc`: anything more is a
-            // revived handle or a native holder of the data.
-            if Rc::strong_count(inner) != 2 {
-                return None;
-            }
-            n.outer.as_ref()?.refcount()
-        }
+        // Reached through no edge: every reference to it is external.
+        Handle::Obj(_) if !n.reached => return None,
+        Handle::Obj(o) => o.refcount(),
         Handle::Arr(a) => a.refcount(),
         Handle::Ref(r) => r.refcount(),
         Handle::Taken => return None,

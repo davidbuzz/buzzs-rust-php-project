@@ -6,7 +6,7 @@ use crate::func::{flags, Args, Builtin, Func, Method, UserFunction};
 use crate::object;
 use crate::opcode::{ArgSrc, ClassSpec, FetchMode, Op, Operand};
 use crate::typecheck::{given_type, TypeCtx};
-use crate::vm::{Frame, FrameKind, PendingCall, RetTarget, Throw, Vm, VmResult};
+use crate::vm::{move_last_frame, Frame, FrameKind, PendingCall, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
@@ -383,6 +383,57 @@ impl Vm {
                 &format!("Value of type {} is not callable", other.type_name()),
             )),
         }
+    }
+
+    /// `ZEND_INIT_METHOD_CALL` with the method name as an operand. A
+    /// literal name (`$o->m()`) probes the run-time cache in place
+    /// ([`Vm::init_cached_method_call`]); other names, and misses, are read
+    /// and take [`Vm::op_init_method_call`].
+    pub(crate) fn op_init_method_call_op(&mut self, obj: Value, name: Operand) -> VmResult<()> {
+        let obj = match name {
+            Operand::Lit(lit) => match self.init_cached_method_call(obj, lit) {
+                Ok(()) => return Ok(()),
+                Err(obj) => obj,
+            },
+            _ => obj,
+        };
+        let n = self.read(name)?;
+        self.op_init_method_call(obj, n)
+    }
+
+    /// The run-time cache hit of `ZEND_INIT_METHOD_CALL` for the method
+    /// named by literal `lit` (`CACHED_POLYMORPHIC_PTR`): the call is pushed
+    /// straight from the cached method, `$this` moved in, with the name read
+    /// in place from the op array and the calling scope from the current
+    /// frame (it executes this op, so it is not a builtin frame and is the
+    /// frame [`Vm::scope`] finds). Gives the operand back on a miss, for an
+    /// object whose class has a native `get_method` handler, and for a
+    /// non-object.
+    #[inline]
+    fn init_cached_method_call(&mut self, obj: Value, lit: u32) -> Result<(), Value> {
+        let Value::Object(o) = obj else {
+            return Err(obj);
+        };
+        let cls = object::class_of(&o);
+        if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
+            return Err(Value::Object(o));
+        }
+        let f = self.frame();
+        let Some(Value::Str(name)) = f.code.literals.get(lit as usize) else {
+            return Err(Value::Object(o));
+        };
+        let Some(m) = self.call_bufs.methods.get(cls, f.scope.as_ref(), name) else {
+            return Err(Value::Object(o));
+        };
+        let called = cls.clone();
+        let is_static = m.is_static() && m.flags & flags::STATIC_KEEPS_THIS == 0;
+        self.push_pending(PendingCall {
+            this: if is_static { None } else { Some(o) },
+            scope: Some(m.scope()),
+            called: Some(called),
+            ..PendingCall::new(m.func.clone())
+        });
+        Ok(())
     }
 
     pub(crate) fn op_init_method_call(&mut self, obj: Value, name: Value) -> VmResult<()> {
@@ -938,9 +989,13 @@ impl Vm {
                 let v = match src {
                     ArgSrc::Val(op) => self.read(*op)?,
                     ArgSrc::CallResult(op) => self.read_raw(*op)?.deref(),
-                    ArgSrc::Place(pid) | ArgSrc::TempPlace(pid) => {
-                        self.place_fetch(*pid, FetchMode::Read)?
-                    }
+                    // `ZEND_SEND_VAR` of a plain compiled variable (`f($x)`):
+                    // read here, without entering the place walk.
+                    ArgSrc::Place(pid) => match self.plain_cv_place(*pid) {
+                        Some(cv) => self.read_cv(cv)?,
+                        None => self.place_fetch(*pid, FetchMode::Read)?,
+                    },
+                    ArgSrc::TempPlace(pid) => self.place_fetch(*pid, FetchMode::Read)?,
                 };
                 let call = self.frame_mut().calls.last_mut().expect("pending call");
                 call.args.push(Some(v));
@@ -968,6 +1023,18 @@ impl Vm {
         };
         let value = self.send_value(src, pos, by_ref, prefer_ref)?;
         self.push_arg(pos, name, value)
+    }
+
+    /// The compiled variable that place `pid` of the current frame names,
+    /// when the place is a plain one (`$x`, no dimension or property): what
+    /// [`Vm::place_fetch`] reads with [`Vm::read_cv`] in `Read` mode.
+    #[inline]
+    fn plain_cv_place(&self, pid: crate::opcode::PlaceId) -> Option<u32> {
+        let p = self.frame().code.places.get(pid as usize)?;
+        match (&p.base, p.segs.is_empty()) {
+            (crate::opcode::PlaceBase::Cv(cv), true) => Some(*cv),
+            _ => None,
+        }
     }
 
     /// The value the general path of [`Vm::op_send`] sends for the argument
@@ -1111,6 +1178,8 @@ impl Vm {
         Ok(())
     }
 
+    /// `ZEND_SEND_UNPACK`: the elements of an array or `Traversable` as
+    /// arguments of the pending call.
     pub(crate) fn op_send_unpack(&mut self, src: Operand) -> VmResult<()> {
         let raw = match src {
             Operand::Cv(cv) => match self.cv_get(cv) {
@@ -1120,10 +1189,20 @@ impl Vm {
             _ => self.read_raw(src)?,
         };
         let mut v = raw.deref();
-        let traversable = matches!(v, Value::Object(_));
         let items: Vec<(Value, Value)> = match &v {
             Value::Array(a) => a.iter().map(|(k, v)| (k.to_value(), v.clone())).collect(),
-            Value::Object(o) if self.instance_of(o, b"traversable") => self.iterate_to_vec(&v)?,
+            Value::Object(o) if self.instance_of(o, b"traversable") => {
+                // Each element is sent as the iterator yields it: its
+                // by-reference warning or argument error comes before the
+                // iterator moves on, and when an exception ends the walk the
+                // iterator, then this operand (`FREE_OP1`, the locals here),
+                // then the arguments sent so far (`cleanup_unfinished_calls`)
+                // are released.
+                let o = o.clone();
+                return self.iterate_each(&o, &mut |vm: &mut Vm, key: Value, val: Value| {
+                    vm.send_unpacked(key, val, None).map(|_| ())
+                });
+            }
             _ => {
                 // ZEND_SEND_UNPACK raises zend_type_error.
                 return Err(self.make_throw(
@@ -1137,73 +1216,7 @@ impl Vm {
         };
         let mut changed = false;
         for (k, val) in items {
-            // ZEND_SEND_UNPACK: a Traversable's numeric string keys
-            // (ZEND_HANDLE_NUMERIC) are positional (GH-18581).
-            let k = match k {
-                Value::Str(s) if traversable => match ArrayKey::from_zstr(&s) {
-                    ArrayKey::Int(i) => Value::Int(i),
-                    ArrayKey::Str(s) => Value::Str(s),
-                },
-                k => k,
-            };
-            let (pos, name) = match &k {
-                Value::Str(s) => (self.arg_position(s)?, Some(s.clone())),
-                Value::Int(_) => {
-                    if self.frame().calls.last().expect("pending call").has_named {
-                        return Err(self.make_throw(
-                            "Error",
-                            "Cannot use positional argument after named argument during unpacking",
-                        ));
-                    }
-                    (
-                        Some(self.frame().calls.last().expect("pending call").args.len()),
-                        None,
-                    )
-                }
-                _ => {
-                    return Err(self.make_throw(
-                        "Error",
-                        "Keys must be of type int|string during argument unpacking",
-                    ))
-                }
-            };
-            let (by_ref, n, prefer_ref) = {
-                let call = self.frame().calls.last().expect("pending call");
-                let params = call.func.params();
-                let n = pos.unwrap_or_else(|| params.len().saturating_sub(1));
-                let param = params.get(n).or_else(|| params.last());
-                (
-                    call.magic_name.is_none() && call.func.arg_by_ref(n),
-                    n,
-                    param.is_some_and(|p| p.promote & crate::opcode::PREFER_REF != 0),
-                )
-            };
-            let val = if by_ref && !traversable {
-                let value = match val {
-                    Value::Reference(r) => Value::Reference(r),
-                    other => Value::Reference(PhpRef::new(other)),
-                };
-                if let Value::Array(a) = &mut v {
-                    let key = match &k {
-                        Value::Str(s) => ArrayKey::Str(s.clone()),
-                        Value::Int(i) => ArrayKey::Int(*i),
-                        _ => unreachable!("validated unpack key"),
-                    };
-                    a.make_mut().insert(key, value.clone());
-                    changed = true;
-                }
-                value
-            } else if by_ref && !prefer_ref {
-                let call = self.frame().calls.last().expect("pending call");
-                let fname = self.func_display(&call.func, call.scope.as_ref());
-                self.warning(&format!(
-                    "Cannot pass by-reference argument {} of {fname}() by unpacking a Traversable, passing by-value instead", n + 1
-                ))?;
-                Value::Reference(PhpRef::new(val.deref()))
-            } else {
-                val.deref()
-            };
-            self.push_arg(pos, name, val)?;
+            changed |= self.send_unpacked(k, val, Some(&mut v))?;
         }
         if changed {
             match raw {
@@ -1222,6 +1235,83 @@ impl Vm {
         Ok(())
     }
 
+    /// Sends the element `val` with key `k` of an unpacked array (`array`:
+    /// that array, whose element becomes a reference when the parameter
+    /// takes one; returns whether it did) or `Traversable` (`array: None`),
+    /// as one step of `ZEND_SEND_UNPACK`.
+    fn send_unpacked(&mut self, k: Value, val: Value, array: Option<&mut Value>) -> VmResult<bool> {
+        let traversable = array.is_none();
+        // ZEND_SEND_UNPACK: a Traversable's numeric string keys
+        // (ZEND_HANDLE_NUMERIC) are positional (GH-18581).
+        let k = match k {
+            Value::Str(s) if traversable => match ArrayKey::from_zstr(&s) {
+                ArrayKey::Int(i) => Value::Int(i),
+                ArrayKey::Str(s) => Value::Str(s),
+            },
+            k => k,
+        };
+        let (pos, name) = match &k {
+            Value::Str(s) => (self.arg_position(s)?, Some(s.clone())),
+            Value::Int(_) => {
+                if self.frame().calls.last().expect("pending call").has_named {
+                    return Err(self.make_throw(
+                        "Error",
+                        "Cannot use positional argument after named argument during unpacking",
+                    ));
+                }
+                (
+                    Some(self.frame().calls.last().expect("pending call").args.len()),
+                    None,
+                )
+            }
+            _ => {
+                return Err(self.make_throw(
+                    "Error",
+                    "Keys must be of type int|string during argument unpacking",
+                ))
+            }
+        };
+        let (by_ref, n, prefer_ref) = {
+            let call = self.frame().calls.last().expect("pending call");
+            let params = call.func.params();
+            let n = pos.unwrap_or_else(|| params.len().saturating_sub(1));
+            let param = params.get(n).or_else(|| params.last());
+            (
+                call.magic_name.is_none() && call.func.arg_by_ref(n),
+                n,
+                param.is_some_and(|p| p.promote & crate::opcode::PREFER_REF != 0),
+            )
+        };
+        let mut changed = false;
+        let val = if by_ref && !traversable {
+            let value = match val {
+                Value::Reference(r) => Value::Reference(r),
+                other => Value::Reference(PhpRef::new(other)),
+            };
+            if let Some(Value::Array(a)) = array {
+                let key = match &k {
+                    Value::Str(s) => ArrayKey::Str(s.clone()),
+                    Value::Int(i) => ArrayKey::Int(*i),
+                    _ => unreachable!("validated unpack key"),
+                };
+                a.make_mut().insert(key, value.clone());
+                changed = true;
+            }
+            value
+        } else if by_ref && !prefer_ref {
+            let call = self.frame().calls.last().expect("pending call");
+            let fname = self.func_display(&call.func, call.scope.as_ref());
+            self.warning(&format!(
+                "Cannot pass by-reference argument {} of {fname}() by unpacking a Traversable, passing by-value instead", n + 1
+            ))?;
+            Value::Reference(PhpRef::new(val.deref()))
+        } else {
+            val.deref()
+        };
+        self.push_arg(pos, name, val)?;
+        Ok(changed)
+    }
+
     // ------------------------------------------------------------------
     // DO_FCALL
     // ------------------------------------------------------------------
@@ -1231,15 +1321,15 @@ impl Vm {
     pub(crate) fn op_do_call(&mut self, dst: Option<u32>) -> VmResult<bool> {
         let frame = self.frames.last_mut().expect("active frame");
         let strict = frame.code.strict_types;
-        let mut call = frame.calls.pop().expect("pending call");
+        let call = frame.calls.pop().expect("pending call");
         // `ZEND_DO_UCALL`: a user function that is neither deprecated, nor
-        // `#[\NoDiscard]`, nor a body-less constructor. The frame takes the
-        // call's parts by reference (no further copies of the call).
+        // `#[\NoDiscard]`, nor a body-less constructor. The call's parts
+        // move into the frame (no copy of the call, no husk to drop).
         if let Func::User(uf) = &call.func {
             if uf.flags & (flags::DEPRECATED | flags::NODISCARD | flags::NO_BODY) == 0 {
                 let uf = uf.clone();
                 let ret = dst.map_or(RetTarget::Discard, RetTarget::Tmp);
-                self.push_user_frame_from(&uf, &mut call, ret, strict, false)?;
+                self.push_user_call(uf, call, ret, strict, false)?;
                 return Ok(true);
             }
         }
@@ -1331,7 +1421,7 @@ impl Vm {
                     self.check_deprecated_call(&call)?;
                 }
                 let ret = dst.map_or(RetTarget::Discard, RetTarget::Tmp);
-                self.push_user_frame(&uf, call, ret, strict, false)?;
+                self.push_user_call(uf, call, ret, strict, false)?;
                 Ok(true)
             }
             Func::Builtin(b) => {
@@ -1469,99 +1559,104 @@ impl Vm {
         Ok(())
     }
 
-    /// Pushes a frame for a user function call.
+    /// Pushes the frame of a user function call (`ZEND_DO_UCALL`:
+    /// `zend_vm_stack_push_call_frame` + `i_init_func_execute_data`).
     ///
-    /// The frame is set up where it lives on the frame stack, like
-    /// `zend_vm_stack_push_call_frame` + `i_init_func_execute_data`: a
-    /// `Frame` is a few hundred bytes and every move of one is a `memcpy`,
-    /// so the pooled frame is moved once (pool to stack) and then
-    /// initialized in place.
-    pub(crate) fn push_user_frame(
+    /// The pending call's parts move into the frame, which is set up where
+    /// it lives on the frame stack: a `Frame` is a few hundred bytes and
+    /// every move of one is a `memcpy`, so a pooled frame is copied once
+    /// (pool to stack, [`move_last_frame`]) and initialised in place, and
+    /// the arguments move straight into their compiled variables
+    /// ([`init_cvs`]), as php-src's SEND ops store them in the callee frame.
+    /// `uf` is the user function `call.func` holds.
+    pub(crate) fn push_user_call(
         &mut self,
-        uf: &Rc<UserFunction>,
+        uf: Rc<UserFunction>,
         mut call: PendingCall,
         ret: RetTarget,
         caller_strict: bool,
         from_internal: bool,
     ) -> VmResult<()> {
-        self.push_user_frame_from(uf, &mut call, ret, caller_strict, from_internal)
-    }
-
-    /// [`Vm::push_user_frame`] that takes the parts of the pending call out
-    /// of `call` (leaving a husk for the caller to drop), so that
-    /// `DO_FCALL` never moves the `PendingCall` itself around.
-    pub(crate) fn push_user_frame_from(
-        &mut self,
-        uf: &Rc<UserFunction>,
-        call: &mut PendingCall,
-        ret: RetTarget,
-        caller_strict: bool,
-        from_internal: bool,
-    ) -> VmResult<()> {
+        debug_assert!(matches!(&call.func, Func::User(u) if Rc::ptr_eq(u, &uf)));
         if self.frames.len() > 50_000 {
             // A backstop like `execute`'s nesting limit: php-src would have
             // hit its native stack limit by now, so the error is
             // `zend_call_stack_size_error()`'s. The error object is created
             // before the arguments are released (object handle reuse is
-            // observable).
+            // observable); the rest of the call goes with it, in order.
             let e = crate::builtins::dump::stack_size_error(self);
             self.put_arg_vec(std::mem::take(&mut call.args));
             return Err(e);
         }
+        let PendingCall {
+            func,
+            this,
+            scope,
+            called,
+            mut args,
+            named,
+            closure,
+            magic_name,
+            is_ctor,
+            ..
+        } = call;
         let idx = self.frames.len();
-        if self.call_bufs.user_frames.is_empty() {
+        if move_last_frame(&mut self.call_bufs.user_frames, &mut self.frames) {
+            self.frames[idx].reinit_for_call(uf.code.clone(), FrameKind::Function);
+        } else {
             self.frames
                 .push(Frame::new(uf.code.clone(), FrameKind::Function));
-        } else {
-            // `extend` from a `drain` copies the pooled frame straight into
-            // the frame stack (`pop` + `push` copy it twice, through a
-            // temporary, with the stack's growth check in between).
-            let last = self.call_bufs.user_frames.len() - 1;
-            self.frames.extend(self.call_bufs.user_frames.drain(last..));
-            self.frames[idx].reinit_for_user(uf.code.clone(), FrameKind::Function);
         }
-        let f = &mut self.frames[idx];
-        f.func = Some(call.func.clone());
-        f.ufunc = Some(uf.clone());
-        f.this = call.this.take();
-        f.scope = call.scope.take();
-        f.called = call.called.take();
-        f.ret = ret;
-        f.caller_strict = caller_strict;
-        f.called_from_internal = from_internal;
-        f.is_ctor = call.is_ctor;
-        let spare_args = if let Some(name) = call.magic_name.take() {
-            // __call($name, $args). `ZEND_CALL_TRAMPOLINE` packs the
-            // arguments as sent: `zend_call_function` does not unwrap
-            // references for a trampoline (bug #50394), the VM's sends
-            // already passed values.
-            let mut arr = HashTable::new();
-            for a in std::mem::take(&mut call.args).into_iter().flatten() {
-                let _ = arr.push(a);
-            }
-            for (k, v) in std::mem::take(&mut call.named) {
-                arr.insert(ArrayKey::Str(k), v);
-            }
-            f.magic_name = Some(name.clone());
-            std::mem::replace(
-                &mut f.args,
-                vec![
-                    Some(Value::Str(name)),
-                    Some(Value::Array(ZArray::from_table(arr))),
-                ],
-            )
-        } else {
-            f.named = std::mem::take(&mut call.named);
-            std::mem::replace(&mut f.args, std::mem::take(&mut call.args))
+        let spare_args = {
+            let f = &mut self.frames[idx];
+            f.this = this;
+            f.scope = scope;
+            f.called = called;
+            f.ret = ret;
+            f.caller_strict = caller_strict;
+            f.called_from_internal = from_internal;
+            f.is_ctor = is_ctor;
+            let spare = match magic_name {
+                Some(name) => {
+                    // __call($name, $args). `ZEND_CALL_TRAMPOLINE` packs the
+                    // arguments as sent: `zend_call_function` does not
+                    // unwrap references for a trampoline (bug #50394), the
+                    // VM's sends already passed values.
+                    let mut arr = HashTable::new();
+                    for a in args.drain(..).flatten() {
+                        let _ = arr.push(a);
+                    }
+                    for (k, v) in named {
+                        arr.insert(ArrayKey::Str(k), v);
+                    }
+                    f.magic_name = Some(name.clone());
+                    f.args.clear();
+                    f.args.push(Some(Value::Str(name)));
+                    f.args.push(Some(Value::Array(ZArray::from_table(arr))));
+                    args
+                }
+                None => {
+                    if !named.is_empty() {
+                        f.named = named;
+                    }
+                    // The frame takes the call's argument buffer (the
+                    // extra arguments stay in it); its own goes back to
+                    // the pool.
+                    std::mem::replace(&mut f.args, args)
+                }
+            };
+            f.ip = init_cvs(&uf, f);
+            f.func = Some(func);
+            spare
         };
-        let first_op = bind_args(uf, f);
-        f.ip = first_op;
         self.put_arg_vec(spare_args);
-        if let Some(c) = call.closure.take() {
+        let is_generator = uf.is_generator();
+        self.frames[idx].ufunc = Some(uf);
+        if let Some(c) = closure {
             self.bind_closure_vars(idx, &c);
             self.frames[idx].closure = Some(c);
         }
-        if self.observer.enabled && !uf.is_generator() {
+        if self.observer.enabled && !is_generator {
             self.observer_begin_top();
         }
         Ok(())
@@ -2212,7 +2307,7 @@ impl Vm {
     }
 
     /// `ZEND_RECV` / `ZEND_RECV_INIT` of an argument that
-    /// [`bind_args`] already stored in its CV, as php-src's SEND ops store
+    /// [`init_cvs`] already stored in its CV, as php-src's SEND ops store
     /// it in the callee frame: only the type is verified, in place. `false`
     /// when the CV is undefined (a gap left by named arguments).
     fn recv_bound(&mut self, n: u32, cv: u32) -> VmResult<bool> {
@@ -2264,7 +2359,7 @@ impl Vm {
     }
 
     pub(crate) fn op_recv(&mut self, n: u32, cv: u32) -> VmResult<()> {
-        // `None`: not passed; `Some(None)`: bound by `bind_args` (or a gap
+        // `None`: not passed; `Some(None)`: bound by `init_cvs` (or a gap
         // left by named arguments); `Some(Some(v))`: still to be bound.
         let arg = self.frame_mut().args.get_mut(n as usize).map(Option::take);
         match arg {
@@ -2349,7 +2444,7 @@ impl Vm {
                 self.cv_bind(cv, v);
                 Ok(true)
             }
-            // Bound by `bind_args`, or a named-argument gap (default).
+            // Bound by `init_cvs`, or a named-argument gap (default).
             Some(None) => self.recv_bound(n, cv),
             None => Ok(false),
         }
@@ -2547,7 +2642,7 @@ impl Vm {
             Func::User(uf) => {
                 self.check_deprecated_call(&call)?;
                 let strict = call.strict;
-                self.push_user_frame(&uf, call, RetTarget::Discard, strict, true)?;
+                self.push_user_call(uf, call, RetTarget::Discard, strict, true)?;
                 let base = self.frames.len() - 1;
                 self.execute(base)
             }
@@ -2886,50 +2981,63 @@ impl MethodCache {
     }
 }
 
-/// The argument handling of `i_init_func_execute_data`
+/// The compiled-variable set-up of `i_init_func_execute_data`
 /// (`Zend/zend_execute.c`) for a new user frame `f` whose `args` hold the
-/// arguments as sent: each passed positional argument of a declared,
-/// non-variadic parameter moves straight into its CV, where php-src's SEND
-/// ops put it, so `RECV`/`RECV_INIT` only verify it ([`Vm::recv_bound`]).
-/// Its `args` entry is left `None` (`func_num_args()` still counts it,
-/// `func_get_args()` and backtraces read the CV), as a `RECV` leaves it.
-/// Extra arguments and those of a variadic parameter stay in `args`.
+/// arguments as sent: fills the frame's CV slots in one pass, each passed
+/// positional argument of a declared, non-variadic parameter moving
+/// straight into its CV (where php-src's SEND ops put it, so
+/// `RECV`/`RECV_INIT` only verify it, [`Vm::recv_bound`]) and every other
+/// CV undefined (`zend_init_cvs`). A bound argument's `args` entry is left
+/// `None` (`func_num_args()` still counts it, `func_get_args()` and
+/// backtraces read the CV), as a `RECV` leaves it. Extra arguments and
+/// those of a variadic parameter stay in `args`.
 ///
 /// For a function without parameter types the `RECV`/`RECV_INIT` ops of
 /// the leading passed arguments are skipped ("Skip useless `ZEND_RECV` and
 /// `ZEND_RECV_INIT` opcodes"): the returned first op is where executing
 /// them would have led. A named-argument gap stops the skipping (its op
 /// reports the missing argument or evaluates the default).
-fn bind_args(uf: &UserFunction, f: &mut Frame) -> usize {
-    if f.cv_map.is_some() || f.args.is_empty() {
+///
+/// The frame's slots may be empty ([`Frame::reinit_for_call`]) or filled
+/// with undefined values (a fresh [`Frame::new`]); parameter `i` is CV `i`
+/// (the compiler's layout). A frame on a shared, mapped store (never a
+/// function frame) is left alone.
+fn init_cvs(uf: &UserFunction, f: &mut Frame) -> usize {
+    if f.cv_map.is_some() {
         return 0;
     }
+    let ncv = uf.code.cv_names.len();
+    let mut vars = f.vars.borrow_mut();
+    vars.slots.clear();
+    vars.slots.reserve(ncv);
     let ops = &uf.code.ops;
     let mut skipping = uf.params.iter().all(|p| p.ty.is_none());
     let mut first_op = 0;
-    let mut vars = f.vars.borrow_mut();
     for (i, (arg, p)) in f.args.iter_mut().zip(&uf.params).enumerate() {
-        if p.variadic {
+        if p.variadic || i == ncv {
             break;
         }
-        let Some(slot) = vars.slots.get_mut(i) else {
-            break;
-        };
-        let Some(v) = arg.take() else {
-            skipping = false;
-            continue;
-        };
-        // The CVs of a new frame are undefined: nothing is released here.
-        *slot = Some(v);
-        if skipping {
-            match ops.get(first_op) {
-                Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
-                Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
-                    first_op = *skip as usize;
+        match arg.take() {
+            Some(v) => {
+                vars.slots.push(Some(v));
+                if skipping {
+                    match ops.get(first_op) {
+                        Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
+                        Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
+                            first_op = *skip as usize;
+                        }
+                        _ => skipping = false,
+                    }
                 }
-                _ => skipping = false,
+            }
+            None => {
+                vars.slots.push(None);
+                skipping = false;
             }
         }
+    }
+    while vars.slots.len() < ncv {
+        vars.slots.push(None);
     }
     first_op
 }
@@ -2937,7 +3045,7 @@ fn bind_args(uf: &UserFunction, f: &mut Frame) -> usize {
 /// Drops `v`, skipping the out-of-line `drop_in_place` call when it owns
 /// no allocation (and so, for a sized element type, no elements).
 #[inline]
-fn forget_unallocated<T>(v: Vec<T>) {
+pub(crate) fn forget_unallocated<T>(v: Vec<T>) {
     if v.capacity() == 0 && std::mem::size_of::<T>() != 0 {
         std::mem::forget(v);
     }

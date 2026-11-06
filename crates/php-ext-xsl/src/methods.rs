@@ -247,7 +247,10 @@ fn clone_object(vm: &mut Vm, o: &Obj) -> VmResult<Obj> {
             .iter()
             .map(|s| s.as_ref().map(Value::deref))
             .collect();
-        *dst.slots.borrow_mut() = slots;
+        // The new object's slots (as many: same class) take the copies.
+        for (slot, v) in dst.slots.borrow_mut().iter_mut().zip(slots) {
+            *slot = v;
+        }
         let dynamic = src.dynamic.borrow().clone();
         *dst.dynamic.borrow_mut() = dynamic;
     }
