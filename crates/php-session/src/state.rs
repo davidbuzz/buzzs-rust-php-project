@@ -361,7 +361,12 @@ fn set_session_var(h: &mut dyn SessionHost, name: ZStr, value: Value) {
 }
 
 /// The session decoders' view of the host ([`serializer::NestedDecode`]).
-struct SessionDecoder<'a>(&'a mut dyn SessionHost);
+struct SessionDecoder<'a> {
+    host: &'a mut dyn SessionHost,
+    /// The `IS_PTR` placeholders of this decode: each stored entry's name
+    /// and the cell it was stored as, in order.
+    stored: Vec<(ZStr, PhpRef)>,
+}
 
 impl serializer::NestedDecode for SessionDecoder<'_> {
     fn unserialize_at(
@@ -369,11 +374,72 @@ impl serializer::NestedDecode for SessionDecoder<'_> {
         data: &[u8],
         offset: usize,
     ) -> Option<RtResult<Result<(Value, usize), usize>>> {
-        self.0.unserialize_shared(data, offset)
+        self.host.unserialize_shared(data, offset)
+    }
+
+    fn unserialize_cell_at(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> Option<RtResult<Result<(Value, usize), usize>>> {
+        self.host.unserialize_shared_cell(data, offset)
     }
 
     fn store(&mut self, name: ZStr, value: Value) {
-        set_session_var(self.0, name, value);
+        if let Value::Reference(cell) = &value {
+            self.stored.push((name.clone(), cell.clone()));
+        }
+        set_session_var(self.host, name, value);
+    }
+
+    fn normalize(&mut self) {
+        let stored = std::mem::take(&mut self.stored);
+        normalize_session_vars(self.host, &stored);
+    }
+}
+
+/// `php_session_normalize_vars()`: the placeholders of one decode — the
+/// entries of `stored` still holding the cell they were stored as — are
+/// taken out of `$_SESSION`, resolved together (a cell an `R:` targeted
+/// stays a reference shared by every entry holding it, the others become
+/// plain values) and put back in place. Entries user code replaced or
+/// removed meanwhile are left alone.
+fn normalize_session_vars(h: &mut dyn SessionHost, stored: &[(ZStr, PhpRef)]) {
+    if stored.is_empty() {
+        return;
+    }
+    let Some(r) = h.session().http_session_vars.clone() else {
+        return;
+    };
+    let mut names: Vec<ZStr> = Vec::with_capacity(stored.len());
+    let mut values: Vec<Value> = Vec::with_capacity(stored.len());
+    {
+        let mut vars = r.borrow_mut();
+        let Some(t) = vars.as_array_mut() else {
+            return;
+        };
+        for (name, cell) in stored {
+            let ours = matches!(
+                t.get_str(name.as_bytes()),
+                Some(Value::Reference(c)) if PhpRef::ptr_eq(c, cell)
+            );
+            if !ours {
+                continue;
+            }
+            // Moved out, not copied: the handle count decides whether a
+            // cell is shared.
+            if let Some(v) = t.insert_str_raw(name.clone(), Value::Null) {
+                names.push(name.clone());
+                values.push(v);
+            }
+        }
+    }
+    h.unwrap_unserialized_cells(&mut values);
+    let mut vars = r.borrow_mut();
+    if let Some(t) = vars.as_array_mut() {
+        for (name, v) in names.into_iter().zip(values) {
+            let _ = t.insert_str_raw(name, v);
+        }
     }
 }
 
@@ -388,7 +454,11 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
     let shared = if rfc1867 {
         None
     } else {
-        serializer::decode_nested(ser, data, &mut SessionDecoder(&mut *h))
+        let mut decoder = SessionDecoder {
+            host: &mut *h,
+            stored: Vec::new(),
+        };
+        serializer::decode_nested(ser, data, &mut decoder)
     };
     #[allow(clippy::single_match_else)] // the None arm is a multi-line computation
     let decoded = match shared {

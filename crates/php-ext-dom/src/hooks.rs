@@ -498,15 +498,18 @@ fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIt
             "An iterator cannot be used with foreach by reference",
         ));
     }
-    Ok(Box::new(new_iter(dom_object(o))))
+    Ok(Box::new(new_iter(dom_object(o), Some(o.clone()))))
 }
 
-/// An iterator over a collection object.
-pub(crate) fn new_iter(d: Option<DomObject>) -> DomIter {
+/// An iterator over a collection object (`php_dom_get_iterator`); `owner`
+/// is the collection's PHP object, which the iterator keeps alive.
+pub(crate) fn new_iter(d: Option<DomObject>, owner: Option<Obj>) -> DomIter {
     let rewindable = matches!(d, Some(DomObject::TokenList(_)));
     DomIter {
+        owner,
         source: d,
         handle: None,
+        cur: None,
         started: false,
         rewindable,
     }

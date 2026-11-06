@@ -178,12 +178,17 @@ fn finish(
         Ok(d) => d,
         Err(status) => {
             private.destroy();
-            let msg = format!(
-                "{} in {}",
-                status.message(),
-                String::from_utf8_lossy(input_name)
-            );
-            php_libxml::error::ctx_error(None, msg.as_bytes());
+            // `php_libxml_internal_error_handler_ex` reports nothing while
+            // a memory-limit violation is pending: the fatal follows the
+            // call (GH-25118).
+            if !php_memlimit::is_pending() {
+                let msg = format!(
+                    "{} in {}",
+                    status.message(),
+                    String::from_utf8_lossy(input_name)
+                );
+                php_libxml::error::ctx_error(None, msg.as_bytes());
+            }
             return Err(DomError::Silent);
         }
     };
