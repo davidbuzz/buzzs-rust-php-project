@@ -103,6 +103,38 @@ impl std::fmt::Debug for CtConstants {
     }
 }
 
+/// The builtins of `zend_try_compile_special_func_ex()` that compile to a
+/// dedicated opcode here (bit order of [`CompileOptions::special_builtins`]).
+/// Aliases (`is_integer`, `doubleval`, ...) are not special in php-src.
+pub const SPECIAL_BUILTINS: &[&str] = &[
+    "strlen",
+    "count",
+    "sizeof",
+    "is_null",
+    "is_bool",
+    "is_int",
+    "is_float",
+    "is_string",
+    "is_array",
+    "is_object",
+    "is_resource",
+    "is_scalar",
+    "boolval",
+    "intval",
+    "floatval",
+    "strval",
+    "gettype",
+];
+
+/// The [`CompileOptions::special_builtins`] bit of lower-case `name`.
+pub fn special_builtin_bit(name: &[u8]) -> Option<u32> {
+    SPECIAL_BUILTINS
+        .iter()
+        .position(|n| n.as_bytes() == name)
+        .and_then(|i| u32::try_from(i).ok())
+        .map(|i| 1 << i)
+}
+
 /// Options for [`compile`].
 #[derive(Clone, Debug, Default)]
 pub struct CompileOptions {
@@ -129,6 +161,12 @@ pub struct CompileOptions {
     /// (`zend_try_compile_special_func()` only applies to internal
     /// functions found at compile time).
     pub strlen_builtin: bool,
+    /// The builtins `zend_try_compile_special_func()` may compile to
+    /// dedicated opcodes: bit `i` is set when [`SPECIAL_BUILTINS`]`[i]` is
+    /// currently registered as an internal function
+    /// (`fbc->type == ZEND_INTERNAL_FUNCTION`). Zero (the default) compiles
+    /// ordinary calls.
+    pub special_builtins: u32,
     /// The request-wide anonymous class counter at the start of this
     /// compilation (`CG(rtd_key_counter)`), so recompiling a file or eval
     /// string names its anonymous classes afresh.

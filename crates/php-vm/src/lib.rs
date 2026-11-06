@@ -42,6 +42,7 @@ mod pfa;
 mod place;
 mod props;
 mod reflection;
+mod special;
 mod typecheck;
 mod typed_refs;
 pub mod types;
