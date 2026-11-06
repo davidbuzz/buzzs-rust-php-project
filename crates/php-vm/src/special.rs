@@ -22,7 +22,7 @@ use crate::object;
 use crate::opcode::Operand;
 use crate::typecheck::given_type;
 use crate::vm::{PendingCall, Vm, VmResult};
-use php_runtime::{Value, ZArray, ZStr};
+use php_runtime::{Value, ZArray};
 use std::rc::Rc;
 
 impl Vm {
@@ -38,7 +38,7 @@ impl Vm {
         let mut mask = 0;
         for (i, name) in SPECIAL_BUILTINS.iter().enumerate() {
             let internal = matches!(
-                self.functions.get(&ZStr::from(*name)),
+                self.functions.get(name.as_bytes()),
                 Some(Func::Builtin(b)) if b.flags & (flags::DEPRECATED | flags::NODISCARD) == 0
             );
             if internal {
@@ -309,7 +309,7 @@ impl Vm {
     #[cold]
     #[inline(never)]
     fn special_func_fallback(&mut self, name: &str, v: Value) -> VmResult<Value> {
-        let Some(Func::Builtin(b)) = self.functions.get(&ZStr::from(name)).cloned() else {
+        let Some(Func::Builtin(b)) = self.functions.get(name.as_bytes()).cloned() else {
             return Err(self.make_throw("Error", &format!("Call to undefined function {name}()")));
         };
         let mut call = PendingCall::new(Func::Builtin(b.clone()));
