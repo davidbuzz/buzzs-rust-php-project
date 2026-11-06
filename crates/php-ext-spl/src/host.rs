@@ -14,7 +14,7 @@ use php_vm::func::{flags, Func};
 use php_vm::object::{
     class_of, data, prop_order, set_prop_order, PropKey, PropOrder, PropTableBuilder,
 };
-use php_vm::vm::FrameKind;
+use php_vm::vm::{FrameKind, PendingCall};
 use php_vm::{Throw, Vm};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -108,6 +108,11 @@ fn sync_pcre_ini(vm: &Vm, p: &mut php_pcre::Pcre) {
 #[must_use]
 pub fn spl_state_of(obj: &Obj) -> Option<Rc<SplObject>> {
     php_vm::object::internal::<Rc<SplObject>, _>(obj, |s| s.clone())
+}
+
+/// Whether two callable values are the same one (`===`).
+fn same_callable(a: &Value, b: &Value) -> bool {
+    php_runtime::ops::is_identical(a, b).unwrap_or(false)
 }
 
 /// Whether the method `lc` of `cls` is implemented in user code.
@@ -477,6 +482,15 @@ pub struct VmHost<'a> {
     /// The VM.
     pub vm: &'a mut Vm,
     pcre: Option<php_pcre::Pcre>,
+    /// Whether [`SplHost::check_callable`] resolves with the callable
+    /// deprecations (`Z_PARAM_FUNC`); off on a host made by
+    /// [`VmHost::callable_checked`].
+    callable_deprecations: bool,
+    /// The callable [`SplHost::check_callable`] resolved last and that
+    /// resolution (the `zend_fcall_info_cache` `Z_PARAM_FUNC` fills), which
+    /// [`SplHost::call_callable`] calls for the same callable during this
+    /// SPL call (`iterator_apply()`, `ArrayObject::uasort()`).
+    resolved: Option<(Value, PendingCall)>,
 }
 
 impl std::fmt::Debug for VmHost<'_> {
@@ -488,7 +502,22 @@ impl std::fmt::Debug for VmHost<'_> {
 impl<'a> VmHost<'a> {
     /// Wraps the VM.
     pub fn new(vm: &'a mut Vm) -> Self {
-        VmHost { vm, pcre: None }
+        VmHost {
+            vm,
+            pcre: None,
+            callable_deprecations: true,
+            resolved: None,
+        }
+    }
+
+    /// A host for an SPL call whose callable argument the binding has
+    /// already resolved in the calling scope, raising its deprecations
+    /// (`spl_autoload_register()`, the callback filters' constructors):
+    /// [`SplHost::check_callable`] only validates.
+    pub fn callable_checked(vm: &'a mut Vm) -> Self {
+        let mut host = Self::new(vm);
+        host.callable_deprecations = false;
+        host
     }
 
     fn vm_rt<T>(&mut self, r: Result<T, Throw>) -> RtResult<T> {
@@ -664,15 +693,47 @@ impl SplHost for VmHost<'_> {
     }
 
     fn call_callable(&mut self, callable: &Value, args: &[Value]) -> RtResult<Value> {
-        let r = self.vm.call_value(callable, args.to_vec());
+        let cached = self
+            .resolved
+            .as_ref()
+            .filter(|(v, _)| same_callable(v, callable))
+            .map(|(_, call)| call.clone());
+        let r = match cached {
+            // `zend_call_known_fcc()` with the cache `Z_PARAM_FUNC` filled.
+            Some(call) => self.vm.call_resolved(call, args.to_vec()),
+            None => self.vm.call_value(callable, args.to_vec()),
+        };
         self.vm_rt(r)
     }
 
     fn check_callable(&mut self, callable: &Value) -> Result<(), String> {
-        if self.vm.is_callable(callable) {
-            Ok(())
-        } else {
-            Err(self.vm.callable_error_message(callable))
+        if !self.callable_deprecations {
+            return if self.vm.is_callable(callable) {
+                Ok(())
+            } else {
+                Err(self.vm.callable_error_message(callable))
+            };
+        }
+        // `Z_PARAM_FUNC` / `"f"`: `zend_fcall_info_init()` resolves the
+        // callable in the calling user frame's scope, raising the callable
+        // deprecations once; the calls that follow use the resolution.
+        match self.vm.resolve_callable(callable) {
+            Ok(Ok(mut call)) => {
+                // `zend_call_function()` makes `ZEND_CALL_DYNAMIC` calls.
+                call.dynamic = true;
+                self.resolved = Some((callable.clone(), call));
+                Ok(())
+            }
+            Ok(Err(reason)) => Err(reason),
+            Err(t) => {
+                // An autoloader, or a user error handler given a
+                // deprecation, threw: `zend_wrong_callback_error()` adds no
+                // TypeError to it, and `rt_throw` hands the parked throw on.
+                if self.vm.pending_throw.is_none() {
+                    self.vm.pending_throw = Some(t);
+                }
+                Err("cannot use \"self\"/\"parent\"/\"static\" in callables".to_string())
+            }
         }
     }
 

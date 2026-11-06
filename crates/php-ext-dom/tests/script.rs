@@ -127,3 +127,82 @@ fn serialization_is_refused() {
         "Serialization of 'DOMDocument' is not allowed, unless serialization methods are implemented in a subclass"
     );
 }
+
+/// `dom_token_list_it` has no `curobj`: every `get_current_data` reads the
+/// token set at the iterator's position, so a change of the list shows in
+/// the next `current()` without a move, and a stale cache tag makes the
+/// key the position's index in the new set
+/// (ext/dom/tests/modern/token_list/iterator_modification_invalidation.phpt).
+#[test]
+fn token_list_iterators_read_the_current_set() {
+    assert_eq!(
+        run(
+            r#"$dom = DOM\XMLDocument::createFromString('<root class="A B C D"/>');
+$list = $dom->documentElement->classList;
+echo "---\n";
+$counter = 0;
+foreach ($list as $key => $token) {
+    var_dump($key, $token);
+    if (++$counter === 2) {
+        $list->value = 'E F G';
+    }
+}
+echo "---\n";
+$iterator = $list->getIterator();
+$iterator->next();
+$list->value = 'X Y Z';
+var_dump($iterator->key());
+var_dump($iterator->current());
+$iterator->rewind();
+var_dump($iterator->key());
+var_dump($iterator->current());
+$list->value = '';
+var_dump($iterator->key());
+var_dump($iterator->current());
+var_dump($iterator->valid());"#
+        ),
+        "---\nint(0)\nstring(1) \"A\"\nint(1)\nstring(1) \"B\"\nint(2)\nstring(1) \"G\"\n---\n\
+         int(1)\nstring(1) \"Y\"\nint(0)\nstring(1) \"X\"\nint(0)\nNULL\nbool(false)\n"
+    );
+}
+
+/// `InternalIterator::current()` calls `get_current_data` without `valid`:
+/// after the current token is removed it reads the next one while the
+/// position stays on the hole, and `dom_token_list_it_move_forward` then
+/// only settles on that token (`validated != current`); `remove()`
+/// invalidated the cache tag, so the key is recounted (0).
+#[test]
+fn token_list_current_does_not_move_past_removed_tokens() {
+    assert_eq!(
+        run(
+            r#"$dom = DOM\XMLDocument::createFromString('<root class="A B C"/>');
+$list = $dom->documentElement->classList;
+$it = $list->getIterator();
+var_dump($it->current());
+$list->remove('A');
+var_dump($it->current());
+$it->next();
+var_dump($it->key(), $it->current());"#
+        ),
+        "string(1) \"A\"\nstring(1) \"B\"\nint(0)\nstring(1) \"B\"\n"
+    );
+}
+
+/// A node collection's iterator has no rewind handler: php-src's
+/// `InternalIterator::rewind()` allows it while `iter->index` is 0 (a
+/// no-op) and throws once the iterator moved (bug79852.phpt).
+#[test]
+fn node_list_iterators_rewind_only_before_moving() {
+    assert_eq!(
+        run(
+            r"$d = new DOMDocument(); $d->loadXML('<r><c>1</c><c>2</c></r>');
+              $it = $d->getElementsByTagName('c')->getIterator();
+              $it->rewind(); $it->rewind();
+              echo $it->key(), $it->current()->textContent, ' ';
+              $it->next();
+              echo $it->key(), $it->current()->textContent, ' ';
+              try { $it->rewind(); } catch (Error $e) { echo $e->getMessage(); }"
+        ),
+        "01 12 Iterator does not support rewinding"
+    );
+}

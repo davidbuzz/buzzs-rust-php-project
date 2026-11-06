@@ -3,6 +3,7 @@
 use php_pcre::{limit_from_php, MatchFailure, PregError, Regex, Replacement};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_vm::ext::{Args, ModuleBuilder, Throw, VmResult};
+use php_vm::vm::PendingCall;
 use php_vm::Vm;
 
 use crate::convert::{to_zarray, unnamed_subpats};
@@ -357,7 +358,7 @@ fn checked(vm: &mut Vm, result: Option<Vec<u8>>) -> VmResult<Option<Vec<u8>>> {
 
 fn preg_replace_callback(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let regex = a.at(0);
-    let callback = a.at(1);
+    let callback = resolve_callback(vm, a, &a.at(1))?;
     let subject = a.at(2);
     let limit = limit_from_php(a.int(3));
     let flags = a.int(5);
@@ -379,13 +380,16 @@ fn preg_replace_callback_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let ArrayKey::Str(pattern) = key else {
             return Err(a.type_error(vm, 1, "must contain only string patterns as keys"));
         };
-        if !vm.is_callable(&callback) {
-            return Err(a.type_error(vm, 1, "must contain only valid callbacks"));
-        }
+        // `zend_is_callable(replace, &fcc, NULL)`: each entry is resolved
+        // (and deprecated) once, before its pattern runs.
+        let call = match vm.resolve_callable(&callback)? {
+            Ok(call) => dynamic(call),
+            Err(_) => return Err(a.type_error(vm, 1, "must contain only valid callbacks")),
+        };
         let result = replace_func_impl(
             vm,
             &Value::Str(pattern),
-            &callback,
+            &call,
             &subject,
             limit,
             flags,
@@ -402,11 +406,31 @@ fn preg_replace_callback_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(subject)
 }
 
+/// `Z_PARAM_FUNC` for `preg_replace_callback()`'s `$callback`: resolved
+/// once, in the calling user frame's scope, raising the callable
+/// deprecations there (`zend_fcall_info_init`); every match calls that
+/// resolution (`zend_call_known_fcc`). The `callable` parameter type
+/// already rejected what does not resolve, unless resolving it again
+/// failed.
+fn resolve_callback(vm: &mut Vm, a: &Args, callback: &Value) -> VmResult<PendingCall> {
+    match vm.resolve_callable(callback)? {
+        Ok(call) => Ok(dynamic(call)),
+        Err(reason) => Err(a.type_error(vm, 2, &format!("must be a valid callback, {reason}"))),
+    }
+}
+
+/// `zend_call_function()` marks the call `ZEND_CALL_DYNAMIC` (`compact()`,
+/// `func_get_args()` & co. refuse it).
+fn dynamic(mut call: PendingCall) -> PendingCall {
+    call.dynamic = true;
+    call
+}
+
 /// `php_preg_replace_func_impl()`.
 fn replace_func_impl(
     vm: &mut Vm,
     regex: &Value,
-    callback: &Value,
+    callback: &PendingCall,
     subject: &Value,
     limit: usize,
     flags: i64,
@@ -442,7 +466,7 @@ fn replace_func_impl(
 fn replace_func_in_subject(
     vm: &mut Vm,
     regex: &Value,
-    callback: &Value,
+    callback: &PendingCall,
     subject_str: &ZStr,
     limit: usize,
     flags: i64,
@@ -487,7 +511,7 @@ fn replace_func_in_subject(
 fn replace_func(
     vm: &mut Vm,
     pattern: &[u8],
-    callback: &Value,
+    callback: &PendingCall,
     subject: &[u8],
     valid_utf8: bool,
     limit: usize,
@@ -520,10 +544,14 @@ fn replace_func(
     checked(vm, out.result.ok())
 }
 
-/// `preg_do_repl_func()`: calls the user callback with the match array and
-/// converts its return value to a string.
-fn call_replacement(vm: &mut Vm, callback: &Value, m: php_pcre::MatchArray) -> VmResult<Vec<u8>> {
-    let ret = vm.call_value(callback, vec![Value::Array(to_zarray(m))])?;
+/// `preg_do_repl_func()`: calls the resolved user callback with the match
+/// array and converts its return value to a string.
+fn call_replacement(
+    vm: &mut Vm,
+    callback: &PendingCall,
+    m: php_pcre::MatchArray,
+) -> VmResult<Vec<u8>> {
+    let ret = vm.call_resolved(callback.clone(), vec![Value::Array(to_zarray(m))])?;
     match ret.deref() {
         Value::Str(s) => Ok(s.as_bytes().to_vec()),
         other => Ok(vm.value_to_string(&other)?.as_bytes().to_vec()),

@@ -406,10 +406,15 @@ impl TokenIter {
         set.buckets.get(set.valid_pos(self.pos)).cloned().flatten()
     }
 
-    /// Current key.
+    /// Current key (`dom_token_list_it_get_current_key`): after the set
+    /// changed, the position's index in the new set; the iterator then
+    /// takes the list's cache tag over (`php_libxml_is_cache_tag_stale`),
+    /// so later moves count from there.
     pub fn key(&mut self) -> i64 {
         self.list.ensure_up_to_date();
-        if self.list.0.cache_tag.get() != self.cache_tag {
+        let tag = self.list.0.cache_tag.get();
+        if tag != self.cache_tag {
+            self.cache_tag = tag;
             let set = self.list.0.set.borrow();
             let mut i = 0;
             let mut p = set.valid_pos(0);
@@ -420,6 +425,13 @@ impl TokenIter {
             self.index = i;
         }
         self.index
+    }
+
+    /// `dom_token_list_it_rewind`: back to the first token of the set as
+    /// it stands (the next access brings it up to date), index 0.
+    pub fn rewind(&mut self) {
+        self.pos = self.list.0.set.borrow().valid_pos(0);
+        self.index = 0;
     }
 
     /// Advance.

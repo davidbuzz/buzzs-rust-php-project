@@ -156,10 +156,10 @@ impl Vm {
         let empty_code = Rc::new(opcode::OpArray::default());
         Vm {
             frames: Vec::new(),
-            functions: HashMap::new(),
-            classes: HashMap::new(),
+            functions: class::NameMap::default(),
+            classes: class::NameMap::default(),
             class_order: Vec::new(),
-            constants: HashMap::new(),
+            constants: class::NameMap::default(),
             user_constants: Vec::new(),
             globals: Rc::new(RefCell::new(vm::VarStore::default())),
             ini,
@@ -205,6 +205,9 @@ impl Vm {
             response_mimetype: None,
             send_default_content_type: true,
             response_header_hook: None,
+            send_headers_hook: None,
+            sapi_flush_hook: None,
+            timer_hook: None,
             rfc1867_callback: None,
             rfc1867_uploaded_files: Vec::new(),
             fibers: Vec::new(),
