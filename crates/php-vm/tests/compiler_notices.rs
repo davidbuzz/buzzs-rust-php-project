@@ -145,3 +145,110 @@ fn by_ref_foreach_binds_the_generator_value() {
          }\n");
     assert_eq!(out, format!("{}int(7)\n", notice(YIELDED, 3)));
 }
+
+const READING: &str = "Fatal error: Cannot use [] for reading in t.php on line 3";
+
+/// Asserts that `source` fails to compile with `fatal` (no output from the
+/// script itself).
+fn assert_compile_error(source: &str, fatal: &str) {
+    let (status, out) = run_status(source);
+    assert_ne!(status, 0, "{out}");
+    assert!(out.contains(fatal), "{out}");
+    assert!(!out.contains("started"), "{out}");
+}
+
+/// `zend_compile_args`: an internal function, and a function declared
+/// before the file is compiled, is a known `fbc`, so `[]` passed for a
+/// by-value parameter is compiled for reading: a compile error.
+#[test]
+fn append_for_a_known_by_value_parameter_is_a_compile_error() {
+    assert_compile_error("<?php\necho \"started\\n\";\nvar_dump($a[]);\n", READING);
+    assert_compile_error(
+        "<?php\necho \"started\\n\";\nstr_replace($a[], 1, 2);\n",
+        READING,
+    );
+    assert_compile_error(
+        "<?php\nnamespace X;\n\\trim($a[]);\necho \"started\\n\";\n",
+        READING,
+    );
+    assert_compile_error(
+        "<?php\nfunction f($v) {}\necho \"started\\n\"; f($a[]->b);\n",
+        READING,
+    );
+    // A function of code that already ran is in the function table too.
+    let (status, out) = run_status(
+        "<?php\n\
+         function g($v) {}\n\
+         eval('echo \"started\\n\"; g($a[][0]);');\n\
+         echo \"after\\n\";\n",
+    );
+    assert_ne!(status, 0, "{out}");
+    assert!(
+        out.contains(
+            "Fatal error: Cannot use [] for reading in t.php(3) : eval()'d code on line 1"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("started") && !out.contains("after"), "{out}");
+}
+
+/// A by-reference parameter of a known function fetches `[]` for writing
+/// (the element is appended), and an unknown callee decides at run time
+/// (`BP_VAR_FUNC_ARG`): `f($b[]->c)` throws before appending when `f`
+/// takes the argument by value.
+#[test]
+fn append_for_a_by_ref_or_unknown_parameter_runs() {
+    let out = run("<?php\n\
+         var_dump(str_replace(\"a\", \"b\", \"aa\", $c[]));\n\
+         var_dump($c);\n\
+         echo \"started\\n\";\n\
+         try { f($b[]->c); } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
+         try { g($b[]->c); } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
+         var_dump($b);\n\
+         function f($v) {}\n\
+         function g(&$v) {}\n");
+    assert_eq!(
+        out,
+        "string(2) \"bb\"\n\
+         array(1) {\n  [0]=>\n  int(2)\n}\n\
+         started\n\
+         Cannot use [] for reading\n\
+         Attempt to modify property \"c\" on null\n\
+         array(1) {\n  [0]=>\n  NULL\n}\n"
+    );
+}
+
+/// An unqualified call in a namespace is resolved at run time: no `fbc`.
+/// php-src master compiles a frameless branch beside it when the global
+/// function is internal with a frameless handler for that many arguments
+/// (`zend_compile_ns_call`), and that branch compiles the arguments for
+/// reading; not for a call nested in such a branch's arguments, nor for
+/// an arity without a handler (`substr()` needs two arguments, a
+/// four-argument `str_replace()` has none).
+#[test]
+fn namespaced_calls_compile_append_by_their_frameless_branch() {
+    assert_compile_error(
+        "<?php\nnamespace X;\ntrim($a[]);\necho \"started\\n\";\n",
+        READING,
+    );
+    assert_compile_error(
+        "<?php\nnamespace X;\nstr_replace(1, 2, $a[]);\necho \"started\\n\";\n",
+        READING,
+    );
+    let out = run("<?php\n\
+         namespace X;\n\
+         echo \"started\\n\";\n\
+         try { strlen($a[]); } catch (\\Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
+         try { trim(strtolower($a[])); } catch (\\Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
+         try { substr($a[]); } catch (\\Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
+         function f($v) {}\n\
+         try { f($a[]); } catch (\\Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
+         var_dump(str_replace(\"a\", \"b\", \"aa\", $c[]), $c);\n");
+    assert_eq!(
+        out,
+        format!(
+            "started\n{}string(2) \"bb\"\narray(1) {{\n  [0]=>\n  int(2)\n}}\n",
+            "Cannot use [] for reading\n".repeat(4)
+        )
+    );
+}

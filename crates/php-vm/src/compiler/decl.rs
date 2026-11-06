@@ -147,7 +147,7 @@ struct BodySpec<'a> {
     has_body: bool,
 }
 
-impl Compiler {
+impl Compiler<'_> {
     pub(crate) fn compile_function_decl(
         &mut self,
         fd: &ast::FunctionDecl,
@@ -235,8 +235,17 @@ impl Compiler {
         if top_level {
             self.hoisted_functions.push(idx);
             // `pass_two()` done: later calls in this file know its arginfo.
-            let params = fd.params.iter().map(|p| (p.by_ref, p.variadic)).collect();
-            self.known_functions.insert(known_key, params);
+            let required = fd
+                .params
+                .iter()
+                .rposition(|p| p.default.is_none() && !p.variadic)
+                .map_or(0, |i| u32::try_from(i + 1).unwrap_or(u32::MAX));
+            let info = super::FunctionInfo::from_flags(
+                false,
+                required,
+                fd.params.iter().map(|p| (p.by_ref, p.variadic)),
+            );
+            self.known_functions.insert(known_key, info);
         } else {
             self.f().line = fd.span.line;
             self.emit(Op::DeclareFunction(idx));
@@ -2260,7 +2269,7 @@ impl Compiler {
     }
 }
 
-impl Compiler {
+impl Compiler<'_> {
     /// Compiles the hooks of a property; returns the hooks and whether the
     /// property is virtual.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -2551,7 +2560,7 @@ fn uses_backing(code: &crate::opcode::OpArray, prop: &[u8]) -> bool {
     })
 }
 
-impl Compiler {
+impl Compiler<'_> {
     /// `zend_check_magic_method_implementation`.
     #[allow(clippy::too_many_lines)]
     fn check_magic_method(

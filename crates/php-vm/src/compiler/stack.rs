@@ -98,7 +98,7 @@ impl StackModel {
     }
 }
 
-impl Compiler {
+impl Compiler<'_> {
     /// `zend_stack_limit_error()`.
     #[cold]
     #[inline(never)]

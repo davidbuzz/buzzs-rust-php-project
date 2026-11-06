@@ -143,7 +143,7 @@ fn lc(name: &ZStr) -> Vec<u8> {
     n.strip_prefix(b"\\").unwrap_or(n).to_ascii_lowercase()
 }
 
-impl Compiler {
+impl Compiler<'_> {
     /// Validates the internal attributes in `attrs` applied to `tgt`
     /// (`promoted`: the extra targets of a promoted constructor parameter).
     pub(crate) fn validate_attributes(

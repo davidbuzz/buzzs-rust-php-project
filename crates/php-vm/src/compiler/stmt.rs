@@ -12,7 +12,7 @@ pub(crate) const SYMBOL_FUNCTION: u8 = 1 << 1;
 /// `ZEND_SYMBOL_CONST`.
 pub(crate) const SYMBOL_CONST: u8 = 1 << 2;
 
-impl Compiler {
+impl Compiler<'_> {
     /// Compiles the statements of a file.
     pub(crate) fn compile_top_statements(&mut self, stmts: &[Stmt]) -> CResult<()> {
         self.check_strict_types_position(stmts)?;
