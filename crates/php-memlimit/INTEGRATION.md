@@ -30,17 +30,23 @@ another thread, come from mimalloc. The accounting is identical either way
 (requested bytes, as before); the heap's chunks are not counted.
 
 The request thread is the *owner*: `request_start` binds the calling
-thread (`bind_to_current_thread`) and `request_end` unbinds it. Ownership
-is exclusive and never taken from a live owner: a thread that calls
-`request_start` while another thread still owns the heap (one that has not
-reached `request_end`) runs its request on mimalloc, correctly but more
-slowly. Heap blocks freed by any other thread (or by the owner after
-`request_end`) go to per-bin lock-free remote lists the next owner reuses.
+thread and `request_end` unbinds a thread that `request_start` bound.
+Ownership is exclusive and never taken from a live owner: a thread that
+calls `request_start` while another thread still owns the heap (one that
+has not reached `request_end`) runs its request on mimalloc, correctly but
+more slowly. Heap blocks freed by any other thread (or by a former owner
+after it gave the heap up) go to per-bin lock-free remote lists the next
+owner reuses.
 
-A SAPI may bind earlier so that startup allocations use the heap too:
-`php_memlimit::bind_to_current_thread()` on the thread that will run the
-requests, before module startup (php-cli: at the top of `main` when the VM
-runs on the main thread).
+A SAPI that runs its requests on one thread binds that thread itself,
+before module startup, so that startup allocations use the heap too:
+`php_memlimit::bind_to_current_thread()` (php-cli: in `do_php_cli`, after
+the built-in server check). A thread bound this way keeps the heap across
+`request_end`, so the teardown that follows (the `Vm`'s drop or discard,
+TLS destructors at exit) frees on the owner path instead of the remote
+lists; it gives the heap up with `php_memlimit::unbind_current_thread()`
+if another thread is to take it. Multi-threaded SAPIs (`php -S` request
+threads, mod_php) leave the binding to `request_start`/`request_end`.
 
 ## 1. php-cli: install the allocator (once)
 

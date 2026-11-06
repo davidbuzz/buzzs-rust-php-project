@@ -159,15 +159,18 @@ pub fn is_observing_heap() -> bool {
 }
 
 /// [`CountingAlloc::bind_to_current_thread`] on [`GLOBAL`]:
-/// [`request_start`] does it; a SAPI may call it earlier on the thread that
-/// will run requests (e.g. before module startup) so that startup
-/// allocations use the heap too. `false` while another thread owns it.
+/// [`request_start`] binds the request thread for the request; a SAPI
+/// that runs its requests on one thread (php-cli) calls this earlier, on
+/// that thread (e.g. before module startup), so that startup allocations
+/// use the heap too and the binding outlives [`request_end`] (the teardown
+/// stays on the owner path). `false` while another thread owns it.
 pub fn bind_to_current_thread() -> bool {
     GLOBAL.bind_to_current_thread()
 }
 
 /// [`CountingAlloc::unbind_current_thread`] on [`GLOBAL`] ([`request_end`]
-/// does it).
+/// does it for a thread that [`request_start`] bound; an explicitly bound
+/// thread calls it when it is done with the heap).
 pub fn unbind_current_thread() {
     GLOBAL.unbind_current_thread();
 }

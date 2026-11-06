@@ -81,11 +81,23 @@ fn global_allocator_lifecycle() {
     assert!(php_memlimit::fallible(|| buf.try_reserve_exact(M)).is_ok());
     drop(buf);
 
-    // Request end lifts the limit and gives the heap up.
+    // Request end lifts the limit and gives the heap up (this thread was
+    // bound by `request_start`).
     php_memlimit::request_end();
     assert_eq!(php_memlimit::limit(), None);
     assert!(!php_memlimit::GLOBAL.is_bound_to_current_thread());
     let big = black_box(vec![1u8; 30 * M]);
     assert_eq!(php_memlimit::check(), None);
     drop(big);
+
+    // php-cli's way: bound explicitly before the request, the thread keeps
+    // the heap through the teardown that follows `request_end`.
+    assert!(php_memlimit::bind_to_current_thread());
+    php_memlimit::request_start(Some(10 * M)).expect("10M fits");
+    let small: Vec<Box<[u8; 24]>> = (0..100).map(|_| Box::new([1u8; 24])).collect();
+    php_memlimit::request_end();
+    assert!(php_memlimit::GLOBAL.is_bound_to_current_thread());
+    drop(black_box(small));
+    php_memlimit::unbind_current_thread();
+    assert!(!php_memlimit::GLOBAL.is_bound_to_current_thread());
 }

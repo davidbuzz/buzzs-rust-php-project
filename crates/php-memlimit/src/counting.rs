@@ -171,6 +171,17 @@ enum Admit {
     Observed,
 }
 
+/// Outcome of [`CountingAlloc::bind`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Bind {
+    /// The heap was free and is now the calling thread's.
+    Taken,
+    /// The calling thread already owned it.
+    Owner,
+    /// Another thread owns it.
+    Foreign,
+}
+
 /// A non-zero value unique to each live thread: the address of this
 /// thread's (destructor-free, const-initialised) `FALLIBLE_DEPTH` slot.
 #[inline]
@@ -281,6 +292,11 @@ pub struct CountingAlloc<A> {
     /// owns [`heap`](Self::heap): it is taken with an acquire CAS from 0
     /// and given back with a release CAS by the owner itself.
     owner: AtomicUsize,
+    /// Whether the owner was bound by [`request_start`](Self::request_start)
+    /// (so [`request_end`](Self::request_end) unbinds it) rather than
+    /// explicitly by [`bind_to_current_thread`](Self::bind_to_current_thread)
+    /// (then it keeps the heap through teardown). Owner only.
+    request_bound: AtomicBool,
     peak: AtomicUsize,
     allocs: AtomicUsize,
     frees: AtomicUsize,
@@ -348,6 +364,7 @@ impl<A> CountingAlloc<A> {
             owned: AtomicUsize::new(0),
             shared: AtomicUsize::new(0),
             owner: AtomicUsize::new(0),
+            request_bound: AtomicBool::new(false),
             peak: AtomicUsize::new(0),
             allocs: AtomicUsize::new(0),
             frees: AtomicUsize::new(0),
@@ -913,7 +930,12 @@ impl<A> CountingAlloc<A> {
     ///
     /// [`DEFAULT_LIMIT`]: crate::DEFAULT_LIMIT
     pub fn request_start(&self, limit: Option<usize>) -> Result<(), SetLimitError> {
-        self.bind_to_current_thread();
+        // A thread that binds here is unbound by `request_end`; one that
+        // bound itself explicitly before keeps the heap (php-cli: through
+        // the teardown that follows its single request).
+        if self.bind() == Bind::Taken {
+            self.request_bound.store(true, Relaxed);
+        }
         self.forgiven.store(0, Relaxed);
         self.forgiven_huge.store(0, Relaxed);
         self.force_limit(None);
@@ -923,7 +945,10 @@ impl<A> CountingAlloc<A> {
     }
 
     /// Request shutdown: lift the limit, clear any violation, reset baseline
-    /// and peak.
+    /// and peak, and give the heap up if [`request_start`](Self::request_start)
+    /// took it (a thread that bound itself with
+    /// [`bind_to_current_thread`](Self::bind_to_current_thread) keeps it, so
+    /// its teardown frees stay on the owner path).
     pub fn request_end(&self) {
         self.forgiven.store(0, Relaxed);
         self.forgiven_huge.store(0, Relaxed);
@@ -933,7 +958,11 @@ impl<A> CountingAlloc<A> {
         self.huge_base.store(0, Relaxed);
         self.reset_peak();
         self.update_thresholds();
-        self.unbind_current_thread();
+        // Also while observed (ownership parked, see `observe`): the
+        // give-back is cancelled so the heap is free for the next request.
+        if self.request_bound.load(Relaxed) {
+            self.unbind_current_thread();
+        }
     }
 
     // ---- allocator hot path -----------------------------------------
@@ -1179,27 +1208,48 @@ impl<A> CountingAlloc<A> {
     ///
     /// Ownership never moves away from a live owner (its heap's free lists
     /// are not locked): it is free again once the owner calls
-    /// [`unbind_current_thread`](Self::unbind_current_thread) (which
-    /// [`request_end`](Self::request_end) does), and binding returns
-    /// `false` until then.
+    /// [`unbind_current_thread`](Self::unbind_current_thread), and binding
+    /// returns `false` until then. A thread bound this way (explicitly)
+    /// keeps the heap across [`request_end`](Self::request_end): php-cli
+    /// binds before module startup and so tears the request down on the
+    /// owner path; a thread that [`request_start`](Self::request_start)
+    /// bound is unbound by `request_end`.
     pub fn bind_to_current_thread(&self) -> bool {
+        match self.bind() {
+            Bind::Taken | Bind::Owner => {
+                self.request_bound.store(false, Relaxed);
+                true
+            }
+            Bind::Foreign => false,
+        }
+    }
+
+    /// Takes the heap for the calling thread unless another thread owns it.
+    fn bind(&self) -> Bind {
         let me = thread_token();
         // Acquire: see the heap as the previous owner left it.
         match self.owner.compare_exchange(0, me, Acquire, Relaxed) {
-            Ok(_) => true,
-            Err(current) => current == me,
+            Ok(_) => Bind::Taken,
+            Err(current) if current == me => Bind::Owner,
+            Err(_) => Bind::Foreign,
         }
     }
 
     /// Gives up ownership if the calling thread is the owner (see
     /// [`bind_to_current_thread`](Self::bind_to_current_thread)). Its
     /// later frees of heap blocks go to the heap's remote lists, its
-    /// allocations to the inner allocator.
+    /// allocations to the inner allocator. On the thread being
+    /// [observed](Self::observe) (which holds no ownership while observed)
+    /// it cancels the give-back that stopping the observer would do.
     pub fn unbind_current_thread(&self) {
+        let me = thread_token();
+        if self.observing.load(Relaxed) == me {
+            self.observed_owner.store(false, Relaxed);
+        }
         // Release: the next owner must see the heap's lists.
-        let _ = self
-            .owner
-            .compare_exchange(thread_token(), 0, Release, Relaxed);
+        if self.owner.compare_exchange(me, 0, Release, Relaxed).is_ok() {
+            self.request_bound.store(false, Relaxed);
+        }
     }
 
     /// Whether the calling thread is the owner.

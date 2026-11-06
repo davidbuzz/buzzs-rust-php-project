@@ -882,6 +882,96 @@ fn heap_ownership_is_exclusive_until_released() {
 }
 
 #[test]
+fn explicit_binding_survives_request_end() {
+    // php-cli binds before the request: the teardown that follows
+    // `request_end` (TLS destructors, the Vm's drop) stays on the owner
+    // path instead of pushing every block onto the remote lists.
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    a.request_start(Some(8 * M)).expect("limit");
+    assert!(a.is_bound_to_current_thread());
+    let b = alloc(&a, 24);
+    assert!(is_heap_block(b.p));
+    a.request_end();
+    assert!(a.is_bound_to_current_thread(), "bound explicitly: kept");
+    let c = alloc(&a, 24);
+    assert!(
+        is_heap_block(c.p),
+        "teardown allocations still use the heap"
+    );
+    drop(b);
+    drop(c);
+    a.unbind_current_thread();
+    assert!(!a.is_bound_to_current_thread());
+    // A thread bound by `request_start` itself (a php -S request thread) is
+    // unbound by `request_end`, also after a second `request_start` on it.
+    a.request_start(None).expect("unlimited");
+    assert!(a.is_bound_to_current_thread());
+    a.request_start(None).expect("unlimited");
+    a.request_end();
+    assert!(!a.is_bound_to_current_thread());
+    // Binding explicitly during a request pins the heap too.
+    a.request_start(None).expect("unlimited");
+    assert!(a.bind_to_current_thread());
+    a.request_end();
+    assert!(a.is_bound_to_current_thread());
+    a.unbind_current_thread();
+    assert!(!a.is_bound_to_current_thread());
+    // Another thread's `request_end` never touches the owner's binding.
+    assert!(a.bind_to_current_thread());
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            assert!(a.request_start(None).is_ok(), "runs on the inner allocator");
+            assert!(!a.is_bound_to_current_thread());
+            a.request_end();
+        });
+    });
+    assert!(a.is_bound_to_current_thread());
+    a.unbind_current_thread();
+    assert_eq!(a.stats().current, 0);
+}
+
+#[test]
+fn unbinding_while_observed_frees_the_heap() {
+    // Observing parks the owner's ownership (`observe(true)` takes it, so
+    // the observed thread's frees are reported on the non-owner path) and
+    // gives it back when observing stops. A request-bound thread whose
+    // request ends in between must not get the heap back.
+    let a = CountingAlloc::new(System);
+    assert!(a.set_observer(record_event));
+    a.request_start(None).expect("unlimited");
+    assert!(a.is_bound_to_current_thread());
+    a.observe(true);
+    assert!(a.is_observing());
+    assert!(!a.is_bound_to_current_thread());
+    a.request_end();
+    a.observe(false);
+    assert!(
+        !a.is_bound_to_current_thread(),
+        "the give-back was cancelled: the heap is free for the next request"
+    );
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            assert!(a.bind_to_current_thread(), "free");
+            a.unbind_current_thread();
+        });
+    });
+    // An explicitly bound thread keeps the heap across an observed request.
+    assert!(a.bind_to_current_thread());
+    a.request_start(None).expect("unlimited");
+    a.observe(true);
+    a.request_end();
+    a.observe(false);
+    assert!(
+        a.is_bound_to_current_thread(),
+        "bound explicitly: given back"
+    );
+    a.unbind_current_thread();
+    assert!(!a.is_bound_to_current_thread());
+    let _ = take_events();
+}
+
+#[test]
 fn remote_frees_come_back_to_the_owner() {
     let a = CountingAlloc::new(System);
     assert!(a.bind_to_current_thread());
