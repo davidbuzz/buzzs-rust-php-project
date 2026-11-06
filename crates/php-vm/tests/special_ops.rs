@@ -3,7 +3,8 @@
 //! `ZEND_DEFINED`, `ZEND_IN_ARRAY`, `ZEND_ARRAY_KEY_EXISTS`) or constants
 //! (`chr()`, `ord()`): same results as the calls, and no builtin frame
 //! (expected outputs from `/usr/bin/php -n`; the null-key deprecation of
-//! `array_key_exists()` and the float-key owner check follow php-src master).
+//! `array_key_exists()`, the float-key owner check and the `chr()`/`ord()`
+//! range and length deprecations follow php-src master).
 use php_runtime::{Value, ZStr};
 use php_vm::compiler::{compile, CompileOptions, SPECIAL_BUILTINS};
 use php_vm::ext::{Extension, ModuleBuilder};
@@ -480,7 +481,8 @@ done
 fn in_array_opcode_matches_the_builtin() {
     // Columns: loose ["a","b"], strict ["a","b"], strict [1,"x"], loose [],
     // loose ["","z"]. `S::__toString` runs once per compared key, in order,
-    // without an `in_array` frame below it.
+    // without an `in_array` frame below it; `T::__toString` counts the
+    // backtrace frames with `foreach` (the bare VM has no `count()`).
     assert_eq!(
         run_with(
             r#"<?php
@@ -495,7 +497,7 @@ foreach ($cases as $i => $n) {
 }
 var_dump(in_array($rr, ["a", "b"]), in_array($rr, ["a", "b"], true), in_array($undef1, ["a"]), in_array($undef2, ["a"], true), in_array($undef3, [""]));
 var_dump(in_array("1", [1, "x"], true), in_array(1, ["1", "x"], true), in_array("1", ["1", "x"], true), in_array(true, ["a"], PHP_INT_MAX), in_array(true, ["a"], "0"));
-class T { function __toString() { $t = debug_backtrace(); echo count($t), "\n"; return "x"; } }
+class T { function __toString() { $n = 0; foreach (debug_backtrace() as $_) { $n++; } echo $n, "\n"; return "x"; } }
 var_dump(in_array(new T, ["a"]));
 class U { function __toString() { throw new Exception("boom"); } }
 try { in_array(new U, ["a"]); } catch (Exception $e) { echo $e->getMessage(), " ", $e->getTrace()[0]["function"], "\n"; }
@@ -558,7 +560,9 @@ fn array_key_exists_opcode_follows_php_src_order() {
     // Operands are read when the opcode runs (`$key` after `change()`), an
     // undefined key warns without the null deprecation, a non-array subject
     // warns for both operands before the TypeError (no frame), and a float
-    // key whose diagnostics drop the array's last other owner is not found.
+    // key whose diagnostics drop the array's last other owner is not found
+    // (`zend_array_key_exists_fast`); a constant literal stays owned by the
+    // op array, so only a runtime-built array can be dropped that way.
     assert_eq!(
         run_with(
             r#"<?php
@@ -587,6 +591,8 @@ function f(&$x) {}
 try { f(array_key_exists("a", $a)); } catch (Error $e) { echo $e->getMessage(), "\n"; }
 $arr = [1 => 7];
 set_error_handler(function ($level, $message) { global $arr; $arr = null; echo $message, "\n"; });
+var_dump(array_key_exists(1.5, $arr));
+$one = 1; $arr = [$one => 7];
 var_dump(array_key_exists(1.5, $arr));
 $arr = [1 => 7]; $copy = $arr;
 var_dump(array_key_exists(1.5, $arr));
@@ -632,6 +638,8 @@ bool(true)
 array
 bool(false)
 f(): Argument #1 ($x) could not be passed by reference
+Implicit conversion from float 1.5 to int loses precision
+bool(true)
 Implicit conversion from float 1.5 to int loses precision
 bool(false)
 Implicit conversion from float 1.5 to int loses precision
@@ -684,7 +692,8 @@ bool(false)
 #[test]
 fn chr_and_ord_literals_fold_to_constants() {
     // Only `chr(0..=255)` and one-byte `ord()` literals fold; the rest are
-    // calls with their strict-mode TypeErrors. A folded argument is sent by
+    // calls, with php-src master's range and length deprecations (8.3 has
+    // none) and their strict-mode TypeErrors. A folded argument is sent by
     // value even after a call argument (`h(g(), chr(65))`), and in write
     // context the constant behaves like the call's temporary.
     assert_eq!(
@@ -706,7 +715,15 @@ var_dump(chr(65)[0], ord("A") + 1);
 "#,
             "co.php"
         ),
-        r#"string(1) "A"
+        r#"
+Deprecated: chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 in co.php on line 3
+
+Deprecated: chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 in co.php on line 3
+
+Deprecated: ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead in co.php on line 3
+
+Deprecated: ord(): Providing an empty string is deprecated in co.php on line 3
+string(1) "A"
 string(1) "A"
 int(65)
 int(255)
