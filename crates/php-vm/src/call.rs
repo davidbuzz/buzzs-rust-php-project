@@ -251,7 +251,11 @@ impl Vm {
     /// `zend_init_dynamic_call_string` / `_array`: like
     /// [`Vm::resolve_callable_for_call`], but a `"C::m"` / `["C", "m"]`
     /// callee never borrows the caller's `$this` (a non-static method, or
-    /// the `__call` trampoline, "cannot be called statically").
+    /// the `__call` trampoline, "cannot be called statically"), and the
+    /// method name of `[$obj, "P::m"]` is looked up whole by the object's
+    /// `get_method` handler (an undefined method, or `__call("P::m")`):
+    /// only `zend_is_callable_ex` splits such names, for `call_user_func()`
+    /// and `Z_PARAM_FUNC`.
     fn resolve_dyn_callable(&mut self, callee: &Value) -> VmResult<PendingCall> {
         let class_method = match callee {
             Value::Str(s) => find_double_colon(s.as_bytes()).map(|p| {
@@ -263,10 +267,14 @@ impl Vm {
             Value::Array(a) if a.len() == 2 => {
                 let target = a.get(&ArrayKey::Int(0)).map(Value::deref);
                 let method = a.get(&ArrayKey::Int(1)).map(Value::deref);
-                if let (Some(Value::Str(c)), Some(Value::Str(m))) = (target, method) {
-                    Some((c, m))
-                } else {
-                    None
+                match (target, method) {
+                    (Some(Value::Str(c)), Some(Value::Str(m))) => Some((c, m)),
+                    (Some(Value::Object(o)), Some(Value::Str(m)))
+                        if find_double_colon(m.as_bytes()).is_some() =>
+                    {
+                        return self.method_call(&o, &m);
+                    }
+                    _ => None,
                 }
             }
             _ => None,

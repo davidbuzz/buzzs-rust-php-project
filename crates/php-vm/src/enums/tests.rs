@@ -342,3 +342,38 @@ t(42);
          Value of type int is not callable\n"
     );
 }
+
+/// `$f()` (`zend_init_dynamic_call_array`) hands `[$obj, "parent::m"]`'s
+/// whole method name to `get_method`: an undefined method or `__call`;
+/// `"parent::m"` strings fetch a class named `parent`. Only
+/// `zend_is_callable_ex` (`call_user_func()`) splits the name.
+#[test]
+fn dynamic_call_does_not_split_a_method_name_with_a_class_prefix() {
+    let out = run_cv(
+        r#"<?php
+class A { public function m($x) { return __METHOD__ . "($x)"; } }
+class B extends A {
+    function run() {
+        foreach ([[$this, 'parent::m'], 'parent::m'] as $f) {
+            try { echo $f(1), "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        }
+    }
+}
+class C extends A {
+    function __call($n, $a) { return "__call($n)"; }
+    function run() { $f = [$this, 'parent::m']; echo $f(1), "\n"; }
+}
+(new B)->run();
+(new C)->run();
+echo call_user_func([new B, 'parent::m'], 2), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Call to undefined method B::parent::m()\n\
+         Class \"parent\" not found\n\
+         __call(parent::m)\n\
+         \nDeprecated: Callables of the form [\"B\", \"parent::m\"] are deprecated in t.php on line 16\n\
+         A::m(2)\n"
+    );
+}
