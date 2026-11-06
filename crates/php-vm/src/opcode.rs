@@ -840,6 +840,27 @@ pub enum Op {
         val: Operand,
         place: PlaceId,
     },
+    /// `FetchConst` whose result is only assigned by the `AssignCv { cv:
+    /// to, val: Tmp(dst), dst: None }` right after it: the value is stored
+    /// into `to` directly when that variable holds no refcounted value,
+    /// skipping the `AssignCv` (else written to `dst` for it). A cached
+    /// value (`ZEND_FETCH_CONSTANT`'s `CACHED_PTR` hit) needs no lookup; a
+    /// miss runs the generic fetch first.
+    FetchConstTo {
+        name: u32,
+        fallback: Option<u32>,
+        dst: u32,
+        to: u32,
+    },
+    /// `FetchClassConst` of `class::NAME` (literal `name`) followed by such
+    /// an `AssignCv` (as in [`Op::FetchConstTo`]), with
+    /// `ZEND_FETCH_CLASS_CONSTANT`'s cache.
+    FetchClassConstTo {
+        class: ClassSpec,
+        name: u32,
+        dst: u32,
+        to: u32,
+    },
 }
 
 /// The bits of [`Op::CmpJmp`]'s `mask`: the outcomes of comparing two

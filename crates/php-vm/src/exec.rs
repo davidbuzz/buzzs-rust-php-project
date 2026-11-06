@@ -1143,6 +1143,35 @@ impl Vm {
                                 break 'slow;
                             }
                         }
+                        // Cached constants with the `AssignCv` after them
+                        // folded in (`Some(true)` from `store_fetched`: skip
+                        // it).
+                        Op::FetchConstTo {
+                            name,
+                            fallback,
+                            dst,
+                            to,
+                        } => match self.const_hit(*name, *fallback) {
+                            Some(v) => {
+                                if self.store_fetched(*dst, Some(*to), v) {
+                                    ip += 1;
+                                }
+                            }
+                            None => break 'slow,
+                        },
+                        Op::FetchClassConstTo {
+                            class,
+                            name,
+                            dst,
+                            to,
+                        } => match self.class_const_cached(class, *name) {
+                            Some(v) => {
+                                if self.store_fetched(*dst, Some(*to), v) {
+                                    ip += 1;
+                                }
+                            }
+                            None => break 'slow,
+                        },
                         _ => break 'slow,
                     }
                     if Self::safe_point_due() {
@@ -1688,6 +1717,33 @@ impl Vm {
                     Op::FetchClassConst { class, name, dst } => {
                         let v = self.fetch_class_const_cached(class, *name)?;
                         self.set_tmp(*dst, v);
+                        Flow::Next
+                    }
+                    // A miss of the specialised forms: the generic fetch,
+                    // then the store of the folded `AssignCv` (which runs as
+                    // its own op when the variable holds a refcounted value).
+                    Op::FetchConstTo {
+                        name,
+                        fallback,
+                        dst,
+                        to,
+                    } => {
+                        let v = self.fetch_constant_cached(*name, *fallback)?;
+                        if self.store_fetched(*dst, Some(*to), v) {
+                            ip += 1;
+                        }
+                        Flow::Next
+                    }
+                    Op::FetchClassConstTo {
+                        class,
+                        name,
+                        dst,
+                        to,
+                    } => {
+                        let v = self.fetch_class_const_cached(class, Operand::Lit(*name))?;
+                        if self.store_fetched(*dst, Some(*to), v) {
+                            ip += 1;
+                        }
                         Flow::Next
                     }
                     Op::FetchClassName {

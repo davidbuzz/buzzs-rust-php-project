@@ -436,3 +436,56 @@ for ($i = 0; $i < 2; $i++) { echo (new W)::Z, "\n"; echo "after\n"; }
     );
     assert_eq!(out, expected);
 }
+
+/// `$x = NAME;` / `$x = A::NAME;` with the `AssignCv` folded into the fetch
+/// (`FetchConstTo`, `FetchClassConstTo`): namespaced, global, fallback and
+/// array constants, class constants through a name, `self`, `static`,
+/// `parent` and `$this`, a target holding an object (destructed by the
+/// assignment), a reference and an array; the errors of uncached fetches
+/// each time.
+#[test]
+fn constant_fetches_assigned_to_variables() {
+    let out = run(r#"<?php
+namespace N;
+const LOCAL = 'local';
+define('GLOBAL_C', 'global');
+define('M_INT', 8);
+define('ARR', [1, 2]);
+class D { function __destruct() { echo "~D\n"; } }
+class A { const X = 'ax'; const ARR = ['k' => 1]; private const P = 'priv'; static function p() { $v = self::P; return $v; } }
+class B extends A { const X = 'bx'; function get() { $a = static::X; $b = self::X; $c = parent::X; $d = $this::X; return "$a $b $c $d"; } }
+for ($i = 0; $i < 3; $i++) {
+    $l = LOCAL; $g = GLOBAL_C; $p = \M_INT; $arr = ARR; $e = \N\LOCAL;
+    $x = A::X; $y = B::X; $ca = A::ARR;
+    echo $l, ' ', $g, ' ', $p, ' ', $arr[1], ' ', $e, ' ', $x, ' ', $y, ' ', $ca['k'], ' ', A::p(), ' ', (new B)->get(), "\n";
+}
+$o = new D; echo "made\n"; $o = A::X; echo "replaced ", $o, "\n";
+$t = 1; $r = &$t; $t = GLOBAL_C; echo $r, "\n";
+$q = [1]; $q = LOCAL; echo $q, "\n";
+for ($i = 0; $i < 2; $i++) { try { $u = UNDEF_CONST; } catch (\Error $e) { echo $e->getMessage(), "\n"; } }
+for ($i = 0; $i < 2; $i++) { try { $u = A::P; } catch (\Error $e) { echo $e->getMessage(), "\n"; } }
+for ($i = 0; $i < 2; $i++) { try { $u = A::NOPE; } catch (\Error $e) { echo $e->getMessage(), "\n"; } }
+define('N\LATE', 'late-ns');
+function late() { $z = LATE; return $z; }
+echo late(), "\n";
+"#);
+    assert_eq!(
+        out,
+        r#"local global 8 2 local ax bx 1 priv bx bx ax bx
+local global 8 2 local ax bx 1 priv bx bx ax bx
+local global 8 2 local ax bx 1 priv bx bx ax bx
+made
+~D
+replaced ax
+global
+local
+Undefined constant "N\UNDEF_CONST"
+Undefined constant "N\UNDEF_CONST"
+Cannot access private constant N\A::P
+Cannot access private constant N\A::P
+Undefined constant N\A::NOPE
+Undefined constant N\A::NOPE
+late-ns
+"#
+    );
+}

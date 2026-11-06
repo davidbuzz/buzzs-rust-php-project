@@ -87,6 +87,26 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
                     mode: *mode,
                 })
             }),
+        Op::FetchConst {
+            name,
+            fallback,
+            dst,
+        } => assigned_cv(next, *dst).map(|to| Op::FetchConstTo {
+            name: *name,
+            fallback: *fallback,
+            dst: *dst,
+            to,
+        }),
+        Op::FetchClassConst {
+            class,
+            name: Operand::Lit(name),
+            dst,
+        } => assigned_cv(next, *dst).map(|to| Op::FetchClassConstTo {
+            class: class.clone(),
+            name: *name,
+            dst: *dst,
+            to,
+        }),
         Op::Isset { place, dst } => isset(places, *place, *dst, false),
         Op::Empty { place, dst } => isset(places, *place, *dst, true),
         Op::Assign { place, val, dst } => assign(places, *place, *val, *dst),
@@ -731,6 +751,37 @@ mod tests {
         );
         assert!(
             ops.iter().any(|op| matches!(op, Op::Assign { .. })),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn constant_fetches_into_variables_are_specialised() {
+        // Classes not declared in the file: nothing is folded at compile
+        // time.
+        let ops = main_ops("<?php $x = C; $y = B::X; echo C; echo B::X; $w = $o::X;");
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::FetchConstTo { .. }))
+                .count(),
+            1,
+            "{ops:?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::FetchClassConstTo { .. }))
+                .count(),
+            2,
+            "{ops:?}"
+        );
+        // A fetch whose value is used otherwise keeps the generic op.
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::FetchConst { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::FetchClassConst { .. })),
             "{ops:?}"
         );
     }

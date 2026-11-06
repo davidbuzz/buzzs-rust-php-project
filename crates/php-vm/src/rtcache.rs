@@ -311,6 +311,14 @@ impl Vm {
         }
     }
 
+    /// The cached value of `Op::FetchConst` (name literal `name`,
+    /// namespace fallback `fallback`), if the slot holds one: no lookup,
+    /// no diagnostic (the hot pre-match of `Vm::run`).
+    #[inline]
+    pub(crate) fn const_hit(&self, name: u32, fallback: Option<u32>) -> Option<Value> {
+        self.const_probe(name, fallback.is_some()).ok()
+    }
+
     /// The cached value, or whether the slot should be filled after the
     /// uncached fetch.
     #[inline]
@@ -404,6 +412,19 @@ impl Vm {
         let v = self.op_fetch_class_const(spec, n)?;
         self.class_const_fill(spec, l, dyn_class.flatten());
         Ok(v)
+    }
+
+    /// The cached value of `A::NAME` (`name` the constant-name literal) for
+    /// a class named or `self`/`parent`/`static`, if the op's slot holds
+    /// one valid for the calling scope: no lookup, no diagnostic, nothing
+    /// consumed (the hot pre-match of `Vm::run`). A dynamic class (its
+    /// operand is consumed on a hit) gives `None`.
+    #[inline]
+    pub(crate) fn class_const_cached(&self, spec: &ClassSpec, name: u32) -> Option<Value> {
+        if matches!(spec, ClassSpec::Dyn(_)) {
+            return None;
+        }
+        self.class_const_hit(spec, name, None)
     }
 
     /// The class of the object a dynamic class operand (`$obj::X`) holds,
