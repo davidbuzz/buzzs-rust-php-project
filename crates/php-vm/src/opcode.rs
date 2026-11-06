@@ -709,10 +709,11 @@ pub struct OpArray {
 /// [`PropCacheEntry::base`] of a `$this->name` place.
 pub const PROP_CACHE_THIS: u32 = u32::MAX;
 
-/// An [`OpArray::prop_cache`] entry: the declared property a one-segment
+/// An [`OpArray::prop_cache`] entry: the property the first segment of a
 /// property place (`$cv->name`, `$this->name`, literal name) resolved to
 /// for one class and calling scope, like php-src's cached
-/// `(ce, offset, prop_info)` triple. Classes are compared by address and
+/// `(ce, offset, prop_info)` triple: a declared slot or a dynamic
+/// property. Classes are compared by address and
 /// held weakly, which pins the address without keeping the class alive (a
 /// method's op array caching its own class would otherwise be an `Rc`
 /// cycle).
@@ -726,6 +727,8 @@ pub struct PropCacheEntry {
     pub base: u32,
     /// The declared property's slot.
     pub slot: u32,
+    /// The literal index of the property name.
+    pub lit: u32,
     /// Builtin type bits (`types::mask`) a written value may have to be
     /// stored without coercion; `u32::MAX` for an untyped property.
     pub accept: u32,

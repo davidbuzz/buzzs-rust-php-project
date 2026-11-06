@@ -1,24 +1,26 @@
-//! Per-place runtime cache of declared property slots: php-src's
+//! Per-place runtime cache of property lookups: php-src's
 //! `CACHE_ADDR(opline->extended_value)` slot of `ZEND_FETCH_OBJ_R`/`_IS`,
 //! `ZEND_ASSIGN_OBJ`, `ZEND_ASSIGN_OBJ_OP`, `ZEND_PRE/POST_INC/DEC_OBJ`
 //! and `ZEND_ISSET_ISEMPTY_PROP_OBJ` (ref: Zend/zend_vm_def.h,
 //! Zend/zend_execute.c `zend_fetch_property_address`,
 //! Zend/zend_object_handlers.c `zend_get_property_offset`).
 //!
-//! A one-segment property place with a literal name on a CV or `$this`
-//! (`$o->p`, `$this->p`) remembers the declared property its last lookup
-//! found, keyed by the object's class and the calling scope. Both decide
-//! `zend_get_property_offset`'s answer; php-src's runtime cache belongs to
-//! one op array in one scope (a closure rebound to another scope gets its
-//! own), ours to the op array alone, so the scope is part of the key. A hit
-//! reads or writes the slot directly.
+//! A property place with a literal name on a CV or `$this` (`$o->p`,
+//! `$this->p`) remembers what its last lookup found, keyed by the object's
+//! class and the calling scope: a declared property's slot, or that the
+//! name is a dynamic property (php-src's `ZEND_DYNAMIC_PROPERTY_OFFSET`).
+//! Both key parts decide `zend_get_property_offset`'s answer; php-src's
+//! runtime cache belongs to one op array in one scope (a closure rebound
+//! to another scope gets its own), ours to the op array alone, so the
+//! scope is part of the key. A hit reads or writes the value directly.
 //!
-//! Every case a cached slot does not cover takes the generic place walk
-//! unchanged: lazy objects, undefined (uninitialized or unset) slots,
-//! slots holding references, hooked and virtual properties, classes with
-//! native property handlers, readonly and asymmetric-visibility properties
-//! for writes, and typed properties when the value would need a coercion.
-//! An initialized, accessible declared slot is exactly where
+//! Every case the cache does not cover takes the generic place walk
+//! unchanged: lazy objects, undefined (uninitialized or unset) slots and
+//! missing dynamic properties, values held by reference, hooked and
+//! virtual properties, classes with native property handlers, readonly
+//! and asymmetric-visibility properties for writes, and typed properties
+//! when the value would need a coercion. An initialized, accessible
+//! declared slot or an existing dynamic property is exactly where
 //! `zend_std_read_property` & co. return without consulting `__get`,
 //! `__set` or `__isset`, so a hit needs no magic-method check.
 
@@ -26,23 +28,26 @@ use crate::class::Class;
 use crate::func::flags;
 use crate::object;
 use crate::opcode::{
-    IncDecKind, Operand, Place, PlaceBase, PlaceId, PropCacheEntry, Seg, PROP_CACHE_THIS,
+    IncDecKind, OpArray, Operand, Place, PlaceBase, PlaceId, PropCacheEntry, Seg, PROP_CACHE_THIS,
 };
 use crate::props::PropLookup;
 use crate::types::mask;
 use crate::vm::{Frame, FrameKind, Vm, VmResult};
-use php_runtime::{ops, BinaryOp, Obj, Value, ZStr};
+use php_runtime::{ops, ArrayKey, BinaryOp, Obj, Value, ZStr};
 use std::rc::Rc;
 
 /// The entry was filled (an unfilled entry never matches).
 const PC_FILLED: u8 = 1 << 0;
-/// Reads (`FETCH_OBJ_R`/`_IS`) may use the slot.
+/// Reads (`FETCH_OBJ_R`/`_IS`) may use the value.
 const PC_READ: u8 = 1 << 1;
-/// `isset()`/`empty()` may use the slot.
+/// `isset()`/`empty()` may use the value.
 const PC_ISSET: u8 = 1 << 2;
-/// Writes may store into the slot (no readonly, set visibility or native
-/// write handler); typed properties only for values in `accept`.
+/// Writes may store the value directly (no readonly, set visibility or
+/// native write handler); typed properties only values in `accept`.
 const PC_WRITE: u8 = 1 << 3;
+/// The name is a dynamic property (`ZEND_DYNAMIC_PROPERTY_OFFSET`): no
+/// declared or static property of the class or scope has it.
+const PC_DYN: u8 = 1 << 4;
 
 /// The result of probing a place's cache entry.
 enum Probe<T> {
@@ -52,6 +57,14 @@ enum Probe<T> {
     Slow,
     /// The entry is unfilled or for another class or scope.
     Miss,
+}
+
+/// Where a cached property's value lives.
+enum Home {
+    /// Declared slot.
+    Slot(u32),
+    /// Dynamic property of this name.
+    Dyn(ZStr),
 }
 
 /// Whether place `p` has the shape the cache covers: a CV or `$this` with
@@ -140,38 +153,138 @@ fn with_base_obj<R>(f: &Frame, base: u32, k: impl FnOnce(&Obj) -> R) -> Option<R
     out
 }
 
-/// Stores `v` in initialized, non-reference slot `slot` of `o`; returns
-/// the old value (to be dropped once all borrows are released), or `None`
-/// when the slot is undefined or holds a reference.
+/// The home of entry `e`'s property (the dynamic name from `code`).
 #[inline]
-fn store_slot(o: &Obj, slot: u32, v: &Value) -> Option<Value> {
-    let d = object::data(o);
-    let old = {
-        let mut slots = d.slots.borrow_mut();
-        match slots.get_mut(slot as usize) {
-            Some(Some(cur)) if !matches!(cur, Value::Reference(_)) => {
-                Some(std::mem::replace(cur, v.clone()))
-            }
-            _ => None,
-        }
-    };
-    if old.is_some() {
-        d.set_slot_unset(slot as usize, false);
+fn home_of(e: &PropCacheEntry, code: &OpArray) -> Option<Home> {
+    if e.flags & PC_DYN == 0 {
+        return Some(Home::Slot(e.slot));
     }
-    old
+    match code.literals.get(e.lit as usize) {
+        Some(Value::Str(s)) => Some(Home::Dyn(s.clone())),
+        _ => None,
+    }
+}
+
+/// Runs `k` on the current value of a property: an initialized declared
+/// slot or an existing dynamic property (`Slow` otherwise).
+#[inline]
+fn read_home<R>(o: &Obj, h: &Home, k: impl FnOnce(&Value) -> Probe<R>) -> Probe<R> {
+    let d = object::data(o);
+    match h {
+        Home::Slot(s) => match d.slots.borrow().get(*s as usize) {
+            Some(Some(v)) => k(v),
+            _ => Probe::Slow,
+        },
+        Home::Dyn(name) => {
+            let dynp = d.dynamic.borrow();
+            let r = match dynp
+                .as_ref()
+                .and_then(|t| t.get(&ArrayKey::Str(name.clone())))
+            {
+                Some(v) => k(v),
+                None => Probe::Slow,
+            };
+            drop(dynp);
+            r
+        }
+    }
+}
+
+/// [`read_home`] with the value mutable.
+#[inline]
+fn write_home<R>(o: &Obj, h: &Home, k: impl FnOnce(&mut Value) -> Probe<R>) -> Probe<R> {
+    let d = object::data(o);
+    match h {
+        Home::Slot(s) => {
+            let mut slots = d.slots.borrow_mut();
+            let r = match slots.get_mut(*s as usize) {
+                Some(Some(v)) => k(v),
+                _ => Probe::Slow,
+            };
+            drop(slots);
+            r
+        }
+        Home::Dyn(name) => {
+            let mut dynp = d.dynamic.borrow_mut();
+            let r = match dynp
+                .as_mut()
+                .and_then(|t| t.get_mut(&ArrayKey::Str(name.clone())))
+            {
+                Some(v) => k(v),
+                None => Probe::Slow,
+            };
+            drop(dynp);
+            r
+        }
+    }
+}
+
+/// Stores `v` over a property's current non-reference value; returns the
+/// old value (to be dropped once all borrows are released), or `None`
+/// when the property is undefined or holds a reference.
+#[inline]
+fn store_home(o: &Obj, h: &Home, v: &Value) -> Option<Value> {
+    let r = write_home(o, h, |cur| {
+        if matches!(cur, Value::Reference(_)) {
+            Probe::Slow
+        } else {
+            Probe::Hit(std::mem::replace(cur, v.clone()))
+        }
+    });
+    match r {
+        Probe::Hit(old) => {
+            if let Home::Slot(s) = h {
+                object::data(o).set_slot_unset(*s as usize, false);
+            }
+            Some(old)
+        }
+        Probe::Slow | Probe::Miss => None,
+    }
+}
+
+/// `++`/`--` of an int (without overflow) or float in place
+/// (`zend_pre_incdec_property_zval`'s `IS_LONG` fast path, and
+/// `increment_function` on a double): the result, `Slow` otherwise. The
+/// value keeps its type, so a typed property stays valid.
+#[inline]
+fn incdec_in_place(v: &mut Value, kind: IncDecKind) -> Probe<Value> {
+    match v {
+        Value::Int(i) => {
+            let old = *i;
+            let new = if kind.is_inc() {
+                old.checked_add(1)
+            } else {
+                old.checked_sub(1)
+            };
+            match new {
+                Some(n) => {
+                    *i = n;
+                    Probe::Hit(Value::Int(if kind.is_post() { old } else { n }))
+                }
+                None => Probe::Slow,
+            }
+        }
+        Value::Float(x) => {
+            let old = *x;
+            let n = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
+            *x = n;
+            Probe::Hit(Value::Float(if kind.is_post() { old } else { n }))
+        }
+        _ => Probe::Slow,
+    }
 }
 
 impl Vm {
-    /// Runs `k` on the matching cache entry of place `pid` and the object
-    /// its base holds. `need` are the `PC_*` bits the access requires;
-    /// lazy objects always take the generic walk (`zend_lazy_object_init`
-    /// runs there).
+    /// Runs `k` on the matching cache entry of place `pid`, the object its
+    /// base holds and the property's home. `need` are the `PC_*` bits the
+    /// access requires; lazy objects always take the generic walk
+    /// (`zend_lazy_object_init` runs there).
     #[inline]
     fn prop_probe<T>(
         &self,
         pid: PlaceId,
         need: u8,
-        k: impl FnOnce(&PropCacheEntry, &Obj) -> Probe<T>,
+        k: impl FnOnce(&PropCacheEntry, &Obj, Home) -> Probe<T>,
     ) -> Probe<T> {
         let f = self.frame();
         if f.kind == FrameKind::Builtin {
@@ -190,7 +303,10 @@ impl Vm {
             if e.flags & need != need || d.lazy.borrow().is_some() {
                 return Probe::Slow;
             }
-            k(e, o)
+            match home_of(e, &f.code) {
+                Some(h) => k(e, o, h),
+                None => Probe::Slow,
+            }
         });
         drop(cache);
         r.unwrap_or(Probe::Slow)
@@ -224,26 +340,53 @@ impl Vm {
             scope: scope.map(Rc::downgrade),
             base,
             slot: 0,
+            lit,
             accept: 0,
             flags: PC_FILLED,
         };
-        if let PropLookup::Found(pi) = self.lookup_prop(&cls, name, scope) {
-            if pi.hooks.is_none() && !pi.is_virtual() {
-                let h = cls.hooks.as_deref();
-                e.slot = pi.slot;
-                if h.is_none_or(|h| h.read_property.is_none()) {
-                    e.flags |= PC_READ;
-                }
-                if h.is_none_or(|h| h.has_property.is_none()) {
-                    e.flags |= PC_ISSET;
-                }
-                if h.is_none_or(|h| h.write_property.is_none())
-                    && pi.flags & (flags::READONLY | flags::SET_MASK) == 0
-                {
-                    e.flags |= PC_WRITE;
-                    e.accept = pi.ty.as_ref().map_or(u32::MAX, |t| t.mask);
+        let h = cls.hooks.as_deref();
+        let read_ok = h.is_none_or(|h| h.read_property.is_none());
+        let isset_ok = h.is_none_or(|h| h.has_property.is_none());
+        let write_ok = h.is_none_or(|h| h.write_property.is_none());
+        match self.lookup_prop(&cls, name, scope) {
+            PropLookup::Found(pi) => {
+                if pi.hooks.is_none() && !pi.is_virtual() {
+                    e.slot = pi.slot;
+                    if read_ok {
+                        e.flags |= PC_READ;
+                    }
+                    if isset_ok {
+                        e.flags |= PC_ISSET;
+                    }
+                    if write_ok && pi.flags & (flags::READONLY | flags::SET_MASK) == 0 {
+                        e.flags |= PC_WRITE;
+                        e.accept = pi.ty.as_ref().map_or(u32::MAX, |t| t.mask);
+                    }
                 }
             }
+            PropLookup::NotFound => {
+                // `zend_get_property_offset` without a "wrong offset": no
+                // mangled name and no static property of that name, so an
+                // existing dynamic property is read and written as such
+                // (`undeclared_prop_check` would return `false` silently).
+                let plain = name.as_bytes().first() != Some(&0)
+                    && cls.find_static(name.as_bytes()).is_none()
+                    && scope.is_none_or(|s| s.find_static(name.as_bytes()).is_none());
+                if plain {
+                    e.flags |= PC_DYN;
+                    e.accept = u32::MAX;
+                    if read_ok {
+                        e.flags |= PC_READ;
+                    }
+                    if isset_ok {
+                        e.flags |= PC_ISSET;
+                    }
+                    if write_ok {
+                        e.flags |= PC_WRITE;
+                    }
+                }
+            }
+            PropLookup::Inaccessible(_) => {}
         }
         let n = code.places.len();
         let mut cache = code.prop_cache.borrow_mut();
@@ -260,7 +403,7 @@ impl Vm {
         &mut self,
         pid: PlaceId,
         need: u8,
-        k: impl Fn(&PropCacheEntry, &Obj) -> Probe<T>,
+        k: impl Fn(&PropCacheEntry, &Obj, Home) -> Probe<T>,
     ) -> Option<T> {
         match self.prop_probe(pid, need, &k) {
             Probe::Hit(v) => Some(v),
@@ -291,30 +434,29 @@ impl Vm {
 
     /// `ZEND_FETCH_OBJ_R`/`_IS` of the first segment of place `pid` (see
     /// [`cacheable_head`]): the (dereferenced) value of an initialized
-    /// declared slot, or `None` for the generic walk.
+    /// declared slot or an existing dynamic property, or `None` for the
+    /// generic walk.
     #[inline]
     pub(crate) fn prop_cache_read(&mut self, pid: PlaceId) -> Option<Value> {
-        self.prop_probe_fill(pid, PC_FILLED | PC_READ, |e, o| {
-            match object::data(o).slots.borrow().get(e.slot as usize) {
-                Some(Some(v)) => Probe::Hit(v.deref()),
-                _ => Probe::Slow,
-            }
+        self.prop_probe_fill(pid, PC_FILLED | PC_READ, |_, o, h| {
+            read_home(o, &h, |v| Probe::Hit(v.deref()))
         })
     }
 
-    /// `ZEND_ASSIGN_OBJ` of cacheable place `pid`: stores `v` in an
-    /// initialized declared slot and returns the assigned value, or hands
-    /// `v` back (`Err`) for the generic walk.
+    /// `ZEND_ASSIGN_OBJ` of cacheable place `pid`: stores `v` over an
+    /// initialized declared slot or an existing dynamic property and
+    /// returns the assigned value, or hands `v` back (`Err`) for the
+    /// generic walk.
     #[inline]
     pub(crate) fn prop_cache_assign(&mut self, pid: PlaceId, v: Value) -> Result<Value, Value> {
         if matches!(v, Value::Reference(_)) {
             return Err(v);
         }
-        let old = self.prop_probe_fill(pid, PC_FILLED | PC_WRITE, |e, o| {
+        let old = self.prop_probe_fill(pid, PC_FILLED | PC_WRITE, |e, o, h| {
             if !accepts(e.accept, &v) {
                 return Probe::Slow;
             }
-            match store_slot(o, e.slot, &v) {
+            match store_home(o, &h, &v) {
                 Some(old) => Probe::Hit(old),
                 None => Probe::Slow,
             }
@@ -328,46 +470,19 @@ impl Vm {
         }
     }
 
-    /// `ZEND_PRE/POST_INC/DEC_OBJ` of cacheable place `pid` on a declared
-    /// slot holding an int (without overflow) or a float, updated in place
-    /// (`zend_pre_incdec_property_zval`): the result, or `None` for the
-    /// generic walk. The value keeps its type, so a typed property stays
-    /// valid.
+    /// `ZEND_PRE/POST_INC/DEC_OBJ` of cacheable place `pid` on a property
+    /// holding an int (without overflow) or a float, updated in place: the
+    /// result, or `None` for the generic walk.
     #[inline]
     pub(crate) fn prop_cache_incdec(&mut self, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
-        self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |e, o| {
-            let d = object::data(o);
-            let mut slots = d.slots.borrow_mut();
-            match slots.get_mut(e.slot as usize) {
-                Some(Some(Value::Int(i))) => {
-                    let old = *i;
-                    let new = if kind.is_inc() {
-                        old.checked_add(1)
-                    } else {
-                        old.checked_sub(1)
-                    };
-                    match new {
-                        Some(n) => {
-                            *i = n;
-                            Probe::Hit(Value::Int(if kind.is_post() { old } else { n }))
-                        }
-                        None => Probe::Slow,
-                    }
-                }
-                Some(Some(Value::Float(x))) => {
-                    let old = *x;
-                    let n = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
-                    *x = n;
-                    Probe::Hit(Value::Float(if kind.is_post() { old } else { n }))
-                }
-                _ => Probe::Slow,
-            }
+        self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |_, o, h| {
+            write_home(o, &h, |v| incdec_in_place(v, kind))
         })
     }
 
     /// `ZEND_ASSIGN_OBJ_OP` of cacheable place `pid` with a numeric
-    /// right-hand side on a declared slot holding a number: reads the
-    /// slot, operates and writes the result back like the generic walk
+    /// right-hand side on a property holding a number: reads the value,
+    /// operates and writes the result back like the generic walk
     /// (`fetch_property_rw`, `assign_op_value`, `write_property`) does.
     /// `Ok(None)` leaves the whole operation to the generic walk.
     ///
@@ -383,27 +498,26 @@ impl Vm {
         if !matches!(rhs, Value::Int(_) | Value::Float(_)) {
             return Ok(None);
         }
-        let hit =
-            self.prop_probe_fill(
-                pid,
-                PC_FILLED | PC_READ | PC_WRITE,
-                |e, o| match object::data(o).slots.borrow().get(e.slot as usize) {
-                    Some(Some(cur @ (Value::Int(_) | Value::Float(_)))) => {
-                        Probe::Hit((o.clone(), cur.clone(), e.slot, e.accept))
-                    }
-                    _ => Probe::Slow,
-                },
-            );
-        let Some((obj, cur, slot, accept)) = hit else {
+        let hit = self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |e, o, h| {
+            let cur = read_home(o, &h, |v| match v {
+                Value::Int(_) | Value::Float(_) => Probe::Hit(v.clone()),
+                _ => Probe::Slow,
+            });
+            match cur {
+                Probe::Hit(cur) => Probe::Hit((o.clone(), cur, h, e.accept)),
+                Probe::Slow | Probe::Miss => Probe::Slow,
+            }
+        });
+        let Some((obj, cur, home, accept)) = hit else {
             return Ok(None);
         };
         let nv = ops::binary_op(op, &cur, rhs, self).map_err(|e| self.rt_throw(e))?;
         // A diagnostic of the operation (a float-to-int deprecation) may
         // have run an error handler that changed the object: the direct
-        // store needs the slot as it was, anything else goes through the
-        // property handlers.
+        // store needs the property as it was, anything else goes through
+        // the property handlers.
         if accepts(accept, &nv) && object::data(&obj).lazy.borrow().is_none() {
-            if let Some(old) = store_slot(&obj, slot, &nv) {
+            if let Some(old) = store_home(&obj, &home, &nv) {
                 drop(old);
                 return Ok(Some(nv));
             }
@@ -413,18 +527,16 @@ impl Vm {
     }
 
     /// `ZEND_ISSET_ISEMPTY_PROP_OBJ` of cacheable place `pid` on an
-    /// initialized declared slot: `isset()` (or, with `empty`, `empty()`),
-    /// or `Ok(None)` for the generic walk.
+    /// initialized declared slot or an existing dynamic property:
+    /// `isset()` (or, with `empty`, `empty()`), or `Ok(None)` for the
+    /// generic walk.
     ///
     /// # Errors
     /// The conversion of the value to bool for `empty()`.
     #[inline]
     pub(crate) fn prop_cache_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<Option<bool>> {
-        let v = self.prop_probe_fill(pid, PC_FILLED | PC_ISSET, |e, o| {
-            match object::data(o).slots.borrow().get(e.slot as usize) {
-                Some(Some(v)) => Probe::Hit(v.deref()),
-                _ => Probe::Slow,
-            }
+        let v = self.prop_probe_fill(pid, PC_FILLED | PC_ISSET, |_, o, h| {
+            read_home(o, &h, |v| Probe::Hit(v.deref()))
         });
         let Some(v) = v else {
             return Ok(None);
@@ -640,6 +752,63 @@ class N {
         let expected = "6\ndeep\ndeep\ndflt\nnull-head\nnull-obj\n\
 \nWarning: Undefined array key 5 in t.php on line 15\n|\n\
 \nWarning: Attempt to read property \"q\" on null in t.php on line 16\n|\n";
+        assert_eq!(run(src), expected);
+    }
+
+    /// Dynamic properties: existing ones are read, written, incremented
+    /// and tested directly; missing ones still reach `__get`, creation
+    /// still deprecates, and a static name still notices.
+    #[test]
+    fn dynamic_properties() {
+        let src = r#"<?php
+$o = new stdClass;
+$o->v = 1;
+for ($i = 0; $i < 3; $i++) {
+    $o->v = $o->v + $i;
+    $o->v++;
+    $o->v += 2;
+    echo $o->v, isset($o->v) ? 'y' : 'n', empty($o->w) ? 'e' : 'f', "\n";
+}
+$o->w = 0;
+echo empty($o->w) ? "e\n" : "f\n";
+$r = 5;
+$o->v = &$r;
+for ($i = 0; $i < 2; $i++) { $o->v = $i; }
+echo $r, "\n";
+class D { public $decl = 1; function __get($n) { return "magic-$n"; } }
+$d = new D;
+for ($i = 0; $i < 2; $i++) { echo $d->dyn, "\n"; }
+$d->dyn = 'real';
+for ($i = 0; $i < 2; $i++) { echo $d->dyn, "\n"; }
+unset($d->dyn);
+echo $d->dyn, "\n";
+class S { public static $st = 1; }
+$s = new S;
+for ($i = 0; $i < 2; $i++) { echo $s->st, "|\n"; }
+"#;
+        let expected = r#"4ye
+8ye
+13ye
+e
+1
+magic-dyn
+magic-dyn
+
+Deprecated: Creation of dynamic property D::$dyn is deprecated in t.php on line 19
+real
+real
+magic-dyn
+
+Notice: Accessing static property S::$st as non static in t.php on line 25
+
+Warning: Undefined property: S::$st in t.php on line 25
+|
+
+Notice: Accessing static property S::$st as non static in t.php on line 25
+
+Warning: Undefined property: S::$st in t.php on line 25
+|
+"#;
         assert_eq!(run(src), expected);
     }
 }
