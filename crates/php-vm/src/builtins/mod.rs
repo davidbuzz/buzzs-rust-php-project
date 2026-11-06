@@ -40,6 +40,24 @@ pub struct ExtState {
 
 /// Registers a builtin function from a stub signature.
 pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
+    let (lc, is_new) = insert_builtin(vm, sig, f);
+    if is_new {
+        info::note_new_function(&lc);
+    }
+    lc
+}
+
+/// [`reg`] for the extension API: attributes the function to `module` in
+/// the same registry update that records the new key for Reflection.
+pub(crate) fn reg_module(vm: &mut Vm, sig: &str, f: BuiltinFn, module: &'static str) -> ZStr {
+    let (lc, is_new) = insert_builtin(vm, sig, f);
+    info::note_function(&lc, module, is_new);
+    lc
+}
+
+/// Inserts the builtin function of stub signature `sig`; returns its
+/// lower-case name (the table key) and whether the name was new.
+fn insert_builtin(vm: &mut Vm, sig: &str, f: BuiltinFn) -> (ZStr, bool) {
     let s = sig::parse_sig_borrowed(sig);
     let mut fl = 0;
     if s.variadic {
@@ -62,14 +80,11 @@ pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
         flags: fl,
         handler: f,
     };
-    if vm
+    let is_new = vm
         .functions
         .insert(lc.clone(), Func::Builtin(Rc::new(b)))
-        .is_none()
-    {
-        crate::reflection::note_new(crate::reflection::Table::Function, lc.as_bytes());
-    }
-    lc
+        .is_none();
+    (lc, is_new)
 }
 
 /// Registers an alias for an existing function.
@@ -90,7 +105,7 @@ pub(crate) fn alias(vm: &mut Vm, alias: &str, target: &str) {
             .insert(lc.clone(), Func::Builtin(Rc::new(nb)))
             .is_none()
         {
-            crate::reflection::note_new(crate::reflection::Table::Function, lc.as_bytes());
+            info::note_new_function(&lc);
         }
     }
 }
@@ -118,8 +133,9 @@ pub(crate) fn register_all(vm: &mut Vm) {
 
 /// Defines a constant.
 pub(crate) fn constant(vm: &mut Vm, name: &str, v: Value) {
-    if vm.constants.insert(ZStr::from(name), v).is_none() {
-        crate::reflection::note_new(crate::reflection::Table::Constant, name.as_bytes());
+    let n = ZStr::from(name);
+    if vm.constants.insert(n.clone(), v).is_none() {
+        info::note_new_constant(&n);
     }
 }
 

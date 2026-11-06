@@ -501,17 +501,19 @@ fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIt
     Ok(Box::new(new_iter(dom_object(o), Some(o.clone()))))
 }
 
-/// An iterator over a collection object (`php_dom_get_iterator`); `owner`
-/// is the collection's PHP object, which the iterator keeps alive.
+/// An iterator over a collection object (`php_dom_get_iterator`, or
+/// `dom_token_list_get_iterator` for a token list); `owner` is the
+/// collection's PHP object, which the iterator keeps alive.
 pub(crate) fn new_iter(d: Option<DomObject>, owner: Option<Obj>) -> DomIter {
-    let rewindable = matches!(d, Some(DomObject::TokenList(_)));
+    let tokens = matches!(d, Some(DomObject::TokenList(_)));
     DomIter {
-        owner,
+        _owner: owner,
         source: d,
         handle: None,
         cur: None,
         started: false,
-        rewindable,
+        moved: false,
+        tokens,
     }
 }
 

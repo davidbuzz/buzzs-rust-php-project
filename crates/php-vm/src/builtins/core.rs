@@ -592,36 +592,95 @@ fn dynamic_property_visible(
     }
 }
 
-/// A property in `properties_info` order: (name, declaring class, flags,
-/// instance slot or `None` for a static).
+/// A `properties_info` entry: (name, declaring class (`prop_info->ce`),
+/// flags, instance slot or `None` for a static property).
 type InfoEntry = (ZStr, ZStr, u32, Option<u32>);
 
-/// `ce->properties_info` order: own declarations first, then the parent's.
+/// The entry `c` itself has for `name`: a property it declares, or one a
+/// trait bound into it (declared on `c` as well).
+fn own_info(c: &Class, name: &[u8]) -> Option<InfoEntry> {
+    let mine = |decl: &ZStr| decl.eq_ignore_ascii_case(&c.name);
+    if let Some(p) = c
+        .props
+        .iter()
+        .find(|p| p.name.as_bytes() == name && mine(&p.class))
+    {
+        return Some((p.name.clone(), p.class.clone(), p.flags, Some(p.slot)));
+    }
+    c.static_props
+        .iter()
+        .find(|sp| sp.name.as_bytes() == name && mine(&sp.class))
+        .map(|sp| (sp.name.clone(), sp.class.clone(), sp.flags, None))
+}
+
+/// `ce->properties_info` in php-src order. A user class declares its own
+/// properties at compile time in declaration order (an enum's `name` and
+/// `value` first, promoted constructor parameters where the constructor
+/// is); linking then appends the parent's entries it does not redeclare
+/// (`zend_do_inheritance`, inherited private ones included) and the
+/// properties of its traits (`zend_do_traits_property_binding`; one the
+/// parent already has keeps the parent's entry). An internal class
+/// inherits first and declares its own properties afterwards
+/// (`zend_register_internal_class_ex`; a redeclared name is deleted and
+/// added again by `zend_declare_typed_property`).
 fn properties_info(c: &Rc<Class>, out: &mut Vec<InfoEntry>) {
-    let own = |decl: &ZStr| decl.eq_ignore_ascii_case(&c.name);
-    let add = |out: &mut Vec<InfoEntry>, e: InfoEntry| {
+    fn push(out: &mut Vec<InfoEntry>, e: InfoEntry) {
         if !out.iter().any(|x| x.0 == e.0) {
             out.push(e);
         }
-    };
-    for p in c.props.iter().filter(|p| own(&p.class)) {
-        add(
-            out,
-            (p.name.clone(), p.class.clone(), p.flags, Some(p.slot)),
-        );
     }
-    for sp in c.static_props.iter().filter(|p| own(&p.class)) {
-        add(out, (sp.name.clone(), sp.class.clone(), sp.flags, None));
+    let user = c.decl.as_deref();
+    if let Some(decl) = user {
+        if c.is_enum() {
+            for name in [b"name".as_slice(), b"value".as_slice()] {
+                if let Some(e) = own_info(c, name) {
+                    push(out, e);
+                }
+            }
+        }
+        for p in &decl.props {
+            if let Some(e) = own_info(c, p.name.as_bytes()) {
+                push(out, e);
+            }
+        }
     }
     if let Some(parent) = &c.parent {
         let mut inherited = Vec::new();
         properties_info(parent, &mut inherited);
         for e in inherited {
-            add(out, e);
+            if user.is_none() && own_info(c, e.0.as_bytes()).is_some() {
+                continue;
+            }
+            push(out, e);
         }
+    }
+    if user.is_some() {
+        for t in &c.traits {
+            let mut bound = Vec::new();
+            properties_info(t, &mut bound);
+            for (name, ..) in bound {
+                if let Some(e) = own_info(c, name.as_bytes()) {
+                    push(out, e);
+                }
+            }
+        }
+    }
+    // The rest of what `c` declares (all of an internal class's own).
+    let mine = |decl: &ZStr| decl.eq_ignore_ascii_case(&c.name);
+    for p in c.props.iter().filter(|p| mine(&p.class)) {
+        push(
+            out,
+            (p.name.clone(), p.class.clone(), p.flags, Some(p.slot)),
+        );
+    }
+    for sp in c.static_props.iter().filter(|sp| mine(&sp.class)) {
+        push(out, (sp.name.clone(), sp.class.clone(), sp.flags, None));
     }
 }
 
+/// `get_class_vars()` (`add_class_vars` twice: instance properties, then
+/// static ones), in `properties_info` order, filtered by the caller's
+/// scope.
 fn get_class_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = s(a, 0);
     let Some(cls) = vm.lookup_class(&name)? else {
@@ -639,6 +698,7 @@ fn get_class_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .frames
         .get(vm.frames.len().wrapping_sub(2))
         .and_then(|f| f.scope.clone());
+    // `zend_update_class_constants`.
     let defaults = vm.class_defaults(&cls)?;
     let mut info = Vec::new();
     properties_info(&cls, &mut info);
@@ -676,21 +736,27 @@ fn get_class_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             t.insert(ArrayKey::Str(n.clone()), v);
         }
     }
-    for (n, _, _, slot) in &shown {
-        if slot.is_none() {
-            let decl = shown
-                .iter()
-                .find(|e| e.0 == *n)
-                .and_then(|e| vm.find_class(e.1.as_bytes()))
-                .unwrap_or_else(|| cls.clone());
-            let cell = match vm.static_prop_cell(&decl, n) {
-                Ok(c) => c,
-                Err(Throw::Exception(_)) => continue,
-                Err(e) => return Err(e),
-            };
-            let v = cell.borrow().deref();
-            t.insert(ArrayKey::Str(n.clone()), v);
+    // Static properties report their declared defaults
+    // (`ce->default_static_members_table`), not their current values; a
+    // constant expression is evaluated on a copy, in the declaring class
+    // (where `ConstExpr` code runs).
+    for (n, decl, _, slot) in &shown {
+        if slot.is_some() {
+            continue;
         }
+        let Some(dc) = vm.find_class(decl.as_bytes()) else {
+            continue;
+        };
+        let default = dc
+            .static_props
+            .iter()
+            .find(|sp| sp.name == *n && sp.class.eq_ignore_ascii_case(decl))
+            .and_then(|sp| sp.default.clone());
+        let v = match default {
+            Some(e) => vm.eval_const_expr(&e, Some(&dc))?,
+            None => Value::Null,
+        };
+        t.insert(ArrayKey::Str(n.clone()), v);
     }
     Ok(Value::Array(ZArray::from_table(t)))
 }
@@ -1343,37 +1409,18 @@ fn assert_failed(vm: &mut Vm, msg: Option<ZStr>) -> VmResult<Value> {
     }
 }
 
-/// `zend_exception_error(ex, E_WARNING)`: reports `e` as an
-/// "Uncaught ..." warning. An exception thrown by its `__toString()` is
-/// reported and stays pending (returned as the throw).
+/// `zend_exception_error(ex, E_WARNING)`: reports `e` as an "Uncaught
+/// ..." warning, straight to the error callback like every report of
+/// `zend_exception_error` (`zend_error_va`): a user error handler never
+/// sees it. An exception its `__toString()` threw stays pending
+/// (`EG(exception)`, so `assert()` skips `zend_throw_unwind_exit()`) and is
+/// returned as the throw.
 #[cold]
 fn uncaught_warning(vm: &mut Vm, e: &php_runtime::Obj) -> VmResult<()> {
-    let s = match vm.call_method_name(e, "__toString", Vec::new()) {
-        Ok(v) => v.deref().as_str().cloned().unwrap_or_default(),
-        Err(Throw::Exception(inner)) => {
-            let file = vm
-                .exc_prop(&inner, "file")
-                .as_str()
-                .cloned()
-                .unwrap_or_default();
-            let line =
-                u32::try_from(vm.exc_prop(&inner, "line").as_int().unwrap_or(0)).unwrap_or(0);
-            let msg = format!(
-                "Uncaught {} in exception handling during call to {}::__toString()",
-                object::class_of(&inner).name,
-                object::class_of(e).name
-            );
-            vm.error_at(crate::errors::level::WARNING, &msg, &file, line)?;
-            return Err(Throw::Exception(inner));
-        }
-        Err(t) => return Err(t),
-    };
-    let file = vm.exc_prop(e, "file").as_str().cloned().unwrap_or_default();
-    let line = u32::try_from(vm.exc_prop(e, "line").as_int().unwrap_or(0)).unwrap_or(0);
-    let mut msg = b"Uncaught ".to_vec();
-    msg.extend_from_slice(s.as_bytes());
-    msg.extend_from_slice(b"\n  thrown");
-    vm.error_at_bytes(crate::errors::level::WARNING, &msg, &file, line)
+    match vm.exception_error(e, crate::errors::level::WARNING) {
+        Some(inner) => Err(Throw::Exception(inner)),
+        None => Ok(()),
+    }
 }
 
 fn class_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1968,10 +2015,13 @@ fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 .as_bytes()
                 .iter()
                 .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80);
-        let exists = vars
-            .borrow_mut()
-            .find(name.as_bytes())
-            .is_some_and(|i| vars.borrow().slots[i as usize].is_some());
+        // One borrow: `find` needs it mutably (it may build the name
+        // index), and the slot test reads through the same guard.
+        let exists = {
+            let mut st = vars.borrow_mut();
+            st.find(name.as_bytes())
+                .is_some_and(|i| st.slots[i as usize].is_some())
+        };
         let target = match mode {
             1 => {
                 if exists {

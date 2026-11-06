@@ -6,52 +6,154 @@
 //! A request runs on its own thread (fresh thread-locals for the VM and the
 //! extension crates, and a large stack); the context is reachable from
 //! native functions through a thread-local ([`with_ctx`]).
+//!
+//! The parts of `main/SAPI.c` / `main/main.c` that need the VM —
+//! `sapi_send_headers()` with its `header_register_callback()` callable
+//! ([`php_header`]), `sapi_flush()` ([`sapi_flush`]),
+//! `php_handle_aborted_connection()` ([`handle_aborted_connection`]) and
+//! `zend_set_timeout()` ([`arm_timer`]) — are installed into the VM as its
+//! SAPI hooks by [`crate::functions::Apache2Handler`].
 
 use crate::backend::{Backend, IntField, StrField, Table, TableOp};
 use crate::config::ProcessConfig;
 use crate::headers::{HeaderFacts, HeaderOp, SapiHeaders};
 use php_runtime::{Value, ZStr};
-use php_vm::{Vm, VmOptions};
+use php_support::output::{status as output_status, OutputHost};
+use php_vm::{Throw, Vm, VmOptions, VmResult};
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// `SAPI_POST_BLOCK_SIZE`.
 pub const POST_BLOCK_SIZE: usize = 0x4000;
 
-/// `max_execution_time` bookkeeping shared with the watchdog: the limit
-/// and the request thread's CPU time when the timer was (re)started
-/// (`zend_set_timeout`, which on Linux counts CPU time via
-/// `ITIMER_PROF`).
+/// `PHP_CONNECTION_ABORTED`.
+pub const CONNECTION_ABORTED: i64 = 1;
+/// `PHP_CONNECTION_TIMEOUT`.
+pub const CONNECTION_TIMEOUT: i64 = 2;
+
+/// What the watchdog found when it checked the [`Timer`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Expiry {
+    /// The limit is not reached (or no timer is armed).
+    None,
+    /// `max_execution_time` elapsed: the executor is to raise the fatal
+    /// error.  With `hard_timeout` set the timer now counts that; otherwise
+    /// it is disarmed.
+    Soft,
+    /// `hard_timeout` elapsed after the soft expiry; the timer is disarmed.
+    Hard,
+}
+
+/// `max_execution_time` bookkeeping shared with the handler thread's
+/// watchdog: `zend_set_timeout()` / `zend_timeout_handler()` for a timer
+/// the SAPI runs itself.  The request thread's CPU time counts, as
+/// php-src's `ITIMER_PROF` timer does on Linux: a script blocked in
+/// `sleep()` or on I/O never times out.
+///
+/// The request thread re-arms it (`set_time_limit()`) while the watchdog
+/// checks it, so the state sits behind one lock: a check never sees half
+/// of a re-arm.
 #[derive(Debug, Default)]
 pub struct Timer {
-    limit_secs: AtomicI64,
-    start_cpu_ns: AtomicI64,
+    state: Mutex<TimerState>,
+}
+
+/// The [`Timer`]'s state.
+#[derive(Debug, Default, Clone, Copy)]
+struct TimerState {
+    /// Seconds until the armed expiry (0: disarmed).
+    limit_secs: i64,
+    /// The request thread's CPU time when the timer was (re)armed.
+    start_cpu_ns: i64,
+    /// `EG(timeout_seconds)`: the configured limit, for messages.
+    timeout_secs: i64,
+    /// `EG(hard_timeout)` in seconds (0: none).
+    hard_secs: i64,
+    /// The soft expiry fired; the armed limit is `hard_timeout`.
+    hard_armed: bool,
+    /// Soft expiries so far: each is `php_on_timeout()`, which ORs
+    /// `PHP_CONNECTION_TIMEOUT` into `PG(connection_status)`.
+    timeouts: u64,
 }
 
 impl Timer {
-    /// Restarts the timer with `secs` (0 = unlimited); call on the request
-    /// thread.
-    pub fn reset(&self, secs: i64) {
-        self.start_cpu_ns.store(thread_cpu_ns(), Ordering::SeqCst);
-        self.limit_secs.store(secs.max(0), Ordering::SeqCst);
+    fn state(&self) -> MutexGuard<'_, TimerState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The current limit in seconds.
+    /// `zend_set_timeout(secs)`: (re)arms the timer with `secs` seconds
+    /// (0 = unlimited) and `hard` as `hard_timeout`.  Call on the request
+    /// thread: its CPU clock is the one measured.
+    pub fn reset(&self, secs: i64, hard: i64) {
+        self.reset_at(thread_cpu_ns(), secs, hard);
+    }
+
+    /// [`Timer::reset`] with the request thread's CPU time given.
+    pub(crate) fn reset_at(&self, cpu_ns: i64, secs: i64, hard: i64) {
+        let mut s = self.state();
+        s.start_cpu_ns = cpu_ns;
+        s.timeout_secs = secs.max(0);
+        s.limit_secs = secs.max(0);
+        s.hard_secs = hard.max(0);
+        s.hard_armed = false;
+    }
+
+    /// The configured limit in seconds (`EG(timeout_seconds)`).
     pub fn limit(&self) -> i64 {
-        self.limit_secs.load(Ordering::SeqCst)
+        self.state().timeout_secs
     }
 
-    /// Whether `cpu_ns` (CPU time of the request thread) exceeds the limit.
-    pub fn expired(&self, cpu_ns: i64) -> bool {
-        let limit = self.limit();
-        limit > 0
-            && cpu_ns - self.start_cpu_ns.load(Ordering::SeqCst)
-                >= limit.saturating_mul(1_000_000_000)
+    /// `hard_timeout` in seconds.
+    pub fn hard_limit(&self) -> i64 {
+        self.state().hard_secs
+    }
+
+    /// Whether the limit was exceeded (`PHP_CONNECTION_TIMEOUT`).
+    pub fn timed_out(&self) -> bool {
+        self.timeouts() > 0
+    }
+
+    /// How many times the limit was exceeded in this request.
+    pub fn timeouts(&self) -> u64 {
+        self.state().timeouts
+    }
+
+    /// Disarms the timer (`zend_unset_timeout()`).
+    pub fn disarm(&self) {
+        let mut s = self.state();
+        s.limit_secs = 0;
+        s.hard_armed = false;
+    }
+
+    /// The watchdog's check with the request thread's CPU time `cpu_ns`
+    /// (`zend_timeout_handler()` on each expiry): a soft expiry re-arms
+    /// for `hard_timeout` when that is set and disarms otherwise; a hard
+    /// expiry disarms.
+    pub fn check(&self, cpu_ns: i64) -> Expiry {
+        let mut s = self.state();
+        if s.limit_secs <= 0
+            || cpu_ns.saturating_sub(s.start_cpu_ns) < s.limit_secs.saturating_mul(1_000_000_000)
+        {
+            return Expiry::None;
+        }
+        if s.hard_armed {
+            s.limit_secs = 0;
+            s.hard_armed = false;
+            return Expiry::Hard;
+        }
+        s.timeouts += 1;
+        if s.hard_secs > 0 {
+            s.start_cpu_ns = cpu_ns;
+            s.limit_secs = s.hard_secs;
+            s.hard_armed = true;
+        } else {
+            s.limit_secs = 0;
+        }
+        Expiry::Soft
     }
 }
 
@@ -89,8 +191,21 @@ pub struct RequestCtx {
     pub headers: RefCell<SapiHeaders>,
     /// Method, protocol and default content type.
     pub facts: RefCell<HeaderFacts>,
-    /// `PG(connection_status) & PHP_CONNECTION_ABORTED`.
+    /// `SG(request_info).headers_only`: a HEAD request (`sapi_activate()`).
+    headers_only: bool,
+    /// `PHP_OUTPUT_DISABLED` set by [`RequestCtx::write`] itself (see
+    /// there).
+    output_disabled: Cell<bool>,
+    /// `PG(connection_status) & PHP_CONNECTION_ABORTED`: the client went
+    /// away.
     pub aborted: Cell<bool>,
+    /// `php_handle_aborted_connection()` ran for the abort an `ap_rwrite`
+    /// noticed (see [`abort_interrupt`]).
+    abort_handled: Cell<bool>,
+    /// [`Timer::timeouts`] when the abort was last recorded: the abort
+    /// assigns `PG(connection_status) = PHP_CONNECTION_ABORTED`, dropping
+    /// the `PHP_CONNECTION_TIMEOUT` bit of earlier timeouts.
+    timeouts_at_abort: Cell<u64>,
     /// The request body.
     pub body: RefCell<Body>,
     /// Whether `ap_setup_client_block` ran (and whether a body follows).
@@ -99,7 +214,7 @@ pub struct RequestCtx {
     pub read_post_bytes: Cell<i64>,
     /// `max_execution_time` timer.
     pub timer: Arc<Timer>,
-    /// `header_register_callback()` callable.
+    /// `header_register_callback()` callable (`SG(send_header_fcc)`).
     pub header_callback: RefCell<Option<Value>>,
 }
 
@@ -118,8 +233,13 @@ thread_local! {
 
 /// Runs `f` with the current request context (`None` outside a request).
 pub fn with_ctx<R>(f: impl FnOnce(&RequestCtx) -> R) -> Option<R> {
-    let ctx = CURRENT.with(|c| c.borrow().clone())?;
+    let ctx = current()?;
     Some(f(&ctx))
+}
+
+/// The current request context.
+fn current() -> Option<Rc<RequestCtx>> {
+    CURRENT.with(|c| c.borrow().clone())
 }
 
 impl RequestCtx {
@@ -131,11 +251,16 @@ impl RequestCtx {
             proto_num: i32::try_from(backend.int_field(IntField::ProtoNum)).unwrap_or(1001),
             ..HeaderFacts::default()
         };
+        let headers_only = facts.method == b"HEAD";
         RequestCtx {
             backend,
             headers: RefCell::new(SapiHeaders::new(status)),
             facts: RefCell::new(facts),
+            headers_only,
+            output_disabled: Cell::new(false),
             aborted: Cell::new(false),
+            abort_handled: Cell::new(false),
+            timeouts_at_abort: Cell::new(0),
             body: RefCell::new(Body::Unread),
             body_ready: Cell::new(None),
             read_post_bytes: Cell::new(0),
@@ -150,34 +275,111 @@ impl RequestCtx {
         self.headers.borrow_mut().op(op, &facts, &*self.backend)
     }
 
-    /// `sapi_send_headers()` (no-op once sent).
+    /// The default `Content-Type` header, added once before the headers go
+    /// out: the first half of `sapi_send_headers()`, which php-src runs
+    /// before the `header_register_callback()` callable.
+    pub fn add_default_content_type(&self) {
+        let facts = self.facts.borrow();
+        self.headers
+            .borrow_mut()
+            .add_default_content_type(&facts, &*self.backend);
+    }
+
+    /// `sapi_send_headers()` without the VM (no-op once sent); callers
+    /// holding the VM use [`php_header`], which also runs the
+    /// `header_register_callback()` callable.
     pub fn send_headers(&self) {
         let facts = self.facts.borrow();
         self.headers.borrow_mut().send(&facts, &*self.backend);
     }
 
-    /// Whether headers were sent.
+    /// The outer `sapi_send_headers()`'s own `php_apache_sapi_send_headers()`
+    /// after a `header_register_callback()` callable whose output already
+    /// sent the headers (see [`SapiHeaders::resend`]).
+    fn resend_headers(&self) {
+        let facts = self.facts.borrow();
+        self.headers.borrow_mut().resend(&facts, &*self.backend);
+    }
+
+    /// Whether headers were sent (`SG(headers_sent)`).
     pub fn headers_sent(&self) -> bool {
         self.headers.borrow().sent
     }
 
-    /// `php_apache_sapi_ub_write()`.
+    /// `SG(request_info).headers_only`: a HEAD request gets no body.
+    pub fn headers_only(&self) -> bool {
+        self.headers_only
+    }
+
+    /// `PG(connection_status)`: `PHP_CONNECTION_ABORTED` once the client
+    /// is gone, plus `PHP_CONNECTION_TIMEOUT` for a timeout since the abort
+    /// was last recorded (or since the request started).
+    pub fn connection_status(&self) -> i64 {
+        let mut status = 0;
+        if self.aborted.get() {
+            status |= CONNECTION_ABORTED;
+        }
+        if self.timer.timeouts() > self.timeouts_at_abort.get() {
+            status |= CONNECTION_TIMEOUT;
+        }
+        status
+    }
+
+    /// `PG(connection_status) = PHP_CONNECTION_ABORTED`.
+    fn record_abort(&self) {
+        self.aborted.set(true);
+        self.timeouts_at_abort.set(self.timer.timeouts());
+    }
+
+    /// The client went away (`ap_rwrite` / `ap_rflush` failed).  Records
+    /// the abort and asks the executor for a safe point, where
+    /// [`abort_interrupt`] runs `php_handle_aborted_connection()`; a caller
+    /// holding the VM does that directly.
+    fn note_abort(&self) {
+        let first = !self.aborted.get();
+        self.record_abort();
+        if first {
+            php_vm::interrupt::request_interrupt();
+        }
+    }
+
+    /// `php_apache_sapi_ub_write()`.  Output of the activated output layer
+    /// reaches it once `php_header()` allowed it, so the headers are out.
+    /// Output written before the layer is activated (request-startup
+    /// warnings) finds them unsent: php-src's layer is already active then
+    /// and its `php_header()` would refuse a HEAD request's output for the
+    /// rest of the request, which this does in its place.
     pub fn write(&self, data: &[u8]) {
         if data.is_empty() {
             return;
         }
-        self.send_headers();
-        if !self.aborted.get() && !self.backend.write(data) {
-            self.aborted.set(true);
+        if !self.headers_sent() {
+            self.send_headers();
+            if self.headers_only {
+                self.output_disabled.set(true);
+            }
+        }
+        if self.output_disabled.get() || self.aborted.get() {
+            return;
+        }
+        if !self.backend.write(data) {
+            self.note_abort();
         }
     }
 
-    /// `php_apache_sapi_flush()` (without sending headers: see
-    /// [`ApacheOutput`]).
-    pub fn flush(&self) {
-        if self.headers_sent() && !self.aborted.get() && !self.backend.flush() {
-            self.aborted.set(true);
+    /// `php_apache_sapi_flush()` without the VM: sends the headers, then
+    /// `ap_rflush`.  `false` when the client is gone (the caller runs
+    /// `php_handle_aborted_connection()`).
+    pub fn flush(&self) -> bool {
+        self.send_headers();
+        if self.aborted.get() {
+            return false;
         }
+        if self.backend.flush() {
+            return true;
+        }
+        self.note_abort();
+        false
     }
 
     /// Prepares reading the request body; `false` when there is none.
@@ -249,12 +451,112 @@ impl RequestCtx {
     }
 }
 
+/// `php_header()` for this SAPI, installed as the VM's `send_headers_hook`
+/// (so it runs when output first reaches the SAPI and at request
+/// shutdown): `sapi_send_headers()` adds the default `Content-Type`, runs
+/// the `header_register_callback()` callable — whose own output sends the
+/// headers at once, as in php-src — and sends the headers through
+/// [`RequestCtx::send_headers`].  Returns whether output may follow
+/// (`SG(request_info).headers_only` denies it to HEAD requests).
+pub fn php_header(vm: &mut Vm) -> bool {
+    let Some(ctx) = current() else {
+        return true;
+    };
+    if !ctx.headers_sent() {
+        ctx.add_default_content_type();
+        // `SG(send_header_fcc)` is cleared before the call: the callable
+        // runs once, and a callable it registers itself never runs.
+        let cb = ctx.header_callback.borrow_mut().take();
+        if let Some(cb) = cb {
+            if let Err(t) = vm.call_value(&cb, Vec::new()) {
+                if vm.pending_throw.is_none() {
+                    vm.pending_throw = Some(t);
+                }
+            }
+            drop(cb);
+            if ctx.headers_sent() {
+                // The callable's output sent the headers (the nested
+                // `sapi_send_headers()`); the outer one still calls
+                // `php_apache_sapi_send_headers()` again.
+                ctx.resend_headers();
+            }
+        }
+        ctx.send_headers();
+    }
+    vm.headers_sent = true;
+    !ctx.headers_only()
+}
+
+/// `sapi_flush()`: `php_apache_sapi_flush()` — the headers, then
+/// `ap_rflush`; a lost client is `php_handle_aborted_connection()`.
+pub fn sapi_flush(vm: &mut Vm) -> VmResult<()> {
+    php_header(vm);
+    if with_ctx(RequestCtx::flush).unwrap_or(true) {
+        return Ok(());
+    }
+    handle_aborted_connection(vm)
+}
+
+/// The VM's `sapi_flush_hook`: the output layer's implicit flush
+/// (`implicit_flush`, `ob_implicit_flush()`).  A bailout surfaces right
+/// after the write that triggered it, as php-src's `longjmp` does.
+pub fn implicit_flush(vm: &mut Vm) {
+    if let Err(t) = sapi_flush(vm) {
+        if vm.pending_throw.is_none() {
+            vm.pending_throw = Some(t);
+        }
+    }
+}
+
+/// `php_handle_aborted_connection()`: `PG(connection_status) =
+/// PHP_CONNECTION_ABORTED`, output disabled for the rest of the request
+/// (`php_output_set_status`), and a bailout — the script stops, shutdown
+/// functions and destructors still run — unless `ignore_user_abort` is on.
+pub fn handle_aborted_connection(vm: &mut Vm) -> VmResult<()> {
+    with_ctx(RequestCtx::record_abort);
+    stop_for_aborted_connection(vm)
+}
+
+/// The rest of `php_handle_aborted_connection()` once the status is
+/// recorded.
+fn stop_for_aborted_connection(vm: &mut Vm) -> VmResult<()> {
+    with_ctx(|c| c.abort_handled.set(true));
+    // `php_output_set_status(PHP_OUTPUT_DISABLED)`.  Spelled out: `Vm`
+    // has an inherent `output(&[u8])` method.
+    OutputHost::output(vm).set_status(output_status::DISABLED);
+    if vm.ini_bool("ignore_user_abort") {
+        Ok(())
+    } else {
+        Err(Throw::Exit)
+    }
+}
+
+/// The module's VM interrupt handler: finishes
+/// `php_handle_aborted_connection()` once for an abort that `ap_rwrite`
+/// noticed — [`RequestCtx::write`] recorded the status but has no VM;
+/// php-src bails out from inside `ub_write`.
+pub fn abort_interrupt(vm: &mut Vm) -> VmResult<()> {
+    let due = with_ctx(|c| c.aborted.get() && !c.abort_handled.get()).unwrap_or(false);
+    if due {
+        stop_for_aborted_connection(vm)
+    } else {
+        Ok(())
+    }
+}
+
+/// The VM's `timer_hook` (`zend_set_timeout()`): (re)arms the request's
+/// CPU-time timer with the new `max_execution_time`.
+pub fn arm_timer(vm: &mut Vm, secs: i64) {
+    let hard = vm.ini_long("hard_timeout");
+    with_ctx(|c| c.timer.reset(secs, hard));
+}
+
 /// The VM's standard output: `ub_write` to Apache, sending the headers
 /// before the first byte.  `flush()` is a no-op: the VM flushes its stdout
 /// before log writes and at shutdown, which must neither commit the
 /// headers nor force a chunked response (Apache computes Content-Length
 /// for responses that end without an intermediate flush).  PHP's
-/// `flush()` is implemented by the SAPI functions instead.
+/// `flush()` and the implicit flush go through [`sapi_flush`] instead.
 pub struct ApacheOutput(pub Rc<RequestCtx>);
 
 impl std::fmt::Debug for ApacheOutput {
@@ -424,6 +726,8 @@ fn php_single_quoted(s: &[u8]) -> Vec<u8> {
 /// Runs one request on the current thread (`php_handler()` from
 /// `php_apache_request_ctor()` to `php_apache_request_dtor()`).
 pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
+    // Declared first, dropped last: after the VM's teardown.
+    let _heap = HeapBinding::take();
     let ctx = Rc::new(RequestCtx::new(backend, params.timer.clone()));
     CURRENT.with(|c| *c.borrow_mut() = Some(ctx.clone()));
 
@@ -435,7 +739,13 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
     let mut vm = Vm::with_extensions(&opts, Box::new(ApacheOutput(ctx.clone())), &refs);
     apply_dir_config(&mut vm, &ctx.backend.dir_config());
     ctx.refresh_facts(&vm);
-    params.timer.reset(vm.ini_long("max_execution_time"));
+    // `zend_set_timeout(EG(timeout_seconds))` at request startup, through
+    // the VM's timer hook ([`arm_timer`] → `params.timer`): it also clears
+    // an engine timeout flag a previous request left unhandled.  With
+    // `max_input_time` at -1 the limit covers reading the input too;
+    // `Vm::run_script` re-arms it when the script starts.
+    let limit = vm.ini_long("max_execution_time");
+    vm.set_time_limit(limit);
 
     // php_apache_request_ctor()
     let headers_in_auth = ctx.backend.table_get(Table::HeadersIn, b"Authorization");
@@ -496,27 +806,48 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
     }
     drop(vm);
     CURRENT.with(|c| *c.borrow_mut() = None);
+    // `_heap` collects and releases php-memlimit's heap here.
 }
 
-/// After the script: `php_output_deactivate()` sends the headers if no
-/// output was produced; uploaded files that were not moved are deleted.
+/// php-memlimit's request heap (the `zend_mm` small-block heap) held by
+/// the request thread for the whole of [`run`]: taken before the VM is
+/// built, so that module startup's allocations come from it as in php-cli
+/// (php-memlimit's INTEGRATION.md, "Where the memory comes from"), and
+/// kept across `request_end` so that the VM's teardown frees on the owner
+/// path.  On drop — after the teardown, and also when the request thread
+/// unwinds — the heap is collected (`zend_mm_gc`: empty runs go back at
+/// once) and given up for the next request's thread.  Every request has a
+/// thread of its own, so the httpd thread never binds the heap: an owner
+/// that outlives requests would leave every request on the inner
+/// allocator.  The thread of a `virtual()` sub-request finds its parent's
+/// thread holding the heap and runs on the inner allocator, which
+/// php-memlimit allows.
+struct HeapBinding;
+
+impl HeapBinding {
+    fn take() -> Self {
+        let _ = php_memlimit::bind_to_current_thread();
+        HeapBinding
+    }
+}
+
+impl Drop for HeapBinding {
+    fn drop(&mut self) {
+        let _ = php_memlimit::collect_heap();
+        php_memlimit::unbind_current_thread();
+    }
+}
+
+/// After `php_request_shutdown()` (which `Vm::run_script` performed: the
+/// shutdown functions applied the fatal status, the output layer sent the
+/// headers through [`php_header`]): the timer is disarmed
+/// (`zend_unset_timeout`), the headers go out if nothing did yet, and
+/// uploaded files that were not moved are deleted.
 fn finish(vm: &mut Vm, ctx: &RequestCtx) {
+    ctx.timer.disarm();
     apply_fatal_status(vm);
-    call_header_callback(vm, ctx);
-    ctx.send_headers();
+    php_header(vm);
     crate::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
-}
-
-/// Invokes the `header_register_callback()` callable once, before the
-/// headers are sent from a point where the VM is available.
-pub fn call_header_callback(vm: &mut Vm, ctx: &RequestCtx) {
-    if ctx.headers_sent() {
-        return;
-    }
-    let cb = ctx.header_callback.borrow_mut().take();
-    if let Some(cb) = cb {
-        let _ = vm.call_value(&cb, Vec::new());
-    }
 }
 
 /// Makes `php://input` read the request body through the SAPI (the
@@ -543,6 +874,8 @@ mod tests {
     use super::*;
     use crate::backend::MockBackend;
 
+    const SEC: i64 = 1_000_000_000;
+
     #[test]
     fn auth_parsing() {
         assert_eq!(
@@ -568,29 +901,143 @@ mod tests {
     }
 
     #[test]
-    fn timer_expiry() {
+    fn timer_unlimited_never_expires() {
         let t = Timer::default();
-        t.reset(0);
-        assert!(!t.expired(i64::MAX));
-        t.reset(1);
-        let start = t.start_cpu_ns.load(Ordering::SeqCst);
-        assert!(!t.expired(start + 999_999_999));
-        assert!(t.expired(start + 1_000_000_000));
+        t.reset_at(0, 0, 0);
+        assert_eq!(t.check(i64::MAX), Expiry::None);
+        assert!(!t.timed_out());
+        assert_eq!(t.limit(), 0);
+    }
+
+    #[test]
+    fn timer_soft_expiry_without_hard_timeout_disarms() {
+        let t = Timer::default();
+        t.reset_at(10 * SEC, 2, 0);
+        assert_eq!(t.check(10 * SEC + 2 * SEC - 1), Expiry::None);
+        assert!(!t.timed_out());
+        assert_eq!(t.check(12 * SEC), Expiry::Soft);
+        assert!(t.timed_out(), "PHP_CONNECTION_TIMEOUT");
+        assert_eq!(t.limit(), 2);
+        // Disarmed: php-src's zend_timeout() unsets the timer.
+        assert_eq!(t.check(i64::MAX), Expiry::None);
+    }
+
+    #[test]
+    fn timer_hard_timeout_follows_the_soft_expiry() {
+        let t = Timer::default();
+        t.reset_at(0, 3, 5);
+        assert_eq!(t.check(3 * SEC), Expiry::Soft);
+        assert_eq!(t.hard_limit(), 5);
+        // Counting hard_timeout from the soft expiry.
+        assert_eq!(t.check(3 * SEC + 5 * SEC - 1), Expiry::None);
+        assert_eq!(t.check(8 * SEC), Expiry::Hard);
+        assert_eq!(
+            t.check(i64::MAX),
+            Expiry::None,
+            "disarmed after the hard expiry"
+        );
+    }
+
+    #[test]
+    fn timer_reset_cancels_the_hard_phase() {
+        let t = Timer::default();
+        t.reset_at(0, 1, 5);
+        assert_eq!(t.check(SEC), Expiry::Soft);
+        // set_time_limit() in a shutdown function re-arms a soft timer.
+        t.reset_at(SEC, 2, 5);
+        assert_eq!(t.check(2 * SEC), Expiry::None);
+        assert_eq!(t.check(3 * SEC), Expiry::Soft);
+        t.disarm();
+        assert_eq!(t.check(i64::MAX), Expiry::None);
+    }
+
+    #[test]
+    fn timer_reset_uses_the_thread_clock() {
+        let t = Timer::default();
+        t.reset(1, 0);
+        assert!(t.state().start_cpu_ns <= thread_cpu_ns());
+        assert_eq!(t.check(thread_cpu_ns()), Expiry::None);
+        t.reset(-5, -1);
+        assert_eq!(t.limit(), 0, "negative limits are unlimited");
+        assert_eq!(t.hard_limit(), 0);
     }
 
     #[test]
     fn ctx_output_sends_headers_once() {
         let ctx = RequestCtx::new(Box::new(MockBackend::default()), Arc::new(Timer::default()));
-        ctx.flush();
-        assert!(
-            !ctx.headers_sent(),
-            "flush before output must not send headers"
-        );
+        assert!(!ctx.headers_sent());
         ctx.write(b"hi");
         assert!(ctx.headers_sent());
         ctx.write(b" there");
-        ctx.flush();
+        assert!(ctx.flush());
         assert!(!ctx.aborted.get());
+        assert_eq!(ctx.connection_status(), 0);
+    }
+
+    #[test]
+    fn flush_sends_headers_like_php_apache_sapi_flush() {
+        let ctx = RequestCtx::new(Box::new(MockBackend::default()), Arc::new(Timer::default()));
+        assert!(ctx.flush());
+        assert!(
+            ctx.headers_sent(),
+            "sapi_send_headers() precedes ap_rflush()"
+        );
+    }
+
+    #[test]
+    fn lost_client_marks_the_connection_aborted() {
+        let m = MockBackend::default();
+        *m.disconnected.borrow_mut() = true;
+        let ctx = RequestCtx::new(Box::new(m), Arc::new(Timer::default()));
+        ctx.write(b"hi");
+        assert!(ctx.aborted.get());
+        assert_eq!(ctx.connection_status(), CONNECTION_ABORTED);
+        assert!(!ctx.flush());
+        // Later writes are dropped without touching the server again.
+        ctx.write(b"more");
+        assert!(ctx.aborted.get());
+    }
+
+    #[test]
+    fn connection_status_reports_timeouts() {
+        let timer = Arc::new(Timer::default());
+        let ctx = RequestCtx::new(Box::new(MockBackend::default()), timer.clone());
+        timer.reset_at(0, 1, 0);
+        assert_eq!(timer.check(SEC), Expiry::Soft);
+        assert_eq!(timer.timeouts(), 1);
+        assert_eq!(ctx.connection_status(), CONNECTION_TIMEOUT);
+    }
+
+    #[test]
+    fn an_abort_replaces_the_status_and_a_timeout_adds_to_it() {
+        // `PG(connection_status) = PHP_CONNECTION_ABORTED` drops an earlier
+        // timeout; `php_on_timeout()` ORs a later one in.
+        let timer = Arc::new(Timer::default());
+        let ctx = RequestCtx::new(Box::new(MockBackend::default()), timer.clone());
+        timer.reset_at(0, 1, 0);
+        assert_eq!(timer.check(SEC), Expiry::Soft);
+        ctx.record_abort();
+        assert_eq!(ctx.connection_status(), CONNECTION_ABORTED);
+        // set_time_limit() in a shutdown function, then a second timeout.
+        timer.reset_at(SEC, 1, 0);
+        assert_eq!(timer.check(2 * SEC), Expiry::Soft);
+        assert_eq!(
+            ctx.connection_status(),
+            CONNECTION_ABORTED | CONNECTION_TIMEOUT
+        );
+        // Another failed flush records the abort again.
+        ctx.record_abort();
+        assert_eq!(ctx.connection_status(), CONNECTION_ABORTED);
+    }
+
+    #[test]
+    fn head_requests_get_no_body() {
+        let m = MockBackend::default().with_str(StrField::Method, b"HEAD");
+        let ctx = RequestCtx::new(Box::new(m), Arc::new(Timer::default()));
+        assert!(ctx.headers_only());
+        let m = MockBackend::default().with_str(StrField::Method, b"GET");
+        let ctx = RequestCtx::new(Box::new(m), Arc::new(Timer::default()));
+        assert!(!ctx.headers_only());
     }
 
     #[test]

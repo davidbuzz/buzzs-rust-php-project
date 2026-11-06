@@ -171,6 +171,17 @@ enum Admit {
     Observed,
 }
 
+/// Outcome of [`CountingAlloc::bind`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Bind {
+    /// The heap was free and is now the calling thread's.
+    Taken,
+    /// The calling thread already owned it.
+    Owner,
+    /// Another thread owns it.
+    Foreign,
+}
+
 /// A non-zero value unique to each live thread: the address of this
 /// thread's (destructor-free, const-initialised) `FALLIBLE_DEPTH` slot.
 #[inline]
@@ -209,11 +220,19 @@ pub struct Stats {
 /// [`bind_to_current_thread`](Self::bind_to_current_thread)) uses no locked
 /// instructions at all: a thread-local address compare, relaxed
 /// loads/stores of the live-byte and call counters, a relaxed load of the
-/// precomputed soft threshold and a relaxed peak compare. Other threads pay
-/// one `fetch_add`/`fetch_sub` on a separate counter; everything about limits happens on a `#[cold]`
-/// path. All atomics are `Relaxed` except the over-limit record, which is
-/// published with release/acquire so [`check`](Self::check) sees consistent
-/// fields.
+/// precomputed soft threshold and a relaxed peak compare and store. Other
+/// threads pay one `fetch_add`/`fetch_sub` on a separate counter and a
+/// `fetch_max` for the peak; everything about limits happens on a
+/// `#[cold]` path. All atomics are `Relaxed` except the over-limit record,
+/// which is published with release/acquire so [`check`](Self::check) sees
+/// consistent fields.
+///
+/// The small-block fast paths of `alloc`/`alloc_zeroed`/`dealloc`
+/// ([`alloc_fast`](Self::alloc_fast) and the head of `dealloc`) are
+/// straight-line code without calls, so that the allocator entry points
+/// need no callee-saved registers; everything else is a tail call into the
+/// `#[cold]` general paths, which hold the complete logic (limits, huge and
+/// uncounted blocks, other threads, the observer).
 ///
 /// "Reported" usage (what `memory_get_usage()` returns) is
 /// `raw − baseline + PHP_BASELINE` (saturating at 0), where `baseline` is the
@@ -254,10 +273,13 @@ pub struct Stats {
 /// bins carved out of 2 MiB chunks obtained from `inner`, with unlocked
 /// free lists); everything else, and every request of another thread, goes
 /// to `inner`. Ownership is exclusive: [`bind_to_current_thread`]
-/// only takes a heap nobody owns, and only the owner gives it up
+/// only takes a heap nobody owns (so does
+/// [`collect_heap`](Self::collect_heap), for the duration of a
+/// collection), and only the owner gives it up
 /// ([`request_end`](Self::request_end)), so the unlocked lists are never
 /// touched by two threads at once. The accounting is the same whichever
-/// allocator serves a block.
+/// allocator serves a block. Free blocks stay on their bins until the heap
+/// is collected (`zend_mm_gc`; see [`collect_heap`](Self::collect_heap)).
 ///
 /// [`bind_to_current_thread`]: Self::bind_to_current_thread
 pub struct CountingAlloc<A> {
@@ -273,6 +295,11 @@ pub struct CountingAlloc<A> {
     /// owns [`heap`](Self::heap): it is taken with an acquire CAS from 0
     /// and given back with a release CAS by the owner itself.
     owner: AtomicUsize,
+    /// Whether the owner was bound by [`request_start`](Self::request_start)
+    /// (so [`request_end`](Self::request_end) unbinds it) rather than
+    /// explicitly by [`bind_to_current_thread`](Self::bind_to_current_thread)
+    /// (then it keeps the heap through teardown). Owner only.
+    request_bound: AtomicBool,
     peak: AtomicUsize,
     allocs: AtomicUsize,
     frees: AtomicUsize,
@@ -340,6 +367,7 @@ impl<A> CountingAlloc<A> {
             owned: AtomicUsize::new(0),
             shared: AtomicUsize::new(0),
             owner: AtomicUsize::new(0),
+            request_bound: AtomicBool::new(false),
             peak: AtomicUsize::new(0),
             allocs: AtomicUsize::new(0),
             frees: AtomicUsize::new(0),
@@ -387,8 +415,10 @@ impl<A> CountingAlloc<A> {
         }
     }
 
-    /// 2 MiB chunks the request thread's heap has obtained from the inner
-    /// allocator (they are kept for the life of the allocator).
+    /// 2 MiB chunks the request thread's heap holds, obtained from the
+    /// inner allocator. The first is kept for the life of the allocator;
+    /// others go back once [collecting](Self::collect_heap) finds them
+    /// without a live block.
     pub fn heap_chunks(&self) -> usize {
         self.heap.chunks()
     }
@@ -839,19 +869,6 @@ impl<A> CountingAlloc<A> {
         self.observing.load(Relaxed) != 0
     }
 
-    /// `gc_mem_caches()` (`zend_mm_gc`): Zend returns the bytes released
-    /// from its chunk caches. The request thread's heap keeps freed small
-    /// blocks on its free lists and never gives chunks back (`zend_mm_gc`
-    /// is not ported), so nothing is ever freed. Reported to the
-    /// [observer](Self::set_observer).
-    pub fn gc_mem_caches(&self) -> usize {
-        let freed = 0;
-        if self.is_observing() {
-            self.notify(HeapEvent::Gc { freed });
-        }
-        freed
-    }
-
     /// Whether an operation of the calling thread is to be reported now.
     #[inline]
     fn observed_here(&self) -> bool {
@@ -905,27 +922,18 @@ impl<A> CountingAlloc<A> {
     ///
     /// [`DEFAULT_LIMIT`]: crate::DEFAULT_LIMIT
     pub fn request_start(&self, limit: Option<usize>) -> Result<(), SetLimitError> {
-        self.bind_to_current_thread();
+        // A thread that binds here is unbound by `request_end`; one that
+        // bound itself explicitly before keeps the heap (php-cli: through
+        // the teardown that follows its single request).
+        if self.bind() == Bind::Taken {
+            self.request_bound.store(true, Relaxed);
+        }
         self.forgiven.store(0, Relaxed);
         self.forgiven_huge.store(0, Relaxed);
         self.force_limit(None);
         self.set_baseline();
         self.clear();
         self.set_limit(limit)
-    }
-
-    /// Request shutdown: lift the limit, clear any violation, reset baseline
-    /// and peak.
-    pub fn request_end(&self) {
-        self.forgiven.store(0, Relaxed);
-        self.forgiven_huge.store(0, Relaxed);
-        self.force_limit(None);
-        self.clear();
-        self.baseline.store(0, Relaxed);
-        self.huge_base.store(0, Relaxed);
-        self.reset_peak();
-        self.update_thresholds();
-        self.unbind_current_thread();
     }
 
     // ---- allocator hot path -----------------------------------------
@@ -940,10 +948,43 @@ impl<A> CountingAlloc<A> {
         if new > self.soft_raw.load(Relaxed) || huge {
             return self.admit_slow(new, size, huge);
         }
-        if new > self.peak.load(Relaxed) {
-            self.peak.fetch_max(new, Relaxed);
-        }
+        self.raise_peak(new, owner);
         Admit::Counted
+    }
+
+    /// Raises the peak to `new` if that is higher. The owner thread stores
+    /// it plainly (`fetch_max` was a locked CAS on every allocation while
+    /// usage grew); other threads use `fetch_max`. A peak another thread
+    /// raises between the owner's load and store is overwritten: the peak
+    /// is informational, like the call counters (see [`bump`]), and PHP runs
+    /// a request on one thread.
+    #[inline]
+    fn raise_peak(&self, new: usize, owner: bool) {
+        if new > self.peak.load(Relaxed) {
+            if owner {
+                self.peak.store(new, Relaxed);
+            } else {
+                self.peak.fetch_max(new, Relaxed);
+            }
+        }
+    }
+
+    /// The owner thread's accounting of a block when nothing is special:
+    /// adds `size` live bytes and raises the peak, unless that would cross
+    /// the soft threshold; then nothing changes and `false` is returned
+    /// (the general path decides). Plain loads and stores only.
+    #[inline]
+    fn count_fast(&self, size: usize) -> bool {
+        let owned = self.owned.load(Relaxed).wrapping_add(size);
+        let new = owned.wrapping_add(self.shared.load(Relaxed));
+        if new > self.soft_raw.load(Relaxed) {
+            return false;
+        }
+        self.owned.store(owned, Relaxed);
+        if new > self.peak.load(Relaxed) {
+            self.peak.store(new, Relaxed);
+        }
+        true
     }
 
     /// [`admit`](Self::admit) past the soft threshold or for a huge block.
@@ -960,9 +1001,7 @@ impl<A> CountingAlloc<A> {
             self.release(size);
             return Admit::Refused;
         }
-        if new > self.peak.load(Relaxed) {
-            self.peak.fetch_max(new, Relaxed);
-        }
+        self.raise_peak(new, self.is_owner());
         if self.observed_here() {
             return Admit::Observed;
         }
@@ -1089,10 +1128,9 @@ impl<A> CountingAlloc<A> {
     /// Accounts `size` live bytes without any limit check (a block that
     /// leaves the registry by shrinking).
     fn count_granted(&self, size: usize) {
-        let new = self.add_live(size);
-        if new > self.peak.load(Relaxed) {
-            self.peak.fetch_max(new, Relaxed);
-        }
+        let owner = self.is_owner();
+        let new = self.add_live_as(size, owner);
+        self.raise_peak(new, owner);
     }
 
     #[inline]
@@ -1100,14 +1138,8 @@ impl<A> CountingAlloc<A> {
         self.owner.load(Relaxed) == thread_token()
     }
 
-    /// Adds `size` live bytes, returning the new total.
-    #[inline]
-    fn add_live(&self, size: usize) -> usize {
-        self.add_live_as(size, self.is_owner())
-    }
-
-    /// [`add_live`](Self::add_live) with [`is_owner`](Self::is_owner)
-    /// already known.
+    /// Adds `size` live bytes, returning the new total; `owner` is
+    /// [`is_owner`](Self::is_owner).
     #[inline]
     fn add_live_as(&self, size: usize, owner: bool) -> usize {
         if owner {
@@ -1147,27 +1179,48 @@ impl<A> CountingAlloc<A> {
     ///
     /// Ownership never moves away from a live owner (its heap's free lists
     /// are not locked): it is free again once the owner calls
-    /// [`unbind_current_thread`](Self::unbind_current_thread) (which
-    /// [`request_end`](Self::request_end) does), and binding returns
-    /// `false` until then.
+    /// [`unbind_current_thread`](Self::unbind_current_thread), and binding
+    /// returns `false` until then. A thread bound this way (explicitly)
+    /// keeps the heap across [`request_end`](Self::request_end): php-cli
+    /// binds before module startup and so tears the request down on the
+    /// owner path; a thread that [`request_start`](Self::request_start)
+    /// bound is unbound by `request_end`.
     pub fn bind_to_current_thread(&self) -> bool {
+        match self.bind() {
+            Bind::Taken | Bind::Owner => {
+                self.request_bound.store(false, Relaxed);
+                true
+            }
+            Bind::Foreign => false,
+        }
+    }
+
+    /// Takes the heap for the calling thread unless another thread owns it.
+    fn bind(&self) -> Bind {
         let me = thread_token();
         // Acquire: see the heap as the previous owner left it.
         match self.owner.compare_exchange(0, me, Acquire, Relaxed) {
-            Ok(_) => true,
-            Err(current) => current == me,
+            Ok(_) => Bind::Taken,
+            Err(current) if current == me => Bind::Owner,
+            Err(_) => Bind::Foreign,
         }
     }
 
     /// Gives up ownership if the calling thread is the owner (see
     /// [`bind_to_current_thread`](Self::bind_to_current_thread)). Its
     /// later frees of heap blocks go to the heap's remote lists, its
-    /// allocations to the inner allocator.
+    /// allocations to the inner allocator. On the thread being
+    /// [observed](Self::observe) (which holds no ownership while observed)
+    /// it cancels the give-back that stopping the observer would do.
     pub fn unbind_current_thread(&self) {
+        let me = thread_token();
+        if self.observing.load(Relaxed) == me {
+            self.observed_owner.store(false, Relaxed);
+        }
         // Release: the next owner must see the heap's lists.
-        let _ = self
-            .owner
-            .compare_exchange(thread_token(), 0, Release, Relaxed);
+        if self.owner.compare_exchange(me, 0, Release, Relaxed).is_ok() {
+            self.request_bound.store(false, Relaxed);
+        }
     }
 
     /// Whether the calling thread is the owner.
@@ -1504,6 +1557,200 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
         });
         p
     }
+
+    // ---- request end and heap collection ----------------------------------
+
+    /// Request shutdown: lift the limit, clear any violation, reset baseline
+    /// and peak, and give the heap up if [`request_start`](Self::request_start)
+    /// took it (a thread that bound itself with
+    /// [`bind_to_current_thread`](Self::bind_to_current_thread) keeps it, so
+    /// its teardown frees stay on the owner path).
+    ///
+    /// A thread that `request_start` bound (`php -S` request threads,
+    /// `mod_php`) first [collects](Self::collect_heap) the heap: `zend_mm`
+    /// resets its whole heap at the end of every request
+    /// (`zend_mm_shutdown`), which Rust's object lifetimes do not allow,
+    /// so a long-running SAPI gives back at least the runs and chunks its
+    /// request freed. php-cli, bound explicitly and ending with its one
+    /// request, skips that.
+    pub fn request_end(&self) {
+        self.forgiven.store(0, Relaxed);
+        self.forgiven_huge.store(0, Relaxed);
+        self.force_limit(None);
+        self.clear();
+        self.baseline.store(0, Relaxed);
+        self.huge_base.store(0, Relaxed);
+        self.reset_peak();
+        self.update_thresholds();
+        // Also while observed (ownership parked, see `observe`): the
+        // give-back is cancelled so the heap is free for the next request.
+        if self.request_bound.load(Relaxed) {
+            if self.is_owner() {
+                // SAFETY: the calling thread owns the heap, whose chunks
+                // all come from `inner`.
+                unsafe { self.heap.gc(&self.inner) };
+            }
+            self.unbind_current_thread();
+        }
+    }
+
+    /// `gc_mem_caches()` (`zend_mm_gc`): [collects](Self::collect_heap) the
+    /// request thread's heap and returns the bytes of the runs given back,
+    /// like `zend_mm_gc`. Usage figures do not change (they count live
+    /// bytes, which collecting leaves alone), so neither do the limits.
+    /// Reported to the [observer](Self::set_observer).
+    pub fn gc_mem_caches(&self) -> usize {
+        let freed = self.collect_heap();
+        if self.is_observing() {
+            self.notify(HeapEvent::Gc { freed });
+        }
+        freed
+    }
+
+    /// `zend_mm_gc` on the request thread's heap: runs whose every block is
+    /// free leave the free lists and give their pages back to their chunk
+    /// (any bin reuses them), and chunks left without a used page go back
+    /// to the inner allocator, except the first. Returns the bytes of the
+    /// runs given back. Blocks freed by other threads are collected too.
+    ///
+    /// The owner collects. A thread that does not own the heap collects it
+    /// only while nobody does, taking it for the duration: the
+    /// [observed](Self::observe) thread (its ownership is parked), or a
+    /// SAPI's request thread after its request's teardown (`request_end`
+    /// has given the heap up; collecting then also takes the blocks the
+    /// teardown freed). While another thread owns the heap nothing happens
+    /// and 0 is returned; a thread that binds during the collection runs
+    /// on the inner allocator until it binds again, as when the heap is
+    /// owned.
+    pub fn collect_heap(&self) -> usize {
+        match self.bind() {
+            // SAFETY: the calling thread owns the heap, whose chunks all
+            // come from `inner`.
+            Bind::Owner => unsafe { self.heap.gc(&self.inner) },
+            Bind::Taken => {
+                // SAFETY: as above, for the duration of the collection.
+                let freed = unsafe { self.heap.gc(&self.inner) };
+                // Release: the next owner sees the lists as they are now.
+                let _ = self
+                    .owner
+                    .compare_exchange(thread_token(), 0, Release, Relaxed);
+                freed
+            }
+            Bind::Foreign => 0,
+        }
+    }
+
+    // ---- the entry points' fast and general paths -----------------------
+
+    /// `alloc`/`alloc_zeroed` when nothing is special: the owner thread
+    /// asks for a small block, the bin's free list is not empty and the
+    /// allocation stays under the soft threshold (`zend_mm_alloc_small`'s
+    /// fast half plus the accounting). Returns null otherwise, with
+    /// nothing changed, and [`alloc_general`](Self::alloc_general) takes
+    /// over. Straight-line code without calls; see the type's docs.
+    ///
+    /// # Safety
+    ///
+    /// The caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
+    #[inline]
+    unsafe fn alloc_fast(&self, layout: Layout, zeroed: bool) -> *mut u8 {
+        let Some(bin) = heap::small_bin(layout) else {
+            return ptr::null_mut();
+        };
+        if !self.is_owner() {
+            return ptr::null_mut();
+        }
+        // SAFETY: the calling thread owns the heap; `bin` comes from
+        // `small_bin`.
+        let p = unsafe { self.heap.pop(bin) };
+        if p.is_null() {
+            return p;
+        }
+        if !self.count_fast(layout.size()) {
+            // Over the soft threshold: the general path decides (and pops
+            // this block again).
+            // SAFETY: popped just above, not handed out.
+            unsafe { self.heap.push(p, bin) };
+            return ptr::null_mut();
+        }
+        bump(&self.allocs);
+        if zeroed {
+            // SAFETY: the block holds at least `layout.size()` bytes (its
+            // bin's size) and is ours alone.
+            unsafe { ptr::write_bytes(p, 0, layout.size()) };
+        }
+        p
+    }
+
+    /// `alloc`/`alloc_zeroed` in full: limits, huge and uncounted blocks,
+    /// other threads, the observer, large blocks from `inner`, and small
+    /// blocks whose bin needs a new run.
+    ///
+    /// # Safety
+    ///
+    /// The caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
+    #[cold]
+    #[inline(never)]
+    unsafe fn alloc_general(&self, layout: Layout, zeroed: bool) -> *mut u8 {
+        let huge = layout.size() > MAX_LARGE_SIZE;
+        let owner = self.is_owner();
+        match self.admit(layout.size(), huge, owner) {
+            Admit::Counted => {}
+            Admit::Refused => return ptr::null_mut(),
+            // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
+            Admit::Uncounted(slot) => return unsafe { self.alloc_uncounted(layout, slot, zeroed) },
+            // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
+            Admit::Observed => return unsafe { self.alloc_observed(layout, zeroed) },
+        }
+        // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
+        let p = unsafe {
+            if zeroed {
+                self.raw_alloc_zeroed(layout, owner)
+            } else {
+                self.raw_alloc(layout, owner)
+            }
+        };
+        if p.is_null() {
+            self.release(layout.size());
+        } else {
+            bump(&self.allocs);
+            if huge {
+                self.huge_change(layout.size(), 0);
+            }
+        }
+        p
+    }
+
+    /// `dealloc` in full, for everything the fast path in `dealloc` does
+    /// not cover: blocks of `inner`, other threads (and the observed one),
+    /// huge and uncounted blocks.
+    ///
+    /// # Safety
+    ///
+    /// The caller upholds `GlobalAlloc::dealloc`'s contract.
+    #[cold]
+    #[inline(never)]
+    unsafe fn dealloc_general(&self, ptr: *mut u8, layout: Layout) {
+        let size = layout.size();
+        let owner = self.is_owner();
+        // Unregister before the block can be reused by another thread.
+        let uncounted = size > MAX_LARGE_SIZE && self.forget_uncounted(ptr, size);
+        // SAFETY: caller guarantees `ptr` was allocated by this allocator
+        // with `layout`.
+        unsafe { self.raw_dealloc(ptr, layout, owner) };
+        if !uncounted {
+            if owner {
+                self.owned
+                    .store(self.owned.load(Relaxed).wrapping_sub(size), Relaxed);
+            } else {
+                self.release_foreign(ptr, size);
+            }
+            if size > MAX_LARGE_SIZE {
+                self.huge_change(0, size);
+            }
+        }
+        bump(&self.frees);
+    }
 }
 
 impl<A> fmt::Debug for CountingAlloc<A> {
@@ -1527,75 +1774,48 @@ impl<A> fmt::Debug for CountingAlloc<A> {
 unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
     #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let huge = layout.size() > MAX_LARGE_SIZE;
-        let owner = self.is_owner();
-        match self.admit(layout.size(), huge, owner) {
-            Admit::Counted => {}
-            Admit::Refused => return ptr::null_mut(),
-            // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
-            Admit::Uncounted(slot) => return unsafe { self.alloc_uncounted(layout, slot, false) },
-            // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
-            Admit::Observed => return unsafe { self.alloc_observed(layout, false) },
-        }
-        // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
-        let p = unsafe { self.raw_alloc(layout, owner) };
+        // SAFETY: caller upholds `GlobalAlloc::alloc`'s contract.
+        let p = unsafe { self.alloc_fast(layout, false) };
         if p.is_null() {
-            self.release(layout.size());
-        } else {
-            bump(&self.allocs);
-            if huge {
-                self.huge_change(layout.size(), 0);
-            }
+            // SAFETY: as above.
+            return unsafe { self.alloc_general(layout, false) };
         }
         p
     }
 
     #[inline]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let huge = layout.size() > MAX_LARGE_SIZE;
-        let owner = self.is_owner();
-        match self.admit(layout.size(), huge, owner) {
-            Admit::Counted => {}
-            Admit::Refused => return ptr::null_mut(),
-            // SAFETY: caller upholds `GlobalAlloc::alloc_zeroed`'s contract.
-            Admit::Uncounted(slot) => return unsafe { self.alloc_uncounted(layout, slot, true) },
-            // SAFETY: caller upholds `GlobalAlloc::alloc_zeroed`'s contract.
-            Admit::Observed => return unsafe { self.alloc_observed(layout, true) },
-        }
         // SAFETY: caller upholds `GlobalAlloc::alloc_zeroed`'s contract.
-        let p = unsafe { self.raw_alloc_zeroed(layout, owner) };
+        let p = unsafe { self.alloc_fast(layout, true) };
         if p.is_null() {
-            self.release(layout.size());
-        } else {
-            bump(&self.allocs);
-            if huge {
-                self.huge_change(layout.size(), 0);
-            }
+            // SAFETY: as above.
+            return unsafe { self.alloc_general(layout, true) };
         }
         p
     }
 
     #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let size = layout.size();
-        let owner = self.is_owner();
-        // Unregister before the block can be reused by another thread.
-        let uncounted = size > MAX_LARGE_SIZE && self.forget_uncounted(ptr, size);
-        // SAFETY: caller guarantees `ptr` was allocated by this allocator
-        // with `layout`.
-        unsafe { self.raw_dealloc(ptr, layout, owner) };
-        if !uncounted {
-            if owner {
-                self.owned
-                    .store(self.owned.load(Relaxed).wrapping_sub(size), Relaxed);
-            } else {
-                self.release_foreign(ptr, size);
-            }
-            if size > MAX_LARGE_SIZE {
-                self.huge_change(0, size);
+        // Fast path: a heap block freed by the owner (`zend_mm_free_small`
+        // plus the accounting), without calls.
+        if let Some(bin) = heap::small_bin(layout) {
+            if heap::is_heap_block(ptr) && self.is_owner() {
+                // SAFETY: `ptr` lies in a heap chunk, so it is a block of
+                // this allocator's heap (the caller guarantees it was
+                // allocated here, and `inner`'s own blocks cannot overlap a
+                // chunk, itself a live `inner` block), of the bin its layout
+                // maps to; the calling thread owns the heap.
+                unsafe { self.heap.push(ptr, bin) };
+                self.owned.store(
+                    self.owned.load(Relaxed).wrapping_sub(layout.size()),
+                    Relaxed,
+                );
+                bump(&self.frees);
+                return;
             }
         }
-        bump(&self.frees);
+        // SAFETY: caller upholds `GlobalAlloc::dealloc`'s contract.
+        unsafe { self.dealloc_general(ptr, layout) }
     }
 
     #[inline]
