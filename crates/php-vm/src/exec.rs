@@ -396,14 +396,15 @@ impl Vm {
     }
 
     /// Binds a compiled variable to a reference.
+    ///
+    /// Also the store of `RECV`: the slot is then undefined, and nothing
+    /// is released.
+    #[inline]
     pub(crate) fn cv_bind(&mut self, cv: u32, v: Value) {
         let f = self.frame();
         let idx = f.cv_idx(cv);
         let old = f.vars.borrow_mut().slots[idx].replace(v);
-        if let Some(old) = &old {
-            crate::gc::possible_root(old);
-        }
-        drop(old);
+        release_slot_value(old);
     }
 
     /// Stores a temporary.
@@ -2182,6 +2183,32 @@ fn discard_unrooted(old: Option<Value>) {
         }
         other => drop(other),
     }
+}
+
+/// Releases the old value of a variable slot (`i_zval_ptr_dtor` /
+/// `zval_ptr_dtor` of a variable): an array, object or reference may
+/// become a GC possible root ([`crate::gc::possible_root`], out of line);
+/// anything else is released at once by [`discard_unrooted`].
+#[inline(always)]
+#[allow(clippy::inline_always)] // the common case is an empty or scalar slot
+fn release_slot_value(old: Option<Value>) {
+    if matches!(
+        old,
+        Some(Value::Array(_) | Value::Object(_) | Value::Reference(_))
+    ) {
+        release_rooted(old);
+    } else {
+        discard_unrooted(old);
+    }
+}
+
+/// [`release_slot_value`] of an array, object or reference.
+#[inline(never)]
+fn release_rooted(old: Option<Value>) {
+    if let Some(old) = &old {
+        crate::gc::possible_root(old);
+    }
+    drop(old);
 }
 
 /// A compiled variable read as the value of an assignment to a place
