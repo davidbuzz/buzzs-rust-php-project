@@ -42,6 +42,7 @@ fn notice(message: &str, line: u32) -> String {
 }
 
 const RETURNED: &str = "Only variable references should be returned by reference";
+const YIELDED: &str = "Only variable references should be yielded by reference";
 
 /// `return $a =& $b;` in a by-reference function: php-src master compiles
 /// the assignment for reading, a TMP holding the dereferenced value
@@ -109,4 +110,38 @@ fn by_value_call_result_in_loop_notices() {
          $x =& a();\n\
          var_dump($x);\n");
     assert_eq!(out, format!("{}int(5)\n", notice(RETURNED, 5)));
+}
+
+/// `foreach` by reference over a by-reference generator binds a yielded
+/// constant or a bare `yield` silently (`ZEND_FE_FETCH_RW` wraps the
+/// generator's value in a reference): only `ZEND_YIELD` notices.
+#[test]
+fn by_ref_foreach_over_yielded_values_is_silent() {
+    let out = run("<?php\n\
+         function &gen() {\n\
+         \x20   $b = 1;\n\
+         \x20   yield 5;\n\
+         \x20   yield;\n\
+         \x20   yield $b;\n\
+         }\n\
+         foreach (gen() as &$v) {\n\
+         \x20   var_dump($v);\n\
+         }\n");
+    assert_eq!(out, format!("{}int(5)\nNULL\nint(1)\n", notice(YIELDED, 4)));
+}
+
+/// The loop variable is bound to the generator's current value, as
+/// `ZEND_FE_FETCH_RW` makes it a reference in place.
+#[test]
+fn by_ref_foreach_binds_the_generator_value() {
+    let out = run("<?php\n\
+         function &gen() {\n\
+         \x20   yield 1;\n\
+         }\n\
+         $g = gen();\n\
+         foreach ($g as &$v) {\n\
+         \x20   $v = 7;\n\
+         \x20   var_dump($g->current());\n\
+         }\n");
+    assert_eq!(out, format!("{}int(7)\n", notice(YIELDED, 3)));
 }
