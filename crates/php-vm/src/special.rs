@@ -170,6 +170,8 @@ pub(crate) fn frameless_call(b: &Builtin, call: &PendingCall) -> bool {
         || call.dynamic
         || call.this.is_some()
         || call.scope.is_some()
+        || call.called.is_some()
+        || call.closure.is_some()
         || call.pfa.is_some()
         || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
     {
