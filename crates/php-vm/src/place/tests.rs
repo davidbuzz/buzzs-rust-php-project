@@ -1,6 +1,11 @@
-//! Script-level tests of assignments whose value is a reference to a
-//! container of the place (`ZEND_ASSIGN_DIM` reads `OP_DATA` after the
-//! container fetch). Expected output from `/usr/bin/php -n`.
+//! Script-level tests of the place walks: assignments whose value is a
+//! reference to a container of the place (`ZEND_ASSIGN_DIM` reads `OP_DATA`
+//! after the container fetch), operands read inside the walk, and walks an
+//! error handler observes (live walks). Expected output from
+//! `/usr/bin/php -n` (8.3); where php-src master raises the null-offset
+//! deprecation ("Using null as an array offset is deprecated") after an
+//! undefined-variable offset (`slow_index_convert_w`), it is added to 8.3's
+//! output.
 
 #![allow(clippy::needless_raw_string_hashes)]
 
@@ -121,6 +126,300 @@ Warning: Only the first byte will be assigned to the string offset in t.php on l
 array(1) {
   ["s"]=>
   string(3) "aAc"
+}
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// Undefined variables used as offsets are read when their fetch runs
+/// (after the earlier fetches' diagnostics, with the null-offset
+/// deprecation right after them, and not for a scalar container), and an
+/// undefined assigned value once the slot or the object is there
+/// (`ZEND_ASSIGN_DIM`, `ZEND_ASSIGN_OBJ` read `OP_DATA` last).
+#[test]
+fn undefined_offsets_and_values_are_read_inside_the_walk() {
+    let src = r#"<?php
+$a = [];
+$a[1.5][$u][2.5] = 1;
+$b[$u] = $v;
+$c = [];
+$c[$u]['k'] = $v;
+$d = [];
+$d['x'][$u] .= 'y';
+$e = 'str';
+try { $e[$u] = $v; } catch (Error $ex) { echo $ex->getMessage(), "\n"; }
+$p = new stdClass;
+$p->q[$u] = $v;
+$s = 5;
+try { $s[$u] = $v; } catch (Error $ex) { echo $ex->getMessage(), "\n"; }
+try { $s[$u][1] = $v; } catch (Error $ex) { echo $ex->getMessage(), "\n"; }
+$n = null;
+try { $n->p = $v; } catch (Error $ex) { echo $ex->getMessage(), "\n"; }
+try { $n[0]->p = $v; } catch (Error $ex) { echo $ex->getMessage(), "\n"; }
+echo serialize([$a, $b, $c, $d, $e, $p, $n]), "\n";
+"#;
+    let null_offset =
+        "Using null as an array offset is deprecated, use an empty string instead in t.php on line";
+    let expected = format!(
+        "\nDeprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 3\n\
+         \nWarning: Undefined variable $u in t.php on line 3\n\
+         \nDeprecated: {null_offset} 3\n\
+         \nDeprecated: Implicit conversion from float 2.5 to int loses precision in t.php on line 3\n\
+         \nWarning: Undefined variable $u in t.php on line 4\n\
+         \nDeprecated: {null_offset} 4\n\
+         \nWarning: Undefined variable $v in t.php on line 4\n\
+         \nWarning: Undefined variable $u in t.php on line 6\n\
+         \nDeprecated: {null_offset} 6\n\
+         \nWarning: Undefined variable $v in t.php on line 6\n\
+         \nWarning: Undefined array key \"x\" in t.php on line 8\n\
+         \nWarning: Undefined variable $u in t.php on line 8\n\
+         \nDeprecated: {null_offset} 8\n\
+         \nWarning: Undefined array key \"\" in t.php on line 8\n\
+         \nWarning: Undefined variable $u in t.php on line 10\n\
+         \nWarning: String offset cast occurred in t.php on line 10\n\
+         \nWarning: Undefined variable $v in t.php on line 10\n\
+         Cannot assign an empty string to a string offset\n\
+         \nWarning: Undefined variable $u in t.php on line 12\n\
+         \nDeprecated: {null_offset} 12\n\
+         \nWarning: Undefined variable $v in t.php on line 12\n\
+         Cannot use a scalar value as an array\n\
+         Cannot use a scalar value as an array\n\
+         \nWarning: Undefined variable $v in t.php on line 17\n\
+         Attempt to assign property \"p\" on null\n\
+         \nWarning: Undefined variable $v in t.php on line 18\n\
+         Attempt to assign property \"p\" on null\n\
+         a:7:{{i:0;a:1:{{i:1;a:1:{{s:0:\"\";a:1:{{i:2;i:1;}}}}}}i:1;a:1:{{s:0:\"\";N;}}\
+         i:2;a:1:{{s:0:\"\";a:1:{{s:1:\"k\";N;}}}}i:3;a:1:{{s:1:\"x\";a:1:{{s:0:\"\";s:1:\"y\";}}}}\
+         i:4;s:3:\"str\";i:5;O:8:\"stdClass\":1:{{s:1:\"q\";a:1:{{s:0:\"\";N;}}}}i:6;a:1:{{i:0;N;}}}}\n"
+    );
+    assert_eq!(run(src), expected);
+}
+
+/// With an error handler set, `$a[$u] = $v` raises the offset's warning,
+/// its null-offset deprecation and then the value's warning; a typed
+/// reference that cannot hold an array rejects the write before either
+/// operand is read.
+#[test]
+fn live_walk_reads_the_offset_before_the_value() {
+    let src = r#"<?php
+set_error_handler(function ($no, $msg) { echo "Err: $msg\n"; });
+$a = [];
+$a[$u] = $v;
+class O { public ?int $p = null; }
+$o = new O;
+$r = &$o->p;
+try { $r[$x] = $y; } catch (TypeError $e) { echo "TE: ", $e->getMessage(), "\n"; }
+try { $r[$x][1] = $y; } catch (TypeError $e) { echo "TE: ", $e->getMessage(), "\n"; }
+var_dump($a, $o->p);
+"#;
+    let expected = "Err: Undefined variable $u
+Err: Using null as an array offset is deprecated, use an empty string instead
+Err: Undefined variable $v
+TE: Cannot auto-initialize an array inside a reference held by property O::$p of type ?int
+TE: Cannot auto-initialize an array inside a reference held by property O::$p of type ?int
+array(1) {
+  [\"\"]=>
+  NULL
+}
+NULL
+";
+    assert_eq!(run(src), expected);
+}
+
+/// An error handler that throws stops the operation where php-src's
+/// opcodes stop: after a `false` container's conversion the interrupted
+/// fetch still completes (an intermediate one adds its key, a final
+/// assignment stores, a read-modify-write gives up at the missing key);
+/// after an offset conversion or a missing read-modify-write key nothing is
+/// added; after the assigned value's warning the null is stored.
+#[test]
+fn throwing_handler_stops_the_walk_where_php_src_does() {
+    let src = r#"<?php
+set_error_handler(function ($no, $msg) { throw new Exception($msg); });
+$a = false; try { $a[1][2] = 3; } catch (Exception $e) { echo "1: ", $e->getMessage(), "\n"; } echo serialize($a), "\n";
+$a = [false]; try { $a[0][1][2] = 3; } catch (Exception $e) { echo "2: ", $e->getMessage(), "\n"; } echo serialize($a), "\n";
+$a = []; try { $a[1.5][2] = 3; } catch (Exception $e) { echo "3: ", $e->getMessage(), "\n"; } echo serialize($a), "\n";
+$a = []; try { $a[1][2.5][3] = 3; } catch (Exception $e) { echo "4: ", $e->getMessage(), "\n"; } echo serialize($a), "\n";
+$a = [1 => false]; try { $a[1][2] = 'x'; } catch (Exception $e) { echo "5: ", $e->getMessage(), "\n"; } echo serialize($a), "\n";
+$a = []; try { $a[1]['k'] .= 'x'; } catch (Exception $e) { echo "6: ", $e->getMessage(), "\n"; } echo serialize($a), "\n";
+$a = [false]; try { $a[0][1] .= 'x'; } catch (Exception $e) { echo "7: ", $e->getMessage(), "\n"; } echo serialize($a), "\n";
+$a = [false]; try { $a[0][1]++; } catch (Exception $e) { echo "8: ", $e->getMessage(), "\n"; } echo serialize($a), "\n";
+$a = [1 => 'one']; try { $a[2.5] .= 'x'; } catch (Exception $e) { echo "9: ", $e->getMessage(), "\n"; } echo serialize($a), "\n";
+$a = false; try { $r = &$a[1][2]; } catch (Exception $e) { echo "10: ", $e->getMessage(), "\n"; } echo serialize($a), "\n";
+$a = []; try { $a[1][2] = $u; } catch (Exception $e) { echo "11: ", $e->getMessage(), "\n"; } echo serialize($a), "\n";
+"#;
+    let expected = r#"1: Automatic conversion of false to array is deprecated
+a:1:{i:1;N;}
+2: Automatic conversion of false to array is deprecated
+a:1:{i:0;a:1:{i:1;N;}}
+3: Implicit conversion from float 1.5 to int loses precision
+a:0:{}
+4: Implicit conversion from float 2.5 to int loses precision
+a:1:{i:1;a:0:{}}
+5: Automatic conversion of false to array is deprecated
+a:1:{i:1;a:1:{i:2;s:1:"x";}}
+6: Undefined array key 1
+a:0:{}
+7: Automatic conversion of false to array is deprecated
+a:1:{i:0;a:0:{}}
+8: Automatic conversion of false to array is deprecated
+a:1:{i:0;a:0:{}}
+9: Implicit conversion from float 2.5 to int loses precision
+a:1:{i:1;s:3:"one";}
+10: Automatic conversion of false to array is deprecated
+a:1:{i:1;N;}
+11: Undefined variable $u
+a:1:{i:1;a:1:{i:2;N;}}
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// An error handler that frees the container during a fetch's diagnostic
+/// gives that fetch up: the rest of the place works on a temporary (the
+/// assignment's result is still the value), a final write or
+/// read-modify-write does not happen, and a `false` container's fetch still
+/// reads its undefined-variable offset (`return_null`).
+#[test]
+fn freeing_handler_gives_the_fetch_up() {
+    let src = r#"<?php
+set_error_handler(function ($no, $msg) { echo "Err: $msg\n"; $GLOBALS['a'] = ''; });
+$a = [[['x']]]; $r = ($a[0][$d][1] = 'b'); var_dump($a, $r);
+$a = [1]; $a[$g]++; var_dump($a);
+$a = [false]; $a[0][$h] .= 'x'; var_dump($a);
+$a = [!'a']; $a[0][$i][1] = 'b'; var_dump($a);
+$a = [false]; $a[0][1] .= 'b'; var_dump($a);
+$a = [false]; $a[0][1]++; var_dump($a);
+$a = [[1]]; $a[0][1.5][2] = 'c'; var_dump($a);
+"#;
+    let expected = r#"Err: Undefined variable $d
+string(0) ""
+string(1) "b"
+Err: Undefined variable $g
+string(0) ""
+Err: Automatic conversion of false to array is deprecated
+string(0) ""
+Err: Automatic conversion of false to array is deprecated
+Err: Undefined variable $i
+string(0) ""
+Err: Automatic conversion of false to array is deprecated
+string(0) ""
+Err: Automatic conversion of false to array is deprecated
+string(0) ""
+Err: Implicit conversion from float 1.5 to int loses precision
+string(0) ""
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `zend_std_get_property_ptr_ptr` adds a missing dynamic property as null
+/// before its "Undefined property" warning: when the error handler throws
+/// there, the property stays, `++` and arithmetic compound assignments
+/// still change it, and `.=` leaves it null; a cached array property's
+/// missing key or converted offset is not added.
+#[test]
+fn missing_properties_and_keys_with_a_throwing_handler() {
+    let src = r#"<?php
+function thrower($no, $msg) { throw new Exception("handler: $msg"); }
+set_error_handler('thrower');
+$o = new stdClass;
+try { $o->undef .= 'x'; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+try { $o->n++; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+try { $o->m += 5; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+var_dump($o);
+class W { public $arr = ['k' => 'v']; function run() {
+    try { $this->arr['zz'] .= 'q'; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+    try { $this->arr[2.5] .= 'q'; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+    var_dump($this->arr);
+} }
+(new W)->run();
+"#;
+    let expected = r#"handler: Undefined property: stdClass::$undef
+handler: Undefined property: stdClass::$n
+handler: Undefined property: stdClass::$m
+object(stdClass)#1 (3) {
+  ["undef"]=>
+  NULL
+  ["n"]=>
+  int(1)
+  ["m"]=>
+  int(5)
+}
+handler: Undefined array key "zz"
+handler: Implicit conversion from float 2.5 to int loses precision
+array(1) {
+  ["k"]=>
+  string(1) "v"
+}
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// `zend_fetch_dimension_address` (FETCH_DIM_W, _RW, _UNSET) makes an
+/// array of a referenced `false` silently; `ZEND_ASSIGN_DIM` and
+/// `ZEND_ASSIGN_DIM_OP` raise the deprecation. `ZEND_ASSIGN_DIM_OP` does not
+/// check a typed reference (FETCH_DIM_RW does), and the write-back of `++`
+/// through a property reports the offset conversion once.
+#[test]
+fn reference_containers_and_incdec_write_backs() {
+    let src = r#"<?php
+$a = false; $r = &$a; $a[1][2] = 3;
+$b = false; $r = &$b; $b[1] = 3;
+$c = false; $r = &$c; $c[1] .= 'x';
+$d = false; $r = &$d; $d[1]['x'] .= 'x';
+$e = false; $r = &$e; $e[1]++;
+$f = false; $r = &$f; $q = &$f[1];
+$g = [false]; $r = &$g[0]; $g[0][1][2] = 3;
+$h = false; $r = &$h; unset($h[1][2]);
+$i = false; $r = &$i; $i[] = 1;
+$j = false; $r = &$j; $j[][1] = 1;
+echo serialize([$a, $b, $c, $d, $e, $f, $g, $h, $i, $j]), "\n";
+class O { public ?int $p = null; }
+$o = new O; $rp = &$o->p;
+try { $rp['k'] .= 'x'; } catch (TypeError $ex) { echo $ex->getMessage(), "\n"; }
+var_dump($o->p);
+$o2 = new O; $rq = &$o2->p;
+try { $rq['j']++; } catch (TypeError $ex) { echo $ex->getMessage(), "\n"; }
+var_dump($o2->p);
+class C { public $a = [1 => 1]; function f() { $this->a[1.5]++; var_dump($this->a); } }
+(new C)->f();
+$o = new stdClass; $o->a = [1 => 1];
+$o->a[1.5]++;
+var_dump($o->a);
+"#;
+    let expected = r#"
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 3
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 4
+
+Warning: Undefined array key 1 in t.php on line 4
+
+Warning: Undefined array key 1 in t.php on line 5
+
+Warning: Undefined array key "x" in t.php on line 5
+
+Warning: Undefined array key 1 in t.php on line 6
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 10
+a:10:{i:0;a:1:{i:1;a:1:{i:2;i:3;}}i:1;a:1:{i:1;i:3;}i:2;a:1:{i:1;s:1:"x";}i:3;a:1:{i:1;a:1:{s:1:"x";s:1:"x";}}i:4;a:1:{i:1;i:1;}i:5;a:1:{i:1;N;}i:6;a:1:{i:0;a:1:{i:1;a:1:{i:2;i:3;}}}i:7;b:0;i:8;a:1:{i:0;i:1;}i:9;a:1:{i:0;a:1:{i:1;i:1;}}}
+
+Warning: Undefined array key "k" in t.php on line 15
+array(1) {
+  ["k"]=>
+  string(1) "x"
+}
+Cannot auto-initialize an array inside a reference held by property O::$p of type ?int
+NULL
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 20
+array(1) {
+  [1]=>
+  int(2)
+}
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 23
+array(1) {
+  [1]=>
+  int(2)
 }
 "#;
     assert_eq!(run(src), expected);
