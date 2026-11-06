@@ -829,6 +829,142 @@ var_dump(array_key_exists($resource, $a));
     );
 }
 
+/// The class names of a declaration are lower-cased once, by the first
+/// check (`class_refs`); the cache travels with clones and is invisible to
+/// equality and `Debug`.
+#[test]
+fn class_refs_are_computed_once_per_declaration() {
+    use crate::types::{mask, ClassRef, TypeDecl};
+    use php_runtime::ZStr;
+
+    let ty = TypeDecl {
+        mask: mask::NULL,
+        classes: vec![
+            ZStr::from("SELF"),
+            ZStr::from("Parent"),
+            ZStr::from("\\Foo\\BAR"),
+        ],
+        intersections: vec![vec![ZStr::from("Countable"), ZStr::from("iterator")]],
+        ..Default::default()
+    };
+    let fresh = ty.clone();
+    let refs = ty.class_refs();
+    assert_eq!(
+        refs.classes,
+        [
+            ClassRef::Scope,
+            ClassRef::Parent,
+            ClassRef::Named(ZStr::from("foo\\bar"))
+        ]
+    );
+    assert_eq!(
+        refs.intersections,
+        [vec![
+            ClassRef::Named(ZStr::from("countable")),
+            ClassRef::Named(ZStr::from("iterator"))
+        ]]
+    );
+    assert!(std::ptr::eq(refs, ty.class_refs()));
+    assert!(fresh.lc_cache.get().is_none());
+    assert!(ty.clone().lc_cache.get().is_some());
+    assert_eq!(ty, fresh);
+    assert_eq!(format!("{ty:?}"), format!("{fresh:?}"));
+    assert_ne!(ty, TypeDecl::simple(mask::NULL));
+}
+
+/// `zend_check_type_slow` resolves a type's class through the class table
+/// without autoloading (`zend_fetch_ce_from_type`), so a `class_alias()`
+/// of a class in the object's hierarchy satisfies the type: parameters
+/// (variadic ones included), return values, unions, intersections,
+/// closures, enums, aliases of aliases, instance and static properties and
+/// the references held by them, also for an alias registered after the
+/// declaration. A name absent from the table never matches, and the
+/// diagnostics keep the declared names (expected output from
+/// `/usr/bin/php -n`).
+#[test]
+fn class_alias_types_accept_the_aliased_class() {
+    let src = r#"<?php
+namespace N;
+class Foo { function __toString(): string { return "str"; } }
+class Sub extends Foo {}
+interface IFoo {}
+class Impl implements IFoo {}
+class Both extends Foo implements IFoo {}
+enum E { case A; }
+class_alias(Foo::class, 'N\Bar');
+class_alias(Foo::class, 'Bar2');
+class_alias(IFoo::class, 'N\IBar');
+class_alias(E::class, 'N\F');
+class_alias('N\bar', 'N\Baz');
+function f(Bar $x) { echo "f ", \get_class($x), "\n"; }
+function g(\bar2 $x) { echo "g ", \get_class($x), "\n"; }
+function h(string|Bar $x) { echo "h ", $x instanceof Foo ? \get_class($x) : $x, "\n"; }
+function i(): ?BAR { return new Sub; }
+function j(Bar&IBar $x) { echo "j ", \get_class($x), "\n"; }
+function k(F $e) { echo "k ", $e->name, "\n"; }
+function m(Baz|int $x) { echo "m ", $x instanceof Foo ? \get_class($x) : $x, "\n"; }
+function n(IBar&Impl $x) { echo "n ", \get_class($x), "\n"; }
+function o(bar ...$xs) { foreach ($xs as $x) { echo "o ", \get_class($x), "\n"; } }
+function q(Missing $x) {}
+function late(Late $x) { echo "late ", \get_class($x), "\n"; }
+class P { public static ?Bar $s = null; public Bar|IBar $u; public ?Baz $v = null; }
+f(new Foo); f(new Sub); g(new Foo); h(new Foo); h(1); echo "i ", \get_class(i()), "\n";
+j(new Both); k(E::A); m(new Foo); m(2); n(new Impl); o(new Foo, new Sub);
+$c = function (Bar $x): Bar { echo "closure\n"; return $x; }; $c(new Foo);
+$p = new P; P::$s = new Foo; $p->u = new Impl; $p->u = new Foo; $p->v = new Sub; echo "props ok\n";
+$ref = &P::$s; $ref = new Sub; $ref2 = &$p->v; $ref2 = new Foo; echo "refs ok\n";
+try { late(new Foo); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+class_alias(Foo::class, 'N\Late');
+late(new Foo);
+$fail = [
+    fn() => f(new Impl), fn() => h(new Impl), fn() => j(new Impl), fn() => j(new Foo), fn() => n(new Both),
+    fn() => k(new Foo), fn() => q(new Foo), fn() => o(new Foo, new Impl),
+    fn() => $p->u = E::A, fn() => P::$s = new Impl,
+];
+foreach ($fail as $call) {
+    try { $call(); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+try { $ref = new Impl; } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $ref2 = new Impl; } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+echo \get_class(P::$s), " ", \get_class($p->v), "\n";
+"#;
+    assert_eq!(
+        run(src),
+        r#"f N\Foo
+f N\Sub
+g N\Foo
+h N\Foo
+h 1
+i N\Sub
+j N\Both
+k A
+m N\Foo
+m 2
+n N\Impl
+o N\Foo
+o N\Sub
+closure
+props ok
+refs ok
+N\late(): Argument #1 ($x) must be of type N\Late, N\Foo given, called in t.php on line 31
+late N\Foo
+N\f(): Argument #1 ($x) must be of type N\Bar, N\Impl given, called in t.php on line 35
+N\h(): Argument #1 ($x) must be of type N\Bar|string, N\Impl given, called in t.php on line 35
+N\j(): Argument #1 ($x) must be of type N\Bar&N\IBar, N\Impl given, called in t.php on line 35
+N\j(): Argument #1 ($x) must be of type N\Bar&N\IBar, N\Foo given, called in t.php on line 35
+N\n(): Argument #1 ($x) must be of type N\IBar&N\Impl, N\Both given, called in t.php on line 35
+N\k(): Argument #1 ($e) must be of type N\F, N\Foo given, called in t.php on line 36
+N\q(): Argument #1 ($x) must be of type N\Missing, N\Foo given, called in t.php on line 36
+N\o(): Argument #2 must be of type N\bar, N\Impl given, called in t.php on line 36
+Cannot assign N\E to property N\P::$u of type N\Bar|N\IBar
+Cannot assign N\Impl to property N\P::$s of type ?N\Bar
+Cannot assign N\Impl to reference held by property N\P::$s of type ?N\Bar
+Cannot assign N\Impl to reference held by property N\P::$v of type ?N\Baz
+N\Sub N\Foo
+"#
+    );
+}
+
 /// `zend_check_type_slow` resolves string/array callables for user
 /// parameter and return types without `IS_CALLABLE_SUPPRESS_DEPRECATIONS`:
 /// the deprecations are raised once per check, at the callee's declaration
