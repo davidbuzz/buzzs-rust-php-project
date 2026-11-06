@@ -184,21 +184,18 @@ impl Compiler {
                 for e in step {
                     self.compile_expr_discard(e)?;
                 }
-                match to_cond {
-                    Some(j) => {
-                        self.patch_here(j);
-                        for (i, e) in cond.iter().enumerate() {
-                            if i + 1 == cond.len() {
-                                let c = self.compile_expr(e)?;
-                                self.emit(Op::JmpNz(c, start));
-                            } else {
-                                self.compile_expr_discard(e)?;
-                            }
+                if let Some(j) = to_cond {
+                    self.patch_here(j);
+                    for (i, e) in cond.iter().enumerate() {
+                        if i + 1 == cond.len() {
+                            let c = self.compile_expr(e)?;
+                            self.emit(Op::JmpNz(c, start));
+                        } else {
+                            self.compile_expr_discard(e)?;
                         }
                     }
-                    None => {
-                        self.emit(Op::Jmp(start));
-                    }
+                } else {
+                    self.emit(Op::Jmp(start));
                 }
                 self.finish_loop(info, cont);
             }
