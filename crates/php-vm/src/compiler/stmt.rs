@@ -869,7 +869,9 @@ impl Compiler {
                 }
             }
         }
+        let by_ref = returns_ref && !is_gen;
         let mut val = match e {
+            Some(ex) if by_ref => self.by_ref_return_operand(ex)?,
             Some(ex) => self.compile_expr(ex)?,
             None => self.lit(Value::Null),
         };
@@ -879,9 +881,14 @@ impl Compiler {
         // `zend_handle_loops_and_finally`: from the innermost construct
         // out, finally blocks are called and loop variables freed.
         if !fins.is_empty() || !self.fref().loops.is_empty() {
-            // Keep the value in a temporary across the unwinding.
+            // Keep the value in a temporary across the unwinding. The
+            // operand of ZEND_RETURN_BY_REF is a call result or a temporary,
+            // which the finally blocks and loop frees cannot touch: php-src
+            // copies only a CV (`zend_compile_return`), and a copy would
+            // dereference what a by-reference call returned.
             let t = self.tmp();
-            if val != Operand::Unused {
+            let copy = val != Operand::Unused && (!by_ref || matches!(val, Operand::Cv(_)));
+            if copy {
                 self.emit(Op::Move { src: val, dst: t });
                 val = Operand::Tmp(t);
                 // zend_compile_return emits VERIFY_RETURN_TYPE before
@@ -893,13 +900,34 @@ impl Compiler {
             }
             self.emit_return_unwind();
         }
-        if returns_ref && !is_gen {
+        if by_ref {
             // ZEND_RETURN_BY_REF of a value (not a variable).
             self.emit(Op::ReturnByRefValue { val });
         } else {
             self.emit(Op::Return { val });
         }
         Ok(())
+    }
+
+    /// The operand of `return expr;` in a by-reference function when `expr`
+    /// is not a variable (`zend_compile_return`, also the body of
+    /// `fn&() => expr`). A call is fetched for writing
+    /// (`zend_is_variable_or_call`), so the reference a by-reference
+    /// function returned passes through `ZEND_RETURNS_FUNCTION`. Anything
+    /// else is compiled for reading: php-src master guarantees such a TMP
+    /// holds no reference (GH-20628 dereferences `$a =& $b` and `@f()` in
+    /// read context), so ZEND_RETURN_BY_REF raises "Only variable references
+    /// should be returned by reference" and returns a new reference to the
+    /// value. [`Op::ReturnByRefValue`] tells the two apart by whether the
+    /// operand holds a reference, so a temporary is dereferenced here.
+    pub(crate) fn by_ref_return_operand(&mut self, ex: &Expr) -> CResult<Operand> {
+        let v = self.compile_expr(ex)?;
+        if super::expr::is_call_expr(ex) || !matches!(v, Operand::Tmp(_)) {
+            return Ok(v);
+        }
+        let t = self.tmp();
+        self.emit(Op::Move { src: v, dst: t });
+        Ok(Operand::Tmp(t))
     }
 
     /// `zend_handle_loops_and_finally` for `return`: innermost first,

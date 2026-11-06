@@ -851,12 +851,26 @@ impl Compiler {
             }
             BodyKind::Arrow(e) => {
                 self.f().line = e.span.line;
+                // The body is `return e;` (`zend_compile_return`): in a
+                // by-reference arrow function a variable or a call may not
+                // end a nullsafe chain (`zend_assert_not_short_circuited`).
+                let by_ref = spec.by_ref && !spec.is_generator;
+                if by_ref
+                    && (super::stmt::is_ref_expr(e) || super::expr::is_call_expr(e))
+                    && super::expr::contains_nullsafe(e)
+                {
+                    return self.err("Cannot take reference of a nullsafe chain", e.span.line);
+                }
                 if spec.by_ref && super::stmt::is_ref_expr(e) {
                     let p = self.compile_place(e, false)?;
                     let pid = self.place(p);
                     self.emit(Op::ReturnRef { place: pid });
                 } else {
-                    let v = self.compile_expr(e)?;
+                    let v = if by_ref {
+                        self.by_ref_return_operand(e)?
+                    } else {
+                        self.compile_expr(e)?
+                    };
                     if return_type.as_ref().is_some_and(TypeDecl::is_void) {
                         self.free(v);
                         self.emit(Op::Return {
