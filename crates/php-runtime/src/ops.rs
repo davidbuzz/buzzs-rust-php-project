@@ -19,7 +19,7 @@ use crate::convert::{
 };
 use crate::error::{BinaryOp, CastTarget, ErrorLevel, RtResult, RuntimeContext, RuntimeError};
 use crate::numeric::{is_numeric_string_ex, Number};
-use crate::string::{binary_strcmp, ZStr};
+use crate::string::{binary_strcmp, format_long, ZStr, LONG_MAX_LEN};
 use crate::value::{Obj, Value};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -523,9 +523,36 @@ pub fn bool_xor(a: &Value, b: &Value, ctx: &mut (impl RuntimeContext + ?Sized)) 
     Ok(Value::Bool(x ^ y))
 }
 
+/// The string form of a value whose conversion has no side effects and
+/// needs no context (`Str`, `Int`, `Bool`, `Null`), borrowed or formatted
+/// into `buf` (`zend_print_long_to_buf`), without allocating.
+#[inline]
+fn plain_str_bytes<'a>(v: &'a Value, buf: &'a mut [u8; LONG_MAX_LEN]) -> Option<&'a [u8]> {
+    match v {
+        Value::Str(s) => Some(s.as_bytes()),
+        Value::Int(i) => Some(format_long(*i, buf)),
+        Value::Null | Value::Bool(false) => Some(b""),
+        Value::Bool(true) => Some(b"1"),
+        _ => None,
+    }
+}
+
 /// `.` (`concat_function`).
 pub fn concat(a: &Value, b: &Value, ctx: &mut (impl RuntimeContext + ?Sized)) -> RtResult<Value> {
     let (da, db) = (deref(a), deref(b));
+    // Strings, ints, bools and null: one exactly sized result, with no
+    // intermediate string for an integer operand (php-src converts with
+    // `zval_get_string`, whose `zend_long_to_str` uses a stack buffer).
+    let (mut ba, mut bb) = ([0u8; LONG_MAX_LEN], [0u8; LONG_MAX_LEN]);
+    if let (Some(x), Some(y)) = (plain_str_bytes(&da, &mut ba), plain_str_bytes(&db, &mut bb)) {
+        if x.is_empty() {
+            return Ok(Value::Str(db.to_zstr(ctx)?));
+        }
+        if y.is_empty() {
+            return Ok(Value::Str(da.to_zstr(ctx)?));
+        }
+        return Ok(Value::Str(ZStr::concat(x, y)));
+    }
     if !matches!(&*da, Value::Str(_)) || !matches!(&*db, Value::Str(_)) {
         if let Some(r) = try_object_op(BinaryOp::Concat, &da, &db, ctx)? {
             return Ok(r);
@@ -1498,6 +1525,33 @@ mod tests {
             v.as_str().map(ZStr::to_string_lossy).as_deref(),
             Some("ab1c")
         );
+    }
+
+    #[test]
+    fn concat_scalars_without_temporaries() {
+        let mut c = CollectingContext::new();
+        let cat = |a: Value, b: Value, c: &mut CollectingContext| {
+            concat(&a, &b, c)
+                .unwrap()
+                .as_str()
+                .map(ZStr::to_string_lossy)
+                .unwrap()
+        };
+        assert_eq!(cat(Value::from("v"), Value::Int(-15), &mut c), "v-15");
+        assert_eq!(
+            cat(Value::Int(i64::MIN), Value::from("!"), &mut c),
+            "-9223372036854775808!"
+        );
+        assert_eq!(cat(Value::Int(7), Value::Int(42), &mut c), "742");
+        assert_eq!(cat(Value::Bool(true), Value::Null, &mut c), "1");
+        assert_eq!(cat(Value::Null, Value::Bool(false), &mut c), "");
+        assert_eq!(cat(Value::from(""), Value::Int(3), &mut c), "3");
+        assert_eq!(cat(Value::Float(1.5), Value::from("x"), &mut c), "1.5x");
+        // An empty operand gives the other string itself.
+        let s = Value::from("keep");
+        let r = concat(&s, &Value::from(""), &mut c).unwrap();
+        assert!(ZStr::ptr_eq(r.as_str().unwrap(), s.as_str().unwrap()));
+        assert!(c.diagnostics.is_empty());
     }
 
     fn self_referencing() -> Value {

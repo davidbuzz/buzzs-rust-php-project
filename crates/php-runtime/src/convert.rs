@@ -9,9 +9,9 @@ use crate::array::{ArrayKey, HashTable, ZArray};
 use crate::error::{
     CastTarget, ErrorLevel, PropertyPurpose, RtResult, RuntimeContext, RuntimeError,
 };
-use crate::float::{double_to_string, format_double_h};
+use crate::float::{format_double_h, format_double_zstr};
 use crate::numeric::{is_numeric_string_ex, str_to_f64, Number};
-use crate::string::ZStr;
+use crate::string::{format_long, ZStr, LONG_MAX_LEN};
 use crate::value::{Obj, Value};
 
 /// `(double)ZEND_LONG_MAX` (= 2^63).
@@ -133,31 +133,15 @@ pub fn long_to_zstr(n: i64) -> ZStr {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         return ZStr::from_byte(b'0' + n as u8);
     }
-    // `i64::MIN` is 19 digits plus the sign.
-    let mut buf = [0u8; 20];
-    let mut pos = buf.len();
-    let mut m = n.unsigned_abs();
-    loop {
-        pos -= 1;
-        #[allow(clippy::cast_possible_truncation)]
-        let digit = (m % 10) as u8;
-        buf[pos] = b'0' + digit;
-        m /= 10;
-        if m == 0 {
-            break;
-        }
-    }
-    if n < 0 {
-        pos -= 1;
-        buf[pos] = b'-';
-    }
-    ZStr::from(&buf[pos..])
+    let mut buf = [0u8; LONG_MAX_LEN];
+    ZStr::from(format_long(n, &mut buf))
 }
 
 /// `zend_double_to_str`: formats a float with the `precision` setting and
-/// warns when it is NaN.
+/// warns when it is NaN. The text is built in a stack buffer and copied
+/// once into an exactly sized string.
 pub fn double_to_zstr(d: f64, ctx: &mut (impl RuntimeContext + ?Sized)) -> RtResult<ZStr> {
-    let s = ZStr::from(double_to_string(d, ctx.precision()));
+    let s = format_double_zstr(d, ctx.precision(), false);
     if d.is_nan() {
         nan_coerced_warning(ctx, "string")?;
     }
