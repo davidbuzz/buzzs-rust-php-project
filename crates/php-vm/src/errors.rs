@@ -653,7 +653,7 @@ impl Vm {
     /// `cb` at every call, in the calling user frame's scope (the code that
     /// raised the error; none for an exception handler), raising the
     /// callable deprecations each time; the call is `ZEND_CALL_DYNAMIC`.
-    /// A callable that does not resolve there is [`Vm::invalid_callback`].
+    /// A callable that does not resolve there is `invalid_callback`.
     pub(crate) fn call_user_function(&mut self, cb: &Value, args: Vec<Value>) -> VmResult<Value> {
         let mut call = match self.zend_is_callable(cb, false)? {
             Ok(call) => call,

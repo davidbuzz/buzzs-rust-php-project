@@ -693,10 +693,11 @@ impl SplHost for VmHost<'_> {
     }
 
     fn call_callable(&mut self, callable: &Value, args: &[Value]) -> RtResult<Value> {
-        let cached = match &self.resolved {
-            Some((v, call)) if same_callable(v, callable) => Some(call.clone()),
-            _ => None,
-        };
+        let cached = self
+            .resolved
+            .as_ref()
+            .filter(|(v, _)| same_callable(v, callable))
+            .map(|(_, call)| call.clone());
         let r = match cached {
             // `zend_call_known_fcc()` with the cache `Z_PARAM_FUNC` filled.
             Some(call) => self.vm.call_resolved(call, args.to_vec()),
