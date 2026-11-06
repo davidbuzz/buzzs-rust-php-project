@@ -309,7 +309,12 @@ impl Vm {
     /// [`Vm::read_cv_defined`], except that a reference to null, false or
     /// an array is left to the place walk, which reads it after fetching
     /// the containers ([`Vm::place_assign_cv_ref`]).
-    #[inline]
+    ///
+    /// Always inlined: `Vm::run`'s `Assign` arm called it out of line in
+    /// the release build of 4e1c2df8, the `CvOpData` returned through
+    /// memory, on every `$obj->p = $v` / `$a[$k] = $v`.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above
     pub(crate) fn read_cv_op_data(&self, cv: u32) -> CvOpData {
         self.frame().peek_cv(cv, |s| match s {
             Some(Value::Reference(r)) => {
@@ -2160,7 +2165,11 @@ impl Vm {
     }
 
     /// Value copy semantics for assignment: references are unwrapped.
-    #[inline]
+    /// Always inlined: a call passes and returns the `Value` through memory
+    /// (`Vm::run`'s `Assign` arm made one in the release build of 4e1c2df8)
+    /// for what is a tag test in the common case.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above
     pub(crate) fn copy_on_assign(&self, v: Value) -> Value {
         match v {
             Value::Reference(r) => r.get(),
