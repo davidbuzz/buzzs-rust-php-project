@@ -368,6 +368,8 @@ const SNIPPETS: &[&str] = &[
     "\"${a 1}\";",
     "\"{$a 1}\";",
     "\"{$a->b 1}\";",
+    "\"{$f = 'f'}\";",
+    "\"{$g{'h'}}\";",
     "\"$a->1\";",
     "\"${a[1 2]}\";",
     "\"$a\" 1;",
@@ -459,6 +461,19 @@ const MASTER_OVERRIDES: &[(&str, &str)] = &[
     (
         "\"{$a->b 1}\";",
         "Parse error: syntax error, unexpected integer \"1\", expecting \"->\" or \"?->\" or \"[\" on line 1",
+    ),
+    // php-src 780a8280d23 removed `array_object_dereferenceable '{' expr '}'`
+    // from the grammar, so "{" left the expected-token list after a variable
+    // (Zend/tests/grammar/alternative_offset_syntax_in_encaps_string.phpt,
+    // Zend/tests/new_without_parentheses/unset_new.phpt) and `"{$g{'h'}}"`
+    // is a syntax error instead of the 8.x compile error.
+    (
+        "\"{$f = 'f'}\";",
+        "Parse error: syntax error, unexpected token \"=\", expecting \"->\" or \"?->\" or \"[\" on line 1",
+    ),
+    (
+        "\"{$g{'h'}}\";",
+        "Parse error: syntax error, unexpected token \"{\", expecting \"->\" or \"?->\" or \"[\" on line 1",
     ),
     (
         "$a = <<<A\n{$a 1}\nA;\n",
