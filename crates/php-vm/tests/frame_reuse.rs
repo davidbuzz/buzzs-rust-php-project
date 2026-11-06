@@ -71,7 +71,7 @@ fn oversized_frame_buffers_are_released_and_values_dropped() {
     {
         let mut vars = frame.vars.borrow_mut();
         vars.slots.resize(1024, Some(Value::Str(value.clone())));
-        vars.names.resize(1024, value);
+        vars.names.to_mut().resize(1024, value);
     }
     let class = vm.classes[&ZStr::from("stdclass")].clone();
     let object = php_vm::object::new_object(class, Vec::new());
