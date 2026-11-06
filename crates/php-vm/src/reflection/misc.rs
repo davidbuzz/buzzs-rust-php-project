@@ -5,7 +5,6 @@
 
 use super::{rexc, set_name_props, str_arg, this, this_refl, zs, FnRef, Refl, PRIV, PUB, RO, STAT};
 use crate::builtins::classbuilder::ClassBuilder;
-use crate::builtins::fasthash::FastMap;
 use crate::class::{cflags, Class, ClassConst, ConstExpr, InternalKind, Magic, NameMap, PropInfo};
 use crate::func::{flags, Args, Builtin, Func, Method};
 use crate::object;
@@ -20,64 +19,13 @@ use std::rc::Rc;
 // Extension attribution
 // ---------------------------------------------------------------------
 
-#[derive(Default)]
-struct Modules {
-    functions: FastMap<Vec<u8>, &'static str>,
-    classes: FastMap<Vec<u8>, &'static str>,
-    constants: FastMap<Vec<u8>, &'static str>,
-    /// The extension whose `register` is running.
-    current: Option<&'static str>,
-}
-
-thread_local! {
-    static MODULES: RefCell<Modules> = RefCell::new(Modules::default());
-}
-
-/// Which table [`note_new`] records into.
-#[derive(Clone, Copy)]
-pub(crate) enum Table {
-    Function,
-    Class,
-    Constant,
-}
-
 /// Opens (`begin = true`) or closes the window in which every *new*
 /// function, class and constant is attributed to extension `name`
-/// (the insert sites call [`note_new`]).
-///
-/// This replaces comparing full snapshots of the three tables before and
-/// after each extension, which was O(extensions × symbols) and 70 % of
-/// debug-build startup.
+/// (the insert sites report new keys to `builtins::info`'s registry,
+/// which also keeps `get_extension_funcs()`'s module attribution: one
+/// entry per symbol).
 pub(crate) fn record_module(_vm: &Vm, name: &'static str, begin: bool) {
-    MODULES.with(|m| {
-        let mut m = m.borrow_mut();
-        if begin && m.functions.capacity() == 0 {
-            // Room for what all bundled extensions register (about 1 500
-            // functions, 300 classes and 2 500 constants), so the tables do
-            // not rehash during start-up.
-            m.functions.reserve(2048);
-            m.classes.reserve(512);
-            m.constants.reserve(4096);
-        }
-        m.current = begin.then_some(name);
-    });
-}
-
-/// Attributes a key that was just added to `table` (the insert returned
-/// `None`) to the extension being registered, if any.
-pub(crate) fn note_new(table: Table, key: &[u8]) {
-    MODULES.with(|m| {
-        let mut m = m.borrow_mut();
-        let Some(name) = m.current else {
-            return;
-        };
-        let map = match table {
-            Table::Function => &mut m.functions,
-            Table::Class => &mut m.classes,
-            Table::Constant => &mut m.constants,
-        };
-        map.insert(key.to_vec(), name);
-    });
+    crate::builtins::info::set_current_module(begin.then_some(name));
 }
 
 /// Core (`zend_builtin_functions.c`) functions.
@@ -164,7 +112,7 @@ pub(crate) fn function_module(
         return class_module(vm, c);
     }
     let lc = name.to_ascii_lowercase();
-    if let Some(m) = MODULES.with(|m| m.borrow().functions.get(lc.as_bytes()).copied()) {
+    if let Some(m) = crate::builtins::info::function_origin(lc.as_bytes()) {
         return Some(m.to_string());
     }
     let s = String::from_utf8_lossy(&lc).into_owned();
@@ -204,7 +152,7 @@ pub(crate) fn class_module(vm: &Vm, c: &Rc<Class>) -> Option<String> {
     if STANDARD_CLASSES.contains(&n) {
         return Some("standard".into());
     }
-    if let Some(m) = MODULES.with(|m| m.borrow().classes.get(n).copied()) {
+    if let Some(m) = crate::builtins::info::class_origin(n) {
         return Some(m.to_string());
     }
     let _ = vm;
@@ -231,7 +179,7 @@ pub(crate) fn constant_module(_vm: &Vm, name: &ZStr) -> String {
         b"UPLOAD_ERR_",
         b"PEAR_",
     ];
-    if let Some(m) = MODULES.with(|m| m.borrow().constants.get(name.as_bytes()).copied()) {
+    if let Some(m) = crate::builtins::info::constant_origin(name.as_bytes()) {
         return m.to_string();
     }
     let n = name.as_bytes();
