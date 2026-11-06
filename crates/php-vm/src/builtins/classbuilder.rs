@@ -293,8 +293,8 @@ impl ClassBuilder {
             let mut consts: Vec<Rc<ClassConst>> = Vec::new();
             let mut const_map = HashMap::new();
             let push_const = |c: Rc<ClassConst>,
-                                  consts: &mut Vec<Rc<ClassConst>>,
-                                  map: &mut HashMap<ZStr, usize>| {
+                              consts: &mut Vec<Rc<ClassConst>>,
+                              map: &mut HashMap<ZStr, usize>| {
                 if let Some(&i) = map.get(&c.name) {
                     consts[i] = c;
                 } else {

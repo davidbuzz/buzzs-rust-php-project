@@ -275,12 +275,20 @@ impl Vm {
     fn compile_stack_limit(&self) -> Option<compiler::CompileStackLimit> {
         const DEFAULT_RESERVED: usize = 48 << 10;
         const COMPILE_BASE_BYTES: usize = 24 << 10;
+        /// `zend_call_stack_init()` when the stack cannot be detected:
+        /// `zend_call_stack_default_size()` (8 MiB on Linux) less the
+        /// 32 KiB it takes off because the base is not the real one.
+        const UNDETECTED_STACK_BYTES: usize = (8 << 20) - (32 << 10);
         let reserved = match usize::try_from(self.ini.get_long("zend.reserved_stack_size")) {
             Ok(0) | Err(_) => DEFAULT_RESERVED,
             Ok(r) => r,
         };
         let stack = match usize::try_from(self.ini.get_long("zend.max_allowed_stack_size")) {
+            // -1: unchecked.
             Err(_) => return None,
+            // 0: detect; a thread of unknown stack size (declared 0) gets
+            // php-src's fallback instead of an empty budget.
+            Ok(0) if self.native_stack_size == 0 => UNDETECTED_STACK_BYTES,
             Ok(0) => self.native_stack_size / crate::fiber::STACK_SCALE,
             Ok(m) => m,
         };

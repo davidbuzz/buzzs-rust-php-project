@@ -2257,15 +2257,17 @@ impl Vm {
             return false;
         }
         let used = self.native_stack_base - here;
-        // Both INIs are INI_SYSTEM: read them once.
+        // Both INIs are INI_SYSTEM: read them once. A reservation of 0 is
+        // php-src's default of 48 KiB (`OnUpdateReservedStackSize`:
+        // `ZEND_ALLOCA_MAX_SIZE + 16K`).
         let (max, reserved) = match self.stack_limit_ini {
             Some(t) => t,
             None => {
-                let t = (
-                    self.ini.get_long("zend.max_allowed_stack_size"),
-                    usize::try_from(self.ini.get_long("zend.reserved_stack_size").max(0))
-                        .unwrap_or(0),
-                );
+                let reserved = match self.ini.get_long("zend.reserved_stack_size") {
+                    r if r <= 0 => 48 << 10,
+                    r => usize::try_from(r).unwrap_or(usize::MAX),
+                };
+                let t = (self.ini.get_long("zend.max_allowed_stack_size"), reserved);
                 self.stack_limit_ini = Some(t);
                 t
             }

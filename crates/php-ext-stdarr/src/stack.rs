@@ -22,7 +22,12 @@ fn stack_budget(vm: &Vm) -> Option<u64> {
     if max == 0 {
         return None;
     }
-    let reserved = u64::try_from(vm.ini_long("zend.reserved_stack_size")).unwrap_or(0);
+    // `zend.reserved_stack_size=0` (the default) is 48 KiB
+    // (`OnUpdateReservedStackSize`: `ZEND_ALLOCA_MAX_SIZE + 16K`).
+    let reserved = match vm.ini_long("zend.reserved_stack_size") {
+        r if r <= 0 => 48 << 10,
+        r => u64::try_from(r).unwrap_or(u64::MAX),
+    };
     Some(max.saturating_sub(reserved).max(FRAME_BYTES))
 }
 
