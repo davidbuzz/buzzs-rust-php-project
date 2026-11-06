@@ -59,6 +59,7 @@ impl ArrayKey {
     }
 
     /// Like [`ArrayKey::from_bytes`] but reuses an existing string.
+    #[inline]
     #[must_use]
     pub fn from_zstr(s: &ZStr) -> Self {
         match handle_numeric_str(s.as_bytes()) {
@@ -325,6 +326,30 @@ fn hash_slot(table_size: u32, h: u64) -> usize {
 #[inline]
 fn link_slot(table_size: u32, idx: u32) -> usize {
     table_size as usize * 2 + idx as usize
+}
+
+/// Whether two key strings have the same bytes (`zend_string_equal_content`
+/// once the hashes matched): keys of up to 16 bytes, the common case,
+/// compare with two overlapping word loads per side instead of a `memcmp`
+/// call.
+#[inline]
+fn same_bytes(a: &[u8], b: &[u8]) -> bool {
+    let n = a.len();
+    if n != b.len() {
+        return false;
+    }
+    if (8..=16).contains(&n) {
+        return a.first_chunk::<8>() == b.first_chunk::<8>()
+            && a.last_chunk::<8>() == b.last_chunk::<8>();
+    }
+    if (4..8).contains(&n) {
+        return a.first_chunk::<4>() == b.first_chunk::<4>()
+            && a.last_chunk::<4>() == b.last_chunk::<4>();
+    }
+    if n < 4 {
+        return a.iter().zip(b).all(|(x, y)| x == y);
+    }
+    a == b
 }
 
 /// `_zend_hash_get_valid_pos` over one storage: the first live slot at or
@@ -607,7 +632,7 @@ impl HashData {
         while idx != INVALID {
             let b = self.buckets.get(idx as usize)?;
             if let ArrayKey::Str(k) = &b.key {
-                if k.hash_value() == h && k.as_bytes() == s {
+                if k.hash_value() == h && same_bytes(k.as_bytes(), s) {
                     return Some(idx);
                 }
             }
@@ -625,7 +650,9 @@ impl HashData {
         while idx != INVALID {
             let b = self.buckets.get(idx as usize)?;
             if let ArrayKey::Str(k) = &b.key {
-                if ZStr::ptr_eq(k, key) || (k.hash_value() == h && k.as_bytes() == key.as_bytes()) {
+                if ZStr::ptr_eq(k, key)
+                    || (k.hash_value() == h && same_bytes(k.as_bytes(), key.as_bytes()))
+                {
                     return Some(idx);
                 }
             }
@@ -3484,6 +3511,41 @@ mod tests {
         assert!(t.get_str(b"beta").is_none());
         assert_eq!(keys(&t), ["\"alpha\""]);
         assert_eq!(ints(&t), [9]);
+    }
+
+    #[test]
+    fn short_key_bytes_compare_like_slices() {
+        let base: Vec<u8> = (0u8..40).map(|i| b'a' + i % 26).collect();
+        let mut t = HashTable::new();
+        for n in 0..=40 {
+            let a = &base[..n];
+            assert!(same_bytes(a, a));
+            assert!(same_bytes(a, &a.to_vec()));
+            if n > 0 {
+                assert!(!same_bytes(a, &a[..n - 1]));
+                assert!(!same_bytes(&a[..n - 1], a));
+            }
+            // Every byte takes part, whichever word load covers it.
+            for i in 0..n {
+                let mut b = a.to_vec();
+                if let Some(c) = b.get_mut(i) {
+                    *c ^= 1;
+                }
+                assert!(!same_bytes(a, &b), "n={n} i={i}");
+            }
+            t.insert(ArrayKey::Str(ZStr::from(a)), Value::Int(idx_key(n)));
+        }
+        // Lookups by another instance of the same bytes compare contents.
+        for n in 0..=40 {
+            let fresh = ZStr::from(&base[..n]);
+            assert_eq!(t.get_zstr(&fresh).and_then(Value::as_int), Some(idx_key(n)));
+            assert_eq!(
+                t.get_str(&base[..n]).and_then(Value::as_int),
+                Some(idx_key(n))
+            );
+        }
+        assert!(t.get_str(b"abcdefghijklmnoq").is_none());
+        assert!(t.get_zstr(&ZStr::from("abcdeg")).is_none());
     }
 
     #[test]
