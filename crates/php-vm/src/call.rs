@@ -1674,90 +1674,8 @@ impl Vm {
             if ty.is_mixed() || accepts_without_coercion(ty.mask, v) {
                 continue;
             }
-            let fname = fname(self);
-            let pname = p.name.to_string_lossy();
-            let ctx = TypeCtx {
-                scope: call.scope.as_ref(),
-                called: call.called.as_ref(),
-                strict,
-                internal_arg: Some((&fname, i + 1, &pname)),
-            };
-            if ty.mask & crate::types::mask::CALLABLE != 0
-                && !ty.has_classes()
-                && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
-                && !(ty.allows_null() && v.is_null())
-            {
-                let callable = match self.zend_is_callable(v, true) {
-                    Ok(callable) => callable,
-                    Err(e) => {
-                        return self.builtin_arg_error(depth, e);
-                    }
-                };
-                match callable {
-                    Ok(_) => continue,
-                    Err(why) => {
-                        // `Z_PARAM_FUNC` checks without suppressing the
-                        // callable deprecations; a valid callable emits
-                        // them when the function resolves it, an invalid
-                        // one here (a class that was not found has none,
-                        // and is not autoloaded twice).
-                        if !why.contains("not found") {
-                            if let Err(e) = self.zend_is_callable(v, false) {
-                                return self.builtin_arg_error(depth, e);
-                            }
-                        }
-                        let nul = if ty.allows_null() { " or null" } else { "" };
-                        let e = self.make_throw(
-                            "TypeError",
-                            &format!(
-                                "{fname}(): Argument #{} (${pname}) must be a valid callback{nul}, {why}",
-                                i + 1
-                            ),
-                        );
-                        return self.builtin_arg_error(depth, e);
-                    }
-                }
-            }
-            let ok = match self.verify_type(ty, v, &ctx) {
-                Ok(ok) => ok,
-                Err(e) => {
-                    return self.builtin_arg_error(depth, e);
-                }
-            };
-            if !ok {
-                let msg = if ty.mask & crate::types::mask::CALLABLE != 0
-                    && !ty.has_classes()
-                    && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
-                {
-                    let why = self.callable_error(v);
-                    let nul = if ty.allows_null() { " or null" } else { "" };
-                    format!(
-                        "{fname}(): Argument #{} (${pname}) must be a valid callback{nul}, {why}",
-                        i + 1
-                    )
-                } else {
-                    format!(
-                        "{fname}(): Argument #{} (${pname}) must be of type {}, {} given",
-                        i + 1,
-                        ty.to_php_string(),
-                        given_type(v)
-                    )
-                };
-                let e = self.make_throw("TypeError", &msg);
+            if let Err(e) = self.coerce_builtin_arg(b, &call, strict, i, v, depth, nframe_args) {
                 return self.builtin_arg_error(depth, e);
-            }
-            // Weak-mode zpp converts to a string in place
-            // (`zend_parse_arg_str_weak`), which backtraces show; other
-            // scalar conversions only fill C locals, leaving the argument as
-            // passed (`NULL` for a deprecated null-to-int).
-            if matches!(v, Value::Str(_)) && i < nframe_args {
-                if let Some(slot) = self
-                    .frames
-                    .get_mut(depth - 1)
-                    .and_then(|f| f.args.get_mut(i))
-                {
-                    *slot = Some(v.clone());
-                }
             }
         }
         if call.dynamic && call.scope.is_none() {
@@ -1814,6 +1732,98 @@ impl Vm {
             crate::gc::released_ctor_this(t);
         }
         r
+    }
+
+    /// The zpp of builtin argument `i` (`v`) whose value does not already
+    /// have an accepted type: callable checks, weak-mode coercion and the
+    /// `TypeError`. Out of line: the common call has accepted types only.
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn coerce_builtin_arg(
+        &mut self,
+        b: &Rc<Builtin>,
+        call: &PendingCall,
+        strict: bool,
+        i: usize,
+        v: &mut Value,
+        depth: usize,
+        nframe_args: usize,
+    ) -> Result<(), Throw> {
+        let nparams = b.params.len();
+        let p = if i < nparams {
+            &b.params[i]
+        } else {
+            &b.params[nparams - 1]
+        };
+        let Some(ty) = &p.ty else { return Ok(()) };
+        let fname = self.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
+        let pname = p.name.to_string_lossy();
+        let ctx = TypeCtx {
+            scope: call.scope.as_ref(),
+            called: call.called.as_ref(),
+            strict,
+            internal_arg: Some((&fname, i + 1, &pname)),
+        };
+        if ty.mask & crate::types::mask::CALLABLE != 0
+            && !ty.has_classes()
+            && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
+            && !(ty.allows_null() && v.is_null())
+        {
+            if let Err(why) = self.zend_is_callable(v, true)? {
+                // `Z_PARAM_FUNC` checks without suppressing the callable
+                // deprecations; a valid callable emits them when the
+                // function resolves it, an invalid one here (a class that
+                // was not found has none, and is not autoloaded twice).
+                if !why.contains("not found") {
+                    let _ = self.zend_is_callable(v, false)?;
+                }
+                let nul = if ty.allows_null() { " or null" } else { "" };
+                return Err(self.make_throw(
+                    "TypeError",
+                    &format!(
+                        "{fname}(): Argument #{} (${pname}) must be a valid callback{nul}, {why}",
+                        i + 1
+                    ),
+                ));
+            }
+            return Ok(());
+        }
+        if !self.verify_type(ty, v, &ctx)? {
+            let msg = if ty.mask & crate::types::mask::CALLABLE != 0
+                && !ty.has_classes()
+                && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
+            {
+                let why = self.callable_error(v);
+                let nul = if ty.allows_null() { " or null" } else { "" };
+                format!(
+                    "{fname}(): Argument #{} (${pname}) must be a valid callback{nul}, {why}",
+                    i + 1
+                )
+            } else {
+                format!(
+                    "{fname}(): Argument #{} (${pname}) must be of type {}, {} given",
+                    i + 1,
+                    ty.to_php_string(),
+                    given_type(v)
+                )
+            };
+            return Err(self.make_throw("TypeError", &msg));
+        }
+        // Weak-mode zpp converts to a string in place
+        // (`zend_parse_arg_str_weak`), which backtraces show; other scalar
+        // conversions only fill C locals, leaving the argument as passed
+        // (`NULL` for a deprecated null-to-int).
+        if matches!(v, Value::Str(_)) && i < nframe_args {
+            if let Some(slot) = self
+                .frames
+                .get_mut(depth - 1)
+                .and_then(|f| f.args.get_mut(i))
+            {
+                *slot = Some(v.clone());
+            }
+        }
+        Ok(())
     }
 
     /// The default of native parameter `i`: a parsed literal, or a
