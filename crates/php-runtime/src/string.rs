@@ -287,48 +287,93 @@ impl ZStr {
             // SAFETY: as above; emptied by `take_vec`.
             unsafe { self.put_vec(v) };
         } else {
-            let needed = len
-                .checked_add(other.len())
-                .filter(|&n| n <= CAP_MASK)
-                .unwrap_or_else(|| capacity_overflow());
-            let cap = meta & CAP_MASK;
-            if needed > cap {
-                let new_cap = if exact {
-                    needed
-                } else {
-                    let grown = cap.saturating_mul(2).clamp(16, CAP_MASK);
-                    needed.max(grown)
-                };
-                let new_layout = block_layout(new_cap);
-                // SAFETY: the block was allocated with `block_layout(cap)`;
-                // the new size is non-zero. The handle is unique, so moving
-                // the block invalidates no other pointer to it.
-                let raw = unsafe {
-                    alloc::realloc(
-                        self.0.as_ptr().cast::<u8>(),
-                        block_layout(cap),
-                        new_layout.size(),
-                    )
-                };
-                // `realloc` keeps the layout's (Header) alignment.
-                #[allow(clippy::cast_ptr_alignment)]
-                let Some(block) = NonNull::new(raw.cast::<Header>()) else {
-                    alloc::handle_alloc_error(new_layout)
-                };
-                self.0 = block;
-                // SAFETY: unique handle; the inline area follows the header.
-                unsafe {
-                    let h = self.0.as_mut();
-                    h.ptr = block.as_ptr().cast::<u8>().add(HEADER);
-                    h.meta = (meta & !CAP_MASK) | new_cap;
-                }
-            }
+            let needed = self.grow_inline(len, meta, other.len(), exact);
             // SAFETY: unique handle; the inline area has room for `needed`
             // bytes and `other` cannot alias it (it would need a second
             // handle or a shared borrow of `self`).
             unsafe {
                 let h = self.0.as_mut();
                 ptr::copy_nonoverlapping(other.as_ptr(), h.ptr.add(len), other.len());
+                h.len = needed;
+            }
+        }
+        self.header().hash.set(0);
+    }
+
+    /// Makes the inline area of a unique inline string of length `len`
+    /// (header meta `meta`) hold `extra` more bytes, reallocating the block
+    /// when its capacity is short (doubling it unless `exact`); returns the
+    /// new length. The bytes after `len` are left to the caller.
+    fn grow_inline(&mut self, len: usize, meta: usize, extra: usize, exact: bool) -> usize {
+        debug_assert!(self.is_unique_mutable() && meta & EXTERNAL == 0);
+        let needed = len
+            .checked_add(extra)
+            .filter(|&n| n <= CAP_MASK)
+            .unwrap_or_else(|| capacity_overflow());
+        let cap = meta & CAP_MASK;
+        if needed > cap {
+            let new_cap = if exact {
+                needed
+            } else {
+                let grown = cap.saturating_mul(2).clamp(16, CAP_MASK);
+                needed.max(grown)
+            };
+            let new_layout = block_layout(new_cap);
+            // SAFETY: the block was allocated with `block_layout(cap)`;
+            // the new size is non-zero. The handle is unique, so moving
+            // the block invalidates no other pointer to it.
+            let raw = unsafe {
+                alloc::realloc(
+                    self.0.as_ptr().cast::<u8>(),
+                    block_layout(cap),
+                    new_layout.size(),
+                )
+            };
+            // `realloc` keeps the layout's (Header) alignment.
+            #[allow(clippy::cast_ptr_alignment)]
+            let Some(block) = NonNull::new(raw.cast::<Header>()) else {
+                alloc::handle_alloc_error(new_layout)
+            };
+            self.0 = block;
+            // SAFETY: unique handle; the inline area follows the header.
+            unsafe {
+                let h = self.0.as_mut();
+                h.ptr = block.as_ptr().cast::<u8>().add(HEADER);
+                h.meta = (meta & !CAP_MASK) | new_cap;
+            }
+        }
+        needed
+    }
+
+    /// Appends the string to itself (`$s .= $s`). When this handle is the
+    /// only owner the buffer grows in place and the bytes are copied within
+    /// it, like php-src's `concat_function` with `result == op1 == op2`
+    /// (`zend_string_extend` of the one string), so the string never exists
+    /// twice; otherwise a new string is built.
+    pub fn append_self(&mut self) {
+        let len = self.len();
+        if len == 0 {
+            return;
+        }
+        if !self.is_unique_mutable() {
+            *self = Self::from_parts(self.as_bytes(), self.as_bytes(), 0);
+            return;
+        }
+        let meta = self.header().meta;
+        if meta & EXTERNAL != 0 {
+            // SAFETY: unique (just checked) and external.
+            let mut v = unsafe { self.take_vec() };
+            v.extend_from_within(..);
+            // SAFETY: as above; emptied by `take_vec`.
+            unsafe { self.put_vec(v) };
+        } else {
+            let needed = self.grow_inline(len, meta, len, false);
+            // SAFETY: unique handle; the inline area has room for `needed`
+            // bytes, and the source `[0, len)` and destination
+            // `[len, 2 * len)` ranges are disjoint.
+            unsafe {
+                let h = self.0.as_mut();
+                ptr::copy_nonoverlapping(h.ptr.cast_const(), h.ptr.add(len), len);
                 h.len = needed;
             }
         }
@@ -847,6 +892,25 @@ mod tests {
         assert_eq!(s.hash_value(), zend_hash_bytes(&expected));
         assert_eq!(s.clone().into_bytes(), expected);
         assert_eq!(s.into_bytes(), expected);
+    }
+
+    #[test]
+    fn append_self_doubles_unique_and_shared_strings() {
+        let mut s = ZStr::from("abc");
+        s.append_self();
+        assert_eq!(s.as_bytes(), b"abcabc");
+        let shared = s.clone();
+        s.append_self();
+        assert_eq!(s.as_bytes(), b"abcabcabcabc");
+        assert_eq!(shared.as_bytes(), b"abcabc");
+        assert_eq!(s.hash_value(), zend_hash_bytes(b"abcabcabcabc"));
+        let mut big = ZStr::new(vec![b'q'; ADOPT_MIN + 1]);
+        big.append_self();
+        assert_eq!(big.len(), 2 * (ADOPT_MIN + 1));
+        assert!(big.as_bytes().iter().all(|&b| b == b'q'));
+        let mut empty = ZStr::from("");
+        empty.append_self();
+        assert!(empty.is_empty());
     }
 
     #[test]
