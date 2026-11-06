@@ -7,7 +7,8 @@ use std::ptr;
 
 use crate::ffi;
 use crate::lexbor::{
-    ns_ids, LxbNode, NsIds, LXB_COMMENT, LXB_DOCUMENT_TYPE, LXB_ELEMENT, LXB_TEXT,
+    ns_ids, LxbNode, NsIds, WorkItem, WorkList, LXB_COMMENT, LXB_DOCUMENT_TYPE, LXB_ELEMENT,
+    LXB_TEXT,
 };
 use crate::ns::{
     PrivateData, MATHML_NS, MATHML_TOKEN, SVG_NS, SVG_TOKEN, XLINK_NS, XLINK_TOKEN, XMLNS_NS,
@@ -37,12 +38,14 @@ impl BridgeStatus {
 /// libxml2 reserves 2 pointer-sized words for interned strings.
 const LXML_INTERNED_STRINGS_SIZE: usize = size_of::<*mut ()>() * 2;
 
-struct WorkItem<'a> {
-    node: LxbNode<'a>,
-    current_active_namespace: usize,
-    lxml_parent: N,
-    lxml_ns: *mut ffi::xmlNs,
-    in_template: bool,
+/// Whether the push of a work item left the conversion out of memory:
+/// php-src's `lexbor_array_obj_push_wo_cls` fails when growing the list
+/// would exceed `memory_limit` (a fallible allocation); here the
+/// allocation succeeds and records the violation, which the VM raises as
+/// the fatal once the method returns, so the bridge stops at the same
+/// point.
+fn push_failed(pushed: bool) -> bool {
+    !pushed || php_memlimit::is_pending()
 }
 
 fn sanitize_line_nr(line: usize) -> c_ushort {
@@ -110,16 +113,21 @@ fn convert(
     let mut xml_ns: *mut ffi::xmlNs = ptr::null_mut();
     let mut prefixed_xmlns_ns: *mut ffi::xmlNs = ptr::null_mut();
 
-    let mut work: Vec<WorkItem<'_>> = Vec::with_capacity(128);
+    let Some(mut work) = WorkList::new() else {
+        return BridgeStatus::Oom;
+    };
     let mut cur = start_node;
     while let Some(n) = cur {
-        work.push(WorkItem {
+        let pushed = work.push(WorkItem {
             node: n,
             current_active_namespace: ids.undef,
             lxml_parent: root,
             lxml_ns: ptr::null_mut(),
             in_template: in_template_contents,
         });
+        if push_failed(pushed) {
+            return BridgeStatus::Oom;
+        }
         cur = n.prev();
     }
 
@@ -186,14 +194,21 @@ fn convert(
                 }
 
                 while let Some(c) = child_node {
-                    work.push(WorkItem {
+                    let pushed = work.push(WorkItem {
                         node: c,
                         current_active_namespace: entering_namespace,
                         lxml_parent: child_parent,
                         lxml_ns: current_lxml_ns,
                         in_template: child_in_template,
                     });
+                    if push_failed(pushed) {
+                        status = BridgeStatus::Oom;
+                        break;
+                    }
                     child_node = c.prev();
+                }
+                if status != BridgeStatus::Ok {
+                    break;
                 }
 
                 let mut last_added: *mut ffi::xmlAttr = ptr::null_mut();
