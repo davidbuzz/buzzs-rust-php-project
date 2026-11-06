@@ -2102,6 +2102,34 @@ impl Vm {
         self.write_place(base, &segs, WOp::Assign(v))
     }
 
+    /// The cached declared slot a write walk of place `pid` (resolved to
+    /// `segs`) may start from: `Some` when its first segment is a cached
+    /// property and more segments follow (see
+    /// [`Vm::write_cached_container`]).
+    fn cached_container_of(&mut self, pid: PlaceId, segs: &[RSeg]) -> Option<(Obj, usize)> {
+        if segs.len() > 1 && propcache::cacheable_head(&self.frame().code.places[pid as usize]) {
+            self.prop_cache_container(pid)
+        } else {
+            None
+        }
+    }
+
+    /// [`Vm::write_place`] of place `pid`, starting from a cached first
+    /// property when the cache covers it.
+    fn write_place_cached(
+        &mut self,
+        pid: PlaceId,
+        base: RBase,
+        segs: &[RSeg],
+        wop: WOp,
+    ) -> VmResult<Value> {
+        if let Some((obj, idx)) = self.cached_container_of(pid, segs) {
+            drop(base);
+            return self.write_cached_container(&obj, idx, segs, wop);
+        }
+        self.write_place(base, segs, wop)
+    }
+
     /// The write walk of a resolved place whose first segment is a cached
     /// declared property, from slot `idx` of `obj` on: what
     /// [`Vm::write_place`] does for an object base reaching `obj_walk`'s
@@ -2439,17 +2467,21 @@ impl Vm {
     #[allow(clippy::type_complexity)] // (value, overloaded ArrayAccess target)
     fn fetch_rw(
         &mut self,
+        pid: PlaceId,
         base: RBase,
         segs: &[RSeg],
     ) -> VmResult<Option<(Value, Option<(Obj, Value)>)>> {
         if !matches!(segs.last(), Some(RSeg::Dim(_) | RSeg::Append)) {
-            return Ok(Some((self.write_place(base, segs, WOp::FetchRw)?, None)));
+            return Ok(Some((
+                self.write_place_cached(pid, base, segs, WOp::FetchRw)?,
+                None,
+            )));
         }
         // Save and restore around the walk: user code it runs (offsetGet,
         // destructors) may perform read-modify-writes of its own.
         let saved = OVERLOADED_RW.with(std::cell::Cell::take);
         let saved_skip = RW_SKIPPED.with(|c| c.replace(false));
-        let r = self.write_place(base, segs, WOp::FetchRw);
+        let r = self.write_place_cached(pid, base, segs, WOp::FetchRw);
         let mine = OVERLOADED_RW.with(|c| c.replace(saved));
         let skipped = RW_SKIPPED.with(|c| c.replace(saved_skip));
         let r = r?;
@@ -2528,7 +2560,7 @@ impl Vm {
                 }
             }
         }
-        let Some((cur, overloaded)) = self.fetch_rw(base, &segs)? else {
+        let Some((cur, overloaded)) = self.fetch_rw(pid, base, &segs)? else {
             // FETCH_DIM_RW yielded a null temporary: ++/-- act on it alone.
             let mut nv = Value::Null;
             if kind.is_inc() {
@@ -2572,10 +2604,17 @@ impl Vm {
             self.assign_ref(r, nv)
         } else {
             // A silent write-back walk: `FETCH_DIM_RW` converted the
-            // offsets (and reported them) once already.
-            let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
-            flush_deferred_ref_assigns();
-            r
+            // offsets (and reported them) once already. (From a cached
+            // property slot there is no base step whose diagnostics the
+            // silent walk would drop.)
+            if let Some((obj, idx)) = self.cached_container_of(pid, &segs) {
+                drop(base2);
+                self.write_cached_container(&obj, idx, &segs, WOp::Assign(nv))
+            } else {
+                let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
+                flush_deferred_ref_assigns();
+                r
+            }
         };
         drop(guard);
         let res = res?;

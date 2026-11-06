@@ -928,4 +928,37 @@ bool(false)
 "#;
         assert_eq!(run(src), expected);
     }
+
+    /// `++`/`--` inside a cached property (`$this->c['a']++`): both the
+    /// read-modify-write walk and the write-back start from the slot.
+    #[test]
+    fn incdec_inside_a_cached_property() {
+        let src = r#"<?php
+class Cnt {
+    public $c = ['a' => 0];
+    public array $t = [1.5];
+    public $o;
+    function __construct() { $this->o = new ArrayObject(['n' => 1]); }
+    function run() {
+        for ($i = 0; $i < 3; $i++) {
+            $this->c['a']++;
+            ++$this->c['b'];
+            $x = $this->t[0]--;
+            $this->o['n']++;
+        }
+        echo json_encode($this->c), ' ', json_encode($this->t), ' ', $x, ' ', $this->o['n'], "\n";
+        $y = $this->c['a']++;
+        $z = --$this->c['a'];
+        echo "$y $z\n";
+    }
+}
+(new Cnt)->run();
+"#;
+        let expected = r#"
+Warning: Undefined array key "b" in t.php on line 10
+{"a":3,"b":3} [-1.5] -0.5 4
+3 3
+"#;
+        assert_eq!(run(src), expected);
+    }
 }
