@@ -1796,6 +1796,63 @@ impl ZArray {
     }
 }
 
+/// A weak handle of an array's table, for the cycle collector's register
+/// of arrays that may contain themselves ([`ZArray::downgrade`]).
+#[derive(Clone, Default)]
+pub struct WeakZArray(std::rc::Weak<HashTable>);
+
+impl WeakZArray {
+    /// The array, unless it was freed.
+    #[must_use]
+    pub fn upgrade(&self) -> Option<ZArray> {
+        self.0.upgrade().map(ZArray)
+    }
+
+    /// Whether the array is still alive.
+    #[must_use]
+    pub fn is_alive(&self) -> bool {
+        self.0.strong_count() > 0
+    }
+}
+
+impl fmt::Debug for WeakZArray {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "WeakZArray({})", self.0.strong_count())
+    }
+}
+
+/// Cycle-collector support (`Zend/zend_gc.c`): an array that contains
+/// itself by value ([`ZArray::store_self_at`] on master) is a cycle of
+/// arrays alone, which only the collector can free.
+impl ZArray {
+    /// A weak handle of this array's table.
+    #[must_use]
+    pub fn downgrade(&self) -> WeakZArray {
+        WeakZArray(Rc::downgrade(&self.0))
+    }
+
+    /// Empties this array in place although other handles share its table,
+    /// returning the former contents: `zend_gc_collect_cycles` destroys
+    /// garbage arrays whatever their count (`HT_ALLOW_COW_VIOLATION`),
+    /// which breaks a cycle of arrays.
+    ///
+    /// # Safety
+    /// Every handle sharing the table must be owned by garbage that nothing
+    /// outside the collector can reach, and no reference into the table
+    /// (`&HashTable`, an element borrow, an iterator) may be alive for the
+    /// duration of the call. The collector guarantees both: it calls this
+    /// for arrays its analysis found unreachable, from its free phase, where
+    /// no PHP code runs and the graph holds handles only.
+    #[must_use]
+    pub unsafe fn gc_take_contents(&self) -> HashTable {
+        let table = Rc::as_ptr(&self.0).cast_mut();
+        // SAFETY: per this function's contract no other reference into the
+        // table exists while it is replaced; `Rc::as_ptr` keeps the
+        // allocation's provenance (this is `Rc::get_mut_unchecked`).
+        unsafe { std::mem::take(&mut *table) }
+    }
+}
+
 impl Default for ZArray {
     fn default() -> Self {
         Self::new()
@@ -1842,6 +1899,23 @@ mod tests {
 
     fn ints(t: &HashTable) -> Vec<i64> {
         t.values().map(|v| v.as_int().unwrap_or(-999)).collect()
+    }
+
+    #[test]
+    fn weak_handle_and_gc_take_contents() {
+        let mut a = ZArray::new();
+        a.make_mut().push(Value::Int(1)).unwrap();
+        let w = a.downgrade();
+        assert!(w.is_alive());
+        let shared = a.clone();
+        // SAFETY: no borrow into the table is alive; both handles are ours.
+        let old = unsafe { shared.gc_take_contents() };
+        assert_eq!(old.len(), 1);
+        assert_eq!(a.len(), 0);
+        assert!(w.upgrade().is_some_and(|x| ZArray::ptr_eq(&x, &a)));
+        drop((a, shared));
+        assert!(!w.is_alive());
+        assert!(w.upgrade().is_none());
     }
 
     #[test]

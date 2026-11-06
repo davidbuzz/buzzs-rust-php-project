@@ -1,13 +1,14 @@
 //! A collection run (`zend_gc_collect_cycles`): analysis, the destructor
 //! protocol, freeing, and the single re-run after destructors.
 
-use super::graph::{Graph, Handle, NONE};
+use super::graph::{Graph, Handle};
 use super::traverse::is_traversed;
-use super::{with_state, RootProvider};
+use super::{take_self_arrays, with_state, RootProvider};
 use crate::object::{self, oflags, ObjectData};
 use crate::vm::{Throw, Vm, VmResult};
 use php_runtime::{Obj, PhpObject, Value};
 use std::any::Any;
+use std::collections::HashSet;
 use std::rc::{Rc, Weak};
 use std::time::Instant;
 
@@ -63,9 +64,6 @@ struct PassResult {
     count: i64,
     /// Destructors were called (a re-run is due).
     had_dtors: bool,
-    /// Objects whose destructor ran, still possibly garbage (roots of the
-    /// re-run): weakly held unless only the collector holds them.
-    survivors: Vec<Weak<dyn PhpObject>>,
     /// Objects only the collector still holds after their destructor
     /// (`GC_DELREF` to zero without freeing): freed by the re-run.
     zombies: Vec<Obj>,
@@ -123,15 +121,11 @@ impl Vm {
                 break;
             }
             // Objects with destructors were removed from this pass: run
-            // again right away to free them (once).
+            // again right away to free them (once). They stayed in the
+            // root buffer (`GC_DTOR_GARBAGE` becomes a root again); the
+            // zombies are handed over strongly.
             rerun = true;
             extra.extend(pass.zombies.into_iter().map(Value::Object));
-            extra.extend(
-                pass.survivors
-                    .iter()
-                    .filter_map(Weak::upgrade)
-                    .map(|rc| Value::Object(Obj::from_rc(rc))),
-            );
         }
         drop(guard);
         with_state(|s| s.collector_time += start.elapsed());
@@ -144,9 +138,11 @@ impl Vm {
         }
     }
 
-    /// One mark/scan/collect pass. Destructor exceptions are accumulated in
-    /// `err` (chained like `zend_objects_destroy_object`); other unwinds
-    /// abort the pass.
+    /// One mark/scan/collect pass (`rerun_gc:` of `zend_gc_collect_cycles`)
+    /// over the root buffer in slot order. Destructor exceptions are
+    /// accumulated in `err` (chained like `zend_objects_destroy_object`);
+    /// other unwinds abort the pass.
+    #[allow(clippy::too_many_lines)] // the phases of zend_gc_collect_cycles
     fn gc_pass(
         &mut self,
         providers: &[RootProvider],
@@ -155,21 +151,33 @@ impl Vm {
         err: &mut Option<Throw>,
     ) -> VmResult<PassResult> {
         let quiet = Quiet::new(providers);
-        let mut roots = with_state(|s| {
-            s.pending = 0;
-            s.roots.take()
+        // `gc_mark_roots`: the buffer is compacted, then walked in slot
+        // order. The roots stay buffered during the pass.
+        let (roots, self_arrays) = with_state(|s| {
+            s.roots.drop_dead();
+            s.roots.compact();
+            s.ref_pending = 0;
+            (s.roots.roots(), take_self_arrays(s))
         })
         .unwrap_or_default();
+        let mut refs: Vec<Value> = Vec::new();
         for p in providers {
-            roots.extend((p.take)());
+            refs.extend((p.take)());
         }
-        roots.extend(extra);
-        let had_roots = !roots.is_empty();
+        let had_roots = !roots.is_empty() || !refs.is_empty() || !extra.is_empty();
         let mut g = Graph::default();
-        for r in &roots {
+        let mut root_nodes: Vec<(usize, Option<u32>)> = Vec::with_capacity(roots.len());
+        for (slot, o) in &roots {
+            root_nodes.push((*slot, g.intern_obj(o)));
+        }
+        for r in refs.iter().chain(&extra) {
             g.add_root(r);
         }
+        let self_nodes: Vec<u32> = self_arrays.iter().map(|a| g.intern_arr(a)).collect();
         drop(roots);
+        drop(refs);
+        drop(extra);
+        drop(self_arrays);
         if full {
             for d in object::live_objects() {
                 g.add_object(d);
@@ -177,6 +185,25 @@ impl Vm {
         }
         g.build();
         let garbage = g.analyze();
+        // `gc_collect_roots`: the live (black) roots leave the buffer, which
+        // is compacted (its last roots move into the holes); the garbage
+        // roots, in their new slot order, come first in the buffer order.
+        let white_objs = with_state(|s| {
+            for &(slot, node) in &root_nodes {
+                if node.is_none_or(|n| g.nodes[n as usize].live) {
+                    s.roots.release(slot);
+                }
+            }
+            s.roots.compact();
+            s.roots.roots()
+        })
+        .unwrap_or_default();
+        drop(root_nodes);
+        let white: Vec<(usize, u32)> = white_objs
+            .iter()
+            .filter_map(|(slot, o)| g.intern_obj(o).map(|x| (*slot, x)))
+            .collect();
+        drop(white_objs);
         let mut res = PassResult {
             ran: had_roots || garbage > 0,
             ..PassResult::default()
@@ -200,22 +227,72 @@ impl Vm {
             .collect();
         let mut removed = vec![false; n];
         let mut dtors: Vec<Weak<dyn PhpObject>> = Vec::new();
+        // Slots taken for garbage that is no root (`gc_add_garbage`).
+        let mut placeholders: Vec<usize> = Vec::new();
         if in_d.iter().any(|&b| b) {
             res.had_dtors = true;
-            // `gc_remove_nested_data_from_buffer`: data reachable from an
-            // object with a destructor may be resurrected by it; it is left
-            // for the re-run.
-            for start in 0..n {
-                if !in_d[start] {
+            let white_nodes: Vec<u32> = white.iter().map(|&(_, x)| x).collect();
+            // `gc_collect_white` appends the garbage it reaches from the
+            // roots: objects with destructors stay buffered as roots of the
+            // re-run (`GC_DTOR_GARBAGE`), the rest only holds its slot.
+            let added = white_order(&g, &white_nodes);
+            let mut slot_of = vec![u32::MAX; n];
+            for &(slot, x) in &white {
+                slot_of[x as usize] = u32::try_from(slot).unwrap_or(u32::MAX);
+            }
+            with_state(|s| {
+                for &x in &added {
+                    let xi = x as usize;
+                    let slot = match g.nodes[xi].obj() {
+                        Some(o) if in_d[xi] => super::buffer_obj(s, o),
+                        _ => {
+                            let i = s.roots.push_garbage();
+                            placeholders.push(i);
+                            Some(i)
+                        }
+                    };
+                    if let Some(i) = slot {
+                        slot_of[xi] = u32::try_from(i).unwrap_or(u32::MAX);
+                    }
+                }
+            });
+            // `gc_remove_nested_data_from_buffer`, for each destructor
+            // object in buffer order: data reachable from it may be
+            // resurrected by it; it is left for the re-run. The destructors
+            // are called in the same (buffer) order.
+            let mut nested: Vec<u32> = Vec::new();
+            for &x in white_nodes.iter().chain(&added) {
+                if !in_d[x as usize] {
                     continue;
                 }
-                let start = u32::try_from(start).unwrap_or(NONE);
-                count -= remove_nested(&g, start, &in_d, &mut removed);
-                if let Some(o) = g.nodes[start as usize].obj() {
+                count -= remove_nested(&g, x, &in_d, &mut removed, &mut nested);
+                if let Some(o) = g.nodes[x as usize].obj() {
                     dtors.push(Rc::downgrade(o.rc()));
                 }
             }
+            // `GC_REMOVE_FROM_BUFFER` of the nested data, in removal order:
+            // roots released by the destructors reuse these slots first.
+            with_state(|s| {
+                for &x in &nested {
+                    let xi = x as usize;
+                    if !in_d[xi] && slot_of[xi] != u32::MAX {
+                        s.roots.release(slot_of[xi] as usize);
+                        slot_of[xi] = u32::MAX;
+                    }
+                }
+            });
         }
+        // Garbage arrays that contain themselves are emptied in the free
+        // phase (nothing else breaks a cycle of arrays alone).
+        let self_garbage: HashSet<usize> = self_nodes
+            .iter()
+            .map(|&x| x as usize)
+            .filter(|&x| !g.nodes[x].live && !removed[x])
+            .filter_map(|x| match &g.nodes[x].handle {
+                Handle::Arr(a) => Some(a.addr()),
+                _ => None,
+            })
+            .collect();
         // Keep the handles of the nodes to free; release everything else
         // (no destructor can run before the destructor phase below, and
         // nothing here can reach a zero count: every node is still held by
@@ -238,10 +315,10 @@ impl Vm {
             let r = self.gc_call_destructors(&dtors, err, &mut res.zombies);
             with_state(|s| s.dtor_time += t.elapsed());
             r?;
-            res.survivors = dtors;
         }
 
-        // Free phase: break the cycles, then let `Rc` free the nodes.
+        // Free phase: break the cycles, then let `Rc` free the nodes (a
+        // freed root leaves the buffer through `forget_root`).
         let t = Instant::now();
         let quiet = Quiet::new(providers);
         let mut trash: Vec<Value> = Vec::new();
@@ -253,6 +330,15 @@ impl Vm {
                     if let Some(mut v) = r.try_borrow_mut() {
                         trash.push(std::mem::take(&mut *v));
                     }
+                }
+                Handle::Arr(a) if self_garbage.contains(&a.addr()) => {
+                    // SAFETY: the analysis found every handle of this table
+                    // owned by garbage (nothing outside the collector can
+                    // reach it), and no PHP code runs in this phase: the
+                    // nodes, `trash` and `states` hold handles only, no
+                    // borrow into the table.
+                    let t = unsafe { a.gc_take_contents() };
+                    trash.push(Value::Array(php_runtime::ZArray::from_table(t)));
                 }
                 Handle::Arr(_) | Handle::Taken => {}
             }
@@ -268,6 +354,15 @@ impl Vm {
         drop(states);
         drop(trash);
         drop(quiet);
+        // The garbage slots are released and the buffer compacted (the
+        // destructor objects and the roots buffered meanwhile move into
+        // the holes): the re-run's order.
+        with_state(|s| {
+            for &i in &placeholders {
+                s.roots.release_dead(i);
+            }
+            s.roots.compact();
+        });
         with_state(|s| s.free_time += t.elapsed());
         res.count = count.max(0);
         Ok(res)
@@ -353,22 +448,93 @@ fn clear_object(d: &Rc<ObjectData>, trash: &mut Vec<Value>, states: &mut Vec<Box
     crate::weakref::object_freed(d.handle);
 }
 
-/// Removes the garbage reachable from destructor object `start` from this
-/// pass (stopping at other destructor objects); returns how many counted
-/// nodes were removed (`start` included).
-fn remove_nested(g: &Graph, start: u32, in_d: &[bool], removed: &mut [bool]) -> i64 {
+/// `gc_remove_nested_data_from_buffer`: removes the garbage reachable from
+/// destructor object `start` from this pass (stopping at other destructor
+/// objects and at data already removed); returns how many counted nodes
+/// were removed (`start` included). The removed nodes are appended to
+/// `out` in php-src's visiting order (the first child is visited next,
+/// the others are stacked).
+fn remove_nested(
+    g: &Graph,
+    start: u32,
+    in_d: &[bool],
+    removed: &mut [bool],
+    out: &mut Vec<u32>,
+) -> i64 {
     let mut count = 0;
-    let mut stack = vec![start];
-    while let Some(x) = stack.pop() {
+    let mut stack: Vec<u32> = Vec::new();
+    let mut x = start;
+    loop {
         let xi = x as usize;
-        if removed[xi] || g.nodes[xi].live || (x != start && in_d[xi]) {
-            continue;
+        if !removed[xi] && !g.nodes[xi].live && (x == start || !in_d[xi]) {
+            removed[xi] = true;
+            if g.nodes[xi].counted() {
+                count += 1;
+            }
+            out.push(x);
+            let mut children = g.children(x);
+            if let Some(first) = children.next() {
+                stack.extend(children);
+                x = first;
+                continue;
+            }
         }
-        removed[xi] = true;
-        if g.nodes[xi].counted() {
-            count += 1;
+        match stack.pop() {
+            Some(c) => x = c,
+            None => break,
         }
-        stack.extend(g.children(x));
     }
     count
+}
+
+/// The order in which `gc_collect_white` adds garbage to the root buffer
+/// after the garbage roots (`roots`, in slot order): walking from each root
+/// in turn, a node is added when visited, its first unvisited garbage child
+/// is visited next and the others are stacked (popped last first);
+/// references take no slot. Garbage no root reaches (found by the
+/// object-store scan of `gc_collect_cycles()`) follows, walked the same way.
+fn white_order(g: &Graph, roots: &[u32]) -> Vec<u32> {
+    let n = g.nodes.len();
+    let mut seen = vec![false; n];
+    let mut buffered = vec![false; n];
+    for &r in roots {
+        buffered[r as usize] = true;
+    }
+    let mut added = Vec::new();
+    let mut stack: Vec<u32> = Vec::new();
+    let rest = (0..n)
+        .filter(|&i| !g.nodes[i].live)
+        .filter_map(|i| u32::try_from(i).ok());
+    for start in roots.iter().copied().chain(rest) {
+        if seen[start as usize] {
+            continue;
+        }
+        seen[start as usize] = true;
+        let mut x = start;
+        loop {
+            let xi = x as usize;
+            if !buffered[xi] && g.nodes[xi].counted() {
+                buffered[xi] = true;
+                added.push(x);
+            }
+            let mut next = None;
+            for c in g.children(x) {
+                let ci = c as usize;
+                if g.nodes[ci].live || seen[ci] {
+                    continue;
+                }
+                seen[ci] = true;
+                if next.is_none() {
+                    next = Some(c);
+                } else {
+                    stack.push(c);
+                }
+            }
+            match next.or_else(|| stack.pop()) {
+                Some(c) => x = c,
+                None => break,
+            }
+        }
+    }
+    added
 }

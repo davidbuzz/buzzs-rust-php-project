@@ -1774,12 +1774,14 @@ impl Vm {
             }
         }
         self.pop_frames_to(depth);
-        // `zend_object_store_ctor_failed` for native constructors.
-        if r.is_err() {
-            if let Some(t) = &ctor_this {
+        if let Some(t) = &ctor_this {
+            // `zend_object_store_ctor_failed` for native constructors.
+            if r.is_err() {
                 let d = object::data(t);
                 d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
             }
+            // `OBJ_RELEASE(This)` of `new` (`ZEND_CALL_RELEASE_THIS`).
+            crate::gc::released_ctor_this(t);
         }
         r
     }

@@ -45,7 +45,7 @@ pub mod sort;
 pub mod string;
 pub mod value;
 
-pub use array::{ArrayKey, HashTable, IterId, ZArray};
+pub use array::{ArrayKey, HashTable, IterId, WeakZArray, ZArray};
 pub use error::{
     BinaryOp, CastTarget, CollectingContext, Diagnostic, ErrorLevel, ObjectDump, ObjectKind,
     PropertyPurpose, PropertySlot, RtResult, RuntimeContext, RuntimeError,
