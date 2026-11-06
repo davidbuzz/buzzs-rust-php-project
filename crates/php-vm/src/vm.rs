@@ -1076,7 +1076,7 @@ mod tests {
     fn peek_cv_clones_share_the_string() {
         let f = frame_with(&["s"]);
         f.vars.borrow_mut().slots[0] = Some(Value::Str(ZStr::from("abc")));
-        let v = f.peek_cv(0, |s| s.cloned());
+        let v = f.peek_cv(0, Option::cloned);
         assert!(matches!(&v, Some(Value::Str(s)) if s.as_bytes() == b"abc"));
         // The slot still holds its value.
         assert!(f.peek_cv(0, |s| matches!(s, Some(Value::Str(_)))));

@@ -137,7 +137,7 @@ struct RootBuffer {
 type AddrMap = HashMap<usize, usize, BuildHasherDefault<AddrHasher>>;
 
 /// Hashes the root index's keys, object addresses, with one folded
-/// multiply instead of SipHash: buffering a root and freeing a buffered
+/// multiply instead of `SipHash`: buffering a root and freeing a buffered
 /// object each look the index up (php-src keeps the slot in the object's
 /// `GC_INFO` and needs no lookup at all). The keys are heap addresses, not
 /// script-controlled data, so there is no hash flooding to defend against.

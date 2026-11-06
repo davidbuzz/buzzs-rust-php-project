@@ -940,16 +940,12 @@ impl Vm {
             Some(n) => self.arg_position(n)?,
             None => Some(self.frame().calls.last().expect("pending call").args.len()),
         };
-        let (by_ref, is_magic) = {
+        let by_ref = {
             let call = self.frame().calls.last().expect("pending call");
             let magic = call.magic_name.is_some();
-            (
-                !magic && pos.is_some_and(|p| call.func.arg_by_ref(p))
-                    || (!magic && pos.is_none() && call.func.arg_by_ref(call.func.params().len())),
-                magic,
-            )
+            !magic && pos.is_some_and(|p| call.func.arg_by_ref(p))
+                || (!magic && pos.is_none() && call.func.arg_by_ref(call.func.params().len()))
         };
-        let _ = is_magic;
         // ZEND_ARG_SEND_PREFER_REF: by reference when possible, else by
         // value without complaint.
         let prefer_ref = by_ref && {
@@ -958,26 +954,27 @@ impl Vm {
             pos.and_then(|p| ps.get(p).or_else(|| ps.last().filter(|l| l.variadic)))
                 .is_some_and(|x| x.promote & crate::opcode::PREFER_REF != 0)
         };
-        let value = match src {
+        let value = self.send_value(src, pos, by_ref, prefer_ref)?;
+        self.push_arg(pos, name, value)
+    }
+
+    /// The value the general path of [`Vm::op_send`] sends for the argument
+    /// at `pos`: read by value, or as a reference for a by-reference
+    /// parameter (`ZEND_SEND_REF`, `ZEND_SEND_VAR_NO_REF`,
+    /// `ZEND_SEND_FUNC_ARG`), with the errors of a value that cannot become
+    /// one.
+    fn send_value(
+        &mut self,
+        src: &ArgSrc,
+        pos: Option<usize>,
+        by_ref: bool,
+        prefer_ref: bool,
+    ) -> VmResult<Value> {
+        Ok(match src {
             ArgSrc::Val(op) => {
                 let v = self.read(*op)?;
                 if by_ref && !prefer_ref {
-                    let call = self.frame().calls.last().expect("pending call").clone();
-                    let p = pos.unwrap_or_else(|| call.func.params().len().saturating_sub(1));
-                    let pname = call
-                        .func
-                        .params()
-                        .get(p)
-                        .filter(|p| !p.variadic)
-                        .map_or_else(String::new, |x| format!(" (${})", x.name));
-                    let fname = self.func_display(&call.func, call.scope.as_ref());
-                    return Err(self.make_throw(
-                        "Error",
-                        &format!(
-                            "{fname}(): Argument #{}{pname} could not be passed by reference",
-                            p + 1
-                        ),
-                    ));
+                    return Err(self.not_passable_by_reference(pos));
                 }
                 v
             }
@@ -1003,27 +1000,7 @@ impl Vm {
                     matches!(p.base, crate::opcode::PlaceBase::GlobalsArray) && p.segs.is_empty()
                 };
                 if by_ref && globals && !prefer_ref {
-                    let call = self
-                        .frames
-                        .last()
-                        .and_then(|f| f.calls.last())
-                        .ok_or(Throw::Fatal)?
-                        .clone();
-                    let p = pos.unwrap_or_else(|| call.func.params().len().saturating_sub(1));
-                    let pname = call
-                        .func
-                        .params()
-                        .get(p)
-                        .filter(|p| !p.variadic)
-                        .map_or_else(String::new, |x| format!(" (${})", x.name));
-                    let fname = self.func_display(&call.func, call.scope.as_ref());
-                    return Err(self.make_throw(
-                        "Error",
-                        &format!(
-                            "{fname}(): Argument #{}{pname} could not be passed by reference",
-                            p + 1
-                        ),
-                    ));
+                    return Err(self.not_passable_by_reference(pos));
                 }
                 if by_ref && !globals {
                     Value::Reference(self.place_make_ref(*pid)?)
@@ -1039,8 +1016,32 @@ impl Vm {
                 }
                 self.place_fetch(*pid, FetchMode::Read)?
             }
+        })
+    }
+
+    /// `zend_cannot_pass_by_reference`: the Error for a value sent to the
+    /// by-reference parameter at `pos` (`None`: the variadic one) of the
+    /// pending call.
+    #[cold]
+    fn not_passable_by_reference(&mut self, pos: Option<usize>) -> Throw {
+        let Some(call) = self.frames.last().and_then(|f| f.calls.last()).cloned() else {
+            return Throw::Fatal;
         };
-        self.push_arg(pos, name, value)
+        let p = pos.unwrap_or_else(|| call.func.params().len().saturating_sub(1));
+        let pname = call
+            .func
+            .params()
+            .get(p)
+            .filter(|p| !p.variadic)
+            .map_or_else(String::new, |x| format!(" (${})", x.name));
+        let fname = self.func_display(&call.func, call.scope.as_ref());
+        self.make_throw(
+            "Error",
+            &format!(
+                "{fname}(): Argument #{}{pname} could not be passed by reference",
+                p + 1
+            ),
+        )
     }
 
     fn push_arg(&mut self, pos: Option<usize>, name: Option<ZStr>, value: Value) -> VmResult<()> {
@@ -2175,7 +2176,7 @@ impl Vm {
 
     /// The typed part of [`Vm::recv_check`] (`zend_verify_recv_arg_type`):
     /// verifies and, where allowed, coerces `v` in place. `false` rejects
-    /// it (the caller raises the TypeError).
+    /// it (the caller raises the `TypeError`).
     fn recv_verify(&mut self, n: u32, v: &mut Value) -> VmResult<bool> {
         // The parameter type is read in place from the function
         // (`zend_verify_recv_arg_type` reads `arg_info->type`): the
@@ -2856,7 +2857,7 @@ impl MethodCache {
 }
 
 /// The argument handling of `i_init_func_execute_data`
-/// (Zend/zend_execute.c) for a new user frame `f` whose `args` hold the
+/// (`Zend/zend_execute.c`) for a new user frame `f` whose `args` hold the
 /// arguments as sent: each passed positional argument of a declared,
 /// non-variadic parameter moves straight into its CV, where php-src's SEND
 /// ops put it, so `RECV`/`RECV_INIT` only verify it ([`Vm::recv_bound`]).
@@ -2865,8 +2866,8 @@ impl MethodCache {
 /// Extra arguments and those of a variadic parameter stay in `args`.
 ///
 /// For a function without parameter types the `RECV`/`RECV_INIT` ops of
-/// the leading passed arguments are skipped ("Skip useless ZEND_RECV and
-/// ZEND_RECV_INIT opcodes"): the returned first op is where executing
+/// the leading passed arguments are skipped ("Skip useless `ZEND_RECV` and
+/// `ZEND_RECV_INIT` opcodes"): the returned first op is where executing
 /// them would have led. A named-argument gap stops the skipping (its op
 /// reports the missing argument or evaluates the default).
 fn bind_args(uf: &UserFunction, f: &mut Frame) -> usize {
