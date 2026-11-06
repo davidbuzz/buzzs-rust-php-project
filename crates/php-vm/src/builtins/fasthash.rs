@@ -50,9 +50,7 @@ impl Hasher for FxHasher {
         }
         let rest = chunks.remainder();
         if !rest.is_empty() {
-            let mut word = [0u8; 8];
-            word[..rest.len()].copy_from_slice(rest);
-            self.add(u64::from_le_bytes(word));
+            self.add(tail_word(rest));
         }
     }
 
@@ -84,17 +82,68 @@ impl Hasher for FxHasher {
     }
 }
 
+/// The 1 to 7 bytes of `rest` as the word `u64::from_le_bytes` gives for
+/// them followed by zero padding, read with at most one 4-, one 2- and one
+/// 1-byte load. Copying a variable length into a padded buffer compiles to
+/// a `memcpy` call, which cost more than the mixing itself for the short
+/// names these tables hold (nearly every name has such a tail).
+#[inline]
+fn tail_word(rest: &[u8]) -> u64 {
+    debug_assert!(!rest.is_empty() && rest.len() < 8);
+    let mut word = 0u64;
+    let mut done = 0usize;
+    if rest.len() & 4 != 0 {
+        word = u64::from(u32::from_le_bytes([rest[0], rest[1], rest[2], rest[3]]));
+        done = 4;
+    }
+    if rest.len() & 2 != 0 {
+        let pair = u16::from_le_bytes([rest[done], rest[done + 1]]);
+        word |= u64::from(pair) << (8 * done);
+        done += 2;
+    }
+    if rest.len() & 1 != 0 {
+        word |= u64::from(rest[done]) << (8 * done);
+    }
+    word
+}
+
 /// A `HashMap` with [`FxHasher`].
 pub(crate) type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 #[cfg(test)]
 mod tests {
-    use super::{FastMap, FxHasher};
+    use super::{tail_word, FastMap, FxHasher};
     use php_runtime::ZStr;
     use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
 
     fn hash_of<T: Hash + ?Sized>(v: &T) -> u64 {
         BuildHasherDefault::<FxHasher>::default().hash_one(v)
+    }
+
+    #[test]
+    fn tail_word_is_the_zero_padded_little_endian_word() {
+        let bytes: [u8; 7] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77];
+        for n in 1..8 {
+            let mut padded = [0u8; 8];
+            padded[..n].copy_from_slice(&bytes[..n]);
+            assert_eq!(tail_word(&bytes[..n]), u64::from_le_bytes(padded), "{n}");
+        }
+    }
+
+    #[test]
+    fn write_feeds_whole_words_then_the_padded_tail() {
+        let mut a = FxHasher::default();
+        a.write(b"abcdefghijk");
+        let mut b = FxHasher::default();
+        b.add(u64::from_le_bytes(*b"abcdefgh"));
+        b.add(u64::from_le_bytes(*b"ijk\0\0\0\0\0"));
+        assert_eq!(a.finish(), b.finish());
+        // A whole number of words has no tail round.
+        let mut c = FxHasher::default();
+        c.write(b"abcdefgh");
+        let mut d = FxHasher::default();
+        d.add(u64::from_le_bytes(*b"abcdefgh"));
+        assert_eq!(c.finish(), d.finish());
     }
 
     #[test]
