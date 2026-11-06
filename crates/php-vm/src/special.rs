@@ -1,9 +1,9 @@
 //! Handlers of the opcodes that `zend_try_compile_special_func()` compiles
-//! builtin calls to (ref: Zend/zend_compile.c `zend_compile_func_strlen`,
+//! builtin calls to (ref: `Zend/zend_compile.c` `zend_compile_func_strlen`,
 //! `_count`, `_typecheck`, `_gettype`, `_defined`, `_in_array`,
-//! `_array_key_exists`; Zend/zend_vm_def.h `ZEND_STRLEN`, `ZEND_COUNT`,
+//! `_array_key_exists`; `Zend/zend_vm_def.h` `ZEND_STRLEN`, `ZEND_COUNT`,
 //! `ZEND_TYPE_CHECK`, `ZEND_GET_TYPE`, `ZEND_DEFINED`, `ZEND_IN_ARRAY`,
-//! `ZEND_ARRAY_KEY_EXISTS`; Zend/zend_execute.c `zend_quick_check_constant`,
+//! `ZEND_ARRAY_KEY_EXISTS`; `Zend/zend_execute.c` `zend_quick_check_constant`,
 //! `zend_array_key_exists_fast`, `zend_array_key_exists_error`).
 //!
 //! The opcodes run in the caller's frame: no builtin frame is pushed, so
