@@ -1292,9 +1292,9 @@ impl HashTable {
     /// Iterates values in order.
     pub fn values(&self) -> impl Iterator<Item = &Value> {
         let (packed, buckets): (&[Option<Value>], &[Bucket]) = match &self.store {
-            Store::Uninit => (&[], &[]),
-            Store::Packed(v) => (v.as_slice(), &[]),
-            Store::Hash(d) => (&[], d.buckets.as_slice()),
+            Store::Uninit => (Default::default(), Default::default()),
+            Store::Packed(v) => (v.as_slice(), Default::default()),
+            Store::Hash(d) => (Default::default(), d.buckets.as_slice()),
         };
         packed
             .iter()
