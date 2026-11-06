@@ -23,53 +23,60 @@ use php_runtime::BinaryOp;
 /// Rewrites `ops` (the finished body whose places are `places`) in place.
 pub(crate) fn specialise(ops: &mut [Op], places: &[Place]) {
     for i in 0..ops.len() {
-        let next = ops.get(i + 1);
-        let new = match &ops[i] {
-            Op::Bin { op, a, b, dst } => bin(*op, *a, *b, *dst, next),
-            Op::IncDec { place, kind, dst } => plain_cv(places, *place).map(|cv| Op::IncDecCv {
-                cv,
-                kind: *kind,
-                dst: *dst,
-                place: *place,
-            }),
-            Op::AssignOp {
-                place,
-                op,
-                val,
-                dst,
-            } if is_numeric_assign_op(*op) => plain_cv(places, *place).map(|cv| Op::AssignOpCv {
-                cv,
-                op: *op,
-                val: *val,
-                dst: *dst,
-                place: *place,
-            }),
-            Op::Fetch {
-                place,
-                mode: FetchMode::Read,
-                dst,
-            } => cv_dim(places, *place).map(|(cv, dim)| Op::FetchDimCv {
-                cv,
-                dim,
-                place: *place,
-                dst: *dst,
-                to: assigned_cv(next, *dst),
-            }),
-            Op::Assign {
-                place,
-                val,
-                dst: None,
-            } => cv_dim(places, *place).map(|(cv, dim)| Op::AssignDimCv {
-                cv,
-                dim,
-                val: *val,
-                place: *place,
-            }),
-            _ => None,
+        let (head, tail) = ops.split_at_mut(i + 1);
+        let Some(cur) = head.last_mut() else {
+            continue;
         };
-        if let Some(op) = new {
-            ops[i] = op;
+        if let Some(op) = rewrite(cur, tail.first(), places) {
+            *cur = op;
         }
+    }
+}
+
+/// The specialised form of `op` (followed by `next`), if any.
+fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
+    match op {
+        Op::Bin { op, a, b, dst } => bin(*op, *a, *b, *dst, next),
+        Op::IncDec { place, kind, dst } => plain_cv(places, *place).map(|cv| Op::IncDecCv {
+            cv,
+            kind: *kind,
+            dst: *dst,
+            place: *place,
+        }),
+        Op::AssignOp {
+            place,
+            op,
+            val,
+            dst,
+        } if is_numeric_assign_op(*op) => plain_cv(places, *place).map(|cv| Op::AssignOpCv {
+            cv,
+            op: *op,
+            val: *val,
+            dst: *dst,
+            place: *place,
+        }),
+        Op::Fetch {
+            place,
+            mode: FetchMode::Read,
+            dst,
+        } => cv_dim(places, *place).map(|(cv, dim)| Op::FetchDimCv {
+            cv,
+            dim,
+            place: *place,
+            dst: *dst,
+            to: assigned_cv(next, *dst),
+        }),
+        Op::Assign {
+            place,
+            val,
+            dst: None,
+        } => cv_dim(places, *place).map(|(cv, dim)| Op::AssignDimCv {
+            cv,
+            dim,
+            val: *val,
+            place: *place,
+        }),
+        _ => None,
     }
 }
 
