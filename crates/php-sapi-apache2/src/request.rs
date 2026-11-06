@@ -172,15 +172,16 @@ pub fn thread_cpu_ns() -> i64 {
         .saturating_add(ts.tv_nsec)
 }
 
-/// The request body as seen by `php://input`.
+/// `SG(request_info).request_body`: the buffer `php://input` reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Body {
-    /// Not read yet: `php://input` reads it from the server on demand.
+    /// Not created yet: `php://input` reads what the server still has (the
+    /// multipart parser reads the server directly and leaves no buffer;
+    /// what it consumed is gone).
     Unread,
-    /// Read at startup (`sapi_read_standard_form_data`).
+    /// Read by `sapi_read_standard_form_data()` (at startup or for
+    /// `request_parse_body()`) or by `php://input`.
     Buffered(Vec<u8>),
-    /// Consumed by the multipart parser (`php://input` is empty).
-    Consumed,
 }
 
 /// State of one request shared by the VM thread's components.
@@ -212,6 +213,11 @@ pub struct RequestCtx {
     body_ready: Cell<Option<bool>>,
     /// Bytes of the body read so far (`SG(read_post_bytes)`).
     pub read_post_bytes: Cell<i64>,
+    /// Temporary files of uploads a later multipart parse
+    /// (`request_parse_body()`) dropped from `SG(rfc1867_uploaded_files)`:
+    /// no longer uploaded files, deleted at request end (php-src leaks
+    /// them).
+    pub orphaned_uploads: RefCell<Vec<PathBuf>>,
     /// `max_execution_time` timer.
     pub timer: Arc<Timer>,
     /// `header_register_callback()` callable (`SG(send_header_fcc)`).
@@ -238,7 +244,7 @@ pub fn with_ctx<R>(f: impl FnOnce(&RequestCtx) -> R) -> Option<R> {
 }
 
 /// The current request context.
-fn current() -> Option<Rc<RequestCtx>> {
+pub(crate) fn current() -> Option<Rc<RequestCtx>> {
     CURRENT.with(|c| c.borrow().clone())
 }
 
@@ -264,6 +270,7 @@ impl RequestCtx {
             body: RefCell::new(Body::Unread),
             body_ready: Cell::new(None),
             read_post_bytes: Cell::new(0),
+            orphaned_uploads: RefCell::new(Vec::new()),
             timer,
             header_callback: RefCell::new(None),
         }
@@ -428,12 +435,12 @@ impl RequestCtx {
         out
     }
 
-    /// The body for `php://input`.
+    /// The body for `php://input`: the request body buffer, created on
+    /// first use from what the server still has (`php_stream_input_read()`).
     pub fn input(&self) -> Vec<u8> {
         let current = self.body.borrow().clone();
         match current {
             Body::Buffered(b) => b,
-            Body::Consumed => Vec::new(),
             Body::Unread => {
                 let b = self.read_rest();
                 *self.body.borrow_mut() = Body::Buffered(b.clone());
@@ -848,6 +855,7 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx) {
     apply_fatal_status(vm);
     php_header(vm);
     crate::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
+    crate::multipart::cleanup(&ctx.orphaned_uploads.take());
 }
 
 /// Makes `php://input` read the request body through the SAPI (the

@@ -7,7 +7,7 @@ use php_stdmisc::highlight::{self, HighlightColors};
 use php_stdmisc::locale::{self, LocaleState};
 use php_stdmisc::query::{self, InputSettings};
 use php_support::output::{self, flags, StartHandler};
-use php_vm::ext::{Args, ModuleBuilder, VmResult};
+use php_vm::ext::{Args, ModuleBuilder, ParseBodyOptions, VmResult};
 use php_vm::Vm;
 use std::cell::RefCell;
 
@@ -214,53 +214,111 @@ const PARSE_BODY_OPTIONS: [&[u8]; 5] = [
     b"upload_max_filesize",
 ];
 
-/// `PHP_FUNCTION(request_parse_body)` (`ext/standard/http.c`): validates
-/// `$options` like `cache_request_parse_body_options()`, then throws, as
-/// the CLI request has no content type (`SG(request_info).content_type`).
-fn request_parse_body(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    if let Some(Value::Array(options)) = a.opt(0) {
-        for (k, v) in options.iter() {
-            let key = match k {
-                ArrayKey::Int(_) => {
-                    return Err(vm.throw("ValueError", "Invalid integer key in $options argument"))
-                }
-                ArrayKey::Str(s) => s.clone(),
-            };
-            if key.as_bytes().is_empty() {
-                return Err(vm.throw(
-                    "ValueError",
-                    "Invalid empty string key in $options argument",
-                ));
+/// `cache_request_parse_body_options()`: validates `$options` and reads
+/// each limit (an integer, or a quantity string such as `"8M"`); a later
+/// key overrides an earlier one spelled in another case.
+fn parse_body_options(vm: &mut Vm, options: &ZArray) -> VmResult<ParseBodyOptions> {
+    let mut parsed = ParseBodyOptions::default();
+    for (k, v) in options.iter() {
+        let key = match k {
+            ArrayKey::Int(_) => {
+                return Err(vm.throw("ValueError", "Invalid integer key in $options argument"))
             }
-            if !PARSE_BODY_OPTIONS
-                .iter()
-                .any(|n| key.as_bytes().eq_ignore_ascii_case(n))
-            {
-                let msg = format!(
-                    "Invalid key \"{}\" in $options argument",
-                    key.to_string_lossy()
-                );
+            ArrayKey::Str(s) => s.clone(),
+        };
+        if key.as_bytes().is_empty() {
+            return Err(vm.throw(
+                "ValueError",
+                "Invalid empty string key in $options argument",
+            ));
+        }
+        let Some(index) = PARSE_BODY_OPTIONS
+            .iter()
+            .position(|n| key.as_bytes().eq_ignore_ascii_case(n))
+        else {
+            let msg = format!(
+                "Invalid key \"{}\" in $options argument",
+                key.to_string_lossy()
+            );
+            return Err(vm.throw("ValueError", &msg));
+        };
+        // cache_request_parse_body_option().
+        let value = match v.deref() {
+            Value::Str(s) => {
+                let (n, err) = php_support::ini::parse_quantity(s.as_bytes());
+                if let Some(err) = err {
+                    vm.raise(2, &err)?;
+                }
+                n
+            }
+            Value::Int(n) => n,
+            other => {
+                let msg = format!("Invalid {} value in $options argument", other.value_name());
                 return Err(vm.throw("ValueError", &msg));
             }
-            // cache_request_parse_body_option().
-            match v.deref() {
-                Value::Str(s) => {
-                    if let (_, Some(err)) = php_support::ini::parse_quantity(s.as_bytes()) {
-                        vm.raise(2, &err)?;
-                    }
-                }
-                Value::Int(_) => {}
-                other => {
-                    let msg = format!("Invalid {} value in $options argument", other.value_name());
-                    return Err(vm.throw("ValueError", &msg));
-                }
-            }
-        }
+        };
+        let slot = match index {
+            0 => &mut parsed.max_file_uploads,
+            1 => &mut parsed.max_input_vars,
+            2 => &mut parsed.max_multipart_body_parts,
+            3 => &mut parsed.post_max_size,
+            _ => &mut parsed.upload_max_filesize,
+        };
+        *slot = Some(value);
     }
-    Err(vm.throw(
-        "RequestParseBodyException",
-        "Request does not provide a content type",
-    ))
+    Ok(parsed)
+}
+
+/// `php_sapi_filter()` for `PARSE_POST` over a parsed body: every
+/// non-empty string becomes its `filter.default` result, whatever its
+/// type; an empty value stays `""`.
+fn filter_post_values(
+    q: &mut VmQuery<'_>,
+    arr: &ZArray,
+    filter: i64,
+    flags: i64,
+) -> RtResult<ZArray> {
+    let mut out = HashTable::new();
+    for (k, v) in arr.iter() {
+        let nv = match v.deref() {
+            Value::Array(inner) => Value::Array(filter_post_values(q, &inner, filter, flags)?),
+            Value::Str(s) if !s.as_bytes().is_empty() => {
+                php_filter::apply_default_filter(q, s.as_bytes(), filter, flags)?
+            }
+            other => other,
+        };
+        out.insert(k.clone(), nv);
+    }
+    Ok(ZArray::from_table(out))
+}
+
+/// `PHP_FUNCTION(request_parse_body)` (`ext/standard/http.c`): validates
+/// `$options` like `cache_request_parse_body_options()`, then has the web
+/// SAPI read and parse the request body ([`Vm::parse_body_hook`]: its
+/// content type's POST handler, with `RequestParseBodyException`s for
+/// what are warnings at request startup) and returns `[$post, $files]`.
+/// The CLI request has no content type (`SG(request_info).content_type`).
+fn request_parse_body(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let options = match a.opt(0) {
+        Some(Value::Array(options)) => parse_body_options(vm, &options)?,
+        _ => ParseBodyOptions::default(),
+    };
+    let Some(parse) = vm.parse_body_hook else {
+        return Err(vm.throw(
+            "RequestParseBodyException",
+            "Request does not provide a content type",
+        ));
+    };
+    let (mut post, files) = parse(vm, &options)?;
+    // sapi_module.input_filter: ext/filter filters the form fields.
+    if let Some((filter, flags)) = default_filter(vm) {
+        let r = filter_post_values(&mut VmQuery::new(vm), &post, filter, flags);
+        post = r.vm(vm)?;
+    }
+    Ok(Value::Array(ZArray::from_values([
+        Value::Array(post),
+        Value::Array(files),
+    ])))
 }
 
 /// The request-variable INI settings used by `parse_str()`.

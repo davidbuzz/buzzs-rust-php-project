@@ -994,6 +994,10 @@ pub struct Vm {
     /// SAPI, or `zend_test_handle_post_data()`) fills it and deletes the
     /// files still listed at request shutdown.
     pub rfc1867_uploaded_files: Vec<std::path::PathBuf>,
+    /// Active web SAPI's request body parse for `request_parse_body()`
+    /// ([`crate::ext::ParseBodyFn`]); `None` (the CLI) means the request
+    /// has no content type.
+    pub parse_body_hook: Option<crate::ext::ParseBodyFn>,
     /// Running fibers (innermost last).
     pub fibers: Vec<Obj>,
     /// Destination temporary of the builtin call in progress (fibers).

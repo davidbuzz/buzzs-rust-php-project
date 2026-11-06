@@ -7,8 +7,9 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
-use php_vm::ext::Extension;
-use php_vm::{Vm, VmOptions};
+use php_runtime::{Value, ZArray};
+use php_vm::ext::{Extension, ParseBodyOptions};
+use php_vm::{Vm, VmOptions, VmResult};
 
 /// A `Write` sink shared with the test.
 #[derive(Clone, Default)]
@@ -642,6 +643,71 @@ fn request_parse_body_validates_options() {
          RequestParseBodyException: Request does not provide a content type\n\
          RequestParseBodyException: Request does not provide a content type\n\
          RequestParseBodyException: Request does not provide a content type\n"
+    );
+}
+
+thread_local! {
+    /// The options [`fake_parse_body`] received.
+    static PARSE_BODY_CALLS: RefCell<Vec<ParseBodyOptions>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A web SAPI's body parse ([`Vm::parse_body_hook`]): records the options,
+/// throws for `max_input_vars` 0, else returns fixed arrays.
+fn fake_parse_body(vm: &mut Vm, options: &ParseBodyOptions) -> VmResult<(ZArray, ZArray)> {
+    PARSE_BODY_CALLS.with(|c| c.borrow_mut().push(*options));
+    if options.max_input_vars == Some(0) {
+        return Err(vm.throw(
+            "RequestParseBodyException",
+            "Input variables exceeded 0. To increase the limit change max_input_vars in php.ini.",
+        ));
+    }
+    let mut post = ZArray::new();
+    post.make_mut().insert("a", Value::from("b"));
+    let mut file = ZArray::new();
+    file.make_mut().insert("error", Value::Int(4));
+    let mut files = ZArray::new();
+    files.make_mut().insert("f", Value::Array(file));
+    Ok((post, files))
+}
+
+/// `request_parse_body()` under a web SAPI: the options reach the SAPI's
+/// parse as limits (quantity strings parsed, keys in any case), its
+/// arrays come back as `[$post, $files]` and its exceptions propagate.
+#[test]
+fn request_parse_body_runs_the_sapi_parse() {
+    let sink = Sink::default();
+    let ext = php_ext_stdmisc::StdMisc;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
+    vm.parse_body_hook = Some(fake_parse_body);
+    vm.run_script(
+        br#"<?php
+var_dump(request_parse_body(['POST_MAX_SIZE' => '1K', 'upload_max_filesize' => 2, 'Max_File_Uploads' => '3']));
+try { request_parse_body(['max_input_vars' => 0]); } catch (RequestParseBodyException $e) { echo $e->getMessage(), "\n"; }"#,
+        "test.php",
+    );
+    drop(vm);
+    let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  array(1) {\n    [\"a\"]=>\n    string(1) \"b\"\n  }\n  [1]=>\n  array(1) {\n    [\"f\"]=>\n    array(1) {\n      [\"error\"]=>\n      int(4)\n    }\n  }\n}\n\
+         Input variables exceeded 0. To increase the limit change max_input_vars in php.ini.\n"
+    );
+    let calls = PARSE_BODY_CALLS.with(|c| c.take());
+    assert_eq!(
+        calls,
+        vec![
+            ParseBodyOptions {
+                max_file_uploads: Some(3),
+                post_max_size: Some(1024),
+                upload_max_filesize: Some(2),
+                ..ParseBodyOptions::default()
+            },
+            ParseBodyOptions {
+                max_input_vars: Some(0),
+                ..ParseBodyOptions::default()
+            },
+        ]
     );
 }
 

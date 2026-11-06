@@ -748,3 +748,451 @@ fn cwd_is_script_dir() {
     );
     assert_eq!(r.body, scratch().canonicalize().unwrap().to_string_lossy());
 }
+
+/// A `&'static str` for [`Req::headers`].
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+/// `Content-Type` and `Content-Length` request headers for `body`.
+fn body_headers(content_type: &str, body: &[u8]) -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("Content-Type", leak(content_type.to_string())),
+        ("Content-Length", leak(body.len().to_string())),
+    ]
+}
+
+/// The boundary of the multipart bodies below (php-src's
+/// `request_parse_body` tests use it).
+const BOUNDARY: &str = "---------------------------84000087610663814162942123332";
+
+/// A `multipart/form-data` body (CRLF line ends) of `(headers, content)`
+/// parts.
+fn multipart(parts: &[(&[&str], &str)]) -> Vec<u8> {
+    let mut out = String::new();
+    for (headers, content) in parts {
+        out.push_str("--");
+        out.push_str(BOUNDARY);
+        out.push_str("\r\n");
+        for h in *headers {
+            out.push_str(h);
+            out.push_str("\r\n");
+        }
+        out.push_str("\r\n");
+        out.push_str(content);
+        out.push_str("\r\n");
+    }
+    out.push_str("--");
+    out.push_str(BOUNDARY);
+    out.push_str("--");
+    out.into_bytes()
+}
+
+// request_parse_body() (ext/standard/http.c) through mod_php: every
+// expected output is what php 8.5's `php -S` answers for the same request
+// (both SAPIs read the body through `sapi_module.read_post`).
+
+/// `request_parse_body()`: A PUT urlencoded body (php-src `request_parse_body/urlencoded.phpt`): `$_POST` stays empty and `php://input` still reads the body.
+#[test]
+fn request_parse_body_urlencoded() {
+    let body = b"foo=foo&bar[]=1&bar[]=2".to_vec();
+    let r = run(
+        "rpb_urlencoded.php",
+        Req {
+            script: r"<?php
+var_dump(request_parse_body(), $_POST, file_get_contents('php://input'));
+",
+            method: "PUT",
+            headers: body_headers("application/x-www-form-urlencoded", &body),
+            body,
+            ini: ini(&[]),
+            ..Req::default()
+        },
+    );
+    assert_eq!(
+        r.body,
+        r#"array(2) {
+  [0]=>
+  array(2) {
+    ["foo"]=>
+    string(3) "foo"
+    ["bar"]=>
+    array(2) {
+      [0]=>
+      string(1) "1"
+      [1]=>
+      string(1) "2"
+    }
+  }
+  [1]=>
+  array(0) {
+  }
+}
+array(0) {
+}
+string(23) "foo=foo&bar[]=1&bar[]=2"
+"#
+    );
+}
+
+/// `request_parse_body()`: A PATCH multipart body: the upload is a real uploaded file; `$_FILES` and `php://input` stay empty.
+#[test]
+fn request_parse_body_multipart() {
+    let body = multipart(&[
+        (
+            &["Content-Disposition: form-data; name=\"field1\""],
+            "value one",
+        ),
+        (
+            &[
+                "Content-Disposition: form-data; name=\"file1\"; filename=\"a.txt\"",
+                "Content-Type: text/plain",
+            ],
+            "file one data",
+        ),
+    ]);
+    let r = run(
+        "rpb_multipart.php",
+        Req {
+            script: r#"<?php
+[$post, $files] = request_parse_body();
+$f = $files['file1'];
+echo json_encode([$post, $f['name'], $f['full_path'], $f['type'], $f['error'], $f['size'], is_uploaded_file($f['tmp_name']), file_get_contents($f['tmp_name']), $_POST, $_FILES, file_get_contents('php://input')]), "\n";
+"#,
+            method: "PATCH",
+            headers: body_headers("multipart/form-data; boundary=---------------------------84000087610663814162942123332", &body),
+            body,
+            ini: ini(&[]),
+            ..Req::default()
+        },
+    );
+    assert_eq!(
+        r.body,
+        r#"[{"field1":"value one"},"a.txt","a.txt","text\/plain",0,13,true,"file one data",[],[],""]
+"#
+    );
+}
+
+/// `request_parse_body()`: No `Content-Type`: nothing to parse.
+#[test]
+fn request_parse_body_no_content_type() {
+    let body = b"foo=bar".to_vec();
+    let r = run(
+        "rpb_no_content_type.php",
+        Req {
+            script: r#"<?php
+try { request_parse_body(); } catch (RequestParseBodyException $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+"#,
+            method: "PUT",
+            headers: vec![("Content-Length", leak(body.len().to_string()))],
+            body,
+            ini: ini(&[]),
+            ..Req::default()
+        },
+    );
+    assert_eq!(
+        r.body,
+        r"RequestParseBodyException: Request does not provide a content type
+"
+    );
+}
+
+/// `request_parse_body()`: A content type without a POST handler throws; the body is left for `php://input`.
+#[test]
+fn request_parse_body_unsupported_content_type() {
+    let body = b"{\"a\":1}".to_vec();
+    let r = run(
+        "rpb_unsupported_content_type.php",
+        Req {
+            script: r#"<?php
+try { request_parse_body(); } catch (RequestParseBodyException $e) { echo $e->getMessage(), "\n"; }
+echo file_get_contents('php://input');
+"#,
+            method: "PUT",
+            headers: body_headers("application/json", &body),
+            body,
+            ini: ini(&[]),
+            ..Req::default()
+        },
+    );
+    assert_eq!(
+        r.body,
+        r#"Content-Type "application/json" is not supported
+{"a":1}"#
+    );
+}
+
+/// `request_parse_body()`: The rfc1867 limits throw, chained in the order they were hit (the option values replace the INI ones).
+#[test]
+fn request_parse_body_chained_limits() {
+    let body = multipart(&[
+        (
+            &["Content-Disposition: form-data; name=\"field1\""],
+            "value one",
+        ),
+        (
+            &["Content-Disposition: form-data; name=\"field2\""],
+            "value two",
+        ),
+        (
+            &[
+                "Content-Disposition: form-data; name=\"file1\"; filename=\"a.txt\"",
+                "Content-Type: text/plain",
+            ],
+            "file one data",
+        ),
+        (
+            &[
+                "Content-Disposition: form-data; name=\"file2\"; filename=\"b.txt\"",
+                "Content-Type: text/plain",
+            ],
+            "file two data",
+        ),
+    ]);
+    let r = run(
+        "rpb_chained_limits.php",
+        Req {
+            script: r#"<?php
+try { request_parse_body(['max_file_uploads' => 1, 'max_input_vars' => 1]); } catch (RequestParseBodyException $e) { echo $e->getMessage(), ' <- ', $e->getPrevious()->getMessage(), "\n"; }
+"#,
+            method: "PUT",
+            headers: body_headers("multipart/form-data; boundary=---------------------------84000087610663814162942123332", &body),
+            body,
+            ini: ini(&[]),
+            ..Req::default()
+        },
+    );
+    assert_eq!(
+        r.body,
+        r"Multipart body parts limit exceeded 2. To increase the limit change max_multipart_body_parts in php.ini. <- Input variables exceeded 1. To increase the limit change max_input_vars in php.ini.
+"
+    );
+}
+
+/// `request_parse_body()`: The `post_max_size` option against `Content-Length`; the body is not read, so a second call parses it.
+#[test]
+fn request_parse_body_post_max_size_option() {
+    let body = multipart(&[(
+        &["Content-Disposition: form-data; name=\"field1\""],
+        "value one",
+    )]);
+    let r = run(
+        "rpb_post_max_size_option.php",
+        Req {
+            script: r#"<?php
+try { request_parse_body(['post_max_size' => 10]); } catch (RequestParseBodyException $e) { echo $e->getMessage(), "\n"; }
+var_dump(request_parse_body()[0]);
+"#,
+            method: "DELETE",
+            headers: body_headers("multipart/form-data; boundary=---------------------------84000087610663814162942123332", &body),
+            body,
+            ini: ini(&[]),
+            ..Req::default()
+        },
+    );
+    assert_eq!(
+        r.body,
+        r#"POST Content-Length of 180 bytes exceeds the limit of 10 bytes
+array(1) {
+  ["field1"]=>
+  string(9) "value one"
+}
+"#
+    );
+}
+
+/// `request_parse_body()`: The startup POST parse consumed the body: nothing left, and the new (empty) buffer is what `php://input` reads.
+#[test]
+fn request_parse_body_after_startup_post() {
+    let body = b"a=1&b=2".to_vec();
+    let r = run(
+        "rpb_after_startup_post.php",
+        Req {
+            script: r"<?php
+echo json_encode([$_POST, request_parse_body(), file_get_contents('php://input')]);
+",
+            method: "POST",
+            headers: body_headers("application/x-www-form-urlencoded", &body),
+            body,
+            ini: ini(&[]),
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.body, r#"[{"a":"1","b":"2"},[[],[]],""]"#);
+}
+
+/// `request_parse_body()`: A second multipart parse: nothing left, and the startup uploads stop being uploaded files.
+#[test]
+fn request_parse_body_after_startup_multipart() {
+    let body = multipart(&[
+        (
+            &["Content-Disposition: form-data; name=\"field1\""],
+            "value one",
+        ),
+        (
+            &[
+                "Content-Disposition: form-data; name=\"file1\"; filename=\"a.txt\"",
+                "Content-Type: text/plain",
+            ],
+            "file one data",
+        ),
+    ]);
+    let r = run(
+        "rpb_after_startup_multipart.php",
+        Req {
+            script: r"<?php
+$t = $_FILES['file1']['tmp_name'];
+echo json_encode([$_POST, is_uploaded_file($t), request_parse_body(), is_uploaded_file($t), file_exists($t)]);
+",
+            method: "POST",
+            headers: body_headers("multipart/form-data; boundary=---------------------------84000087610663814162942123332", &body),
+            body,
+            ini: ini(&[]),
+            ..Req::default()
+        },
+    );
+    assert_eq!(
+        r.body,
+        r#"[{"field1":"value one"},true,[[],[]],false,true]"#
+    );
+}
+
+/// `request_parse_body()`: A too large boundary is a plain warning (`sapi_error()`), not an exception.
+#[test]
+fn request_parse_body_boundary_too_large() {
+    let body = b"--x\n".to_vec();
+    let r = run(
+        "rpb_boundary_too_large.php",
+        Req {
+            script: r"<?php
+echo json_encode(request_parse_body());
+",
+            method: "PUT",
+            headers: body_headers(
+                &format!("multipart/form-data; boundary={}", "x".repeat(5200)),
+                &body,
+            ),
+            body,
+            ini: ini(&[("html_errors", "0")]),
+            ..Req::default()
+        },
+    );
+    let path = scratch()
+        .join("rpb_boundary_too_large.php")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        r.body,
+        r"
+Warning: Boundary too large in multipart/form-data POST data in %PATH% on line 2
+[[],[]]"
+            .replace("%PATH%", &path)
+    );
+}
+
+/// `request_parse_body()`: `max_input_vars` stays a warning of the function for urlencoded bodies (`php_std_post_handler()`).
+#[test]
+fn request_parse_body_urlencoded_max_input_vars() {
+    let body = b"a=1&b=2&c=3".to_vec();
+    let r = run(
+        "rpb_urlencoded_max_input_vars.php",
+        Req {
+            script: r"<?php
+echo json_encode(request_parse_body(['max_input_vars' => 1]));
+",
+            method: "PUT",
+            headers: body_headers("application/x-www-form-urlencoded", &body),
+            body,
+            ini: ini(&[("html_errors", "0")]),
+            ..Req::default()
+        },
+    );
+    let path = scratch()
+        .join("rpb_urlencoded_max_input_vars.php")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(r.body, r#"
+Warning: request_parse_body(): Input variables exceeded 1. To increase the limit change max_input_vars in php.ini. in %PATH% on line 2
+[{"a":"1","b":"2"},[]]"#.replace("%PATH%", &path));
+}
+
+/// `request_parse_body()`: `filter.default` filters the fields like `php_sapi_filter()` (an empty value stays empty).
+#[test]
+fn request_parse_body_filter_default() {
+    let body = b"a=%3Cb%3E&e=&n[]=%22".to_vec();
+    let r = run(
+        "rpb_filter_default.php",
+        Req {
+            script: r"<?php
+echo json_encode(request_parse_body());
+",
+            method: "PUT",
+            headers: body_headers("application/x-www-form-urlencoded", &body),
+            body,
+            ini: ini(&[("filter.default", "special_chars")]),
+            ..Req::default()
+        },
+    );
+    let expected = r#"[{"a":"&#60;b&#62;","e":"","n":["&#34;"]},[]]"#;
+    assert!(r.body.ends_with(expected), "{}", r.body);
+}
+
+/// `request_parse_body()`: `filter.default` filters multipart fields, not the file entries.
+#[test]
+fn request_parse_body_filter_default_multipart() {
+    let body = multipart(&[
+        (&["Content-Disposition: form-data; name=\"a\""], "<b>"),
+        (
+            &[
+                "Content-Disposition: form-data; name=\"file1\"; filename=\"<x>.txt\"",
+                "Content-Type: text/plain",
+            ],
+            "zz",
+        ),
+    ]);
+    let r = run(
+        "rpb_filter_default_multipart.php",
+        Req {
+            script: r"<?php
+[$p, $f] = request_parse_body();
+echo json_encode([$p, $f['file1']['name'], $f['file1']['type']]);
+",
+            method: "PUT",
+            headers: body_headers("multipart/form-data; boundary=---------------------------84000087610663814162942123332", &body),
+            body,
+            ini: ini(&[("filter.default", "special_chars")]),
+            ..Req::default()
+        },
+    );
+    let expected = r#"[{"a":"&#60;b&#62;"},"<x>.txt","text\/plain"]"#;
+    assert!(r.body.ends_with(expected), "{}", r.body);
+}
+
+/// `request_parse_body()`: A validating `filter.default` registers the filter result, whatever its type.
+#[test]
+fn request_parse_body_filter_default_validate() {
+    let body = b"a=12&b=x&c=".to_vec();
+    let r = run(
+        "rpb_filter_default_validate.php",
+        Req {
+            script: r"<?php
+var_dump(request_parse_body()[0]);
+",
+            method: "PUT",
+            headers: body_headers("application/x-www-form-urlencoded", &body),
+            body,
+            ini: ini(&[("filter.default", "int")]),
+            ..Req::default()
+        },
+    );
+    let expected = r#"array(3) {
+  ["a"]=>
+  int(12)
+  ["b"]=>
+  bool(false)
+  ["c"]=>
+  string(0) ""
+}
+"#;
+    assert!(r.body.ends_with(expected), "{}", r.body);
+}
