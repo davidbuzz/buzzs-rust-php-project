@@ -2254,9 +2254,15 @@ impl Vm {
             let p = &self.frame().code.places[pid as usize];
             (propcache::cacheable(p), propcache::cacheable_head(p))
         };
-        // Fast path: ASSIGN_OBJ to a cached property.
+        // Fast paths: ASSIGN_OBJ to a cached property, ASSIGN_DIM to an
+        // element of a cached array property (`$this->a[$k] = v`).
         let v = if single {
             match self.prop_cache_assign(pid, v) {
+                Ok(r) => return Ok(r),
+                Err(v) => v,
+            }
+        } else if head {
+            match self.prop_cache_nested_assign(pid, v) {
                 Ok(r) => return Ok(r),
                 Err(v) => v,
             }
@@ -2557,6 +2563,11 @@ impl Vm {
             if let Some(r) = self.prop_cache_assign_op(pid, op, &v)? {
                 return Ok(r);
             }
+        } else if head {
+            // ASSIGN_DIM_OP on an element of a cached array property.
+            if let Some(r) = self.prop_cache_nested_assign_op(pid, op, &v) {
+                return Ok(r);
+            }
         }
         if let Some(cv) = self.rw_undef_cv_container(pid) {
             self.rw_undef_container_first(cv)?;
@@ -2761,9 +2772,18 @@ impl Vm {
         if let Some(r) = self.incdec_cv_int_fast(pid, kind) {
             return Ok(r);
         }
-        // Fast path: PRE/POST_INC/DEC_OBJ on a cached declared slot.
-        if propcache::cacheable(&self.frame().code.places[pid as usize]) {
+        // Fast paths: PRE/POST_INC/DEC_OBJ on a cached property, and the
+        // element of a cached array property (`$this->a[$k]++`).
+        let (single, head) = {
+            let p = &self.frame().code.places[pid as usize];
+            (propcache::cacheable(p), propcache::cacheable_head(p))
+        };
+        if single {
             if let Some(r) = self.prop_cache_incdec(pid, kind) {
+                return Ok(r);
+            }
+        } else if head {
+            if let Some(r) = self.prop_cache_nested_incdec(pid, kind) {
                 return Ok(r);
             }
         }
@@ -2955,6 +2975,10 @@ impl Vm {
         if let (PlaceBase::StaticProp { class, name }, true) = (&p.base, p.segs.is_empty()) {
             return Err(self.unset_static_prop(class, *name));
         }
+        // Fast path: UNSET_OBJ of a cached property.
+        if propcache::cacheable(p) && self.prop_cache_unset(pid) {
+            return Ok(());
+        }
         let (base, segs) = self.resolve_place_ex(pid, false, false, None, PlaceOp::Unset)?;
         if let RBase::Undef(_) = &base {
             return Ok(());
@@ -3046,6 +3070,12 @@ impl Vm {
             // (`$this->a[$i]`, `$this->a->b`) goes on from that value.
             if mode != FetchMode::List && propcache::cacheable_head(p) {
                 let single = p.segs.len() == 1;
+                // `$this->a[$k]`: the element straight from the cached slot.
+                if !single {
+                    if let Some(value) = self.prop_cache_read_dim(pid) {
+                        return Ok(value);
+                    }
+                }
                 match self.prop_cache_read(pid) {
                     Some(value) if single => return Ok(value),
                     found => found,
@@ -3083,8 +3113,15 @@ impl Vm {
                     if !settled {
                         cur = match cur {
                             Value::Object(o) => {
-                                let name = self.to_zstr(&v)?;
-                                self.read_property(&o, &name, mode)?
+                                // The last segment's own runtime cache entry.
+                                let hit = self.prop_cache_read_tail(pid, &o, *op, mode);
+                                match hit {
+                                    Some(found) => found,
+                                    None => {
+                                        let name = self.to_zstr(&v)?;
+                                        self.read_property(&o, &name, mode)?
+                                    }
+                                }
                             }
                             other => {
                                 if mode == FetchMode::Read {
@@ -3289,9 +3326,14 @@ impl Vm {
             let p = &self.frame().code.places[pid as usize];
             (propcache::cacheable(p), propcache::cacheable_head(p))
         };
-        // Fast path: ISSET_ISEMPTY_PROP_OBJ on a cached property.
+        // Fast paths: ISSET_ISEMPTY_PROP_OBJ on a cached property, and
+        // ISSET_ISEMPTY_DIM_OBJ on a cached array property's element.
         if single {
             if let Some(r) = self.prop_cache_isset(pid, empty)? {
+                return Ok(r);
+            }
+        } else if head {
+            if let Some(r) = self.prop_cache_nested_isset(pid, empty)? {
                 return Ok(r);
             }
         }
