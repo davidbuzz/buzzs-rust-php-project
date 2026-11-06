@@ -1089,19 +1089,30 @@ impl ZStr {
         Self::from_parts(a.as_bytes(), b.as_bytes(), Self::concat_props_both(a, b))
     }
 
-    /// A copy of `bytes`, which must be ASCII (formatted numbers, built-in
-    /// names), flagged `IS_STR_VALID_UTF8` as `zend_long_to_str`,
-    /// `zend_double_to_str` and the known strings (`ZSTR_KNOWN`) are.
-    /// Zero or one byte gives the shared static string, as
-    /// `zend_long_to_str` returns `ZSTR_CHAR` for one digit.
+    /// [`ZStr::concat`] for a caller that knows whether both parts are
+    /// valid UTF-8 (flagged strings, formatted numbers): `valid_utf8`
+    /// records `IS_STR_VALID_UTF8` on the result, as `concat_function`
+    /// does with the operands' properties. Debug builds verify.
+    #[must_use]
+    pub fn concat_utf8(a: &[u8], b: &[u8], valid_utf8: bool) -> Self {
+        debug_assert!(
+            !valid_utf8 || (std::str::from_utf8(a).is_ok() && std::str::from_utf8(b).is_ok()),
+            "IS_STR_VALID_UTF8 on invalid UTF-8"
+        );
+        Self::from_parts(a, b, if valid_utf8 { VALID_UTF8 } else { 0 })
+    }
+
+    /// A new string holding `bytes`, which must be ASCII (formatted
+    /// numbers, built-in names), flagged `IS_STR_VALID_UTF8` as
+    /// `zend_long_to_str`, `zend_double_to_str` and the known strings
+    /// (`ZSTR_KNOWN`) are. It is always a new string, as
+    /// `zend_double_to_str` makes one even for a single byte; a caller
+    /// wanting `ZSTR_CHAR` for one digit (`zend_long_to_str`) asks
+    /// [`ZStr::from_byte`].
     #[must_use]
     pub fn from_ascii(bytes: &[u8]) -> Self {
         debug_assert!(bytes.is_ascii(), "ZStr::from_ascii of non-ASCII bytes");
-        match bytes {
-            [] => Self::empty(),
-            &[c] => Self::from_byte(c),
-            _ => Self::from_parts(bytes, &[], VALID_UTF8),
-        }
+        Self::from_parts(bytes, &[], VALID_UTF8)
     }
 
     /// Returns an ASCII-lowercased copy (`zend_string_tolower`); returns a clone
@@ -1990,13 +2001,16 @@ mod tests {
             "an empty operand returns the string"
         );
 
-        // Formatted numbers.
+        // Formatted numbers: always a new string, flagged.
         assert!(ZStr::from_ascii(b"2.0E+100").is_valid_utf8());
-        assert!(ZStr::ptr_eq(
-            &ZStr::from_ascii(b"7"),
-            &ZStr::from_byte(b'7')
-        ));
-        assert!(ZStr::ptr_eq(&ZStr::from_ascii(b""), &ZStr::empty()));
+        let one = ZStr::from_ascii(b"1");
+        assert!(one.is_valid_utf8() && !one.is_interned());
+        assert_eq!(one.refcount(), 1);
+
+        // Callers that know both parts' validity.
+        assert!(ZStr::concat_utf8(b"v", b"12", true).is_valid_utf8());
+        assert!(!ZStr::concat_utf8(b"v", b"\xff", false).is_valid_utf8());
+        assert_eq!(ZStr::concat_utf8(b"v", b"12", true), "v12");
     }
 
     /// `ZEND_ROPE_END`: the rope keeps the properties of all its parts.
