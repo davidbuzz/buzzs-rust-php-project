@@ -48,6 +48,26 @@ lists; it gives the heap up with `php_memlimit::unbind_current_thread()`
 if another thread is to take it. Multi-threaded SAPIs (`php -S` request
 threads, mod_php) leave the binding to `request_start`/`request_end`.
 
+Freed small blocks stay on their bins until the heap is *collected*
+(`zend_mm_gc`): runs whose every block is free give their pages back to
+their chunk, and chunks left without a used page (except the first) go
+back to mimalloc. php-src resets its whole heap at every request end
+(`zend_mm_shutdown`), which Rust's object lifetimes do not allow; the
+closest equivalent here is:
+
+- `request_end` collects before giving the heap up, on a thread that
+  `request_start` bound (php -S, mod_php). php-cli (bound explicitly, one
+  request per process) does not collect.
+- `php_memlimit::collect_heap()` collects on demand. A long-running SAPI
+  that drops its `Vm` after `request_end` can call it after the drop, so
+  the blocks the teardown freed are collected right away rather than at
+  the next request's end. It takes the heap for the duration when nobody
+  owns it and does nothing while another thread does.
+- `gc_mem_caches()` (below) collects and reports the bytes.
+
+Collecting never changes `memory_get_usage()`, the peak or the limits:
+they count live bytes.
+
 ## 1. php-cli: install the allocator (once)
 
 `crates/php-cli/Cargo.toml`: `php-memlimit = { path = "../php-memlimit" }`
@@ -181,7 +201,7 @@ let out = input.repeat(mult);
 | `memory_get_usage(bool $real_usage = false)` | `php_memlimit::memory_get_usage(real)` |
 | `memory_get_peak_usage(bool $real_usage = false)` | `php_memlimit::memory_get_peak_usage(real)` |
 | `memory_reset_peak_usage()` | `php_memlimit::reset_peak()` |
-| `gc_mem_caches()` | `php_memlimit::gc_mem_caches()` (always 0: no allocator caches) |
+| `gc_mem_caches()` | `php_memlimit::gc_mem_caches()` (`zend_mm_gc`: the bytes of the heap's empty runs given back; reported to the heap observer) |
 
 `real_usage` is the usage rounded up to 2 MiB chunks (minimum one chunk), so
 a fresh script reports `memory_get_usage(true) === 2097152`, like PHP.
@@ -221,8 +241,10 @@ count.
   overhead, and our values are differently sized than zvals, so absolute
   numbers differ from PHP. Tests compare deltas or use `%d`.
 - `memory_get_usage(true)` is chunk-rounded usage, not mapped memory (the
-  heap's chunks are never returned to the system, and free small blocks
-  stay on their bins: `zend_mm_gc` is not ported).
+  heap keeps free small blocks on their bins and its chunks until it is
+  collected, see "Where the memory comes from"). For the same reason
+  `gc_mem_caches()` returns what the heap gave back, which is not
+  php-src's figure.
 - `tried to allocate` is the Rust allocation (or reserved) size, not Zend's
   chunk/huge-block size.
 - On clamping to `max_memory_limit` we apply the max as the limit (PHP

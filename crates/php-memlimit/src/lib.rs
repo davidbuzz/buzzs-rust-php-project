@@ -29,7 +29,9 @@
 //! The memory itself comes from a port of `zend_mm`'s small-block heap for
 //! the request thread (the thread [bound](bind_to_current_thread) by
 //! [`request_start`]: size bins carved out of 2 MiB chunks, unlocked free
-//! lists) and from [`MiMalloc`] for larger blocks and other threads; see
+//! lists, empty runs and chunks given back by [`gc_mem_caches`],
+//! [`collect_heap`] and the end of a request-bound thread's request) and
+//! from [`MiMalloc`] for larger blocks and other threads; see
 //! [`CountingAlloc`].
 //!
 //! See `INTEGRATION.md` in this crate for how the VM and bindings use it.
@@ -138,9 +140,18 @@ pub fn reset_peak() {
 }
 
 /// [`CountingAlloc::gc_mem_caches`] on [`GLOBAL`] (`gc_mem_caches()`:
-/// always 0: the heap's chunks are never released).
+/// `zend_mm_gc`, the bytes of the heap's empty runs given back).
 pub fn gc_mem_caches() -> usize {
     GLOBAL.gc_mem_caches()
+}
+
+/// [`CountingAlloc::collect_heap`] on [`GLOBAL`]: `zend_mm_gc` without the
+/// observer report. [`request_end`] runs it for a thread that
+/// [`request_start`] bound; a long-running SAPI that tears its `Vm` down
+/// after `request_end` can call it again afterwards, so that the blocks the
+/// teardown freed are collected too.
+pub fn collect_heap() -> usize {
+    GLOBAL.collect_heap()
 }
 
 /// [`CountingAlloc::set_observer`] on [`GLOBAL`].

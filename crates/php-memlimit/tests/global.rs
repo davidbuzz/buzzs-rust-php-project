@@ -98,6 +98,14 @@ fn global_allocator_lifecycle() {
     php_memlimit::request_end();
     assert!(php_memlimit::GLOBAL.is_bound_to_current_thread());
     drop(black_box(small));
+
+    // gc_mem_caches() gives runs without a live block back (1024 blocks of
+    // 3 KiB fill 256 runs of their own) to mimalloc.
+    let boxes: Vec<Box<[u8; 3072]>> = (0..1024).map(|_| Box::new([2u8; 3072])).collect();
+    assert!(boxes.iter().all(|b| b[3071] == 2));
+    drop(black_box(boxes));
+    assert!(php_memlimit::gc_mem_caches() > 0);
+    assert!(php_memlimit::GLOBAL.heap_chunks() >= 1);
     php_memlimit::unbind_current_thread();
     assert!(!php_memlimit::GLOBAL.is_bound_to_current_thread());
 }

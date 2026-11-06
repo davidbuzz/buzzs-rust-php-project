@@ -273,10 +273,13 @@ pub struct Stats {
 /// bins carved out of 2 MiB chunks obtained from `inner`, with unlocked
 /// free lists); everything else, and every request of another thread, goes
 /// to `inner`. Ownership is exclusive: [`bind_to_current_thread`]
-/// only takes a heap nobody owns, and only the owner gives it up
+/// only takes a heap nobody owns (so does
+/// [`collect_heap`](Self::collect_heap), for the duration of a
+/// collection), and only the owner gives it up
 /// ([`request_end`](Self::request_end)), so the unlocked lists are never
 /// touched by two threads at once. The accounting is the same whichever
-/// allocator serves a block.
+/// allocator serves a block. Free blocks stay on their bins until the heap
+/// is collected (`zend_mm_gc`; see [`collect_heap`](Self::collect_heap)).
 ///
 /// [`bind_to_current_thread`]: Self::bind_to_current_thread
 pub struct CountingAlloc<A> {
@@ -412,8 +415,10 @@ impl<A> CountingAlloc<A> {
         }
     }
 
-    /// 2 MiB chunks the request thread's heap has obtained from the inner
-    /// allocator (they are kept for the life of the allocator).
+    /// 2 MiB chunks the request thread's heap holds, obtained from the
+    /// inner allocator. The first is kept for the life of the allocator;
+    /// others go back once [collecting](Self::collect_heap) finds them
+    /// without a live block.
     pub fn heap_chunks(&self) -> usize {
         self.heap.chunks()
     }
@@ -864,19 +869,6 @@ impl<A> CountingAlloc<A> {
         self.observing.load(Relaxed) != 0
     }
 
-    /// `gc_mem_caches()` (`zend_mm_gc`): Zend returns the bytes released
-    /// from its chunk caches. The request thread's heap keeps freed small
-    /// blocks on its free lists and never gives chunks back (`zend_mm_gc`
-    /// is not ported), so nothing is ever freed. Reported to the
-    /// [observer](Self::set_observer).
-    pub fn gc_mem_caches(&self) -> usize {
-        let freed = 0;
-        if self.is_observing() {
-            self.notify(HeapEvent::Gc { freed });
-        }
-        freed
-    }
-
     /// Whether an operation of the calling thread is to be reported now.
     #[inline]
     fn observed_here(&self) -> bool {
@@ -942,27 +934,6 @@ impl<A> CountingAlloc<A> {
         self.set_baseline();
         self.clear();
         self.set_limit(limit)
-    }
-
-    /// Request shutdown: lift the limit, clear any violation, reset baseline
-    /// and peak, and give the heap up if [`request_start`](Self::request_start)
-    /// took it (a thread that bound itself with
-    /// [`bind_to_current_thread`](Self::bind_to_current_thread) keeps it, so
-    /// its teardown frees stay on the owner path).
-    pub fn request_end(&self) {
-        self.forgiven.store(0, Relaxed);
-        self.forgiven_huge.store(0, Relaxed);
-        self.force_limit(None);
-        self.clear();
-        self.baseline.store(0, Relaxed);
-        self.huge_base.store(0, Relaxed);
-        self.reset_peak();
-        self.update_thresholds();
-        // Also while observed (ownership parked, see `observe`): the
-        // give-back is cancelled so the heap is free for the next request.
-        if self.request_bound.load(Relaxed) {
-            self.unbind_current_thread();
-        }
     }
 
     // ---- allocator hot path -----------------------------------------
@@ -1585,6 +1556,88 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
             new: p.addr(),
         });
         p
+    }
+
+    // ---- request end and heap collection ----------------------------------
+
+    /// Request shutdown: lift the limit, clear any violation, reset baseline
+    /// and peak, and give the heap up if [`request_start`](Self::request_start)
+    /// took it (a thread that bound itself with
+    /// [`bind_to_current_thread`](Self::bind_to_current_thread) keeps it, so
+    /// its teardown frees stay on the owner path).
+    ///
+    /// A thread that `request_start` bound (`php -S` request threads,
+    /// `mod_php`) first [collects](Self::collect_heap) the heap: `zend_mm`
+    /// resets its whole heap at the end of every request
+    /// (`zend_mm_shutdown`), which Rust's object lifetimes do not allow,
+    /// so a long-running SAPI gives back at least the runs and chunks its
+    /// request freed. php-cli, bound explicitly and ending with its one
+    /// request, skips that.
+    pub fn request_end(&self) {
+        self.forgiven.store(0, Relaxed);
+        self.forgiven_huge.store(0, Relaxed);
+        self.force_limit(None);
+        self.clear();
+        self.baseline.store(0, Relaxed);
+        self.huge_base.store(0, Relaxed);
+        self.reset_peak();
+        self.update_thresholds();
+        // Also while observed (ownership parked, see `observe`): the
+        // give-back is cancelled so the heap is free for the next request.
+        if self.request_bound.load(Relaxed) {
+            if self.is_owner() {
+                // SAFETY: the calling thread owns the heap, whose chunks
+                // all come from `inner`.
+                unsafe { self.heap.gc(&self.inner) };
+            }
+            self.unbind_current_thread();
+        }
+    }
+
+    /// `gc_mem_caches()` (`zend_mm_gc`): [collects](Self::collect_heap) the
+    /// request thread's heap and returns the bytes of the runs given back,
+    /// like `zend_mm_gc`. Usage figures do not change (they count live
+    /// bytes, which collecting leaves alone), so neither do the limits.
+    /// Reported to the [observer](Self::set_observer).
+    pub fn gc_mem_caches(&self) -> usize {
+        let freed = self.collect_heap();
+        if self.is_observing() {
+            self.notify(HeapEvent::Gc { freed });
+        }
+        freed
+    }
+
+    /// `zend_mm_gc` on the request thread's heap: runs whose every block is
+    /// free leave the free lists and give their pages back to their chunk
+    /// (any bin reuses them), and chunks left without a used page go back
+    /// to the inner allocator, except the first. Returns the bytes of the
+    /// runs given back. Blocks freed by other threads are collected too.
+    ///
+    /// The owner collects. A thread that does not own the heap collects it
+    /// only while nobody does, taking it for the duration: the
+    /// [observed](Self::observe) thread (its ownership is parked), or a
+    /// SAPI's request thread after its request's teardown (`request_end`
+    /// has given the heap up; collecting then also takes the blocks the
+    /// teardown freed). While another thread owns the heap nothing happens
+    /// and 0 is returned; a thread that binds during the collection runs
+    /// on the inner allocator until it binds again, as when the heap is
+    /// owned.
+    pub fn collect_heap(&self) -> usize {
+        match self.bind() {
+            // SAFETY: the calling thread owns the heap, whose chunks all
+            // come from `inner`.
+            Bind::Owner => unsafe { self.heap.gc(&self.inner) },
+            Bind::Taken => {
+                // SAFETY: as above, for the duration of the collection.
+                let freed = unsafe { self.heap.gc(&self.inner) };
+                // Release: the next owner sees the lists as they are now.
+                let _ = self
+                    .owner
+                    .compare_exchange(thread_token(), 0, Release, Relaxed);
+                freed
+            }
+            Bind::Foreign => 0,
+        }
     }
 
     // ---- the entry points' fast and general paths -----------------------
