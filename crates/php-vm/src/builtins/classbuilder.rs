@@ -2,7 +2,8 @@
 
 use super::sig::{parse_sig_borrowed, parse_type};
 use crate::class::{
-    cflags, AttributeInfo, Class, ClassConst, ConstExpr, InternalKind, PropInfo, StaticProp,
+    cflags, name_map_with_capacity, AttributeInfo, Class, ClassConst, ConstExpr, InternalKind,
+    NameMap, PropInfo, StaticProp,
 };
 use crate::classlink::build_magic;
 use crate::func::{flags, Builtin, BuiltinFn, Func, Method};
@@ -10,7 +11,6 @@ use crate::vm::Vm;
 use php_runtime::{Value, ZStr};
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 /// A builder for internal (native) classes.
@@ -340,18 +340,17 @@ impl ClassBuilder {
         let cls = Rc::new_cyclic(|weak: &Weak<Class>| {
             // Constants.
             let mut consts: Vec<Rc<ClassConst>> = Vec::with_capacity(nconsts);
-            let mut const_map = HashMap::with_capacity(nconsts);
-            let push_const = |c: Rc<ClassConst>,
-                              consts: &mut Vec<Rc<ClassConst>>,
-                              map: &mut HashMap<ZStr, usize>| {
-                match map.entry(c.name.clone()) {
-                    Entry::Occupied(e) => consts[*e.get()] = c,
-                    Entry::Vacant(e) => {
-                        e.insert(consts.len());
-                        consts.push(c);
+            let mut const_map = name_map_with_capacity(nconsts);
+            let push_const =
+                |c: Rc<ClassConst>, consts: &mut Vec<Rc<ClassConst>>, map: &mut NameMap<usize>| {
+                    match map.entry(c.name.clone()) {
+                        Entry::Occupied(e) => consts[*e.get()] = c,
+                        Entry::Vacant(e) => {
+                            e.insert(consts.len());
+                            consts.push(c);
+                        }
                     }
-                }
-            };
+                };
             if let Some(p) = &parent {
                 for c in &p.consts {
                     push_const(c.clone(), &mut consts, &mut const_map);
@@ -405,7 +404,7 @@ impl ClassBuilder {
             let mut props: Vec<Rc<PropInfo>> =
                 parent.as_ref().map(|p| p.props.clone()).unwrap_or_default();
             props.reserve(self.props.len());
-            let mut prop_map: HashMap<ZStr, Rc<PropInfo>> = HashMap::with_capacity(
+            let mut prop_map: NameMap<Rc<PropInfo>> = name_map_with_capacity(
                 parent.as_ref().map_or(0, |p| p.prop_map.len()) + self.props.len(),
             );
             if let Some(p) = &parent {
@@ -449,10 +448,11 @@ impl ClassBuilder {
                 .as_ref()
                 .map(|p| p.static_props.clone())
                 .unwrap_or_default();
-            let mut static_map: HashMap<ZStr, usize> = parent
+            let mut static_map: NameMap<usize> = parent
                 .as_ref()
                 .map(|p| p.static_map.clone())
                 .unwrap_or_default();
+            static_map.reserve(self.statics.len());
             for (n, f, v) in &self.statics {
                 let sp = StaticProp {
                     name: ZStr::from(n.as_str()),
@@ -468,7 +468,7 @@ impl ClassBuilder {
                 static_props.push(sp);
             }
             // Methods.
-            let mut methods: HashMap<ZStr, Rc<Method>> = HashMap::with_capacity(nmethods);
+            let mut methods: NameMap<Rc<Method>> = name_map_with_capacity(nmethods);
             let mut order: Vec<ZStr> = Vec::with_capacity(nmethods);
             for (sig, f, h) in &self.methods {
                 let b = builtin_method(sig, *f, *h);
@@ -521,7 +521,7 @@ impl ClassBuilder {
                 magic,
                 defaults: RefCell::new(None),
                 backing: self.enum_backing.mask(),
-                enum_cases: RefCell::new(HashMap::new()),
+                enum_cases: RefCell::new(NameMap::default()),
                 decl: None,
                 internal,
                 attributes: Vec::new(),

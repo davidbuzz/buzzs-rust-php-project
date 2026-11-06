@@ -1,12 +1,15 @@
-//! A fast, unseeded hasher for the VM's private registration tables (the
-//! attribution of functions, classes and constants to extensions).
+//! A fast, unseeded hasher for the VM's tables of declared names: the
+//! registration tables (the attribution of functions, classes and constants
+//! to extensions) and the per-class member tables
+//! ([`crate::class::NameMap`]).
 //!
-//! Their keys are the names of internal symbols, not request data, so they
-//! need no protection against chosen-key collisions. `SipHash`, the standard
-//! library's default, took about 15 % of start-up instructions. This is
-//! rustc's `FxHasher` word mix, finished with a folded 128-bit multiply so
-//! that the low bits hashbrown picks buckets with depend on every input
-//! byte (a plain multiply only carries differences upwards).
+//! Their keys are the names of symbols and members, not request data, so
+//! they need no protection against chosen-key collisions. `SipHash`, the
+//! standard library's default, took about 15 % of start-up instructions and
+//! about 280 instructions per class-member lookup. This is rustc's
+//! `FxHasher` word mix, finished with a folded 128-bit multiply so that the
+//! low bits hashbrown picks buckets with depend on every input byte (a
+//! plain multiply only carries differences upwards).
 //!
 //! Iteration order is fixed instead of random per process; as with any
 //! hash map, nothing may depend on it (the readers sort or keep a separate
@@ -21,9 +24,11 @@ const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
 /// The multiplier of the final fold (`rustc-hash` 2's `K`).
 const FOLD: u64 = 0xf1_35_7a_ea_2e_62_a9_c5;
 
-/// rustc's `FxHasher`: rotate, xor and multiply per 8-byte word.
+/// rustc's `FxHasher`: rotate, xor and multiply per 8-byte word. Public
+/// through [`crate::class::FxHasher`] so that other crates can name the
+/// type of a [`crate::class::NameMap`].
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct FxHasher {
+pub struct FxHasher {
     hash: u64,
 }
 
