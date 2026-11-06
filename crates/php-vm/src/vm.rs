@@ -222,6 +222,8 @@ pub(crate) struct CallBufs {
     pub(crate) passed: Vec<Vec<bool>>,
     /// Prewarmed and pooled user function frames.
     pub(crate) user_frames: Vec<Frame>,
+    /// The run-time cache of `ZEND_INIT_METHOD_CALL`.
+    pub(crate) methods: crate::call::MethodCache,
 }
 
 impl CallBufs {
@@ -234,6 +236,7 @@ impl CallBufs {
             values: Vec::with_capacity(16),
             passed: Vec::with_capacity(16),
             user_frames: Vec::with_capacity(8),
+            methods: crate::call::MethodCache::default(),
         };
         for _ in 0..4 {
             b.args.push(Vec::with_capacity(8));

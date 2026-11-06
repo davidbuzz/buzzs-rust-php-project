@@ -216,6 +216,15 @@ impl Vm {
     }
 
     pub(crate) fn op_init_dyn_call(&mut self, callee: Value) -> VmResult<()> {
+        // `$closure()` (`zend_init_dynamic_call_object` of a closure): the
+        // call is built straight from the closure's data.
+        if let Value::Object(o) = &callee {
+            if let Some(mut call) = self.closure_call(o) {
+                call.dynamic = true;
+                self.push_pending(call);
+                return Ok(());
+            }
+        }
         let mut call = self.resolve_dyn_callable(&callee)?;
         call.dynamic = true;
         self.push_pending(call);
@@ -392,12 +401,20 @@ impl Vm {
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.get_method) {
             f(self, o, name)?;
         }
+        // The run-time cache of `ZEND_INIT_METHOD_CALL`.
+        let scope = self.scope();
+        if let Some(m) = self.call_bufs.methods.get(&cls, scope.as_ref(), name) {
+            return Ok(self.pending_for_method(&m, Some(o.clone()), cls));
+        }
         self.method_call_on(o, &cls, name)
     }
 
     fn method_call_on(&mut self, o: &Obj, cls: &Rc<Class>, name: &ZStr) -> VmResult<PendingCall> {
         let scope = self.scope();
         let lc = ZStr::from(name.to_ascii_lowercase());
+        // Only a lookup for the object's own class is cached: the private
+        // method rule below depends on it.
+        let cacheable = Rc::ptr_eq(cls, object::class_of(o));
         // A private method of the calling scope takes precedence.
         if let Some(s) = &scope {
             if let Some(m) = s.methods.get(&lc) {
@@ -405,6 +422,9 @@ impl Vm {
                     && Rc::ptr_eq(&m.scope(), s)
                     && object::class_of(o).is_subclass_of(s)
                 {
+                    if cacheable {
+                        self.call_bufs.methods.insert(cls, Some(s), name, m);
+                    }
                     return Ok(self.pending_for_method(
                         m,
                         Some(o.clone()),
@@ -415,6 +435,9 @@ impl Vm {
         }
         if let Some(m) = cls.methods.get(&lc).cloned() {
             if self.can_access_method(&m, scope.as_ref()) {
+                if cacheable {
+                    self.call_bufs.methods.insert(cls, scope.as_ref(), name, &m);
+                }
                 return Ok(self.pending_for_method(
                     &m,
                     Some(o.clone()),
@@ -2600,6 +2623,105 @@ fn install_buffer<T>(slot: &mut Vec<T>, buf: Vec<T>) {
     let old = std::mem::replace(slot, buf);
     if old.capacity() == 0 {
         std::mem::forget(old);
+    }
+}
+
+/// Entries of a [`MethodCache`] (a power of two).
+const METHOD_CACHE_SIZE: usize = 64;
+
+/// Longest method name a [`MethodCache`] entry holds.
+const METHOD_CACHE_NAME: usize = 31;
+
+/// The run-time cache of `ZEND_INIT_METHOD_CALL` (`CACHED_POLYMORPHIC_PTR`
+/// in `zend_vm_def.h`: the method `zend_std_get_method` found for the
+/// object's class), shared by all call sites as a small direct-mapped
+/// table keyed by (class of the object, calling scope, method name).
+///
+/// Classes are held weakly, for their identity only (a `Weak` keeps the
+/// address from being reused), and the name as an inline copy, so that
+/// the cache owns no PHP-visible string. The table is allocated with the
+/// VM and never grows while code runs (`memory_get_usage()` deltas).
+#[derive(Debug)]
+pub(crate) struct MethodCache {
+    entries: Vec<Option<MethodCacheEntry>>,
+}
+
+#[derive(Debug)]
+struct MethodCacheEntry {
+    class: std::rc::Weak<Class>,
+    scope: Option<std::rc::Weak<Class>>,
+    name_len: u8,
+    name: [u8; METHOD_CACHE_NAME],
+    method: Rc<Method>,
+}
+
+impl Default for MethodCache {
+    fn default() -> Self {
+        MethodCache {
+            entries: (0..METHOD_CACHE_SIZE).map(|_| None).collect(),
+        }
+    }
+}
+
+impl MethodCache {
+    #[inline]
+    #[allow(clippy::cast_possible_truncation)] // a hash, truncated on purpose
+    fn slot(cls: &Rc<Class>, name: &ZStr) -> usize {
+        ((Rc::as_ptr(cls) as usize >> 4) ^ name.hash_value() as usize) & (METHOD_CACHE_SIZE - 1)
+    }
+
+    /// The method cached for `name` on an object of class `cls` called
+    /// from `scope`.
+    #[inline]
+    pub(crate) fn get(
+        &self,
+        cls: &Rc<Class>,
+        scope: Option<&Rc<Class>>,
+        name: &ZStr,
+    ) -> Option<Rc<Method>> {
+        let e = self.entries.get(Self::slot(cls, name))?.as_ref()?;
+        let same_scope = match (scope, &e.scope) {
+            (None, None) => true,
+            (Some(s), Some(w)) => std::ptr::eq(Rc::as_ptr(s), w.as_ptr()),
+            _ => false,
+        };
+        let hit = std::ptr::eq(Rc::as_ptr(cls), e.class.as_ptr())
+            && same_scope
+            && e.name
+                .get(..usize::from(e.name_len))
+                .is_some_and(|n| n.eq_ignore_ascii_case(name.as_bytes()));
+        hit.then(|| e.method.clone())
+    }
+
+    /// Remembers that `name` on an object of class `cls` called from
+    /// `scope` is `method`. Longer names than an entry holds are not
+    /// cached.
+    pub(crate) fn insert(
+        &mut self,
+        cls: &Rc<Class>,
+        scope: Option<&Rc<Class>>,
+        name: &ZStr,
+        method: &Rc<Method>,
+    ) {
+        let bytes = name.as_bytes();
+        let Ok(name_len) = u8::try_from(bytes.len()) else {
+            return;
+        };
+        if bytes.len() > METHOD_CACHE_NAME {
+            return;
+        }
+        let mut copy = [0u8; METHOD_CACHE_NAME];
+        copy[..bytes.len()].copy_from_slice(bytes);
+        let slot = Self::slot(cls, name);
+        if let Some(e) = self.entries.get_mut(slot) {
+            *e = Some(MethodCacheEntry {
+                class: Rc::downgrade(cls),
+                scope: scope.map(Rc::downgrade),
+                name_len,
+                name: copy,
+                method: method.clone(),
+            });
+        }
     }
 }
 
