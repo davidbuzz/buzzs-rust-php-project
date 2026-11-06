@@ -269,7 +269,7 @@ Warning: Undefined variable $undef in t.php on line 12
 one Array
 two 7
 three M
-four
+four 
 
 Warning: Array to string conversion in t.php on line 15
 caught boom at 4
