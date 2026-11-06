@@ -48,12 +48,13 @@ $x = null; $r =& $x; $x['k'][] = $r; var_dump($x);
 $y = []; $ry =& $y; $z = ($y['a'] = $ry); var_dump($z);
 $s = [1]; $rs =& $s; $s[] = $s; var_dump($s);
 $p = [1]; $q = &$p; $o = []; $o['k'] = $q; var_dump($o);
-$b = [1]; $rb =& $b; $b[] = $rb; $b[] = 2; var_dump(count($b), count($b[1]));
+$b = [1]; $rb =& $b; $b[] = $rb; $b[] = 2; var_dump(cnt($b), cnt($b[1]));
 $a = [0]; $a[0] = &$w; $ra =& $a; $a[0] = $ra; var_dump($w);
 function g(&$a) { $c = &$a; $a['me'] = $c; }
 $h = ['v' => 1]; g($h); var_dump($h);
 $f = false; $rf =& $f; $f[] = $rf; var_dump($f);
 $m = ['s' => 'abc']; $rm =& $m; $m['s'][1] = $rm; var_dump($m);
+function cnt($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
 "#;
     let expected = r#"array(3) {
   [0]=>

@@ -85,7 +85,8 @@ fn legacy_unserializer_pushes_no_frame() {
     assert_eq!(
         run(
             r#"try { unserialize('C:3:"GMP":4:{r:2;}'); } catch (Exception $e) {
-            echo $e->getMessage(), ' ', count($e->getTrace()), ' ', $e->getTrace()[0]['function'];
+            $frames = 0; foreach ($e->getTrace() as $_) { $frames++; }
+            echo $e->getMessage(), ' ', $frames, ' ', $e->getTrace()[0]['function'];
         }"#
         ),
         "Could not unserialize number 1 unserialize"
