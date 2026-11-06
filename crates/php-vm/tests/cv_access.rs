@@ -81,3 +81,26 @@ $e = $w = [1]; $w[0] = 2; var_dump($e[0]);
         "int(5)\nCannot assign string to reference held by property C::$p of type int\nint(5)\narray(2) {\n  [0]=>\n  string(1) \"x\"\n  [1]=>\n  int(1)\n}\nint(6)\nint(5)\nint(11)\nint(2)\nstring(4) \"a012\"\nint(1)\n"
     );
 }
+
+/// `??`/`?->` on variables holding references, `RECV` stores, repeated
+/// `global`/`static` bindings (the old slot value is a reference) and
+/// `foreach` value variables: old values are released, and destructed,
+/// exactly when the generic path releases them.
+#[test]
+fn variable_reads_and_rebindings_release_values_at_the_same_points() {
+    assert_eq!(
+        run(r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "~{$this->n}\n"; } }
+$v = null; $r = &$v; var_dump($r ?? "dflt"); $v = 0; var_dump($r ?? "dflt");
+$o = null; $ro = &$o; var_dump($ro?->p); $o = new D(1); $o->p = 5; var_dump($ro?->p); $o = null; echo "o gone\n";
+function take($a, $b = 2) { echo "in take\n"; return $a->n + $b; }
+var_dump(take(new D(2))); echo "after take\n";
+function gl() { global $g; global $g; $g = new D(3); } gl(); $g = 1; echo "g reset\n";
+function st() { static $s = 0; $s++; return $s; } st(); var_dump(st());
+foreach ([new D(4), new D(5)] as $it) { echo "it {$it->n}\n"; } echo "loop done\n"; $it = 0;
+$list = [1, 2, 3]; $sum = 0; foreach ($list as $k => $e) { $sum = $sum + $e * $k; } var_dump($sum);
+$u = "a"; $w = &$u; $copy = $u; $w = "b"; var_dump($copy, $u);
+"#),
+        "string(4) \"dflt\"\nint(0)\nNULL\n\nDeprecated: Creation of dynamic property D::$p is deprecated in t.php on line 4\nint(5)\n~1\no gone\nin take\n~2\nint(4)\nafter take\n~3\ng reset\nint(2)\nit 4\nit 5\n~4\nloop done\n~5\nint(8)\nstring(1) \"a\"\nstring(1) \"b\"\n"
+    );
+}
