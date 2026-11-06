@@ -519,6 +519,11 @@ pub enum Op {
     },
     /// `gettype($x)` (`ZEND_GET_TYPE`, `zend_compile_func_gettype`).
     GetType { a: Operand, dst: Option<u32> },
+    /// `get_class($x)`, or `get_class()` with `a` [`Operand::Unused`]
+    /// (`ZEND_GET_CLASS`, `zend_compile_func_get_class`).
+    GetClass { a: Operand, dst: Option<u32> },
+    /// `get_called_class()` (`ZEND_GET_CALLED_CLASS`).
+    GetCalledClass { dst: Option<u32> },
 
     /// `echo`
     Echo(Operand),

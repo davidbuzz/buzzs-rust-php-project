@@ -117,6 +117,46 @@ g(): Argument #1 ($x) could not be passed by reference
 }
 
 #[test]
+fn get_class_and_get_called_class_use_the_running_scope() {
+    assert_eq!(
+        run(
+            r#"<?php
+class A {
+    function f() { return [get_class(), get_class($this), get_called_class()]; }
+    static function s() { return get_called_class(); }
+}
+class B extends A {}
+var_dump((new B)->f(), B::s());
+try { get_class(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { get_called_class(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { get_class(1); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { get_class(null); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$f = function () { return get_called_class(); };
+var_dump(Closure::bind($f, null, B::class)());
+"#,
+            "gc.php"
+        ),
+        r#"
+Deprecated: Calling get_class() without arguments is deprecated in gc.php on line 3
+array(3) {
+  [0]=>
+  string(1) "A"
+  [1]=>
+  string(1) "B"
+  [2]=>
+  string(1) "B"
+}
+string(1) "B"
+get_class() without arguments must be called from within a class
+get_called_class() must be called from within a class
+get_class(): Argument #1 ($object) must be of type object, int given
+get_class(): Argument #1 ($object) must be of type object, null given
+string(1) "B"
+"#
+    );
+}
+
+#[test]
 fn namespaced_and_aliased_calls_stay_calls() {
     // Unqualified names in a namespace resolve at run time
     // (`ZEND_INIT_NS_FCALL_BY_NAME`), so a namespaced function wins.
@@ -155,7 +195,8 @@ fn ops(src: &str, special_builtins: u32) -> Vec<Op> {
 fn special_opcodes_are_emitted_only_for_registered_builtins() {
     let all = u32::MAX >> (32 - SPECIAL_BUILTINS.len());
     let src = "<?php $a = strlen($x); $b = count($y); $c = is_int($z); $d = gettype($z); \
-               $e = intval($z); is_null($z); $f = count($y, 1); $g = is_integer($z);";
+               $e = intval($z); is_null($z); $f = count($y, 1); $g = is_integer($z); \
+               $h = get_class($z); $i = get_called_class(); $j = get_class($z, 1);";
     let with = ops(src, all);
     assert!(with
         .iter()
@@ -168,23 +209,35 @@ fn special_opcodes_are_emitted_only_for_registered_builtins() {
         .any(|o| matches!(o, Op::TypeCheck { dst: None, .. })));
     assert!(with.iter().any(|o| matches!(o, Op::GetType { .. })));
     assert!(with.iter().any(|o| matches!(o, Op::Cast { .. })));
-    // `count($y, 1)` and the `is_integer` alias remain calls.
+    assert!(with
+        .iter()
+        .any(|o| matches!(o, Op::GetClass { dst: Some(_), .. })));
+    assert!(with
+        .iter()
+        .any(|o| matches!(o, Op::GetCalledClass { dst: Some(_) })));
+    // `count($y, 1)`, the `is_integer` alias and two-argument `get_class`
+    // remain calls.
     assert_eq!(
         with.iter()
             .filter(|o| matches!(o, Op::DoCall { .. }))
             .count(),
-        2
+        3
     );
     let without = ops(src, 0);
     assert!(!without.iter().any(|o| matches!(
         o,
-        Op::Strlen { .. } | Op::Count { .. } | Op::TypeCheck { .. } | Op::GetType { .. }
+        Op::Strlen { .. }
+            | Op::Count { .. }
+            | Op::TypeCheck { .. }
+            | Op::GetType { .. }
+            | Op::GetClass { .. }
+            | Op::GetCalledClass { .. }
     )));
     assert_eq!(
         without
             .iter()
             .filter(|o| matches!(o, Op::DoCall { .. }))
             .count(),
-        8
+        11
     );
 }

@@ -124,6 +124,8 @@ pub const SPECIAL_BUILTINS: &[&str] = &[
     "floatval",
     "strval",
     "gettype",
+    "get_class",
+    "get_called_class",
 ];
 
 /// The [`CompileOptions::special_builtins`] bit of lower-case `name`.

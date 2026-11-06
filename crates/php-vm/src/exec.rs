@@ -1327,6 +1327,16 @@ impl Vm {
                         self.set_dst(*dst, Value::Str(ZStr::from(t)));
                         Flow::Next
                     }
+                    Op::GetClass { a, dst } => {
+                        let r = self.op_get_class(*a)?;
+                        self.set_dst(*dst, r);
+                        Flow::Next
+                    }
+                    Op::GetCalledClass { dst } => {
+                        let r = self.op_get_called_class()?;
+                        self.set_dst(*dst, r);
+                        Flow::Next
+                    }
                     Op::Echo(a) => {
                         let v = self.read(*a)?;
                         match &v {

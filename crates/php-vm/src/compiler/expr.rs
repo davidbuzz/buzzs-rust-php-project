@@ -2510,6 +2510,13 @@ impl Compiler {
             {
                 self.compile_special_opcode(&lc, positional[0], line, need)
             }
+            // zend_compile_func_get_class / zend_compile_func_get_called_class.
+            b"get_class" if fb.is_none() && only_positional && positional.len() <= 1 => {
+                self.compile_class_special(&lc, positional.first().copied(), line, need)
+            }
+            b"get_called_class" if fb.is_none() && args.args.is_empty() => {
+                self.compile_class_special(&lc, None, line, need)
+            }
             // zend_compile_func_num_args / zend_compile_func_get_args: only
             // inside a function body, and not as a namespaced fallback.
             b"func_num_args" | b"func_get_args"
@@ -2635,6 +2642,38 @@ impl Compiler {
             Special::GetType => Op::GetType { a, dst },
         };
         self.emit(op);
+        Ok(Some(
+            dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+        ))
+    }
+
+    /// `get_class([$x])` / `get_called_class()` as `ZEND_GET_CLASS` /
+    /// `ZEND_GET_CALLED_CLASS` when they are registered builtins: the scope
+    /// is the running function's, so no call frame is needed.
+    fn compile_class_special(
+        &mut self,
+        lc: &[u8],
+        arg: Option<&Expr>,
+        line: u32,
+        need: bool,
+    ) -> CResult<Option<Operand>> {
+        let Some(bit) = super::special_builtin_bit(lc) else {
+            return Ok(None);
+        };
+        if self.opts.special_builtins & bit == 0 {
+            return Ok(None);
+        }
+        let a = match arg {
+            Some(e) => self.compile_expr(e)?,
+            None => Operand::Unused,
+        };
+        self.f().line = line;
+        let dst = need.then(|| self.tmp());
+        if lc == b"get_called_class".as_slice() {
+            self.emit(Op::GetCalledClass { dst });
+        } else {
+            self.emit(Op::GetClass { a, dst });
+        }
         Ok(Some(
             dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
         ))

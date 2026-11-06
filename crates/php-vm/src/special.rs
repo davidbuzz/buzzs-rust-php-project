@@ -10,6 +10,8 @@
 
 use crate::compiler::SPECIAL_BUILTINS;
 use crate::func::{flags, Func};
+use crate::object;
+use crate::opcode::Operand;
 use crate::typecheck::given_type;
 use crate::vm::{PendingCall, Vm, VmResult};
 use php_runtime::{Value, ZStr};
@@ -82,6 +84,46 @@ impl Vm {
                     "{name}(): Argument #1 ($value) must be of type Countable|array, {} given",
                     given_type(&v)
                 ),
+            )),
+        }
+    }
+
+    /// `ZEND_GET_CLASS`: the class name of object `a`, or with no operand
+    /// the running function's scope (deprecated).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn op_get_class(&mut self, a: Operand) -> VmResult<Value> {
+        if matches!(a, Operand::Unused) {
+            let Some(scope) = self.frame().scope.clone() else {
+                return Err(self.make_throw(
+                    "Error",
+                    "get_class() without arguments must be called from within a class",
+                ));
+            };
+            self.deprecated("Calling get_class() without arguments is deprecated")?;
+            return Ok(Value::Str(scope.name.clone()));
+        }
+        match self.read(a)? {
+            Value::Object(o) => Ok(Value::Str(object::class_of(&o).name.clone())),
+            v => Err(self.make_throw(
+                "TypeError",
+                &format!(
+                    "get_class(): Argument #1 ($object) must be of type object, {} given",
+                    given_type(&v)
+                ),
+            )),
+        }
+    }
+
+    /// `ZEND_GET_CALLED_CLASS`: the running function's called scope.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn op_get_called_class(&mut self) -> VmResult<Value> {
+        match self.frame().called.clone() {
+            Some(called) => Ok(Value::Str(called.name.clone())),
+            None => Err(self.make_throw(
+                "Error",
+                "get_called_class() must be called from within a class",
             )),
         }
     }
