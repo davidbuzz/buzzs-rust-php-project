@@ -354,14 +354,15 @@ fn rc(count: usize, z: Zval) -> usize {
     count.saturating_sub(z.extra).max(1)
 }
 
-/// Per-call state of `debug_zval_dump()`: handles to refcounted values
-/// that this VM holds and php-src does not.
+/// Per-call state of `debug_zval_dump()`: where this VM's ownership of a
+/// refcounted value differs from php-src's, by value identity.
 struct DzState {
-    /// Handles kept by compiled class metadata, by value identity: a
-    /// literal property default lives in its `PropDecl` and `PropInfo`
-    /// as well as in the class's default slot table, while php-src keeps
-    /// it only in `default_properties_table`.
-    meta: HashMap<usize, usize>,
+    /// Handles kept by compiled class metadata that php-src does not
+    /// have (see [`class_handles`]).
+    hidden: HashMap<usize, usize>,
+    /// Handles php-src's class entries hold that this VM has not
+    /// materialised yet (see [`class_handles`]).
+    missing: HashMap<usize, usize>,
     /// Identities of the values in the property lists that the dumper
     /// frames hold (each list holds a handle to each of its values, where
     /// php-src walks the object's own table), innermost last.
@@ -386,60 +387,116 @@ fn identity(v: &Value) -> Option<usize> {
     }
 }
 
-/// Handles to the value with identity `id` held by class metadata and by
-/// the dumper's property lists (see [`DzState`]).
-fn hidden_handles(id: usize) -> usize {
-    DZ_STATE.with(|s| {
-        s.borrow().as_ref().map_or(0, |st| {
-            st.meta.get(&id).copied().unwrap_or(0) + st.held_count.get(&id).copied().unwrap_or(0)
-        })
-    })
-}
-
-/// `rc()` for the value with identity `id`, also discounting the handles
-/// php-src does not have.
+/// `rc()` for the value with identity `id`, corrected for the handles
+/// php-src does not have (class metadata, the dumper's property lists)
+/// and for the ones it has that this VM does not (see [`DzState`]).
 fn rc_of(count: usize, z: Zval, id: usize) -> usize {
+    let (hidden, missing) = DZ_STATE.with(|s| {
+        s.borrow().as_ref().map_or((0, 0), |st| {
+            let at = |m: &HashMap<usize, usize>| m.get(&id).copied().unwrap_or(0);
+            (at(&st.hidden) + at(&st.held_count), at(&st.missing))
+        })
+    });
     rc(
-        count,
+        count + missing,
         Zval {
-            extra: z.extra + hidden_handles(id),
+            extra: z.extra + hidden,
         },
     )
 }
 
-/// The handles compiled class metadata keeps to literal instance property
-/// defaults: `PropInfo::default` and the declaring `PropDecl::default`
-/// (each counted once, however many classes share them).
-fn metadata_handles(vm: &Vm) -> HashMap<usize, usize> {
+/// Handles to the refcounted literals of class declarations that this
+/// VM's metadata keeps and php-src does not (`hidden`), and the ones
+/// php-src's class entries keep that this VM has not materialised yet
+/// (`missing`), by value identity.
+struct ClassHandles {
+    hidden: HashMap<usize, usize>,
+    missing: HashMap<usize, usize>,
+}
+
+/// Counts one handle in `map` when `e` is a refcounted literal.
+fn note(map: &mut HashMap<usize, usize>, e: Option<&ConstExpr>) {
+    if let Some(ConstExpr::Value(v)) = e {
+        if let Some(id) = identity(v) {
+            *map.entry(id).or_insert(0) += 1;
+        }
+    }
+}
+
+/// Where this VM's class metadata and php-src's class entries own the
+/// literals of declarations differently, over every declared class (an
+/// alias is the same class).
+///
+/// Held here and not by php-src:
+/// - an instance property default: `PropDecl::default` and
+///   `PropInfo::default` (each once, however many classes share them);
+///   php-src keeps it only in `default_properties_table`;
+/// - a static property default: `PropDecl::default`, and the copies of
+///   the `StaticProp` that inheriting classes get; php-src's
+///   `default_static_members_table` entry is the declaring (or
+///   trait-using) class's `StaticProp::default`, an inheriting class
+///   holds `IS_INDIRECT`, and the storage cell is `static_members_table`;
+/// - a class constant: `ConstDecl::value` and `ClassConst::expr`;
+///   php-src keeps `zend_class_constant.value` only (our
+///   `ClassConst::value`), one per declaring class shared with its
+///   subclasses and copied per trait-using class, as `Rc<ClassConst>`s
+///   are.
+///
+/// Held by php-src and not here yet:
+/// - `default_properties_table` is filled when a class is linked, for
+///   every class of a hierarchy (abstract classes and traits included);
+///   `Class::defaults` is built on first instantiation, so a class never
+///   instantiated holds none of its literal defaults;
+/// - `zend_class_constant.value` exists from the declaration on; the
+///   `ClassConst::value` of a typed constant or of a trait's copy is set
+///   on first use.
+fn class_handles(vm: &Vm) -> ClassHandles {
+    let mut seen_classes = HashSet::new();
     let mut seen_props = HashSet::new();
     let mut seen_decls = HashSet::new();
-    let mut meta: HashMap<usize, usize> = HashMap::new();
-    let mut note = |e: Option<&ConstExpr>| {
-        if let Some(ConstExpr::Value(v)) = e {
-            if let Some(id) = identity(v) {
-                *meta.entry(id).or_insert(0) += 1;
-            }
-        }
-    };
+    let mut seen_consts = HashSet::new();
+    let mut seen_cells = HashSet::new();
+    let mut hidden: HashMap<usize, usize> = HashMap::new();
+    let mut missing: HashMap<usize, usize> = HashMap::new();
     for cls in vm.classes.values() {
+        if !seen_classes.insert(Rc::as_ptr(cls)) {
+            continue;
+        }
         for pi in cls.props.iter().chain(cls.prop_map.values()) {
             if seen_props.insert(Rc::as_ptr(pi)) {
-                note(pi.default.as_ref());
+                note(&mut hidden, pi.default.as_ref());
+            }
+        }
+        if cls.defaults.try_borrow().is_ok_and(|d| d.is_none()) {
+            for pi in &cls.props {
+                note(&mut missing, pi.default.as_ref());
+            }
+        }
+        for sp in &cls.static_props {
+            if !seen_cells.insert(Rc::as_ptr(&sp.cell)) {
+                note(&mut hidden, sp.default.as_ref());
+            }
+        }
+        for c in &cls.consts {
+            if seen_consts.insert(Rc::as_ptr(c)) {
+                note(&mut hidden, Some(&c.expr));
+                if c.value.try_borrow().is_ok_and(|v| v.is_none()) {
+                    note(&mut missing, Some(&c.expr));
+                }
             }
         }
         if let Some(decl) = &cls.decl {
             if seen_decls.insert(Rc::as_ptr(decl)) {
-                for pd in decl
-                    .props
-                    .iter()
-                    .filter(|pd| pd.flags & crate::func::flags::STATIC == 0)
-                {
-                    note(pd.default.as_ref());
+                for pd in &decl.props {
+                    note(&mut hidden, pd.default.as_ref());
+                }
+                for cd in &decl.consts {
+                    note(&mut hidden, Some(&cd.value));
                 }
             }
         }
     }
-    meta
+    ClassHandles { hidden, missing }
 }
 
 /// A dumper frame's entries in [`DzState::held`], removed when dropped.
@@ -744,8 +801,10 @@ pub(crate) fn debug_zval_dump(
 ) -> VmResult<()> {
     let outermost = DZ_STATE.with(|s| s.borrow().is_none());
     if outermost {
+        let ClassHandles { hidden, missing } = class_handles(vm);
         let state = DzState {
-            meta: metadata_handles(vm),
+            hidden,
+            missing,
             held: Vec::new(),
             held_count: HashMap::new(),
         };
@@ -981,6 +1040,10 @@ fn var_export_object(vm: &mut Vm, out: &mut Out, o: &Obj, level: usize) -> VmRes
 #[cfg(test)]
 mod tests {
     use super::{cstr, rc, Zval};
+    use crate::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
 
     #[test]
     fn cstr_stops_at_nul() {
@@ -992,5 +1055,131 @@ mod tests {
     fn refcounts_subtract_own_handles() {
         assert_eq!(rc(5, Zval { extra: 2 }), 3);
         assert_eq!(rc(1, Zval { extra: 2 }), 1);
+    }
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn run(src: &str) -> String {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(src.as_bytes(), "t.php");
+        drop(vm);
+        let out = sink.0.borrow().clone();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// php-src fills every class's `default_properties_table` at link
+    /// time: the literal of an inherited property is held once per class
+    /// of the hierarchy (abstract parents and traits included), whether
+    /// or not the class was ever instantiated.
+    #[test]
+    fn property_defaults_are_held_by_every_class_of_the_hierarchy() {
+        let out = run("<?php
+abstract class P { public $p = [1]; }
+class Q extends P {}
+class R extends Q {}
+trait T { public $t = [2]; }
+class U { use T; }
+class V { use T; }
+$q = new Q;
+debug_zval_dump($q);
+$r = new R;
+debug_zval_dump($q);
+$u = new U;
+debug_zval_dump($u);
+");
+        assert_eq!(
+            out,
+            "object(Q)#1 (1) refcount(2){\n  [\"p\"]=>\n  array(1) packed refcount(4){\n    [0]=>\n    int(1)\n  }\n}\n\
+             object(Q)#1 (1) refcount(2){\n  [\"p\"]=>\n  array(1) packed refcount(5){\n    [0]=>\n    int(1)\n  }\n}\n\
+             object(U)#3 (1) refcount(2){\n  [\"t\"]=>\n  array(1) packed refcount(4){\n    [0]=>\n    int(2)\n  }\n}\n"
+        );
+    }
+
+    /// A static property default is held by the declaring class's
+    /// `default_static_members_table` and by its `static_members_table`;
+    /// an inheriting class holds `IS_INDIRECT`, a trait-using class a
+    /// copy of both.
+    #[test]
+    fn static_property_defaults_are_held_once_per_declaring_class() {
+        let out = run("<?php
+class H { public static $s = [1]; }
+class I extends H {}
+class J extends H { public static $s = [2]; }
+trait T { public static $t = [3]; }
+class U { use T; }
+debug_zval_dump(H::$s);
+debug_zval_dump(I::$s);
+debug_zval_dump(J::$s);
+debug_zval_dump(U::$t);
+");
+        assert_eq!(
+            out,
+            "array(1) packed refcount(3){\n  [0]=>\n  int(1)\n}\n\
+             array(1) packed refcount(3){\n  [0]=>\n  int(1)\n}\n\
+             array(1) packed refcount(3){\n  [0]=>\n  int(2)\n}\n\
+             array(1) packed refcount(4){\n  [0]=>\n  int(3)\n}\n"
+        );
+    }
+
+    /// A class constant's value is held by its `zend_class_constant`
+    /// alone (shared with subclasses, copied per trait-using class) plus
+    /// the fetched temporary; fetches php-src cannot substitute at compile
+    /// time (class declared later, `static::`, a variable class name, a
+    /// trait user) show exactly that.
+    #[test]
+    fn class_constants_are_held_once_per_class_constant() {
+        let out = run("<?php
+debug_zval_dump(W::X);
+class W { const X = [5]; }
+class C { const X = [1]; const array Y = [2]; }
+class D extends C { static function f() { debug_zval_dump(static::X); } }
+trait T { const K = [3]; }
+class U { use T; }
+class V { use T; }
+D::f();
+$c = 'C';
+debug_zval_dump($c::Y);
+debug_zval_dump(V::K);
+");
+        assert_eq!(
+            out,
+            "array(1) packed refcount(2){\n  [0]=>\n  int(5)\n}\n\
+             array(1) packed refcount(2){\n  [0]=>\n  int(1)\n}\n\
+             array(1) packed refcount(2){\n  [0]=>\n  int(2)\n}\n\
+             array(1) packed refcount(4){\n  [0]=>\n  int(3)\n}\n"
+        );
+    }
+
+    /// An alias is the same class entry (one default table); a promoted
+    /// constructor property has no default in the class.
+    #[test]
+    fn aliases_and_promoted_properties_add_no_handles() {
+        let out = run("<?php
+class A { public $a = [1]; }
+class_alias('A', 'AA');
+class B extends A {}
+$b = new B;
+debug_zval_dump($b);
+class P { function __construct(public $a = [7]) {} }
+$p = new P;
+debug_zval_dump($p);
+");
+        assert_eq!(
+            out,
+            "object(B)#1 (1) refcount(2){\n  [\"a\"]=>\n  array(1) packed refcount(3){\n    [0]=>\n    int(1)\n  }\n}\n\
+             object(P)#2 (1) refcount(2){\n  [\"a\"]=>\n  array(1) packed refcount(2){\n    [0]=>\n    int(7)\n  }\n}\n"
+        );
     }
 }
