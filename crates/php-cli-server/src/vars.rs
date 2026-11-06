@@ -487,12 +487,12 @@ fn handle_multipart(
 
     let mut pending: Option<Throw> = None;
     for w in &outcome.warnings {
-        let res = if phase == Phase::ParseBody && w.docref {
+        let reported = if phase == Phase::ParseBody && w.docref {
             Err(vm.throw("RequestParseBodyException", &w.message))
         } else {
             warn(vm, phase, &w.message, w.docref)
         };
-        pend_err(vm, &mut pending, res)?;
+        pend_err(vm, &mut pending, reported)?;
     }
     let settings = input_settings(vm);
     let opts = RegisterOptions {
@@ -501,18 +501,18 @@ fn handle_multipart(
         cookie: false,
         warning_prefix: phase.docref_prefix(),
     };
-    for reg in outcome.registrations {
-        let v = match reg.value {
+    for registration in outcome.registrations {
+        let v = match registration.value {
             RegValue::Str(s) => Value::Str(ZStr::from(s)),
             RegValue::Long(l) => Value::Int(l),
         };
-        let track = match reg.target {
+        let track = match registration.target {
             Target::Post => &mut *post,
             Target::Files => &mut *files,
         };
-        let res = query::register_variable_ex(&reg.name, v, track, &opts, vm)
+        let registered = query::register_variable_ex(&registration.name, v, track, &opts, vm)
             .map_err(|e| vm.throw_runtime_error(e));
-        pend_err(vm, &mut pending, res)?;
+        pend_err(vm, &mut pending, registered)?;
     }
     pending.map_or(Ok(()), Err)
 }
