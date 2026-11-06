@@ -2768,7 +2768,10 @@ impl Interp {
                             Ok(V::Null)
                         }
                         "valid" => Ok(V::Bool(i.valid())),
-                        "rewind" => Ok(V::Null),
+                        "rewind" => {
+                            i.rewind();
+                            Ok(V::Null)
+                        }
                         _ => Err(self.throw_err(
                             "Error",
                             &format!("Call to undefined method InternalIterator::{name}()"),

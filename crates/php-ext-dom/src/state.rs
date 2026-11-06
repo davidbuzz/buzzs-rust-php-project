@@ -217,13 +217,15 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
             Value::Object(new_dom_object(vm, class, class, DomObject::XPath(x))?)
         }
         DomValue::Iterator(h) => {
+            let tokens = h.0.borrow().is_tokens();
             let it = DomIter {
                 owner: None,
                 source: None,
                 handle: Some(h),
                 cur: None,
                 started: false,
-                rewindable: false,
+                moved: false,
+                tokens,
             };
             Value::Object(vm.new_internal_iterator(Box::new(it))?)
         }
@@ -317,7 +319,8 @@ pub(crate) fn to_dom(vm: &mut Vm, v: &Value) -> DomValue {
 }
 
 /// A `foreach` / `getIterator()` iterator over a DOM collection
-/// (`php_dom_iterator`, ext/dom/dom_iterators.c).
+/// (`php_dom_iterator`, ext/dom/dom_iterators.c) or a token list
+/// (`dom_token_list_it`, ext/dom/token_list.c).
 ///
 /// The field order is the release order of `php_dom_iterator_dtor`
 /// (`intern.data`, then `curobj`), which `FE_FREE` and the destruction of
@@ -333,15 +336,23 @@ pub(crate) struct DomIter {
     pub source: Option<DomObject>,
     /// The library iterator.
     pub handle: Option<IterHandle>,
-    /// The current element (`iterator->curobj`): fetched when the iterator
-    /// reaches it (`php_dom_get_iterator`, `php_dom_iterator_move_forward`)
-    /// and released only after its successor exists.
+    /// The current element of a node collection (`iterator->curobj`):
+    /// fetched when the iterator reaches it (`php_dom_get_iterator`,
+    /// `php_dom_iterator_move_forward`) and released only after its
+    /// successor exists. A token list's iterator has none: its
+    /// `get_current_data` reads the token set at every access, so a change
+    /// of the list shows at once.
     pub cur: Option<Value>,
     /// Whether `rewind()` was called once already.
     pub started: bool,
-    /// Whether a second `rewind()` restarts (token lists) or throws
-    /// "Iterator does not support rewinding" (node collections).
-    pub rewindable: bool,
+    /// Whether the iterator moved forward since it started or was last
+    /// rewound (`iter->index != 0`).
+    pub moved: bool,
+    /// A token list's iterator, which has a rewind handler and no
+    /// `curobj`. A node collection's has no rewind handler:
+    /// `InternalIterator::rewind()` is a no-op until it moved, then throws
+    /// "Iterator does not support rewinding".
+    pub tokens: bool,
 }
 
 impl DomIter {
@@ -370,18 +381,27 @@ impl DomIter {
 impl NativeIterator for DomIter {
     fn rewind(&mut self, vm: &mut Vm) -> VmResult<()> {
         if self.started {
-            if !self.rewindable {
-                return Err(vm.throw("Error", "Iterator does not support rewinding"));
+            if !self.tokens {
+                if self.moved {
+                    return Err(vm.throw("Error", "Iterator does not support rewinding"));
+                }
+                return Ok(());
             }
-            if self.source.is_some() {
-                self.handle = None;
+            // `dom_token_list_it_rewind`: the same iterator, back at the
+            // first token.
+            self.moved = false;
+            if let Some(h) = &self.handle {
+                h.0.borrow_mut().rewind();
             }
+            return Ok(());
         }
         self.started = true;
         self.ensure(vm)?;
-        // `php_dom_get_iterator`: `get_item(objmap, 0, &iterator->curobj)`.
-        let first = self.fetch_current(vm)?;
-        self.cur = Some(first);
+        if !self.tokens {
+            // `php_dom_get_iterator`: `get_item(objmap, 0, &iterator->curobj)`.
+            let first = self.fetch_current(vm)?;
+            self.cur = Some(first);
+        }
         Ok(())
     }
 
@@ -395,12 +415,26 @@ impl NativeIterator for DomIter {
 
     fn current(&mut self, vm: &mut Vm) -> VmResult<Value> {
         self.ensure(vm)?;
+        if self.tokens {
+            // `dom_token_list_it_get_current_data`: the token at the
+            // position in the set as it is now.
+            return self.fetch_current(vm);
+        }
         if let Some(v) = &self.cur {
             return Ok(v.clone());
         }
         let v = self.fetch_current(vm)?;
         self.cur = Some(v.clone());
         Ok(v)
+    }
+
+    /// `InternalIterator::current()`: neither iterator checks the position
+    /// in `get_current_data` (`curobj` or nothing; the token at the
+    /// position or nothing). A token iterator's `valid` would also move the
+    /// position past removed tokens, which its next `move_forward` would
+    /// then take for the step.
+    fn current_data(&mut self, vm: &mut Vm) -> VmResult<Value> {
+        self.current(vm)
     }
 
     fn key(&mut self, vm: &mut Vm) -> VmResult<Value> {
@@ -414,15 +448,18 @@ impl NativeIterator for DomIter {
 
     fn next(&mut self, vm: &mut Vm) -> VmResult<()> {
         self.ensure(vm)?;
+        self.moved = true;
         let Some(h) = self.handle.clone() else {
             return Ok(());
         };
         let r = crate::run::direct(vm, || h.0.borrow_mut().next())?;
         crate::errors::check(vm, r, None)?;
-        // `php_dom_iterator_move_forward`: the next element's object exists
-        // before the previous one (`garbage`) is released.
-        let next = self.fetch_current(vm)?;
-        self.cur = Some(next);
+        if !self.tokens {
+            // `php_dom_iterator_move_forward`: the next element's object
+            // exists before the previous one (`garbage`) is released.
+            let next = self.fetch_current(vm)?;
+            self.cur = Some(next);
+        }
         Ok(())
     }
 }
