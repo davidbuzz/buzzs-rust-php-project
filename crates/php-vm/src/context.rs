@@ -865,7 +865,12 @@ impl OutputHost for Vm {
     }
 
     fn sapi_flush(&mut self) {
-        let _ = self.stdout.flush();
+        match self.sapi_flush_hook {
+            Some(hook) => hook(self),
+            None => {
+                let _ = self.stdout.flush();
+            }
+        }
     }
 
     fn report(&mut self, diagnostic: php_support::Diagnostic) {

@@ -183,6 +183,19 @@ pub type OutputHandlerHookFn = fn(&mut Vm);
 /// Performs a SAPI header add/replace operation, returning its actual result.
 pub type ResponseHeaderFn = fn(&mut Vm, &[u8], bool, i64) -> VmResult<bool>;
 
+/// A SAPI's `sapi_send_headers()` with the VM at hand (`php_header()`):
+/// runs the `header_register_callback()` callable and sends the headers;
+/// returns whether output may follow (`false` for a HEAD request).
+pub type SendHeadersFn = fn(&mut Vm) -> bool;
+
+/// A SAPI's `sapi_flush()`, run by the output layer after each write
+/// under `implicit_flush`.
+pub type SapiFlushFn = fn(&mut Vm);
+
+/// A SAPI's execution timer: (re)armed with `max_execution_time` seconds
+/// (0 = none) in place of the VM's wall-clock timer (`zend_set_timeout`).
+pub type TimerFn = fn(&mut Vm, i64);
+
 /// An event of the SAPI's `multipart/form-data` parser
 /// (`MULTIPART_EVENT_*` in `main/rfc1867.h`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

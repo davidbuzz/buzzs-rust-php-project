@@ -63,6 +63,17 @@ pub fn send_headers(vm: &mut Vm) -> bool {
         let loc = vm.current_location();
         with(|s| s.output_start = Some(loc));
     }
+    if let Some(hook) = vm.send_headers_hook {
+        // A non-CLI SAPI's `sapi_send_headers()`: its header list, its
+        // `header_register_callback()` callable (whose own output sends
+        // the headers through the SAPI) and its send; `false` is
+        // `php_header()` refusing output.
+        with(|s| s.sending = true);
+        let allowed = hook(vm);
+        with(|s| s.sending = false);
+        vm.headers_sent = true;
+        return allowed;
+    }
     // The callback is cleared before it runs (it may produce output).
     if let Some(cb) = with(|s| s.callback.take()) {
         with(|s| s.sending = true);
@@ -353,6 +364,17 @@ mod tests {
             .call_value(&Value::from("headers_list"), Vec::new())
             .expect("list");
         assert!(matches!(list, Value::Array(a) if a.is_empty()));
+    }
+
+    #[test]
+    fn sapi_send_headers_hook_runs_once_and_may_refuse_output() {
+        let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(Vec::<u8>::new()), &[]);
+        vm.send_headers_hook = Some(|_| false);
+        assert!(!super::send_headers(&mut vm), "the hook refused output");
+        assert!(vm.headers_sent);
+        // Already sent: the hook is not consulted again.
+        vm.send_headers_hook = Some(|_| unreachable!("headers were sent"));
+        assert!(super::send_headers(&mut vm));
     }
 
     #[test]

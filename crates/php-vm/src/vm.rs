@@ -893,6 +893,22 @@ pub struct Vm {
     pub(crate) send_default_content_type: bool,
     /// Active non-CLI SAPI's header operation (`sapi_header_op`).
     pub response_header_hook: Option<crate::ext::ResponseHeaderFn>,
+    /// Active non-CLI SAPI's `sapi_send_headers()` run with the VM at hand
+    /// (`php_header()`): called when output first reaches the SAPI
+    /// (`php_output_header`) and at request shutdown, before the CLI's own
+    /// header state is marked sent; it runs the SAPI's
+    /// `header_register_callback()` callable and sends its header list.
+    /// Returning `false` disables output (a HEAD request).
+    pub send_headers_hook: Option<crate::ext::SendHeadersFn>,
+    /// Active non-CLI SAPI's `sapi_flush()`, run by the output layer after
+    /// every write under `implicit_flush` / `ob_implicit_flush()`; the CLI
+    /// flushes its stdout instead.
+    pub sapi_flush_hook: Option<crate::ext::SapiFlushFn>,
+    /// A SAPI running the execution timer itself (`zend_set_timeout` on a
+    /// CPU-time clock, as `ITIMER_PROF` does): [`Vm::set_time_limit`] tells
+    /// it the limit instead of arming the VM's wall-clock timer thread, and
+    /// it reports expiry with [`crate::interrupt::sapi_timer_expired`].
+    pub timer_hook: Option<crate::ext::TimerFn>,
     /// Observer of the SAPI's multipart parser (`php_rfc1867_callback`).
     pub rfc1867_callback: Option<crate::ext::Rfc1867Fn>,
     /// `SG(rfc1867_uploaded_files)`: the temporary files of this request's
