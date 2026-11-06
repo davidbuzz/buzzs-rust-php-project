@@ -121,10 +121,31 @@ impl Vm {
         let rhs = Self::peek_num(f, b)?;
         num_bin(op, lhs, rhs)
     }
+
+    /// [`Vm::cmp_simple_fast`] for the operators it decides (`==`, `!=`,
+    /// `===`, `!==`), and `None` at once for any other. The call is out of
+    /// line: in the release build of 4e1c2df8 its own early `None` still
+    /// cost the call and a full prologue and epilogue (about 30
+    /// instructions) on every `Bin` that missed the numeric form (`.`,
+    /// `**`, arithmetic on strings) and every non-numeric `<`/`<=` branch.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the operator test must stay at the call site
+    fn equality_fast(&mut self, op: BinKind, a: Operand, b: Operand) -> Option<bool> {
+        if matches!(
+            op,
+            BinKind::Equal | BinKind::NotEqual | BinKind::Identical | BinKind::NotIdentical
+        ) {
+            self.cmp_simple_fast(op, a, b)
+        } else {
+            None
+        }
+    }
 }
 
 /// The arithmetic of [`Vm::bin_num_fast`] on two peeked numbers: `None`
-/// when the operator has no sealed numeric form or an int result overflows.
+/// when the operator has no sealed numeric form, an int result overflows,
+/// or the generic path must throw or convert (a zero divisor, a negative
+/// shift or one of 64 bits or more, a float operand of `%`, `<<`, `>>`).
 /// Always inlined with it (a call returns the `Option<Value>` through
 /// memory, and the operator is usually known at the call site's arm).
 #[inline(always)]
@@ -138,6 +159,29 @@ fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
             BinKind::Arith(BinaryOp::BitOr) => Value::Int(x | y),
             BinKind::Arith(BinaryOp::BitAnd) => Value::Int(x & y),
             BinKind::Arith(BinaryOp::BitXor) => Value::Int(x ^ y),
+            // `mod_function`: `checked_rem` refuses a zero divisor (the
+            // generic path throws "Modulo by zero") and `PHP_INT_MIN % -1`
+            // (the generic path answers 0, as for any `x % -1`).
+            BinKind::Arith(BinaryOp::Mod) => Value::Int(x.checked_rem(y)?),
+            // `div_function`: an exact quotient stays an int, any other is
+            // `(double) x / y`; a zero divisor ("Division by zero") and
+            // `PHP_INT_MIN / -1` (a float) are the generic path's.
+            BinKind::Arith(BinaryOp::Div) => {
+                if x.checked_rem(y)? == 0 {
+                    Value::Int(x / y)
+                } else {
+                    Value::Float(Num::Int(x).as_f64() / Num::Int(y).as_f64())
+                }
+            }
+            // `shift_left_function` / `shift_right_function` by 0..=63 bits
+            // (bits shifted out are lost, `>>` is arithmetic); a negative
+            // shift (ArithmeticError) or a wider one (0 or -1) goes generic.
+            BinKind::Arith(BinaryOp::ShiftLeft) => {
+                Value::Int(x.checked_shl(u32::try_from(y).ok()?)?)
+            }
+            BinKind::Arith(BinaryOp::ShiftRight) => {
+                Value::Int(x.checked_shr(u32::try_from(y).ok()?)?)
+            }
             BinKind::Equal | BinKind::Identical => Value::Bool(x == y),
             BinKind::NotEqual | BinKind::NotIdentical => Value::Bool(x != y),
             BinKind::Less => Value::Bool(x < y),
@@ -160,6 +204,9 @@ fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
         BinKind::Arith(BinaryOp::Add) => Value::Float(xf + yf),
         BinKind::Arith(BinaryOp::Sub) => Value::Float(xf - yf),
         BinKind::Arith(BinaryOp::Mul) => Value::Float(xf * yf),
+        // `div_function` with a double operand; a zero divisor (also -0.0)
+        // throws on the generic path.
+        BinKind::Arith(BinaryOp::Div) if yf != 0.0 => Value::Float(xf / yf),
         BinKind::Equal => Value::Bool(xf == yf),
         BinKind::NotEqual => Value::Bool(xf != yf),
         BinKind::Identical => Value::Bool(!mixed && xf == yf),
@@ -1009,7 +1056,7 @@ impl Vm {
                         } => {
                             let r = self
                                 .cmp_num_fast(*kind, *a, *b)
-                                .or_else(|| self.cmp_simple_fast(*kind, *a, *b));
+                                .or_else(|| self.equality_fast(*kind, *a, *b));
                             match r {
                                 Some(r) if r == *jmp_if => ip = *target as usize,
                                 Some(_) => ip += 1,
@@ -1027,7 +1074,7 @@ impl Vm {
                             // instruction.
                             if let Some(r) = self.bin_num_fast(*kind, *a, *b) {
                                 self.set_tmp(*dst, r);
-                            } else if let Some(r) = self.cmp_simple_fast(*kind, *a, *b) {
+                            } else if let Some(r) = self.equality_fast(*kind, *a, *b) {
                                 self.set_tmp(*dst, Value::Bool(r));
                             } else {
                                 self.frame_mut().ip = ip;
@@ -1043,7 +1090,7 @@ impl Vm {
                         } => {
                             let r = self
                                 .bin_num_fast(*kind, *a, *b)
-                                .or_else(|| self.cmp_simple_fast(*kind, *a, *b).map(Value::Bool));
+                                .or_else(|| self.equality_fast(*kind, *a, *b).map(Value::Bool));
                             match r {
                                 // Stored into the variable: the `AssignCv`
                                 // after the op is done; otherwise it runs on
@@ -1154,12 +1201,12 @@ impl Vm {
                         // long/double handlers): operands are CVs or
                         // literals currently holding plain numbers.
                         // Anything else - references, undefined variables,
-                        // strings, overflow, division - takes the
+                        // strings, overflow, zero divisors - takes the
                         // out-of-line generic path with its exact
                         // semantics.
                         if let Some(r) = self.bin_num_fast(*op, *a, *b) {
                             self.set_tmp(*dst, r);
-                        } else if let Some(r) = self.cmp_simple_fast(*op, *a, *b) {
+                        } else if let Some(r) = self.equality_fast(*op, *a, *b) {
                             self.set_tmp(*dst, Value::Bool(r));
                         } else {
                             self.bin_slow(*op, *a, *b, *dst)?;
