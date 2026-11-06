@@ -3006,32 +3006,46 @@ impl Vm {
     /// `isset(place)` / `empty(place)` (returns the isset or empty result).
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
-        // Fast path: ISSET_ISEMPTY_PROP_OBJ on a cached declared slot.
-        if propcache::cacheable(&self.frame().code.places[pid as usize]) {
+        let p = &self.frame().code.places[pid as usize];
+        let (single, head) = (propcache::cacheable(p), propcache::cacheable_head(p));
+        // Fast path: ISSET_ISEMPTY_PROP_OBJ on a cached property.
+        if single {
             if let Some(r) = self.prop_cache_isset(pid, empty)? {
                 return Ok(r);
             }
         }
+        // `isset($this->a[$k])` & co.: the container's FETCH_OBJ_IS from
+        // the cache.
+        let head = if head && !single {
+            self.prop_cache_read(pid)
+        } else {
+            None
+        };
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];
-        let base = self.resolve_base(&place.base, false, true, None)?;
         let segs = &place.segs;
-        let mut cur = match base {
-            RBase::Var(store, idx) => store.borrow().slots[idx].as_ref().map(Value::deref),
-            // ZEND_ISSET_ISEMPTY_PROP_OBJ / FETCH_*_IS on an unset `$this`
-            // (zend_this_not_in_object_context_helper).
-            RBase::This(None) if !segs.is_empty() => {
-                return Err(self.make_throw("Error", "Using $this when not in object context"));
-            }
-            RBase::This(o) => o.map(Value::Object),
-            RBase::Cell(c) => {
-                (!crate::typed_refs::static_cell_uninit(&c)).then(|| c.borrow().deref())
-            }
-            RBase::Value(v) => Some(v.deref()),
-            RBase::Undef(_) => None,
-            RBase::Globals => Some(Value::Array(ZArray::from_table(
-                self.globals.borrow().to_array(),
-            ))),
+        let (mut cur, start) = if let Some(v) = head {
+            (Some(v), 1)
+        } else {
+            let base = self.resolve_base(&place.base, false, true, None)?;
+            let cur = match base {
+                RBase::Var(store, idx) => store.borrow().slots[idx].as_ref().map(Value::deref),
+                // ZEND_ISSET_ISEMPTY_PROP_OBJ / FETCH_*_IS on an unset `$this`
+                // (zend_this_not_in_object_context_helper).
+                RBase::This(None) if !segs.is_empty() => {
+                    return Err(self.make_throw("Error", "Using $this when not in object context"));
+                }
+                RBase::This(o) => o.map(Value::Object),
+                RBase::Cell(c) => {
+                    (!crate::typed_refs::static_cell_uninit(&c)).then(|| c.borrow().deref())
+                }
+                RBase::Value(v) => Some(v.deref()),
+                RBase::Undef(_) => None,
+                RBase::Globals => Some(Value::Array(ZArray::from_table(
+                    self.globals.borrow().to_array(),
+                ))),
+            };
+            (cur, 0)
         };
         let n = segs.len();
         if n == 0 {
@@ -3050,7 +3064,7 @@ impl Vm {
         // is known (an undefined offset variable still warns); property
         // names convert only when an object is reached.
         let mut settled = false;
-        for (i, seg) in segs.iter().enumerate() {
+        for (i, seg) in segs.iter().enumerate().skip(start) {
             let raw = match seg {
                 Seg::Dim(op) => self.read_dim_operand(*op)?,
                 Seg::Prop(op) => self.read(*op)?,

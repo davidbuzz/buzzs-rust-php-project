@@ -885,4 +885,47 @@ Cannot use a scalar value as an array
 "#;
         assert_eq!(run(src), expected);
     }
+
+    /// `isset()`/`empty()` of a chain take the container from the cache.
+    #[test]
+    fn isset_of_a_chain_with_a_cached_head() {
+        let src = r#"<?php
+class K {
+    public $a = ['k' => 1, 'z' => 0, 'n' => null];
+    public $o;
+    public $n = null;
+    function __construct() { $this->o = new stdClass; $this->o->p = 'x'; }
+    function run() {
+        for ($i = 0; $i < 2; $i++) {
+            var_dump(isset($this->a['k']), isset($this->a['n']), isset($this->a['q']),
+                empty($this->a['z']), empty($this->a['k']), isset($this->o->p), isset($this->o->q),
+                isset($this->n['x']), empty($this->n->x), isset($this->a[$i]));
+        }
+    }
+}
+(new K)->run();
+"#;
+        let expected = r#"bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+"#;
+        assert_eq!(run(src), expected);
+    }
 }
