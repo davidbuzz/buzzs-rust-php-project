@@ -171,22 +171,33 @@ pub(crate) fn frameless_call(b: &Builtin, call: &PendingCall) -> bool {
         || call.this.is_some()
         || call.scope.is_some()
         || call.pfa.is_some()
-        || b.flags & (flags::DEPRECATED | flags::VARIADIC | flags::NODISCARD) != 0
+        || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
     {
         return false;
     }
     let n = call.args.len();
-    // The arities without an error path: strpos()'s offset can be out of
-    // range, trim()'s character list can hold an invalid `..` range.
-    let error_free = match b.name.as_bytes() {
-        b"abs" | b"dechex" | b"strtolower" | b"strtoupper" | b"trim" | b"ltrim" | b"rtrim" => {
-            n == 1
+    let name = b.name.as_bytes();
+    // The arities (and values) without an error path: strpos()'s offset
+    // can be out of range, trim()'s character list can hold an invalid
+    // `..` range, dirname()'s levels can be below 1, ord() and chr()
+    // deprecate other lengths and values, max()/min() need two values.
+    let error_free = match name {
+        b"abs" | b"dechex" | b"strtolower" | b"strtoupper" | b"trim" | b"ltrim" | b"rtrim"
+        | b"dirname" | b"is_numeric" => n == 1,
+        b"ord" => n == 1 && matches!(&call.args[0], Some(Value::Str(s)) if s.len() == 1),
+        b"chr" => n == 1 && matches!(&call.args[0], Some(Value::Int(c)) if (0..=255).contains(c)),
+        b"strpos" | b"str_contains" | b"str_starts_with" | b"str_ends_with" | b"max" | b"min" => {
+            n == 2
         }
-        b"strpos" | b"str_contains" | b"str_starts_with" | b"str_ends_with" => n == 2,
-        b"substr" => n == 2 || n == 3,
+        b"substr" | b"strstr" => n == 2 || n == 3,
         _ => false,
     };
-    if !error_free || n < b.required as usize || n > b.params.len() {
+    let variadic = b.flags & flags::VARIADIC != 0;
+    if !error_free
+        || (variadic && !matches!(name, b"max" | b"min"))
+        || n < b.required as usize
+        || n > b.params.len()
+    {
         return false;
     }
     call.args.iter().zip(&b.params).all(|(arg, p)| {
@@ -259,9 +270,60 @@ impl Vm {
 
 #[cfg(test)]
 mod tests {
+    use super::frameless_call;
     use crate::compiler::{special_builtin_bit, SPECIAL_BUILTINS};
+    use crate::func::Func;
     use crate::opcode::type_mask;
+    use crate::vm::{PendingCall, Vm};
     use php_runtime::{Value, ZStr};
+
+    #[test]
+    fn frameless_calls_need_error_free_arities_and_accepted_scalars() {
+        let vm = Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        let call = |name: &str, args: Vec<Value>| {
+            let Some(Func::Builtin(b)) = vm.functions.get(&ZStr::from(name)).cloned() else {
+                panic!("{name} is a core builtin");
+            };
+            let mut call = PendingCall::new(Func::Builtin(b.clone()));
+            call.args = args.into_iter().map(Some).collect();
+            (b, call)
+        };
+        let frameless = |name: &str, args: Vec<Value>| {
+            let (b, call) = call(name, args);
+            frameless_call(&b, &call)
+        };
+        let s = |v: &str| Value::Str(ZStr::from(v));
+        assert!(frameless("abs", vec![Value::Int(-1)]));
+        assert!(frameless("abs", vec![Value::Float(-1.5)]));
+        // zpp would coerce (or deprecate): the frame is needed.
+        assert!(!frameless("abs", vec![s("1")]));
+        assert!(!frameless("abs", vec![Value::Bool(true)]));
+        assert!(!frameless("abs", vec![Value::Null]));
+        assert!(frameless("ord", vec![s("a")]));
+        assert!(!frameless("ord", vec![s("")]));
+        assert!(!frameless("ord", vec![s("ab")]));
+        assert!(frameless("chr", vec![Value::Int(65)]));
+        assert!(!frameless("chr", vec![Value::Int(256)]));
+        assert!(frameless("strpos", vec![s("abc"), s("b")]));
+        assert!(!frameless("strpos", vec![s("abc"), s("b"), Value::Int(1)]));
+        assert!(frameless("substr", vec![s("abc"), Value::Int(1)]));
+        assert!(frameless(
+            "substr",
+            vec![s("abc"), Value::Int(1), Value::Null]
+        ));
+        assert!(!frameless("substr", vec![s("abc"), s("1")]));
+        assert!(frameless("trim", vec![s(" a ")]));
+        assert!(!frameless("trim", vec![s(" a "), s("a..b")]));
+        assert!(!frameless("str_repeat", vec![s("a"), Value::Int(2)]));
+        let arr = Value::Array(php_runtime::ZArray::new());
+        assert!(!frameless("substr", vec![arr, Value::Int(1)]));
+        let (b, mut dynamic) = call("abs", vec![Value::Int(1)]);
+        dynamic.dynamic = true;
+        assert!(!frameless_call(&b, &dynamic));
+        let (b, mut named) = call("abs", vec![Value::Int(1)]);
+        named.has_named = true;
+        assert!(!frameless_call(&b, &named));
+    }
 
     #[test]
     fn special_builtin_bits_are_distinct_and_lowercase() {
