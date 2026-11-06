@@ -36,7 +36,7 @@ fn run(source: &str) -> String {
 /// A ghost whose properties table exists before its initialization: the
 /// initializer's dynamic write (`$this->a = 1`) separates the table,
 /// freezing `b` at its default (1) while the slot then gets 3.
-const FROZEN_GHOST: &str = r#"<?php
+const FROZEN_GHOST: &str = r"<?php
 #[AllowDynamicProperties]
 class C {
     public int $b = 1;
@@ -49,7 +49,7 @@ $r = new ReflectionClass(C::class);
 $o = $r->newLazyGhost(function ($o) { $o->__construct(); });
 ob_start(); var_dump($o); ob_end_clean();
 $r->initializeLazyObject($o);
-"#;
+";
 
 /// `zend_std_compare_objects` compares the classes before initializing
 /// anything: a proxy of `C` whose factory would return a `D` is
@@ -108,12 +108,12 @@ foreach ($o as $k => $v) { echo "$k=$v\n"; }
 fn comparison_uses_the_frozen_table() {
     let src = format!(
         "{FROZEN_GHOST}{}",
-        r#"
+        r"
 $p = new C();
 $p->b = 1;
 $q = new C();
 var_dump($o == $p, $o == $q, $o->b == $q->b);
-"#
+"
     );
     assert_eq!(run(&src), "bool(true)\nbool(false)\nbool(true)\n");
 }
@@ -124,7 +124,7 @@ var_dump($o == $p, $o == $q, $o->b == $q->b);
 /// undefined `IS_INDIRECT` entry below the defined one (-1).
 #[test]
 fn undefined_slots_order_below_defined_ones_through_a_table() {
-    let src = r#"<?php
+    let src = r"<?php
 class U { public $a; public int $t; }
 $x = new U; $y = new U; $y->t = 5;
 var_dump($x <=> $y, $y <=> $x);
@@ -132,7 +132,7 @@ ob_start(); var_dump($x); ob_end_clean();
 var_dump($x <=> $y, $y <=> $x);
 $x->t = 5;
 var_dump($x == $y);
-"#;
+";
     assert_eq!(run(src), "int(1)\nint(1)\nint(-1)\nint(1)\nbool(true)\n");
 }
 
@@ -140,7 +140,7 @@ var_dump($x == $y);
 /// entries orders above (`zend_hash_compare` compares the counts first).
 #[test]
 fn dynamic_properties_count_in_table_comparisons() {
-    let src = r#"<?php
+    let src = r"<?php
 #[AllowDynamicProperties]
 class C { public $a; }
 $x = new C; $y = new C;
@@ -150,6 +150,6 @@ $x->q = 2;
 var_dump($x == $y);
 $x->q = 3;
 var_dump($x <=> $y);
-"#;
+";
     assert_eq!(run(src), "int(-1)\nint(1)\nbool(true)\nint(1)\n");
 }

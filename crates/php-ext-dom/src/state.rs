@@ -219,7 +219,7 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
         DomValue::Iterator(h) => {
             let tokens = h.0.borrow().is_tokens();
             let it = DomIter {
-                owner: None,
+                _owner: None,
                 source: None,
                 handle: Some(h),
                 cur: None,
@@ -319,8 +319,8 @@ pub(crate) fn to_dom(vm: &mut Vm, v: &Value) -> DomValue {
 }
 
 /// A `foreach` / `getIterator()` iterator over a DOM collection
-/// (`php_dom_iterator`, ext/dom/dom_iterators.c) or a token list
-/// (`dom_token_list_it`, ext/dom/token_list.c).
+/// (`php_dom_iterator`, `ext/dom/dom_iterators.c`) or a token list
+/// (`dom_token_list_it`, `ext/dom/token_list.c`).
 ///
 /// The field order is the release order of `php_dom_iterator_dtor`
 /// (`intern.data`, then `curobj`), which `FE_FREE` and the destruction of
@@ -330,8 +330,8 @@ pub(crate) struct DomIter {
     /// The collection object (`iterator->intern.data`, `ZVAL_OBJ_COPY` in
     /// `php_dom_get_iterator`): the iterator keeps it alive for as long as
     /// it exists, so a temporary (`foreach ($xpath->query(..) as $n)`) and
-    /// the node objects it holds outlive the loop.
-    pub owner: Option<Obj>,
+    /// the node objects it holds outlive the loop. Only held, never read.
+    pub _owner: Option<Obj>,
     /// The collection (to restart on rewind), when known.
     pub source: Option<DomObject>,
     /// The library iterator.

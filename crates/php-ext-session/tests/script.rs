@@ -454,7 +454,7 @@ var_dump($_SESSION);"#,
 /// `php_session_normalize_vars()`: the entries of one decode are parsed
 /// into one `var_hash`, so an `R:` back-reference makes the targeted entry
 /// (or an element inside it) a reference shared with the referring entry,
-/// and nothing else becomes one (session_decode_variation1.phpt, 019.phpt;
+/// and nothing else becomes one (`session_decode_variation1.phpt`, `019.phpt`;
 /// expected output from php-src). The element appended through `guff` is
 /// read back through `foo` and `blah` (the test VM has no `count()`).
 #[test]

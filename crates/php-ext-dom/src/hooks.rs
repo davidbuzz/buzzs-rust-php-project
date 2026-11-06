@@ -507,7 +507,7 @@ fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIt
 pub(crate) fn new_iter(d: Option<DomObject>, owner: Option<Obj>) -> DomIter {
     let tokens = matches!(d, Some(DomObject::TokenList(_)));
     DomIter {
-        owner,
+        _owner: owner,
         source: d,
         handle: None,
         cur: None,

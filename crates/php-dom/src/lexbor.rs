@@ -739,6 +739,7 @@ struct WorkItemRaw {
 }
 
 /// A node waiting to be converted (`work_list_item`).
+#[derive(Clone, Copy)]
 pub(crate) struct WorkItem<'a> {
     pub(crate) node: LxbNode<'a>,
     pub(crate) current_active_namespace: usize,
