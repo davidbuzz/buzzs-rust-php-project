@@ -186,18 +186,17 @@ impl Vm {
     /// the class named by literal `lit`, looked up without autoloading and
     /// cached once found (a class not declared yet catches nothing).
     pub(crate) fn catch_class_matches(&self, cls: &Rc<Class>, lit: u32) -> bool {
-        let catch_ce = match self.peek_named_class(lit) {
-            Some(c) => c,
-            None => {
-                let Some(c) = self
-                    .rt_lit_str(lit)
-                    .and_then(|n| self.find_class(n.as_bytes()))
-                else {
-                    return false;
-                };
-                self.remember_named_class(lit, &c);
-                c
-            }
+        let catch_ce = if let Some(c) = self.peek_named_class(lit) {
+            c
+        } else {
+            let Some(c) = self
+                .rt_lit_str(lit)
+                .and_then(|n| self.find_class(n.as_bytes()))
+            else {
+                return false;
+            };
+            self.remember_named_class(lit, &c);
+            c
         };
         cls.is_subclass_of(&catch_ce)
     }
@@ -553,7 +552,7 @@ impl Vm {
             return None;
         };
         let m = m.upgrade()?;
-        let caller = self
+        let caller_frame = self
             .frames
             .iter()
             .rev()
@@ -566,7 +565,7 @@ impl Vm {
                 ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
             );
             let called = if forward {
-                caller
+                caller_frame
                     .and_then(|f| f.called.clone())
                     .filter(|c| c.is_subclass_of(&cls))
                     .unwrap_or(cls)
@@ -579,7 +578,7 @@ impl Vm {
                 ..PendingCall::new(m.func.clone())
             });
         }
-        let this = caller.and_then(|f| f.this.clone())?;
+        let this = caller_frame.and_then(|f| f.this.clone())?;
         let called = object::class_of(&this).clone();
         if !called.is_subclass_of(&cls) {
             return None;
@@ -613,7 +612,7 @@ impl Vm {
         let Some(n) = self.rt_lit_str(l) else {
             return;
         };
-        let lc = ZStr::from(n.to_ascii_lowercase());
+        let lc = n.to_ascii_lowercase();
         let Some(m) = cls.methods.get(&lc) else {
             return;
         };
