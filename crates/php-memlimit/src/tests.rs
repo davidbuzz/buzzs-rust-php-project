@@ -1042,6 +1042,82 @@ fn shrinking_realloc_moves_to_the_smaller_bin() {
 }
 
 #[test]
+fn owner_fast_path_accounts_like_the_general_one() {
+    // Small heap blocks of the owner take the call-free fast path; its
+    // figures must be the ones the general path produces.
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    let x = alloc(&a, 24);
+    let y = alloc(&a, 1000);
+    assert!(is_heap_block(x.p) && is_heap_block(y.p));
+    let s = a.stats();
+    assert_eq!((s.current, s.peak, s.allocs, s.frees), (1024, 1024, 2, 0));
+    let y_addr = y.p.addr();
+    drop(y);
+    let s = a.stats();
+    assert_eq!((s.current, s.peak, s.frees), (24, 1024, 1));
+    let z = alloc(&a, 500);
+    assert_eq!(a.stats().peak, 1024, "below the peak: unchanged");
+    let w = alloc(&a, 1000);
+    assert_eq!(w.p.addr(), y_addr, "the freed block is reused");
+    assert_eq!(a.stats().current, 1524);
+    assert_eq!(a.stats().peak, 1524, "a new high-water mark");
+    // A large block (the inner allocator, through the general path) joins
+    // the same counters.
+    let big = alloc(&a, MAX_SMALL_SIZE + 1);
+    assert!(!is_heap_block(big.p));
+    assert_eq!(a.stats().current, 1524 + MAX_SMALL_SIZE + 1);
+    assert_eq!(a.stats().peak, 1524 + MAX_SMALL_SIZE + 1);
+    drop(big);
+    drop(w);
+    drop(z);
+    drop(x);
+    let s = a.stats();
+    assert_eq!((s.current, s.allocs, s.frees), (0, 5, 5));
+    a.unbind_current_thread();
+}
+
+#[test]
+fn fast_path_defers_to_the_limit_check() {
+    // A small heap block that would cross the soft threshold leaves the
+    // fast path for the general one, which records the violation and
+    // grants the block all the same.
+    let a = CountingAlloc::new(System);
+    a.request_start(Some(4 * M)).expect("limit");
+    assert!(a.is_bound_to_current_thread());
+    // Exact bytes (tracked mode), so the threshold is the limit itself.
+    a.set_tracked(true);
+    let mut fill = Vec::new();
+    while a.usage() + 3000 <= 4 * M {
+        fill.push(alloc(&a, 3000));
+    }
+    assert!(fill.iter().all(|b| is_heap_block(b.p)));
+    assert_eq!(a.check(), None);
+    let room = 4 * M - a.usage();
+    assert!(room < 3000);
+    let exact = (room > 0).then(|| alloc(&a, room));
+    assert_eq!(a.usage(), 4 * M);
+    assert_eq!(a.check(), None, "exactly at the limit is fine");
+    let over = alloc(&a, 8);
+    assert!(!over.p.is_null() && is_heap_block(over.p), "granted");
+    assert_eq!(
+        a.check(),
+        Some(OverLimit {
+            limit: 4 * M,
+            tried: 8
+        })
+    );
+    assert_eq!(a.peak(), 4 * M + 8);
+    a.clear();
+    drop(over);
+    drop(exact);
+    drop(fill);
+    assert_eq!(a.stats().current, 0);
+    a.request_end();
+    assert!(!a.is_bound_to_current_thread());
+}
+
+#[test]
 fn observing_takes_the_owner_off_the_heap_and_gives_it_back() {
     let a = CountingAlloc::new(System);
     assert!(a.bind_to_current_thread());

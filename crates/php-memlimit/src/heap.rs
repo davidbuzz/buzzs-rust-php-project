@@ -17,8 +17,10 @@
 //! * Large (up to `ZEND_MM_MAX_LARGE_SIZE`) and huge requests are left to
 //!   the inner allocator. `zend_mm` maps huge blocks on their own, which is
 //!   what the inner allocator does for them as well; large runs are rare in
-//!   the profiled workloads (no `perf/bench` workload makes more than a
-//!   few dozen) and are not ported.
+//!   the profiled workloads and are not ported (callgrind on the release
+//!   binary, `perf/bench/suite` scaled 50x: `objects` makes 100k small
+//!   allocations and no large one, `strings` 10k and 3, `array_rw` 6.2k
+//!   and 7, plus 8 large reallocations whose cost is the copy).
 //!
 //! # Differences forced by Rust
 //!
@@ -255,6 +257,43 @@ impl Heap {
         self.chunks.load(Relaxed)
     }
 
+    /// The fast half of `zend_mm_alloc_small()`: pops the head of bin
+    /// `bin`'s free list, or returns null when the list is empty (the
+    /// caller then goes to [`alloc`](Self::alloc), which carves a run).
+    /// A load, a dependent load and a store; no call.
+    ///
+    /// # Safety
+    ///
+    /// The calling thread owns the heap and `bin < BINS`.
+    #[inline]
+    pub(crate) unsafe fn pop(&self, bin: usize) -> *mut u8 {
+        let head = &self.free[bin];
+        let p = head.load(Relaxed);
+        if !p.is_null() {
+            // SAFETY: `p` heads this bin's free list, which only the owner
+            // (the caller) touches, so it is a free block holding a link.
+            head.store(unsafe { read_next(p) }, Relaxed);
+        }
+        p
+    }
+
+    /// `zend_mm_free_small()` on the owner thread: pushes `p` onto bin
+    /// `bin`'s free list. A load and two stores; no call.
+    ///
+    /// # Safety
+    ///
+    /// The calling thread owns the heap; `p` is a block of this heap
+    /// allocated from bin `bin` (its layout maps to `bin` through
+    /// [`small_bin`]) that is not used again.
+    #[inline]
+    pub(crate) unsafe fn push(&self, p: *mut u8, bin: usize) {
+        let head = &self.free[bin];
+        // SAFETY: the block is being freed, so the caller has exclusive
+        // access to it; the list is the owner's.
+        unsafe { write_next(p, head.load(Relaxed)) };
+        head.store(p, Relaxed);
+    }
+
     /// `zend_mm_alloc_small()`: a block of bin `bin`, or null when no
     /// chunk could be obtained (the caller then falls back to the inner
     /// allocator).
@@ -265,15 +304,12 @@ impl Heap {
     /// allocator this heap has always obtained its chunks from.
     #[inline]
     pub(crate) unsafe fn alloc<A: GlobalAlloc>(&self, inner: &A, bin: usize) -> *mut u8 {
-        let head = &self.free[bin];
-        let p = head.load(Relaxed);
+        // SAFETY: forwarded contract.
+        let p = unsafe { self.pop(bin) };
         if p.is_null() {
             // SAFETY: forwarded contract.
             return unsafe { self.alloc_slow(inner, bin) };
         }
-        // SAFETY: `p` heads this bin's free list, which only the owner (the
-        // caller) touches, so it is a free block holding a link.
-        head.store(unsafe { read_next(p) }, Relaxed);
         p
     }
 
@@ -361,11 +397,8 @@ impl Heap {
     #[inline]
     pub(crate) unsafe fn free(&self, p: *mut u8, bin: usize, owner: bool) {
         if owner {
-            let head = &self.free[bin];
-            // SAFETY: the block is being freed, so the caller has exclusive
-            // access to it; the list is the owner's.
-            unsafe { write_next(p, head.load(Relaxed)) };
-            head.store(p, Relaxed);
+            // SAFETY: forwarded contract.
+            unsafe { self.push(p, bin) };
         } else {
             // SAFETY: forwarded contract.
             unsafe { self.free_remote(p, bin) };
