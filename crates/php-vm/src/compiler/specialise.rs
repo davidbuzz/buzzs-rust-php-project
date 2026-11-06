@@ -58,26 +58,32 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
             op,
             val,
             dst,
-        } if is_numeric_assign_op(*op) => plain_cv(places, *place)
-            .map(|cv| Op::AssignOpCv {
+        } => {
+            if is_numeric_assign_op(*op) {
+                if let Some(cv) = plain_cv(places, *place) {
+                    return Some(Op::AssignOpCv {
+                        cv,
+                        op: *op,
+                        val: *val,
+                        dst: *dst,
+                        place: *place,
+                    });
+                }
+            }
+            // `$cv[k] op= v` as a statement: a number operated on in place,
+            // or `.=` extending a string element in place
+            // (`ZEND_ASSIGN_DIM_OP` on the fetched slot).
+            if dst.is_some() || !(is_numeric_assign_op(*op) || *op == BinaryOp::Concat) {
+                return None;
+            }
+            cv_dim(places, *place).map(|(cv, dim)| Op::AssignOpDimCv {
                 cv,
+                dim,
                 op: *op,
                 val: *val,
-                dst: *dst,
                 place: *place,
             })
-            .or_else(|| {
-                if dst.is_some() {
-                    return None;
-                }
-                cv_dim(places, *place).map(|(cv, dim)| Op::AssignOpDimCv {
-                    cv,
-                    dim,
-                    op: *op,
-                    val: *val,
-                    place: *place,
-                })
-            }),
+        }
         Op::Fetch { place, mode, dst } if *mode != FetchMode::List => cv_dim(places, *place)
             .map(|(cv, dim)| Op::FetchDimCv {
                 cv,
@@ -411,6 +417,10 @@ mod tests {
             )),
             "{ops:?}"
         );
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::AssignDimCv { .. })),
+            "{ops:?}"
+        );
         let ops = main_ops(
             "<?php $a = []; $k = 'k'; $v = $a[$k] ?? 1; $i = isset($a[$k]); $e = empty($a[0]);",
         );
@@ -441,10 +451,10 @@ mod tests {
             !ops.iter().any(|op| matches!(op, Op::FetchDimCv { .. })),
             "{ops:?}"
         );
-        assert!(
-            ops.iter().any(|op| matches!(op, Op::AssignDimCv { .. })),
-            "{ops:?}"
-        );
+    }
+
+    #[test]
+    fn cv_dimension_updates_and_chains_are_specialised() {
         let ops = main_ops("<?php $s = 0; $s += 2; $s .= 'x'; $a = [1]; $a[0] += 1; $a[0]++; $a[0] .= 'x'; $y = $a[0] += 1;");
         assert_eq!(
             ops.iter()
@@ -453,11 +463,13 @@ mod tests {
             1,
             "{ops:?}"
         );
+        // `$a[0] += 1` and `$a[0] .= 'x'` (the string element is extended
+        // in place).
         assert_eq!(
             ops.iter()
                 .filter(|op| matches!(op, Op::AssignOpDimCv { .. }))
                 .count(),
-            1,
+            2,
             "{ops:?}"
         );
         assert!(
@@ -471,13 +483,13 @@ mod tests {
             )),
             "{ops:?}"
         );
-        // `.=` (on the CV and on the dimension) and a compound assignment
-        // with a used result keep the generic op.
+        // `.=` on the CV (its own fast path runs from the generic op) and a
+        // compound assignment with a used result keep the generic op.
         assert_eq!(
             ops.iter()
                 .filter(|op| matches!(op, Op::AssignOp { .. }))
                 .count(),
-            3,
+            2,
             "{ops:?}"
         );
         // Nested dimension reads get the chain form; appends and nested

@@ -657,22 +657,21 @@ impl Vm {
     /// (undefined, a reference, a number), and readonly, set-restricted,
     /// hooked or natively handled properties (no `PC_WRITE`).
     pub(crate) fn prop_cache_concat(&mut self, pid: PlaceId, rhs: &Value) -> Option<Value> {
-        let tmp;
-        let add: &[u8] = match rhs {
-            Value::Str(s) => s.as_bytes(),
-            Value::Int(i) => {
-                tmp = php_runtime::convert::long_to_zstr(*i);
-                tmp.as_bytes()
-            }
-            _ => return None,
-        };
+        if !matches!(rhs, Value::Str(_) | Value::Int(_)) {
+            return None;
+        }
         self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |e, o, h| {
             if e.accept != u32::MAX && e.accept & mask::STRING == 0 {
                 return Probe::Slow;
             }
-            write_home(o, &h, |v| match v {
-                Value::Str(s) => {
-                    s.append(add);
+            write_home(o, &h, |v| match (v, rhs) {
+                (Value::Str(s), Value::Str(add)) => {
+                    s.append(add.as_bytes());
+                    Probe::Hit(Value::Str(s.clone()))
+                }
+                // The digits go straight into the string (`ZStr::append_long`).
+                (Value::Str(s), Value::Int(i)) => {
+                    s.append_long(*i);
                     Probe::Hit(Value::Str(s.clone()))
                 }
                 _ => Probe::Slow,
@@ -988,8 +987,8 @@ class L {
         $this->maybe[] = 1;
         $copy = $this->items;
         $this->items[] = 99;
-        echo count($copy), ' ', count($this->items), "\n";
-        echo json_encode([$this->items, $this->typed, $this->maybe, $this->cnt]), "\n";
+        echo cnt($copy), ' ', cnt($this->items), "\n";
+        echo enc([$this->items, $this->typed, $this->maybe, $this->cnt]), "\n";
         $this->cnt['zz'] .= 'q';
         echo $this->cnt['zz'], "\n";
         $this->str[1] = 'X';
@@ -1002,7 +1001,14 @@ $t = new TI;
 try { $t->n[] = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
 $o = new L;
 for ($i = 0; $i < 2; $i++) { $o->items['x'][] = $i; }
-echo json_encode($o->items), "\n";
+echo enc($o->items), "\n";
+function cnt($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
+function enc($v) {
+    if (!is_array($v)) { return is_string($v) ? "\"$v\"" : var_export($v, true); }
+    $list = true; $i = 0; foreach ($v as $k => $_) { if ($k !== $i++) { $list = false; break; } }
+    $parts = []; foreach ($v as $k => $x) { $parts[] = ($list ? '' : "\"$k\":") . enc($x); }
+    return ($list ? '[' : '{') . implode(',', $parts) . ($list ? ']' : '}');
+}
 "#;
         let expected = r#"3 4
 [[0,1,2,99],{"k0":0,"k1":2,"k2":4},[1],{"a":3}]
@@ -1063,12 +1069,12 @@ bool(false)
     /// read-modify-write walk and the write-back start from the slot.
     #[test]
     fn incdec_inside_a_cached_property() {
-        let src = r#"<?php
+        let src = r#"<?php class AO implements ArrayAccess { public $a; function __construct($a) { $this->a = $a; } function offsetExists($k): bool { return isset($this->a[$k]); } function &offsetGet($k): mixed { return $this->a[$k]; } function offsetSet($k, $v): void { $this->a[$k] = $v; } function offsetUnset($k): void { unset($this->a[$k]); } }
 class Cnt {
     public $c = ['a' => 0];
     public array $t = [1.5];
     public $o;
-    function __construct() { $this->o = new ArrayObject(['n' => 1]); }
+    function __construct() { $this->o = new AO(['n' => 1]); }
     function run() {
         for ($i = 0; $i < 3; $i++) {
             $this->c['a']++;
@@ -1076,13 +1082,19 @@ class Cnt {
             $x = $this->t[0]--;
             $this->o['n']++;
         }
-        echo json_encode($this->c), ' ', json_encode($this->t), ' ', $x, ' ', $this->o['n'], "\n";
+        echo enc($this->c), ' ', enc($this->t), ' ', $x, ' ', $this->o['n'], "\n";
         $y = $this->c['a']++;
         $z = --$this->c['a'];
         echo "$y $z\n";
     }
 }
 (new Cnt)->run();
+function enc($v) {
+    if (!is_array($v)) { return is_string($v) ? "\"$v\"" : var_export($v, true); }
+    $list = true; $i = 0; foreach ($v as $k => $_) { if ($k !== $i++) { $list = false; break; } }
+    $parts = []; foreach ($v as $k => $x) { $parts[] = ($list ? '' : "\"$k\":") . enc($x); }
+    return ($list ? '[' : '{') . implode(',', $parts) . ($list ? ']' : '}');
+}
 "#;
         let expected = r#"
 Warning: Undefined array key "b" in t.php on line 10
@@ -1109,7 +1121,7 @@ class Rf {
             $r += 10;
             unset($r);
         }
-        sort($this->list);
+        srt($this->list);
         foreach ($this->list as &$v) { $v *= 2; }
         unset($v);
         $q = &$this->t;
@@ -1117,13 +1129,26 @@ class Rf {
         $q = 5;
         $w = &$this->a['k'];
         $w = 9;
-        echo $this->p, ' ', json_encode($this->list), ' ', $this->t, ' ', json_encode($this->a), "\n";
+        echo $this->p, ' ', enc($this->list), ' ', $this->t, ' ', enc($this->a), "\n";
     }
 }
 (new Rf)->run();
 $o = new Rf;
-for ($i = 0; $i < 2; $i++) { array_push($o->list, $i); }
-echo json_encode($o->list), "\n";
+for ($i = 0; $i < 2; $i++) { push($o->list, $i); }
+echo enc($o->list), "\n";
+function srt(array &$a) {
+    $v = []; foreach ($a as $x) { $v[] = $x; }
+    $n = 0; foreach ($v as $_) { $n++; }
+    for ($i = 1; $i < $n; $i++) { for ($j = $i; $j > 0 && $v[$j - 1] > $v[$j]; $j--) { $t = $v[$j]; $v[$j] = $v[$j - 1]; $v[$j - 1] = $t; } }
+    $a = $v;
+}
+function push(array &$a, $v) { $a[] = $v; }
+function enc($v) {
+    if (!is_array($v)) { return is_string($v) ? "\"$v\"" : var_export($v, true); }
+    $list = true; $i = 0; foreach ($v as $k => $_) { if ($k !== $i++) { $list = false; break; } }
+    $parts = []; foreach ($v as $k => $x) { $parts[] = ($list ? '' : "\"$k\":") . enc($x); }
+    return ($list ? '[' : '{') . implode(',', $parts) . ($list ? ']' : '}');
+}
 "#;
         let expected = r#"Cannot assign string to reference held by property Rf::$t of type int
 21 [2,4,6] 5 {"k":9}

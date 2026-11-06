@@ -110,9 +110,9 @@ impl Vm {
     #[inline]
     fn bin_num_fast(&self, op: BinKind, a: Operand, b: Operand) -> Option<Value> {
         let f = self.frame();
-        let x = Self::peek_num(f, a)?;
-        let y = Self::peek_num(f, b)?;
-        num_bin(op, x, y)
+        let lhs = Self::peek_num(f, a)?;
+        let rhs = Self::peek_num(f, b)?;
+        num_bin(op, lhs, rhs)
     }
 }
 
@@ -165,9 +165,9 @@ impl Vm {
     /// stays small (the sealed numeric forms handle the hot cases).
     #[inline(never)]
     fn bin_slow(&mut self, op: BinKind, a: Operand, b: Operand, dst: u32) -> VmResult<()> {
-        let x = self.read(a)?;
-        let y = self.read(b)?;
-        let r = match (op, a, x, y) {
+        let lhs = self.read(a)?;
+        let rhs = self.read(b)?;
+        let result = match (op, a, lhs, rhs) {
             // `ZEND_CONCAT` with a TMP op1: a string nothing else holds is
             // extended in place (`zend_string_extend`), not copied.
             (BinKind::Arith(BinaryOp::Concat), Operand::Tmp(_), Value::Str(s), Value::Str(t)) => {
@@ -180,13 +180,13 @@ impl Vm {
                 let mut buf = [0u8; php_runtime::string::LONG_MAX_LEN];
                 Value::Str(s.concat_owned(php_runtime::string::format_long(i, &mut buf)))
             }
-            (_, _, x, y) => {
-                let r = self.binary(op, &x, &y)?;
-                drop((x, y));
-                r
+            (_, _, lhs, rhs) => {
+                let result = self.binary(op, &lhs, &rhs)?;
+                drop((lhs, rhs));
+                result
             }
         };
-        self.set_tmp(dst, r);
+        self.set_tmp(dst, result);
         Ok(())
     }
 
@@ -312,7 +312,7 @@ impl Vm {
     /// Reads a compiled variable without warning (`None` if undefined).
     #[inline]
     pub(crate) fn cv_get(&self, cv: u32) -> Option<Value> {
-        self.frame().peek_cv(cv, |s| s.cloned())
+        self.frame().peek_cv(cv, Option::cloned)
     }
 
     /// Assigns to a compiled variable (through references). A typed
@@ -430,7 +430,7 @@ impl Vm {
             Operand::Unused => return false,
         };
         let keep = dst.map(|_| v.clone());
-        let old = std::mem::replace(&mut vars.slots[idx], Some(v));
+        let old = vars.slots[idx].replace(v);
         drop(vars);
         discard_unrooted(old);
         if let (Some(d), Some(k)) = (dst, keep) {
@@ -1294,7 +1294,15 @@ impl Vm {
                         }
                         Flow::Next
                     }
-                    Op::IncDec { place, kind, dst } => {
+                    // Also the generic form of the specialised `IncDecCv` /
+                    // `IncDecDimCv` whose fast path did not apply.
+                    Op::IncDec { place, kind, dst }
+                    | Op::IncDecCv {
+                        kind, dst, place, ..
+                    }
+                    | Op::IncDecDimCv {
+                        kind, dst, place, ..
+                    } => {
                         let r = self.place_incdec(*place, *kind)?;
                         self.set_dst(*dst, r);
                         Flow::Next
@@ -1320,7 +1328,16 @@ impl Vm {
                         self.list_fetch_ref(*place, *dst)?;
                         Flow::Next
                     }
-                    Op::Fetch { place, mode, dst } => {
+                    // Also the generic form of the specialised `FetchDimCv` /
+                    // `FetchDimsCv` whose fast path did not apply (the
+                    // `AssignCv` folded into them then runs as its own op).
+                    Op::Fetch { place, mode, dst }
+                    | Op::FetchDimCv {
+                        place, dst, mode, ..
+                    }
+                    | Op::FetchDimsCv {
+                        place, dst, mode, ..
+                    } => {
                         let v = self.place_fetch(*place, *mode)?;
                         self.set_tmp(*dst, v);
                         Flow::Next
@@ -1910,18 +1927,11 @@ impl Vm {
                     }
                     // The specialised ops whose fast path did not apply
                     // (the hot pre-match changed nothing): the generic op
-                    // each one replaced. The op after a `CmpJmp`,
-                    // `BinAssignCv`, `FetchDimCv` or `FetchDimsCv` then runs
-                    // as its own op.
+                    // each one replaced (`IncDec*` and `FetchDim*` share the
+                    // `IncDec` and `Fetch` arms above). The op after a
+                    // `CmpJmp` or `BinAssignCv` then runs as its own op.
                     Op::CmpJmp { op, a, b, dst, .. } | Op::BinAssignCv { op, a, b, dst, .. } => {
                         self.bin_slow(*op, *a, *b, *dst)?;
-                        Flow::Next
-                    }
-                    Op::IncDecCv {
-                        kind, dst, place, ..
-                    } => {
-                        let r = self.place_incdec(*place, *kind)?;
-                        self.set_dst(*dst, r);
                         Flow::Next
                     }
                     Op::AssignOpCv {
@@ -1939,23 +1949,6 @@ impl Vm {
                     Op::AssignOpDimCv { op, val, place, .. } => {
                         let v = self.read(*val)?;
                         self.place_assign_op(*place, *op, v)?;
-                        Flow::Next
-                    }
-                    Op::IncDecDimCv {
-                        kind, dst, place, ..
-                    } => {
-                        let r = self.place_incdec(*place, *kind)?;
-                        self.set_dst(*dst, r);
-                        Flow::Next
-                    }
-                    Op::FetchDimCv {
-                        place, dst, mode, ..
-                    }
-                    | Op::FetchDimsCv {
-                        place, dst, mode, ..
-                    } => {
-                        let v = self.place_fetch(*place, *mode)?;
-                        self.set_tmp(*dst, v);
                         Flow::Next
                     }
                     Op::IssetDimCv {
@@ -2005,14 +1998,15 @@ impl Vm {
 
     /// Whether the safe point after an instruction has work to do
     /// (`EG(vm_interrupt)`): one flag says whether destructors, a
-    /// collection or interrupt handlers wait ([`crate::interrupt`]); the
-    /// delayed `memory_limit` violation is still polled on its own
-    /// (php-memlimit cannot raise the flag). Inline flag tests; the work
-    /// itself is out of line ([`Vm::safe_point_work`]).
+    /// collection, a delayed `memory_limit` violation (php-memlimit raises
+    /// the flag through its pending hook, see [`crate::interrupt`]) or
+    /// interrupt handlers wait. One inline flag test; the work itself is
+    /// out of line ([`Vm::safe_point_work`]), where each source is polled
+    /// on its own.
     #[inline(always)]
     #[allow(clippy::inline_always)] // the per-instruction test of the dispatch loop
     fn safe_point_due() -> bool {
-        crate::interrupt::safe_point_due() || php_memlimit::is_pending()
+        crate::interrupt::safe_point_due()
     }
 
     /// The safe point after an instruction of the current frame that

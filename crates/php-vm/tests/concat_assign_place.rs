@@ -249,10 +249,11 @@ bool(true)
 /// handler), `[]`, string offsets, an element held by reference, an array
 /// right-hand side, and `ArrayAccess`.
 #[test]
+#[allow(clippy::too_many_lines)] // one oracle script and its output
 fn concat_assign_on_array_elements_matches_php() {
     assert_eq!(
         output_of(
-            r#"<?php
+            r#"<?php class AO implements ArrayAccess { public $a; function __construct($a) { $this->a = $a; } function offsetExists($k): bool { return isset($this->a[$k]); } function offsetGet($k): mixed { return $this->a[$k]; } function offsetSet($k, $v): void { $this->a[$k] = $v; } function offsetUnset($k): void { unset($this->a[$k]); } }
 $a = ['k' => 'a', 'n' => ['m' => 'b'], 5 => 'c'];
 for ($i = 0; $i < 3; $i++) { $a['k'] .= $i; $a['n']['m'] .= 'x'; $a[5] .= "-"; }
 $b = $a;
@@ -303,7 +304,7 @@ $u[1.5] = 's'; $u[1.5] .= 't'; var_dump($u);
 $u['x'] .= $undef2;
 var_dump($u['x']);
 restore_error_handler();
-$ao = new ArrayObject(['k' => 'v']);
+$ao = new AO(['k' => 'v']);
 $ao['k'] .= 'w';
 var_dump($ao['k']);
 "#
