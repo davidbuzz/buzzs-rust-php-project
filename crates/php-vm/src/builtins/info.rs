@@ -225,6 +225,20 @@ pub(crate) fn set_current_module(name: Option<&'static str>) {
     });
 }
 
+/// Leaks the registry's entries, for a process that exits next
+/// ([`Vm::discard`]): they name the internal functions, classes and
+/// constants whose tables `discard` leaks too, and releasing the five
+/// thousand names one by one was most of what the thread-local destructors
+/// cost at exit. Readers see an empty registry afterwards.
+pub(crate) fn forget_registry() {
+    // `try_with`: the thread's locals may already be being destroyed.
+    let _ = REGISTRY.try_with(|r| {
+        if let Ok(mut r) = r.try_borrow_mut() {
+            std::mem::forget(std::mem::take(&mut *r));
+        }
+    });
+}
+
 /// Records that `module` registered the function `lc_name` through the
 /// extension API; `is_new` tells whether the name was not in the function
 /// table before (Reflection then attributes it to the extension being
@@ -557,5 +571,26 @@ mod tests {
         assert_eq!(t.origin(b"f"), Some("three"));
         assert_eq!(t.index[b"f".as_slice()].pos, Some(0));
         assert_eq!(t.origin(b"g"), None);
+    }
+
+    #[test]
+    fn a_forgotten_registry_starts_empty_and_still_records() {
+        // The registry is thread-local and each test runs on its own thread.
+        super::set_current_module(Some("ext"));
+        super::note_new_function(&ZStr::from("forgotten_fn"));
+        super::note_new_class(&ZStr::from("forgottenclass"));
+        super::note_constant(&ZStr::from("FORGOTTEN_C"), "ext", true);
+        super::set_current_module(None);
+        assert_eq!(super::function_origin(b"forgotten_fn"), Some("ext"));
+        assert_eq!(super::class_origin(b"forgottenclass"), Some("ext"));
+        assert_eq!(super::constant_origin(b"FORGOTTEN_C"), Some("ext"));
+        super::forget_registry();
+        assert_eq!(super::function_origin(b"forgotten_fn"), None);
+        assert_eq!(super::class_origin(b"forgottenclass"), None);
+        assert_eq!(super::constant_origin(b"FORGOTTEN_C"), None);
+        super::set_current_module(Some("two"));
+        super::note_function(&ZStr::from("again"), "two", true);
+        super::set_current_module(None);
+        assert_eq!(super::function_origin(b"again"), Some("two"));
     }
 }
