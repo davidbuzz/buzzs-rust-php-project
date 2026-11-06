@@ -1983,9 +1983,9 @@ impl Vm {
         };
         if should_pool {
             self.frames[fidx].clear_for_pool(&self.empty_code);
-            if let Some(frame) = self.frames.pop() {
-                self.call_bufs.user_frames.push(frame);
-            }
+            // One copy into the pool (`pop` + `push` would copy the frame
+            // twice, through a temporary).
+            self.call_bufs.user_frames.extend(self.frames.drain(fidx..));
         } else {
             self.frames.truncate(fidx);
         }
