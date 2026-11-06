@@ -4,6 +4,7 @@
 //! Expected outputs are php-src's (`/usr/bin/php -n`).
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::rc::Rc;
 
@@ -31,49 +32,9 @@ fn run(source: &str) -> String {
     output
 }
 
-#[test]
-fn arguments_bound_at_frame_push_match_recv_semantics() {
-    assert_eq!(
-        run(r#"<?php
-function plain($a, $b = 2, $c = [3]) { echo func_num_args(), ":", serialize(func_get_args()), ":", serialize([$a, $b, $c]), "\n"; }
-plain(1); plain(1, 5); plain(1, 5, 6, 7); plain(c: 9, a: 0);
-try { plain(); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
-function gap($a, $b, $c = 3) { echo $a, $b, $c, "\n"; }
-try { gap(1, c: 4); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
-function trace($a, $b) { $a = "changed"; return debug_backtrace()[0]["args"]; }
-echo serialize(trace(1, 2)), "\n";
-function typed(int $a, string $b = "d", ?array $c = null) { var_dump($a, $b, $c); }
-typed("5"); typed(7, 8); typed(1.0, "x", [1]);
-try { typed("x"); } catch (TypeError $e) { echo $e->getMessage(), "\n", serialize($e->getTrace()[0]["args"]), "\n"; }
-try { typed(1, []); } catch (TypeError $e) { echo $e->getMessage(), "\n", serialize($e->getTrace()[0]["args"]), "\n"; }
-function mixed_($a, int $b, $c) { var_dump(func_get_args()); }
-mixed_(1, "2", 3);
-function variadic($a, ...$rest) { var_dump($a, $rest, func_num_args()); }
-variadic(1); variadic(1, 2, 3); variadic(1, x: 2);
-function byref(&$a, $b) { $a .= $b; }
-$s = "a"; byref($s, "b"); byref($s, "c"); echo $s, "\n";
-class S { function __toString(): string { echo "[toString]"; return "str"; } }
-function strparam(string $s, $t) { var_dump($s, $t); }
-strparam(new S, 1);
-function gen($a, $b = 2) { yield $a; yield $b; yield func_num_args(); }
-foreach (gen(10) as $v) echo $v, " "; echo "\n";
-foreach (gen(10, 20) as $v) echo $v, " "; echo "\n";
-$f = function ($x, $y = 1) use (&$s) { $s .= $x . $y; return func_get_args(); };
-for ($i = 0; $i < 3; $i++) { echo serialize($f($i)), $s, "\n"; }
-$g = fn($x) => $x * $i;
-echo $g(2), $g(3), "\n";
-function counter() { static $n = 0; return ++$n; }
-counter(); counter(); echo counter(), "\n";
-$h = function () { static $k = 0; return ++$k; };
-$h(); echo $h(), "\n";
-class P { public function __construct(public $x, public int $y = 3) {} }
-echo serialize(new P(1)), serialize(new P("a", "4")), "\n";
-function many($a, $b) { return $a + $b; }
-$t = 0; for ($i = 0; $i < 5; $i++) { $t += many($i, $i); } echo $t, "\n";
-function rec($n) { return $n ? $n + rec($n - 1) : 0; }
-echo rec(50), "\n";
-"#),
-        r#"1:a:1:{i:0;i:1;}:a:3:{i:0;i:1;i:1;i:2;i:2;a:1:{i:0;i:3;}}
+/// What `arguments_bound_at_frame_push_match_recv_semantics` prints in
+/// php-src (`/usr/bin/php -n`).
+const BOUND_ARGS_EXPECTED: &str = r#"1:a:1:{i:0;i:1;}:a:3:{i:0;i:1;i:1;i:2;i:2;a:1:{i:0;i:3;}}
 2:a:2:{i:0;i:1;i:1;i:5;}:a:3:{i:0;i:1;i:1;i:5;i:2;a:1:{i:0;i:3;}}
 4:a:4:{i:0;i:1;i:1;i:5;i:2;i:6;i:3;i:7;}:a:3:{i:0;i:1;i:1;i:5;i:2;i:6;}
 3:a:3:{i:0;i:0;i:1;i:2;i:2;i:9;}:a:3:{i:0;i:0;i:1;i:2;i:2;i:9;}
@@ -125,8 +86,8 @@ int(1)
 abc
 [toString]string(3) "str"
 int(1)
-10 2 1 
-10 20 2 
+10 2 1
+10 20 2
 a:1:{i:0;i:0;}abc01
 a:1:{i:0;i:1;}abc0111
 a:1:{i:0;i:2;}abc011121
@@ -136,7 +97,51 @@ a:1:{i:0;i:2;}abc011121
 O:1:"P":2:{s:1:"x";i:1;s:1:"y";i:3;}O:1:"P":2:{s:1:"x";s:1:"a";s:1:"y";i:4;}
 20
 1275
-"#
+"#;
+
+#[test]
+fn arguments_bound_at_frame_push_match_recv_semantics() {
+    assert_eq!(
+        run(r#"<?php
+function plain($a, $b = 2, $c = [3]) { echo func_num_args(), ":", serialize(func_get_args()), ":", serialize([$a, $b, $c]), "\n"; }
+plain(1); plain(1, 5); plain(1, 5, 6, 7); plain(c: 9, a: 0);
+try { plain(); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+function gap($a, $b, $c = 3) { echo $a, $b, $c, "\n"; }
+try { gap(1, c: 4); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+function trace($a, $b) { $a = "changed"; return debug_backtrace()[0]["args"]; }
+echo serialize(trace(1, 2)), "\n";
+function typed(int $a, string $b = "d", ?array $c = null) { var_dump($a, $b, $c); }
+typed("5"); typed(7, 8); typed(1.0, "x", [1]);
+try { typed("x"); } catch (TypeError $e) { echo $e->getMessage(), "\n", serialize($e->getTrace()[0]["args"]), "\n"; }
+try { typed(1, []); } catch (TypeError $e) { echo $e->getMessage(), "\n", serialize($e->getTrace()[0]["args"]), "\n"; }
+function mixed_($a, int $b, $c) { var_dump(func_get_args()); }
+mixed_(1, "2", 3);
+function variadic($a, ...$rest) { var_dump($a, $rest, func_num_args()); }
+variadic(1); variadic(1, 2, 3); variadic(1, x: 2);
+function byref(&$a, $b) { $a .= $b; }
+$s = "a"; byref($s, "b"); byref($s, "c"); echo $s, "\n";
+class S { function __toString(): string { echo "[toString]"; return "str"; } }
+function strparam(string $s, $t) { var_dump($s, $t); }
+strparam(new S, 1);
+function gen($a, $b = 2) { yield $a; yield $b; yield func_num_args(); }
+foreach (gen(10) as $v) echo $v, " "; echo "\n";
+foreach (gen(10, 20) as $v) echo $v, " "; echo "\n";
+$f = function ($x, $y = 1) use (&$s) { $s .= $x . $y; return func_get_args(); };
+for ($i = 0; $i < 3; $i++) { echo serialize($f($i)), $s, "\n"; }
+$g = fn($x) => $x * $i;
+echo $g(2), $g(3), "\n";
+function counter() { static $n = 0; return ++$n; }
+counter(); counter(); echo counter(), "\n";
+$h = function () { static $k = 0; return ++$k; };
+$h(); echo $h(), "\n";
+class P { public function __construct(public $x, public int $y = 3) {} }
+echo serialize(new P(1)), serialize(new P("a", "4")), "\n";
+function many($a, $b) { return $a + $b; }
+$t = 0; for ($i = 0; $i < 5; $i++) { $t += many($i, $i); } echo $t, "\n";
+function rec($n) { return $n ? $n + rec($n - 1) : 0; }
+echo rec(50), "\n";
+"#),
+        BOUND_ARGS_EXPECTED
     );
 }
 
@@ -173,7 +178,7 @@ $m = "F"; echo $b->$m(), $b->{"f"}(), "\n";
 class LongNames { function thisIsAVeryLongMethodNameThatExceedsTheCacheLimitForSure() { return "long"; } }
 $l = new LongNames; echo $l->thisIsAVeryLongMethodNameThatExceedsTheCacheLimitForSure(), $l->THISISAVERYLONGMETHODNAMETHATEXCEEDSTHECACHELIMITFORSURE(), "\n";
 "#),
-        r#"A::f B::f A::f A::f C::f
+        r"A::f B::f A::f A::f C::f
 A::__call(f) A::__call(p) A::p B::F2 B::F2 B::F2 static
 Call to private method C::priv() from global scope
 A::f B::f A::f A::f C::f
@@ -186,7 +191,7 @@ X1X2X1X2
 A::f B::f A::f
 B::fB::f
 longlong
-"#
+"
     );
 }
 
@@ -212,13 +217,14 @@ fn method_cache_evictions_keep_lookups_exact() {
     // More (class, scope, name) triples than the cache holds: every lookup
     // must still resolve as `zend_std_get_method` would, including private
     // methods reached from their own scope and refused from another one.
-    let classes: String = (0..100)
-        .map(|i| {
-            format!(
-                "class K{i} {{ function m() {{ return {i}; }} private function p() {{ return -{i}; }} function q($o) {{ return $o->p(); }} }}\n"
-            )
-        })
-        .collect();
+    let classes = (0..100).fold(String::new(), |mut out, i| {
+        writeln!(
+            out,
+            "class K{i} {{ function m() {{ return {i}; }} private function p() {{ return -{i}; }} function q($o) {{ return $o->p(); }} }}"
+        )
+        .expect("String write");
+        out
+    });
     let src = format!(
         r#"<?php
 {classes}$objs = [];

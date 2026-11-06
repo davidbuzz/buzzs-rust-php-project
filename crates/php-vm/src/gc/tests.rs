@@ -330,7 +330,7 @@ fn released_array_elements_are_roots_and_fill_the_buffer() {
     assert_eq!(out, "int(1)\nC\ncaught c\n");
 }
 
-/// destructors_014: the compiled variables released while an exception
+/// `destructors_014`: the compiled variables released while an exception
 /// unwinds a fiber's frame fill the root buffer; the collection runs before
 /// a handler is found, and the destructor's exception replaces the one in
 /// flight, with it as its previous one.
@@ -349,7 +349,7 @@ fn collection_while_unwinding_chains_the_exception_in_flight() {
     assert_eq!(out, "C\nc f\n");
 }
 
-/// destructors_015: a fiber releases its callable (`zend_fiber_release_callable`)
+/// `destructors_015`: a fiber releases its callable (`zend_fiber_release_callable`)
 /// inside the fiber once its function returned; values released with a
 /// closure's bound variables can fill the root buffer, and the exception
 /// of the collection's destructor is thrown by the fiber.
@@ -379,7 +379,7 @@ fn binding_references_buffers_no_roots() {
     assert_eq!(out, "int(0)\n");
 }
 
-/// gc_047: a run finds the cycle alive through the reference the
+/// `gc_047`: a run finds the cycle alive through the reference the
 /// by-reference `foreach` still holds and drops the root; the loop
 /// variable is rooted again afterwards (`zend_gc_check_root_tmpvars`), so
 /// the cycles are collected once the loop releases it without a GC check.
@@ -392,7 +392,7 @@ fn live_loop_reference_is_rooted_again_after_a_run() {
     assert_eq!(out, "int(0)\nint(1)\nint(2)\n");
 }
 
-/// gc_023: the automatic run collects the roots buffered when the
+/// `gc_023`: the automatic run collects the roots buffered when the
 /// threshold was reached, not the root that crossed it
 /// (`gc_possible_root_when_full`).
 #[test]
@@ -422,7 +422,7 @@ const CYCLE: &str =
     "class C { public $self; function __construct(public $id) { $this->self = $this; }\n\
      function __destruct() { echo $this->id; } }\n";
 
-/// destructors_005: a live root in the first slot leaves the buffer when
+/// `destructors_005`: a live root in the first slot leaves the buffer when
 /// the collection finds it black, and `gc_compact` moves the last root
 /// into the hole: the garbage is destructed in the order 2, 0, 1.
 #[test]

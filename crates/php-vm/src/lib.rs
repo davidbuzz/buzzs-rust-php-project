@@ -133,8 +133,28 @@ impl Vm {
         // A new executor (`init_executor()`): a fatal error or the shutdown
         // of an earlier request on this thread disabled destructors.
         object::set_destructors_enabled(true);
+        let mut vm = Vm::with_ini(ini, stdout);
+        for n in ["error_reporting", "precision", "serialize_precision"] {
+            vm.sync_ini(n);
+        }
+        // A recorded memory_limit violation raises the safe-point flag.
+        crate::interrupt::install_memory_limit_hook();
+        vm.startup_diagnostics = sink;
+        // `zend_interned_strings_init()`: the empty and one-character
+        // strings exist before any script runs, so their first use (e.g.
+        // `(string) 0`) does not show in `memory_get_usage()` deltas.
+        let _ = (ZStr::empty(), ZStr::from_byte(0));
+        // `zend_objects_store_init()`: likewise for the object store.
+        object::prewarm_store();
+        builtins::register_all(&mut vm);
+        vm
+    }
+
+    /// The executor state before start-up: every field at its initial
+    /// value, with the ini registry and the output sink installed.
+    fn with_ini(ini: IniRegistry, stdout: Box<dyn Write>) -> Vm {
         let empty_code = Rc::new(opcode::OpArray::default());
-        let mut vm = Vm {
+        Vm {
             frames: Vec::new(),
             functions: HashMap::new(),
             classes: HashMap::new(),
@@ -230,21 +250,7 @@ impl Vm {
             prop_guards: HashSet::new(),
             observer: crate::observer::ObserverState::default(),
             user_opcode_handlers: Vec::new(),
-        };
-        for n in ["error_reporting", "precision", "serialize_precision"] {
-            vm.sync_ini(n);
         }
-        // A recorded memory_limit violation raises the safe-point flag.
-        crate::interrupt::install_memory_limit_hook();
-        vm.startup_diagnostics = sink;
-        // `zend_interned_strings_init()`: the empty and one-character
-        // strings exist before any script runs, so their first use (e.g.
-        // `(string) 0`) does not show in `memory_get_usage()` deltas.
-        let _ = (ZStr::empty(), ZStr::from_byte(0));
-        // `zend_objects_store_init()`: likewise for the object store.
-        object::prewarm_store();
-        builtins::register_all(&mut vm);
-        vm
     }
 
     /// Re-reads cached ini values after a change.

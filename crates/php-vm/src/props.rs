@@ -2092,18 +2092,28 @@ impl Vm {
                 &format!("Cannot instantiate abstract class {}", cls.name),
             ));
         }
-        if cls.lc_name.as_bytes() == b"generator" {
-            // `zend_generator_get_constructor`.
-            return Err(self.make_throw(
-                "Error",
-                "The \"Generator\" class is reserved for internal use and cannot be manually instantiated",
-            ));
-        }
-        if cls.flags & cflags::NO_NEW != 0 {
-            return Err(self.make_throw(
-                "Error",
-                &format!("Instantiation of class {} is not allowed", cls.name),
-            ));
+        if cls.lc_name.as_bytes() == b"generator" || cls.flags & cflags::NO_NEW != 0 {
+            // `object_init_ex` succeeds for these classes (they have a
+            // `create_object`); it is their `get_constructor`
+            // (`zend_generator_get_constructor`, `zend_closure_get_constructor`)
+            // that throws, after `ZEND_NEW` created the object. So the
+            // rejected object takes a handle, the Error object the next one,
+            // and freeing the rejected object afterwards puts its handle at
+            // the head of the free list (the next `new` reuses it).
+            let rejected = object::new_object(cls.clone(), Vec::new());
+            let err = if cls.lc_name.as_bytes() == b"generator" {
+                self.make_throw(
+                    "Error",
+                    "The \"Generator\" class is reserved for internal use and cannot be manually instantiated",
+                )
+            } else {
+                self.make_throw(
+                    "Error",
+                    &format!("Instantiation of class {} is not allowed", cls.name),
+                )
+            };
+            object::discard_rejected(rejected);
+            return Err(err);
         }
         self.instantiate_unchecked(cls)
     }
