@@ -136,7 +136,11 @@ fn snapshot(o: &Obj) -> Snapshot {
 
 fn revert(o: &Obj, s: Snapshot) {
     let d = object::data(o);
-    *d.slots.borrow_mut() = s.slots;
+    // The slots are the object's own (their number is fixed): the snapshot
+    // goes back in place, releasing the values it replaces.
+    for (slot, v) in d.slots.borrow_mut().iter_mut().zip(s.slots) {
+        *slot = v;
+    }
     *d.dynamic.borrow_mut() = s.dynamic;
     let mut separated = false;
     with_info(o, |i| {

@@ -243,7 +243,7 @@ impl RootBuffer {
     /// place in the buffer until the garbage is freed.
     fn push_garbage(&mut self) -> usize {
         let i = self.fetch();
-        let empty: Weak<dyn PhpObject> = Weak::<ObjectData>::new();
+        let empty: Weak<dyn PhpObject> = Weak::<crate::object::ObjectBlock<0>>::new();
         self.slots[i] = Some(empty);
         self.num_roots += 1;
         i

@@ -1,11 +1,16 @@
 //! Objects (`zend_object`): property slots, dynamic properties, handles and
 //! destructor scheduling.
 //!
-//! An object is one allocation: the [`Obj`] cell of `php-runtime` (counts,
-//! vtable) with [`ObjectData`] as its payload, like php-src's `zend_object`
-//! behind a `zend_object *`. So [`data`] is a constant offset, every `Obj`
-//! handle is one of php-src's `GC_REFCOUNT` references, and an object keeps
-//! its address, handle and identity for its whole life, destructor included.
+//! An object is one allocation, like php-src's `zend_object` with its
+//! `properties_table` (ref: Zend/zend_objects.c `zend_objects_new`): the
+//! [`Obj`] cell of `php-runtime` (counts, vtable), the fixed part
+//! [`ObjectData`], then the declared property slots inline ([`Slots`]; the
+//! payload type is an `ObjectBlock<N>` with room for `N` slots, `N` the
+//! class's slot count rounded up to a size class). Every payload shares one
+//! header type ([`Obj::new_in_family`]), so [`data`] is a type check plus a
+//! constant offset; every `Obj` handle is one of php-src's `GC_REFCOUNT`
+//! references, and an object keeps its address, handle and identity for its
+//! whole life, destructor included.
 //!
 //! Destructor timing (`zend_objects_store_del`): when the last handle of an
 //! object is dropped, `Obj::drop` calls [`PhpObject::release_last`] before
@@ -13,7 +18,7 @@
 //! that handle onto the pending queue and so stays alive at count 1
 //! (php-src's `GC_SET_REFCOUNT(obj, 1)` around `dtor_obj`) until the
 //! executor runs the queue at its next safe point and drops the handle
-//! again, which frees it: [`ObjectData::drop`] is `zend_object_std_dtor`
+//! again, which frees it: the payload's `Drop` is `zend_object_std_dtor`
 //! plus the tail of `zend_objects_store_del` (`GC_REMOVE_FROM_BUFFER`, the
 //! store slot invalidated, the handle back on the free list).
 //!
@@ -26,9 +31,13 @@
 use crate::class::Class;
 use php_runtime::{ArrayKey, HashTable, Obj, ObjWeak, PhpObject, Value, ZStr};
 use std::any::Any;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
 use std::fmt;
+use std::marker::PhantomData;
+use std::mem::MaybeUninit;
+use std::ops::{Deref, DerefMut};
+use std::ptr::{self, NonNull};
 use std::rc::Rc;
 
 /// Object flags.
@@ -56,14 +65,16 @@ pub mod oflags {
     pub const STALE_PROPS: u32 = 1 << 7;
 }
 
-/// The state of a PHP object.
+/// The state of a PHP object: the fixed part of its allocation (the
+/// declared property slots follow it, see [`Slots`]).
 pub struct ObjectData {
     /// Handle number (`spl_object_id`).
     pub handle: u32,
     /// The class.
     pub class: Rc<Class>,
-    /// Declared property slots (`None` = undefined/uninitialized).
-    pub slots: RefCell<Vec<Option<Value>>>,
+    /// Declared property slots (`None` = undefined/uninitialized), stored
+    /// inline after this struct (`zend_object.properties_table`).
+    pub slots: Slots,
     /// Dynamic properties (`zend_object.properties`). Boxed: most objects
     /// have none, and an inline table added ~90 bytes to every object.
     pub dynamic: RefCell<Option<Box<HashTable>>>,
@@ -187,6 +198,290 @@ impl fmt::Debug for ObjectData {
     }
 }
 
+/// The declared property slots of an object (`zend_object.properties_table`):
+/// a `RefCell`-like cell over a slice stored inline after the object's
+/// fixed part, in the object's own allocation (a class with more than
+/// `MAX_INLINE` (64) slots keeps them in a buffer of their own). The slot
+/// count is fixed when the object is created.
+///
+/// [`Slots::borrow`] and [`Slots::borrow_mut`] (and their `try_` forms)
+/// work as `RefCell`'s, with guards that dereference to `[Option<Value>]`.
+pub struct Slots {
+    /// `RefCell`'s borrow state: 0 unused, `n > 0` shared borrows, -1 the
+    /// exclusive one.
+    borrow: Cell<isize>,
+    /// The first slot. Written once, right after the allocation (the
+    /// inline storage's address is known only then); the pointer carries
+    /// the provenance of the whole allocation (or of the separate buffer),
+    /// which a reference to the fixed part does not.
+    first: Cell<NonNull<Option<Value>>>,
+    /// The slot count.
+    len: usize,
+}
+
+impl Slots {
+    /// `len` slots at `first` (dangling until the storage is known).
+    fn new(first: NonNull<Option<Value>>, len: usize) -> Self {
+        Slots {
+            borrow: Cell::new(0),
+            first: Cell::new(first),
+            len,
+        }
+    }
+
+    /// The number of declared slots.
+    #[inline]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether the object has no declared slots.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    fn slice(&self) -> NonNull<[Option<Value>]> {
+        NonNull::slice_from_raw_parts(self.first.get(), self.len)
+    }
+
+    /// Borrows the slots (`RefCell::borrow`).
+    ///
+    /// # Panics
+    /// Panics if they are mutably borrowed.
+    #[inline]
+    #[track_caller]
+    pub fn borrow(&self) -> SlotsRef<'_> {
+        self.try_borrow().expect("already mutably borrowed")
+    }
+
+    /// Borrows the slots unless they are mutably borrowed
+    /// (`RefCell::try_borrow`).
+    ///
+    /// # Errors
+    /// [`SlotsBorrowError`] while the slots are mutably borrowed.
+    #[inline]
+    pub fn try_borrow(&self) -> Result<SlotsRef<'_>, SlotsBorrowError> {
+        let b = self.borrow.get();
+        // Negative: mutably borrowed; `isize::MAX`: the count is full.
+        if b < 0 || b == isize::MAX {
+            return Err(SlotsBorrowError);
+        }
+        self.borrow.set(b + 1);
+        Ok(SlotsRef {
+            slots: self.slice(),
+            borrow: &self.borrow,
+        })
+    }
+
+    /// Mutably borrows the slots (`RefCell::borrow_mut`).
+    ///
+    /// # Panics
+    /// Panics if they are borrowed.
+    #[inline]
+    #[track_caller]
+    pub fn borrow_mut(&self) -> SlotsRefMut<'_> {
+        self.try_borrow_mut().expect("already borrowed")
+    }
+
+    /// Mutably borrows the slots unless they are borrowed
+    /// (`RefCell::try_borrow_mut`).
+    ///
+    /// # Errors
+    /// [`SlotsBorrowError`] while the slots are borrowed.
+    #[inline]
+    pub fn try_borrow_mut(&self) -> Result<SlotsRefMut<'_>, SlotsBorrowError> {
+        if self.borrow.get() != 0 {
+            return Err(SlotsBorrowError);
+        }
+        self.borrow.set(-1);
+        Ok(SlotsRefMut {
+            slots: self.slice(),
+            borrow: &self.borrow,
+            _marker: PhantomData,
+        })
+    }
+}
+
+impl fmt::Debug for Slots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.try_borrow() {
+            Ok(s) => fmt::Debug::fmt(&*s, f),
+            Err(_) => write!(f, "Slots(<borrowed>, {})", self.len),
+        }
+    }
+}
+
+/// The slots were borrowed in a conflicting way ([`Slots::try_borrow`],
+/// [`Slots::try_borrow_mut`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotsBorrowError;
+
+impl fmt::Display for SlotsBorrowError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("object property slots already borrowed")
+    }
+}
+
+impl std::error::Error for SlotsBorrowError {}
+
+/// A shared borrow of an object's slots ([`Slots::borrow`]).
+pub struct SlotsRef<'a> {
+    slots: NonNull<[Option<Value>]>,
+    borrow: &'a Cell<isize>,
+}
+
+impl SlotsRef<'_> {
+    /// The slot values as a `Vec`, as `.clone()` of a borrow of the former
+    /// `RefCell<Vec<_>>` slots gave it (a copy to work on once the borrow
+    /// is released; the guard itself is not duplicated).
+    // Named for the callers written against `Ref<Vec<_>>::clone`; a guard
+    // implementing `Clone` would hold the borrow instead.
+    #[allow(clippy::should_implement_trait)]
+    #[must_use]
+    pub fn clone(&self) -> Vec<Option<Value>> {
+        self.to_vec()
+    }
+}
+
+impl Deref for SlotsRef<'_> {
+    type Target = [Option<Value>];
+
+    #[inline]
+    fn deref(&self) -> &[Option<Value>] {
+        // SAFETY: `slots` is the object's initialized slot storage, which
+        // lives as long as the object, kept alive by the `'a` borrow of its
+        // data; the shared borrow counted in `borrow` keeps the only writer
+        // (`SlotsRefMut`) away until this guard is dropped.
+        unsafe { self.slots.as_ref() }
+    }
+}
+
+impl Drop for SlotsRef<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.borrow.set(self.borrow.get() - 1);
+    }
+}
+
+impl fmt::Debug for SlotsRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+/// An exclusive borrow of an object's slots ([`Slots::borrow_mut`]).
+pub struct SlotsRefMut<'a> {
+    slots: NonNull<[Option<Value>]>,
+    borrow: &'a Cell<isize>,
+    _marker: PhantomData<&'a mut [Option<Value>]>,
+}
+
+impl Deref for SlotsRefMut<'_> {
+    type Target = [Option<Value>];
+
+    #[inline]
+    fn deref(&self) -> &[Option<Value>] {
+        // SAFETY: as for `SlotsRef`; the exclusive borrow (`borrow` is -1)
+        // keeps every other guard away until this one is dropped.
+        unsafe { self.slots.as_ref() }
+    }
+}
+
+impl DerefMut for SlotsRefMut<'_> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [Option<Value>] {
+        // SAFETY: as for `deref`; `&mut self` makes the reference unique.
+        unsafe { self.slots.as_mut() }
+    }
+}
+
+impl Drop for SlotsRefMut<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.borrow.set(self.borrow.get() + 1);
+    }
+}
+
+impl fmt::Debug for SlotsRefMut<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+/// The largest inline slot storage: a class with more declared slots keeps
+/// them in a buffer of their own.
+const MAX_INLINE: usize = 64;
+
+/// The payload of an object's allocation: the fixed part, then room for
+/// `N` declared property slots, of which the first `data.slots.len()` are
+/// initialized (`zend_object` and its `properties_table`). A block without
+/// inline room (`N == 0`) keeps the slots of a class with more than
+/// [`MAX_INLINE`] in a separate buffer.
+#[repr(C)]
+pub(crate) struct ObjectBlock<const N: usize> {
+    data: ObjectData,
+    /// Written through the [`Slots`] pointer while shared references to the
+    /// payload exist, hence the `UnsafeCell`.
+    inline: UnsafeCell<[MaybeUninit<Option<Value>>; N]>,
+}
+
+/// Every object payload: [`data`] finds its [`ObjectData`] through the
+/// family header ([`Obj::new_in_family`]).
+impl<const N: usize> PhpObject for ObjectBlock<N> {
+    #[inline]
+    fn handle(&self) -> u32 {
+        self.data.handle
+    }
+    fn class_name(&self) -> ZStr {
+        display_name(&self.data.class.name)
+    }
+    #[inline]
+    fn as_any(&self) -> &dyn Any {
+        &self.data
+    }
+    #[inline]
+    fn release_last(&self, this: &Obj) {
+        self.data.release_last(this);
+    }
+}
+
+/// The free (see [`free_object`]), once the last handle is gone for good.
+impl<const N: usize> Drop for ObjectBlock<N> {
+    fn drop(&mut self) {
+        let cell = Obj::addr_of_payload::<Self>(self);
+        let len = self.data.slots.len;
+        if len > N {
+            // SAFETY: slots that do not fit inline (a block of `N == 0` for
+            // more than `MAX_INLINE`) are the `len` of the buffer
+            // `new_block` made with `Box::into_raw` (a separate
+            // allocation, not under the drop glue's exclusive borrow of the
+            // cell); nothing refers to it once the object is being freed.
+            let mut buf: Box<[Option<Value>]> = unsafe {
+                Box::from_raw(ptr::slice_from_raw_parts_mut(
+                    self.data.slots.first.get().as_ptr(),
+                    len,
+                ))
+            };
+            free_object(&mut self.data, &mut buf, cell);
+        } else {
+            let inline = &mut self.inline.get_mut()[..len];
+            // SAFETY: `new_block` initialized the first `len` entries (they
+            // are only ever replaced by other values since). They are
+            // reached through this drop's own exclusive reference, not the
+            // `Slots` pointer, which may not be used while the drop glue
+            // holds the cell (`Obj::payload_ptr`).
+            let slots: &mut [Option<Value>] = unsafe {
+                std::slice::from_raw_parts_mut(inline.as_mut_ptr().cast::<Option<Value>>(), len)
+            };
+            free_object(&mut self.data, slots, cell);
+        }
+    }
+}
+
 thread_local! {
     static STORE: RefCell<ObjectStore> = RefCell::new(ObjectStore::default());
     static PENDING: RefCell<Vec<Obj>> = const { RefCell::new(Vec::new()) };
@@ -298,21 +593,10 @@ pub(crate) fn prewarm_store() {
     STORE.with(|_| {});
 }
 
-/// The object is the payload of its [`Obj`] cell.
-impl PhpObject for ObjectData {
-    #[inline]
-    fn handle(&self) -> u32 {
-        self.handle
-    }
-    fn class_name(&self) -> ZStr {
-        display_name(&self.class.name)
-    }
-    #[inline]
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    /// `zend_objects_store_del` on `GC_REFCOUNT == 0`: an object whose
-    /// `__destruct` has not run keeps itself alive for it.
+impl ObjectData {
+    /// `zend_objects_store_del` on `GC_REFCOUNT == 0` (the payload's
+    /// [`PhpObject::release_last`]): an object whose `__destruct` has not
+    /// run keeps itself alive for it.
     #[inline]
     fn release_last(&self, this: &Obj) {
         if self.flags.get() & oflags::DESTRUCTED != 0 || !self.class.has_destructor() {
@@ -350,53 +634,58 @@ fn queue_destructor(d: &ObjectData, this: &Obj) {
 
 /// The free: `zend_object_std_dtor` and the tail of
 /// `zend_objects_store_del`, once the last handle is gone for good (no
-/// destructor left to run). Only `self` and weak counts are touched here:
-/// the cell is under the drop glue's exclusive borrow.
-impl Drop for ObjectData {
-    fn drop(&mut self) {
-        let handle = self.handle;
-        let flags = self.flags.get();
-        if flags & oflags::GC_BUFFERED != 0 {
-            // `GC_REMOVE_FROM_BUFFER`.
-            crate::gc::forget_root(Obj::addr_of_payload::<ObjectData>(self));
-        }
-        if self.unset_bits.get() & UNSET_OVERFLOW_BIT != 0 {
-            forget_unset_overflow(handle);
-        }
-        let seq = PENDING_SEQ.try_with(Cell::get).unwrap_or(0);
-        // `zend_weakrefs_notify`: purge WeakMap entries before the handle
-        // can be reused.
-        crate::weakref::object_freed(handle);
-        // `zend_object_std_dtor` releases the properties (and objects they
-        // hold) before `zend_objects_store_del` puts this handle on the
-        // free list, so this handle is the next one reused.
-        let slots = std::mem::take(self.slots.get_mut());
-        let dynamic = self.dynamic.get_mut().take();
-        let internal = self.internal.get_mut().take();
-        let stale = if flags & oflags::STALE_PROPS == 0 {
-            None
-        } else {
-            crate::lazy::take_stale_slots(handle)
-        };
-        drop((slots, dynamic, internal, stale));
-        // A destructor queued meanwhile runs (and frees its object) before
-        // this handle is reusable, as it would have inside php-src's
-        // `zend_object_std_dtor`.
-        let anchor = if PENDING_SEQ.try_with(Cell::get).unwrap_or(0) == seq {
-            None
-        } else {
-            last_pending_handle()
-        };
-        // `try_with`: the store may already be gone during thread teardown.
-        let _ = STORE.try_with(|s| {
-            if let Ok(mut s) = s.try_borrow_mut() {
-                if let Some(slot) = s.objects.get_mut(handle as usize - 1) {
-                    *slot = None;
-                }
-                s.release_handle(handle, anchor);
-            }
-        });
+/// destructor left to run), from the payload's `Drop`. `slots` are the
+/// object's initialized slots and `cell` its [`Obj::addr`]. Only `d`,
+/// `slots` (reached through the payload's own exclusive reference) and weak
+/// counts are touched: the cell is under the drop glue's exclusive borrow.
+fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
+    let handle = d.handle;
+    let flags = d.flags.get();
+    if flags & oflags::GC_BUFFERED != 0 {
+        // `GC_REMOVE_FROM_BUFFER`.
+        crate::gc::forget_root(cell);
     }
+    if d.unset_bits.get() & UNSET_OVERFLOW_BIT != 0 {
+        forget_unset_overflow(handle);
+    }
+    let seq = PENDING_SEQ.try_with(Cell::get).unwrap_or(0);
+    // `zend_weakrefs_notify`: purge WeakMap entries before the handle can
+    // be reused.
+    crate::weakref::object_freed(handle);
+    // `zend_object_std_dtor` releases the properties (and objects they
+    // hold) before `zend_objects_store_del` puts this handle on the free
+    // list, so this handle is the next one reused: the declared slots in
+    // order, then the dynamic table, the native state and the stale copies
+    // of a lazy object's slots, everything taken out before anything is
+    // released.
+    let dynamic = d.dynamic.get_mut().take();
+    let internal = d.internal.get_mut().take();
+    let stale = if flags & oflags::STALE_PROPS == 0 {
+        None
+    } else {
+        crate::lazy::take_stale_slots(handle)
+    };
+    for slot in slots {
+        drop(slot.take());
+    }
+    drop((dynamic, internal, stale));
+    // A destructor queued meanwhile runs (and frees its object) before
+    // this handle is reusable, as it would have inside php-src's
+    // `zend_object_std_dtor`.
+    let anchor = if PENDING_SEQ.try_with(Cell::get).unwrap_or(0) == seq {
+        None
+    } else {
+        last_pending_handle()
+    };
+    // `try_with`: the store may already be gone during thread teardown.
+    let _ = STORE.try_with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut() {
+            if let Some(slot) = s.objects.get_mut(handle as usize - 1) {
+                *slot = None;
+            }
+            s.release_handle(handle, anchor);
+        }
+    });
 }
 
 /// `object_properties_init`: the slots of a new object, copied from its
@@ -411,21 +700,139 @@ pub fn copy_slots(defaults: &[Option<Value>]) -> Vec<Option<Value>> {
 
 /// Allocates a handle and creates an object of `class` with the given slot
 /// values (`zend_objects_new` + `zend_objects_store_put`): one allocation,
-/// the cell with the object data inside.
+/// the slots moved in after the object's fixed part.
 pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {
+    create(class, Fill::Values(slots))
+}
+
+/// [`new_object`] with the slots copied straight from `defaults`
+/// (`object_properties_init` from `ce->default_properties_table`), with no
+/// vector in between: `new` of a class whose defaults are evaluated.
+pub fn new_object_from_defaults(class: Rc<Class>, defaults: &[Option<Value>]) -> Obj {
+    create(class, Fill::Defaults(defaults))
+}
+
+/// Where the slot values of a new object come from.
+enum Fill<'a> {
+    /// Moved out of a vector.
+    Values(Vec<Option<Value>>),
+    /// Copies of the class's default properties.
+    Defaults(&'a [Option<Value>]),
+}
+
+impl Fill<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Fill::Values(values) => values.len(),
+            Fill::Defaults(values) => values.len(),
+        }
+    }
+
+    /// Writes the values into `dst`, which has room for exactly
+    /// [`Fill::len`] of them.
+    fn write(self, dst: &mut [MaybeUninit<Option<Value>>]) {
+        debug_assert_eq!(dst.len(), self.len());
+        match self {
+            Fill::Values(values) => {
+                for (d, v) in dst.iter_mut().zip(values) {
+                    *d = MaybeUninit::new(v);
+                }
+            }
+            Fill::Defaults(values) => {
+                for (d, v) in dst.iter_mut().zip(values) {
+                    *d = MaybeUninit::new(v.clone());
+                }
+            }
+        }
+    }
+
+    /// The values in a buffer of their own.
+    fn into_boxed(self) -> Box<[Option<Value>]> {
+        match self {
+            Fill::Values(values) => values.into_boxed_slice(),
+            Fill::Defaults(values) => values.into(),
+        }
+    }
+}
+
+/// Creates the object in the smallest block that holds its slots (the size
+/// classes waste at most a fifth of the room above eight slots).
+#[inline]
+fn create(class: Rc<Class>, fill: Fill<'_>) -> Obj {
+    match fill.len() {
+        1 => new_block::<1>(class, fill),
+        2 => new_block::<2>(class, fill),
+        3 => new_block::<3>(class, fill),
+        4 => new_block::<4>(class, fill),
+        5 => new_block::<5>(class, fill),
+        6 => new_block::<6>(class, fill),
+        7 => new_block::<7>(class, fill),
+        8 => new_block::<8>(class, fill),
+        9..=10 => new_block::<10>(class, fill),
+        11..=12 => new_block::<12>(class, fill),
+        13..=16 => new_block::<16>(class, fill),
+        17..=20 => new_block::<20>(class, fill),
+        21..=24 => new_block::<24>(class, fill),
+        25..=32 => new_block::<32>(class, fill),
+        33..=40 => new_block::<40>(class, fill),
+        41..=48 => new_block::<48>(class, fill),
+        49..=MAX_INLINE => new_block::<MAX_INLINE>(class, fill),
+        // No slots, or more than fit inline (a buffer of their own).
+        _ => new_block::<0>(class, fill),
+    }
+}
+
+/// [`create`] in a block with room for `N` slots: the values are written
+/// into the block before it is allocated (so no object ever has
+/// uninitialized slots), then the slots are pointed at their place inside
+/// the allocation.
+#[inline(never)]
+fn new_block<const N: usize>(class: Rc<Class>, fill: Fill<'_>) -> Obj {
+    let len = fill.len();
+    let mut inline = [const { MaybeUninit::<Option<Value>>::uninit() }; N];
+    let buf = if len <= N {
+        fill.write(&mut inline[..len]);
+        None
+    } else {
+        let raw = Box::into_raw(fill.into_boxed());
+        // SAFETY: `Box::into_raw` never returns null.
+        Some(unsafe { NonNull::new_unchecked(raw.cast::<Option<Value>>()) })
+    };
     STORE.with(|s| {
         let mut s = s.borrow_mut();
         let handle = s.take_handle();
-        let o = Obj::new(ObjectData {
-            handle,
-            class,
-            slots: RefCell::new(slots),
-            dynamic: RefCell::new(None),
-            internal: RefCell::new(None),
-            flags: Cell::new(0),
-            unset_bits: Cell::new(0),
-            lazy: RefCell::new(None),
-        });
+        let block = ObjectBlock {
+            data: ObjectData {
+                handle,
+                class,
+                // Inline slots get their address once the block has one.
+                slots: Slots::new(buf.unwrap_or(NonNull::dangling()), len),
+                dynamic: RefCell::new(None),
+                internal: RefCell::new(None),
+                flags: Cell::new(0),
+                unset_bits: Cell::new(0),
+                lazy: RefCell::new(None),
+            },
+            inline: UnsafeCell::new(inline),
+        };
+        // SAFETY: `ObjectBlock` is `repr(C)` with its `ObjectData` first,
+        // and aligned like it (the inline slots are 8-aligned values).
+        let o = unsafe { Obj::new_in_family::<ObjectBlock<N>, ObjectData>(block) };
+        if buf.is_none() && len > 0 {
+            let p = o
+                .payload_ptr::<ObjectData>()
+                .expect("an object block is in the ObjectData family");
+            // SAFETY: the payload is this `ObjectBlock<N>` and `p` keeps the
+            // provenance of the whole allocation, so the projection to the
+            // inline storage stays in bounds (`addr_of_mut!` makes no
+            // reference; `UnsafeCell` is transparent); the fixed part is
+            // initialized, and only shared references to it exist.
+            unsafe {
+                let block = p.as_ptr().cast::<ObjectBlock<N>>();
+                let first = ptr::addr_of_mut!((*block).inline).cast::<Option<Value>>();
+                p.as_ref().slots.first.set(NonNull::new_unchecked(first));
+            }
+        }
         s.objects[handle as usize - 1] = Some(o.downgrade());
         o
     })
@@ -931,12 +1338,151 @@ mod tests {
     }
 
     /// One allocation per object: php-runtime's `Rc` counts (16 B), the
-    /// `Obj` header (vtable `Rc` + `TypeId`, 32 B) and this payload; the
-    /// declared slots still live in their `Vec` buffer.
+    /// `Obj` header (vtable `Rc` + `TypeId`, 32 B), this fixed part, then
+    /// 16 B per declared slot (a zval's size).
     #[test]
     fn object_data_is_a_compact_cell_payload() {
-        assert!(std::mem::size_of::<ObjectData>() <= 112);
-        assert_eq!(std::mem::align_of::<ObjectData>(), 8);
+        use std::mem::{align_of, offset_of, size_of};
+        assert!(size_of::<ObjectData>() <= 104);
+        assert_eq!(align_of::<ObjectData>(), 8);
+        assert_eq!(size_of::<Option<Value>>(), 16);
+        assert_eq!(size_of::<Slots>(), 24);
+        assert_eq!(offset_of!(ObjectBlock<3>, data), 0);
+        assert_eq!(offset_of!(ObjectBlock<3>, inline), size_of::<ObjectData>());
+        assert_eq!(
+            size_of::<ObjectBlock<3>>(),
+            size_of::<ObjectData>() + 3 * 16
+        );
+        assert_eq!(size_of::<ObjectBlock<0>>(), size_of::<ObjectData>());
+        assert_eq!(align_of::<ObjectBlock<64>>(), align_of::<ObjectData>());
+    }
+
+    /// `len` slots over `storage` (which must outlive them).
+    fn slots_over(storage: &mut [Option<Value>]) -> Slots {
+        let len = storage.len();
+        Slots::new(NonNull::from(storage).cast(), len)
+    }
+
+    #[test]
+    fn slots_borrow_like_a_refcell() {
+        let mut storage = [Some(Value::Int(1)), None, Some(Value::Int(3))];
+        let slots = slots_over(&mut storage);
+        assert_eq!((slots.len(), slots.is_empty()), (3, false));
+        {
+            let a = slots.borrow();
+            let b = slots.try_borrow().expect("shared borrows stack");
+            assert!(slots.try_borrow_mut().is_err());
+            assert_eq!(a.len(), 3);
+            assert!(matches!(b[0], Some(Value::Int(1))));
+            assert!(b.get(3).is_none());
+            // `clone()` copies the values out, as `Ref<Vec<_>>` did.
+            let copy: Vec<Option<Value>> = a.clone();
+            assert_eq!(copy.len(), 3);
+        }
+        {
+            let mut m = slots.borrow_mut();
+            assert!(slots.try_borrow().is_err());
+            assert!(slots.try_borrow_mut().is_err());
+            m[1] = Some(Value::Int(2));
+            if let Some(Some(Value::Int(n))) = m.get_mut(2) {
+                *n = 30;
+            }
+            m.swap(0, 2);
+        }
+        let values: Vec<i64> = slots
+            .borrow()
+            .iter()
+            .map(|s| match s {
+                Some(Value::Int(n)) => *n,
+                _ => -1,
+            })
+            .collect();
+        assert_eq!(values, [30, 2, 1]);
+        assert!(slots.try_borrow_mut().is_ok());
+        drop(slots);
+        assert!(matches!(storage[1], Some(Value::Int(2))));
+    }
+
+    #[test]
+    #[should_panic(expected = "already borrowed")]
+    fn slots_borrow_mut_while_borrowed_panics() {
+        let mut storage = [None];
+        let slots = slots_over(&mut storage);
+        let _shared = slots.borrow();
+        let _ = slots.borrow_mut();
+    }
+
+    #[test]
+    #[should_panic(expected = "already mutably borrowed")]
+    fn slots_borrow_while_mutably_borrowed_panics() {
+        let mut storage = [None];
+        let slots = slots_over(&mut storage);
+        let _exclusive = slots.borrow_mut();
+        let _ = slots.borrow();
+    }
+
+    /// Objects of every size class (inline up to `MAX_INLINE`, then a
+    /// buffer of their own) keep their values, take writes, copy their
+    /// class defaults and release everything when freed.
+    #[test]
+    fn slots_live_inline_or_in_their_own_buffer() {
+        let vm = crate::Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        let cls = vm.find_class(b"stdClass").expect("stdClass");
+        // A table of its own (`ZArray::new()` shares the empty one).
+        let shared = php_runtime::ZArray::from_values([Value::Int(1)]);
+        for n in [0usize, 1, 2, 8, 9, 13, 48, 49, 64, 65, 300] {
+            let values: Vec<Option<Value>> = (0..n)
+                .map(|i| match i % 3 {
+                    0 => None,
+                    1 => Some(Value::Int(i64::try_from(i).unwrap_or(0))),
+                    _ => Some(Value::Array(shared.clone())),
+                })
+                .collect();
+            let held = n / 3;
+            assert_eq!(shared.refcount(), 1 + held);
+            let o = new_object(cls.clone(), values);
+            let d = data(&o);
+            assert_eq!(d.slots.len(), n);
+            assert_eq!(shared.refcount(), 1 + held);
+            let payload = o.payload_ptr::<ObjectData>().expect("object");
+            let first = d.slots.borrow().as_ptr() as usize;
+            let inline = payload.as_ptr() as usize + std::mem::size_of::<ObjectData>();
+            if (1..=MAX_INLINE).contains(&n) {
+                assert_eq!(first, inline, "{n} slots inline");
+            } else if n > MAX_INLINE {
+                assert_ne!(first, inline, "{n} slots in a buffer");
+            }
+            for (i, s) in d.slots.borrow().iter().enumerate() {
+                match i % 3 {
+                    0 => assert!(s.is_none()),
+                    1 => assert!(
+                        matches!(s, Some(Value::Int(v)) if *v == i64::try_from(i).unwrap_or(0))
+                    ),
+                    _ => assert!(matches!(s, Some(Value::Array(_)))),
+                }
+            }
+            if n > 0 {
+                d.slots.borrow_mut()[n - 1] = Some(Value::Int(-7));
+                assert!(matches!(d.slots.borrow()[n - 1], Some(Value::Int(-7))));
+            }
+            let held = held - usize::from(n > 0 && (n - 1) % 3 == 2);
+            assert_eq!(shared.refcount(), 1 + held);
+            // A copy from the object's slots as class defaults.
+            let defaults = d.slots.borrow().clone();
+            let copy = new_object_from_defaults(cls.clone(), &defaults);
+            drop(defaults);
+            assert_eq!(shared.refcount(), 1 + 2 * held);
+            assert_eq!(data(&copy).slots.len(), n);
+            if n > 0 {
+                data(&copy).slots.borrow_mut()[0] = Some(Value::Int(5));
+                assert!(!matches!(d.slots.borrow()[0], Some(Value::Int(5))));
+            }
+            drop(o);
+            assert_eq!(shared.refcount(), 1 + held);
+            drop(copy);
+            assert_eq!(shared.refcount(), 1);
+        }
+        drop(vm);
     }
 
     #[test]
