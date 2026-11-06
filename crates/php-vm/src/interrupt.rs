@@ -27,9 +27,25 @@
 //!
 //! The delayed `memory_limit` violation is recorded by `php-memlimit`,
 //! which raises the flag through its pending hook
-//! ([`install_memory_limit_hook`], once per process); the executor's own
-//! [`php_memlimit::is_pending`] polls next to the flag have been redundant
-//! since then and stay only until its loop tail is reworked.
+//! ([`install_memory_limit_hook`], once per process), so the executor's
+//! per-instruction poll reads the flag alone; [`php_memlimit::is_pending`]
+//! is only consulted by the safe-point work itself, which checks each
+//! source on its own.
+//!
+//! # Linkage of the flags
+//!
+//! The per-instruction poll is one load of `SAFE_POINT`, and it is only a
+//! RIP-relative load while the static has internal linkage. rustc exports a
+//! private static (and the executor then reaches it through the GOT, one
+//! more instruction per opcode) as soon as some body that other crates may
+//! inline names it, including closures and small leaf functions, which are
+//! cross-crate inlinable without `#[inline]`. So the only inlinable code
+//! that touches `SAFE_POINT` is the poll (`safe_point_due`, called from the
+//! executor's private loop); every raiser and every bookkeeping path goes
+//! through a function that is never inlined (`raise_safe_point`,
+//! `resync_safe_point`, the `ExecutionGuard` entry and exit helpers).
+//! `INTERRUPT` is kept internal the same way: its only inlinable reader is
+//! the call-boundary poll `Vm::check_interrupt`.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -47,7 +63,8 @@ use crate::vm::{Vm, VmResult};
 static INTERRUPT: AtomicBool = AtomicBool::new(false);
 /// `EG(vm_interrupt)`: whether some safe-point work may be due (see the
 /// module docs), and how many threads execute PHP code. Like
-/// [`INTERRUPT`], only touched by this crate's non-inlinable code, so the
+/// [`INTERRUPT`], only touched by the executor's poll and by this crate's
+/// non-inlinable code ("Linkage of the flags" in the module docs), so the
 /// per-instruction poll is a single direct load.
 static SAFE_POINT: SafePoint = SafePoint::new();
 
@@ -122,7 +139,16 @@ pub(crate) fn safe_point_due() -> bool {
 /// Asks for a safe point after the current instruction: called by whoever
 /// queues work for it (a destructor, a due collection), after setting its
 /// own source. Async-signal-safe.
-#[inline]
+///
+/// Never inlined, so that no inlinable body of a raiser (the destructor
+/// queue, the collector's root buffering behind the inlinable
+/// `gc::possible_root`, the execution guard) names `SAFE_POINT` and gets
+/// it exported ("Linkage of the flags" in the module docs). In the release
+/// binaries of 4e1c2df8 and of the 13:33 perf gate the static was a global
+/// symbol polled through the GOT, although every reference to it was
+/// php-vm code. Raising is rare (a destructor queued, a collection due, a
+/// signal), so the call costs nothing measurable.
+#[inline(never)]
 pub(crate) fn raise_safe_point() {
     SAFE_POINT.raise();
 }
@@ -195,7 +221,7 @@ impl Drop for ExecutionGuard {
             n == 1
         });
         if last {
-            SAFE_POINT.thread_left();
+            last_execution_on_thread();
         }
     }
 }
@@ -210,6 +236,16 @@ fn first_execution_on_thread() {
     if crate::object::has_pending_destructors() || crate::gc::wants_run() {
         raise_safe_point();
     }
+}
+
+/// This thread's outermost execution ended: it is no longer counted. Out
+/// of line, like [`first_execution_on_thread`], so that the guard's
+/// inlinable `drop` never names `SAFE_POINT` (module docs, "Linkage of the
+/// flags").
+#[cold]
+#[inline(never)]
+fn last_execution_on_thread() {
+    SAFE_POINT.thread_left();
 }
 
 /// Set by the timer thread when `max_execution_time` elapsed.

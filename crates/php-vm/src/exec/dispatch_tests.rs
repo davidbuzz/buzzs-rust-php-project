@@ -415,3 +415,77 @@ i,e,d,c,
 "#
     );
 }
+
+/// `%`, `/`, `<<` and `>>` on int and float operands run in the sealed
+/// numeric form (`num_bin`); zero divisors, `PHP_INT_MIN % -1`,
+/// `PHP_INT_MIN / -1`, negative and 64-bit shifts and non-int operands of
+/// `%` (with its deprecation) are left to the generic path. String
+/// concatenation and comparisons skip the equality probe or take it as
+/// they apply. Expected output from `/usr/bin/php -n` (8.3).
+#[test]
+fn division_modulo_and_shifts_on_the_numeric_fast_path() {
+    let src = r#"<?php
+function show($v) { echo var_export($v, true), "|"; }
+$pairs = [[7, 3], [-7, 3], [7, -3], [-7, -3], [5, -1], [0, 5], [PHP_INT_MIN, -1], [6, 3], [7, 2]];
+foreach ($pairs as [$a, $b]) {
+    show($a % $b); show($a / $b);
+    $m = $a % $b; $d = $a / $b;
+    show($m); show($d);
+    echo "\n";
+}
+$x = 7.0; $y = 2; $z = 0.5;
+show($x / $y); show($y / $z); show($x / $z); show(-$x / $y);
+$i = 0; $f = 0.0; $nf = -0.0;
+foreach ([[1, $i], [1, $f], [1.5, $f], [2, $nf], [7, 0]] as [$p, $q]) {
+    try { show($p / $q); } catch (DivisionByZeroError $e) { echo get_class($e), ":", $e->getMessage(), "|"; }
+}
+try { show(7 % $i); } catch (DivisionByZeroError $e) { echo get_class($e), ":", $e->getMessage(), "|"; }
+echo "\n";
+$inf = INF; $nan = NAN;
+show($inf / 2); show(2 / $inf); show(is_nan($nan / 2)); show(0.0 / 5);
+echo "\n";
+foreach ([[1, 3], [1, 63], [1, 64], [3, 100], [-8, 1], [-8, 64], [8, 64], [-1, 1], [PHP_INT_MAX, 1], [PHP_INT_MIN, 63]] as [$a, $b]) {
+    show($a << $b); show($a >> $b);
+}
+echo "\n";
+$neg = -1;
+try { show(1 << $neg); } catch (ArithmeticError $e) { echo get_class($e), ":", $e->getMessage(), "|"; }
+try { show(1 >> $neg); } catch (ArithmeticError $e) { echo get_class($e), ":", $e->getMessage(), "|"; }
+echo "\n";
+$s = 0; $t = 1.0;
+for ($k = 1; $k <= 20; $k++) {
+    $s = $s + ($k % 7) * ($k >> 1) - ($k << 2) % 5;
+    $t = $t + $k / 4;
+}
+show($s); show($t);
+echo "\n";
+$fs = 7.5; $str = "9";
+show($fs % 2); show($str % 4); show($str / 2); show("8" >> 1);
+echo "\n";
+$c = "a"; for ($k = 0; $k < 3; $k++) { $c = $c . $k; } show($c);
+$e1 = "x"; $e2 = "x"; show($e1 == $e2); show($e1 === $e2); show($e1 != "y"); show($c < "b");
+echo "\n";
+"#;
+    assert_eq!(
+        run(src),
+        r#"1|2.3333333333333335|1|2.3333333333333335|
+-1|-2.3333333333333335|-1|-2.3333333333333335|
+1|-2.3333333333333335|1|-2.3333333333333335|
+-1|2.3333333333333335|-1|2.3333333333333335|
+0|-5|0|-5|
+0|0|0|0|
+0|9.223372036854776E+18|0|9.223372036854776E+18|
+0|2|0|2|
+1|3.5|1|3.5|
+3.5|4.0|14.0|-3.5|DivisionByZeroError:Division by zero|DivisionByZeroError:Division by zero|DivisionByZeroError:Division by zero|DivisionByZeroError:Division by zero|DivisionByZeroError:Division by zero|DivisionByZeroError:Modulo by zero|
+INF|0.0|true|0.0|
+8|0|-9223372036854775807-1|0|0|0|0|0|-16|-4|0|-1|0|0|-2|-1|-2|4611686018427387903|0|-1|
+ArithmeticError:Bit shift by negative number|ArithmeticError:Bit shift by negative number|
+302|53.5|
+
+Deprecated: Implicit conversion from float 7.5 to int loses precision in t.php on line 37
+1|1|4.5|4|
+'a012'|true|true|true|true|
+"#
+    );
+}
