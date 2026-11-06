@@ -3,6 +3,8 @@
 pub(crate) mod attrs;
 mod constexpr;
 mod decl;
+#[cfg(test)]
+mod decl_tree_tests;
 mod expr;
 #[cfg(test)]
 mod fbc_tests;
@@ -63,7 +65,9 @@ pub struct CompiledUnit {
     pub hoisted_functions: Vec<u32>,
     /// Classes to try to declare before execution (top-level).
     pub hoisted_classes: Vec<u32>,
-    /// The declaration table shared by all code of the unit.
+    /// The unit's declaration table: the main op array's declarations
+    /// (which `hoisted_functions` and `hoisted_classes` index), followed in
+    /// compile order by every declaration nested deeper in the unit.
     pub decls: Rc<DeclTable>,
     /// Compile-time warnings (level bits, message, line) to emit before
     /// execution.
@@ -356,6 +360,11 @@ pub(crate) struct FnCtx {
     /// namespaced call that has a frameless branch, so calls nested in them
     /// get none (`zend_compile_ns_call`).
     pub in_frameless_branch: bool,
+    /// The functions, closures, classes and constant attributes declared in
+    /// this op array (php-src's `dynamic_func_defs`): what its declaration
+    /// ops index ([`OpArray::decls`]). `None` until the first declaration;
+    /// the main op array's is the unit's table ([`Compiler::decls`]).
+    pub decls: Option<Rc<DeclTable>>,
 }
 
 impl FnCtx {
@@ -400,6 +409,7 @@ impl FnCtx {
             fast_calls: Vec::new(),
             http_response_header_assigned: false,
             in_frameless_branch: false,
+            decls: None,
         }
     }
 }
@@ -417,7 +427,18 @@ pub(crate) struct Compiler<'f> {
     pub strict_types: bool,
     /// `FC(declarables).ticks`: N of the active `declare(ticks=N)`.
     pub(crate) ticks: u32,
+    /// The unit's declaration table: the main op array's declarations,
+    /// which its ops and [`CompiledUnit::hoisted_functions`] /
+    /// [`CompiledUnit::hoisted_classes`] index, followed (in compile order)
+    /// by every declaration nested deeper in the unit, so that looking a
+    /// declaration up through the unit finds them all. Only the main op
+    /// array refers to it: a nested op array's ops index its own table
+    /// ([`FnCtx::decls`]), so no declaration's code holds a table that holds
+    /// the declaration (an `Rc` cycle that kept every user function and
+    /// class of a request alive after the VM was dropped).
     pub decls: Rc<DeclTable>,
+    /// The table of the op arrays that declare nothing.
+    empty_decls: Rc<DeclTable>,
     pub fns: Vec<FnCtx>,
     pub classes: Vec<ClassCtx>,
     pub hoisted_functions: Vec<u32>,
@@ -633,6 +654,7 @@ impl<'f> Compiler<'f> {
             strict_types: false,
             ticks: 0,
             decls: Rc::new(DeclTable::default()),
+            empty_decls: Rc::new(DeclTable::default()),
             fns: Vec::new(),
             classes: Vec::new(),
             hoisted_functions: Vec::new(),
@@ -675,6 +697,7 @@ impl<'f> Compiler<'f> {
         }
         let mut f = FnCtx::new(FnKind::Main);
         f.line = program.statements.first().map_or(1, |s| s.span.line);
+        f.decls = Some(c.decls.clone());
         c.fns.push(f);
         c
     }
@@ -993,7 +1016,7 @@ impl Compiler<'_> {
             live_tmps: f.live_tmps,
             filename: self.filename.clone(),
             strict_types: self.strict_types,
-            decls: self.decls.clone(),
+            decls: f.decls.unwrap_or_else(|| self.empty_decls.clone()),
             fcall_cache: std::cell::RefCell::default(),
             class_cache: std::cell::RefCell::default(),
             rt_cache: crate::rtcache::RuntimeCache::default(),
@@ -1287,17 +1310,44 @@ impl Compiler<'_> {
         Ok(ConstExpr::Code(Rc::new(code)))
     }
 
-    /// Registers a class declaration.
+    /// The declaration table of the op array being compiled, created on
+    /// its first declaration.
+    pub(crate) fn current_decls(&mut self) -> Rc<DeclTable> {
+        self.f()
+            .decls
+            .get_or_insert_with(|| Rc::new(DeclTable::default()))
+            .clone()
+    }
+
+    /// Whether `table` is a nested op array's, whose declarations are also
+    /// listed in the unit's table ([`Compiler::decls`]).
+    fn is_nested_table(&self, table: &Rc<DeclTable>) -> bool {
+        !Rc::ptr_eq(table, &self.decls)
+    }
+
+    /// Registers a class declaration of the current op array; returns its
+    /// index in that op array's table.
     pub(crate) fn add_class(&mut self, decl: ClassDecl) -> u32 {
-        let mut cs = self.decls.classes.borrow_mut();
-        cs.push(Rc::new(decl));
+        let table = self.current_decls();
+        let decl = Rc::new(decl);
+        if self.is_nested_table(&table) {
+            self.decls.classes.borrow_mut().push(decl.clone());
+        }
+        let mut cs = table.classes.borrow_mut();
+        cs.push(decl);
         u32::try_from(cs.len() - 1).unwrap_or(u32::MAX)
     }
 
-    /// Registers a function.
+    /// Registers a function or closure declared in the current op array;
+    /// returns its index in that op array's table.
     pub(crate) fn add_function(&mut self, f: UserFunction) -> u32 {
-        let mut fs = self.decls.functions.borrow_mut();
-        fs.push(Rc::new(f));
+        let table = self.current_decls();
+        let f = Rc::new(f);
+        if self.is_nested_table(&table) {
+            self.decls.functions.borrow_mut().push(f.clone());
+        }
+        let mut fs = table.functions.borrow_mut();
+        fs.push(f);
         u32::try_from(fs.len() - 1).unwrap_or(u32::MAX)
     }
 }

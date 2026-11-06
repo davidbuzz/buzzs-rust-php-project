@@ -1290,7 +1290,11 @@ impl Compiler<'_> {
     /// use no trait are bound at compile time; the others are declared when
     /// their statement runs.
     fn can_early_bind(&self, idx: u32) -> bool {
-        let classes = self.decls.classes.borrow();
+        // `idx` is in the table of the op array the class is declared in.
+        let Some(table) = self.fref().decls.as_ref() else {
+            return false;
+        };
+        let classes = table.classes.borrow();
         let Some(d) = classes.get(idx as usize) else {
             return false;
         };

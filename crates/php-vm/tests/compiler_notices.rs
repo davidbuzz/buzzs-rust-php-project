@@ -273,3 +273,51 @@ fn enum_constants_and_cases_keep_declaration_order() {
          echo \"\\n\";\n");
     assert_eq!(out, "X A* Y B* \nA* X B* Y Z C* \nX A Y B \nA B C \n");
 }
+
+/// Each op array holds only the declarations nested in it, so the run-time
+/// `DECLARE_FUNCTION` / `DECLARE_CLASS` of a function body find theirs in
+/// its own table, and dropping the VM frees every function and class the
+/// script compiled: no declared function's code holds the table that holds
+/// the function (the `Rc` cycle leaked every user declaration of each
+/// request under `php -S`, `--repeat` and mod_php).
+#[test]
+fn dropping_the_vm_frees_the_scripts_declarations() {
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    let status = vm.run_script(
+        b"<?php
+function outer() {
+    function inner() { return 1; }
+    if (false) { $f = function () { return fn() => 2; }; }
+}
+outer();
+echo inner(), \"\\n\";
+function mk() {
+    class K { static function sm() { return 3; } function m() { return function () {}; } }
+}
+mk();
+echo K::sm(), \"\\n\";
+if (false) { $g = function () {}; }
+",
+        "t.php",
+    );
+    assert_eq!(status, 0);
+    assert_eq!(sink.0.borrow().as_slice(), b"1\n3\n");
+    let mut functions = Vec::new();
+    let mut classes = Vec::new();
+    for unit in vm
+        .units
+        .iter()
+        .filter(|u| u.main.code.filename.as_bytes() == b"t.php")
+    {
+        functions.extend(unit.decls.functions.borrow().iter().map(Rc::downgrade));
+        classes.extend(unit.decls.classes.borrow().iter().map(Rc::downgrade));
+    }
+    // inner, the arrow function, $f, outer, K::m's closure, mk, $g; K.
+    assert_eq!((functions.len(), classes.len()), (7, 1));
+    drop(vm);
+    for (i, f) in functions.iter().enumerate() {
+        assert!(f.upgrade().is_none(), "function #{i} outlived the VM");
+    }
+    assert!(classes[0].upgrade().is_none(), "class K outlived the VM");
+}

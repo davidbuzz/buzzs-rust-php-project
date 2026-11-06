@@ -495,7 +495,10 @@ impl Compiler<'_> {
             }
             let list = self.attributes(attributes)?;
             self.validate_attributes(&list, super::attrs::target::CONSTANT, 0, None, false)?;
-            let mut t = self.decls.const_attributes.borrow_mut();
+            // `const` statements are top-level code: the main op array's
+            // table, which is the unit's.
+            let table = self.current_decls();
+            let mut t = table.const_attributes.borrow_mut();
             t.push(std::rc::Rc::new(list));
             attrs = u32::try_from(t.len() - 1).unwrap_or(u32::MAX);
         }
