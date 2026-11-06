@@ -107,7 +107,14 @@ impl Vm {
     /// promotion is the generic path's job). Mixed int/float pairs use
     /// php-src's `(double)` widening; `===`/`!==` on mixed types is a type
     /// mismatch.
-    #[inline]
+    ///
+    /// Always inlined: a hint is not enough inside `Vm::run`, where the
+    /// release build of 4e1c2df8 called it (and [`num_bin`]) out of line
+    /// from every hot arm (`Bin`, `BinAssignCv`, `AssignOpCv`): 72 + 29
+    /// instructions per `$x = $x + $i`, its `Option<Value>` returned
+    /// through memory.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above: the hot arms of the dispatch loop
     fn bin_num_fast(&self, op: BinKind, a: Operand, b: Operand) -> Option<Value> {
         let f = self.frame();
         let lhs = Self::peek_num(f, a)?;
@@ -118,7 +125,10 @@ impl Vm {
 
 /// The arithmetic of [`Vm::bin_num_fast`] on two peeked numbers: `None`
 /// when the operator has no sealed numeric form or an int result overflows.
-#[inline]
+/// Always inlined with it (a call returns the `Option<Value>` through
+/// memory, and the operator is usually known at the call site's arm).
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of the hot numeric fast path
 fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
     if let (Num::Int(x), Num::Int(y)) = (x, y) {
         return Some(match op {
@@ -280,7 +290,13 @@ impl Vm {
 
     /// [`Vm::read_cv`] for a defined variable (dereferenced); `None` when
     /// undefined, leaving the warning to the caller.
-    #[inline]
+    ///
+    /// Always inlined: as a call (what the inline hint got in `Vm::read`,
+    /// release build of 4e1c2df8) the call, the argument set-up and the
+    /// `Option<Value>` returned through memory are about a fifth of its ~45
+    /// instructions, paid for every compiled variable an instruction reads.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above: every CV operand read
     pub(crate) fn read_cv_defined(&self, cv: u32) -> Option<Value> {
         self.frame().peek_cv(cv, |s| match s {
             Some(Value::Reference(r)) => Some(r.get()),
@@ -312,7 +328,8 @@ impl Vm {
     /// Reads a compiled variable without warning (`None` if undefined).
     #[inline]
     pub(crate) fn cv_get(&self, cv: u32) -> Option<Value> {
-        self.frame().peek_cv(cv, |slot: Option<&Value>| slot.cloned())
+        self.frame()
+            .peek_cv(cv, |slot: Option<&Value>| slot.cloned())
     }
 
     /// Assigns to a compiled variable (through references). A typed
@@ -469,7 +486,12 @@ impl Vm {
     }
 
     /// Stores a temporary.
-    #[inline]
+    ///
+    /// Always inlined: `Vm::run` called it out of line from 17 arms in the
+    /// release build of 4e1c2df8 (the inline hint was not taken there),
+    /// ~25 instructions for a 16-byte store and a tag test.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above: the result store of most instructions
     pub(crate) fn set_tmp(&mut self, t: u32, v: Value) {
         let old = std::mem::replace(&mut self.frame_mut().tmps[t as usize], v);
         // The slot almost always holds a scalar (or the `Null` a consuming
@@ -489,7 +511,11 @@ impl Vm {
     /// a plain value is tested in place (`if ($found)`), without the clone;
     /// anything else (undefined: warning, references, objects, resources)
     /// takes the generic path.
-    #[inline]
+    ///
+    /// Always inlined: the hot `JmpZ`/`JmpNz` arms of `Vm::run` called it
+    /// out of line in the release build of 4e1c2df8.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above: the jump fast path
     fn take_tmp_bool(&mut self, op: Operand) -> Option<bool> {
         let t = match op {
             Operand::Tmp(t) => t,
@@ -522,8 +548,11 @@ impl Vm {
         self.to_bool(&v)
     }
 
-    /// Stores an optional result.
-    #[inline]
+    /// Stores an optional result. Always inlined, like [`Vm::set_tmp`]
+    /// (five arms of `Vm::run` called it out of line in the release build
+    /// of 4e1c2df8).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see `set_tmp`
     pub(crate) fn set_dst(&mut self, dst: Option<u32>, v: Value) {
         if let Some(t) = dst {
             self.set_tmp(t, v);
