@@ -3561,7 +3561,9 @@ mod tests {
         for n in 0..=40 {
             let a = &base[..n];
             assert!(same_bytes(a, a));
-            assert!(same_bytes(a, &a.to_vec()));
+            // Equal bytes in another allocation.
+            let copy = Vec::from(a);
+            assert!(same_bytes(a, &copy));
             if n > 0 {
                 assert!(!same_bytes(a, &a[..n - 1]));
                 assert!(!same_bytes(&a[..n - 1], a));
