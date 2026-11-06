@@ -1336,6 +1336,12 @@ impl Vm {
                         let v = self.read(*a)?;
                         match &v {
                             Value::Str(s) => self.echo(s.as_bytes()),
+                            // `zend_long_to_str` digits from a stack buffer:
+                            // no string is materialised for an echoed int.
+                            Value::Int(i) => {
+                                let mut buf = [0u8; php_runtime::string::LONG_MAX_LEN];
+                                self.echo(php_runtime::string::format_long(*i, &mut buf));
+                            }
                             _ => {
                                 let s = self.to_zstr(&v)?;
                                 self.echo(s.as_bytes());
