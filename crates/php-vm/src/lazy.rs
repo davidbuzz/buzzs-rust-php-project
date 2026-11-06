@@ -3,24 +3,22 @@
 //!
 //! The property handlers in `props.rs` call [`Vm::lazy_object_for`] before
 //! every property operation; it initializes an uninitialized lazy object
-//! (or returns the real instance of an initialized proxy).
-//!
-//! Status: hook points only — the initialization logic and the Reflection
-//! methods (`newLazyGhost`, `newLazyProxy`, `resetAsLazy*`,
-//! `initializeLazyObject`, `markLazyObjectAsInitialized`,
-//! `isUninitializedLazyObject`, `getLazyInitializer`,
-//! `ReflectionProperty::skipLazyInitialization`,
-//! `setRawValueWithoutLazyInitialization`, `isLazy`) are still to be
-//! written.
+//! (or returns the real instance of an initialized proxy). The
+//! initialization itself and the Reflection methods live in
+//! `reflection/lazy.rs`; this module holds the state and the model of
+//! `zobj->properties` for lazy objects (built, shared, frozen tables).
 
 use crate::object::{self, oflags, ObjectData};
 use crate::vm::{Vm, VmResult};
-use php_runtime::{Obj, Value, ZStr};
+use php_runtime::{ArrayKey, Obj, Value, ZStr};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Lazy-object state stored in `ObjectData::lazy`.
+// The flags mirror `zend_lazy_object_info.flags` and the `IS_OBJ_LAZY_*`
+// object flags one to one.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct LazyInfo {
     /// Proxy (true) or ghost (false).
@@ -65,6 +63,84 @@ pub(crate) fn mark_props_built(d: &ObjectData) {
     crate::object::note_property_table(d);
 }
 
+/// `zend_object_is_lazy()`: an uninitialized ghost or proxy, or an
+/// initialized proxy. Not an object whose initializer is running:
+/// `zend_lazy_object_init` clears `IS_OBJ_LAZY_UNINITIALIZED` and
+/// `IS_OBJ_LAZY_PROXY` for the duration (and an initialized ghost has no
+/// lazy state left).
+pub(crate) fn is_lazy(d: &ObjectData) -> bool {
+    d.lazy.borrow().as_ref().is_some_and(|i| !i.initializing)
+}
+
+/// The entries of php-src's `zobj->properties` table of `o` in table
+/// order, building the table if it does not exist yet
+/// (`zend_std_get_properties_ex` → `rebuild_object_properties`): the
+/// declared properties by slot (mangled keys; `None` for an undefined slot,
+/// which the table points to with an `IS_INDIRECT` entry and which
+/// `zend_hash_compare` orders below a defined one), then the dynamic
+/// properties. A table of frozen copies ([`stale_slots`]) lists the copies
+/// and has no entry for a slot that was undefined when it was copied.
+///
+/// With `make_refs`, every entry is turned into a reference first, as
+/// `ZEND_FE_FETCH_RW` does to the table's entries (`ZVAL_MAKE_REF`): a
+/// frozen copy stays a reference in the table, a dynamic property in the
+/// object's table. Declared slots are never touched here: the caller only
+/// asks for references over a frozen table.
+pub(crate) fn property_table(o: &Obj, make_refs: bool) -> Vec<(ArrayKey, Option<Value>)> {
+    let d = object::data(o);
+    mark_props_built(d);
+    let stale = stale_slots(d);
+    let mut out: Vec<(ArrayKey, Option<Value>, Option<u32>)> = Vec::new();
+    if let Some(frozen) = stale {
+        let mut frozen = frozen.to_vec();
+        for pi in &d.class.props {
+            if pi.is_virtual() {
+                continue;
+            }
+            let Some(Some(value)) = frozen.get_mut(pi.slot as usize) else {
+                continue;
+            };
+            let value = if make_refs {
+                Value::Reference(value.make_ref())
+            } else {
+                value.clone()
+            };
+            out.push((crate::props::mangle(pi), Some(value), Some(pi.slot)));
+        }
+        if make_refs {
+            let prev = set_stale_slots(d, Some(frozen));
+            drop(prev);
+        }
+    } else {
+        let slots = d.slots.borrow();
+        for pi in &d.class.props {
+            if pi.is_virtual() {
+                continue;
+            }
+            let value = slots.get(pi.slot as usize).cloned().flatten();
+            out.push((crate::props::mangle(pi), value, Some(pi.slot)));
+        }
+    }
+    if make_refs {
+        if let Some(table) = d.dynamic.borrow_mut().as_mut() {
+            for (key, value) in table.iter_mut() {
+                let value = Value::Reference(value.make_ref());
+                out.push((key.clone(), Some(value), None));
+            }
+        }
+    } else if let Some(table) = d.dynamic.borrow().as_ref() {
+        for (key, value) in table.iter() {
+            out.push((key.clone(), Some(value.clone()), None));
+        }
+    }
+    if let Some(order) = object::prop_order(d) {
+        order.sort(&mut out, |(key, _, slot)| (*slot, key));
+    }
+    out.into_iter()
+        .map(|(key, value, _)| (key, value))
+        .collect()
+}
+
 /// The declared-property values listed for `d` when its properties table
 /// holds frozen copies of them (indexed by slot; `None`: not in the table),
 /// or `None` when listings read the slots.
@@ -100,21 +176,18 @@ pub(crate) fn set_stale_slots(
     frozen: Option<Vec<Option<Value>>>,
 ) -> Option<Rc<Vec<Option<Value>>>> {
     let handle = d.handle;
-    match frozen {
-        Some(v) => {
-            d.flags.set(d.flags.get() | oflags::STALE_PROPS);
-            STALE
-                .try_with(|m| m.borrow_mut().insert(handle, Rc::new(v)))
-                .ok()
-                .flatten()
+    if let Some(values) = frozen {
+        d.flags.set(d.flags.get() | oflags::STALE_PROPS);
+        STALE
+            .try_with(|m| m.borrow_mut().insert(handle, Rc::new(values)))
+            .ok()
+            .flatten()
+    } else {
+        if d.flags.get() & oflags::STALE_PROPS == 0 {
+            return None;
         }
-        None => {
-            if d.flags.get() & oflags::STALE_PROPS == 0 {
-                return None;
-            }
-            d.flags.set(d.flags.get() & !oflags::STALE_PROPS);
-            take_stale_slots(handle)
-        }
+        d.flags.set(d.flags.get() & !oflags::STALE_PROPS);
+        take_stale_slots(handle)
     }
 }
 
@@ -147,21 +220,41 @@ pub(crate) fn copy_stale_slots(from: &ObjectData, to: &ObjectData) {
 /// first (`zend_array_dup` in `zend_std_write_property`,
 /// `zend_std_get_property_ptr_ptr` and `zend_std_unset_property`), which
 /// freezes the declared properties' current values in the object's table
-/// (see [`stale_slots`]). Singly held references are unwrapped, as
-/// `zend_array_dup_value` does.
-#[cold]
-#[inline(never)]
+/// (see [`stale_slots`]).
 fn separate_props(o: &Obj, name: &ZStr) {
     let d = object::data(o);
+    // A declared property's slot is written in place.
+    let declared =
+        d.class.prop_map.contains_key(name) || d.class.props.iter().any(|p| p.name == *name);
+    if !declared {
+        separate_shared_props(d);
+    }
+}
+
+/// `ZEND_FE_RESET_R` / `ZEND_FE_RESET_RW` on `o` without `get_iterator`:
+/// a properties table shared with the initialization snapshot
+/// (`GC_REFCOUNT(properties) > 1`) is separated before the loop walks it,
+/// freezing the declared properties' values like [`separate_props`].
+pub(crate) fn separate_props_for_iteration(o: &Obj) {
+    let d = object::data(o);
+    if d.lazy.borrow().is_some() {
+        separate_shared_props(d);
+    }
+}
+
+/// `zend_array_dup` of a ghost's properties table shared with its
+/// initialization snapshot: the object keeps the duplicate, whose declared
+/// entries are plain copies of the slots' current values. Singly held
+/// references are unwrapped, as `zend_array_dup_value` does.
+#[cold]
+#[inline(never)]
+fn separate_shared_props(d: &ObjectData) {
     {
         let mut lazy = d.lazy.borrow_mut();
         let Some(i) = lazy.as_deref_mut() else {
             return;
         };
-        // A declared property's slot is written in place.
-        let declared =
-            d.class.prop_map.contains_key(name) || d.class.props.iter().any(|p| p.name == *name);
-        if !i.initializing || !i.props_shared || declared {
+        if !i.initializing || !i.props_shared {
             return;
         }
         i.props_shared = false;
@@ -223,6 +316,7 @@ impl Vm {
     }
 
     /// Whether `o` is an uninitialized lazy object (`var_dump` prefix).
+    #[allow(clippy::unused_self)] // a dump hook of the VM, like `object_dump`
     pub(crate) fn lazy_prefix(&self, o: &Obj) -> &'static str {
         match object::data(o).lazy.borrow().as_ref() {
             Some(i) if i.initializing => "",

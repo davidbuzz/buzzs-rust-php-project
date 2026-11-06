@@ -266,10 +266,6 @@ pub(crate) fn starts_variable(k: T) -> bool {
 const AOD_FOLLOW: &[T] = &[T::ObjectOperator, T::NullsafeObjectOperator, T::LBracket];
 const PROPERTY_NAME_START: &[T] = &[T::String, T::Variable, T::LBrace, T::Dollar];
 
-fn bx(e: Expr) -> Box<Expr> {
-    Box::new(e)
-}
-
 impl Parser<'_> {
     /// Parses an `expr`.
     pub(crate) fn parse_expr(&mut self) -> PResult<Expr> {
@@ -307,7 +303,7 @@ impl Parser<'_> {
                 let span = self.span_from(lhs.span);
                 lhs = Expr::new(
                     ExprKind::Instanceof {
-                        expr: bx(lhs),
+                        expr: Box::new(lhs),
                         class: Box::new(class),
                     },
                     span,
@@ -323,8 +319,8 @@ impl Parser<'_> {
                 let span = self.span_from(lhs.span);
                 lhs = Expr::new(
                     ExprKind::Pipe {
-                        left: bx(lhs),
-                        right: bx(rhs),
+                        left: Box::new(lhs),
+                        right: Box::new(rhs),
                     },
                     span,
                 );
@@ -345,8 +341,8 @@ impl Parser<'_> {
             lhs = Expr::new(
                 ExprKind::Binary {
                     op,
-                    left: bx(lhs),
-                    right: bx(rhs),
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
                 },
                 span,
             );
@@ -371,15 +367,15 @@ impl Parser<'_> {
                 return Err(self.unexpected(&[]));
             }
             self.bump();
-            Some(bx(t))
+            Some(Box::new(t))
         };
         let else_ = self.parse_expr_bp(prec::TERNARY + 1)?;
         let span = self.span_from(cond.span);
         Ok(Expr::new(
             ExprKind::Conditional {
-                cond: bx(cond),
+                cond: Box::new(cond),
                 then,
-                else_: bx(else_),
+                else_: Box::new(else_),
                 parenthesized: false,
             },
             span,
@@ -394,7 +390,7 @@ impl Parser<'_> {
     ) -> PResult<Expr> {
         let operand = self.parse_expr_bp(min)?;
         let span = self.span_from(start);
-        Ok(Expr::new(f(bx(operand)), span))
+        Ok(Expr::new(f(Box::new(operand)), span))
     }
 
     /// Parses a unary expression: prefix operators, primaries with their
@@ -445,7 +441,13 @@ impl Parser<'_> {
                     IncDecOp::PreDec
                 };
                 let span = self.span_from(start);
-                Ok(Expr::new(ExprKind::IncDec { op, var: bx(var) }, span))
+                Ok(Expr::new(
+                    ExprKind::IncDec {
+                        op,
+                        var: Box::new(var),
+                    },
+                    span,
+                ))
             }
             T::Print => {
                 self.bump();
@@ -470,8 +472,8 @@ impl Parser<'_> {
                     let span = self.span_from(start);
                     return Ok(Expr::new(
                         ExprKind::Yield {
-                            key: Some(bx(first)),
-                            value: Some(bx(value)),
+                            key: Some(Box::new(first)),
+                            value: Some(Box::new(value)),
                         },
                         span,
                     ));
@@ -480,7 +482,7 @@ impl Parser<'_> {
                 Ok(Expr::new(
                     ExprKind::Yield {
                         key: None,
-                        value: Some(bx(first)),
+                        value: Some(Box::new(first)),
                     },
                     span,
                 ))
@@ -525,8 +527,8 @@ impl Parser<'_> {
                 let span = self.span_from(start);
                 Ok(Expr::new(
                     ExprKind::Assign {
-                        target: bx(target),
-                        value: bx(value),
+                        target: Box::new(target),
+                        value: Box::new(value),
                     },
                     span,
                 ))
@@ -539,8 +541,8 @@ impl Parser<'_> {
                     let span = self.span_from(start);
                     return Ok(Expr::new(
                         ExprKind::Assign {
-                            target: bx(arr),
-                            value: bx(value),
+                            target: Box::new(arr),
+                            value: Box::new(value),
                         },
                         span,
                     ));
@@ -595,8 +597,8 @@ impl Parser<'_> {
                 let span = self.span_from(e.span);
                 return Ok(Expr::new(
                     ExprKind::AssignRef {
-                        target: bx(e),
-                        value: bx(value),
+                        target: Box::new(e),
+                        value: Box::new(value),
                     },
                     span,
                 ));
@@ -605,13 +607,13 @@ impl Parser<'_> {
             let span = self.span_from(e.span);
             let kind = match op {
                 None => ExprKind::Assign {
-                    target: bx(e),
-                    value: bx(value),
+                    target: Box::new(e),
+                    value: Box::new(value),
                 },
                 Some(op) => ExprKind::AssignOp {
                     op,
-                    target: bx(e),
-                    value: bx(value),
+                    target: Box::new(e),
+                    value: Box::new(value),
                 },
             };
             return Ok(Expr::new(kind, span));
@@ -624,7 +626,13 @@ impl Parser<'_> {
                 IncDecOp::PostDec
             };
             let span = self.span_from(e.span);
-            return Ok(Expr::new(ExprKind::IncDec { op, var: bx(e) }, span));
+            return Ok(Expr::new(
+                ExprKind::IncDec {
+                    op,
+                    var: Box::new(e),
+                },
+                span,
+            ));
         }
         Ok(e)
     }
@@ -665,7 +673,7 @@ impl Parser<'_> {
         match self.peek() {
             T::Variable => {
                 let t = self.bump();
-                let text = self.text(&t);
+                let text = t.text();
                 Ok(Expr::new(
                     ExprKind::Var(VarName::Name(Ident::new(text[1..].to_vec(), t.span))),
                     t.span,
@@ -679,12 +687,15 @@ impl Parser<'_> {
                         let e = self.parse_expr()?;
                         self.expect_close_brace()?;
                         let span = self.span_from(start);
-                        Ok(Expr::new(ExprKind::Var(VarName::Expr(bx(e))), span))
+                        Ok(Expr::new(ExprKind::Var(VarName::Expr(Box::new(e))), span))
                     }
                     T::Variable | T::Dollar => {
                         let inner = self.parse_simple_variable()?;
                         let span = self.span_from(start);
-                        Ok(Expr::new(ExprKind::Var(VarName::Expr(bx(inner))), span))
+                        Ok(Expr::new(
+                            ExprKind::Var(VarName::Expr(Box::new(inner))),
+                            span,
+                        ))
                     }
                     _ => Err(self.unexpected(&[T::Variable, T::LBrace, T::Dollar])),
                 }
@@ -709,7 +720,7 @@ impl Parser<'_> {
         match e.kind {
             ExprKind::Var(VarName::Name(id)) => VarName::Name(id),
             ExprKind::Var(VarName::Expr(inner)) => VarName::Expr(inner),
-            _ => VarName::Expr(bx(e)),
+            _ => VarName::Expr(Box::new(e)),
         }
     }
 
@@ -766,7 +777,7 @@ impl Parser<'_> {
                 self.record_identifier(t.span.start);
                 let name = Name {
                     kind: NameKind::Unqualified,
-                    name: self.text(&t).to_vec(),
+                    name: t.text().to_vec(),
                     span: t.span,
                 };
                 let args = self.parse_argument_list()?;
@@ -932,11 +943,11 @@ impl Parser<'_> {
                 self.bump();
                 let span = self.span_from(start);
                 let kind = if k == T::Empty {
-                    ExprKind::Empty(bx(e))
+                    ExprKind::Empty(Box::new(e))
                 } else {
                     ExprKind::Include {
                         kind: IncludeKind::Eval,
-                        expr: bx(e),
+                        expr: Box::new(e),
                     }
                 };
                 Ok((Expr::new(kind, span), Cat::Other))
@@ -982,14 +993,20 @@ impl Parser<'_> {
                         return Err(self.unexpected(&[T::RBracket]));
                     } else {
                         let idx = self.parse_expr()?;
-                        Some(bx(idx))
+                        Some(Box::new(idx))
                     };
                     if self.peek() != T::RBracket {
                         return Err(self.unexpected(&[T::RBracket]));
                     }
                     self.bump();
                     let span = self.span_from(e.span);
-                    e = Expr::new(ExprKind::Dim { base: bx(e), index }, span);
+                    e = Expr::new(
+                        ExprKind::Dim {
+                            base: Box::new(e),
+                            index,
+                        },
+                        span,
+                    );
                     cat = Cat::Var;
                 }
                 T::ObjectOperator | T::NullsafeObjectOperator if cat.is_aod() => {
@@ -1000,7 +1017,7 @@ impl Parser<'_> {
                         let span = self.span_from(e.span);
                         e = Expr::new(
                             ExprKind::MethodCall {
-                                object: bx(e),
+                                object: Box::new(e),
                                 name,
                                 args: Box::new(args),
                                 nullsafe,
@@ -1012,7 +1029,7 @@ impl Parser<'_> {
                         let span = self.span_from(e.span);
                         e = Expr::new(
                             ExprKind::Prop {
-                                object: bx(e),
+                                object: Box::new(e),
                                 name,
                                 nullsafe,
                             },
@@ -1072,7 +1089,7 @@ impl Parser<'_> {
                         Expr::new(
                             ExprKind::StaticCall {
                                 class: Box::new(class),
-                                name: MemberName::Expr(bx(var)),
+                                name: MemberName::Expr(Box::new(var)),
                                 args: Box::new(args),
                             },
                             span,
@@ -1104,7 +1121,7 @@ impl Parser<'_> {
                         Expr::new(
                             ExprKind::StaticCall {
                                 class: Box::new(class),
-                                name: MemberName::Expr(bx(name_expr)),
+                                name: MemberName::Expr(Box::new(name_expr)),
                                 args: Box::new(args),
                             },
                             span,
@@ -1117,7 +1134,7 @@ impl Parser<'_> {
                     Expr::new(
                         ExprKind::ClassConst {
                             class: Box::new(class),
-                            name: MemberName::Expr(bx(name_expr)),
+                            name: MemberName::Expr(Box::new(name_expr)),
                         },
                         span,
                     ),
@@ -1176,9 +1193,11 @@ impl Parser<'_> {
                 self.bump();
                 let e = self.parse_expr()?;
                 self.expect_close_brace()?;
-                Ok(MemberName::Expr(bx(e)))
+                Ok(MemberName::Expr(Box::new(e)))
             }
-            T::Variable | T::Dollar => Ok(MemberName::Expr(bx(self.parse_simple_variable()?))),
+            T::Variable | T::Dollar => {
+                Ok(MemberName::Expr(Box::new(self.parse_simple_variable()?)))
+            }
             _ => Err(self.unexpected(PROPERTY_NAME_START)),
         }
     }
@@ -1251,14 +1270,20 @@ impl Parser<'_> {
                     let index = if self.peek() == T::RBracket {
                         None
                     } else {
-                        Some(bx(self.parse_expr()?))
+                        Some(Box::new(self.parse_expr()?))
                     };
                     if self.peek() != T::RBracket {
                         return Err(self.unexpected(&[T::RBracket]));
                     }
                     self.bump();
                     let span = self.span_from(e.span);
-                    e = Expr::new(ExprKind::Dim { base: bx(e), index }, span);
+                    e = Expr::new(
+                        ExprKind::Dim {
+                            base: Box::new(e),
+                            index,
+                        },
+                        span,
+                    );
                 }
                 T::ObjectOperator | T::NullsafeObjectOperator => {
                     let nullsafe = self.bump().kind == T::NullsafeObjectOperator;
@@ -1266,7 +1291,7 @@ impl Parser<'_> {
                     let span = self.span_from(e.span);
                     e = Expr::new(
                         ExprKind::Prop {
-                            object: bx(e),
+                            object: Box::new(e),
                             name,
                             nullsafe,
                         },
@@ -1297,7 +1322,7 @@ impl Parser<'_> {
             return Ok((
                 Expr::new(
                     ExprKind::New {
-                        class: Box::new(NewClass::Anonymous(decl)),
+                        class: Box::new(NewClass::Anonymous(Box::new(decl))),
                         args: Box::new(args),
                     },
                     span,
@@ -1701,8 +1726,8 @@ impl Parser<'_> {
         let span = self.span_from(target.span);
         let e = Expr::new(
             ExprKind::Assign {
-                target: bx(target),
-                value: bx(value),
+                target: Box::new(target),
+                value: Box::new(value),
             },
             span,
         );
@@ -1737,7 +1762,7 @@ impl Parser<'_> {
                     let t = self.bump();
                     let s = match t.value {
                         Some(TokenValue::Str(s)) => s,
-                        _ => self.text(&t).to_vec(),
+                        _ => t.text().to_vec(),
                     };
                     parts.push(InterpPart::Literal(s, t.span));
                 }
@@ -1787,8 +1812,8 @@ impl Parser<'_> {
                         Ok(InterpPart::Expr {
                             expr: Expr::new(
                                 ExprKind::Dim {
-                                    base: bx(var),
-                                    index: Some(bx(index)),
+                                    base: Box::new(var),
+                                    index: Some(Box::new(index)),
                                 },
                                 span,
                             ),
@@ -1803,7 +1828,7 @@ impl Parser<'_> {
                         Ok(InterpPart::Expr {
                             expr: Expr::new(
                                 ExprKind::Prop {
-                                    object: bx(var),
+                                    object: Box::new(var),
                                     name,
                                     nullsafe,
                                 },
@@ -1824,7 +1849,7 @@ impl Parser<'_> {
                     let k1 = self.peek_nth(1);
                     if k1 == T::RBrace || k1 == T::LBracket {
                         let t = self.bump();
-                        let name = Ident::new(self.text(&t).to_vec(), t.span);
+                        let name = Ident::new(t.text().to_vec(), t.span);
                         let var = Expr::new(ExprKind::Var(VarName::Name(name)), t.span);
                         if self.eat(T::LBracket).is_some() {
                             let idx = self.parse_expr()?;
@@ -1837,8 +1862,8 @@ impl Parser<'_> {
                             return Ok(InterpPart::Expr {
                                 expr: Expr::new(
                                     ExprKind::Dim {
-                                        base: bx(var),
-                                        index: Some(bx(idx)),
+                                        base: Box::new(var),
+                                        index: Some(Box::new(idx)),
                                     },
                                     span,
                                 ),
@@ -1857,7 +1882,7 @@ impl Parser<'_> {
                 self.expect_close_brace()?;
                 let span = self.span_from(start);
                 Ok(InterpPart::Expr {
-                    expr: Expr::new(ExprKind::Var(VarName::Expr(bx(e))), span),
+                    expr: Expr::new(ExprKind::Var(VarName::Expr(Box::new(e))), span),
                     syntax: InterpSyntax::DollarCurlyExpr,
                 })
             }
@@ -1878,7 +1903,7 @@ impl Parser<'_> {
         let t = match self.peek() {
             T::String => {
                 let t = self.bump();
-                let s = self.text(&t).to_vec();
+                let s = t.text().to_vec();
                 return Ok(Expr::new(ExprKind::String(s), t.span));
             }
             T::NumString => self.bump(),
@@ -1904,7 +1929,7 @@ impl Parser<'_> {
         let kind = match t.value {
             Some(TokenValue::Int(i)) => ExprKind::Int(i),
             Some(TokenValue::Str(s)) => ExprKind::String(s),
-            _ => ExprKind::String(self.text(&t).to_vec()),
+            _ => ExprKind::String(t.text().to_vec()),
         };
         Ok(Expr::new(kind, t.span))
     }
@@ -1963,7 +1988,7 @@ impl Parser<'_> {
         self.bump();
         Ok(Expr::new(
             ExprKind::Match {
-                subject: bx(subject),
+                subject: Box::new(subject),
                 arms,
             },
             self.span_from(start),

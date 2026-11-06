@@ -181,7 +181,7 @@ fn dtoa_small(abs: f64, shortest: bool, ndigits: i32) -> Option<SmallDigits> {
     if n > 17 {
         return None;
     }
-    let n_digits = usize::try_from(n).ok()?;
+    let max_count = usize::try_from(n).ok()?;
     if (1.0..1e15).contains(&abs) && abs.fract() == 0.0 {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let mut m = abs as u64;
@@ -195,7 +195,7 @@ fn dtoa_small(abs: f64, shortest: bool, ndigits: i32) -> Option<SmallDigits> {
             m /= 10;
         }
         let count = tmp.len() - pos;
-        if shortest || count <= n_digits {
+        if shortest || count <= max_count {
             let mut end = tmp.len();
             while end - pos > 1 && tmp[end - 1] == b'0' {
                 end -= 1;
@@ -213,12 +213,12 @@ fn dtoa_small(abs: f64, shortest: bool, ndigits: i32) -> Option<SmallDigits> {
     if shortest || (n <= 15 && abs >= f64::MIN_POSITIVE) {
         write!(w, "{abs:e}").ok()?;
         let d = parse_exp_format(w.as_bytes())?;
-        if shortest || d.len <= n_digits {
+        if shortest || d.len <= max_count {
             return Some(d);
         }
         w.len = 0;
     }
-    let prec = n_digits - 1;
+    let prec = max_count - 1;
     write!(w, "{abs:.prec$e}").ok()?;
     parse_exp_format(w.as_bytes())
 }

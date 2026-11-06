@@ -178,48 +178,109 @@ impl Vm {
         Ok(Some(ZArray::from_table(t)))
     }
 
-    fn std_compare(&mut self, a: &Obj, b: &Obj) -> VmResult<i32> {
-        let (a, b) = (
-            &self.lazy_object_for(a, None)?,
-            &self.lazy_object_for(b, None)?,
-        );
-        let ca = object::class_of(a).clone();
-        let cb = object::class_of(b).clone();
-        if !std::rc::Rc::ptr_eq(&ca, &cb) {
+    /// `zend_std_compare_objects` on two distinct objects.
+    fn std_compare(&mut self, lhs: &Obj, rhs: &Obj) -> VmResult<i32> {
+        // Objects of different classes are uncomparable, before any lazy
+        // one is initialized.
+        let cls = object::class_of(lhs);
+        if !std::rc::Rc::ptr_eq(cls, object::class_of(rhs)) {
             return Ok(1);
         }
-        if ca.is_enum() {
+        if cls.is_enum() {
             return Ok(1);
         }
-        if let Some(r) = self.internal_compare(a, b)? {
-            return Ok(r);
+        if let Some(order) = self.internal_compare(lhs, rhs)? {
+            return Ok(order);
         }
-        let _guard = php_runtime::ops::RecursionGuard::try_enter(
-            php_runtime::ops::GuardKind::Compare,
-            a.addr(),
-        )
-        .ok_or_else(|| {
-            self.make_throw("Error", "Nesting level too deep - recursive dependency?")
-        })?;
-        // Compare declared slots in order, then dynamic tables.
-        let sa = object::data(a).slots.borrow().clone();
-        let sb = object::data(b).slots.borrow().clone();
-        for (x, y) in sa.iter().zip(sb.iter()) {
-            match (x, y) {
-                (Some(x), Some(y)) => {
-                    let r = php_runtime::ops::compare(x, y, self).map_err(|e| self.rt_throw(e))?;
-                    if r != 0 {
-                        return Ok(r);
+        let plain = |o: &Obj| {
+            let d = object::data(o);
+            !crate::lazy::props_built(d) && !crate::lazy::is_lazy(d)
+        };
+        if plain(lhs) && plain(rhs) {
+            return self.compare_slots(lhs, rhs);
+        }
+        // Either object has a properties table or is lazy:
+        // `zend_std_get_properties_ex` initializes a lazy object (an
+        // initialized proxy stands for its instance), builds the tables and
+        // `zend_compare_symbol_tables` compares them.
+        let lhs = self.lazy_object_for(lhs, None)?;
+        let rhs = self.lazy_object_for(rhs, None)?;
+        if Obj::ptr_eq(&lhs, &rhs) {
+            return Ok(0);
+        }
+        let left = crate::lazy::property_table(&lhs, false);
+        let right = crate::lazy::property_table(&rhs, false);
+        self.compare_property_tables(&lhs, &left, &right)
+    }
+
+    /// Protects `o` against recursive comparison (`Z_PROTECT_RECURSION_P`
+    /// / `GC_PROTECT_RECURSION` of its table) for the guard's lifetime.
+    fn compare_guard(&mut self, o: &Obj) -> VmResult<php_runtime::ops::RecursionGuard> {
+        php_runtime::ops::RecursionGuard::try_enter(php_runtime::ops::GuardKind::Compare, o.addr())
+            .ok_or_else(|| {
+                self.make_throw("Error", "Nesting level too deep - recursive dependency?")
+            })
+    }
+
+    /// Two objects without properties tables: the declared slots are
+    /// compared in order (`properties_info_table`); a defined slot against
+    /// an undefined one makes the objects uncomparable (1).
+    fn compare_slots(&mut self, lhs: &Obj, rhs: &Obj) -> VmResult<i32> {
+        let _guard = self.compare_guard(lhs)?;
+        let left = object::data(lhs).slots.borrow().clone();
+        let right = object::data(rhs).slots.borrow().clone();
+        for pair in left.iter().zip(right.iter()) {
+            match pair {
+                (Some(lhs_value), Some(rhs_value)) => {
+                    let order = php_runtime::ops::compare(lhs_value, rhs_value, self)
+                        .map_err(|err| self.rt_throw(err))?;
+                    if order != 0 {
+                        return Ok(order);
                     }
                 }
                 (None, None) => {}
-                (Some(_), None) => return Ok(1),
-                (None, Some(_)) => return Ok(1),
+                (Some(_), None) | (None, Some(_)) => return Ok(1),
             }
         }
-        let da = object::data(a).dynamic.borrow().clone().unwrap_or_default();
-        let db = object::data(b).dynamic.borrow().clone().unwrap_or_default();
-        php_runtime::ops::compare_tables(&da, &db, self).map_err(|e| self.rt_throw(e))
+        Ok(0)
+    }
+
+    /// `zend_compare_symbol_tables` (`zend_hash_compare`, unordered) on the
+    /// properties tables of `lhs` and another object: the element counts
+    /// decide first, then every entry of `left` is compared with the entry
+    /// of the same key in `right` (a missing key: 1). An undefined declared
+    /// slot (`IS_INDIRECT` to `IS_UNDEF`, `None`) orders below a defined
+    /// one, unlike in [`Self::compare_slots`].
+    fn compare_property_tables(
+        &mut self,
+        lhs: &Obj,
+        left: &[(ArrayKey, Option<Value>)],
+        right: &[(ArrayKey, Option<Value>)],
+    ) -> VmResult<i32> {
+        let _guard = self.compare_guard(lhs)?;
+        if left.len() != right.len() {
+            return Ok(if left.len() > right.len() { 1 } else { -1 });
+        }
+        let index: std::collections::HashMap<&ArrayKey, &Option<Value>> =
+            right.iter().map(|(key, value)| (key, value)).collect();
+        for (key, lhs_value) in left {
+            let Some(rhs_value) = index.get(key) else {
+                return Ok(1);
+            };
+            match (lhs_value, rhs_value) {
+                (None, None) => {}
+                (None, Some(_)) => return Ok(-1),
+                (Some(_), None) => return Ok(1),
+                (Some(lhs_value), Some(rhs_value)) => {
+                    let order = php_runtime::ops::compare(lhs_value, rhs_value, self)
+                        .map_err(|err| self.rt_throw(err))?;
+                    if order != 0 {
+                        return Ok(order);
+                    }
+                }
+            }
+        }
+        Ok(0)
     }
 }
 

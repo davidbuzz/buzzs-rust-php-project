@@ -368,6 +368,8 @@ const SNIPPETS: &[&str] = &[
     "\"${a 1}\";",
     "\"{$a 1}\";",
     "\"{$a->b 1}\";",
+    "\"{$f = 'f'}\";",
+    "\"{$g{'h'}}\";",
     "\"$a->1\";",
     "\"${a[1 2]}\";",
     "\"$a\" 1;",
@@ -459,6 +461,19 @@ const MASTER_OVERRIDES: &[(&str, &str)] = &[
     (
         "\"{$a->b 1}\";",
         "Parse error: syntax error, unexpected integer \"1\", expecting \"->\" or \"?->\" or \"[\" on line 1",
+    ),
+    // php-src 780a8280d23 removed `array_object_dereferenceable '{' expr '}'`
+    // from the grammar, so "{" left the expected-token list after a variable
+    // (Zend/tests/grammar/alternative_offset_syntax_in_encaps_string.phpt,
+    // Zend/tests/new_without_parentheses/unset_new.phpt) and `"{$g{'h'}}"`
+    // is a syntax error instead of the 8.x compile error.
+    (
+        "\"{$f = 'f'}\";",
+        "Parse error: syntax error, unexpected token \"=\", expecting \"->\" or \"?->\" or \"[\" on line 1",
+    ),
+    (
+        "\"{$g{'h'}}\";",
+        "Parse error: syntax error, unexpected token \"{\", expecting \"->\" or \"?->\" or \"[\" on line 1",
     ),
     (
         "$a = <<<A\n{$a 1}\nA;\n",
@@ -579,6 +594,113 @@ fn messages_match_php() {
         }
     }
     assert!(n > 0);
+    assert!(failures.is_empty(), "mismatches:\n{failures}");
+}
+
+/// Compile-time checks around an empty dimension (`zend_compile.c`):
+///
+/// * `zend_delayed_compile_dim()` rejects `$GLOBALS[]` with "Cannot append to
+///   $GLOBALS" before compiling the base, in every fetch mode (read, write,
+///   isset, unset, function argument), and the fetch type reaches the base
+///   unchanged through `zend_delayed_compile_var()`, so an `[]` inside an
+///   `unset()` chain is "Cannot use [] for unsetting".
+/// * `zend_compile_isset_or_empty()` and `zend_compile_unset()` test
+///   `is_global_var_fetch()` first, so the direct `isset($GLOBALS[])`,
+///   `empty($GLOBALS[])` and `unset($GLOBALS[])` keep the generic `[]`
+///   messages, and `isset()` of a call fails before its operand is compiled
+///   (`zend_is_variable()` excludes calls).
+/// * A constant-object chain (`ZEND_CONST_OBJECT_FETCH`) compiles in any
+///   fetch type, so the same `[]` rules apply inside it.
+///
+/// Messages and lines verified with php 8.3.6; the two `A::B->c[]` cases
+/// follow master, where 8.3 still rejects the whole chain.
+#[test]
+fn empty_dimension_messages() {
+    const APPEND: &str = "Fatal error: Cannot append to $GLOBALS on line 1";
+    const READING: &str = "Fatal error: Cannot use [] for reading on line 1";
+    const UNSETTING: &str = "Fatal error: Cannot use [] for unsetting on line 1";
+    let cases: &[(&str, &str)] = &[
+        ("$x = $GLOBALS[];", APPEND),
+        ("echo $GLOBALS[];", APPEND),
+        ("$GLOBALS[];", APPEND),
+        ("$x = $GLOBALS[] ?? 1;", APPEND),
+        ("$GLOBALS[] ??= 1;", APPEND),
+        ("$x = $GLOBALS[][\"a\"];", APPEND),
+        ("$x = $GLOBALS[]->a;", APPEND),
+        ("$x = $GLOBALS[]::$y;", APPEND),
+        ("$x = ${$GLOBALS[]};", APPEND),
+        ("$x = fn() => $GLOBALS[];", APPEND),
+        ("f(...$GLOBALS[]);", APPEND),
+        ("f(1, $GLOBALS[]);", APPEND),
+        ("isset($GLOBALS[][\"a\"]);", APPEND),
+        ("isset($GLOBALS[]->a);", APPEND),
+        ("empty($GLOBALS[]->a);", APPEND),
+        ("empty($GLOBALS[]());", APPEND),
+        ("unset($GLOBALS[][\"a\"]);", APPEND),
+        ("unset(${$GLOBALS[]});", APPEND),
+        ("$GLOBALS[] = 1;", APPEND),
+        ("$GLOBALS[]++;", APPEND),
+        ("$x = &$GLOBALS[];", APPEND),
+        ("[$GLOBALS[]] = [1];", APPEND),
+        ("foreach ([1] as $GLOBALS[]) {}", APPEND),
+        // The direct forms of isset/empty/unset.
+        ("isset($GLOBALS[]);", READING),
+        ("isset($x, $GLOBALS[]);", READING),
+        ("empty($GLOBALS[]);", READING),
+        ("unset($GLOBALS[]);", UNSETTING),
+        ("unset($x, $GLOBALS[]);", UNSETTING),
+        (
+            "isset($GLOBALS[]());",
+            "Fatal error: Cannot use isset() on the result of an expression (you can use \"null !== expression\" instead) on line 1",
+        ),
+        // Not a `$GLOBALS` fetch: `$$GLOBALS[]` is `${$GLOBALS}[]`.
+        ("$x = $$GLOBALS[];", READING),
+        ("$x = $a[];", READING),
+        ("$x = $a[]->b;", READING),
+        ("isset($a[]);", READING),
+        ("isset($a[][\"b\"]);", READING),
+        ("unset($a[]::$b);", READING),
+        // The unset fetch type reaches the base of the chain.
+        ("unset($a[]);", UNSETTING),
+        ("unset($a[][\"b\"]);", UNSETTING),
+        ("unset($a[][\"b\"][\"c\"]);", UNSETTING),
+        ("unset($a[]->b);", UNSETTING),
+        ("unset($a->b[]->c);", UNSETTING),
+        ("unset($this[]->a);", UNSETTING),
+        ("unset(A::$b[][0]);", UNSETTING),
+        ("unset($GLOBALS[\"x\"][]);", UNSETTING),
+        ("class A { const B = 1; } unset(A::B->c[][0]);", UNSETTING),
+        // Appending inside a write chain is fine.
+        ("$a[][\"b\"] = 1;", "OK"),
+        ("$a[][\"b\"] .= 1;", "OK"),
+        ("$x = &$a[][\"b\"];", "OK"),
+        ("f($a[][\"b\"]);", "OK"),
+        ("class A { const B = 1; } A::B->c[][0] = 1;", "OK"),
+        // Lines: the error is reported at the line of the dimension's base.
+        (
+            "$x =\n  $GLOBALS\n  [];",
+            "Fatal error: Cannot append to $GLOBALS on line 2",
+        ),
+        (
+            "isset(\n  $GLOBALS\n  []\n);",
+            "Fatal error: Cannot use [] for reading on line 2",
+        ),
+        (
+            "isset(\n  $GLOBALS\n  []\n  [\"a\"]\n);",
+            "Fatal error: Cannot append to $GLOBALS on line 2",
+        ),
+        (
+            "unset(\n  $a\n  []\n  [\"b\"]\n);",
+            "Fatal error: Cannot use [] for unsetting on line 2",
+        ),
+    ];
+    let mut failures = String::new();
+    for (snippet, expected) in cases {
+        let got = ours(snippet);
+        if got != *expected {
+            let _ = writeln!(failures, "{snippet}\n    php:  {expected}\n    ours: {got}");
+        }
+    }
     assert!(failures.is_empty(), "mismatches:\n{failures}");
 }
 

@@ -5,11 +5,10 @@
 //! typed class constants, doc comments).
 
 use php_runtime::ZStr;
-use php_vm::class::{Class, Magic};
+use php_vm::class::{Class, Magic, NameMap};
 use php_vm::func::{flags, Builtin, Func, Method};
 use php_vm::Vm;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 /// Replaces the native function `name` with an edited copy.
@@ -43,7 +42,7 @@ pub(crate) fn deprecate_function(vm: &mut Vm, name: &str, since: &str, message: 
 // `ZStr` caches its hash in a cell; keys are never mutated (the VM's own
 // tables use the same key type).
 #[allow(clippy::mutable_key_type)]
-pub(crate) fn magic_of(methods: &HashMap<ZStr, Rc<Method>>) -> Magic {
+pub(crate) fn magic_of(methods: &NameMap<Rc<Method>>) -> Magic {
     let g = |n: &str| methods.get(n.as_bytes()).cloned();
     Magic {
         construct: g("__construct"),
@@ -97,7 +96,7 @@ pub(crate) fn rebuild_class(
 ) -> Rc<Class> {
     let old = Rc::downgrade(cls);
     let new = Rc::new_cyclic(|weak: &Weak<Class>| {
-        let methods: HashMap<ZStr, Rc<Method>> = cls
+        let methods: NameMap<Rc<Method>> = cls
             .methods
             .iter()
             .map(|(k, m)| (k.clone(), remap_method(m, &old, weak)))

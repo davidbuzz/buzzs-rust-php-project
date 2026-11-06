@@ -18,6 +18,7 @@
 #include <lexbor/html/interfaces/template_element.h>
 #include <lexbor/dom/dom.h>
 #include <lexbor/encoding/encoding.h>
+#include <lexbor/core/array_obj.h>
 #include <lexbor/core/swar.h>
 #include <lexbor/css/parser.h>
 #include <lexbor/css/log.h>
@@ -1083,4 +1084,75 @@ const lxb_char_t *phpdom_lxb_doctype_public_id(lxb_dom_node_t *node, size_t *len
 const lxb_char_t *phpdom_lxb_doctype_system_id(lxb_dom_node_t *node, size_t *len)
 {
 	return lxb_dom_document_type_system_id(lxb_dom_interface_document_type(node), len);
+}
+
+/* ------------------------------------------------------------------ */
+/* The bridge's work list (php-src html5_parser.c `work_list`)          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The lexbor -> libxml2 bridge (Rust, html5_parser.rs) keeps the nodes it
+ * still has to convert in a lexbor_array_obj_t, as php-src's
+ * lexbor_libxml2_bridge_convert does.  Using lexbor's own array gives the
+ * list php-src's memory footprint (lexbor sizes it as
+ * sizeof(uint8_t *) * items * item size and grows it 128 items at a time)
+ * and its fallibility, so a huge flat document reaches memory_limit while
+ * it is converted, as it does in PHP (GH-25118).
+ */
+
+#define PHPDOM_WORK_LIST_INIT_SIZE 128
+
+/* `work_list_item`; mirrored by WorkItemRaw in lexbor.rs. */
+typedef struct phpdom_work_item {
+	const lxb_dom_node_t *node;
+	uintptr_t current_active_namespace;
+	void *lxml_parent;
+	void *lxml_ns;
+	bool in_template;
+} phpdom_work_item;
+
+/* `lexbor_array_obj_init(&work_list, WORK_LIST_INIT_SIZE, sizeof(work_list_item))`; NULL on allocation failure. */
+lexbor_array_obj_t *phpdom_work_list_create(void)
+{
+	lexbor_array_obj_t *list = lexbor_array_obj_create();
+	if (list == NULL) {
+		return NULL;
+	}
+	if (lexbor_array_obj_init(list, PHPDOM_WORK_LIST_INIT_SIZE, sizeof(phpdom_work_item)) != LXB_STATUS_OK) {
+		lexbor_array_obj_destroy(list, true);
+		return NULL;
+	}
+	return list;
+}
+
+/* `lexbor_libxml2_bridge_work_list_item_push`: false when the list could not grow. */
+bool phpdom_work_list_push(lexbor_array_obj_t *list, const lxb_dom_node_t *node, uintptr_t current_active_namespace,
+	void *lxml_parent, void *lxml_ns, bool in_template)
+{
+	phpdom_work_item *item = (phpdom_work_item *) lexbor_array_obj_push_wo_cls(list);
+	if (item == NULL) {
+		return false;
+	}
+	item->node = node;
+	item->current_active_namespace = current_active_namespace;
+	item->lxml_parent = lxml_parent;
+	item->lxml_ns = lxml_ns;
+	item->in_template = in_template;
+	return true;
+}
+
+/* `lexbor_array_obj_pop`: copies the most recently pushed item into *out; false when the list is empty. */
+bool phpdom_work_list_pop(lexbor_array_obj_t *list, phpdom_work_item *out)
+{
+	const phpdom_work_item *item = (const phpdom_work_item *) lexbor_array_obj_pop(list);
+	if (item == NULL) {
+		return false;
+	}
+	*out = *item;
+	return true;
+}
+
+void phpdom_work_list_destroy(lexbor_array_obj_t *list)
+{
+	lexbor_array_obj_destroy(list, true);
 }

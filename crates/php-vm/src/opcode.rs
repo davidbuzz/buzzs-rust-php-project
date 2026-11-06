@@ -705,8 +705,8 @@ pub enum Op {
         val: Operand,
         place: PlaceId,
     },
-    /// `IncDec` of `$cv[dim]`: php-src compiles `$a[k]++` to `FETCH_DIM_RW`
-    /// + `PRE_INC`/`POST_INC` on the fetched slot; this is the
+    /// `IncDec` of `$cv[dim]`: php-src compiles `$a[k]++` to a `FETCH_DIM_RW`
+    /// followed by `PRE_INC`/`POST_INC` on the fetched slot; this is the
     /// `IS_LONG`/`IS_DOUBLE` fast path of that pair on an array element.
     /// Other elements and containers go through `place`.
     IncDecDimCv {
@@ -859,6 +859,7 @@ pub const NATIVE_PARAM_BITS: u32 = PREFER_REF | UNCHECKED_TYPE;
 
 /// Information about one declared parameter.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)] // mirrors `zend_arg_info`'s independent flags
 pub struct ParamInfo {
     /// Name without `$`.
     pub name: ZStr,
