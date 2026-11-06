@@ -81,6 +81,7 @@ impl ArrayKey {
     }
 
     /// The key as a PHP value (`int` or `string`).
+    #[inline]
     #[must_use]
     pub fn to_value(&self) -> Value {
         match self {
@@ -1344,21 +1345,31 @@ impl HashTable {
     #[inline]
     #[must_use]
     pub fn get_int(&self, i: i64) -> Option<&Value> {
-        match &self.store {
-            Store::Uninit => None,
-            Store::Packed(v) => v.get(usize::try_from(i).ok()?)?.as_ref(),
-            Store::Hash(d) => {
-                let idx = d.find_int(self.table_size, i)?;
-                d.buckets.get(idx as usize)?.val.as_ref()
-            }
+        // The packed test first: one compare instead of decoding the
+        // storage kind.
+        if let Store::Packed(v) = &self.store {
+            return v.get(usize::try_from(i).ok()?)?.as_ref();
         }
+        let Store::Hash(d) = &self.store else {
+            return None;
+        };
+        let idx = d.find_int(self.table_size, i)?;
+        d.buckets.get(idx as usize)?.val.as_ref()
     }
 
-    /// Mutable lookup of an integer key.
+    /// Mutable lookup of an integer key (one probe, no second storage
+    /// match for the slot).
     #[inline]
     pub fn get_int_mut(&mut self, i: i64) -> Option<&mut Value> {
-        let idx = self.find_int(i)?;
-        self.val_mut(idx)
+        let ts = self.table_size;
+        match &mut self.store {
+            Store::Uninit => None,
+            Store::Packed(v) => v.get_mut(usize::try_from(i).ok()?)?.as_mut(),
+            Store::Hash(d) => {
+                let idx = d.find_int(ts, i)?;
+                d.buckets.get_mut(idx as usize)?.val.as_mut()
+            }
+        }
     }
 
     /// Looks up an exact string key given as a [`ZStr`] (no numeric
@@ -1395,8 +1406,16 @@ impl HashTable {
     /// Mutable lookup.
     #[inline]
     pub fn get_mut(&mut self, key: &ArrayKey) -> Option<&mut Value> {
-        let idx = self.find(key)?;
-        self.val_mut(idx)
+        let s = match key {
+            ArrayKey::Int(i) => return self.get_int_mut(*i),
+            ArrayKey::Str(s) => s,
+        };
+        let ts = self.table_size;
+        let Store::Hash(d) = &mut self.store else {
+            return None;
+        };
+        let idx = d.find_zstr(ts, s)?;
+        d.buckets.get_mut(idx as usize)?.val.as_mut()
     }
 
     /// Whether the key exists.
@@ -3235,6 +3254,18 @@ mod tests {
         assert!(s.table_size() >= 32);
         assert_eq!(s.get_str(b"k3").and_then(Value::as_int), Some(33));
         assert_eq!(s.get_str(b"k19").and_then(Value::as_int), Some(19));
+        // Mutable lookups in either storage.
+        if let Some(v) = t.get_int_mut(5) {
+            *v = Value::Int(56);
+        }
+        assert_eq!(t.get_int(5).and_then(Value::as_int), Some(56));
+        assert!(t.get_int_mut(-1).is_none());
+        if let Some(v) = s.get_mut(&ArrayKey::from("k7")) {
+            *v = Value::Int(77);
+        }
+        assert_eq!(s.get_str(b"k7").and_then(Value::as_int), Some(77));
+        assert!(s.get_mut(&ArrayKey::Int(7)).is_none());
+        assert!(s.get_mut(&ArrayKey::from("nope")).is_none());
         // `$a[] = v` when nNextFreeElement points at an existing element.
         let mut n = HashTable::new();
         n.push(Value::Int(0)).unwrap();
@@ -3242,6 +3273,10 @@ mod tests {
         n.set_next_free_element(1);
         assert!(n.push(Value::Int(2)).is_err());
         assert_eq!(n.len(), 2);
+        assert!(n.get_mut(&ArrayKey::from("x")).is_none());
+        assert!(n.get_mut(&ArrayKey::Int(1)).is_some());
+        assert!(n.get_int_mut(2).is_none());
+        assert!(HashTable::new().get_int_mut(0).is_none());
     }
 
     #[test]
