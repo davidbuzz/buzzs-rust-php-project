@@ -262,13 +262,21 @@ impl Vm {
     /// `$a instanceof B`.
     pub(crate) fn op_instanceof(&mut self, v: &Value, spec: &ClassSpec) -> VmResult<bool> {
         let cls = match spec {
-            ClassSpec::Named(l) => {
-                let n = self.lit_str(*l);
-                match self.find_class(n.as_bytes()) {
-                    Some(c) => c,
-                    None => return Ok(false),
+            // `ZEND_INSTANCEOF` caches the class once found (it never
+            // autoloads, so a miss is looked up again next time).
+            ClassSpec::Named(l) => match self.peek_named_class(*l) {
+                Some(c) => c,
+                None => {
+                    let n = self.lit_str(*l);
+                    match self.find_class(n.as_bytes()) {
+                        Some(c) => {
+                            self.remember_named_class(*l, &c);
+                            c
+                        }
+                        None => return Ok(false),
+                    }
                 }
-            }
+            },
             ClassSpec::Dyn(op) => {
                 let c = self.read(*op)?;
                 match c {

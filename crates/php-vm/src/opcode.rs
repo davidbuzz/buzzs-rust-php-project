@@ -700,6 +700,10 @@ pub struct OpArray {
     /// are never unregistered once declared). Weak: a method's op array
     /// naming its own class would otherwise form an `Rc` cycle.
     pub class_cache: RefCell<Vec<std::rc::Weak<crate::class::Class>>>,
+    /// Run-time cache of constant, class constant, static property and
+    /// static method lookups (php-src's `run_time_cache`; see
+    /// [`crate::rtcache`]).
+    pub rt_cache: crate::rtcache::RuntimeCache,
 }
 
 /// An [`OpArray::fcall_cache`] entry. User functions are held weakly: the

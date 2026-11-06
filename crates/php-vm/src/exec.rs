@@ -1247,13 +1247,12 @@ impl Vm {
                         fallback,
                         dst,
                     } => {
-                        let v = self.fetch_constant(*name, *fallback)?;
+                        let v = self.fetch_constant_cached(*name, *fallback)?;
                         self.set_tmp(*dst, v);
                         Flow::Next
                     }
                     Op::FetchClassConst { class, name, dst } => {
-                        let n = self.read(*name)?;
-                        let v = self.op_fetch_class_const(class, n)?;
+                        let v = self.fetch_class_const_cached(class, *name)?;
                         self.set_tmp(*dst, v);
                         Flow::Next
                     }

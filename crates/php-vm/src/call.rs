@@ -696,6 +696,12 @@ impl Vm {
     }
 
     pub(crate) fn op_init_static_call(&mut self, class: &ClassSpec, name: Operand) -> VmResult<()> {
+        // The op's run-time cache slot (see `rtcache`).
+        if let Some(call) = self.static_call_hit(class, name) {
+            self.push_pending(call);
+            return Ok(());
+        }
+        let name_op = name;
         let forward = matches!(
             class,
             ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
@@ -713,6 +719,7 @@ impl Vm {
             return Err(self.make_throw("Error", "Cannot call constructor"));
         }
         let call = self.static_method_call(&cls, &name, forward)?;
+        self.static_call_fill(class, name_op, &cls, &call);
         if cls.is_trait() {
             // `zend_std_get_static_method()`: the resolved method (or the
             // `__callStatic` trampoline) is scoped to the trait itself.
