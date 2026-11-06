@@ -538,11 +538,30 @@ mod int_keys {
 }
 
 impl HashData {
+    /// Room for `table_size` buckets and their index
+    /// (`zend_hash_real_init_mixed_ex` allocates `HT_SIZE_EX(nTableSize)`).
     fn new(table_size: u32) -> Self {
         HashData {
-            buckets: Vec::new(),
+            buckets: Vec::with_capacity(table_size as usize),
             index: new_index(table_size),
         }
+    }
+
+    /// Appends a bucket for `key` and links it at the head of its chain
+    /// (the tail of `_zend_hash_add_or_update_i`); returns its position.
+    /// The caller checked that the key is absent and that the table has
+    /// room (`nNumUsed < nTableSize`).
+    #[inline]
+    fn append(&mut self, ts: u32, key: ArrayKey, val: Value) -> u32 {
+        let idx = to_u32(self.buckets.len());
+        let s = hash_slot(ts, key.hash());
+        let head = match self.index.get_mut(s) {
+            Some(slot) => std::mem::replace(slot, idx),
+            None => INVALID,
+        };
+        self.set_next(ts, idx, head);
+        self.buckets.push(Bucket::new(key, val));
+        idx
     }
 
     /// The first bucket of `h`'s chain (`HT_HASH(ht, nIndex)`).
@@ -684,7 +703,11 @@ impl HashTable {
         t
     }
 
-    /// Creates an empty table sized for `n` elements (`zend_new_array(n)`).
+    /// Creates an empty table sized for `n` elements (`zend_new_array(n)`):
+    /// nothing is allocated until the first insert, which allocates room for
+    /// `nTableSize` (`n` rounded up to a power of two, at least 8) elements
+    /// at once, as `zend_hash_real_init_packed` / `_mixed` do; the storage
+    /// then doubles with the table size.
     #[must_use]
     pub fn with_capacity(n: usize) -> Self {
         HashTable {
@@ -824,12 +847,28 @@ impl HashTable {
         }
     }
 
+    /// `zend_hash_real_init_packed_ex`: room for `nTableSize` values up
+    /// front, so appends below the table size never reallocate.
     fn real_init_packed(&mut self) {
-        self.store = Store::Packed(Vec::new());
+        self.store = Store::Packed(Vec::with_capacity(self.table_size as usize));
     }
 
+    /// `zend_hash_real_init_mixed_ex`: room for `nTableSize` buckets and
+    /// their index.
     fn real_init_mixed(&mut self) {
         self.store = Store::Hash(HashData::new(self.table_size));
+    }
+
+    /// Grows the storage to hold `nTableSize` elements after the table size
+    /// changed (the `perealloc` of `arData` in `zend_hash_packed_grow` and
+    /// `zend_hash_do_resize`); never shrinks.
+    fn reserve_table(&mut self) {
+        let ts = self.table_size as usize;
+        match &mut self.store {
+            Store::Uninit => {}
+            Store::Packed(v) => v.reserve_exact(ts.saturating_sub(v.len())),
+            Store::Hash(d) => d.buckets.reserve_exact(ts.saturating_sub(d.buckets.len())),
+        }
     }
 
     /// The hash storage, converting an uninitialized or packed table first.
@@ -915,6 +954,8 @@ impl HashTable {
         }
     }
 
+    /// `zend_hash_do_resize`: compacts a table with enough holes, otherwise
+    /// doubles `nTableSize` (buckets and index) and rehashes.
     fn do_resize(&mut self) {
         let n = self.num_elements;
         if self.used() > n + (n >> 5) {
@@ -924,24 +965,26 @@ impl HashTable {
             if let Store::Hash(d) = &mut self.store {
                 d.index = new_index(self.table_size);
             }
+            self.reserve_table();
             self.rehash();
         }
     }
 
     /// `zend_hash_packed_to_hash`: the values become buckets keyed by their
-    /// positions, then `zend_hash_rehash` drops the holes (remapping the
-    /// internal pointer and the registered iterators) and links the chains.
+    /// positions (in storage for `nTableSize` buckets), then
+    /// `zend_hash_rehash` drops the holes (remapping the internal pointer
+    /// and the registered iterators) and links the chains.
     fn packed_to_hash(&mut self) {
         let buckets = match std::mem::replace(&mut self.store, Store::Uninit) {
             Store::Uninit => Vec::new(),
-            Store::Packed(v) => v
-                .into_iter()
-                .enumerate()
-                .map(|(i, val)| Bucket {
+            Store::Packed(v) => {
+                let mut buckets = Vec::with_capacity((self.table_size as usize).max(v.len()));
+                buckets.extend(v.into_iter().enumerate().map(|(i, val)| Bucket {
                     val,
                     key: ArrayKey::Int(idx_key(i)),
-                })
-                .collect(),
+                }));
+                buckets
+            }
             Store::Hash(d) => {
                 self.store = Store::Hash(d);
                 return;
@@ -1004,22 +1047,20 @@ impl HashTable {
     /// table is in hash mode).
     fn hash_append(&mut self, key: ArrayKey, val: Value) -> u32 {
         if let ArrayKey::Int(h) = key {
-            if h >= self.next_free {
-                self.next_free = if h < i64::MAX { h + 1 } else { i64::MAX };
-            }
+            self.note_int_key(h);
         }
         let ts = self.table_size;
-        let d = self.hash_data_mut();
-        let idx = to_u32(d.buckets.len());
-        let s = hash_slot(ts, key.hash());
-        let head = match d.index.get_mut(s) {
-            Some(slot) => std::mem::replace(slot, idx),
-            None => INVALID,
-        };
-        d.set_next(ts, idx, head);
-        d.buckets.push(Bucket::new(key, val));
+        let idx = self.hash_data_mut().append(ts, key, val);
         self.num_elements += 1;
         idx
+    }
+
+    /// `nNextFreeElement` after adding the integer key `h` to a hash.
+    #[inline]
+    fn note_int_key(&mut self, h: i64) {
+        if h >= self.next_free {
+            self.next_free = if h < i64::MAX { h + 1 } else { i64::MAX };
+        }
     }
 
     fn add_to_packed(&mut self, h: i64, val: Value) -> u32 {
@@ -1039,11 +1080,56 @@ impl HashTable {
     /// Port of `_zend_hash_index_add_or_update_i`. Returns the bucket index
     /// and whether the key already existed (in which case `val` was stored
     /// only for `Mode::Update`).
+    ///
+    /// The cases that dominate are decided here without a call: an existing
+    /// element, an append at `nNumUsed` of a packed table inside
+    /// `nTableSize` (`add_to_packed` with no holes to fill), and a new key
+    /// in a hash with room. Everything else (initialisation, holes, growth,
+    /// conversion) is [`HashTable::index_insert_slow`].
+    #[inline]
     fn index_insert(&mut self, h: i64, val: Value, mode: Mode) -> Result<(u32, bool), Value> {
-        let mut h = h;
-        if mode == Mode::Next && h == i64::MIN {
-            h = 0;
+        let h = if mode == Mode::Next && h == i64::MIN {
+            0
+        } else {
+            h
+        };
+        let ts = self.table_size;
+        match &mut self.store {
+            Store::Packed(v) => {
+                if let Ok(i) = usize::try_from(h) {
+                    let len = v.len();
+                    if i == len && h < i64::from(ts) {
+                        v.push(Some(val));
+                        self.next_free = h + 1;
+                        self.num_elements += 1;
+                        return Ok((to_u32(i), false));
+                    }
+                    let live = matches!(v.get(i), Some(Some(_)));
+                    if live {
+                        return self.existing(to_u32(i), val, mode);
+                    }
+                }
+            }
+            Store::Hash(d) => {
+                if let Some(idx) = d.find_int(ts, h) {
+                    return self.existing(idx, val, mode);
+                }
+                if d.buckets.len() < ts as usize {
+                    let idx = d.append(ts, ArrayKey::Int(h), val);
+                    self.note_int_key(h);
+                    self.num_elements += 1;
+                    return Ok((idx, false));
+                }
+            }
+            Store::Uninit => {}
         }
+        self.index_insert_slow(h, val, mode)
+    }
+
+    /// The initialisation, hole, growth and conversion cases of
+    /// [`HashTable::index_insert`] (`h` already mapped for `Mode::Next`).
+    #[inline(never)]
+    fn index_insert_slow(&mut self, h: i64, val: Value, mode: Mode) -> Result<(u32, bool), Value> {
         match self.kind() {
             Kind::Packed => {
                 let used = self.used() as usize;
@@ -1064,7 +1150,9 @@ impl HashTable {
                     && (h >> 1) < i64::from(self.table_size)
                     && (self.table_size >> 1) < self.num_elements
                 {
+                    // zend_hash_packed_grow
                     self.table_size += self.table_size;
+                    self.reserve_table();
                     return Ok((self.add_to_packed(h, val), false));
                 } else {
                     if self.used() >= self.table_size {
@@ -1092,6 +1180,9 @@ impl HashTable {
         Ok((self.hash_append(ArrayKey::Int(h), val), false))
     }
 
+    /// An insert that found `key` at `idx`: `HASH_LOOKUP` returns it,
+    /// `HASH_ADD` gives the value back, `HASH_UPDATE` overwrites.
+    #[inline]
     fn existing(&mut self, idx: u32, val: Value, mode: Mode) -> Result<(u32, bool), Value> {
         match mode {
             Mode::Lookup => Ok((idx, true)),
@@ -1106,8 +1197,29 @@ impl HashTable {
     }
 
     /// Port of `_zend_hash_add_or_update_i` for string keys (no numeric
-    /// normalization).
+    /// normalization). An existing key and a new key in a hash with room
+    /// are decided here; initialisation, conversion and growth are
+    /// [`HashTable::str_insert_slow`].
+    #[inline]
     fn str_insert(&mut self, key: ZStr, val: Value, mode: Mode) -> Result<(u32, bool), Value> {
+        let ts = self.table_size;
+        if let Store::Hash(d) = &mut self.store {
+            if let Some(idx) = d.find_zstr(ts, &key) {
+                return self.existing(idx, val, mode);
+            }
+            if d.buckets.len() < ts as usize {
+                let idx = d.append(ts, ArrayKey::Str(key), val);
+                self.num_elements += 1;
+                return Ok((idx, false));
+            }
+        }
+        self.str_insert_slow(key, val, mode)
+    }
+
+    /// The initialisation, conversion and growth cases of
+    /// [`HashTable::str_insert`].
+    #[inline(never)]
+    fn str_insert_slow(&mut self, key: ZStr, val: Value, mode: Mode) -> Result<(u32, bool), Value> {
         match self.kind() {
             Kind::Uninit => self.real_init_mixed(),
             Kind::Packed => {
@@ -1128,6 +1240,7 @@ impl HashTable {
         Ok((self.hash_append(ArrayKey::Str(key), val), false))
     }
 
+    #[inline]
     fn key_insert(&mut self, key: ArrayKey, val: Value, mode: Mode) -> Result<(u32, bool), Value> {
         match key {
             ArrayKey::Int(h) => self.index_insert(h, val, mode),
@@ -1137,6 +1250,7 @@ impl HashTable {
 
     /// `zend_hash_lookup`: the position of `key` (one probe), inserted with
     /// `null` when absent, and whether it already existed.
+    #[inline]
     fn lookup_idx(&mut self, key: ArrayKey) -> (u32, bool) {
         let Ok(r) = self.key_insert(key, Value::Null, Mode::Lookup) else {
             unreachable!("lookup never fails")
@@ -1144,6 +1258,7 @@ impl HashTable {
         r
     }
 
+    #[inline]
     fn val_at_mut(&mut self, idx: u32) -> &mut Value {
         match self.val_mut(idx) {
             Some(v) => v,
@@ -1295,6 +1410,7 @@ impl HashTable {
     /// `$a[] = v`). Returns the key used, or gives the value back when the
     /// next key is already occupied ("Cannot add element to the array as the
     /// next element is already occupied").
+    #[inline]
     pub fn push(&mut self, val: Value) -> Result<i64, Value> {
         let h = self.next_index();
         self.index_insert(h, val, Mode::Next)?;
@@ -1316,6 +1432,7 @@ impl HashTable {
 
     /// Like [`HashTable::lookup`] and also reports whether the key was newly
     /// inserted.
+    #[inline]
     pub fn lookup_ex(&mut self, key: impl Into<ArrayKey>) -> (&mut Value, bool) {
         let (idx, existed) = self.lookup_idx(key.into());
         (self.val_at_mut(idx), !existed)
@@ -1844,14 +1961,17 @@ impl HashTable {
     fn sort_finish(&mut self, items: Vec<SortItem>, renumber: bool) {
         self.internal_ptr = 0;
         let n = items.len();
+        // Room for `nTableSize` elements, as php-src sorts `arData` in place
+        // (and `zend_hash_to_packed` allocates that many values).
+        let cap = (self.table_size as usize).max(n);
         if renumber {
-            self.store = Store::Packed(items.into_iter().map(|it| Some(it.val)).collect());
+            let mut vals = Vec::with_capacity(cap);
+            vals.extend(items.into_iter().map(|it| Some(it.val)));
+            self.store = Store::Packed(vals);
             self.next_free = idx_key(n);
         } else {
-            let buckets = items
-                .into_iter()
-                .map(|it| Bucket::new(it.key, it.val))
-                .collect();
+            let mut buckets = Vec::with_capacity(cap);
+            buckets.extend(items.into_iter().map(|it| Bucket::new(it.key, it.val)));
             self.store = Store::Hash(HashData {
                 buckets,
                 index: new_index(self.table_size),
@@ -1933,9 +2053,8 @@ impl HashTable {
             }
         }
         let store = std::mem::replace(&mut self.store, Store::Uninit);
-        let buckets: Vec<Bucket> = into_entries(store)
-            .map(|(k, v)| Bucket::new(k, v))
-            .collect();
+        let mut buckets: Vec<Bucket> = Vec::with_capacity(self.table_size as usize);
+        buckets.extend(into_entries(store).map(|(k, v)| Bucket::new(k, v)));
         let n = buckets.len();
         self.store = Store::Hash(HashData {
             buckets,
@@ -1952,12 +2071,9 @@ impl HashTable {
         if renumber {
             match std::mem::replace(&mut self.store, Store::Uninit) {
                 Store::Hash(d) => {
-                    let vals: Vec<Option<Value>> = d
-                        .buckets
-                        .into_iter()
-                        .filter_map(|b| b.val)
-                        .map(Some)
-                        .collect();
+                    let cap = (self.table_size as usize).max(d.buckets.len());
+                    let mut vals: Vec<Option<Value>> = Vec::with_capacity(cap);
+                    vals.extend(d.buckets.into_iter().filter_map(|b| b.val).map(Some));
                     self.next_free = idx_key(vals.len());
                     self.store = Store::Packed(vals);
                 }
@@ -2416,23 +2532,25 @@ impl Clone for HashTable {
             out.internal_ptr = 0;
             return out;
         }
+        // The copy has room for `nTableSize` elements, like the source
+        // (`zend_array_dup` allocates `HT_SIZE_EX(nTableSize)`).
+        let cap = out.table_size as usize;
         match &self.store {
             Store::Uninit => {}
             Store::Packed(v) => {
-                out.store = Store::Packed(v.iter().map(|s| s.as_ref().map(&dup_val)).collect());
+                let mut vals = Vec::with_capacity(cap.max(v.len()));
+                vals.extend(v.iter().map(|s| s.as_ref().map(&dup_val)));
+                out.store = Store::Packed(vals);
             }
             Store::Hash(d) => {
-                let buckets = d
-                    .buckets
-                    .iter()
-                    .map(|b| match &b.val {
-                        Some(v) => Bucket::new(b.key.clone(), dup_val(v)),
-                        None => Bucket {
-                            val: None,
-                            key: ArrayKey::Int(0),
-                        },
-                    })
-                    .collect();
+                let mut buckets = Vec::with_capacity(cap.max(d.buckets.len()));
+                buckets.extend(d.buckets.iter().map(|b| match &b.val {
+                    Some(v) => Bucket::new(b.key.clone(), dup_val(v)),
+                    None => Bucket {
+                        val: None,
+                        key: ArrayKey::Int(0),
+                    },
+                }));
                 out.store = Store::Hash(HashData {
                     buckets,
                     index: new_index(out.table_size),
@@ -3021,6 +3139,145 @@ mod tests {
             t.values().filter_map(Value::as_int).collect::<Vec<_>>(),
             want
         );
+    }
+
+    #[test]
+    fn insert_fast_paths_keep_zend_semantics() {
+        let mut t = HashTable::new();
+        for i in 0..4 {
+            assert_eq!(t.push(Value::Int(i)).ok(), Some(i));
+        }
+        // Existing elements: update in place, `add` refuses, lookups find.
+        assert_eq!(
+            t.insert(2, Value::Int(20)).and_then(|v| v.as_int()),
+            Some(2)
+        );
+        assert!(t.add(1, Value::Int(9)).is_err());
+        let (slot, added) = t.lookup_ex(3);
+        assert!(!added);
+        *slot = Value::Int(30);
+        // An append at nNumUsed through `insert` stays packed.
+        assert!(t.insert(4, Value::Int(40)).is_none());
+        assert!(t.is_packed());
+        assert_eq!(render(&t), "0=0,1=1,2=20,3=30,4=40");
+        assert_eq!(t.next_index(), 5);
+        // Deleting the last element trims nNumUsed but not
+        // nNextFreeElement: the next push leaves a hole behind.
+        t.remove(&ArrayKey::Int(4));
+        assert_eq!(t.used(), 4);
+        assert_eq!(t.push(Value::Int(50)).ok(), Some(5));
+        assert!(t.is_packed());
+        assert_eq!(t.used(), 6);
+        assert_eq!(render(&t), "0=0,1=1,2=20,3=30,5=50");
+        // Writing into the hole keeps the order: the table becomes a hash.
+        assert!(t.insert(4, Value::Int(44)).is_none());
+        assert!(!t.is_packed());
+        assert_eq!(render(&t), "0=0,1=1,2=20,3=30,5=50,4=44");
+        // Hash: updates, lookups and appends with room, then growth.
+        assert_eq!(
+            t.insert(5, Value::Int(55)).and_then(|v| v.as_int()),
+            Some(50)
+        );
+        let (_, added) = t.lookup_ex(100);
+        assert!(added);
+        assert_eq!(t.next_index(), 101);
+        for k in 200..240 {
+            assert!(t.insert(k, Value::Int(k)).is_none());
+        }
+        assert!(t.table_size() >= 64);
+        for k in 200..240 {
+            assert_eq!(t.get_int(k).and_then(Value::as_int), Some(k));
+        }
+        assert!(t
+            .get(&ArrayKey::Int(100))
+            .is_some_and(|v| matches!(v, Value::Null)));
+        // String keys go through the same fast path of str_insert.
+        let mut s = HashTable::new();
+        for i in 0..20 {
+            assert!(s
+                .insert_str_raw(ZStr::from(format!("k{i}")), Value::Int(i))
+                .is_none());
+        }
+        assert_eq!(
+            s.insert_str_raw(ZStr::from("k3"), Value::Int(33))
+                .and_then(|v| v.as_int()),
+            Some(3)
+        );
+        assert!(s.add(ArrayKey::from("k4"), Value::Null).is_err());
+        assert_eq!(s.len(), 20);
+        assert!(s.table_size() >= 32);
+        assert_eq!(s.get_str(b"k3").and_then(Value::as_int), Some(33));
+        assert_eq!(s.get_str(b"k19").and_then(Value::as_int), Some(19));
+        // `$a[] = v` when nNextFreeElement points at an existing element.
+        let mut n = HashTable::new();
+        n.push(Value::Int(0)).unwrap();
+        n.push(Value::Int(1)).unwrap();
+        n.set_next_free_element(1);
+        assert!(n.push(Value::Int(2)).is_err());
+        assert_eq!(n.len(), 2);
+    }
+
+    #[test]
+    fn storage_is_presized_to_the_table_size() {
+        fn capacity(t: &HashTable) -> usize {
+            match &t.store {
+                Store::Uninit => 0,
+                Store::Packed(v) => v.capacity(),
+                Store::Hash(d) => d.buckets.capacity(),
+            }
+        }
+        fn data_ptr(t: &HashTable) -> usize {
+            match &t.store {
+                Store::Uninit => 0,
+                Store::Packed(v) => v.as_ptr() as usize,
+                Store::Hash(d) => d.buckets.as_ptr() as usize,
+            }
+        }
+        // zend_hash_real_init_packed: the first insert allocates nTableSize
+        // values, so appends up to it never move the storage.
+        let mut t = HashTable::new();
+        assert_eq!(capacity(&t), 0);
+        t.push(Value::Int(0)).unwrap();
+        assert_eq!(t.table_size(), 8);
+        assert!(capacity(&t) >= 8);
+        let first = data_ptr(&t);
+        for i in 1..8 {
+            t.push(Value::Int(i)).unwrap();
+        }
+        assert_eq!(data_ptr(&t), first);
+        // zend_hash_packed_grow doubles the table size and the storage.
+        t.push(Value::Int(8)).unwrap();
+        assert_eq!(t.table_size(), 16);
+        assert!(capacity(&t) >= 16);
+        // A size hint is rounded up to a power of two, allocated at once.
+        let mut h = HashTable::with_capacity(100);
+        assert_eq!(capacity(&h), 0);
+        h.push(Value::Null).unwrap();
+        assert_eq!(h.table_size(), 128);
+        assert!(capacity(&h) >= 128);
+        // Hashes: zend_hash_real_init_mixed, then zend_hash_do_resize.
+        let mut m = HashTable::with_capacity_mixed(20);
+        assert!(capacity(&m) >= 32);
+        let first = data_ptr(&m);
+        for i in 0..32 {
+            m.insert(format!("k{i}").as_str(), Value::Int(i));
+        }
+        assert_eq!(data_ptr(&m), first);
+        m.insert("more", Value::Null);
+        assert_eq!(m.table_size(), 64);
+        assert!(capacity(&m) >= 64);
+        // Conversions, copies (zend_array_dup) and sorts keep room for
+        // nTableSize elements.
+        t.insert("s", Value::Null);
+        assert!(!t.is_packed());
+        assert!(capacity(&t) >= t.table_size() as usize);
+        for c in [t.clone(), m.clone(), h.clone()] {
+            assert!(capacity(&c) >= c.table_size() as usize);
+        }
+        let mut sorted = t.clone();
+        sorted.sort_by(|_, a, _, b| int_cmp(a, b), true);
+        assert!(sorted.is_packed());
+        assert!(capacity(&sorted) >= sorted.table_size() as usize);
     }
 
     #[test]
