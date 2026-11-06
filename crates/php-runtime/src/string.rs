@@ -1256,24 +1256,24 @@ mod tests {
     /// returns for those contents.
     #[test]
     fn immortal_strings_are_static_and_uncounted() {
-        let e = ZStr::empty();
-        assert!(e.is_empty());
-        assert!(e.is_interned());
-        assert_eq!(e.refcount(), 0);
-        assert_eq!(e.hash_value(), zend_hash_bytes(b""));
-        assert!(ZStr::ptr_eq(&e, &ZStr::intern(b"")));
-        assert!(ZStr::ptr_eq(&e, &ZStr::from("").interned()));
-        assert!(ZStr::ptr_eq(&e, &ZStr::default()));
-        let f = e.clone();
+        let empty = ZStr::empty();
+        assert!(empty.is_empty());
+        assert!(empty.is_interned());
+        assert_eq!(empty.refcount(), 0);
+        assert_eq!(empty.hash_value(), zend_hash_bytes(b""));
+        assert!(ZStr::ptr_eq(&empty, &ZStr::intern(b"")));
+        assert!(ZStr::ptr_eq(&empty, &ZStr::from("").interned()));
+        assert!(ZStr::ptr_eq(&empty, &ZStr::default()));
+        let handle = empty.clone();
         assert_eq!(
-            e.refcount(),
+            empty.refcount(),
             0,
             "handles of an immortal string are not counted"
         );
-        drop(f);
-        assert_eq!(e.refcount(), 0);
-        assert_eq!(e, ZStr::from(""));
-        assert_eq!(e, ZStr::concat(b"", b""));
+        drop(handle);
+        assert_eq!(empty.refcount(), 0);
+        assert_eq!(empty, ZStr::from(""));
+        assert_eq!(empty, ZStr::concat(b"", b""));
         for c in 0..=255u8 {
             let s = ZStr::from_byte(c);
             assert_eq!(s.as_bytes(), &[c]);
@@ -1288,24 +1288,24 @@ mod tests {
             assert!(ZStr::ptr_eq(&s, &ZStr::intern(&[c])), "{c}");
             assert!(ZStr::ptr_eq(&s, &s.clone()));
             assert_eq!(s, ZStr::from(&[c][..]));
-            assert_ne!(s, e);
+            assert_ne!(s, empty);
             drop(s.clone());
             assert_eq!(s.refcount(), 0);
         }
         assert_ne!(ZStr::from_byte(b'a'), ZStr::from_byte(b'b'));
         // Mutation copies, as for any interned string; the static is untouched.
-        let mut a = ZStr::from_byte(b'a');
-        a.append(b"b");
-        assert_eq!(a, "ab");
-        assert!(!a.is_interned());
-        assert_eq!(a.refcount(), 1);
+        let mut grown = ZStr::from_byte(b'a');
+        grown.append(b"b");
+        assert_eq!(grown, "ab");
+        assert!(!grown.is_interned());
+        assert_eq!(grown.refcount(), 1);
         assert_eq!(ZStr::from_byte(b'a'), "a");
-        let x = ZStr::empty().concat_owned(b"x");
-        assert_eq!(x, "x");
-        assert!(!x.is_interned());
-        let mut n = ZStr::empty();
-        n.append_long(42);
-        assert_eq!(n, "42");
+        let appended = ZStr::empty().concat_owned(b"x");
+        assert_eq!(appended, "x");
+        assert!(!appended.is_interned());
+        let mut digits = ZStr::empty();
+        digits.append_long(42);
+        assert_eq!(digits, "42");
         assert!(ZStr::empty().is_empty());
         assert_eq!(ZStr::from_byte(b'z').into_bytes(), b"z");
         assert_eq!(ZStr::from_byte(b'z').to_ascii_uppercase(), "Z");

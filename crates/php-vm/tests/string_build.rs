@@ -144,7 +144,7 @@ ini_set('precision', 0); echo $q . "", "\n";
 ini_set('precision', 25); echo $tenth . "", "\n";
 "#
         ),
-        r#"
+        r"
 Warning: Array to string conversion in t.php on line 4
 
 Warning: Undefined variable $undef in t.php on line 4
@@ -170,7 +170,7 @@ v-15 x1.5 2 1.0E+100 0.3 -9223372036854775808
 1.23E+3 0.125 1.23E+3
 1.0E+3
 0.1000000000000000055511151
-"#
+"
     );
 }
 
@@ -256,7 +256,7 @@ function g(): int { return strtoupper(
 try { g(); } catch (TypeError $e) { echo $e->getMessage(), " at ", $e->getLine(), "\n"; }
 "#
         ),
-        r#"
+        r"
 Warning: Array to string conversion in t.php on line 6
 [m]a Array b M c
 [ts][m]
@@ -298,7 +298,7 @@ n Array m Array
 Warning: Array to string conversion in t.php on line 28
 Array
 g(): Return value must be of type int, string returned at 31
-"#
+"
     );
 }
 
