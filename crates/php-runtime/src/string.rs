@@ -814,6 +814,14 @@ impl ZStr {
         s
     }
 
+    /// Number of live heap-interned strings of the calling thread (the
+    /// static empty and one-byte strings are not counted): what the
+    /// thread's intern table holds, for diagnostics and tests.
+    #[must_use]
+    pub fn live_interned_count() -> usize {
+        INTERNED_SET.with(|set| set.borrow().len())
+    }
+
     /// A string literal's value as the scanner makes it
     /// (`zend_scan_escape_string`): the shared `ZSTR_EMPTY_ALLOC()` /
     /// `ZSTR_CHAR(c)` for zero or one byte, otherwise a new string.
@@ -1855,11 +1863,6 @@ mod tests {
         assert!(ZStrBuf::with_capacity(0).finish().is_empty());
     }
 
-    /// Number of live heap-interned strings of this thread.
-    fn intern_table_len() -> usize {
-        INTERNED_SET.with(|set| set.borrow().len())
-    }
-
     /// Whether the intern table has an entry for `bytes`.
     fn intern_table_contains(bytes: &[u8]) -> bool {
         INTERNED_SET.with(|set| set.borrow().contains(InternKey::new(bytes)))
@@ -2087,7 +2090,7 @@ mod tests {
     /// with its last handle, and the bytes can be interned again later.
     #[test]
     fn interned_strings_leave_the_table_with_their_last_handle() {
-        let before = intern_table_len();
+        let before = ZStr::live_interned_count();
         assert!(!intern_table_contains(b"transient literal"));
         let a = ZStr::intern(b"transient literal");
         assert_eq!(a.refcount(), 1, "the table does not count");
@@ -2099,7 +2102,7 @@ mod tests {
         assert!(intern_table_contains(b"transient literal"));
         drop(b);
         assert!(!intern_table_contains(b"transient literal"));
-        assert_eq!(intern_table_len(), before);
+        assert_eq!(ZStr::live_interned_count(), before);
 
         let again = ZStr::intern(b"transient literal");
         assert!(again.is_interned());
@@ -2112,25 +2115,25 @@ mod tests {
         drop(in_place);
         assert!(!intern_table_contains(b"reused block"));
         drop(again);
-        assert_eq!(intern_table_len(), before);
+        assert_eq!(ZStr::live_interned_count(), before);
     }
 
     /// Many unique interned strings (an `eval()` loop over unique code):
     /// the table grows with the live ones and empties again.
     #[test]
     fn intern_table_follows_the_live_strings() {
-        let before = intern_table_len();
+        let before = ZStr::live_interned_count();
         for round in 0..2 {
             let live: Vec<ZStr> = (0..5000)
                 .map(|i| ZStr::intern(format!("unique literal {round} {i}").as_bytes()))
                 .collect();
-            assert_eq!(intern_table_len(), before + 5000);
+            assert_eq!(ZStr::live_interned_count(), before + 5000);
             for (i, s) in live.iter().enumerate() {
                 let again = ZStr::intern(format!("unique literal {round} {i}").as_bytes());
                 assert!(ZStr::ptr_eq(s, &again), "{round} {i}");
             }
             drop(live);
-            assert_eq!(intern_table_len(), before, "round {round}");
+            assert_eq!(ZStr::live_interned_count(), before, "round {round}");
         }
     }
 

@@ -269,7 +269,9 @@ pub(crate) struct FnCtx {
     pub ops: Vec<Op>,
     pub lines: Vec<u32>,
     pub literals: Vec<Value>,
-    lit_strs: HashMap<Vec<u8>, u32>,
+    /// The literal slot of each string literal, keyed by its interned
+    /// instance (looked up by bytes).
+    lit_strs: crate::class::NameMap<u32>,
     pub places: Vec<Place>,
     pub cv_names: Vec<ZStr>,
     cv_map: HashMap<Vec<u8>, u32>,
@@ -322,7 +324,7 @@ impl FnCtx {
             ops: Vec::new(),
             lines: Vec::new(),
             literals: Vec::new(),
-            lit_strs: HashMap::new(),
+            lit_strs: crate::class::NameMap::default(),
             places: Vec::new(),
             cv_names: Vec::new(),
             cv_map: HashMap::new(),
@@ -591,16 +593,20 @@ impl Compiler {
 
     pub(crate) fn lit_idx(&mut self, v: Value) -> u32 {
         let f = self.f();
-        if let Value::Str(s) = &v {
-            if let Some(&i) = f.lit_strs.get(s.as_bytes()) {
+        let v = match v {
+            Value::Str(s) => {
+                if let Some(&i) = f.lit_strs.get(s.as_bytes()) {
+                    return i;
+                }
+                // `zend_insert_literal` -> `zval_make_interned_string`: a
+                // literal nothing else holds becomes the interned instance
+                // itself, without a copy.
+                let s = s.into_interned();
+                let i = u32::try_from(f.literals.len()).unwrap_or(u32::MAX);
+                f.lit_strs.insert(s.clone(), i);
+                f.literals.push(Value::Str(s));
                 return i;
             }
-            let i = u32::try_from(f.literals.len()).unwrap_or(u32::MAX);
-            f.lit_strs.insert(s.as_bytes().to_vec(), i);
-            f.literals.push(Value::Str(s.interned()));
-            return i;
-        }
-        let v = match v {
             Value::Array(mut a) => {
                 intern_array_strings(&mut a);
                 Value::Array(a)
@@ -612,6 +618,9 @@ impl Compiler {
     }
 
     pub(crate) fn lit_str(&mut self, s: &[u8]) -> u32 {
+        if let Some(&i) = self.f().lit_strs.get(s) {
+            return i;
+        }
         self.lit_idx(Value::Str(ZStr::from(s)))
     }
 
@@ -1090,7 +1099,7 @@ impl Compiler {
     pub(crate) fn const_expr(&mut self, e: &ast::Expr) -> CResult<ConstExpr> {
         if let Some(v) = self.try_fold(e) {
             let v = match v {
-                Value::Str(s) => Value::Str(s.interned()),
+                Value::Str(s) => Value::Str(s.into_interned()),
                 Value::Array(mut a) => {
                     intern_array_strings(&mut a);
                     Value::Array(a)
