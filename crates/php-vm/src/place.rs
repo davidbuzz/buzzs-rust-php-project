@@ -719,6 +719,11 @@ pub(crate) fn descend(
                                 Step::Done(r)
                             }
                             _ => {
+                                if existed && diags.is_empty() {
+                                    if let Some(step) = concat_dim_in_place(slot, segs, wop) {
+                                        return step;
+                                    }
+                                }
                                 let step = apply_final(slot, wop);
                                 if !existed && rw {
                                     watch_rw_container(arr);
@@ -887,6 +892,36 @@ enum UndefDimHit {
     Array(ZArray, bool),
     /// A string: `zend_assign_to_string_offset`'s `GC_ADDREF(s)`.
     Str(ZStr),
+}
+
+/// `ZEND_ASSIGN_DIM_OP` with `.=` on an existing string element: like
+/// php-src (`zend_binary_op` on the fetched `var_ptr`, `concat_function`
+/// with `result == op1`), the element is extended in place
+/// (`zend_string_extend` when nothing else holds it; the array was already
+/// separated for writing) instead of being copied and written back by a
+/// second walk. Only when no diagnostic is pending (an error handler
+/// could otherwise observe or abort the operation before it is done) and
+/// no segment appends. The operation becomes [`WOp::FetchRw`], whose
+/// finished step is the result, so the callers' write-back of a compound
+/// assignment is skipped.
+fn concat_dim_in_place(slot: &mut Value, segs: &[RSeg], wop: &mut WOp) -> Option<Step> {
+    let WOp::AssignOp(BinaryOp::Concat, rhs) = wop else {
+        return None;
+    };
+    if segs.iter().any(|seg| matches!(seg, RSeg::Append)) {
+        return None;
+    }
+    let Value::Str(s) = slot else {
+        return None;
+    };
+    match rhs {
+        Value::Str(add) => s.append(add.as_bytes()),
+        Value::Int(i) => s.append_long(*i),
+        _ => return None,
+    }
+    let result = Value::Str(s.clone());
+    *wop = WOp::FetchRw;
+    Some(Step::Done(result))
 }
 
 /// The in-place append behind [`Vm::concat_assign_cv`]: `None` when place

@@ -195,3 +195,78 @@ fn rope_allocates_once() {
 fn concat_with_int_allocates_once() {
     assert_allocs("$t = '';", "$t = 'v' . $i;", 1.0);
 }
+
+/// `ZEND_ASSIGN_DIM_OP` with `.=`: existing string elements (also through
+/// properties and references) are extended in place; new keys, converted
+/// keys (with their diagnostics) and shared arrays keep php-src's results.
+#[test]
+fn concat_assign_on_array_elements_matches_php() {
+    assert_eq!(
+        output_of(
+            r#"<?php
+$a = ['k' => 'a', 'n' => ['m' => 'b'], 5 => 'c'];
+for ($i = 0; $i < 3; $i++) { $a['k'] .= $i; $a['n']['m'] .= 'x'; $a[5] .= "-"; }
+$b = $a;
+$r = ($a['k'] .= 'y');
+$a['n']['m'] .= $a['n']['m'];
+$a[1.5] = 's';
+$a[1.5] .= 't';
+$a['new'] .= 'z';
+echo $r, "\n";
+var_dump($a, $b['k']);
+class C { public array $arr = ['p' => 'q']; public $dyn; }
+$o = new C;
+$o->arr['p'] .= 'r';
+$o->arr['p'] .= 7;
+$o->dyn = ['d' => ''];
+$o->dyn['d'] .= 'e';
+$ref = &$o->arr;
+$ref['p'] .= '!';
+echo $o->arr['p'], ' ', $o->dyn['d'], "\n";
+$list = ['x'];
+foreach ($list as &$v) { $list[0] .= 'y'; }
+unset($v);
+echo $list[0], "\n";
+"#
+        ),
+        r#"
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 7
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+
+Warning: Undefined array key "new" in t.php on line 9
+a012y
+array(5) {
+  ["k"]=>
+  string(5) "a012y"
+  ["n"]=>
+  array(1) {
+    ["m"]=>
+    string(8) "bxxxbxxx"
+  }
+  [5]=>
+  string(4) "c---"
+  [1]=>
+  string(2) "st"
+  ["new"]=>
+  string(1) "z"
+}
+string(4) "a012"
+qr7! e
+xy
+"#
+    );
+}
+
+/// `$a['k'] .= 'x'` costs no more allocations than `$a['k'] = 'x'`: the
+/// element grows in place instead of being copied on every append.
+#[test]
+fn concat_assign_on_array_element_extends_in_place() {
+    let setup = "$a = ['k' => ''];";
+    let append = per_iteration(setup, "$a['k'] .= 'x';");
+    let assign = per_iteration(setup, "$a['k'] = 'x';");
+    assert!(
+        append <= assign + 0.05,
+        "`.=` on an element: {append:.3} allocations per iteration, plain assignment {assign:.3}"
+    );
+}
