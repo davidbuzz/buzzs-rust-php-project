@@ -1,6 +1,6 @@
 //! The virtual machine: global state, frames and request lifecycle.
 
-use crate::class::Class;
+use crate::class::{Class, NameMap};
 use crate::compiler::CompiledUnit;
 use crate::func::{Func, UserFunction};
 use crate::opcode::OpArray;
@@ -857,14 +857,17 @@ pub struct LastError {
 pub struct Vm {
     /// Call frames.
     pub frames: Vec<Frame>,
-    /// Functions by lower-case name.
-    pub functions: HashMap<ZStr, Func>,
-    /// Classes by lower-case name.
-    pub classes: HashMap<ZStr, Rc<Class>>,
+    /// Functions by lower-case name (`EG(function_table)`). A [`NameMap`],
+    /// like php-src's tables hashed with the unseeded
+    /// `zend_inline_hash_func`; nothing depends on its iteration order
+    /// (declaration order is kept where it is observable).
+    pub functions: NameMap<Func>,
+    /// Classes by lower-case name (`EG(class_table)`, a [`NameMap`]).
+    pub classes: NameMap<Rc<Class>>,
     /// Class declaration order (lower-case names) for `get_declared_classes`.
     pub class_order: Vec<ZStr>,
-    /// Constants by name.
-    pub constants: HashMap<ZStr, Value>,
+    /// Constants by name (`EG(zend_constants)`, a [`NameMap`]).
+    pub constants: NameMap<Value>,
     /// User-defined constant names in definition order.
     pub user_constants: Vec<ZStr>,
     /// The global variable table.

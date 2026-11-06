@@ -312,7 +312,8 @@ impl Vm {
     /// Reads a compiled variable without warning (`None` if undefined).
     #[inline]
     pub(crate) fn cv_get(&self, cv: u32) -> Option<Value> {
-        self.frame().peek_cv(cv, |slot: Option<&Value>| slot.cloned())
+        self.frame()
+            .peek_cv(cv, |slot: Option<&Value>| slot.cloned())
     }
 
     /// Assigns to a compiled variable (through references). A typed
