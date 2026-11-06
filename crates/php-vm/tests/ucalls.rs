@@ -206,3 +206,32 @@ try { echo g(b: 1); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n
         "1/5/3 1/2/3 1/5/9 4/5/0\ng(): Argument #1 ($a) not passed\n"
     );
 }
+
+#[test]
+fn method_cache_evictions_keep_lookups_exact() {
+    // More (class, scope, name) triples than the cache holds: every lookup
+    // must still resolve as `zend_std_get_method` would, including private
+    // methods reached from their own scope and refused from another one.
+    let classes: String = (0..100)
+        .map(|i| {
+            format!(
+                "class K{i} {{ function m() {{ return {i}; }} private function p() {{ return -{i}; }} function q($o) {{ return $o->p(); }} }}\n"
+            )
+        })
+        .collect();
+    let src = format!(
+        r#"<?php
+{classes}$objs = [];
+for ($i = 0; $i < 100; $i++) {{ $c = "K$i"; $objs[] = new $c; }}
+$sum = 0;
+for ($r = 0; $r < 3; $r++) {{ foreach ($objs as $o) {{ $sum += $o->m() + $o->M() + $o->q($o); }} }}
+echo $sum, "\n";
+try {{ $objs[0]->p(); }} catch (Error $e) {{ echo $e->getMessage(), "\n"; }}
+try {{ $objs[1]->q($objs[2]); }} catch (Error $e) {{ echo $e->getMessage(), "\n"; }}
+"#
+    );
+    assert_eq!(
+        run(&src),
+        "14850\nCall to private method K0::p() from global scope\nCall to private method K2::p() from scope K1\n"
+    );
+}
