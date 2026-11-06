@@ -193,6 +193,9 @@ pub struct RequestCtx {
     pub facts: RefCell<HeaderFacts>,
     /// `SG(request_info).headers_only`: a HEAD request (`sapi_activate()`).
     headers_only: bool,
+    /// `PHP_OUTPUT_DISABLED` set by [`RequestCtx::write`] itself (see
+    /// there).
+    output_disabled: Cell<bool>,
     /// `PG(connection_status) & PHP_CONNECTION_ABORTED`: the client went
     /// away.
     pub aborted: Cell<bool>,
@@ -254,6 +257,7 @@ impl RequestCtx {
             headers: RefCell::new(SapiHeaders::new(status)),
             facts: RefCell::new(facts),
             headers_only,
+            output_disabled: Cell::new(false),
             aborted: Cell::new(false),
             abort_handled: Cell::new(false),
             timeouts_at_abort: Cell::new(0),
@@ -339,17 +343,23 @@ impl RequestCtx {
         }
     }
 
-    /// `php_apache_sapi_ub_write()`.  Output reaches it only once
-    /// `php_header()` allowed it, except from inside the
-    /// `header_register_callback()` callable, whose output sends the
-    /// headers first (php-src's re-entrant `sapi_send_headers()`) and is
-    /// then refused for a HEAD request like any other.
+    /// `php_apache_sapi_ub_write()`.  Output of the activated output layer
+    /// reaches it once `php_header()` allowed it, so the headers are out.
+    /// Output written before the layer is activated (request-startup
+    /// warnings) finds them unsent: php-src's layer is already active then
+    /// and its `php_header()` would refuse a HEAD request's output for the
+    /// rest of the request, which this does in its place.
     pub fn write(&self, data: &[u8]) {
         if data.is_empty() {
             return;
         }
-        self.send_headers();
-        if self.headers_only || self.aborted.get() {
+        if !self.headers_sent() {
+            self.send_headers();
+            if self.headers_only {
+                self.output_disabled.set(true);
+            }
+        }
+        if self.output_disabled.get() || self.aborted.get() {
             return;
         }
         if !self.backend.write(data) {

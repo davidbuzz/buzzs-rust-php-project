@@ -64,13 +64,13 @@ pub fn send_headers(vm: &mut Vm) -> bool {
         with(|s| s.output_start = Some(loc));
     }
     if let Some(hook) = vm.send_headers_hook {
-        // A non-CLI SAPI's `sapi_send_headers()`: its header list, its
-        // `header_register_callback()` callable (whose own output sends
-        // the headers through the SAPI) and its send; `false` is
-        // `php_header()` refusing output.
-        with(|s| s.sending = true);
+        // A non-CLI SAPI's `php_header()`: its header list, its
+        // `header_register_callback()` callable and its send; `false`
+        // refuses output (a HEAD request). Re-entrant like
+        // `sapi_send_headers()`: output of the callable comes back here
+        // and sends the headers from inside the callable, and a refusal
+        // then disables that output too.
         let allowed = hook(vm);
-        with(|s| s.sending = false);
         vm.headers_sent = true;
         return allowed;
     }
@@ -375,6 +375,33 @@ mod tests {
         // Already sent: the hook is not consulted again.
         vm.send_headers_hook = Some(|_| unreachable!("headers were sent"));
         assert!(super::send_headers(&mut vm));
+    }
+
+    #[test]
+    fn sapi_send_headers_hook_is_reentrant() {
+        thread_local! {
+            static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        // The SAPI's php_header() whose header callable produces output:
+        // that output asks for the headers again before the outer call
+        // has marked them sent, and is refused as well.
+        fn hook(vm: &mut Vm) -> bool {
+            let n = CALLS.with(|c| {
+                c.set(c.get() + 1);
+                c.get()
+            });
+            if n == 1 {
+                assert!(!super::send_headers(vm), "the nested call refuses output");
+                assert!(vm.headers_sent, "the nested call sent the headers");
+            }
+            false
+        }
+        let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(Vec::<u8>::new()), &[]);
+        vm.send_headers_hook = Some(hook);
+        assert!(!super::send_headers(&mut vm));
+        assert_eq!(CALLS.with(std::cell::Cell::get), 2);
+        assert!(super::send_headers(&mut vm), "sent: output passes");
+        assert_eq!(CALLS.with(std::cell::Cell::get), 2);
     }
 
     #[test]
