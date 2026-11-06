@@ -926,29 +926,40 @@ pub struct OpArray {
     /// static method lookups (php-src's `run_time_cache`; see
     /// [`crate::rtcache`]).
     pub rt_cache: crate::rtcache::RuntimeCache,
-    /// Per-place cache of property lookups, indexed by [`PlaceId`]
-    /// (php-src's `CACHE_ADDR` slot of `FETCH_OBJ_*`/`ASSIGN_OBJ` & co.,
-    /// filled by `zend_fetch_property_address`): sized on first use.
+    /// Per-place cache of property lookups (php-src's `CACHE_ADDR` slot of
+    /// `FETCH_OBJ_*`/`ASSIGN_OBJ` & co., filled by
+    /// `zend_fetch_property_address`), sized on first use: entry `pid`
+    /// describes the first segment of place `pid` when that is a
+    /// `$cv->name` / `$this->name` head, otherwise its last `->name`
+    /// segment; entry `places.len() + pid` the last segment of a place
+    /// that has both (`$this->a->b`). See `place::propcache`.
     pub prop_cache: RefCell<Vec<PropCacheEntry>>,
 }
 
 /// [`PropCacheEntry::base`] of a `$this->name` place.
 pub const PROP_CACHE_THIS: u32 = u32::MAX;
 
-/// An [`OpArray::prop_cache`] entry: the property the first segment of a
-/// property place (`$cv->name`, `$this->name`, literal name) resolved to
-/// for one class and calling scope, like php-src's cached
-/// `(ce, offset, prop_info)` triple: a declared slot or a dynamic
-/// property. Classes are compared by address and held weakly, which pins
-/// the address without keeping the class alive (a method's op array
-/// caching its own class would otherwise be an `Rc` cycle).
+/// An [`OpArray::prop_cache`] entry: the property a literal-named
+/// segment of a property place resolved to for one class and calling
+/// scope, like php-src's cached `(ce, offset, prop_info)` triple: a
+/// declared slot or a dynamic property. Classes are compared by address;
+/// the entry holds them weakly, which pins the address without keeping
+/// the class alive (a method's op array caching its own class would
+/// otherwise be an `Rc` cycle).
 #[derive(Debug, Default, Clone)]
 pub struct PropCacheEntry {
+    /// Address of the object's class (`Rc::as_ptr`; pinned by `class`),
+    /// 0 in an unfilled entry, which therefore never matches.
+    pub class_addr: usize,
+    /// Address of the class scope the lookup ran in (pinned by `scope`),
+    /// 0 for no class scope.
+    pub scope_addr: usize,
     /// The object's class (`Weak::new()` in an unfilled entry).
     pub class: std::rc::Weak<crate::class::Class>,
     /// The class scope the lookup ran in (`None`: no class scope).
     pub scope: Option<std::rc::Weak<crate::class::Class>>,
-    /// The place's base: a CV, or [`PROP_CACHE_THIS`].
+    /// The place's base: a CV, or [`PROP_CACHE_THIS`] (unused by an entry
+    /// for a later segment).
     pub base: u32,
     /// The declared property's slot.
     pub slot: u32,
@@ -960,6 +971,12 @@ pub struct PropCacheEntry {
     /// The lower-case class a typed property names (exactly one, not
     /// `self`/`parent`/`static`): instances of it are stored as-is too.
     pub class_lc: Option<ZStr>,
+    /// Address of the class of the last object stored because it is an
+    /// instance of `class_lc` (pinned by `ok_class`; 0: none yet): later
+    /// instances of that class pass with one comparison.
+    pub ok_class_addr: usize,
+    /// Pins `ok_class_addr`.
+    pub ok_class: std::rc::Weak<crate::class::Class>,
     /// `PC_*` bits of `place::propcache`: which fast paths apply.
     pub flags: u8,
 }
