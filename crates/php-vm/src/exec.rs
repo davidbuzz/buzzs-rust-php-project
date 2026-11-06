@@ -932,7 +932,7 @@ impl Vm {
             let code = self.frame().code.clone();
             let ops: &[Op] = &code.ops;
             let mut ip = self.frame().ip;
-            loop {
+            'ops: loop {
                 let at = ip;
                 let op = &ops[at];
                 ip = at + 1;
@@ -1097,7 +1097,7 @@ impl Vm {
                     if Self::safe_point_due() {
                         ip = self.safe_point(ip, op)?;
                     }
-                    continue;
+                    continue 'ops;
                 }
                 // `SAVE_OPLINE()`: the handler may report the current line,
                 // throw, call out, or push a frame.

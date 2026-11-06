@@ -382,7 +382,7 @@ impl Vm {
             cur = a.get(&key)?;
         }
         Some(match cur {
-            Value::Reference(r) => Value::clone(&r.try_borrow()?),
+            Value::Reference(r) => Value::clone(&*r.try_borrow()?),
             v => v.clone(),
         })
     }
