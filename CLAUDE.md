@@ -22,7 +22,7 @@ cargo test -p <crate> <test_name_substring>      # one Rust test
 
 # .phpt tests, the real acceptance criterion (file or directory):
 target/debug/phpt-runner --php target/debug/php modules/php-src/Zend/tests/foo.phpt
-env -u LANGUAGE target/debug/phpt-runner --php target/debug/php -j 8 -q --no-artifacts \
+env -u LANGUAGE target/debug/phpt-runner --php target/debug/php -j 12 -q --no-artifacts \
     --summary-depth 2 modules/php-src/ext/json
 ```
 
