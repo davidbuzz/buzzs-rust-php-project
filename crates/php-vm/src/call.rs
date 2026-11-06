@@ -989,9 +989,13 @@ impl Vm {
                 let v = match src {
                     ArgSrc::Val(op) => self.read(*op)?,
                     ArgSrc::CallResult(op) => self.read_raw(*op)?.deref(),
-                    ArgSrc::Place(pid) | ArgSrc::TempPlace(pid) => {
-                        self.place_fetch(*pid, FetchMode::Read)?
-                    }
+                    // `ZEND_SEND_VAR` of a plain compiled variable (`f($x)`):
+                    // read here, without entering the place walk.
+                    ArgSrc::Place(pid) => match self.plain_cv_place(*pid) {
+                        Some(cv) => self.read_cv(cv)?,
+                        None => self.place_fetch(*pid, FetchMode::Read)?,
+                    },
+                    ArgSrc::TempPlace(pid) => self.place_fetch(*pid, FetchMode::Read)?,
                 };
                 let call = self.frame_mut().calls.last_mut().expect("pending call");
                 call.args.push(Some(v));
@@ -1019,6 +1023,18 @@ impl Vm {
         };
         let value = self.send_value(src, pos, by_ref, prefer_ref)?;
         self.push_arg(pos, name, value)
+    }
+
+    /// The compiled variable that place `pid` of the current frame names,
+    /// when the place is a plain one (`$x`, no dimension or property): what
+    /// [`Vm::place_fetch`] reads with [`Vm::read_cv`] in `Read` mode.
+    #[inline]
+    fn plain_cv_place(&self, pid: crate::opcode::PlaceId) -> Option<u32> {
+        let p = self.frame().code.places.get(pid as usize)?;
+        match (&p.base, p.segs.is_empty()) {
+            (crate::opcode::PlaceBase::Cv(cv), true) => Some(*cv),
+            _ => None,
+        }
     }
 
     /// The value the general path of [`Vm::op_send`] sends for the argument
