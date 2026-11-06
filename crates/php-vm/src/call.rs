@@ -319,7 +319,11 @@ impl Vm {
                 match target {
                     Value::Object(o) => {
                         if let Some(p) = find_double_colon(m.as_bytes()) {
-                            // [$obj, 'parent::m']
+                            // `[$obj, 'parent::m']` split like
+                            // `zend_is_callable_ex` does: reached by the
+                            // callers that do not resolve through it yet
+                            // (`Fiber`) and by [`Vm::call_value`]'s error
+                            // path (no parent class).
                             let cn = ZStr::from(&m.as_bytes()[..p]);
                             let mn = ZStr::from(&m.as_bytes()[p + 2..]);
                             let cls = if cn.eq_ignore_ascii_case(b"parent") {
@@ -2568,9 +2572,27 @@ impl Vm {
         }
     }
 
-    /// Calls a callable value with arguments (`call_user_func`).
+    /// Calls a callable value with arguments: `zend_call_function()` for a
+    /// callable an internal function received through `Z_PARAM_FUNC`
+    /// (validated with [`Vm::resolve_callable`] or [`Vm::is_callable`],
+    /// which is where the `"self"`/`"parent"`/`"static"` and
+    /// `["C", "P::m"]` deprecations belong, so none is raised here).
+    ///
+    /// The callable is resolved by the `zend_is_callable_ex` port in the
+    /// calling user frame's scope, like the `zend_fcall_info_cache` php-src
+    /// fills at parameter parsing: `"parent::m"` names the frame's parent
+    /// class, `"C::m"` and `[$obj, "P::m"]` bind that frame's `$this`, and
+    /// method visibility is judged from that frame. A value the port
+    /// rejects keeps the dynamic-call resolution for its error ("Call to
+    /// undefined function f()").
+    ///
+    /// [`Vm::resolve_callable`]: crate::Vm::resolve_callable
+    /// [`Vm::is_callable`]: crate::Vm::is_callable
     pub fn call_value(&mut self, callable: &Value, args: Vec<Value>) -> VmResult<Value> {
-        let mut call = self.resolve_callable_for_call(callable)?;
+        let mut call = match self.zend_is_callable(callable, true)? {
+            Ok(call) => call,
+            Err(_) => self.resolve_callable_for_call(callable)?,
+        };
         call.args = args.into_iter().map(Some).collect();
         self.call_pending(call)
     }
