@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use std::ptr::{self, NonNull};
 use std::sync::Once;
 
-use crate::ffi::xmlNode;
+use crate::ffi::{xmlNode, xmlNs};
 use crate::ns::{
     ns_is_fast, HTML_TOKEN, MATHML_TOKEN, SVG_TOKEN, XLINK_TOKEN, XMLNS_TOKEN, XML_TOKEN,
 };
@@ -36,6 +36,11 @@ struct LxbAttrRaw {
 }
 #[repr(C)]
 struct CssQueryRaw {
+    _private: [u8; 0],
+}
+/// `lexbor_array_obj_t`.
+#[repr(C)]
+struct LxbArrayObj {
     _private: [u8; 0],
 }
 
@@ -152,6 +157,18 @@ extern "C" {
     fn phpdom_lxb_doctype_name(node: *mut LxbNodeRaw, len: *mut usize) -> *const u8;
     fn phpdom_lxb_doctype_public_id(node: *mut LxbNodeRaw, len: *mut usize) -> *const u8;
     fn phpdom_lxb_doctype_system_id(node: *mut LxbNodeRaw, len: *mut usize) -> *const u8;
+
+    fn phpdom_work_list_create() -> *mut LxbArrayObj;
+    fn phpdom_work_list_push(
+        list: *mut LxbArrayObj,
+        node: *const LxbNodeRaw,
+        current_active_namespace: usize,
+        lxml_parent: *mut c_void,
+        lxml_ns: *mut c_void,
+        in_template: bool,
+    ) -> bool;
+    fn phpdom_work_list_pop(list: *mut LxbArrayObj, out: *mut WorkItemRaw) -> bool;
+    fn phpdom_work_list_destroy(list: *mut LxbArrayObj);
 }
 
 unsafe extern "C" fn cb_ns_is_fast(node: *const xmlNode, token: c_int) -> bool {
@@ -704,6 +721,93 @@ impl Drop for Fragment {
     fn drop(&mut self) {
         // SAFETY: owned document (or NULL).
         unsafe { phpdom_html_document_destroy(self.doc) };
+    }
+}
+
+// ---------------------------------------------------------------------
+// The bridge's work list (html5_parser.c `work_list`)
+// ---------------------------------------------------------------------
+
+/// `work_list_item` as the C side stores it (`csrc/glue.c`).
+#[repr(C)]
+struct WorkItemRaw {
+    node: *mut LxbNodeRaw,
+    current_active_namespace: usize,
+    lxml_parent: *mut xmlNode,
+    lxml_ns: *mut xmlNs,
+    in_template: bool,
+}
+
+/// A node waiting to be converted (`work_list_item`).
+pub(crate) struct WorkItem<'a> {
+    pub(crate) node: LxbNode<'a>,
+    pub(crate) current_active_namespace: usize,
+    pub(crate) lxml_parent: N,
+    pub(crate) lxml_ns: *mut xmlNs,
+    pub(crate) in_template: bool,
+}
+
+/// The stack of nodes the lexbor → libxml2 bridge still has to convert:
+/// php-src's `work_list`, a `lexbor_array_obj_t` in lexbor's allocator.
+/// Using lexbor's own array gives the list php-src's memory footprint
+/// (lexbor sizes it as `sizeof(uint8_t *)` × items × item size and grows
+/// it 128 items at a time), so a huge flat document reaches `memory_limit`
+/// while it is converted, as it does in PHP (GH-25118).
+pub(crate) struct WorkList<'a>(NonNull<LxbArrayObj>, PhantomData<&'a ()>);
+
+impl<'a> WorkList<'a> {
+    /// `lexbor_array_obj_init(&work_list, WORK_LIST_INIT_SIZE, ...)`;
+    /// `None` when the allocation failed.
+    pub(crate) fn new() -> Option<Self> {
+        init();
+        // SAFETY: a fresh list from lexbor's allocator, or NULL.
+        NonNull::new(unsafe { phpdom_work_list_create() }).map(|p| WorkList(p, PhantomData))
+    }
+
+    /// `lexbor_libxml2_bridge_work_list_item_push`: `false` when the list
+    /// could not grow.
+    #[must_use]
+    pub(crate) fn push(&mut self, item: WorkItem<'a>) -> bool {
+        // SAFETY: live list; the item's fields are copied into it.
+        unsafe {
+            phpdom_work_list_push(
+                self.0.as_ptr(),
+                item.node.p(),
+                item.current_active_namespace,
+                item.lxml_parent.p().cast(),
+                item.lxml_ns.cast(),
+                item.in_template,
+            )
+        }
+    }
+
+    /// `lexbor_array_obj_pop`: the most recently pushed item.
+    pub(crate) fn pop(&mut self) -> Option<WorkItem<'a>> {
+        let mut raw = WorkItemRaw {
+            node: ptr::null_mut(),
+            current_active_namespace: 0,
+            lxml_parent: ptr::null_mut(),
+            lxml_ns: ptr::null_mut(),
+            in_template: false,
+        };
+        // SAFETY: live list; `raw` is written only when an item exists.
+        if !unsafe { phpdom_work_list_pop(self.0.as_ptr(), &raw mut raw) } {
+            return None;
+        }
+        Some(WorkItem {
+            node: LxbNode::new(raw.node)?,
+            current_active_namespace: raw.current_active_namespace,
+            lxml_parent: N::new(raw.lxml_parent)?,
+            lxml_ns: raw.lxml_ns,
+            in_template: raw.in_template,
+        })
+    }
+}
+
+impl Drop for WorkList<'_> {
+    fn drop(&mut self) {
+        // SAFETY: owned list, freed once.
+        unsafe { phpdom_work_list_destroy(self.0.as_ptr()) };
     }
 }
 
