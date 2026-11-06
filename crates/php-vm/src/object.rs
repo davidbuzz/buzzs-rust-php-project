@@ -209,7 +209,9 @@ const STORE_INITIAL: usize = 1024;
 
 struct ObjectStore {
     /// Live objects by handle (index = handle - 1): the object's current
-    /// outer `Obj` (a thin weak handle, so a slot stays one word).
+    /// outer `Obj`, as its weak handle (the allocation's `Weak<dyn
+    /// PhpObject>`, two words: it is dropped and replaced from inside the
+    /// object's own `Drop`, when the cell may not be read).
     objects: Vec<Option<ObjWeak>>,
     /// Free handles (LIFO, like Zend's free list).
     free: Vec<u32>,

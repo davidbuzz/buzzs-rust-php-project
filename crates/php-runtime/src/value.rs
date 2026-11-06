@@ -15,7 +15,7 @@ use std::any::{Any, TypeId};
 use std::cell::{Cell, Ref, RefCell, RefMut, UnsafeCell};
 use std::fmt;
 use std::marker::PhantomData;
-use std::mem::{ManuallyDrop, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
 use std::rc::{Rc, Weak};
 
@@ -650,14 +650,10 @@ impl Obj {
         unsafe { (*self.header().this.get()).assume_init_ref() }
     }
 
-    /// A weak handle to the object (one pointer; see [`ObjWeak`]).
+    /// A weak handle to the object (see [`ObjWeak`]).
     #[must_use]
     pub fn downgrade(&self) -> ObjWeak {
-        std::mem::forget(Rc::downgrade(self.rc()));
-        ObjWeak {
-            ptr: self.ptr,
-            _owns: PhantomData,
-        }
+        ObjWeak(Rc::downgrade(self.rc()))
     }
 
     /// The object handle number.
@@ -751,74 +747,45 @@ impl fmt::Debug for Obj {
     }
 }
 
-/// A weak handle to an [`Obj`] (`Weak<dyn PhpObject>` in one pointer): it
-/// does not keep the object alive, and [`ObjWeak::upgrade`] returns the
-/// same object (identity and refcount) while it is.
-pub struct ObjWeak {
-    ptr: NonNull<ObjHeader>,
-    _owns: PhantomData<Weak<dyn PhpObject>>,
-}
+/// A weak handle to an [`Obj`]: it does not keep the object alive, and
+/// [`ObjWeak::upgrade`] returns the same object (identity and refcount)
+/// while it is.
+///
+/// It is the allocation's own `Weak<dyn PhpObject>` (two words), not a thin
+/// pointer that would re-read the header: weak handles are used while their
+/// object's payload is being dropped (the VM's object store and destructor
+/// revival replace, drop and upgrade the weak handle of the dying object
+/// from inside `Drop`), and the drop glue holds an exclusive reference to
+/// the whole cell, header included, for as long as it runs. `Weak` only
+/// touches the counts in front of the cell, which is allowed then (Miri,
+/// `payload_drop_may_create_objects_and_drop_weaks`).
+#[derive(Clone)]
+pub struct ObjWeak(Weak<dyn PhpObject>);
 
 impl ObjWeak {
-    /// The data pointer of the allocation's `Rc` (what `Weak::into_raw`
-    /// returns for it).
-    #[inline]
-    fn raw(&self) -> *const dyn PhpObject {
-        // SAFETY: a weak count keeps the allocation alive, header included,
-        // even once the payload is dropped; the header has no drop glue and
-        // `this` is never written after `Obj::new`, so it stays readable.
-        unsafe { Rc::as_ptr((*(*self.ptr.as_ptr()).this.get()).assume_init_ref()) }
-    }
-
-    /// Runs `f` on this handle as a `Weak` (without touching its count).
-    #[inline]
-    fn with_weak<R>(&self, f: impl FnOnce(&Weak<dyn PhpObject>) -> R) -> R {
-        // SAFETY: `raw` is the pointer `Weak::into_raw` gives for the weak
-        // count this handle owns; `ManuallyDrop` leaves that count alone.
-        let w = ManuallyDrop::new(unsafe { Weak::from_raw(self.raw()) });
-        f(&w)
-    }
-
     /// The object, if it is still alive.
     #[must_use]
     pub fn upgrade(&self) -> Option<Obj> {
-        let rc = self.with_weak(Weak::upgrade)?;
-        // The strong count `upgrade` took moves into the handle.
-        std::mem::forget(rc);
-        Some(Obj {
-            ptr: self.ptr,
-            _owns: PhantomData,
-        })
+        let rc = self.0.upgrade()?;
+        let raw = Rc::into_raw(rc);
+        // SAFETY: an `ObjWeak` is only made by `Obj::downgrade`, so `rc` is
+        // the `Rc<dyn PhpObject>` of an `ObjCell` made by `Obj::new` (its
+        // `this` is written); the strong count `upgrade` took moves into
+        // the handle.
+        Some(unsafe { Obj::from_header(raw.cast::<ObjHeader>()) })
     }
 
     /// Number of strong handles to the object (`0` once it is freed).
     #[must_use]
     pub fn strong_count(&self) -> usize {
-        self.with_weak(Weak::strong_count)
+        self.0.strong_count()
     }
 
-    /// The [`Obj::addr`] of the object.
+    /// The [`Obj::addr`] of the object (valid as a key even after the
+    /// object is freed, while this handle exists).
     #[must_use]
     pub fn addr(&self) -> usize {
-        self.ptr.as_ptr().cast::<u8>() as usize
-    }
-}
-
-impl Clone for ObjWeak {
-    fn clone(&self) -> Self {
-        self.with_weak(|w| std::mem::forget(Weak::clone(w)));
-        ObjWeak {
-            ptr: self.ptr,
-            _owns: PhantomData,
-        }
-    }
-}
-
-impl Drop for ObjWeak {
-    fn drop(&mut self) {
-        // SAFETY: this handle owns one weak count, and `raw` is the pointer
-        // `Weak::into_raw` gives for it.
-        drop(unsafe { Weak::from_raw(self.raw()) });
+        self.0.as_ptr().cast::<u8>() as usize
     }
 }
 
@@ -1008,8 +975,9 @@ mod tests {
         assert_eq!(size_of::<Option<Value>>(), 16);
         assert_eq!(size_of::<Obj>(), 8);
         assert_eq!(size_of::<Option<Obj>>(), 8);
-        assert_eq!(size_of::<ObjWeak>(), 8);
-        assert_eq!(size_of::<Option<ObjWeak>>(), 8);
+        // A weak handle is the allocation's fat `Weak` (see `ObjWeak`).
+        assert_eq!(size_of::<ObjWeak>(), 16);
+        assert_eq!(size_of::<Option<ObjWeak>>(), 16);
         assert_eq!(size_of::<PhpRef>(), 8);
         assert_eq!(size_of::<Resource>(), 8);
     }
