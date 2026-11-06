@@ -7,6 +7,16 @@
 //! `&mut Value` and collects diagnostics; when it reaches an object it
 //! releases all borrows and continues with the object handlers, which may
 //! run user code (`__get`, `offsetGet`, ...).
+//!
+//! php-src runs one opcode per segment (`FETCH_DIM_W`, ..., `ASSIGN_DIM`)
+//! and raises each diagnostic where it arises, holding the container
+//! (`GC_ADDREF`) and giving the write up when the error handler freed or
+//! shared it. Collected diagnostics are only equivalent while no error
+//! handler can observe them: with one set, a walk stops at each such
+//! diagnostic (`Step::Pause`), the VM raises it with the container held and
+//! walks again past it ([`Vm::run_live`]). Undefined compiled variables
+//! used as offsets or as the assigned value are read when the walk gets to
+//! them, as the opcodes read their operands ([`PendingRead`]).
 
 use crate::exec::KeyCtx;
 use crate::object;
@@ -157,10 +167,233 @@ pub(crate) enum Step {
     /// An assignment through a typed reference, performed once the walk
     /// has released its borrows (`zend_assign_to_typed_ref`).
     TypedRefAssign(PhpRef, Value),
+    /// A walk in [`Mode::Live`] stopped at a diagnostic for the VM to
+    /// raise ([`Vm::run_live`]). Boxed: rare, and `Step` stays small.
+    Pause(Box<Pause>),
+}
+
+/// Where a live walk stopped.
+pub(crate) enum Pause {
+    /// A diagnostic in the middle of an array fetch, raised with the
+    /// (separated) array `held` the way php-src holds it (`GC_ADDREF`).
+    /// The walk resumes past phase `phase` of segment `seg`.
+    Fetch {
+        seg: usize,
+        phase: u8,
+        level: i64,
+        msg: String,
+        held: ZArray,
+        check: Check,
+    },
+    /// A final assignment to a string offset that raises a diagnostic
+    /// (`zend_assign_to_string_offset`).
+    Str(StrAssign),
+}
+
+/// What php-src checks after a [`Pause::Fetch`] diagnostic.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Check {
+    /// `zend_false_to_array_deprecated`: the fetch is given up when the
+    /// handler freed the new array (`GC_DELREF(ht) == 0`); an exception
+    /// does not stop the fetch, only the opcodes after it.
+    False,
+    /// `slow_index_convert_w`, `zend_undefined_index_write`: a freed or
+    /// shared array (`GC_DELREF(ht) != 1`) or an exception gives it up.
+    Index,
+    /// The assigned value's "Undefined variable" warning at the final
+    /// slot: given up when the array was freed (php-src would write into
+    /// freed memory); the null is still stored after an exception.
+    Value,
+}
+
+/// The parts of a string offset assignment raising diagnostics: the
+/// separated string `held`, the offset (`undef_dim` when it is an
+/// undefined variable) and the value (`undef_value` likewise).
+pub(crate) struct StrAssign {
+    held: ZStr,
+    dim: Value,
+    undef_dim: Option<ZStr>,
+    value: Value,
+    undef_value: Option<ZStr>,
+}
+
+/// How a walk treats the diagnostics php-src raises in the middle of a
+/// fetch (see [`site`]).
+#[derive(Clone, Copy)]
+enum Mode {
+    /// Collect them for the caller to raise afterwards: nothing can observe
+    /// the walk (no error handler is set).
+    Defer,
+    /// Stop at the first one past phase `phase` of segment `seg` (the
+    /// earlier ones were raised already).
+    Live { seg: usize, phase: u8 },
+    /// The error handler threw at phase `phase` of segment `seg`: that
+    /// fetch completes as php-src's does with `EG(exception)` set (later
+    /// diagnostics are not raised, an offset conversion gives the fetch up).
+    Unwind { seg: usize, phase: u8 },
+}
+
+/// What a walk does at a diagnostic (see [`Mode`]).
+#[derive(Clone, Copy)]
+enum Site {
+    Defer,
+    Skip,
+    Pause,
+    Suppressed,
+}
+
+/// The phases of one segment's fetch, in php-src's order: the `false`
+/// container's conversion, the undefined-variable offset, its conversion,
+/// the missing key of a read-modify-write, the assigned value, a string
+/// offset assignment.
+const PH_FALSE: u8 = 1;
+const PH_UNDEF: u8 = 2;
+const PH_KEY: u8 = 3;
+const PH_UNDEF_KEY: u8 = 4;
+const PH_VALUE: u8 = 5;
+const PH_STR: u8 = 6;
+
+thread_local! {
+    /// The mode of the walk in progress; set by [`Vm::run_live`] around each
+    /// walk it runs, `Defer` otherwise (user code never runs inside a walk).
+    static MODE: std::cell::Cell<Mode> = const { std::cell::Cell::new(Mode::Defer) };
+}
+
+/// What the walk does at the diagnostic of `phase` of segment `i`.
+#[cold]
+fn site(i: usize, phase: u8) -> Site {
+    match MODE.with(std::cell::Cell::get) {
+        Mode::Defer => Site::Defer,
+        Mode::Live { seg, phase: p } | Mode::Unwind { seg, phase: p } if (i, phase) <= (seg, p) => {
+            Site::Skip
+        }
+        Mode::Live { .. } => Site::Pause,
+        Mode::Unwind { .. } => Site::Suppressed,
+    }
+}
+
+/// Runs `f` (a walk) in `mode`.
+fn with_mode<R>(mode: Mode, f: impl FnOnce() -> R) -> R {
+    let saved = MODE.with(|m| m.replace(mode));
+    let r = f();
+    MODE.with(|m| m.set(saved));
+    r
+}
+
+/// A [`Pause::Fetch`] step.
+fn pause(seg: usize, phase: u8, level: i64, msg: String, held: ZArray, check: Check) -> Step {
+    Step::Pause(Box::new(Pause::Fetch {
+        seg,
+        phase,
+        level,
+        msg,
+        held,
+        check,
+    }))
+}
+
+/// The segment index of a [`PendingRead`] of the assigned value.
+const VALUE: usize = usize::MAX;
+
+/// An undefined compiled variable a write walk reads when it gets to it:
+/// the offset of segment `seg` (`$a[$u][...] = v`: `FETCH_DIM_W` and
+/// `ASSIGN_DIM` read it once they have the container, so its warning
+/// follows the earlier fetches' diagnostics and is not raised for a
+/// scalar container), or ([`VALUE`]) the assigned value (`ASSIGN_DIM` and
+/// `ASSIGN_OBJ` read `OP_DATA` once they have the slot or the object).
+/// Registered for the walk over the `len` segments at `segs` (see [`Segs`]).
+struct PendingRead {
+    segs: *const RSeg,
+    len: usize,
+    seg: usize,
+    name: ZStr,
+}
+
+thread_local! {
+    /// The pending reads of the write walks in progress.
+    static PENDING_READS: RefCell<Vec<PendingRead>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Whether any write walk has a pending read.
+#[inline]
+fn reads_pending() -> bool {
+    PENDING_READS.with(|p| p.try_borrow().is_ok_and(|p| !p.is_empty()))
+}
+
+/// Takes the name of the variable pending for segment `seg` ([`VALUE`]:
+/// the assigned value) of the walk over `segs`.
+#[cold]
+fn take_pending(segs: &[RSeg], seg: usize) -> Option<ZStr> {
+    PENDING_READS.with(|p| {
+        let mut p = p.try_borrow_mut().ok()?;
+        let at = p.iter().position(|r| {
+            std::ptr::eq(r.segs, segs.as_ptr()) && r.len == segs.len() && r.seg == seg
+        })?;
+        Some(p.swap_remove(at).name)
+    })
+}
+
+/// A place's resolved segments ([`Vm::resolve_place`]); the reads pending
+/// for a walk over them are dropped with them.
+pub(crate) struct Segs {
+    v: Vec<RSeg>,
+    reads: bool,
+}
+
+impl Segs {
+    /// Registers a pending read of `name` for segment `seg` ([`VALUE`]: the
+    /// assigned value) of a walk over these segments.
+    fn add_read(&mut self, seg: usize, name: ZStr) {
+        let r = PendingRead {
+            segs: self.v.as_ptr(),
+            len: self.v.len(),
+            seg,
+            name,
+        };
+        if PENDING_READS
+            .with(|p| p.try_borrow_mut().map(|mut p| p.push(r)))
+            .is_ok()
+        {
+            self.reads = true;
+        }
+    }
+}
+
+impl std::ops::Deref for Segs {
+    type Target = [RSeg];
+
+    fn deref(&self) -> &[RSeg] {
+        &self.v
+    }
+}
+
+impl Drop for Segs {
+    fn drop(&mut self) {
+        if self.reads {
+            let ptr = self.v.as_ptr();
+            let _ = PENDING_READS.try_with(|p| {
+                if let Ok(mut p) = p.try_borrow_mut() {
+                    p.retain(|r| !std::ptr::eq(r.segs, ptr));
+                }
+            });
+        }
+    }
+}
+
+/// What [`Vm::run_live`] leaves to its caller.
+enum Live {
+    /// The walk got to its end: the step to finish and the diagnostics it
+    /// collected.
+    Walked(Step, Diags),
+    /// The operation is over (given up, continued on a temporary, or
+    /// thrown).
+    Over(VmResult<Value>),
 }
 
 const E_WARNING: i64 = 2;
 const E_DEPRECATED: i64 = 8192;
+
+const FALSE_TO_ARRAY: &str = "Automatic conversion of false to array is deprecated";
 
 /// Converts an array key for a write/read context without the VM (pure);
 /// diagnostics are deferred.
@@ -345,39 +578,64 @@ fn string_container_step(
             "[] operator not supported for strings".into(),
         ));
     };
+    // `zend_check_string_offset` reads an undefined-variable offset (its
+    // warning, then "String offset cast occurred").
+    let undef_dim = if dim.is_null() {
+        take_pending(segs, i)
+    } else {
+        None
+    };
     if last {
-        if let WOp::AssignDeref(d) = wop {
+        let val = match wop {
+            WOp::Assign(val) => Some(val.clone()),
             // The source is null, false or an array (one holding this
             // string when the walk holds its borrow): converting any array
             // to a string offset value behaves alike.
-            let val = d
-                .src
-                .try_borrow()
-                .map_or_else(|| Value::Array(ZArray::new()), |b| b.clone());
-            return string_container_step(v, segs, i, &mut WOp::Assign(val), diags);
-        }
-        if let WOp::Assign(val) = wop {
-            if dim.is_null() {
-                if let Some(cv) = take_pending_undef_dim(segs) {
-                    // `zend_assign_to_string_offset` separates the string
-                    // and holds it across `zend_check_string_offset`'s
-                    // warnings: the VM raises them (`Vm::undef_dim_diags`).
-                    if let Value::Str(s) = v {
-                        if s.is_interned() || s.refcount() != 1 {
-                            *s = ZStr::new(s.as_bytes().to_vec());
-                        }
-                        let hit = UndefDimHit::Str(s.clone());
-                        UNDEF_DIM_HIT.with(|c| c.set(Some((cv, hit))));
+            WOp::AssignDeref(d) => Some(
+                d.src
+                    .try_borrow()
+                    .map_or_else(|| Value::Array(ZArray::new()), |b| b.clone()),
+            ),
+            _ => None,
+        };
+        if let Some(val) = val {
+            let undef_value = if matches!(wop, WOp::Assign(Value::Null)) {
+                take_pending(segs, VALUE)
+            } else {
+                None
+            };
+            let quiet = undef_dim.is_none()
+                && undef_value.is_none()
+                && matches!(dim, Value::Int(_))
+                && matches!(&val, Value::Str(s) if s.len() == 1);
+            if !quiet && matches!(site(i, PH_STR), Site::Pause) {
+                // `zend_assign_to_string_offset` separates the string and
+                // holds it across each diagnostic: the VM raises them
+                // (`Vm::live_string_assign`).
+                if let Value::Str(s) = v {
+                    if s.is_interned() || s.refcount() != 1 {
+                        *s = ZStr::new(s.as_bytes().to_vec());
                     }
-                    return Step::Done(Value::Null);
+                    return Step::Pause(Box::new(Pause::Str(StrAssign {
+                        held: s.clone(),
+                        dim: dim.clone(),
+                        undef_dim,
+                        value: val,
+                        undef_value,
+                    })));
                 }
             }
-            let val = val.clone();
-            return match assign_string_offset(v, dim, &val, diags) {
+            if let Some(name) = undef_dim {
+                diags.push((E_WARNING, crate::exec::undefined_var_msg(&name)));
+            }
+            return match assign_string_offset(v, dim, &val, diags, undef_value.as_ref()) {
                 Ok(r) => Step::Done(r),
                 Err(e) => Step::Err(e),
             };
         }
+    }
+    if let Some(name) = undef_dim {
+        diags.push((E_WARNING, crate::exec::undefined_var_msg(&name)));
     }
     if let Err(e) = string_offset(dim, diags, unset) {
         return Step::Err(e);
@@ -414,12 +672,15 @@ fn string_offset_value_bytes(val: &Value) -> Vec<u8> {
     }
 }
 
-/// Writes one byte of a string (`zend_assign_to_string_offset`).
+/// Writes one byte of a string (`zend_assign_to_string_offset`);
+/// `undef_value` names the undefined variable the value was read from (its
+/// warning comes after the offset checks).
 fn assign_string_offset(
     s: &mut Value,
     dim: &Value,
     val: &Value,
     diags: &mut Diags,
+    undef_value: Option<&ZStr>,
 ) -> Result<Value, WalkErr> {
     let Value::Str(str) = s else {
         return Ok(Value::Null);
@@ -431,6 +692,9 @@ fn assign_string_offset(
         return Ok(Value::Null);
     }
     let offset = if offset < 0 { offset + len } else { offset };
+    if let Some(name) = undef_value {
+        diags.push((E_WARNING, crate::exec::undefined_var_msg(name)));
+    }
     let bytes: Vec<u8> = match val.deref() {
         Value::Str(v) => v.as_bytes().to_vec(),
         Value::Int(i) => i.to_string().into_bytes(),
@@ -492,12 +756,27 @@ pub(crate) fn descend(
                 "Cannot modify a value while it is being iterated".into(),
             ));
         }
-        if !matches!(wop, WOp::Unset) && !matches!(segs[i], RSeg::Prop(_)) {
+        let dim = !matches!(segs[i], RSeg::Prop(_));
+        let last = i + 1 == segs.len();
+        // `ZEND_ASSIGN_DIM_OP` works on the referenced value unchecked; the
+        // fetches and `ZEND_ASSIGN_DIM` verify a typed reference first.
+        if dim && !matches!(wop, WOp::Unset) && !(last && matches!(wop, WOp::AssignOp(..))) {
             if let Some(msg) = crate::typed_refs::walk_auto_init_error(r) {
                 return Step::Err(WalkErr::TypeError(msg));
             }
         }
         let mut b = r.borrow_mut();
+        // A fetch (`zend_fetch_dimension_address`: FETCH_DIM_W, _RW and
+        // _UNSET) makes an array of a referenced `false` without the
+        // false-to-array deprecation, which only `ZEND_ASSIGN_DIM`,
+        // `ZEND_ASSIGN_DIM_OP` and `ZEND_UNSET_DIM` raise.
+        let fetch = !last || matches!(wop, WOp::FetchRw | WOp::MakeRef | WOp::AssignRef(_));
+        if dim && fetch && matches!(*b, Value::Bool(false)) {
+            if matches!(wop, WOp::Unset) {
+                return Step::Done(Value::Null);
+            }
+            *b = Value::Array(ZArray::new());
+        }
         return descend(&mut b, segs, i, wop, diags, false);
     }
     let last = i + 1 == segs.len();
@@ -520,6 +799,11 @@ pub(crate) fn descend(
                         WOp::Assign(_) | WOp::AssignOp(..) | WOp::AssignDeref(_)
                     )
                 {
+                    // ZEND_ASSIGN_OBJ reads OP_DATA before it looks at the
+                    // object.
+                    if matches!(wop, WOp::Assign(Value::Null)) {
+                        push_pending_value(segs, diags);
+                    }
                     Step::Err(WalkErr::Error(format!(
                         "Attempt to assign property \"{}\" on {tn}",
                         name.to_string_lossy()
@@ -540,9 +824,6 @@ pub(crate) fn descend(
             }
         },
         seg @ (RSeg::Dim(_) | RSeg::Append) => {
-            // Whether this container was `false` just converted to an
-            // array (`zend_false_to_array_deprecated`).
-            let mut from_false = false;
             match v {
                 Value::Array(_) => {}
                 Value::Null => {
@@ -552,26 +833,35 @@ pub(crate) fn descend(
                     *v = Value::Array(ZArray::new());
                 }
                 Value::Bool(false) => {
-                    diags.push((
-                        E_DEPRECATED,
-                        "Automatic conversion of false to array is deprecated".into(),
-                    ));
                     if is_unset {
                         // UNSET_DIM / FETCH_DIM_UNSET leave `false` alone.
+                        diags.push((E_DEPRECATED, FALSE_TO_ARRAY.into()));
                         return Step::Done(Value::Null);
                     }
                     *v = Value::Array(ZArray::new());
-                    from_false = true;
+                    if let Some(step) = false_to_array_site(v, i, diags) {
+                        return step;
+                    }
                 }
                 Value::Object(o) => return Step::Obj(o.clone(), i),
                 Value::Str(_) => return string_container_step(v, segs, i, wop, diags),
-                other => {
+                _ => {
                     if is_unset {
                         return Step::Err(WalkErr::Error(
                             "Cannot unset offset in a non-array variable".into(),
                         ));
                     }
-                    let _ = other;
+                    // `ZEND_ASSIGN_DIM_OP` reads the offset before
+                    // `zend_binary_assign_op_dim_slow` throws; the fetches
+                    // and `ZEND_ASSIGN_DIM` throw first.
+                    if last
+                        && matches!(wop, WOp::AssignOp(..))
+                        && matches!(seg, RSeg::Dim(Value::Null))
+                    {
+                        if let Some(name) = take_pending(segs, i) {
+                            diags.push((E_WARNING, crate::exec::undefined_var_msg(&name)));
+                        }
+                    }
                     return Step::Err(WalkErr::Error(
                         "Cannot use a scalar value as an array".into(),
                     ));
@@ -586,6 +876,11 @@ pub(crate) fn descend(
                     if last {
                         match wop {
                             WOp::Assign(val) => {
+                                // ZEND_ASSIGN_DIM reads OP_DATA before the
+                                // insertion.
+                                if val.is_null() {
+                                    push_pending_value(segs, diags);
+                                }
                                 let val = std::mem::take(val);
                                 if t.push(val.clone()).is_err() {
                                     return Step::Err(WalkErr::Error(
@@ -637,55 +932,13 @@ pub(crate) fn descend(
                     }
                 }
                 RSeg::Dim(k) => {
-                    if last && k.is_null() && matches!(wop, WOp::Assign(_)) {
-                        if let Some(cv) = take_pending_undef_dim(segs) {
-                            // `slow_index_convert_w` holds the (separated)
-                            // array across the "Undefined variable" warning
-                            // and the null-offset deprecation.
-                            arr.make_mut();
-                            let hit = UndefDimHit::Array(arr.clone(), from_false);
-                            UNDEF_DIM_HIT.with(|c| c.set(Some((cv, hit))));
-                            return Step::Done(Value::Null);
-                        }
-                    }
-                    if last
-                        && matches!(
-                            k,
-                            Value::Float(_)
-                                | Value::Null
-                                | Value::Resource(_)
-                                | Value::Reference(_)
-                        )
-                        && matches!(wop, WOp::Assign(_))
-                        && take_pending_convert_dim(segs)
-                    {
-                        // `slow_index_convert_w` holds the (separated)
-                        // array across the conversion's diagnostic; the
-                        // write is redone once it has been raised.
-                        if let Err(e) = key_of(k, diags, KeyCtx::Write) {
-                            return Step::Err(e);
-                        }
-                        arr.make_mut();
-                        CONVERT_DIM_HIT.with(|c| c.set(Some(arr.clone())));
-                        return Step::Done(Value::Null);
-                    }
-                    // Only the final ZEND_UNSET_DIM reports "Cannot unset
-                    // offset"; FETCH_DIM_UNSET converts like a write fetch.
-                    let ctx = if is_unset && last {
-                        KeyCtx::Unset
-                    } else {
-                        KeyCtx::Write
-                    };
-                    // ZEND_UNSET_DIM maps a null offset to "" without the
-                    // null-offset deprecation; intermediate unset fetches
-                    // (FETCH_DIM_UNSET) still raise it.
-                    let key = if is_unset && last && matches!(k, Value::Null) {
-                        ArrayKey::Str(ZStr::empty())
-                    } else {
-                        match key_of(k, diags, ctx) {
-                            Ok(k) => k,
-                            Err(e) => return Step::Err(e),
-                        }
+                    let key = match k {
+                        Value::Int(n) => ArrayKey::Int(*n),
+                        Value::Str(s) => ArrayKey::from_zstr(s),
+                        _ => match slow_key(arr, k, segs, i, is_unset, diags) {
+                            Ok(key) => key,
+                            Err(step) => return step,
+                        },
                     };
                     if is_unset {
                         if last {
@@ -706,11 +959,28 @@ pub(crate) fn descend(
                     }
                     let t = arr.make_mut();
                     let rw = matches!(wop, WOp::FetchRw | WOp::AssignOp(..));
-                    let (slot, inserted) = t.lookup_ex(key.clone());
-                    let existed = !inserted;
-                    if !existed && rw {
-                        diags.push((E_WARNING, undefined_key_msg(&key)));
+                    // A read-modify-write warns about a missing key before
+                    // adding it (`zend_undefined_index_write`).
+                    let found = if rw { t.position_of(&key) } else { None };
+                    if rw && found.is_none() {
+                        match site(i, PH_UNDEF_KEY) {
+                            Site::Defer => diags.push((E_WARNING, undefined_key_msg(&key))),
+                            Site::Skip => {}
+                            // `EG(exception)`: the key is not added.
+                            Site::Suppressed => return Step::Done(Value::Null),
+                            Site::Pause => return undefined_key_pause(arr, &key, i),
+                        }
                     }
+                    let (slot, existed) = match found {
+                        Some(pos) => match t.at_mut(pos) {
+                            Some(slot) => (slot, true),
+                            None => return Step::Done(Value::Null),
+                        },
+                        None => {
+                            let (slot, inserted) = t.lookup_ex(key.clone());
+                            (slot, !inserted)
+                        }
+                    };
                     if last {
                         match wop {
                             WOp::AssignRef(r) => {
@@ -719,6 +989,9 @@ pub(crate) fn descend(
                                 Step::Done(r)
                             }
                             _ => {
+                                if matches!(wop, WOp::Assign(Value::Null)) && reads_pending() {
+                                    return value_site(arr, segs, i, &key, wop, diags);
+                                }
                                 if rw && existed && diags.is_empty() {
                                     if let Some(step) = concat_in_place(slot, segs, wop) {
                                         return step;
@@ -739,6 +1012,235 @@ pub(crate) fn descend(
             }
         }
     }
+}
+
+/// The deprecation of a `false` container just made the (new, empty)
+/// array `v` (`zend_false_to_array_deprecated`, raised with the array
+/// held). `Some` stops the walk with that step.
+#[cold]
+#[inline(never)]
+fn false_to_array_site(v: &mut Value, i: usize, diags: &mut Diags) -> Option<Step> {
+    match site(i, PH_FALSE) {
+        Site::Defer => {
+            diags.push((E_DEPRECATED, FALSE_TO_ARRAY.into()));
+            None
+        }
+        Site::Skip | Site::Suppressed => None,
+        Site::Pause => {
+            let Value::Array(a) = v else {
+                return None;
+            };
+            // Its own table (not the shared empty one), whose count then
+            // tells whether the error handler freed it.
+            a.make_mut();
+            Some(pause(
+                i,
+                PH_FALSE,
+                E_DEPRECATED,
+                FALSE_TO_ARRAY.into(),
+                a.clone(),
+                Check::False,
+            ))
+        }
+    }
+}
+
+/// The key of an offset `k` of segment `i` that is neither an int nor a
+/// string, in the array `arr` (`slow_index_convert_w`): an undefined
+/// variable is read first (its warning), then the offset converts (null,
+/// float and resource diagnostics), each raised as the walk's mode says
+/// with the separated array held. `Err` ends the walk with that step.
+#[cold]
+#[inline(never)]
+fn slow_key(
+    arr: &mut ZArray,
+    k: &Value,
+    segs: &[RSeg],
+    i: usize,
+    is_unset: bool,
+    diags: &mut Diags,
+) -> Result<ArrayKey, Step> {
+    let last = i + 1 == segs.len();
+    // ZEND_UNSET_DIM maps a null offset to "" without the null-offset
+    // deprecation; intermediate unset fetches (FETCH_DIM_UNSET) still
+    // raise it.
+    if is_unset && last && k.is_null() {
+        return Ok(ArrayKey::Str(ZStr::empty()));
+    }
+    if k.is_null() {
+        if let Some(step) = undefined_offset_site(arr, segs, i, diags) {
+            return Err(step);
+        }
+    }
+    // Only the final ZEND_UNSET_DIM reports "Cannot unset offset";
+    // FETCH_DIM_UNSET converts like a write fetch.
+    let ctx = if is_unset && last {
+        KeyCtx::Unset
+    } else {
+        KeyCtx::Write
+    };
+    let n = diags.len();
+    let key = key_of(k, diags, ctx).map_err(Step::Err)?;
+    if diags.len() > n {
+        if let Some(step) = key_site(arr, i, diags, n) {
+            return Err(step);
+        }
+    }
+    Ok(key)
+}
+
+/// The "Undefined variable" warning of an offset of segment `i` read from
+/// an undefined compiled variable (`slow_index_convert_w`'s `IS_UNDEF`);
+/// nothing for a null offset of another origin. `Some` stops the walk.
+#[cold]
+fn undefined_offset_site(
+    arr: &mut ZArray,
+    segs: &[RSeg],
+    i: usize,
+    diags: &mut Diags,
+) -> Option<Step> {
+    let s = site(i, PH_UNDEF);
+    if matches!(s, Site::Skip) {
+        return None;
+    }
+    let name = take_pending(segs, i)?;
+    let msg = crate::exec::undefined_var_msg(&name);
+    match s {
+        Site::Pause => {
+            arr.make_mut();
+            Some(pause(
+                i,
+                PH_UNDEF,
+                E_WARNING,
+                msg,
+                arr.clone(),
+                Check::Index,
+            ))
+        }
+        // `EG(exception)`: the fetch gives up.
+        Site::Suppressed => Some(Step::Done(Value::Null)),
+        Site::Defer | Site::Skip => {
+            diags.push((E_WARNING, msg));
+            None
+        }
+    }
+}
+
+/// The diagnostic `key_of` raised converting an offset of segment `i` (the
+/// entries of `diags` from `n` on). `Some` stops the walk.
+#[cold]
+fn key_site(arr: &mut ZArray, i: usize, diags: &mut Diags, n: usize) -> Option<Step> {
+    match site(i, PH_KEY) {
+        Site::Defer => None,
+        Site::Skip => {
+            diags.truncate(n);
+            None
+        }
+        Site::Suppressed => {
+            diags.truncate(n);
+            Some(Step::Done(Value::Null))
+        }
+        Site::Pause => {
+            let (level, msg) = diags.drain(n..).next()?;
+            arr.make_mut();
+            Some(pause(i, PH_KEY, level, msg, arr.clone(), Check::Index))
+        }
+    }
+}
+
+/// The live walk's stop at the "Undefined array key" warning of a
+/// read-modify-write whose key is missing from `arr`
+/// (`zend_undefined_index_write` / `zend_undefined_offset_write`: raised
+/// before the key is added, with the array held).
+#[cold]
+#[inline(never)]
+fn undefined_key_pause(arr: &mut ZArray, key: &ArrayKey, i: usize) -> Step {
+    arr.make_mut();
+    pause(
+        i,
+        PH_UNDEF_KEY,
+        E_WARNING,
+        undefined_key_msg(key),
+        arr.clone(),
+        Check::Index,
+    )
+}
+
+/// The final assignment at `key` of the array `arr` (segment `i`) when the
+/// value may be an undefined variable pending for the walk: `ZEND_ASSIGN_DIM`
+/// reads `OP_DATA` once it has the slot, so its warning comes after the
+/// offsets' diagnostics; then the store.
+#[cold]
+#[inline(never)]
+fn value_site(
+    arr: &mut ZArray,
+    segs: &[RSeg],
+    i: usize,
+    key: &ArrayKey,
+    wop: &mut WOp,
+    diags: &mut Diags,
+) -> Step {
+    if let Some(name) = take_pending(segs, VALUE) {
+        let msg = crate::exec::undefined_var_msg(&name);
+        match site(i, PH_VALUE) {
+            Site::Defer => diags.push((E_WARNING, msg)),
+            Site::Pause => {
+                arr.make_mut();
+                return pause(i, PH_VALUE, E_WARNING, msg, arr.clone(), Check::Value);
+            }
+            Site::Skip | Site::Suppressed => {}
+        }
+    }
+    let slot = arr.make_mut().lookup(key.clone());
+    apply_final(slot, wop)
+}
+
+/// Collects the warning of the undefined variable pending as the assigned
+/// value of the walk over `segs`, if any.
+#[cold]
+fn push_pending_value(segs: &[RSeg], diags: &mut Diags) {
+    if let Some(name) = take_pending(segs, VALUE) {
+        diags.push((E_WARNING, crate::exec::undefined_var_msg(&name)));
+    }
+}
+
+/// php-src once an error handler threw at the diagnostic of phase `phase`
+/// of segment `seg`'s fetch, which goes on with `EG(exception)` set:
+/// converting a `false` container has no exception check, so that fetch
+/// completes (an intermediate `FETCH_DIM_W` adds its key, `FETCH_DIM_RW`
+/// gives up at a missing one; a final assignment stores its value, as it
+/// also does after the value's own warning) and raises nothing more; the
+/// opcodes after it do not run.
+#[cold]
+#[inline(never)]
+fn unwind_live(
+    segs: &[RSeg],
+    wop: &mut WOp,
+    walk: &mut dyn FnMut(&[RSeg], &mut WOp, &mut Diags) -> Step,
+    seg: usize,
+    phase: u8,
+) {
+    let mode = Mode::Unwind { seg, phase };
+    let mut diags = Vec::new();
+    let substitute = if seg + 1 < segs.len() {
+        Some(if matches!(wop, WOp::FetchRw | WOp::AssignOp(..)) {
+            WOp::FetchRw
+        } else {
+            WOp::Assign(Value::Null)
+        })
+    } else if matches!(wop, WOp::MakeRef | WOp::AssignRef(_)) {
+        // The final `FETCH_DIM_W`: the reference is never made.
+        Some(WOp::Assign(Value::Null))
+    } else {
+        None
+    };
+    let s = match substitute {
+        // The walk ends at the interrupted fetch.
+        Some(mut w) => with_mode(mode, || walk(&segs[..=seg], &mut w, &mut diags)),
+        None => with_mode(mode, || walk(segs, wop, &mut diags)),
+    };
+    drop(s);
+    flush_deferred_ref_assigns();
 }
 
 thread_local! {
@@ -798,71 +1300,25 @@ thread_local! {
     /// `zend_undefined_index_write`'s `GC_ADDREF`: an error handler that
     /// writes to or frees the array leaves this the only owner.
     static RW_UNDEF_WATCH: std::cell::Cell<Option<ZArray>> = const { std::cell::Cell::new(None) };
-    /// Set when a `WOp::FetchRw` walk was abandoned that way (read by
+    /// Set when a `WOp::FetchRw` walk was abandoned that way, or given up
+    /// when a live walk's error handler freed or shared the array (read by
     /// `Vm::fetch_rw`).
     static RW_SKIPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// The undefined compiled variable (and frame depth) a
-    /// `place = $undef` walk through a property still has to warn about:
-    /// set by `Vm::place_assign_undef_cv`.
-    static PENDING_UNDEF_VALUE: std::cell::Cell<Option<(u32, usize)>> =
-        const { std::cell::Cell::new(None) };
     /// The frame depth of a `$o->p =& f()` walk whose value is not a
     /// reference: set by `Vm::place_assign_ref_nonvar_prop`, taken by
     /// `Vm::assign_property_ref` once the walk reaches the property.
     static PENDING_NONVAR_REF: std::cell::Cell<Option<usize>> =
         const { std::cell::Cell::new(None) };
-    /// The final offset of a `place = v` walk that is an undefined
-    /// compiled variable, keyed by the walk's segments (their address):
-    /// set by `Vm::assign_undef_dim`. `ZEND_ASSIGN_DIM` reads the offset
-    /// only once it has the container, so the "Undefined variable" warning
-    /// follows the earlier fetches' diagnostics, is not raised for a
-    /// scalar container, and comes from inside `zend_check_string_offset`
-    /// for a string.
-    static PENDING_UNDEF_DIM: std::cell::Cell<Option<(*const RSeg, u32)>> =
-        const { std::cell::Cell::new(None) };
-    /// The container a walk stopped at for that offset, with the variable
-    /// (see [`UndefDimHit`]).
-    static UNDEF_DIM_HIT: std::cell::Cell<Option<(u32, UndefDimHit)>> =
-        const { std::cell::Cell::new(None) };
-    /// The final offset of a `place = v` walk whose conversion raises a
-    /// diagnostic (a fractional or out-of-range float, null or a resource)
-    /// while an error handler is set, keyed by the walk's segments (their
-    /// address): set by `Vm::assign_converted_dim`.
-    static PENDING_CONVERT_DIM: std::cell::Cell<Option<*const RSeg>> =
-        const { std::cell::Cell::new(None) };
-    /// The array such a walk stopped at (`slow_index_convert_w`'s
-    /// `GC_ADDREF(ht)`).
-    static CONVERT_DIM_HIT: std::cell::Cell<Option<ZArray>> =
-        const { std::cell::Cell::new(None) };
-}
-
-/// Takes the pending converted final offset of the walk over `segs`.
-fn take_pending_convert_dim(segs: &[RSeg]) -> bool {
-    PENDING_CONVERT_DIM.with(|c| match c.get() {
-        Some(ptr) if std::ptr::eq(ptr, segs.as_ptr()) => {
-            c.set(None);
-            true
-        }
-        _ => false,
-    })
-}
-
-/// Whether converting the final offset `seg` of an assignment raises a
-/// diagnostic (`slow_index_convert_w`).
-#[cold]
-#[inline(never)]
-fn final_dim_converts_noisily(seg: Option<&RSeg>) -> bool {
-    let Some(RSeg::Dim(k)) = seg else {
-        return false;
-    };
-    if !matches!(
-        k,
-        Value::Float(_) | Value::Null | Value::Resource(_) | Value::Reference(_)
-    ) {
-        return false;
-    }
-    let mut diags = Vec::new();
-    key_of(k, &mut diags, KeyCtx::Write).is_ok() && !diags.is_empty()
+    /// The exception an error handler threw at the "Undefined property"
+    /// warning (or the dynamic-property deprecation) of `$o->undef++`:
+    /// `zend_std_get_property_ptr_ptr` has added the null property by then
+    /// and the increment still happens; `Vm::place_incdec` throws it after
+    /// writing the result (see `Vm::rw_dynamic_threw`).
+    static RW_THROW: std::cell::Cell<Option<Throw>> = const { std::cell::Cell::new(None) };
+    /// The frame depth of the silent write-back walk of `++`/`--` (after
+    /// `FETCH_DIM_RW` has reported the offsets): the container walks it
+    /// reaches through objects drop their diagnostics too.
+    static QUIET_AT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 /// Whether the property reference assignment at frame depth `depth` is the
@@ -877,21 +1333,6 @@ pub(crate) fn take_nonvar_ref(depth: usize) -> bool {
             false
         }
     })
-}
-
-/// The container a `place = v` walk reached at an undefined-variable final
-/// offset; the walk stops there without writing, the VM raises the offset
-/// diagnostics, and the assignment is redone silently unless the error
-/// handler destroyed (or, for an array, shared) the container.
-enum UndefDimHit {
-    /// An array: `slow_index_convert_w`'s `GC_ADDREF(ht)`. The flag is set
-    /// when the walk made it from `false`: `ZEND_ASSIGN_DIM` holds the new
-    /// array across the "Automatic conversion of false to array" deprecation
-    /// (already raised with the walk's diagnostics) and abandons the write,
-    /// before reading the offset, when the error handler freed it.
-    Array(ZArray, bool),
-    /// A string: `zend_assign_to_string_offset`'s `GC_ADDREF(s)`.
-    Str(ZStr),
 }
 
 /// The in-place append behind [`Vm::concat_assign_cv`]: `None` when place
@@ -960,17 +1401,6 @@ fn incdec_var_int_fast(base: &RBase, kind: IncDecKind) -> Option<Value> {
         Some(Value::Int(i)) => incdec_int_slot(i, kind),
         _ => None,
     }
-}
-
-/// Takes the pending undefined final offset of the walk over `segs`.
-fn take_pending_undef_dim(segs: &[RSeg]) -> Option<u32> {
-    PENDING_UNDEF_DIM.with(|c| match c.get() {
-        Some((ptr, cv)) if std::ptr::eq(ptr, segs.as_ptr()) => {
-            c.set(None);
-            Some(cv)
-        }
-        _ => None,
-    })
 }
 
 /// See `RW_UNDEF_WATCH`.
@@ -1198,24 +1628,30 @@ fn finish_deferred(
     }
 }
 
+/// How a read-modify-write of a missing dynamic property goes on when the
+/// error handler throws at its warning (see [`Vm::rw_dynamic_threw`]).
+#[derive(Clone, Copy)]
+enum RwThrow<'a> {
+    /// `++`/`--`.
+    IncDec,
+    /// A compound assignment with this operator and right-hand side.
+    Op(BinaryOp, &'a Value),
+}
+
 impl Vm {
     /// Resolves a place's base and segments.
     #[inline]
-    pub(crate) fn resolve_place(
-        &mut self,
-        pid: PlaceId,
-        write: bool,
-    ) -> VmResult<(RBase, Vec<RSeg>)> {
-        self.resolve_place_ex(pid, write, false, None, PlaceOp::Other)
+    pub(crate) fn resolve_place(&mut self, pid: PlaceId, write: bool) -> VmResult<(RBase, Segs)> {
+        self.resolve_place_ex(pid, write, false, PlaceOp::Other)
     }
 
     /// [`Vm::resolve_place`]; `quiet` is the `BP_VAR_IS` fetch of
     /// `isset()`/`empty()`, where an undeclared or inaccessible static
     /// property base resolves to an undefined base without an error.
     ///
-    /// With `undef_last_dim`, a final offset that is an undefined compiled
-    /// variable resolves to null without the warning and the variable is
-    /// stored there (see `PENDING_UNDEF_DIM`).
+    /// For a write, an offset that is an undefined compiled variable
+    /// resolves to null without the warning, which the walk raises when it
+    /// gets to the offset ([`PendingRead`]).
     ///
     /// `op` tells a static property base how it is written (see
     /// [`StaticWrite`]).
@@ -1224,9 +1660,8 @@ impl Vm {
         pid: PlaceId,
         write: bool,
         quiet: bool,
-        mut undef_last_dim: Option<&mut Option<u32>>,
         op: PlaceOp,
-    ) -> VmResult<(RBase, Vec<RSeg>)> {
+    ) -> VmResult<(RBase, Segs)> {
         let code = self.frame().code.clone();
         let p = &code.places[pid as usize];
         let sw = match (write, p.segs.is_empty(), op) {
@@ -1239,19 +1674,16 @@ impl Vm {
         let base = self.resolve_base(&p.base, write, quiet, sw)?;
         let n = p.segs.len();
         let mut segs = Vec::with_capacity(n);
+        let mut undefined = Vec::new();
         for (j, s) in p.segs.iter().enumerate() {
             segs.push(match s {
-                Seg::Dim(Operand::Cv(cv)) if j + 1 == n && undef_last_dim.is_some() => {
-                    match self.read_cv_defined(*cv) {
-                        Some(v) => RSeg::Dim(v),
-                        None => {
-                            if let Some(slot) = undef_last_dim.as_deref_mut() {
-                                *slot = Some(*cv);
-                            }
-                            RSeg::Dim(Value::Null)
-                        }
+                Seg::Dim(Operand::Cv(cv)) if write => match self.read_cv_defined(*cv) {
+                    Some(v) => RSeg::Dim(v),
+                    None => {
+                        undefined.push((j, code.cv_names[*cv as usize].clone()));
+                        RSeg::Dim(Value::Null)
                     }
-                }
+                },
                 Seg::Dim(op) => RSeg::Dim(self.read_dim_operand(*op)?),
                 Seg::Append => RSeg::Append,
                 Seg::Prop(op) => {
@@ -1259,6 +1691,13 @@ impl Vm {
                     RSeg::Prop(self.to_zstr(&v)?)
                 }
             });
+        }
+        let mut segs = Segs {
+            v: segs,
+            reads: false,
+        };
+        for (j, name) in undefined {
+            segs.add_read(j, name);
         }
         Ok((base, segs))
     }
@@ -1425,7 +1864,9 @@ impl Vm {
 
     /// `quiet` drops the walk's deferred diagnostics: the write-back walk
     /// of a compound assignment repeats offset conversions the first walk
-    /// already reported.
+    /// already reported. Otherwise, with an error handler set, the base
+    /// container's walk runs live ([`Vm::run_live`]).
+    #[allow(clippy::too_many_lines)]
     fn write_place_inner(
         &mut self,
         base: RBase,
@@ -1438,6 +1879,7 @@ impl Vm {
             WOp::AssignOp(..) | WOp::FetchRw | WOp::Assign(Value::Object(_) | Value::Reference(_))
         )
         .then(|| base.clone());
+        let live = !quiet && self.live_walk(segs, &wop);
         let mut diags = Vec::new();
         let step = match base {
             RBase::Var(store, idx) => {
@@ -1470,10 +1912,30 @@ impl Vm {
                     }
                     st.slots[idx] = Some(Value::Null);
                 }
-                let slot = st.slots[idx].as_mut().expect("slot defined");
-                let s = descend(slot, segs, 0, &mut wop, &mut diags, undef);
-                drop(st);
-                s
+                if live {
+                    drop(st);
+                    let mut walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
+                        let mut st = store.borrow_mut();
+                        let step = match st.slots.get_mut(idx) {
+                            Some(Some(slot)) => descend(slot, sg, 0, w, d, false),
+                            _ => Step::Done(Value::Null),
+                        };
+                        drop(st);
+                        step
+                    };
+                    match self.run_live(segs, &mut wop, &mut walk) {
+                        Live::Walked(s, d) => {
+                            diags = d;
+                            s
+                        }
+                        Live::Over(r) => return r,
+                    }
+                } else {
+                    let slot = st.slots[idx].as_mut().expect("slot defined");
+                    let s = descend(slot, segs, 0, &mut wop, &mut diags, undef);
+                    drop(st);
+                    s
+                }
             }
             RBase::This(o) => match o {
                 Some(o) if segs.is_empty() => {
@@ -1503,10 +1965,24 @@ impl Vm {
                     drop(b);
                     return self.finish_step(s, segs, wop);
                 }
-                let mut b = cell.borrow_mut();
-                let s = descend(&mut b, segs, 0, &mut wop, &mut diags, false);
-                drop(b);
-                s
+                if live {
+                    let mut walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
+                        let mut b = cell.borrow_mut();
+                        descend(&mut b, sg, 0, w, d, false)
+                    };
+                    match self.run_live(segs, &mut wop, &mut walk) {
+                        Live::Walked(s, d) => {
+                            diags = d;
+                            s
+                        }
+                        Live::Over(r) => return r,
+                    }
+                } else {
+                    let mut b = cell.borrow_mut();
+                    let s = descend(&mut b, segs, 0, &mut wop, &mut diags, false);
+                    drop(b);
+                    s
+                }
             }
             RBase::Value(mut v) => {
                 if segs.is_empty() {
@@ -1519,7 +1995,20 @@ impl Vm {
                         _ => Value::Null,
                     });
                 }
-                descend(&mut v, segs, 0, &mut wop, &mut diags, false)
+                if live {
+                    let mut walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
+                        descend(&mut v, sg, 0, w, d, false)
+                    };
+                    match self.run_live(segs, &mut wop, &mut walk) {
+                        Live::Walked(s, d) => {
+                            diags = d;
+                            s
+                        }
+                        Live::Over(r) => return r,
+                    }
+                } else {
+                    descend(&mut v, segs, 0, &mut wop, &mut diags, false)
+                }
             }
             RBase::Globals => {
                 return Err(self.make_throw(
@@ -1672,50 +2161,226 @@ impl Vm {
         wop: WOp,
         mut walk: impl FnMut(&[RSeg], &mut WOp, &mut Diags) -> Step,
     ) -> VmResult<Value> {
-        let mut diags = Vec::new();
         let mut w = wop;
-        // A hit pending in an outer walk (whose diagnostics are being
-        // reported) is not this walk's.
-        let outer_hit = UNDEF_DIM_HIT.with(std::cell::Cell::take);
-        let s = walk(segs, &mut w, &mut diags);
+        // The write-back walk of `++`/`--` (see `QUIET_AT`).
+        let quiet = QUIET_AT.with(std::cell::Cell::get) == Some(self.frames.len());
+        let (s, diags) = if !quiet && self.live_walk(segs, &w) {
+            match self.run_live(segs, &mut w, &mut walk) {
+                Live::Walked(s, d) => (s, d),
+                Live::Over(r) => return r,
+            }
+        } else {
+            let mut diags = Vec::new();
+            let s = walk(segs, &mut w, &mut diags);
+            (s, diags)
+        };
         let appended = if matches!(w, WOp::AssignOp(..)) {
             take_appended_segs(segs)
         } else {
             None
         };
-        let hit = UNDEF_DIM_HIT.with(|c| c.replace(outer_hit));
-        let flushed = self.flush_diags(diags);
+        let flushed = if quiet {
+            Ok(())
+        } else {
+            self.flush_diags(diags)
+        };
         let changed = rw_container_changed(&w);
         flushed?;
         if changed {
             return Ok(Value::Null);
         }
-        if let Some((cv, hit)) = hit {
-            return self.descend_undef_dim(cv, hit, segs, w, walk);
-        }
         self.finish_native(s, segs, w, appended, walk)
     }
 
-    /// [`Vm::assign_undef_dim`] for a walk stopped inside a container
-    /// reached through an object: the container is walked again rather
-    /// than the place, so object handlers run once.
+    /// Whether a write walk over `segs` doing `wop` runs live: an error
+    /// handler could observe its diagnostics (see [`Vm::run_live`]).
+    /// Unset walks and walks appending with `[]` (whose repeated walk would
+    /// append again) keep collecting them.
+    #[inline]
+    fn live_walk(&self, segs: &[RSeg], wop: &WOp) -> bool {
+        !self.error_handlers.is_empty()
+            && !matches!(wop, WOp::Unset)
+            && !segs.iter().any(|s| matches!(s, RSeg::Append))
+    }
+
+    /// Runs a write walk of one container (`walk`) the way php-src's
+    /// opcodes go through it while an error handler is set: the walk stops
+    /// at each diagnostic php-src raises in the middle of a fetch
+    /// ([`Step::Pause`]), which is raised here with the container held;
+    /// then, as php-src decides after it, the walk is repeated past it
+    /// (the steps before it are done already and do not repeat their
+    /// diagnostics), the fetch is given up (the handler freed or shared the
+    /// array: the rest of the place is walked on a temporary null, as
+    /// php-src's next opcodes get a null result), or the handler's
+    /// exception ends the operation once the fetch it interrupted is
+    /// complete.
     #[cold]
     #[inline(never)]
-    fn descend_undef_dim(
+    fn run_live(
         &mut self,
-        cv: u32,
-        hit: UndefDimHit,
         segs: &[RSeg],
-        wop: WOp,
-        mut walk: impl FnMut(&[RSeg], &mut WOp, &mut Diags) -> Step,
+        wop: &mut WOp,
+        walk: &mut dyn FnMut(&[RSeg], &mut WOp, &mut Diags) -> Step,
+    ) -> Live {
+        let (mut seg, mut phase) = (0, 0);
+        loop {
+            let mut diags = Vec::new();
+            let step = with_mode(Mode::Live { seg, phase }, || walk(segs, wop, &mut diags));
+            let p = match step {
+                Step::Pause(p) => p,
+                step => return Live::Walked(step, diags),
+            };
+            if let Err(t) = self.flush_diags(diags) {
+                return Live::Over(Err(t));
+            }
+            let (at, ph, level, msg, held, check) = match *p {
+                Pause::Str(s) => return Live::Over(self.live_string_assign(s, segs, walk)),
+                Pause::Fetch {
+                    seg,
+                    phase,
+                    level,
+                    msg,
+                    held,
+                    check,
+                } => (seg, phase, level, msg, held, check),
+            };
+            let raised = self.error(level, &msg);
+            let gone = match check {
+                Check::Index => held.refcount() != 2,
+                Check::False | Check::Value => held.refcount() == 1,
+            };
+            drop(held);
+            match raised {
+                Err(t) => {
+                    if !gone && check != Check::Index {
+                        unwind_live(segs, wop, walk, at, ph);
+                    }
+                    return Live::Over(Err(t));
+                }
+                Ok(()) if gone => return Live::Over(self.live_give_up(at, check, segs, wop)),
+                Ok(()) => (seg, phase) = (at, ph),
+            }
+        }
+    }
+
+    /// The fetch of segment `seg` was given up after a diagnostic (the
+    /// error handler freed or shared the array, see [`Vm::run_live`]): the
+    /// opcode yields null, the following ones work on that temporary, and
+    /// a final assignment does not happen.
+    #[cold]
+    #[inline(never)]
+    fn live_give_up(
+        &mut self,
+        seg: usize,
+        check: Check,
+        segs: &[RSeg],
+        wop: &mut WOp,
     ) -> VmResult<Value> {
-        let WOp::Assign(v) = &wop else {
-            return Ok(Value::Null);
+        let last = seg + 1 == segs.len();
+        if check == Check::False
+            && (!last || matches!(wop, WOp::FetchRw | WOp::MakeRef | WOp::AssignRef(_)))
+        {
+            // `zend_fetch_dimension_address`'s `return_null` still reads an
+            // undefined-variable offset.
+            if let Some(name) = take_pending(segs, seg) {
+                self.warning(&crate::exec::undefined_var_msg(&name))?;
+            }
+        }
+        let rw_fetch = matches!(wop, WOp::FetchRw);
+        let r = if last {
+            match wop {
+                WOp::MakeRef => Ok(Value::Reference(PhpRef::new(Value::Null))),
+                _ => Ok(Value::Null),
+            }
+        } else {
+            let w = std::mem::replace(wop, WOp::Unset);
+            self.descend_temp(Value::Null, segs, seg + 1, w)
         };
-        if !self.undef_dim_diags(cv, hit, v)? {
+        if rw_fetch {
+            // `++`/`--` then act on the temporary (see `Vm::fetch_rw`).
+            RW_SKIPPED.with(|c| c.set(true));
+        }
+        r
+    }
+
+    /// php-src's `zend_assign_to_string_offset` for a final assignment to a
+    /// string offset that raises a diagnostic, raised here with the
+    /// (separated) string held: when the error handler frees it the write
+    /// is given up and the assignment yields null. The byte is then written
+    /// by walking again (`walk`) with the one-byte value.
+    #[cold]
+    #[inline(never)]
+    fn live_string_assign(
+        &mut self,
+        p: StrAssign,
+        segs: &[RSeg],
+        walk: &mut dyn FnMut(&[RSeg], &mut WOp, &mut Diags) -> Step,
+    ) -> VmResult<Value> {
+        let StrAssign {
+            held,
+            dim,
+            undef_dim,
+            value,
+            undef_value,
+        } = p;
+        let offset = if let Value::Int(i) = dim {
+            i
+        } else {
+            // `zend_check_string_offset`.
+            let mut d = Vec::new();
+            if let Some(name) = &undef_dim {
+                d.push((E_WARNING, crate::exec::undefined_var_msg(name)));
+            }
+            let off = string_offset(&dim, &mut d, false);
+            self.flush_diags(d)?;
+            if held.refcount() == 1 {
+                return Ok(Value::Null);
+            }
+            match off {
+                Ok(o) => o,
+                Err(e) => return Err(self.walk_err(e)),
+            }
+        };
+        let len = i64::try_from(held.len()).unwrap_or(i64::MAX);
+        if offset < -len {
+            self.warning(&format!("Illegal string offset {offset}"))?;
             return Ok(Value::Null);
         }
-        let mut w = wop;
+        let bytes = match value.deref() {
+            Value::Str(s) => s.as_bytes().to_vec(),
+            other => {
+                // `zval_try_get_string_func`, with the string held across
+                // the value's warnings.
+                if let Some(name) = &undef_value {
+                    self.warning(&crate::exec::undefined_var_msg(name))?;
+                }
+                let bytes = match &other {
+                    Value::Array(_) => {
+                        self.warning("Array to string conversion")?;
+                        b"Array".to_vec()
+                    }
+                    Value::Object(_) => self.to_zstr(&other)?.as_bytes().to_vec(),
+                    v => string_offset_value_bytes(v),
+                };
+                if held.refcount() == 1 {
+                    return Ok(Value::Null);
+                }
+                bytes
+            }
+        };
+        let Some(&c) = bytes.first() else {
+            return Err(
+                self.make_throw("Error", "Cannot assign an empty string to a string offset")
+            );
+        };
+        if bytes.len() > 1 {
+            self.warning("Only the first byte will be assigned to the string offset")?;
+            if held.refcount() == 1 {
+                return Ok(Value::Null);
+            }
+        }
+        drop(held);
+        let mut w = WOp::Assign(Value::Str(ZStr::from_byte(c)));
         let s = walk(segs, &mut w, &mut Vec::new());
         self.finish_step(s, segs, w)
     }
@@ -1740,6 +2405,14 @@ impl Vm {
             Step::Err(e) => Err(self.walk_err(e)),
             Step::TypedRefAssign(r, v) => self.assign_ref(&r, v),
             Step::Obj(o, i) => self.obj_walk(o, segs, i, wop),
+            // Only live walks pause, and `Vm::run_live` handles that.
+            Step::Pause(p) => match *p {
+                Pause::Fetch { level, msg, .. } => {
+                    self.error(level, &msg)?;
+                    Ok(Value::Null)
+                }
+                Pause::Str(_) => Ok(Value::Null),
+            },
         }
     }
 
@@ -1848,14 +2521,21 @@ impl Vm {
             RSeg::Prop(name) => {
                 if last {
                     return match wop {
-                        WOp::Assign(v) => self.write_property_walk(&obj, name, v),
+                        WOp::Assign(v) => {
+                            // ZEND_ASSIGN_OBJ reads OP_DATA once it has the
+                            // object.
+                            if v.is_null() {
+                                self.take_pending_value_warning(segs)?;
+                            }
+                            self.write_property_walk(&obj, name, v)
+                        }
                         WOp::FetchRw => match self.native_read_property(
                             &obj,
                             name,
                             crate::ext::PropCtx::ReadWrite,
                         )? {
                             Some(v) => Ok(v.deref()),
-                            None => self.fetch_property_rw(&obj, name),
+                            None => self.fetch_property_rw(&obj, name, RwThrow::IncDec),
                         },
                         WOp::AssignOp(op, rhs) => {
                             if op == BinaryOp::Concat {
@@ -1872,7 +2552,9 @@ impl Vm {
                                 crate::ext::PropCtx::ReadWrite,
                             )? {
                                 Some(v) => v.deref(),
-                                None => self.fetch_property_rw(&obj, name)?,
+                                None => {
+                                    self.fetch_property_rw(&obj, name, RwThrow::Op(op, &rhs))?
+                                }
                             };
                             let nv = self.assign_op_value(op, &cur, &rhs)?;
                             drop(cur);
@@ -1963,8 +2645,13 @@ impl Vm {
                 }
             }
             seg @ (RSeg::Dim(_) | RSeg::Append) => {
-                if last && matches!(seg, RSeg::Dim(Value::Null)) && matches!(wop, WOp::Assign(_)) {
-                    self.take_pending_undef_dim_warn(segs)?;
+                // An undefined-variable offset is read before the object's
+                // handlers run (`zend_fetch_dimension_address`,
+                // `ZEND_ASSIGN_DIM`, `zend_binary_assign_op_obj_dim`).
+                if matches!(seg, RSeg::Dim(Value::Null)) {
+                    if let Some(name) = take_pending(segs, i) {
+                        self.warning(&crate::exec::undefined_var_msg(&name))?;
+                    }
                 }
                 let key = match seg {
                     RSeg::Dim(k) => k.clone(),
@@ -1979,7 +2666,9 @@ impl Vm {
                         match &wop {
                             WOp::Assign(v) => {
                                 if let Some(f) = h.write_dimension {
-                                    self.take_pending_undef_value()?;
+                                    if v.is_null() {
+                                        self.take_pending_value_warning(segs)?;
+                                    }
                                     if f(self, &obj, keyopt, v)? {
                                         return Ok(v.clone());
                                     }
@@ -2060,6 +2749,11 @@ impl Vm {
                     }
                 }
                 if !self.instance_of(&obj, b"arrayaccess") {
+                    // `ZEND_ASSIGN_DIM` reads OP_DATA before
+                    // `zend_std_write_dimension` throws.
+                    if last && matches!(wop, WOp::Assign(Value::Null)) {
+                        self.take_pending_value_warning(segs)?;
+                    }
                     return Err(self.make_throw(
                         "Error",
                         &format!(
@@ -2072,7 +2766,9 @@ impl Vm {
                     let assign_ref = matches!(wop, WOp::AssignRef(_));
                     return match wop {
                         WOp::Assign(v) => {
-                            self.take_pending_undef_value()?;
+                            if v.is_null() {
+                                self.take_pending_value_warning(segs)?;
+                            }
                             self.call_method_name(&obj, "offsetSet", vec![key, v.clone()])?;
                             Ok(v)
                         }
@@ -2189,9 +2885,7 @@ impl Vm {
             }
             None => return self.place_assign_undef_cv(pid, cv),
         };
-        let mut undef_dim = None;
-        let resolved =
-            self.resolve_place_ex(pid, true, false, Some(&mut undef_dim), PlaceOp::Assign);
+        let resolved = self.resolve_place_ex(pid, true, false, PlaceOp::Assign);
         let (base, segs) = match resolved {
             Ok(r) => r,
             Err(e) => {
@@ -2199,12 +2893,9 @@ impl Vm {
                 return Err(e);
             }
         };
-        let noisy = !self.error_handlers.is_empty() && final_dim_converts_noisily(segs.last());
         let target = match &base {
             RBase::Var(store, idx)
-                if undef_dim.is_none()
-                    && !noisy
-                    && !segs.is_empty()
+                if !segs.is_empty()
                     && !segs.iter().any(|s| matches!(s, RSeg::Prop(_)))
                     && store.borrow().slots.get(*idx).is_some_and(Option::is_some) =>
             {
@@ -2215,12 +2906,6 @@ impl Vm {
         let Some((store, idx)) = target else {
             let v = src.get();
             crate::gc::release_duplicate(Value::Reference(src));
-            if let Some(cv) = undef_dim {
-                return self.assign_undef_dim(base, &segs, v, cv);
-            }
-            if noisy {
-                return self.assign_converted_dim(base, &segs, v);
-            }
             return self.write_place(base, &segs, WOp::Assign(v));
         };
         let mut wop = WOp::AssignDeref(Box::new(DeferredRead {
@@ -2228,12 +2913,32 @@ impl Vm {
             hit: DeferredHit::None,
         }));
         let mut diags = Vec::new();
-        let mut st = store.borrow_mut();
-        let step = match st.slots.get_mut(idx).and_then(Option::as_mut) {
-            Some(slot) => descend(slot, &segs, 0, &mut wop, &mut diags, false),
-            None => Step::Done(Value::Null),
+        let walk_slot = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
+            let mut st = store.borrow_mut();
+            let step = match st.slots.get_mut(idx).and_then(Option::as_mut) {
+                Some(slot) => descend(slot, sg, 0, w, d, false),
+                None => Step::Done(Value::Null),
+            };
+            drop(st);
+            step
         };
-        drop(st);
+        let step = if self.live_walk(&segs, &wop) {
+            let mut walk = walk_slot;
+            match self.run_live(&segs, &mut wop, &mut walk) {
+                Live::Walked(s, d) => {
+                    diags = d;
+                    s
+                }
+                Live::Over(r) => {
+                    drop(wop.resolve_deferred());
+                    flush_deferred_ref_assigns();
+                    return r;
+                }
+            }
+        } else {
+            let mut walk = walk_slot;
+            walk(&*segs, &mut wop, &mut diags)
+        };
         let step = match (step, &mut wop) {
             (Step::Done(v), WOp::AssignDeref(d)) => finish_deferred(v, d, &store, idx, &segs),
             (s, _) => s,
@@ -2263,15 +2968,7 @@ impl Vm {
         } else {
             v
         };
-        let mut undef_dim = None;
-        let (base, segs) =
-            self.resolve_place_ex(pid, true, false, Some(&mut undef_dim), PlaceOp::Assign)?;
-        if let Some(cv) = undef_dim {
-            return self.assign_undef_dim(base, &segs, v, cv);
-        }
-        if !self.error_handlers.is_empty() && final_dim_converts_noisily(segs.last()) {
-            return self.assign_converted_dim(base, &segs, v);
-        }
+        let (base, segs) = self.resolve_place_ex(pid, true, false, PlaceOp::Assign)?;
         // Fast path: `$this->a[$k] = v` & co. enter a cached declared slot
         // (FETCH_OBJ_W with a runtime cache slot).
         if head && !single {
@@ -2339,140 +3036,20 @@ impl Vm {
         r
     }
 
-    /// `place[k] = v` where converting `k` raises a diagnostic and an error
-    /// handler is set: `slow_index_convert_w` (`Zend/zend_execute.c`)
-    /// holds the array across the diagnostic and skips the write (the
-    /// assignment yields null) when the handler captured or destroyed it
-    /// (`array_offset_002`). The walk stops at the final array without
-    /// writing (see `PENDING_CONVERT_DIM`); once its diagnostics have been
-    /// raised the assignment is redone silently.
-    #[cold]
-    #[inline(never)]
-    fn assign_converted_dim(&mut self, base: RBase, segs: &[RSeg], v: Value) -> VmResult<Value> {
-        let again = base.clone();
-        let saved = PENDING_CONVERT_DIM.with(|c| c.replace(Some(segs.as_ptr())));
-        let saved_hit = CONVERT_DIM_HIT.with(std::cell::Cell::take);
-        let r = self.write_place(base, segs, WOp::Assign(v.clone()));
-        PENDING_CONVERT_DIM.with(|c| c.set(saved));
-        let hit = CONVERT_DIM_HIT.with(|c| c.replace(saved_hit));
-        let r = r?;
-        let Some(held) = hit else {
-            return Ok(r);
-        };
-        // The variable's slot and `held`.
-        if held.refcount() != 2 {
-            return Ok(Value::Null);
-        }
-        drop(held);
-        let r = self.write_place_inner(again, segs, WOp::Assign(v), true);
-        flush_deferred_ref_assigns();
-        r
-    }
-
-    /// `place[$undef] = v` (`ZEND_ASSIGN_DIM` with an undefined CV offset):
-    /// the walk stops at the final container without writing (see
-    /// `PENDING_UNDEF_DIM`); the offset diagnostics are raised with the
-    /// container held, and the assignment is then redone silently unless
-    /// the error handler destroyed it.
-    #[cold]
-    #[inline(never)]
-    fn assign_undef_dim(
-        &mut self,
-        base: RBase,
-        segs: &[RSeg],
-        v: Value,
-        cv: u32,
-    ) -> VmResult<Value> {
-        let again = base.clone();
-        let saved = PENDING_UNDEF_DIM.with(|c| c.replace(Some((segs.as_ptr(), cv))));
-        let saved_hit = UNDEF_DIM_HIT.with(std::cell::Cell::take);
-        let r = self.write_place(base, segs, WOp::Assign(v.clone()));
-        let unconsumed = PENDING_UNDEF_DIM.with(|c| c.replace(saved)).is_some();
-        let hit = UNDEF_DIM_HIT.with(|c| c.replace(saved_hit));
-        let r = r?;
-        let Some((cv, hit)) = hit else {
-            if unconsumed {
-                // A container this walk does not stop at: warn late
-                // rather than never.
-                self.undef_dim_warning(cv)?;
-            }
-            return Ok(r);
-        };
-        if !self.undef_dim_diags(cv, hit, &v)? {
-            return Ok(Value::Null);
-        }
-        let r = self.write_place_inner(again, segs, WOp::Assign(v), true);
-        flush_deferred_ref_assigns();
-        r
-    }
-
-    /// The "Undefined variable" warning of a final offset.
-    fn undef_dim_warning(&mut self, cv: u32) -> VmResult<()> {
-        let name = self.frame().code.cv_names[cv as usize].clone();
-        self.warning(&crate::exec::undefined_var_msg(&name))
-    }
-
-    /// Raises the diagnostics of an undefined-variable final offset at the
-    /// container the walk stopped at: `slow_index_convert_w` (array) or
-    /// `zend_assign_to_string_offset` (string). `false` when the error
-    /// handler destroyed the container (or shared the array): the write is
-    /// abandoned and the assignment yields null.
-    #[cold]
-    fn undef_dim_diags(&mut self, cv: u32, hit: UndefDimHit, v: &Value) -> VmResult<bool> {
-        if let UndefDimHit::Array(held, true) = &hit {
-            // `ZEND_ASSIGN_DIM`: `GC_DELREF(ht) == 0` after the false
-            // deprecation -> `assign_dim_error`; the offset is never read.
-            if held.refcount() == 1 {
-                return Ok(false);
-            }
-        }
-        self.undef_dim_warning(cv)?;
-        match hit {
-            UndefDimHit::Array(held, _) => {
-                if held.refcount() != 2 {
-                    return Ok(false);
-                }
-                self.deprecated(
-                    "Using null as an array offset is deprecated, use an empty string instead",
-                )?;
-                Ok(held.refcount() == 2)
-            }
-            UndefDimHit::Str(held) => {
-                self.warning("String offset cast occurred")?;
-                if held.refcount() == 1 {
-                    return Ok(false);
-                }
-                if string_offset_value_bytes(v).len() > 1 {
-                    self.warning("Only the first byte will be assigned to the string offset")?;
-                    if held.refcount() == 1 {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
-        }
-    }
-
-    /// Raises the pending undefined final offset's warning of the walk
-    /// over `segs` before an object's `write_dimension` (`ZEND_ASSIGN_DIM`
-    /// reads the offset before calling it).
-    fn take_pending_undef_dim_warn(&mut self, segs: &[RSeg]) -> VmResult<()> {
-        match take_pending_undef_dim(segs) {
-            Some(cv) => self.undef_dim_warning(cv),
-            None => Ok(()),
-        }
-    }
-
     /// The `BP_VAR_RW` read of a compound assignment's property
     /// (`zend_std_get_property_ptr_ptr`, `Zend/zend_object_handlers.c`):
     /// an error handler run by the "Undefined property" warning may define
     /// the property, and the operation then works on that value
-    /// (`zend_assign_op_overloaded_property`).
+    /// (`zend_assign_op_overloaded_property`). `after` says how the
+    /// operation goes on when that handler throws (see
+    /// [`Vm::rw_dynamic_threw`]).
     ///
     /// `obj` is an [`Vm::obj_walk`] temporary.
-    fn fetch_property_rw(&mut self, obj: &Obj, name: &ZStr) -> VmResult<Value> {
-        if let Some(v) = self.rw_create_dynamic(obj, name, 1)? {
-            return Ok(v);
+    fn fetch_property_rw(&mut self, obj: &Obj, name: &ZStr, after: RwThrow<'_>) -> VmResult<Value> {
+        match self.rw_create_dynamic(obj, name, 1) {
+            Ok(Some(v)) => return Ok(v),
+            Ok(None) => {}
+            Err(t) => return self.rw_dynamic_threw(obj, name, after, t),
         }
         let v = self.read_property(obj, name, FetchMode::Read)?;
         if !matches!(v, Value::Null) || self.error_handlers.is_empty() {
@@ -2481,58 +3058,78 @@ impl Vm {
         Ok(stored_property(obj, name).unwrap_or(v))
     }
 
-    /// `place = $cv` where `$cv` is undefined. `ZEND_ASSIGN_DIM`
-    /// (`Zend/zend_vm_def.h`) fetches the dimension before reading
-    /// `OP_DATA`, so the offsets' "Undefined variable" warnings come first
-    /// (an error handler that throws on them never sees the value's
-    /// warning); `ZEND_ASSIGN_OBJ` reads `OP_DATA` before the property name.
+    /// An error handler threw `t` at the dynamic-property deprecation or
+    /// the "Undefined property" warning of a read-modify-write of the
+    /// missing property `name`. `zend_std_get_property_ptr_ptr` adds it as
+    /// null first (and keeps it), and the opcode goes on with the exception
+    /// set: `++`/`--` still change it (`zend_pre_incdec_property_zval`; the
+    /// exception is thrown once the result is written, see `RW_THROW`),
+    /// the arithmetic operators store their result, and `concat_function`
+    /// gives up converting the null.
+    #[cold]
+    #[inline(never)]
+    fn rw_dynamic_threw(
+        &mut self,
+        obj: &Obj,
+        name: &ZStr,
+        after: RwThrow<'_>,
+        t: Throw,
+    ) -> VmResult<Value> {
+        let cls = object::class_of(obj);
+        let creatable = cls.flags
+            & (crate::class::cflags::READONLY | crate::class::cflags::NO_DYNAMIC_PROPERTIES)
+            == 0
+            && !cls.is_enum();
+        if !creatable || !matches!(t, Throw::Exception(_)) {
+            return Err(t);
+        }
+        if stored_property(obj, name).is_none() {
+            self.write_dynamic_prop(obj, name.clone(), Value::Null);
+        }
+        match after {
+            RwThrow::IncDec => {
+                RW_THROW.with(|c| c.set(Some(t)));
+                Ok(Value::Null)
+            }
+            RwThrow::Op(op, rhs) => {
+                if op != BinaryOp::Concat {
+                    if let Ok(nv) = self.assign_op_value(op, &Value::Null, rhs) {
+                        self.write_dynamic_prop(obj, name.clone(), nv);
+                    }
+                }
+                Err(t)
+            }
+        }
+    }
+
+    /// `place = $cv` where `$cv` is undefined. `ZEND_ASSIGN_DIM` and
+    /// `ZEND_ASSIGN_OBJ` (`Zend/zend_vm_def.h`) read `OP_DATA` once they
+    /// have the container (and for an array the slot), so its warning
+    /// follows the fetches' diagnostics (an error handler that throws on
+    /// them never sees it) and is not raised when the walk fails first:
+    /// the walk raises it when it gets there ([`PendingRead`]).
     #[cold]
     pub(crate) fn place_assign_undef_cv(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
-        let last_is_prop = matches!(
-            self.frame().code.places[pid as usize].segs.last(),
-            Some(Seg::Prop(_))
-        );
-        if last_is_prop {
-            let v = self.read_cv(cv)?;
-            return self.place_assign(pid, v);
-        }
-        let (base, segs) = self.resolve_place_ex(pid, true, false, None, PlaceOp::Assign)?;
-        if !segs.iter().any(|s| matches!(s, RSeg::Prop(_))) {
+        let (base, mut segs) = self.resolve_place_ex(pid, true, false, PlaceOp::Assign)?;
+        if segs.is_empty() {
             let v = self.read_cv(cv)?;
             return self.write_place(base, &segs, WOp::Assign(v));
         }
-        // Through a property, the fetches (`FETCH_OBJ_W`'s "Indirect
-        // modification" notice, `__get`, `offsetGet`) precede the OP_DATA
-        // read: the value's warning is raised just before the final store
-        // (`Vm::take_pending_undef_value`) or after the walk.
-        let depth = self.frames.len();
-        let saved = PENDING_UNDEF_VALUE.with(|c| c.replace(Some((cv, depth))));
-        let r = self.write_place(base, &segs, WOp::Assign(Value::Null));
-        let mine = PENDING_UNDEF_VALUE.with(|c| c.replace(saved));
-        let r = r?;
-        if let Some((cv, _)) = mine {
-            self.read_cv(cv)?;
-        }
-        Ok(r)
+        let name = self.frame().code.cv_names[cv as usize].clone();
+        segs.add_read(VALUE, name);
+        self.write_place(base, &segs, WOp::Assign(Value::Null))
     }
 
-    /// Raises the deferred "Undefined variable" warning of
-    /// [`Vm::place_assign_undef_cv`] before an object's final dimension
-    /// write (`offsetSet`, a native `write_dimension`), as `ZEND_ASSIGN_DIM`
-    /// reads `OP_DATA` before `zend_assign_to_object_dim`.
-    fn take_pending_undef_value(&mut self) -> VmResult<()> {
-        let depth = self.frames.len();
-        let pending = PENDING_UNDEF_VALUE.with(|c| match c.get() {
-            Some((cv, d)) if d == depth => {
-                c.set(None);
-                Some(cv)
-            }
-            _ => None,
-        });
-        if let Some(cv) = pending {
-            self.read_cv(cv)?;
+    /// Raises the warning of the undefined variable pending as the value
+    /// assigned by the walk over `segs` ([`Vm::place_assign_undef_cv`])
+    /// before an object's final write (`offsetSet`, a native
+    /// `write_dimension`, the property's), as `ZEND_ASSIGN_DIM` and
+    /// `ZEND_ASSIGN_OBJ` read `OP_DATA` before calling the handlers.
+    fn take_pending_value_warning(&mut self, segs: &[RSeg]) -> VmResult<()> {
+        match take_pending(segs, VALUE) {
+            Some(name) => self.warning(&crate::exec::undefined_var_msg(&name)),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     /// `place op= v`
@@ -2663,32 +3260,47 @@ impl Vm {
         Ok(())
     }
 
-    /// The read half of a read-modify-write: the current value and, when
-    /// the walk ended on an `ArrayAccess` offset, that object and offset.
-    /// `None` when the walk was abandoned because an error handler changed
-    /// the array (see `rw_container_changed`).
-    #[allow(clippy::type_complexity)] // (value, overloaded ArrayAccess target)
+    /// The read half of a read-modify-write: the current value, when the
+    /// walk ended on an `ArrayAccess` offset that object and offset, and
+    /// the exception an error handler threw at a missing dynamic property,
+    /// to throw once the operation is done (see `RW_THROW`). `None` when
+    /// the walk was abandoned because an error handler changed the array
+    /// (see `rw_container_changed`, `Vm::live_give_up`).
+    #[allow(clippy::type_complexity)] // (value, overloaded ArrayAccess target, pending throw)
     fn fetch_rw(
         &mut self,
         pid: PlaceId,
         base: RBase,
         segs: &[RSeg],
-    ) -> VmResult<Option<(Value, Option<(Obj, Value)>)>> {
-        if !matches!(segs.last(), Some(RSeg::Dim(_) | RSeg::Append)) {
-            return Ok(Some((
-                self.write_place_cached(pid, base, segs, WOp::FetchRw)?,
-                None,
-            )));
+    ) -> VmResult<Option<(Value, Option<(Obj, Value)>, Option<Throw>)>> {
+        match segs.last() {
+            Some(RSeg::Dim(_) | RSeg::Append) => {}
+            Some(RSeg::Prop(_)) => {
+                // Saved and restored around the walk, whose user code (an
+                // error handler) may run increments of its own.
+                let saved = RW_THROW.with(std::cell::Cell::take);
+                let r = self.write_place_cached(pid, base, segs, WOp::FetchRw);
+                let thrown = RW_THROW.with(|c| c.replace(saved));
+                return Ok(Some((r?, None, thrown)));
+            }
+            None => {
+                return Ok(Some((
+                    self.write_place_cached(pid, base, segs, WOp::FetchRw)?,
+                    None,
+                    None,
+                )));
+            }
         }
         // Save and restore around the walk: user code it runs (offsetGet,
-        // destructors) may perform read-modify-writes of its own.
+        // destructors, error handlers) may perform read-modify-writes of
+        // its own.
         let saved = OVERLOADED_RW.with(std::cell::Cell::take);
         let saved_skip = RW_SKIPPED.with(|c| c.replace(false));
         let r = self.write_place_cached(pid, base, segs, WOp::FetchRw);
         let mine = OVERLOADED_RW.with(|c| c.replace(saved));
         let skipped = RW_SKIPPED.with(|c| c.replace(saved_skip));
         let r = r?;
-        Ok((!skipped).then_some((r, mine)))
+        Ok((!skipped).then_some((r, mine, None)))
     }
 
     /// `$cv .= <string or int>` (`ZEND_ASSIGN_OP` on a CV, whose
@@ -2791,7 +3403,7 @@ impl Vm {
                 return Ok(r);
             }
         }
-        let Some((cur, overloaded)) = self.fetch_rw(pid, base, &segs)? else {
+        let Some((cur, overloaded, thrown)) = self.fetch_rw(pid, base, &segs)? else {
             // FETCH_DIM_RW yielded a null temporary: ++/-- act on it alone.
             let mut nv = Value::Null;
             if kind.is_inc() {
@@ -2835,20 +3447,29 @@ impl Vm {
             self.assign_ref(r, nv)
         } else {
             // A silent write-back walk: `FETCH_DIM_RW` converted the
-            // offsets (and reported them) once already. (From a cached
-            // property slot there is no base step whose diagnostics the
-            // silent walk would drop.)
-            if let Some((obj, idx)) = self.cached_container_of(pid, &segs) {
+            // offsets (and reported them) once already, also those of the
+            // containers reached through properties (`QUIET_AT`).
+            let through_props = segs.iter().any(|s| matches!(s, RSeg::Prop(_)));
+            let quiet =
+                through_props.then(|| QUIET_AT.with(|q| q.replace(Some(self.frames.len()))));
+            let r = if let Some((obj, idx)) = self.cached_container_of(pid, &segs) {
                 drop(base2);
                 self.write_cached_container(&obj, idx, &segs, WOp::Assign(nv))
             } else {
                 let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
                 flush_deferred_ref_assigns();
                 r
+            };
+            if let Some(q) = quiet {
+                QUIET_AT.with(|c| c.set(q));
             }
+            r
         };
         drop(guard);
         let res = res?;
+        if let Some(t) = thrown {
+            return Err(t);
+        }
         Ok(if kind.is_post() { old } else { res })
     }
 
@@ -2955,7 +3576,7 @@ impl Vm {
         if let (PlaceBase::StaticProp { class, name }, true) = (&p.base, p.segs.is_empty()) {
             return Err(self.unset_static_prop(class, *name));
         }
-        let (base, segs) = self.resolve_place_ex(pid, false, false, None, PlaceOp::Unset)?;
+        let (base, segs) = self.resolve_place_ex(pid, false, false, PlaceOp::Unset)?;
         if let RBase::Undef(_) = &base {
             return Ok(());
         }
@@ -2963,7 +3584,7 @@ impl Vm {
             // UNSET_DIM, FETCH_DIM_UNSET and FETCH_OBJ_UNSET on an
             // undefined CV warn (ZVAL_UNDEFINED_OP1); a lone UNSET_OBJ
             // does not.
-            let warns = !segs.is_empty() && !matches!(segs.as_slice(), [RSeg::Prop(_)]);
+            let warns = !segs.is_empty() && !matches!(&segs[..], [RSeg::Prop(_)]);
             if warns
                 && store.borrow().slots[*idx].is_none()
                 && matches!(
