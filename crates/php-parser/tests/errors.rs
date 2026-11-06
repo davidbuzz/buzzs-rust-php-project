@@ -675,6 +675,12 @@ fn empty_dimension_messages() {
         ("$a[][\"b\"] .= 1;", "OK"),
         ("$x = &$a[][\"b\"];", "OK"),
         ("f($a[][\"b\"]);", "OK"),
+        // ... and so is a property of an appended element passed to a call
+        // (`BP_VAR_FUNC_ARG`; the compiler rejects it once it knows the
+        // parameter is by value).
+        ("f($a[]->b);", "OK"),
+        ("f($a[][0]->b->c);", "OK"),
+        ("f(x: $a[]->b);", "OK"),
         ("class A { const B = 1; } A::B->c[][0] = 1;", "OK"),
         // Lines: the error is reported at the line of the dimension's base.
         (

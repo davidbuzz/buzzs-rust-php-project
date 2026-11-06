@@ -341,7 +341,22 @@ impl Vm {
             .as_ref()
             .is_some_and(|u| u.flags & flags::RETURN_REF != 0);
         let v = val.unwrap_or_default();
-        let v = if by_ref { v } else { v.deref() };
+        // The current value of a by-reference generator is a reference:
+        // what `ZEND_FE_FETCH_RW` makes of a yielded constant, temporary or
+        // bare `yield` (it wraps `generator->value` in a new reference, in
+        // place), so `foreach` by reference binds it without the "Only
+        // variables should be assigned by reference" notice of a function
+        // result. `current()`, `send()`, by-value `foreach` and unpacking
+        // dereference it; a reference nothing else holds reads as its value
+        // elsewhere (`iterator_to_array`).
+        let v = if by_ref {
+            match v {
+                Value::Reference(_) => v,
+                other => Value::Reference(php_runtime::PhpRef::new(other)),
+            }
+        } else {
+            v.deref()
+        };
         let key = key.map(|k| k.deref());
         if let Some(d) = dst {
             self.set_tmp(d, Value::Null);

@@ -147,7 +147,7 @@ struct BodySpec<'a> {
     has_body: bool,
 }
 
-impl Compiler {
+impl Compiler<'_> {
     pub(crate) fn compile_function_decl(
         &mut self,
         fd: &ast::FunctionDecl,
@@ -235,8 +235,17 @@ impl Compiler {
         if top_level {
             self.hoisted_functions.push(idx);
             // `pass_two()` done: later calls in this file know its arginfo.
-            let params = fd.params.iter().map(|p| (p.by_ref, p.variadic)).collect();
-            self.known_functions.insert(known_key, params);
+            let required = fd
+                .params
+                .iter()
+                .rposition(|p| p.default.is_none() && !p.variadic)
+                .map_or(0, |i| u32::try_from(i + 1).unwrap_or(u32::MAX));
+            let info = super::FunctionInfo::from_flags(
+                false,
+                required,
+                fd.params.iter().map(|p| (p.by_ref, p.variadic)),
+            );
+            self.known_functions.insert(known_key, info);
         } else {
             self.f().line = fd.span.line;
             self.emit(Op::DeclareFunction(idx));
@@ -851,12 +860,26 @@ impl Compiler {
             }
             BodyKind::Arrow(e) => {
                 self.f().line = e.span.line;
+                // The body is `return e;` (`zend_compile_return`): in a
+                // by-reference arrow function a variable or a call may not
+                // end a nullsafe chain (`zend_assert_not_short_circuited`).
+                let by_ref = spec.by_ref && !spec.is_generator;
+                if by_ref
+                    && (super::stmt::is_ref_expr(e) || super::expr::is_call_expr(e))
+                    && super::expr::contains_nullsafe(e)
+                {
+                    return self.err("Cannot take reference of a nullsafe chain", e.span.line);
+                }
                 if spec.by_ref && super::stmt::is_ref_expr(e) {
                     let p = self.compile_place(e, false)?;
                     let pid = self.place(p);
                     self.emit(Op::ReturnRef { place: pid });
                 } else {
-                    let v = self.compile_expr(e)?;
+                    let v = if by_ref {
+                        self.by_ref_return_operand(e)?
+                    } else {
+                        self.compile_expr(e)?
+                    };
                     if return_type.as_ref().is_some_and(TypeDecl::is_void) {
                         self.free(v);
                         self.emit(Op::Return {
@@ -1267,7 +1290,11 @@ impl Compiler {
     /// use no trait are bound at compile time; the others are declared when
     /// their statement runs.
     fn can_early_bind(&self, idx: u32) -> bool {
-        let classes = self.decls.classes.borrow();
+        // `idx` is in the table of the op array the class is declared in.
+        let Some(table) = self.fref().decls.as_ref() else {
+            return false;
+        };
+        let classes = table.classes.borrow();
         let Some(d) = classes.get(idx as usize) else {
             return false;
         };
@@ -1870,6 +1897,7 @@ impl Compiler {
                             doc_comment: c.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
                             attributes: attrs.clone(),
                             line: c.span.line,
+                            cases_before: u32::try_from(cases.len()).unwrap_or(u32::MAX),
                         });
                     }
                 }
@@ -2246,7 +2274,7 @@ impl Compiler {
     }
 }
 
-impl Compiler {
+impl Compiler<'_> {
     /// Compiles the hooks of a property; returns the hooks and whether the
     /// property is virtual.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -2537,7 +2565,7 @@ fn uses_backing(code: &crate::opcode::OpArray, prop: &[u8]) -> bool {
     })
 }
 
-impl Compiler {
+impl Compiler<'_> {
     /// `zend_check_magic_method_implementation`.
     #[allow(clippy::too_many_lines)]
     fn check_magic_method(

@@ -2903,27 +2903,12 @@ fn build_class(
     }
     // Own constants and enum cases in declaration order (`zend_compile_
     // class_decl` adds both to `constants_table` as they appear, the order
-    // `ReflectionClass::getConstants()` shows). The declaration keeps them
-    // in two lists, so an enum's are merged by line, constants first on a
-    // shared line.
-    let mut own_members: Vec<(u32, bool, usize)> =
-        Vec::with_capacity(decl.consts.len() + decl.cases.len());
-    own_members.extend(
-        decl.consts
-            .iter()
-            .enumerate()
-            .map(|(idx, cd)| (cd.line, false, idx)),
-    );
-    own_members.extend(
-        decl.cases
-            .iter()
-            .enumerate()
-            .map(|(idx, c)| (c.2, true, idx)),
-    );
-    if !decl.cases.is_empty() {
-        own_members.sort_by_key(|&(line, is_case, _)| (line, is_case));
-    }
-    for &(_, is_case, idx) in &own_members {
+    // `ReflectionClass::getConstants()` shows).
+    for member in decl.own_constants() {
+        let (is_case, idx) = match member {
+            crate::class::OwnConstant::Case(idx) => (true, idx),
+            crate::class::OwnConstant::Const(idx) => (false, idx),
+        };
         if is_case {
             let (cname, value, _line) = &decl.cases[idx];
             add_const(

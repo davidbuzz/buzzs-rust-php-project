@@ -3,7 +3,11 @@
 pub(crate) mod attrs;
 mod constexpr;
 mod decl;
+#[cfg(test)]
+mod decl_tree_tests;
 mod expr;
+#[cfg(test)]
+mod fbc_tests;
 #[cfg(test)]
 mod fold_tests;
 #[cfg(test)]
@@ -61,7 +65,9 @@ pub struct CompiledUnit {
     pub hoisted_functions: Vec<u32>,
     /// Classes to try to declare before execution (top-level).
     pub hoisted_classes: Vec<u32>,
-    /// The declaration table shared by all code of the unit.
+    /// The unit's declaration table: the main op array's declarations
+    /// (which `hoisted_functions` and `hoisted_classes` index), followed in
+    /// compile order by every declaration nested deeper in the unit.
     pub decls: Rc<DeclTable>,
     /// Compile-time warnings (level bits, message, line) to emit before
     /// execution.
@@ -136,6 +142,47 @@ pub const SPECIAL_BUILTINS: &[&str] = &[
     "chr",
     "ord",
 ];
+
+/// The internal functions with `@frameless-function` handlers in php-src
+/// master's stubs (`Zend/zend_builtin_functions.stub.php`,
+/// `ext/standard/basic_functions.stub.php`, `ext/pcre/php_pcre.stub.php`),
+/// with the argument counts they have a handler for
+/// (`zend_frameless_function_info.num_args`).
+const FRAMELESS_FUNCTIONS: &[(&str, &[u32])] = &[
+    ("clamp", &[3]),
+    ("class_exists", &[1, 2]),
+    ("dechex", &[1]),
+    ("dirname", &[1, 2]),
+    ("implode", &[1, 2]),
+    ("in_array", &[2, 3]),
+    ("is_numeric", &[1]),
+    ("ltrim", &[1, 2]),
+    ("max", &[2]),
+    ("min", &[2]),
+    ("preg_match", &[2]),
+    ("preg_replace", &[3]),
+    ("property_exists", &[2]),
+    ("rtrim", &[1, 2]),
+    ("str_contains", &[2]),
+    ("str_ends_with", &[2]),
+    ("str_replace", &[3]),
+    ("str_starts_with", &[2]),
+    ("strpos", &[2, 3]),
+    ("strstr", &[2, 3]),
+    ("strtolower", &[1]),
+    ("strtoupper", &[1]),
+    ("strtr", &[2, 3]),
+    ("substr", &[2, 3]),
+    ("trim", &[1, 2]),
+];
+
+/// The frameless handler arities of internal function `lcname`.
+pub(crate) fn frameless_arities(lcname: &[u8]) -> Option<&'static [u32]> {
+    FRAMELESS_FUNCTIONS
+        .iter()
+        .find(|(name, _)| name.as_bytes() == lcname)
+        .map(|&(_, arities)| arities)
+}
 
 /// The [`CompileOptions::special_builtins`] bit of lower-case `name`.
 pub fn special_builtin_bit(name: &[u8]) -> Option<u32> {
@@ -311,6 +358,15 @@ pub(crate) struct FnCtx {
     /// array writes `$http_response_header` (or takes it as a parameter),
     /// later reads no longer raise the deprecation.
     pub http_response_header_assigned: bool,
+    /// `CG(context).in_jmp_frameless_branch`: compiling the arguments of a
+    /// namespaced call that has a frameless branch, so calls nested in them
+    /// get none (`zend_compile_ns_call`).
+    pub in_frameless_branch: bool,
+    /// The functions, closures, classes and constant attributes declared in
+    /// this op array (php-src's `dynamic_func_defs`): what its declaration
+    /// ops index ([`OpArray::decls`]). `None` until the first declaration;
+    /// the main op array's is the unit's table ([`Compiler::decls`]).
+    pub decls: Option<Rc<DeclTable>>,
 }
 
 impl FnCtx {
@@ -354,12 +410,14 @@ impl FnCtx {
             in_finally: 0,
             fast_calls: Vec::new(),
             http_response_header_assigned: false,
+            in_frameless_branch: false,
+            decls: None,
         }
     }
 }
 
 /// The compiler for one file.
-pub(crate) struct Compiler {
+pub(crate) struct Compiler<'f> {
     pub filename: ZStr,
     pub namespace: Vec<u8>,
     pub class_uses: HashMap<Vec<u8>, Vec<u8>>,
@@ -371,7 +429,18 @@ pub(crate) struct Compiler {
     pub strict_types: bool,
     /// `FC(declarables).ticks`: N of the active `declare(ticks=N)`.
     pub(crate) ticks: u32,
+    /// The unit's declaration table: the main op array's declarations,
+    /// which its ops and [`CompiledUnit::hoisted_functions`] /
+    /// [`CompiledUnit::hoisted_classes`] index, followed (in compile order)
+    /// by every declaration nested deeper in the unit, so that looking a
+    /// declaration up through the unit finds them all. Only the main op
+    /// array refers to it: a nested op array's ops index its own table
+    /// ([`FnCtx::decls`]), so no declaration's code holds a table that holds
+    /// the declaration (an `Rc` cycle that kept every user function and
+    /// class of a request alive after the VM was dropped).
     pub decls: Rc<DeclTable>,
+    /// The table of the op arrays that declare nothing.
+    empty_decls: Rc<DeclTable>,
     pub fns: Vec<FnCtx>,
     pub classes: Vec<ClassCtx>,
     pub hoisted_functions: Vec<u32>,
@@ -383,9 +452,11 @@ pub(crate) struct Compiler {
     pub declared_functions: HashMap<Vec<u8>, u32>,
     /// `CG(function_table)` entries finalized so far: the top-level
     /// functions of this file whose compilation finished, by lower-case
-    /// name, with each parameter's (by-reference, variadic) flags.
-    /// `zend_compile_args` knows their arginfo (`fbc`).
-    pub known_functions: HashMap<Vec<u8>, Vec<(bool, bool)>>,
+    /// name. `zend_compile_args` knows their arginfo (`fbc`).
+    pub known_functions: HashMap<Vec<u8>, FunctionInfo>,
+    /// The rest of `CG(function_table)`: the functions declared when the
+    /// compilation started (`None`: only this file's are known).
+    pub functions: Option<&'f dyn FunctionTable>,
     pub source: Rc<[u8]>,
     /// Original source offsets cannot recover multibyte semantic text.
     pub multibyte: bool,
@@ -421,13 +492,108 @@ pub(crate) struct Compiler {
     pub(crate) stack: stack::StackModel,
 }
 
+/// What `zend_compile_args` reads of a function it finds in
+/// `CG(function_table)` at compile time (its `fbc`): how each argument is
+/// sent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FunctionInfo {
+    /// `fbc->type == ZEND_INTERNAL_FUNCTION`.
+    pub internal: bool,
+    /// `fbc->common.required_num_args`.
+    pub required: u32,
+    /// The declared parameters, a variadic one included.
+    pub num_params: u32,
+    /// The last parameter is variadic (`ZEND_ACC_VARIADIC`).
+    pub variadic: bool,
+    /// Bit `i`: parameter `i` is sent by reference (`ZEND_SEND_BY_REF` or
+    /// `ZEND_SEND_PREFER_REF`); parameters past the 64th count as by value.
+    pub by_ref: u64,
+}
+
+impl FunctionInfo {
+    /// The argument send modes of `func`.
+    #[must_use]
+    pub fn of(func: &crate::func::Func) -> Self {
+        Self::from_flags(
+            !func.is_user(),
+            func.required(),
+            func.params().iter().map(|p| (p.by_ref, p.variadic)),
+        )
+    }
+
+    /// From each declared parameter's (by reference, variadic) flags.
+    pub(crate) fn from_flags(
+        internal: bool,
+        required: u32,
+        params: impl Iterator<Item = (bool, bool)>,
+    ) -> Self {
+        let mut info = FunctionInfo {
+            internal,
+            required,
+            ..Self::default()
+        };
+        for (i, (by_ref, variadic)) in params.enumerate() {
+            if by_ref && i < 64 {
+                info.by_ref |= 1u64 << i;
+            }
+            info.variadic = variadic;
+            info.num_params = u32::try_from(i + 1).unwrap_or(u32::MAX);
+        }
+        info
+    }
+
+    /// `ARG_SHOULD_BE_SENT_BY_REF(fbc, i + 1)`: past the declared
+    /// parameters, the variadic one's mode.
+    #[must_use]
+    pub fn sends_by_ref(&self, i: usize) -> bool {
+        let declared = self.num_params as usize;
+        let i = if i < declared {
+            i
+        } else if self.variadic {
+            declared - 1
+        } else {
+            return false;
+        };
+        i < 64 && self.by_ref & (1u64 << i) != 0
+    }
+}
+
+/// `CG(function_table)` when a compilation starts: the functions declared
+/// so far (the internal ones and those of the code that already ran), which
+/// `zend_compile_call` looks up by lower-case name to know a call's `fbc`.
+pub trait FunctionTable {
+    /// The function `lcname`, if one is declared.
+    fn find(&self, lcname: &[u8]) -> Option<FunctionInfo>;
+}
+
+impl<F: Fn(&[u8]) -> Option<FunctionInfo>> FunctionTable for F {
+    fn find(&self, lcname: &[u8]) -> Option<FunctionInfo> {
+        self(lcname)
+    }
+}
+
 /// Compiles a parsed program.
 pub fn compile(
     program: &ast::Program,
     source: Rc<[u8]>,
     opts: CompileOptions,
 ) -> CResult<CompiledUnit> {
-    let mut c = Compiler::start(program, source, opts);
+    let mut c = Compiler::start(program, source, opts, None);
+    c.compile_top_statements(&program.statements)?;
+    c.finish_unit()
+}
+
+/// [`compile`] knowing the functions declared when it starts: with a
+/// known `fbc`, `zend_compile_args` compiles an argument for a by-value
+/// parameter for reading (`f($a[])` is then "Cannot use [] for reading"
+/// at compile time, a run-time `Error` otherwise).
+pub fn compile_with_functions(
+    program: &ast::Program,
+    source: Rc<[u8]>,
+    opts: CompileOptions,
+    functions: &dyn FunctionTable,
+) -> CResult<CompiledUnit> {
+    let mut c = Compiler::start(program, source, opts, Some(functions));
     c.compile_top_statements(&program.statements)?;
     c.finish_unit()
 }
@@ -440,21 +606,46 @@ pub fn compile(
 /// together (`Zend/tests/runtime_compile_time_binary_operands.phpt`
 /// includes 11 MB of generated code under `memory_limit=256M`).
 pub fn compile_program(
-    mut program: ast::Program,
+    program: ast::Program,
     source: Rc<[u8]>,
     opts: CompileOptions,
 ) -> CResult<CompiledUnit> {
-    let mut c = Compiler::start(&program, source, opts);
+    compile_program_inner(program, source, opts, None)
+}
+
+/// [`compile_program`] knowing the functions declared when it starts (see
+/// [`compile_with_functions`]).
+pub fn compile_program_with_functions(
+    program: ast::Program,
+    source: Rc<[u8]>,
+    opts: CompileOptions,
+    functions: &dyn FunctionTable,
+) -> CResult<CompiledUnit> {
+    compile_program_inner(program, source, opts, Some(functions))
+}
+
+fn compile_program_inner(
+    mut program: ast::Program,
+    source: Rc<[u8]>,
+    opts: CompileOptions,
+    functions: Option<&dyn FunctionTable>,
+) -> CResult<CompiledUnit> {
+    let mut c = Compiler::start(&program, source, opts, functions);
     let statements = std::mem::take(&mut program.statements);
     drop(program);
     c.compile_top_statements_owned(statements)?;
     c.finish_unit()
 }
 
-impl Compiler {
+impl<'f> Compiler<'f> {
     /// The compiler state for a new file (`zend_compile_top_stmt` callers):
     /// the main op array is open and the parser's diagnostics are queued.
-    fn start(program: &ast::Program, source: Rc<[u8]>, opts: CompileOptions) -> Self {
+    fn start(
+        program: &ast::Program,
+        source: Rc<[u8]>,
+        opts: CompileOptions,
+        functions: Option<&'f dyn FunctionTable>,
+    ) -> Self {
         let mut c = Compiler {
             filename: opts.filename.clone(),
             namespace: Vec::new(),
@@ -465,6 +656,7 @@ impl Compiler {
             strict_types: false,
             ticks: 0,
             decls: Rc::new(DeclTable::default()),
+            empty_decls: Rc::new(DeclTable::default()),
             fns: Vec::new(),
             classes: Vec::new(),
             hoisted_functions: Vec::new(),
@@ -475,6 +667,7 @@ impl Compiler {
             opts,
             declared_functions: HashMap::new(),
             known_functions: HashMap::new(),
+            functions,
             source,
             multibyte: program.multibyte,
             hook_prop: None,
@@ -506,6 +699,7 @@ impl Compiler {
         }
         let mut f = FnCtx::new(FnKind::Main);
         f.line = program.statements.first().map_or(1, |s| s.span.line);
+        f.decls = Some(c.decls.clone());
         c.fns.push(f);
         c
     }
@@ -546,7 +740,7 @@ impl Compiler {
     }
 }
 
-impl Compiler {
+impl Compiler<'_> {
     /// The current function context.
     pub(crate) fn f(&mut self) -> &mut FnCtx {
         self.fns.last_mut().expect("function context")
@@ -831,7 +1025,7 @@ impl Compiler {
             live_tmps: f.live_tmps,
             filename: self.filename.clone(),
             strict_types: self.strict_types,
-            decls: self.decls.clone(),
+            decls: f.decls.unwrap_or_else(|| self.empty_decls.clone()),
             fcall_cache: std::cell::RefCell::default(),
             class_cache: std::cell::RefCell::default(),
             rt_cache: crate::rtcache::RuntimeCache::default(),
@@ -1125,17 +1319,44 @@ impl Compiler {
         Ok(ConstExpr::Code(Rc::new(code)))
     }
 
-    /// Registers a class declaration.
+    /// The declaration table of the op array being compiled, created on
+    /// its first declaration.
+    pub(crate) fn current_decls(&mut self) -> Rc<DeclTable> {
+        self.f()
+            .decls
+            .get_or_insert_with(|| Rc::new(DeclTable::default()))
+            .clone()
+    }
+
+    /// Whether `table` is a nested op array's, whose declarations are also
+    /// listed in the unit's table ([`Compiler::decls`]).
+    fn is_nested_table(&self, table: &Rc<DeclTable>) -> bool {
+        !Rc::ptr_eq(table, &self.decls)
+    }
+
+    /// Registers a class declaration of the current op array; returns its
+    /// index in that op array's table.
     pub(crate) fn add_class(&mut self, decl: ClassDecl) -> u32 {
-        let mut cs = self.decls.classes.borrow_mut();
-        cs.push(Rc::new(decl));
+        let table = self.current_decls();
+        let decl = Rc::new(decl);
+        if self.is_nested_table(&table) {
+            self.decls.classes.borrow_mut().push(decl.clone());
+        }
+        let mut cs = table.classes.borrow_mut();
+        cs.push(decl);
         u32::try_from(cs.len() - 1).unwrap_or(u32::MAX)
     }
 
-    /// Registers a function.
+    /// Registers a function or closure declared in the current op array;
+    /// returns its index in that op array's table.
     pub(crate) fn add_function(&mut self, f: UserFunction) -> u32 {
-        let mut fs = self.decls.functions.borrow_mut();
-        fs.push(Rc::new(f));
+        let table = self.current_decls();
+        let f = Rc::new(f);
+        if self.is_nested_table(&table) {
+            self.decls.functions.borrow_mut().push(f.clone());
+        }
+        let mut fs = table.functions.borrow_mut();
+        fs.push(f);
         u32::try_from(fs.len() - 1).unwrap_or(u32::MAX)
     }
 }

@@ -912,7 +912,13 @@ pub struct OpArray {
     pub filename: ZStr,
     /// `declare(strict_types=1)`.
     pub strict_types: bool,
-    /// Nested functions/classes declared by this code.
+    /// The functions, closures, classes and constant attributes declared by
+    /// this code, which its declaration ops index (php-src's
+    /// `dynamic_func_defs`). A nested op array's table holds only its own
+    /// declarations, so no declared function's code refers back to a table
+    /// that holds the function; a unit's main op array has the unit's table,
+    /// which also lists every declaration nested deeper
+    /// ([`crate::compiler::CompiledUnit::decls`]).
     pub decls: Rc<DeclTable>,
     /// Per-call-site cache of `InitFCall` resolutions, indexed by the
     /// name literal (like php-src's runtime cache slot: once a call site
@@ -993,7 +999,8 @@ impl CachedFunc {
     }
 }
 
-/// Functions, classes and closures declared inside a compiled unit.
+/// Functions, classes and closures declared inside an op array
+/// ([`OpArray::decls`]).
 #[derive(Debug, Default)]
 pub struct DeclTable {
     /// User functions (named and closures, by index).

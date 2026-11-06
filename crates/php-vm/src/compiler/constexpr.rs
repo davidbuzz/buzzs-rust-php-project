@@ -10,7 +10,7 @@ fn is_static_name(n: &ast::Name) -> bool {
     n.kind != ast::NameKind::FullyQualified && n.name.eq_ignore_ascii_case(b"static")
 }
 
-impl Compiler {
+impl Compiler<'_> {
     /// The class operand `(expr)::NAME` of a class constant in a constant
     /// expression. `zend_eval_const_expr` folds it first: with a literal
     /// constant name, a folded non-string class is "Illegal class name"

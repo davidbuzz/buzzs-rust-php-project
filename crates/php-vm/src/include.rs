@@ -177,11 +177,16 @@ impl Vm {
         let halt_compiler_offset = program.halt_compiler_offset;
         // A multibyte script's AST is kept for the semantic text of
         // diagnostics; any other is released statement by statement while
-        // it compiles.
+        // it compiles. The compiler sees the function table as it stands
+        // (`CG(function_table)`), for the `fbc` of calls by name.
+        let functions = &self.functions;
+        let table = |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of);
         let (compiled, kept) = if program.multibyte {
-            (compiler::compile(&program, src, opts), Some(program))
+            let unit = compiler::compile_with_functions(&program, src, opts, &table);
+            (unit, Some(program))
         } else {
-            (compiler::compile_program(program, src, opts), None)
+            let unit = compiler::compile_program_with_functions(program, src, opts, &table);
+            (unit, None)
         };
         self.activate_compiled_auto_globals();
         let unit = match compiled {
