@@ -10,13 +10,15 @@
 // `ZStr` caches its hash in a `Cell`; `Hash`/`Eq` only use the bytes.
 #![allow(clippy::mutable_key_type)]
 
+use super::fasthash::FastMap;
 use super::reg;
 use super::util::{b, s};
 use crate::func::{Args, Func};
 use crate::vm::{Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::Entry;
+use std::collections::HashSet;
 
 /// `Zend/zend_builtin_functions.stub.php`.
 const CORE_FUNCTIONS: &[&str] = &[
@@ -90,11 +92,11 @@ struct Registry {
     /// Lowercase function name → module, in registration order.
     functions: Vec<(ZStr, &'static str)>,
     #[allow(dead_code)]
-    function_index: HashMap<ZStr, usize>,
+    function_index: FastMap<ZStr, usize>,
     /// Constant name → module, in registration order.
     constants: Vec<(ZStr, &'static str)>,
     #[allow(dead_code)]
-    constant_index: HashMap<ZStr, usize>,
+    constant_index: FastMap<ZStr, usize>,
     /// The VM's own builtin functions (snapshot at registration).
     builtin_functions: HashSet<ZStr>,
 }
@@ -108,29 +110,44 @@ thread_local! {
 #[allow(dead_code)] // for the extension API (module attribution)
 pub fn note_function(lc_name: &ZStr, module: &'static str) {
     REGISTRY.with(|r| {
-        let mut r = r.borrow_mut();
-        if let Some(&i) = r.function_index.get(lc_name) {
-            r.functions[i].1 = module;
-        } else {
-            let i = r.functions.len();
-            r.functions.push((lc_name.clone(), module));
-            r.function_index.insert(lc_name.clone(), i);
+        let r = &mut *r.borrow_mut();
+        if r.functions.capacity() == 0 {
+            // Room for every bundled extension's functions: no regrowth
+            // during start-up.
+            r.functions.reserve(2048);
+            r.function_index.reserve(2048);
         }
+        note(&mut r.functions, &mut r.function_index, lc_name, module);
     });
+}
+
+/// Records `module` for `name` in a registration-order list and its index:
+/// a name registered again keeps its place and takes the new module.
+fn note(
+    list: &mut Vec<(ZStr, &'static str)>,
+    index: &mut FastMap<ZStr, usize>,
+    name: &ZStr,
+    module: &'static str,
+) {
+    match index.entry(name.clone()) {
+        Entry::Occupied(e) => list[*e.get()].1 = module,
+        Entry::Vacant(e) => {
+            e.insert(list.len());
+            list.push((name.clone(), module));
+        }
+    }
 }
 
 /// Records that `module` registered the constant `name`.
 #[allow(dead_code)] // for the extension API (module attribution)
 pub fn note_constant(name: &ZStr, module: &'static str) {
     REGISTRY.with(|r| {
-        let mut r = r.borrow_mut();
-        if let Some(&i) = r.constant_index.get(name) {
-            r.constants[i].1 = module;
-        } else {
-            let i = r.constants.len();
-            r.constants.push((name.clone(), module));
-            r.constant_index.insert(name.clone(), i);
+        let r = &mut *r.borrow_mut();
+        if r.constants.capacity() == 0 {
+            r.constants.reserve(4096);
+            r.constant_index.reserve(4096);
         }
+        note(&mut r.constants, &mut r.constant_index, name, module);
     });
 }
 
@@ -314,12 +331,37 @@ pub(crate) fn register(vm: &mut Vm) {
 
 #[cfg(test)]
 mod tests {
-    use super::is_core_constant;
+    use super::{is_core_constant, note};
+    use crate::builtins::fasthash::FastMap;
+    use php_runtime::ZStr;
 
     #[test]
     fn core_constants() {
         assert!(is_core_constant(b"E_ALL"));
         assert!(is_core_constant(b"PHP_VERSION"));
         assert!(!is_core_constant(b"M_PI"));
+    }
+
+    #[test]
+    fn a_name_noted_again_keeps_its_place_and_takes_the_new_module() {
+        let mut list = Vec::new();
+        let mut index = FastMap::default();
+        for (name, module) in [("a", "one"), ("b", "one"), ("a", "two"), ("c", "three")] {
+            note(&mut list, &mut index, &ZStr::from(name), module);
+        }
+        let got: Vec<(Vec<u8>, &str)> = list
+            .iter()
+            .map(|(n, m)| (n.as_bytes().to_vec(), *m))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (b"a".to_vec(), "two"),
+                (b"b".to_vec(), "one"),
+                (b"c".to_vec(), "three")
+            ]
+        );
+        assert_eq!(index.len(), 3);
+        assert_eq!(index[b"c".as_slice()], 2);
     }
 }
