@@ -480,7 +480,8 @@ done
 fn in_array_opcode_matches_the_builtin() {
     // Columns: loose ["a","b"], strict ["a","b"], strict [1,"x"], loose [],
     // loose ["","z"]. `S::__toString` runs once per compared key, in order,
-    // without an `in_array` frame below it.
+    // without an `in_array` frame below it; `T::__toString` counts the
+    // backtrace frames with `foreach` (the bare VM has no `count()`).
     assert_eq!(
         run_with(
             r#"<?php
@@ -495,7 +496,7 @@ foreach ($cases as $i => $n) {
 }
 var_dump(in_array($rr, ["a", "b"]), in_array($rr, ["a", "b"], true), in_array($undef1, ["a"]), in_array($undef2, ["a"], true), in_array($undef3, [""]));
 var_dump(in_array("1", [1, "x"], true), in_array(1, ["1", "x"], true), in_array("1", ["1", "x"], true), in_array(true, ["a"], PHP_INT_MAX), in_array(true, ["a"], "0"));
-class T { function __toString() { $t = debug_backtrace(); echo count($t), "\n"; return "x"; } }
+class T { function __toString() { $n = 0; foreach (debug_backtrace() as $_) { $n++; } echo $n, "\n"; return "x"; } }
 var_dump(in_array(new T, ["a"]));
 class U { function __toString() { throw new Exception("boom"); } }
 try { in_array(new U, ["a"]); } catch (Exception $e) { echo $e->getMessage(), " ", $e->getTrace()[0]["function"], "\n"; }
