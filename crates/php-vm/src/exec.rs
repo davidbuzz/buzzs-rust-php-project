@@ -1356,13 +1356,12 @@ impl Vm {
                         fallback,
                         dst,
                     } => {
-                        let v = self.fetch_constant(*name, *fallback)?;
+                        let v = self.fetch_constant_cached(*name, *fallback)?;
                         self.set_tmp(*dst, v);
                         Flow::Next
                     }
                     Op::FetchClassConst { class, name, dst } => {
-                        let n = self.read(*name)?;
-                        let v = self.op_fetch_class_const(class, n)?;
+                        let v = self.fetch_class_const_cached(class, *name)?;
                         self.set_tmp(*dst, v);
                         Flow::Next
                     }
@@ -1433,9 +1432,7 @@ impl Vm {
                         let cls = object::class_of(&exc).clone();
                         let mut matched = false;
                         for c in classes.iter() {
-                            let name = self.lit_str(*c);
-                            let lc = name.to_ascii_lowercase();
-                            if cls.instance_of_name(lc.as_bytes()) {
+                            if self.catch_class_matches(&cls, *c) {
                                 matched = true;
                                 break;
                             }

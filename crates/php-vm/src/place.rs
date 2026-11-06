@@ -1216,10 +1216,16 @@ impl Vm {
             PlaceBase::GlobalsArray => RBase::Globals,
             PlaceBase::This => RBase::This(self.frame().this.clone()),
             PlaceBase::StaticProp { class, name } => {
+                // The op's run-time cache slot (`CACHED_PTR`, see
+                // `rtcache`): the class and name are only looked up on a
+                // miss.
+                if let Some(cell) = self.static_prop_hit(class, *name) {
+                    return Ok(RBase::Cell(cell));
+                }
                 let n = self.read(*name)?;
                 let n = self.to_zstr(&n)?;
                 let cls = self.resolve_class_spec(class)?;
-                if quiet {
+                let r = if quiet {
                     match self.static_prop_cell_is(&cls, &n)? {
                         Some(cell) => RBase::Cell(cell),
                         None => RBase::Undef(n),
@@ -1235,7 +1241,11 @@ impl Vm {
                     }
                 } else {
                     RBase::Cell(self.static_prop_cell(&cls, &n)?)
+                };
+                if matches!(r, RBase::Cell(_)) {
+                    self.static_prop_fill(class, *name);
                 }
+                r
             }
             PlaceBase::Value(op) => {
                 let v = self.read_raw(*op)?;

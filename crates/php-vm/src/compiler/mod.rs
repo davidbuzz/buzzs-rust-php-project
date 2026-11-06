@@ -770,6 +770,7 @@ impl Compiler {
             decls: self.decls.clone(),
             fcall_cache: std::cell::RefCell::default(),
             class_cache: std::cell::RefCell::default(),
+            rt_cache: crate::rtcache::RuntimeCache::default(),
         })
     }
 
