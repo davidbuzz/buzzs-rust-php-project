@@ -3,9 +3,11 @@
 //! Under the CLI there is no request (`SG(request_info).request_method` is
 //! `NULL`), so after opening the executing archive `webPhar()` returns
 //! without routing. Under a web SAPI (`php -S`: `PHP_SAPI` is
-//! `cli-server`) the request comes from `$_SERVER` (`REQUEST_METHOD`,
-//! `REQUEST_URI`, which the SAPI fills from `SG(request_info)`) and
-//! response headers go through the SAPI's header operation.
+//! `cli-server`; mod_php: `apache2handler`) the request comes from
+//! `$_SERVER` (`REQUEST_METHOD`, `REQUEST_URI`, which the SAPI fills from
+//! `SG(request_info)`), response headers go through the SAPI's header
+//! operation, and a PHP entry runs through the include machinery of
+//! [`crate::include`] (`phar_file_action()`, `PHAR_MIME_PHP`).
 
 use php_phar::web::{MimeOverride, Rewrite, ServerValue, WebHost, WebPharArgs, WebResult};
 use php_runtime::{Value, ZArray, ZStr};
@@ -122,8 +124,8 @@ impl WebHost for CliHost<'_> {
     fn highlight_file(&mut self, path: &[u8]) {
         let _ = self.vm.call_function("highlight_file", vec![bytes(path)]);
     }
-    fn include(&mut self, _path: &[u8]) -> bool {
-        false
+    fn include(&mut self, path: &[u8]) -> bool {
+        crate::include::run_web_entry(self.vm, path)
     }
     fn rewrite(&mut self, entry: &[u8]) -> Rewrite {
         let Some(cb) = self.rewrite.clone() else {

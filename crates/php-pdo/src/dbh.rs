@@ -22,6 +22,7 @@ use crate::host::{Ctx, NullHost, PdoException, PdoHost};
 use crate::stmt::{PdoStatement, Stmt};
 use php_runtime::numeric::{is_numeric_string, Number};
 use php_runtime::{Obj, PhpObject, RtResult, Value, ZArray, ZStr};
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
@@ -54,6 +55,12 @@ pub(crate) struct Dbh {
     /// `query_stmt` / `query_stmt_obj`: the statement of a failed
     /// `PDO::query()`, whose error the handle reports.
     pub query_stmt: RefCell<Option<(Rc<Stmt>, Value)>>,
+    /// `cls_methods[PDO_DBH_DRIVER_METHOD_KIND_DBH]`: the driver's method
+    /// table, built by the binding on the first lookup of a method `PDO`
+    /// itself lacks (`dbh_method_get` → `pdo_hash_methods`) and destroyed
+    /// with the connection (`dbh_free`). Type-erased: the method objects
+    /// belong to the VM.
+    pub cls_methods: RefCell<Option<Rc<dyn Any>>>,
 }
 
 impl std::fmt::Debug for Dbh {
@@ -89,6 +96,7 @@ impl Dbh {
             def_stmt_ce: RefCell::new(ZStr::from(PDO_STATEMENT_CLASS)),
             def_stmt_ctor_args: RefCell::new(None),
             query_stmt: RefCell::new(None),
+            cls_methods: RefCell::new(None),
         }
     }
 
@@ -146,6 +154,7 @@ impl Dbh {
             cx.with_driver(|dcx| d.close(dcx));
         }
         self.def_stmt_ctor_args.borrow_mut().take();
+        self.cls_methods.borrow_mut().take();
     }
 }
 
@@ -324,6 +333,23 @@ impl Pdo {
     /// The name of the connected driver (`PDO::ATTR_DRIVER_NAME`).
     pub fn driver_name(&self) -> Option<&'static str> {
         self.dbh().entry.get().map(|e| e.name)
+    }
+
+    /// The driver's method table
+    /// (`dbh->cls_methods[PDO_DBH_DRIVER_METHOD_KIND_DBH]`), if the binding
+    /// built one for this connection ([`Pdo::set_driver_methods`]).
+    pub fn driver_methods(&self) -> Option<Rc<dyn Any>> {
+        self.dbh().cls_methods.borrow().clone()
+    }
+
+    /// Stores the driver's method table (`pdo_hash_methods`): the binding
+    /// builds it on the first lookup of a method `PDO` itself lacks
+    /// (`dbh_method_get`), and it lives as long as the connection, shared
+    /// by the objects of a persistent connection and destroyed with it
+    /// (`dbh_free`). Type-erased because the method objects belong to the
+    /// VM.
+    pub fn set_driver_methods(&self, table: Rc<dyn Any>) {
+        *self.dbh().cls_methods.borrow_mut() = Some(table);
     }
 
     /// The values the VM must report to its garbage collector

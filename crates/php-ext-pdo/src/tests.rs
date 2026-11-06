@@ -1,7 +1,8 @@
 //! End-to-end tests: PHP snippets run on a VM with this extension.
 
 use super::Pdo;
-use php_vm::ext::Extension;
+use php_runtime::{Value, ZStr};
+use php_vm::ext::{Args, Extension, VmResult};
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;
@@ -233,5 +234,46 @@ fn legacy_sqlite_methods_are_driver_methods() {
          class P does not have a method \"sqliteCreateFunction\";\
          8192:Method PDO::sqliteCreateCollation() is deprecated since 8.5, \
          use Pdo\\Sqlite::createCollation() instead;bool(true)\n"
+    );
+}
+
+/// `pdo_hash_methods` builds the driver's method table per connection
+/// (`dbh->cls_methods`), not per class: two `SQLite` connections hold
+/// distinct method objects (an observer reports `init` for each of them),
+/// one connection always hands out the same, and a `PDO` without an
+/// `SQLite` connection has none.
+#[test]
+fn driver_methods_are_built_per_connection() {
+    fn probe(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+        let Value::Object(o) = a.at(0) else {
+            return Ok(Value::Int(-1));
+        };
+        let m = super::pdo::pdo_driver_method(vm, &o, &ZStr::from("sqliteCreateFunction"));
+        let id = m.map_or(0, |m| Rc::as_ptr(&m) as usize);
+        Ok(Value::Int(i64::try_from(id).unwrap_or(-1)))
+    }
+    let sink = Sink::default();
+    let streams = php_ext_streams::Streams;
+    let ext = Pdo;
+    let exts: [&dyn Extension; 2] = [&streams, &ext];
+    let opts = VmOptions { ini: Vec::new() };
+    let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
+    vm.register_function("driver_method_id(object $pdo): int", probe);
+    vm.run_script(
+        br"<?php
+        class P extends PDO { function __construct() {} }
+        $a = new PDO('sqlite::memory:');
+        $b = new PDO('sqlite::memory:');
+        $ia = driver_method_id($a);
+        var_dump($ia !== 0, $ia === driver_method_id($a), $ia !== driver_method_id($b), driver_method_id(new P));
+        ",
+        "test.php",
+    );
+    // See `run`: keep the VM alive.
+    std::mem::forget(vm);
+    let out = sink.0.borrow().clone();
+    assert_eq!(
+        String::from_utf8_lossy(&out),
+        "bool(true)\nbool(true)\nbool(true)\nint(0)\n"
     );
 }

@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
+use php_runtime::{Value, ZStr};
 use php_vm::ext::Extension;
 use php_vm::{Vm, VmOptions};
 
@@ -27,6 +28,17 @@ impl Write for Sink {
 /// Runs `code` (without `<?php`) with the given INI settings and returns
 /// its output.
 fn run(code: &str, ini: &[(&str, &str)]) -> String {
+    run_as(code, ini, None)
+}
+
+/// [`run`] under a web SAPI: `PHP_SAPI` is `cli-server`, so
+/// `Phar::webPhar()` serves the request the script describes in
+/// `$_SERVER`.
+fn run_web(code: &str, ini: &[(&str, &str)]) -> String {
+    run_as(code, ini, Some("cli-server"))
+}
+
+fn run_as(code: &str, ini: &[(&str, &str)], sapi: Option<&str>) -> String {
     let sink = Sink::default();
     let streams = php_ext_streams::Streams;
     let spl = php_ext_spl::Spl;
@@ -39,6 +51,10 @@ fn run(code: &str, ini: &[(&str, &str)]) -> String {
             .collect(),
     };
     let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
+    if let Some(sapi) = sapi {
+        vm.constants
+            .insert(ZStr::from("PHP_SAPI"), Value::Str(ZStr::from(sapi)));
+    }
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
     drop(vm);
     let out = sink.0.borrow().clone();
@@ -132,4 +148,41 @@ try { Phar::mapPhar(); } catch (PharException $e) { echo $e->getMessage(), "\n";
          No values passed to Phar::mungServer(), expecting an array of any of these strings: PHP_SELF, REQUEST_URI, SCRIPT_FILENAME, SCRIPT_NAME\n\
          __HALT_COMPILER(); must be declared in a phar\n"
     );
+}
+
+/// `Phar::webPhar()` under a web SAPI runs a PHP entry of the archive as
+/// php-src's `phar_file_action()` does for `PHAR_MIME_PHP`: compiled from
+/// its `phar://` URL (`__FILE__`), at the top level with the global
+/// variables, registered in `EG(included_files)` (an `include_once` of it
+/// is a no-op), resolving its own includes inside the archive; the request
+/// ends with it, so the rest of the stub never runs. Oracle: php 8.3
+/// `php -S` serving the same archive through a router that includes it.
+#[test]
+fn webphar_runs_a_php_entry() {
+    let out = run_web(
+        r#"$f = sys_get_temp_dir() . '/phpext-phar-web-' . getmypid() . '.phar';
+@unlink($f);
+$p = new Phar($f);
+$p['index.php'] = '<?php
+echo "index: ", basename(__FILE__), "\n";
+include "lib/a.php";
+echo isset($g) ? "sees globals\n" : "no globals\n";
+include_once __FILE__;
+echo "done\n";
+';
+$p['lib/a.php'] = '<?php echo "lib a\n";';
+$p->setStub('<?php
+Phar::webPhar();
+echo "not reached\n";
+__HALT_COMPILER();');
+unset($p);
+register_shutdown_function(function () use ($f) { @unlink($f); });
+$g = 1;
+$_SERVER['REQUEST_METHOD'] = 'GET';
+$_SERVER['REQUEST_URI'] = '/' . basename($f) . '/index.php';
+include $f;
+echo "after include\n";"#,
+        WRITABLE,
+    );
+    assert_eq!(out, "index: index.php\nlib a\nsees globals\ndone\n");
 }

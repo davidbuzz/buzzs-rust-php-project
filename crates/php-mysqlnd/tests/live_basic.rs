@@ -234,8 +234,12 @@ fn ping_select_db_statistics_kill() {
     c.ping().unwrap();
     assert_eq!(c.affected_rows(), u64::MAX);
     c.select_db(b"test").unwrap();
+    // ER_BAD_DB_ERROR, "Unknown database": the test user has
+    // `GRANT ALL PRIVILEGES ON *.*`, so MariaDB reports the missing
+    // database itself (ext/mysqli/tests/gh22854.phpt) instead of
+    // ER_DBACCESS_DENIED_ERROR (1044) for a user without privileges.
     let e = c.select_db(b"nonexistent_db_xyz").unwrap_err();
-    assert_eq!(e.errno, 1044);
+    assert_eq!(e.errno, 1049);
     let s = c.statistics().unwrap();
     assert!(
         s.starts_with(b"Uptime: "),
