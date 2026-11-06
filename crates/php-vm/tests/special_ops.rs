@@ -3,7 +3,8 @@
 //! `ZEND_DEFINED`, `ZEND_IN_ARRAY`, `ZEND_ARRAY_KEY_EXISTS`) or constants
 //! (`chr()`, `ord()`): same results as the calls, and no builtin frame
 //! (expected outputs from `/usr/bin/php -n`; the null-key deprecation of
-//! `array_key_exists()` and the float-key owner check follow php-src master).
+//! `array_key_exists()`, the float-key owner check and the `chr()`/`ord()`
+//! range and length deprecations follow php-src master).
 use php_runtime::{Value, ZStr};
 use php_vm::compiler::{compile, CompileOptions, SPECIAL_BUILTINS};
 use php_vm::ext::{Extension, ModuleBuilder};
@@ -691,7 +692,8 @@ bool(false)
 #[test]
 fn chr_and_ord_literals_fold_to_constants() {
     // Only `chr(0..=255)` and one-byte `ord()` literals fold; the rest are
-    // calls with their strict-mode TypeErrors. A folded argument is sent by
+    // calls, with php-src master's range and length deprecations (8.3 has
+    // none) and their strict-mode TypeErrors. A folded argument is sent by
     // value even after a call argument (`h(g(), chr(65))`), and in write
     // context the constant behaves like the call's temporary.
     assert_eq!(
@@ -713,7 +715,15 @@ var_dump(chr(65)[0], ord("A") + 1);
 "#,
             "co.php"
         ),
-        r#"string(1) "A"
+        r#"
+Deprecated: chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 in co.php on line 3
+
+Deprecated: chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 in co.php on line 3
+
+Deprecated: ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead in co.php on line 3
+
+Deprecated: ord(): Providing an empty string is deprecated in co.php on line 3
+string(1) "A"
 string(1) "A"
 int(65)
 int(255)
