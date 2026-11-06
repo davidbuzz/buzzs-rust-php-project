@@ -290,22 +290,24 @@ impl Vm {
     /// Binds captured variables and statics into the new frame at index
     /// `frame` of the frame stack (set up in place by `push_user_frame`).
     pub(crate) fn bind_closure_vars(&mut self, frame: usize, c: &Obj) {
-        let Some(d) = self.closure_data(c) else {
-            return;
-        };
         let Some(f) = self.frames.get_mut(frame) else {
             return;
         };
-        {
-            let mut st = f.vars.borrow_mut();
-            for (cv, v) in d.vars {
-                let idx = cv as usize;
-                if idx < st.slots.len() {
-                    st.slots[idx] = Some(v);
+        // Copies the bound variables out of a borrow of the closure's data
+        // (`zend_closure_bind_var` / `ZEND_BIND_STATIC` copy them with an
+        // addref): cloning the whole `ClosureData` would copy and release
+        // everything else on every call.
+        object::internal::<ClosureData, _>(c, |d| {
+            {
+                let mut st = f.vars.borrow_mut();
+                for (cv, v) in &d.vars {
+                    if let Some(slot) = st.slots.get_mut(*cv as usize) {
+                        *slot = Some(v.clone());
+                    }
                 }
             }
-        }
-        f.statics = Some(d.statics);
+            f.statics = Some(d.statics.clone());
+        });
     }
 
     fn statics_store(&mut self) -> Rc<RefCell<Vec<Option<PhpRef>>>> {

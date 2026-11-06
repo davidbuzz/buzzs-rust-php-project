@@ -63,8 +63,10 @@ impl Vm {
     // INIT
     // ------------------------------------------------------------------
 
-    /// Pushes a pending call.
-    #[inline]
+    /// Pushes a pending call. Always inlined: as a call, the ~140-byte
+    /// `PendingCall` is copied once more on the way into `calls`.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above: one copy of the call less per INIT
     fn push_pending(&mut self, call: PendingCall) {
         self.frame_mut().calls.push(call);
     }
@@ -231,6 +233,15 @@ impl Vm {
     }
 
     pub(crate) fn op_init_dyn_call(&mut self, callee: Value) -> VmResult<()> {
+        // `$closure()` (`zend_init_dynamic_call_object` of a closure): the
+        // call is built straight from the closure's data.
+        if let Value::Object(o) = &callee {
+            if let Some(mut call) = self.closure_call(o) {
+                call.dynamic = true;
+                self.push_pending(call);
+                return Ok(());
+            }
+        }
         let mut call = self.resolve_dyn_callable(&callee)?;
         call.dynamic = true;
         self.push_pending(call);
@@ -376,6 +387,22 @@ impl Vm {
                 ),
             ));
         };
+        // A hit in the run-time cache of `ZEND_INIT_METHOD_CALL`: the call
+        // is pushed straight from the cached method, `$this` moved in.
+        let cls = object::class_of(&o).clone();
+        if cls.hooks.as_ref().and_then(|h| h.get_method).is_none() {
+            let scope = self.scope();
+            if let Some(m) = self.call_bufs.methods.get(&cls, scope.as_ref(), &name) {
+                let is_static = m.is_static() && m.flags & flags::STATIC_KEEPS_THIS == 0;
+                self.push_pending(PendingCall {
+                    this: if is_static { None } else { Some(o) },
+                    scope: Some(m.scope()),
+                    called: Some(cls),
+                    ..PendingCall::new(m.func.clone())
+                });
+                return Ok(());
+            }
+        }
         let call = self.method_call(&o, &name)?;
         self.push_pending(call);
         Ok(())
@@ -407,12 +434,20 @@ impl Vm {
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.get_method) {
             f(self, o, name)?;
         }
+        // The run-time cache of `ZEND_INIT_METHOD_CALL`.
+        let scope = self.scope();
+        if let Some(m) = self.call_bufs.methods.get(&cls, scope.as_ref(), name) {
+            return Ok(self.pending_for_method(&m, Some(o.clone()), cls));
+        }
         self.method_call_on(o, &cls, name)
     }
 
     fn method_call_on(&mut self, o: &Obj, cls: &Rc<Class>, name: &ZStr) -> VmResult<PendingCall> {
         let scope = self.scope();
         let lc = ZStr::from(name.to_ascii_lowercase());
+        // Only a lookup for the object's own class is cached: the private
+        // method rule below depends on it.
+        let cacheable = Rc::ptr_eq(cls, object::class_of(o));
         // A private method of the calling scope takes precedence.
         if let Some(s) = &scope {
             if let Some(m) = s.methods.get(&lc) {
@@ -420,6 +455,9 @@ impl Vm {
                     && Rc::ptr_eq(&m.scope(), s)
                     && object::class_of(o).is_subclass_of(s)
                 {
+                    if cacheable {
+                        self.call_bufs.methods.insert(cls, Some(s), name, m);
+                    }
                     return Ok(self.pending_for_method(
                         m,
                         Some(o.clone()),
@@ -430,6 +468,9 @@ impl Vm {
         }
         if let Some(m) = cls.methods.get(&lc).cloned() {
             if self.can_access_method(&m, scope.as_ref()) {
+                if cacheable {
+                    self.call_bufs.methods.insert(cls, scope.as_ref(), name, &m);
+                }
                 return Ok(self.pending_for_method(
                     &m,
                     Some(o.clone()),
@@ -837,15 +878,42 @@ impl Vm {
     }
 
     pub(crate) fn op_send(&mut self, src: &ArgSrc, name: Option<ZStr>) -> VmResult<()> {
-        self.pooled_args();
         // Fast path: a positional by-value argument of an ordinary call
         // (the general path below computes the same thing in more steps).
         if name.is_none() {
             let by_val = {
-                let call = self.frame().calls.last().expect("pending call");
-                call.magic_name.is_none()
+                let frame = self.frames.last_mut().expect("active frame");
+                let call = frame.calls.last_mut().expect("pending call");
+                if call.args.capacity() == 0 {
+                    if let Some(v) = self.call_bufs.args.pop() {
+                        install_buffer(&mut call.args, v);
+                    }
+                }
+                let by_val = call.magic_name.is_none()
                     && !call.has_named
-                    && !call.func.arg_by_ref(call.args.len())
+                    && !call.func.arg_by_ref(call.args.len());
+                // `ZEND_SEND_VAL` of a literal or temporary
+                // (`ZEND_SEND_VAL_SPEC_CONST`/`_TMP`): copied (moved) into
+                // the call without leaving the frame.
+                if by_val {
+                    match src {
+                        ArgSrc::Val(Operand::Lit(i)) => {
+                            let v = frame.code.literals[*i as usize].clone();
+                            call.args.push(Some(v));
+                            return Ok(());
+                        }
+                        ArgSrc::Val(Operand::Tmp(t)) => {
+                            let v = match std::mem::take(&mut frame.tmps[*t as usize]) {
+                                Value::Reference(r) => r.get(),
+                                v => v,
+                            };
+                            call.args.push(Some(v));
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
+                by_val
             };
             if by_val {
                 let v = match src {
@@ -860,6 +928,7 @@ impl Vm {
                 return Ok(());
             }
         }
+        self.pooled_args();
         let pos = match &name {
             Some(n) => self.arg_position(n)?,
             None => Some(self.frame().calls.last().expect("pending call").args.len()),
@@ -1140,8 +1209,20 @@ impl Vm {
     /// Performs the pending call. Returns `true` when a user frame was
     /// pushed.
     pub(crate) fn op_do_call(&mut self, dst: Option<u32>) -> VmResult<bool> {
-        let call = self.frame_mut().calls.pop().expect("pending call");
-        let strict = self.frame().code.strict_types;
+        let frame = self.frames.last_mut().expect("active frame");
+        let strict = frame.code.strict_types;
+        let mut call = frame.calls.pop().expect("pending call");
+        // `ZEND_DO_UCALL`: a user function that is neither deprecated, nor
+        // `#[\NoDiscard]`, nor a body-less constructor. The frame takes the
+        // call's parts by reference (no further copies of the call).
+        if let Func::User(uf) = &call.func {
+            if uf.flags & (flags::DEPRECATED | flags::NODISCARD | flags::NO_BODY) == 0 {
+                let uf = uf.clone();
+                let ret = dst.map_or(RetTarget::Discard, RetTarget::Tmp);
+                self.push_user_frame_from(&uf, &mut call, ret, strict, false)?;
+                return Ok(true);
+            }
+        }
         if dst.is_none() && call.func.flags() & flags::NODISCARD != 0 {
             return self.op_do_call_nodiscard(call, strict);
         }
@@ -1383,6 +1464,20 @@ impl Vm {
         caller_strict: bool,
         from_internal: bool,
     ) -> VmResult<()> {
+        self.push_user_frame_from(uf, &mut call, ret, caller_strict, from_internal)
+    }
+
+    /// [`Vm::push_user_frame`] that takes the parts of the pending call out
+    /// of `call` (leaving a husk for the caller to drop), so that
+    /// `DO_FCALL` never moves the `PendingCall` itself around.
+    pub(crate) fn push_user_frame_from(
+        &mut self,
+        uf: &Rc<UserFunction>,
+        call: &mut PendingCall,
+        ret: RetTarget,
+        caller_strict: bool,
+        from_internal: bool,
+    ) -> VmResult<()> {
         if self.frames.len() > 50_000 {
             // A backstop like `execute`'s nesting limit: php-src would have
             // hit its native stack limit by now, so the error is
@@ -1394,35 +1489,37 @@ impl Vm {
             return Err(e);
         }
         let idx = self.frames.len();
-        match self.call_bufs.user_frames.pop() {
-            Some(f) => {
-                self.frames.push(f);
-                self.frames[idx].reinit_for_user(uf.code.clone(), FrameKind::Function);
-            }
-            None => self
-                .frames
-                .push(Frame::new(uf.code.clone(), FrameKind::Function)),
+        if self.call_bufs.user_frames.is_empty() {
+            self.frames
+                .push(Frame::new(uf.code.clone(), FrameKind::Function));
+        } else {
+            // `extend` from a `drain` copies the pooled frame straight into
+            // the frame stack (`pop` + `push` copy it twice, through a
+            // temporary, with the stack's growth check in between).
+            let last = self.call_bufs.user_frames.len() - 1;
+            self.frames.extend(self.call_bufs.user_frames.drain(last..));
+            self.frames[idx].reinit_for_user(uf.code.clone(), FrameKind::Function);
         }
         let f = &mut self.frames[idx];
-        f.func = Some(call.func);
+        f.func = Some(call.func.clone());
         f.ufunc = Some(uf.clone());
-        f.this = call.this;
-        f.scope = call.scope;
-        f.called = call.called;
+        f.this = call.this.take();
+        f.scope = call.scope.take();
+        f.called = call.called.take();
         f.ret = ret;
         f.caller_strict = caller_strict;
         f.called_from_internal = from_internal;
         f.is_ctor = call.is_ctor;
-        let spare_args = if let Some(name) = call.magic_name {
+        let spare_args = if let Some(name) = call.magic_name.take() {
             // __call($name, $args). `ZEND_CALL_TRAMPOLINE` packs the
             // arguments as sent: `zend_call_function` does not unwrap
             // references for a trampoline (bug #50394), the VM's sends
             // already passed values.
             let mut arr = HashTable::new();
-            for a in call.args.into_iter().flatten() {
+            for a in std::mem::take(&mut call.args).into_iter().flatten() {
                 let _ = arr.push(a);
             }
-            for (k, v) in call.named {
+            for (k, v) in std::mem::take(&mut call.named) {
                 arr.insert(ArrayKey::Str(k), v);
             }
             f.magic_name = Some(name.clone());
@@ -1434,11 +1531,13 @@ impl Vm {
                 ],
             )
         } else {
-            f.named = call.named;
-            std::mem::replace(&mut f.args, call.args)
+            f.named = std::mem::take(&mut call.named);
+            std::mem::replace(&mut f.args, std::mem::take(&mut call.args))
         };
+        let first_op = bind_args(uf, f);
+        f.ip = first_op;
         self.put_arg_vec(spare_args);
-        if let Some(c) = call.closure {
+        if let Some(c) = call.closure.take() {
             self.bind_closure_vars(idx, &c);
             self.frames[idx].closure = Some(c);
         }
@@ -2009,48 +2108,107 @@ impl Vm {
                 Some(_) => {}
             }
         }
+        if !self.recv_verify(n, &mut v)? {
+            // php-src already holds the rejected value in the CV, so
+            // the TypeError's trace shows it: keep it visible.
+            if let Some(slot) = self.frame_mut().args.get_mut(n as usize) {
+                if slot.is_none() {
+                    *slot = Some(v.clone());
+                }
+            }
+            return Err(self.recv_type_error(n, &v));
+        }
+        Ok(v)
+    }
+
+    /// The typed part of [`Vm::recv_check`] (`zend_verify_recv_arg_type`):
+    /// verifies and, where allowed, coerces `v` in place. `false` rejects
+    /// it (the caller raises the TypeError).
+    fn recv_verify(&mut self, n: u32, v: &mut Value) -> VmResult<bool> {
         let (ty, strict) = {
             let f = self.frame();
             let uf = f.ufunc.as_ref().expect("user frame");
             let p = uf.params.get(n as usize).or_else(|| uf.params.last());
             (p.and_then(|p| p.ty.clone()), f.caller_strict)
         };
-        if let Some(ty) = ty {
-            let scope = self.frame().scope.clone();
-            let called = self.frame().called.clone();
-            let ctx = TypeCtx {
-                scope: scope.as_ref(),
-                called: called.as_ref(),
-                strict,
-                internal_arg: None,
+        let Some(ty) = ty else {
+            return Ok(true);
+        };
+        let scope = self.frame().scope.clone();
+        let called = self.frame().called.clone();
+        let ctx = TypeCtx {
+            scope: scope.as_ref(),
+            called: called.as_ref(),
+            strict,
+            internal_arg: None,
+        };
+        self.verify_type(&ty, v, &ctx)
+    }
+
+    /// `ZEND_RECV` / `ZEND_RECV_INIT` of an argument that
+    /// [`bind_args`] already stored in its CV, as php-src's SEND ops store
+    /// it in the callee frame: only the type is verified, in place. `false`
+    /// when the CV is undefined (a gap left by named arguments).
+    fn recv_bound(&mut self, n: u32, cv: u32) -> VmResult<bool> {
+        let idx = {
+            let f = self.frame();
+            let idx = f.cv_idx(cv);
+            let vars = f.vars.borrow();
+            let Some(Some(v)) = vars.slots.get(idx) else {
+                return Ok(false);
             };
-            if !self.verify_type(&ty, &mut v, &ctx)? {
-                // php-src already holds the rejected value in the CV, so
-                // the TypeError's trace shows it: keep it visible.
-                if let Some(slot) = self.frame_mut().args.get_mut(n as usize) {
-                    if slot.is_none() {
-                        *slot = Some(v.clone());
-                    }
+            let uf = f.ufunc.as_ref().expect("user frame");
+            let p = uf.params.get(n as usize).or_else(|| uf.params.last());
+            match p.and_then(|p| p.ty.as_ref()) {
+                None => return Ok(true),
+                Some(ty) if ty.is_mixed() || accepts_without_coercion(ty.mask, v) => {
+                    return Ok(true);
                 }
-                return Err(self.recv_type_error(n, &v));
+                Some(_) => idx,
             }
+        };
+        self.recv_bound_slow(n, idx)
+    }
+
+    /// [`Vm::recv_bound`] of a value that needs coercion or is rejected.
+    /// Like the RECV of a value not yet in its CV, the value is out of the
+    /// CV while it is coerced (a `__toString()` call may run).
+    #[cold]
+    #[inline(never)]
+    fn recv_bound_slow(&mut self, n: u32, idx: usize) -> VmResult<bool> {
+        let taken = self
+            .frame()
+            .vars
+            .borrow_mut()
+            .slots
+            .get_mut(idx)
+            .and_then(Option::take);
+        let Some(mut v) = taken else {
+            return Ok(false);
+        };
+        let accepted = self.recv_verify(n, &mut v)?;
+        if accepted {
+            self.frame().vars.borrow_mut().slots[idx] = Some(v);
+            return Ok(true);
         }
-        Ok(v)
+        // php-src's CV holds the rejected value: the TypeError's trace
+        // shows it.
+        self.frame().vars.borrow_mut().slots[idx] = Some(v.clone());
+        Err(self.recv_type_error(n, &v))
     }
 
     pub(crate) fn op_recv(&mut self, n: u32, cv: u32) -> VmResult<()> {
-        let arg = self
-            .frame_mut()
-            .args
-            .get_mut(n as usize)
-            .and_then(Option::take);
+        // `None`: not passed; `Some(None)`: bound by `bind_args` (or a gap
+        // left by named arguments); `Some(Some(v))`: still to be bound.
+        let arg = self.frame_mut().args.get_mut(n as usize).map(Option::take);
         match arg {
-            Some(v) => {
+            Some(Some(v)) => {
                 let v = self.recv_check(n, v)?;
                 self.cv_bind(cv, v);
                 Ok(())
             }
-            None => Err(self.missing_arg_error(n)),
+            Some(None) if self.recv_bound(n, cv)? => Ok(()),
+            _ => Err(self.missing_arg_error(n)),
         }
     }
 
@@ -2118,17 +2276,15 @@ impl Vm {
     }
 
     pub(crate) fn op_recv_init(&mut self, n: u32, cv: u32) -> VmResult<bool> {
-        let arg = self
-            .frame_mut()
-            .args
-            .get_mut(n as usize)
-            .and_then(Option::take);
+        let arg = self.frame_mut().args.get_mut(n as usize).map(Option::take);
         match arg {
-            Some(v) => {
+            Some(Some(v)) => {
                 let v = self.recv_check(n, v)?;
                 self.cv_bind(cv, v);
                 Ok(true)
             }
+            // Bound by `bind_args`, or a named-argument gap (default).
+            Some(None) => self.recv_bound(n, cv),
             None => Ok(false),
         }
     }
@@ -2533,6 +2689,153 @@ fn install_buffer<T>(slot: &mut Vec<T>, buf: Vec<T>) {
     if old.capacity() == 0 {
         std::mem::forget(old);
     }
+}
+
+/// Entries of a [`MethodCache`] (a power of two).
+const METHOD_CACHE_SIZE: usize = 64;
+
+/// Longest method name a [`MethodCache`] entry holds.
+const METHOD_CACHE_NAME: usize = 31;
+
+/// The run-time cache of `ZEND_INIT_METHOD_CALL` (`CACHED_POLYMORPHIC_PTR`
+/// in `zend_vm_def.h`: the method `zend_std_get_method` found for the
+/// object's class), shared by all call sites as a small direct-mapped
+/// table keyed by (class of the object, calling scope, method name).
+///
+/// Classes are held weakly, for their identity only (a `Weak` keeps the
+/// address from being reused), and the name as an inline copy, so that
+/// the cache owns no PHP-visible string. The table is allocated with the
+/// VM and never grows while code runs (`memory_get_usage()` deltas).
+#[derive(Debug)]
+pub(crate) struct MethodCache {
+    entries: Vec<Option<MethodCacheEntry>>,
+}
+
+#[derive(Debug)]
+struct MethodCacheEntry {
+    class: std::rc::Weak<Class>,
+    scope: Option<std::rc::Weak<Class>>,
+    name_len: u8,
+    name: [u8; METHOD_CACHE_NAME],
+    method: Rc<Method>,
+}
+
+impl Default for MethodCache {
+    fn default() -> Self {
+        MethodCache {
+            entries: (0..METHOD_CACHE_SIZE).map(|_| None).collect(),
+        }
+    }
+}
+
+impl MethodCache {
+    #[inline]
+    #[allow(clippy::cast_possible_truncation)] // a hash, truncated on purpose
+    fn slot(cls: &Rc<Class>, name: &ZStr) -> usize {
+        ((Rc::as_ptr(cls) as usize >> 4) ^ name.hash_value() as usize) & (METHOD_CACHE_SIZE - 1)
+    }
+
+    /// The method cached for `name` on an object of class `cls` called
+    /// from `scope`.
+    #[inline]
+    pub(crate) fn get(
+        &self,
+        cls: &Rc<Class>,
+        scope: Option<&Rc<Class>>,
+        name: &ZStr,
+    ) -> Option<Rc<Method>> {
+        let e = self.entries.get(Self::slot(cls, name))?.as_ref()?;
+        let same_scope = match (scope, &e.scope) {
+            (None, None) => true,
+            (Some(s), Some(w)) => std::ptr::eq(Rc::as_ptr(s), w.as_ptr()),
+            _ => false,
+        };
+        let hit = std::ptr::eq(Rc::as_ptr(cls), e.class.as_ptr())
+            && same_scope
+            && e.name
+                .get(..usize::from(e.name_len))
+                .is_some_and(|n| n.eq_ignore_ascii_case(name.as_bytes()));
+        hit.then(|| e.method.clone())
+    }
+
+    /// Remembers that `name` on an object of class `cls` called from
+    /// `scope` is `method`. Longer names than an entry holds are not
+    /// cached.
+    pub(crate) fn insert(
+        &mut self,
+        cls: &Rc<Class>,
+        scope: Option<&Rc<Class>>,
+        name: &ZStr,
+        method: &Rc<Method>,
+    ) {
+        let bytes = name.as_bytes();
+        let Ok(name_len) = u8::try_from(bytes.len()) else {
+            return;
+        };
+        if bytes.len() > METHOD_CACHE_NAME {
+            return;
+        }
+        let mut copy = [0u8; METHOD_CACHE_NAME];
+        copy[..bytes.len()].copy_from_slice(bytes);
+        let slot = Self::slot(cls, name);
+        if let Some(e) = self.entries.get_mut(slot) {
+            *e = Some(MethodCacheEntry {
+                class: Rc::downgrade(cls),
+                scope: scope.map(Rc::downgrade),
+                name_len,
+                name: copy,
+                method: method.clone(),
+            });
+        }
+    }
+}
+
+/// The argument handling of `i_init_func_execute_data`
+/// (Zend/zend_execute.c) for a new user frame `f` whose `args` hold the
+/// arguments as sent: each passed positional argument of a declared,
+/// non-variadic parameter moves straight into its CV, where php-src's SEND
+/// ops put it, so `RECV`/`RECV_INIT` only verify it ([`Vm::recv_bound`]).
+/// Its `args` entry is left `None` (`func_num_args()` still counts it,
+/// `func_get_args()` and backtraces read the CV), as a `RECV` leaves it.
+/// Extra arguments and those of a variadic parameter stay in `args`.
+///
+/// For a function without parameter types the `RECV`/`RECV_INIT` ops of
+/// the leading passed arguments are skipped ("Skip useless ZEND_RECV and
+/// ZEND_RECV_INIT opcodes"): the returned first op is where executing
+/// them would have led. A named-argument gap stops the skipping (its op
+/// reports the missing argument or evaluates the default).
+fn bind_args(uf: &UserFunction, f: &mut Frame) -> usize {
+    if f.cv_map.is_some() || f.args.is_empty() {
+        return 0;
+    }
+    let ops = &uf.code.ops;
+    let mut skipping = uf.params.iter().all(|p| p.ty.is_none());
+    let mut first_op = 0;
+    let mut vars = f.vars.borrow_mut();
+    for (i, (arg, p)) in f.args.iter_mut().zip(&uf.params).enumerate() {
+        if p.variadic {
+            break;
+        }
+        let Some(slot) = vars.slots.get_mut(i) else {
+            break;
+        };
+        let Some(v) = arg.take() else {
+            skipping = false;
+            continue;
+        };
+        // The CVs of a new frame are undefined: nothing is released here.
+        *slot = Some(v);
+        if skipping {
+            match ops.get(first_op) {
+                Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
+                Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
+                    first_op = *skip as usize;
+                }
+                _ => skipping = false,
+            }
+        }
+    }
+    first_op
 }
 
 fn forwarded_called(cur: Option<Rc<Class>>, cls: &Rc<Class>, forward: bool) -> Rc<Class> {
