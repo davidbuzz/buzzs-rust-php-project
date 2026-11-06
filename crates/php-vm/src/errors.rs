@@ -215,11 +215,25 @@ impl Vm {
     /// `kind('name')` prefixes it, and under `html_errors` it is escaped and
     /// linked to the `function.kind` manual page.
     pub(crate) fn include_warning(&mut self, kind: &str, name: &[u8], msg: &str) -> VmResult<()> {
+        self.include_error(level::WARNING, kind, name, msg)
+    }
+
+    /// [`Vm::include_warning`] at any level: the stream layer's warnings
+    /// and notices while a wrapper `include` opens
+    /// (`php_stream_open_for_zend_ex`, reported by the `php-ext-streams`
+    /// include opener).
+    pub fn include_error(
+        &mut self,
+        level: i64,
+        kind: &str,
+        name: &[u8],
+        msg: &str,
+    ) -> VmResult<()> {
         let origin = self.include_error_origin(kind, name);
         if self.ini.get_bool("html_errors") {
-            return self.docref_html(level::WARNING, &origin, kind, msg.as_bytes());
+            return self.docref_html(level, &origin, kind, msg.as_bytes());
         }
-        self.error(level::WARNING, &format!("{origin}: {msg}"))
+        self.error(level, &format!("{origin}: {msg}"))
     }
 
     /// `escape_html` of `main/main.c` with the request's charset.
