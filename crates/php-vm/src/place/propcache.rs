@@ -173,10 +173,15 @@ fn home_of(entry: &PropCacheEntry, code: &OpArray) -> Option<Home> {
 fn read_home<R>(obj: &Obj, home: &Home, access: impl FnOnce(&Value) -> Probe<R>) -> Probe<R> {
     let data = object::data(obj);
     match home {
-        Home::Slot(slot) => match data.slots.borrow().get(*slot as usize) {
-            Some(Some(value)) => access(value),
-            _ => Probe::Slow,
-        },
+        Home::Slot(slot) => {
+            let slots = data.slots.borrow();
+            let res = match slots.get(*slot as usize) {
+                Some(Some(value)) => access(value),
+                _ => Probe::Slow,
+            };
+            drop(slots);
+            res
+        }
         Home::Dyn(name) => {
             let table = data.dynamic.borrow();
             let res = match table
