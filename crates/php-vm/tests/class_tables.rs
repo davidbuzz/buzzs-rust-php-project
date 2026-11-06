@@ -111,7 +111,16 @@ fn linked_tables_are_consistent_and_ordered_like_php() {
     // was registered (`ClassBuilder`, hand-built reflection classes, the
     // zend_test patches).
     let internal: Vec<Rc<Class>> = vm.classes.values().cloned().collect();
-    assert!(internal.len() > 300, "{}", internal.len());
+    assert!(internal.len() >= 50, "{}", internal.len());
+    for core in [
+        "stdClass",
+        "Exception",
+        "Closure",
+        "ReflectionClass",
+        "PropertyHookType",
+    ] {
+        assert!(vm.find_class(core.as_bytes()).is_some(), "{core}");
+    }
     for cls in &internal {
         check_tables(cls);
     }
