@@ -512,8 +512,9 @@ struct ObjHeader {
     /// dropped: `MaybeUninit` has no drop glue); it lends [`Obj::rc`] a real
     /// `&Rc<dyn PhpObject>` and carries the vtable (drop, size, methods).
     this: UnsafeCell<MaybeUninit<Rc<dyn PhpObject>>>,
-    /// `TypeId` of the payload: [`Obj::downcast_ref`] to the payload type
-    /// is one comparison instead of two virtual calls.
+    /// `TypeId` of the payload (or of its family, [`Obj::new_in_family`]):
+    /// [`Obj::downcast_ref`] to that type is one comparison instead of two
+    /// virtual calls.
     type_id: TypeId,
 }
 
@@ -590,10 +591,38 @@ pub struct Obj {
 impl Obj {
     /// Wraps a VM object (one allocation: header + `object`).
     pub fn new<T: PhpObject>(object: T) -> Self {
+        Obj::with_type_id(object, TypeId::of::<T>())
+    }
+
+    /// Wraps a VM object whose payload `T` starts with an `F`: the payload
+    /// is a member of `F`'s family, and [`Obj::downcast_ref`] and
+    /// [`Obj::payload_ptr`] for `F` reach that `F` part with the one type
+    /// check every other payload type gets. php-src's objects are such a
+    /// family: a `zend_object` whose `properties_table` continues past the
+    /// struct, sized for the class, in the same allocation.
+    ///
+    /// # Safety
+    /// `T` must hold a valid `F` at offset 0 for as long as the object
+    /// lives (a `#[repr(C)]` struct with an `F` first field, say), with
+    /// `F`'s alignment (checked at compile time, with the sizes).
+    /// [`Obj::downcast_ref`] for `T` itself does not recognise the payload
+    /// by its header (it looks for `T` through [`PhpObject::as_any`]).
+    #[must_use]
+    pub unsafe fn new_in_family<T: PhpObject, F: 'static>(object: T) -> Self {
+        const {
+            assert!(payload_offset::<T>() == payload_offset::<F>());
+            assert!(std::mem::size_of::<T>() >= std::mem::size_of::<F>());
+        }
+        Obj::with_type_id(object, TypeId::of::<F>())
+    }
+
+    /// [`Obj::new`] with the type the header records for
+    /// [`Obj::downcast_ref`] (`T`'s own, or its family's).
+    fn with_type_id<T: PhpObject>(object: T, type_id: TypeId) -> Self {
         let rc: Rc<dyn PhpObject> = Rc::new(ObjCell {
             header: ObjHeader {
                 this: UnsafeCell::new(MaybeUninit::uninit()),
-                type_id: TypeId::of::<T>(),
+                type_id,
             },
             value: object,
         });
@@ -699,18 +728,42 @@ impl Obj {
         self.rc().class_name()
     }
 
-    /// Downcasts to the VM's concrete object type.
+    /// Downcasts to the VM's concrete object type (or to the family type of
+    /// an object made by [`Obj::new_in_family`]).
     #[inline]
     #[must_use]
     pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
         if self.header().type_id == TypeId::of::<T>() {
-            // SAFETY: the payload's type is `T`, so the allocation is an
-            // `ObjCell<T>` (alive while this handle is); only shared
-            // references to the payload are ever made.
+            // SAFETY: the payload's type is `T`, or it starts with a `T`
+            // and is aligned like one (`Obj::new_in_family`), so a `T` sits
+            // at `payload_offset::<T>()` of the allocation (alive while this
+            // handle is); only shared references to the payload are ever
+            // made.
             Some(unsafe { &(*self.ptr.as_ptr().cast::<ObjCell<T>>()).value })
         } else {
             self.rc().as_any().downcast_ref::<T>()
         }
+    }
+
+    /// The payload, as a raw pointer to its `F` part, if its type or
+    /// family ([`Obj::new_in_family`]) is `F`. Unlike the reference
+    /// [`Obj::downcast_ref`] returns, which covers the `F` part only, the
+    /// pointer may be used to reach the rest of the payload (data a family
+    /// member keeps after the `F` part, inside `UnsafeCell`) while the
+    /// object is alive, except from inside the payload's own `Drop`: the
+    /// drop glue then holds an exclusive reference to the whole cell.
+    #[inline]
+    #[must_use]
+    pub fn payload_ptr<F: 'static>(&self) -> Option<NonNull<F>> {
+        if self.header().type_id != TypeId::of::<F>() {
+            return None;
+        }
+        // SAFETY: as in `downcast_ref`, the allocation holds an `F` at
+        // `payload_offset::<F>()`, so the field projection stays in
+        // bounds; `addr_of!` makes no reference, so the pointer keeps the
+        // provenance of the handle's own pointer (the whole allocation).
+        let p = unsafe { ptr::addr_of!((*self.ptr.as_ptr().cast::<ObjCell<F>>()).value) };
+        NonNull::new(p.cast_mut())
     }
 
     /// Whether two handles denote the same object (`===`).
@@ -1336,6 +1389,93 @@ mod tests {
         let foreign: Rc<dyn PhpObject> = Rc::new(Counted(2, drops.clone()));
         drop(Obj::from_rc(foreign));
         assert_eq!(drops.get(), 2);
+    }
+
+    /// The common part of a payload family (like the VM's object data,
+    /// whose property slots follow it inline).
+    struct Head {
+        id: u32,
+        /// Sum of the tail seen by the payload's `Drop`.
+        seen: Rc<Cell<u64>>,
+    }
+
+    /// A family member with room for `N` values after the head.
+    #[repr(C)]
+    struct Tailed<const N: usize> {
+        head: Head,
+        tail: UnsafeCell<[u64; N]>,
+    }
+    impl<const N: usize> PhpObject for Tailed<N> {
+        fn handle(&self) -> u32 {
+            self.head.id
+        }
+        fn class_name(&self) -> ZStr {
+            ZStr::from("Tailed")
+        }
+        fn as_any(&self) -> &dyn Any {
+            &self.head
+        }
+    }
+    impl<const N: usize> Drop for Tailed<N> {
+        fn drop(&mut self) {
+            // Through the drop's own exclusive reference, never through a
+            // pointer made from a handle.
+            let sum = self.tail.get_mut().iter().sum();
+            self.head.seen.set(sum);
+        }
+    }
+
+    #[test]
+    fn family_members_are_recognised_by_their_common_part() {
+        let seen = Rc::new(Cell::new(0));
+        // SAFETY: `Tailed` is `repr(C)` with its `Head` first.
+        let o = unsafe {
+            Obj::new_in_family::<Tailed<3>, Head>(Tailed {
+                head: Head {
+                    id: 5,
+                    seen: seen.clone(),
+                },
+                tail: UnsafeCell::new([1, 2, 3]),
+            })
+        };
+        let p = Obj::new(Counted(6, Rc::new(Cell::new(0))));
+        assert_eq!(o.downcast_ref::<Head>().map(|h| h.id), Some(5));
+        assert_eq!(o.handle(), 5);
+        assert!(p.downcast_ref::<Head>().is_none());
+        // The member type is not what the header records.
+        assert!(o.downcast_ref::<Tailed<3>>().is_none());
+        assert!(o.payload_ptr::<Tailed<3>>().is_none());
+        assert!(p.payload_ptr::<Head>().is_none());
+        // The payload pointer reaches the tail, also while shared
+        // references to the object are around.
+        let base = o.payload_ptr::<Head>().expect("family member");
+        let head: &Head = o.downcast_ref::<Head>().expect("head");
+        // SAFETY: the payload is a `Tailed<3>`; its tail (inside
+        // `UnsafeCell`, so shared references to the payload allow the
+        // writes) is in bounds of the allocation `base` may reach.
+        let tail = unsafe {
+            base.cast::<u8>()
+                .add(std::mem::offset_of!(Tailed<3>, tail))
+                .cast::<u64>()
+        };
+        unsafe { tail.add(1).write(20) };
+        assert_eq!(unsafe { tail.add(1).read() }, 20);
+        assert_eq!(head.id, 5);
+        assert_eq!(o.addr() + payload_offset::<Head>(), base.as_ptr() as usize);
+        assert_eq!(
+            // SAFETY: the payload is a live `Tailed<3>`.
+            Obj::addr_of_payload::<Tailed<3>>(unsafe { &*base.as_ptr().cast() }),
+            o.addr()
+        );
+        // Weak handles and `from_rc` keep the family header.
+        let w = o.downgrade();
+        let back = Obj::from_rc(o.rc().clone());
+        assert!(back.downcast_ref::<Head>().is_some());
+        drop(back);
+        drop(p);
+        drop(o);
+        assert!(w.upgrade().is_none());
+        assert_eq!(seen.get(), 1 + 20 + 3);
     }
 
     #[test]
