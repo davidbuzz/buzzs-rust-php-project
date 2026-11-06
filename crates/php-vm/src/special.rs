@@ -50,13 +50,12 @@ impl Vm {
                 )?;
                 return Ok(Value::Int(0));
             }
-            let original = v.clone();
+            // Leaves `v` as it was when it cannot be converted.
             if self.weak_scalar_coerce(crate::types::mask::STRING, &mut v)? {
                 if let Value::Str(s) = &v {
                     return Ok(Value::Int(i64::try_from(s.len()).unwrap_or(i64::MAX)));
                 }
             }
-            v = original;
         }
         Err(self.make_throw(
             "TypeError",
