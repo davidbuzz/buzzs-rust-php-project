@@ -524,6 +524,33 @@ pub enum Op {
     GetClass { a: Operand, dst: Option<u32> },
     /// `get_called_class()` (`ZEND_GET_CALLED_CLASS`).
     GetCalledClass { dst: Option<u32> },
+    /// `defined('NAME')` with a literal name without `\` or `:`
+    /// (`ZEND_DEFINED`, `zend_compile_func_defined`): whether the constant
+    /// named by literal `name` exists. Only the exact name is looked up
+    /// (`zend_quick_check_constant`): `true`/`false`/`null` were resolved
+    /// at compile time, and `__COMPILER_HALT_OFFSET__` is not found. A
+    /// non-string literal names the constant `zval_get_string` makes of it.
+    Defined { name: u32, dst: Option<u32> },
+    /// `in_array($needle, [literals...][, strict])` (`ZEND_IN_ARRAY`,
+    /// `zend_compile_func_in_array`): whether `a` is one of the keys of the
+    /// literal array `set`, which holds the haystack's values as keys
+    /// (strings as string keys even when numeric, integers as integer
+    /// keys).
+    InArray {
+        a: Operand,
+        set: u32,
+        strict: bool,
+        dst: Option<u32>,
+    },
+    /// `array_key_exists($key, $array)` (`ZEND_ARRAY_KEY_EXISTS`,
+    /// `zend_compile_func_array_key_exists`): no call frame; the
+    /// undefined-variable warnings, the key diagnostics and the
+    /// `TypeError` for a non-array happen in place, in php-src's order.
+    KeyExists {
+        key: Operand,
+        array: Operand,
+        dst: Option<u32>,
+    },
 
     /// `echo`
     Echo(Operand),

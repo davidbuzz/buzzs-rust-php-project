@@ -1691,6 +1691,27 @@ impl Vm {
                         self.set_dst(*dst, r);
                         Flow::Next
                     }
+                    Op::Defined { name, dst } => {
+                        let r = self.op_defined(*name)?;
+                        self.set_dst(*dst, Value::Bool(r));
+                        Flow::Next
+                    }
+                    Op::InArray {
+                        a,
+                        set,
+                        strict,
+                        dst,
+                    } => {
+                        let needle = self.read(*a)?;
+                        let r = self.op_in_array(&needle, *set, *strict)?;
+                        self.set_dst(*dst, Value::Bool(r));
+                        Flow::Next
+                    }
+                    Op::KeyExists { key, array, dst } => {
+                        let r = self.op_key_exists(*key, *array)?;
+                        self.set_dst(*dst, Value::Bool(r));
+                        Flow::Next
+                    }
                     Op::Echo(a) => {
                         let v = self.read(*a)?;
                         match &v {

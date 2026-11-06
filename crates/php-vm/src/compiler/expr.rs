@@ -1279,10 +1279,14 @@ impl Compiler {
     }
 
     /// Whether `e` calls a builtin that `zend_try_compile_special_func_ex`
-    /// (`Zend/zend_compile.c`) compiles to an opcode with a TMP result,
-    /// which `zend_separate_if_call_and_write` and `zend_compile_assign_ref`
-    /// reject in write context. Only the forms that depend on the argument
-    /// count alone are recognised.
+    /// (`Zend/zend_compile.c`) compiles to an opcode with a TMP result or
+    /// to a constant, which `zend_separate_if_call_and_write` and
+    /// `zend_compile_assign_ref` reject in write context. Only the forms
+    /// that depend on the argument count alone are recognised, plus
+    /// `defined()` and `in_array()`, which depend on their literal
+    /// arguments ([`Compiler::compile_defined`],
+    /// [`Compiler::in_array_set`]). `chr()` and `ord()` are only folded in
+    /// read context, so they never qualify.
     fn is_opcode_builtin_call(&self, e: &Expr) -> bool {
         let ExprKind::Call { callee, args } = &e.kind else {
             return false;
@@ -1290,11 +1294,15 @@ impl Compiler {
         let Callee::Name(n) = &**callee else {
             return false;
         };
-        if !args
+        let positional: Vec<&Expr> = args
             .args
             .iter()
-            .all(|a| matches!(a.kind, ArgKind::Positional(_)))
-        {
+            .filter_map(|a| match &a.kind {
+                ArgKind::Positional(e) => Some(e),
+                _ => None,
+            })
+            .collect();
+        if positional.len() != args.args.len() {
             return false;
         }
         let (resolved, fallback) = self.resolve_function_name(n);
@@ -1311,6 +1319,12 @@ impl Compiler {
             b"get_class" => argc <= 1,
             b"get_called_class" => argc == 0,
             b"array_key_exists" => argc == 2,
+            b"defined" => {
+                argc == 1
+                    && self.special_builtin_enabled(b"defined")
+                    && defined_literal_name(positional[0])
+            }
+            b"in_array" => self.in_array_set(&positional).is_some(),
             _ => false,
         }
     }
@@ -2523,6 +2537,37 @@ impl Compiler {
             b"sprintf" if fb.is_none() && only_positional && self.opts.sprintf_builtin => {
                 self.compile_sprintf_rope(&positional, line)
             }
+            // zend_compile_func_array_key_exists: both arguments compiled
+            // for reading, then one opcode in the caller's frame. Like
+            // `zend_emit_op_tmp`, it takes the line the arguments left
+            // behind (`CG(zend_lineno)`), where its diagnostics appear.
+            b"array_key_exists"
+                if fb.is_none()
+                    && only_positional
+                    && positional.len() == 2
+                    && self.special_builtin_enabled(b"array_key_exists") =>
+            {
+                let key = self.compile_expr(positional[0])?;
+                let array = self.compile_expr(positional[1])?;
+                let dst = need.then(|| self.tmp());
+                self.emit(Op::KeyExists { key, array, dst });
+                Ok(Some(
+                    dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+                ))
+            }
+            // zend_compile_func_defined / _in_array / _chr / _ord decide
+            // from the literal arguments and otherwise keep the call.
+            b"defined" if fb.is_none() && only_positional && positional.len() == 1 => {
+                self.compile_defined(positional[0], need)
+            }
+            b"in_array" if fb.is_none() && only_positional => {
+                self.compile_in_array(&positional, need)
+            }
+            b"chr" | b"ord" if fb.is_none() && only_positional && positional.len() == 1 => {
+                Ok(self.fold_chr_ord(&lc, positional[0]))
+            }
+            // Without `array_key_exists` registered as an internal function,
+            // only the float-key lifetime case finishes a pending call.
             b"array_key_exists" if fb.is_none() && only_positional && positional.len() == 2 => {
                 if !matches!(
                     positional[0].kind,
@@ -2744,6 +2789,142 @@ impl Compiler {
         Ok(Some(
             dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
         ))
+    }
+
+    /// Whether `lc` is currently registered as an internal function
+    /// ([`super::CompileOptions::special_builtins`]).
+    fn special_builtin_enabled(&self, lc: &[u8]) -> bool {
+        super::special_builtin_bit(lc).is_some_and(|bit| self.opts.special_builtins & bit != 0)
+    }
+
+    /// `zend_compile_func_defined`: `defined()` of a literal name without
+    /// `\` or `:`. The call is `true` at compile time when the constant is
+    /// substituted at compile time (`zend_try_ct_eval_const`: `true`,
+    /// `false` and `null` in any case, and persistent internal constants),
+    /// and `ZEND_DEFINED`, an exact-name lookup at run time, otherwise. A
+    /// number is converted with `zval_get_string` instead of the call's
+    /// parameter check, so `defined(1)` is `false` even under
+    /// `strict_types`. `None` keeps the call.
+    fn compile_defined(&mut self, arg: &Expr, need: bool) -> CResult<Option<Operand>> {
+        if !self.special_builtin_enabled(b"defined") || !defined_literal_name(arg) {
+            return Ok(None);
+        }
+        let name = match &arg.kind {
+            ExprKind::String(s) => Value::Str(ZStr::from(s.as_slice())),
+            ExprKind::Int(i) => Value::Str(ZStr::from(i.to_string())),
+            // Formatted at run time, with the `precision` setting in effect.
+            ExprKind::Float(f) => Value::Float(*f),
+            _ => return Ok(None),
+        };
+        if let Value::Str(s) = &name {
+            let n = s.as_bytes();
+            if n.eq_ignore_ascii_case(b"true")
+                || n.eq_ignore_ascii_case(b"false")
+                || n.eq_ignore_ascii_case(b"null")
+                || self.ct_eval_const(n).is_some()
+            {
+                return Ok(Some(self.lit(Value::Bool(true))));
+            }
+        }
+        let name = self.lit_idx(name);
+        let dst = need.then(|| self.tmp());
+        self.emit(Op::Defined { name, dst });
+        Ok(Some(
+            dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+        ))
+    }
+
+    /// `zend_compile_func_in_array`: `in_array()` whose haystack is a
+    /// literal array of strings (none numeric, so that loose comparison
+    /// with a string needle is byte equality) or, in strict mode, of
+    /// strings and integers, and whose `strict` argument is a literal or a
+    /// compile-time constant, is `ZEND_IN_ARRAY` over the set of those
+    /// values. `None` keeps the call.
+    fn compile_in_array(&mut self, args: &[&Expr], need: bool) -> CResult<Option<Operand>> {
+        let Some((set, strict)) = self.in_array_set(args) else {
+            return Ok(None);
+        };
+        // The haystack is evaluated, not compiled; the needle is compiled
+        // last, so the opcode takes its line (`CG(zend_lineno)`).
+        let a = self.compile_expr(args[0])?;
+        let set = self.lit_idx(Value::Array(set));
+        let dst = need.then(|| self.tmp());
+        self.emit(Op::InArray {
+            a,
+            set,
+            strict,
+            dst,
+        });
+        Ok(Some(
+            dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+        ))
+    }
+
+    /// The key set and strictness of an `in_array()` call that
+    /// [`Compiler::compile_in_array`] compiles to `ZEND_IN_ARRAY`; `None`
+    /// for a call. Pure: nothing is emitted.
+    fn in_array_set(&self, args: &[&Expr]) -> Option<(ZArray, bool)> {
+        if !(2..=3).contains(&args.len()) || !self.special_builtin_enabled(b"in_array") {
+            return None;
+        }
+        let strict = match args.get(2) {
+            None => false,
+            Some(e) => {
+                // A literal (`zend_is_true`) or a constant known at compile
+                // time (`zend_try_ct_eval_const`); anything else is a call.
+                if !matches!(
+                    e.kind,
+                    ExprKind::Int(_)
+                        | ExprKind::Float(_)
+                        | ExprKind::String(_)
+                        | ExprKind::Const(_)
+                ) {
+                    return None;
+                }
+                match self.try_fold(e)? {
+                    Value::Float(f) if f.is_nan() => return None,
+                    v => v.to_bool(&mut CollectingContext::new()).ok()?,
+                }
+            }
+        };
+        if !matches!(args[1].kind, ExprKind::Array { .. }) {
+            return None;
+        }
+        let Value::Array(haystack) = self.try_fold(args[1])? else {
+            return None;
+        };
+        let mut set = php_runtime::HashTable::with_capacity(haystack.len());
+        for v in haystack.values() {
+            let key = match v {
+                Value::Str(s) if strict || !php_runtime::numeric::is_numeric(s.as_bytes()) => {
+                    php_runtime::ArrayKey::Str(s.clone())
+                }
+                Value::Int(i) if strict => php_runtime::ArrayKey::Int(*i),
+                _ => return None,
+            };
+            // A value listed twice is one key (`zend_hash_add` fails quietly).
+            let _ = set.add(key, Value::Bool(true));
+        }
+        Some((ZArray::from_table(set), strict))
+    }
+
+    /// `zend_compile_func_chr` / `zend_compile_func_ord`: `chr()` of an
+    /// integer literal in `0..=255` and `ord()` of a one-byte string
+    /// literal are compile-time constants. php-src folds them in read
+    /// context only (`BP_VAR_R`) and calls the function in write context,
+    /// which is not observable: neither call can fail or run user code,
+    /// and the write paths treat the literal like the call's temporary
+    /// (`$x = &chr(65)` still notices and assigns the value).
+    fn fold_chr_ord(&mut self, lc: &[u8], arg: &Expr) -> Option<Operand> {
+        if !self.special_builtin_enabled(lc) {
+            return None;
+        }
+        let v = match (lc, &arg.kind) {
+            (b"chr", ExprKind::Int(i)) => Value::Str(ZStr::from_byte(u8::try_from(*i).ok()?)),
+            (b"ord", ExprKind::String(s)) if s.len() == 1 => Value::Int(i64::from(s[0])),
+            _ => return None,
+        };
+        Some(self.lit(v))
     }
 
     /// Lowers the constant formats accepted by `zend_compile_func_sprintf()`.
@@ -2999,6 +3180,18 @@ fn map_incdec(op: ast::IncDecOp) -> IncDecKind {
         ast::IncDecOp::PreDec => IncDecKind::PreDec,
         ast::IncDecOp::PostInc => IncDecKind::PostInc,
         ast::IncDecOp::PostDec => IncDecKind::PostDec,
+    }
+}
+
+/// Whether `e`, the argument of `defined()`, is a literal that
+/// `zend_compile_func_defined` accepts (`ZEND_AST_ZVAL`): a string without
+/// `\` or `:`, or a number. `true`, `false` and `null` are constants, not
+/// literals, so `defined(null)` keeps the call and its `TypeError`.
+fn defined_literal_name(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) => true,
+        ExprKind::String(s) => !s.contains(&b'\\') && !s.contains(&b':'),
+        _ => false,
     }
 }
 
