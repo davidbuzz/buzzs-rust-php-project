@@ -180,8 +180,30 @@ fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Err(a.type_error(vm, 2, &msg));
         }
     };
-    let out = implode_array(vm, glue.as_bytes(), &pieces)?;
-    Ok(bytes(out))
+    let out = ZStr::from(implode_array(vm, glue.as_bytes(), &pieces)?);
+    if implode_valid_utf8(&glue, &pieces) {
+        out.mark_valid_utf8();
+    }
+    Ok(Value::Str(out))
+}
+
+/// Whether `php_implode` flags its result `IS_STR_VALID_UTF8`: an empty
+/// array gives the (flagged) empty string, one element its own string,
+/// more the glue's and every piece's copyable concat properties. Integers,
+/// floats, bools, null and arrays (`"Array"`, a known string) convert to
+/// ASCII; an object's or resource's string is not known here, so it
+/// counts as unflagged.
+fn implode_valid_utf8(glue: &ZStr, pieces: &ZArray) -> bool {
+    let piece = |v: &Value| match v.deref() {
+        Value::Str(s) => s.is_valid_utf8(),
+        Value::Object(_) | Value::Resource(_) => false,
+        _ => true,
+    };
+    match pieces.len() {
+        0 => true,
+        1 => pieces.iter().all(|(_, v)| piece(v)),
+        _ => glue.is_valid_utf8() && pieces.iter().all(|(_, v)| piece(v)),
+    }
 }
 
 fn strtok(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -736,7 +758,12 @@ fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         mem::check(vm, mem::zstr(total))?;
     }
     let r = transform::str_repeat(s.as_bytes(), times);
-    Ok(bytes(check(vm, r)?))
+    let out = ZStr::from(check(vm, r)?);
+    // `ZSTR_COPY_CONCAT_PROPERTIES(result, input_str)`.
+    if s.is_valid_utf8() {
+        out.mark_valid_utf8();
+    }
+    Ok(Value::Str(out))
 }
 
 fn count_chars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1043,5 +1070,39 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         ("CHAR_MAX", 127),
     ] {
         m.constant(name, Value::Int(v));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::implode_valid_utf8;
+    use php_runtime::{Value, ZArray, ZStr};
+
+    fn list(items: Vec<Value>) -> ZArray {
+        ZArray::from_values(items)
+    }
+
+    /// The `implode` cases of ext/zend_test/tests/strings_marked_as_utf8.phpt.
+    #[test]
+    fn implode_flags_follow_php_implode() {
+        let a = || Value::Str(ZStr::from_byte(b'a'));
+        let b = || Value::Str(ZStr::from_byte(b'b'));
+        let ff = || Value::Str(ZStr::from_byte(0xff));
+        let empty = ZStr::empty();
+        let bar = ZStr::from_byte(b'|');
+        let glue_ff = ZStr::from_byte(0xff);
+        assert!(implode_valid_utf8(&empty, &list(vec![a(), b()])));
+        assert!(implode_valid_utf8(&bar, &list(vec![a(), b()])));
+        assert!(!implode_valid_utf8(&empty, &list(vec![ff(), a(), b()])));
+        assert!(!implode_valid_utf8(&empty, &list(vec![a(), b(), ff()])));
+        assert!(!implode_valid_utf8(&glue_ff, &list(vec![a(), b()])));
+        assert!(implode_valid_utf8(&empty, &list(vec![])));
+        assert!(implode_valid_utf8(&glue_ff, &list(vec![])));
+        assert!(implode_valid_utf8(&empty, &list(vec![a()])));
+        assert!(implode_valid_utf8(&glue_ff, &list(vec![a()])));
+        let mixed = list(vec![Value::Int(1), Value::Float(1.0), a()]);
+        assert!(implode_valid_utf8(&empty, &mixed));
+        let unknown = list(vec![a(), Value::Str(ZStr::from("not known"))]);
+        assert!(!implode_valid_utf8(&empty, &unknown));
     }
 }
