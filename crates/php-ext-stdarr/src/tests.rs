@@ -422,22 +422,32 @@ fn memory_and_stack_limits() {
     // by the oom_*.phpt tests rather than by these parallel unit tests.
     assert!(run("array_fill(0, 2147483647, 1);")
         .contains("Possible integer overflow in memory allocation"));
-    let deep = "$a = []; for ($i = 0; $i < 10000; $i++) { $a = [$a, []]; }";
-    assert_eq!(
-        run(&format!("{deep} echo count($a, COUNT_RECURSIVE);")),
-        "20000"
-    );
-    // 128K leaves 80 KiB after the default 48 KiB reservation: enough to
-    // compile the script (php-src fails to compile `echo 1;` with 16K or
-    // 64K) and far less than 10000 levels of `php_count_recursive`.
-    let limited = run_with(
-        &[("zend.max_allowed_stack_size", "128K")],
-        &format!("{deep} try {{ count($a, COUNT_RECURSIVE); }} catch (Error $e) {{ echo $e->getMessage(); }}"),
-    );
-    assert_eq!(
-        limited,
-        "Maximum call stack size of 81920 bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?"
-    );
+    // Counting (and dropping) a 10000-level array recurses natively: give
+    // the script the CLI's large stack.
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let deep = "$a = []; for ($i = 0; $i < 10000; $i++) { $a = [$a, []]; }";
+            assert_eq!(
+                run(&format!("{deep} echo count($a, COUNT_RECURSIVE);")),
+                "20000"
+            );
+            // 128K leaves 80 KiB after the default 48 KiB reservation:
+            // enough to compile the script (php-src fails to compile
+            // `echo 1;` with 16K or 64K) and far less than 10000 levels of
+            // `php_count_recursive`.
+            let limited = run_with(
+                &[("zend.max_allowed_stack_size", "128K")],
+                &format!("{deep} try {{ count($a, COUNT_RECURSIVE); }} catch (Error $e) {{ echo $e->getMessage(); }}"),
+            );
+            assert_eq!(
+                limited,
+                "Maximum call stack size of 81920 bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?"
+            );
+        })
+        .expect("spawn test thread")
+        .join()
+        .expect("test thread");
 }
 
 /// `Z_PARAM_FUNC`: method callables are resolved in the calling scope,

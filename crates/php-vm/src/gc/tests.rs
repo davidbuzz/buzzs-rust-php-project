@@ -379,6 +379,19 @@ fn binding_references_buffers_no_roots() {
     assert_eq!(out, "int(0)\n");
 }
 
+/// gc_047: a run finds the cycle alive through the reference the
+/// by-reference `foreach` still holds and drops the root; the loop
+/// variable is rooted again afterwards (`zend_gc_check_root_tmpvars`), so
+/// the cycles are collected once the loop releases it without a GC check.
+#[test]
+fn live_loop_reference_is_rooted_again_after_a_run() {
+    let out = run("<?php $a = [0, 1];\n\
+         foreach ($a as &$v) { $a[0] =& $a; $a[1] = array(); $a[1][0] =& $a[1]; $b = 1; $a =& $b;\n\
+         var_dump(gc_collect_cycles(), gc_status()['roots']); break; }\n\
+         var_dump(gc_collect_cycles());");
+    assert_eq!(out, "int(0)\nint(1)\nint(2)\n");
+}
+
 /// gc_023: the automatic run collects the roots buffered when the
 /// threshold was reached, not the root that crossed it
 /// (`gc_possible_root_when_full`).

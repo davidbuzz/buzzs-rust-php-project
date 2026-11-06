@@ -129,12 +129,37 @@ impl Vm {
         }
         drop(guard);
         with_state(|s| s.collector_time += start.elapsed());
+        self.root_live_temporaries();
         // Values released by freeing (e.g. `WeakMap` entries) may have
         // queued destructors of ordinary objects.
         let r = self.run_pending_destructors();
         match err {
             Some(e) => Err(e),
             None => r.map(|()| total),
+        }
+    }
+
+    /// `zend_gc_check_root_tmpvars`: the values the running frames'
+    /// temporaries and `foreach` loops hold are rooted again after a run
+    /// (see [`super::root_live_value`]).
+    fn root_live_temporaries(&self) {
+        use crate::vm::ForeachIter;
+        for f in &self.frames {
+            for v in &f.tmps {
+                super::root_live_value(v);
+            }
+            for it in f.iters.iter().flatten() {
+                match it {
+                    ForeachIter::ArrayRef { r, .. } => {
+                        php_runtime::ref_roots::check_possible_root(r);
+                    }
+                    ForeachIter::Props { subject, .. } => super::root_live_value(subject),
+                    ForeachIter::Iterator { obj, .. } | ForeachIter::Generator { obj, .. } => {
+                        super::root_live_obj(obj);
+                    }
+                    ForeachIter::Array { .. } | ForeachIter::Native(..) | ForeachIter::Empty => {}
+                }
+            }
         }
     }
 

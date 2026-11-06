@@ -86,6 +86,13 @@ pub(crate) fn released(r: &PhpRef) {
     });
 }
 
+/// `gc_check_possible_root` for a reference a live temporary or loop
+/// variable holds after a collection (`zend_gc_check_root_tmpvars`):
+/// buffers it like a release of one of its handles would.
+pub fn check_possible_root(r: &PhpRef) {
+    released(r);
+}
+
 /// Takes the buffered references that are still alive and empties the
 /// buffer.
 #[must_use]
