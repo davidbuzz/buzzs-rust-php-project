@@ -6,6 +6,9 @@ use crate::vm::{FinState, Frame, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ops, BinaryOp, ErrorLevel, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
+#[cfg(test)]
+mod dispatch_tests;
+
 /// Upper bound on nested `execute()` runs (internal-to-user callbacks,
 /// destructors, `__clone`, magic methods); each one uses native stack.
 const MAX_NESTED_EXECUTIONS: u32 = 20000;
@@ -444,7 +447,9 @@ impl Vm {
         };
         let slot = self.frame_mut().tmps.get_mut(t as usize)?;
         if let Value::Bool(b) = *slot {
-            *slot = Value::Null;
+            // A bool has nothing to drop: overwrite it without the
+            // out-of-line `drop_in_place` a plain assignment calls.
+            std::mem::forget(std::mem::take(slot));
             Some(b)
         } else {
             None
@@ -456,6 +461,13 @@ impl Vm {
     pub(crate) fn set_dst(&mut self, dst: Option<u32>, v: Value) {
         if let Some(t) = dst {
             self.set_tmp(t, v);
+        } else if matches!(
+            v,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            // An unused scalar result (`$i++;`): skip the out-of-line
+            // `drop_in_place` call, as `set_tmp` does for the old value.
+            std::mem::forget(v);
         }
     }
 
@@ -825,19 +837,86 @@ impl Vm {
         t
     }
 
-    /// The interpreter loop proper.
+    /// The interpreter loop proper (`execute_ex`).
+    ///
+    /// Like php-src's VM, which keeps `opline` in a machine register and
+    /// stores it to `EX(opline)` only where a handler may observe it
+    /// (`SAVE_OPLINE()`), the loop runs on a local `ip` (the index of the
+    /// next instruction) and the op array's instruction slice held in
+    /// locals, instead of looking up the current frame and writing its
+    /// `ip` back for every instruction:
+    ///
+    /// * Hot instructions whose fast path cannot observe the frame's `ip`
+    ///   (no warning, no throw, no user code: jumps on a boolean temporary,
+    ///   the sealed numeric [`Op::Bin`] forms) run first, on the local `ip`
+    ///   alone (`ZEND_VM_NEXT_OPCODE` / `ZEND_VM_SET_OPCODE`).
+    /// * Every other instruction is dispatched after storing the local
+    ///   `ip` into the frame (`SAVE_OPLINE`). Within one instruction that
+    ///   returns [`Flow::Next`], only this loop moves the current frame's
+    ///   `ip` (jumps write the local), so the local stays authoritative and
+    ///   is not reloaded. [`Flow::Reload`] (a frame was pushed or popped)
+    ///   reloads the frame's code and `ip` (`LOAD_OPLINE` after
+    ///   `ZEND_VM_ENTER`/`ZEND_VM_LEAVE`).
+    /// * The safe point after an instruction ([`Vm::safe_point_due`]) is
+    ///   one inline flag test; its work, which may report the current
+    ///   line, stores the local `ip` first ([`Vm::safe_point`]).
     #[allow(clippy::too_many_lines)]
     fn run(&mut self, base: usize) -> VmResult<Value> {
         'frames: loop {
             let code = self.frame().code.clone();
+            let ops: &[Op] = &code.ops;
+            let mut ip = self.frame().ip;
             loop {
-                let ip = {
-                    let f = self.frame_mut();
-                    let ip = f.ip;
-                    f.ip += 1;
-                    ip
-                };
-                let flow = match &code.ops[ip] {
+                let at = ip;
+                let op = &ops[at];
+                ip = at + 1;
+                // Hot instructions on the local `ip` (no frame store).
+                'slow: {
+                    match op {
+                        Op::Nop => {}
+                        Op::Jmp(t) => ip = *t as usize,
+                        Op::JmpZ(a, t) => match self.take_tmp_bool(*a) {
+                            Some(false) => ip = *t as usize,
+                            Some(true) => {}
+                            None => break 'slow,
+                        },
+                        Op::JmpNz(a, t) => match self.take_tmp_bool(*a) {
+                            Some(true) => ip = *t as usize,
+                            Some(false) => {}
+                            None => break 'slow,
+                        },
+                        Op::IncDec { place, kind, dst } => {
+                            match self.incdec_cv_fast(*place, *kind) {
+                                Some(r) => self.set_dst(*dst, r),
+                                None => break 'slow,
+                            }
+                        }
+                        Op::Bin {
+                            op: kind,
+                            a,
+                            b,
+                            dst,
+                        } => {
+                            // The sealed numeric forms cannot warn or throw;
+                            // the generic path can, at this instruction.
+                            if let Some(r) = self.bin_num_fast(*kind, *a, *b) {
+                                self.set_tmp(*dst, r);
+                            } else {
+                                self.frame_mut().ip = ip;
+                                self.bin_slow(*kind, *a, *b, *dst)?;
+                            }
+                        }
+                        _ => break 'slow,
+                    }
+                    if Self::safe_point_due() {
+                        ip = self.safe_point(ip, op)?;
+                    }
+                    continue;
+                }
+                // `SAVE_OPLINE()`: the handler may report the current line,
+                // throw, call out, or push a frame.
+                self.frame_mut().ip = ip;
+                let flow = match op {
                     Op::Nop => Flow::Next,
                     Op::Move { src, dst } => {
                         let v = self.read(*src)?;
@@ -934,7 +1013,7 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Jmp(t) => {
-                        self.frame_mut().ip = *t as usize;
+                        ip = *t as usize;
                         Flow::Next
                     }
                     Op::JmpZ(a, t) => {
@@ -946,7 +1025,7 @@ impl Vm {
                             }
                         };
                         if !b {
-                            self.frame_mut().ip = *t as usize;
+                            ip = *t as usize;
                         }
                         Flow::Next
                     }
@@ -959,7 +1038,7 @@ impl Vm {
                             }
                         };
                         if b {
-                            self.frame_mut().ip = *t as usize;
+                            ip = *t as usize;
                         }
                         Flow::Next
                     }
@@ -968,7 +1047,7 @@ impl Vm {
                         let b = self.to_bool(&v)?;
                         if !b {
                             self.set_tmp(*dst, Value::Bool(false));
-                            self.frame_mut().ip = *target as usize;
+                            ip = *target as usize;
                         }
                         Flow::Next
                     }
@@ -977,7 +1056,7 @@ impl Vm {
                         let b = self.to_bool(&v)?;
                         if b {
                             self.set_tmp(*dst, Value::Bool(true));
-                            self.frame_mut().ip = *target as usize;
+                            ip = *target as usize;
                         }
                         Flow::Next
                     }
@@ -985,7 +1064,7 @@ impl Vm {
                         let v = self.read(*a)?;
                         if self.to_bool(&v)? {
                             self.set_tmp(*dst, v);
-                            self.frame_mut().ip = *target as usize;
+                            ip = *target as usize;
                         }
                         Flow::Next
                     }
@@ -996,7 +1075,7 @@ impl Vm {
                         };
                         if !v.is_null() {
                             self.set_tmp(*dst, v);
-                            self.frame_mut().ip = *target as usize;
+                            ip = *target as usize;
                         }
                         Flow::Next
                     }
@@ -1013,7 +1092,7 @@ impl Vm {
                                 self.set_tmp(*t, Value::Null);
                             }
                             self.set_tmp(*dst, Value::Null);
-                            self.frame_mut().ip = *target as usize;
+                            ip = *target as usize;
                         }
                         Flow::Next
                     }
@@ -1109,7 +1188,7 @@ impl Vm {
                     Op::BindStatic { cv, idx, skip } => {
                         if let Some(r) = self.static_slot(*idx) {
                             self.cv_bind(*cv, Value::Reference(r));
-                            self.frame_mut().ip = *skip as usize;
+                            ip = *skip as usize;
                         }
                         Flow::Next
                     }
@@ -1161,7 +1240,7 @@ impl Vm {
                     Op::New { class, dst, skip } => {
                         let has_ctor = self.op_new(class, *dst)?;
                         if !has_ctor {
-                            self.frame_mut().ip = *skip as usize;
+                            ip = *skip as usize;
                         }
                         Flow::Next
                     }
@@ -1220,7 +1299,7 @@ impl Vm {
                     }
                     Op::RecvInit { n, cv, skip } => {
                         if self.op_recv_init(*n, *cv)? {
-                            self.frame_mut().ip = *skip as usize;
+                            ip = *skip as usize;
                         }
                         Flow::Next
                     }
@@ -1427,7 +1506,7 @@ impl Vm {
                     Op::Catch { classes, cv, next } => {
                         let exc = self.frame().pending_exc.clone();
                         let Some(exc) = exc else {
-                            self.frame_mut().ip = *next as usize;
+                            ip = *next as usize;
                             continue;
                         };
                         let cls = object::class_of(&exc).clone();
@@ -1448,7 +1527,7 @@ impl Vm {
                                 }
                             }
                         } else {
-                            self.frame_mut().ip = *next as usize;
+                            ip = *next as usize;
                         }
                         Flow::Next
                     }
@@ -1460,16 +1539,15 @@ impl Vm {
                         }
                     }
                     Op::FastCall { fin, target } => {
-                        let f = self.frame_mut();
-                        f.fins[*fin as usize] = FinState::Return(f.ip);
-                        f.ip = *target as usize;
+                        self.frame_mut().fins[*fin as usize] = FinState::Return(ip);
+                        ip = *target as usize;
                         Flow::Next
                     }
                     Op::FastRet { fin } => {
                         let st = std::mem::take(&mut self.frame_mut().fins[*fin as usize]);
                         match st {
-                            FinState::Return(ip) => {
-                                self.frame_mut().ip = ip;
+                            FinState::Return(ret) => {
+                                ip = ret;
                                 Flow::Next
                             }
                             FinState::Exception(e) => return Err(Throw::Exception(e)),
@@ -1516,7 +1594,7 @@ impl Vm {
                     } => {
                         let has = self.op_fe_reset(*subject, *place, *kind, *iter)?;
                         if !has {
-                            self.frame_mut().ip = *end as usize;
+                            ip = *end as usize;
                         }
                         Flow::Next
                     }
@@ -1528,7 +1606,7 @@ impl Vm {
                     } => {
                         let has = self.op_fe_fetch(*iter, *val, *key)?;
                         if !has {
-                            self.frame_mut().ip = *end as usize;
+                            ip = *end as usize;
                         }
                         Flow::Next
                     }
@@ -1595,41 +1673,112 @@ impl Vm {
                         let a = self.ini.get_long("zend.assertions");
                         if a != 1 {
                             self.set_tmp(*dst, Value::Bool(true));
-                            self.frame_mut().ip = *skip as usize;
+                            ip = *skip as usize;
                         }
                         Flow::Next
                     }
                 };
-                // Safe point (`EG(vm_interrupt)`): one flag says whether
-                // destructors, a collection or interrupt handlers wait; the
-                // delayed memory_limit violation is still polled on its own
-                // (php-memlimit cannot raise the flag).
-                if crate::interrupt::safe_point_due() || php_memlimit::is_pending() {
-                    self.safe_point(&code.ops[ip])?;
-                }
                 match flow {
-                    Flow::Next => {}
-                    Flow::Reload => continue 'frames,
-                    Flow::Done(v) => return Ok(v),
+                    Flow::Next => {
+                        if Self::safe_point_due() {
+                            ip = self.safe_point(ip, op)?;
+                        }
+                    }
+                    // The frame stack changed: the safe point runs on the
+                    // new top frame, whose `ip` is its own.
+                    Flow::Reload => {
+                        if Self::safe_point_due() {
+                            self.safe_point_work(op)?;
+                        }
+                        continue 'frames;
+                    }
+                    Flow::Done(v) => {
+                        if Self::safe_point_due() {
+                            self.safe_point_work(op)?;
+                        }
+                        return Ok(v);
+                    }
                 }
             }
         }
     }
 
-    /// The work waiting for the end of an instruction, in this order:
-    /// queued destructors, a due collection, a delayed `memory_limit`
-    /// violation, interrupt handlers. Each source is checked on its own (the
-    /// flag that led here may be stale); afterwards the flag is cleared
-    /// unless a source is still set, also when the work threw.
+    /// `++`/`--` on a compiled variable holding an int that does not
+    /// overflow (php-src's `ZEND_PRE_INC_LONG_NO_OVERFLOW_SPEC_CV` and
+    /// `ZEND_POST_INC_LONG_NO_OVERFLOW_SPEC_CV`): the result, or `None` for
+    /// the generic [`Vm::place_incdec`], which starts with this same test.
+    /// Cannot warn, throw or run user code, so it runs on the local `ip`.
+    #[inline]
+    fn incdec_cv_fast(
+        &self,
+        pid: crate::opcode::PlaceId,
+        kind: crate::opcode::IncDecKind,
+    ) -> Option<Value> {
+        let f = self.frame();
+        let p = &f.code.places[pid as usize];
+        let crate::opcode::PlaceBase::Cv(cv) = p.base else {
+            return None;
+        };
+        if !p.segs.is_empty() {
+            return None;
+        }
+        let idx = f.cv_idx(cv);
+        let mut st = f.vars.borrow_mut();
+        let Some(Some(Value::Int(i))) = st.slots.get_mut(idx) else {
+            return None;
+        };
+        let old = *i;
+        let new = if kind.is_inc() {
+            old.checked_add(1)
+        } else {
+            old.checked_sub(1)
+        }?;
+        *i = new;
+        Some(Value::Int(if kind.is_post() { old } else { new }))
+    }
+
+    /// Whether the safe point after an instruction has work to do
+    /// (`EG(vm_interrupt)`): one flag says whether destructors, a
+    /// collection or interrupt handlers wait ([`crate::interrupt`]); the
+    /// delayed `memory_limit` violation is still polled on its own
+    /// (php-memlimit cannot raise the flag). Inline flag tests; the work
+    /// itself is out of line ([`Vm::safe_point_work`]).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the per-instruction test of the dispatch loop
+    fn safe_point_due() -> bool {
+        crate::interrupt::safe_point_due() || php_memlimit::is_pending()
+    }
+
+    /// The safe point after an instruction of the current frame that
+    /// continues at `ip`: stores `ip` into the frame (the work may report
+    /// the current line, run user code or throw from this frame), does the
+    /// work, and returns the frame's `ip` to continue at.
     #[cold]
     #[inline(never)]
-    fn safe_point(&mut self, op: &Op) -> VmResult<()> {
-        let r = self.safe_point_work(op);
+    fn safe_point(&mut self, ip: usize, op: &Op) -> VmResult<usize> {
+        self.frame_mut().ip = ip;
+        self.safe_point_work(op)?;
+        Ok(self.frame().ip)
+    }
+
+    /// The work waiting for the end of instruction `op`, in php-src's
+    /// order: destructors of released objects, the collector when the root
+    /// buffer is full (`gc_possible_root_when_full`), a delayed
+    /// `memory_limit` violation (`zend_mm_delayed_error`), then the
+    /// interrupt handlers (`zend_interrupt_helper`). Each source is checked
+    /// on its own (the flag that led here may be stale); afterwards the
+    /// flag is cleared unless a source is still set, also when the work
+    /// threw.
+    #[cold]
+    #[inline(never)]
+    fn safe_point_work(&mut self, op: &Op) -> VmResult<()> {
+        let r = self.safe_point_checks(op);
         crate::interrupt::resync_safe_point();
         r
     }
 
-    fn safe_point_work(&mut self, op: &Op) -> VmResult<()> {
+    /// The four checks of [`Vm::safe_point_work`].
+    fn safe_point_checks(&mut self, op: &Op) -> VmResult<()> {
         if object::has_pending_destructors() {
             self.run_pending_destructors()?;
         }

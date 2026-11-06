@@ -131,16 +131,21 @@ impl Compiler {
                 }
             }
             StmtKind::While { cond, body } => {
+                // `zend_compile_while`: a jump to the condition, the body,
+                // then the condition and a `JMPNZ` back to the body, so an
+                // iteration dispatches one jump (not a `JMPZ` plus a `JMP`
+                // back), and the body is compiled first (CV order).
+                let to_cond = self.emit(Op::Jmp(0));
                 let start = self.here();
-                self.f().line = cond.span.line;
-                let c = self.compile_expr(cond)?;
-                let jz = self.emit(Op::JmpZ(c, 0));
                 self.push_loop(LoopKind::Loop, Cleanup::None);
                 self.compile_stmt(body)?;
                 let info = self.pop_loop();
-                self.emit(Op::Jmp(start));
-                self.patch_here(jz);
-                self.finish_loop(info, start);
+                let cont = self.here();
+                self.patch_here(to_cond);
+                self.f().line = cond.span.line;
+                let c = self.compile_expr(cond)?;
+                self.emit(Op::JmpNz(c, start));
+                self.finish_loop(info, cont);
             }
             StmtKind::DoWhile { body, cond } => {
                 let start = self.here();
@@ -162,16 +167,16 @@ impl Compiler {
                 for e in init {
                     self.compile_expr_discard(e)?;
                 }
+                // `zend_compile_for`: init, a jump to the condition, the
+                // body, the step, then the condition and a `JMPNZ` back to
+                // the body (one jump per iteration; CVs numbered in that
+                // order). Without a condition the step jumps back.
+                let to_cond = if cond.is_empty() {
+                    None
+                } else {
+                    Some(self.emit(Op::Jmp(0)))
+                };
                 let start = self.here();
-                let mut jz = None;
-                for (i, e) in cond.iter().enumerate() {
-                    if i + 1 == cond.len() {
-                        let c = self.compile_expr(e)?;
-                        jz = Some(self.emit(Op::JmpZ(c, 0)));
-                    } else {
-                        self.compile_expr_discard(e)?;
-                    }
-                }
                 self.push_loop(LoopKind::Loop, Cleanup::None);
                 self.compile_stmt(body)?;
                 let info = self.pop_loop();
@@ -179,9 +184,18 @@ impl Compiler {
                 for e in step {
                     self.compile_expr_discard(e)?;
                 }
-                self.emit(Op::Jmp(start));
-                if let Some(j) = jz {
+                if let Some(j) = to_cond {
                     self.patch_here(j);
+                    for (i, e) in cond.iter().enumerate() {
+                        if i + 1 == cond.len() {
+                            let c = self.compile_expr(e)?;
+                            self.emit(Op::JmpNz(c, start));
+                        } else {
+                            self.compile_expr_discard(e)?;
+                        }
+                    }
+                } else {
+                    self.emit(Op::Jmp(start));
                 }
                 self.finish_loop(info, cont);
             }

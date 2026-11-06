@@ -6,6 +6,8 @@ mod decl;
 mod expr;
 #[cfg(test)]
 mod fold_tests;
+#[cfg(test)]
+mod loop_layout_tests;
 mod stack;
 mod stmt;
 
