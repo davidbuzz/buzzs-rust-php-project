@@ -302,8 +302,7 @@ impl<'a> ModuleBuilder<'a> {
     /// (`"name(type $param = default, ...): ret"`; `&$x` for by-reference,
     /// `...$rest` for variadics). Re-registering a name replaces it.
     pub fn function(&mut self, signature: &str, handler: NativeFn) -> &mut Self {
-        let name = crate::builtins::reg(self.vm, signature, handler);
-        crate::builtins::info::note_function(&name, self.name);
+        let name = crate::builtins::reg_module(self.vm, signature, handler, self.name);
         self.last_function = Some(name);
         self
     }
@@ -357,10 +356,8 @@ impl<'a> ModuleBuilder<'a> {
     /// Defines a global constant.
     pub fn constant(&mut self, name: &str, value: Value) -> &mut Self {
         let n = ZStr::from(name);
-        crate::builtins::info::note_constant(&n, self.name);
-        if self.vm.constants.insert(n.clone(), value).is_none() {
-            crate::reflection::note_new(crate::reflection::Table::Constant, n.as_bytes());
-        }
+        let is_new = self.vm.constants.insert(n.clone(), value).is_none();
+        crate::builtins::info::note_constant(&n, self.name, is_new);
         self
     }
 
@@ -375,10 +372,8 @@ impl<'a> ModuleBuilder<'a> {
         message: &str,
     ) -> &mut Self {
         let n = ZStr::from(name);
-        crate::builtins::info::note_constant(&n, self.name);
-        if self.vm.constants.insert(n.clone(), value).is_none() {
-            crate::reflection::note_new(crate::reflection::Table::Constant, n.as_bytes());
-        }
+        let is_new = self.vm.constants.insert(n.clone(), value).is_none();
+        crate::builtins::info::note_constant(&n, self.name, is_new);
         let suffix =
             crate::attrs::format_suffix(Some(&ZStr::from(since)), Some(&ZStr::from(message)));
         self.vm.deprecated_constants.insert(n, suffix);
