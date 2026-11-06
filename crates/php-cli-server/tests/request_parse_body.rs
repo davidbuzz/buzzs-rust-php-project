@@ -6,7 +6,7 @@
 //! requests (run-tests.php's `--POST_RAW--` framing: the `Content-Type`
 //! line becomes the header, the other lines joined with `\n` the body; the
 //! `--ENV--` method; the `--INI--` settings as `-d`). The other cases are
-//! the custom-method request parsing ones (`Request::createFromGlobals()` for
+//! custom-method request parsing (`Request::createFromGlobals()` for
 //! PUT/DELETE/PATCH) and how the body is consumed. Every expected output is
 //! what php 8.5's `php -S` answers.
 //!
@@ -178,10 +178,10 @@ function show($label, $f) {
 }
 "#;
 
-/// `Request::createFromGlobals()` of custom-method request parsing 7.4, and what
-/// its functional test fixture reports.
+/// Handling of custom request methods (PUT, DELETE, PATCH) and what
+/// a request parser reports.
 const HTTP_REQUEST_HANDLER: &str = r"<?php
-// Request::createFromGlobals() of custom-method request parsing 7.4.
+// Request parsing for custom methods.
 if (in_array($_SERVER['REQUEST_METHOD'] ?? null, ['PUT', 'DELETE', 'PATCH', 'QUERY'], true)) {
     try {
         [$post, $files] = @request_parse_body();
