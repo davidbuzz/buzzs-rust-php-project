@@ -45,7 +45,7 @@ define('FOO', 1);
 define('n\BAR', 'bar');
 define('ARR', [1, 2]);
 for ($i = 0; $i < 3; $i++) {
-    echo f(), g(), count(h()), "\n";
+    echo f(), g(), h()[1], "\n";
     define("X$i", $i);
 }
 function u() { try { return UNDEF_C; } catch (\Error $e) { return $e->getMessage(); } }
@@ -285,6 +285,44 @@ Deprecated: Constant K::KC is deprecated in t.php on line 5
 2
 Deprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed in t.php on line 5
 2048
+"#
+    );
+}
+
+/// Class types match in any case, through interfaces, parents, `self`, `parent`, unions and intersections (allocation-free name matching).
+#[test]
+fn class_types_match_names_in_any_case() {
+    let out = run(r#"<?php
+interface I {}
+class A implements I { function s(self $x) { return 's'; } }
+class B extends A { function p(PARENT $x) { return 'p'; } }
+class C {}
+function f(a $x) { return 'a'; }
+function g(i $x) { return 'i'; }
+function h(C|A $x) { return 'u'; }
+function k(I&A $x) { return 'n'; }
+$a = new A; $b = new B; $c = new C;
+for ($i = 0; $i < 2; $i++) {
+    echo f($a), f($b), g($b), h($c), h($b), k($b), $b->s($a), $b->p($b), "\n";
+    foreach ([fn() => f($c), fn() => g($c), fn() => $a->s($c), fn() => $b->p($c), fn() => k($c)] as $t) {
+        try { $t(); } catch (TypeError $e) { echo strstr($e->getMessage(), ', called', true), "\n"; }
+    }
+}
+"#);
+    assert_eq!(
+        out,
+        r#"aaiuunsp
+f(): Argument #1 ($x) must be of type a, C given
+g(): Argument #1 ($x) must be of type i, C given
+A::s(): Argument #1 ($x) must be of type A, C given
+B::p(): Argument #1 ($x) must be of type A, C given
+k(): Argument #1 ($x) must be of type I&A, C given
+aaiuunsp
+f(): Argument #1 ($x) must be of type a, C given
+g(): Argument #1 ($x) must be of type i, C given
+A::s(): Argument #1 ($x) must be of type A, C given
+B::p(): Argument #1 ($x) must be of type A, C given
+k(): Argument #1 ($x) must be of type I&A, C given
 "#
     );
 }
