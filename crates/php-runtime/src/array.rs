@@ -347,48 +347,101 @@ fn into_entries(store: Store) -> impl Iterator<Item = (ArrayKey, Value)> {
 ///
 /// A packed table stores bare values, like php-src's `zval *arPacked`: the
 /// key of an element is its position. The table API still lends keys out as
-/// `&ArrayKey` (`iter()`, `at()`, `keys()`, ...), so for packed tables those
-/// references point here instead: one process-wide array of `Int(i)` per
-/// position, allocated in chunks of doubling size on first use and never
-/// written or freed afterwards. The chunks come from the system allocator
-/// directly, outside the counted heap: they are interpreter bookkeeping that
-/// php-src does not have, so `memory_get_usage()` and `memory_limit` must
-/// not see them.
+/// `&ArrayKey` (`iter()`, `at()`, `keys()`, `first()`, `last()`,
+/// `current_key()`, `iter_mut()`), so for packed tables those references
+/// point here instead: one process-wide array of `Int(i)` per position,
+/// allocated in chunks on first use and never written or freed afterwards.
+/// The chunks come from the system allocator directly, outside the counted
+/// heap: they are interpreter bookkeeping that php-src does not have (it
+/// yields packed keys by value), so `memory_get_usage()` and `memory_limit`
+/// must not see them.
+///
+/// Footprint: 16 bytes per position up to the highest position ever handed
+/// out, plus at most one chunk (1 MiB) of slack, for the life of the
+/// process. Positions below `2^16` live in chunks of doubling size (4 KiB
+/// first, 1 MiB in all); above that every chunk holds `2^16` keys, so the
+/// table never overshoots the arrays that drove it by a factor. A script
+/// that iterates a packed array of `n` elements therefore pins about `16 n`
+/// bytes that `memory_get_usage()` does not report; the arrays themselves
+/// take `24 n` counted bytes, so the hidden part stays below the visible one
+/// and within `memory_limit`'s order of magnitude. VM code that only needs
+/// the key of a position should use [`HashTable::key_at`], which never
+/// touches this table.
 mod int_keys {
-    use super::ArrayKey;
+    use super::{to_u32, ArrayKey};
     use std::alloc::{handle_alloc_error, GlobalAlloc, Layout, System};
     use std::ptr;
     use std::sync::atomic::{AtomicPtr, Ordering};
 
-    /// log2 of the number of keys in the first chunk.
+    /// log2 of the keys in the first chunk.
     const FIRST_BITS: u32 = 8;
-    /// Keys in the first chunk; chunk `c` holds `FIRST << c` keys.
-    const FIRST: usize = 1 << FIRST_BITS;
-    /// Enough chunks for every `u32` position (chunk 24 ends past
-    /// `u32::MAX`).
-    const CHUNKS: usize = 25;
+    /// log2 of the keys in every chunk above `SMALL`.
+    const BIG_BITS: u32 = 16;
+    /// Positions below this use the doubling chunks: chunk 0 holds
+    /// `0..2^8`, chunk `c` in `1..=8` holds `2^(7+c)..2^(8+c)`.
+    const SMALL: u32 = 1 << BIG_BITS;
+    /// The number of doubling chunks.
+    const SMALL_CHUNKS: usize = (BIG_BITS - FIRST_BITS) as usize + 1;
+    /// Chunk `SMALL_CHUNKS - 1 + k` (`k >= 1`) holds the positions
+    /// `k << BIG_BITS` up to `(k + 1) << BIG_BITS`; this many chunks cover
+    /// every `u32` position.
+    const CHUNKS: usize = SMALL_CHUNKS - 1 + (1 << (u32::BITS - BIG_BITS));
 
-    /// Chunk `c` holds the keys `(FIRST << c) - FIRST` up to (excluding)
-    /// `(FIRST << (c + 1)) - FIRST`; null until first used.
+    /// The chunks; null until first used.
     static CHUNK: [AtomicPtr<ArrayKey>; CHUNKS] =
         [const { AtomicPtr::new(ptr::null_mut()) }; CHUNKS];
+
+    /// The chunk holding `pos` and the offset of `pos` in it.
+    #[inline]
+    fn locate(pos: u32) -> (usize, usize) {
+        if pos < SMALL {
+            let c = (u32::BITS - pos.leading_zeros()).saturating_sub(FIRST_BITS);
+            let start = if c == 0 { 0 } else { 1 << (c + FIRST_BITS - 1) };
+            (c as usize, (pos - start) as usize)
+        } else {
+            (
+                SMALL_CHUNKS - 1 + (pos >> BIG_BITS) as usize,
+                (pos & (SMALL - 1)) as usize,
+            )
+        }
+    }
+
+    /// The first position of chunk `c` and the number of keys it holds.
+    fn extent(c: usize) -> (usize, usize) {
+        if c == 0 {
+            (0, 1 << FIRST_BITS)
+        } else if c < SMALL_CHUNKS {
+            let len = 1usize << (to_u32(c) + FIRST_BITS - 1);
+            (len, len)
+        } else {
+            ((c - (SMALL_CHUNKS - 1)) << BIG_BITS, 1 << BIG_BITS)
+        }
+    }
 
     /// The key `Int(pos)`.
     #[inline]
     pub(super) fn get(pos: u32) -> &'static ArrayKey {
-        let j = pos as usize + FIRST;
-        let c = (usize::BITS - 1 - j.leading_zeros() - FIRST_BITS) as usize;
-        let off = j - (FIRST << c);
+        let (c, off) = locate(pos);
         let mut base = CHUNK[c].load(Ordering::Acquire);
         if base.is_null() {
             base = fill(c);
         }
-        // SAFETY: `base` is a published chunk of `FIRST << c` keys, all
-        // initialised before publication (`fill`) and never written or
-        // freed afterwards, and `off < FIRST << c`. The keys are integers,
-        // which hold no shared mutable state, so lending them to any thread
-        // for the rest of the process is sound.
+        // SAFETY: `base` is the published chunk `c`, whose `extent(c).1`
+        // keys were all initialised before publication (`fill`) and are
+        // never written or freed afterwards, and `locate` keeps
+        // `off < extent(c).1`. The keys are integers, which hold no shared
+        // mutable state, so lending them to any thread for the rest of the
+        // process is sound.
         unsafe { &*base.add(off) }
+    }
+
+    /// The bytes the table has allocated so far (tests and diagnostics).
+    #[cfg(test)]
+    pub(super) fn allocated_bytes() -> usize {
+        (0..CHUNKS)
+            .filter(|&c| !CHUNK[c].load(Ordering::Acquire).is_null())
+            .map(|c| extent(c).1 * std::mem::size_of::<ArrayKey>())
+            .sum()
     }
 
     /// Allocates, fills and publishes chunk `c`, or returns the chunk
@@ -397,8 +450,7 @@ mod int_keys {
     #[inline(never)]
     #[allow(clippy::cast_ptr_alignment)]
     fn fill(c: usize) -> *mut ArrayKey {
-        let len = FIRST << c;
-        let start = len - FIRST;
+        let (start, len) = extent(c);
         let Ok(layout) = Layout::array::<ArrayKey>(len) else {
             std::process::abort()
         };
@@ -820,7 +872,8 @@ impl HashTable {
     }
 
     /// `zend_hash_packed_to_hash`: the values become buckets keyed by their
-    /// positions, holes kept.
+    /// positions, then `zend_hash_rehash` drops the holes (remapping the
+    /// internal pointer and the registered iterators) and links the chains.
     fn packed_to_hash(&mut self) {
         let buckets = match std::mem::replace(&mut self.store, Store::Uninit) {
             Store::Uninit => Vec::new(),
@@ -841,7 +894,7 @@ impl HashTable {
             buckets,
             index: new_index(self.table_size),
         });
-        self.rehash_without_compaction();
+        self.rehash();
     }
 
     fn rehash_without_compaction(&mut self) {
@@ -941,7 +994,9 @@ impl HashTable {
                     if self.is_occupied(hu) {
                         return self.existing(to_u32(hu), val, mode);
                     }
-                    // Keep the order: convert to a hash.
+                    // Keep the order: convert to a hash. The conversion
+                    // drops the hole at `h`, so the table has room; the
+                    // resize check only guards the invariant.
                     self.packed_to_hash();
                     if self.used() >= self.table_size {
                         self.do_resize();
@@ -2677,10 +2732,68 @@ mod tests {
 
     #[test]
     fn shared_packed_keys_cover_chunk_boundaries() {
-        for pos in [0u32, 1, 255, 256, 257, 511, 512, 767, 768, 70_000] {
+        let top = 1u32 << 18;
+        for pos in [
+            0u32, 1, 255, 256, 257, 511, 512, 1023, 1024, 32_767, 32_768, 65_535, 65_536, 65_537,
+            131_071, 131_072, 200_000, top,
+        ] {
             assert_eq!(int_keys::get(pos), &ArrayKey::Int(i64::from(pos)));
             assert!(std::ptr::eq(int_keys::get(pos), int_keys::get(pos)));
         }
+        // Neighbouring positions share a chunk or sit at the start of the
+        // next one: the keys are contiguous within a chunk.
+        for pos in [100u32, 300, 40_000, 70_000, 150_000] {
+            let a: *const ArrayKey = int_keys::get(pos);
+            let b: *const ArrayKey = int_keys::get(pos + 1);
+            assert!(std::ptr::eq(a.wrapping_add(1), b));
+        }
+        // 16 bytes per position plus at most one 1 MiB chunk of slack,
+        // never a doubling overshoot (which would be 32 MiB here).
+        let bound = (top as usize + 2 * (1 << 16)) * std::mem::size_of::<ArrayKey>();
+        assert!(int_keys::allocated_bytes() <= bound);
+    }
+
+    #[test]
+    fn packed_to_hash_compacts_like_zend_hash_rehash() {
+        // zend_hash_fconvert_packed_to_hash ends with zend_hash_rehash,
+        // which drops the holes and remaps the internal pointer and the
+        // iterators: a position at (or in a hole before) an element follows
+        // that element, a past-the-end position moves to the new end.
+        let mut t = HashTable::new();
+        for i in 0..6 {
+            t.push(Value::Int(i)).unwrap();
+        }
+        t.remove(&ArrayKey::Int(1));
+        t.remove(&ArrayKey::Int(3));
+        t.set_internal_pointer(3);
+        let at_hole = t.iterator_add(1);
+        let at_elem = t.iterator_add(4);
+        let past_end = t.iterator_add(6);
+        t.insert("s", Value::Int(9));
+        assert!(!t.is_packed());
+        assert_eq!(t.used(), 5);
+        assert_eq!(render(&t), "0=0,2=2,4=4,5=5,s=9");
+        assert_eq!(t.current().and_then(Value::as_int), Some(4));
+        assert_eq!(t.iterator_pos(at_hole), 1);
+        assert_eq!(t.iterator_pos(at_elem), 2);
+        // The past-the-end iterator picks up the element appended by the
+        // converting insert.
+        assert_eq!(t.iterator_pos(past_end), 4);
+        for k in [0, 2, 4, 5] {
+            assert_eq!(t.get_int(k).and_then(Value::as_int), Some(k));
+        }
+        assert_eq!(t.get_str(b"s").and_then(Value::as_int), Some(9));
+        // The order-keeping conversion ($a = [0, 1, 2]; unset($a[1]);
+        // $a[1] = 1) compacts too and appends the key at the end.
+        let mut t = HashTable::new();
+        for i in 0..3 {
+            t.push(Value::Int(i)).unwrap();
+        }
+        t.remove(&ArrayKey::Int(1));
+        t.insert(1, Value::Int(1));
+        assert_eq!(render(&t), "0=0,2=2,1=1");
+        assert_eq!(t.used(), 3);
+        assert_eq!(t.position_of(&ArrayKey::Int(1)), Some(2));
     }
 
     #[test]
@@ -2727,13 +2840,14 @@ mod tests {
         // Deleting the last element trims trailing holes (`nNumUsed`).
         t.remove(&ArrayKey::Int(4));
         assert_eq!(t.used(), 3);
-        // Converting to a hash keeps the order, the keys and the holes'
-        // positions.
+        // Converting to a hash keeps the order and the keys and drops the
+        // holes (`zend_hash_packed_to_hash` rehashes).
         t.insert("s", Value::Int(7));
         assert!(!t.is_packed());
         assert_eq!(keys(&t), ["0", "2", "\"s\""]);
         assert_eq!(t.get_int(2).and_then(Value::as_int), Some(2));
-        assert_eq!(t.position_of(&ArrayKey::from("s")), Some(3));
+        assert_eq!(t.position_of(&ArrayKey::from("s")), Some(2));
+        assert_eq!(t.used(), 3);
     }
 
     #[test]
