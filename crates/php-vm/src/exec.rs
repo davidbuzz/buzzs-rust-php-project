@@ -1440,6 +1440,54 @@ impl Vm {
                         self.set_dst(*dst, Value::Array(args));
                         Flow::Next
                     }
+                    Op::Strlen { a, dst } => {
+                        let v = self.read(*a)?;
+                        let len = match &v {
+                            Value::Str(s) => Some(s.len()),
+                            _ => None,
+                        };
+                        let r = match len {
+                            Some(n) => Value::Int(i64::try_from(n).unwrap_or(i64::MAX)),
+                            None => self.op_strlen_slow(v)?,
+                        };
+                        self.set_dst(*dst, r);
+                        Flow::Next
+                    }
+                    Op::Count { a, dst, sizeof } => {
+                        let v = self.read(*a)?;
+                        let len = match &v {
+                            Value::Array(arr) => Some(arr.len()),
+                            _ => None,
+                        };
+                        let r = match len {
+                            Some(n) => Value::Int(i64::try_from(n).unwrap_or(i64::MAX)),
+                            None => self.op_count_slow(v, *sizeof)?,
+                        };
+                        self.set_dst(*dst, r);
+                        Flow::Next
+                    }
+                    Op::TypeCheck { a, mask, dst } => {
+                        let v = self.read(*a)?;
+                        let r = crate::opcode::type_mask::matches(*mask, &v);
+                        self.set_dst(*dst, Value::Bool(r));
+                        Flow::Next
+                    }
+                    Op::GetType { a, dst } => {
+                        let v = self.read(*a)?;
+                        let t = v.legacy_type_name();
+                        self.set_dst(*dst, Value::Str(ZStr::from(t)));
+                        Flow::Next
+                    }
+                    Op::GetClass { a, dst } => {
+                        let r = self.op_get_class(*a)?;
+                        self.set_dst(*dst, r);
+                        Flow::Next
+                    }
+                    Op::GetCalledClass { dst } => {
+                        let r = self.op_get_called_class()?;
+                        self.set_dst(*dst, r);
+                        Flow::Next
+                    }
                     Op::Echo(a) => {
                         let v = self.read(*a)?;
                         match &v {

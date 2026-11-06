@@ -825,6 +825,7 @@ impl Vm {
                 self.functions.get(&ZStr::from("strlen")),
                 Some(Func::Builtin(_))
             ),
+            special_builtins: self.special_builtins(),
             anon_base: self.anon_counter,
             ct_constants: Some(self.ct_constants()),
             stack_limit: None,

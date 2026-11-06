@@ -9,8 +9,8 @@ use crate::ast::{
 };
 use crate::func::flags;
 use crate::opcode::{
-    ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Op, Operand, Place,
-    PlaceBase, Seg, UnKind,
+    type_mask, ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Op,
+    Operand, Place, PlaceBase, Seg, UnKind,
 };
 use php_runtime::{BinaryOp, CollectingContext, Value, ZArray, ZStr};
 
@@ -2522,8 +2522,24 @@ impl Compiler {
                         let len = i64::try_from(s.len()).unwrap_or(i64::MAX);
                         Ok(Some(self.lit(Value::Int(len))))
                     }
-                    _ => Ok(None),
+                    _ => self.compile_special_opcode(&lc, positional[0], line, need),
                 }
+            }
+            // zend_compile_func_strlen / _count / _typecheck / _is_scalar /
+            // _cast / _gettype: one argument, a dedicated opcode.
+            b"strlen" | b"count" | b"sizeof" | b"is_null" | b"is_bool" | b"is_int"
+            | b"is_float" | b"is_string" | b"is_array" | b"is_object" | b"is_resource"
+            | b"is_scalar" | b"boolval" | b"intval" | b"floatval" | b"strval" | b"gettype"
+                if fb.is_none() && only_positional && positional.len() == 1 =>
+            {
+                self.compile_special_opcode(&lc, positional[0], line, need)
+            }
+            // zend_compile_func_get_class / zend_compile_func_get_called_class.
+            b"get_class" if fb.is_none() && only_positional && positional.len() <= 1 => {
+                self.compile_class_special(&lc, positional.first().copied(), line, need)
+            }
+            b"get_called_class" if fb.is_none() && args.args.is_empty() => {
+                self.compile_class_special(&lc, None, line, need)
             }
             // zend_compile_func_num_args / zend_compile_func_get_args: only
             // inside a function body, and not as a namespaced fallback.
@@ -2585,6 +2601,106 @@ impl Compiler {
             }
             _ => Ok(None),
         }
+    }
+
+    /// The one-argument builtins `zend_try_compile_special_func_ex()`
+    /// compiles to an opcode instead of a call (`ZEND_STRLEN`,
+    /// `ZEND_COUNT`, `ZEND_TYPE_CHECK`, `ZEND_CAST`, `ZEND_GET_TYPE`): the
+    /// argument is compiled for reading (`zend_compile_expr`), and no call
+    /// frame exists while the opcode runs. `None` (a regular call) unless
+    /// `lc` is registered as an internal function
+    /// ([`super::CompileOptions::special_builtins`]).
+    fn compile_special_opcode(
+        &mut self,
+        lc: &[u8],
+        arg: &Expr,
+        line: u32,
+        need: bool,
+    ) -> CResult<Option<Operand>> {
+        enum Special {
+            Cast(CastKind),
+            TypeCheck(u8),
+            Strlen,
+            Count { sizeof: bool },
+            GetType,
+        }
+        let Some(bit) = super::special_builtin_bit(lc) else {
+            return Ok(None);
+        };
+        if self.opts.special_builtins & bit == 0 {
+            return Ok(None);
+        }
+        let special = match lc {
+            b"boolval" => Special::Cast(CastKind::Bool),
+            b"intval" => Special::Cast(CastKind::Int),
+            b"floatval" => Special::Cast(CastKind::Float),
+            b"strval" => Special::Cast(CastKind::String),
+            b"is_null" => Special::TypeCheck(type_mask::NULL),
+            b"is_bool" => Special::TypeCheck(type_mask::BOOL),
+            b"is_int" => Special::TypeCheck(type_mask::INT),
+            b"is_float" => Special::TypeCheck(type_mask::FLOAT),
+            b"is_string" => Special::TypeCheck(type_mask::STRING),
+            b"is_array" => Special::TypeCheck(type_mask::ARRAY),
+            b"is_object" => Special::TypeCheck(type_mask::OBJECT),
+            b"is_resource" => Special::TypeCheck(type_mask::RESOURCE),
+            b"is_scalar" => Special::TypeCheck(type_mask::SCALAR),
+            b"strlen" => Special::Strlen,
+            b"count" => Special::Count { sizeof: false },
+            b"sizeof" => Special::Count { sizeof: true },
+            b"gettype" => Special::GetType,
+            _ => return Ok(None),
+        };
+        let a = self.compile_expr(arg)?;
+        self.f().line = line;
+        let dst = need.then(|| self.tmp());
+        let op = match special {
+            Special::Cast(kind) => {
+                // zend_compile_func_cast: `ZEND_CAST` always has a result.
+                let dst = dst.unwrap_or_else(|| self.tmp());
+                self.emit(Op::Cast { kind, a, dst });
+                return Ok(Some(Operand::Tmp(dst)));
+            }
+            Special::TypeCheck(mask) => Op::TypeCheck { a, mask, dst },
+            Special::Strlen => Op::Strlen { a, dst },
+            Special::Count { sizeof } => Op::Count { a, dst, sizeof },
+            Special::GetType => Op::GetType { a, dst },
+        };
+        self.emit(op);
+        Ok(Some(
+            dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+        ))
+    }
+
+    /// `get_class([$x])` / `get_called_class()` as `ZEND_GET_CLASS` /
+    /// `ZEND_GET_CALLED_CLASS` when they are registered builtins: the scope
+    /// is the running function's, so no call frame is needed.
+    fn compile_class_special(
+        &mut self,
+        lc: &[u8],
+        arg: Option<&Expr>,
+        line: u32,
+        need: bool,
+    ) -> CResult<Option<Operand>> {
+        let Some(bit) = super::special_builtin_bit(lc) else {
+            return Ok(None);
+        };
+        if self.opts.special_builtins & bit == 0 {
+            return Ok(None);
+        }
+        let a = match arg {
+            Some(e) => self.compile_expr(e)?,
+            None => Operand::Unused,
+        };
+        self.f().line = line;
+        let dst = need.then(|| self.tmp());
+        if lc == b"get_called_class".as_slice() {
+            self.emit(Op::GetCalledClass { dst });
+        } else {
+            self.emit(Op::GetClass { a, dst });
+        }
+        Ok(Some(
+            dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+        ))
     }
 
     /// Lowers the constant formats accepted by `zend_compile_func_sprintf()`.

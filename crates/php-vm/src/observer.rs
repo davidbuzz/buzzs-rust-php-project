@@ -46,6 +46,13 @@ fn zend_opcode_name(op: &Op) -> Option<&'static str> {
         Op::Echo(_) => "ZEND_ECHO",
         Op::Throw(_) => "ZEND_THROW",
         Op::Exit(_) => "ZEND_EXIT",
+        // Builtin calls compiled to opcodes (`zend_try_compile_special_func`).
+        Op::Strlen { .. } => "ZEND_STRLEN",
+        Op::Count { .. } => "ZEND_COUNT",
+        Op::TypeCheck { .. } => "ZEND_TYPE_CHECK",
+        Op::GetType { .. } => "ZEND_GET_TYPE",
+        Op::GetClass { .. } => "ZEND_GET_CLASS",
+        Op::GetCalledClass { .. } => "ZEND_GET_CALLED_CLASS",
         _ => return None,
     })
 }

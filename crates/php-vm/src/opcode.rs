@@ -498,6 +498,32 @@ pub enum Op {
     FuncNumArgs { dst: Option<u32> },
     /// `func_get_args()` likewise (`ZEND_FUNC_GET_ARGS`).
     FuncGetArgs { dst: Option<u32> },
+    /// `strlen($x)` (`ZEND_STRLEN`, `zend_compile_func_strlen`): no call
+    /// frame; weak-mode coercion and the `TypeError` happen in place.
+    Strlen { a: Operand, dst: Option<u32> },
+    /// `count($x)` / `sizeof($x)` with one argument (`ZEND_COUNT`,
+    /// `zend_compile_func_count`); `sizeof` names the function in the
+    /// `TypeError`.
+    Count {
+        a: Operand,
+        dst: Option<u32>,
+        sizeof: bool,
+    },
+    /// `is_null()` ... `is_scalar()` (`ZEND_TYPE_CHECK`,
+    /// `zend_compile_func_typecheck`): whether the type of `a` is one of
+    /// the [`type_mask`] bits in `mask`.
+    TypeCheck {
+        a: Operand,
+        mask: u8,
+        dst: Option<u32>,
+    },
+    /// `gettype($x)` (`ZEND_GET_TYPE`, `zend_compile_func_gettype`).
+    GetType { a: Operand, dst: Option<u32> },
+    /// `get_class($x)`, or `get_class()` with `a` [`Operand::Unused`]
+    /// (`ZEND_GET_CLASS`, `zend_compile_func_get_class`).
+    GetClass { a: Operand, dst: Option<u32> },
+    /// `get_called_class()` (`ZEND_GET_CALLED_CLASS`).
+    GetCalledClass { dst: Option<u32> },
 
     /// `echo`
     Echo(Operand),
@@ -584,6 +610,48 @@ pub enum Op {
     /// throws when the (kept) container `obj` of a constant-expression
     /// dimension fetch is an object, before the offset is evaluated.
     ConstDimCheck { obj: Operand },
+}
+
+/// The type bits of [`Op::TypeCheck`] (`zend_compile_func_typecheck`'s
+/// `1 << IS_*` masks, one bit per PHP type).
+pub mod type_mask {
+    /// `null`
+    pub const NULL: u8 = 1 << 0;
+    /// `false` and `true`
+    pub const BOOL: u8 = 1 << 1;
+    /// `int`
+    pub const INT: u8 = 1 << 2;
+    /// `float`
+    pub const FLOAT: u8 = 1 << 3;
+    /// `string`
+    pub const STRING: u8 = 1 << 4;
+    /// `array`
+    pub const ARRAY: u8 = 1 << 5;
+    /// `object`
+    pub const OBJECT: u8 = 1 << 6;
+    /// `resource` (alone, a closed resource does not match: `is_resource`)
+    pub const RESOURCE: u8 = 1 << 7;
+    /// `is_scalar()`
+    pub const SCALAR: u8 = BOOL | INT | FLOAT | STRING;
+
+    /// Whether `v` (dereferenced) has one of the types in `mask`
+    /// (`ZEND_TYPE_CHECK`).
+    pub fn matches(mask: u8, v: &php_runtime::Value) -> bool {
+        use php_runtime::Value;
+        match v {
+            Value::Null => mask & NULL != 0,
+            Value::Bool(_) => mask & BOOL != 0,
+            Value::Int(_) => mask & INT != 0,
+            Value::Float(_) => mask & FLOAT != 0,
+            Value::Str(_) => mask & STRING != 0,
+            Value::Array(_) => mask & ARRAY != 0,
+            Value::Object(_) => mask & OBJECT != 0,
+            // `opline->extended_value != MAY_BE_RESOURCE ||
+            // zend_rsrc_list_get_rsrc_type(...)`.
+            Value::Resource(r) => mask & RESOURCE != 0 && (mask != RESOURCE || !r.is_closed()),
+            Value::Reference(r) => matches(mask, &r.get()),
+        }
+    }
 }
 
 /// A temporary that an exception thrown by an op in `start..end` releases

@@ -94,7 +94,7 @@ impl Vm {
     /// Returns an argument buffer to the pool, keeping larger capacities when
     /// small Rust-origin callback buffers compete with prewarmed buffers.
     #[inline]
-    fn put_arg_vec(&mut self, mut v: Vec<Option<Value>>) {
+    pub(crate) fn put_arg_vec(&mut self, mut v: Vec<Option<Value>>) {
         if v.capacity() > 0 && v.capacity() <= 256 {
             v.clear();
             if self.call_bufs.args.len() < 4 {
@@ -114,7 +114,7 @@ impl Vm {
 
     /// Returns a ZPP value buffer to the pool.
     #[inline]
-    fn put_val_vec(&mut self, mut v: Vec<Value>) {
+    pub(crate) fn put_val_vec(&mut self, mut v: Vec<Value>) {
         if v.capacity() > 0 && v.capacity() <= 256 && self.call_bufs.values.len() < 4 {
             v.clear();
             self.call_bufs.values.push(v);
@@ -123,7 +123,7 @@ impl Vm {
 
     /// Returns a ZPP passed-flag buffer to the pool.
     #[inline]
-    fn put_bool_vec(&mut self, mut v: Vec<bool>) {
+    pub(crate) fn put_bool_vec(&mut self, mut v: Vec<bool>) {
         if v.capacity() > 0 && v.capacity() <= 256 && self.call_bufs.passed.len() < 4 {
             v.clear();
             self.call_bufs.passed.push(v);
@@ -1562,6 +1562,10 @@ impl Vm {
         strict: bool,
     ) -> VmResult<Value> {
         if !self.observer.enabled {
+            // php-src's frameless internal calls, where no frame can be seen.
+            if crate::special::frameless_call(b, &call) {
+                return self.call_builtin_frameless(b, call);
+            }
             return self.call_builtin_impl(b, call, strict, false);
         }
         let depth = self.frames.len();
@@ -1644,13 +1648,6 @@ impl Vm {
         // pushed before zpp so arity and argument errors show it. It is
         // pushed first and filled in place: a `Frame` is a few hundred
         // bytes, and every move of one is a `memcpy`.
-        let pushed_args = if call.args.is_empty() {
-            Vec::new()
-        } else {
-            let mut fa = self.call_bufs.args.pop().unwrap_or_default();
-            fa.extend(call.args.iter().cloned());
-            fa
-        };
         // Direct call_user_func calls compile to frameless call forwarding in Zend.
         let builtin_name = (!call.direct
             || !matches!(
@@ -1669,6 +1666,10 @@ impl Vm {
                         )
                     }))
                 || self.compiles_to_opcode(b, &call));
+        // The frame takes the pending call's argument buffer as is
+        // (php-src's arguments stay in the call frame on the VM stack); the
+        // handler gets copies.
+        let pushed_args = std::mem::take(&mut call.args);
         self.frames.push(Frame::with_vars(
             self.empty_code.clone(),
             FrameKind::Builtin,
@@ -1677,14 +1678,24 @@ impl Vm {
         ));
         let depth = self.frames.len();
         {
+            // A new frame has no named arguments, `$this` or scopes: only
+            // the ones the call has are copied.
             let f = &mut self.frames[depth - 1];
             f.func = Some(Func::Builtin(b.clone()));
             f.builtin_name = builtin_name;
-            f.named.clone_from(&call.named);
+            if !call.named.is_empty() {
+                f.named.clone_from(&call.named);
+            }
             install_buffer(&mut f.args, pushed_args);
-            f.this.clone_from(&call.this);
-            f.scope.clone_from(&call.scope);
-            f.called.clone_from(&call.called);
+            if call.this.is_some() {
+                f.this.clone_from(&call.this);
+            }
+            if call.scope.is_some() {
+                f.scope.clone_from(&call.scope);
+            }
+            if call.called.is_some() {
+                f.called.clone_from(&call.called);
+            }
             f.observer_hidden = observer_hidden;
         }
         self.observer_begin_top();
@@ -1700,9 +1711,8 @@ impl Vm {
             let e = self.arg_count_error_builtin(&fname(self), b, npassed);
             return self.builtin_arg_error(depth, e);
         }
-        let mut call_args = std::mem::take(&mut call.args);
-        for (i, a) in call_args.drain(..).enumerate() {
-            match a {
+        for i in 0..npassed {
+            match self.frames[depth - 1].args[i].clone() {
                 Some(v) => {
                     values.push(v);
                     passed.push(true);
@@ -1725,7 +1735,6 @@ impl Vm {
                 }
             }
         }
-        self.put_arg_vec(call_args);
         // Omitted trailing optional parameters get their declared defaults
         // (not marked as passed); backtraces only show the passed ones.
         let nframe_args = values.len();
@@ -1794,90 +1803,8 @@ impl Vm {
             if ty.is_mixed() || accepts_without_coercion(ty.mask, v) {
                 continue;
             }
-            let fname = fname(self);
-            let pname = p.name.to_string_lossy();
-            let ctx = TypeCtx {
-                scope: call.scope.as_ref(),
-                called: call.called.as_ref(),
-                strict,
-                internal_arg: Some((&fname, i + 1, &pname)),
-            };
-            if ty.mask & crate::types::mask::CALLABLE != 0
-                && !ty.has_classes()
-                && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
-                && !(ty.allows_null() && v.is_null())
-            {
-                let callable = match self.zend_is_callable(v, true) {
-                    Ok(callable) => callable,
-                    Err(e) => {
-                        return self.builtin_arg_error(depth, e);
-                    }
-                };
-                match callable {
-                    Ok(_) => continue,
-                    Err(why) => {
-                        // `Z_PARAM_FUNC` checks without suppressing the
-                        // callable deprecations; a valid callable emits
-                        // them when the function resolves it, an invalid
-                        // one here (a class that was not found has none,
-                        // and is not autoloaded twice).
-                        if !why.contains("not found") {
-                            if let Err(e) = self.zend_is_callable(v, false) {
-                                return self.builtin_arg_error(depth, e);
-                            }
-                        }
-                        let nul = if ty.allows_null() { " or null" } else { "" };
-                        let e = self.make_throw(
-                            "TypeError",
-                            &format!(
-                                "{fname}(): Argument #{} (${pname}) must be a valid callback{nul}, {why}",
-                                i + 1
-                            ),
-                        );
-                        return self.builtin_arg_error(depth, e);
-                    }
-                }
-            }
-            let ok = match self.verify_type(ty, v, &ctx) {
-                Ok(ok) => ok,
-                Err(e) => {
-                    return self.builtin_arg_error(depth, e);
-                }
-            };
-            if !ok {
-                let msg = if ty.mask & crate::types::mask::CALLABLE != 0
-                    && !ty.has_classes()
-                    && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
-                {
-                    let why = self.callable_error(v);
-                    let nul = if ty.allows_null() { " or null" } else { "" };
-                    format!(
-                        "{fname}(): Argument #{} (${pname}) must be a valid callback{nul}, {why}",
-                        i + 1
-                    )
-                } else {
-                    format!(
-                        "{fname}(): Argument #{} (${pname}) must be of type {}, {} given",
-                        i + 1,
-                        ty.to_php_string(),
-                        given_type(v)
-                    )
-                };
-                let e = self.make_throw("TypeError", &msg);
+            if let Err(e) = self.coerce_builtin_arg(b, &call, strict, i, v, depth, nframe_args) {
                 return self.builtin_arg_error(depth, e);
-            }
-            // Weak-mode zpp converts to a string in place
-            // (`zend_parse_arg_str_weak`), which backtraces show; other
-            // scalar conversions only fill C locals, leaving the argument as
-            // passed (`NULL` for a deprecated null-to-int).
-            if matches!(v, Value::Str(_)) && i < nframe_args {
-                if let Some(slot) = self
-                    .frames
-                    .get_mut(depth - 1)
-                    .and_then(|f| f.args.get_mut(i))
-                {
-                    *slot = Some(v.clone());
-                }
             }
         }
         if call.dynamic && call.scope.is_none() {
@@ -1936,9 +1863,101 @@ impl Vm {
         r
     }
 
+    /// The zpp of builtin argument `i` (`v`) whose value does not already
+    /// have an accepted type: callable checks, weak-mode coercion and the
+    /// `TypeError`. Out of line: the common call has accepted types only.
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn coerce_builtin_arg(
+        &mut self,
+        b: &Rc<Builtin>,
+        call: &PendingCall,
+        strict: bool,
+        i: usize,
+        v: &mut Value,
+        depth: usize,
+        nframe_args: usize,
+    ) -> Result<(), Throw> {
+        let nparams = b.params.len();
+        let p = if i < nparams {
+            &b.params[i]
+        } else {
+            &b.params[nparams - 1]
+        };
+        let Some(ty) = &p.ty else { return Ok(()) };
+        let fname = self.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
+        let pname = p.name.to_string_lossy();
+        let ctx = TypeCtx {
+            scope: call.scope.as_ref(),
+            called: call.called.as_ref(),
+            strict,
+            internal_arg: Some((&fname, i + 1, &pname)),
+        };
+        if ty.mask & crate::types::mask::CALLABLE != 0
+            && !ty.has_classes()
+            && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
+            && !(ty.allows_null() && v.is_null())
+        {
+            if let Err(why) = self.zend_is_callable(v, true)? {
+                // `Z_PARAM_FUNC` checks without suppressing the callable
+                // deprecations; a valid callable emits them when the
+                // function resolves it, an invalid one here (a class that
+                // was not found has none, and is not autoloaded twice).
+                if !why.contains("not found") {
+                    let _ = self.zend_is_callable(v, false)?;
+                }
+                let nul = if ty.allows_null() { " or null" } else { "" };
+                return Err(self.make_throw(
+                    "TypeError",
+                    &format!(
+                        "{fname}(): Argument #{} (${pname}) must be a valid callback{nul}, {why}",
+                        i + 1
+                    ),
+                ));
+            }
+            return Ok(());
+        }
+        if !self.verify_type(ty, v, &ctx)? {
+            let msg = if ty.mask & crate::types::mask::CALLABLE != 0
+                && !ty.has_classes()
+                && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
+            {
+                let why = self.callable_error(v);
+                let nul = if ty.allows_null() { " or null" } else { "" };
+                format!(
+                    "{fname}(): Argument #{} (${pname}) must be a valid callback{nul}, {why}",
+                    i + 1
+                )
+            } else {
+                format!(
+                    "{fname}(): Argument #{} (${pname}) must be of type {}, {} given",
+                    i + 1,
+                    ty.to_php_string(),
+                    given_type(v)
+                )
+            };
+            return Err(self.make_throw("TypeError", &msg));
+        }
+        // Weak-mode zpp converts to a string in place
+        // (`zend_parse_arg_str_weak`), which backtraces show; other scalar
+        // conversions only fill C locals, leaving the argument as passed
+        // (`NULL` for a deprecated null-to-int).
+        if matches!(v, Value::Str(_)) && i < nframe_args {
+            if let Some(slot) = self
+                .frames
+                .get_mut(depth - 1)
+                .and_then(|f| f.args.get_mut(i))
+            {
+                *slot = Some(v.clone());
+            }
+        }
+        Ok(())
+    }
+
     /// The default of native parameter `i`: a parsed literal, or a
     /// constant (`SOME_CONST`, `Class::CONST`) resolved at call time.
-    fn builtin_default(&mut self, b: &Builtin, i: usize) -> Option<Value> {
+    pub(crate) fn builtin_default(&mut self, b: &Builtin, i: usize) -> Option<Value> {
         if let Some(v) = b.defaults.get(i).cloned().flatten() {
             return Some(v);
         }
@@ -1962,9 +1981,35 @@ impl Vm {
 
     /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
     fn pop_frames_to(&mut self, depth: usize) {
-        if self.frames.len() >= depth && !self.observer.keep_builtin_frame {
+        if self.frames.len() > depth && !self.observer.keep_builtin_frame {
+            // Frames left above the builtin one: dropped after it, in order.
             let args = std::mem::take(&mut self.frames[depth - 1].args);
             self.frames.truncate(depth - 1);
+            self.put_arg_vec(args);
+        } else if self.frames.len() == depth && !self.observer.keep_builtin_frame {
+            let args = {
+                let Some(frame) = self.frames.pop() else {
+                    return;
+                };
+                // A builtin frame's operand buffers were never allocated:
+                // they are forgotten instead of dropped, which skips an
+                // out-of-line empty `Vec` drop each (see `install_buffer`).
+                // The rest of the frame is dropped at the end of this
+                // block, before the arguments are released.
+                let Frame {
+                    args,
+                    tmps,
+                    iters,
+                    fins,
+                    calls,
+                    ..
+                } = frame;
+                forget_unallocated(tmps);
+                forget_unallocated(iters);
+                forget_unallocated(fins);
+                forget_unallocated(calls);
+                args
+            };
             self.put_arg_vec(args);
         }
     }
@@ -2845,6 +2890,15 @@ fn bind_args(uf: &UserFunction, f: &mut Frame) -> usize {
     first_op
 }
 
+/// Drops `v`, skipping the out-of-line `drop_in_place` call when it owns
+/// no allocation (and so, for a sized element type, no elements).
+#[inline]
+fn forget_unallocated<T>(v: Vec<T>) {
+    if v.capacity() == 0 && std::mem::size_of::<T>() != 0 {
+        std::mem::forget(v);
+    }
+}
+
 fn forwarded_called(cur: Option<Rc<Class>>, cls: &Rc<Class>, forward: bool) -> Rc<Class> {
     if forward {
         cur.filter(|c| c.is_subclass_of(cls))
@@ -2861,7 +2915,7 @@ pub(crate) fn find_double_colon(s: &[u8]) -> Option<usize> {
 
 /// Whether `verify_type` would accept `v` for a type with mask `m` as-is:
 /// the side-effect-free subset of `type_accepts` (no callable/class checks).
-fn accepts_without_coercion(m: u32, v: &Value) -> bool {
+pub(crate) fn accepts_without_coercion(m: u32, v: &Value) -> bool {
     use crate::types::mask;
     let bit = match v {
         Value::Null => mask::NULL,
@@ -2980,6 +3034,39 @@ restore_error_handler();
         assert_eq!(capacities(&vm), before);
         assert_eq!(held.refcount(), 1);
         assert!(vm.call_bufs.args.iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn popping_a_builtin_frame_releases_frame_values_before_arguments() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        let before = capacities(&vm);
+        let arg = ZStr::from("argument");
+        let tmp = ZStr::from("temporary");
+        let mut frame = Frame::with_vars(
+            vm.empty_code.clone(),
+            FrameKind::Builtin,
+            vm.empty_vars.clone(),
+            None,
+        );
+        frame.args = vm.call_bufs.args.pop().expect("prewarmed buffer");
+        frame.args.push(Some(Value::Str(arg.clone())));
+        frame.tmps.push(Value::Str(tmp.clone()));
+        vm.frames.push(frame);
+        let depth = vm.frames.len();
+        vm.pop_frames_to(depth);
+        assert!(vm.frames.is_empty());
+        assert_eq!(capacities(&vm), before);
+        assert_eq!(arg.refcount(), 1);
+        assert_eq!(tmp.refcount(), 1);
+    }
+
+    #[test]
+    fn forget_unallocated_drops_allocated_vectors() {
+        let held = ZStr::from("held");
+        forget_unallocated(vec![Value::Str(held.clone())]);
+        assert_eq!(held.refcount(), 1);
+        forget_unallocated(Vec::<Value>::new());
+        forget_unallocated(vec![(); 3]);
     }
 
     #[test]
