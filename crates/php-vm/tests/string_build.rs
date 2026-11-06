@@ -208,3 +208,103 @@ fn echo_of_ints_matches_php() {
         "-15 0 -9223372036854775808 9223372036854775807 1234567\n"
     );
 }
+
+/// `zend_compile_encaps_list`: an interpolated part is converted to a
+/// string as soon as it has been evaluated (`ZEND_ROPE_ADD`), on its own
+/// line and before any later part runs code, so "Array to string
+/// conversion" warnings, `__toString` calls and their exceptions interleave
+/// with method calls as in php-src; an opcode consuming a multi-line call's
+/// result reports the last argument's line (`CG(zend_lineno)` after the
+/// call); a one-part interpolation is a plain string cast. Expected output
+/// from `php -n` 8.3.
+#[test]
+fn interpolation_converts_parts_in_php_order() {
+    assert_eq!(
+        output_of(
+            r#"<?php
+class O { function m() { echo "[m]"; return "M"; } function arr($a = 0) { return [1]; }
+  function __toString() { echo "[ts]"; return "S"; } }
+class B { function __toString() { throw new Exception("boom"); } }
+$arr = [1]; $o = new O; $i = 7; $bb = new stdClass; $bb->x = new B;
+echo "a $arr b {$o->m()} c\n";
+echo "p $o q {$o->m()} r $arr\n";
+$s = <<<EOT
+one $arr
+two $i
+three {$o->m()}
+four $undef
+EOT;
+echo $s, "\n";
+try { echo "e $arr f {$bb->x} g {$o->m()} h\n"; } catch (Exception $e) { echo "caught ", $e->getMessage(), " at ", $e->getLine(), "\n"; }
+echo "u $nope v {$o->m()} w\n";
+echo "x {$o->arr(
+  1,
+  2
+)} y $i\n";
+echo "A $arr
+B {$o->m()} C $arr
+D\n";
+echo "$arr", "|", "$o", "|", "$i", "\n";
+$k = "idx"; $a2 = ["idx" => [5]];
+echo "n {$a2["$k"]} m $arr\n";
+echo $o->arr(
+  "a"
+), "\n";
+function g(): int { return strtoupper(
+  "a"
+); }
+try { g(); } catch (TypeError $e) { echo $e->getMessage(), " at ", $e->getLine(), "\n"; }
+"#
+        ),
+        r#"
+Warning: Array to string conversion in t.php on line 6
+[m]a Array b M c
+[ts][m]
+Warning: Array to string conversion in t.php on line 7
+p S q M r Array
+
+Warning: Array to string conversion in t.php on line 9
+[m]
+Warning: Undefined variable $undef in t.php on line 12
+one Array
+two 7
+three M
+four
+
+Warning: Array to string conversion in t.php on line 15
+caught boom at 4
+
+Warning: Undefined variable $nope in t.php on line 16
+[m]u  v M w
+
+Warning: Array to string conversion in t.php on line 19
+x Array y 7
+
+Warning: Array to string conversion in t.php on line 21
+[m]
+Warning: Array to string conversion in t.php on line 22
+A Array
+B M C Array
+D
+
+Warning: Array to string conversion in t.php on line 24
+Array|[ts]S|7
+
+Warning: Array to string conversion in t.php on line 26
+
+Warning: Array to string conversion in t.php on line 26
+n Array m Array
+
+Warning: Array to string conversion in t.php on line 28
+Array
+g(): Return value must be of type int, string returned at 31
+"#
+    );
+}
+
+/// `"$str"` is a string cast (`zend_compile_rope_finalize` with one
+/// element): a reference to the same string, no allocation.
+#[test]
+fn single_part_interpolation_allocates_nothing() {
+    assert_allocs("$s = 'abc'; $t = '';", "$t = \"$s\";", 0.0);
+}

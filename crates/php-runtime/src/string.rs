@@ -21,6 +21,12 @@
 //! header then points at the vector's buffer), so building a large string
 //! never needs two copies of it at once. The data pointer is stored in both
 //! cases, so reading the bytes never branches on the representation.
+//!
+//! The empty string and the 256 one-byte strings are *immortal*: they live
+//! in static memory (`zend_empty_string`, `zend_one_char_string[]`) with a
+//! refcount of 0 that handles never touch, as php-src never counts
+//! `ZSTR_IS_INTERNED` strings, so [`ZStr::empty`] and [`ZStr::from_byte`]
+//! cost a pointer load and no allocation.
 
 use std::alloc::{self, Layout};
 use std::borrow::Borrow;
@@ -47,7 +53,8 @@ const ADOPT_MIN: usize = 1024;
 /// inline bytes (`EXTERNAL` clear) or by nothing (`EXTERNAL` set).
 #[repr(C)]
 struct Header {
-    /// Number of live handles (`GC_REFCOUNT`).
+    /// Number of live handles (`GC_REFCOUNT`); 0 for an immortal string,
+    /// whose handles are not counted.
     rc: Cell<usize>,
     /// Cached `zend_inline_hash_func` value; `0` means "not computed yet"
     /// (a real hash always has its top bit set, so it is never `0`).
@@ -76,9 +83,69 @@ pub struct ZStr(NonNull<Header>);
 
 thread_local! {
     static INTERNED_SET: RefCell<HashSet<ZStr>> = RefCell::new(HashSet::new());
-    static EMPTY: ZStr = ZStr::intern(b"");
-    static CHARS: Vec<ZStr> = (0..=255u8).map(|c| ZStr::intern(&[c])).collect();
 }
+
+/// The bytes of the one-byte strings: `CHAR_BYTES[c] == c`.
+#[allow(clippy::cast_possible_truncation)]
+static CHAR_BYTES: [u8; 256] = {
+    let mut bytes = [0u8; 256];
+    let mut i = 0;
+    while i < bytes.len() {
+        bytes[i] = i as u8;
+        i += 1;
+    }
+    bytes
+};
+
+/// A string header in static memory: the shared empty string and the 256
+/// one-byte strings, which `zend_interned_strings_init` makes permanent
+/// interned strings (`zend_empty_string`, `zend_one_char_string[]`). They
+/// are immortal: the refcount is 0 and counts no handles ([`Clone`] and
+/// [`Drop`] skip it, as `zend_string_copy` / `zend_string_release` skip
+/// `ZSTR_IS_INTERNED` strings), the hash is computed at compile time, and
+/// as interned strings they are never extended in place.
+#[repr(transparent)]
+struct StaticHeader(Header);
+
+// SAFETY: a `StaticHeader` is never written through. `rc` is 0, which
+// `Clone` and `Drop` leave alone; `hash` is non-zero from the start, so
+// `hash_value` never stores it; and every in-place mutation
+// (`extend_unique`, `take_vec`, `put_vec`) requires `is_unique_mutable`,
+// which an interned string never is. Its bytes are the immutable
+// `CHAR_BYTES`. Immutable data can be shared between threads.
+unsafe impl Sync for StaticHeader {}
+
+impl StaticHeader {
+    /// The header of the immortal string of the `len` bytes at `ptr`, whose
+    /// hash is `hash`.
+    const fn new(ptr: *const u8, len: usize, hash: u64) -> Self {
+        StaticHeader(Header {
+            rc: Cell::new(0),
+            hash: Cell::new(hash),
+            ptr: ptr.cast_mut(),
+            len,
+            meta: len | INTERNED,
+        })
+    }
+}
+
+/// `zend_empty_string`.
+static EMPTY: StaticHeader = StaticHeader::new(CHAR_BYTES.as_ptr(), 0, zend_hash_bytes_const(b""));
+
+/// `zend_one_char_string`: `CHARS[c]` is the string of the single byte `c`.
+#[allow(clippy::cast_possible_truncation)]
+static CHARS: [StaticHeader; 256] = {
+    let mut table =
+        [const { StaticHeader::new(CHAR_BYTES.as_ptr(), 0, zend_hash_bytes_const(b"")) }; 256];
+    let mut i = 0;
+    while i < table.len() {
+        // SAFETY: `i < 256`, so the offset stays inside `CHAR_BYTES`.
+        let ptr = unsafe { CHAR_BYTES.as_ptr().add(i) };
+        table[i] = StaticHeader::new(ptr, 1, zend_hash_bytes_const(&[i as u8]));
+        i += 1;
+    }
+    table
+};
 
 /// Computes PHP's string hash (`zend_inline_hash_func`, 64-bit variant).
 ///
@@ -105,6 +172,19 @@ pub fn zend_hash_bytes(bytes: &[u8]) -> u64 {
     }
     for &b in chunks.remainder() {
         hash = step(hash, b);
+    }
+    hash | 0x8000_0000_0000_0000
+}
+
+/// [`zend_hash_bytes`] for compile-time tables: the same chain, one byte
+/// per step, as a `const fn`.
+#[allow(clippy::cast_lossless)] // `u64::from` is not `const`
+const fn zend_hash_bytes_const(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 5381;
+    let mut i = 0;
+    while i < bytes.len() {
+        hash = hash.wrapping_mul(33).wrapping_add(bytes[i] as u64);
+        i += 1;
     }
     hash | 0x8000_0000_0000_0000
 }
@@ -438,6 +518,12 @@ impl ZStr {
     /// Interned strings live for the remainder of the thread.
     #[must_use]
     pub fn intern(bytes: &[u8]) -> Self {
+        // The empty and one-byte strings have immortal static instances.
+        match bytes {
+            [] => return Self::empty(),
+            &[c] => return Self::from_byte(c),
+            _ => {}
+        }
         INTERNED_SET.with(|set| {
             if let Some(existing) = set.borrow().get(bytes) {
                 return existing.clone();
@@ -458,16 +544,20 @@ impl ZStr {
         }
     }
 
-    /// The shared empty string (`ZSTR_EMPTY_ALLOC()`).
+    /// The shared empty string (`ZSTR_EMPTY_ALLOC()`): an immortal interned
+    /// string in static memory, so this neither allocates nor counts.
+    #[inline]
     #[must_use]
     pub fn empty() -> Self {
-        EMPTY.with(Clone::clone)
+        ZStr(NonNull::from(&EMPTY.0))
     }
 
-    /// The shared one-character string for byte `c` (`ZSTR_CHAR(c)`).
+    /// The shared one-character string for byte `c` (`ZSTR_CHAR(c)`),
+    /// immortal like [`ZStr::empty`].
+    #[inline]
     #[must_use]
     pub fn from_byte(c: u8) -> Self {
-        CHARS.with(|chars| chars[usize::from(c)].clone())
+        ZStr(NonNull::from(&CHARS[usize::from(c)].0))
     }
 
     /// Returns the bytes of the string.
@@ -520,7 +610,9 @@ impl ZStr {
         a.0 == b.0
     }
 
-    /// Number of live handles to this string instance (the "refcount").
+    /// Number of live handles to this string instance (the "refcount"); 0
+    /// for the immortal [`ZStr::empty`] / [`ZStr::from_byte`] strings, whose
+    /// handles are not counted.
     #[must_use]
     pub fn refcount(&self) -> usize {
         self.header().rc.get()
@@ -630,12 +722,17 @@ impl Clone for ZStr {
     #[inline]
     fn clone(&self) -> Self {
         let rc = &self.header().rc;
-        let n = rc.get().wrapping_add(1);
-        if n == 0 {
-            // Like `Rc`: an overflowing count would later free a live block.
-            std::process::abort();
+        let n = rc.get();
+        // An immortal string (refcount 0) counts no handles, like
+        // `zend_string_copy` on a `ZSTR_IS_INTERNED` string.
+        if n != 0 {
+            let n = n.wrapping_add(1);
+            if n == 0 {
+                // Like `Rc`: an overflowing count would later free a live block.
+                std::process::abort();
+            }
+            rc.set(n);
         }
-        rc.set(n);
         ZStr(self.0)
     }
 }
@@ -644,13 +741,14 @@ impl Drop for ZStr {
     #[inline]
     fn drop(&mut self) {
         let rc = &self.header().rc;
-        let n = rc.get() - 1;
-        if n != 0 {
-            rc.set(n);
-            return;
+        match rc.get() {
+            // An immortal string counts no handles (`zend_string_release` on
+            // a `ZSTR_IS_INTERNED` string).
+            0 => {}
+            // SAFETY: this was the last handle to a live block.
+            1 => unsafe { free_block(self.0) },
+            n => rc.set(n - 1),
         }
-        // SAFETY: this was the last handle to a live block.
-        unsafe { free_block(self.0) };
     }
 }
 
@@ -1079,6 +1177,103 @@ mod tests {
         assert_eq!(c, "keep?");
         assert!(!c.is_interned());
         assert_eq!(ZStr::intern(b"keep"), "keep");
+    }
+
+    #[test]
+    fn const_hash_matches_runtime_hash() {
+        assert_eq!(zend_hash_bytes_const(b""), zend_hash_bytes(b""));
+        assert_eq!(zend_hash_bytes_const(b"a"), zend_hash_bytes(b"a"));
+        let text = b"hello world, 12345: a string longer than one hash chunk";
+        assert_eq!(zend_hash_bytes_const(text), zend_hash_bytes(text));
+    }
+
+    /// `zend_empty_string` / `zend_one_char_string[]`: static, interned,
+    /// uncounted, with precomputed hashes, and the instances `intern`
+    /// returns for those contents.
+    #[test]
+    fn immortal_strings_are_static_and_uncounted() {
+        let e = ZStr::empty();
+        assert!(e.is_empty());
+        assert!(e.is_interned());
+        assert_eq!(e.refcount(), 0);
+        assert_eq!(e.hash_value(), zend_hash_bytes(b""));
+        assert!(ZStr::ptr_eq(&e, &ZStr::intern(b"")));
+        assert!(ZStr::ptr_eq(&e, &ZStr::from("").interned()));
+        assert!(ZStr::ptr_eq(&e, &ZStr::default()));
+        let f = e.clone();
+        assert_eq!(
+            e.refcount(),
+            0,
+            "handles of an immortal string are not counted"
+        );
+        drop(f);
+        assert_eq!(e.refcount(), 0);
+        assert_eq!(e, ZStr::from(""));
+        assert_eq!(e, ZStr::concat(b"", b""));
+        for c in 0..=255u8 {
+            let s = ZStr::from_byte(c);
+            assert_eq!(s.as_bytes(), &[c]);
+            assert!(s.is_interned());
+            assert_eq!(s.refcount(), 0);
+            assert_ne!(
+                CHARS[usize::from(c)].0.hash.get(),
+                0,
+                "{c}: hash precomputed"
+            );
+            assert_eq!(s.hash_value(), zend_hash_bytes(&[c]), "{c}");
+            assert!(ZStr::ptr_eq(&s, &ZStr::intern(&[c])), "{c}");
+            assert!(ZStr::ptr_eq(&s, &s.clone()));
+            assert_eq!(s, ZStr::from(&[c][..]));
+            assert_ne!(s, e);
+            drop(s.clone());
+            assert_eq!(s.refcount(), 0);
+        }
+        assert_ne!(ZStr::from_byte(b'a'), ZStr::from_byte(b'b'));
+        // Mutation copies, as for any interned string; the static is untouched.
+        let mut a = ZStr::from_byte(b'a');
+        a.append(b"b");
+        assert_eq!(a, "ab");
+        assert!(!a.is_interned());
+        assert_eq!(a.refcount(), 1);
+        assert_eq!(ZStr::from_byte(b'a'), "a");
+        let x = ZStr::empty().concat_owned(b"x");
+        assert_eq!(x, "x");
+        assert!(!x.is_interned());
+        let mut n = ZStr::empty();
+        n.append_long(42);
+        assert_eq!(n, "42");
+        assert!(ZStr::empty().is_empty());
+        assert_eq!(ZStr::from_byte(b'z').into_bytes(), b"z");
+        assert_eq!(ZStr::from_byte(b'z').to_ascii_uppercase(), "Z");
+        assert!(ZStr::ptr_eq(
+            &ZStr::from_byte(b'z').to_ascii_lowercase(),
+            &ZStr::from_byte(b'z')
+        ));
+    }
+
+    /// The immortal strings are process-wide: every thread sees the same
+    /// instances, and cloning or dropping them on one thread writes nothing
+    /// another could observe.
+    #[test]
+    fn immortal_strings_are_shared_between_threads() {
+        let here = (
+            ZStr::empty().0.as_ptr().addr(),
+            ZStr::from_byte(b'a').0.as_ptr().addr(),
+        );
+        let there = std::thread::spawn(|| {
+            let e = ZStr::empty();
+            let a = ZStr::from_byte(b'a');
+            for _ in 0..1000 {
+                let (e2, a2) = (e.clone(), a.clone());
+                assert_eq!(e2.refcount() + a2.refcount(), 0);
+            }
+            assert!(ZStr::ptr_eq(&a, &ZStr::intern(b"a")));
+            (e.0.as_ptr().addr(), a.0.as_ptr().addr())
+        })
+        .join()
+        .expect("thread");
+        assert_eq!(here, there);
+        assert_eq!(ZStr::empty().refcount(), 0);
     }
 
     #[test]

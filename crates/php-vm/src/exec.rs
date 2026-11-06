@@ -1826,7 +1826,12 @@ impl Vm {
         Ok(match kind {
             CastKind::Int => Value::Int(self.to_long(&x)?),
             CastKind::Float => Value::Float(self.to_double(&x)?),
-            CastKind::String => Value::Str(self.to_zstr(&x)?),
+            // A string is its own cast (`zval_get_string` adds a reference);
+            // the rope compiler emits this for `"$str"`.
+            CastKind::String => match x {
+                Value::Str(_) => x,
+                _ => Value::Str(self.to_zstr(&x)?),
+            },
             CastKind::Bool => Value::Bool(self.to_bool(&x)?),
             CastKind::Null => Value::Null,
             CastKind::Array => match x {
