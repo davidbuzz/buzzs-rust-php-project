@@ -1,15 +1,18 @@
 //! Request variables: `$_SERVER` (`sapi_cli_server_register_variables` +
 //! `php_register_server_variables`), `$_GET`, `$_POST`, `$_COOKIE`,
 //! `$_FILES`, `$_ENV` and `$_REQUEST` (`php_hash_environment()`,
-//! `sapi_read_post_data()` and the rfc1867 handler).
+//! `sapi_read_post_data()` and the rfc1867 handler), and the body parse
+//! of `request_parse_body()` ([`parse_body`]), which runs the same POST
+//! readers and handlers into fresh arrays.
 
 use crate::multipart::{self, RegValue, Target, UploadSettings};
+use crate::parser::Method;
 use crate::request::Request;
-use crate::sapi::{Body, RequestCtx};
+use crate::sapi::RequestCtx;
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_stdmisc::query::{self, InputSettings, ParseKind, RegisterOptions};
-use php_vm::ext::Rfc1867Event;
-use php_vm::Vm;
+use php_vm::ext::{ParseBodyOptions, Rfc1867Event};
+use php_vm::{Throw, Vm, VmResult};
 use std::path::PathBuf;
 
 /// How a `$_SERVER` entry is registered.
@@ -178,6 +181,112 @@ pub fn content_type_key(ct: &[u8]) -> Vec<u8> {
     ct[..end].to_ascii_lowercase()
 }
 
+/// When the body is parsed, which decides how its problems are reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    /// Request startup (`sapi_activate()`, `php_hash_environment()`):
+    /// startup warnings.
+    Startup,
+    /// `request_parse_body()`: warnings of the function, and
+    /// `RequestParseBodyException`s for the rfc1867 handler's
+    /// `EMIT_WARNING_OR_ERROR()`s (`throw_exceptions`).
+    ParseBody,
+}
+
+impl Phase {
+    /// The function `php_error_docref()` names in warnings (empty during
+    /// request startup).
+    fn func(self) -> &'static str {
+        match self {
+            Phase::Startup => "",
+            Phase::ParseBody => "request_parse_body",
+        }
+    }
+
+    /// The prefix of `php_error_docref()` warnings.
+    fn docref_prefix(self) -> &'static str {
+        match self {
+            Phase::Startup => STARTUP,
+            Phase::ParseBody => "request_parse_body(): ",
+        }
+    }
+}
+
+/// The limits of one body parse (`REQUEST_PARSE_BODY_OPTION_GET()`): the
+/// INI settings, each replaced by its `request_parse_body()` option when
+/// one was given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Limits {
+    max_file_uploads: i64,
+    max_input_vars: i64,
+    max_multipart_body_parts: i64,
+    post_max_size: i64,
+    upload_max_filesize: i64,
+}
+
+impl Limits {
+    fn new(vm: &Vm, options: &ParseBodyOptions) -> Self {
+        Limits {
+            max_file_uploads: options
+                .max_file_uploads
+                .unwrap_or_else(|| vm.ini_long("max_file_uploads")),
+            max_input_vars: options
+                .max_input_vars
+                .unwrap_or_else(|| vm.ini_long("max_input_vars")),
+            max_multipart_body_parts: options.max_multipart_body_parts.unwrap_or_else(|| {
+                vm.ini_string("max_multipart_body_parts")
+                    .map_or(-1, |v| crate::headers::strtol(&v))
+            }),
+            post_max_size: options
+                .post_max_size
+                .unwrap_or_else(|| vm.ini_long("post_max_size")),
+            upload_max_filesize: options
+                .upload_max_filesize
+                .unwrap_or_else(|| vm.ini_long("upload_max_filesize")),
+        }
+    }
+}
+
+/// Reports a problem of the body parse (`php_error_docref()` when
+/// `docref`, else `sapi_error()`): a startup warning during request
+/// startup, a warning of `request_parse_body()` afterwards.
+fn warn(vm: &mut Vm, phase: Phase, message: &str, docref: bool) -> VmResult<()> {
+    match phase {
+        Phase::Startup => {
+            startup_warning(vm, message, docref);
+            Ok(())
+        }
+        Phase::ParseBody if docref => vm.php_warning(message),
+        Phase::ParseBody => vm.raise(2, message),
+    }
+}
+
+/// Records `t` as `zend_throw_exception_internal()` does: an exception
+/// thrown while another is pending gets that one as its `previous`.
+/// `exit()` and fatal errors end the parse at once.
+fn pend(vm: &mut Vm, pending: &mut Option<Throw>, t: Throw) -> VmResult<()> {
+    match (pending.take(), t) {
+        (Some(Throw::Exception(old)), Throw::Exception(new)) => {
+            vm.chain_exception(&new, &old);
+            *pending = Some(Throw::Exception(new));
+            Ok(())
+        }
+        (_, Throw::Exception(new)) => {
+            *pending = Some(Throw::Exception(new));
+            Ok(())
+        }
+        (_, t) => Err(t),
+    }
+}
+
+/// [`pend`] for the error of `r`, if any.
+fn pend_err(vm: &mut Vm, pending: &mut Option<Throw>, r: VmResult<()>) -> VmResult<()> {
+    match r {
+        Ok(()) => Ok(()),
+        Err(t) => pend(vm, pending, t),
+    }
+}
+
 fn tmp_dirs(vm: &Vm) -> Vec<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
     let mut dirs = Vec::new();
@@ -266,27 +375,146 @@ fn base64_decode(s: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `sapi_read_standard_form_data()`: enforces `post_max_size`; returns
-/// whether the body was accepted.
-fn read_standard_form_data(vm: &mut Vm, ctx: &RequestCtx) -> bool {
-    let content_length =
-        i64::try_from(ctx.request.content.as_ref().map_or(0, Vec::len)).unwrap_or(i64::MAX);
-    let post_max_size = vm.ini_long("post_max_size");
-    if post_max_size > 0 && content_length > post_max_size {
-        startup_warning(
+/// `SG(request_info).content_length`: the length of the received body.
+fn content_length(ctx: &RequestCtx) -> i64 {
+    i64::try_from(ctx.request.content.as_ref().map_or(0, Vec::len)).unwrap_or(i64::MAX)
+}
+
+/// `sapi_read_standard_form_data()`: unless the body is longer than
+/// `post_max_size` (a warning; any earlier buffer stays), what the SAPI
+/// has not read yet becomes the request body buffer. The buffer stays in
+/// the request (no copy): `php://input` and the urlencoded handler read it
+/// from there.
+fn read_standard_form_data(
+    vm: &mut Vm,
+    ctx: &RequestCtx,
+    post_max_size: i64,
+    phase: Phase,
+) -> VmResult<()> {
+    let length = content_length(ctx);
+    if post_max_size > 0 && length > post_max_size {
+        return warn(
             vm,
+            phase,
             &format!(
-                "POST Content-Length of {content_length} bytes exceeds the limit of {post_max_size} bytes"
+                "POST Content-Length of {length} bytes exceeds the limit of {post_max_size} bytes"
             ),
             true,
         );
-        return false;
     }
-    // The body stays in the request (no copy): `php://input` and `$_POST`
-    // read it from there.
-    ctx.post_read_offset
-        .set(ctx.request.content.as_ref().map_or(0, Vec::len));
-    true
+    ctx.buffer_body();
+    Ok(())
+}
+
+/// `php_std_post_handler()`: the `application/x-www-form-urlencoded`
+/// variables of the request body buffer (none without one), with
+/// `max_input_vars` from `limits`.
+fn handle_urlencoded(
+    vm: &mut Vm,
+    ctx: &RequestCtx,
+    limits: &Limits,
+    phase: Phase,
+    post: &mut ZArray,
+) -> VmResult<()> {
+    // `php_stream_copy_to_mem()` of the request body: the copy counts
+    // towards memory_limit, as in PHP.
+    let Some(data) = ctx.request_body().map(<[u8]>::to_vec) else {
+        return Ok(());
+    };
+    let settings = InputSettings {
+        max_input_vars: limits.max_input_vars,
+        ..input_settings(vm)
+    };
+    query::treat_data(
+        ParseKind::Post,
+        &data,
+        post,
+        &settings,
+        phase.func(),
+        None,
+        vm,
+    )
+    .map_err(|e| vm.throw_runtime_error(e))
+}
+
+/// `rfc1867_post_handler()`: parses the multipart body from what the SAPI
+/// has not read yet into `post` / `files`, reporting the parser's events
+/// to the upload observer (`php_rfc1867_callback`), and registers the
+/// uploaded files (`SG(rfc1867_uploaded_files)`). For `request_parse_body()`
+/// the handler's `EMIT_WARNING_OR_ERROR()`s become chained
+/// `RequestParseBodyException`s, returned once the parse is over.
+fn handle_multipart(
+    vm: &mut Vm,
+    ctx: &RequestCtx,
+    content_type: &[u8],
+    limits: &Limits,
+    phase: Phase,
+    post: &mut ZArray,
+    files: &mut ZArray,
+) -> VmResult<()> {
+    let upload = UploadSettings {
+        max_file_uploads: limits.max_file_uploads,
+        max_multipart_body_parts: limits.max_multipart_body_parts,
+        post_max_size: limits.post_max_size,
+        max_input_vars: limits.max_input_vars,
+        upload_max_filesize: limits.upload_max_filesize,
+        file_uploads: vm.ini_bool("file_uploads"),
+        tmp_dirs: tmp_dirs(vm),
+    };
+    let callback = vm.rfc1867_callback;
+    // The parse got past its early checks: MULTIPART_EVENT_START follows
+    // the new SG(rfc1867_uploaded_files).
+    let mut started = false;
+    let mut read = |buf: &mut [u8]| ctx.read_post(buf);
+    let outcome = multipart::parse_with_events(
+        content_type,
+        content_length(ctx),
+        &upload,
+        &mut read,
+        &mut |event: Rfc1867Event<'_>, bytes| {
+            if matches!(event, Rfc1867Event::Start { .. }) {
+                started = true;
+            }
+            callback.is_none_or(|cb| cb(vm, event, bytes))
+        },
+    );
+    if started {
+        // The files of an earlier parse are no longer uploaded files.
+        let earlier = std::mem::take(&mut vm.rfc1867_uploaded_files);
+        ctx.orphaned_uploads.borrow_mut().extend(earlier);
+    }
+    vm.rfc1867_uploaded_files.extend(outcome.uploaded);
+
+    let mut pending: Option<Throw> = None;
+    for w in &outcome.warnings {
+        let reported = if phase == Phase::ParseBody && w.docref {
+            Err(vm.throw("RequestParseBodyException", &w.message))
+        } else {
+            warn(vm, phase, &w.message, w.docref)
+        };
+        pend_err(vm, &mut pending, reported)?;
+    }
+    let settings = input_settings(vm);
+    let opts = RegisterOptions {
+        max_nesting_level: settings.max_input_nesting_level,
+        display_errors: settings.display_errors,
+        cookie: false,
+        warning_prefix: phase.docref_prefix(),
+    };
+    for registration in outcome.registrations {
+        let v = match registration.value {
+            RegValue::Str(s) => Value::Str(ZStr::from(s)),
+            RegValue::Long(l) => Value::Int(l),
+        };
+        let track = match registration.target {
+            Target::Post => &mut *post,
+            Target::Files => &mut *files,
+        };
+        let registered = query::register_variable_ex(&registration.name, v, track, &opts, vm)
+            .map_err(|e| vm.throw_runtime_error(e));
+        pend_err(vm, &mut pending, registered)?;
+    }
+    pending.map_or(Ok(()), Err)
 }
 
 /// `$_GET` (`treat_data(PARSE_GET)`), empty unless `enabled`.
@@ -333,43 +561,20 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
     // `$_GET`/`$_COOKIE` parsed early for the upload observer.
     let mut early: Option<(ZArray, ZArray)> = None;
     let content_type = req.header(b"content-type").map(<[u8]>::to_vec);
-    if vm.ini_bool("enable_post_data_reading") && req.method == crate::parser::Method::Post {
+    if vm.ini_bool("enable_post_data_reading") && req.method == Method::Post {
         if let Some(ct) = &content_type {
+            let limits = Limits::new(vm, &ParseBodyOptions::default());
+            // Startup problems are warnings only: the results are dropped.
             match content_type_key(ct).as_slice() {
                 b"application/x-www-form-urlencoded" => {
-                    if read_standard_form_data(vm, ctx) && has(b'P') {
-                        // `php_stream_copy_to_mem()` of the request body:
-                        // the copy counts towards memory_limit, as in PHP.
-                        let data = req.content.clone().unwrap_or_default();
-                        let _ = query::treat_data(
-                            ParseKind::Post,
-                            &data,
-                            &mut post,
-                            &settings,
-                            "",
-                            None,
-                            vm,
-                        );
+                    let _ = read_standard_form_data(vm, ctx, limits.post_max_size, Phase::Startup);
+                    if has(b'P') {
+                        let _ = handle_urlencoded(vm, ctx, &limits, Phase::Startup, &mut post);
                     }
                 }
                 b"multipart/form-data" => {
                     if has(b'P') {
-                        let upload = UploadSettings {
-                            max_file_uploads: vm.ini_long("max_file_uploads"),
-                            max_multipart_body_parts: vm
-                                .ini_string("max_multipart_body_parts")
-                                .map_or(-1, |v| crate::headers::strtol(&v)),
-                            post_max_size: vm.ini_long("post_max_size"),
-                            max_input_vars: vm.ini_long("max_input_vars"),
-                            upload_max_filesize: vm.ini_long("upload_max_filesize"),
-                            file_uploads: vm.ini_bool("file_uploads"),
-                            tmp_dirs: tmp_dirs(vm),
-                        };
-                        let content_length =
-                            i64::try_from(req.content.as_ref().map_or(0, Vec::len))
-                                .unwrap_or(i64::MAX);
-                        let callback = vm.rfc1867_callback;
-                        if callback.is_some() {
+                        if vm.rfc1867_callback.is_some() {
                             // php_session_rfc1867_early_find_sid(): the
                             // observer looks the session ID up in
                             // $_COOKIE / $_GET while the body is parsed.
@@ -379,37 +584,21 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
                             set_global(vm, "_COOKIE", cookie.clone());
                             early = Some((get, cookie));
                         }
-                        let mut read = |buf: &mut [u8]| ctx.read_post(buf);
-                        let outcome = match callback {
-                            Some(cb) => multipart::parse_with_events(
-                                ct,
-                                content_length,
-                                &upload,
-                                &mut read,
-                                &mut |event: Rfc1867Event<'_>, bytes| cb(vm, event, bytes),
-                            ),
-                            None => multipart::parse(ct, content_length, &upload, &mut read),
-                        };
-                        *ctx.body.borrow_mut() = Body::Consumed;
-                        for w in &outcome.warnings {
-                            startup_warning(vm, &w.message, w.docref);
-                        }
-                        for r in outcome.registrations {
-                            let v = match r.value {
-                                RegValue::Str(s) => Value::Str(ZStr::from(s)),
-                                RegValue::Long(l) => Value::Int(l),
-                            };
-                            let track = match r.target {
-                                Target::Post => &mut post,
-                                Target::Files => &mut files,
-                            };
-                            register(vm, &r.name, v, track, false);
-                        }
-                        vm.rfc1867_uploaded_files.extend(outcome.uploaded);
+                        let _ = handle_multipart(
+                            vm,
+                            ctx,
+                            ct,
+                            &limits,
+                            Phase::Startup,
+                            &mut post,
+                            &mut files,
+                        );
                     }
                 }
+                // php_default_post_reader(): a body no handler is
+                // registered for is still read.
                 _ => {
-                    read_standard_form_data(vm, ctx);
+                    let _ = read_standard_form_data(vm, ctx, limits.post_max_size, Phase::Startup);
                 }
             }
         }
@@ -511,10 +700,67 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
     set_global(vm, "_REQUEST", request);
 }
 
+/// The SAPI's part of `request_parse_body()` ([`php_vm::ext::ParseBodyFn`],
+/// `ext/standard/http.c`): `sapi_read_post_data()` and `sapi_handle_post()`
+/// again, for any request method, into fresh arrays. The body is read
+/// from where earlier reads left it: once request startup, `php://input`
+/// or an earlier call consumed it, there is nothing left to parse.
+pub fn parse_body(vm: &mut Vm, options: &ParseBodyOptions) -> VmResult<(ZArray, ZArray)> {
+    let ctx = crate::sapi::current();
+    let content_type = ctx
+        .as_ref()
+        .and_then(|c| c.request.header(b"content-type"))
+        .map(|ct| c_str(ct).to_vec());
+    let (Some(ctx), Some(ct)) = (ctx, content_type) else {
+        return Err(vm.throw(
+            "RequestParseBodyException",
+            "Request does not provide a content type",
+        ));
+    };
+    let limits = Limits::new(vm, options);
+    let phase = Phase::ParseBody;
+    let mut post = ZArray::new();
+    let mut files = ZArray::new();
+    let mut pending: Option<Throw> = None;
+    match content_type_key(&ct).as_slice() {
+        b"application/x-www-form-urlencoded" => {
+            let r = read_standard_form_data(vm, &ctx, limits.post_max_size, phase);
+            pend_err(vm, &mut pending, r)?;
+            // Once a warning handler threw, the handler's warnings would
+            // not reach it, and its result is dropped.
+            if pending.is_none() {
+                let r = handle_urlencoded(vm, &ctx, &limits, phase, &mut post);
+                pend_err(vm, &mut pending, r)?;
+            }
+        }
+        b"multipart/form-data" => {
+            let r = handle_multipart(vm, &ctx, &ct, &limits, phase, &mut post, &mut files);
+            pend_err(vm, &mut pending, r)?;
+        }
+        _ => {
+            // php_default_post_reader(): a POST body no handler is
+            // registered for is read all the same (replacing the buffer).
+            if ctx.request.method == Method::Post {
+                let r = read_standard_form_data(vm, &ctx, limits.post_max_size, phase);
+                pend_err(vm, &mut pending, r)?;
+            }
+            let msg = format!(
+                "Content-Type \"{}\" is not supported",
+                String::from_utf8_lossy(&ct)
+            );
+            let t = vm.throw("RequestParseBodyException", &msg);
+            pend(vm, &mut pending, t)?;
+        }
+    }
+    match pending {
+        Some(t) => Err(t),
+        None => Ok((post, files)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Method;
 
     fn sample() -> Request {
         Request {
@@ -622,5 +868,74 @@ mod tests {
             content_type_key(b"Multipart/Form-Data; b=1"),
             b"multipart/form-data"
         );
+    }
+
+    fn vm_with(ini: &[(&str, &str)]) -> Vm {
+        let opts = php_vm::VmOptions {
+            ini: ini
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+        };
+        Vm::with_extensions(&opts, Box::new(std::io::sink()), &[])
+    }
+
+    /// `REQUEST_PARSE_BODY_OPTION_GET()`: an option replaces its INI value.
+    #[test]
+    fn limits_prefer_the_options() {
+        let vm = vm_with(&[("max_input_vars", "7"), ("post_max_size", "1K")]);
+        let ini = Limits::new(&vm, &ParseBodyOptions::default());
+        assert_eq!(ini.max_input_vars, 7);
+        assert_eq!(ini.post_max_size, 1024);
+        assert_eq!(ini.max_multipart_body_parts, -1);
+        let options = ParseBodyOptions {
+            max_input_vars: Some(1),
+            max_multipart_body_parts: Some(3),
+            upload_max_filesize: Some(0),
+            ..ParseBodyOptions::default()
+        };
+        let set = Limits::new(&vm, &options);
+        assert_eq!(set.max_input_vars, 1);
+        assert_eq!(set.max_multipart_body_parts, 3);
+        assert_eq!(set.upload_max_filesize, 0);
+        assert_eq!(set.post_max_size, 1024);
+        assert_eq!(set.max_file_uploads, ini.max_file_uploads);
+    }
+
+    /// Exceptions raised during one parse chain like
+    /// `zend_throw_exception_internal()`; a fatal error ends the parse.
+    #[test]
+    fn pending_exceptions_chain() {
+        let mut vm = vm_with(&[]);
+        let first = vm.throw("RequestParseBodyException", "first");
+        let Throw::Exception(first_obj) = first.clone() else {
+            panic!("not an exception");
+        };
+        let second = vm.throw("RequestParseBodyException", "second");
+        let mut pending = None;
+        pend(&mut vm, &mut pending, first).unwrap();
+        pend_err(&mut vm, &mut pending, Ok(())).unwrap();
+        pend_err(&mut vm, &mut pending, Err(second)).unwrap();
+        let Some(Throw::Exception(last)) = pending.clone() else {
+            panic!("nothing pending");
+        };
+        let previous = vm
+            .call_method_by_name(&last, "getPrevious", Vec::new())
+            .unwrap();
+        assert!(matches!(previous, Value::Object(o) if php_runtime::Obj::ptr_eq(&o, &first_obj)));
+        assert!(matches!(
+            pend(&mut vm, &mut pending, Throw::Fatal),
+            Err(Throw::Fatal)
+        ));
+    }
+
+    /// Startup problems are startup warnings; `request_parse_body()` ones
+    /// name the function (docref) or not (`sapi_error()`).
+    #[test]
+    fn phase_prefixes() {
+        assert_eq!(Phase::Startup.func(), "");
+        assert_eq!(Phase::Startup.docref_prefix(), STARTUP);
+        assert_eq!(Phase::ParseBody.func(), "request_parse_body");
+        assert_eq!(Phase::ParseBody.docref_prefix(), "request_parse_body(): ");
     }
 }

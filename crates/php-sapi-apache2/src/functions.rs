@@ -610,14 +610,16 @@ impl Extension for Apache2Handler {
         {
             // The SAPI's `sapi_module` entries the VM calls back into:
             // header_handler, send_headers (php_header), flush, the
-            // execution timer, and the aborted-connection bailout the
-            // output writer cannot raise itself.
+            // execution timer, the aborted-connection bailout the output
+            // writer cannot raise itself, and the body parse of
+            // request_parse_body().
             let vm = m.vm();
             vm.response_header_hook = Some(add_response_header);
             vm.send_headers_hook = Some(php_header);
             vm.sapi_flush_hook = Some(crate::request::implicit_flush);
             vm.timer_hook = Some(crate::request::arm_timer);
             vm.interrupt_handlers.push(crate::request::abort_interrupt);
+            vm.parse_body_hook = Some(crate::vars::parse_body);
         }
         // PHP_INI_BEGIN() of php_functions.c.
         for (name, default) in [("xbithack", "0"), ("engine", "1"), ("last_modified", "0")] {

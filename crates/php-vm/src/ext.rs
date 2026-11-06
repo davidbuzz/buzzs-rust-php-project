@@ -242,6 +242,37 @@ pub enum Rfc1867Event<'a> {
 /// is `FAILURE` (the field is skipped, or the upload cancelled).
 pub type Rfc1867Fn = fn(&mut Vm, Rfc1867Event<'_>, i64) -> bool;
 
+/// The `$options` of one `request_parse_body()` call
+/// (`SG(request_parse_body_context).options_cache`): each given limit
+/// replaces its INI setting for that parse only
+/// (`REQUEST_PARSE_BODY_OPTION_GET()` in `main/SAPI.h`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ParseBodyOptions {
+    /// `max_file_uploads`.
+    pub max_file_uploads: Option<i64>,
+    /// `max_input_vars`.
+    pub max_input_vars: Option<i64>,
+    /// `max_multipart_body_parts`.
+    pub max_multipart_body_parts: Option<i64>,
+    /// `post_max_size`, in bytes.
+    pub post_max_size: Option<i64>,
+    /// `upload_max_filesize`, in bytes.
+    pub upload_max_filesize: Option<i64>,
+}
+
+/// A web SAPI's part of `request_parse_body()` (`ext/standard/http.c`),
+/// run once the options are validated: `sapi_read_post_data()` reads the
+/// request body again and `sapi_handle_post()` runs the POST handler of
+/// its content type into fresh arrays, returned as `($post, $files)`
+/// (`$_POST` and `$_FILES` stay as they are), for any request method.
+/// The handler's problems that are warnings during request startup throw
+/// `RequestParseBodyException` instead
+/// (`SG(request_parse_body_context).throw_exceptions`), as do a missing
+/// content type ("Request does not provide a content type") and one
+/// without a handler (`Content-Type "%s" is not supported`). Uploaded
+/// files join [`Vm::rfc1867_uploaded_files`].
+pub type ParseBodyFn = fn(&mut Vm, &ParseBodyOptions) -> VmResult<(ZArray, ZArray)>;
+
 /// A `PHP_MINFO` callback.
 pub type ModuleInfoFn = fn(&mut Vm) -> Vec<InfoItem>;
 

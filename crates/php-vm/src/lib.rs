@@ -210,6 +210,7 @@ impl Vm {
             timer_hook: None,
             rfc1867_callback: None,
             rfc1867_uploaded_files: Vec::new(),
+            parse_body_hook: None,
             fibers: Vec::new(),
             loaded_extensions: Vec::new(),
             shutdown_hooks: Vec::new(),
