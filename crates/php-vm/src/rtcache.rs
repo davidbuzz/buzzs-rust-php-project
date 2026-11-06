@@ -10,12 +10,13 @@
 //! skips the name hashing, visibility checks and deprecation probes. Slots
 //! are indexed by the op's name literal, like [`OpArray::class_cache`] and
 //! [`OpArray::fcall_cache`]; because literals are shared by every op of an
-//! op array naming the same string, a slot remembers the class it was
+//! op array naming the same string (`A::X` and `B::X`), a member slot
+//! holds up to [`POLY_ENTRIES`] entries, each remembering the class it was
 //! filled for (php-src's polymorphic cache pair `ce, ptr`) and, for a
 //! non-public member, the calling scope whose access check it passed.
-//! A slot that does not match is a miss: the op takes its uncached path,
-//! which raises every error, deprecation and autoload exactly as before,
-//! and refills the slot.
+//! No matching entry is a miss: the op takes its uncached path, which
+//! raises every error, deprecation and autoload exactly as before, and
+//! adds an entry.
 //!
 //! Only results that cannot change while the op array lives are cached:
 //! classes, their constants, static property slots and methods are never
@@ -41,9 +42,13 @@ use std::rc::{Rc, Weak};
 #[cfg(test)]
 mod tests;
 
-/// [`MemberSlot::class_lit`] of a slot not filled by a `ClassSpec::Named`
-/// op.
+/// [`MemberSlot::class_lit`] of an entry not filled by a
+/// `ClassSpec::Named` op.
 const NO_CLASS_LIT: u32 = u32::MAX;
+
+/// Entries per member slot: the classes one name literal of an op array
+/// is cached for at a time.
+const POLY_ENTRIES: usize = 4;
 
 /// The run-time cache of one op array (see the module docs).
 #[derive(Debug, Default)]
@@ -51,11 +56,11 @@ pub struct RuntimeCache {
     /// `FetchConst` results, by name literal.
     consts: RefCell<Vec<ConstSlot>>,
     /// `FetchClassConst` results, by constant-name literal.
-    class_consts: RefCell<Vec<Option<MemberSlot>>>,
+    class_consts: RefCell<Vec<Vec<MemberSlot>>>,
     /// Static property slots of `A::$name` places, by name literal.
-    static_props: RefCell<Vec<Option<MemberSlot>>>,
+    static_props: RefCell<Vec<Vec<MemberSlot>>>,
     /// `InitStaticCall` method resolutions, by method-name literal.
-    static_calls: RefCell<Vec<Option<CallSlot>>>,
+    static_calls: RefCell<Vec<Vec<MemberSlot>>>,
 }
 
 /// A cached global constant.
@@ -76,32 +81,29 @@ enum ConstSlot {
     Fallback { value: Value, epoch: usize },
 }
 
-/// A cached class member (class constant or static property).
+/// One entry of a member slot: a class member (class constant, static
+/// property or method) as looked up through one class.
 #[derive(Debug)]
 struct MemberSlot {
-    /// The class literal of the `ClassSpec::Named` op that filled the slot
-    /// ([`NO_CLASS_LIT`] otherwise).
+    /// The class literal of the `ClassSpec::Named` op that filled the
+    /// entry ([`NO_CLASS_LIT`] otherwise).
     class_lit: u32,
-    /// The class the member was found in.
+    /// The class the member was looked up in.
     class: Weak<Class>,
-    /// Who may use the slot.
+    /// Who may use the entry.
     access: Access,
-    /// Index into the class's `consts` / `static_props`.
-    idx: usize,
+    /// The member.
+    target: Target,
 }
 
-/// A cached static method call target.
+/// What a [`MemberSlot`] caches.
 #[derive(Debug)]
-struct CallSlot {
-    /// As [`MemberSlot::class_lit`].
-    class_lit: u32,
-    /// The class named by the call.
-    class: Weak<Class>,
-    /// As [`MemberSlot::access`].
-    access: Access,
-    /// The resolved method (static, or an instance method called with a
-    /// compatible `$this`).
-    method: Weak<Method>,
+enum Target {
+    /// Index into the class's `consts` / `static_props`.
+    Index(usize),
+    /// The resolved method of a static call (a static method, or an
+    /// instance method called with a compatible `$this`).
+    Method(Weak<Method>),
 }
 
 /// The access check a cached member passed.
@@ -120,6 +122,22 @@ fn put<T: Default>(slots: &RefCell<Vec<T>>, i: usize, x: T) {
         v.resize_with(i + 1, T::default);
     }
     v[i] = x;
+}
+
+/// Adds `x` to the member slot `i`: it replaces the entry for the same
+/// class (filled under another scope or by another spelling of the class),
+/// and the oldest entry once the slot is full.
+fn put_member(slots: &RefCell<Vec<Vec<MemberSlot>>>, i: usize, x: MemberSlot) {
+    let mut v = slots.borrow_mut();
+    if v.len() <= i {
+        v.resize_with(i + 1, Vec::new);
+    }
+    let entries = &mut v[i];
+    entries.retain(|e| e.class.as_ptr() != x.class.as_ptr());
+    if entries.len() >= POLY_ENTRIES {
+        entries.remove(0);
+    }
+    entries.push(x);
 }
 
 /// Whether a constant value may be shared by the cache: values whose
@@ -183,19 +201,31 @@ impl Vm {
         }
     }
 
-    /// The class `spec` resolves to, if it is the one a slot was filled
-    /// for (`lit`, `class`).
+    /// The entry of a member slot filled for the class `spec` resolves to
+    /// and valid in the calling scope, with that class.
     #[inline]
-    fn rt_class(&self, spec: &ClassSpec, lit: u32, class: &Weak<Class>) -> Option<Rc<Class>> {
+    fn rt_find<'a>(
+        &self,
+        spec: &ClassSpec,
+        entries: &'a [MemberSlot],
+    ) -> Option<(Rc<Class>, &'a MemberSlot)> {
         let c = match spec {
-            ClassSpec::Named(l) if *l == lit => return class.upgrade(),
-            ClassSpec::Named(l) => self.peek_named_class(*l)?,
+            ClassSpec::Named(l) => {
+                if let Some(e) = entries.iter().find(|e| e.class_lit == *l) {
+                    let c = e.class.upgrade()?;
+                    return self.rt_access_ok(&e.access).then_some((c, e));
+                }
+                self.peek_named_class(*l)?
+            }
             ClassSpec::SelfClass => self.scope()?,
             ClassSpec::Parent => self.scope()?.parent.clone()?,
             ClassSpec::Static => self.rt_called()?,
             ClassSpec::Dyn(_) => return None,
         };
-        (Rc::as_ptr(&c) == class.as_ptr()).then_some(c)
+        let e = entries
+            .iter()
+            .find(|e| Rc::as_ptr(&c) == e.class.as_ptr() && self.rt_access_ok(&e.access))?;
+        Some((c, e))
     }
 
     /// Whether a slot's access check holds for the calling scope.
@@ -334,12 +364,11 @@ impl Vm {
     #[inline]
     fn class_const_hit(&self, spec: &ClassSpec, name: u32) -> Option<Value> {
         let cache = self.frame().code.rt_cache.class_consts.borrow();
-        let e = cache.get(name as usize)?.as_ref()?;
-        let cls = self.rt_class(spec, e.class_lit, &e.class)?;
-        if !self.rt_access_ok(&e.access) {
+        let (cls, e) = self.rt_find(spec, cache.get(name as usize)?)?;
+        let Target::Index(idx) = e.target else {
             return None;
-        }
-        let v = cls.consts.get(e.idx)?.value.borrow().clone();
+        };
+        let v = cls.consts.get(idx)?.value.borrow().clone();
         v
     }
 
@@ -380,12 +409,12 @@ impl Vm {
             class_lit,
             class: Rc::downgrade(&cls),
             access,
-            idx,
+            target: Target::Index(idx),
         };
-        put(
+        put_member(
             &self.frame().code.rt_cache.class_consts,
             name as usize,
-            Some(slot),
+            slot,
         );
     }
 
@@ -406,12 +435,11 @@ impl Vm {
             return None;
         };
         let cache = self.frame().code.rt_cache.static_props.borrow();
-        let e = cache.get(l as usize)?.as_ref()?;
-        let cls = self.rt_class(spec, e.class_lit, &e.class)?;
-        if !self.rt_access_ok(&e.access) {
+        let (cls, e) = self.rt_find(spec, cache.get(l as usize)?)?;
+        let Target::Index(idx) = e.target else {
             return None;
-        }
-        let sp = cls.static_props.get(e.idx)?;
+        };
+        let sp = cls.static_props.get(idx)?;
         // What `static_prop_slot` does on every fetch of an initialised
         // property of a class.
         crate::typed_refs::note_static_prop(sp);
@@ -453,13 +481,9 @@ impl Vm {
             class_lit,
             class: Rc::downgrade(&cls),
             access,
-            idx,
+            target: Target::Index(idx),
         };
-        put(
-            &self.frame().code.rt_cache.static_props,
-            l as usize,
-            Some(slot),
-        );
+        put_member(&self.frame().code.rt_cache.static_props, l as usize, slot);
     }
 
     // ------------------------------------------------------------------
@@ -476,12 +500,11 @@ impl Vm {
             return None;
         };
         let cache = self.frame().code.rt_cache.static_calls.borrow();
-        let e = cache.get(l as usize)?.as_ref()?;
-        let cls = self.rt_class(spec, e.class_lit, &e.class)?;
-        if !self.rt_access_ok(&e.access) {
+        let (cls, e) = self.rt_find(spec, cache.get(l as usize)?)?;
+        let Target::Method(m) = &e.target else {
             return None;
-        }
-        let m = e.method.upgrade()?;
+        };
+        let m = m.upgrade()?;
         let caller = self
             .frames
             .iter()
@@ -556,17 +579,13 @@ impl Vm {
             ClassSpec::Named(c) => *c,
             _ => NO_CLASS_LIT,
         };
-        let slot = CallSlot {
+        let slot = MemberSlot {
             class_lit,
             class: Rc::downgrade(cls),
             access,
-            method: Rc::downgrade(m),
+            target: Target::Method(Rc::downgrade(m)),
         };
-        put(
-            &self.frame().code.rt_cache.static_calls,
-            l as usize,
-            Some(slot),
-        );
+        put_member(&self.frame().code.rt_cache.static_calls, l as usize, slot);
     }
 
     /// Whether two function handles are the same function.
