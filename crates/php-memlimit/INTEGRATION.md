@@ -113,6 +113,14 @@ cannot fire a second one (PHP's `ZEND_OOM_STATE_HANDLED`). The message has no
 `" at file:line"` part (that is debug-build only; tests match it with `%S`).
 `error_get_last()['message']` is `over.to_string()`.
 
+Instead of polling on every opcode, the VM can install
+`php_memlimit::set_pending_hook(hook)` once: `hook()` runs each time a
+violation is recorded (an allocation over the soft limit or a failed
+`try_reserve`), after `is_pending()`/`check()` can see it, on the recording
+thread and possibly inside the allocator, so it should only set an atomic
+flag (php-src's `EG(vm_interrupt)`); the VM then calls `take()` at its next
+interrupt check.
+
 Also poll before calling user callbacks from builtins if convenient
 (`oom_soft_limit_in_callback.phpt`); not required for correctness.
 

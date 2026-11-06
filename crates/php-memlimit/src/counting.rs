@@ -250,7 +250,7 @@ pub struct Stats {
 /// # The request thread's heap
 ///
 /// Small requests (up to 3072 bytes, alignment up to 16) made by the owner
-/// thread are served from a zend_mm-style heap (see `heap.rs`: per-size
+/// thread are served from a `zend_mm`-style heap (see `heap.rs`: per-size
 /// bins carved out of 2 MiB chunks obtained from `inner`, with unlocked
 /// free lists); everything else, and every request of another thread, goes
 /// to `inner`. Ownership is exclusive: [`bind_to_current_thread`]

@@ -26,7 +26,7 @@
 //!   [observing](observe_heap) is on (`ext/zend_test`'s custom ZendMM
 //!   handlers); while it is off the fast paths do no extra work.
 //!
-//! The memory itself comes from a port of zend_mm's small-block heap for
+//! The memory itself comes from a port of `zend_mm`'s small-block heap for
 //! the request thread (the thread [bound](bind_to_current_thread) by
 //! [`request_start`]: size bins carved out of 2 MiB chunks, unlocked free
 //! lists) and from [`MiMalloc`] for larger blocks and other threads; see

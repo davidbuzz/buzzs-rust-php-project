@@ -1,7 +1,7 @@
 //! The request thread's small-block heap: a port of the small-size part of
-//! `Zend/zend_alloc.c` (zend_mm).
+//! `Zend/zend_alloc.c` (`zend_mm`).
 //!
-//! # Design (as in zend_mm)
+//! # Design (as in `zend_mm`)
 //!
 //! * Memory comes in 2 MiB *chunks* ([`CHUNK_SIZE`], aligned to their own
 //!   size), divided into 4 KiB pages.
@@ -15,7 +15,7 @@
 //!   each, no locked instruction, because only the thread that owns the
 //!   heap (the request thread) touches the lists.
 //! * Large (up to `ZEND_MM_MAX_LARGE_SIZE`) and huge requests are left to
-//!   the inner allocator. zend_mm maps huge blocks on their own, which is
+//!   the inner allocator. `zend_mm` maps huge blocks on their own, which is
 //!   what the inner allocator does for them as well; large runs are rare in
 //!   the profiled workloads (no `perf/bench` workload makes more than a
 //!   few dozen) and are not ported.
@@ -36,7 +36,7 @@
 //!   chunk is obtained) tells them apart. Chunks are never given back, so a
 //!   bit is never cleared and an address once tested as "heap" stays so
 //!   for as long as the block lives.
-//! * Chunks are never returned to the system (zend_mm caches its chunks
+//! * Chunks are never returned to the system (`zend_mm` caches its chunks
 //!   too, and frees them at `zend_mm_shutdown`, which Rust's object
 //!   lifetimes do not allow). Freed small blocks stay on their bin's list.
 //!
