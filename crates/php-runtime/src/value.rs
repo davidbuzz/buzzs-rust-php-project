@@ -735,7 +735,7 @@ impl Drop for Obj {
         // allocation's own `Rc` is an `Rc` owning exactly that count, and
         // dropping it releases it (and frees the object if it was the last).
         // `self` is not used afterwards.
-        unsafe { drop(ptr::read(self.rc())) }
+        unsafe { drop(ptr::read(self.rc())) };
     }
 }
 
