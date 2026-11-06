@@ -761,6 +761,12 @@ impl Vm {
                             Some(false) => {}
                             None => break 'slow,
                         },
+                        Op::IncDec { place, kind, dst } => {
+                            match self.incdec_cv_fast(*place, *kind) {
+                                Some(r) => self.set_dst(*dst, r),
+                                None => break 'slow,
+                            }
+                        }
                         Op::Bin {
                             op: kind,
                             a,
@@ -1586,6 +1592,40 @@ impl Vm {
                 }
             }
         }
+    }
+
+    /// `++`/`--` on a compiled variable holding an int that does not
+    /// overflow (php-src's `ZEND_PRE_INC_LONG_NO_OVERFLOW_SPEC_CV` and
+    /// `ZEND_POST_INC_LONG_NO_OVERFLOW_SPEC_CV`): the result, or `None` for
+    /// the generic [`Vm::place_incdec`], which starts with this same test.
+    /// Cannot warn, throw or run user code, so it runs on the local `ip`.
+    #[inline]
+    fn incdec_cv_fast(
+        &self,
+        pid: crate::opcode::PlaceId,
+        kind: crate::opcode::IncDecKind,
+    ) -> Option<Value> {
+        let f = self.frame();
+        let p = &f.code.places[pid as usize];
+        let crate::opcode::PlaceBase::Cv(cv) = p.base else {
+            return None;
+        };
+        if !p.segs.is_empty() {
+            return None;
+        }
+        let idx = f.cv_idx(cv);
+        let mut st = f.vars.borrow_mut();
+        let Some(Some(Value::Int(i))) = st.slots.get_mut(idx) else {
+            return None;
+        };
+        let old = *i;
+        let new = if kind.is_inc() {
+            old.checked_add(1)
+        } else {
+            old.checked_sub(1)
+        }?;
+        *i = new;
+        Some(Value::Int(if kind.is_post() { old } else { new }))
     }
 
     /// Whether the safe point after an instruction has work to do: pending

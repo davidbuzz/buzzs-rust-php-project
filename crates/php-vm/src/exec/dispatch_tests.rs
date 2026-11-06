@@ -320,6 +320,74 @@ Stack trace:
     );
 }
 
+/// `++`/`--` on an int CV runs on the local `ip`; overflow, references,
+/// floats, numeric strings, null, undefined variables, statics and
+/// dimensions take the generic path (with its warnings and line).
+#[test]
+fn incdec_fast_path_and_its_fallbacks() {
+    let src = r#"<?php
+$i = 5;
+$a = $i++;
+$b = ++$i;
+$c = $i--;
+$d = --$i;
+var_dump($a, $b, $c, $d, $i);
+$m = PHP_INT_MAX;
+$m++;
+var_dump($m);
+$n = PHP_INT_MIN;
+$p = $n--;
+var_dump($p, $n);
+$r = 1;
+$x = &$r;
+$x++;
+var_dump($r);
+$s = "9";
+$s++;
+var_dump($s);
+$f = 1.5;
+$f--;
+var_dump($f);
+$z = null;
+$z--;
+var_dump($z);
+$u++;
+var_dump($u);
+function counter() { static $k = 0; return ++$k; }
+counter();
+var_dump(counter());
+$arr = [1];
+$arr[0]++;
+var_dump($arr);
+"#;
+    assert_eq!(
+        run(src),
+        r#"int(5)
+int(7)
+int(7)
+int(5)
+int(5)
+float(9.223372036854776E+18)
+int(-9223372036854775808)
+float(-9.223372036854776E+18)
+int(2)
+int(10)
+float(0.5)
+
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in t.php on line 25
+NULL
+
+Warning: Undefined variable $u in t.php on line 27
+int(1)
+int(2)
+array(1) {
+  [0]=>
+  int(2)
+}
+"#
+    );
+}
+
 /// `zend_compile_while`/`zend_compile_for` compile the body before the
 /// condition (and `for` the step too): CVs, so `get_defined_vars()`, follow
 /// that order.
