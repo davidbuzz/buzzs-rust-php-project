@@ -1056,27 +1056,19 @@ impl Vm {
                         },
                         // With `to`, the `AssignCv` after a dimension fetch
                         // is done here when the variable holds a plain
-                        // value (`store_fetched`: skip it).
+                        // value (`Some(true)`: skip it).
                         Op::FetchDimCv {
                             cv, dim, dst, to, ..
-                        } => match self.fetch_dim_cv_fast(*cv, *dim) {
-                            Some(v) => {
-                                self.release_tmp_str(*dim);
-                                if self.store_fetched(*dst, *to, v) {
-                                    ip += 1;
-                                }
-                            }
+                        } => match self.fetch_dim_cv(*cv, *dim, *dst, *to) {
+                            Some(true) => ip += 1,
+                            Some(false) => {}
                             None => break 'slow,
                         },
                         Op::FetchDimsCv {
                             cv, place, dst, to, ..
-                        } => match self.fetch_dims_cv_fast(*cv, *place) {
-                            Some(v) => {
-                                self.release_dim_tmps(*place);
-                                if self.store_fetched(*dst, *to, v) {
-                                    ip += 1;
-                                }
-                            }
+                        } => match self.fetch_dims_cv(*cv, *place, *dst, *to) {
+                            Some(true) => ip += 1,
+                            Some(false) => {}
                             None => break 'slow,
                         },
                         Op::IssetDimCv {
@@ -1085,15 +1077,28 @@ impl Vm {
                             dst,
                             empty,
                             ..
-                        } => match self.isset_dim_cv_fast(*cv, *dim, *empty) {
-                            Some(r) => {
-                                self.release_tmp_str(*dim);
-                                self.set_tmp(*dst, Value::Bool(r));
+                        } => {
+                            if !self.isset_dim_cv(*cv, *dim, *dst, *empty) {
+                                break 'slow;
                             }
-                            None => break 'slow,
-                        },
+                        }
                         Op::AssignDimCv { cv, dim, val, .. } => {
                             if !self.assign_dim_cv_fast(*cv, *dim, *val) {
+                                break 'slow;
+                            }
+                        }
+                        Op::AssignDimsCv { cv, val, place } => {
+                            if !self.assign_dims_cv_fast(*cv, *place, *val) {
+                                break 'slow;
+                            }
+                        }
+                        Op::AssignOpDimsCv {
+                            cv,
+                            op: kind,
+                            val,
+                            place,
+                        } => {
+                            if !self.assign_op_dims_cv_fast(*cv, *kind, *place, *val) {
                                 break 'slow;
                             }
                         }
@@ -2003,7 +2008,8 @@ impl Vm {
                         self.set_dst(*dst, r);
                         Flow::Next
                     }
-                    Op::AssignOpDimCv { op, val, place, .. } => {
+                    Op::AssignOpDimCv { op, val, place, .. }
+                    | Op::AssignOpDimsCv { op, val, place, .. } => {
                         let v = self.read(*val)?;
                         self.place_assign_op(*place, *op, v)?;
                         Flow::Next
@@ -2016,7 +2022,7 @@ impl Vm {
                         self.set_tmp(*dst, Value::Bool(v));
                         Flow::Next
                     }
-                    Op::AssignDimCv { val, place, .. } => {
+                    Op::AssignDimCv { val, place, .. } | Op::AssignDimsCv { val, place, .. } => {
                         self.assign_place_unused(*place, *val)?;
                         Flow::Next
                     }
@@ -2833,6 +2839,8 @@ fn defers_oom(op: &Op) -> bool {
             | Op::AssignOpCv { .. }
             | Op::AssignOpDimCv { .. }
             | Op::AssignDimCv { .. }
+            | Op::AssignDimsCv { .. }
+            | Op::AssignOpDimsCv { .. }
             | Op::AssignStaticProp { .. }
             | Op::AssignOpStaticProp { .. }
             | Op::ConcatCv { .. }

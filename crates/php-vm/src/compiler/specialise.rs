@@ -60,50 +60,7 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
             op,
             val,
             dst,
-        } => {
-            if static_prop(places, *place) {
-                return Some(Op::AssignOpStaticProp {
-                    place: *place,
-                    op: *op,
-                    val: *val,
-                    dst: *dst,
-                });
-            }
-            if *op == BinaryOp::Concat {
-                if let Some(cv) = plain_cv(places, *place) {
-                    return Some(Op::ConcatCv {
-                        cv,
-                        val: *val,
-                        dst: *dst,
-                        place: *place,
-                    });
-                }
-            }
-            if is_numeric_assign_op(*op) {
-                if let Some(cv) = plain_cv(places, *place) {
-                    return Some(Op::AssignOpCv {
-                        cv,
-                        op: *op,
-                        val: *val,
-                        dst: *dst,
-                        place: *place,
-                    });
-                }
-            }
-            // `$cv[k] op= v` as a statement: a number operated on in place,
-            // or `.=` extending a string element in place
-            // (`ZEND_ASSIGN_DIM_OP` on the fetched slot).
-            if dst.is_some() || !(is_numeric_assign_op(*op) || *op == BinaryOp::Concat) {
-                return None;
-            }
-            cv_dim(places, *place).map(|(cv, dim)| Op::AssignOpDimCv {
-                cv,
-                dim,
-                op: *op,
-                val: *val,
-                place: *place,
-            })
-        }
+        } => assign_op(places, *place, *op, *val, *dst),
         Op::Fetch { place, mode, dst } if *mode != FetchMode::List => cv_dim(places, *place)
             .map(|(cv, dim)| Op::FetchDimCv {
                 cv,
@@ -132,26 +89,98 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
             }),
         Op::Isset { place, dst } => isset(places, *place, *dst, false),
         Op::Empty { place, dst } => isset(places, *place, *dst, true),
-        Op::Assign { place, val, dst } => {
-            if static_prop(places, *place) {
-                return Some(Op::AssignStaticProp {
-                    place: *place,
-                    val: *val,
-                    dst: *dst,
-                });
-            }
-            if dst.is_some() {
-                return None;
-            }
-            cv_dim(places, *place).map(|(cv, dim)| Op::AssignDimCv {
-                cv,
-                dim,
-                val: *val,
-                place: *place,
-            })
-        }
+        Op::Assign { place, val, dst } => assign(places, *place, *val, *dst),
         _ => None,
     }
+}
+
+/// The specialised `Assign` of `place = val` (result `dst`).
+fn assign(places: &[Place], place: PlaceId, val: Operand, dst: Option<u32>) -> Option<Op> {
+    if static_prop(places, place) {
+        return Some(Op::AssignStaticProp { place, val, dst });
+    }
+    if dst.is_some() {
+        return None;
+    }
+    if let Some((cv, dim)) = cv_dim(places, place) {
+        return Some(Op::AssignDimCv {
+            cv,
+            dim,
+            val,
+            place,
+        });
+    }
+    // `$cv[d1][d2]... = val;` (`mkmatrix`'s `$mx[$i][$j] = $count++`).
+    short_cv_dims(places, place).map(|cv| Op::AssignDimsCv { cv, val, place })
+}
+
+/// The specialised `AssignOp` of `place op= val` (result `dst`).
+fn assign_op(
+    places: &[Place],
+    place: PlaceId,
+    op: BinaryOp,
+    val: Operand,
+    dst: Option<u32>,
+) -> Option<Op> {
+    if static_prop(places, place) {
+        return Some(Op::AssignOpStaticProp {
+            place,
+            op,
+            val,
+            dst,
+        });
+    }
+    if op == BinaryOp::Concat {
+        if let Some(cv) = plain_cv(places, place) {
+            return Some(Op::ConcatCv {
+                cv,
+                val,
+                dst,
+                place,
+            });
+        }
+    }
+    if is_numeric_assign_op(op) {
+        if let Some(cv) = plain_cv(places, place) {
+            return Some(Op::AssignOpCv {
+                cv,
+                op,
+                val,
+                dst,
+                place,
+            });
+        }
+    }
+    // `$cv[k] op= v` as a statement: a number operated on in place, or `.=`
+    // extending a string element in place (`ZEND_ASSIGN_DIM_OP` on the
+    // fetched slot).
+    if dst.is_some() || !(is_numeric_assign_op(op) || op == BinaryOp::Concat) {
+        return None;
+    }
+    if let Some((cv, dim)) = cv_dim(places, place) {
+        return Some(Op::AssignOpDimCv {
+            cv,
+            dim,
+            op,
+            val,
+            place,
+        });
+    }
+    // `$cv[d1][d2]... op= v` on numbers.
+    if !is_numeric_assign_op(op) {
+        return None;
+    }
+    short_cv_dims(places, place).map(|cv| Op::AssignOpDimsCv { cv, op, val, place })
+}
+
+/// The deepest dimension chain the nested write fast paths take
+/// (`exec/spec.rs`, `MAX_WRITE_DIMS`).
+const MAX_WRITE_DIMS: usize = 4;
+
+/// [`cv_dims`] with at most [`MAX_WRITE_DIMS`] dimensions.
+fn short_cv_dims(places: &[Place], pid: PlaceId) -> Option<u32> {
+    let cv = cv_dims(places, pid)?;
+    (places.get(pid as usize)?.segs.len() <= MAX_WRITE_DIMS).then_some(cv)
 }
 
 /// The specialised `isset()` (`empty` false) or `empty()` of `pid`
@@ -562,8 +591,8 @@ mod tests {
             1,
             "{ops:?}"
         );
-        // Nested dimension reads get the chain form; appends and nested
-        // writes keep the generic place ops.
+        // Nested dimension reads and writes get the chain forms; appends
+        // keep the generic place ops.
         let ops = main_ops(
             "<?php $a = [[1]]; echo $a[0][0]; $a[] = 1; $a[0][0] = 2; $x = $a[0][0]; $y = $a[0][0] ?? 1;",
         );
@@ -608,7 +637,40 @@ mod tests {
             ops.iter()
                 .filter(|op| matches!(op, Op::Assign { .. }))
                 .count(),
-            2,
+            1,
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::AssignDimsCv { .. })),
+            "{ops:?}"
+        );
+        // Nested compound assignments: numeric ones get the chain form; `.=`,
+        // a used result and more than four dimensions keep the generic ops.
+        let ops = main_ops(
+            "<?php $m = [[1]]; $m[0][0] += 2; $m[0][0] .= 'x'; $y = ($m[0][0] -= 1); $m[0][0][0][0][0] = 1; $m[0][0][0][0][0] *= 2;",
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(
+                    op,
+                    Op::AssignOpDimsCv {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                ))
+                .count(),
+            1,
+            "{ops:?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::AssignOp { .. }))
+                .count(),
+            3,
+            "{ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|op| matches!(op, Op::AssignDimsCv { .. })),
             "{ops:?}"
         );
     }

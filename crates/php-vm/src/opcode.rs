@@ -818,6 +818,28 @@ pub enum Op {
         dst: Option<u32>,
         place: PlaceId,
     },
+    /// `Assign` of `$cv[d1][d2]... = val` (two to four dimensions, none
+    /// `[]`) without a used result: the chain of `FETCH_DIM_W`s and the
+    /// `ASSIGN_DIM` on arrays, each separated (`SEPARATE_ARRAY`), a missing
+    /// or null container element becoming an empty array, with a scalar or
+    /// string value replacing a scalar or string element (or none);
+    /// anything else is the generic `Assign` of `place`.
+    AssignDimsCv {
+        cv: u32,
+        val: Operand,
+        place: PlaceId,
+    },
+    /// `AssignOp` (`+=`, `-=`, `*=`, `|=`, `&=`, `^=`) of `$cv[d1][d2]...`
+    /// (as in [`Op::AssignDimsCv`]) without a used result, when every
+    /// container exists and is an array and the element is a plain number
+    /// (the `FETCH_DIM_RW` chain and `ZEND_ASSIGN_DIM_OP`'s numeric fast
+    /// path); anything else is the generic `AssignOp` of `place`.
+    AssignOpDimsCv {
+        cv: u32,
+        op: BinaryOp,
+        val: Operand,
+        place: PlaceId,
+    },
 }
 
 /// The bits of [`Op::CmpJmp`]'s `mask`: the outcomes of comparing two
