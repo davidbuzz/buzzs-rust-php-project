@@ -644,7 +644,7 @@ fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
     let flags = d.flags.get();
     if flags & oflags::GC_BUFFERED != 0 {
         // `GC_REMOVE_FROM_BUFFER`.
-        crate::gc::forget_root(cell);
+        crate::gc::forget_root(cell, handle);
     }
     if d.unset_bits.get() & UNSET_OVERFLOW_BIT != 0 {
         forget_unset_overflow(handle);

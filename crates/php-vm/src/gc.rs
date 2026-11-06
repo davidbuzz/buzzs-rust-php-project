@@ -62,8 +62,6 @@ use crate::object::ObjectData;
 use crate::vm::{Vm, VmResult};
 use php_runtime::{Obj, PhpObject, Value};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
@@ -109,10 +107,10 @@ const NO_SLOT: usize = usize::MAX;
 /// The object root buffer (`GC_G(buf)`), laid out like php-src's: slot `i`
 /// is php-src's `GC_FIRST_ROOT + i`.
 ///
-/// * A slot holds a weak handle of a buffered object (`GC_ROOT`), a dead
-///   weak handle standing for garbage of the running collection
-///   (`GC_GARBAGE`, see [`RootBuffer::push_garbage`]), or nothing
-///   (`GC_UNUSED`).
+/// * A slot holds a buffered object (`GC_ROOT`: its weak handle and its
+///   object handle), a dead weak handle standing for garbage of the running
+///   collection (`GC_GARBAGE`, see [`RootBuffer::push_garbage`]), or
+///   nothing (`GC_UNUSED`).
 /// * Removing a root (`gc_remove_from_roots`) puts its slot on the unused
 ///   list, and the next root takes the most recently freed slot
 ///   (`GC_FETCH_UNUSED`) before the buffer grows (`GC_FETCH_NEXT_UNUSED`).
@@ -121,73 +119,32 @@ const NO_SLOT: usize = usize::MAX;
 ///
 /// A collection visits the roots in slot order, so this layout decides the
 /// order in which garbage is destructed (`Zend/tests/fibers/destructors_005`).
-/// Each object is buffered at most once (`GC_INFO != 0`): `index` maps a
-/// buffered handle's address to its slot (a weak handle keeps the address
-/// from being reused while it is buffered).
+/// Each object is buffered at most once (`GC_INFO != 0`): `by_handle` maps
+/// a buffered object's handle to its slot, as php-src's `GC_INFO` does
+/// from the object itself (no hashing). Handles are unique among live
+/// objects, and an entry counts only while its slot holds that object
+/// (same handle and address; a weak handle keeps the address from being
+/// reused while it is buffered), so an entry left behind by a freed object
+/// whose handle was reused is ignored.
+#[derive(Default)]
 struct RootBuffer {
-    slots: Vec<Option<Weak<dyn PhpObject>>>,
+    slots: Vec<Option<Root>>,
     /// The unused list (`GC_G(unused)`): freed slots, the last freed on top.
     unused: Vec<usize>,
     /// Used slots (`GC_G(num_roots)`).
     num_roots: usize,
-    index: AddrMap,
+    /// Slot + 1 of the buffered object with each handle (0: none).
+    by_handle: Vec<u32>,
 }
 
-/// The root index: buffered handle address → slot.
-type AddrMap = HashMap<usize, usize, BuildHasherDefault<AddrHasher>>;
-
-/// Hashes the root index's keys, object addresses, with one folded
-/// multiply instead of `SipHash`: buffering a root and freeing a buffered
-/// object each look the index up (php-src keeps the slot in the object's
-/// `GC_INFO` and needs no lookup at all). The keys are heap addresses, not
-/// script-controlled data, so there is no hash flooding to defend against.
-#[derive(Clone, Copy, Default)]
-struct AddrHasher(u64);
-
-/// Multiplier of [`AddrHasher`] (2^64 / golden ratio).
-const ADDR_HASH_K: u64 = 0x9e37_79b9_7f4a_7c15;
-
-impl AddrHasher {
-    #[inline]
-    #[allow(clippy::cast_possible_truncation)] // folds the 128-bit product
-    fn mix(&mut self, x: u64) {
-        let m = u128::from(self.0 ^ x) * u128::from(ADDR_HASH_K);
-        self.0 = (m as u64) ^ ((m >> 64) as u64);
-    }
+/// A buffered object.
+struct Root {
+    weak: Weak<dyn PhpObject>,
+    /// Its handle (0 for a garbage placeholder: handles start at 1).
+    handle: u32,
 }
 
-impl Hasher for AddrHasher {
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for chunk in bytes.chunks(8) {
-            let mut b = [0u8; 8];
-            b[..chunk.len()].copy_from_slice(chunk);
-            self.mix(u64::from_le_bytes(b));
-        }
-    }
-
-    #[inline]
-    fn write_usize(&mut self, n: usize) {
-        self.mix(n as u64);
-    }
-}
-
-impl Default for RootBuffer {
-    fn default() -> Self {
-        RootBuffer {
-            slots: Vec::new(),
-            unused: Vec::new(),
-            num_roots: 0,
-            index: AddrMap::default(),
-        }
-    }
-}
-
-/// The address a buffered weak handle is indexed by ([`Obj::addr`]).
+/// The address of a buffered weak handle ([`Obj::addr`]).
 fn weak_addr(w: &Weak<dyn PhpObject>) -> usize {
     w.as_ptr().cast::<u8>() as usize
 }
@@ -203,9 +160,39 @@ impl RootBuffer {
         self.slots.len()
     }
 
-    /// Whether `o` is buffered.
-    fn contains(&self, o: &Obj) -> bool {
-        self.index.contains_key(&o.addr())
+    /// The slot of the buffered object with `handle` at `addr`
+    /// (`GC_REF_ADDRESS`), if it is buffered.
+    #[inline]
+    fn slot_of(&self, handle: u32, addr: usize) -> Option<usize> {
+        let i = (*self.by_handle.get(handle as usize)? as usize).checked_sub(1)?;
+        match self.slots.get(i) {
+            Some(Some(r)) if r.handle == handle && weak_addr(&r.weak) == addr => Some(i),
+            _ => None,
+        }
+    }
+
+    /// Whether the object with `handle` at `addr` is buffered.
+    fn contains(&self, handle: u32, addr: usize) -> bool {
+        self.slot_of(handle, addr).is_some()
+    }
+
+    /// Records slot `i` as the one of `handle` (`GC_REF_SET_INFO`).
+    fn set_index(&mut self, handle: u32, i: usize) {
+        let h = handle as usize;
+        if self.by_handle.len() <= h {
+            self.by_handle.resize(h + 1, 0);
+        }
+        // `MAX_BUF_SIZE` keeps slot numbers far below `u32::MAX`.
+        self.by_handle[h] = u32::try_from(i + 1).unwrap_or(0);
+    }
+
+    /// Forgets that `handle` is at slot `i` (if that is what is recorded).
+    fn clear_index(&mut self, handle: u32, i: usize) {
+        if let Some(e) = self.by_handle.get_mut(handle as usize) {
+            if *e as usize == i + 1 {
+                *e = 0;
+            }
+        }
     }
 
     /// `GC_FETCH_UNUSED()`, else `GC_FETCH_NEXT_UNUSED()`.
@@ -223,17 +210,22 @@ impl RootBuffer {
     /// is buffered.
     #[cfg(test)]
     fn push(&mut self, o: &Obj) -> Option<usize> {
-        if self.contains(o) {
+        let handle = crate::object::data(o).handle;
+        if self.contains(handle, o.addr()) {
             return None;
         }
-        Some(self.insert_new(o))
+        Some(self.insert_new(o, handle))
     }
 
-    /// Buffers `o`, which is not buffered; returns its slot.
-    fn insert_new(&mut self, o: &Obj) -> usize {
+    /// Buffers `o`, the object with `handle`, which is not buffered;
+    /// returns its slot.
+    fn insert_new(&mut self, o: &Obj, handle: u32) -> usize {
         let i = self.fetch();
-        self.slots[i] = Some(Rc::downgrade(o.rc()));
-        self.index.insert(o.addr(), i);
+        self.slots[i] = Some(Root {
+            weak: Rc::downgrade(o.rc()),
+            handle,
+        });
+        self.set_index(handle, i);
         self.num_roots += 1;
         i
     }
@@ -244,22 +236,21 @@ impl RootBuffer {
     fn push_garbage(&mut self) -> usize {
         let i = self.fetch();
         let empty: Weak<dyn PhpObject> = Weak::<crate::object::ObjectBlock<0>>::new();
-        self.slots[i] = Some(empty);
+        self.slots[i] = Some(Root {
+            weak: empty,
+            handle: 0,
+        });
         self.num_roots += 1;
         i
     }
 
     /// `gc_remove_from_roots`: slot `i` goes to the unused list.
     fn release(&mut self, i: usize) {
-        match self.slots.get(i) {
-            Some(Some(w)) => {
-                let addr = weak_addr(w);
-                if self.index.get(&addr) == Some(&i) {
-                    self.index.remove(&addr);
-                }
-            }
-            _ => return,
-        }
+        let Some(Some(r)) = self.slots.get(i) else {
+            return;
+        };
+        let handle = r.handle;
+        self.clear_index(handle, i);
         self.slots[i] = None;
         self.unused.push(i);
         self.num_roots = self.num_roots.saturating_sub(1);
@@ -268,29 +259,21 @@ impl RootBuffer {
     /// Releases slot `i` if it holds no live object: a garbage placeholder
     /// (or a root freed without notice), never a root buffered since.
     fn release_dead(&mut self, i: usize) {
-        if matches!(self.slots.get(i), Some(Some(w)) if w.strong_count() == 0) {
+        if matches!(self.slots.get(i), Some(Some(r)) if r.weak.strong_count() == 0) {
             self.release(i);
         }
     }
 
-    /// `GC_REMOVE_FROM_BUFFER` of the handle at `addr`; `false` if it was
-    /// not buffered.
-    fn remove(&mut self, addr: usize) -> bool {
-        // One index lookup: the entry goes first, then its slot (which
-        // holds this handle, as the index follows the slots).
-        let Some(i) = self.index.remove(&addr) else {
+    /// `GC_REMOVE_FROM_BUFFER` of the object with `handle` at `addr`;
+    /// `false` if it was not buffered.
+    fn remove(&mut self, addr: usize, handle: u32) -> bool {
+        let Some(i) = self.slot_of(handle, addr) else {
             return false;
         };
-        if matches!(self.slots.get(i), Some(Some(w)) if weak_addr(w) == addr) {
-            self.slots[i] = None;
-            self.unused.push(i);
-            self.num_roots = self.num_roots.saturating_sub(1);
-        } else {
-            // Not reached while the index follows the slots; what
-            // `release` does for an entry it finds in place.
-            self.index.insert(addr, i);
-            self.release(i);
-        }
+        self.by_handle[handle as usize] = 0;
+        self.slots[i] = None;
+        self.unused.push(i);
+        self.num_roots = self.num_roots.saturating_sub(1);
         true
     }
 
@@ -300,7 +283,7 @@ impl RootBuffer {
             .slots
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.as_ref().is_some_and(|w| w.strong_count() == 0))
+            .filter(|(_, s)| s.as_ref().is_some_and(|r| r.weak.strong_count() == 0))
             .map(|(i, _)| i)
             .collect();
         for i in dead {
@@ -330,10 +313,12 @@ impl RootBuffer {
                 }
                 if scan > free && free < len {
                     let moved = self.slots[scan].take();
-                    if let Some(w) = &moved {
-                        let addr = weak_addr(w);
-                        if self.index.get(&addr) == Some(&scan) {
-                            self.index.insert(addr, free);
+                    if let Some(r) = &moved {
+                        let handle = r.handle;
+                        if self.by_handle.get(handle as usize).copied()
+                            == u32::try_from(scan + 1).ok()
+                        {
+                            self.set_index(handle, free);
                         }
                     }
                     self.slots[free] = moved;
@@ -356,7 +341,7 @@ impl RootBuffer {
             .enumerate()
             .filter_map(|(i, s)| {
                 s.as_ref()
-                    .and_then(Weak::upgrade)
+                    .and_then(|r| r.weak.upgrade())
                     .map(|rc| (i, Obj::from_rc(rc)))
             })
             .collect()
@@ -365,17 +350,17 @@ impl RootBuffer {
     /// Buffers `later`'s roots after these (roots buffered while a due run
     /// waited for its safe point: php-src buffers them after the run).
     fn append(&mut self, later: RootBuffer) {
-        for w in later.slots.into_iter().flatten() {
-            if w.strong_count() == 0 {
+        for r in later.slots.into_iter().flatten() {
+            if r.weak.strong_count() == 0 {
                 continue;
             }
-            let addr = weak_addr(&w);
-            if self.index.contains_key(&addr) {
+            let handle = r.handle;
+            if self.contains(handle, weak_addr(&r.weak)) {
                 continue;
             }
             let i = self.fetch();
-            self.slots[i] = Some(w);
-            self.index.insert(addr, i);
+            self.slots[i] = Some(r);
+            self.set_index(handle, i);
             self.num_roots += 1;
         }
     }
@@ -730,14 +715,14 @@ fn buffer_obj(s: &mut GcState, o: &Obj) -> Option<usize> {
     if s.protected {
         return None;
     }
-    // php-src reads `GC_INFO` from the object itself. Here an object none
-    // of whose handles was ever buffered (`oflags::GC_BUFFERED` clear, the
-    // case of every fresh object) cannot be in the index, so the lookup
-    // is skipped.
-    let data = o.downcast_ref::<ObjectData>();
-    let maybe_buffered =
-        data.is_none_or(|d| d.flags.get() & crate::object::oflags::GC_BUFFERED != 0);
-    if maybe_buffered && s.roots.contains(o) {
+    // Only the VM's own objects are buffered (the callers check).
+    let d = o.downcast_ref::<ObjectData>()?;
+    // php-src reads `GC_INFO` from the object itself. Here an object that
+    // was never buffered (`oflags::GC_BUFFERED` clear, the case of every
+    // fresh object) cannot be in the buffer, so the lookup is skipped.
+    if d.flags.get() & crate::object::oflags::GC_BUFFERED != 0
+        && s.roots.contains(d.handle, o.addr())
+    {
         return None;
     }
     if !s.roots.has_unused() {
@@ -745,8 +730,7 @@ fn buffer_obj(s: &mut GcState, o: &Obj) -> Option<usize> {
         // empty buffer).
         note_new_slot(s);
     }
-    let i = s.roots.insert_new(o);
-    let d = data.unwrap_or_else(|| crate::object::data(o));
+    let i = s.roots.insert_new(o, d.handle);
     d.flags
         .set(d.flags.get() | crate::object::oflags::GC_BUFFERED);
     Some(i)
@@ -789,14 +773,14 @@ pub(crate) fn released_ctor_this(o: &Obj) {
     root_obj(o);
 }
 
-/// A buffered object handle (`oflags::GC_BUFFERED`) at `addr` is being
-/// freed: its root buffer entry goes (`GC_REMOVE_FROM_BUFFER`), and its
-/// slot is the next one reused.
-pub(crate) fn forget_root(addr: usize) {
+/// The buffered object (`oflags::GC_BUFFERED`) with `handle` at `addr` is
+/// being freed: its root buffer entry goes (`GC_REMOVE_FROM_BUFFER`), and
+/// its slot is the next one reused.
+pub(crate) fn forget_root(addr: usize, handle: u32) {
     with_state(|s| {
-        s.roots.remove(addr);
+        s.roots.remove(addr, handle);
         if let Some(f) = &mut s.frozen {
-            f.objs.remove(addr);
+            f.objs.remove(addr, handle);
         }
     });
 }
