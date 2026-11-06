@@ -26,6 +26,18 @@ fn global_allocator_lifecycle() {
         php_memlimit::CHUNK_SIZE
     );
 
+    // The request thread's small blocks come from its heap; the heap's
+    // chunks are not part of the usage figures.
+    assert!(php_memlimit::GLOBAL.is_bound_to_current_thread());
+    let small: Vec<Box<[u8; 40]>> = (0..1000).map(|_| Box::new([7u8; 40])).collect();
+    assert!(php_memlimit::GLOBAL.heap_chunks() >= 1);
+    assert!(small.iter().all(|b| b.iter().all(|&x| x == 7)));
+    drop(black_box(small));
+    assert_eq!(
+        php_memlimit::memory_get_usage(true),
+        php_memlimit::CHUNK_SIZE
+    );
+
     // Deltas are visible to memory_get_usage().
     let v = black_box(vec![1u8; M]);
     assert!(php_memlimit::usage() >= start + M);
@@ -69,9 +81,10 @@ fn global_allocator_lifecycle() {
     assert!(php_memlimit::fallible(|| buf.try_reserve_exact(M)).is_ok());
     drop(buf);
 
-    // Request end lifts the limit.
+    // Request end lifts the limit and gives the heap up.
     php_memlimit::request_end();
     assert_eq!(php_memlimit::limit(), None);
+    assert!(!php_memlimit::GLOBAL.is_bound_to_current_thread());
     let big = black_box(vec![1u8; 30 * M]);
     assert_eq!(php_memlimit::check(), None);
     drop(big);

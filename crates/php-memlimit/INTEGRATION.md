@@ -8,8 +8,7 @@ API docs: `cargo doc -p php-memlimit`. Reference: `Zend/zend_alloc.c`
 
 ## Model in one paragraph
 
-`php_memlimit::GLOBAL` is a `CountingAlloc<MiMalloc>` (mimalloc as the base
-allocator) that counts every live
+`php_memlimit::GLOBAL` is a `CountingAlloc<MiMalloc>` that counts every live
 byte. Crossing `memory_limit` never fails an ordinary allocation (Rust would
 abort); it **records** an `OverLimit { limit, tried }` (first one wins) that
 the VM turns into the PHP fatal at its next safe point — exactly PHP's
@@ -20,6 +19,28 @@ allocation crossing the **hard ceiling** (2x the limit, or limit + 1 GiB above
 1 GiB; `memory_hard_limit_percent` tunes it) fails: it calls the hard-limit
 handler if installed, otherwise Rust prints
 `memory allocation of N bytes failed` and aborts (SIGABRT).
+
+## Where the memory comes from
+
+The request thread's small blocks (up to 3072 bytes, alignment up to 16)
+come from a port of zend_mm's small-block heap (`src/heap.rs`): 30 size
+bins whose runs are carved out of 2 MiB chunks, unlocked free lists, a
+load and a store per allocation or free. Larger blocks, and every block of
+another thread, come from mimalloc. The accounting is identical either way
+(requested bytes, as before); the heap's chunks are not counted.
+
+The request thread is the *owner*: `request_start` binds the calling
+thread (`bind_to_current_thread`) and `request_end` unbinds it. Ownership
+is exclusive and never taken from a live owner: a thread that calls
+`request_start` while another thread still owns the heap (one that has not
+reached `request_end`) runs its request on mimalloc, correctly but more
+slowly. Heap blocks freed by any other thread (or by the owner after
+`request_end`) go to per-bin lock-free remote lists the next owner reuses.
+
+A SAPI may bind earlier so that startup allocations use the heap too:
+`php_memlimit::bind_to_current_thread()` on the thread that will run the
+requests, before module startup (php-cli: at the top of `main` when the VM
+runs on the main thread).
 
 ## 1. php-cli: install the allocator (once)
 
@@ -185,7 +206,9 @@ count.
 - Bytes are Rust `Layout` sizes; Zend rounds to bin sizes and adds chunk
   overhead, and our values are differently sized than zvals, so absolute
   numbers differ from PHP. Tests compare deltas or use `%d`.
-- `memory_get_usage(true)` is chunk-rounded usage, not mapped memory.
+- `memory_get_usage(true)` is chunk-rounded usage, not mapped memory (the
+  heap's chunks are never returned to the system, and free small blocks
+  stay on their bins: `zend_mm_gc` is not ported).
 - `tried to allocate` is the Rust allocation (or reserved) size, not Zend's
   chunk/huge-block size.
 - On clamping to `max_memory_limit` we apply the max as the limit (PHP
