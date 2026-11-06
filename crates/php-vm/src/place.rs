@@ -932,6 +932,36 @@ fn concat_cv_in_place(
     })
 }
 
+/// `++`/`--` of the int in `slot` when the result stays an int: the slot
+/// is updated and the expression's value returned (`PRE/POST_INC/DEC` on
+/// `IS_LONG` without overflow); `None`, nothing changed, on overflow (the
+/// generic path promotes to float).
+#[inline]
+fn incdec_int_slot(slot: &mut i64, kind: IncDecKind) -> Option<Value> {
+    let old = *slot;
+    let new = if kind.is_inc() {
+        old.checked_add(1)?
+    } else {
+        old.checked_sub(1)?
+    };
+    *slot = new;
+    Some(Value::Int(if kind.is_post() { old } else { new }))
+}
+
+/// The int fast path of [`Vm::place_incdec`] after the generic place
+/// resolution: a variable slot holding an int directly (not a reference).
+#[inline]
+fn incdec_var_int_fast(base: &RBase, kind: IncDecKind) -> Option<Value> {
+    let RBase::Var(store, idx) = base else {
+        return None;
+    };
+    let mut st = store.borrow_mut();
+    match st.slots.get_mut(*idx)? {
+        Some(Value::Int(i)) => incdec_int_slot(i, kind),
+        _ => None,
+    }
+}
+
 /// Takes the pending undefined final offset of the walk over `segs`.
 fn take_pending_undef_dim(segs: &[RSeg]) -> Option<u32> {
     PENDING_UNDEF_DIM.with(|c| match c.get() {
@@ -1499,6 +1529,23 @@ impl Vm {
             }
             RBase::Undef(_) => return Ok(Value::Null),
         };
+        self.finish_write_walk(step, segs, wop, again, diags, quiet)
+    }
+
+    /// The end of a [`Vm::write_place_inner`] walk that reached `step`:
+    /// the walk's diagnostics (dropped when `quiet`), the write-back of a
+    /// compound assignment's result with a second, silent walk from `again`
+    /// (the base, kept when such a walk may be needed), and the finished
+    /// step.
+    fn finish_write_walk(
+        &mut self,
+        step: Step,
+        segs: &[RSeg],
+        wop: WOp,
+        again: Option<RBase>,
+        diags: Diags,
+        quiet: bool,
+    ) -> VmResult<Value> {
         let appended = if matches!(wop, WOp::AssignOp(..)) {
             take_appended_segs(segs)
         } else {
@@ -2690,29 +2737,29 @@ impl Vm {
         true
     }
 
+    /// The int fast path of [`Vm::place_incdec`] before the generic place
+    /// resolution: a plain compiled variable holding an int directly.
+    #[inline]
+    fn incdec_cv_int_fast(&self, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
+        let f = self.frame();
+        let p = &f.code.places[pid as usize];
+        let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) else {
+            return None;
+        };
+        let idx = f.cv_idx(*cv);
+        let mut st = f.vars.borrow_mut();
+        match st.slots.get_mut(idx)? {
+            Some(Value::Int(i)) => incdec_int_slot(i, kind),
+            _ => None,
+        }
+    }
+
     /// `++place` etc.
     pub(crate) fn place_incdec(&mut self, pid: PlaceId, kind: IncDecKind) -> VmResult<Value> {
         // Fast path: `$i++` on a compiled variable holding an int (no
         // overflow), before resolving the place generically.
-        {
-            let f = self.frame();
-            let p = &f.code.places[pid as usize];
-            if let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) {
-                let idx = f.cv_idx(*cv);
-                let mut st = f.vars.borrow_mut();
-                if let Some(Some(Value::Int(i))) = st.slots.get_mut(idx) {
-                    let old = *i;
-                    let new = if kind.is_inc() {
-                        old.checked_add(1)
-                    } else {
-                        old.checked_sub(1)
-                    };
-                    if let Some(n) = new {
-                        *i = n;
-                        return Ok(Value::Int(if kind.is_post() { old } else { n }));
-                    }
-                }
-            }
+        if let Some(r) = self.incdec_cv_int_fast(pid, kind) {
+            return Ok(r);
         }
         // Fast path: PRE/POST_INC/DEC_OBJ on a cached declared slot.
         if propcache::cacheable(&self.frame().code.places[pid as usize]) {
@@ -2740,26 +2787,8 @@ impl Vm {
         };
         // Fast path for integer variables.
         if segs.is_empty() {
-            if let RBase::Var(store, idx) = &base {
-                let mut st = store.borrow_mut();
-                if let Some(slot) = &mut st.slots[*idx] {
-                    let target = match slot {
-                        Value::Reference(_) => None,
-                        s => Some(s),
-                    };
-                    if let Some(Value::Int(i)) = target {
-                        let old = *i;
-                        let new = if kind.is_inc() {
-                            old.checked_add(1)
-                        } else {
-                            old.checked_sub(1)
-                        };
-                        if let Some(n) = new {
-                            *i = n;
-                            return Ok(Value::Int(if kind.is_post() { old } else { n }));
-                        }
-                    }
-                }
+            if let Some(r) = incdec_var_int_fast(&base, kind) {
+                return Ok(r);
             }
         }
         let Some((cur, overloaded)) = self.fetch_rw(pid, base, &segs)? else {

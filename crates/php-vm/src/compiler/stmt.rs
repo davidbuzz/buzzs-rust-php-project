@@ -113,94 +113,15 @@ impl Compiler {
             StmtKind::If {
                 branches,
                 else_branch,
-            } => {
-                let mut end_jumps = Vec::new();
-                for (i, br) in branches.iter().enumerate() {
-                    self.f().line = br.cond.span.line;
-                    let c = self.compile_expr(&br.cond)?;
-                    let jz = self.emit(Op::JmpZ(c, 0));
-                    self.compile_stmt(&br.body)?;
-                    // zend_compile_if: "Don't generate a jump for the last
-                    // branch".
-                    if i + 1 < branches.len() || else_branch.is_some() {
-                        end_jumps.push(self.emit(Op::Jmp(0)));
-                    }
-                    self.patch_here(jz);
-                }
-                if let Some(e) = else_branch {
-                    self.compile_stmt(e)?;
-                }
-                for j in end_jumps {
-                    self.patch_here(j);
-                }
-            }
-            StmtKind::While { cond, body } => {
-                // `zend_compile_while`: a jump to the condition, the body,
-                // then the condition and a `JMPNZ` back to the body, so an
-                // iteration dispatches one jump (not a `JMPZ` plus a `JMP`
-                // back), and the body is compiled first (CV order).
-                let to_cond = self.emit(Op::Jmp(0));
-                self.push_loop(LoopKind::Loop, Cleanup::None);
-                let start = self.here();
-                self.compile_stmt(body)?;
-                let info = self.pop_loop();
-                let cond_at = self.here();
-                self.patch(to_cond, cond_at);
-                self.f().line = cond.span.line;
-                let c = self.compile_expr(cond)?;
-                self.emit(Op::JmpNz(c, start));
-                self.finish_loop(info, cond_at);
-            }
-            StmtKind::DoWhile { body, cond } => {
-                let start = self.here();
-                self.push_loop(LoopKind::Loop, Cleanup::None);
-                self.compile_stmt(body)?;
-                let info = self.pop_loop();
-                let cont = self.here();
-                self.f().line = cond.span.line;
-                let c = self.compile_expr(cond)?;
-                self.emit(Op::JmpNz(c, start));
-                self.finish_loop(info, cont);
-            }
+            } => self.compile_if(branches, else_branch.as_deref())?,
+            StmtKind::While { cond, body } => self.compile_while(cond, body)?,
+            StmtKind::DoWhile { body, cond } => self.compile_do_while(body, cond)?,
             StmtKind::For {
                 init,
                 cond,
                 step,
                 body,
-            } => {
-                for e in init {
-                    self.compile_expr_discard(e)?;
-                }
-                // `zend_compile_for`: init, a jump to the condition, the
-                // body, the step, then the condition and a `JMPNZ` back to
-                // the body (one jump per iteration; CVs numbered in that
-                // order). Without a condition the step jumps back
-                // (`JMPNZ` on the constant `true`).
-                let to_cond = self.emit(Op::Jmp(0));
-                self.push_loop(LoopKind::Loop, Cleanup::None);
-                let start = self.here();
-                self.compile_stmt(body)?;
-                let info = self.pop_loop();
-                let cont = self.here();
-                for e in step {
-                    self.compile_expr_discard(e)?;
-                }
-                self.patch_here(to_cond);
-                let mut c = None;
-                for (i, e) in cond.iter().enumerate() {
-                    if i + 1 == cond.len() {
-                        self.f().line = e.span.line;
-                        c = Some(self.compile_expr(e)?);
-                    } else {
-                        self.compile_expr_discard(e)?;
-                    }
-                }
-                match c {
-                    Some(c) => self.emit(Op::JmpNz(c, start)),
-                    None => self.emit(Op::Jmp(start)),
-                };
-                self.finish_loop(info, cont);
-            }
+            } => self.compile_for(init, cond, step, body)?,
             StmtKind::Foreach {
                 subject,
                 key,
@@ -214,70 +135,8 @@ impl Compiler {
                 self.compile_break(is_break, n.as_ref(), s.span.line)?;
             }
             StmtKind::Return(e) => self.compile_return(e.as_ref(), s.span.line)?,
-            StmtKind::Global(vars) => {
-                for v in vars {
-                    match &v.kind {
-                        ExprKind::Var(VarName::Name(id)) => {
-                            if id.name == b"this" {
-                                return self
-                                    .err("Cannot use $this as global variable", v.span.line);
-                            }
-                            // `global $_ENV` names the auto-global too.
-                            super::expr::is_superglobal(&id.name);
-                            let cv = self.cv(&id.name);
-                            let name = self.lit_str(&id.name);
-                            self.emit(Op::Global { cv, name });
-                        }
-                        ExprKind::Var(VarName::Expr(e)) => {
-                            // `zend_compile_global_var` without a CV: the name
-                            // is evaluated once, FETCH_W (global) then FETCH_W
-                            // (local) and ASSIGN_REF.
-                            let n = self.compile_expr(e)?;
-                            self.f().line = v.span.line;
-                            let global = self.place(Place {
-                                base: PlaceBase::Global(Compiler::keep(n)),
-                                segs: Vec::new(),
-                            });
-                            let local = self.place(Place {
-                                base: PlaceBase::VarVar(n),
-                                segs: Vec::new(),
-                            });
-                            let t = self.tmp();
-                            self.emit(Op::MakeRef {
-                                place: global,
-                                dst: t,
-                            });
-                            self.emit(Op::AssignRef {
-                                place: local,
-                                src: Operand::Tmp(t),
-                                dst: None,
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            StmtKind::Static(vars) => {
-                for sv in &vars[..] {
-                    self.f().line = sv.span.line;
-                    if sv.name.name == b"this" {
-                        return self.err("Cannot use $this as static variable", sv.span.line);
-                    }
-                    let cv = self.cv(&sv.name.name);
-                    let idx = {
-                        let f = self.f();
-                        f.num_statics += 1;
-                        f.num_statics - 1
-                    };
-                    let bind = self.emit(Op::BindStatic { cv, idx, skip: 0 });
-                    let val = match &sv.default {
-                        Some(e) => self.compile_expr(e)?,
-                        None => self.lit(Value::Null),
-                    };
-                    self.emit(Op::InitStatic { cv, idx, val });
-                    self.patch_here(bind);
-                }
-            }
+            StmtKind::Global(vars) => self.compile_global(vars)?,
+            StmtKind::Static(vars) => self.compile_static(vars)?,
             StmtKind::Echo(exprs) => {
                 for e in exprs {
                     let op = self.compile_expr(e)?;
@@ -309,52 +168,7 @@ impl Compiler {
                 }
             }
             StmtKind::Declare { directives, body } => {
-                let ticks_before = self.ticks;
-                for d in directives {
-                    if d.name.eq_ignore_case("strict_types") {
-                        if let ExprKind::Int(v) = d.value.kind {
-                            if v != 0 && v != 1 {
-                                return self.err(
-                                    "strict_types declaration must have 0 or 1 as its value",
-                                    d.span.line,
-                                );
-                            }
-                            if body.is_some() {
-                                return self.err(
-                                    "strict_types declaration must not use block mode",
-                                    d.span.line,
-                                );
-                            }
-                            self.strict_types = v == 1;
-                        } else {
-                            return self.err(
-                                "strict_types declaration must have 0 or 1 as its value",
-                                d.span.line,
-                            );
-                        }
-                    } else if d.name.eq_ignore_case("ticks") {
-                        let n = match self.try_fold(&d.value) {
-                            Some(Value::Int(n)) => n,
-                            Some(v) => v.as_int().unwrap_or(0),
-                            None => 0,
-                        };
-                        self.ticks = u32::try_from(n.max(0)).unwrap_or(u32::MAX);
-                    } else if d.name.eq_ignore_case("encoding") {
-                        // Encoding is ignored (no zend.multibyte).
-                    } else {
-                        self.warnings.push((
-                            128,
-                            format!("Unsupported declare '{}'", d.name.as_str_lossy()),
-                            d.span.line,
-                        ));
-                    }
-                }
-                if let Some(b) = body {
-                    // Block mode: the directives apply to the block only.
-                    let r = self.compile_stmt(b);
-                    self.ticks = ticks_before;
-                    r?;
-                }
+                self.compile_declare(directives, body.as_deref())?;
             }
             StmtKind::Nop | StmtKind::HaltCompiler { .. } => {}
             StmtKind::Try {
@@ -388,43 +202,7 @@ impl Compiler {
             StmtKind::Function(fd) => self.compile_function_decl(fd, false)?,
             StmtKind::Class(cd) => self.compile_class_stmt(cd, false)?,
             StmtKind::Const { consts, attributes } => {
-                let mut attrs = u32::MAX;
-                if !attributes.is_empty() {
-                    if consts.len() > 1 {
-                        let line = consts.first().map_or(s.span.line, |c| c.span.line);
-                        return self.err(
-                            "Cannot apply attributes to multiple constants at once",
-                            line,
-                        );
-                    }
-                    let list = self.attributes(attributes)?;
-                    self.validate_attributes(
-                        &list,
-                        super::attrs::target::CONSTANT,
-                        0,
-                        None,
-                        false,
-                    )?;
-                    let mut t = self.decls.const_attributes.borrow_mut();
-                    t.push(std::rc::Rc::new(list));
-                    attrs = u32::try_from(t.len() - 1).unwrap_or(u32::MAX);
-                }
-                for c in consts {
-                    self.f().line = c.span.line;
-                    let full = self.ns_prefixed_pub(&c.name.name);
-                    let name = self.lit_str(&full);
-                    self.check_const_expr(&c.value, true)?;
-                    self.check_const_decl_name(&c.name.name, &full, c.span.line)?;
-                    let saved = std::mem::replace(&mut self.in_const_decl, true);
-                    let depth = std::mem::replace(&mut self.inline_const_depth, self.fns.len());
-                    let global = std::mem::replace(&mut self.in_global_const, true);
-                    let val = self.compile_expr(&c.value);
-                    self.in_global_const = global;
-                    self.inline_const_depth = depth;
-                    self.in_const_decl = saved;
-                    let val = val?;
-                    self.emit(Op::DeclareConst { name, val, attrs });
-                }
+                self.compile_const_stmt(consts, attributes, s.span.line)?;
             }
             StmtKind::Namespace { .. } => {
                 // Nested namespaces are rejected by the parser.
@@ -454,6 +232,276 @@ impl Compiler {
                     )?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// `zend_compile_if`: each branch tests its condition and, unless it is
+    /// the last one, jumps over the rest when it ran ("Don't generate a
+    /// jump for the last branch").
+    fn compile_if(
+        &mut self,
+        branches: &[ast::IfBranch],
+        else_branch: Option<&Stmt>,
+    ) -> CResult<()> {
+        let mut end_jumps = Vec::new();
+        for (i, br) in branches.iter().enumerate() {
+            self.f().line = br.cond.span.line;
+            let c = self.compile_expr(&br.cond)?;
+            let jz = self.emit(Op::JmpZ(c, 0));
+            self.compile_stmt(&br.body)?;
+            if i + 1 < branches.len() || else_branch.is_some() {
+                end_jumps.push(self.emit(Op::Jmp(0)));
+            }
+            self.patch_here(jz);
+        }
+        if let Some(e) = else_branch {
+            self.compile_stmt(e)?;
+        }
+        for j in end_jumps {
+            self.patch_here(j);
+        }
+        Ok(())
+    }
+
+    /// `zend_compile_while`: a jump to the condition, the body, then the
+    /// condition and a `JMPNZ` back to the body, so an iteration dispatches
+    /// one jump (not a `JMPZ` plus a `JMP` back), and the body is compiled
+    /// first (CV order).
+    fn compile_while(&mut self, cond: &Expr, body: &Stmt) -> CResult<()> {
+        let to_cond = self.emit(Op::Jmp(0));
+        self.push_loop(LoopKind::Loop, Cleanup::None);
+        let start = self.here();
+        self.compile_stmt(body)?;
+        let info = self.pop_loop();
+        let cond_at = self.here();
+        self.patch(to_cond, cond_at);
+        self.f().line = cond.span.line;
+        let c = self.compile_expr(cond)?;
+        self.emit(Op::JmpNz(c, start));
+        self.finish_loop(info, cond_at);
+        Ok(())
+    }
+
+    /// `do { body } while (cond);`: the body, then the condition and a
+    /// `JMPNZ` back to it.
+    fn compile_do_while(&mut self, body: &Stmt, cond: &Expr) -> CResult<()> {
+        let start = self.here();
+        self.push_loop(LoopKind::Loop, Cleanup::None);
+        self.compile_stmt(body)?;
+        let info = self.pop_loop();
+        let cont = self.here();
+        self.f().line = cond.span.line;
+        let c = self.compile_expr(cond)?;
+        self.emit(Op::JmpNz(c, start));
+        self.finish_loop(info, cont);
+        Ok(())
+    }
+
+    /// `zend_compile_for`: init, a jump to the condition, the body, the
+    /// step, then the condition and a `JMPNZ` back to the body (one jump
+    /// per iteration; CVs numbered in that order). Without a condition the
+    /// step jumps back unconditionally.
+    fn compile_for(
+        &mut self,
+        init: &[Expr],
+        cond: &[Expr],
+        step: &[Expr],
+        body: &Stmt,
+    ) -> CResult<()> {
+        for e in init {
+            self.compile_expr_discard(e)?;
+        }
+        let to_cond = self.emit(Op::Jmp(0));
+        self.push_loop(LoopKind::Loop, Cleanup::None);
+        let start = self.here();
+        self.compile_stmt(body)?;
+        let info = self.pop_loop();
+        let cont = self.here();
+        for e in step {
+            self.compile_expr_discard(e)?;
+        }
+        self.patch_here(to_cond);
+        let mut c = None;
+        for (i, e) in cond.iter().enumerate() {
+            if i + 1 == cond.len() {
+                self.f().line = e.span.line;
+                c = Some(self.compile_expr(e)?);
+            } else {
+                self.compile_expr_discard(e)?;
+            }
+        }
+        match c {
+            Some(c) => self.emit(Op::JmpNz(c, start)),
+            None => self.emit(Op::Jmp(start)),
+        };
+        self.finish_loop(info, cont);
+        Ok(())
+    }
+
+    /// `global $a, $$name;` (`zend_compile_global_var`).
+    fn compile_global(&mut self, vars: &[Expr]) -> CResult<()> {
+        for v in vars {
+            match &v.kind {
+                ExprKind::Var(VarName::Name(id)) => {
+                    if id.name == b"this" {
+                        return self.err("Cannot use $this as global variable", v.span.line);
+                    }
+                    // `global $_ENV` names the auto-global too.
+                    super::expr::is_superglobal(&id.name);
+                    let cv = self.cv(&id.name);
+                    let name = self.lit_str(&id.name);
+                    self.emit(Op::Global { cv, name });
+                }
+                ExprKind::Var(VarName::Expr(e)) => {
+                    // `zend_compile_global_var` without a CV: the name is
+                    // evaluated once, FETCH_W (global) then FETCH_W (local)
+                    // and ASSIGN_REF.
+                    let n = self.compile_expr(e)?;
+                    self.f().line = v.span.line;
+                    let global = self.place(Place {
+                        base: PlaceBase::Global(Compiler::keep(n)),
+                        segs: Vec::new(),
+                    });
+                    let local = self.place(Place {
+                        base: PlaceBase::VarVar(n),
+                        segs: Vec::new(),
+                    });
+                    let t = self.tmp();
+                    self.emit(Op::MakeRef {
+                        place: global,
+                        dst: t,
+                    });
+                    self.emit(Op::AssignRef {
+                        place: local,
+                        src: Operand::Tmp(t),
+                        dst: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// `static $a = <const expr>;`: `BindStatic` binds an initialized
+    /// static and skips `InitStatic`, which initializes it the first time.
+    fn compile_static(&mut self, vars: &[ast::StaticVar]) -> CResult<()> {
+        for sv in vars {
+            self.f().line = sv.span.line;
+            if sv.name.name == b"this" {
+                return self.err("Cannot use $this as static variable", sv.span.line);
+            }
+            let cv = self.cv(&sv.name.name);
+            let idx = {
+                let f = self.f();
+                f.num_statics += 1;
+                f.num_statics - 1
+            };
+            let bind = self.emit(Op::BindStatic { cv, idx, skip: 0 });
+            let val = match &sv.default {
+                Some(e) => self.compile_expr(e)?,
+                None => self.lit(Value::Null),
+            };
+            self.emit(Op::InitStatic { cv, idx, val });
+            self.patch_here(bind);
+        }
+        Ok(())
+    }
+
+    /// `declare(strict_types=1)`, `declare(ticks=N) { ... }` (block mode
+    /// applies the directives to the block only), `declare(encoding=...)`.
+    fn compile_declare(
+        &mut self,
+        directives: &[ast::ConstElem],
+        body: Option<&Stmt>,
+    ) -> CResult<()> {
+        let ticks_before = self.ticks;
+        for d in directives {
+            if d.name.eq_ignore_case("strict_types") {
+                if let ExprKind::Int(v) = d.value.kind {
+                    if v != 0 && v != 1 {
+                        return self.err(
+                            "strict_types declaration must have 0 or 1 as its value",
+                            d.span.line,
+                        );
+                    }
+                    if body.is_some() {
+                        return self.err(
+                            "strict_types declaration must not use block mode",
+                            d.span.line,
+                        );
+                    }
+                    self.strict_types = v == 1;
+                } else {
+                    return self.err(
+                        "strict_types declaration must have 0 or 1 as its value",
+                        d.span.line,
+                    );
+                }
+            } else if d.name.eq_ignore_case("ticks") {
+                let n = match self.try_fold(&d.value) {
+                    Some(Value::Int(n)) => n,
+                    Some(v) => v.as_int().unwrap_or(0),
+                    None => 0,
+                };
+                self.ticks = u32::try_from(n.max(0)).unwrap_or(u32::MAX);
+            } else if d.name.eq_ignore_case("encoding") {
+                // Encoding is ignored (no zend.multibyte).
+            } else {
+                self.warnings.push((
+                    128,
+                    format!("Unsupported declare '{}'", d.name.as_str_lossy()),
+                    d.span.line,
+                ));
+            }
+        }
+        if let Some(b) = body {
+            let r = self.compile_stmt(b);
+            self.ticks = ticks_before;
+            r?;
+        }
+        Ok(())
+    }
+
+    /// `const A = 1, B = 2;` at the top level (`zend_compile_const_decl`);
+    /// attributes apply to a single constant. `line` is the statement's.
+    fn compile_const_stmt(
+        &mut self,
+        consts: &[ast::ConstElem],
+        attributes: &ast::Attributes,
+        line: u32,
+    ) -> CResult<()> {
+        let mut attrs = u32::MAX;
+        if !attributes.is_empty() {
+            if consts.len() > 1 {
+                let line = consts.first().map_or(line, |c| c.span.line);
+                return self.err(
+                    "Cannot apply attributes to multiple constants at once",
+                    line,
+                );
+            }
+            let list = self.attributes(attributes)?;
+            self.validate_attributes(&list, super::attrs::target::CONSTANT, 0, None, false)?;
+            let mut t = self.decls.const_attributes.borrow_mut();
+            t.push(std::rc::Rc::new(list));
+            attrs = u32::try_from(t.len() - 1).unwrap_or(u32::MAX);
+        }
+        for c in consts {
+            self.f().line = c.span.line;
+            let full = self.ns_prefixed_pub(&c.name.name);
+            let name = self.lit_str(&full);
+            self.check_const_expr(&c.value, true)?;
+            self.check_const_decl_name(&c.name.name, &full, c.span.line)?;
+            let saved = std::mem::replace(&mut self.in_const_decl, true);
+            let depth = std::mem::replace(&mut self.inline_const_depth, self.fns.len());
+            let global = std::mem::replace(&mut self.in_global_const, true);
+            let val = self.compile_expr(&c.value);
+            self.in_global_const = global;
+            self.inline_const_depth = depth;
+            self.in_const_decl = saved;
+            let val = val?;
+            self.emit(Op::DeclareConst { name, val, attrs });
         }
         Ok(())
     }
