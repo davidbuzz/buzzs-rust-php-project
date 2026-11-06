@@ -115,12 +115,16 @@ impl Compiler {
                 else_branch,
             } => {
                 let mut end_jumps = Vec::new();
-                for br in branches {
+                for (i, br) in branches.iter().enumerate() {
                     self.f().line = br.cond.span.line;
                     let c = self.compile_expr(&br.cond)?;
                     let jz = self.emit(Op::JmpZ(c, 0));
                     self.compile_stmt(&br.body)?;
-                    end_jumps.push(self.emit(Op::Jmp(0)));
+                    // zend_compile_if: "Don't generate a jump for the last
+                    // branch".
+                    if i + 1 < branches.len() || else_branch.is_some() {
+                        end_jumps.push(self.emit(Op::Jmp(0)));
+                    }
                     self.patch_here(jz);
                 }
                 if let Some(e) = else_branch {
@@ -136,16 +140,16 @@ impl Compiler {
                 // iteration dispatches one jump (not a `JMPZ` plus a `JMP`
                 // back), and the body is compiled first (CV order).
                 let to_cond = self.emit(Op::Jmp(0));
-                let start = self.here();
                 self.push_loop(LoopKind::Loop, Cleanup::None);
+                let start = self.here();
                 self.compile_stmt(body)?;
                 let info = self.pop_loop();
-                let cont = self.here();
-                self.patch_here(to_cond);
+                let cond_at = self.here();
+                self.patch(to_cond, cond_at);
                 self.f().line = cond.span.line;
                 let c = self.compile_expr(cond)?;
                 self.emit(Op::JmpNz(c, start));
-                self.finish_loop(info, cont);
+                self.finish_loop(info, cond_at);
             }
             StmtKind::DoWhile { body, cond } => {
                 let start = self.here();
@@ -170,33 +174,31 @@ impl Compiler {
                 // `zend_compile_for`: init, a jump to the condition, the
                 // body, the step, then the condition and a `JMPNZ` back to
                 // the body (one jump per iteration; CVs numbered in that
-                // order). Without a condition the step jumps back.
-                let to_cond = if cond.is_empty() {
-                    None
-                } else {
-                    Some(self.emit(Op::Jmp(0)))
-                };
-                let start = self.here();
+                // order). Without a condition the step jumps back
+                // (`JMPNZ` on the constant `true`).
+                let to_cond = self.emit(Op::Jmp(0));
                 self.push_loop(LoopKind::Loop, Cleanup::None);
+                let start = self.here();
                 self.compile_stmt(body)?;
                 let info = self.pop_loop();
                 let cont = self.here();
                 for e in step {
                     self.compile_expr_discard(e)?;
                 }
-                if let Some(j) = to_cond {
-                    self.patch_here(j);
-                    for (i, e) in cond.iter().enumerate() {
-                        if i + 1 == cond.len() {
-                            let c = self.compile_expr(e)?;
-                            self.emit(Op::JmpNz(c, start));
-                        } else {
-                            self.compile_expr_discard(e)?;
-                        }
+                self.patch_here(to_cond);
+                let mut c = None;
+                for (i, e) in cond.iter().enumerate() {
+                    if i + 1 == cond.len() {
+                        self.f().line = e.span.line;
+                        c = Some(self.compile_expr(e)?);
+                    } else {
+                        self.compile_expr_discard(e)?;
                     }
-                } else {
-                    self.emit(Op::Jmp(start));
                 }
+                match c {
+                    Some(c) => self.emit(Op::JmpNz(c, start)),
+                    None => self.emit(Op::Jmp(start)),
+                };
                 self.finish_loop(info, cont);
             }
             StmtKind::Foreach {

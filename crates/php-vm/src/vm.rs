@@ -4,7 +4,7 @@ use crate::class::Class;
 use crate::compiler::CompiledUnit;
 use crate::func::{Func, UserFunction};
 use crate::opcode::OpArray;
-use php_runtime::{HashTable, Obj, PhpRef, Value, ZStr};
+use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZStr};
 use php_support::ini::IniRegistry;
 use php_support::output::OutputStack;
 use std::cell::RefCell;
@@ -613,6 +613,37 @@ impl Frame {
             store_mutably_borrowed()
         };
         read(vs.slots.get(idx).and_then(Option::as_ref))
+    }
+
+    /// `$cv[key]` looked up in place: the element of the array compiled
+    /// variable `cv` holds (directly or through a reference), dereferenced
+    /// and cloned; `None` when the variable is undefined, holds no array or
+    /// the array has no such key. The keyed form of [`Frame::peek_cv`]
+    /// (whose `read` cannot capture the key); the lookup and the clone run
+    /// no PHP code.
+    ///
+    /// # Panics
+    /// Like `RefCell::borrow`, if the store is mutably borrowed.
+    #[inline]
+    pub(crate) fn peek_cv_dim(&self, cv: u32, key: &ArrayKey) -> Option<Value> {
+        let idx = self.cv_idx(cv);
+        // SAFETY: as in `peek_cv`: `try_borrow_unguarded` fails while a
+        // mutable borrow of the store is active, so no `&mut VarStore`
+        // exists now, and the shared reference is used only here, to look
+        // up and clone one element (a refcount bump, or the clone of a
+        // reference's inner value: no PHP code, no access to the store),
+        // and is gone before this function returns.
+        let Ok(vs) = (unsafe { self.vars.try_borrow_unguarded() }) else {
+            store_mutably_borrowed()
+        };
+        match vs.slots.get(idx)? {
+            Some(Value::Array(a)) => a.get(key).map(Value::deref),
+            Some(Value::Reference(r)) => match &*r.try_borrow()? {
+                Value::Array(a) => a.get(key).map(Value::deref),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// The current line.

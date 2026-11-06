@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 #[cfg(test)]
 mod dispatch_tests;
+mod spec;
 
 /// Upper bound on nested `execute()` runs (internal-to-user callbacks,
 /// destructors, `__clone`, magic methods); each one uses native stack.
@@ -870,7 +871,11 @@ impl Vm {
                 let at = ip;
                 let op = &ops[at];
                 ip = at + 1;
-                // Hot instructions on the local `ip` (no frame store).
+                // Hot instructions on the local `ip` (no frame store): their
+                // fast paths cannot warn, throw, run user code or change the
+                // frame stack. A specialised op (`exec/spec.rs`) whose fast
+                // path does not apply has changed nothing and breaks to the
+                // big match, which runs the generic op it replaced.
                 'slow: {
                     match op {
                         Op::Nop => {}
@@ -885,12 +890,21 @@ impl Vm {
                             Some(false) => {}
                             None => break 'slow,
                         },
-                        Op::IncDec { place, kind, dst } => {
-                            match self.incdec_cv_fast(*place, *kind) {
-                                Some(r) => self.set_dst(*dst, r),
-                                None => break 'slow,
-                            }
-                        }
+                        // Smart branch (`ZEND_IS_SMALLER_LONG_SPEC` +
+                        // `ZEND_VM_SMART_BRANCH`): a numeric comparison
+                        // jumps, or skips the jump op after it, directly.
+                        Op::CmpJmp {
+                            op: kind,
+                            a,
+                            b,
+                            target,
+                            jmp_if,
+                            ..
+                        } => match self.cmp_num_fast(*kind, *a, *b) {
+                            Some(r) if r == *jmp_if => ip = *target as usize,
+                            Some(_) => ip += 1,
+                            None => break 'slow,
+                        },
                         Op::Bin {
                             op: kind,
                             a,
@@ -904,6 +918,57 @@ impl Vm {
                             } else {
                                 self.frame_mut().ip = ip;
                                 self.bin_slow(*kind, *a, *b, *dst)?;
+                            }
+                        }
+                        Op::BinAssignCv {
+                            op: kind,
+                            a,
+                            b,
+                            dst,
+                            cv,
+                        } => match self.bin_num_fast(*kind, *a, *b) {
+                            // Stored into the variable: the `AssignCv` after
+                            // the op is done; otherwise it runs on `dst`.
+                            Some(r) => match self.cv_store_plain(*cv, r) {
+                                Ok(()) => ip += 1,
+                                Err(r) => self.set_tmp(*dst, r),
+                            },
+                            None => break 'slow,
+                        },
+                        Op::IncDecCv { cv, kind, dst, .. } => {
+                            match self.incdec_cv_fast(*cv, *kind) {
+                                Some(r) => self.set_dst(*dst, r),
+                                None => break 'slow,
+                            }
+                        }
+                        Op::AssignOpCv {
+                            cv,
+                            op: kind,
+                            val,
+                            dst,
+                            ..
+                        } => {
+                            if !self.assign_op_cv_fast(*cv, *kind, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        Op::FetchDimCv {
+                            cv, dim, dst, to, ..
+                        } => match self.fetch_dim_cv_fast(*cv, *dim) {
+                            // With `to`, the `AssignCv` after the op is done
+                            // here when the variable holds a plain value.
+                            Some(v) => match to {
+                                Some(to) => match self.cv_store_plain(*to, v) {
+                                    Ok(()) => ip += 1,
+                                    Err(v) => self.set_tmp(*dst, v),
+                                },
+                                None => self.set_tmp(*dst, v),
+                            },
+                            None => break 'slow,
+                        },
+                        Op::AssignDimCv { cv, dim, val, .. } => {
+                            if !self.assign_dim_cv_fast(*cv, *dim, *val) {
+                                break 'slow;
                             }
                         }
                         _ => break 'slow,
@@ -1669,6 +1734,42 @@ impl Vm {
                         }
                         Flow::Next
                     }
+                    // The specialised ops whose fast path did not apply
+                    // (the hot pre-match changed nothing): the generic op
+                    // each one replaced. The op after a `CmpJmp`,
+                    // `BinAssignCv` or `FetchDimCv` then runs as its own op.
+                    Op::CmpJmp { op, a, b, dst, .. } | Op::BinAssignCv { op, a, b, dst, .. } => {
+                        self.bin_slow(*op, *a, *b, *dst)?;
+                        Flow::Next
+                    }
+                    Op::IncDecCv {
+                        kind, dst, place, ..
+                    } => {
+                        let r = self.place_incdec(*place, *kind)?;
+                        self.set_dst(*dst, r);
+                        Flow::Next
+                    }
+                    Op::AssignOpCv {
+                        op,
+                        val,
+                        dst,
+                        place,
+                        ..
+                    } => {
+                        let v = self.read(*val)?;
+                        let r = self.place_assign_op(*place, *op, v)?;
+                        self.set_dst(*dst, r);
+                        Flow::Next
+                    }
+                    Op::FetchDimCv { place, dst, .. } => {
+                        let v = self.place_fetch(*place, crate::opcode::FetchMode::Read)?;
+                        self.set_tmp(*dst, v);
+                        Flow::Next
+                    }
+                    Op::AssignDimCv { val, place, .. } => {
+                        self.assign_place_unused(*place, *val)?;
+                        Flow::Next
+                    }
                     Op::AssertCheck { dst, skip } => {
                         let a = self.ini.get_long("zend.assertions");
                         if a != 1 {
@@ -1701,40 +1802,6 @@ impl Vm {
                 }
             }
         }
-    }
-
-    /// `++`/`--` on a compiled variable holding an int that does not
-    /// overflow (php-src's `ZEND_PRE_INC_LONG_NO_OVERFLOW_SPEC_CV` and
-    /// `ZEND_POST_INC_LONG_NO_OVERFLOW_SPEC_CV`): the result, or `None` for
-    /// the generic [`Vm::place_incdec`], which starts with this same test.
-    /// Cannot warn, throw or run user code, so it runs on the local `ip`.
-    #[inline]
-    fn incdec_cv_fast(
-        &self,
-        pid: crate::opcode::PlaceId,
-        kind: crate::opcode::IncDecKind,
-    ) -> Option<Value> {
-        let f = self.frame();
-        let p = &f.code.places[pid as usize];
-        let crate::opcode::PlaceBase::Cv(cv) = p.base else {
-            return None;
-        };
-        if !p.segs.is_empty() {
-            return None;
-        }
-        let idx = f.cv_idx(cv);
-        let mut st = f.vars.borrow_mut();
-        let Some(Some(Value::Int(i))) = st.slots.get_mut(idx) else {
-            return None;
-        };
-        let old = *i;
-        let new = if kind.is_inc() {
-            old.checked_add(1)
-        } else {
-            old.checked_sub(1)
-        }?;
-        *i = new;
-        Some(Value::Int(if kind.is_post() { old } else { new }))
     }
 
     /// Whether the safe point after an instruction has work to do
@@ -2494,6 +2561,9 @@ fn defers_oom(op: &Op) -> bool {
             | Op::AssignCv { .. }
             | Op::Assign { .. }
             | Op::AssignOp { .. }
+            | Op::BinAssignCv { .. }
+            | Op::AssignOpCv { .. }
+            | Op::AssignDimCv { .. }
             | Op::Echo(_)
             | Op::Free(_)
     )
