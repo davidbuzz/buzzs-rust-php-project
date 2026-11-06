@@ -177,6 +177,54 @@ throw new Exception("final");
     );
 }
 
+/// `php_output_handler_create_user()` resolves the handler once, at
+/// `ob_start()` (deprecations there, the reason as a warning when it does
+/// not resolve), and every flush calls that resolution: a private method
+/// or `'parent::ob'` registered in a method still works when the buffer is
+/// flushed outside it or at shutdown. The handler keeps its given name.
+#[test]
+fn output_handler_is_resolved_at_ob_start() {
+    let (status, out) = run(r#"<?php
+class foo {
+    public function ob($buf) { return "[ob:" . $buf . "]"; }
+}
+class bar extends foo {
+    private function mine($buf) { return "[mine:" . $buf . "]"; }
+    function scoped() { ob_start([$this, 'mine']); }
+    function reg_parent() { ob_start('parent::ob'); }
+    function bad() { var_dump(ob_start('parent::nonexist')); }
+}
+$b = new bar;
+$b->scoped();
+echo "x";
+ob_end_flush();
+echo "\n";
+$b->reg_parent();
+echo "y";
+ob_end_flush();
+echo "\n";
+$b->bad();
+print_r(ob_list_handlers());
+$b->reg_parent();
+print_r(ob_list_handlers());
+echo "z";
+"#);
+    assert_eq!(status, 0, "{out}");
+    assert_eq!(
+        out,
+        "[mine:x]\n\
+         \nDeprecated: Use of \"parent\" in callables is deprecated in t.php on line 8\n\
+         [ob:y]\n\
+         \nDeprecated: Use of \"parent\" in callables is deprecated in t.php on line 9\n\
+         \nWarning: ob_start(): class foo does not have a method \"nonexist\" in t.php on line 9\n\
+         \nNotice: ob_start(): Failed to create buffer in t.php on line 9\n\
+         bool(false)\n\
+         Array\n(\n)\n\
+         \nDeprecated: Use of \"parent\" in callables is deprecated in t.php on line 8\n\
+         [ob:Array\n(\n    [0] => parent::ob\n)\nz]"
+    );
+}
+
 #[test]
 fn deprecations_at_given_lines_are_dropped() {
     let out = "a\n\nDeprecated: x in t.php on line 6\nb\n\nDeprecated: y in t.php on line 7\n";
