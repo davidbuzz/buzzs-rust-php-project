@@ -531,3 +531,44 @@ fn live_registered_array_is_kept() {
     assert_eq!(sink.0.borrow().as_slice(), b"int(0)\n");
     assert_eq!(a.len(), 1);
 }
+
+/// The root index's address hasher spreads aligned addresses over the low
+/// bits (bucket index) and the high bits (control byte) alike, and the
+/// index still finds and forgets every buffered handle.
+#[test]
+fn root_index_hashes_aligned_addresses_apart() {
+    use std::hash::Hasher;
+    let hash = |n: usize| {
+        let mut h = super::AddrHasher::default();
+        h.write_usize(n);
+        h.finish()
+    };
+    let base = 0x7f00_1234_5000_usize;
+    let hashes: Vec<u64> = (0..256).map(|i| hash(base + i * 16)).collect();
+    let low: std::collections::HashSet<u64> = hashes.iter().map(|h| h & 0xff).collect();
+    let high: std::collections::HashSet<u64> = hashes.iter().map(|h| h >> 57).collect();
+    assert!(low.len() > 128, "low bits collide: {}", low.len());
+    assert!(high.len() > 64, "high bits collide: {}", high.len());
+    assert_ne!(hash(base), hash(base + 16));
+
+    let sink = Sink::default();
+    let vm = Vm::new(&VmOptions::default(), Box::new(sink));
+    let objs: Vec<php_runtime::Obj> = (0..64)
+        .map(|_| {
+            crate::object::new_object(vm.find_class(b"stdClass").expect("stdClass"), Vec::new())
+        })
+        .collect();
+    let mut b = super::RootBuffer::default();
+    for (i, o) in objs.iter().enumerate() {
+        assert_eq!(b.push(o), Some(i));
+        assert!(b.contains(o));
+    }
+    for o in objs.iter().step_by(2) {
+        assert!(b.remove(o.addr()));
+        assert!(!b.contains(o));
+        assert!(!b.remove(o.addr()));
+    }
+    assert_eq!(b.num_roots, 32);
+    assert!(objs.iter().skip(1).step_by(2).all(|o| b.contains(o)));
+    drop(vm);
+}

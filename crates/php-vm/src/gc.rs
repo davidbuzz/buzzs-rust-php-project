@@ -63,6 +63,7 @@ use crate::vm::{Vm, VmResult};
 use php_runtime::{Obj, PhpObject, Value};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
@@ -129,7 +130,50 @@ struct RootBuffer {
     unused: Vec<usize>,
     /// Used slots (`GC_G(num_roots)`).
     num_roots: usize,
-    index: HashMap<usize, usize>,
+    index: AddrMap,
+}
+
+/// The root index: buffered handle address → slot.
+type AddrMap = HashMap<usize, usize, BuildHasherDefault<AddrHasher>>;
+
+/// Hashes the root index's keys, object addresses, with one folded
+/// multiply instead of SipHash: buffering a root and freeing a buffered
+/// object each look the index up (php-src keeps the slot in the object's
+/// `GC_INFO` and needs no lookup at all). The keys are heap addresses, not
+/// script-controlled data, so there is no hash flooding to defend against.
+#[derive(Clone, Copy, Default)]
+struct AddrHasher(u64);
+
+/// Multiplier of [`AddrHasher`] (2^64 / golden ratio).
+const ADDR_HASH_K: u64 = 0x9e37_79b9_7f4a_7c15;
+
+impl AddrHasher {
+    #[inline]
+    #[allow(clippy::cast_possible_truncation)] // folds the 128-bit product
+    fn mix(&mut self, x: u64) {
+        let m = u128::from(self.0 ^ x) * u128::from(ADDR_HASH_K);
+        self.0 = (m as u64) ^ ((m >> 64) as u64);
+    }
+}
+
+impl Hasher for AddrHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut b = [0u8; 8];
+            b[..chunk.len()].copy_from_slice(chunk);
+            self.mix(u64::from_le_bytes(b));
+        }
+    }
+
+    #[inline]
+    fn write_usize(&mut self, n: usize) {
+        self.mix(n as u64);
+    }
 }
 
 impl Default for RootBuffer {
@@ -138,7 +182,7 @@ impl Default for RootBuffer {
             slots: Vec::new(),
             unused: Vec::new(),
             num_roots: 0,
-            index: HashMap::new(),
+            index: AddrMap::default(),
         }
     }
 }
