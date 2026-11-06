@@ -1405,6 +1405,16 @@ impl HashTable {
         }
     }
 
+    /// The value at a position (holes and out-of-range give `None`) without
+    /// its key: for `foreach` without a key variable and other positional
+    /// walks that need no key, this never touches the shared packed-key
+    /// table that [`HashTable::at`] lends keys from.
+    #[inline]
+    #[must_use]
+    pub fn value_at(&self, pos: u32) -> Option<&Value> {
+        self.val_ref(pos)
+    }
+
     /// Mutable access to the value at a position.
     #[inline]
     pub fn at_mut(&mut self, pos: u32) -> Option<&mut Value> {
