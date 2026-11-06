@@ -281,6 +281,108 @@ echo "end\n";
     );
 }
 
+/// What `unpacking_sends_each_element_as_the_iterator_yields_it` prints in
+/// php-src (`/usr/bin/php -n`).
+const UNPACK_ORDER_EXPECTED: &str = r#"a
+
+Warning: Cannot pass by-reference argument 1 of byref() by unpacking a Traversable, passing by-value instead in t.php on line 5
+b
+
+Warning: Cannot pass by-reference argument 2 of byref() by unpacking a Traversable, passing by-value instead in t.php on line 5
+c
+byref
+1
+2
+Cannot use positional argument after named argument during unpacking
+d:before
+d:y1
+d:y2
+caught
+a
+b
+c
+2
+x
+Keys must be of type int|string during array unpacking
+d:before
+d:y1
+d:y2
+caught
+d:one
+Cannot add element to the array as the next element is already occupied
+array(3) {
+  ["a"]=>
+  int(1)
+  [0]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+end
+"#;
+
+#[test]
+fn unpacking_sends_each_element_as_the_iterator_yields_it() {
+    // `ZEND_SEND_UNPACK` / `ZEND_ADD_ARRAY_UNPACK` of a Traversable: each
+    // element is sent (or added) before the iterator moves on, so its
+    // by-reference warning or key error comes first and an error stops
+    // the iterator; when an exception ends the walk, the iterator, then
+    // the operand, then the arguments sent (or the array built) so far are
+    // released.
+    assert_eq!(
+        run(r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "d:{$this->n}\n"; } }
+function g() { echo "a\n"; yield 1; echo "b\n"; yield 2; echo "c\n"; }
+function byref(&$x, &$y) { echo "byref\n"; }
+byref(...g());
+function h() { echo "1\n"; yield 'k' => 1; echo "2\n"; yield 5; echo "3\n"; }
+function q($k = 0, $z = 0) { echo "q\n"; }
+try { q(...h()); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+function y() { yield new D('y1'); yield new D('y2'); throw new Exception('x'); }
+function r($a, $b, $c = null) { echo "r\n"; }
+try { r(new D('before'), ...y()); } catch (Exception $e) { echo "caught\n"; }
+$a = [...g()];
+echo count($a), "\n";
+function kf() { yield 1; echo "x\n"; yield 1.5 => 2; echo "y\n"; yield 3; }
+try { $b = [...kf()]; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { $c = [new D('before'), ...y()]; } catch (Exception $e) { echo "caught\n"; }
+function one() { yield new D('one'); echo "after one\n"; }
+try { $w = [PHP_INT_MAX => 0, ...one()]; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+function ki() { yield 'a' => 1; yield '7' => 2; yield 3; }
+var_dump([...ki()]);
+var_dump(iterator_to_array((function () { yield 1; yield 2; })()));
+echo "end\n";
+"#),
+        UNPACK_ORDER_EXPECTED
+    );
+    // The handles: the generator #1, the iterator's #2, the yielded #3;
+    // freed in the order #2, #1, #3, so the next object takes #3.
+    let handles = "object(stdClass)#3 (0) {\n}\nobject(stdClass)#3 (0) {\n}\n";
+    assert_eq!(
+        run(r#"<?php
+function o() { yield new stdClass; throw new Exception("x"); }
+function f($a, $b) { var_dump(new stdClass); }
+try { f(...o()); } catch (Exception $e) { var_dump(new stdClass); }
+var_dump(new stdClass);
+"#),
+        handles
+    );
+    assert_eq!(
+        run(r#"<?php
+function o() { yield new stdClass; throw new Exception("x"); }
+try { $z = [...o()]; } catch (Exception $e) { var_dump(new stdClass); }
+var_dump(new stdClass);
+"#),
+        handles
+    );
+}
+
 #[test]
 fn method_cache_respects_class_scope_and_visibility() {
     assert_eq!(

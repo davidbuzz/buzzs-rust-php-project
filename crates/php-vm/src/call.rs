@@ -1111,6 +1111,8 @@ impl Vm {
         Ok(())
     }
 
+    /// `ZEND_SEND_UNPACK`: the elements of an array or `Traversable` as
+    /// arguments of the pending call.
     pub(crate) fn op_send_unpack(&mut self, src: Operand) -> VmResult<()> {
         let raw = match src {
             Operand::Cv(cv) => match self.cv_get(cv) {
@@ -1120,10 +1122,20 @@ impl Vm {
             _ => self.read_raw(src)?,
         };
         let mut v = raw.deref();
-        let traversable = matches!(v, Value::Object(_));
         let items: Vec<(Value, Value)> = match &v {
             Value::Array(a) => a.iter().map(|(k, v)| (k.to_value(), v.clone())).collect(),
-            Value::Object(o) if self.instance_of(o, b"traversable") => self.iterate_to_vec(&v)?,
+            Value::Object(o) if self.instance_of(o, b"traversable") => {
+                // Each element is sent as the iterator yields it: its
+                // by-reference warning or argument error comes before the
+                // iterator moves on, and when an exception ends the walk the
+                // iterator, then this operand (`FREE_OP1`, the locals here),
+                // then the arguments sent so far (`cleanup_unfinished_calls`)
+                // are released.
+                let o = o.clone();
+                return self.iterate_each(&o, &mut |vm: &mut Vm, key: Value, val: Value| {
+                    vm.send_unpacked(key, val, None).map(|_| ())
+                });
+            }
             _ => {
                 // ZEND_SEND_UNPACK raises zend_type_error.
                 return Err(self.make_throw(
@@ -1137,73 +1149,7 @@ impl Vm {
         };
         let mut changed = false;
         for (k, val) in items {
-            // ZEND_SEND_UNPACK: a Traversable's numeric string keys
-            // (ZEND_HANDLE_NUMERIC) are positional (GH-18581).
-            let k = match k {
-                Value::Str(s) if traversable => match ArrayKey::from_zstr(&s) {
-                    ArrayKey::Int(i) => Value::Int(i),
-                    ArrayKey::Str(s) => Value::Str(s),
-                },
-                k => k,
-            };
-            let (pos, name) = match &k {
-                Value::Str(s) => (self.arg_position(s)?, Some(s.clone())),
-                Value::Int(_) => {
-                    if self.frame().calls.last().expect("pending call").has_named {
-                        return Err(self.make_throw(
-                            "Error",
-                            "Cannot use positional argument after named argument during unpacking",
-                        ));
-                    }
-                    (
-                        Some(self.frame().calls.last().expect("pending call").args.len()),
-                        None,
-                    )
-                }
-                _ => {
-                    return Err(self.make_throw(
-                        "Error",
-                        "Keys must be of type int|string during argument unpacking",
-                    ))
-                }
-            };
-            let (by_ref, n, prefer_ref) = {
-                let call = self.frame().calls.last().expect("pending call");
-                let params = call.func.params();
-                let n = pos.unwrap_or_else(|| params.len().saturating_sub(1));
-                let param = params.get(n).or_else(|| params.last());
-                (
-                    call.magic_name.is_none() && call.func.arg_by_ref(n),
-                    n,
-                    param.is_some_and(|p| p.promote & crate::opcode::PREFER_REF != 0),
-                )
-            };
-            let val = if by_ref && !traversable {
-                let value = match val {
-                    Value::Reference(r) => Value::Reference(r),
-                    other => Value::Reference(PhpRef::new(other)),
-                };
-                if let Value::Array(a) = &mut v {
-                    let key = match &k {
-                        Value::Str(s) => ArrayKey::Str(s.clone()),
-                        Value::Int(i) => ArrayKey::Int(*i),
-                        _ => unreachable!("validated unpack key"),
-                    };
-                    a.make_mut().insert(key, value.clone());
-                    changed = true;
-                }
-                value
-            } else if by_ref && !prefer_ref {
-                let call = self.frame().calls.last().expect("pending call");
-                let fname = self.func_display(&call.func, call.scope.as_ref());
-                self.warning(&format!(
-                    "Cannot pass by-reference argument {} of {fname}() by unpacking a Traversable, passing by-value instead", n + 1
-                ))?;
-                Value::Reference(PhpRef::new(val.deref()))
-            } else {
-                val.deref()
-            };
-            self.push_arg(pos, name, val)?;
+            changed |= self.send_unpacked(k, val, Some(&mut v))?;
         }
         if changed {
             match raw {
@@ -1220,6 +1166,83 @@ impl Vm {
             }
         }
         Ok(())
+    }
+
+    /// Sends the element `val` with key `k` of an unpacked array (`array`:
+    /// that array, whose element becomes a reference when the parameter
+    /// takes one; returns whether it did) or `Traversable` (`array: None`),
+    /// as one step of `ZEND_SEND_UNPACK`.
+    fn send_unpacked(&mut self, k: Value, val: Value, array: Option<&mut Value>) -> VmResult<bool> {
+        let traversable = array.is_none();
+        // ZEND_SEND_UNPACK: a Traversable's numeric string keys
+        // (ZEND_HANDLE_NUMERIC) are positional (GH-18581).
+        let k = match k {
+            Value::Str(s) if traversable => match ArrayKey::from_zstr(&s) {
+                ArrayKey::Int(i) => Value::Int(i),
+                ArrayKey::Str(s) => Value::Str(s),
+            },
+            k => k,
+        };
+        let (pos, name) = match &k {
+            Value::Str(s) => (self.arg_position(s)?, Some(s.clone())),
+            Value::Int(_) => {
+                if self.frame().calls.last().expect("pending call").has_named {
+                    return Err(self.make_throw(
+                        "Error",
+                        "Cannot use positional argument after named argument during unpacking",
+                    ));
+                }
+                (
+                    Some(self.frame().calls.last().expect("pending call").args.len()),
+                    None,
+                )
+            }
+            _ => {
+                return Err(self.make_throw(
+                    "Error",
+                    "Keys must be of type int|string during argument unpacking",
+                ))
+            }
+        };
+        let (by_ref, n, prefer_ref) = {
+            let call = self.frame().calls.last().expect("pending call");
+            let params = call.func.params();
+            let n = pos.unwrap_or_else(|| params.len().saturating_sub(1));
+            let param = params.get(n).or_else(|| params.last());
+            (
+                call.magic_name.is_none() && call.func.arg_by_ref(n),
+                n,
+                param.is_some_and(|p| p.promote & crate::opcode::PREFER_REF != 0),
+            )
+        };
+        let mut changed = false;
+        let val = if by_ref && !traversable {
+            let value = match val {
+                Value::Reference(r) => Value::Reference(r),
+                other => Value::Reference(PhpRef::new(other)),
+            };
+            if let Some(Value::Array(a)) = array {
+                let key = match &k {
+                    Value::Str(s) => ArrayKey::Str(s.clone()),
+                    Value::Int(i) => ArrayKey::Int(*i),
+                    _ => unreachable!("validated unpack key"),
+                };
+                a.make_mut().insert(key, value.clone());
+                changed = true;
+            }
+            value
+        } else if by_ref && !prefer_ref {
+            let call = self.frame().calls.last().expect("pending call");
+            let fname = self.func_display(&call.func, call.scope.as_ref());
+            self.warning(&format!(
+                "Cannot pass by-reference argument {} of {fname}() by unpacking a Traversable, passing by-value instead", n + 1
+            ))?;
+            Value::Reference(PhpRef::new(val.deref()))
+        } else {
+            val.deref()
+        };
+        self.push_arg(pos, name, val)?;
+        Ok(changed)
     }
 
     // ------------------------------------------------------------------
