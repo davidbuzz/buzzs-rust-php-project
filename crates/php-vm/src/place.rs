@@ -719,6 +719,11 @@ pub(crate) fn descend(
                                 Step::Done(r)
                             }
                             _ => {
+                                if rw && existed && diags.is_empty() {
+                                    if let Some(step) = concat_in_place(slot, segs, wop) {
+                                        return step;
+                                    }
+                                }
                                 let step = apply_final(slot, wop);
                                 if !existed && rw {
                                     watch_rw_container(arr);
@@ -1024,6 +1029,43 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
             Step::Done(Value::Null)
         }
     }
+}
+
+/// `.=` on a slot holding a string, in place. php-src's `ZEND_ASSIGN_DIM_OP`
+/// and `ZEND_ASSIGN_STATIC_PROP_OP` operate on the fetched slot
+/// (`zend_binary_op(var_ptr, var_ptr, value)`: `concat_function` with
+/// `result == op1` extends the string with `zend_string_extend` when
+/// nothing else holds it; a shared or interned string is copied once and
+/// grows in place from then on), where the generic walk yields a copy of
+/// the value, concatenates into a new string of the full length and writes
+/// that back with a second, silent walk. `None` leaves the operation to
+/// that walk: a right-hand side that is neither a string nor an int (its
+/// conversion may warn or call `__toString()`), a slot not holding a
+/// string directly (a reference, another type), or a `[]` segment in
+/// `segs` (its appended element is recorded for the write-back walk).
+/// Callers use it only while no diagnostic of the walk is pending: an
+/// error handler raised afterwards could otherwise observe or abort an
+/// operation that has already happened. The operation becomes
+/// [`WOp::FetchRw`], whose finished step is the result, so the callers'
+/// write-back of a compound assignment is skipped.
+fn concat_in_place(slot: &mut Value, segs: &[RSeg], wop: &mut WOp) -> Option<Step> {
+    let WOp::AssignOp(BinaryOp::Concat, rhs) = wop else {
+        return None;
+    };
+    if segs.iter().any(|seg| matches!(seg, RSeg::Append)) {
+        return None;
+    }
+    let Value::Str(s) = slot else {
+        return None;
+    };
+    match rhs {
+        Value::Str(add) => s.append(add.as_bytes()),
+        Value::Int(i) => s.append(php_runtime::convert::long_to_zstr(*i).as_bytes()),
+        _ => return None,
+    }
+    let result = Value::Str(s.clone());
+    *wop = WOp::FetchRw;
+    Some(Step::Done(result))
 }
 
 /// The index of the segment whose container the walk over `segs` (from
@@ -1417,7 +1459,13 @@ impl Vm {
                 }
                 if segs.is_empty() {
                     let mut b = cell.borrow_mut();
-                    let s = apply_final(&mut b, &mut wop);
+                    // `ZEND_ASSIGN_STATIC_PROP_OP` with `.=` on a string
+                    // extends it in place (`typed_static_write` has let a
+                    // typed property holding a string through).
+                    let s = match concat_in_place(&mut b, segs, &mut wop) {
+                        Some(s) => s,
+                        None => apply_final(&mut b, &mut wop),
+                    };
                     drop(b);
                     return self.finish_step(s, segs, wop);
                 }
@@ -1704,6 +1752,38 @@ impl Vm {
         }
     }
 
+    /// `ZEND_ASSIGN_OBJ_OP` with `.=` on an initialized plain public
+    /// property slot holding a string ([`Vm::plain_property_slot`]: the
+    /// slot `get_property_ptr_ptr` hands out, with no hook, magic method,
+    /// native handler, lazy state or type involved), for the places the
+    /// property cache does not cover (`$this->o->s .= 'x'`,
+    /// `$list[$i]->name .= 'x'`): the string is extended in place like
+    /// [`concat_in_place`] does. `None` leaves the operation to the generic
+    /// read, operate and write-back path.
+    fn plain_prop_concat(o: &Obj, name: &ZStr, rhs: &Value) -> Option<Value> {
+        let tmp;
+        let add: &[u8] = match rhs {
+            Value::Str(s) => s.as_bytes(),
+            Value::Int(i) => {
+                tmp = php_runtime::convert::long_to_zstr(*i);
+                tmp.as_bytes()
+            }
+            _ => return None,
+        };
+        let idx = Self::plain_property_slot(o, name, true)?;
+        let data = object::data(o);
+        let mut slots = data.slots.borrow_mut();
+        let r = match slots.get_mut(idx) {
+            Some(Some(Value::Str(s))) => {
+                s.append(add);
+                Some(Value::Str(s.clone()))
+            }
+            _ => None,
+        };
+        drop(slots);
+        r
+    }
+
     /// Continues a write walk at an object.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn obj_walk(
@@ -1728,6 +1808,11 @@ impl Vm {
                             None => self.fetch_property_rw(&obj, name),
                         },
                         WOp::AssignOp(op, rhs) => {
+                            if op == BinaryOp::Concat {
+                                if let Some(r) = Self::plain_prop_concat(&obj, name, &rhs) {
+                                    return Ok(r);
+                                }
+                            }
                             // `zend_assign_op_overloaded_property` and the
                             // `get_property_ptr_ptr` path alike: read, operate,
                             // write back through the property handlers.
@@ -2411,8 +2496,14 @@ impl Vm {
             let p = &self.frame().code.places[pid as usize];
             (propcache::cacheable(p), propcache::cacheable_head(p))
         };
-        // Fast path: ASSIGN_OBJ_OP on a cached property holding a number.
+        // Fast paths: ASSIGN_OBJ_OP on a cached property: `.=` on a string
+        // appends in place, another operator on a number operates in place.
         if single {
+            if op == BinaryOp::Concat {
+                if let Some(r) = self.prop_cache_concat(pid, &v) {
+                    return Ok(r);
+                }
+            }
             if let Some(r) = self.prop_cache_assign_op(pid, op, &v)? {
                 return Ok(r);
             }

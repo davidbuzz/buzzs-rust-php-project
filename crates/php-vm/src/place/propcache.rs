@@ -641,6 +641,45 @@ impl Vm {
         self.write_property(&obj, &name, new).map(Some)
     }
 
+    /// `ZEND_ASSIGN_OBJ_OP` with `.=` of cacheable place `pid` on a property
+    /// holding a string: appends `rhs` (a string or an int) to that string
+    /// in place. php-src operates on the fetched slot
+    /// (`zend_binary_op(zptr, zptr, value)`, so `concat_function` with
+    /// `result == op1` and `zend_string_extend` when nothing else holds the
+    /// string; a shared or interned one is copied once and then grows in
+    /// place), and `zend_binary_assign_op_typed_prop` does the same for a
+    /// typed property whose value is a string ("make sure that in-place
+    /// concatenation is used if the LHS is a string"): the result is a
+    /// string, so the type that admitted the current value admits it.
+    /// Returns the new value, or `None` for the generic walk: a right-hand
+    /// side of another type (its conversion may warn or call
+    /// `__toString()`), a property not holding a string directly
+    /// (undefined, a reference, a number), and readonly, set-restricted,
+    /// hooked or natively handled properties (no `PC_WRITE`).
+    pub(crate) fn prop_cache_concat(&mut self, pid: PlaceId, rhs: &Value) -> Option<Value> {
+        let tmp;
+        let add: &[u8] = match rhs {
+            Value::Str(s) => s.as_bytes(),
+            Value::Int(i) => {
+                tmp = php_runtime::convert::long_to_zstr(*i);
+                tmp.as_bytes()
+            }
+            _ => return None,
+        };
+        self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |e, o, h| {
+            if e.accept != u32::MAX && e.accept & mask::STRING == 0 {
+                return Probe::Slow;
+            }
+            write_home(o, &h, |v| match v {
+                Value::Str(s) => {
+                    s.append(add);
+                    Probe::Hit(Value::Str(s.clone()))
+                }
+                _ => Probe::Slow,
+            })
+        })
+    }
+
     /// `ZEND_ISSET_ISEMPTY_PROP_OBJ` of cacheable place `pid` on an
     /// initialized declared slot or an existing dynamic property:
     /// `isset()` (or, with `empty`, `empty()`), or `Ok(None)` for the
