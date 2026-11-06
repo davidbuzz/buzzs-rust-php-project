@@ -319,3 +319,31 @@ Stack trace:
 "#
     );
 }
+
+/// `zend_compile_while`/`zend_compile_for` compile the body before the
+/// condition (and `for` the step too): CVs, so `get_defined_vars()`, follow
+/// that order.
+#[test]
+fn loop_bodies_are_compiled_before_conditions() {
+    let src = r#"<?php
+function f() {
+    $i = 0;
+    while ($a = $i++ < 1) { $b = 1; }
+    foreach (get_defined_vars() as $k => $v) { echo $k, ","; }
+    echo "\n";
+}
+f();
+function g() {
+    for ($i = 0; $c = $i < 1; $d = $i++) { $e = 1; }
+    foreach (get_defined_vars() as $k => $v) { echo $k, ","; }
+    echo "\n";
+}
+g();
+"#;
+    assert_eq!(
+        run(src),
+        r#"i,b,a,
+i,e,d,c,
+"#
+    );
+}
