@@ -112,6 +112,22 @@ impl DomIterator {
         }
     }
 
+    /// Restarts: a token list's iterator rewinds (`dom_token_list_it_rewind`);
+    /// a node collection's has no rewind handler (`php_dom_iterator_funcs`),
+    /// so this leaves it where it is.
+    pub fn rewind(&mut self) {
+        if let DomIterator::Tokens(t) = self {
+            t.rewind();
+        }
+    }
+
+    /// Whether this iterates a token list (`dom_token_list_it`: values read
+    /// from the token set at every access) rather than a node collection
+    /// (`php_dom_iterator`, which holds its current node).
+    pub fn is_tokens(&self) -> bool {
+        matches!(self, DomIterator::Tokens(_))
+    }
+
     /// Advances.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> DomResult<()> {

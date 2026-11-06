@@ -359,7 +359,11 @@ impl Vm {
             return;
         }
         match self.take_pending_exception() {
-            Some(e) => self.exception_error(&e, level::WARNING),
+            // `EG(exception) = NULL` after it: an exception its
+            // `__toString()` threw goes too.
+            Some(e) => {
+                self.exception_error(&e, level::WARNING);
+            }
             None => self.record_fatal_backtrace(),
         }
     }
@@ -720,11 +724,15 @@ impl Vm {
 
     /// `zend_exception_error(ex, severity)`: reports `e` as "Uncaught ...
     /// thrown" at `severity` (`E_ERROR` for an uncaught exception,
-    /// `E_WARNING` for one still pending when a fatal error is raised),
-    /// without a fatal backtrace (its own trace is in the message). A
-    /// `ParseError` or `CompileError` is reported as the compile error it
-    /// stands for; a fiber's graceful exit reports nothing.
-    fn exception_error(&mut self, e: &Obj, severity: i64) {
+    /// `E_WARNING` for one still pending when a fatal error is raised, or
+    /// for `assert()`'s with `assert.bail`), without a fatal backtrace (its
+    /// own trace is in the message). A `ParseError` or `CompileError` is
+    /// reported as the compile error it stands for; a fiber's graceful exit
+    /// reports nothing. The reports go straight to the error callback
+    /// (`zend_error_va` calls `zend_error_cb`), never to a user error
+    /// handler. Returns the exception `e`'s `__toString()` threw, which
+    /// php-src leaves in `EG(exception)`.
+    pub(crate) fn exception_error(&mut self, e: &Obj, severity: i64) -> Option<Obj> {
         self.last_fatal_error_backtrace = None;
         let cls = object::class_of(e).clone();
         if cls.lc_name.as_bytes() == b"parseerror" || cls.lc_name.as_bytes() == b"compileerror" {
@@ -740,11 +748,12 @@ impl Vm {
                 level::COMPILE_ERROR
             };
             self.compile_exception_error(lv, &msg, &file, line);
-            return;
+            return None;
         }
         if crate::fiber::is_graceful_exit(e) {
-            return;
+            return None;
         }
+        let mut thrown = None;
         match self.call_method_name(e, "__toString", Vec::new()) {
             Ok(v) => match v.deref() {
                 Value::Str(s) => self.set_exc_prop(e, "string", Value::Str(s)),
@@ -758,7 +767,7 @@ impl Vm {
                 // exception right away (`zend_throw_exception_internal`).
                 if !self.is_executing() {
                     self.exception_error(&inner, level::ERROR);
-                    return;
+                    return None;
                 }
                 let file = self
                     .exc_prop(&inner, "file")
@@ -777,7 +786,8 @@ impl Vm {
                     object::class_of(&inner).name,
                     cls.name
                 );
-                let _ = self.error_at(level::WARNING, &msg, &file, line);
+                self.error_cb_dont_bail(level::WARNING, msg.as_bytes(), &file, line);
+                thrown = Some(inner);
             }
             Err(_) => {}
         }
@@ -798,6 +808,7 @@ impl Vm {
         msg.extend_from_slice(s.as_bytes());
         msg.extend_from_slice(b"\n  thrown");
         self.error_cb_dont_bail(severity, &msg, &file, line);
+        thrown
     }
 }
 
