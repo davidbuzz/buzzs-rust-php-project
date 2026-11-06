@@ -48,9 +48,12 @@ pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
     if s.by_ref_return {
         fl |= flags::RETURN_REF;
     }
-    let lc = ZStr::from(s.name.to_ascii_lowercase());
+    let name = ZStr::from(s.name.as_str());
+    // Shares `name`'s buffer when it is already lower case, as method
+    // names do (`ClassBuilder::register`).
+    let lc = name.to_ascii_lowercase();
     let b = Builtin {
-        name: ZStr::from(s.name.as_str()),
+        name,
         params: s.params,
         defaults: s.defaults,
         required: s.required,
