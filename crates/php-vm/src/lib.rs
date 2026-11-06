@@ -233,6 +233,8 @@ impl Vm {
         for n in ["error_reporting", "precision", "serialize_precision"] {
             vm.sync_ini(n);
         }
+        // A recorded memory_limit violation raises the safe-point flag.
+        crate::interrupt::install_memory_limit_hook();
         vm.startup_diagnostics = sink;
         // `zend_interned_strings_init()`: the empty and one-character
         // strings exist before any script runs, so their first use (e.g.

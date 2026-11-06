@@ -323,6 +323,12 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
     {
         return status;
     }
+    // This thread runs the request: own php-memlimit's request heap from
+    // here on, so that module startup's allocations come from it too
+    // (php-memlimit's INTEGRATION.md, "Where the memory comes from"). Not
+    // before `maybe_run`: the built-in server's request threads take the
+    // heap per request, so its main thread must not hold it.
+    php_memlimit::bind_to_current_thread();
     let argv0 = argv.first().cloned().unwrap_or_else(|| b"php".to_vec());
     let mut opts = config::Options {
         binary: std::env::current_exe().ok(),

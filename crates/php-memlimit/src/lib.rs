@@ -26,23 +26,33 @@
 //!   [observing](observe_heap) is on (`ext/zend_test`'s custom ZendMM
 //!   handlers); while it is off the fast paths do no extra work.
 //!
+//! The memory itself comes from a port of `zend_mm`'s small-block heap for
+//! the request thread (the thread [bound](bind_to_current_thread) by
+//! [`request_start`]: size bins carved out of 2 MiB chunks, unlocked free
+//! lists) and from [`MiMalloc`] for larger blocks and other threads; see
+//! [`CountingAlloc`].
+//!
 //! See `INTEGRATION.md` in this crate for how the VM and bindings use it.
 
 mod counting;
+mod heap;
 mod limit;
 
 pub use mimalloc::MiMalloc;
 
 pub use counting::{
-    fallible, uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, Stats,
+    fallible, uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, PendingHook,
+    Stats,
 };
+pub use heap::{MAX_SMALL_ALIGN, MAX_SMALL_SIZE};
 pub use limit::{
     clamp_to_max_warning, hard_limit_for, limit_from_ini, round_to_chunks, scale_by_percent,
     HardLimitExceeded, HardLimitPercentError, MemoryLimitIni, OverLimit, SetLimitError, CHUNK_SIZE,
     DEFAULT_LIMIT, LIMIT_MAX, PHP_BASELINE,
 };
 
-/// The process-wide accounting allocator over [`MiMalloc`] (mimalloc).
+/// The process-wide accounting allocator: the request thread's small-block
+/// heap, over [`MiMalloc`] (mimalloc) for everything else.
 ///
 /// It only sees allocations once installed with
 /// [`install_global_allocator!`]; until then usage reads as
@@ -128,7 +138,7 @@ pub fn reset_peak() {
 }
 
 /// [`CountingAlloc::gc_mem_caches`] on [`GLOBAL`] (`gc_mem_caches()`:
-/// always 0, we keep no allocator-level caches).
+/// always 0: the heap's chunks are never released).
 pub fn gc_mem_caches() -> usize {
     GLOBAL.gc_mem_caches()
 }
@@ -146,6 +156,20 @@ pub fn observe_heap(on: bool) {
 /// [`CountingAlloc::is_observing`] on [`GLOBAL`].
 pub fn is_observing_heap() -> bool {
     GLOBAL.is_observing()
+}
+
+/// [`CountingAlloc::bind_to_current_thread`] on [`GLOBAL`]:
+/// [`request_start`] does it; a SAPI may call it earlier on the thread that
+/// will run requests (e.g. before module startup) so that startup
+/// allocations use the heap too. `false` while another thread owns it.
+pub fn bind_to_current_thread() -> bool {
+    GLOBAL.bind_to_current_thread()
+}
+
+/// [`CountingAlloc::unbind_current_thread`] on [`GLOBAL`] ([`request_end`]
+/// does it).
+pub fn unbind_current_thread() {
+    GLOBAL.unbind_current_thread();
 }
 
 /// [`CountingAlloc::set_baseline`] on [`GLOBAL`].
@@ -221,6 +245,11 @@ pub fn would_fit(bytes: usize) -> bool {
 /// [`CountingAlloc::set_hard_limit_handler`] on [`GLOBAL`].
 pub fn set_hard_limit_handler(handler: HardLimitHandler) -> bool {
     GLOBAL.set_hard_limit_handler(handler)
+}
+
+/// [`CountingAlloc::set_pending_hook`] on [`GLOBAL`].
+pub fn set_pending_hook(hook: PendingHook) -> bool {
+    GLOBAL.set_pending_hook(hook)
 }
 
 /// [`CountingAlloc::request_start`] on [`GLOBAL`].

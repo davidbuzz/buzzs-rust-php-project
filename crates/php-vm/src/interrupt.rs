@@ -26,8 +26,10 @@
 //! it can never clear a flag another executing thread still needs.
 //!
 //! The delayed `memory_limit` violation is recorded by `php-memlimit`,
-//! which cannot see this flag yet, so the executor still polls
-//! [`php_memlimit::is_pending`] next to it.
+//! which raises the flag through its pending hook
+//! ([`install_memory_limit_hook`], once per process); the executor's own
+//! [`php_memlimit::is_pending`] polls next to the flag have been redundant
+//! since then and stay only until its loop tail is reworked.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -123,6 +125,24 @@ pub(crate) fn safe_point_due() -> bool {
 #[inline]
 pub(crate) fn raise_safe_point() {
     SAFE_POINT.raise();
+}
+
+/// `php-memlimit`'s pending hook: a `memory_limit` violation was just
+/// recorded (an allocation over the soft limit, or a failed
+/// `try_reserve`), possibly inside the allocator, so this only raises the
+/// flag: no allocation, no panic. The safe point then `take()`s the
+/// violation, and [`resync_safe_point`] keeps the flag up while one is
+/// pending.
+#[inline(never)]
+fn memory_limit_pending() {
+    raise_safe_point();
+}
+
+/// Installs [`memory_limit_pending`] as `php-memlimit`'s pending hook.
+/// Idempotent: the hook is installed once per process, and later calls
+/// (every `Vm::new`) find it in place.
+pub(crate) fn install_memory_limit_hook() {
+    let _ = php_memlimit::set_pending_hook(memory_limit_pending);
 }
 
 /// Ends a safe point: clears the flag unless one of its sources is still
