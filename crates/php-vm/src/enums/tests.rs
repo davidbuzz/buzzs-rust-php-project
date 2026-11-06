@@ -225,3 +225,155 @@ fn case_objects_are_owned_by_their_constant() {
          object(Foo)#1 (1) refcount(4){\n  [\"name\"]=>\n  string(3) \"Bar\" interned\n}\n"
     );
 }
+
+/// A test extension with `cv($callable, ...$args)`: [`Vm::call_value`],
+/// the `zend_call_function()` an extension makes for a callable it
+/// received (and validated) through `Z_PARAM_FUNC`.
+struct CvExt;
+
+impl crate::ext::Extension for CvExt {
+    fn name(&self) -> &'static str {
+        "cvtest"
+    }
+    fn register(&self, m: &mut crate::ext::ModuleBuilder<'_>) {
+        m.function("cv(mixed $callable, mixed ...$args): mixed", cv);
+    }
+}
+
+fn cv(vm: &mut Vm, a: &mut crate::ext::Args) -> crate::vm::VmResult<Value> {
+    let callable = a.at(0);
+    let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
+    vm.call_value(&callable, args)
+}
+
+fn run_cv(src: &str) -> String {
+    let sink = Sink::default();
+    let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &[&CvExt]);
+    vm.run_script(src.as_bytes(), "t.php");
+    drop(vm);
+    let out = sink.0.borrow().clone();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `zend_call_function()` resolves the callable in the calling user
+/// frame's scope (`zend_is_callable_ex`): `parent::`/`self::`/`static::`,
+/// `"C::m"` binding that frame's `$this`, private methods of that scope;
+/// `ext/pdo/tests/pdo_fetch_func_001.phpt` with `'parent::method'`.
+#[test]
+fn call_value_resolves_in_the_calling_user_frame() {
+    let out = run_cv(
+        r#"<?php
+function f($x) { return "f($x)"; }
+class A {
+    public function m($x) { return __METHOD__ . "($x)"; }
+    public static function s($x) { return __METHOD__ . "($x)"; }
+}
+class B extends A {
+    private function priv($x) { return "priv($x)"; }
+    public function __invoke($x) { return "invoke($x)"; }
+    function run() {
+        echo cv('parent::m', 1), "\n";
+        echo cv('self::m', 2), "\n";
+        echo cv('static::s', 3), "\n";
+        echo cv([$this, 'parent::m'], 4), "\n";
+        echo cv(['B', 'parent::s'], 5), "\n";
+        echo cv('A::m', 6), "\n";
+        echo cv([$this, 'priv'], 7), "\n";
+        echo cv($this, 8), "\n";
+        echo cv(fn($x) => "closure($x)", 9), "\n";
+        echo cv('f', 'ten'), cv('\f', 11), "\n";
+    }
+}
+(new B)->run();
+echo cv([new B, 'A::m'], 12), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "A::m(1)\nA::m(2)\nA::s(3)\nA::m(4)\nA::s(5)\nA::m(6)\npriv(7)\ninvoke(8)\nclosure(9)\n\
+         f(ten)f(11)\nA::m(12)\n"
+    );
+}
+
+/// The callable deprecations belong to the validation (`Z_PARAM_FUNC`,
+/// here `is_callable()`), not to the call of the cached `fcc`.
+#[test]
+fn call_value_leaves_the_callable_deprecations_to_the_validator() {
+    let out = run_cv(
+        r#"<?php
+class A { public function m($x) { return __METHOD__ . "($x)"; } }
+class B extends A {
+    function run() {
+        $c = [$this, 'parent::m'];
+        var_dump(is_callable($c));
+        echo cv($c, 1), cv($c, 2), "\n";
+    }
+}
+(new B)->run();
+"#,
+    );
+    assert_eq!(
+        out,
+        "\nDeprecated: Callables of the form [\"B\", \"parent::m\"] are deprecated in t.php on line 6\n\
+         bool(true)\nA::m(1)A::m(2)\n"
+    );
+}
+
+/// A value `zend_is_callable_ex` rejects keeps the dynamic-call errors.
+#[test]
+fn call_value_keeps_the_dynamic_call_errors_for_invalid_callables() {
+    let out = run_cv(
+        r#"<?php
+class A { public function m($x) { return 1; } }
+function t($c) { try { cv($c); } catch (Error $e) { echo $e->getMessage(), "\n"; } }
+t('nope');
+t([new A, 'zz']);
+t('parent::m');
+t([new A, 'parent::m']);
+t(42);
+"#,
+    );
+    assert_eq!(
+        out,
+        "Call to undefined function nope()\n\
+         Call to undefined method A::zz()\n\
+         Class \"parent\" not found\n\
+         Cannot use \"parent\" when current class scope has no parent\n\
+         Value of type int is not callable\n"
+    );
+}
+
+/// `$f()` (`zend_init_dynamic_call_array`) hands `[$obj, "parent::m"]`'s
+/// whole method name to `get_method`: an undefined method or `__call`;
+/// `"parent::m"` strings fetch a class named `parent`. Only
+/// `zend_is_callable_ex` (`call_user_func()`) splits the name.
+#[test]
+fn dynamic_call_does_not_split_a_method_name_with_a_class_prefix() {
+    let out = run_cv(
+        r#"<?php
+class A { public function m($x) { return __METHOD__ . "($x)"; } }
+class B extends A {
+    function run() {
+        foreach ([[$this, 'parent::m'], 'parent::m'] as $f) {
+            try { echo $f(1), "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        }
+    }
+}
+class C extends A {
+    function __call($n, $a) { return "__call($n)"; }
+    function run() { $f = [$this, 'parent::m']; echo $f(1), "\n"; }
+}
+(new B)->run();
+(new C)->run();
+echo call_user_func([new B, 'parent::m'], 2), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Call to undefined method B::parent::m()\n\
+         Class \"parent\" not found\n\
+         __call(parent::m)\n\
+         \nDeprecated: Callables of the form [\"B\", \"parent::m\"] are deprecated in t.php on line 16\n\
+         A::m(2)\n"
+    );
+}

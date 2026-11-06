@@ -3,8 +3,8 @@
 //! autoloading, class constants and static properties.
 
 use crate::class::{
-    cflags, Class, ClassConst, ClassDecl, ClassKind, ConstExpr, InternalKind, Magic, PropInfo,
-    StaticProp, TraitRule,
+    cflags, name_map_with_capacity, Class, ClassConst, ClassDecl, ClassKind, ConstExpr,
+    InternalKind, Magic, NameMap, PropInfo, StaticProp, TraitRule,
 };
 use crate::func::{flags, Func, Method, UserFunction};
 use crate::object;
@@ -12,11 +12,10 @@ use crate::opcode::ClassSpec;
 use crate::vm::{Frame, FrameKind, Throw, Vm, VmResult};
 use php_runtime::{Value, ZStr};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 /// Builds magic-method shortcuts from a method table.
-pub(crate) fn build_magic(methods: &HashMap<ZStr, Rc<Method>>) -> Magic {
+pub(crate) fn build_magic(methods: &NameMap<Rc<Method>>) -> Magic {
     // Up to this many methods, one pass over the table that only looks at
     // `__` names is cheaper than sixteen hashed lookups.
     const SCAN_MAX: usize = 32;
@@ -2181,11 +2180,11 @@ struct TraitMethodBinder<'a> {
     parent: Option<&'a Rc<Class>>,
     traits: &'a [Rc<Class>],
     rules: &'a TraitRules,
-    methods: &'a mut HashMap<ZStr, Rc<Method>>,
+    methods: &'a mut NameMap<Rc<Method>>,
     order: &'a mut Vec<ZStr>,
     /// Methods copied from a trait whose scope has not been fixed up to
     /// the class yet: lowercase name -> trait index.
-    unfixed: HashMap<ZStr, usize>,
+    unfixed: NameMap<usize>,
     checks: &'a mut Vec<TraitAbstractCheck>,
     warnings: &'a mut Vec<String>,
     err: &'a mut Option<String>,
@@ -2554,8 +2553,8 @@ fn trait_property_conflict(
     traits: &[Rc<Class>],
     ti: usize,
     pd: &crate::class::PropDecl,
-    prop_map: &HashMap<ZStr, Rc<PropInfo>>,
-    static_map: &HashMap<ZStr, usize>,
+    prop_map: &NameMap<Rc<PropInfo>>,
+    static_map: &NameMap<usize>,
     static_props: &[StaticProp],
     link_out: &mut LinkOut,
 ) -> Option<String> {
@@ -2625,8 +2624,8 @@ fn visibility_name(f: u32) -> &'static str {
 fn static_prop_override_error(
     pd: &crate::class::PropDecl,
     name: &ZStr,
-    prop_map: &HashMap<ZStr, Rc<PropInfo>>,
-    static_map: &HashMap<ZStr, usize>,
+    prop_map: &NameMap<Rc<PropInfo>>,
+    static_map: &NameMap<usize>,
     static_props: &[StaticProp],
 ) -> Option<String> {
     if let Some(e) = prop_map
@@ -2853,10 +2852,18 @@ fn build_class(
 ) -> Class {
     let name = decl.name.clone();
     let display = object::display_name(&name);
-    let mut consts: Vec<Rc<ClassConst>> = Vec::new();
-    let mut const_map: HashMap<ZStr, usize> = HashMap::new();
+    // Upper bounds of the table sizes (inherited members may be overridden
+    // in place), so the tables are built without regrowing, as
+    // `zend_hash_extend` sizes them in `zend_do_inheritance`.
+    let nconsts = parent.as_ref().map_or(0, |p| p.consts.len())
+        + interfaces.iter().map(|i| i.consts.len()).sum::<usize>()
+        + traits.iter().map(|t| t.consts.len()).sum::<usize>()
+        + decl.consts.len()
+        + decl.cases.len();
+    let mut consts: Vec<Rc<ClassConst>> = Vec::with_capacity(nconsts);
+    let mut const_map: NameMap<usize> = name_map_with_capacity(nconsts);
     let add_const =
-        |c: Rc<ClassConst>, consts: &mut Vec<Rc<ClassConst>>, map: &mut HashMap<ZStr, usize>| {
+        |c: Rc<ClassConst>, consts: &mut Vec<Rc<ClassConst>>, map: &mut NameMap<usize>| {
             if let Some(&i) = map.get(&c.name) {
                 consts[i] = c;
             } else {
@@ -2894,7 +2901,50 @@ fn build_class(
             }
         }
     }
-    for cd in &decl.consts {
+    // Own constants and enum cases in declaration order (`zend_compile_
+    // class_decl` adds both to `constants_table` as they appear, the order
+    // `ReflectionClass::getConstants()` shows). The declaration keeps them
+    // in two lists, so an enum's are merged by line, constants first on a
+    // shared line.
+    let mut own_members: Vec<(u32, bool, usize)> =
+        Vec::with_capacity(decl.consts.len() + decl.cases.len());
+    own_members.extend(
+        decl.consts
+            .iter()
+            .enumerate()
+            .map(|(idx, cd)| (cd.line, false, idx)),
+    );
+    own_members.extend(
+        decl.cases
+            .iter()
+            .enumerate()
+            .map(|(idx, c)| (c.2, true, idx)),
+    );
+    if !decl.cases.is_empty() {
+        own_members.sort_by_key(|&(line, is_case, _)| (line, is_case));
+    }
+    for &(_, is_case, idx) in &own_members {
+        if is_case {
+            let (cname, value, _line) = &decl.cases[idx];
+            add_const(
+                Rc::new(ClassConst {
+                    name: cname.clone(),
+                    value: RefCell::new(None),
+                    expr: value.clone().unwrap_or(ConstExpr::Value(Value::Null)),
+                    flags: flags::PUBLIC,
+                    class: name.clone(),
+                    ty: None,
+                    is_case: true,
+                    evaluating: Cell::new(false),
+                    doc_comment: decl.case_doc_comments.get(idx).cloned().flatten(),
+                    attributes: decl.case_attributes.get(idx).cloned().unwrap_or_default(),
+                }),
+                &mut consts,
+                &mut const_map,
+            );
+            continue;
+        }
+        let cd = &decl.consts[idx];
         if let Some(&i) = const_map.get(&cd.name) {
             let existing = &consts[i];
             if existing.flags & flags::FINAL != 0 && err.is_none() {
@@ -2949,24 +2999,6 @@ fn build_class(
             &mut const_map,
         );
     }
-    for (i, (cname, value, _line)) in decl.cases.iter().enumerate() {
-        add_const(
-            Rc::new(ClassConst {
-                name: cname.clone(),
-                value: RefCell::new(None),
-                expr: value.clone().unwrap_or(ConstExpr::Value(Value::Null)),
-                flags: flags::PUBLIC,
-                class: name.clone(),
-                ty: None,
-                is_case: true,
-                evaluating: Cell::new(false),
-                doc_comment: decl.case_doc_comments.get(i).cloned().flatten(),
-                attributes: decl.case_attributes.get(i).cloned().unwrap_or_default(),
-            }),
-            &mut consts,
-            &mut const_map,
-        );
-    }
 
     // `zend_do_traits_constant_binding` (traits are bound before
     // inheritance, so a constant inherited from the parent or an interface
@@ -3014,25 +3046,7 @@ fn build_class(
         }
     }
 
-    // Properties.
-    let mut props: Vec<Rc<PropInfo>> = parent.as_ref().map(|p| p.props.clone()).unwrap_or_default();
-    let mut prop_map: HashMap<ZStr, Rc<PropInfo>> = HashMap::new();
-    let mut static_props: Vec<StaticProp> = Vec::new();
-    let mut static_map: HashMap<ZStr, usize> = HashMap::new();
-    if let Some(p) = &parent {
-        for (k, pi) in &p.prop_map {
-            if pi.visibility() != flags::PRIVATE {
-                prop_map.insert(k.clone(), pi.clone());
-            }
-        }
-        for sp in &p.static_props {
-            if sp.flags & flags::PRIVATE == 0 {
-                static_map.insert(sp.name.clone(), static_props.len());
-                static_props.push(sp.clone());
-            }
-        }
-    }
-    // (declaration, owner, index of the trait it comes from)
+    // Properties: (declaration, owner, index of the trait it comes from).
     let mut all_props: Vec<(crate::class::PropDecl, ZStr, Option<usize>)> = Vec::new();
     if decl.kind == ClassKind::Enum {
         let mk = |n: &str, ty: crate::types::TypeDecl| crate::class::PropDecl {
@@ -3069,6 +3083,31 @@ fn build_class(
     for (ti, t) in traits.iter().enumerate() {
         for p in trait_prop_decls(t) {
             all_props.push((p, name.clone(), Some(ti)));
+        }
+    }
+    let nstatic_decls = all_props
+        .iter()
+        .filter(|(pd, _, _)| pd.flags & flags::STATIC != 0)
+        .count();
+    let ninstance_decls = all_props.len() - nstatic_decls;
+    let mut props: Vec<Rc<PropInfo>> = parent.as_ref().map(|p| p.props.clone()).unwrap_or_default();
+    props.reserve(ninstance_decls);
+    let mut prop_map: NameMap<Rc<PropInfo>> =
+        name_map_with_capacity(parent.as_ref().map_or(0, |p| p.prop_map.len()) + ninstance_decls);
+    let nstatics = parent.as_ref().map_or(0, |p| p.static_props.len()) + nstatic_decls;
+    let mut static_props: Vec<StaticProp> = Vec::with_capacity(nstatics);
+    let mut static_map: NameMap<usize> = name_map_with_capacity(nstatics);
+    if let Some(p) = &parent {
+        for (k, pi) in &p.prop_map {
+            if pi.visibility() != flags::PRIVATE {
+                prop_map.insert(k.clone(), pi.clone());
+            }
+        }
+        for sp in &p.static_props {
+            if sp.flags & flags::PRIVATE == 0 {
+                static_map.insert(sp.name.clone(), static_props.len());
+                static_props.push(sp.clone());
+            }
         }
     }
     for (pd, owner, from_trait) in all_props {
@@ -3334,9 +3373,30 @@ fn build_class(
     }
     // Private props of this class must be accessible by name too.
 
-    // Methods.
-    let mut methods: HashMap<ZStr, Rc<Method>> = HashMap::new();
-    let mut method_order: Vec<ZStr> = Vec::new();
+    // Methods. A concrete class has every interface method among its own,
+    // trait or inherited ones; only an interface or an abstract class can
+    // take new entries from its interfaces.
+    let ntrait_methods = traits.iter().map(|t| t.method_order.len()).sum::<usize>();
+    let niface_methods = if decl.kind == ClassKind::Interface || cflag & cflags::ABSTRACT != 0 {
+        interfaces
+            .iter()
+            .map(|i| i.method_order.len())
+            .sum::<usize>()
+    } else {
+        0
+    };
+    let nmethods = decl.methods.len()
+        + if decl.kind == ClassKind::Enum {
+            crate::builtins::enum_methods().len()
+        } else {
+            0
+        }
+        + ntrait_methods
+        + decl.trait_rules.len()
+        + parent.as_ref().map_or(0, |p| p.method_order.len())
+        + niface_methods;
+    let mut methods: NameMap<Rc<Method>> = name_map_with_capacity(nmethods);
+    let mut method_order: Vec<ZStr> = Vec::with_capacity(nmethods);
     // Own methods first (for get_class_methods order), then trait methods,
     // then inherited ones.
     for md in &decl.methods {
@@ -3400,7 +3460,7 @@ fn build_class(
         rules,
         methods: &mut methods,
         order: &mut method_order,
-        unfixed: HashMap::new(),
+        unfixed: name_map_with_capacity(ntrait_methods),
         checks: &mut link_out.trait_checks,
         warnings: &mut link_out.warnings,
         err,
@@ -3464,7 +3524,7 @@ fn build_class(
         magic,
         defaults: RefCell::new(None),
         backing: decl.backing,
-        enum_cases: RefCell::new(HashMap::new()),
+        enum_cases: RefCell::new(NameMap::default()),
         decl: Some(decl.clone()),
         internal,
         attributes: decl.attributes.clone(),

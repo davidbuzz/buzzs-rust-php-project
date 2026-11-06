@@ -251,7 +251,11 @@ impl Vm {
     /// `zend_init_dynamic_call_string` / `_array`: like
     /// [`Vm::resolve_callable_for_call`], but a `"C::m"` / `["C", "m"]`
     /// callee never borrows the caller's `$this` (a non-static method, or
-    /// the `__call` trampoline, "cannot be called statically").
+    /// the `__call` trampoline, "cannot be called statically"), and the
+    /// method name of `[$obj, "P::m"]` is looked up whole by the object's
+    /// `get_method` handler (an undefined method, or `__call("P::m")`):
+    /// only `zend_is_callable_ex` splits such names, for `call_user_func()`
+    /// and `Z_PARAM_FUNC`.
     fn resolve_dyn_callable(&mut self, callee: &Value) -> VmResult<PendingCall> {
         let class_method = match callee {
             Value::Str(s) => find_double_colon(s.as_bytes()).map(|p| {
@@ -263,10 +267,14 @@ impl Vm {
             Value::Array(a) if a.len() == 2 => {
                 let target = a.get(&ArrayKey::Int(0)).map(Value::deref);
                 let method = a.get(&ArrayKey::Int(1)).map(Value::deref);
-                if let (Some(Value::Str(c)), Some(Value::Str(m))) = (target, method) {
-                    Some((c, m))
-                } else {
-                    None
+                match (target, method) {
+                    (Some(Value::Str(c)), Some(Value::Str(m))) => Some((c, m)),
+                    (Some(Value::Object(o)), Some(Value::Str(m)))
+                        if find_double_colon(m.as_bytes()).is_some() =>
+                    {
+                        return self.method_call(&o, &m);
+                    }
+                    _ => None,
                 }
             }
             _ => None,
@@ -319,7 +327,11 @@ impl Vm {
                 match target {
                     Value::Object(o) => {
                         if let Some(p) = find_double_colon(m.as_bytes()) {
-                            // [$obj, 'parent::m']
+                            // `[$obj, 'parent::m']` split like
+                            // `zend_is_callable_ex` does: reached by the
+                            // callers that do not resolve through it yet
+                            // (`Fiber`) and by [`Vm::call_value`]'s error
+                            // path (no parent class).
                             let cn = ZStr::from(&m.as_bytes()[..p]);
                             let mn = ZStr::from(&m.as_bytes()[p + 2..]);
                             let cls = if cn.eq_ignore_ascii_case(b"parent") {
@@ -2573,9 +2585,27 @@ impl Vm {
         }
     }
 
-    /// Calls a callable value with arguments (`call_user_func`).
+    /// Calls a callable value with arguments: `zend_call_function()` for a
+    /// callable an internal function received through `Z_PARAM_FUNC`
+    /// (validated with [`Vm::resolve_callable`] or [`Vm::is_callable`],
+    /// which is where the `"self"`/`"parent"`/`"static"` and
+    /// `["C", "P::m"]` deprecations belong, so none is raised here).
+    ///
+    /// The callable is resolved by the `zend_is_callable_ex` port in the
+    /// calling user frame's scope, like the `zend_fcall_info_cache` php-src
+    /// fills at parameter parsing: `"parent::m"` names the frame's parent
+    /// class, `"C::m"` and `[$obj, "P::m"]` bind that frame's `$this`, and
+    /// method visibility is judged from that frame. A value the port
+    /// rejects keeps the dynamic-call resolution for its error ("Call to
+    /// undefined function f()").
+    ///
+    /// [`Vm::resolve_callable`]: crate::Vm::resolve_callable
+    /// [`Vm::is_callable`]: crate::Vm::is_callable
     pub fn call_value(&mut self, callable: &Value, args: Vec<Value>) -> VmResult<Value> {
-        let mut call = self.resolve_callable_for_call(callable)?;
+        let mut call = match self.zend_is_callable(callable, true)? {
+            Ok(call) => call,
+            Err(_) => self.resolve_callable_for_call(callable)?,
+        };
         call.args = args.into_iter().map(Some).collect();
         self.call_pending(call)
     }
