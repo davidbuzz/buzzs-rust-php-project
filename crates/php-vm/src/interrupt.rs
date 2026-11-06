@@ -12,17 +12,17 @@
 //! current instruction: queued destructors, a due garbage collection, a
 //! delayed `memory_limit` fatal and the interrupt handlers above. Instead of
 //! polling each source after every instruction, whoever raises one of them
-//! also sets one combined flag ([`raise_safe_point`], php-src's
+//! also sets one combined flag (`raise_safe_point`, php-src's
 //! `EG(vm_interrupt)`), and the executor polls only that flag. When it is
-//! set, the executor runs [`Vm::safe_point`](crate::vm::Vm) work, which
+//! set, the executor runs its `Vm::safe_point` work, which
 //! checks every source in the same order as before, and then
-//! [`resync_safe_point`] clears the flag unless a source is still set.
+//! `resync_safe_point` clears the flag unless a source is still set.
 //! A spuriously set flag costs one pass over the sources and nothing else.
 //!
 //! The flag is process-wide, like the interrupt flag (the timer thread and
 //! signal handlers on other threads must reach it), while the destructor
 //! and collector sources are per thread. A thread only clears it when it is
-//! the only thread executing PHP code ([`ExecutionGuard`] counts them), so
+//! the only thread executing PHP code (`ExecutionGuard` counts them), so
 //! it can never clear a flag another executing thread still needs.
 //!
 //! The delayed `memory_limit` violation is recorded by `php-memlimit`,
@@ -202,7 +202,7 @@ static TIMER_GEN: AtomicU64 = AtomicU64::new(0);
 /// signal handlers and other threads.
 ///
 /// Not inlinable into other crates (`#[inline(never)]`): an inlinable body
-/// would export [`INTERRUPT`] and [`SAFE_POINT`] and turn the executor's
+/// would export the `INTERRUPT` and `SAFE_POINT` statics and turn the executor's
 /// per-instruction poll into a GOT load.
 #[inline(never)]
 pub fn request_interrupt() {
