@@ -51,7 +51,11 @@ thread_local! {
 /// `child_init` hook.
 pub fn child_init() {
     // Nothing is shared between requests; make sure the configuration is
-    // materialised before the first request.
+    // materialised before the first request.  php-memlimit's request heap
+    // is not bound here, unlike php-cli's single request thread: every
+    // request runs on a thread of its own, which takes the heap for the
+    // request (`request::run`); an httpd thread owning it would leave
+    // every request on the inner allocator.
     let _ = crate::config::current();
 }
 

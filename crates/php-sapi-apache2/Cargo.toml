@@ -29,6 +29,7 @@ php-ext-pdo = { path = "../php-ext-pdo" }
 php-ext-date = { path = "../php-ext-date" }
 php-ext-streams = { path = "../php-ext-streams" }
 php-ext-session = { path = "../php-ext-session" }
+php-memlimit = { path = "../php-memlimit" }
 libc = "0.2"
 
 [build-dependencies]

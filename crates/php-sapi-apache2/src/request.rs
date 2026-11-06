@@ -726,6 +726,8 @@ fn php_single_quoted(s: &[u8]) -> Vec<u8> {
 /// Runs one request on the current thread (`php_handler()` from
 /// `php_apache_request_ctor()` to `php_apache_request_dtor()`).
 pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
+    // Declared first, dropped last: after the VM's teardown.
+    let _heap = HeapBinding::take();
     let ctx = Rc::new(RequestCtx::new(backend, params.timer.clone()));
     CURRENT.with(|c| *c.borrow_mut() = Some(ctx.clone()));
 
@@ -804,6 +806,36 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
     }
     drop(vm);
     CURRENT.with(|c| *c.borrow_mut() = None);
+    // `_heap` collects and releases php-memlimit's heap here.
+}
+
+/// php-memlimit's request heap (the `zend_mm` small-block heap) held by
+/// the request thread for the whole of [`run`]: taken before the VM is
+/// built, so that module startup's allocations come from it as in php-cli
+/// (php-memlimit's INTEGRATION.md, "Where the memory comes from"), and
+/// kept across `request_end` so that the VM's teardown frees on the owner
+/// path.  On drop — after the teardown, and also when the request thread
+/// unwinds — the heap is collected (`zend_mm_gc`: empty runs go back at
+/// once) and given up for the next request's thread.  Every request has a
+/// thread of its own, so the httpd thread never binds the heap: an owner
+/// that outlives requests would leave every request on the inner
+/// allocator.  The thread of a `virtual()` sub-request finds its parent's
+/// thread holding the heap and runs on the inner allocator, which
+/// php-memlimit allows.
+struct HeapBinding;
+
+impl HeapBinding {
+    fn take() -> Self {
+        let _ = php_memlimit::bind_to_current_thread();
+        HeapBinding
+    }
+}
+
+impl Drop for HeapBinding {
+    fn drop(&mut self) {
+        let _ = php_memlimit::collect_heap();
+        php_memlimit::unbind_current_thread();
+    }
 }
 
 /// After `php_request_shutdown()` (which `Vm::run_script` performed: the
