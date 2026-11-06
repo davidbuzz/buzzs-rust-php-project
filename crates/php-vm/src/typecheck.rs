@@ -4,7 +4,7 @@
 
 use crate::class::Class;
 use crate::object;
-use crate::types::{mask, TypeDecl};
+use crate::types::{mask, ClassRef, ClassRefs, TypeDecl};
 use crate::vm::{Vm, VmResult};
 use php_runtime::numeric::{is_numeric_string_ex, Number};
 use php_runtime::{convert, Value, ZStr};
@@ -20,47 +20,57 @@ pub(crate) struct TypeCtx<'a> {
     pub internal_arg: Option<(&'a str, usize, &'a str)>,
 }
 
-/// [`Class::instance_of_name`] for a name in any case: class names are
-/// stored lower-cased (`lc_name`), so a case-insensitive comparison is the
-/// comparison with the lower-cased name.
-fn instance_of_name_ci(cls: &Rc<Class>, name: &[u8]) -> bool {
-    if is_named(cls, name) || cls.interfaces.iter().any(|i| is_named(i, name)) {
-        return true;
+/// `instanceof_function` against the class a type member names, resolved
+/// like `zend_fetch_class(name, ZEND_FETCH_CLASS_AUTO)`: `self`/`parent`
+/// through the declaring scope, any other name by its lower-case form
+/// against the names of the object's class, its parents and interfaces.
+/// Called for every class-typed argument, return value and property
+/// assignment: a matching check touches neither the class table nor the
+/// allocator. Aliases are left to [`Vm::class_alias_matches`].
+fn class_matches(cls: &Rc<Class>, member: &ClassRef, ctx: &TypeCtx<'_>) -> bool {
+    match member {
+        ClassRef::Named(lc) => cls.instance_of_name(lc.as_bytes()),
+        ClassRef::Scope => ctx
+            .scope
+            .is_some_and(|s| cls.instance_of_name(s.lc_name.as_bytes())),
+        ClassRef::Parent => ctx
+            .scope
+            .and_then(|s| s.parent.as_ref())
+            .is_some_and(|p| cls.instance_of_name(p.lc_name.as_bytes())),
     }
-    let mut c = cls.parent.as_deref();
-    while let Some(p) = c {
-        if is_named(p, name) {
-            return true;
-        }
-        c = p.parent.as_deref();
-    }
-    false
-}
-
-/// Whether `c` is named `name` (any case).
-fn is_named(c: &Class, name: &[u8]) -> bool {
-    c.lc_name.as_bytes().eq_ignore_ascii_case(name)
 }
 
 impl Vm {
-    /// Whether an object of `obj_class` is an instance of the class type
-    /// `name` (any case), without allocating: called for every class-typed
-    /// argument, return value and property assignment.
-    #[allow(clippy::unused_self)]
-    fn class_matches(&mut self, obj_class: &Rc<Class>, name: &ZStr, ctx: &TypeCtx<'_>) -> bool {
-        let n = name.as_bytes();
-        if n.eq_ignore_ascii_case(b"self") {
-            return ctx
-                .scope
-                .is_some_and(|c| instance_of_name_ci(obj_class, c.lc_name.as_bytes()));
+    /// `zend_fetch_ce_from_type` for the names the object's hierarchy does
+    /// not carry, run only once every name comparison has failed: php-src
+    /// resolves a type's class through the class table without autoloading
+    /// (`ZEND_FETCH_CLASS_NO_AUTOLOAD`), and `class_alias()` registers a
+    /// class under a second key there, so an object satisfies a type naming
+    /// an alias of one of its classes.
+    #[inline(never)]
+    #[cold]
+    fn class_alias_matches(&self, cls: &Rc<Class>, refs: &ClassRefs, ctx: &TypeCtx<'_>) -> bool {
+        refs.classes
+            .iter()
+            .any(|c| self.aliased_class_matches(cls, c))
+            || refs.intersections.iter().any(|group| {
+                group
+                    .iter()
+                    .all(|c| class_matches(cls, c, ctx) || self.aliased_class_matches(cls, c))
+            })
+    }
+
+    /// Whether `member` names, through a `class_alias()`, a class `cls` is
+    /// an instance of (`instanceof_function` on the class table's entry).
+    fn aliased_class_matches(&self, cls: &Rc<Class>, member: &ClassRef) -> bool {
+        match member {
+            ClassRef::Named(lc) => self
+                .classes
+                .get(lc)
+                .is_some_and(|ce| ce.lc_name.as_bytes() != lc.as_bytes() && cls.is_subclass_of(ce)),
+            // The declaring scope sits in the table under its own name.
+            ClassRef::Scope | ClassRef::Parent => false,
         }
-        if n.eq_ignore_ascii_case(b"parent") {
-            return ctx
-                .scope
-                .and_then(|c| c.parent.as_ref())
-                .is_some_and(|p| instance_of_name_ci(obj_class, p.lc_name.as_bytes()));
-        }
-        instance_of_name_ci(obj_class, n)
     }
 
     /// Whether `v` satisfies `ty` without coercion, resolving callables
@@ -76,7 +86,7 @@ impl Vm {
     /// callable with `zend_is_callable_ex(arg, NULL, 0, ...)`, so the
     /// "Use of \"self\" in callables" and `Callables of the form [...]`
     /// deprecations are raised (in the current frame, i.e. at the callee's
-    /// RECV or the VERIFY_RETURN_TYPE line), once per check.
+    /// `RECV` or the `VERIFY_RETURN_TYPE` line), once per check.
     fn check_type(
         &mut self,
         ty: &TypeDecl,
@@ -110,7 +120,7 @@ impl Vm {
                 if m & mask::OBJECT != 0 {
                     return Ok(true);
                 }
-                let cls = object::class_of(o).clone();
+                let cls = object::class_of(o);
                 if m & mask::ITERABLE != 0 && cls.instance_of_name(b"traversable") {
                     return Ok(true);
                 }
@@ -126,17 +136,16 @@ impl Vm {
                 if m & mask::CALLABLE != 0 && self.is_callable_value(v) {
                     return Ok(true);
                 }
-                for c in &ty.classes {
-                    if self.class_matches(&cls, c, ctx) {
-                        return Ok(true);
-                    }
+                let refs = ty.class_refs();
+                if refs.classes.iter().any(|c| class_matches(cls, c, ctx))
+                    || refs
+                        .intersections
+                        .iter()
+                        .any(|group| group.iter().all(|c| class_matches(cls, c, ctx)))
+                {
+                    return Ok(true);
                 }
-                for g in &ty.intersections {
-                    if g.iter().all(|c| self.class_matches(&cls, c, ctx)) {
-                        return Ok(true);
-                    }
-                }
-                false
+                ty.has_classes() && self.class_alias_matches(cls, refs, ctx)
             }
         })
     }

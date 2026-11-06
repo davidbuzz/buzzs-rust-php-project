@@ -1,6 +1,8 @@
 //! Type declarations (`zend_type`).
 
 use php_runtime::ZStr;
+use std::cell::OnceCell;
+use std::fmt;
 use std::fmt::Write as _;
 
 /// Bits of [`TypeDecl::mask`] (`MAY_BE_*`).
@@ -50,8 +52,49 @@ pub enum TypeMember {
     Iterable,
 }
 
-/// A parsed type declaration.
+/// A class-like member of a type as the runtime check resolves it
+/// (`zend_fetch_class` with `ZEND_FETCH_CLASS_AUTO` on the declared name).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClassRef {
+    /// `self`: the declaring class.
+    Scope,
+    /// `parent`: the declaring class's parent.
+    Parent,
+    /// A class name lower-cased and without a leading `\`, the form the
+    /// class table keys it by (`Class::lc_name`).
+    Named(ZStr),
+}
+
+impl ClassRef {
+    /// Classifies a declared class name.
+    fn from_name(name: &ZStr) -> Self {
+        let bytes = name.as_bytes();
+        let stripped = bytes.strip_prefix(b"\\").unwrap_or(bytes);
+        if stripped.eq_ignore_ascii_case(b"self") {
+            ClassRef::Scope
+        } else if stripped.eq_ignore_ascii_case(b"parent") {
+            ClassRef::Parent
+        } else if stripped.len() == bytes.len() {
+            ClassRef::Named(name.to_ascii_lowercase())
+        } else {
+            ClassRef::Named(ZStr::from(stripped.to_ascii_lowercase()))
+        }
+    }
+}
+
+/// The class-like members of a [`TypeDecl`] as the runtime check compares
+/// them ([`TypeDecl::class_refs`]), parallel to `classes` and
+/// `intersections`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClassRefs {
+    /// One per `TypeDecl::classes` entry.
+    pub classes: Vec<ClassRef>,
+    /// One group per `TypeDecl::intersections` entry.
+    pub intersections: Vec<Vec<ClassRef>>,
+}
+
+/// A parsed type declaration.
+#[derive(Clone, Default)]
 pub struct TypeDecl {
     /// Builtin type bits.
     pub mask: u32,
@@ -64,9 +107,68 @@ pub struct TypeDecl {
     pub pure_intersection: bool,
     /// Class-like members in source order; empty for legacy builtin declarations.
     pub members: Vec<TypeMember>,
+    /// [`Self::class_refs`], computed by the first runtime check of the
+    /// finished declaration; cloned along, ignored by equality.
+    pub lc_cache: OnceCell<ClassRefs>,
 }
 
+impl fmt::Debug for TypeDecl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TypeDecl")
+            .field("mask", &self.mask)
+            .field("classes", &self.classes)
+            .field("intersections", &self.intersections)
+            .field("pure_intersection", &self.pure_intersection)
+            .field("members", &self.members)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for TypeDecl {
+    fn eq(&self, other: &Self) -> bool {
+        self.mask == other.mask
+            && self.classes == other.classes
+            && self.intersections == other.intersections
+            && self.pure_intersection == other.pure_intersection
+            && self.members == other.members
+    }
+}
+
+impl Eq for TypeDecl {}
+
 impl TypeDecl {
+    /// The class-like members lower-cased for the runtime check, computed
+    /// once per declaration (php-src's `zend_type` names resolve through
+    /// the class table's lower-case keys; `self`/`parent` through the
+    /// declaring scope). The declaration must not change afterwards.
+    #[inline]
+    pub fn class_refs(&self) -> &ClassRefs {
+        match self.lc_cache.get() {
+            Some(refs) => {
+                debug_assert!(
+                    refs.classes.len() == self.classes.len()
+                        && refs.intersections.len() == self.intersections.len(),
+                    "type declaration changed after its first check"
+                );
+                refs
+            }
+            None => self.init_class_refs(),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn init_class_refs(&self) -> &ClassRefs {
+        self.lc_cache.get_or_init(|| ClassRefs {
+            classes: self.classes.iter().map(ClassRef::from_name).collect(),
+            intersections: self
+                .intersections
+                .iter()
+                .map(|group| group.iter().map(ClassRef::from_name).collect())
+                .collect(),
+        })
+    }
+
     /// `mixed`.
     pub fn mixed() -> Self {
         TypeDecl {
