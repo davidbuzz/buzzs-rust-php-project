@@ -189,9 +189,11 @@ fn rope_allocates_once() {
     assert_allocs("$len = 7; $t = '';", "$t = \"item $i of {$len}\";", 1.0);
 }
 
-/// `concat_function` with an integer operand: one allocation, for the
-/// result.
+/// `concat_function` with an integer or float operand: one allocation,
+/// for the result (the number is formatted on the stack).
 #[test]
-fn concat_with_int_allocates_once() {
+fn concat_with_number_allocates_once() {
     assert_allocs("$t = '';", "$t = 'v' . $i;", 1.0);
+    assert_allocs("$t = ''; $x = 1.5;", "$t = 'v' . $x;", 1.0);
+    assert_allocs("$t = ''; $x = 0.1 + 0.2;", "$t = $x . 'v';", 1.0);
 }

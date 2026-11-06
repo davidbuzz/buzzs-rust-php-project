@@ -435,22 +435,58 @@ pub fn format_double(num: f64, precision: i64, zero_fraction: bool) -> String {
     s
 }
 
+/// Stack room for the text of a float (`char buf[ZEND_DOUBLE_MAX_LENGTH]`),
+/// filled by [`format_double_buf`].
+#[derive(Debug)]
+pub struct DoubleBuf(StackBuf<SMALL_OUT>);
+
+impl DoubleBuf {
+    /// An empty buffer.
+    #[must_use]
+    pub const fn new() -> Self {
+        DoubleBuf(StackBuf::new())
+    }
+}
+
+impl Default for DoubleBuf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// [`format_double`] into a stack buffer, without heap allocation:
+/// `None` when the precision asks for more than 17 digits (the text may
+/// then not fit; use [`format_double`]).
+pub fn format_double_buf(
+    num: f64,
+    precision: i64,
+    zero_fraction: bool,
+    buf: &mut DoubleBuf,
+) -> Option<&[u8]> {
+    let p = i32::try_from(precision.clamp(-1, 1000)).unwrap_or(17);
+    let ndigit = if p == 0 { 1 } else { p };
+    if ndigit > 17 {
+        return None;
+    }
+    let b = &mut buf.0;
+    b.len = 0;
+    gcvt_with(b, num, ndigit, b'.', b'E');
+    if zero_fraction && num.is_finite() && !b.as_bytes().contains(&b'.') {
+        b.put_all(b".0");
+    }
+    Some(b.as_bytes())
+}
+
 /// [`format_double`] straight into a [`ZStr`] (`zend_double_to_str`:
 /// `zend_gcvt` into a stack buffer, then one exactly sized string), with
 /// no heap temporaries for precisions up to 17.
 #[must_use]
 pub fn format_double_zstr(num: f64, precision: i64, zero_fraction: bool) -> ZStr {
-    let p = i32::try_from(precision.clamp(-1, 1000)).unwrap_or(17);
-    let ndigit = if p == 0 { 1 } else { p };
-    if ndigit > 17 {
-        return ZStr::from(format_double(num, precision, zero_fraction));
+    let mut buf = DoubleBuf::new();
+    match format_double_buf(num, precision, zero_fraction, &mut buf) {
+        Some(text) => ZStr::from(text),
+        None => ZStr::from(format_double(num, precision, zero_fraction)),
     }
-    let mut b = StackBuf::<SMALL_OUT>::new();
-    gcvt_with(&mut b, num, ndigit, b'.', b'E');
-    if zero_fraction && num.is_finite() && !b.as_bytes().contains(&b'.') {
-        b.put_all(b".0");
-    }
-    ZStr::from(b.as_bytes())
 }
 
 /// `%.*H` formatting as used by `var_dump` / `debug_zval_dump`
@@ -631,6 +667,16 @@ mod tests {
                 }
             }
         }
+        let mut buf = DoubleBuf::new();
+        assert_eq!(
+            format_double_buf(-1.5, 14, false, &mut buf),
+            Some(&b"-1.5"[..])
+        );
+        assert_eq!(
+            format_double_buf(2.0, -1, true, &mut buf),
+            Some(&b"2.0"[..])
+        );
+        assert_eq!(format_double_buf(0.1, 18, false, &mut buf), None);
         assert_eq!(format_double_zstr(1.5, 14, false), "1.5");
         assert_eq!(format_double_zstr(-2.0, 14, false), "-2");
         assert_eq!(format_double_zstr(1e25, 14, false), "1.0E+25");
