@@ -391,3 +391,48 @@ k(): Argument #1 ($x) must be of type I&A, C given
 "#
     );
 }
+
+/// `$obj::X` (a dynamic class operand): cached per class of the object,
+/// so a subclass instance, a private constant seen through a subclass,
+/// a class-name string, an enum case and a temporary object (freed by the
+/// fetch, before the echo) all behave as uncached.
+#[test]
+fn class_constants_through_objects() {
+    let out = run(r#"<?php
+class P { const X = 'px'; const ARR = [1, 2]; protected const PROT = 'prot'; }
+class C extends P {
+    const X = 'cx'; const Y = self::X . '!'; private const PRIV = 'priv';
+    function run() {
+        for ($i = 0; $i < 3; $i++) {
+            echo $this::X, ' ', $this::Y, ' ', $this::PROT, ' ', count($this::ARR), "\n";
+            try { echo $this::PRIV, "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+            $o = new P; echo $o::X, "\n";
+            $n = 'C'; echo $n::X, "\n";
+        }
+    }
+}
+class D extends C { const X = 'dx'; }
+(new C)->run();
+(new D)->run();
+$c = new C;
+for ($i = 0; $i < 2; $i++) {
+    echo $c::X, "\n";
+    try { echo $c::PRIV, "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { echo $c::NOPE, "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $c = new D;
+}
+enum E: string { case A = 'a'; const K = self::A; }
+$e = E::A;
+for ($i = 0; $i < 2; $i++) { var_dump($e::K, $e::A->value); }
+class W { function __destruct() { echo "~W\n"; } const Z = 'z'; }
+for ($i = 0; $i < 2; $i++) { echo (new W)::Z, "\n"; echo "after\n"; }
+"#);
+    let c_run = "cx cx! prot 2\npriv\npx\ncx\n";
+    let d_run = "dx cx! prot 2\nUndefined constant D::PRIV\npx\ncx\n";
+    let expected = format!(
+        "{}{}cx\nCannot access private constant C::PRIV\nUndefined constant C::NOPE\ndx\nUndefined constant D::PRIV\nUndefined constant D::NOPE\nenum(E::A)\nstring(1) \"a\"\nenum(E::A)\nstring(1) \"a\"\n~W\nz\nafter\n~W\nz\nafter\n",
+        c_run.repeat(3),
+        d_run.repeat(3)
+    );
+    assert_eq!(out, expected);
+}
