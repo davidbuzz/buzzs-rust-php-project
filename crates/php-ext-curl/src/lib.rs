@@ -40,7 +40,14 @@ impl Extension for Curl {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
-        php_curl::easy::global_init();
+        // php-src calls `curl_global_init(CURL_GLOBAL_DEFAULT)` here, at
+        // MINIT. It loads the OpenSSL configuration (2.4 M instructions, 4 %
+        // of `php -r 'echo 1;'`), so it is deferred to the first handle:
+        // `php_curl`'s `Easy::new`, `Multi::new` and `Share::new` run it
+        // before any other libcurl call, and nothing before a handle exists
+        // can observe the difference. `curl_version()` and `phpinfo()` read
+        // `curl_version_info()`, static data libcurl fills without the
+        // global init; the constants are registered below as usual.
         m.ini(IniDirective::new(
             "curl.cainfo",
             Some(""),
