@@ -18,8 +18,8 @@
 
 use super::{CvOpData, Num};
 use crate::opcode::{BinKind, FetchMode, IncDecKind, Operand, PlaceId};
-use crate::vm::{Vm, VmResult};
-use php_runtime::{ArrayKey, BinaryOp, Value};
+use crate::vm::{Frame, VarStore, Vm, VmResult};
+use php_runtime::{ArrayKey, BinaryOp, Value, ZStr};
 
 /// Whether replacing `v` needs no destructor, GC root buffering or
 /// reference semantics: no value, or null, bool, int, float or string
@@ -43,7 +43,101 @@ fn is_plain_value(v: &Value) -> bool {
     )
 }
 
+/// The value of an operand for a comparison without conversions: a
+/// defined compiled variable, a literal or a temporary (left in place), not
+/// holding a reference.
+#[inline]
+fn operand_simple<'a>(f: &'a Frame, vars: &'a VarStore, op: Operand) -> Option<&'a Value> {
+    let v = match op {
+        Operand::Cv(cv) => vars.slots.get(f.cv_idx(cv))?.as_ref()?,
+        Operand::Lit(i) => f.code.literals.get(i as usize)?,
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::Unused => return None,
+    };
+    match v {
+        Value::Reference(_) => None,
+        v => Some(v),
+    }
+}
+
 impl Vm {
+    /// `zend_is_true` of compiled variable `cv` when it needs neither a
+    /// diagnostic nor a copy (the type switch inlined into
+    /// `ZEND_JMPZ_SPEC_CV`/`ZEND_JMPNZ_SPEC_CV`): null, bool, int, a
+    /// non-NaN float (NaN's coercion warns), a string or an array.
+    /// References, objects, resources and undefined variables go generic.
+    #[inline]
+    pub(super) fn peek_cv_bool(&self, cv: u32) -> Option<bool> {
+        let f = self.frame();
+        let vars = f.vars.borrow();
+        match vars.slots.get(f.cv_idx(cv))?.as_ref()? {
+            Value::Null => Some(false),
+            Value::Bool(b) => Some(*b),
+            Value::Int(i) => Some(*i != 0),
+            Value::Float(x) if !x.is_nan() => Some(*x != 0.0),
+            Value::Str(s) => Some(!(s.is_empty() || s.as_bytes() == b"0")),
+            Value::Array(a) => Some(!a.is_empty()),
+            _ => None,
+        }
+    }
+
+    /// `==`, `!=`, `===`, `!==` on operands that are not both numbers,
+    /// without conversions (`zend_is_identical`, the byte-equal case of
+    /// `zend_fast_equal_strings`): same-type null, bool and string pairs,
+    /// and `===`/`!==` of two different types (false/true). Byte-unequal
+    /// strings under `==`/`!=` may still be numerically equal and go
+    /// generic, as do arrays, objects, resources and references. A
+    /// consumed temporary holding a string is released, as the generic
+    /// read would (`FREE_OP1`/`FREE_OP2`).
+    #[inline(never)]
+    pub(super) fn cmp_simple_fast(&mut self, op: BinKind, a: Operand, b: Operand) -> Option<bool> {
+        let identity = match op {
+            BinKind::Identical | BinKind::NotIdentical => true,
+            BinKind::Equal | BinKind::NotEqual => false,
+            _ => return None,
+        };
+        let negate = matches!(op, BinKind::NotIdentical | BinKind::NotEqual);
+        let same = {
+            let f = self.frame();
+            let vars = f.vars.borrow();
+            let x = operand_simple(f, &vars, a)?;
+            let y = operand_simple(f, &vars, b)?;
+            match (x, y) {
+                (Value::Null, Value::Null) => true,
+                (Value::Bool(p), Value::Bool(q)) => p == q,
+                (Value::Str(s), Value::Str(t)) => {
+                    let eq = ZStr::ptr_eq(s, t) || s.as_bytes() == t.as_bytes();
+                    if !eq && !identity {
+                        return None;
+                    }
+                    eq
+                }
+                (x, y) => {
+                    if !identity || std::mem::discriminant(x) == std::mem::discriminant(y) {
+                        return None;
+                    }
+                    false
+                }
+            }
+        };
+        self.release_tmp_str(a);
+        self.release_tmp_str(b);
+        Some(same != negate)
+    }
+
+    /// Releases the string a consumed temporary operand holds; other
+    /// temporaries are left in place (see [`Vm::peek_num`]).
+    #[inline]
+    fn release_tmp_str(&mut self, op: Operand) {
+        if let Operand::Tmp(t) = op {
+            if let Some(slot) = self.frame_mut().tmps.get_mut(t as usize) {
+                if matches!(slot, Value::Str(_)) {
+                    *slot = Value::Null;
+                }
+            }
+        }
+    }
+
     /// The comparison of a smart branch ([`crate::opcode::Op::CmpJmp`])
     /// when both operands are plain numbers: the `IS_LONG`/`IS_DOUBLE`
     /// pairs of `ZEND_IS_EQUAL`, `ZEND_IS_IDENTICAL`, `ZEND_IS_SMALLER`
@@ -121,16 +215,20 @@ impl Vm {
         dst: u32,
         cv: u32,
     ) -> VmResult<bool> {
-        match self.bin_num_fast(op, a, b) {
-            Some(r) => match self.cv_store_plain(cv, r) {
-                Ok(()) => Ok(true),
-                Err(r) => {
-                    self.set_tmp(dst, r);
-                    Ok(false)
+        let r = match self.bin_num_fast(op, a, b) {
+            Some(r) => r,
+            None => match self.cmp_simple_fast(op, a, b) {
+                Some(r) => Value::Bool(r),
+                None => {
+                    self.bin_slow(op, a, b, dst)?;
+                    return Ok(false);
                 }
             },
-            None => {
-                self.bin_slow(op, a, b, dst)?;
+        };
+        match self.cv_store_plain(cv, r) {
+            Ok(()) => Ok(true),
+            Err(r) => {
+                self.set_tmp(dst, r);
                 Ok(false)
             }
         }
@@ -460,6 +558,53 @@ echo "\n";
         let expected =
             "3\n0.5 1.5 2.5 \nge\neq\nnot id\nnot id2\nno nan\narrays\n0\n3\n010 19 28 \n";
         assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn simple_identity_and_truth_tests() {
+        let src = r#"<?php
+$n = null; $f = false; $s = "abc"; $t = "abc"; $i = 1; $z = 0; $e = ""; $a = [];
+if ($n === null) { echo "a"; }
+if ($n !== null) { echo "X"; } else { echo "b"; }
+if ($f === false) { echo "c"; }
+if ($f == null) { echo "d"; }
+if ($s === $t) { echo "e"; }
+if ($s === "abd") { echo "X"; } else { echo "f"; }
+if ($s == "abc") { echo "g"; }
+if ($s != "abc") { echo "X"; } else { echo "h"; }
+$ns = "1e1"; if ($ns == "10") { echo "i"; }
+if ($ns === "10") { echo "X"; } else { echo "j"; }
+if ($i === "1") { echo "X"; } else { echo "k"; }
+if ($i == "1") { echo "l"; }
+if ($i !== null) { echo "m"; }
+if ($z) { echo "X"; } else { echo "n"; }
+if ($e) { echo "X"; } else { echo "o"; }
+$zs = "0"; if ($zs) { echo "X"; } else { echo "p"; }
+$zz = "0.0"; if ($zz) { echo "q"; }
+if ($a) { echo "X"; } else { echo "r"; }
+$a[] = 1; if ($a) { echo "s"; }
+$fl = 0.0; if ($fl) { echo "X"; } else { echo "t"; }
+$fl = 0.5; while ($fl) { $fl = 0.0; echo "u"; }
+$str = "x"; $cnt = 0; while ($str) { $str = ""; $cnt++; } echo $cnt;
+$o = new stdClass; if ($o) { echo "v"; }
+$r = 1; $ref = &$r; if ($ref) { echo "w"; } $r = 0; if ($ref) { echo "X"; } else { echo "x"; }
+if ($n && $i) { echo "X"; } else { echo "y"; }
+if ($z || $s) { echo "z"; }
+echo "\n";
+var_dump(strtolower("ABC") === "abc", "a" . "b" === "ab", null == false, [] === [], [1] === [1], $o === $o);
+$x = ($i === "1"); var_dump($x);
+$y = ($s !== $t); var_dump($y);
+$w = ($n == $f); var_dump($w);
+if ($undef) { echo "X"; } else { echo "undef-false\n"; }
+if ($undef2 === null) { echo "undef-null\n"; }
+"#;
+        let out = run(src);
+        let expected_head = "abcdefghijklmnopqrstu1vwxyz\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\n";
+        assert!(out.starts_with(expected_head), "{out}");
+        assert!(out.contains("Undefined variable $undef in"), "{out}");
+        assert!(out.contains("undef-false\n"), "{out}");
+        assert!(out.contains("Undefined variable $undef2 in"), "{out}");
+        assert!(out.ends_with("undef-null\n"), "{out}");
     }
 
     #[test]

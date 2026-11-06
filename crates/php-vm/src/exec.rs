@@ -331,6 +331,23 @@ impl Vm {
         }
     }
 
+    /// The truth value of a jump operand: a boolean temporary (consumed),
+    /// a compiled variable holding a plain value, or the generic read and
+    /// conversion (`ZEND_JMPZ`/`ZEND_JMPNZ` with their inline type switch).
+    #[inline]
+    fn jump_cond(&mut self, op: Operand) -> VmResult<bool> {
+        if let Some(b) = self.take_tmp_bool(op) {
+            return Ok(b);
+        }
+        if let Operand::Cv(cv) = op {
+            if let Some(b) = self.peek_cv_bool(cv) {
+                return Ok(b);
+            }
+        }
+        let v = self.read(op)?;
+        self.to_bool(&v)
+    }
+
     /// Stores an optional result.
     #[inline]
     pub(crate) fn set_dst(&mut self, dst: Option<u32>, v: Value) {
@@ -732,6 +749,8 @@ impl Vm {
                         // semantics.
                         if let Some(r) = self.bin_num_fast(*op, *a, *b) {
                             self.set_tmp(*dst, r);
+                        } else if let Some(r) = self.cmp_simple_fast(*op, *a, *b) {
+                            self.set_tmp(*dst, Value::Bool(r));
                         } else {
                             self.bin_slow(*op, *a, *b, *dst)?;
                         }
@@ -816,34 +835,19 @@ impl Vm {
                         Flow::Next
                     }
                     Op::JmpZ(a, t) => {
-                        let b = match self.take_tmp_bool(*a) {
-                            Some(b) => b,
-                            None => {
-                                let v = self.read(*a)?;
-                                self.to_bool(&v)?
-                            }
-                        };
-                        if !b {
+                        if !self.jump_cond(*a)? {
                             self.frame_mut().ip = *t as usize;
                         }
                         Flow::Next
                     }
                     Op::JmpNz(a, t) => {
-                        let b = match self.take_tmp_bool(*a) {
-                            Some(b) => b,
-                            None => {
-                                let v = self.read(*a)?;
-                                self.to_bool(&v)?
-                            }
-                        };
-                        if b {
+                        if self.jump_cond(*a)? {
                             self.frame_mut().ip = *t as usize;
                         }
                         Flow::Next
                     }
                     Op::JmpZEx { a, dst, target } => {
-                        let v = self.read(*a)?;
-                        let b = self.to_bool(&v)?;
+                        let b = self.jump_cond(*a)?;
                         if !b {
                             self.set_tmp(*dst, Value::Bool(false));
                             self.frame_mut().ip = *target as usize;
@@ -851,8 +855,7 @@ impl Vm {
                         Flow::Next
                     }
                     Op::JmpNzEx { a, dst, target } => {
-                        let v = self.read(*a)?;
-                        let b = self.to_bool(&v)?;
+                        let b = self.jump_cond(*a)?;
                         if b {
                             self.set_tmp(*dst, Value::Bool(true));
                             self.frame_mut().ip = *target as usize;
@@ -1504,7 +1507,10 @@ impl Vm {
                         // Smart branch: a numeric comparison jumps (or
                         // skips the JmpZ/JmpNz after it) directly; other
                         // operands compute `dst` for that jump op.
-                        if let Some(r) = self.cmp_num_fast(*op, *a, *b) {
+                        let r = self
+                            .cmp_num_fast(*op, *a, *b)
+                            .or_else(|| self.cmp_simple_fast(*op, *a, *b));
+                        if let Some(r) = r {
                             let f = self.frame_mut();
                             if r == *jmp_if {
                                 f.ip = *target as usize;
