@@ -411,6 +411,10 @@ mod tests {
             )),
             "{ops:?}"
         );
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::AssignDimCv { .. })),
+            "{ops:?}"
+        );
         let ops = main_ops(
             "<?php $a = []; $k = 'k'; $v = $a[$k] ?? 1; $i = isset($a[$k]); $e = empty($a[0]);",
         );
@@ -439,10 +443,6 @@ mod tests {
         let ops = main_ops("<?php $a = [1]; [$x] = $a;");
         assert!(
             !ops.iter().any(|op| matches!(op, Op::FetchDimCv { .. })),
-            "{ops:?}"
-        );
-        assert!(
-            ops.iter().any(|op| matches!(op, Op::AssignDimCv { .. })),
             "{ops:?}"
         );
         let ops = main_ops("<?php $s = 0; $s += 2; $s .= 'x'; $a = [1]; $a[0] += 1; $a[0]++; $a[0] .= 'x'; $y = $a[0] += 1;");
