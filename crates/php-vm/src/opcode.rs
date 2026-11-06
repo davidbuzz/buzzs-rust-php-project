@@ -763,6 +763,48 @@ pub enum Op {
         val: Operand,
         place: PlaceId,
     },
+    /// `Fetch` (`Read` or `Is` mode) of a static property `A::$name`
+    /// (`place` has a `PlaceBase::StaticProp` base with a literal name and
+    /// a non-dynamic class, and no segments): `ZEND_FETCH_STATIC_PROP_R` /
+    /// `_IS` on a run-time cache hit (`zend_fetch_static_property_address`
+    /// with `CACHED_PTR`). `to` as in [`Op::FetchDimCv`]. A miss, or a
+    /// typed property holding null in `Read` mode (possibly uninitialized),
+    /// falls back to `place` in `mode`.
+    FetchStaticProp {
+        place: PlaceId,
+        dst: u32,
+        to: Option<u32>,
+        mode: FetchMode,
+    },
+    /// `Assign` of a static property place (as in
+    /// [`Op::FetchStaticProp`]): `ZEND_ASSIGN_STATIC_PROP` on a cache hit
+    /// of an untyped property holding a scalar or string, with a scalar or
+    /// string value; anything else is the generic `Assign`.
+    AssignStaticProp {
+        place: PlaceId,
+        val: Operand,
+        dst: Option<u32>,
+    },
+    /// `AssignOp` of a static property place (as in
+    /// [`Op::FetchStaticProp`]): `ZEND_ASSIGN_STATIC_PROP_OP` on a cache
+    /// hit, `.=` extending a string the property holds in place
+    /// (`zend_binary_assign_op_typed_prop`'s in-place concatenation), or a
+    /// numeric operator on an untyped property holding a number; anything
+    /// else is the generic `AssignOp`.
+    AssignOpStaticProp {
+        place: PlaceId,
+        op: BinaryOp,
+        val: Operand,
+        dst: Option<u32>,
+    },
+    /// `Isset` / `Empty` (`empty`) of a static property place (as in
+    /// [`Op::FetchStaticProp`]): `ZEND_ISSET_ISEMPTY_STATIC_PROP` on a
+    /// cache hit; anything else goes through `place`.
+    IssetStaticProp {
+        place: PlaceId,
+        dst: u32,
+        empty: bool,
+    },
 }
 
 /// The type bits of [`Op::TypeCheck`] (`zend_compile_func_typecheck`'s

@@ -481,16 +481,34 @@ impl Vm {
         let Operand::Lit(l) = name else {
             return None;
         };
+        self.static_prop_cached(spec, l).map(|(cell, _)| cell)
+    }
+
+    /// [`Vm::static_prop_hit`] for the literal name `name`, also telling
+    /// whether the property is typed (a type other than `mixed`: its
+    /// writes are checked and its null may mean "uninitialized", see
+    /// `typed_refs::note_static_prop`). The static-property ops'
+    /// fast paths (`exec/spec/statics.rs`) take only untyped properties
+    /// where a write would need the type check.
+    #[inline]
+    pub(crate) fn static_prop_cached(
+        &self,
+        spec: &ClassSpec,
+        name: u32,
+    ) -> Option<(Rc<RefCell<Value>>, bool)> {
         let cache = self.frame().code.rt_cache.static_props.borrow();
-        let (cls, e) = self.rt_find(spec, cache.get(l as usize)?)?;
+        let (cls, e) = self.rt_find(spec, cache.get(name as usize)?)?;
         let Target::Index(idx) = e.target else {
             return None;
         };
         let sp = cls.static_props.get(idx)?;
+        let typed = !sp.ty.as_ref().is_none_or(crate::types::TypeDecl::is_mixed);
         // What `static_prop_slot` does on every fetch of an initialised
-        // property of a class.
-        crate::typed_refs::note_static_prop(sp);
-        Some(sp.cell.clone())
+        // property of a class (nothing for an untyped one).
+        if typed {
+            crate::typed_refs::note_static_prop(sp);
+        }
+        Some((sp.cell.clone(), typed))
     }
 
     /// Fills the slot of an `A::$name` place base that just resolved to a

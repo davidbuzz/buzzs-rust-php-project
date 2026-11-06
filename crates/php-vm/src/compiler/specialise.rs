@@ -17,7 +17,7 @@
 //! the temporary and the successor runs as before. A jump landing on the
 //! successor from elsewhere also runs it as before.
 
-use crate::opcode::{BinKind, FetchMode, Op, Operand, Place, PlaceBase, PlaceId, Seg};
+use crate::opcode::{BinKind, ClassSpec, FetchMode, Op, Operand, Place, PlaceBase, PlaceId, Seg};
 use php_runtime::BinaryOp;
 
 /// Rewrites `ops` (the finished body whose places are `places`) in place.
@@ -59,6 +59,14 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
             val,
             dst,
         } => {
+            if static_prop(places, *place) {
+                return Some(Op::AssignOpStaticProp {
+                    place: *place,
+                    op: *op,
+                    val: *val,
+                    dst: *dst,
+                });
+            }
             if is_numeric_assign_op(*op) {
                 if let Some(cv) = plain_cv(places, *place) {
                     return Some(Op::AssignOpCv {
@@ -101,33 +109,75 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
                     to: assigned_cv(next, *dst),
                     mode: *mode,
                 })
+            })
+            .or_else(|| {
+                static_prop(places, *place).then(|| Op::FetchStaticProp {
+                    place: *place,
+                    dst: *dst,
+                    to: assigned_cv(next, *dst),
+                    mode: *mode,
+                })
             }),
-        Op::Isset { place, dst } => cv_dim(places, *place).map(|(cv, dim)| Op::IssetDimCv {
-            cv,
-            dim,
-            place: *place,
-            dst: *dst,
-            empty: false,
-        }),
-        Op::Empty { place, dst } => cv_dim(places, *place).map(|(cv, dim)| Op::IssetDimCv {
-            cv,
-            dim,
-            place: *place,
-            dst: *dst,
-            empty: true,
-        }),
-        Op::Assign {
-            place,
-            val,
-            dst: None,
-        } => cv_dim(places, *place).map(|(cv, dim)| Op::AssignDimCv {
-            cv,
-            dim,
-            val: *val,
-            place: *place,
-        }),
+        Op::Isset { place, dst } => isset(places, *place, *dst, false),
+        Op::Empty { place, dst } => isset(places, *place, *dst, true),
+        Op::Assign { place, val, dst } => {
+            if static_prop(places, *place) {
+                return Some(Op::AssignStaticProp {
+                    place: *place,
+                    val: *val,
+                    dst: *dst,
+                });
+            }
+            if dst.is_some() {
+                return None;
+            }
+            cv_dim(places, *place).map(|(cv, dim)| Op::AssignDimCv {
+                cv,
+                dim,
+                val: *val,
+                place: *place,
+            })
+        }
         _ => None,
     }
+}
+
+/// The specialised `isset()` (`empty` false) or `empty()` of `pid`
+/// writing `dst`.
+fn isset(places: &[Place], pid: PlaceId, dst: u32, empty: bool) -> Option<Op> {
+    if let Some((cv, dim)) = cv_dim(places, pid) {
+        return Some(Op::IssetDimCv {
+            cv,
+            dim,
+            place: pid,
+            dst,
+            empty,
+        });
+    }
+    static_prop(places, pid).then_some(Op::IssetStaticProp {
+        place: pid,
+        dst,
+        empty,
+    })
+}
+
+/// Whether `pid` is a static property `A::$name` the run-time cache can
+/// hold: a literal name, a class that is named or `self`/`parent`/
+/// `static` (not an expression), no further segments.
+fn static_prop(places: &[Place], pid: PlaceId) -> bool {
+    places.get(pid as usize).is_some_and(|p| {
+        p.segs.is_empty()
+            && matches!(
+                &p.base,
+                PlaceBase::StaticProp {
+                    class: ClassSpec::Named(_)
+                        | ClassSpec::SelfClass
+                        | ClassSpec::Parent
+                        | ClassSpec::Static,
+                    name: Operand::Lit(_),
+                }
+            )
+    })
 }
 
 /// `zend_is_smart_branch`: the comparisons whose result can drive the
@@ -255,6 +305,7 @@ fn cv_dims(places: &[Place], pid: PlaceId) -> Option<u32> {
 mod tests {
     use super::super::{compile, CompileOptions};
     use crate::opcode::{BinKind, FetchMode, IncDecKind, Op, Operand};
+    use php_runtime::BinaryOp;
     use std::rc::Rc;
 
     fn main_ops(src: &str) -> Vec<Op> {
@@ -539,6 +590,66 @@ mod tests {
                 .filter(|op| matches!(op, Op::Assign { .. }))
                 .count(),
             2,
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn static_properties_are_specialised() {
+        let ops = main_ops(
+            "<?php class A { static $a = 0; } $x = A::$a; A::$a = 1; A::$a .= 'x'; $y = isset(A::$a); $z = empty(A::$a); $w = A::$a ?? 2; $d = 'a'; $v = A::$$d; A::$a[] = 1;",
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchStaticProp {
+                    to: Some(_),
+                    mode: FetchMode::Read,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchStaticProp {
+                    mode: FetchMode::Is,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::AssignStaticProp { dst: None, .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::AssignOpStaticProp {
+                    op: BinaryOp::Concat,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        for empty in [false, true] {
+            assert!(
+                ops.iter()
+                    .any(|op| matches!(op, Op::IssetStaticProp { empty: e, .. } if *e == empty)),
+                "{ops:?}"
+            );
+        }
+        // A variable property name (`A::$$d`) and a dimension (`A::$a[]`)
+        // keep the generic ops.
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::Fetch { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::Assign { .. })),
             "{ops:?}"
         );
     }

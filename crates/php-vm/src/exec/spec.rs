@@ -38,6 +38,8 @@ use crate::opcode::{BinKind, IncDecKind, Operand, PlaceId, Seg};
 use crate::vm::{Frame, VarStore, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, Value, ZStr};
 
+mod statics;
+
 /// Whether replacing `v` needs no destructor, GC root buffering or
 /// reference semantics: no value, or null, bool, int, float or string
 /// (`!Z_REFCOUNTED` in php-src, plus strings, whose release has no side

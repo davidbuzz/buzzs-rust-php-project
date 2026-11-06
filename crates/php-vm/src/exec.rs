@@ -1092,6 +1092,42 @@ impl Vm {
                                 break 'slow;
                             }
                         }
+                        // Static properties on a run-time cache hit
+                        // (`exec/spec/statics.rs`).
+                        Op::FetchStaticProp {
+                            place,
+                            dst,
+                            to,
+                            mode,
+                        } => match self.fetch_static_prop_fast(*place, *mode) {
+                            Some(v) => {
+                                if self.store_fetched(*dst, *to, v) {
+                                    ip += 1;
+                                }
+                            }
+                            None => break 'slow,
+                        },
+                        Op::AssignStaticProp { place, val, dst } => {
+                            if !self.assign_static_prop_fast(*place, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        Op::AssignOpStaticProp {
+                            place,
+                            op: kind,
+                            val,
+                            dst,
+                        } => {
+                            if !self.assign_op_static_prop_fast(*place, *kind, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        Op::IssetStaticProp { place, dst, empty } => {
+                            match self.isset_static_prop_fast(*place, *empty) {
+                                Some(r) => self.set_tmp(*dst, Value::Bool(r)),
+                                None => break 'slow,
+                            }
+                        }
                         _ => break 'slow,
                     }
                     if Self::safe_point_due() {
@@ -1262,7 +1298,8 @@ impl Vm {
                         self.op_assign_cv(*cv, *val, *dst)?;
                         Flow::Next
                     }
-                    Op::Assign { place, val, dst } => {
+                    // Also the generic form of `AssignStaticProp`.
+                    Op::Assign { place, val, dst } | Op::AssignStaticProp { place, val, dst } => {
                         let r = match *val {
                             Operand::Cv(cv) => match self.read_cv_op_data(cv) {
                                 CvOpData::Value(v) => self.place_assign(*place, v)?,
@@ -1278,7 +1315,14 @@ impl Vm {
                         self.set_dst(*dst, r);
                         Flow::Next
                     }
+                    // Also the generic form of `AssignOpStaticProp`.
                     Op::AssignOp {
+                        place,
+                        op,
+                        val,
+                        dst,
+                    }
+                    | Op::AssignOpStaticProp {
                         place,
                         op,
                         val,
@@ -1336,6 +1380,9 @@ impl Vm {
                         place, dst, mode, ..
                     }
                     | Op::FetchDimsCv {
+                        place, dst, mode, ..
+                    }
+                    | Op::FetchStaticProp {
                         place, dst, mode, ..
                     } => {
                         let v = self.place_fetch(*place, *mode)?;
@@ -1953,7 +2000,8 @@ impl Vm {
                     }
                     Op::IssetDimCv {
                         place, dst, empty, ..
-                    } => {
+                    }
+                    | Op::IssetStaticProp { place, dst, empty } => {
                         let v = self.place_isset(*place, *empty)?;
                         self.set_tmp(*dst, Value::Bool(v));
                         Flow::Next
@@ -2763,6 +2811,8 @@ fn defers_oom(op: &Op) -> bool {
             | Op::AssignOpCv { .. }
             | Op::AssignOpDimCv { .. }
             | Op::AssignDimCv { .. }
+            | Op::AssignStaticProp { .. }
+            | Op::AssignOpStaticProp { .. }
             | Op::Echo(_)
             | Op::Free(_)
     )
