@@ -1275,64 +1275,24 @@ fn process_stdin(vm: &mut Vm, req: &Request) -> i32 {
     vm.shutdown(r)
 }
 
-/// `-l`: `php_lint_script()` then the CLI's verdict line.
+/// `-l`: `php_lint_script()` (the whole compile, its diagnostics reported
+/// by the engine as in any request: `display_errors`, `log_errors`,
+/// `html_errors`, the fatal error backtrace), the CLI's verdict line
+/// through the output layer (`zend_printf`), then request shutdown.
 fn lint(cfg: &Config, src: &[u8], php_self: &[u8], how: Release) -> i32 {
-    let name = lossy(php_self);
     let mut vm = match new_request_vm(cfg) {
         Ok(vm) => vm,
         Err(status) => return status,
     };
     request_startup(&mut vm);
-    let parsed = vm.parse_source(src, false, true);
-    let warnings = match &parsed {
-        Ok(program) => &program.warnings,
-        Err(error) => &error.warnings,
+    let verdict = if vm.lint_script(src, &ZStr::from(php_self)) {
+        format!("No syntax errors detected in {}\n", lossy(php_self))
+    } else {
+        vm.exit_status = 255;
+        format!("Errors parsing {}\n", lossy(php_self))
     };
-    for warning in warnings {
-        let level = match warning.level {
-            php_parser::ast::DiagnosticLevel::CompileWarning => 128,
-            php_parser::ast::DiagnosticLevel::Deprecated => 8192,
-            php_parser::ast::DiagnosticLevel::Warning => 2,
-        };
-        if vm
-            .error_at(level, &warning.message, &ZStr::from(php_self), warning.line)
-            .is_err()
-        {
-            vm.flush_stdout();
-            return 255;
-        }
-    }
-    vm.flush_stdout();
-    let status = match parsed.map(|_| ()).map_err(|error| {
-        (
-            error.message,
-            error.line,
-            error.kind == php_parser::ErrorKind::Parse,
-        )
-    }) {
-        Ok(()) => {
-            out(format!("No syntax errors detected in {name}\n").as_bytes());
-            0
-        }
-        Err((msg, line, parse)) => {
-            let label = if parse { "Parse error" } else { "Fatal error" };
-            let display = cfg.get("display_errors").unwrap_or("1");
-            let log = cfg
-                .get("log_errors")
-                .is_some_and(|v| php_support::ini::parse_bool(v.as_bytes()));
-            let text = format!("{msg} in {name} on line {line}");
-            if log {
-                err(format!("PHP {label}:  {text}\n").as_bytes());
-            }
-            if display.eq_ignore_ascii_case("stderr") {
-                err(format!("PHP {label}:  {text}\n").as_bytes());
-            } else if php_support::ini::parse_bool(display.as_bytes()) {
-                out(format!("\n{label}: {text}\n").as_bytes());
-            }
-            out(format!("Errors parsing {name}\n").as_bytes());
-            255
-        }
-    };
+    vm.echo(verdict.as_bytes());
+    let status = vm.shutdown(Ok(()));
     release(vm, how);
     status
 }
@@ -1388,38 +1348,6 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
         let u = String::from_utf8(usage(b"weird")).unwrap();
         assert!(u.starts_with("Usage: php [options]"));
         assert!(u.contains("  -C               Do not chdir"));
-    #[test]
-    fn address_space_cap_follows_memory_and_swap() {
-        const GIB: u64 = 1 << 30;
-        let meminfo: &[u8] = b"MemTotal:       32597444 kB\nMemFree:        25000000 kB\n\
-            SwapTotal:       8388604 kB\nSwapFree:        8388604 kB\n";
-        let total: u64 = (32_597_444 + 8_388_604) * 1024;
-        assert_eq!(address_space_cap(None, Some(meminfo)), total / 4 * 3);
-        assert!(address_space_cap(None, Some(meminfo)) > 29 * GIB);
-        // A small machine keeps the 4 GiB floor.
-        let small: &[u8] = b"MemTotal:        2000000 kB\nSwapTotal:             0 kB\n";
-        assert_eq!(address_space_cap(None, Some(small)), 4 * GIB);
-        // No, or malformed, meminfo: the floor.
-        assert_eq!(address_space_cap(None, None), 4 * GIB);
-        assert_eq!(
-            address_space_cap(None, Some(b"garbage\nMemTotal: lots\n")),
-            4 * GIB
-        );
-        // The environment override is taken verbatim, even below the floor.
-        assert_eq!(address_space_cap(Some(512), Some(meminfo)), 512 << 20);
-        assert_eq!(address_space_cap(Some(16384), None), 16 * GIB);
-    }
-
-    #[test]
-    fn meminfo_fields_parse_in_kb() {
-        let m: &[u8] = b"MemTotal:       32597444 kB\nSwapTotal:       8388604 kB\n";
-        assert_eq!(meminfo_kb(m, b"MemTotal:"), 32_597_444);
-        assert_eq!(meminfo_kb(m, b"SwapTotal:"), 8_388_604);
-        assert_eq!(meminfo_kb(m, b"SwapFree:"), 0);
-        assert_eq!(meminfo_kb(b"", b"MemTotal:"), 0);
-        assert_eq!(meminfo_kb(b"MemTotal: x kB\n", b"MemTotal:"), 0);
-    }
-
     }
 
     #[test]
@@ -1458,6 +1386,38 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
     #[test]
     fn builtin_date_shape() {
         assert_eq!(BUILD_DATE.len(), 20);
+    }
+
+    #[test]
+    fn address_space_cap_follows_memory_and_swap() {
+        const GIB: u64 = 1 << 30;
+        let meminfo: &[u8] = b"MemTotal:       32597444 kB\nMemFree:        25000000 kB\n\
+            SwapTotal:       8388604 kB\nSwapFree:        8388604 kB\n";
+        let total: u64 = (32_597_444 + 8_388_604) * 1024;
+        assert_eq!(address_space_cap(None, Some(meminfo)), total / 4 * 3);
+        assert!(address_space_cap(None, Some(meminfo)) > 29 * GIB);
+        // A small machine keeps the 4 GiB floor.
+        let small: &[u8] = b"MemTotal:        2000000 kB\nSwapTotal:             0 kB\n";
+        assert_eq!(address_space_cap(None, Some(small)), 4 * GIB);
+        // No, or malformed, meminfo: the floor.
+        assert_eq!(address_space_cap(None, None), 4 * GIB);
+        assert_eq!(
+            address_space_cap(None, Some(b"garbage\nMemTotal: lots\n")),
+            4 * GIB
+        );
+        // The environment override is taken verbatim, even below the floor.
+        assert_eq!(address_space_cap(Some(512), Some(meminfo)), 512 << 20);
+        assert_eq!(address_space_cap(Some(16384), None), 16 * GIB);
+    }
+
+    #[test]
+    fn meminfo_fields_parse_in_kb() {
+        let m: &[u8] = b"MemTotal:       32597444 kB\nSwapTotal:       8388604 kB\n";
+        assert_eq!(meminfo_kb(m, b"MemTotal:"), 32_597_444);
+        assert_eq!(meminfo_kb(m, b"SwapTotal:"), 8_388_604);
+        assert_eq!(meminfo_kb(m, b"SwapFree:"), 0);
+        assert_eq!(meminfo_kb(b"", b"MemTotal:"), 0);
+        assert_eq!(meminfo_kb(b"MemTotal: x kB\n", b"MemTotal:"), 0);
     }
 
     fn ini_registry(entries: &[(&str, &str)]) -> php_support::ini::IniRegistry {

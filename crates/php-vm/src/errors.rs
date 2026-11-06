@@ -1,9 +1,11 @@
 //! Error reporting (`zend_error`, `php_error_cb`): user error handlers,
 //! display, logging, fatal errors and uncaught exceptions.
 
+use crate::include::CompileOutcome;
 use crate::object;
 use crate::vm::{FrameKind, LastError, Throw, Vm, VmResult};
 use php_runtime::{Obj, Value, ZStr};
+use std::rc::Rc;
 
 /// `E_*` constants.
 pub mod level {
@@ -613,6 +615,37 @@ impl Vm {
         object::set_destructors_enabled(enabled);
     }
 
+    /// `php_lint_script()` (`php -l`): compiles `src` as the script
+    /// `filename` without running it, and returns whether it compiled.
+    /// Diagnostics are reported as a request reports them: compile
+    /// warnings as they are, a `ParseError` through
+    /// `zend_exception_error`, a compile error as the fatal error it is,
+    /// with its backtrace.
+    pub fn lint_script(&mut self, src: &[u8], filename: &ZStr) -> bool {
+        let src = match self.filter_source(filename, src.to_vec()) {
+            Ok(src) => src,
+            Err(t) => return self.lint_failed(t),
+        };
+        match self.compile_source(Rc::from(src), filename, false, true) {
+            Ok(CompileOutcome::Ok(_)) => true,
+            Ok(CompileOutcome::ParseError(e)) => {
+                self.report_uncaught(&e);
+                false
+            }
+            Ok(CompileOutcome::Fatal) => false,
+            Err(t) => self.lint_failed(t),
+        }
+    }
+
+    /// A throw escaping the lint compile (an error handler of a compile
+    /// warning threw): an uncaught exception is reported as such.
+    fn lint_failed(&mut self, t: Throw) -> bool {
+        if let Throw::Exception(e) = t {
+            let _ = self.uncaught_exception(e);
+        }
+        false
+    }
+
     /// Handles an exception that escaped all frames: the user exception
     /// handler or the "Uncaught" fatal error.
     ///
@@ -866,6 +899,47 @@ mod tests {
         assert_eq!(
             output(vm, &sink),
             "\nFatal error: oops in t.php on line 4\nStack trace:\n#0 {main}\n"
+        );
+    }
+
+    fn lint(src: &str) -> (bool, i32, String) {
+        let (mut vm, sink) = vm_with_sink();
+        let ok = vm.lint_script(src.as_bytes(), &ZStr::from("t.php"));
+        let status = vm.exit_status;
+        (ok, status, output(vm, &sink))
+    }
+
+    /// `php_lint_script()` compiles the whole script, not just the parse,
+    /// and its diagnostics are the request's (sapi/cli/tests/011, 024).
+    #[test]
+    fn lint_compiles_and_reports_like_a_request() {
+        let (ok, status, out) = lint("<?php\necho 1;\n");
+        assert!(ok);
+        assert_eq!(status, 0);
+        assert_eq!(out, "");
+
+        let (ok, status, out) = lint("<?php\n$x = 1 +;\n");
+        assert!(!ok);
+        assert_eq!(status, 255);
+        assert_eq!(
+            out,
+            "\nParse error: syntax error, unexpected token \";\" in t.php on line 2\n"
+        );
+
+        // Raised by the compiler, past the parser: `php -l` runs it too.
+        let (ok, status, out) = lint("<?php\nfunction f() { return isset(f()); }\n");
+        assert!(!ok);
+        assert_eq!(status, 255);
+        assert_eq!(
+            out,
+            "\nFatal error: Cannot use isset() on the result of an expression (you can use \"null !== expression\" instead) in t.php on line 2\nStack trace:\n#0 {main}\n"
+        );
+
+        let (ok, _, out) = lint("<?php\nstatic $a = 10;\nstatic $a = 11;\n");
+        assert!(!ok);
+        assert_eq!(
+            out,
+            "\nFatal error: Duplicate declaration of static variable $a in t.php on line 3\nStack trace:\n#0 {main}\n"
         );
     }
 }
