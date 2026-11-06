@@ -129,6 +129,9 @@ impl Vm {
             output_handler_hooks,
             loaded_extensions,
         ));
+        // The thread-local registry attributing those internal entries to
+        // their extensions goes with them.
+        crate::builtins::info::forget_registry();
     }
 }
 

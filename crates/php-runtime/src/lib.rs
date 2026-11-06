@@ -40,6 +40,7 @@ pub mod numeric;
 pub mod ops;
 pub mod plain;
 pub mod ref_roots;
+mod reference;
 pub mod serialize;
 pub mod sort;
 pub mod string;

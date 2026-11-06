@@ -59,6 +59,28 @@ fn regexp_and_callback() {
     );
 }
 
+/// `php_filter_callback()` (master, c7da728 "Check callback validity
+/// once") checks the option with `IS_CALLABLE_SUPPRESS_DEPRECATIONS` and
+/// calls that resolution: `'parent::m'` resolves in the calling scope
+/// without the deprecation PHP 8.3 raised through `call_user_function()`.
+#[test]
+fn callback_option_resolves_in_the_calling_scope_without_deprecations() {
+    assert_eq!(
+        run(r#"
+class foo { public function fc($v) { return "fc:$v"; } }
+class bar extends foo {
+    function go() {
+        var_dump(filter_var('v', FILTER_CALLBACK, ['options' => 'parent::fc']));
+        var_dump(filter_var('w', FILTER_CALLBACK, ['options' => [$this, 'parent::fc']]));
+    }
+}
+(new bar)->go();
+try { filter_var('v', FILTER_CALLBACK, ['options' => 'parent::fc']); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#),
+        "string(4) \"fc:v\"\nstring(4) \"fc:w\"\nfilter_var(): Option must be a valid callback\n"
+    );
+}
+
 #[test]
 fn arrays() {
     assert_eq!(

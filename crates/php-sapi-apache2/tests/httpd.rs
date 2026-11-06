@@ -169,6 +169,13 @@ DirectoryIndex index.php index.html
 <Directory "{d}/slow">
   php_value max_execution_time 1
 </Directory>
+<Directory "{d}/sess">
+  php_value session.save_path {root}/sessions
+  php_flag session.use_strict_mode off
+  php_flag session.upload_progress.cleanup off
+  php_value session.upload_progress.freq 0
+  php_value session.upload_progress.min_freq 0
+</Directory>
 SetEnv FROM_SETENV hello
 {extra}
 "#,
@@ -215,6 +222,26 @@ const SCRIPTS: &[(&str, &str)] = &[
     ("off/.htaccess", "php_flag engine off\n"),
     ("off/src.php", "<?php echo 'not run';\n"),
     ("slow/loop.php", "<?php echo \"start\\n\"; flush(); while (true) { $x = 1; }\n"),
+    ("slow/quiet/q.php", "<?php while (true) { $x = 1; }\n"),
+    ("slow/quiet/.htaccess", "php_flag display_errors off\n"),
+    (
+        "hs.php",
+        "<?php\necho \"x\\n\";\nheaders_sent($f, $l); echo basename($f), ':', $l, \"\\n\"; http_response_code(404);\n",
+    ),
+    (
+        "cb.php",
+        "<?php header_register_callback(function () { header('X-CB: ' . (headers_sent() ? 'late' : 'early')); header_remove('X-Powered-By'); }); echo \"cb\\n\";\n",
+    ),
+    ("implicit/.htaccess", "php_flag implicit_flush on\n"),
+    ("implicit/stream.php", "<?php\necho \"first\\n\";\nusleep(600000);\necho \"second\\n\";\n"),
+    (
+        "sess/upload.php",
+        "<?php session_id('upload1'); session_start();\n$p = $_SESSION['upload_progress_t'] ?? null;\nvar_dump($p['done'] ?? null, $p['files'][0]['name'] ?? null, $p['files'][0]['field_name'] ?? null);\n",
+    ),
+    (
+        "abort.php",
+        "<?php\n$log = __DIR__ . '/../abort.log';\nregister_shutdown_function(function () use ($log) { file_put_contents($log, 'status=' . connection_status() . ' aborted=' . var_export(connection_aborted(), true)); });\nfor ($i = 0; $i < 60; $i++) { echo str_repeat('x', 4096), \"\\n\"; flush(); usleep(100000); }\nfile_put_contents($log, 'completed');\n",
+    ),
 ];
 
 /// A parsed HTTP response.
@@ -317,6 +344,9 @@ fn setup_docroot(root: &Path) {
         std::fs::write(p, src).unwrap();
     }
     std::fs::create_dir_all(root.join("logs")).unwrap();
+    // Session files of an earlier run must not answer for this one.
+    let _ = std::fs::remove_dir_all(root.join("sessions"));
+    std::fs::create_dir_all(root.join("sessions")).unwrap();
 }
 
 #[test]
@@ -461,9 +491,36 @@ SERVER_PORT={PORT}\nSERVER_PROTOCOL=HTTP/1.1\nSERVER_SIGNATURE=\nSERVER_SOFTWARE
     c.eq("headers body", &r.body.clone(),
         format!(
             "X-Powered-By: PHP/{v}\nX-Test: one\nX-Test: two\nContent-type: text/plain;charset=UTF-8\nSet-Cookie: c1=v%20a%20l; path=/; HttpOnly\n\
-<br />\n<b>Warning</b>:  Cannot modify header information - headers already sent in <b>{docroot}/headers.php</b> on line <b>8</b><br />\n"
+<br />\n<b>Warning</b>:  Cannot modify header information - headers already sent by (output started at {docroot}/headers.php:7) in <b>{docroot}/headers.php</b> on line <b>8</b><br />\n"
         ),
     );
+
+    // headers_sent() location, http_response_code() after output.
+    let r = curl(&root, &[&url("/hs.php")]);
+    c.eq("headers_sent location", &r.body.clone(),
+        format!(
+            "x\nhs.php:2\n<br />\n<b>Warning</b>:  http_response_code(): Cannot set response code - headers already sent (output started at {docroot}/hs.php:2) in <b>{docroot}/hs.php</b> on line <b>3</b><br />\n"
+        ),
+    );
+
+    // header_register_callback() runs before the implicit send.
+    let r = curl(&root, &[&url("/cb.php")]);
+    c.eq("callback body", &r.body.clone(), "cb\n");
+    c.eq(
+        "callback header",
+        &r.header("X-CB").unwrap_or_default().to_string(),
+        "early",
+    );
+    c.ok(
+        "callback removed X-Powered-By",
+        r.header("X-Powered-By").is_none(),
+        format!("{:?}", r.headers),
+    );
+
+    // HEAD: headers, no body.
+    let r = curl(&root, &[&url("/hello.php"), "-I"]);
+    c.eq("HEAD status", &r.status.clone(), "HTTP/1.1 200 OK");
+    c.eq("HEAD body", &r.body.clone(), "");
     let r = curl(&root, &[&url("/redirect.php")]);
     c.eq("redirect", &r.status.clone(), "HTTP/1.1 302 Found");
     c.eq(
@@ -590,14 +647,74 @@ SERVER_PORT={PORT}\nSERVER_PROTOCOL=HTTP/1.1\nSERVER_SIGNATURE=\nSERVER_SOFTWARE
         Err(e) => c.ok("flush streams", false, e),
     }
 
-    // max_execution_time: the child is terminated, the server recovers.
+    // implicit_flush streams without flush().
+    match streamed_gap("/implicit/stream.php") {
+        Ok(gap) => c.ok(
+            "implicit_flush streams",
+            gap >= Duration::from_millis(400),
+            format!("gap {gap:?}"),
+        ),
+        Err(e) => c.ok("implicit_flush streams", false, e),
+    }
+
+    // Session upload progress.
+    let r = curl(
+        &root,
+        &[
+            &url("/sess/upload.php"),
+            "-b",
+            "PHPSESSID=upload1",
+            "-F",
+            "PHP_SESSION_UPLOAD_PROGRESS=t",
+            "-F",
+            &format!("f=@{}", up.display()),
+        ],
+    );
+    c.eq(
+        "upload progress",
+        &r.body.clone(),
+        "bool(true)\nstring(6) \"up.txt\"\nstring(1) \"f\"\n",
+    );
+
+    // A client that goes away: the script bails out, shutdown functions
+    // see the aborted connection.
+    let abort_log = root.join("abort.log");
+    let _ = std::fs::remove_file(&abort_log);
+    let _ = Command::new("curl")
+        .args(["-s", "--max-time", "1", &url("/abort.php")])
+        .stdout(Stdio::null())
+        .status();
+    let mut abort_seen = String::new();
+    for _ in 0..60 {
+        if let Ok(s) = std::fs::read_to_string(&abort_log) {
+            abort_seen = s;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    c.eq("client abort", &abort_seen, "status=1 aborted=true");
+
+    // max_execution_time: the executor raises the fatal error (the status
+    // was committed by flush()), the child survives.
     let r = curl(&root, &[&url("/slow/loop.php")]);
-    c.ok("timeout output", r.body.starts_with("start\n"), &r.body);
+    c.eq("timeout status", &r.status.clone(), "HTTP/1.1 200 OK");
+    c.eq("timeout output", &r.body.clone(),
+        format!("start\n<br />\n<b>Fatal error</b>:  Maximum execution time of 1 second exceeded in <b>{docroot}/slow/loop.php</b> on line <b>1</b><br />\n"),
+    );
+    let r = curl(&root, &[&url("/slow/quiet/q.php")]);
+    c.eq(
+        "timeout 500",
+        &r.status.clone(),
+        "HTTP/1.0 500 Internal Server Error",
+    );
+    c.eq("timeout 500 body", &r.body.clone(), "");
     std::thread::sleep(Duration::from_millis(300));
     let log = server.log();
     c.ok(
         "timeout logged",
-        log.contains("PHP Fatal error:  Maximum execution time of 1 second exceeded"),
+        log.contains(&format!(
+            "PHP Fatal error:  Maximum execution time of 1 second exceeded in {docroot}/slow/loop.php on line 1"
+        )),
         &log,
     );
     let mut recovered = false;

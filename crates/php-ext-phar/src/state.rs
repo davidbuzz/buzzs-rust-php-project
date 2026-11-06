@@ -2,39 +2,30 @@
 //!
 //! The objects extend SPL classes whose state occupies the VM object's
 //! internal slot, so the phar state lives in side tables keyed by object
-//! address. Each slot keeps a weak handle to its object: a slot whose
-//! object died (or whose address was reused) is released lazily
-//! ([`sweep`]) — `__destruct()` releases eagerly.
+//! address (an object keeps its address for its whole life, its deferred
+//! `__destruct()` call included). Each slot keeps a weak handle to its
+//! object: a slot whose object died (or whose address was reused) is
+//! released lazily ([`sweep`]) — `__destruct()` releases eagerly.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
 use php_phar::object::{PharFileInfo, PharObject};
-use php_runtime::Obj;
-use php_vm::object::{ObjBox, ObjectData};
-
-/// The object's data cell: unlike the `Obj` handle it survives the
-/// revival of an object for its deferred `__destruct()` call.
-fn data_of(o: &Obj) -> Option<&Rc<ObjectData>> {
-    o.downcast_ref::<ObjBox>().map(|b| &b.0)
-}
+use php_runtime::{Obj, ObjWeak};
 
 fn key_of(o: &Obj) -> usize {
-    data_of(o).map_or_else(|| o.addr(), |d| Rc::as_ptr(d) as usize)
+    o.addr()
 }
 
 struct Slot<T> {
-    weak: Weak<ObjectData>,
+    weak: ObjWeak,
     state: Rc<RefCell<T>>,
 }
 
 impl<T> Slot<T> {
     fn alive_for(&self, o: &Obj) -> bool {
-        match (self.weak.upgrade(), data_of(o)) {
-            (Some(rc), Some(d)) => Rc::ptr_eq(&rc, d),
-            _ => false,
-        }
+        self.weak.strong_count() > 0 && self.weak.addr() == o.addr()
     }
 }
 
@@ -89,7 +80,7 @@ fn get_or_create<T: Release>(
         t.borrow_mut().insert(
             key,
             Slot {
-                weak: data_of(o).map_or_else(Weak::new, Rc::downgrade),
+                weak: o.downgrade(),
                 state: fresh.clone(),
             },
         );

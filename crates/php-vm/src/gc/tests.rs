@@ -547,43 +547,56 @@ fn live_registered_array_is_kept() {
     assert_eq!(a.len(), 1);
 }
 
-/// The root index's address hasher spreads aligned addresses over the low
-/// bits (bucket index) and the high bits (control byte) alike, and the
-/// index still finds and forgets every buffered handle.
+/// The root index (by object handle, php-src's `GC_INFO`) finds and
+/// forgets every buffered object, and an entry left behind by a freed
+/// object never matches the new object that reuses its handle.
 #[test]
-fn root_index_hashes_aligned_addresses_apart() {
-    use std::hash::Hasher;
-    let hash = |n: usize| {
-        let mut h = super::AddrHasher::default();
-        h.write_usize(n);
-        h.finish()
-    };
-    let base = 0x7f00_1234_5000_usize;
-    let hashes: Vec<u64> = (0..256).map(|i| hash(base + i * 16)).collect();
-    let low: std::collections::HashSet<u64> = hashes.iter().map(|h| h & 0xff).collect();
-    let high: std::collections::HashSet<u64> = hashes.iter().map(|h| h >> 57).collect();
-    assert!(low.len() > 128, "low bits collide: {}", low.len());
-    assert!(high.len() > 64, "high bits collide: {}", high.len());
-    assert_ne!(hash(base), hash(base + 16));
-
+fn root_index_finds_and_forgets_every_handle() {
     let sink = Sink::default();
     let vm = Vm::new(&VmOptions::default(), Box::new(sink));
+    let std_class = vm.find_class(b"stdClass").expect("stdClass");
     let objs: Vec<php_runtime::Obj> = (0..64)
-        .map(|_| {
-            crate::object::new_object(vm.find_class(b"stdClass").expect("stdClass"), Vec::new())
-        })
+        .map(|_| crate::object::new_object(std_class.clone(), Vec::new()))
         .collect();
+    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle;
     let mut b = super::RootBuffer::default();
     for (i, o) in objs.iter().enumerate() {
         assert_eq!(b.push(o), Some(i));
-        assert!(b.contains(o));
+        assert!(b.contains(handle(o), o.addr()));
     }
     for o in objs.iter().step_by(2) {
-        assert!(b.remove(o.addr()));
-        assert!(!b.contains(o));
-        assert!(!b.remove(o.addr()));
+        assert!(b.remove(o.addr(), handle(o)));
+        assert!(!b.contains(handle(o), o.addr()));
+        assert!(!b.remove(o.addr(), handle(o)));
     }
     assert_eq!(b.num_roots, 32);
-    assert!(objs.iter().skip(1).step_by(2).all(|o| b.contains(o)));
+    assert!(objs
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .all(|o| b.contains(handle(o), o.addr())));
+    // A buffered object freed without notice (this buffer is not the
+    // collector's): its handle goes to the next object, which is not
+    // taken for it, and is buffered in a slot of its own.
+    let gone = crate::object::new_object(std_class.clone(), Vec::new());
+    let (h, slot) = (handle(&gone), b.push(&gone).expect("buffered"));
+    drop(gone);
+    let next = crate::object::new_object(std_class.clone(), Vec::new());
+    assert_eq!(handle(&next), h);
+    assert!(!b.contains(h, next.addr()));
+    let mine = b.push(&next).expect("buffered");
+    assert_ne!(mine, slot);
+    b.release_dead(slot);
+    assert!(b.contains(h, next.addr()));
+    // Compaction keeps the index on the moved entries.
+    b.compact();
+    assert_eq!(b.num_roots, 33);
+    assert!(b.contains(h, next.addr()));
+    assert!(objs
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .all(|o| b.contains(handle(o), o.addr())));
+    drop(next);
     drop(vm);
 }

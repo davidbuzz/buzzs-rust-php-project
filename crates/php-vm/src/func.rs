@@ -70,6 +70,14 @@ pub mod flags {
     pub const SCRUB_ARG_ERROR_TRACE: u32 = 1 << 25;
     /// Set-visibility mask.
     pub const SET_MASK: u32 = SET_PUBLIC | SET_PROTECTED | SET_PRIVATE;
+    /// The lowest of the five bits (27..=31) of a builtin *function*'s
+    /// flags that hold its frameless-call class (php-src's
+    /// `ZEND_FRAMELESS_FUNCTION` infos), zero for none. Set at
+    /// registration from the function's name (`crate::special`); methods,
+    /// closures and trampolines never carry one.
+    pub const FRAMELESS_SHIFT: u32 = 27;
+    /// Mask of the frameless-call class bits (see [`FRAMELESS_SHIFT`]).
+    pub const FRAMELESS: u32 = 0x1f << FRAMELESS_SHIFT;
 }
 
 /// A closure `use` binding.

@@ -156,10 +156,10 @@ impl Vm {
         let empty_code = Rc::new(opcode::OpArray::default());
         Vm {
             frames: Vec::new(),
-            functions: HashMap::new(),
-            classes: HashMap::new(),
+            functions: class::NameMap::default(),
+            classes: class::NameMap::default(),
             class_order: Vec::new(),
-            constants: HashMap::new(),
+            constants: class::NameMap::default(),
             user_constants: Vec::new(),
             globals: Rc::new(RefCell::new(vm::VarStore::default())),
             ini,
@@ -205,6 +205,9 @@ impl Vm {
             response_mimetype: None,
             send_default_content_type: true,
             response_header_hook: None,
+            send_headers_hook: None,
+            sapi_flush_hook: None,
+            timer_hook: None,
             rfc1867_callback: None,
             rfc1867_uploaded_files: Vec::new(),
             fibers: Vec::new(),
@@ -462,13 +465,15 @@ impl Vm {
                 continue;
             }
             d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
-            if let Some(b) = o.downcast_ref::<object::ObjBox>() {
-                keep.push(b.0.clone());
-            }
             if let Err(e) = self.call_destructor(&o) {
                 return self.destructor_error(e);
             }
-            drop(o);
+            // `GC_DELREF` without the release: the handle `o` took
+            // (`GC_ADDREF(obj)` around `dtor_obj`, the only extra count
+            // the destructor sees) is held until the loop is done, so an
+            // object whose destructor dropped its last reference is not
+            // freed by it.
+            keep.push(o);
             if let Err(e) = self.run_pending_destructors() {
                 return self.destructor_error(e);
             }
