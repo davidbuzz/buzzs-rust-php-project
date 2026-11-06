@@ -28,6 +28,82 @@ pub enum Throw {
 /// Result type of VM operations.
 pub type VmResult<T> = Result<T, Throw>;
 
+/// The names of a variable table's slots (`op_array->vars`).
+///
+/// Every frame of a function shares the compiled-variable names of its op
+/// array; a table copies them only when a variable is created at run time
+/// (`$$name`, `extract()`, the variables of an included file), as php-src
+/// builds a symbol table (`zend_rebuild_symbol_table`) only then. The
+/// names read as one slice either way (`Deref<Target = [ZStr]>`).
+#[derive(Default)]
+pub struct VarNames {
+    /// The op array whose compiled-variable names are the slots' names,
+    /// while none was added at run time.
+    shared: Option<Rc<OpArray>>,
+    /// The table's own names, once a variable was added at run time
+    /// (empty while `shared` is set).
+    owned: Vec<ZStr>,
+}
+
+impl VarNames {
+    /// The compiled-variable names of `code`, shared with it.
+    #[must_use]
+    pub fn shared(code: &Rc<OpArray>) -> Self {
+        VarNames {
+            shared: Some(code.clone()),
+            owned: Vec::new(),
+        }
+    }
+
+    /// Makes the names those of `code`'s compiled variables again, keeping
+    /// a small owned buffer for the next run-time copy.
+    fn share(&mut self, code: &Rc<OpArray>) {
+        self.shared = Some(code.clone());
+        self.owned.clear();
+    }
+
+    /// Drops all names; a small owned buffer keeps its capacity for reuse.
+    fn clear(&mut self) {
+        self.shared = None;
+        clear_frame_buffer(&mut self.owned);
+    }
+
+    /// The names as a list this table owns, copying shared ones first
+    /// (once per table, like php-src's symbol-table rebuild).
+    pub fn to_mut(&mut self) -> &mut Vec<ZStr> {
+        if let Some(code) = self.shared.take() {
+            self.owned.clear();
+            self.owned.extend_from_slice(&code.cv_names);
+        }
+        &mut self.owned
+    }
+
+    /// The capacity of the owned list (0 while the names are shared and
+    /// no buffer is kept).
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.owned.capacity()
+    }
+}
+
+impl std::ops::Deref for VarNames {
+    type Target = [ZStr];
+
+    #[inline]
+    fn deref(&self) -> &[ZStr] {
+        match &self.shared {
+            Some(code) => &code.cv_names,
+            None => &self.owned,
+        }
+    }
+}
+
+impl std::fmt::Debug for VarNames {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
 /// A variable table (symbol table): compiled variables plus dynamically
 /// created ones.
 #[derive(Debug, Default)]
@@ -35,16 +111,30 @@ pub struct VarStore {
     /// Values (`None` = undefined).
     pub slots: Vec<Option<Value>>,
     /// Names, parallel to `slots`.
-    pub names: Vec<ZStr>,
+    pub names: VarNames,
     index: Option<HashMap<ZStr, u32>>,
 }
 
 impl VarStore {
-    /// A store for a function's compiled variables.
+    /// A store for variables with the given names (its own copy).
     pub fn with_names(names: &[ZStr]) -> Self {
         VarStore {
             slots: vec![None; names.len()],
-            names: names.to_vec(),
+            names: VarNames {
+                shared: None,
+                owned: names.to_vec(),
+            },
+            index: None,
+        }
+    }
+
+    /// A store for the compiled variables of `code`, sharing their names
+    /// with the op array (a php-src frame reads `op_array->vars`).
+    #[must_use]
+    pub fn for_code(code: &Rc<OpArray>) -> Self {
+        VarStore {
+            slots: vec![None; code.cv_names.len()],
+            names: VarNames::shared(code),
             index: None,
         }
     }
@@ -80,7 +170,7 @@ impl VarStore {
         let i = u32::try_from(self.slots.len()).unwrap_or(0);
         self.slots.push(None);
         let z = ZStr::from(name);
-        self.names.push(z.clone());
+        self.names.to_mut().push(z.clone());
         if let Some(m) = &mut self.index {
             m.insert(z, i);
         }
@@ -417,7 +507,7 @@ impl Frame {
             ip: 0,
             vars: Rc::new(RefCell::new(VarStore {
                 slots: Vec::with_capacity(8),
-                names: Vec::with_capacity(8),
+                names: VarNames::default(),
                 index: None,
             })),
             cv_map: None,
@@ -480,7 +570,7 @@ impl Frame {
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
             clear_frame_buffer(&mut vs.slots);
-            clear_frame_buffer(&mut vs.names);
+            vs.names.clear();
             vs.index = None;
         } else {
             self.vars = Rc::new(RefCell::new(VarStore::default()));
@@ -507,17 +597,19 @@ impl Frame {
             let vs = rc_mut.get_mut();
             vs.slots.clear();
             vs.slots.resize(self.code.cv_names.len(), None);
-            vs.names.clear();
-            vs.names.extend(self.code.cv_names.iter().cloned());
+            // The CV names stay the op array's (`op_array->vars`): no
+            // per-call copy of them.
+            vs.names.share(&self.code);
             vs.index = None;
         } else {
-            self.vars = Rc::new(RefCell::new(VarStore::with_names(&self.code.cv_names)));
+            self.vars = Rc::new(RefCell::new(VarStore::for_code(&self.code)));
         }
     }
 
-    /// Creates a frame for `code` with its own variable store.
+    /// Creates a frame for `code` with its own variable store, whose
+    /// compiled-variable names are shared with the op array.
     pub fn new(code: Rc<OpArray>, kind: FrameKind) -> Self {
-        let vars = Rc::new(RefCell::new(VarStore::with_names(&code.cv_names)));
+        let vars = Rc::new(RefCell::new(VarStore::for_code(&code)));
         Frame::with_vars(code, kind, vars, None)
     }
 

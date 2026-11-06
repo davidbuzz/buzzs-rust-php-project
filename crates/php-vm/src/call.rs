@@ -2177,24 +2177,25 @@ impl Vm {
     /// verifies and, where allowed, coerces `v` in place. `false` rejects
     /// it (the caller raises the TypeError).
     fn recv_verify(&mut self, n: u32, v: &mut Value) -> VmResult<bool> {
-        let (ty, strict) = {
-            let f = self.frame();
-            let uf = f.ufunc.as_ref().expect("user frame");
-            let p = uf.params.get(n as usize).or_else(|| uf.params.last());
-            (p.and_then(|p| p.ty.clone()), f.caller_strict)
-        };
-        let Some(ty) = ty else {
+        // The parameter type is read in place from the function
+        // (`zend_verify_recv_arg_type` reads `arg_info->type`): the
+        // function's `Rc` keeps it alive while the check runs user code (a
+        // `__toString()` of a coerced argument), so only that handle is
+        // cloned, not the declaration with its class names.
+        let uf = self.frame().ufunc.clone().expect("user frame");
+        let p = uf.params.get(n as usize).or_else(|| uf.params.last());
+        let Some(ty) = p.and_then(|p| p.ty.as_ref()) else {
             return Ok(true);
         };
-        let scope = self.frame().scope.clone();
-        let called = self.frame().called.clone();
+        let f = self.frame();
+        let (strict, scope, called) = (f.caller_strict, f.scope.clone(), f.called.clone());
         let ctx = TypeCtx {
             scope: scope.as_ref(),
             called: called.as_ref(),
             strict,
             internal_arg: None,
         };
-        self.verify_type(&ty, v, &ctx)
+        self.verify_type(ty, v, &ctx)
     }
 
     /// `ZEND_RECV` / `ZEND_RECV_INIT` of an argument that
@@ -2392,26 +2393,34 @@ impl Vm {
                 _ => {}
             }
         }
-        let (rt, strict, is_gen, func, scope, called) = {
+        // The return type is read in place from the function
+        // (`zend_verify_return_type` reads `func->common.arg_info[-1]`):
+        // the function's `Rc` keeps it alive while the check runs user code
+        // (a `__toString()` of a coerced value), so only that handle is
+        // cloned, not the declaration with its class names.
+        let Some(uf) = self.frame().ufunc.clone() else {
+            return Ok(v.unwrap_or_default());
+        };
+        let Some(rt) = uf.return_type.as_ref() else {
+            return Ok(v.unwrap_or_default());
+        };
+        if uf.is_generator() {
+            return Ok(v.unwrap_or_default());
+        }
+        // `void` and `never` exclude each other: the common `void` return
+        // is answered before anything else is fetched from the frame.
+        if rt.is_void() {
+            return Ok(Value::Null);
+        }
+        let (strict, func, scope, called) = {
             let f = self.frame();
-            let Some(uf) = &f.ufunc else {
-                return Ok(v.unwrap_or_default());
-            };
             (
-                uf.return_type.clone(),
                 f.code.strict_types,
-                uf.is_generator(),
                 f.func.clone(),
                 f.scope.clone(),
                 f.called.clone(),
             )
         };
-        let Some(rt) = rt else {
-            return Ok(v.unwrap_or_default());
-        };
-        if is_gen {
-            return Ok(v.unwrap_or_default());
-        }
         if rt.is_never() {
             let fname = func.as_ref().map_or_else(String::new, |f| match &scope {
                 Some(c) => format!("{}::{}", c.name, f.name()),
@@ -2427,23 +2436,26 @@ impl Vm {
                 &format!("{fname}(): never-returning {what} must not implicitly return"),
             ));
         }
-        if rt.is_void() {
-            return Ok(Value::Null);
-        }
-        // Return type errors print the scope and function name separately with `%s`.
-        let fname = func.as_ref().map_or_else(String::new, |f| {
-            let name = object::display_name(f.name());
-            match scope.as_ref() {
-                Some(c) => format!("{}::{name}", object::display_name(&c.name)),
-                None => name.to_string_lossy(),
-            }
-        });
-        let tyname = rt.display(
-            scope.as_ref().map(|s| &s.name),
-            scope.as_ref().and_then(|s| s.parent_name()),
-            called.as_ref().map(|c| &c.name),
-        );
+        // Return type errors print the scope and function name separately
+        // with `%s`. The strings are only built for an error
+        // (`zend_verify_return_error`), not for a value that coerces.
+        let error_names = || {
+            let fname = func.as_ref().map_or_else(String::new, |f| {
+                let name = object::display_name(f.name());
+                match scope.as_ref() {
+                    Some(c) => format!("{}::{name}", object::display_name(&c.name)),
+                    None => name.to_string_lossy(),
+                }
+            });
+            let tyname = rt.display(
+                scope.as_ref().map(|s| &s.name),
+                scope.as_ref().and_then(|s| s.parent_name()),
+                called.as_ref().map(|c| &c.name),
+            );
+            (fname, tyname)
+        };
         let Some(mut v) = v else {
+            let (fname, tyname) = error_names();
             return Err(self.make_throw(
                 "TypeError",
                 &format!("{fname}(): Return value must be of type {tyname}, none returned"),
@@ -2455,7 +2467,8 @@ impl Vm {
             strict,
             internal_arg: None,
         };
-        if !self.verify_type(&rt, &mut v, &ctx)? {
+        if !self.verify_type(rt, &mut v, &ctx)? {
+            let (fname, tyname) = error_names();
             return Err(self.make_throw(
                 "TypeError",
                 &format!(
