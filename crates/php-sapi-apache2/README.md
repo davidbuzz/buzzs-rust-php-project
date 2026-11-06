@@ -77,6 +77,10 @@ with `ini_set()`.  `php_flag engine off` hands the request back to Apache.
   `max_file_uploads`, `post_max_size`, `MAX_FILE_SIZE`), `php://input`;
   ext/session is linked, so `session.upload_progress.*` tracks uploads
   (`$_SESSION["upload_progress_<name>"]`) while the body is parsed.
+  `request_parse_body()` parses a urlencoded or multipart body of any
+  method (PUT, PATCH, …) into `[$post, $files]`, with the limits of its
+  `$options` and `RequestParseBodyException`s, from whatever of the body
+  request startup and `php://input` left unread.
 * `flush()` → `ap_rflush`; output is written with `ap_rwrite`;
   `implicit_flush=1` / `ob_implicit_flush()` flush after every write.
 * A client that went away (`ap_rwrite`/`ap_rflush` failing):

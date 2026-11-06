@@ -291,6 +291,7 @@ fn handle_multipart(
         upload_max_filesize: limits.upload_max_filesize,
         file_uploads: vm.ini_bool("file_uploads"),
         tmp_dirs: tmp_dirs(vm),
+        read_post_bytes: ctx.read_post_bytes.get(),
     };
     let callback = vm.rfc1867_callback;
     // The parse got past its early checks: MULTIPART_EVENT_START follows
