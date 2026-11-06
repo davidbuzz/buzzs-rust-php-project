@@ -56,6 +56,12 @@ fn run_array_lookup(src: &str) -> String {
 
     let sink = Sink::default();
     let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    // The stand-in simulates ext/standard's binding, and these scripts test
+    // the internal-call path: a registered `array_key_exists` would
+    // otherwise compile direct calls to `ZEND_ARRAY_KEY_EXISTS`, whose
+    // behaviour (no frame, operands read in place) tests/special_ops.rs
+    // covers.
+    vm.compile_no_builtins = true;
     vm.register_function("array_key_exists($key, array $array): bool", lookup);
     vm.register_function("test_resource()", |_vm, _args| {
         Ok(Value::Resource(php_runtime::Resource::with_handle(
