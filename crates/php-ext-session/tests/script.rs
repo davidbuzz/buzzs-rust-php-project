@@ -451,10 +451,90 @@ var_dump($_SESSION);"#,
     );
 }
 
+/// `php_session_normalize_vars()`: the entries of one decode are parsed
+/// into one `var_hash`, so an `R:` back-reference makes the targeted entry
+/// (or an element inside it) a reference shared with the referring entry,
+/// and nothing else becomes one (session_decode_variation1.phpt, 019.phpt;
+/// expected output from php-src).
+#[test]
+fn decoded_back_references_share_session_entries() {
+    let out = run_with(
+        r#"<?php ob_start();
+session_start();
+var_dump(session_decode("foo|a:3:{i:0;i:1;i:1;i:2;i:2;i:3;}guff|R:1;blah|R:1;"));
+var_dump($_SESSION);
+$_SESSION['guff'][] = 4;
+var_dump(count($_SESSION['foo']), count($_SESSION['blah']));
+var_dump(session_decode("foo|a:1:{i:0;i:5;}bar|R:2;"));
+var_dump($_SESSION['foo'], $_SESSION['bar']);
+$_SESSION['bar']++;
+var_dump($_SESSION['foo'][0]);
+var_dump(session_decode('o1|O:8:"stdClass":1:{s:1:"c";i:42;}o2|R:1;x|i:1;x|i:2;'));
+var_dump($_SESSION['o1'], $_SESSION['o2'], $_SESSION['x']);
+echo session_encode(), "\n";"#,
+        &[("session.use_cookies", "0")],
+    );
+    assert_eq!(
+        out,
+        r#"bool(true)
+array(3) {
+  ["foo"]=>
+  &array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+  ["guff"]=>
+  &array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+  ["blah"]=>
+  &array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+}
+int(4)
+int(4)
+bool(true)
+array(1) {
+  [0]=>
+  &int(5)
+}
+int(5)
+int(6)
+bool(true)
+object(stdClass)#1 (1) {
+  ["c"]=>
+  int(42)
+}
+object(stdClass)#1 (1) {
+  ["c"]=>
+  int(42)
+}
+int(2)
+foo|a:1:{i:0;i:6;}guff|a:4:{i:0;i:1;i:1;i:2;i:2;i:3;i:3;i:4;}blah|R:3;bar|R:2;o1|O:8:"stdClass":1:{s:1:"c";i:42;}o2|R:8;x|i:2;
+"#
+    );
+}
+
 thread_local! {
     static SAPI_HEADERS: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
 }
 
+#[allow(clippy::unnecessary_wraps)] // the signature is `php_vm::ext::ResponseHeaderFn`
 fn record_sapi_header(
     _vm: &mut Vm,
     line: &[u8],

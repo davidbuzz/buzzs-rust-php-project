@@ -67,6 +67,38 @@ pub trait SessionHost: RuntimeContext {
         None
     }
 
+    /// `php_var_unserialize()` into a `var_tmp_var()` of the shared
+    /// `var_hash` (the `php`/`php_binary` decoders): as
+    /// [`SessionHost::unserialize_shared`], but the value is returned as its
+    /// `var_hash` cell (a `Value::Reference`), not yet resolved, so `R:`
+    /// back-references in later entries of the same decode turn it into a
+    /// reference shared with them. The module stores the cell into
+    /// `$_SESSION` (PHP's `IS_PTR` placeholder) and resolves every stored
+    /// cell with [`SessionHost::unwrap_unserialized_cells`] once the data is
+    /// parsed (`php_session_normalize_vars()`). `None` (the default)
+    /// declines, like `unserialize_shared`.
+    fn unserialize_shared_cell(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> Option<RtResult<Result<(Value, usize), usize>>> {
+        let _ = (data, offset);
+        None
+    }
+
+    /// Resolves cells of [`SessionHost::unserialize_shared_cell`]: those
+    /// only `values` and the `var_hash` hold become their values,
+    /// recursively; a cell an `R:` targeted stays a reference shared by
+    /// every value holding it. The default has no `var_hash` and unwraps
+    /// lone references.
+    fn unwrap_unserialized_cells(&mut self, values: &mut [Value]) {
+        for v in values {
+            if matches!(v, Value::Reference(r) if r.refcount() == 1) {
+                v.unwrap_reference();
+            }
+        }
+    }
+
     /// `php_var_serialize()` of the `$_SESSION` entries `keys` (in order),
     /// or of the whole array for `None`, with one shared `var_hash`
     /// (`PHP_VAR_SERIALIZE_INIT`), which a `serialize()` made from a
