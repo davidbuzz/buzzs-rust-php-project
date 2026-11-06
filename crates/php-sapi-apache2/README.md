@@ -62,15 +62,28 @@ with `ini_set()`.  `php_flag engine off` hands the request back to Apache.
 * `PHP_SAPI`/`php_sapi_name()` = `apache2handler`; `$_SERVER` comes from
   Apache's CGI environment (`SCRIPT_FILENAME`, `PATH_INFO`, `HTTP_*`, …)
   plus `PHP_SELF`, `PHP_AUTH_USER/PW/DIGEST`, `REQUEST_TIME(_FLOAT)`.
-* `header()`, `header_remove()`, `headers_list()`, `headers_sent()`,
-  `http_response_code()`, `setcookie()`/`setrawcookie()`; default
-  `Content-Type: text/html; charset=UTF-8`; `X-Powered-By` and the
-  `Server` token with `expose_php`.  A fatal error with `display_errors`
-  off yields `HTTP/1.0 500`.
+* `header()`, `header_remove()`, `headers_list()`, `headers_sent()` (with
+  the file and line where output started), `http_response_code()`,
+  `setcookie()`/`setrawcookie()`; "headers already sent by (output started
+  at file:line)" warnings; default `Content-Type: text/html;
+  charset=UTF-8`; `X-Powered-By` and the `Server` token with `expose_php`.
+  A fatal error with `display_errors` off yields `HTTP/1.0 500`.
+* `header_register_callback()`: the callable runs when the headers go out,
+  which is the first output (also output from inside an output handler),
+  `flush()`, `virtual()` or request shutdown — as `sapi_send_headers()`
+  does.  HEAD requests get the headers and no body.
 * POST forms, `multipart/form-data` uploads (`$_FILES`,
   `is_uploaded_file()`, `move_uploaded_file()`, `upload_max_filesize`,
-  `max_file_uploads`, `post_max_size`, `MAX_FILE_SIZE`), `php://input`.
-* `flush()` → `ap_rflush`; output is written with `ap_rwrite`.
+  `max_file_uploads`, `post_max_size`, `MAX_FILE_SIZE`), `php://input`;
+  ext/session is linked, so `session.upload_progress.*` tracks uploads
+  (`$_SESSION["upload_progress_<name>"]`) while the body is parsed.
+* `flush()` → `ap_rflush`; output is written with `ap_rwrite`;
+  `implicit_flush=1` / `ob_implicit_flush()` flush after every write.
+* A client that went away (`ap_rwrite`/`ap_rflush` failing):
+  `connection_status()` reports `CONNECTION_ABORTED`, output is discarded
+  for the rest of the request and the script is stopped like `exit()`
+  (shutdown functions and destructors still run) unless
+  `ignore_user_abort` is on — `php_handle_aborted_connection()`.
 * Errors: `display_errors` (HTML) to the page, `log_errors` to the Apache
   error log as `[php:warn] … PHP Warning:  …` (level per error type);
   `error_log()` → `[php:notice]`.
@@ -78,11 +91,20 @@ with `ini_set()`.  `php_flag engine off` hands the request back to Apache.
   `apache_note()`, `apache_setenv()`/`apache_getenv()`,
   `apache_lookup_uri()`, `virtual()`, `apache_get_version()`,
   `apache_get_modules()`.
-* `max_execution_time` (CPU time, default 30 s): the VM cannot be
-  interrupted, so on expiry the child logs
-  `PHP Fatal error:  Maximum execution time of N seconds exceeded` and
-  exits; httpd starts a replacement and the client sees a truncated
-  response.
+* `max_execution_time` (default 30 s) counts the request thread's CPU
+  time, like php-src's `ITIMER_PROF` timer on Linux (a script waiting in
+  `sleep()` or on I/O does not time out).  On expiry the executor raises
+  `Fatal error: Maximum execution time of N seconds exceeded in <file> on
+  line <n>` at its next opcode — displayed and/or logged like any fatal
+  error, with `HTTP/1.0 500` when `display_errors` is off and nothing was
+  sent yet — and `connection_status()` gains `CONNECTION_TIMEOUT`.
+  `set_time_limit()` and `ini_set('max_execution_time')` restart the
+  timer.  With `hard_timeout` (php.ini, default 2 s) at N > 0, a native
+  call that has not returned N CPU seconds after the fatal was flagged
+  ends the child with
+  `Fatal error: Maximum execution time of M+N seconds exceeded
+  (terminated)` on the error log and exit status 124, as
+  `zend_timeout_handler` does; httpd starts a replacement child.
 
 ## Threads
 
@@ -100,7 +122,7 @@ scales with the number of child processes only).
 ## Tests
 
 ```sh
-cargo test -p php-sapi-apache2                       # unit + in-memory lifecycle tests
+cargo test -p php-sapi-apache2                       # unit + in-memory lifecycle tests (+ tests/interrupts.rs: CPU-time timeouts and client aborts, serialised, ~6 s)
 cargo build -p php-cli                               # optional: enables the CLI comparison
 cargo test -p php-sapi-apache2 --test httpd -- --ignored --test-threads=1
 ```

@@ -19,6 +19,8 @@ struct Response {
     headers_out: Vec<(String, String)>,
     body: String,
     logs: Vec<(LogLevel, String)>,
+    /// `ap_rflush` calls.
+    flushes: usize,
 }
 
 fn scratch() -> PathBuf {
@@ -36,7 +38,16 @@ struct Req {
     headers: Vec<(&'static str, &'static str)>,
     body: Vec<u8>,
     dir: Vec<(&'static str, &'static str, bool)>,
-    ini: Vec<(&'static str, &'static str)>,
+    ini: Vec<(String, String)>,
+    /// The client is gone before the script runs: every write fails.
+    disconnected: bool,
+}
+
+fn ini(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect()
 }
 
 fn run(name: &str, req: Req) -> Response {
@@ -87,6 +98,7 @@ fn run(name: &str, req: Req) -> Response {
                 m = m.with_entry(Table::HeadersIn, k.as_bytes(), v.as_bytes());
             }
             m.body_in.borrow_mut().extend_from_slice(&req.body);
+            *m.disconnected.borrow_mut() = req.disconnected;
             for (n, v, admin) in &req.dir {
                 m.dir.borrow_mut().push(DirEntry {
                     name: (*n).to_string(),
@@ -102,7 +114,7 @@ fn run(name: &str, req: Req) -> Response {
             let shared = Rc::new(m);
             let mut config = ProcessConfig::with_defaults();
             for (k, v) in &req.ini {
-                config.ini.push(((*k).to_string(), (*v).to_string()));
+                config.ini.push((k.clone(), v.clone()));
             }
             let params = RunParams {
                 config: Arc::new(config),
@@ -126,6 +138,7 @@ fn run(name: &str, req: Req) -> Response {
                     .iter()
                     .map(|(l, m)| (*l, s(m)))
                     .collect(),
+                flushes: *shared.flushes.borrow(),
             };
             resp
         })
@@ -219,24 +232,322 @@ fn status_line_and_redirects() {
 }
 
 #[test]
-fn late_header_warns() {
+fn late_header_warns_with_where_output_started() {
     let r = run(
         "late.php",
         Req {
-            script: "<?php echo 'a'; header('X: y'); var_dump(headers_sent());",
+            script: "<?php echo 'a';\nheader('X: y'); var_dump(headers_sent($f, $l)); echo basename($f), ':', $l;",
+            ..Req::default()
+        },
+    );
+    let path = scratch().join("late.php").display().to_string();
+    assert_eq!(
+        r.body,
+        format!(
+            "a<br />\n<b>Warning</b>:  Cannot modify header information - headers already sent by (output started at {path}:1) in <b>{path}</b> on line <b>2</b><br />\nbool(true)\nlate.php:1"
+        )
+    );
+}
+
+#[test]
+fn response_code_after_output_names_where_it_started() {
+    let r = run(
+        "code.php",
+        Req {
+            script: "<?php echo 'x';\nvar_dump(http_response_code(404), http_response_code());",
+            ..Req::default()
+        },
+    );
+    let path = scratch().join("code.php").display().to_string();
+    assert_eq!(
+        r.body,
+        format!(
+            "x<br />\n<b>Warning</b>:  http_response_code(): Cannot set response code - headers already sent (output started at {path}:1) in <b>{path}</b> on line <b>2</b><br />\nbool(false)\nint(200)\n"
+        )
+    );
+}
+
+#[test]
+fn flush_without_output_sends_headers_without_a_location() {
+    let r = run(
+        "flush.php",
+        Req {
+            script: "<?php flush(); var_dump(headers_sent($f, $l), $f, $l); header('X: y');",
             ..Req::default()
         },
     );
     assert!(
-        r.body.starts_with("a<br />\n<b>Warning</b>:  Cannot modify header information - headers already sent in <b>"),
+        r.body.starts_with(
+            "bool(true)\nstring(0) \"\"\nint(0)\n<br />\n<b>Warning</b>:  Cannot modify header information - headers already sent in <b>"
+        ),
         "{}",
         r.body
     );
+    assert_eq!(r.flushes, 1);
+}
+
+#[test]
+fn header_callback_runs_before_the_first_output() {
+    let r = run(
+        "cb.php",
+        Req {
+            script: "<?php header_register_callback(function () { header('X-CB: ' . (headers_sent() ? 'late' : 'early')); header_remove('X-Powered-By'); });\necho 'body'; header('X-After: 1');",
+            ..Req::default()
+        },
+    );
+    assert!(r.body.starts_with("body<br />"), "{}", r.body);
+    assert_eq!(
+        r.headers_out,
+        vec![("X-CB".to_string(), "early".to_string())]
+    );
+}
+
+#[test]
+fn header_callback_output_sends_the_headers() {
+    let r = run(
+        "cbout.php",
+        Req {
+            script: "<?php header_register_callback(function () { echo 'cb:'; header('X-Too-Late: 1'); });\necho 'body';",
+            ..Req::default()
+        },
+    );
+    let path = scratch().join("cbout.php").display().to_string();
+    // The callable's own output sends the headers (php-src's re-entrant
+    // sapi_send_headers()); its later header() is too late.
+    assert_eq!(
+        r.body,
+        format!(
+            "cb:<br />\n<b>Warning</b>:  Cannot modify header information - headers already sent by (output started at {path}:2) in <b>{path}</b> on line <b>1</b><br />\nbody"
+        )
+    );
+    assert!(!r.headers_out.iter().any(|(k, _)| k == "X-Too-Late"));
+}
+
+#[test]
+fn header_callback_output_resets_the_content_type() {
+    // The nested sapi_send_headers() applies text/plain; the outer one
+    // calls php_apache_sapi_send_headers() again with ctx->content_type
+    // consumed, so httpd gets the default type (php-src's behaviour).
+    let r = run(
+        "cbtype.php",
+        Req {
+            script: "<?php header('Content-Type: text/plain'); header('HTTP/1.1 404 Not Found');\nheader_register_callback(function () { echo 'cb:'; });\necho 'body'; echo implode('|', headers_list());",
+            ..Req::default()
+        },
+    );
+    assert!(r.body.starts_with("cb:body"), "{}", r.body);
     assert!(
+        r.body.contains("Content-type: text/plain;charset=UTF-8"),
+        "headers_list() keeps the script's header: {}",
         r.body
-            .ends_with("late.php</b> on line <b>1</b><br />\nbool(true)\n"),
-        "{}",
-        r.body
+    );
+    assert_eq!(r.content_type.as_deref(), Some("text/html; charset=UTF-8"));
+    assert_eq!(r.status.map(|s| s.0), Some(404));
+}
+
+#[test]
+fn header_callback_without_output_keeps_the_content_type() {
+    let r = run(
+        "cbtype2.php",
+        Req {
+            script: "<?php header('Content-Type: text/plain');\nheader_register_callback(function () { header('X-CB: 1'); });\necho 'body';",
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.body, "body");
+    assert_eq!(r.content_type.as_deref(), Some("text/plain;charset=UTF-8"));
+}
+
+#[test]
+fn head_request_header_callback_output_is_dropped() {
+    let r = run(
+        "cbhead.php",
+        Req {
+            script: "<?php header_register_callback(function () { echo 'cb'; });\necho 'body';",
+            method: "HEAD",
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.body, "");
+    assert_eq!(r.status, Some((200, None, 0)));
+}
+
+#[test]
+fn header_callback_runs_at_shutdown_without_output() {
+    let r = run(
+        "cbend.php",
+        Req {
+            script: "<?php header_register_callback(function () { header('X-Late: 1'); });",
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.body, "");
+    assert!(r
+        .headers_out
+        .contains(&("X-Late".to_string(), "1".to_string())));
+}
+
+#[test]
+fn implicit_flush_flushes_after_every_write() {
+    let r = run(
+        "imp.php",
+        Req {
+            script: "<?php echo 'a'; echo 'b'; echo '';",
+            ini: ini(&[("implicit_flush", "1")]),
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.body, "ab");
+    assert_eq!(r.flushes, 2);
+    let r = run(
+        "noimp.php",
+        Req {
+            script: "<?php echo 'a'; echo 'b';",
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.flushes, 0, "no flush without implicit_flush");
+    let r = run(
+        "obimp.php",
+        Req {
+            script: "<?php ob_implicit_flush(); echo 'a'; ob_implicit_flush(false); echo 'b';",
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.body, "ab");
+    assert_eq!(r.flushes, 1);
+}
+
+#[test]
+fn connection_status_defaults() {
+    let r = run(
+        "cs.php",
+        Req {
+            script: "<?php var_dump(connection_status(), connection_aborted(), ignore_user_abort(true), ignore_user_abort(), ini_get('ignore_user_abort'));",
+            ..Req::default()
+        },
+    );
+    assert_eq!(
+        r.body,
+        "int(0)\nbool(false)\nbool(false)\nbool(true)\nstring(1) \"1\"\n"
+    );
+}
+
+// The bailout of a failed `ap_rwrite` alone goes through the engine's
+// process-wide interrupt flag, which concurrently running VMs share: it is
+// tested in tests/interrupts.rs.  With `implicit_flush` the failed flush
+// that follows the write bails out with the VM at hand.
+#[test]
+fn implicit_flush_to_a_lost_client_bails_out_after_the_write() {
+    let log = scratch().join("abort.log");
+    let _ = std::fs::remove_file(&log);
+    let r = run(
+        "abort.php",
+        Req {
+            script: "<?php $f = __DIR__ . '/abort.log';\nregister_shutdown_function(function () use ($f) { file_put_contents($f, 'shutdown:' . connection_status() . ':' . var_export(connection_aborted(), true), FILE_APPEND); });\necho 'a';\nfile_put_contents($f, 'after;', FILE_APPEND);",
+            disconnected: true,
+            ini: ini(&[("implicit_flush", "1")]),
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.body, "", "nothing reaches a gone client");
+    assert_eq!(r.status.map(|s| s.0), Some(200));
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        "shutdown:1:true",
+        "php_handle_aborted_connection() bailed out before the next statement"
+    );
+}
+
+#[test]
+fn ignore_user_abort_keeps_running_without_output() {
+    let log = scratch().join("ignore.log");
+    let _ = std::fs::remove_file(&log);
+    let r = run(
+        "ignore.php",
+        Req {
+            script: "<?php $f = __DIR__ . '/ignore.log';\nregister_shutdown_function(function () use ($f) { file_put_contents($f, 'shutdown:' . connection_status(), FILE_APPEND); });\necho 'a';\nfile_put_contents($f, 'after;', FILE_APPEND); echo 'more'; flush();\nfile_put_contents($f, 'flushed;', FILE_APPEND);",
+            disconnected: true,
+            dir: vec![("ignore_user_abort", "1", false)],
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.body, "");
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        "after;flushed;shutdown:1"
+    );
+}
+
+#[test]
+fn flush_to_a_lost_client_bails_out() {
+    let log = scratch().join("flushabort.log");
+    let _ = std::fs::remove_file(&log);
+    let r = run(
+        "flushabort.php",
+        Req {
+            script:
+                "<?php $f = __DIR__ . '/flushabort.log';\nflush();\nfile_put_contents($f, 'after');",
+            disconnected: true,
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.body, "");
+    assert!(!log.exists(), "the bailout happens inside flush()");
+}
+
+#[test]
+fn head_requests_send_headers_without_a_body() {
+    let r = run(
+        "head.php",
+        Req {
+            script: "<?php header('X-H: 1'); echo 'hidden';",
+            method: "HEAD",
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.body, "");
+    assert_eq!(r.status, Some((200, None, 0)));
+    assert!(r
+        .headers_out
+        .contains(&("X-H".to_string(), "1".to_string())));
+}
+
+#[test]
+fn session_upload_progress_is_tracked() {
+    let save = scratch().join("sessions");
+    std::fs::create_dir_all(&save).unwrap();
+    let body = b"--B\r\nContent-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\nt\r\n--B\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nDATA\r\n--B--\r\n";
+    let len = body.len().to_string();
+    let len_header: &'static str = Box::leak(len.into_boxed_str());
+    let save_path = save.display().to_string();
+    let r = run(
+        "progress.php",
+        Req {
+            script: "<?php session_id('upload1'); session_start();\n$p = $_SESSION['upload_progress_t'];\nvar_dump($p['done'], $p['bytes_processed'], $p['files'][0]['name'], $p['files'][0]['field_name'], $p['files'][0]['done'], $_POST['PHP_SESSION_UPLOAD_PROGRESS'], $_FILES['f']['error']);",
+            method: "POST",
+            headers: vec![
+                ("Content-Type", "multipart/form-data; boundary=B"),
+                ("Content-Length", len_header),
+                ("Cookie", "PHPSESSID=upload1"),
+            ],
+            body: body.to_vec(),
+            ini: ini(&[
+                ("session.save_path", save_path.as_str()),
+                ("session.use_strict_mode", "0"),
+                ("session.upload_progress.cleanup", "0"),
+                ("session.upload_progress.freq", "0"),
+                ("session.upload_progress.min_freq", "0"),
+            ]),
+            ..Req::default()
+        },
+    );
+    assert_eq!(
+        r.body,
+        format!(
+            "bool(true)\nint({})\nstring(5) \"a.txt\"\nstring(1) \"f\"\nbool(true)\nstring(1) \"t\"\nint(0)\n",
+            body.len()
+        )
     );
 }
 

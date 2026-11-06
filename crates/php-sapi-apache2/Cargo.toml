@@ -28,6 +28,7 @@ php-ext-filter = { path = "../php-ext-filter" }
 php-ext-pdo = { path = "../php-ext-pdo" }
 php-ext-date = { path = "../php-ext-date" }
 php-ext-streams = { path = "../php-ext-streams" }
+php-ext-session = { path = "../php-ext-session" }
 libc = "0.2"
 
 [build-dependencies]
