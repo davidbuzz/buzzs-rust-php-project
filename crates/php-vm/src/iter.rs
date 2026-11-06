@@ -319,6 +319,26 @@ impl Vm {
                 }
             }
         }
+        // A class with property hooks has `get_iterator` set
+        // (`zend_hooked_object_get_iterator`): its properties are walked by
+        // a `zend_object_iterator` holding an object handle of its own, the
+        // hooks called as each property is fetched.
+        if object::class_of(&o).props.iter().any(|p| p.hooks.is_some()) {
+            let handle = object::HandleGuard::reserve();
+            let keys = self.visible_props(&o)?;
+            let it = HookedPropsIter {
+                obj: o,
+                keys,
+                pos: 0,
+                by_ref,
+                item: None,
+            };
+            return Ok(ForeachIter::Native(
+                crate::vm::NativeIter(Box::new(it)),
+                false,
+                handle,
+            ));
+        }
         // A table shared with a ghost's initialization snapshot is
         // separated first (`GC_REFCOUNT(properties) > 1`: `zend_array_dup`),
         // which freezes the declared properties' values in it; a table of
@@ -476,59 +496,8 @@ impl Vm {
                     *pos = 0;
                     *target = current;
                 }
-                if *pos >= keys.len() {
-                    for (key, name, private_of) in self.visible_props(&obj)? {
-                        if !keys.iter().any(|(_, old_name, old_private)| {
-                            *old_name == name && *old_private == private_of
-                        }) {
-                            keys.push((key, name, private_of));
-                        }
-                    }
-                }
-                let mut found = None;
-                while *pos < keys.len() {
-                    let (k, name, private_of) = keys[*pos].clone();
-                    *pos += 1;
-                    // Skip properties removed since the reset.
-                    let exists = match &private_of {
-                        Some(_) => true,
-                        None => Self::has_property_raw(&obj, &name),
-                    };
-                    if exists {
-                        found = Some((k, name, private_of));
-                        break;
-                    }
-                }
-                match found {
-                    Some((k, name, _)) => {
-                        let v = if by_ref {
-                            self.foreach_readonly_ref_check(&obj, &name)?;
-                            let cls = object::class_of(&obj);
-                            if let Some(pi) = cls.prop_map.get(&name) {
-                                if pi
-                                    .hooks
-                                    .as_ref()
-                                    .and_then(|h| h.get.as_ref())
-                                    .is_some_and(|g| g.flags & flags::RETURN_REF == 0)
-                                {
-                                    return Err(self.make_throw(
-                                        "Error",
-                                        &format!(
-                                            "Cannot create reference to property {}::${name}",
-                                            object::display_name(&cls.name)
-                                        ),
-                                    ));
-                                }
-                            }
-                            match nul_dynamic_prop_ref(&obj, &name) {
-                                Some(r) => Value::Reference(r),
-                                None => Value::Reference(self.property_ref(&obj, &name)?),
-                            }
-                        } else if name.as_bytes().first() == Some(&0) {
-                            nul_dynamic_prop(&obj, &name)
-                        } else {
-                            self.read_property(&obj, &name, crate::opcode::FetchMode::Is)?
-                        };
+                match self.fetch_next_prop(&obj, keys, pos, by_ref)? {
+                    Some((k, v)) => {
                         self.set_tmp(val, v);
                         if let Some(kt) = key {
                             self.set_tmp(kt, k);
@@ -599,6 +568,75 @@ impl Vm {
             }
         }
         res
+    }
+
+    /// `zend_fe_fetch_object_helper` over the properties of `obj`: the next
+    /// property of `keys` from `pos` on that still exists (properties added
+    /// since the reset are picked up at the end), with its value: a
+    /// reference to it `by_ref`, else the value read as `FE_FETCH_R` does.
+    /// `None` at the end.
+    fn fetch_next_prop(
+        &mut self,
+        obj: &Obj,
+        keys: &mut Vec<(Value, ZStr, Option<ZStr>)>,
+        pos: &mut usize,
+        by_ref: bool,
+    ) -> VmResult<Option<(Value, Value)>> {
+        if *pos >= keys.len() {
+            for (key, name, private_of) in self.visible_props(obj)? {
+                if !keys.iter().any(|(_, old_name, old_private)| {
+                    *old_name == name && *old_private == private_of
+                }) {
+                    keys.push((key, name, private_of));
+                }
+            }
+        }
+        let mut found = None;
+        while *pos < keys.len() {
+            let (k, name, private_of) = keys[*pos].clone();
+            *pos += 1;
+            // Skip properties removed since the reset.
+            let exists = match &private_of {
+                Some(_) => true,
+                None => Self::has_property_raw(obj, &name),
+            };
+            if exists {
+                found = Some((k, name));
+                break;
+            }
+        }
+        let Some((k, name)) = found else {
+            return Ok(None);
+        };
+        let v = if by_ref {
+            self.foreach_readonly_ref_check(obj, &name)?;
+            let cls = object::class_of(obj);
+            if let Some(pi) = cls.prop_map.get(&name) {
+                if pi
+                    .hooks
+                    .as_ref()
+                    .and_then(|h| h.get.as_ref())
+                    .is_some_and(|g| g.flags & flags::RETURN_REF == 0)
+                {
+                    return Err(self.make_throw(
+                        "Error",
+                        &format!(
+                            "Cannot create reference to property {}::${name}",
+                            object::display_name(&cls.name)
+                        ),
+                    ));
+                }
+            }
+            match nul_dynamic_prop_ref(obj, &name) {
+                Some(r) => Value::Reference(r),
+                None => Value::Reference(self.property_ref(obj, &name)?),
+            }
+        } else if name.as_bytes().first() == Some(&0) {
+            nul_dynamic_prop(obj, &name)
+        } else {
+            self.read_property(obj, &name, crate::opcode::FetchMode::Is)?
+        };
+        Ok(Some((k, v)))
     }
 
     fn has_property_raw(o: &Obj, name: &ZStr) -> bool {
@@ -850,6 +888,53 @@ impl<T> UnpackIter<T> {
         };
         drop(handle);
         r
+    }
+}
+
+/// `zend_hooked_object_get_iterator`: the `zend_object_iterator` a
+/// `foreach` over an object of a class with property hooks goes through
+/// (the object's own handle lives in the `ForeachIter::Native` variant).
+/// `valid` fetches the next property ([`Vm::fetch_next_prop`], calling its
+/// hook) and keeps it for `current` / `key` until `next`.
+struct HookedPropsIter {
+    obj: Obj,
+    keys: Vec<(Value, ZStr, Option<ZStr>)>,
+    pos: usize,
+    by_ref: bool,
+    /// The (key, value) pair `valid` fetched, until `next`.
+    item: Option<(Value, Value)>,
+}
+
+impl crate::ext::NativeIterator for HookedPropsIter {
+    fn rewind(&mut self, _vm: &mut Vm) -> VmResult<()> {
+        Ok(())
+    }
+
+    fn valid(&mut self, vm: &mut Vm) -> VmResult<bool> {
+        if self.item.is_none() {
+            self.item =
+                vm.fetch_next_prop(&self.obj, &mut self.keys, &mut self.pos, self.by_ref)?;
+        }
+        Ok(self.item.is_some())
+    }
+
+    fn current(&mut self, _vm: &mut Vm) -> VmResult<Value> {
+        Ok(self
+            .item
+            .as_ref()
+            .map_or(Value::Null, |(_, value)| value.clone()))
+    }
+
+    fn key(&mut self, _vm: &mut Vm) -> VmResult<Value> {
+        Ok(self
+            .item
+            .as_ref()
+            .map_or(Value::Null, |(key, _)| key.clone()))
+    }
+
+    fn next(&mut self, _vm: &mut Vm) -> VmResult<()> {
+        self.item = None;
+        Ok(())
     }
 }
 
