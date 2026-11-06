@@ -1409,37 +1409,18 @@ fn assert_failed(vm: &mut Vm, msg: Option<ZStr>) -> VmResult<Value> {
     }
 }
 
-/// `zend_exception_error(ex, E_WARNING)`: reports `e` as an
-/// "Uncaught ..." warning. An exception thrown by its `__toString()` is
-/// reported and stays pending (returned as the throw).
+/// `zend_exception_error(ex, E_WARNING)`: reports `e` as an "Uncaught
+/// ..." warning, straight to the error callback like every report of
+/// `zend_exception_error` (`zend_error_va`): a user error handler never
+/// sees it. An exception its `__toString()` threw stays pending
+/// (`EG(exception)`, so `assert()` skips `zend_throw_unwind_exit()`) and is
+/// returned as the throw.
 #[cold]
 fn uncaught_warning(vm: &mut Vm, e: &php_runtime::Obj) -> VmResult<()> {
-    let s = match vm.call_method_name(e, "__toString", Vec::new()) {
-        Ok(v) => v.deref().as_str().cloned().unwrap_or_default(),
-        Err(Throw::Exception(inner)) => {
-            let file = vm
-                .exc_prop(&inner, "file")
-                .as_str()
-                .cloned()
-                .unwrap_or_default();
-            let line =
-                u32::try_from(vm.exc_prop(&inner, "line").as_int().unwrap_or(0)).unwrap_or(0);
-            let msg = format!(
-                "Uncaught {} in exception handling during call to {}::__toString()",
-                object::class_of(&inner).name,
-                object::class_of(e).name
-            );
-            vm.error_at(crate::errors::level::WARNING, &msg, &file, line)?;
-            return Err(Throw::Exception(inner));
-        }
-        Err(t) => return Err(t),
-    };
-    let file = vm.exc_prop(e, "file").as_str().cloned().unwrap_or_default();
-    let line = u32::try_from(vm.exc_prop(e, "line").as_int().unwrap_or(0)).unwrap_or(0);
-    let mut msg = b"Uncaught ".to_vec();
-    msg.extend_from_slice(s.as_bytes());
-    msg.extend_from_slice(b"\n  thrown");
-    vm.error_at_bytes(crate::errors::level::WARNING, &msg, &file, line)
+    match vm.exception_error(e, crate::errors::level::WARNING) {
+        Some(inner) => Err(Throw::Exception(inner)),
+        None => Ok(()),
+    }
 }
 
 fn class_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
