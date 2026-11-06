@@ -327,6 +327,39 @@ fn link_slot(table_size: u32, idx: u32) -> usize {
     table_size as usize * 2 + idx as usize
 }
 
+/// `_zend_hash_get_valid_pos` over one storage: the first live slot at or
+/// after `pos`, the slot count (`nNumUsed`) when there is none, or `pos`
+/// itself when it lies past the end.
+#[inline]
+fn first_live<T>(slots: &[T], pos: u32, live: impl Fn(&T) -> bool) -> u32 {
+    let start = pos as usize;
+    match slots.get(start..) {
+        Some(rest) => match rest.iter().position(live) {
+            Some(i) => to_u32(start + i),
+            None => to_u32(slots.len()),
+        },
+        None => pos,
+    }
+}
+
+/// The shared key of packed position `pos` through an iterator's cached
+/// chunk (`keys`, whose first key is position `keys_start`): one chunk
+/// lookup per chunk of positions, then a slice index.
+#[inline]
+fn packed_key(keys: &mut &'static [ArrayKey], keys_start: &mut u32, pos: u32) -> &'static ArrayKey {
+    let cached: &'static [ArrayKey] = *keys;
+    if let Some(k) = cached.get(pos.wrapping_sub(*keys_start) as usize) {
+        return k;
+    }
+    let (chunk, start) = int_keys::chunk(pos);
+    *keys = chunk;
+    *keys_start = start;
+    match chunk.get(pos.wrapping_sub(start) as usize) {
+        Some(k) => k,
+        None => int_keys::get(pos),
+    }
+}
+
 /// The elements of a table's storage in order, by value.
 fn into_entries(store: Store) -> impl Iterator<Item = (ArrayKey, Value)> {
     let (packed, buckets) = match store {
@@ -366,10 +399,14 @@ fn into_entries(store: Store) -> impl Iterator<Item = (ArrayKey, Value)> {
 /// table never overshoots the arrays that drove it by a factor. A script
 /// that iterates a packed array of `n` elements therefore pins about `16 n`
 /// bytes that `memory_get_usage()` does not report; the arrays themselves
-/// take `24 n` counted bytes, so the hidden part stays below the visible one
-/// and within `memory_limit`'s order of magnitude. VM code that only needs
-/// the key of a position should use [`HashTable::key_at`], which never
-/// touches this table.
+/// take at least `16 n` counted bytes, so the hidden part never exceeds the
+/// visible one and stays within `memory_limit`'s order of magnitude. VM
+/// code that only needs the key of a position should use
+/// [`HashTable::key_at`] or [`HashTable::key_value_at`] (and
+/// [`HashTable::fe_fetch`] to step `foreach`), which never touch this
+/// table. Iterators cache the chunk they are in (`chunk`), so walking a
+/// packed table costs one chunk lookup per chunk of positions, not one per
+/// element.
 mod int_keys {
     use super::{to_u32, ArrayKey};
     use std::alloc::{handle_alloc_error, GlobalAlloc, Layout, System};
@@ -436,6 +473,25 @@ mod int_keys {
         // mutable state, so lending them to any thread for the rest of the
         // process is sound.
         unsafe { &*base.add(off) }
+    }
+
+    /// The chunk holding `pos`, as the slice of its keys and the position
+    /// of its first key: iterators fetch it once per chunk and then index
+    /// the slice instead of locating every position.
+    #[inline]
+    pub(super) fn chunk(pos: u32) -> (&'static [ArrayKey], u32) {
+        let (c, _) = locate(pos);
+        let mut base = CHUNK[c].load(Ordering::Acquire);
+        if base.is_null() {
+            base = fill(c);
+        }
+        let (start, len) = extent(c);
+        // SAFETY: as in `get`: `base` is the published chunk `c`, whose
+        // `len` keys were all initialised before publication (`fill`) and
+        // are never written or freed afterwards, so a shared slice over them
+        // stays valid for the rest of the process.
+        let keys: &'static [ArrayKey] = unsafe { std::slice::from_raw_parts(base, len) };
+        (keys, to_u32(start))
     }
 
     /// The bytes the table has allocated so far (tests and diagnostics).
@@ -1305,11 +1361,15 @@ impl HashTable {
                 slots: empty.iter(),
                 front: 0,
                 back: 0,
+                keys: &[],
+                keys_start: 0,
             },
             Store::Packed(v) => IterInner::Packed {
                 slots: v.iter(),
                 front: 0,
                 back: to_u32(v.len()),
+                keys: &[],
+                keys_start: 0,
             },
             Store::Hash(d) => IterInner::Hash(d.buckets.iter()),
         };
@@ -1326,12 +1386,16 @@ impl HashTable {
             Store::Packed(v) => (v.as_mut_slice(), Default::default()),
             Store::Hash(d) => (Default::default(), d.buckets.as_mut_slice()),
         };
+        // The chunk of shared keys last used, as in `Iter`.
+        let mut keys: &'static [ArrayKey] = &[];
+        let mut keys_start: u32 = 0;
         packed
             .iter_mut()
             .enumerate()
-            .filter_map(|(i, slot)| {
-                let key: &ArrayKey = int_keys::get(to_u32(i));
-                slot.as_mut().map(|v| (key, v))
+            .filter_map(move |(i, slot)| {
+                let v = slot.as_mut()?;
+                let key: &ArrayKey = packed_key(&mut keys, &mut keys_start, to_u32(i));
+                Some((key, v))
             })
             .chain(buckets.iter_mut().filter_map(|b| {
                 let Bucket { val, key } = b;
@@ -1345,29 +1409,60 @@ impl HashTable {
         self.iter().map(|(k, _)| k)
     }
 
-    /// Iterates values in order.
-    pub fn values(&self) -> impl Iterator<Item = &Value> {
-        let (packed, buckets): (&[Option<Value>], &[Bucket]) = match &self.store {
-            Store::Uninit => (Default::default(), Default::default()),
-            Store::Packed(v) => (v.as_slice(), Default::default()),
-            Store::Hash(d) => (Default::default(), d.buckets.as_slice()),
+    /// Iterates values in order (no keys, so a packed table never touches
+    /// the shared key table).
+    #[must_use]
+    pub fn values(&self) -> Values<'_> {
+        let empty: &[Option<Value>] = &[];
+        let inner = match &self.store {
+            Store::Uninit => ValuesInner::Packed(empty.iter()),
+            Store::Packed(v) => ValuesInner::Packed(v.iter()),
+            Store::Hash(d) => ValuesInner::Hash(d.buckets.iter()),
         };
-        packed
-            .iter()
-            .flatten()
-            .chain(buckets.iter().filter_map(|b| b.val.as_ref()))
+        Values {
+            inner,
+            remaining: self.num_elements as usize,
+        }
     }
 
     /// First valid position at or after `pos` (`_zend_hash_get_valid_pos`);
-    /// returns [`HashTable::used`] when there is none.
+    /// returns [`HashTable::used`] when there is none, and `pos` itself
+    /// when it lies past the end.
+    #[inline]
     #[must_use]
     pub fn valid_pos(&self, pos: u32) -> u32 {
-        let used = self.used() as usize;
-        let mut p = pos as usize;
-        while p < used && !self.is_occupied(p) {
-            p += 1;
+        match &self.store {
+            Store::Uninit => pos,
+            Store::Packed(v) => first_live(v, pos, Option::is_some),
+            Store::Hash(d) => first_live(&d.buckets, pos, |b| b.val.is_some()),
         }
-        to_u32(p.max(pos as usize))
+    }
+
+    /// One `ZEND_FE_FETCH_R` step over the table: the first element at or
+    /// after `pos`, as its position and value, or `None` past the last one.
+    /// The caller stores `position + 1` as the next `pos`, and takes the key
+    /// from [`HashTable::key_value_at`] when the loop has a key variable:
+    /// neither touches the shared packed-key table [`HashTable::at`] lends
+    /// keys from (php-src's packed `FE_FETCH_R` yields the position as the
+    /// key).
+    #[inline]
+    #[must_use]
+    pub fn fe_fetch(&self, pos: u32) -> Option<(u32, &Value)> {
+        let start = pos as usize;
+        match &self.store {
+            Store::Uninit => None,
+            Store::Packed(v) => v
+                .get(start..)?
+                .iter()
+                .enumerate()
+                .find_map(|(i, s)| s.as_ref().map(|x| (to_u32(start + i), x))),
+            Store::Hash(d) => d
+                .buckets
+                .get(start..)?
+                .iter()
+                .enumerate()
+                .find_map(|(i, b)| b.val.as_ref().map(|x| (to_u32(start + i), x))),
+        }
     }
 
     /// The entry at a position (holes and out-of-range give `None`).
@@ -1402,6 +1497,25 @@ impl HashTable {
             Store::Hash(d) => {
                 let b = d.buckets.get(pos as usize)?;
                 b.val.as_ref().map(|_| b.key.clone())
+            }
+        }
+    }
+
+    /// The key at a position as a PHP value (`int` or `string`; holes and
+    /// out-of-range give `None`), cloned once; like [`HashTable::key_at`]
+    /// it never touches the shared packed-key table.
+    #[inline]
+    #[must_use]
+    pub fn key_value_at(&self, pos: u32) -> Option<Value> {
+        match &self.store {
+            Store::Uninit => None,
+            Store::Packed(v) => v
+                .get(pos as usize)?
+                .as_ref()
+                .map(|_| Value::Int(i64::from(pos))),
+            Store::Hash(d) => {
+                let b = d.buckets.get(pos as usize)?;
+                b.val.as_ref().map(|_| b.key.to_value())
             }
         }
     }
@@ -2345,11 +2459,14 @@ pub struct Iter<'a> {
 /// The storage walked by an [`Iter`].
 enum IterInner<'a> {
     /// Packed values; `front`/`back` are the positions of the next value
-    /// from either end (the keys).
+    /// from either end (the keys), `keys`/`keys_start` the chunk of shared
+    /// keys last used and the position of its first key.
     Packed {
         slots: std::slice::Iter<'a, Option<Value>>,
         front: u32,
         back: u32,
+        keys: &'static [ArrayKey],
+        keys_start: u32,
     },
     /// Hash buckets.
     Hash(std::slice::Iter<'a, Bucket>),
@@ -2369,12 +2486,18 @@ impl<'a> Iterator for Iter<'a> {
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let item: (&'a ArrayKey, &'a Value) = match &mut self.inner {
-            IterInner::Packed { slots, front, .. } => loop {
+            IterInner::Packed {
+                slots,
+                front,
+                keys,
+                keys_start,
+                ..
+            } => loop {
                 let slot = slots.next()?;
                 let pos = *front;
                 *front += 1;
                 if let Some(v) = slot {
-                    break (int_keys::get(pos), v);
+                    break (packed_key(keys, keys_start, pos), v);
                 }
             },
             IterInner::Hash(buckets) => loop {
@@ -2396,11 +2519,17 @@ impl<'a> Iterator for Iter<'a> {
 impl DoubleEndedIterator for Iter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         let item: Self::Item = match &mut self.inner {
-            IterInner::Packed { slots, back, .. } => loop {
+            IterInner::Packed {
+                slots,
+                back,
+                keys,
+                keys_start,
+                ..
+            } => loop {
                 let slot = slots.next_back()?;
                 *back -= 1;
                 if let Some(v) = slot {
-                    break (int_keys::get(*back), v);
+                    break (packed_key(keys, keys_start, *back), v);
                 }
             },
             IterInner::Hash(buckets) => loop {
@@ -2416,6 +2545,75 @@ impl DoubleEndedIterator for Iter<'_> {
 }
 
 impl ExactSizeIterator for Iter<'_> {}
+
+/// Iterator over the values of a [`HashTable`] ([`HashTable::values`]).
+pub struct Values<'a> {
+    inner: ValuesInner<'a>,
+    remaining: usize,
+}
+
+/// The storage walked by a [`Values`].
+enum ValuesInner<'a> {
+    /// Packed values (`None` is a hole).
+    Packed(std::slice::Iter<'a, Option<Value>>),
+    /// Hash buckets.
+    Hash(std::slice::Iter<'a, Bucket>),
+}
+
+impl fmt::Debug for Values<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Values")
+            .field("remaining", &self.remaining)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> Iterator for Values<'a> {
+    type Item = &'a Value;
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a Value> {
+        let v: &'a Value = match &mut self.inner {
+            ValuesInner::Packed(slots) => loop {
+                if let Some(v) = slots.next()? {
+                    break v;
+                }
+            },
+            ValuesInner::Hash(buckets) => loop {
+                if let Some(v) = &buckets.next()?.val {
+                    break v;
+                }
+            },
+        };
+        self.remaining = self.remaining.saturating_sub(1);
+        Some(v)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl DoubleEndedIterator for Values<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let v: Self::Item = match &mut self.inner {
+            ValuesInner::Packed(slots) => loop {
+                if let Some(v) = slots.next_back()? {
+                    break v;
+                }
+            },
+            ValuesInner::Hash(buckets) => loop {
+                if let Some(v) = &buckets.next_back()?.val {
+                    break v;
+                }
+            },
+        };
+        self.remaining = self.remaining.saturating_sub(1);
+        Some(v)
+    }
+}
+
+impl ExactSizeIterator for Values<'_> {}
 
 impl<'a> IntoIterator for &'a HashTable {
     type Item = (&'a ArrayKey, &'a Value);
@@ -2757,10 +2955,124 @@ mod tests {
             let b: *const ArrayKey = int_keys::get(pos + 1);
             assert!(std::ptr::eq(a.wrapping_add(1), b));
         }
+        // A chunk is the contiguous run of keys holding its position.
+        for pos in [0u32, 255, 256, 600, 32_768, 65_535, 65_536, 131_071, top] {
+            let (keys, start) = int_keys::chunk(pos);
+            assert!(start <= pos);
+            let k = keys.get((pos - start) as usize);
+            assert!(k.is_some_and(|k| std::ptr::eq(k, int_keys::get(pos))));
+            assert_eq!(keys.first(), Some(&ArrayKey::Int(i64::from(start))));
+        }
         // 16 bytes per position plus at most one 1 MiB chunk of slack,
         // never a doubling overshoot (which would be 32 MiB here).
         let bound = (top as usize + 2 * (1 << 16)) * std::mem::size_of::<ArrayKey>();
         assert!(int_keys::allocated_bytes() <= bound);
+    }
+
+    #[test]
+    fn packed_iteration_caches_key_chunks() {
+        // 70 000 positions span the doubling chunks and two fixed-size ones.
+        let n: i64 = 70_000;
+        let mut t = HashTable::new();
+        for i in 0..n {
+            t.push(Value::Int(i)).unwrap();
+        }
+        for i in (0..n).step_by(7) {
+            t.remove(&ArrayKey::Int(i));
+        }
+        let want: Vec<i64> = (0..n).filter(|i| i % 7 != 0).collect();
+        let key_of = |k: &ArrayKey| match k {
+            ArrayKey::Int(i) => *i,
+            ArrayKey::Str(_) => -1,
+        };
+        let fwd: Vec<i64> = t.iter().map(|(k, _)| key_of(k)).collect();
+        assert_eq!(fwd, want);
+        let mut back: Vec<i64> = t.iter().rev().map(|(k, _)| key_of(k)).collect();
+        back.reverse();
+        assert_eq!(back, want);
+        assert!(t.iter().all(|(k, v)| Some(key_of(k)) == v.as_int()));
+        // Alternating ends share one cached chunk without mixing keys up.
+        let mut it = t.iter();
+        let (mut lo, mut hi) = (Vec::new(), Vec::new());
+        for step in 0..want.len() {
+            if step % 2 == 0 {
+                if let Some((k, _)) = it.next() {
+                    lo.push(key_of(k));
+                }
+            } else if let Some((k, _)) = it.next_back() {
+                hi.push(key_of(k));
+            }
+        }
+        assert!(it.next().is_none());
+        hi.reverse();
+        lo.extend(hi);
+        assert_eq!(lo, want);
+        // iter_mut() and keys() lend the same keys; values() is exact.
+        let via_mut: Vec<i64> = t.iter_mut().map(|(k, _)| key_of(k)).collect();
+        assert_eq!(via_mut, want);
+        assert_eq!(t.keys().map(key_of).collect::<Vec<_>>(), want);
+        assert_eq!(t.values().len(), want.len());
+        assert_eq!(t.values().size_hint(), (want.len(), Some(want.len())));
+        assert_eq!(
+            t.values().next_back().and_then(Value::as_int),
+            want.last().copied()
+        );
+        assert_eq!(
+            t.values().filter_map(Value::as_int).collect::<Vec<_>>(),
+            want
+        );
+    }
+
+    #[test]
+    fn positional_reads_skip_holes_without_shared_keys() {
+        let mut t = HashTable::new();
+        assert_eq!(t.valid_pos(0), 0);
+        assert!(t.fe_fetch(0).is_none());
+        for i in 0..6 {
+            t.push(Value::Int(i * 10)).unwrap();
+        }
+        t.remove(&ArrayKey::Int(1));
+        t.remove(&ArrayKey::Int(2));
+        // Deleting the last element trims the trailing hole.
+        t.remove(&ArrayKey::Int(5));
+        assert_eq!(t.used(), 5);
+        assert_eq!(t.valid_pos(0), 0);
+        assert_eq!(t.valid_pos(1), 3);
+        assert_eq!(t.valid_pos(5), 5);
+        assert_eq!(t.valid_pos(9), 9);
+        let mut seen = Vec::new();
+        let mut pos = 0;
+        while let Some((p, v)) = t.fe_fetch(pos) {
+            let k = t.key_value_at(p);
+            seen.push((p, k.as_ref().and_then(Value::as_int), v.as_int()));
+            pos = p + 1;
+        }
+        assert_eq!(
+            seen,
+            [
+                (0, Some(0), Some(0)),
+                (3, Some(3), Some(30)),
+                (4, Some(4), Some(40))
+            ]
+        );
+        assert!(t.key_value_at(1).is_none());
+        assert!(t.key_value_at(7).is_none());
+        assert!(t.fe_fetch(5).is_none());
+        assert!(t.fe_fetch(9).is_none());
+        // A hash: the conversion compacts, string keys come back as strings.
+        t.insert("s", Value::Int(7));
+        assert!(!t.is_packed());
+        assert_eq!(
+            t.fe_fetch(1).map(|(p, v)| (p, v.as_int())),
+            Some((1, Some(30)))
+        );
+        assert!(matches!(t.key_value_at(3), Some(Value::Str(s)) if s.as_bytes() == b"s"));
+        t.remove(&ArrayKey::Int(3));
+        assert_eq!(t.valid_pos(1), 2);
+        assert_eq!(
+            t.fe_fetch(1).map(|(p, v)| (p, v.as_int())),
+            Some((2, Some(40)))
+        );
     }
 
     #[test]
