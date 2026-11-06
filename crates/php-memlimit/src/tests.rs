@@ -882,6 +882,96 @@ fn heap_ownership_is_exclusive_until_released() {
 }
 
 #[test]
+fn explicit_binding_survives_request_end() {
+    // php-cli binds before the request: the teardown that follows
+    // `request_end` (TLS destructors, the Vm's drop) stays on the owner
+    // path instead of pushing every block onto the remote lists.
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    a.request_start(Some(8 * M)).expect("limit");
+    assert!(a.is_bound_to_current_thread());
+    let b = alloc(&a, 24);
+    assert!(is_heap_block(b.p));
+    a.request_end();
+    assert!(a.is_bound_to_current_thread(), "bound explicitly: kept");
+    let c = alloc(&a, 24);
+    assert!(
+        is_heap_block(c.p),
+        "teardown allocations still use the heap"
+    );
+    drop(b);
+    drop(c);
+    a.unbind_current_thread();
+    assert!(!a.is_bound_to_current_thread());
+    // A thread bound by `request_start` itself (a php -S request thread) is
+    // unbound by `request_end`, also after a second `request_start` on it.
+    a.request_start(None).expect("unlimited");
+    assert!(a.is_bound_to_current_thread());
+    a.request_start(None).expect("unlimited");
+    a.request_end();
+    assert!(!a.is_bound_to_current_thread());
+    // Binding explicitly during a request pins the heap too.
+    a.request_start(None).expect("unlimited");
+    assert!(a.bind_to_current_thread());
+    a.request_end();
+    assert!(a.is_bound_to_current_thread());
+    a.unbind_current_thread();
+    assert!(!a.is_bound_to_current_thread());
+    // Another thread's `request_end` never touches the owner's binding.
+    assert!(a.bind_to_current_thread());
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            assert!(a.request_start(None).is_ok(), "runs on the inner allocator");
+            assert!(!a.is_bound_to_current_thread());
+            a.request_end();
+        });
+    });
+    assert!(a.is_bound_to_current_thread());
+    a.unbind_current_thread();
+    assert_eq!(a.stats().current, 0);
+}
+
+#[test]
+fn unbinding_while_observed_frees_the_heap() {
+    // Observing parks the owner's ownership (`observe(true)` takes it, so
+    // the observed thread's frees are reported on the non-owner path) and
+    // gives it back when observing stops. A request-bound thread whose
+    // request ends in between must not get the heap back.
+    let a = CountingAlloc::new(System);
+    assert!(a.set_observer(record_event));
+    a.request_start(None).expect("unlimited");
+    assert!(a.is_bound_to_current_thread());
+    a.observe(true);
+    assert!(a.is_observing());
+    assert!(!a.is_bound_to_current_thread());
+    a.request_end();
+    a.observe(false);
+    assert!(
+        !a.is_bound_to_current_thread(),
+        "the give-back was cancelled: the heap is free for the next request"
+    );
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            assert!(a.bind_to_current_thread(), "free");
+            a.unbind_current_thread();
+        });
+    });
+    // An explicitly bound thread keeps the heap across an observed request.
+    assert!(a.bind_to_current_thread());
+    a.request_start(None).expect("unlimited");
+    a.observe(true);
+    a.request_end();
+    a.observe(false);
+    assert!(
+        a.is_bound_to_current_thread(),
+        "bound explicitly: given back"
+    );
+    a.unbind_current_thread();
+    assert!(!a.is_bound_to_current_thread());
+    let _ = take_events();
+}
+
+#[test]
 fn remote_frees_come_back_to_the_owner() {
     let a = CountingAlloc::new(System);
     assert!(a.bind_to_current_thread());
@@ -1042,6 +1132,82 @@ fn shrinking_realloc_moves_to_the_smaller_bin() {
 }
 
 #[test]
+fn owner_fast_path_accounts_like_the_general_one() {
+    // Small heap blocks of the owner take the call-free fast path; its
+    // figures must be the ones the general path produces.
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    let x = alloc(&a, 24);
+    let y = alloc(&a, 1000);
+    assert!(is_heap_block(x.p) && is_heap_block(y.p));
+    let s = a.stats();
+    assert_eq!((s.current, s.peak, s.allocs, s.frees), (1024, 1024, 2, 0));
+    let y_addr = y.p.addr();
+    drop(y);
+    let s = a.stats();
+    assert_eq!((s.current, s.peak, s.frees), (24, 1024, 1));
+    let z = alloc(&a, 500);
+    assert_eq!(a.stats().peak, 1024, "below the peak: unchanged");
+    let w = alloc(&a, 1000);
+    assert_eq!(w.p.addr(), y_addr, "the freed block is reused");
+    assert_eq!(a.stats().current, 1524);
+    assert_eq!(a.stats().peak, 1524, "a new high-water mark");
+    // A large block (the inner allocator, through the general path) joins
+    // the same counters.
+    let big = alloc(&a, MAX_SMALL_SIZE + 1);
+    assert!(!is_heap_block(big.p));
+    assert_eq!(a.stats().current, 1524 + MAX_SMALL_SIZE + 1);
+    assert_eq!(a.stats().peak, 1524 + MAX_SMALL_SIZE + 1);
+    drop(big);
+    drop(w);
+    drop(z);
+    drop(x);
+    let s = a.stats();
+    assert_eq!((s.current, s.allocs, s.frees), (0, 5, 5));
+    a.unbind_current_thread();
+}
+
+#[test]
+fn fast_path_defers_to_the_limit_check() {
+    // A small heap block that would cross the soft threshold leaves the
+    // fast path for the general one, which records the violation and
+    // grants the block all the same.
+    let a = CountingAlloc::new(System);
+    a.request_start(Some(4 * M)).expect("limit");
+    assert!(a.is_bound_to_current_thread());
+    // Exact bytes (tracked mode), so the threshold is the limit itself.
+    a.set_tracked(true);
+    let mut fill = Vec::new();
+    while a.usage() + 3000 <= 4 * M {
+        fill.push(alloc(&a, 3000));
+    }
+    assert!(fill.iter().all(|b| is_heap_block(b.p)));
+    assert_eq!(a.check(), None);
+    let room = 4 * M - a.usage();
+    assert!(room < 3000);
+    let exact = (room > 0).then(|| alloc(&a, room));
+    assert_eq!(a.usage(), 4 * M);
+    assert_eq!(a.check(), None, "exactly at the limit is fine");
+    let over = alloc(&a, 8);
+    assert!(!over.p.is_null() && is_heap_block(over.p), "granted");
+    assert_eq!(
+        a.check(),
+        Some(OverLimit {
+            limit: 4 * M,
+            tried: 8
+        })
+    );
+    assert_eq!(a.peak(), 4 * M + 8);
+    a.clear();
+    drop(over);
+    drop(exact);
+    drop(fill);
+    assert_eq!(a.stats().current, 0);
+    a.request_end();
+    assert!(!a.is_bound_to_current_thread());
+}
+
+#[test]
 fn observing_takes_the_owner_off_the_heap_and_gives_it_back() {
     let a = CountingAlloc::new(System);
     assert!(a.bind_to_current_thread());
@@ -1152,4 +1318,149 @@ fn pending_hook_runs_once_per_violation() {
     a.clear();
     drop(over);
     a.request_end();
+}
+
+// ---- heap collection (`zend_mm_gc`) ----------------------------------------
+
+use crate::heap::{BIN_PAGES, USABLE_PAGES};
+use crate::limit::PAGE_SIZE;
+
+/// The 3 KiB bin's geometry: `(blocks per run, pages per run, runs that
+/// fill the first chunk and start a second one)`.
+fn three_k_runs() -> (usize, usize, usize) {
+    let bin = small_size_to_bin(3072);
+    let pages = usize::from(BIN_PAGES[bin]);
+    (
+        usize::from(BIN_ELEMENTS[bin]),
+        pages,
+        USABLE_PAGES / pages + 1,
+    )
+}
+
+#[test]
+fn gc_mem_caches_gives_empty_runs_and_chunks_back() {
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    let (per_run, pages, runs) = three_k_runs();
+    let blocks: Vec<Block<'_>> = (0..runs * per_run).map(|_| alloc(&a, 3072)).collect();
+    assert!(blocks.iter().all(|b| is_heap_block(b.p)));
+    assert_eq!(a.heap_chunks(), 2);
+    let live = a.stats();
+    assert_eq!(a.gc_mem_caches(), 0, "every block is live");
+    assert_eq!(a.stats(), live, "collecting changes no figure");
+    drop(blocks);
+    let (usage, peak) = (a.usage(), a.peak());
+    assert_eq!(a.gc_mem_caches(), runs * pages * PAGE_SIZE);
+    assert_eq!(a.heap_chunks(), 1, "the second chunk went back");
+    assert_eq!((a.usage(), a.peak()), (usage, peak));
+    assert_eq!(a.gc_mem_caches(), 0, "nothing left to give back");
+    // The heap serves blocks again, from the first chunk's pages.
+    let again = alloc(&a, 3072);
+    assert!(is_heap_block(again.p));
+    drop(again);
+    assert_eq!(a.stats().current, 0);
+    a.unbind_current_thread();
+}
+
+#[test]
+fn request_end_collects_the_heap_of_a_request_bound_thread() {
+    // A php -S / mod_php request thread, bound by `request_start`, gives
+    // back the runs and chunks its request freed before it gives the heap
+    // up (php-src resets its whole heap at every request end).
+    let (per_run, _, runs) = three_k_runs();
+    let a = CountingAlloc::new(System);
+    a.request_start(None).expect("unlimited");
+    assert!(a.is_bound_to_current_thread());
+    let blocks: Vec<Block<'_>> = (0..runs * per_run).map(|_| alloc(&a, 3072)).collect();
+    assert_eq!(a.heap_chunks(), 2);
+    drop(blocks);
+    a.request_end();
+    assert!(!a.is_bound_to_current_thread());
+    assert_eq!(a.heap_chunks(), 1, "collected before the heap was given up");
+    // php-cli, bound explicitly, leaves its heap as it is: the process ends
+    // with its request.
+    let b = CountingAlloc::new(System);
+    assert!(b.bind_to_current_thread());
+    b.request_start(None).expect("unlimited");
+    let blocks: Vec<Block<'_>> = (0..runs * per_run).map(|_| alloc(&b, 3072)).collect();
+    drop(blocks);
+    b.request_end();
+    assert!(b.is_bound_to_current_thread());
+    assert_eq!(b.heap_chunks(), 2, "not collected");
+    b.unbind_current_thread();
+    assert_eq!((a.stats().current, b.stats().current), (0, 0));
+}
+
+#[test]
+fn collect_heap_takes_a_free_heap_for_the_collection() {
+    let (per_run, pages, runs) = three_k_runs();
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    let blocks: Vec<Block<'_>> = (0..runs * per_run).map(|_| alloc(&a, 3072)).collect();
+    a.unbind_current_thread();
+    // Freed after the heap was given up (a request's teardown after
+    // `request_end`): onto the remote lists.
+    drop(blocks);
+    assert_eq!(a.heap_chunks(), 2);
+    // While another thread owns the heap, collecting does nothing here.
+    // (Results are checked after the barriers, so that a failure cannot
+    // leave the other thread waiting.)
+    let owned = std::sync::Barrier::new(2);
+    let checked = std::sync::Barrier::new(2);
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let bound = a.bind_to_current_thread();
+            owned.wait();
+            checked.wait();
+            a.unbind_current_thread();
+            assert!(bound, "the heap was free");
+        });
+        owned.wait();
+        let collected = a.collect_heap();
+        checked.wait();
+        assert_eq!(collected, 0, "owned by another thread");
+    });
+    assert_eq!(a.heap_chunks(), 2);
+    // Nobody owns it now: it is taken for the collection, which takes the
+    // remote frees over too, and given up again.
+    assert_eq!(a.collect_heap(), runs * pages * PAGE_SIZE);
+    assert_eq!(a.heap_chunks(), 1);
+    assert!(!a.is_bound_to_current_thread());
+    assert!(a.bind_to_current_thread(), "free again");
+    a.unbind_current_thread();
+    assert_eq!(a.stats().current, 0);
+}
+
+#[test]
+fn gc_mem_caches_while_observed_collects_and_reports() {
+    // `zend_mm_custom_handlers_gc_01`: the observed heap's gc handler runs
+    // `zend_mm_gc` on the original heap and reports what it freed. The
+    // observed thread's ownership is parked, so the heap is taken for the
+    // collection and parked again.
+    let (per_run, pages, _) = three_k_runs();
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    assert!(a.set_observer(record_event));
+    let _ = take_events();
+    let run: Vec<Block<'_>> = (0..per_run).map(|_| alloc(&a, 3072)).collect();
+    a.observe(true);
+    // Observed frees: the remote lists, and reported.
+    drop(run);
+    assert_eq!(a.gc_mem_caches(), pages * PAGE_SIZE);
+    assert!(!a.is_bound_to_current_thread(), "still parked");
+    a.observe(false);
+    assert!(a.is_bound_to_current_thread(), "ownership comes back");
+    let heard = take_events();
+    assert_eq!(heard.len(), per_run + 1, "{heard:?}");
+    assert!(heard[..per_run]
+        .iter()
+        .all(|e| matches!(e, HeapEvent::Free { .. })));
+    assert_eq!(
+        heard[per_run],
+        HeapEvent::Gc {
+            freed: pages * PAGE_SIZE
+        }
+    );
+    a.unbind_current_thread();
+    assert_eq!(a.stats().current, 0);
 }
