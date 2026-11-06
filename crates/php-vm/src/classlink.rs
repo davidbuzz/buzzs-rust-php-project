@@ -881,7 +881,7 @@ impl Vm {
         let lc = cls.lc_name.clone();
         self.class_order.push(lc.clone());
         if self.classes.insert(lc.clone(), cls).is_none() {
-            crate::reflection::note_new(crate::reflection::Table::Class, lc.as_bytes());
+            crate::builtins::info::note_new_class(&lc);
         }
     }
 

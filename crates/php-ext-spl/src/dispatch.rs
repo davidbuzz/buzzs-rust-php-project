@@ -548,6 +548,7 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if t.class == "IteratorIterator" && t.def.name == "__construct" {
         downcast_aggregate(vm, &mut args)?;
     }
+    let callback_resolved = resolve_filter_callback(vm, t, &mut args)?;
     if t.class == "SplFixedArray" && t.def.name == "getIterator" && args.is_empty() {
         if let Some((obj, st)) = this
             .as_ref()
@@ -592,10 +593,44 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         });
     }
     let r = {
-        let mut host = VmHost::new(vm);
+        let mut host = if callback_resolved {
+            VmHost::callable_checked(vm)
+        } else {
+            VmHost::new(vm)
+        };
         php_spl::call_method(&mut host, t.class, t.def.name, this.as_ref(), &args)
     };
     crate::iter::finish(vm, r)
+}
+
+/// `spl_dual_it_construct()` for `CallbackFilterIterator` and
+/// `RecursiveCallbackFilterIterator` (`"OF"`): once the inner iterator is
+/// accepted, `zend_fcall_info_init()` resolves the callback in the
+/// constructing scope, raising its deprecations, and `accept()` calls that
+/// resolution (`zend_call_known_fcc`) wherever the iteration runs, as do
+/// the children `getChildren()` constructs with it. A callback whose
+/// resolution depends on the constructing scope (`'parent::m'`, a private
+/// method) reaches `php-spl` as the fake closure
+/// [`Vm::resolve_kept_callable`] makes of it. Returns whether the callback
+/// was resolved here, so that `php-spl`'s own check only validates.
+fn resolve_filter_callback(vm: &mut Vm, t: Target, args: &mut [Value]) -> VmResult<bool> {
+    let inner: &[u8] = match (t.class, t.def.name) {
+        ("CallbackFilterIterator", "__construct") => b"iterator",
+        ("RecursiveCallbackFilterIterator", "__construct") => b"recursiveiterator",
+        _ => return Ok(false),
+    };
+    let inner_ok = matches!(
+        args.first().map(Value::deref),
+        Some(Value::Object(o)) if php_vm::object::class_of(&o).instance_of_name(inner)
+    );
+    if !inner_ok || args.len() != 2 {
+        // `php-spl` reports the argument error first.
+        return Ok(false);
+    }
+    if let Ok(kept) = vm.resolve_kept_callable(&args[1])? {
+        args[1] = kept;
+    }
+    Ok(true)
 }
 
 /// The VM stub signature of an SPL function.

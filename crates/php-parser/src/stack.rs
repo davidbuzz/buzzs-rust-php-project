@@ -50,6 +50,24 @@ pub(crate) fn current_sp() -> usize {
     std::ptr::addr_of!(marker) as usize
 }
 
+/// Tells the parser the calling thread's stack is `[low, high)`, so its
+/// first parse on this thread does not probe the bounds itself (for the
+/// main thread `pthread_getattr_np` reads and parses `/proc/self/maps`:
+/// about 0.9 M instructions). A host that has just read the stack mapping
+/// to raise `RLIMIT_STACK` passes the mapping's end and `end - limit`,
+/// which is what the probe would find.
+///
+/// The bounds must contain the current stack pointer: otherwise they are
+/// ignored, the call returns `false` and the parser probes as usual.
+pub fn set_thread_stack(low: usize, high: usize) -> bool {
+    let sp = current_sp();
+    if sp <= low || sp >= high {
+        return false;
+    }
+    STACK_LOW.with(|c| c.set(Probe::Low(low)));
+    true
+}
+
 /// The address below which the parser must stop recursing on this thread,
 /// or `None` if the thread's stack bounds are unknown.
 pub(crate) fn stack_limit() -> Option<usize> {
@@ -128,5 +146,38 @@ mod tests {
             .unwrap();
         let room = h.join().unwrap();
         assert!(room > 2 * 1024 * 1024 && room < 4 * 1024 * 1024, "{room}");
+    }
+
+    #[test]
+    fn given_bounds_replace_the_probe_on_their_thread() {
+        const MIB: usize = 1024 * 1024;
+        let h = std::thread::Builder::new()
+            .stack_size(4 * MIB)
+            .spawn(|| {
+                // `set_thread_stack` checks its own frame's stack pointer,
+                // a little below this one: the bounds below keep a margin
+                // far larger than the frames in between.
+                let sp = current_sp();
+                let not_probed = || STACK_LOW.with(|c| matches!(c.get(), Probe::NotYet));
+                // Bounds that do not contain the stack pointer (wholly
+                // above it, wholly below it, or empty) are ignored.
+                assert!(!set_thread_stack(sp + MIB, sp + 2 * MIB));
+                assert!(!set_thread_stack(sp - 2 * MIB, sp - MIB));
+                assert!(!set_thread_stack(sp + MIB, sp - MIB));
+                assert!(not_probed());
+                // Given bounds are used instead of the probe.
+                let low = sp - 3 * MIB;
+                assert!(set_thread_stack(low, sp + MIB));
+                assert_eq!(stack_limit(), Some(low + MARGIN));
+                assert!(!exhausted(stack_limit()));
+                // A stack said to end less than MARGIN below the current
+                // frame counts as nearly exhausted.
+                let low = sp - MARGIN / 2;
+                assert!(set_thread_stack(low, sp + MIB));
+                assert_eq!(stack_limit(), Some(low + MARGIN));
+                assert!(exhausted(stack_limit()));
+            })
+            .unwrap();
+        h.join().unwrap();
     }
 }

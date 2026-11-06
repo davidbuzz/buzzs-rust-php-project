@@ -34,20 +34,33 @@ impl Vm {
                 return c.clone();
             }
         }
-        let user: std::collections::HashSet<&[u8]> =
-            self.user_constants.iter().map(ZStr::as_bytes).collect();
-        let table: std::collections::HashMap<ZStr, Value> = self
-            .constants
-            .iter()
-            .filter(|(name, v)| {
-                matches!(
-                    v,
-                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
-                ) && !user.contains(name.as_bytes())
-                    && !self.deprecated_constants.contains_key(*name)
-            })
-            .map(|(name, v)| (name.clone(), v.clone()))
-            .collect();
+        // Sized for every constant so the table never rehashes while it
+        // fills (2 700 internal constants rehashed eleven times before), and
+        // the few user-defined and deprecated names are removed afterwards
+        // instead of being looked up once per constant.
+        let mut table: std::collections::HashMap<ZStr, Value> =
+            std::collections::HashMap::with_capacity(self.constants.len());
+        table.extend(
+            self.constants
+                .iter()
+                .filter(|(_, v)| {
+                    matches!(
+                        v,
+                        Value::Null
+                            | Value::Bool(_)
+                            | Value::Int(_)
+                            | Value::Float(_)
+                            | Value::Str(_)
+                    )
+                })
+                .map(|(name, v)| (name.clone(), v.clone())),
+        );
+        for name in &self.user_constants {
+            table.remove(name);
+        }
+        for name in self.deprecated_constants.keys() {
+            table.remove(name);
+        }
         let c = CtConstants::new(table);
         self.ct_constants = Some((key, c.clone()));
         c

@@ -2,6 +2,16 @@
 //! filtering, the per-process request lock, the request thread, the
 //! `max_execution_time` watchdog and the error-log capture.
 //!
+//! # The watchdog
+//! php-src arms `ITIMER_PROF` and its `SIGPROF` handler flags the timeout
+//! for the executor.  Here the httpd thread that waits for the request
+//! thread polls that thread's CPU clock instead ([`watchdog`]); on expiry
+//! it flags the timeout through [`php_vm::interrupt::sapi_timer_expired`]
+//! and the executor raises the "Maximum execution time" fatal at its next
+//! safe point, exactly as the signal handler would.  Only `hard_timeout`
+//! (a second expiry finding the first unhandled: a native call that does
+//! not return) ends the child process, as `zend_timeout_handler` does.
+//!
 //! # Threading
 //! The VM is single-threaded (`Rc` everywhere, thread-local state in the
 //! extension crates), so every PHP request runs on a fresh thread (fresh
@@ -13,7 +23,7 @@
 //! so throughput is bounded by the number of child processes.
 
 use crate::backend::{Backend, IntField, LogLevel, StrField};
-use crate::request::{RunParams, Timer};
+use crate::request::{Expiry, RunParams, Timer};
 use std::cell::Cell;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -41,7 +51,11 @@ thread_local! {
 /// `child_init` hook.
 pub fn child_init() {
     // Nothing is shared between requests; make sure the configuration is
-    // materialised before the first request.
+    // materialised before the first request.  php-memlimit's request heap
+    // is not bound here, unlike php-cli's single request thread: every
+    // request runs on a thread of its own, which takes the heap for the
+    // request (`request::run`); an httpd thread owning it would leave
+    // every request on the inner allocator.
     let _ = crate::config::current();
 }
 
@@ -109,6 +123,13 @@ fn log_with_file(r: &dyn Backend, pre: &str, file: &[u8], post: &str) {
     r.log(LogLevel::Err, &msg);
 }
 
+/// Runs a request on its own thread with the `max_execution_time`
+/// watchdog, as [`handle`] does once its checks passed; `r` receives the
+/// log entries.  Public for the SAPI's own tests.
+pub fn run_watched(r: &dyn Backend, make: BackendFactory, params: RunParams) -> i32 {
+    run_thread(make, params, Some((r, None)))
+}
+
 /// Runs the request on a new thread and waits for it, enforcing
 /// `max_execution_time` when `watch` is given.
 fn run_thread(
@@ -132,23 +153,73 @@ fn run_thread(
         return 500;
     };
     if let Some((r, capture)) = watch {
-        let clock = cpu_clock(&handle);
-        loop {
-            match rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if let Some(clock) = clock {
-                        if timer.expired(clock_ns(clock)) {
-                            hard_timeout(r, capture, timer.limit());
-                        }
-                    }
-                }
-            }
+        if let Some(clock) = cpu_clock(&handle) {
+            let mut sink = EngineTimeout { r, capture };
+            watchdog(&timer, &rx, &mut || clock_ns(clock), &mut sink);
         }
     }
     match handle.join() {
         Ok(()) => OK,
         Err(_) => 500,
+    }
+}
+
+/// Where the watchdog reports: the engine's interrupt flags in production
+/// ([`EngineTimeout`]), a recorder in tests.
+pub(crate) trait TimeoutSink {
+    /// `zend_timeout_handler()`: flags the timeout for the executor.
+    fn expired(&mut self);
+    /// Whether the flagged timeout is still unhandled (`EG(timed_out)`).
+    fn pending(&self) -> bool;
+    /// The hard timeout: ends the process (`_exit(124)`).
+    fn kill(&mut self, secs: i64, hard: i64);
+}
+
+/// The production [`TimeoutSink`]: php-vm's interrupt module.
+struct EngineTimeout<'a> {
+    r: &'a dyn Backend,
+    capture: Option<&'a StderrCapture>,
+}
+
+impl TimeoutSink for EngineTimeout<'_> {
+    fn expired(&mut self) {
+        php_vm::interrupt::sapi_timer_expired();
+    }
+
+    fn pending(&self) -> bool {
+        php_vm::interrupt::timeout_pending()
+    }
+
+    fn kill(&mut self, secs: i64, hard: i64) {
+        hard_timeout(self.r, self.capture, secs, hard);
+    }
+}
+
+/// The watchdog loop: polls the request thread's CPU clock (`now`) every
+/// 50 ms until the request ends (`done` receives, or its sender is gone).
+/// A soft expiry is reported to the engine; a hard expiry that finds the
+/// soft one still unhandled kills the process (after which the loop ends,
+/// for a test sink that returns).
+pub(crate) fn watchdog(
+    timer: &Timer,
+    done: &mpsc::Receiver<()>,
+    now: &mut dyn FnMut() -> i64,
+    sink: &mut dyn TimeoutSink,
+) {
+    loop {
+        match done.recv_timeout(Duration::from_millis(50)) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            Err(mpsc::RecvTimeoutError::Timeout) => match timer.check(now()) {
+                Expiry::None => {}
+                Expiry::Soft => sink.expired(),
+                Expiry::Hard => {
+                    if sink.pending() {
+                        sink.kill(timer.limit(), timer.hard_limit());
+                        return;
+                    }
+                }
+            },
+        }
     }
 }
 
@@ -175,23 +246,26 @@ fn clock_ns(clock: libc::clockid_t) -> i64 {
         .saturating_add(ts.tv_nsec)
 }
 
-/// `max_execution_time` exceeded.  The VM cannot be interrupted, and the
-/// request thread may be inside httpd at any moment, so the child process
-/// logs the fatal error and exits (httpd replaces it); the client sees
-/// the response cut off.
-fn hard_timeout(r: &dyn Backend, capture: Option<&StderrCapture>, secs: i64) -> ! {
+/// `hard_timeout` expired while the executor had not reached a safe point
+/// since the `max_execution_time` fatal was flagged (a native call that
+/// does not return).  `zend_timeout_handler` writes its message to fd 2 —
+/// Apache's error log — and ends the process with `_exit(124)`; httpd
+/// starts a replacement child and the client sees the response cut off.
+/// The executing file and line belong to the request thread, so they are
+/// reported as `Unknown` / 0, as php-src does when nothing executes.
+fn hard_timeout(r: &dyn Backend, capture: Option<&StderrCapture>, secs: i64, hard: i64) -> ! {
+    use std::io::Write;
     if let Some(c) = capture {
         c.restore();
         forward_log(r, &c.snapshot());
     }
     let msg = format!(
-        "PHP Fatal error:  Maximum execution time of {secs} second{} exceeded in Unknown on line 0",
-        if secs == 1 { "" } else { "s" }
+        "\nFatal error: Maximum execution time of {secs}+{hard} seconds exceeded (terminated) in Unknown on line 0\n"
     );
-    r.log(LogLevel::Err, msg.as_bytes());
+    let _ = std::io::stderr().write_all(msg.as_bytes());
     // SAFETY: terminating the process without running destructors is the
     // intent: other threads may hold locks and the request_rec.
-    unsafe { libc::_exit(1) }
+    unsafe { libc::_exit(124) }
 }
 
 /// Forwards captured stderr once stderr is restored: lines httpd itself
@@ -404,6 +478,99 @@ mod tests {
         assert_eq!(log_level_of(b"PHP Deprecated:  x"), LogLevel::Info);
         assert_eq!(log_level_of(b"PHP Fatal error:  x"), LogLevel::Err);
         assert_eq!(log_level_of(b"other"), LogLevel::Err);
+    }
+
+    /// A [`TimeoutSink`] recording what the watchdog reported.
+    #[derive(Default)]
+    struct Recorder {
+        /// Soft expiries reported.
+        expired: usize,
+        /// The executor handled the flagged timeout (cleared
+        /// `EG(timed_out)`) before the next poll.
+        handled: bool,
+        /// The hard-timeout kill, with its `(max_execution_time,
+        /// hard_timeout)`.
+        killed: Option<(i64, i64)>,
+    }
+
+    impl TimeoutSink for Recorder {
+        fn expired(&mut self) {
+            self.expired += 1;
+        }
+
+        fn pending(&self) -> bool {
+            self.expired > 0 && !self.handled
+        }
+
+        fn kill(&mut self, secs: i64, hard: i64) {
+            self.killed = Some((secs, hard));
+        }
+    }
+
+    const SEC: i64 = 1_000_000_000;
+
+    /// Runs the watchdog over a scripted CPU clock; the request "ends"
+    /// (the done channel's sender is dropped) once the clock runs out.
+    fn run_watchdog(timer: &Timer, clock: &[i64], sink: &mut Recorder) {
+        let (tx, rx) = mpsc::channel::<()>();
+        let mut tx = Some(tx);
+        let mut ticks = clock.iter();
+        let mut now = || match ticks.next() {
+            Some(&t) => t,
+            None => {
+                drop(tx.take());
+                i64::MIN
+            }
+        };
+        watchdog(timer, &rx, &mut now, sink);
+    }
+
+    #[test]
+    fn watchdog_reports_the_soft_expiry_once() {
+        let timer = Timer::default();
+        timer.reset_at(0, 2, 0);
+        let mut sink = Recorder::default();
+        run_watchdog(&timer, &[SEC, 3 * SEC, 4 * SEC, 5 * SEC], &mut sink);
+        assert_eq!(sink.expired, 1);
+        assert_eq!(sink.killed, None, "no hard_timeout: nothing is killed");
+        assert!(timer.timed_out());
+    }
+
+    #[test]
+    fn watchdog_kills_on_an_unhandled_hard_timeout() {
+        let timer = Timer::default();
+        timer.reset_at(0, 1, 2);
+        let mut sink = Recorder::default();
+        // Soft at 1 s, nothing at 2 s, hard at 3 s with the soft one still
+        // unhandled: the kill ends the watch before the clock runs out.
+        run_watchdog(&timer, &[SEC, 2 * SEC, 3 * SEC, 9 * SEC], &mut sink);
+        assert_eq!(sink.expired, 1);
+        assert_eq!(sink.killed, Some((1, 2)));
+    }
+
+    #[test]
+    fn watchdog_spares_a_handled_timeout() {
+        let timer = Timer::default();
+        timer.reset_at(0, 1, 2);
+        let mut sink = Recorder {
+            handled: true,
+            ..Recorder::default()
+        };
+        run_watchdog(&timer, &[SEC, 3 * SEC, 4 * SEC], &mut sink);
+        assert_eq!(sink.expired, 1);
+        assert_eq!(sink.killed, None, "zend_timeout() disarmed the timer");
+    }
+
+    #[test]
+    fn watchdog_ends_with_the_request() {
+        let timer = Timer::default();
+        timer.reset_at(0, 0, 0);
+        let (tx, rx) = mpsc::channel::<()>();
+        tx.send(()).unwrap();
+        let mut sink = Recorder::default();
+        let mut now = || -> i64 { unreachable!("the request already ended") };
+        watchdog(&timer, &rx, &mut now, &mut sink);
+        assert_eq!(sink.expired, 0);
     }
 
     #[test]
