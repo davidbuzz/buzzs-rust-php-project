@@ -558,20 +558,27 @@ pub fn add_root_provider(p: RootProvider) {
 /// object or a reference). Releasing the last handle of an array releases
 /// its elements (`zend_array_destroy`), which buffers the objects among
 /// them that are still referenced elsewhere. Cheap when the value is not
-/// an object or an unshared non-empty array.
+/// an object or an unshared non-empty array: inline, the release of an
+/// object's last handle (the common case of an overwritten variable) is a
+/// count test.
+#[inline]
 pub fn possible_root(v: &Value) {
     match v {
         Value::Object(o) => root_obj(o),
         // Releasing the last handle of a reference releases its value.
-        Value::Reference(r) if r.refcount() == 1 => {
-            if let Some(inner) = r.try_borrow() {
-                if let Value::Object(o) = &*inner {
-                    root_obj(o);
-                }
-            }
-        }
+        Value::Reference(r) if r.refcount() == 1 => released_ref(r),
         Value::Array(a) if a.refcount() == 1 && !a.is_empty() => released_array(a),
         _ => {}
+    }
+}
+
+/// [`possible_root`] of the last handle of a reference: its value.
+#[inline(never)]
+fn released_ref(r: &php_runtime::PhpRef) {
+    if let Some(inner) = r.try_borrow() {
+        if let Value::Object(o) = &*inner {
+            root_obj(o);
+        }
     }
 }
 
@@ -700,12 +707,20 @@ pub(crate) fn root_live_obj(o: &Obj) {
 }
 
 /// Buffers `o`, one handle of which is about to be released.
+#[inline]
 fn root_obj(o: &Obj) {
     // A count of 1 drops to zero: the object is freed, not a root.
-    if o.refcount() < 2 || o.downcast_ref::<ObjectData>().is_none() {
-        return;
+    if o.refcount() >= 2 {
+        root_shared_obj(o);
     }
-    with_state(|s| buffer_obj(s, o));
+}
+
+/// [`root_obj`] for an object that stays referenced.
+#[inline(never)]
+fn root_shared_obj(o: &Obj) {
+    if o.downcast_ref::<ObjectData>().is_some() {
+        with_state(|s| buffer_obj(s, o));
+    }
 }
 
 /// `gc_possible_root` of an object: buffers `o` unless it already is
