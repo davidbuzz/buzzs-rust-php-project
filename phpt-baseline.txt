@@ -1,6 +1,5 @@
 # phpt-runner baseline: tests known to FAIL or BORK. Regenerate with --update-baseline.
 Zend/tests/arginfo_zpp_mismatch.phpt
 Zend/tests/concat/concat_003.phpt
-Zend/tests/gh10251.phpt
 ext/gd/tests/createfromstring-overflow.phpt
 ext/mysqli/tests/mysqli_fetch_field_types.phpt

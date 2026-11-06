@@ -3119,6 +3119,28 @@ impl Vm {
     /// the walk raises it when it gets there ([`PendingRead`]).
     #[cold]
     pub(crate) fn place_assign_undef_cv(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
+        // `$o->{$p} = $v` / `$this->$p = $v`: ZEND_ASSIGN_OBJ fetches the
+        // object, then reads OP_DATA, and only then its property name
+        // (OP2), so the value's warning precedes the name's (bug #79599,
+        // Zend/tests/gh10251.phpt); an error handler that throws on it
+        // stops before the name is read. Resolving the place would read a
+        // dynamic name first, so raise the value's warning before it.
+        let value_first = {
+            let p = &self.frame().code.places[pid as usize];
+            matches!(p.base, PlaceBase::Cv(_) | PlaceBase::This)
+                && matches!(
+                    p.segs.as_slice(),
+                    [Seg::Prop(
+                        Operand::Cv(_) | Operand::Tmp(_) | Operand::TmpKeep(_)
+                    )]
+                )
+        };
+        if value_first {
+            let name = self.frame().code.cv_names[cv as usize].clone();
+            self.warning(&crate::exec::undefined_var_msg(&name))?;
+            let (base, segs) = self.resolve_place_ex(pid, true, false, PlaceOp::Assign)?;
+            return self.write_place(base, &segs, WOp::Assign(Value::Null));
+        }
         let (base, mut segs) = self.resolve_place_ex(pid, true, false, PlaceOp::Assign)?;
         if segs.is_empty() {
             let v = self.read_cv(cv)?;
