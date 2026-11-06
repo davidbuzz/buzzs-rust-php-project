@@ -145,10 +145,13 @@ no JSON column type).
 ### Where php-rust is ahead
 
 - **Speed.** php-rust reports 2.4–4.6x PHP's CPU time on six micro-benchmark categories and
-  about 1.77x on the full WordPress test suite. This project is at 6.47x PHP's user-space
-  instruction count (geometric mean over the 82 workloads of `scripts/perf_gate.sh`), down from
-  about 18x on 4 Nov 2026; the performance work is in progress. The metrics and workloads
-  differ, so the numbers are not directly comparable, but php-rust is faster today.
+  about 1.77x on the full WordPress test suite. This project is at 5.21x PHP's user-space
+  instruction count (geometric mean over the 82 workloads of `scripts/perf_gate.sh`; release
+  build of `3670e2f3`, 6 Nov 2026), down from about 18x on 4 Nov 2026 and 6.4x on the morning
+  of 6 Nov. It is still slower than C PHP on every workload: from 1.4x on string concatenation
+  to 13.3x on user function calls, with start-up at 2.6x. The performance work is in progress.
+  The metrics and workloads differ, so the numbers are not directly comparable, but php-rust is
+  faster today.
 - **Real applications.** php-rust has shown WordPress, Composer, PHPUnit, Doctrine and Symfony
   running on its engine. This project has not measured real applications yet.
 
