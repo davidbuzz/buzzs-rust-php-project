@@ -1,0 +1,15 @@
+[package]
+name = "php-ext-opcache"
+description = "ext/opcache binding for the phprust VM: opcache_* functions, INI entries and the compile hook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+php-vm = { path = "../php-vm" }
+php-runtime = { path = "../php-runtime" }
+php-opcache = { path = "../php-opcache" }
+
+[lints]
+workspace = true

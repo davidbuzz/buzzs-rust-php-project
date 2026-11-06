@@ -695,6 +695,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-ext-opcache"
+version = "0.1.0"
+dependencies = [
+ "php-opcache",
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
 name = "php-ext-openssl"
 version = "0.1.0"
 dependencies = [
@@ -1121,6 +1130,13 @@ version = "0.1.0"
 dependencies = [
  "openssl",
  "php-hash",
+ "php-runtime",
+]
+
+[[package]]
+name = "php-opcache"
+version = "0.1.0"
+dependencies = [
  "php-runtime",
 ]
 
