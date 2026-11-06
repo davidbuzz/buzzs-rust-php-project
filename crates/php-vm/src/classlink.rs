@@ -17,6 +17,38 @@ use std::rc::{Rc, Weak};
 
 /// Builds magic-method shortcuts from a method table.
 pub(crate) fn build_magic(methods: &HashMap<ZStr, Rc<Method>>) -> Magic {
+    // Up to this many methods, one pass over the table that only looks at
+    // `__` names is cheaper than sixteen hashed lookups.
+    const SCAN_MAX: usize = 32;
+    if methods.len() <= SCAN_MAX {
+        let mut m = Magic::default();
+        for (lc, method) in methods {
+            if !lc.as_bytes().starts_with(b"__") {
+                continue;
+            }
+            let slot = match lc.as_bytes() {
+                b"__construct" => &mut m.construct,
+                b"__destruct" => &mut m.destruct,
+                b"__get" => &mut m.get,
+                b"__set" => &mut m.set,
+                b"__isset" => &mut m.isset,
+                b"__unset" => &mut m.unset,
+                b"__call" => &mut m.call,
+                b"__callstatic" => &mut m.call_static,
+                b"__tostring" => &mut m.to_string,
+                b"__invoke" => &mut m.invoke,
+                b"__clone" => &mut m.clone,
+                b"__debuginfo" => &mut m.debug_info,
+                b"__serialize" => &mut m.serialize,
+                b"__unserialize" => &mut m.unserialize,
+                b"__sleep" => &mut m.sleep,
+                b"__wakeup" => &mut m.wakeup,
+                _ => continue,
+            };
+            *slot = Some(method.clone());
+        }
+        return m;
+    }
     let g = |n: &str| methods.get(n.as_bytes()).cloned();
     Magic {
         construct: g("__construct"),
@@ -262,13 +294,21 @@ impl Vm {
     /// `$a instanceof B`.
     pub(crate) fn op_instanceof(&mut self, v: &Value, spec: &ClassSpec) -> VmResult<bool> {
         let cls = match spec {
-            ClassSpec::Named(l) => {
-                let n = self.lit_str(*l);
-                match self.find_class(n.as_bytes()) {
-                    Some(c) => c,
-                    None => return Ok(false),
+            // `ZEND_INSTANCEOF` caches the class once found (it never
+            // autoloads, so a miss is looked up again next time).
+            ClassSpec::Named(l) => match self.peek_named_class(*l) {
+                Some(c) => c,
+                None => {
+                    let n = self.lit_str(*l);
+                    match self.find_class(n.as_bytes()) {
+                        Some(c) => {
+                            self.remember_named_class(*l, &c);
+                            c
+                        }
+                        None => return Ok(false),
+                    }
                 }
-            }
+            },
             ClassSpec::Dyn(op) => {
                 let c = self.read(*op)?;
                 match c {

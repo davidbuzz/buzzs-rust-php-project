@@ -498,6 +498,32 @@ pub enum Op {
     FuncNumArgs { dst: Option<u32> },
     /// `func_get_args()` likewise (`ZEND_FUNC_GET_ARGS`).
     FuncGetArgs { dst: Option<u32> },
+    /// `strlen($x)` (`ZEND_STRLEN`, `zend_compile_func_strlen`): no call
+    /// frame; weak-mode coercion and the `TypeError` happen in place.
+    Strlen { a: Operand, dst: Option<u32> },
+    /// `count($x)` / `sizeof($x)` with one argument (`ZEND_COUNT`,
+    /// `zend_compile_func_count`); `sizeof` names the function in the
+    /// `TypeError`.
+    Count {
+        a: Operand,
+        dst: Option<u32>,
+        sizeof: bool,
+    },
+    /// `is_null()` ... `is_scalar()` (`ZEND_TYPE_CHECK`,
+    /// `zend_compile_func_typecheck`): whether the type of `a` is one of
+    /// the [`type_mask`] bits in `mask`.
+    TypeCheck {
+        a: Operand,
+        mask: u8,
+        dst: Option<u32>,
+    },
+    /// `gettype($x)` (`ZEND_GET_TYPE`, `zend_compile_func_gettype`).
+    GetType { a: Operand, dst: Option<u32> },
+    /// `get_class($x)`, or `get_class()` with `a` [`Operand::Unused`]
+    /// (`ZEND_GET_CLASS`, `zend_compile_func_get_class`).
+    GetClass { a: Operand, dst: Option<u32> },
+    /// `get_called_class()` (`ZEND_GET_CALLED_CLASS`).
+    GetCalledClass { dst: Option<u32> },
 
     /// `echo`
     Echo(Operand),
@@ -666,6 +692,48 @@ pub enum Op {
     },
 }
 
+/// The type bits of [`Op::TypeCheck`] (`zend_compile_func_typecheck`'s
+/// `1 << IS_*` masks, one bit per PHP type).
+pub mod type_mask {
+    /// `null`
+    pub const NULL: u8 = 1 << 0;
+    /// `false` and `true`
+    pub const BOOL: u8 = 1 << 1;
+    /// `int`
+    pub const INT: u8 = 1 << 2;
+    /// `float`
+    pub const FLOAT: u8 = 1 << 3;
+    /// `string`
+    pub const STRING: u8 = 1 << 4;
+    /// `array`
+    pub const ARRAY: u8 = 1 << 5;
+    /// `object`
+    pub const OBJECT: u8 = 1 << 6;
+    /// `resource` (alone, a closed resource does not match: `is_resource`)
+    pub const RESOURCE: u8 = 1 << 7;
+    /// `is_scalar()`
+    pub const SCALAR: u8 = BOOL | INT | FLOAT | STRING;
+
+    /// Whether `v` (dereferenced) has one of the types in `mask`
+    /// (`ZEND_TYPE_CHECK`).
+    pub fn matches(mask: u8, v: &php_runtime::Value) -> bool {
+        use php_runtime::Value;
+        match v {
+            Value::Null => mask & NULL != 0,
+            Value::Bool(_) => mask & BOOL != 0,
+            Value::Int(_) => mask & INT != 0,
+            Value::Float(_) => mask & FLOAT != 0,
+            Value::Str(_) => mask & STRING != 0,
+            Value::Array(_) => mask & ARRAY != 0,
+            Value::Object(_) => mask & OBJECT != 0,
+            // `opline->extended_value != MAY_BE_RESOURCE ||
+            // zend_rsrc_list_get_rsrc_type(...)`.
+            Value::Resource(r) => mask & RESOURCE != 0 && (mask != RESOURCE || !r.is_closed()),
+            Value::Reference(r) => matches(mask, &r.get()),
+        }
+    }
+}
+
 /// A temporary that an exception thrown by an op in `start..end` releases
 /// before the handler runs (`zend_live_range` / `cleanup_live_vars`,
 /// `Zend/zend_execute.c`). Only recorded where the release is observable:
@@ -780,6 +848,46 @@ pub struct OpArray {
     /// are never unregistered once declared). Weak: a method's op array
     /// naming its own class would otherwise form an `Rc` cycle.
     pub class_cache: RefCell<Vec<std::rc::Weak<crate::class::Class>>>,
+    /// Run-time cache of constant, class constant, static property and
+    /// static method lookups (php-src's `run_time_cache`; see
+    /// [`crate::rtcache`]).
+    pub rt_cache: crate::rtcache::RuntimeCache,
+    /// Per-place cache of property lookups, indexed by [`PlaceId`]
+    /// (php-src's `CACHE_ADDR` slot of `FETCH_OBJ_*`/`ASSIGN_OBJ` & co.,
+    /// filled by `zend_fetch_property_address`): sized on first use.
+    pub prop_cache: RefCell<Vec<PropCacheEntry>>,
+}
+
+/// [`PropCacheEntry::base`] of a `$this->name` place.
+pub const PROP_CACHE_THIS: u32 = u32::MAX;
+
+/// An [`OpArray::prop_cache`] entry: the property the first segment of a
+/// property place (`$cv->name`, `$this->name`, literal name) resolved to
+/// for one class and calling scope, like php-src's cached
+/// `(ce, offset, prop_info)` triple: a declared slot or a dynamic
+/// property. Classes are compared by address and held weakly, which pins
+/// the address without keeping the class alive (a method's op array
+/// caching its own class would otherwise be an `Rc` cycle).
+#[derive(Debug, Default, Clone)]
+pub struct PropCacheEntry {
+    /// The object's class (`Weak::new()` in an unfilled entry).
+    pub class: std::rc::Weak<crate::class::Class>,
+    /// The class scope the lookup ran in (`None`: no class scope).
+    pub scope: Option<std::rc::Weak<crate::class::Class>>,
+    /// The place's base: a CV, or [`PROP_CACHE_THIS`].
+    pub base: u32,
+    /// The declared property's slot.
+    pub slot: u32,
+    /// The literal index of the property name.
+    pub lit: u32,
+    /// Builtin type bits (`types::mask`) a written value may have to be
+    /// stored without coercion; `u32::MAX` for an untyped property.
+    pub accept: u32,
+    /// The lower-case class a typed property names (exactly one, not
+    /// `self`/`parent`/`static`): instances of it are stored as-is too.
+    pub class_lc: Option<ZStr>,
+    /// `PC_*` bits of `place::propcache`: which fast paths apply.
+    pub flags: u8,
 }
 
 /// An [`OpArray::fcall_cache`] entry. User functions are held weakly: the

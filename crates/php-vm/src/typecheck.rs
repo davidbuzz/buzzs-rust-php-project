@@ -20,22 +20,47 @@ pub(crate) struct TypeCtx<'a> {
     pub internal_arg: Option<(&'a str, usize, &'a str)>,
 }
 
+/// [`Class::instance_of_name`] for a name in any case: class names are
+/// stored lower-cased (`lc_name`), so a case-insensitive comparison is the
+/// comparison with the lower-cased name.
+fn instance_of_name_ci(cls: &Rc<Class>, name: &[u8]) -> bool {
+    if is_named(cls, name) || cls.interfaces.iter().any(|i| is_named(i, name)) {
+        return true;
+    }
+    let mut c = cls.parent.as_deref();
+    while let Some(p) = c {
+        if is_named(p, name) {
+            return true;
+        }
+        c = p.parent.as_deref();
+    }
+    false
+}
+
+/// Whether `c` is named `name` (any case).
+fn is_named(c: &Class, name: &[u8]) -> bool {
+    c.lc_name.as_bytes().eq_ignore_ascii_case(name)
+}
+
 impl Vm {
+    /// Whether an object of `obj_class` is an instance of the class type
+    /// `name` (any case), without allocating: called for every class-typed
+    /// argument, return value and property assignment.
     #[allow(clippy::unused_self)]
     fn class_matches(&mut self, obj_class: &Rc<Class>, name: &ZStr, ctx: &TypeCtx<'_>) -> bool {
-        let lc = name.to_ascii_lowercase();
-        let resolved: Option<ZStr> = match lc.as_bytes() {
-            b"self" => ctx.scope.map(|c| c.lc_name.clone()),
-            b"parent" => ctx
+        let n = name.as_bytes();
+        if n.eq_ignore_ascii_case(b"self") {
+            return ctx
+                .scope
+                .is_some_and(|c| instance_of_name_ci(obj_class, c.lc_name.as_bytes()));
+        }
+        if n.eq_ignore_ascii_case(b"parent") {
+            return ctx
                 .scope
                 .and_then(|c| c.parent.as_ref())
-                .map(|p| p.lc_name.clone()),
-            _ => Some(lc),
-        };
-        match resolved {
-            Some(r) => obj_class.instance_of_name(r.as_bytes()),
-            None => false,
+                .is_some_and(|p| instance_of_name_ci(obj_class, p.lc_name.as_bytes()));
         }
+        instance_of_name_ci(obj_class, n)
     }
 
     /// Whether `v` satisfies `ty` without coercion, resolving callables

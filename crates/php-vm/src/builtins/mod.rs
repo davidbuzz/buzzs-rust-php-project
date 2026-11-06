@@ -3,6 +3,7 @@
 pub mod classbuilder;
 mod core;
 pub(crate) mod dump;
+pub(crate) mod fasthash;
 pub(crate) mod headers;
 pub(crate) mod info;
 mod serial;
@@ -39,7 +40,7 @@ pub struct ExtState {
 
 /// Registers a builtin function from a stub signature.
 pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
-    let s = sig::parse_sig(sig);
+    let s = sig::parse_sig_borrowed(sig);
     let mut fl = 0;
     if s.variadic {
         fl |= flags::VARIADIC;
@@ -47,9 +48,12 @@ pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
     if s.by_ref_return {
         fl |= flags::RETURN_REF;
     }
-    let lc = ZStr::from(s.name.to_ascii_lowercase());
+    let name = ZStr::from(s.name);
+    // Shares `name`'s buffer when it is already lower case, as method
+    // names do (`ClassBuilder::register`).
+    let lc = name.to_ascii_lowercase();
     let b = Builtin {
-        name: ZStr::from(s.name.as_str()),
+        name,
         params: s.params,
         defaults: s.defaults,
         required: s.required,

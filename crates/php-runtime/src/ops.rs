@@ -14,12 +14,13 @@
 
 use crate::array::{HashTable, ZArray};
 use crate::convert::{
-    double_to_zstr, dval_to_lval_safe, long_to_zstr, number_value, try_convert_to_number,
-    try_get_long,
+    double_to_zstr, dval_to_lval_safe, long_to_zstr, nan_coerced_warning, number_value,
+    try_convert_to_number, try_get_long,
 };
 use crate::error::{BinaryOp, CastTarget, ErrorLevel, RtResult, RuntimeContext, RuntimeError};
+use crate::float::{format_double_buf, DoubleBuf};
 use crate::numeric::{is_numeric_string_ex, Number};
-use crate::string::{binary_strcmp, ZStr};
+use crate::string::{binary_strcmp, format_long, ZStr, LONG_MAX_LEN};
 use crate::value::{Obj, Value};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -523,9 +524,73 @@ pub fn bool_xor(a: &Value, b: &Value, ctx: &mut (impl RuntimeContext + ?Sized)) 
     Ok(Value::Bool(x ^ y))
 }
 
+/// Stack room for the string form of a scalar operand.
+#[derive(Debug, Default)]
+struct ScalarText {
+    long: [u8; LONG_MAX_LEN],
+    double: DoubleBuf,
+}
+
+/// The string form of a value whose conversion runs no user code (`Str`,
+/// `Int`, `Float`, `Bool`, `Null`), borrowed or formatted into `buf`
+/// (`zend_print_long_to_buf`, `zend_gcvt` into a stack buffer) without
+/// allocating. `None` for other values and for floats under a `precision`
+/// above 17. A NaN float's warning is left to the caller.
+#[inline]
+fn plain_str_bytes<'a>(v: &'a Value, precision: i64, buf: &'a mut ScalarText) -> Option<&'a [u8]> {
+    match v {
+        Value::Str(s) => Some(s.as_bytes()),
+        Value::Int(i) => Some(format_long(*i, &mut buf.long)),
+        Value::Float(d) => format_double_buf(*d, precision, false, &mut buf.double),
+        Value::Null | Value::Bool(false) => Some(b""),
+        Value::Bool(true) => Some(b"1"),
+        _ => None,
+    }
+}
+
+/// [`Value::to_zstr`] of a value [`plain_str_bytes`] accepted, from its
+/// text, without diagnostics (a float's NaN warning was already raised).
+fn plain_to_zstr(v: &Value, text: &[u8]) -> ZStr {
+    match v {
+        Value::Str(s) => s.clone(),
+        Value::Int(i) => long_to_zstr(*i),
+        Value::Bool(true) => ZStr::from_byte(b'1'),
+        Value::Null | Value::Bool(false) => ZStr::empty(),
+        _ => ZStr::from(text),
+    }
+}
+
 /// `.` (`concat_function`).
 pub fn concat(a: &Value, b: &Value, ctx: &mut (impl RuntimeContext + ?Sized)) -> RtResult<Value> {
     let (da, db) = (deref(a), deref(b));
+    // Strings, numbers, bools and null: one exactly sized result, with no
+    // intermediate string for a number operand (php-src converts with
+    // `zval_get_string`, whose `zend_long_to_str` / `zend_double_to_str`
+    // format into a stack buffer first).
+    let precision = if matches!(&*da, Value::Float(_)) || matches!(&*db, Value::Float(_)) {
+        ctx.precision()
+    } else {
+        14
+    };
+    let (mut ba, mut bb) = (ScalarText::default(), ScalarText::default());
+    if let (Some(x), Some(y)) = (
+        plain_str_bytes(&da, precision, &mut ba),
+        plain_str_bytes(&db, precision, &mut bb),
+    ) {
+        // `zend_double_to_str`'s NaN warning, operand by operand.
+        for v in [&*da, &*db] {
+            if matches!(v, Value::Float(d) if d.is_nan()) {
+                nan_coerced_warning(ctx, "string")?;
+            }
+        }
+        if x.is_empty() {
+            return Ok(Value::Str(plain_to_zstr(&db, y)));
+        }
+        if y.is_empty() {
+            return Ok(Value::Str(plain_to_zstr(&da, x)));
+        }
+        return Ok(Value::Str(ZStr::concat(x, y)));
+    }
     if !matches!(&*da, Value::Str(_)) || !matches!(&*db, Value::Str(_)) {
         if let Some(r) = try_object_op(BinaryOp::Concat, &da, &db, ctx)? {
             return Ok(r);
@@ -1497,6 +1562,56 @@ mod tests {
         assert_eq!(
             v.as_str().map(ZStr::to_string_lossy).as_deref(),
             Some("ab1c")
+        );
+    }
+
+    #[test]
+    fn concat_scalars_without_temporaries() {
+        let mut c = CollectingContext::new();
+        let cat = |a: Value, b: Value, c: &mut CollectingContext| {
+            concat(&a, &b, c)
+                .unwrap()
+                .as_str()
+                .map(ZStr::to_string_lossy)
+                .unwrap()
+        };
+        assert_eq!(cat(Value::from("v"), Value::Int(-15), &mut c), "v-15");
+        assert_eq!(
+            cat(Value::Int(i64::MIN), Value::from("!"), &mut c),
+            "-9223372036854775808!"
+        );
+        assert_eq!(cat(Value::Int(7), Value::Int(42), &mut c), "742");
+        assert_eq!(cat(Value::Bool(true), Value::Null, &mut c), "1");
+        assert_eq!(cat(Value::Null, Value::Bool(false), &mut c), "");
+        assert_eq!(cat(Value::from(""), Value::Int(3), &mut c), "3");
+        assert_eq!(cat(Value::Float(1.5), Value::from("x"), &mut c), "1.5x");
+        // An empty operand gives the other string itself.
+        let s = Value::from("keep");
+        let r = concat(&s, &Value::from(""), &mut c).unwrap();
+        assert!(ZStr::ptr_eq(r.as_str().unwrap(), s.as_str().unwrap()));
+        assert!(c.diagnostics.is_empty());
+        // Floats follow `precision`; NaN warns once per NaN operand, in order.
+        c.precision = Some(3);
+        assert_eq!(
+            cat(Value::Float(1234.5), Value::from(""), &mut c),
+            "1.23E+3"
+        );
+        assert_eq!(cat(Value::from(""), Value::Float(-0.0), &mut c), "-0");
+        c.precision = Some(20);
+        assert_eq!(
+            cat(Value::Float(0.1), Value::Null, &mut c),
+            "0.10000000000000000555"
+        );
+        c.precision = None;
+        assert!(c.diagnostics.is_empty());
+        assert_eq!(
+            cat(Value::Float(f64::NAN), Value::Float(f64::INFINITY), &mut c),
+            "NANINF"
+        );
+        assert_eq!(c.diagnostics.len(), 1);
+        assert_eq!(
+            c.diagnostics[0].message,
+            "unexpected NAN value was coerced to string"
         );
     }
 

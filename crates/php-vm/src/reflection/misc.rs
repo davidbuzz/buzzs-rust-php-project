@@ -5,6 +5,7 @@
 
 use super::{rexc, set_name_props, str_arg, this, this_refl, zs, FnRef, Refl, PRIV, PUB, RO, STAT};
 use crate::builtins::classbuilder::ClassBuilder;
+use crate::builtins::fasthash::FastMap;
 use crate::class::{cflags, Class, ClassConst, ConstExpr, InternalKind, Magic, PropInfo};
 use crate::func::{flags, Args, Builtin, Func, Method};
 use crate::object;
@@ -21,11 +22,11 @@ use std::rc::Rc;
 
 #[derive(Default)]
 struct Modules {
-    functions: HashMap<Vec<u8>, String>,
-    classes: HashMap<Vec<u8>, String>,
-    constants: HashMap<Vec<u8>, String>,
+    functions: FastMap<Vec<u8>, &'static str>,
+    classes: FastMap<Vec<u8>, &'static str>,
+    constants: FastMap<Vec<u8>, &'static str>,
     /// The extension whose `register` is running.
-    current: Option<String>,
+    current: Option<&'static str>,
 }
 
 thread_local! {
@@ -47,8 +48,19 @@ pub(crate) enum Table {
 /// This replaces comparing full snapshots of the three tables before and
 /// after each extension, which was O(extensions × symbols) and 70 % of
 /// debug-build startup.
-pub(crate) fn record_module(_vm: &Vm, name: &str, begin: bool) {
-    MODULES.with(|m| m.borrow_mut().current = begin.then(|| name.to_string()));
+pub(crate) fn record_module(_vm: &Vm, name: &'static str, begin: bool) {
+    MODULES.with(|m| {
+        let mut m = m.borrow_mut();
+        if begin && m.functions.capacity() == 0 {
+            // Room for what all bundled extensions register (about 1 500
+            // functions, 300 classes and 2 500 constants), so the tables do
+            // not rehash during start-up.
+            m.functions.reserve(2048);
+            m.classes.reserve(512);
+            m.constants.reserve(4096);
+        }
+        m.current = begin.then_some(name);
+    });
 }
 
 /// Attributes a key that was just added to `table` (the insert returned
@@ -56,7 +68,7 @@ pub(crate) fn record_module(_vm: &Vm, name: &str, begin: bool) {
 pub(crate) fn note_new(table: Table, key: &[u8]) {
     MODULES.with(|m| {
         let mut m = m.borrow_mut();
-        let Some(name) = m.current.clone() else {
+        let Some(name) = m.current else {
             return;
         };
         let map = match table {
@@ -152,8 +164,8 @@ pub(crate) fn function_module(
         return class_module(vm, c);
     }
     let lc = name.to_ascii_lowercase();
-    if let Some(m) = MODULES.with(|m| m.borrow().functions.get(lc.as_bytes()).cloned()) {
-        return Some(m);
+    if let Some(m) = MODULES.with(|m| m.borrow().functions.get(lc.as_bytes()).copied()) {
+        return Some(m.to_string());
     }
     let s = String::from_utf8_lossy(&lc).into_owned();
     // Unattributed functions are the VM's own builtins.
@@ -192,8 +204,8 @@ pub(crate) fn class_module(vm: &Vm, c: &Rc<Class>) -> Option<String> {
     if STANDARD_CLASSES.contains(&n) {
         return Some("standard".into());
     }
-    if let Some(m) = MODULES.with(|m| m.borrow().classes.get(n).cloned()) {
-        return Some(m);
+    if let Some(m) = MODULES.with(|m| m.borrow().classes.get(n).copied()) {
+        return Some(m.to_string());
     }
     let _ = vm;
     // Classes registered by the VM itself: the reflection classes and the
@@ -219,8 +231,8 @@ pub(crate) fn constant_module(_vm: &Vm, name: &ZStr) -> String {
         b"UPLOAD_ERR_",
         b"PEAR_",
     ];
-    if let Some(m) = MODULES.with(|m| m.borrow().constants.get(name.as_bytes()).cloned()) {
-        return m;
+    if let Some(m) = MODULES.with(|m| m.borrow().constants.get(name.as_bytes()).copied()) {
+        return m.to_string();
     }
     let n = name.as_bytes();
     let core = PREFIXES.iter().any(|p| n.starts_with(p))

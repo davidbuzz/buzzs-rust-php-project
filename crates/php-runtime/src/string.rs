@@ -85,11 +85,84 @@ thread_local! {
 /// The result always has its most significant bit set, so it is never zero.
 #[must_use]
 pub fn zend_hash_bytes(bytes: &[u8]) -> u64 {
+    #[inline]
+    fn step(hash: u64, b: u8) -> u64 {
+        hash.wrapping_mul(33).wrapping_add(u64::from(b))
+    }
     let mut hash: u64 = 5381;
-    for &b in bytes {
-        hash = hash.wrapping_mul(33).wrapping_add(u64::from(b));
+    // Eight bytes per iteration, like `zend_inline_hash_func`'s unrolled
+    // loop: the same sequential chain, without per-byte loop overhead.
+    let mut chunks = bytes.chunks_exact(8);
+    for c in &mut chunks {
+        hash = step(hash, c[0]);
+        hash = step(hash, c[1]);
+        hash = step(hash, c[2]);
+        hash = step(hash, c[3]);
+        hash = step(hash, c[4]);
+        hash = step(hash, c[5]);
+        hash = step(hash, c[6]);
+        hash = step(hash, c[7]);
+    }
+    for &b in chunks.remainder() {
+        hash = step(hash, b);
     }
     hash | 0x8000_0000_0000_0000
+}
+
+/// Bytes needed for the decimal form of any `i64` (`MAX_LENGTH_OF_LONG - 1`:
+/// 19 digits of `i64::MIN` plus its sign).
+pub const LONG_MAX_LEN: usize = 20;
+
+/// `"00" "01" … "99"`: two digits per division step.
+const DIGIT_PAIRS: &[u8; 200] = b"\
+0001020304050607080910111213141516171819\
+2021222324252627282930313233343536373839\
+4041424344454647484950515253545556575859\
+6061626364656667686970717273747576777879\
+8081828384858687888990919293949596979899";
+
+/// Writes the decimal form of `n` at the end of `buf` and returns it
+/// (`zend_print_long_to_buf`), two digits per step.
+#[inline]
+pub fn format_long(n: i64, buf: &mut [u8; LONG_MAX_LEN]) -> &[u8] {
+    let mut pos = buf.len();
+    let mut m = n.unsigned_abs();
+    while m >= 100 {
+        #[allow(clippy::cast_possible_truncation)]
+        let pair = (m % 100) as usize * 2;
+        m /= 100;
+        pos -= 2;
+        buf[pos..pos + 2].copy_from_slice(&DIGIT_PAIRS[pair..pair + 2]);
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let m = m as usize;
+    if m >= 10 {
+        pos -= 2;
+        buf[pos..pos + 2].copy_from_slice(&DIGIT_PAIRS[m * 2..m * 2 + 2]);
+    } else {
+        pos -= 1;
+        #[allow(clippy::cast_possible_truncation)]
+        let digit = m as u8;
+        buf[pos] = b'0' + digit;
+    }
+    if n < 0 {
+        pos -= 1;
+        buf[pos] = b'-';
+    }
+    &buf[pos..]
+}
+
+/// Length of the decimal form of `n` (what [`format_long`] writes).
+#[inline]
+#[must_use]
+pub fn long_str_len(n: i64) -> usize {
+    let mut m = n.unsigned_abs();
+    let mut len = usize::from(n < 0) + 1;
+    while m >= 10 {
+        m /= 10;
+        len += 1;
+    }
+    len
 }
 
 #[cold]
@@ -184,6 +257,31 @@ impl ZStr {
                 ptr: data,
                 len,
                 meta: len | flags,
+            });
+        }
+        ZStr(block)
+    }
+
+    /// An empty, unique string with room for `cap` inline bytes
+    /// (`zend_string_alloc(cap)` with the length still 0): the start of a
+    /// [`ZStrBuf`].
+    fn with_inline_capacity(cap: usize) -> Self {
+        if cap > CAP_MASK {
+            capacity_overflow();
+        }
+        let block = alloc_block(cap);
+        // SAFETY: `block` is a fresh allocation of `HEADER + cap` bytes,
+        // aligned for `Header`; the (uninitialised) inline area starts
+        // right after the header and no byte of it is readable yet
+        // (`len` is 0).
+        unsafe {
+            let data = block.as_ptr().cast::<u8>().add(HEADER);
+            block.as_ptr().write(Header {
+                rc: Cell::new(1),
+                hash: Cell::new(0),
+                ptr: data,
+                len: 0,
+                meta: cap,
             });
         }
         ZStr(block)
@@ -457,6 +555,14 @@ impl ZStr {
         *self = Self::from_parts(self.as_bytes(), other, 0);
     }
 
+    /// Appends the decimal form of `n` (`concat_function` with an integer
+    /// right operand, `smart_str_append_long`), extending in place like
+    /// [`ZStr::append`] without materialising the number as a string.
+    pub fn append_long(&mut self, n: i64) {
+        let mut buf = [0u8; LONG_MAX_LEN];
+        self.append(format_long(n, &mut buf));
+    }
+
     /// `ZEND_CONCAT` with a temporary left operand: when this handle is the
     /// only owner (and the string is not interned) the buffer is extended
     /// in place to exactly the new length (`zend_string_extend`), so the
@@ -545,6 +651,63 @@ impl Drop for ZStr {
         }
         // SAFETY: this was the last handle to a live block.
         unsafe { free_block(self.0) };
+    }
+}
+
+/// A string under construction (`smart_str`): bytes are appended into
+/// the inline area of one uniquely owned string block, which grows by
+/// doubling when a piece does not fit, and [`ZStrBuf::finish`] hands the
+/// block over as a [`ZStr`] without copying. Reserving the exact final
+/// length up front (`with_capacity`) gives one exactly sized allocation,
+/// like php-src's `zend_string_alloc(len)` + `memcpy` in `ZEND_ROPE_END`.
+#[derive(Debug)]
+pub struct ZStrBuf(ZStr);
+
+impl ZStrBuf {
+    /// An empty buffer with room for `cap` bytes.
+    #[must_use]
+    pub fn with_capacity(cap: usize) -> Self {
+        ZStrBuf(ZStr::with_inline_capacity(cap))
+    }
+
+    /// Appends bytes (`smart_str_appendl`).
+    #[inline]
+    pub fn push(&mut self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            self.0.extend_unique(bytes, false);
+        }
+    }
+
+    /// Appends the decimal form of `n` (`smart_str_append_long`).
+    #[inline]
+    pub fn push_long(&mut self, n: i64) {
+        let mut buf = [0u8; LONG_MAX_LEN];
+        self.push(format_long(n, &mut buf));
+    }
+
+    /// Bytes appended so far.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether nothing was appended yet.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The bytes appended so far.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+
+    /// The finished string (`smart_str_extract`); spare capacity, if any,
+    /// stays with it for later in-place appends.
+    #[must_use]
+    pub fn finish(self) -> ZStr {
+        self.0
     }
 }
 
@@ -777,6 +940,24 @@ mod tests {
     }
 
     #[test]
+    fn unrolled_hash_matches_bytewise_hash() {
+        let data: Vec<u8> = (0..100u32)
+            .map(|i| u8::try_from((i * 37 + 11) % 256).unwrap_or(0))
+            .collect();
+        for n in 0..data.len() {
+            let mut h: u64 = 5381;
+            for &b in &data[..n] {
+                h = h.wrapping_mul(33).wrapping_add(u64::from(b));
+            }
+            assert_eq!(
+                zend_hash_bytes(&data[..n]),
+                h | 0x8000_0000_0000_0000,
+                "{n}"
+            );
+        }
+    }
+
+    #[test]
     fn interning() {
         let a = ZStr::intern(b"foo");
         let b = ZStr::intern(b"foo");
@@ -919,5 +1100,85 @@ mod tests {
         assert_eq!(s.to_ascii_uppercase(), "ABC");
         let l = ZStr::from("abc");
         assert!(ZStr::ptr_eq(&l.to_ascii_lowercase(), &l));
+    }
+
+    #[test]
+    fn format_long_matches_to_string() {
+        let mut cases = vec![
+            0,
+            1,
+            9,
+            10,
+            99,
+            100,
+            101,
+            999,
+            1000,
+            -1,
+            -9,
+            -10,
+            -100,
+            i64::MAX,
+            i64::MIN,
+            i64::MIN + 1,
+        ];
+        let mut p = 1i64;
+        while let Some(next) = p.checked_mul(10) {
+            cases.extend([p - 1, p, p + 1, -p, -(p - 1)]);
+            p = next;
+        }
+        for n in cases {
+            let mut buf = [0u8; LONG_MAX_LEN];
+            let text = n.to_string();
+            assert_eq!(format_long(n, &mut buf), text.as_bytes(), "{n}");
+            assert_eq!(long_str_len(n), text.len(), "{n}");
+        }
+    }
+
+    #[test]
+    fn append_long_in_place() {
+        let mut s = ZStr::from("n=");
+        s.append_long(-42);
+        assert_eq!(s, "n=-42");
+        let t = s.clone();
+        s.append_long(7);
+        assert_eq!(s, "n=-427");
+        assert_eq!(t, "n=-42", "a shared string is copied, not extended");
+        let mut e = ZStr::empty();
+        e.append_long(i64::MIN);
+        assert_eq!(e, "-9223372036854775808");
+        assert_eq!(ZStr::empty(), "");
+    }
+
+    #[test]
+    fn zstrbuf_builds_exact_and_grown_strings() {
+        let mut b = ZStrBuf::with_capacity(11);
+        assert!(b.is_empty());
+        b.push(b"item ");
+        b.push_long(5);
+        b.push(b"");
+        b.push(b" of 9");
+        assert_eq!(b.len(), 11);
+        assert_eq!(b.as_bytes(), b"item 5 of 9");
+        let s = b.finish();
+        assert_eq!(s, "item 5 of 9");
+        assert_eq!(s.refcount(), 1);
+        assert!(!s.is_interned());
+        assert_eq!(s.hash_value(), zend_hash_bytes(b"item 5 of 9"));
+
+        // Past the reserved capacity it grows like `.=`.
+        let mut g = ZStrBuf::with_capacity(0);
+        let mut expected = Vec::new();
+        for i in 0..500i64 {
+            g.push_long(i);
+            g.push(b",");
+            expected.extend_from_slice(format!("{i},").as_bytes());
+        }
+        let g = g.finish();
+        assert_eq!(g.as_bytes(), &expected[..]);
+        let mut g2 = g.clone();
+        g2.append(b"!");
+        assert_eq!(g.len() + 1, g2.len());
+        assert!(ZStrBuf::with_capacity(0).finish().is_empty());
     }
 }

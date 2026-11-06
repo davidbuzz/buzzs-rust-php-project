@@ -1,6 +1,6 @@
 //! Construction of internal (builtin) classes.
 
-use super::sig::{parse_sig, parse_type};
+use super::sig::{parse_sig_borrowed, parse_type};
 use crate::class::{
     cflags, AttributeInfo, Class, ClassConst, ConstExpr, InternalKind, PropInfo, StaticProp,
 };
@@ -9,6 +9,7 @@ use crate::func::{flags, Builtin, BuiltinFn, Func, Method};
 use crate::vm::Vm;
 use php_runtime::{Value, ZStr};
 use std::cell::{Cell, RefCell};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
@@ -18,7 +19,7 @@ pub struct ClassBuilder {
     parent: Option<Rc<Class>>,
     interfaces: Vec<Rc<Class>>,
     flags: u32,
-    consts: Vec<(String, Value, u32, Vec<AttributeInfo>)>,
+    consts: Vec<(ZStr, Value, u32, Vec<AttributeInfo>)>,
     props: Vec<(String, u32, Option<&'static str>, Option<Value>)>,
     statics: Vec<(String, u32, Value)>,
     methods: Vec<(&'static str, u32, BuiltinFn)>,
@@ -39,7 +40,7 @@ fn abstract_stub(
 /// The native method of stub signature `sig` with flags `fl` (public
 /// when no visibility is given; `VARIADIC`/`RETURN_REF` from the stub).
 fn builtin_method(sig: &str, fl: u32, h: BuiltinFn) -> Builtin {
-    let s = parse_sig(sig);
+    let s = parse_sig_borrowed(sig);
     let mut bfl = fl;
     if s.variadic {
         bfl |= flags::VARIADIC;
@@ -51,7 +52,7 @@ fn builtin_method(sig: &str, fl: u32, h: BuiltinFn) -> Builtin {
         bfl |= flags::PUBLIC;
     }
     Builtin {
-        name: ZStr::from(s.name.as_str()),
+        name: ZStr::from(s.name),
         params: s.params,
         defaults: s.defaults,
         required: s.required,
@@ -159,7 +160,7 @@ impl ClassBuilder {
     /// Adds a constant.
     pub fn constant(mut self, name: &str, v: Value) -> Self {
         self.consts
-            .push((name.to_string(), v, flags::PUBLIC, Vec::new()));
+            .push((ZStr::from(name), v, flags::PUBLIC, Vec::new()));
         self
     }
 
@@ -187,7 +188,7 @@ impl ClassBuilder {
             strict: false,
         };
         self.consts
-            .push((name.to_string(), v, flags::PUBLIC, vec![attr]));
+            .push((ZStr::from(name), v, flags::PUBLIC, vec![attr]));
         self
     }
 
@@ -288,18 +289,31 @@ impl ClassBuilder {
         if let Some(p) = &parent {
             cflag |= p.flags & cflags::ALLOW_DYNAMIC;
         }
+        // Upper bounds of the table sizes (inherited entries may be
+        // overridden), so the tables are built without regrowing.
+        let nconsts = parent.as_ref().map_or(0, |p| p.consts.len())
+            + interfaces.iter().map(|i| i.consts.len()).sum::<usize>()
+            + self.consts.len()
+            + self.cases.len();
+        let nmethods = parent.as_ref().map_or(0, |p| p.method_order.len())
+            + interfaces
+                .iter()
+                .map(|i| i.method_order.len())
+                .sum::<usize>()
+            + self.methods.len();
         let cls = Rc::new_cyclic(|weak: &Weak<Class>| {
             // Constants.
-            let mut consts: Vec<Rc<ClassConst>> = Vec::new();
-            let mut const_map = HashMap::new();
+            let mut consts: Vec<Rc<ClassConst>> = Vec::with_capacity(nconsts);
+            let mut const_map = HashMap::with_capacity(nconsts);
             let push_const = |c: Rc<ClassConst>,
                               consts: &mut Vec<Rc<ClassConst>>,
                               map: &mut HashMap<ZStr, usize>| {
-                if let Some(&i) = map.get(&c.name) {
-                    consts[i] = c;
-                } else {
-                    map.insert(c.name.clone(), consts.len());
-                    consts.push(c);
+                match map.entry(c.name.clone()) {
+                    Entry::Occupied(e) => consts[*e.get()] = c,
+                    Entry::Vacant(e) => {
+                        e.insert(consts.len());
+                        consts.push(c);
+                    }
                 }
             };
             if let Some(p) = &parent {
@@ -309,15 +323,16 @@ impl ClassBuilder {
             }
             for i in &interfaces {
                 for c in &i.consts {
-                    if !const_map.contains_key(&c.name) {
-                        push_const(c.clone(), &mut consts, &mut const_map);
+                    if let Entry::Vacant(e) = const_map.entry(c.name.clone()) {
+                        e.insert(consts.len());
+                        consts.push(c.clone());
                     }
                 }
             }
             for (n, v, f, attrs) in &self.consts {
                 push_const(
                     Rc::new(ClassConst {
-                        name: ZStr::from(n.as_str()),
+                        name: n.clone(),
                         value: RefCell::new(Some(v.clone())),
                         expr: ConstExpr::Value(v.clone()),
                         flags: *f,
@@ -353,7 +368,10 @@ impl ClassBuilder {
             // Properties.
             let mut props: Vec<Rc<PropInfo>> =
                 parent.as_ref().map(|p| p.props.clone()).unwrap_or_default();
-            let mut prop_map: HashMap<ZStr, Rc<PropInfo>> = HashMap::new();
+            props.reserve(self.props.len());
+            let mut prop_map: HashMap<ZStr, Rc<PropInfo>> = HashMap::with_capacity(
+                parent.as_ref().map_or(0, |p| p.prop_map.len()) + self.props.len(),
+            );
             if let Some(p) = &parent {
                 for (k, v) in &p.prop_map {
                     if v.visibility() != flags::PRIVATE {
@@ -414,8 +432,8 @@ impl ClassBuilder {
                 static_props.push(sp);
             }
             // Methods.
-            let mut methods: HashMap<ZStr, Rc<Method>> = HashMap::new();
-            let mut order: Vec<ZStr> = Vec::new();
+            let mut methods: HashMap<ZStr, Rc<Method>> = HashMap::with_capacity(nmethods);
+            let mut order: Vec<ZStr> = Vec::with_capacity(nmethods);
             for (sig, f, h) in &self.methods {
                 let b = builtin_method(sig, *f, *h);
                 let bfl = b.flags;
@@ -436,22 +454,14 @@ impl ClassBuilder {
                     }),
                 );
             }
-            if let Some(p) = &parent {
-                for lc in &p.method_order {
-                    if !methods.contains_key(lc) {
-                        if let Some(m) = p.methods.get(lc) {
+            // Inherited methods the class does not override, in the
+            // parent's and then each interface's declaration order.
+            for from in parent.iter().chain(interfaces.iter()) {
+                for lc in &from.method_order {
+                    if let Entry::Vacant(e) = methods.entry(lc.clone()) {
+                        if let Some(m) = from.methods.get(lc) {
                             order.push(lc.clone());
-                            methods.insert(lc.clone(), m.clone());
-                        }
-                    }
-                }
-            }
-            for i in &interfaces {
-                for lc in &i.method_order {
-                    if !methods.contains_key(lc) {
-                        if let Some(m) = i.methods.get(lc) {
-                            order.push(lc.clone());
-                            methods.insert(lc.clone(), m.clone());
+                            e.insert(m.clone());
                         }
                     }
                 }
@@ -492,5 +502,145 @@ impl ClassBuilder {
         });
         vm.register_class(cls.clone());
         cls
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClassBuilder;
+    use crate::class::{cflags, Class};
+    use crate::func::{flags, Args};
+    use crate::vm::{Vm, VmResult};
+    use crate::VmOptions;
+    use php_runtime::Value;
+
+    fn nop(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+        Ok(Value::Null)
+    }
+
+    fn vm() -> Vm {
+        Vm::new(&VmOptions::default(), Box::new(std::io::sink()))
+    }
+
+    /// The magic methods `build_magic` found, by name.
+    fn magic(c: &Class) -> Vec<&'static str> {
+        let m = &c.magic;
+        [
+            ("__construct", m.construct.is_some()),
+            ("__destruct", m.destruct.is_some()),
+            ("__get", m.get.is_some()),
+            ("__set", m.set.is_some()),
+            ("__isset", m.isset.is_some()),
+            ("__unset", m.unset.is_some()),
+            ("__call", m.call.is_some()),
+            ("__callStatic", m.call_static.is_some()),
+            ("__toString", m.to_string.is_some()),
+            ("__invoke", m.invoke.is_some()),
+            ("__clone", m.clone.is_some()),
+            ("__debugInfo", m.debug_info.is_some()),
+            ("__serialize", m.serialize.is_some()),
+            ("__unserialize", m.unserialize.is_some()),
+            ("__sleep", m.sleep.is_some()),
+            ("__wakeup", m.wakeup.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(n, found)| found.then_some(n))
+        .collect()
+    }
+
+    fn with_magic(b: ClassBuilder) -> ClassBuilder {
+        b.method("__construct(int $x = 0)", flags::PUBLIC, nop)
+            .method("__toString(): string", flags::PUBLIC, nop)
+            .method(
+                "__callStatic(string $name, array $arguments): mixed",
+                flags::STATIC,
+                nop,
+            )
+            .method("__unserialize(array $data): void", flags::PUBLIC, nop)
+            .method("__notMagic(): void", flags::PUBLIC, nop)
+            .method("other(): void", flags::PUBLIC, nop)
+    }
+
+    #[test]
+    fn magic_methods_of_small_and_large_method_tables_agree() {
+        let mut vm = vm();
+        let small = with_magic(ClassBuilder::new("MagicSmall")).register(&mut vm);
+        let mut large = with_magic(ClassBuilder::new("MagicLarge"));
+        for i in 0..40 {
+            let sig: &'static str = Box::leak(format!("m{i}(): void").into_boxed_str());
+            large = large.method(sig, flags::PUBLIC, nop);
+        }
+        let large = large.register(&mut vm);
+        assert!(small.methods.len() <= 32 && large.methods.len() > 32);
+        let expected = ["__construct", "__callStatic", "__toString", "__unserialize"];
+        assert_eq!(magic(&small), expected);
+        assert_eq!(magic(&large), expected);
+        let ctor = small.magic.construct.as_ref().expect("constructor");
+        assert!(std::rc::Rc::ptr_eq(
+            ctor,
+            &small.methods[b"__construct".as_slice()]
+        ));
+    }
+
+    #[test]
+    fn inherited_tables_keep_declaration_order_and_overrides() {
+        let mut vm = vm();
+        ClassBuilder::new("BaseT")
+            .constant("A", Value::Int(1))
+            .constant("B", Value::Int(2))
+            .method("first(): void", flags::PUBLIC, nop)
+            .method("__toString(): string", flags::PUBLIC, nop)
+            .method("second(): void", flags::PUBLIC, nop)
+            .register(&mut vm);
+        ClassBuilder::new("IfaceT")
+            .flags(cflags::INTERFACE | cflags::ABSTRACT)
+            .constant("A", Value::Int(3))
+            .constant("C", Value::Int(4))
+            .abstract_method("second(): void", flags::PUBLIC)
+            .abstract_method("third(): void", flags::PUBLIC)
+            .register(&mut vm);
+        let child = ClassBuilder::new("ChildT")
+            .extends(&vm, "BaseT")
+            .implements(&vm, &["IfaceT"])
+            .constant("B", Value::Int(20))
+            .constant("D", Value::Int(5))
+            .method("own(): void", flags::PUBLIC, nop)
+            .method("first(): void", flags::PUBLIC, nop)
+            .register(&mut vm);
+        let consts: Vec<(Vec<u8>, i64)> = child
+            .consts
+            .iter()
+            .map(|c| {
+                let v = match &*c.value.borrow() {
+                    Some(Value::Int(i)) => *i,
+                    _ => -1,
+                };
+                (c.name.as_bytes().to_vec(), v)
+            })
+            .collect();
+        // The parent's constants, then the interface's new ones; own ones
+        // replace inherited ones in place.
+        assert_eq!(
+            consts,
+            [
+                (b"A".to_vec(), 1),
+                (b"B".to_vec(), 20),
+                (b"C".to_vec(), 4),
+                (b"D".to_vec(), 5)
+            ]
+        );
+        for (i, c) in child.consts.iter().enumerate() {
+            assert_eq!(child.const_map[c.name.as_bytes()], i);
+        }
+        let order: Vec<&[u8]> = child.method_order.iter().map(|n| n.as_bytes()).collect();
+        let expected: [&[u8]; 5] = [b"own", b"first", b"__tostring", b"second", b"third"];
+        assert_eq!(order, expected);
+        assert_eq!(child.methods.len(), 5);
+        assert_eq!(magic(&child), ["__toString"]);
+        let base = vm.find_class(b"BaseT").expect("BaseT");
+        assert!(std::rc::Rc::ptr_eq(
+            &child.methods[b"second".as_slice()],
+            &base.methods[b"second".as_slice()]
+        ));
     }
 }

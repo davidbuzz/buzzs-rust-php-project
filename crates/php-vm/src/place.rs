@@ -889,6 +889,40 @@ enum UndefDimHit {
     Str(ZStr),
 }
 
+/// The in-place append behind [`Vm::concat_assign_cv`]: `None` when place
+/// `pid` is not a plain compiled variable holding a string, or `rhs` is
+/// neither a string nor an int; otherwise the string was extended (a
+/// shared one is copied first, as `zend_string_extend` requires a
+/// refcount of 1) and the result is returned: the new string when
+/// `want_result`, else `Null`.
+#[inline]
+fn concat_cv_in_place(
+    f: &crate::vm::Frame,
+    pid: PlaceId,
+    rhs: &Value,
+    want_result: bool,
+) -> Option<Value> {
+    let p = &f.code.places[pid as usize];
+    let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) else {
+        return None;
+    };
+    let idx = f.cv_idx(*cv);
+    let mut st = f.vars.borrow_mut();
+    let Some(Some(Value::Str(s))) = st.slots.get_mut(idx) else {
+        return None;
+    };
+    match rhs {
+        Value::Str(add) => s.append(add.as_bytes()),
+        Value::Int(i) => s.append_long(*i),
+        _ => return None,
+    }
+    Some(if want_result {
+        Value::Str(s.clone())
+    } else {
+        Value::Null
+    })
+}
+
 /// Takes the pending undefined final offset of the walk over `segs`.
 fn take_pending_undef_dim(segs: &[RSeg]) -> Option<u32> {
     PENDING_UNDEF_DIM.with(|c| match c.get() {
@@ -1216,10 +1250,16 @@ impl Vm {
             PlaceBase::GlobalsArray => RBase::Globals,
             PlaceBase::This => RBase::This(self.frame().this.clone()),
             PlaceBase::StaticProp { class, name } => {
+                // The op's run-time cache slot (`CACHED_PTR`, see
+                // `rtcache`): the class and name are only looked up on a
+                // miss.
+                if let Some(cell) = self.static_prop_hit(class, *name) {
+                    return Ok(RBase::Cell(cell));
+                }
                 let n = self.read(*name)?;
                 let n = self.to_zstr(&n)?;
                 let cls = self.resolve_class_spec(class)?;
-                if quiet {
+                let r = if quiet {
                     match self.static_prop_cell_is(&cls, &n)? {
                         Some(cell) => RBase::Cell(cell),
                         None => RBase::Undef(n),
@@ -1235,7 +1275,11 @@ impl Vm {
                     }
                 } else {
                     RBase::Cell(self.static_prop_cell(&cls, &n)?)
+                };
+                if matches!(r, RBase::Cell(_)) {
+                    self.static_prop_fill(class, *name);
                 }
+                r
             }
             PlaceBase::Value(op) => {
                 let v = self.read_raw(*op)?;
@@ -2071,6 +2115,19 @@ impl Vm {
 
     /// `place = v`
     pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+        let (single, head) = {
+            let p = &self.frame().code.places[pid as usize];
+            (propcache::cacheable(p), propcache::cacheable_head(p))
+        };
+        // Fast path: ASSIGN_OBJ to a cached property.
+        let v = if single {
+            match self.prop_cache_assign(pid, v) {
+                Ok(r) => return Ok(r),
+                Err(v) => v,
+            }
+        } else {
+            v
+        };
         let mut undef_dim = None;
         let (base, segs) =
             self.resolve_place_ex(pid, true, false, Some(&mut undef_dim), PlaceOp::Assign)?;
@@ -2080,7 +2137,71 @@ impl Vm {
         if !self.error_handlers.is_empty() && final_dim_converts_noisily(segs.last()) {
             return self.assign_converted_dim(base, &segs, v);
         }
+        // Fast path: `$this->a[$k] = v` & co. enter a cached declared slot
+        // (FETCH_OBJ_W with a runtime cache slot).
+        if head && !single {
+            if let Some((obj, idx)) = self.prop_cache_container(pid) {
+                drop(base);
+                return self.write_cached_container(&obj, idx, &segs, WOp::Assign(v));
+            }
+        }
         self.write_place(base, &segs, WOp::Assign(v))
+    }
+
+    /// The cached declared slot a write walk of place `pid` (resolved to
+    /// `segs`) may start from: `Some` when its first segment is a cached
+    /// property and more segments follow (see
+    /// [`Vm::write_cached_container`]).
+    fn cached_container_of(&mut self, pid: PlaceId, segs: &[RSeg]) -> Option<(Obj, usize)> {
+        if segs.len() > 1 && propcache::cacheable_head(&self.frame().code.places[pid as usize]) {
+            self.prop_cache_container(pid)
+        } else {
+            None
+        }
+    }
+
+    /// [`Vm::write_place`] of place `pid`, starting from a cached first
+    /// property when the cache covers it.
+    fn write_place_cached(
+        &mut self,
+        pid: PlaceId,
+        base: RBase,
+        segs: &[RSeg],
+        wop: WOp,
+    ) -> VmResult<Value> {
+        if let Some((obj, idx)) = self.cached_container_of(pid, segs) {
+            drop(base);
+            return self.write_cached_container(&obj, idx, segs, wop);
+        }
+        self.write_place(base, segs, wop)
+    }
+
+    /// The write walk of a resolved place whose first segment is a cached
+    /// declared property, from slot `idx` of `obj` on: what
+    /// [`Vm::write_place`] does for an object base reaching `obj_walk`'s
+    /// `PropContainer::Declared(idx)`, once `Vm::prop_cache_container`
+    /// stood in for the property's `FETCH_OBJ_W`.
+    fn write_cached_container(
+        &mut self,
+        obj: &Obj,
+        idx: usize,
+        segs: &[RSeg],
+        wop: WOp,
+    ) -> VmResult<Value> {
+        // `write_place_inner`'s check after the base step.
+        if rw_container_changed(&wop) {
+            flush_deferred_ref_assigns();
+            return Ok(Value::Null);
+        }
+        let walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
+            let data = object::data(obj);
+            let mut slots = data.slots.borrow_mut();
+            let slot = slots[idx].get_or_insert(Value::Null);
+            descend(slot, sg, 1, w, d, false)
+        };
+        let r = self.descend_with(segs, wop, walk);
+        flush_deferred_ref_assigns();
+        r
     }
 
     /// `place[k] = v` where converting `k` raises a diagnostic and an error
@@ -2286,6 +2407,16 @@ impl Vm {
         op: BinaryOp,
         v: Value,
     ) -> VmResult<Value> {
+        let (single, head) = {
+            let p = &self.frame().code.places[pid as usize];
+            (propcache::cacheable(p), propcache::cacheable_head(p))
+        };
+        // Fast path: ASSIGN_OBJ_OP on a cached property holding a number.
+        if single {
+            if let Some(r) = self.prop_cache_assign_op(pid, op, &v)? {
+                return Ok(r);
+            }
+        }
         if let Some(cv) = self.rw_undef_cv_container(pid) {
             self.rw_undef_container_first(cv)?;
         }
@@ -2297,6 +2428,13 @@ impl Vm {
             self.rw_undefined_global(pid, &base)?;
         }
         if !segs.is_empty() {
+            // `$this->a[$k] op= v` & co.: enter a cached declared slot.
+            if head && !single {
+                if let Some((obj, idx)) = self.prop_cache_container(pid) {
+                    drop(base);
+                    return self.write_cached_container(&obj, idx, &segs, WOp::AssignOp(op, v));
+                }
+            }
             // One walk: offsets convert and object handlers run once.
             return self.write_place(base, &segs, WOp::AssignOp(op, v));
         }
@@ -2377,21 +2515,71 @@ impl Vm {
     #[allow(clippy::type_complexity)] // (value, overloaded ArrayAccess target)
     fn fetch_rw(
         &mut self,
+        pid: PlaceId,
         base: RBase,
         segs: &[RSeg],
     ) -> VmResult<Option<(Value, Option<(Obj, Value)>)>> {
         if !matches!(segs.last(), Some(RSeg::Dim(_) | RSeg::Append)) {
-            return Ok(Some((self.write_place(base, segs, WOp::FetchRw)?, None)));
+            return Ok(Some((
+                self.write_place_cached(pid, base, segs, WOp::FetchRw)?,
+                None,
+            )));
         }
         // Save and restore around the walk: user code it runs (offsetGet,
         // destructors) may perform read-modify-writes of its own.
         let saved = OVERLOADED_RW.with(std::cell::Cell::take);
         let saved_skip = RW_SKIPPED.with(|c| c.replace(false));
-        let r = self.write_place(base, segs, WOp::FetchRw);
+        let r = self.write_place_cached(pid, base, segs, WOp::FetchRw);
         let mine = OVERLOADED_RW.with(|c| c.replace(saved));
         let skipped = RW_SKIPPED.with(|c| c.replace(saved_skip));
         let r = r?;
         Ok((!skipped).then_some((r, mine)))
+    }
+
+    /// `$cv .= <string or int>` (`ZEND_ASSIGN_OP` on a CV, whose
+    /// `concat_function` call has `result == op1`): a compiled variable
+    /// holding a string (not a reference) is appended to in place, which
+    /// extends the buffer when nothing else holds it (`zend_string_extend`),
+    /// without resolving the place generically. Writes the result to `dst`
+    /// and returns `true`; `false` leaves the operation to
+    /// [`Vm::place_assign_op`], whose string fast path does the same after
+    /// the generic resolution (integers it converts to a temporary string
+    /// first).
+    #[inline]
+    pub(crate) fn concat_assign_cv(&mut self, pid: PlaceId, v: &Value, dst: Option<u32>) -> bool {
+        let Some(result) = concat_cv_in_place(self.frame(), pid, v, dst.is_some()) else {
+            return false;
+        };
+        if let Some(t) = dst {
+            self.set_tmp(t, result);
+        }
+        true
+    }
+
+    /// [`Vm::concat_assign_cv`] for a literal right operand (`$s .= "x"`,
+    /// `ZEND_ASSIGN_OP` CV, CONST), appended straight from the literal
+    /// table without reading (cloning) the operand. `false` when `val` is
+    /// not a literal or the fast path does not apply; the caller then
+    /// reads the operand as usual.
+    #[inline]
+    pub(crate) fn concat_assign_cv_lit(
+        &mut self,
+        pid: PlaceId,
+        val: Operand,
+        dst: Option<u32>,
+    ) -> bool {
+        let Operand::Lit(l) = val else {
+            return false;
+        };
+        let f = self.frame();
+        let Some(result) = concat_cv_in_place(f, pid, &f.code.literals[l as usize], dst.is_some())
+        else {
+            return false;
+        };
+        if let Some(t) = dst {
+            self.set_tmp(t, result);
+        }
+        true
     }
 
     /// `++place` etc.
@@ -2416,6 +2604,12 @@ impl Vm {
                         return Ok(Value::Int(if kind.is_post() { old } else { n }));
                     }
                 }
+            }
+        }
+        // Fast path: PRE/POST_INC/DEC_OBJ on a cached declared slot.
+        if propcache::cacheable(&self.frame().code.places[pid as usize]) {
+            if let Some(r) = self.prop_cache_incdec(pid, kind) {
+                return Ok(r);
             }
         }
         if let Some(cv) = self.rw_undef_cv_container(pid) {
@@ -2460,7 +2654,7 @@ impl Vm {
                 }
             }
         }
-        let Some((cur, overloaded)) = self.fetch_rw(base, &segs)? else {
+        let Some((cur, overloaded)) = self.fetch_rw(pid, base, &segs)? else {
             // FETCH_DIM_RW yielded a null temporary: ++/-- act on it alone.
             let mut nv = Value::Null;
             if kind.is_inc() {
@@ -2504,10 +2698,17 @@ impl Vm {
             self.assign_ref(r, nv)
         } else {
             // A silent write-back walk: `FETCH_DIM_RW` converted the
-            // offsets (and reported them) once already.
-            let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
-            flush_deferred_ref_assigns();
-            r
+            // offsets (and reported them) once already. (From a cached
+            // property slot there is no base step whose diagnostics the
+            // silent walk would drop.)
+            if let Some((obj, idx)) = self.cached_container_of(pid, &segs) {
+                drop(base2);
+                self.write_cached_container(&obj, idx, &segs, WOp::Assign(nv))
+            } else {
+                let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
+                flush_deferred_ref_assigns();
+                r
+            }
         };
         drop(guard);
         let res = res?;
@@ -2596,8 +2797,15 @@ impl Vm {
 
     /// Makes a place a reference.
     pub(crate) fn place_make_ref(&mut self, pid: PlaceId) -> VmResult<PhpRef> {
+        // Fast path: `&$this->p` on a cached declared slot.
+        if propcache::cacheable(&self.frame().code.places[pid as usize]) {
+            if let Some(rf) = self.prop_cache_make_ref(pid) {
+                return Ok(rf);
+            }
+        }
         let (base, segs) = self.resolve_place(pid, true)?;
-        match self.write_place(base, &segs, WOp::MakeRef)? {
+        // `&$this->a[$k]` & co. enter a cached declared slot.
+        match self.write_place_cached(pid, base, &segs, WOp::MakeRef)? {
             Value::Reference(r) => Ok(r),
             other => Ok(PhpRef::new(other)),
         }
@@ -2681,25 +2889,98 @@ impl Vm {
     /// Reads a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_fetch(&mut self, pid: PlaceId, mode: FetchMode) -> VmResult<Value> {
-        // Fast path: reading a plain compiled variable (`f($x)`).
-        if mode == FetchMode::Read {
+        let head = {
             let p = &self.frame().code.places[pid as usize];
-            if let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) {
-                let cv = *cv;
-                return self.read_cv(cv);
+            // Fast path: reading a plain compiled variable (`f($x)`).
+            if mode == FetchMode::Read {
+                if let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) {
+                    let cv = *cv;
+                    return self.read_cv(cv);
+                }
+                // FETCH_DIM_FUNC_ARG sent by value: `$a[]` fails before its
+                // container or any later offset is read
+                // (`zend_use_undef_in_read_context`).
+                if matches!(p.segs.first(), Some(Seg::Append)) {
+                    return Err(self.make_throw("Error", "Cannot use [] for reading"));
+                }
             }
-            // FETCH_DIM_FUNC_ARG sent by value: `$a[]` fails before its
-            // container or any later offset is read
-            // (`zend_use_undef_in_read_context`).
-            if matches!(p.segs.first(), Some(Seg::Append)) {
-                return Err(self.make_throw("Error", "Cannot use [] for reading"));
+            // Fast path: `$cv->name` / `$this->name` on a cached property
+            // (FETCH_OBJ_R/IS with a runtime cache slot); a longer chain
+            // (`$this->a[$i]`, `$this->a->b`) goes on from that value.
+            if mode != FetchMode::List && propcache::cacheable_head(p) {
+                let single = p.segs.len() == 1;
+                match self.prop_cache_read(pid) {
+                    Some(value) if single => return Ok(value),
+                    found => found,
+                }
+            } else {
+                None
             }
-        }
+        };
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];
-        let base = self.resolve_base(&place.base, false, mode == FetchMode::Is, None)?;
         let segs = &place.segs;
-        let mut cur = match base {
+        let (mut cur, rest) = if let Some(v) = head {
+            (v, &segs[1..])
+        } else {
+            let base = self.resolve_base(&place.base, false, mode == FetchMode::Is, None)?;
+            (self.fetch_base_value(pid, base, segs, mode)?, &segs[..])
+        };
+        // Each offset/name operand is read when its FETCH_DIM_*/FETCH_OBJ_*
+        // runs (after the container's warnings); a quiet chain that reached
+        // null still reads, and reports, the remaining operands.
+        let mut settled = mode == FetchMode::Is && rest.len() < segs.len() && cur.is_null();
+        for seg in rest {
+            match seg {
+                Seg::Dim(op) => {
+                    let k = self.read_dim_operand(*op)?;
+                    if !settled {
+                        cur = self.fetch_dim(cur, &k, mode)?;
+                    }
+                }
+                Seg::Append => {
+                    return Err(self.make_throw("Error", "Cannot use [] for reading"));
+                }
+                Seg::Prop(op) => {
+                    let v = self.read(*op)?;
+                    if !settled {
+                        cur = match cur {
+                            Value::Object(o) => {
+                                let name = self.to_zstr(&v)?;
+                                self.read_property(&o, &name, mode)?
+                            }
+                            other => {
+                                if mode == FetchMode::Read {
+                                    let name = self.to_zstr(&v)?;
+                                    self.warning(&format!(
+                                        "Attempt to read property \"{}\" on {}",
+                                        name.to_string_lossy(),
+                                        other.value_name()
+                                    ))?;
+                                }
+                                Value::Null
+                            }
+                        };
+                    }
+                }
+            }
+            if mode == FetchMode::Is && cur.is_null() {
+                settled = true;
+            }
+        }
+        Ok(cur)
+    }
+
+    /// The value of a read place's resolved base (`place_fetch` without a
+    /// cached head), with the undefined-variable warnings of a read.
+    fn fetch_base_value(
+        &mut self,
+        pid: PlaceId,
+        base: RBase,
+        segs: &[Seg],
+        mode: FetchMode,
+    ) -> VmResult<Value> {
+        Ok(match base {
             RBase::Var(store, idx) => {
                 let v = store.borrow().slots[idx].as_ref().map(Value::deref);
                 match v {
@@ -2740,50 +3021,7 @@ impl Vm {
                 Value::Null
             }
             RBase::Globals => Value::Array(ZArray::from_table(self.globals.borrow().to_array())),
-        };
-        // Each offset/name operand is read when its FETCH_DIM_*/FETCH_OBJ_*
-        // runs (after the container's warnings); a quiet chain that reached
-        // null still reads, and reports, the remaining operands.
-        let mut settled = false;
-        for seg in segs {
-            match seg {
-                Seg::Dim(op) => {
-                    let k = self.read_dim_operand(*op)?;
-                    if !settled {
-                        cur = self.fetch_dim(cur, &k, mode)?;
-                    }
-                }
-                Seg::Append => {
-                    return Err(self.make_throw("Error", "Cannot use [] for reading"));
-                }
-                Seg::Prop(op) => {
-                    let v = self.read(*op)?;
-                    if !settled {
-                        cur = match cur {
-                            Value::Object(o) => {
-                                let name = self.to_zstr(&v)?;
-                                self.read_property(&o, &name, mode)?
-                            }
-                            other => {
-                                if mode == FetchMode::Read {
-                                    let name = self.to_zstr(&v)?;
-                                    self.warning(&format!(
-                                        "Attempt to read property \"{}\" on {}",
-                                        name.to_string_lossy(),
-                                        other.value_name()
-                                    ))?;
-                                }
-                                Value::Null
-                            }
-                        };
-                    }
-                }
-            }
-            if mode == FetchMode::Is && cur.is_null() {
-                settled = true;
-            }
-        }
-        Ok(cur)
+        })
     }
 
     /// One dimension read (`zend_fetch_dimension_address_read`).
@@ -2910,26 +3148,48 @@ impl Vm {
     /// `isset(place)` / `empty(place)` (returns the isset or empty result).
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
+        let (single, head) = {
+            let p = &self.frame().code.places[pid as usize];
+            (propcache::cacheable(p), propcache::cacheable_head(p))
+        };
+        // Fast path: ISSET_ISEMPTY_PROP_OBJ on a cached property.
+        if single {
+            if let Some(r) = self.prop_cache_isset(pid, empty)? {
+                return Ok(r);
+            }
+        }
+        // `isset($this->a[$k])` & co.: the container's FETCH_OBJ_IS from
+        // the cache.
+        let head = if head && !single {
+            self.prop_cache_read(pid)
+        } else {
+            None
+        };
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];
-        let base = self.resolve_base(&place.base, false, true, None)?;
         let segs = &place.segs;
-        let mut cur = match base {
-            RBase::Var(store, idx) => store.borrow().slots[idx].as_ref().map(Value::deref),
-            // ZEND_ISSET_ISEMPTY_PROP_OBJ / FETCH_*_IS on an unset `$this`
-            // (zend_this_not_in_object_context_helper).
-            RBase::This(None) if !segs.is_empty() => {
-                return Err(self.make_throw("Error", "Using $this when not in object context"));
-            }
-            RBase::This(o) => o.map(Value::Object),
-            RBase::Cell(c) => {
-                (!crate::typed_refs::static_cell_uninit(&c)).then(|| c.borrow().deref())
-            }
-            RBase::Value(v) => Some(v.deref()),
-            RBase::Undef(_) => None,
-            RBase::Globals => Some(Value::Array(ZArray::from_table(
-                self.globals.borrow().to_array(),
-            ))),
+        let (mut cur, start) = if let Some(v) = head {
+            (Some(v), 1)
+        } else {
+            let base = self.resolve_base(&place.base, false, true, None)?;
+            let cur = match base {
+                RBase::Var(store, idx) => store.borrow().slots[idx].as_ref().map(Value::deref),
+                // ZEND_ISSET_ISEMPTY_PROP_OBJ / FETCH_*_IS on an unset `$this`
+                // (zend_this_not_in_object_context_helper).
+                RBase::This(None) if !segs.is_empty() => {
+                    return Err(self.make_throw("Error", "Using $this when not in object context"));
+                }
+                RBase::This(o) => o.map(Value::Object),
+                RBase::Cell(c) => {
+                    (!crate::typed_refs::static_cell_uninit(&c)).then(|| c.borrow().deref())
+                }
+                RBase::Value(v) => Some(v.deref()),
+                RBase::Undef(_) => None,
+                RBase::Globals => Some(Value::Array(ZArray::from_table(
+                    self.globals.borrow().to_array(),
+                ))),
+            };
+            (cur, 0)
         };
         let n = segs.len();
         if n == 0 {
@@ -2948,7 +3208,7 @@ impl Vm {
         // is known (an undefined offset variable still warns); property
         // names convert only when an object is reached.
         let mut settled = false;
-        for (i, seg) in segs.iter().enumerate() {
+        for (i, seg) in segs.iter().enumerate().skip(start) {
             let raw = match seg {
                 Seg::Dim(op) => self.read_dim_operand(*op)?,
                 Seg::Prop(op) => self.read(*op)?,
@@ -3164,6 +3424,8 @@ fn stored_property(obj: &Obj, name: &ZStr) -> Option<Value> {
             .and_then(|t| t.get(&ArrayKey::Str(name.clone())).map(Value::deref)),
     }
 }
+
+mod propcache;
 
 #[cfg(test)]
 mod tests;
