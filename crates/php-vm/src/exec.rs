@@ -1630,16 +1630,17 @@ impl Vm {
 
     /// Whether the safe point after an instruction has work to do: pending
     /// destructors, a due collection, a delayed `memory_limit` violation or
-    /// an interrupt. One inline test of the flags; the work itself is out
-    /// of line ([`Vm::safe_point_work`]).
+    /// an interrupt. Inline flag tests; the work itself is out of line
+    /// ([`Vm::safe_point_work`]).
     #[inline(always)]
     #[allow(clippy::inline_always)] // the per-instruction test of the dispatch loop
     fn safe_point_due() -> bool {
-        // Non-short-circuit `|`: four flag loads and one branch.
+        // Short-circuit: a compare-and-branch per flag (no `setcc`/`or`
+        // chain); all four are almost always clear.
         object::has_pending_destructors()
-            | crate::gc::wants_run()
-            | php_memlimit::is_pending()
-            | crate::interrupt::interrupt_flag().load(std::sync::atomic::Ordering::Relaxed)
+            || crate::gc::wants_run()
+            || php_memlimit::is_pending()
+            || crate::interrupt::interrupt_flag().load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The safe point after an instruction of the current frame that
