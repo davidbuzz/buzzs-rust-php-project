@@ -346,21 +346,37 @@ impl SessionHost for VmHost<'_> {
         }))
     }
 
+    fn unserialize_shared_cell(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> Option<RtResult<Result<(Value, usize), usize>>> {
+        if !self.vm.unserialize_context_active() {
+            return None;
+        }
+        Some(self.parked(|vm| {
+            vm.unserialize_nested_cell(data, offset)
+                .map_err(|t| to_rt(vm, t))
+        }))
+    }
+
+    fn unwrap_unserialized_cells(&mut self, values: &mut [Value]) {
+        self.vm.unwrap_unserialized_cells(values);
+    }
+
     fn serialize_shared(
         &mut self,
         vars: &ZArray,
         keys: Option<&[ZStr]>,
     ) -> Option<RtResult<Vec<Vec<u8>>>> {
         let whole;
-        let values: Vec<&Value> = match keys {
-            Some(keys) => keys
-                .iter()
+        let values: Vec<&Value> = if let Some(keys) = keys {
+            keys.iter()
                 .filter_map(|k| vars.get_str(k.as_bytes()))
-                .collect(),
-            None => {
-                whole = Value::Array(vars.clone());
-                vec![&whole]
-            }
+                .collect()
+        } else {
+            whole = Value::Array(vars.clone());
+            vec![&whole]
         };
         Some(self.parked(|vm| vm.serialize_values(&values).map_err(|t| to_rt(vm, t))))
     }

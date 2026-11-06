@@ -671,12 +671,14 @@ dependencies = [
 name = "php-ext-mbstring"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
  "php-mbstring",
  "php-memlimit",
  "php-parser",
  "php-pcre",
  "php-runtime",
  "php-stdmisc",
+ "php-streams",
  "php-support",
  "php-vm",
 ]

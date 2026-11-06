@@ -86,12 +86,15 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
             Severity::Deprecated => 8192,
             Severity::Error => 1,
         };
-        let origin = if pending.is_some() {
-            active_function_origin(vm)
+        if pending.is_some() {
+            let origin = active_function_origin(vm);
+            vm.raise(level, &format!("{origin}: {}", d.text()))?;
         } else {
-            vm.include_error_origin(kind, name)
-        };
-        vm.raise(level, &format!("{origin}: {}", d.text()))?;
+            // `php_verror` with the opline on `ZEND_INCLUDE_OR_EVAL`: the
+            // `kind()` origin, escaped and linked to the manual page under
+            // `html_errors` + `docref_root`.
+            vm.include_error(level, kind, name, &d.text())?;
+        }
     }
     if let Some(t) = pending {
         return Err(t);
@@ -306,6 +309,42 @@ var_dump(include 'php://filter/read=sample.filter/resource={p}');
             "{out}"
         );
         assert!(out.ends_with("bool(false)\n"), "{out}");
+    }
+
+    /// `php_verror` while `ZEND_INCLUDE_OR_EVAL` executes: under
+    /// `html_errors` with a `docref_root`, the stream layer's warning for a
+    /// wrapper include is escaped and linked to the `function.include` page
+    /// like the VM's own "Failed opening" warning (main/main.c).
+    #[test]
+    fn wrapper_include_warnings_link_the_manual_page() {
+        let sink = Sink::default();
+        let streams = crate::Streams;
+        let exts: [&dyn Extension; 1] = [&streams];
+        let opts = VmOptions {
+            ini: vec![
+                ("html_errors".to_owned(), "1".to_owned()),
+                ("docref_root".to_owned(), "http://example.org/".to_owned()),
+                ("docref_ext".to_owned(), ".html".to_owned()),
+            ],
+        };
+        let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
+        vm.run_script(
+            b"<?php include 'php://filter/read=nonexistent.filter/resource=data:,x';",
+            "test.php",
+        );
+        drop(vm);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        let link = "include() [<a href='http://example.org/function.include.html'>function.include.html</a>]: ";
+        assert!(
+            out.contains(&format!(
+                "{link}Failed to open stream: operation failed in <b>test.php</b> on line <b>1</b>"
+            )),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!("{link}Failed opening 'php://filter/read=nonexistent.filter/resource=data:,x' for inclusion")),
+            "{out}"
+        );
     }
 
     #[test]

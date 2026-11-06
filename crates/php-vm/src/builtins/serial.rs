@@ -1782,6 +1782,38 @@ fn without_root_recording<R>(f: impl FnOnce() -> R) -> R {
 }
 
 impl Unwrapper {
+    /// An unwrapper for the cells of context `d` (none: only lone cells are
+    /// unwrapped), counting each cell's `var_hash` entries.
+    fn new(d: Option<&UnserRc>) -> Self {
+        let mut slot_counts = HashMap::new();
+        if let Some(d) = d {
+            for c in d.borrow().slots.iter().flatten() {
+                *slot_counts.entry(c.addr()).or_insert(0) += 1;
+            }
+        }
+        Self {
+            seen_refs: HashSet::new(),
+            seen_objs: HashSet::new(),
+            slot_counts,
+        }
+    }
+
+    /// Unwraps what the delayed calls of `d` will see: the properties of
+    /// every object created and the `__unserialize()` data arrays.
+    fn pending(&mut self, d: &UnserRc) {
+        let objects = std::mem::take(&mut d.borrow_mut().objects);
+        for o in &objects {
+            self.object(o);
+        }
+        let mut dtors = std::mem::take(&mut d.borrow_mut().dtors);
+        for dt in &mut dtors {
+            if let Dtor::Unserialize(_, data) = dt {
+                self.value(data);
+            }
+        }
+        d.borrow_mut().dtors = dtors;
+    }
+
     fn value(&mut self, v: &mut Value) {
         match v {
             Value::Reference(r) => {
@@ -2158,30 +2190,12 @@ fn unserialize_with_options(
             return Err(t);
         }
     };
-    let mut slot_counts = HashMap::new();
-    for c in d.borrow().slots.iter().flatten() {
-        *slot_counts.entry(c.addr()).or_insert(0) += 1;
-    }
-    let mut uw = Unwrapper {
-        seen_refs: HashSet::new(),
-        seen_objs: HashSet::new(),
-        slot_counts,
-    };
+    let mut uw = Unwrapper::new(Some(&d));
     if let Some(v) = value.as_mut() {
         uw.value(v);
     }
     if outermost {
-        let objects = std::mem::take(&mut d.borrow_mut().objects);
-        for o in &objects {
-            uw.object(o);
-        }
-        let mut dtors = std::mem::take(&mut d.borrow_mut().dtors);
-        for dt in &mut dtors {
-            if let Dtor::Unserialize(_, data) = dt {
-                uw.value(data);
-            }
-        }
-        d.borrow_mut().dtors = dtors;
+        uw.pending(&d);
     }
     unser_destroy(vm, &d, outermost, true)?;
     Ok(match value {
@@ -2245,6 +2259,11 @@ impl Vm {
             ABANDONED_UNSER.with(|u| u.borrow_mut().push(d));
             return Ok(());
         }
+        if outermost {
+            // What the delayed calls see is unwrapped first, as for
+            // `unserialize()`'s own outermost context.
+            Unwrapper::new(Some(&d)).pending(&d);
+        }
         unser_destroy(self, &d, outermost, run)
     }
 
@@ -2267,52 +2286,97 @@ impl Vm {
         data: &[u8],
         offset: usize,
     ) -> VmResult<Result<(Value, usize), usize>> {
-        let (d, outermost) = unser_init(self);
-        let first_slot = d.borrow().slots.len();
-        let mut u = Unserializer {
-            cur: Cursor { data, pos: offset },
-            d: d.clone(),
+        unserialize_one(self, data, offset, true)
+    }
+
+    /// `php_var_unserialize()` into a `var_tmp_var()` of the shared
+    /// `var_hash`: like [`Vm::unserialize_nested`], but the value comes back
+    /// as its parse cell (a `Value::Reference`), not yet unwrapped, so `R:`
+    /// back-references in later values of the same context turn it, or a
+    /// cell inside it, into a true reference in place. The session decoders
+    /// store it into `$_SESSION` as PHP stores the `IS_PTR` placeholder and
+    /// finish with [`Vm::unwrap_unserialized_cells`] before ending the
+    /// context (`php_session_normalize_vars()`).
+    pub fn unserialize_nested_cell(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> VmResult<Result<(Value, usize), usize>> {
+        unserialize_one(self, data, offset, false)
+    }
+
+    /// Replaces the cells that only `values` (and the active context's
+    /// `var_hash`) hold by their values, recursively, as
+    /// [`Vm::unserialize_nested`] does for each of its results: a cell an
+    /// `R:` back-reference targeted stays a reference, shared by every
+    /// value holding it. `values` must hold every handle of a cell outside
+    /// the `var_hash` (moved in, not cloned), as the decision counts
+    /// handles; without an active context only lone cells are unwrapped.
+    pub fn unwrap_unserialized_cells(&mut self, values: &mut [Value]) {
+        let active = if is_locked() {
+            None
+        } else {
+            UNSER.with(|u| {
+                let u = u.borrow();
+                u.1.clone().filter(|_| u.0 > 0)
+            })
         };
-        let parsed = u.value(self, None);
-        if matches!(parsed, Err(Throw::Fatal)) {
-            ABANDONED_UNSER.with(|u| u.borrow_mut().push(d));
-            return Err(Throw::Fatal);
-        }
-        let pos = u.cur.pos;
-        let mut value = match parsed {
-            Ok(Some(v)) => Some(v),
-            Ok(None) => {
-                for s in d.borrow_mut().slots.iter_mut().skip(first_slot) {
-                    *s = None;
-                }
-                None
-            }
-            Err(t) => {
-                for s in d.borrow_mut().slots.iter_mut().skip(first_slot) {
-                    *s = None;
-                }
-                let _ = unser_destroy(self, &d, outermost, false);
-                return Err(t);
-            }
-        };
-        if let Some(v) = value.as_mut() {
-            let mut slot_counts = HashMap::new();
-            for c in d.borrow().slots.iter().flatten() {
-                *slot_counts.entry(c.addr()).or_insert(0) += 1;
-            }
-            let mut uw = Unwrapper {
-                seen_refs: HashSet::new(),
-                seen_objs: HashSet::new(),
-                slot_counts,
-            };
+        let mut uw = Unwrapper::new(active.as_ref());
+        for v in values {
             uw.value(v);
         }
-        unser_destroy(self, &d, outermost, true)?;
-        Ok(match value {
-            Some(v) => Ok((v.deref(), pos)),
-            None => Err(pos),
-        })
     }
+}
+
+/// `php_var_unserialize()` of one value of `data` at `offset` in the
+/// active context. With `unwrap`, the cells only the value holds are
+/// unwrapped and the result dereferenced; otherwise the parse cell itself
+/// is returned (see [`Vm::unserialize_nested_cell`]).
+fn unserialize_one(
+    vm: &mut Vm,
+    data: &[u8],
+    offset: usize,
+    unwrap: bool,
+) -> VmResult<Result<(Value, usize), usize>> {
+    let (d, outermost) = unser_init(vm);
+    let first_slot = d.borrow().slots.len();
+    let mut u = Unserializer {
+        cur: Cursor { data, pos: offset },
+        d: d.clone(),
+    };
+    let parsed = u.value(vm, None);
+    if matches!(parsed, Err(Throw::Fatal)) {
+        ABANDONED_UNSER.with(|u| u.borrow_mut().push(d));
+        return Err(Throw::Fatal);
+    }
+    let pos = u.cur.pos;
+    let mut value = match parsed {
+        Ok(Some(v)) => Some(v),
+        Ok(None) => {
+            for s in d.borrow_mut().slots.iter_mut().skip(first_slot) {
+                *s = None;
+            }
+            None
+        }
+        Err(t) => {
+            for s in d.borrow_mut().slots.iter_mut().skip(first_slot) {
+                *s = None;
+            }
+            let _ = unser_destroy(vm, &d, outermost, false);
+            return Err(t);
+        }
+    };
+    if unwrap {
+        if let Some(v) = value.as_mut() {
+            Unwrapper::new(Some(&d)).value(v);
+        }
+    }
+    unser_destroy(vm, &d, outermost, true)?;
+    Ok(match value {
+        Some(v) if unwrap => Ok((v.deref(), pos)),
+        Some(v) => Ok((v, pos)),
+        None => Err(pos),
+    })
 }
 
 fn unserialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -2336,6 +2400,7 @@ pub(crate) fn register(vm: &mut Vm) {
 mod tests {
     use super::{unescape, valid_class_name};
     use crate::{Vm, VmOptions};
+    use php_runtime::{ArrayKey, PhpRef, Value, ZArray};
     use std::cell::RefCell;
     use std::io::Write;
     use std::rc::Rc;
@@ -2360,6 +2425,61 @@ mod tests {
         drop(vm);
         let out = sink.0.borrow().clone();
         String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// The session decoders' path: values parsed into cells stay subject to
+    /// later `R:` back-references until they are unwrapped together.
+    #[test]
+    fn nested_cells_become_shared_references_when_back_referenced() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(Sink::default()));
+        vm.begin_unserialize_context();
+        let data = b"foo|a:3:{i:0;i:1;i:1;i:2;i:2;i:3;}guff|R:1;bar|a:1:{i:0;i:5;}baz|R:6;x|i:7;";
+        let parse = |vm: &mut Vm, off: usize| -> (Value, usize) {
+            match vm.unserialize_nested_cell(data, off) {
+                Ok(Ok(r)) => r,
+                other => panic!("parse at {off}: {other:?}"),
+            }
+        };
+        let (foo, end) = parse(&mut vm, 4);
+        assert_eq!(end, 34);
+        assert!(matches!(foo, Value::Reference(_)));
+        let (guff, end) = parse(&mut vm, 39);
+        assert_eq!(end, 43);
+        let (bar, end) = parse(&mut vm, 47);
+        assert_eq!(end, 61);
+        let (baz, end) = parse(&mut vm, 65);
+        assert_eq!(end, 69);
+        let (x, end) = parse(&mut vm, 71);
+        assert_eq!(end, 75);
+        let mut values = vec![foo, guff, bar, baz, x];
+        vm.unwrap_unserialized_cells(&mut values);
+        vm.end_unserialize_context(true, false).unwrap();
+        let [foo, guff, bar, baz, x] = values.as_slice() else {
+            panic!()
+        };
+        // `guff|R:1;` made foo's cell a reference both entries share.
+        let (Value::Reference(f), Value::Reference(g)) = (foo, guff) else {
+            panic!("{foo:?} {guff:?}")
+        };
+        assert!(PhpRef::ptr_eq(f, g));
+        assert_eq!(f.refcount(), 2);
+        let Value::Array(shared) = f.get() else {
+            panic!("{foo:?}")
+        };
+        assert_eq!(shared.len(), 3);
+        // `baz|R:6;` targeted bar's element 0: bar stays a plain array whose
+        // element is the reference baz shares.
+        let Value::Array(b) = bar else {
+            panic!("{bar:?}")
+        };
+        let (Some(Value::Reference(e)), Value::Reference(z)) = (b.get(&ArrayKey::Int(0)), baz)
+        else {
+            panic!("{bar:?} {baz:?}")
+        };
+        assert!(PhpRef::ptr_eq(e, z));
+        assert!(matches!(e.get(), Value::Int(5)));
+        // Nothing referred to x: a plain value.
+        assert!(matches!(x, Value::Int(7)));
     }
 
     #[test]

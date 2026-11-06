@@ -29,9 +29,12 @@ fn first_function(src: &str) -> (Vec<Op>, Vec<String>) {
     (f.code.ops.clone(), cvs)
 }
 
+/// Jump sites: (index of the jump op, its target).
+type Jumps = Vec<(usize, u32)>;
+
 /// The backward conditional jumps (`JMPNZ` to an earlier op) and all
 /// unconditional jumps of `ops`.
-fn jumps(ops: &[Op]) -> (Vec<(usize, u32)>, Vec<(usize, u32)>) {
+fn jumps(ops: &[Op]) -> (Jumps, Jumps) {
     let mut back = Vec::new();
     let mut plain = Vec::new();
     for (at, op) in ops.iter().enumerate() {

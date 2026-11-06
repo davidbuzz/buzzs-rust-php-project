@@ -2,7 +2,8 @@
 
 use super::sig::{parse_sig_borrowed, parse_type};
 use crate::class::{
-    cflags, AttributeInfo, Class, ClassConst, ConstExpr, InternalKind, PropInfo, StaticProp,
+    cflags, name_map_with_capacity, AttributeInfo, Class, ClassConst, ConstExpr, InternalKind,
+    NameMap, PropInfo, StaticProp,
 };
 use crate::classlink::build_magic;
 use crate::func::{flags, Builtin, BuiltinFn, Func, Method};
@@ -10,10 +11,10 @@ use crate::vm::Vm;
 use php_runtime::{Value, ZStr};
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 /// A builder for internal (native) classes.
+#[derive(Debug)]
 pub struct ClassBuilder {
     name: String,
     parent: Option<Rc<Class>>,
@@ -25,9 +26,30 @@ pub struct ClassBuilder {
     methods: Vec<(&'static str, u32, BuiltinFn)>,
     internal: InternalKind,
     hooks: Option<Rc<crate::ext::ClassHooks>>,
-    /// `Some(backing)` for enums (`None` backing: a unit enum).
-    enum_backing: Option<Option<u32>>,
+    enum_backing: EnumBacking,
     cases: Vec<(String, Option<Value>)>,
+}
+
+/// Whether the class under construction is an enum, and of which kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnumBacking {
+    /// Not an enum.
+    NotEnum,
+    /// A unit enum (`enum Name { case A; }`).
+    Unit,
+    /// A backed enum, with the type mask of its backing type.
+    Backed(u32),
+}
+
+impl EnumBacking {
+    /// The type mask of a backed enum's backing type.
+    fn mask(self) -> Option<u32> {
+        if let EnumBacking::Backed(m) = self {
+            Some(m)
+        } else {
+            None
+        }
+    }
 }
 
 fn abstract_stub(
@@ -64,7 +86,7 @@ fn builtin_method(sig: &str, fl: u32, h: BuiltinFn) -> Builtin {
 
 /// A native method of `scope` that is not in its method table: the
 /// functions a `get_method` handler hands out from a table of its own
-/// (`pdo_hash_methods` in ext/pdo/pdo_dbh.c builds them from the driver's
+/// (`pdo_hash_methods` in `ext/pdo/pdo_dbh.c` builds them from the driver's
 /// `zend_function_entry` list with `func.scope = pdo_dbh_ce`). Served
 /// through [`crate::ext::ClassHooks::extra_method`].
 pub fn native_method(scope: &Rc<Class>, sig: &str, fl: u32, h: BuiltinFn) -> Rc<Method> {
@@ -92,44 +114,49 @@ impl ClassBuilder {
             methods: Vec::new(),
             internal: InternalKind::None,
             hooks: None,
-            enum_backing: None,
+            enum_backing: EnumBacking::NotEnum,
             cases: Vec::new(),
         }
     }
 
     /// Makes the class a unit enum (`enum Name { case A; }`): final,
     /// implements `UnitEnum`, has `$name` and `cases()`.
+    #[must_use]
     pub fn unit_enum(mut self) -> Self {
-        self.enum_backing = Some(None);
+        self.enum_backing = EnumBacking::Unit;
         self
     }
 
     /// Makes the class a backed enum (`enum Name: int|string`): adds
     /// `BackedEnum`, `$value`, `from()`/`tryFrom()`. `backing` is
     /// `"int"` or `"string"`.
+    #[must_use]
     pub fn backed_enum(mut self, backing: &str) -> Self {
         let m = if backing.eq_ignore_ascii_case("int") {
             crate::types::mask::LONG
         } else {
             crate::types::mask::STRING
         };
-        self.enum_backing = Some(Some(m));
+        self.enum_backing = EnumBacking::Backed(m);
         self
     }
 
     /// Adds an enum case (`value` is the backing value of a backed enum).
+    #[must_use]
     pub fn case(mut self, name: &str, value: Option<Value>) -> Self {
         self.cases.push((name.to_string(), value));
         self
     }
 
     /// Sets the parent class (looked up in the VM).
+    #[must_use]
     pub fn extends(mut self, vm: &Vm, parent: &str) -> Self {
         self.parent = vm.find_class(parent.as_bytes());
         self
     }
 
     /// Adds implemented interfaces.
+    #[must_use]
     pub fn implements(mut self, vm: &Vm, names: &[&str]) -> Self {
         for n in names {
             if let Some(c) = vm.find_class(n.as_bytes()) {
@@ -140,12 +167,14 @@ impl ClassBuilder {
     }
 
     /// Adds class flags.
+    #[must_use]
     pub fn flags(mut self, f: u32) -> Self {
         self.flags |= f;
         self
     }
 
     /// Sets native object handlers.
+    #[must_use]
     pub fn hooks(mut self, h: crate::ext::ClassHooks) -> Self {
         self.hooks = Some(Rc::new(h));
         self
@@ -158,6 +187,7 @@ impl ClassBuilder {
     }
 
     /// Adds a constant.
+    #[must_use]
     pub fn constant(mut self, name: &str, v: Value) -> Self {
         self.consts
             .push((ZStr::from(name), v, flags::PUBLIC, Vec::new()));
@@ -167,6 +197,7 @@ impl ClassBuilder {
     /// Adds a `#[\Deprecated]` constant: reading it emits
     /// `Deprecated: Constant C::NAME is deprecated since X, message`
     /// (`since`/`message` may be empty).
+    #[must_use]
     pub fn deprecated_constant(mut self, name: &str, v: Value, since: &str, message: &str) -> Self {
         let mut args = Vec::new();
         if !message.is_empty() {
@@ -194,6 +225,7 @@ impl ClassBuilder {
 
     /// Adds a property: `ty` is a stub type or `None`; `default` `None`
     /// leaves typed properties uninitialized.
+    #[must_use]
     pub fn prop(
         mut self,
         name: &str,
@@ -206,18 +238,21 @@ impl ClassBuilder {
     }
 
     /// Adds a static property.
+    #[must_use]
     pub fn static_prop(mut self, name: &str, fl: u32, v: Value) -> Self {
         self.statics.push((name.to_string(), fl | flags::STATIC, v));
         self
     }
 
     /// Adds a method with a stub signature.
+    #[must_use]
     pub fn method(mut self, sig: &'static str, fl: u32, f: BuiltinFn) -> Self {
         self.methods.push((sig, fl, f));
         self
     }
 
     /// Adds an abstract (interface) method.
+    #[must_use]
     pub fn abstract_method(mut self, sig: &'static str, fl: u32) -> Self {
         self.methods
             .push((sig, fl | flags::ABSTRACT, abstract_stub));
@@ -227,7 +262,8 @@ impl ClassBuilder {
     /// Builds and registers the class.
     #[allow(clippy::too_many_lines)]
     pub fn register(mut self, vm: &mut Vm) -> Rc<Class> {
-        if let Some(backing) = self.enum_backing {
+        if self.enum_backing != EnumBacking::NotEnum {
+            let backing = self.enum_backing.mask();
             self.flags |= cflags::ENUM | cflags::FINAL;
             let mut ifaces = Vec::new();
             ifaces.extend(vm.find_class(b"UnitEnum"));
@@ -304,18 +340,17 @@ impl ClassBuilder {
         let cls = Rc::new_cyclic(|weak: &Weak<Class>| {
             // Constants.
             let mut consts: Vec<Rc<ClassConst>> = Vec::with_capacity(nconsts);
-            let mut const_map = HashMap::with_capacity(nconsts);
-            let push_const = |c: Rc<ClassConst>,
-                              consts: &mut Vec<Rc<ClassConst>>,
-                              map: &mut HashMap<ZStr, usize>| {
-                match map.entry(c.name.clone()) {
-                    Entry::Occupied(e) => consts[*e.get()] = c,
-                    Entry::Vacant(e) => {
-                        e.insert(consts.len());
-                        consts.push(c);
+            let mut const_map = name_map_with_capacity(nconsts);
+            let push_const =
+                |c: Rc<ClassConst>, consts: &mut Vec<Rc<ClassConst>>, map: &mut NameMap<usize>| {
+                    match map.entry(c.name.clone()) {
+                        Entry::Occupied(e) => consts[*e.get()] = c,
+                        Entry::Vacant(e) => {
+                            e.insert(consts.len());
+                            consts.push(c);
+                        }
                     }
-                }
-            };
+                };
             if let Some(p) = &parent {
                 for c in &p.consts {
                     push_const(c.clone(), &mut consts, &mut const_map);
@@ -369,7 +404,7 @@ impl ClassBuilder {
             let mut props: Vec<Rc<PropInfo>> =
                 parent.as_ref().map(|p| p.props.clone()).unwrap_or_default();
             props.reserve(self.props.len());
-            let mut prop_map: HashMap<ZStr, Rc<PropInfo>> = HashMap::with_capacity(
+            let mut prop_map: NameMap<Rc<PropInfo>> = name_map_with_capacity(
                 parent.as_ref().map_or(0, |p| p.prop_map.len()) + self.props.len(),
             );
             if let Some(p) = &parent {
@@ -413,10 +448,11 @@ impl ClassBuilder {
                 .as_ref()
                 .map(|p| p.static_props.clone())
                 .unwrap_or_default();
-            let mut static_map: HashMap<ZStr, usize> = parent
+            let mut static_map: NameMap<usize> = parent
                 .as_ref()
                 .map(|p| p.static_map.clone())
                 .unwrap_or_default();
+            static_map.reserve(self.statics.len());
             for (n, f, v) in &self.statics {
                 let sp = StaticProp {
                     name: ZStr::from(n.as_str()),
@@ -432,12 +468,12 @@ impl ClassBuilder {
                 static_props.push(sp);
             }
             // Methods.
-            let mut methods: HashMap<ZStr, Rc<Method>> = HashMap::with_capacity(nmethods);
+            let mut methods: NameMap<Rc<Method>> = name_map_with_capacity(nmethods);
             let mut order: Vec<ZStr> = Vec::with_capacity(nmethods);
             for (sig, f, h) in &self.methods {
                 let b = builtin_method(sig, *f, *h);
                 let bfl = b.flags;
-                let lc = ZStr::from(b.name.to_ascii_lowercase());
+                let lc = b.name.to_ascii_lowercase();
                 let proto = parent
                     .as_ref()
                     .and_then(|p| p.methods.get(&lc))
@@ -484,8 +520,8 @@ impl ClassBuilder {
                 method_order: order,
                 magic,
                 defaults: RefCell::new(None),
-                backing: self.enum_backing.flatten(),
-                enum_cases: RefCell::new(HashMap::new()),
+                backing: self.enum_backing.mask(),
+                enum_cases: RefCell::new(NameMap::default()),
                 decl: None,
                 internal,
                 attributes: Vec::new(),
@@ -512,8 +548,9 @@ mod tests {
     use crate::func::{flags, Args};
     use crate::vm::{Vm, VmResult};
     use crate::VmOptions;
-    use php_runtime::Value;
+    use php_runtime::{Value, ZStr};
 
+    #[allow(clippy::unnecessary_wraps)] // builtin signature
     fn nop(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         Ok(Value::Null)
     }
@@ -632,7 +669,7 @@ mod tests {
         for (i, c) in child.consts.iter().enumerate() {
             assert_eq!(child.const_map[c.name.as_bytes()], i);
         }
-        let order: Vec<&[u8]> = child.method_order.iter().map(|n| n.as_bytes()).collect();
+        let order: Vec<&[u8]> = child.method_order.iter().map(ZStr::as_bytes).collect();
         let expected: [&[u8]; 5] = [b"own", b"first", b"__tostring", b"second", b"third"];
         assert_eq!(order, expected);
         assert_eq!(child.methods.len(), 5);

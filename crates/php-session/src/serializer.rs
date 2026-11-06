@@ -12,7 +12,7 @@
 //! `ext/standard/var_unserializer.re`.
 
 use php_runtime::serialize::{
-    EnumCaseLookup, SerializedObject, UnserializeOptions, serialize, unserialize_partial,
+    serialize, unserialize_partial, EnumCaseLookup, SerializedObject, UnserializeOptions,
 };
 use php_runtime::{
     ArrayKey, BinaryOp, CastTarget, ErrorLevel, Obj, ObjectDump, PropertyPurpose, RtResult,
@@ -351,10 +351,28 @@ pub trait NestedDecode {
         offset: usize,
     ) -> Option<RtResult<Result<(Value, usize), usize>>>;
 
+    /// `php_var_unserialize()` into a `var_tmp_var()`: as
+    /// [`NestedDecode::unserialize_at`], but the value is its `var_hash`
+    /// cell (a reference), which `R:` back-references in later entries of
+    /// the same decode may turn into a reference shared with them; the
+    /// cells are resolved by [`NestedDecode::normalize`].
+    fn unserialize_cell_at(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> Option<RtResult<Result<(Value, usize), usize>>>;
+
     /// `php_set_session_var()`: stores a decoded entry into `$_SESSION`
     /// before the next value is parsed (the value it replaces is released
-    /// first, so its object handle can be reused).
+    /// first, so its object handle can be reused). For the `php` and
+    /// `php_binary` decoders `value` is the cell of
+    /// [`NestedDecode::unserialize_cell_at`], PHP's `IS_PTR` placeholder.
     fn store(&mut self, name: ZStr, value: Value);
+
+    /// `php_session_normalize_vars()`: once the data is parsed (or parsing
+    /// failed), replaces the stored cells by their values; a cell an `R:`
+    /// targeted stays a reference shared by every entry holding it.
+    fn normalize(&mut self);
 }
 
 /// Decodes session data value by value with the embedder's
@@ -364,9 +382,13 @@ pub trait NestedDecode {
 /// `session_decode()`, bug #70219) and is joined by `unserialize()` calls
 /// made from `Serializable::unserialize()` (bug #79031): `r:`/`R:`
 /// back-references resolve across those boundaries. `php`/`php_binary`
-/// entries are stored through [`NestedDecode::store`] as they are parsed
-/// (the result's `entries` is empty). Returns `None` when the embedder
-/// declines, and [`decode_with`] applies.
+/// entries are parsed into `var_tmp_var()` cells
+/// ([`NestedDecode::unserialize_cell_at`]) and stored through
+/// [`NestedDecode::store`] as they are parsed (the result's `entries` is
+/// empty); [`NestedDecode::normalize`] then resolves the cells, so an `R:`
+/// in a later entry makes the targeted entry a reference the two share
+/// (`&array(3)` in `var_dump($_SESSION)`, `session_decode_variation1.phpt`).
+/// Returns `None` when the embedder declines, and [`decode_with`] applies.
 pub fn decode_nested(
     ser: Serializer,
     data: &[u8],
@@ -382,6 +404,7 @@ pub fn decode_nested(
         }));
     }
     let mut ok = true;
+    let mut thrown = None;
     let mut p = 0;
     while p < data.len() {
         let (name, value_start) = if ser == Serializer::Php {
@@ -398,17 +421,31 @@ pub fn decode_nested(
             }
             (ZStr::from(&data[p + 1..=p + namelen]), p + 1 + namelen)
         };
-        match nested.unserialize_at(data, value_start)? {
-            Ok(Ok((value, end))) => {
+        match nested.unserialize_cell_at(data, value_start) {
+            Some(Ok(Ok((value, end)))) => {
                 nested.store(name, value);
                 p = end;
             }
-            Ok(Err(_)) => {
+            Some(Ok(Err(_))) => {
                 ok = false;
                 break;
             }
-            Err(e) => return Some(Err(e)),
+            Some(Err(e)) => {
+                thrown = Some(e);
+                break;
+            }
+            None => {
+                // The shared `var_hash` went away mid-way (not in practice):
+                // what is stored is resolved and the caller decodes anew.
+                nested.normalize();
+                return None;
+            }
         }
+    }
+    // `break_outer_loop:` — the placeholders are resolved whatever happened.
+    nested.normalize();
+    if let Some(e) = thrown {
+        return Some(Err(e));
     }
     Some(Ok(Decoded::Merge {
         entries: Vec::new(),
@@ -805,11 +842,14 @@ mod tests {
         Ok((Value::Int(n), off + end + 1))
     }
 
-    /// A recording [`NestedDecode`]: `parse` answers each
-    /// `unserialize_at`, and stored entries are kept in order.
+    /// A recording [`NestedDecode`]: `parse` answers each `unserialize_at`
+    /// and `unserialize_cell_at` (`cells` counts the latter), stored entries
+    /// are kept in order, and `normalized` counts the `normalize()` calls.
     struct Recorder<F> {
         parse: F,
         stored: Vec<(ZStr, Value)>,
+        cells: usize,
+        normalized: usize,
     }
 
     impl<F> NestedDecode for Recorder<F>
@@ -824,8 +864,21 @@ mod tests {
             (self.parse)(data, offset)
         }
 
+        fn unserialize_cell_at(
+            &mut self,
+            data: &[u8],
+            offset: usize,
+        ) -> Option<RtResult<Result<(Value, usize), usize>>> {
+            self.cells += 1;
+            (self.parse)(data, offset)
+        }
+
         fn store(&mut self, name: ZStr, value: Value) {
             self.stored.push((name, value));
+        }
+
+        fn normalize(&mut self) {
+            self.normalized += 1;
         }
     }
 
@@ -836,6 +889,8 @@ mod tests {
         Recorder {
             parse,
             stored: Vec::new(),
+            cells: 0,
+            normalized: 0,
         }
     }
 
@@ -849,8 +904,10 @@ mod tests {
             panic!("expected a merge")
         };
         assert!(ok);
-        // Entries are stored one by one, not returned.
+        // Entries are stored one by one, not returned, as the cells of
+        // `unserialize_cell_at`; `normalize()` resolves them once at the end.
         assert!(entries.is_empty());
+        assert_eq!((rec.cells, rec.normalized), (2, 1));
         let stored = rec.stored;
         assert_eq!(stored.len(), 2);
         assert_eq!(stored[0].0.as_bytes(), b"a");
@@ -869,6 +926,8 @@ mod tests {
         };
         assert!(!ok);
         assert!(entries.is_empty());
+        // `normalize()` runs after a failure too (`break_outer_loop`).
+        assert_eq!((rec.cells, rec.normalized), (2, 1));
         let stored = rec.stored;
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].0.as_bytes(), b"x");
@@ -887,6 +946,8 @@ mod tests {
             }))
         ));
         assert!(rec.stored.is_empty());
+        // `php_serialize` unserializes `$_SESSION` as a whole: no cells.
+        assert_eq!((rec.cells, rec.normalized), (0, 0));
         let mut rec = recorder(|_: &[u8], _: usize| Some(Ok(Err(0))));
         let r = decode_nested(Serializer::PhpSerialize, b"x", &mut rec);
         assert!(matches!(r, Some(Ok(Decoded::Replace { ok: false, .. }))));
@@ -895,6 +956,8 @@ mod tests {
         let r = decode_nested(Serializer::Php, b"a|i:1;", &mut rec);
         assert!(r.is_none());
         assert!(rec.stored.is_empty());
+        // Declining still resolves whatever was stored.
+        assert_eq!((rec.cells, rec.normalized), (1, 1));
     }
 
     #[test]

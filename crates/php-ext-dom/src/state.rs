@@ -218,8 +218,10 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
         }
         DomValue::Iterator(h) => {
             let it = DomIter {
+                owner: None,
                 source: None,
                 handle: Some(h),
+                cur: None,
                 started: false,
                 rewindable: false,
             };
@@ -314,12 +316,27 @@ pub(crate) fn to_dom(vm: &mut Vm, v: &Value) -> DomValue {
     }
 }
 
-/// A `foreach` / `getIterator()` iterator over a DOM collection.
+/// A `foreach` / `getIterator()` iterator over a DOM collection
+/// (`php_dom_iterator`, ext/dom/dom_iterators.c).
+///
+/// The field order is the release order of `php_dom_iterator_dtor`
+/// (`intern.data`, then `curobj`), which `FE_FREE` and the destruction of
+/// an `InternalIterator` replay before the iterator's own handle is freed,
+/// so object handle numbers come out as in PHP.
 pub(crate) struct DomIter {
+    /// The collection object (`iterator->intern.data`, `ZVAL_OBJ_COPY` in
+    /// `php_dom_get_iterator`): the iterator keeps it alive for as long as
+    /// it exists, so a temporary (`foreach ($xpath->query(..) as $n)`) and
+    /// the node objects it holds outlive the loop.
+    pub owner: Option<Obj>,
     /// The collection (to restart on rewind), when known.
     pub source: Option<DomObject>,
     /// The library iterator.
     pub handle: Option<IterHandle>,
+    /// The current element (`iterator->curobj`): fetched when the iterator
+    /// reaches it (`php_dom_get_iterator`, `php_dom_iterator_move_forward`)
+    /// and released only after its successor exists.
+    pub cur: Option<Value>,
     /// Whether `rewind()` was called once already.
     pub started: bool,
     /// Whether a second `rewind()` restarts (token lists) or throws
@@ -338,6 +355,16 @@ impl DomIter {
         }
         Ok(())
     }
+
+    /// The value of the element at the current position (`get_item` into
+    /// `curobj`: the node's object is created now if it does not exist).
+    fn fetch_current(&self, vm: &mut Vm) -> VmResult<Value> {
+        let v = match &self.handle {
+            Some(h) => h.0.borrow().current(),
+            None => DomValue::Null,
+        };
+        to_value(vm, v)
+    }
 }
 
 impl NativeIterator for DomIter {
@@ -351,7 +378,11 @@ impl NativeIterator for DomIter {
             }
         }
         self.started = true;
-        self.ensure(vm)
+        self.ensure(vm)?;
+        // `php_dom_get_iterator`: `get_item(objmap, 0, &iterator->curobj)`.
+        let first = self.fetch_current(vm)?;
+        self.cur = Some(first);
+        Ok(())
     }
 
     fn valid(&mut self, vm: &mut Vm) -> VmResult<bool> {
@@ -364,11 +395,12 @@ impl NativeIterator for DomIter {
 
     fn current(&mut self, vm: &mut Vm) -> VmResult<Value> {
         self.ensure(vm)?;
-        let v = match &self.handle {
-            Some(h) => h.0.borrow().current(),
-            None => DomValue::Null,
-        };
-        to_value(vm, v)
+        if let Some(v) = &self.cur {
+            return Ok(v.clone());
+        }
+        let v = self.fetch_current(vm)?;
+        self.cur = Some(v.clone());
+        Ok(v)
     }
 
     fn key(&mut self, vm: &mut Vm) -> VmResult<Value> {
@@ -386,6 +418,11 @@ impl NativeIterator for DomIter {
             return Ok(());
         };
         let r = crate::run::direct(vm, || h.0.borrow_mut().next())?;
-        crate::errors::check(vm, r, None).map(|_| ())
+        crate::errors::check(vm, r, None)?;
+        // `php_dom_iterator_move_forward`: the next element's object exists
+        // before the previous one (`garbage`) is released.
+        let next = self.fetch_current(vm)?;
+        self.cur = Some(next);
+        Ok(())
     }
 }

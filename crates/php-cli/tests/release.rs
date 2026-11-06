@@ -97,3 +97,32 @@ fn lint_checks_every_file_given() {
     let _ = std::fs::remove_file(&good);
     let _ = std::fs::remove_file(&bad);
 }
+
+/// `php -l` is `php_lint_script`: the whole compile, with the diagnostics
+/// reported by the engine. A compile error the compiler (not the parser)
+/// raises fails the lint, with the fatal error backtrace
+/// `fatal_error_backtraces=On` gives a frameless fatal error (`#0 {main}`),
+/// and `display_errors=stderr` takes php_error_cb's stderr format.
+#[test]
+fn lint_reports_compile_errors_through_the_engine() {
+    let file = temp("isset.php");
+    std::fs::write(&file, "<?php function f() { return isset(f()); }").unwrap();
+    let path = file.to_str().unwrap();
+    let message = format!(
+        "Fatal error: Cannot use isset() on the result of an expression (you can use \"null !== expression\" instead) in {path} on line 1\nStack trace:\n#0 {{main}}\n"
+    );
+    let out = php(&["-l", path]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("\n{message}Errors parsing {path}\n")
+    );
+    assert_eq!(out.status.code(), Some(255));
+    let out = php(&["-d", "display_errors=stderr", "-l", path]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("Errors parsing {path}\n")
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), message);
+    assert_eq!(out.status.code(), Some(255));
+    let _ = std::fs::remove_file(&file);
+}

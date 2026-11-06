@@ -57,6 +57,13 @@ pub(crate) struct Tok<'a> {
     doc: Option<Vec<u8>>,
 }
 
+impl Tok<'_> {
+    /// The source text of the token.
+    pub fn text(&self) -> &[u8] {
+        &self.text
+    }
+}
+
 /// The parser state.
 #[allow(clippy::struct_excessive_bools)] // parser state flags
 pub(crate) struct Parser<'a> {
@@ -277,11 +284,6 @@ impl<'a> Parser<'a> {
         self.expect(k, &[k])
     }
 
-    /// The source text of a token.
-    pub fn text<'t>(&self, tok: &'t Tok<'a>) -> &'t [u8] {
-        &tok.text
-    }
-
     /// Stops the lexer (after `__halt_compiler();`).
     pub fn stop_lexing(&mut self) {
         self.lexer.stop();
@@ -325,13 +327,13 @@ impl<'a> Parser<'a> {
 
     /// The identifier text of a token.
     pub fn ident_of(&self, tok: &Tok<'a>) -> Ident {
-        Ident::new(self.text(tok).to_vec(), tok.span)
+        Ident::new(tok.text().to_vec(), tok.span)
     }
 
     /// The identifier of a token used as `identifier` (`zend_lex_tstring`):
     /// `<?=` scans as `echo` but cannot be used as a name.
     pub fn ident_checked(&mut self, tok: &Tok<'a>) -> PResult<Ident> {
-        if self.text(tok) == b"<?=" {
+        if tok.text() == b"<?=" {
             let line = self.cur().end_line;
             return Err(ParseError::parse(
                 "Cannot use \"<?=\" as an identifier",
@@ -353,7 +355,7 @@ impl<'a> Parser<'a> {
 
     /// Builds a [`Name`] from a name token.
     pub fn name_of(&self, tok: &Tok<'a>) -> Name {
-        let text = self.text(tok);
+        let text = tok.text();
         let (kind, name) = match tok.kind {
             TokenKind::NameFullyQualified => (NameKind::FullyQualified, &text[1..]),
             TokenKind::NameRelative => (NameKind::Relative, &text[b"namespace\\".len()..]),
