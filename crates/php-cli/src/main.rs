@@ -110,6 +110,35 @@ fn limit_memory() {
     }
 }
 
+/// A reference into libstdc++, so that the linker records the library in
+/// this binary's own `DT_NEEDED` list (`--as-needed` drops a library nothing
+/// refers to); `build.rs` names it right after libc. libstdc++ is loaded
+/// anyway (ICU is C++), but as a dependency of a dependency it came 41st in
+/// the dynamic linker's search scope, behind every other library, and the
+/// 1 900 start-up symbol lookups that resolve to it walked all of them
+/// first. Named here it comes 2nd: about 3 M fewer instructions per start
+/// (`perf/README.md`, "Startup").
+#[used]
+static LIBSTDCXX_IS_NEEDED: Demangle = __cxa_demangle;
+
+/// `abi::__cxa_demangle` of libstdc++'s `<cxxabi.h>`; declared only for
+/// [`LIBSTDCXX_IS_NEEDED`], never called.
+type Demangle = unsafe extern "C" fn(
+    *const std::ffi::c_char,
+    *mut std::ffi::c_char,
+    *mut usize,
+    *mut std::ffi::c_int,
+) -> *mut std::ffi::c_char;
+
+extern "C" {
+    fn __cxa_demangle(
+        mangled: *const std::ffi::c_char,
+        buf: *mut std::ffi::c_char,
+        len: *mut usize,
+        status: *mut std::ffi::c_int,
+    ) -> *mut std::ffi::c_char;
+}
+
 /// Makes sure the main thread may grow its stack to [`VM_STACK`], so the
 /// VM runs on the main thread: process-directed signals then reach it
 /// (pcntl), the process stays single-threaded (`unshare()`, `fork()`

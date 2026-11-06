@@ -1,5 +1,6 @@
 //! Records the build time in C's `__DATE__ " " __TIME__` format
-//! (`PHP_BUILD_DATE`, the `-v` banner).
+//! (`PHP_BUILD_DATE`, the `-v` banner) and puts libc and libstdc++ at the
+//! head of the binary's `DT_NEEDED` list (start-up time, see `main`).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -41,4 +42,20 @@ fn main() {
         t / 60 % 60,
         t % 60
     );
+    // Dynamic-linker search order, for start-up time (perf/README.md,
+    // "Startup"). The ~10 000 symbol lookups of start-up (everything is
+    // BIND_NOW) walk the global scope: this binary, its DT_NEEDED libraries
+    // in order, then theirs. 2 700 of them resolve to libc and 1 900 to
+    // libstdc++ (ICU is C++), which the usual order puts 18th and 41st. A
+    // crate's own `-l` flags precede its dependencies' on the link line and
+    // DT_NEEDED follows the link line, so these two lines put the two
+    // libraries first: about 5 M fewer instructions per `php -r 'echo 1;'`
+    // (measured by preloading them). libm and libgcc_s stay where they are:
+    // moved up they cost every other lookup a probe. References into both
+    // libraries are versioned, so no symbol binds differently.
+    println!("cargo:rustc-link-lib=dylib=c");
+    // By soname, so no `libstdc++.so` development link is needed. Nothing in
+    // Rust refers to it, so `--as-needed` would drop it without the reference
+    // `LIBSTDCXX_IS_NEEDED` in main.rs.
+    println!("cargo:rustc-link-lib=dylib:+verbatim=libstdc++.so.6");
 }
