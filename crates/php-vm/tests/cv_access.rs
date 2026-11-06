@@ -51,11 +51,12 @@ $x = $undef; var_dump($x);
 function &f() { static $st = 1; return $st; }
 $z = f(); $z++; var_dump(f());
 $x = 4; $x = $x; var_dump($x);
-$k = [1, 2]; $m = $k; $m[] = 3; var_dump(count($k), count($m));
+$k = [1, 2]; $m = $k; $m[] = 3; var_dump(cnt($k), cnt($m));
 $q = $p = "str"; $p = 1; var_dump($q);
 $i = 10; $j = $i + 1; $i = $j * 2; var_dump($i, $j);
 $f = 1.5; $g = $f + 1; var_dump($g);
 $u = $x ?? 9; $v = $nope ?? 9; var_dump($u, $v);
+function cnt($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
 "#),
         "bool(true)\nstring(3) \"abc\"\nstring(1) \"z\"\nint(5)\nint(5)\nint(1)\nint(2)\nint(3)\n~1\nafter o\n~2\nafter arr\n\nWarning: Undefined variable $undef in t.php on line 10\nNULL\nint(1)\nint(4)\nint(2)\nint(3)\nstring(3) \"str\"\nint(22)\nint(11)\nfloat(2.5)\nint(4)\nint(9)\n"
     );

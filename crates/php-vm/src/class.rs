@@ -7,7 +7,27 @@ use php_runtime::{Value, ZStr};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::BuildHasherDefault;
 use std::rc::Rc;
+
+pub use crate::builtins::fasthash::FxHasher;
+
+/// A member table of a class keyed by name: php-src's `zend_hash` of
+/// `function_table`, `properties_info` and `constants_table`, which hashes
+/// with the cheap `zend_inline_hash_func` (cached in the `zend_string`).
+/// The keys are declared names, not request data, so the unseeded
+/// [`FxHasher`] needs no protection against chosen-key collisions; the
+/// standard `SipHash` cost about 280 instructions per lookup of a short
+/// name. Iteration order is fixed per build and, as with any hash map,
+/// means nothing: declaration order lives in [`Class::consts`],
+/// [`Class::props`], [`Class::static_props`] and [`Class::method_order`].
+pub type NameMap<V> = HashMap<ZStr, V, BuildHasherDefault<FxHasher>>;
+
+/// An empty [`NameMap`] that holds `capacity` entries without regrowing.
+#[must_use]
+pub fn name_map_with_capacity<V>(capacity: usize) -> NameMap<V> {
+    HashMap::with_capacity_and_hasher(capacity, BuildHasherDefault::default())
+}
 
 /// Class flags (`ZEND_ACC_*` subset) stored in [`Class::flags`].
 pub mod cflags {
@@ -380,19 +400,19 @@ pub struct Class {
     pub traits: Vec<Rc<Class>>,
     /// Constants in declaration order (inherited ones included).
     pub consts: Vec<Rc<ClassConst>>,
-    /// Constant lookup.
-    pub const_map: HashMap<ZStr, usize>,
+    /// Constant lookup: index into `consts`.
+    pub const_map: NameMap<usize>,
     /// Instance property infos in slot order (inherited private ones
     /// included).
     pub props: Vec<Rc<PropInfo>>,
     /// Properties accessible by name from this class's scope.
-    pub prop_map: HashMap<ZStr, Rc<PropInfo>>,
+    pub prop_map: NameMap<Rc<PropInfo>>,
     /// Static properties.
     pub static_props: Vec<StaticProp>,
-    /// Static property lookup.
-    pub static_map: HashMap<ZStr, usize>,
+    /// Static property lookup: index into `static_props`.
+    pub static_map: NameMap<usize>,
     /// Methods by lower-case name.
-    pub methods: HashMap<ZStr, Rc<Method>>,
+    pub methods: NameMap<Rc<Method>>,
     /// Method order (lower-case names) for `get_class_methods`.
     pub method_order: Vec<ZStr>,
     /// Magic methods.
@@ -402,7 +422,7 @@ pub struct Class {
     /// Enum backing type mask.
     pub backing: Option<u32>,
     /// Enum case objects by name.
-    pub enum_cases: RefCell<HashMap<ZStr, Value>>,
+    pub enum_cases: RefCell<NameMap<Value>>,
     /// The compiled declaration (user classes).
     pub decl: Option<Rc<ClassDecl>>,
     /// Internal class kind.
@@ -525,5 +545,37 @@ impl Class {
     /// Number of instance property slots.
     pub fn num_slots(&self) -> usize {
         self.props.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{name_map_with_capacity, NameMap};
+    use php_runtime::ZStr;
+
+    #[test]
+    fn name_map_finds_keys_by_zstr_and_by_bytes() {
+        let mut m: NameMap<usize> = NameMap::default();
+        m.insert(ZStr::from("getvalue"), 1);
+        m.insert(ZStr::from("__construct"), 2);
+        assert_eq!(m.get(&ZStr::from("getvalue")), Some(&1));
+        assert_eq!(m.get(b"getvalue".as_slice()), Some(&1));
+        assert_eq!(m.get(b"__construct".as_slice()), Some(&2));
+        assert_eq!(m.get(b"GetValue".as_slice()), None);
+        assert_eq!(m[b"getvalue".as_slice()], 1);
+    }
+
+    #[test]
+    fn presized_name_map_holds_its_entries_without_regrowing() {
+        for n in [0usize, 1, 3, 4, 7, 8, 13, 32, 100] {
+            let mut m: NameMap<usize> = name_map_with_capacity(n);
+            let before = m.capacity();
+            assert!(before >= n, "{n}: {before}");
+            for i in 0..n {
+                m.insert(ZStr::from(format!("member{i}")), i);
+            }
+            assert_eq!(m.capacity(), before, "regrew for {n} entries");
+            assert_eq!(m.len(), n);
+        }
     }
 }

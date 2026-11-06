@@ -105,8 +105,69 @@ This project follows php-src `master`, organizes extensions as per-extension cra
 and uses `.phpt` tests and per-workload instruction counts as its compatibility and
 performance measures.
 
+## Compared with php-rust (phprust.com)
+
+Both projects implement PHP in Rust. They differ in what they treat as the definition of
+correct, and that choice shows in the results. Figures for php-rust are its own (README and
+COVERAGE.md, clone of 2 Nov 2026); figures for this project were measured on 6 Nov 2026.
+
+### Two approaches
+
+- **php-rust** reimplements PHP from its observable behaviour on a new architecture: the mago
+  parser, its own HIR and bytecode VM, six crates and about 154,000 lines of Rust. It targets
+  PHP 8.5.7, and its main proof of correctness is real applications (WordPress, Composer,
+  PHPUnit, Doctrine, Symfony) plus a frozen list of known test failures.
+- **This project** ports php-src's own design, file by file: the compiler, executor, hash
+  tables, memory allocator, garbage collector and the bundled libraries (timelib, libmbfl,
+  libmagic rules and others), in 100 crates and about 746,000 lines of Rust. It follows
+  php-src `master`. Its definition of correct is php-src's own `.phpt` suite, byte for byte,
+  across the whole tree, and every crate cites the C file it ports.
+
+### Conformance
+
+| | php-rust (its own figures) | This project (6 Nov 2026) |
+|---|---|---|
+| `Zend/tests` (the engine suite) | 2,655 pass of 4,067 runnable (65.3%); 1,412 fail | 5,665 pass of 5,665 runnable (100%); 60 of 5,725 skipped |
+| Whole php-src suite | not reported | 20,170 pass of 20,174 run (99.9%) across the 21,582 in-scope tests: `Zend/tests`, `tests/`, ext/standard, every other in-scope extension, the CLI SAPI |
+| Internal functions | 1,017 of 2,143 (47%) | 1,962 functions, 347 classes, 54 extensions |
+| Rust test suite | 1,748 tests | 4,290 tests |
+
+The difference is depth as well as count. Many php-src tests check details that only a port
+of the mechanisms reproduces: the exact text and order of every warning and deprecation,
+`memory_limit` failures at the same allocation as C PHP (with the same "tried to allocate N
+bytes"), garbage-collector root order and destructor timing, object handle numbers in
+`var_dump` output, stack-overflow limits, and the bundled libraries' edge cases. An engine
+can run WordPress correctly and still fail those tests; this one passes them because it
+reproduces the mechanisms behind them. The remaining failures are listed in
+`phpt-baseline.txt`; two are environmental (Ubuntu's libgd is built without GD2, MariaDB has
+no JSON column type).
+
+### Where php-rust is ahead
+
+- **Speed.** php-rust reports 2.4–4.6x PHP's CPU time on six micro-benchmark categories and
+  about 1.77x on the full WordPress test suite. This project is at 6.47x PHP's user-space
+  instruction count (geometric mean over the 82 workloads of `scripts/perf_gate.sh`), down from
+  about 18x on 4 Nov 2026; the performance work is in progress. The metrics and workloads
+  differ, so the numbers are not directly comparable, but php-rust is faster today.
+- **Real applications.** php-rust has shown WordPress, Composer, PHPUnit, Doctrine and Symfony
+  running on its engine. This project has not measured real applications yet.
+
+### Why the approach matters
+
+A port of php-src's design starts from PHP's exact semantics, so its remaining work is mostly
+making the same design faster: operand-specialised handlers, per-opcode runtime caches,
+16-byte values and a zend_mm-style allocator, each measured against C PHP. A behaviour-driven
+engine reaches "fast and working" sooner, but each further conformance point means finding
+and reproducing another mechanism it does not share with C PHP; for php-rust, its 1,412
+failing engine tests are that list.
+
+In short: php-rust shows that PHP applications can run on a Rust engine; this project is a
+Rust implementation of PHP that passes 99.9% of php-src's own test suite, with its
+performance work under way toward C PHP's speed.
+
 ## Resource notes
 
-Many agents build concurrently on one machine, so `.cargo/config.toml` caps `cargo` at 2
+Many agents build concurrently on one machine, so `.cargo/config.toml` caps `cargo` at 6
 jobs, every oracle `php` invocation passes `-d memory_limit=1G`, and the `php` binary caps its
-own address space at 4 GB. See the "Resource limits" section of CLAUDE.md.
+own address space (at the larger of 4 GiB and 75% of RAM plus swap; `PHPRUST_MAX_AS_MB`
+overrides it). See the "Resource limits" section of CLAUDE.md.

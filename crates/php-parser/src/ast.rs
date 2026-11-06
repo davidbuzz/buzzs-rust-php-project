@@ -1279,8 +1279,9 @@ pub enum NewClass {
     Name(Name),
     /// `new $a`, `new (expr)`
     Expr(Expr),
-    /// `new class {}`
-    Anonymous(ClassDecl),
+    /// `new class {}` (boxed: a class declaration is several times the size
+    /// of the other variants)
+    Anonymous(Box<ClassDecl>),
 }
 
 /// An argument list.

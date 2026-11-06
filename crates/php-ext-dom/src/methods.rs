@@ -295,7 +295,7 @@ pub(crate) fn method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(vm.throw("Error", &format!("Couldn't fetch {class}")));
     };
     if name.eq_ignore_ascii_case("getIterator") {
-        let it = crate::hooks::new_iter(Some(d));
+        let it = crate::hooks::new_iter(Some(d), Some(this.clone()));
         return Ok(Value::Object(vm.new_internal_iterator(Box::new(it))?));
     }
     let dargs = convert_args(vm, a, &meta)?;

@@ -1143,9 +1143,9 @@ impl<A> CountingAlloc<A> {
     #[inline]
     fn add_live_as(&self, size: usize, owner: bool) -> usize {
         if owner {
-            let owned = self.owned.load(Relaxed).wrapping_add(size);
-            self.owned.store(owned, Relaxed);
-            owned.wrapping_add(self.shared.load(Relaxed))
+            let owned_now = self.owned.load(Relaxed).wrapping_add(size);
+            self.owned.store(owned_now, Relaxed);
+            owned_now.wrapping_add(self.shared.load(Relaxed))
         } else {
             let shared = self.shared.fetch_add(size, Relaxed).wrapping_add(size);
             shared.wrapping_add(self.owned.load(Relaxed))

@@ -289,7 +289,7 @@ Deprecated: Constant E_STRICT is deprecated since 8.4, the error level was remov
     );
 }
 
-/// `catch` looks the class up without autoloading and caches it once found (ZEND_CATCH): names in any case, interfaces, multi-catch, a class declared later and a `class_alias` (the alias catches, as in php-src; the name comparison it replaces did not).
+/// `catch` looks the class up without autoloading and caches it once found (`ZEND_CATCH`): names in any case, interfaces, multi-catch, a class declared later and a `class_alias` (the alias catches, as in php-src; the name comparison it replaces did not).
 #[test]
 fn catch_looks_classes_up_once_found() {
     let out = run(r#"<?php

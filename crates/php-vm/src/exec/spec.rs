@@ -71,15 +71,42 @@ fn plain_key(v: Option<&Value>) -> Option<ArrayKey> {
     }
 }
 
+/// The one-byte string at int offset `offset` of `s` (a negative offset
+/// counts from the end): `$str[$i]` for an offset inside the string, which
+/// php-src answers with the interned `ZSTR_CHAR` and no diagnostic. `None`
+/// outside the string (the generic fetch warns, or yields null in IS mode).
+#[inline]
+fn string_offset_char(s: &ZStr, offset: i64) -> Option<Value> {
+    let len = i64::try_from(s.len()).ok()?;
+    let real = if offset < 0 {
+        offset.checked_add(len)?
+    } else {
+        offset
+    };
+    let idx = usize::try_from(real).ok()?;
+    s.as_bytes()
+        .get(idx)
+        .map(|&c| Value::Str(ZStr::from_byte(c)))
+}
+
 /// The value of an operand for a comparison without conversions: a
 /// defined compiled variable, a literal or a temporary (left in place), not
-/// holding a reference.
+/// holding a reference. A consumed temporary (`Tmp`) qualifies only when it
+/// holds a plain value, which [`Vm::release_tmp_str`] can release: an
+/// array, object or resource in it must be freed by the generic op's read
+/// (`FREE_OP1`/`FREE_OP2` of `ZEND_IS_IDENTICAL` & co.), with the
+/// destructor that may run, so it does not outlive its statement in the
+/// slot (`$weak->get() !== null`, `new D !== null`).
 #[inline]
 fn operand_simple<'a>(f: &'a Frame, vars: &'a VarStore, op: Operand) -> Option<&'a Value> {
     let v = match op {
         Operand::Cv(cv) => vars.slots.get(f.cv_idx(cv))?.as_ref()?,
         Operand::Lit(i) => f.code.literals.get(i as usize)?,
-        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::Tmp(t) => {
+            let v = f.tmps.get(t as usize)?;
+            return is_plain_value(v).then_some(v);
+        }
+        Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
         Operand::Unused => return None,
     };
     match v {
@@ -124,9 +151,10 @@ impl Vm {
     /// `zend_fast_equal_strings`): same-type null, bool and string pairs,
     /// and `===`/`!==` of two different types (false/true). Byte-unequal
     /// strings under `==`/`!=` may still be numerically equal and go
-    /// generic, as do arrays, objects, resources and references. A
-    /// consumed temporary holding a string is released, as the generic
-    /// read would (`FREE_OP1`/`FREE_OP2`).
+    /// generic, as do arrays, objects, resources and references (also when
+    /// only one operand is one of those and it sits in a consumed
+    /// temporary, see [`operand_simple`]). A consumed temporary holding a
+    /// string is released, as the generic read would (`FREE_OP1`/`FREE_OP2`).
     #[inline(never)]
     pub(super) fn cmp_simple_fast(&mut self, op: BinKind, a: Operand, b: Operand) -> Option<bool> {
         let identity = match op {
@@ -136,11 +164,11 @@ impl Vm {
         };
         let negate = matches!(op, BinKind::NotIdentical | BinKind::NotEqual);
         let same = {
-            let f = self.frame();
-            let vars = f.vars.borrow();
-            let x = operand_simple(f, &vars, a)?;
-            let y = operand_simple(f, &vars, b)?;
-            match (x, y) {
+            let frame = self.frame();
+            let vars = frame.vars.borrow();
+            let lhs = operand_simple(frame, &vars, a)?;
+            let rhs = operand_simple(frame, &vars, b)?;
+            match (lhs, rhs) {
                 (Value::Null, Value::Null) => true,
                 (Value::Bool(p), Value::Bool(q)) => p == q,
                 (Value::Str(s), Value::Str(t)) => {
@@ -150,8 +178,8 @@ impl Vm {
                     }
                     eq
                 }
-                (x, y) => {
-                    if !identity || std::mem::discriminant(x) == std::mem::discriminant(y) {
+                (lhs, rhs) => {
+                    if !identity || std::mem::discriminant(lhs) == std::mem::discriminant(rhs) {
                         return None;
                     }
                     false
@@ -185,10 +213,10 @@ impl Vm {
     #[inline]
     #[allow(clippy::float_cmp)] // PHP compares doubles exactly
     pub(super) fn cmp_num_fast(&self, op: BinKind, a: Operand, b: Operand) -> Option<bool> {
-        let f = self.frame();
-        let x = Self::peek_num(f, a)?;
-        let y = Self::peek_num(f, b)?;
-        if let (Num::Int(x), Num::Int(y)) = (x, y) {
+        let frame = self.frame();
+        let lhs = Self::peek_num(frame, a)?;
+        let rhs = Self::peek_num(frame, b)?;
+        if let (Num::Int(x), Num::Int(y)) = (lhs, rhs) {
             return Some(match op {
                 BinKind::Equal | BinKind::Identical => x == y,
                 BinKind::NotEqual | BinKind::NotIdentical => x != y,
@@ -198,10 +226,10 @@ impl Vm {
             });
         }
         let mixed = matches!(
-            (x, y),
+            (lhs, rhs),
             (Num::Int(_), Num::Float(_)) | (Num::Float(_), Num::Int(_))
         );
-        let (xf, yf) = (x.as_f64(), y.as_f64());
+        let (xf, yf) = (lhs.as_f64(), rhs.as_f64());
         Some(match op {
             BinKind::Equal => xf == yf,
             BinKind::NotEqual => xf != yf,
@@ -231,7 +259,7 @@ impl Vm {
         if !is_plain_slot(slot.as_ref()) {
             return Err(v);
         }
-        let old = std::mem::replace(slot, Some(v));
+        let old = slot.replace(v);
         drop(vars);
         // A scalar is forgotten; a string is released (no side effects).
         discard_unrooted(old);
@@ -313,7 +341,7 @@ impl Vm {
         };
         let keep = dst.map(|_| r.clone());
         // The old value is a number: nothing to drop.
-        std::mem::forget(std::mem::replace(slot, Some(r)));
+        std::mem::forget(slot.replace(r));
         drop(vars);
         if let (Some(d), Some(k)) = (dst, keep) {
             self.set_tmp(d, k);
@@ -341,13 +369,26 @@ impl Vm {
 
     /// `$cv[dim]` read when `$cv` holds an array (directly or through a
     /// reference) that has the key: `zend_fetch_dimension_address_inner`
-    /// with `BP_VAR_R` on a hit. `None` (a miss, an offset that needs
-    /// converting, a non-array) leaves everything to the generic fetch,
-    /// nothing consumed.
+    /// with `BP_VAR_R` on a hit; or a string and the offset is an int
+    /// inside it: `zend_fetch_dimension_str`'s one-byte result
+    /// (`ZSTR_CHAR`). `None` (a miss, an offset that needs converting or
+    /// lies outside the string, another container) leaves everything to the
+    /// generic fetch, nothing consumed.
     #[inline]
     pub(super) fn fetch_dim_cv_fast(&self, cv: u32, dim: Operand) -> Option<Value> {
         let key = self.peek_dim_key(dim)?;
-        self.frame().peek_cv_dim(cv, &key)
+        let frame = self.frame();
+        if let Some(v) = frame.peek_cv_dim(cv, &key) {
+            return Some(v);
+        }
+        let ArrayKey::Int(offset) = key else {
+            return None;
+        };
+        let vars = frame.vars.try_borrow().ok()?;
+        match vars.slots.get(frame.cv_idx(cv))? {
+            Some(Value::Str(s)) => string_offset_char(s, offset),
+            _ => None,
+        }
     }
 
     /// `$cv[d1][d2]...` read when every container on the way is an array
@@ -445,9 +486,9 @@ impl Vm {
     /// element at the (int or string) offset is a plain number and `val`
     /// peeks as a plain number: `ZEND_ASSIGN_DIM_OP` with the
     /// `IS_LONG`/`IS_DOUBLE` fast path of `zend_binary_op` on the fetched
-    /// slot, after `SEPARATE_ARRAY`. Returns `false`, having changed
-    /// nothing, otherwise (a missing key warns and inserts on the generic
-    /// path).
+    /// slot, after `SEPARATE_ARRAY`; `.=` is [`Vm::concat_dim_cv_fast`].
+    /// Returns `false`, having changed nothing, otherwise (a missing key
+    /// warns and inserts on the generic path).
     #[inline]
     pub(super) fn assign_op_dim_cv_fast(
         &mut self,
@@ -456,6 +497,9 @@ impl Vm {
         op: BinaryOp,
         val: Operand,
     ) -> bool {
+        if op == BinaryOp::Concat {
+            return self.concat_dim_cv_fast(cv, dim, val);
+        }
         let Some(key) = self.peek_dim_key(dim) else {
             return false;
         };
@@ -485,6 +529,57 @@ impl Vm {
         std::mem::forget(std::mem::replace(slot, r));
         drop(vars);
         self.release_tmp_str(dim);
+        true
+    }
+
+    /// `$cv[dim] .= val` when `$cv` holds a non-reference array whose
+    /// element at the (int or string) offset is a string and `val` peeks
+    /// as a string or an int: `ZEND_ASSIGN_DIM_OP` runs `concat_function`
+    /// on the fetched slot (`result == op1`, after `SEPARATE_ARRAY`), so the
+    /// string is extended in place when nothing else holds it
+    /// (`zend_string_extend`) and copied once otherwise (a shared array's
+    /// element after the separation, `$a[$k] .= $a[$k]`); the digits of an
+    /// int go straight into it. Returns `false`, having changed nothing,
+    /// otherwise: a missing key (warning, then insert), an element of
+    /// another type or held by reference, and a right-hand side of another
+    /// type (its conversion may warn or call `__toString()`) take the
+    /// generic path.
+    #[inline]
+    fn concat_dim_cv_fast(&mut self, cv: u32, dim: Operand, val: Operand) -> bool {
+        let Some(key) = self.peek_dim_key(dim) else {
+            return false;
+        };
+        let add = match self.peek_plain_value(val) {
+            Some(v @ (Value::Str(_) | Value::Int(_))) => v,
+            _ => return false,
+        };
+        let f = self.frame();
+        let idx = f.cv_idx(cv);
+        let Ok(mut vars) = f.vars.try_borrow_mut() else {
+            return false;
+        };
+        let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
+            return false;
+        };
+        if !matches!(arr.get(&key), Some(Value::Str(_))) {
+            return false;
+        }
+        let Some(Value::Str(s)) = arr.make_mut().get_mut(&key) else {
+            return false;
+        };
+        match &add {
+            Value::Str(t) => s.append(t.as_bytes()),
+            Value::Int(i) => s.append_long(*i),
+            // `add` is a string or an int (checked above).
+            _ => {}
+        }
+        drop(vars);
+        drop(add);
+        // The offset and OP_DATA temporaries are consumed.
+        self.release_tmp_str(dim);
+        if let Operand::Tmp(t) = val {
+            self.set_tmp(t, Value::Null);
+        }
         true
     }
 
@@ -558,7 +653,7 @@ impl Vm {
     /// `$cv[dim] = val;` when `$cv` holds an array (not a reference), the
     /// offset is an int or string, the value is plain and the element it
     /// replaces (if any) is plain: the `zend_fetch_dimension_address_inner_W`
-    /// + `zend_assign_to_variable` path of `ZEND_ASSIGN_DIM` on an array,
+    /// and `zend_assign_to_variable` path of `ZEND_ASSIGN_DIM` on an array,
     /// separating a shared array first (`SEPARATE_ARRAY`). Returns `false`,
     /// having changed nothing, otherwise.
     #[inline]
@@ -794,7 +889,7 @@ $u += 1; var_dump($u);
 
     #[test]
     fn incdec_on_cvs() {
-        let src = r#"<?php
+        let src = r"<?php
 $i = 1; $a = $i++; $b = ++$i; $c = $i--; $d = --$i;
 var_dump($i, $a, $b, $c, $d);
 $f = 1.5; $f++; ++$f; var_dump($f); $f--; var_dump($f);
@@ -802,7 +897,7 @@ $m = PHP_INT_MAX; $m++; var_dump($m);
 $n = null; $n++; var_dump($n);
 $r = 5; $q = &$r; $r++; var_dump($q);
 $u++; var_dump($u);
-"#;
+";
         let out = run(src);
         let expected_head = "int(1)\nint(1)\nint(3)\nint(3)\nint(1)\nfloat(3.5)\nfloat(2.5)\nfloat(9.223372036854776E+18)\nint(1)\nint(6)\n";
         assert!(out.starts_with(expected_head), "{out}");
@@ -813,7 +908,7 @@ $u++; var_dump($u);
     #[test]
     fn dim_reads_on_cvs() {
         let src = r#"<?php
-$a = range(0, 9); $s = 0;
+$a = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; $s = 0;
 for ($i = 0; $i < 20; $i++) { $s = $a[$i & 7]; }
 var_dump($s);
 $h = ['x' => 1, '5' => 'five', 7 => [1]];
@@ -848,7 +943,7 @@ echo "end\n";
 
     #[test]
     fn isset_empty_and_coalesce_on_cv_dimensions() {
-        let src = r#"<?php
+        let src = r#"<?php class AO implements ArrayAccess { public $a; function __construct($a) { $this->a = $a; } function offsetExists($k): bool { return isset($this->a[$k]); } function offsetGet($k): mixed { return $this->a[$k]; } function offsetSet($k, $v): void { $this->a[$k] = $v; } function offsetUnset($k): void { unset($this->a[$k]); } }
 $a = [1, 0, null, 'x' => 'y', '7' => 'seven', 'e' => '', 'z' => '0', 'arr' => [], 'f' => 0.0];
 var_dump(isset($a[0]), isset($a[1]), isset($a[2]), isset($a[3]), isset($a['x']), isset($a[7]), isset($a['7']), isset($a['missing']));
 var_dump(empty($a[0]), empty($a[1]), empty($a[2]), empty($a[3]), empty($a['x']), empty($a['e']), empty($a['z']), empty($a['arr']), empty($a['f']));
@@ -857,7 +952,7 @@ var_dump(isset($a[$k]), isset($a[$i]), isset($a[$fl]), empty($a[$k]), empty($a[$
 var_dump($a[$k] ?? 'd', $a[2] ?? 'd', $a['missing'] ?? 'd', $a[$i] ?? 'd');
 $r = &$a; var_dump(isset($r['x']), isset($r['q']), $r['x'] ?? 'd');
 $s = 'str'; var_dump(isset($s[1]), isset($s[5]), empty($s[0]), $s[1] ?? 'd');
-$o = new ArrayObject(['k' => 1, 'n' => null]); var_dump(isset($o['k']), isset($o['n']), isset($o['m']), empty($o['k']), $o['k'] ?? 'd', $o['m'] ?? 'd');
+$o = new AO(['k' => 1, 'n' => null]); var_dump(isset($o['k']), isset($o['n']), isset($o['m']), empty($o['k']), $o['k'] ?? 'd', $o['m'] ?? 'd');
 $b = [&$i, [1]]; $i = null; var_dump(isset($b[0]), $b[0] ?? 'd', isset($b[1][0]), isset($b[1][1]), $b[1][0] ?? 'd');
 var_dump(isset($undef[0]), empty($undef[0]), $undef[0] ?? 'd');
 $ai = ['1' => 'a', '01' => 'b']; var_dump(isset($ai[1]), isset($ai['1']), isset($ai['01']), $ai['01'] ?? 'd');
@@ -890,7 +985,7 @@ $X = [];
 for ($i = 0; $i < 5; $i++) { $X["foo_$i"] = $i; }
 $sum = 0;
 for ($i = 0; $i < 5; $i++) { $sum += $X["foo_$i"]; }
-var_dump($sum, count($X));
+var_dump($sum, cnt($X));
 $n = 0;
 for ($i = 0; $i < 7; $i++) { if (isset($X["foo_$i"])) { $n++; } }
 var_dump($n);
@@ -899,9 +994,10 @@ $v = $X["bar_" . 2] ?? 'd'; var_dump($v);
 $v = $X["foo_" . 9]; var_dump($v);
 $k = 3; $X["foo_$k"] = 'three'; var_dump($X["foo_$k"]);
 $Y = [5 => 'five']; var_dump($Y["" . 5], isset($Y[5 . ""]), $Y[strval(5)]);
-$Y["0" . "7"] = 'oh-seven'; var_dump(array_keys($Y));
+$Y["0" . "7"] = 'oh-seven'; $ks = []; foreach ($Y as $kk => $_) { $ks[] = $kk; } var_dump($ks);
 $s = "k"; $Z = []; $Z[$s . $s] = 1; $Z[$s . $s] += 2; var_dump($Z);
 echo memory_get_usage() > 0 ? "ok\n" : "bad\n";
+function cnt($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
 "#;
         let out = run(src);
         assert!(
@@ -979,7 +1075,7 @@ $b = [true]; $b[0]++; $b[0] += 1; var_dump($b);
 
     #[test]
     fn nested_dimension_reads_on_cvs() {
-        let src = r#"<?php
+        let src = r#"<?php class AO implements ArrayAccess { public $a; function __construct($a) { $this->a = $a; } function offsetExists($k): bool { return isset($this->a[$k]); } function offsetGet($k): mixed { return $this->a[$k]; } function offsetSet($k, $v): void { $this->a[$k] = $v; } function offsetUnset($k): void { unset($this->a[$k]); } }
 $m = [[1, 2], [3, 4]]; $s = 0;
 for ($i = 0; $i < 2; $i++) { for ($j = 0; $j < 2; $j++) { $s += $m[$i][$j]; } }
 var_dump($s);
@@ -993,7 +1089,7 @@ var_dump($m[5][0]);
 var_dump($m[0][7]);
 $str = ['ab']; var_dump($str[0][1]);
 $n = [null]; var_dump($n[0][0]);
-$o = [new ArrayObject([[7]])]; var_dump($o[0][0][0]);
+$o = [new AO([[7]])]; var_dump($o[0][0][0]);
 $ref = &$m[0]; $ref[0] = 99; var_dump($m[0][0]);
 $t = [[1]]; $x = $t[0][0]; var_dump($x);
 $w = ['k' => [1.5]]; $y = $w['k'][0] ?? 0; var_dump($y);
@@ -1028,13 +1124,13 @@ echo "end\n";
 
     #[test]
     fn dim_writes_on_cvs() {
-        let src = r#"<?php
-$a = array_fill(0, 4, 0);
+        let src = r#"<?php class AO implements ArrayAccess { public $a; function __construct($a) { $this->a = $a; } function offsetExists($k): bool { return isset($this->a[$k]); } function offsetGet($k): mixed { return $this->a[$k]; } function offsetSet($k, $v): void { $this->a[$k] = $v; } function offsetUnset($k): void { unset($this->a[$k]); } }
+$a = [0, 0, 0, 0];
 for ($i = 0; $i < 10; $i++) { $a[$i & 3] = $i; }
 var_dump($a);
 $b = $a; $b[0] = 'x'; var_dump($a[0], $b[0]);
 $h = []; $h['k'] = 1.5; $h['3'] = true; $h[] = null; var_dump($h);
-$o = [new ArrayObject([])]; $o[0] = 1; var_dump($o);
+$o = [new AO([])]; $o[0] = 1; var_dump($o);
 $r = [1]; $x = 5; $r[0] = &$x; $r[0] = 6; var_dump($x);
 $str = 'abc'; $str[1] = 'X'; var_dump($str);
 $n = null; $n[2] = 1; var_dump($n);
@@ -1070,12 +1166,139 @@ $c = 'lit'; var_dump($c);
 $i = "0";
 for (; $i < 3; $i++) { echo $i; }
 echo "\n";
-$a = null; $a[0] = 1; $a[1] = 2; var_dump(count($a));
+$a = null; $a[0] = 1; $a[1] = 2; var_dump(cnt($a));
 $s = null; $s += 2; $s += 3; var_dump($s);
 $x = [1, 2]; $y = &$x; $v = $x[1]; $v = $x[0]; var_dump($v);
 $t = 0; $t = $t + "1"; $t = $t + 1; var_dump($t);
+function cnt($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
 "#;
         let expected = "012\nint(2)\nint(5)\nint(1)\nint(2)\n";
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn identity_comparisons_release_object_temporaries() {
+        // `ZEND_IS_IDENTICAL` / `ZEND_IS_NOT_IDENTICAL` free both operands
+        // (FREE_OP1/FREE_OP2): an object compared from a temporary is
+        // destructed by the comparison, not at the end of the request, so
+        // the weak reference is cleared and the cycle collected.
+        let src = r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "~{$this->n}\n"; } }
+$o = new stdClass; $o->o = $o; $w = WeakReference::create($o); unset($o);
+var_dump($w->get() !== null);
+var_dump(gc_collect_cycles());
+var_dump($w->get());
+var_dump(new D(1) !== null); echo "after 1\n";
+var_dump(new D(2) === null); echo "after 2\n";
+var_dump([new D(3)] !== null); echo "after 3\n";
+if (new D(4) !== null) { echo "in if 4\n"; } echo "after 4\n";
+$x = (new D(5) === null); echo "after 5\n";
+var_dump(new D(6) == null); echo "after 6\n";
+function f() { return new D(7); }
+while (f() !== null) { echo "loop 7\n"; break; } echo "after 7\n";
+$arr = [1]; var_dump($arr === null, null !== $arr);
+echo "end\n";
+"#;
+        let expected = "bool(true)\nint(1)\nNULL\n~1\nbool(true)\nafter 1\n~2\nbool(false)\nafter 2\n~3\nbool(true)\nafter 3\n~4\nin if 4\nafter 4\n~5\nafter 5\n~6\nbool(false)\nafter 6\n~7\nloop 7\nafter 7\nbool(false)\nbool(true)\nend\n";
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn concat_assign_on_cv_dimensions() {
+        // `$cv[k] .= v` (AssignOpDimCv): string elements extended in place
+        // with string and int operands, from literals, variables and
+        // temporaries; copy-on-write of a shared array; self-append; and
+        // every case that keeps the generic op with its exact diagnostics:
+        // missing and converted keys, non-string elements, elements held by
+        // reference, a reference to the array, autovivification, string
+        // offsets, array/float/object operands, undefined containers,
+        // properties, ArrayAccess and scalars.
+        let src = r#"<?php class AO implements ArrayAccess { public $a; function __construct($a) { $this->a = $a; } function offsetExists($k): bool { return isset($this->a[$k]); } function offsetGet($k): mixed { return $this->a[$k]; } function offsetSet($k, $v): void { $this->a[$k] = $v; } function offsetUnset($k): void { unset($this->a[$k]); } }
+$a = ['k' => 'a', 5 => 'c', 'n' => 1, 'f' => 1.5, 'nul' => null];
+for ($i = 0; $i < 3; $i++) { $a['k'] .= $i; $a[5] .= "-"; $a['k'] .= 'x'; }
+var_dump($a['k'], $a[5]);
+$b = $a; $a['k'] .= 'y'; var_dump($b['k'], $a['k']);
+$a['n'] .= 'z'; $a['f'] .= 'w'; $a['nul'] .= 'v'; var_dump($a['n'], $a['f'], $a['nul']);
+$a['k'] .= $a['k']; var_dump($a['k']);
+$s = $a['k']; $a['k'] .= $s; var_dump($a['k'], $s);
+$a['missing'] .= 'm'; var_dump($a['missing']);
+$a[1.5] .= 'fl'; var_dump($a[1]);
+$k = 'k'; $a[$k] .= $k; var_dump($a[$k]);
+$a["k$k"] .= 'kk'; var_dump($a['kk']);
+$r = 'ref'; $a['r'] = &$r; $a['r'] .= '!'; var_dump($r);
+$ra = &$a; $ra['k'] .= 'R'; var_dump($a['k']);
+$n = null; $n['x'] .= 'auto'; var_dump($n);
+$str = 'abc'; try { $str[0] .= 'x'; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$a['k'] = 'q'; $a['k'] .= [1];
+$a['k'] .= 2.5; var_dump($a['k']);
+class T { function __toString(): string { return 'T'; } }
+$a['k'] .= new T; var_dump($a['k']);
+$i = 7; $a['k'] .= $i; var_dump($a['k']);
+$e = ['']; for ($j = 0; $j < 3; $j++) { $e[0] .= 'ab'; } var_dump($e);
+$w = ['s' => 'w']; $x = ($w['s'] .= 'u'); var_dump($x, $w['s']);
+$u['q'] .= 'undef'; var_dump($u);
+$o = new stdClass; $o->p = ['s' => 'o']; $o->p['s'] .= 'p'; var_dump($o->p['s']);
+$ao = new AO(['k' => 'v']); $ao['k'] .= 'w'; var_dump($ao['k']);
+$int = 5; try { $int['x'] .= 'z'; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+var_dump($int);
+echo "end\n";
+"#;
+        let expected = r#"string(7) "a0x1x2x"
+string(4) "c---"
+string(7) "a0x1x2x"
+string(8) "a0x1x2xy"
+string(2) "1z"
+string(4) "1.5w"
+string(1) "v"
+string(16) "a0x1x2xya0x1x2xy"
+string(32) "a0x1x2xya0x1x2xya0x1x2xya0x1x2xy"
+string(16) "a0x1x2xya0x1x2xy"
+
+Warning: Undefined array key "missing" in t.php on line 9
+string(1) "m"
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 10
+
+Warning: Undefined array key 1 in t.php on line 10
+string(2) "fl"
+string(33) "a0x1x2xya0x1x2xya0x1x2xya0x1x2xyk"
+
+Warning: Undefined array key "kk" in t.php on line 12
+string(2) "kk"
+string(4) "ref!"
+string(34) "a0x1x2xya0x1x2xya0x1x2xya0x1x2xykR"
+
+Warning: Undefined array key "x" in t.php on line 15
+array(1) {
+  ["x"]=>
+  string(4) "auto"
+}
+Cannot use assign-op operators with string offsets
+
+Warning: Array to string conversion in t.php on line 17
+string(9) "qArray2.5"
+string(10) "qArray2.5T"
+string(11) "qArray2.5T7"
+array(1) {
+  [0]=>
+  string(6) "ababab"
+}
+string(2) "wu"
+string(2) "wu"
+
+Warning: Undefined variable $u in t.php on line 24
+
+Warning: Undefined array key "q" in t.php on line 24
+array(1) {
+  ["q"]=>
+  string(5) "undef"
+}
+string(2) "op"
+string(2) "vw"
+Cannot use a scalar value as an array
+int(5)
+end
+"#;
         assert_eq!(run(src), expected);
     }
 }

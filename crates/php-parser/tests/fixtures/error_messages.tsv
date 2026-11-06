@@ -351,6 +351,8 @@ static;	Parse error: syntax error, unexpected token ";", expecting "::" on line 
 "${a 1}";	Parse error: syntax error, unexpected integer "1" on line 1
 "{$a 1}";	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
 "{$a->b 1}";	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
+"{$f = 'f'}";	Parse error: syntax error, unexpected token "=", expecting "->" or "?->" or "{" or "[" on line 1
+"{$g{'h'}}";	Fatal error: Array and string offset access syntax with curly braces is no longer supported on line 1
 "$a->1";	OK
 "${a[1 2]}";	Parse error: syntax error, unexpected integer "2" on line 1
 "$a" 1;	Parse error: syntax error, unexpected integer "1" on line 1
