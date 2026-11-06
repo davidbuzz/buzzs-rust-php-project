@@ -1,7 +1,7 @@
 //! Compile-time decisions with observable notices and errors: by-reference
 //! returns and yields (`zend_compile_return`, `zend_compile_yield`), the
 //! argument fetch mode of `zend_compile_args` (`Cannot use [] for reading`)
-//! and the declaration order of enum members (ref: Zend/zend_compile.c).
+//! and the declaration order of enum members (ref: `Zend/zend_compile.c`).
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;
@@ -46,7 +46,7 @@ const YIELDED: &str = "Only variable references should be yielded by reference";
 
 /// `return $a =& $b;` in a by-reference function: php-src master compiles
 /// the assignment for reading, a TMP holding the dereferenced value
-/// (GH-20628), so ZEND_RETURN_BY_REF notices and returns a new reference
+/// (GH-20628), so `ZEND_RETURN_BY_REF` notices and returns a new reference
 /// that is not bound to `$b`.
 #[test]
 fn by_ref_return_of_assign_ref_notices() {
@@ -279,7 +279,7 @@ fn enum_constants_and_cases_keep_declaration_order() {
 /// its own table, and dropping the VM frees every function and class the
 /// script compiled: no declared function's code holds the table that holds
 /// the function (the `Rc` cycle leaked every user declaration of each
-/// request under `php -S`, `--repeat` and mod_php).
+/// request under `php -S`, `--repeat` and `mod_php`).
 #[test]
 fn dropping_the_vm_frees_the_scripts_declarations() {
     let sink = Sink::default();

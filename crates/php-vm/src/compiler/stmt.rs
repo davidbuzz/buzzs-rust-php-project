@@ -919,7 +919,7 @@ impl Compiler<'_> {
     /// function returned passes through `ZEND_RETURNS_FUNCTION`. Anything
     /// else is compiled for reading: php-src master guarantees such a TMP
     /// holds no reference (GH-20628 dereferences `$a =& $b` and `@f()` in
-    /// read context), so ZEND_RETURN_BY_REF raises "Only variable references
+    /// read context), so `ZEND_RETURN_BY_REF` raises "Only variable references
     /// should be returned by reference" and returns a new reference to the
     /// value. [`Op::ReturnByRefValue`] tells the two apart by whether the
     /// operand holds a reference, so a temporary is dereferenced here.
