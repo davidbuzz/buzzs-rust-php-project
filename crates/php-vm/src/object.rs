@@ -1,20 +1,27 @@
 //! Objects (`zend_object`): property slots, dynamic properties, handles and
 //! destructor scheduling.
 //!
-//! An [`Obj`] from `php-runtime` is a thin handle to an `Rc<dyn PhpObject>`
-//! allocation; ours holds an [`ObjBox`] wrapping an `Rc<ObjectData>`. When
-//! the last `Obj` handle is dropped, `ObjBox::drop` runs: if the class has
-//! a destructor that has not been called yet, a fresh `Obj` is created
-//! around the same data and queued so that the VM calls `__destruct` at the
-//! next safe point — this gives PHP's refcount-driven destructor timing
-//! without access to the VM from `Drop`.
+//! An object is one allocation: the [`Obj`] cell of `php-runtime` (counts,
+//! vtable) with [`ObjectData`] as its payload, like php-src's `zend_object`
+//! behind a `zend_object *`. So [`data`] is a constant offset, every `Obj`
+//! handle is one of php-src's `GC_REFCOUNT` references, and an object keeps
+//! its address, handle and identity for its whole life, destructor included.
+//!
+//! Destructor timing (`zend_objects_store_del`): when the last handle of an
+//! object is dropped, `Obj::drop` calls [`PhpObject::release_last`] before
+//! the count reaches zero. An object with an uncalled `__destruct` clones
+//! that handle onto the pending queue and so stays alive at count 1
+//! (php-src's `GC_SET_REFCOUNT(obj, 1)` around `dtor_obj`) until the
+//! executor runs the queue at its next safe point and drops the handle
+//! again, which frees it: [`ObjectData::drop`] is `zend_object_std_dtor`
+//! plus the tail of `zend_objects_store_del` (`GC_REMOVE_FROM_BUFFER`, the
+//! store slot invalidated, the handle back on the free list).
 //!
 //! The object store (`EG(objects_store)`, ref: Zend/zend_objects_API.c)
-//! holds a weak handle to the current outer `Obj` of every object, so a
-//! lookup by handle (shutdown destructors, `WeakReference::get()`) yields
-//! the same `Obj` — the same identity for `===` and recursion guards, and
-//! the same refcount — as every other holder, as php-src's one
-//! `zend_object *` per handle does.
+//! holds a weak handle per live object, so a lookup by handle (shutdown
+//! destructors, `WeakReference::get()`) yields the one object every other
+//! holder has — the same identity for `===` and recursion guards, and the
+//! same refcount — as php-src's one `zend_object *` per handle does.
 
 use crate::class::Class;
 use php_runtime::{ArrayKey, HashTable, Obj, ObjWeak, PhpObject, Value, ZStr};
@@ -208,10 +215,9 @@ const PROP_ORDERS_MIN_PRUNE: usize = 64;
 const STORE_INITIAL: usize = 1024;
 
 struct ObjectStore {
-    /// Live objects by handle (index = handle - 1): the object's current
-    /// outer `Obj`, as its weak handle (the allocation's `Weak<dyn
-    /// PhpObject>`, two words: it is dropped and replaced from inside the
-    /// object's own `Drop`, when the cell may not be read).
+    /// Live objects by handle (index = handle - 1), as weak handles (the
+    /// allocation's `Weak<dyn PhpObject>`, two words: the slot is cleared
+    /// from inside the object's own `Drop`, when the cell may not be read).
     objects: Vec<Option<ObjWeak>>,
     /// Free handles (LIFO, like Zend's free list).
     free: Vec<u32>,
@@ -292,9 +298,68 @@ pub(crate) fn prewarm_store() {
     STORE.with(|_| {});
 }
 
+/// The object is the payload of its [`Obj`] cell.
+impl PhpObject for ObjectData {
+    #[inline]
+    fn handle(&self) -> u32 {
+        self.handle
+    }
+    fn class_name(&self) -> ZStr {
+        display_name(&self.class.name)
+    }
+    #[inline]
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    /// `zend_objects_store_del` on `GC_REFCOUNT == 0`: an object whose
+    /// `__destruct` has not run keeps itself alive for it.
+    #[inline]
+    fn release_last(&self, this: &Obj) {
+        if self.flags.get() & oflags::DESTRUCTED != 0 || !self.class.has_destructor() {
+            return;
+        }
+        queue_destructor(self, this);
+    }
+}
+
+/// Queues `this` (the last handle of `d`, about to be dropped) for its
+/// destructor: the clone keeps the object alive at count 1, the executor
+/// calls `__destruct` on it at the next safe point and drops it, which frees
+/// the object unless the destructor stored it somewhere (`DESTRUCTED` then
+/// keeps it from running twice).
+#[cold]
+#[inline(never)]
+fn queue_destructor(d: &ObjectData, this: &Obj) {
+    if !DESTRUCTORS_ENABLED.with(Cell::get) {
+        return;
+    }
+    d.flags.set(d.flags.get() | oflags::DESTRUCTED);
+    // `try_with`/`try_borrow_mut`: the last handle may go during thread
+    // teardown or while the queue is being taken; the object is then freed
+    // without its destructor, as before.
+    let _ = PENDING.try_with(|p| {
+        if let Ok(mut p) = p.try_borrow_mut() {
+            p.push(this.clone());
+            HAS_PENDING.with(|h| h.set(true));
+            // The executor runs the queue at its next safe point.
+            crate::interrupt::raise_safe_point();
+            PENDING_SEQ.with(|c| c.set(c.get().wrapping_add(1)));
+        }
+    });
+}
+
+/// The free: `zend_object_std_dtor` and the tail of
+/// `zend_objects_store_del`, once the last handle is gone for good (no
+/// destructor left to run). Only `self` and weak counts are touched here:
+/// the cell is under the drop glue's exclusive borrow.
 impl Drop for ObjectData {
     fn drop(&mut self) {
         let handle = self.handle;
+        let flags = self.flags.get();
+        if flags & oflags::GC_BUFFERED != 0 {
+            // `GC_REMOVE_FROM_BUFFER`.
+            crate::gc::forget_root(Obj::addr_of_payload::<ObjectData>(self));
+        }
         if self.unset_bits.get() & UNSET_OVERFLOW_BIT != 0 {
             forget_unset_overflow(handle);
         }
@@ -308,7 +373,7 @@ impl Drop for ObjectData {
         let slots = std::mem::take(self.slots.get_mut());
         let dynamic = self.dynamic.get_mut().take();
         let internal = self.internal.get_mut().take();
-        let stale = if self.flags.get() & oflags::STALE_PROPS == 0 {
+        let stale = if flags & oflags::STALE_PROPS == 0 {
             None
         } else {
             crate::lazy::take_stale_slots(handle)
@@ -334,62 +399,6 @@ impl Drop for ObjectData {
     }
 }
 
-/// The `PhpObject` implementation: a handle to [`ObjectData`].
-pub struct ObjBox(pub Rc<ObjectData>);
-
-impl fmt::Debug for ObjBox {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl PhpObject for ObjBox {
-    fn handle(&self) -> u32 {
-        self.0.handle
-    }
-    fn class_name(&self) -> ZStr {
-        display_name(&self.0.class.name)
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-impl Drop for ObjBox {
-    fn drop(&mut self) {
-        let data = &self.0;
-        if data.flags.get() & oflags::GC_BUFFERED != 0 {
-            // `GC_REMOVE_FROM_BUFFER` in `zend_objects_store_del`.
-            crate::gc::forget_root(Obj::addr_of_payload::<ObjBox>(self));
-        }
-        if data.flags.get() & oflags::DESTRUCTED != 0 || !data.class.has_destructor() {
-            return;
-        }
-        if !DESTRUCTORS_ENABLED.with(Cell::get) {
-            return;
-        }
-        data.flags.set(data.flags.get() | oflags::DESTRUCTED);
-        let revived = Obj::new(ObjBox(data.clone()));
-        register_outer(&revived);
-        let _ = PENDING.try_with(|p| {
-            if let Ok(mut p) = p.try_borrow_mut() {
-                p.push(revived);
-                HAS_PENDING.with(|h| h.set(true));
-                // The executor runs the queue at its next safe point.
-                crate::interrupt::raise_safe_point();
-                PENDING_SEQ.with(|c| c.set(c.get().wrapping_add(1)));
-            }
-        });
-    }
-}
-
-impl std::ops::Deref for ObjBox {
-    type Target = ObjectData;
-    fn deref(&self) -> &ObjectData {
-        &self.0
-    }
-}
-
 /// `object_properties_init`: the slots of a new object, copied from its
 /// class's evaluated default properties (`ce->default_properties_table`).
 #[inline]
@@ -401,12 +410,13 @@ pub fn copy_slots(defaults: &[Option<Value>]) -> Vec<Option<Value>> {
 }
 
 /// Allocates a handle and creates an object of `class` with the given slot
-/// values.
+/// values (`zend_objects_new` + `zend_objects_store_put`): one allocation,
+/// the cell with the object data inside.
 pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {
     STORE.with(|s| {
         let mut s = s.borrow_mut();
         let handle = s.take_handle();
-        let data = Rc::new(ObjectData {
+        let o = Obj::new(ObjectData {
             handle,
             class,
             slots: RefCell::new(slots),
@@ -416,7 +426,6 @@ pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {
             unset_bits: Cell::new(0),
             lazy: RefCell::new(None),
         });
-        let o = Obj::new(ObjBox(data));
         s.objects[handle as usize - 1] = Some(o.downgrade());
         o
     })
@@ -431,23 +440,6 @@ pub(crate) fn discard_rejected(o: Obj) {
     let d = data(&o);
     d.flags.set(d.flags.get() | oflags::DESTRUCTED);
     drop(o);
-}
-
-/// Makes `o` the store's handle of its object: lookups by handle return
-/// this `Obj` from now on (the previous outer `Obj` is gone or going).
-fn register_outer(o: &Obj) {
-    let handle = data(o).handle;
-    // `try_with`/`try_borrow_mut`: called from `Drop`.
-    let _ = STORE.try_with(|s| {
-        if let Ok(mut s) = s.try_borrow_mut() {
-            if let Some(slot) = (handle as usize)
-                .checked_sub(1)
-                .and_then(|i| s.objects.get_mut(i))
-            {
-                *slot = Some(o.downgrade());
-            }
-        }
-    });
 }
 
 /// An object handle taken from the store with no object behind it.
@@ -495,12 +487,14 @@ impl fmt::Debug for HandleGuard {
     }
 }
 
-/// Returns our object data for an `Obj`.
+/// Returns our object data for an `Obj` (`Z_OBJ_P`: a type check and an
+/// offset into the one allocation).
 ///
 /// # Panics
 /// Panics if the object was not created by this VM.
+#[inline]
 pub fn data(o: &Obj) -> &ObjectData {
-    &o.downcast_ref::<ObjBox>().expect("phprust object").0
+    o.downcast_ref::<ObjectData>().expect("phprust object")
 }
 
 /// Returns the class of an object.
@@ -552,19 +546,14 @@ pub fn destructors_enabled() -> bool {
     DESTRUCTORS_ENABLED.with(Cell::get)
 }
 
-/// All live objects in handle order (for shutdown destructors).
-pub fn live_objects() -> Vec<Rc<ObjectData>> {
-    // The upgraded `Obj` is a second strong handle, so dropping it inside
-    // the borrow never runs `ObjBox::drop`.
+/// All live objects in handle order (`gc_collect_cycles()`'s scan of the
+/// object store), as further handles of them.
+pub fn live_objects() -> Vec<Obj> {
     STORE.with(|s| {
         s.borrow()
             .objects
             .iter()
-            .filter_map(|w| {
-                w.as_ref()
-                    .and_then(ObjWeak::upgrade)
-                    .and_then(|o| box_data(&o))
-            })
+            .filter_map(|w| w.as_ref().and_then(ObjWeak::upgrade))
             .collect()
     })
 }
@@ -574,18 +563,9 @@ pub fn store_len() -> usize {
     STORE.with(|s| s.borrow().objects.len())
 }
 
-/// The live object in store slot `i` (handle `i + 1`), if any.
-pub fn live_object_at(i: usize) -> Option<Rc<ObjectData>> {
-    live_box_at(i).and_then(|o| box_data(&o))
-}
-
-/// The live object in store slot `i` (handle `i + 1`) as the `Obj` every
-/// other holder has (same identity and refcount).
+/// The live object in store slot `i` (handle `i + 1`), if any, as the
+/// `Obj` every other holder has (same identity and refcount).
 pub fn live_obj_at(i: usize) -> Option<Obj> {
-    live_box_at(i)
-}
-
-fn live_box_at(i: usize) -> Option<Obj> {
     STORE.with(|s| {
         s.borrow()
             .objects
@@ -594,36 +574,11 @@ fn live_box_at(i: usize) -> Option<Obj> {
     })
 }
 
-/// The `Rc<ObjectData>` behind one of our objects.
-fn box_data(o: &Obj) -> Option<Rc<ObjectData>> {
-    o.downcast_ref::<ObjBox>().map(|b| b.0.clone())
-}
-
 /// Suspends (`true`) or restores handle reuse
 /// (`EG_FLAGS_OBJECT_STORE_NO_REUSE`, set by
 /// `zend_objects_store_call_destructors`).
 pub fn set_handle_no_reuse(on: bool) {
     STORE.with(|s| s.borrow_mut().no_reuse = on);
-}
-
-/// The `Obj` of existing object data: the store's current handle when one
-/// is alive (so identity and refcount match every other holder), else a
-/// new outer `Obj`, which becomes the store's handle.
-pub fn revive(data: Rc<ObjectData>) -> Obj {
-    let live = (data.handle as usize).checked_sub(1).and_then(live_box_at);
-    if let Some(o) = &live {
-        if o.downcast_ref::<ObjBox>()
-            .is_some_and(|b| Rc::ptr_eq(&b.0, &data))
-        {
-            return o.clone();
-        }
-    }
-    let o = Obj::new(ObjBox(data));
-    if live.is_none() {
-        register_outer(&o);
-    }
-    drop(live);
-    o
 }
 
 /// `rebuild_object_properties`: `d` now has a materialized property table
@@ -973,6 +928,15 @@ mod tests {
 
     fn key(s: &str) -> ArrayKey {
         ArrayKey::Str(ZStr::from(s))
+    }
+
+    /// One allocation per object: php-runtime's `Rc` counts (16 B), the
+    /// `Obj` header (vtable `Rc` + `TypeId`, 32 B) and this payload; the
+    /// declared slots still live in their `Vec` buffer.
+    #[test]
+    fn object_data_is_a_compact_cell_payload() {
+        assert!(std::mem::size_of::<ObjectData>() <= 112);
+        assert_eq!(std::mem::align_of::<ObjectData>(), 8);
     }
 
     #[test]

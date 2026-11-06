@@ -1,11 +1,10 @@
 //! `WeakReference`, `WeakMap` and `InternalIterator`
 //! (`Zend/zend_weakrefs.c`, `Zend/zend_interfaces.c`).
 //!
-//! Objects are `Rc`-counted, so a weak reference is a pair of `Weak`
-//! pointers: one to the object's [`ObjectData`] (alive until the object is
-//! really freed, including while its destructor runs) and one to the
-//! outer `Rc<dyn PhpObject>` handle (so that [`WeakReference::get()`]
-//! returns the *same* handle and `===` holds).
+//! A weak reference is the object cell's own weak handle ([`ObjWeak`]): an
+//! object is one allocation that lives until it is really freed, its
+//! destructor included, so `WeakReference::get()` returns the *same*
+//! object (`===` holds) for as long as php-src's would.
 //!
 //! `WeakMap` entries must disappear the moment their key object is freed
 //! (and the value must be released right then, which can run destructors).
@@ -24,9 +23,11 @@ use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::cflags;
 use crate::ext::{ClassHooks, NativeIterator};
 use crate::func::{flags, Args};
-use crate::object::{self, ObjBox, ObjectData};
+use crate::object;
 use crate::vm::{Vm, VmResult};
-use php_runtime::{ArrayKey, HashTable, Obj, PhpObject, PhpRef, PropertyPurpose, Value, ZArray};
+use php_runtime::{
+    ArrayKey, HashTable, Obj, ObjWeak, PhpObject, PhpRef, PropertyPurpose, Value, ZArray,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
@@ -40,7 +41,7 @@ const PUB: u32 = flags::PUBLIC;
 /// A `WeakReference` singleton registered for a referent.
 struct RefSlot {
     /// The referent (to detect a reused handle).
-    referent: Weak<ObjectData>,
+    referent: ObjWeak,
     /// The `WeakReference` object.
     weakref: Weak<dyn PhpObject>,
 }
@@ -123,35 +124,26 @@ fn register_map_key(handle: u32, map: &Rc<MapCell>) {
 /// A weak handle to a PHP object.
 #[derive(Clone)]
 struct WeakObj {
-    data: Weak<ObjectData>,
-    outer: Weak<dyn PhpObject>,
+    outer: ObjWeak,
 }
 
 impl WeakObj {
     fn new(o: &Obj) -> Self {
-        let data = o
-            .downcast_ref::<ObjBox>()
-            .map_or_else(Weak::new, |b| Rc::downgrade(&b.0));
         WeakObj {
-            data,
-            outer: Rc::downgrade(o.rc()),
+            outer: o.downgrade(),
         }
     }
 
-    /// The object, if it has not been freed. While its destructor runs the
-    /// original handle is gone but the object is still alive (and already
-    /// marked destructed), so a fresh handle is safe to hand out.
+    /// The object, if it has not been freed (`zend_weakref_get`). While its
+    /// destructor runs the object is still alive (held by the destructor
+    /// queue, already marked destructed), so this hands it out then too.
     fn get(&self) -> Option<Obj> {
-        if let Some(rc) = self.outer.upgrade() {
-            return Some(Obj::from_rc(rc));
-        }
-        self.data.upgrade().map(object::revive)
+        self.outer.upgrade()
     }
 
     /// Whether this denotes `o`.
     fn is(&self, o: &Obj) -> bool {
-        o.downcast_ref::<ObjBox>()
-            .is_some_and(|b| std::ptr::eq(self.data.as_ptr(), Rc::as_ptr(&b.0)))
+        self.outer.addr() == o.addr()
     }
 }
 
@@ -179,13 +171,7 @@ fn weakref_create(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let handle = target.handle();
     let existing = REFS.with(|r| {
         r.borrow().get(&handle).and_then(|s| {
-            let same = std::ptr::eq(
-                s.referent.as_ptr(),
-                target
-                    .downcast_ref::<ObjBox>()
-                    .map_or(std::ptr::null(), |b| Rc::as_ptr(&b.0)),
-            );
-            if same {
+            if s.referent.addr() == target.addr() {
                 s.weakref.upgrade()
             } else {
                 None
@@ -201,7 +187,7 @@ fn weakref_create(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let wr = vm.new_object(&cls)?;
     let referent = WeakObj::new(&target);
     let slot = RefSlot {
-        referent: referent.data.clone(),
+        referent: referent.outer.clone(),
         weakref: Rc::downgrade(wr.rc()),
     };
     object::set_internal(&wr, WeakRefData { referent });
@@ -373,7 +359,7 @@ impl crate::gc::GcTraverse for Rc<MapCell> {
             return;
         };
         for e in st.entries.iter().flatten() {
-            v.weak_entry(&e.key.data, &e.value);
+            v.weak_entry(&e.key.outer, &e.value);
         }
     }
 }

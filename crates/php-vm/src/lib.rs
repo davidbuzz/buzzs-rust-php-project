@@ -462,9 +462,9 @@ impl Vm {
                 continue;
             }
             d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
-            if let Some(b) = o.downcast_ref::<object::ObjBox>() {
-                keep.push(b.0.clone());
-            }
+            // `GC_ADDREF(obj)` around `dtor_obj`, held until the loop is
+            // done: the object is not freed by its own destructor.
+            keep.push(o.clone());
             if let Err(e) = self.call_destructor(&o) {
                 return self.destructor_error(e);
             }

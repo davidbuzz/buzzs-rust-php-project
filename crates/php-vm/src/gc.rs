@@ -58,7 +58,7 @@ mod tests;
 
 pub use traverse::{register_traverse, register_traverse_with, GcTraverse, GcVisitor};
 
-use crate::object::ObjBox;
+use crate::object::ObjectData;
 use crate::vm::{Vm, VmResult};
 use php_runtime::{Obj, PhpObject, Value};
 use std::cell::{Cell, RefCell};
@@ -243,7 +243,7 @@ impl RootBuffer {
     /// place in the buffer until the garbage is freed.
     fn push_garbage(&mut self) -> usize {
         let i = self.fetch();
-        let empty: Weak<dyn PhpObject> = Weak::<ObjBox>::new();
+        let empty: Weak<dyn PhpObject> = Weak::<ObjectData>::new();
         self.slots[i] = Some(empty);
         self.num_roots += 1;
         i
@@ -622,7 +622,7 @@ fn release_value_at(v: &Value, depth: u32) {
 #[cold]
 #[inline(never)]
 fn released_object(o: &Obj, depth: u32) {
-    if o.downcast_ref::<ObjBox>().is_none() {
+    if o.downcast_ref::<ObjectData>().is_none() {
         return;
     }
     let d = crate::object::data(o);
@@ -694,7 +694,7 @@ pub(crate) fn root_live_value(v: &Value) {
 
 /// [`root_live_value`] for an object held by a live temporary.
 pub(crate) fn root_live_obj(o: &Obj) {
-    if o.downcast_ref::<ObjBox>().is_some() {
+    if o.downcast_ref::<ObjectData>().is_some() {
         with_state(|s| buffer_obj(s, o));
     }
 }
@@ -702,7 +702,7 @@ pub(crate) fn root_live_obj(o: &Obj) {
 /// Buffers `o`, one handle of which is about to be released.
 fn root_obj(o: &Obj) {
     // A count of 1 drops to zero: the object is freed, not a root.
-    if o.refcount() < 2 || o.downcast_ref::<ObjBox>().is_none() {
+    if o.refcount() < 2 || o.downcast_ref::<ObjectData>().is_none() {
         return;
     }
     with_state(|s| buffer_obj(s, o));
@@ -719,7 +719,7 @@ fn buffer_obj(s: &mut GcState, o: &Obj) -> Option<usize> {
     // of whose handles was ever buffered (`oflags::GC_BUFFERED` clear, the
     // case of every fresh object) cannot be in the index, so the lookup
     // is skipped.
-    let data = o.downcast_ref::<ObjBox>().map(|b| &*b.0);
+    let data = o.downcast_ref::<ObjectData>();
     let maybe_buffered =
         data.is_none_or(|d| d.flags.get() & crate::object::oflags::GC_BUFFERED != 0);
     if maybe_buffered && s.roots.contains(o) {
