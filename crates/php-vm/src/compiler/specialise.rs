@@ -17,7 +17,9 @@
 //! the temporary and the successor runs as before. A jump landing on the
 //! successor from elsewhere also runs it as before.
 
-use crate::opcode::{BinKind, ClassSpec, FetchMode, Op, Operand, Place, PlaceBase, PlaceId, Seg};
+use crate::opcode::{
+    cmp_outcome, BinKind, ClassSpec, FetchMode, Op, Operand, Place, PlaceBase, PlaceId, Seg,
+};
 use php_runtime::BinaryOp;
 
 /// Rewrites `ops` (the finished body whose places are `places`) in place.
@@ -230,27 +232,27 @@ fn bin(op: BinKind, a: Operand, b: Operand, dst: u32, next: Option<&Op>) -> Opti
     if !has_numeric_fast_path(op) {
         return None;
     }
-    match next? {
-        Op::JmpZ(Operand::Tmp(t), target) if *t == dst && is_smart_branch(op) => Some(Op::CmpJmp {
-            op,
-            a,
-            b,
-            dst,
-            target: *target,
-            jmp_if: false,
-        }),
-        Op::JmpNz(Operand::Tmp(t), target) if *t == dst && is_smart_branch(op) => {
-            Some(Op::CmpJmp {
+    let branch = match next? {
+        Op::JmpZ(Operand::Tmp(t), target) if *t == dst => Some((*target, false)),
+        Op::JmpNz(Operand::Tmp(t), target) if *t == dst => Some((*target, true)),
+        _ => None,
+    };
+    if let Some((target, jmp_if)) = branch {
+        // `for_branch` is `None` for the operators that are not smart
+        // branches (`zend_is_smart_branch`).
+        if let Some(mask) = cmp_outcome::for_branch(op, jmp_if) {
+            return Some(Op::CmpJmp {
                 op,
                 a,
                 b,
                 dst,
-                target: *target,
-                jmp_if: true,
-            })
+                target,
+                jmp_if,
+                mask,
+            });
         }
-        _ => assigned_cv(next, dst).map(|cv| Op::BinAssignCv { op, a, b, dst, cv }),
     }
+    assigned_cv(next, dst).map(|cv| Op::BinAssignCv { op, a, b, dst, cv })
 }
 
 /// The CV that `next` assigns temporary `dst` to, as a statement
@@ -304,7 +306,7 @@ fn cv_dims(places: &[Place], pid: PlaceId) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::super::{compile, CompileOptions};
-    use crate::opcode::{BinKind, FetchMode, IncDecKind, Op, Operand};
+    use crate::opcode::{cmp_outcome, BinKind, FetchMode, IncDecKind, Op, Operand};
     use php_runtime::BinaryOp;
     use std::rc::Rc;
 
@@ -359,11 +361,13 @@ mod tests {
             target,
             jmp_if: true,
             dst,
+            mask,
         } = ops[cond]
         else {
             panic!("no smart branch at {cond}: {ops:?}");
         };
         assert_eq!(target as usize, jmp + 1, "{ops:?}");
+        assert_eq!(mask, cmp_outcome::LESS, "{ops:?}");
         // The jump the smart branch stands for is kept after it.
         assert!(
             matches!(ops[cond + 1], Op::JmpNz(Operand::Tmp(t), l) if t == dst && l == target),

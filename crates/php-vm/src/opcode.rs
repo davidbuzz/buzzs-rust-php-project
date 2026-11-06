@@ -653,7 +653,8 @@ pub enum Op {
     /// operands are plain numbers the comparison jumps to `target` when
     /// its result equals `jmp_if` and otherwise skips the jump op; any other
     /// operands compute the comparison into `dst` and fall through to the
-    /// jump op.
+    /// jump op. `mask` is [`cmp_outcome::for_branch`] of `op` and `jmp_if`:
+    /// the numeric outcomes that take the jump.
     CmpJmp {
         op: BinKind,
         a: Operand,
@@ -661,6 +662,7 @@ pub enum Op {
         dst: u32,
         target: Label,
         jmp_if: bool,
+        mask: u8,
     },
     /// `Bin` whose result is only assigned by the `AssignCv { cv, val:
     /// Tmp(dst), dst: None }` right after it (opcache's DFA pass writes
@@ -805,6 +807,50 @@ pub enum Op {
         dst: u32,
         empty: bool,
     },
+}
+
+/// The bits of [`Op::CmpJmp`]'s `mask`: the outcomes of comparing two
+/// plain numbers for which the smart branch jumps, plus the
+/// [`IDENTITY`](cmp_outcome::IDENTITY) flag. Decided once by the compiler
+/// from the comparison and the jump's sense, so the handler tests one bit
+/// instead of decoding the operator (php-src generates one handler per
+/// comparison and jump sense, `ZEND_IS_SMALLER_SPEC_..._JMPZ` & co.).
+pub mod cmp_outcome {
+    use super::BinKind;
+
+    /// `a < b`.
+    pub const LESS: u8 = 1 << 0;
+    /// `a == b`.
+    pub const EQUAL: u8 = 1 << 1;
+    /// `a > b`.
+    pub const GREATER: u8 = 1 << 2;
+    /// A NaN operand: no order (every comparison but `!=`/`!==` is false).
+    pub const UNORDERED: u8 = 1 << 3;
+    /// An int and a float under `===` / `!==` (different types).
+    pub const MISMATCH: u8 = 1 << 4;
+    /// Flag, not an outcome: the comparison is `===` / `!==`, so an int
+    /// and a float are a [`MISMATCH`] instead of being compared as floats.
+    pub const IDENTITY: u8 = 1 << 5;
+    /// Every outcome.
+    pub const ALL: u8 = LESS | EQUAL | GREATER | UNORDERED | MISMATCH;
+
+    /// The mask of a smart branch on comparison `op` that jumps when the
+    /// comparison's result is `jmp_if`; `None` when `op` is not one of the
+    /// smart-branch comparisons (`zend_is_smart_branch`).
+    #[must_use]
+    pub fn for_branch(op: BinKind, jmp_if: bool) -> Option<u8> {
+        let (taken, identity) = match op {
+            BinKind::Less => (LESS, false),
+            BinKind::LessEqual => (LESS | EQUAL, false),
+            BinKind::Equal => (EQUAL, false),
+            BinKind::NotEqual => (LESS | GREATER | UNORDERED, false),
+            BinKind::Identical => (EQUAL, true),
+            BinKind::NotIdentical => (LESS | GREATER | UNORDERED | MISMATCH, true),
+            BinKind::Arith(_) | BinKind::Spaceship => return None,
+        };
+        let taken = if jmp_if { taken } else { ALL & !taken };
+        Some(if identity { taken | IDENTITY } else { taken })
+    }
 }
 
 /// The type bits of [`Op::TypeCheck`] (`zend_compile_func_typecheck`'s

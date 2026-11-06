@@ -118,7 +118,10 @@ impl Vm {
 
 /// The arithmetic of [`Vm::bin_num_fast`] on two peeked numbers: `None`
 /// when the operator has no sealed numeric form or an int result overflows.
-#[inline]
+/// Always inlined: as a call, both numbers and the result go through
+/// memory (the specialised handlers' fast paths, `exec/spec.rs`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // see above
 fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
     if let (Num::Int(x), Num::Int(y)) = (x, y) {
         return Some(match op {
@@ -312,7 +315,8 @@ impl Vm {
     /// Reads a compiled variable without warning (`None` if undefined).
     #[inline]
     pub(crate) fn cv_get(&self, cv: u32) -> Option<Value> {
-        self.frame().peek_cv(cv, |slot: Option<&Value>| slot.cloned())
+        self.frame()
+            .peek_cv(cv, |slot: Option<&Value>| slot.cloned())
     }
 
     /// Assigns to a compiled variable (through references). A typed
@@ -965,14 +969,18 @@ impl Vm {
                             b,
                             target,
                             jmp_if,
+                            mask,
                             ..
                         } => {
-                            let r = self
-                                .cmp_num_fast(*kind, *a, *b)
-                                .or_else(|| self.cmp_simple_fast(*kind, *a, *b));
-                            match r {
-                                Some(r) if r == *jmp_if => ip = *target as usize,
-                                Some(_) => ip += 1,
+                            // Numbers: one outcome bit against the mask; the
+                            // same-type identity forms: the comparison's
+                            // result against the jump's sense.
+                            let jump = self.cmp_jmp_num(*a, *b, *mask).or_else(|| {
+                                self.cmp_simple_fast(*kind, *a, *b).map(|r| r == *jmp_if)
+                            });
+                            match jump {
+                                Some(true) => ip = *target as usize,
+                                Some(false) => ip += 1,
                                 None => break 'slow,
                             }
                         }
@@ -985,13 +993,13 @@ impl Vm {
                             // The sealed numeric and same-type forms cannot
                             // warn or throw; the generic path can, at this
                             // instruction.
-                            if let Some(r) = self.bin_num_fast(*kind, *a, *b) {
-                                self.set_tmp(*dst, r);
-                            } else if let Some(r) = self.cmp_simple_fast(*kind, *a, *b) {
-                                self.set_tmp(*dst, Value::Bool(r));
-                            } else {
-                                self.frame_mut().ip = ip;
-                                self.bin_slow(*kind, *a, *b, *dst)?;
+                            if !self.bin_tmp_fast(*kind, *a, *b, *dst) {
+                                if let Some(r) = self.cmp_simple_fast(*kind, *a, *b) {
+                                    self.set_tmp(*dst, Value::Bool(r));
+                                } else {
+                                    self.frame_mut().ip = ip;
+                                    self.bin_slow(*kind, *a, *b, *dst)?;
+                                }
                             }
                         }
                         Op::BinAssignCv {
@@ -1000,25 +1008,22 @@ impl Vm {
                             b,
                             dst,
                             cv,
-                        } => {
-                            let r = self
-                                .bin_num_fast(*kind, *a, *b)
-                                .or_else(|| self.cmp_simple_fast(*kind, *a, *b).map(Value::Bool));
-                            match r {
-                                // Stored into the variable: the `AssignCv`
-                                // after the op is done; otherwise it runs on
-                                // `dst`.
-                                Some(r) => match self.cv_store_plain(*cv, r) {
+                        } => match self.bin_assign_cv_fast(*kind, *a, *b, *cv, *dst) {
+                            // Stored into the variable: the `AssignCv` after
+                            // the op is done; otherwise it runs on `dst`.
+                            Some(true) => ip += 1,
+                            Some(false) => {}
+                            None => match self.cmp_simple_fast(*kind, *a, *b) {
+                                Some(r) => match self.cv_store_plain(*cv, Value::Bool(r)) {
                                     Ok(()) => ip += 1,
                                     Err(r) => self.set_tmp(*dst, r),
                                 },
                                 None => break 'slow,
-                            }
-                        }
+                            },
+                        },
                         Op::IncDecCv { cv, kind, dst, .. } => {
-                            match self.incdec_cv_fast(*cv, *kind) {
-                                Some(r) => self.set_dst(*dst, r),
-                                None => break 'slow,
+                            if !self.incdec_cv_fast(*cv, *kind, *dst) {
+                                break 'slow;
                             }
                         }
                         Op::AssignOpCv {

@@ -34,7 +34,7 @@
 //! [`Frame::peek_cv_dim`]: crate::vm::Frame::peek_cv_dim
 
 use super::{discard_unrooted, num_bin, CvOpData, Num};
-use crate::opcode::{BinKind, IncDecKind, Operand, PlaceId, Seg};
+use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Operand, PlaceId, Seg};
 use crate::vm::{Frame, VarStore, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, Value, ZStr};
 
@@ -139,6 +139,46 @@ fn slot_truth(v: Option<&Value>) -> Option<bool> {
     v.and_then(plain_truth)
 }
 
+/// The outcome of comparing the plain numbers `x` and `y`, as one
+/// [`cmp_outcome`] bit: two ints compare as ints, an int and a float as
+/// doubles (php-src's `(double)` widening) unless `identity` (`===`,
+/// `!==`), where they are a type mismatch; a NaN is unordered.
+#[inline(always)]
+#[allow(clippy::inline_always, clippy::float_cmp)] // the smart branch's test; PHP compares doubles exactly
+fn num_outcome(x: Num, y: Num, identity: bool) -> u8 {
+    let (xf, yf) = match (x, y) {
+        // 0, 1 or 2: LESS, EQUAL or GREATER.
+        (Num::Int(p), Num::Int(q)) => return 1 << (u8::from(p > q) + u8::from(p >= q)),
+        (Num::Float(p), Num::Float(q)) => (p, q),
+        _ if identity => return cmp_outcome::MISMATCH,
+        _ => (x.as_f64(), y.as_f64()),
+    };
+    if xf < yf {
+        cmp_outcome::LESS
+    } else if xf > yf {
+        cmp_outcome::GREATER
+    } else if xf == yf {
+        cmp_outcome::EQUAL
+    } else {
+        cmp_outcome::UNORDERED
+    }
+}
+
+/// Stores `v` into the temporary slot `slot` as [`Vm::set_tmp`] does: an
+/// old scalar (or the `Null` a consuming read left) is overwritten without
+/// the out-of-line drop call.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a store and a tag test
+fn put_tmp(slot: &mut Value, v: Value) {
+    let old = std::mem::replace(slot, v);
+    if matches!(
+        old,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    ) {
+        std::mem::forget(old);
+    }
+}
+
 impl Vm {
     /// [`plain_truth`] of compiled variable `cv` in place (the type switch
     /// inlined into `ZEND_JMPZ_SPEC_CV`/`ZEND_JMPNZ_SPEC_CV`); undefined
@@ -206,41 +246,83 @@ impl Vm {
         }
     }
 
-    /// The comparison of a smart branch ([`crate::opcode::Op::CmpJmp`])
-    /// when both operands are plain numbers: the `IS_LONG`/`IS_DOUBLE`
-    /// pairs of `ZEND_IS_EQUAL`, `ZEND_IS_IDENTICAL`, `ZEND_IS_SMALLER`
-    /// and `ZEND_IS_SMALLER_OR_EQUAL` (mixed pairs compare as doubles;
-    /// `===` on a mixed pair is a type mismatch). The same results as
-    /// [`Vm::bin_num_fast`], without building a `Value`.
+    /// The jump decision of a smart branch ([`crate::opcode::Op::CmpJmp`])
+    /// on two plain numbers: the `IS_LONG`/`IS_DOUBLE` pairs of
+    /// `ZEND_IS_EQUAL`, `ZEND_IS_IDENTICAL`, `ZEND_IS_SMALLER` and
+    /// `ZEND_IS_SMALLER_OR_EQUAL` with `ZEND_VM_SMART_BRANCH`, as the one
+    /// [`cmp_outcome`] bit of the comparison tested against the op's mask
+    /// (mixed pairs compare as doubles; under `===` they are a type
+    /// mismatch). `None` when an operand is not a plain number.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // every loop's condition: no call, one frame look
+    pub(super) fn cmp_jmp_num(&self, a: Operand, b: Operand, mask: u8) -> Option<bool> {
+        let f = self.frames.last()?;
+        let x = Self::peek_num(f, a)?;
+        let y = Self::peek_num(f, b)?;
+        let identity = (mask & cmp_outcome::IDENTITY) != 0;
+        Some((mask & num_outcome(x, y, identity)) != 0)
+    }
+
+    /// [`crate::opcode::Op::Bin`] on two plain numbers ([`Vm::peek_num`],
+    /// [`num_bin`]), the result written straight into temporary `dst`
+    /// under one look at the frame. `false`, nothing changed, when an
+    /// operand is not a plain number or the operator has no numeric form
+    /// (or an int result overflows).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the hot pre-match arm: no Value through memory
+    pub(super) fn bin_tmp_fast(&mut self, op: BinKind, a: Operand, b: Operand, dst: u32) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        let Some(x) = Self::peek_num(f, a) else {
+            return false;
+        };
+        let Some(y) = Self::peek_num(f, b) else {
+            return false;
+        };
+        let Some(r) = num_bin(op, x, y) else {
+            return false;
+        };
+        let Some(slot) = f.tmps.get_mut(dst as usize) else {
+            return false;
+        };
+        put_tmp(slot, r);
+        true
+    }
+
+    /// [`crate::opcode::Op::BinAssignCv`] on two plain numbers: the result
+    /// goes straight into compiled variable `cv` when the variable holds no
+    /// refcounted value (`Some(true)`: the `AssignCv` after the op is
+    /// done), else into `dst` for that `AssignCv` (`Some(false)`), under
+    /// one look at the frame. `None`, nothing changed, as for
+    /// [`Vm::bin_tmp_fast`].
     #[inline]
-    #[allow(clippy::float_cmp)] // PHP compares doubles exactly
-    pub(super) fn cmp_num_fast(&self, op: BinKind, a: Operand, b: Operand) -> Option<bool> {
-        let frame = self.frame();
-        let lhs = Self::peek_num(frame, a)?;
-        let rhs = Self::peek_num(frame, b)?;
-        if let (Num::Int(x), Num::Int(y)) = (lhs, rhs) {
-            return Some(match op {
-                BinKind::Equal | BinKind::Identical => x == y,
-                BinKind::NotEqual | BinKind::NotIdentical => x != y,
-                BinKind::Less => x < y,
-                BinKind::LessEqual => x <= y,
-                _ => return None,
-            });
+    pub(super) fn bin_assign_cv_fast(
+        &mut self,
+        op: BinKind,
+        a: Operand,
+        b: Operand,
+        cv: u32,
+        dst: u32,
+    ) -> Option<bool> {
+        let f = self.frames.last_mut()?;
+        let x = Self::peek_num(f, a)?;
+        let y = Self::peek_num(f, b)?;
+        let r = num_bin(op, x, y)?;
+        let idx = f.cv_idx(cv);
+        if let Ok(mut vars) = f.vars.try_borrow_mut() {
+            if let Some(slot) = vars.slots.get_mut(idx) {
+                if is_plain_slot(slot.as_ref()) {
+                    let old = slot.replace(r);
+                    drop(vars);
+                    // A scalar is forgotten; a string is released.
+                    discard_unrooted(old);
+                    return Some(true);
+                }
+            }
         }
-        let mixed = matches!(
-            (lhs, rhs),
-            (Num::Int(_), Num::Float(_)) | (Num::Float(_), Num::Int(_))
-        );
-        let (xf, yf) = (lhs.as_f64(), rhs.as_f64());
-        Some(match op {
-            BinKind::Equal => xf == yf,
-            BinKind::NotEqual => xf != yf,
-            BinKind::Identical => !mixed && xf == yf,
-            BinKind::NotIdentical => mixed || xf != yf,
-            BinKind::Less => xf < yf,
-            BinKind::LessEqual => xf <= yf,
-            _ => return None,
-        })
+        put_tmp(f.tmps.get_mut(dst as usize)?, r);
+        Some(false)
     }
 
     /// Stores `v` (never a reference) into compiled variable `cv` when the
@@ -286,39 +368,56 @@ impl Vm {
 
     /// `++`/`--` of compiled variable `cv` holding an int that does not
     /// overflow, or a float (`ZEND_PRE_INC_LONG_SPEC_CV` & co.,
-    /// `increment_function` on `IS_DOUBLE`): the result of the expression,
-    /// or `None` (nothing changed) for the generic path.
+    /// `increment_function` on `IS_DOUBLE`), the expression's value written
+    /// to `dst` when used, under one look at the frame. `false` (nothing
+    /// changed) for the generic path.
     #[inline]
-    pub(super) fn incdec_cv_fast(&self, cv: u32, kind: IncDecKind) -> Option<Value> {
-        let f = self.frame();
+    pub(super) fn incdec_cv_fast(&mut self, cv: u32, kind: IncDecKind, dst: Option<u32>) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
         let idx = f.cv_idx(cv);
-        let mut vars = f.vars.try_borrow_mut().ok()?;
-        match vars.slots.get_mut(idx)? {
-            Some(Value::Int(i)) => {
-                let old = *i;
-                let new = if kind.is_inc() {
-                    old.checked_add(1)?
-                } else {
-                    old.checked_sub(1)?
-                };
-                *i = new;
-                Some(Value::Int(if kind.is_post() { old } else { new }))
+        let r = {
+            let Ok(mut vars) = f.vars.try_borrow_mut() else {
+                return false;
+            };
+            match vars.slots.get_mut(idx) {
+                Some(Some(Value::Int(i))) => {
+                    let old = *i;
+                    let next = if kind.is_inc() {
+                        old.checked_add(1)
+                    } else {
+                        old.checked_sub(1)
+                    };
+                    let Some(new) = next else {
+                        return false;
+                    };
+                    *i = new;
+                    Value::Int(if kind.is_post() { old } else { new })
+                }
+                Some(Some(Value::Float(x))) => {
+                    let old = *x;
+                    let new = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
+                    *x = new;
+                    Value::Float(if kind.is_post() { old } else { new })
+                }
+                _ => return false,
             }
-            Some(Value::Float(x)) => {
-                let old = *x;
-                let new = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
-                *x = new;
-                Some(Value::Float(if kind.is_post() { old } else { new }))
+        };
+        if let Some(t) = dst {
+            if let Some(slot) = f.tmps.get_mut(t as usize) {
+                put_tmp(slot, r);
             }
-            _ => None,
         }
+        true
     }
 
     /// [`crate::opcode::Op::AssignOpCv`]: `$cv op= val` in place when both
     /// hold plain numbers and the result stays in the int domain (or is a
     /// float): `ZEND_ASSIGN_OP_SPEC_CV_*` with the `IS_LONG`/`IS_DOUBLE`
-    /// fast paths of `zend_binary_op`. Returns `false`, having changed
-    /// nothing, when the generic `AssignOp` must run.
+    /// fast paths of `zend_binary_op`, under one look at the frame. Returns
+    /// `false`, having changed nothing, when the generic `AssignOp` must
+    /// run.
     #[inline]
     pub(super) fn assign_op_cv_fast(
         &mut self,
@@ -327,26 +426,39 @@ impl Vm {
         val: Operand,
         dst: Option<u32>,
     ) -> bool {
-        // `peek_num` on the CV only succeeds for a slot holding an int or a
-        // float directly (no reference), which the store below overwrites
-        // without side effects.
-        let Some(r) = self.bin_num_fast(BinKind::Arith(op), Operand::Cv(cv), val) else {
+        let Some(f) = self.frames.last_mut() else {
             return false;
         };
-        let f = self.frame();
+        // The operand first: it may be this very variable (`$x += $x`).
+        let Some(y) = Self::peek_num(f, val) else {
+            return false;
+        };
         let idx = f.cv_idx(cv);
-        let Ok(mut vars) = f.vars.try_borrow_mut() else {
-            return false;
+        let r = {
+            let Ok(mut vars) = f.vars.try_borrow_mut() else {
+                return false;
+            };
+            // Only a slot holding an int or a float directly (no
+            // reference): overwritten without side effects.
+            let Some(Some(slot)) = vars.slots.get_mut(idx) else {
+                return false;
+            };
+            let x = match *slot {
+                Value::Int(i) => Num::Int(i),
+                Value::Float(v) => Num::Float(v),
+                _ => return false,
+            };
+            let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
+                return false;
+            };
+            // A number replaces a number: no drop glue to run.
+            std::mem::forget(std::mem::replace(slot, r.clone()));
+            r
         };
-        let Some(slot @ Some(Value::Int(_) | Value::Float(_))) = vars.slots.get_mut(idx) else {
-            return false;
-        };
-        let keep = dst.map(|_| r.clone());
-        // The old value is a number: nothing to drop.
-        std::mem::forget(slot.replace(r));
-        drop(vars);
-        if let (Some(d), Some(k)) = (dst, keep) {
-            self.set_tmp(d, k);
+        if let Some(t) = dst {
+            if let Some(slot) = f.tmps.get_mut(t as usize) {
+                put_tmp(slot, r);
+            }
         }
         true
     }
@@ -767,6 +879,81 @@ echo "\n";
 "#;
         let expected =
             "3\n0.5 1.5 2.5 \nge\neq\nnot id\nnot id2\nno nan\narrays\n0\n3\n010 19 28 \n";
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn smart_branches_and_numeric_ops_on_every_number_pair() {
+        // Each comparison as an `if` (JmpZ) and a rotated `while` (JmpNz)
+        // over int, float, -0.0, NaN, infinities and large ints (the
+        // `(double)` widening of int/float pairs, `===` type mismatch),
+        // then fused arithmetic, overflow and compound assignments.
+        let src = r#"<?php
+$vals = [0, 1, -1, 1.0, 0.5, -0.0, NAN, INF, -INF, PHP_INT_MAX, 9007199254740993, 9007199254740992.0];
+foreach ($vals as $x) {
+    $line = '';
+    foreach ($vals as $y) {
+        $r = '';
+        if ($x < $y) { $r .= 'L'; } else { $r .= 'l'; }
+        if ($x <= $y) { $r .= 'E'; } else { $r .= 'e'; }
+        if ($x == $y) { $r .= 'Q'; } else { $r .= 'q'; }
+        if ($x != $y) { $r .= 'N'; } else { $r .= 'n'; }
+        if ($x === $y) { $r .= 'I'; } else { $r .= 'i'; }
+        if ($x !== $y) { $r .= 'D'; } else { $r .= 'd'; }
+        while ($x < $y) { $r .= '1'; break; }
+        while ($x <= $y) { $r .= '2'; break; }
+        while ($x == $y) { $r .= '3'; break; }
+        while ($x != $y) { $r .= '4'; break; }
+        while ($x === $y) { $r .= '5'; break; }
+        while ($x !== $y) { $r .= '6'; break; }
+        if ($x > 0.5) { $r .= 'g'; }
+        if (1 >= $y) { $r .= 'h'; }
+        $line .= $r . ' ';
+    }
+    echo $line, "\n";
+}
+$i = 0; $f = 0.0; $n = 0;
+for ($k = 0; $k < 3; $k++) { $i++; $f += 0.5; $n = $n + $k * 2; }
+var_dump($i, $f, $n);
+$m = PHP_INT_MAX; $o = $m + 1; $p = $m; $p = $p + 1; var_dump($o, $p);
+$q = PHP_INT_MIN; $q--; var_dump($q);
+$s = 5; $t = $s++ + ++$s; var_dump($s, $t);
+$u = 1.5; $v = $u-- * --$u; var_dump($u, $v);
+$w = 7; $w -= 2; $w *= 3; $w ^= 1; $w |= 64; $w &= 0x7f; var_dump($w);
+$z = 3; $z += $z; var_dump($z); $z -= $z; var_dump($z);
+$big = PHP_INT_MAX; $big += 1; var_dump($big); $neg = PHP_INT_MIN; $neg -= 1; var_dump($neg);
+$e = 2; $res = ($e *= 2.5); var_dump($e, $res);
+"#;
+        let expected = r#"lEQnId235h LEqNiD1246h leqNiD46h LEqNiD1246h LEqNiD1246h lEQniD236h leqNiD46 LEqNiD1246 leqNiD46h LEqNiD1246 LEqNiD1246 LEqNiD1246 
+leqNiD46gh lEQnId235gh leqNiD46gh lEQniD236gh leqNiD46gh leqNiD46gh leqNiD46g LEqNiD1246g leqNiD46gh LEqNiD1246g LEqNiD1246g LEqNiD1246g 
+LEqNiD1246h LEqNiD1246h lEQnId235h LEqNiD1246h LEqNiD1246h LEqNiD1246h leqNiD46 LEqNiD1246 leqNiD46h LEqNiD1246 LEqNiD1246 LEqNiD1246 
+leqNiD46gh lEQniD236gh leqNiD46gh lEQnId235gh leqNiD46gh leqNiD46gh leqNiD46g LEqNiD1246g leqNiD46gh LEqNiD1246g LEqNiD1246g LEqNiD1246g 
+leqNiD46h LEqNiD1246h leqNiD46h LEqNiD1246h lEQnId235h leqNiD46h leqNiD46 LEqNiD1246 leqNiD46h LEqNiD1246 LEqNiD1246 LEqNiD1246 
+lEQniD236h LEqNiD1246h leqNiD46h LEqNiD1246h LEqNiD1246h lEQnId235h leqNiD46 LEqNiD1246 leqNiD46h LEqNiD1246 LEqNiD1246 LEqNiD1246 
+leqNiD46h leqNiD46h leqNiD46h leqNiD46h leqNiD46h leqNiD46h leqNiD46 leqNiD46 leqNiD46h leqNiD46 leqNiD46 leqNiD46 
+leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46g lEQnId235g leqNiD46gh leqNiD46g leqNiD46g leqNiD46g 
+LEqNiD1246h LEqNiD1246h LEqNiD1246h LEqNiD1246h LEqNiD1246h LEqNiD1246h leqNiD46 LEqNiD1246 lEQnId235h LEqNiD1246 LEqNiD1246 LEqNiD1246 
+leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46g LEqNiD1246g leqNiD46gh lEQnId235g leqNiD46g leqNiD46g 
+leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46g LEqNiD1246g leqNiD46gh LEqNiD1246g lEQnId235g lEQniD236g 
+leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46g LEqNiD1246g leqNiD46gh LEqNiD1246g lEQniD236g lEQnId235g 
+int(3)
+float(1.5)
+int(6)
+float(9.223372036854776E+18)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+int(7)
+int(12)
+float(-0.5)
+float(-0.75)
+int(78)
+int(6)
+int(0)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(5)
+float(5)
+"#;
         assert_eq!(run(src), expected);
     }
 
