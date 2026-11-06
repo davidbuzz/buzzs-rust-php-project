@@ -323,6 +323,37 @@ later myex aliased aliased
     );
 }
 
+/// `static::X`, `static::$n` and `static::f()` from a base class method over more subclasses than a slot holds: evicted entries are refilled and every class still sees its own member.
+#[test]
+fn megamorphic_static_lookups_evict_correctly() {
+    let out = run(r#"<?php
+abstract class Base {
+    const T = 'base';
+    public static $n = 0;
+    static function t() { return static::T . static::$n . static::make(); }
+    static function make() { return '!'; }
+}
+$classes = [];
+for ($i = 0; $i < 11; $i++) {
+    eval("class C$i extends Base { const T = 't$i'; public static \$n = $i; static function make() { return '$i'; } }");
+    $classes[] = "C$i";
+}
+for ($round = 0; $round < 3; $round++) {
+    $out = '';
+    foreach ($classes as $c) { $out .= $c::t() . ' '; }
+    echo $out, Base::t(), "\n";
+    C3::$n += 100;
+}
+"#);
+    assert_eq!(
+        out,
+        r#"t000 t111 t222 t333 t444 t555 t666 t777 t888 t999 t101010 base0!
+t000 t111 t222 t31033 t444 t555 t666 t777 t888 t999 t101010 base0!
+t000 t111 t222 t32033 t444 t555 t666 t777 t888 t999 t101010 base0!
+"#
+    );
+}
+
 /// Class types match in any case, through interfaces, parents, `self`, `parent`, unions and intersections (allocation-free name matching).
 #[test]
 fn class_types_match_names_in_any_case() {

@@ -47,8 +47,9 @@ mod tests;
 const NO_CLASS_LIT: u32 = u32::MAX;
 
 /// Entries per member slot: the classes one name literal of an op array
-/// is cached for at a time.
-const POLY_ENTRIES: usize = 4;
+/// is cached for at a time (`static::X` in a base class method sees one
+/// class per subclass; past this many the oldest entry is replaced).
+const POLY_ENTRIES: usize = 8;
 
 /// The run-time cache of one op array (see the module docs).
 #[derive(Debug, Default)]
