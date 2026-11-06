@@ -73,13 +73,22 @@ fn plain_key(v: Option<&Value>) -> Option<ArrayKey> {
 
 /// The value of an operand for a comparison without conversions: a
 /// defined compiled variable, a literal or a temporary (left in place), not
-/// holding a reference.
+/// holding a reference. A consumed temporary (`Tmp`) qualifies only when it
+/// holds a plain value, which [`Vm::release_tmp_str`] can release: an
+/// array, object or resource in it must be freed by the generic op's read
+/// (`FREE_OP1`/`FREE_OP2` of `ZEND_IS_IDENTICAL` & co.), with the
+/// destructor that may run, so it does not outlive its statement in the
+/// slot (`$weak->get() !== null`, `new D !== null`).
 #[inline]
 fn operand_simple<'a>(f: &'a Frame, vars: &'a VarStore, op: Operand) -> Option<&'a Value> {
     let v = match op {
         Operand::Cv(cv) => vars.slots.get(f.cv_idx(cv))?.as_ref()?,
         Operand::Lit(i) => f.code.literals.get(i as usize)?,
-        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::Tmp(t) => {
+            let v = f.tmps.get(t as usize)?;
+            return is_plain_value(v).then_some(v);
+        }
+        Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
         Operand::Unused => return None,
     };
     match v {
@@ -124,9 +133,10 @@ impl Vm {
     /// `zend_fast_equal_strings`): same-type null, bool and string pairs,
     /// and `===`/`!==` of two different types (false/true). Byte-unequal
     /// strings under `==`/`!=` may still be numerically equal and go
-    /// generic, as do arrays, objects, resources and references. A
-    /// consumed temporary holding a string is released, as the generic
-    /// read would (`FREE_OP1`/`FREE_OP2`).
+    /// generic, as do arrays, objects, resources and references (also when
+    /// only one operand is one of those and it sits in a consumed
+    /// temporary, see [`operand_simple`]). A consumed temporary holding a
+    /// string is released, as the generic read would (`FREE_OP1`/`FREE_OP2`).
     #[inline(never)]
     pub(super) fn cmp_simple_fast(&mut self, op: BinKind, a: Operand, b: Operand) -> Option<bool> {
         let identity = match op {
@@ -1076,6 +1086,33 @@ $x = [1, 2]; $y = &$x; $v = $x[1]; $v = $x[0]; var_dump($v);
 $t = 0; $t = $t + "1"; $t = $t + 1; var_dump($t);
 "#;
         let expected = "012\nint(2)\nint(5)\nint(1)\nint(2)\n";
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn identity_comparisons_release_object_temporaries() {
+        // `ZEND_IS_IDENTICAL` / `ZEND_IS_NOT_IDENTICAL` free both operands
+        // (FREE_OP1/FREE_OP2): an object compared from a temporary is
+        // destructed by the comparison, not at the end of the request, so
+        // the weak reference is cleared and the cycle collected.
+        let src = r#"<?php
+class D { public $n; function __construct($n) { $this->n = $n; } function __destruct() { echo "~{$this->n}\n"; } }
+$o = new stdClass; $o->o = $o; $w = WeakReference::create($o); unset($o);
+var_dump($w->get() !== null);
+var_dump(gc_collect_cycles());
+var_dump($w->get());
+var_dump(new D(1) !== null); echo "after 1\n";
+var_dump(new D(2) === null); echo "after 2\n";
+var_dump([new D(3)] !== null); echo "after 3\n";
+if (new D(4) !== null) { echo "in if 4\n"; } echo "after 4\n";
+$x = (new D(5) === null); echo "after 5\n";
+var_dump(new D(6) == null); echo "after 6\n";
+function f() { return new D(7); }
+while (f() !== null) { echo "loop 7\n"; break; } echo "after 7\n";
+$arr = [1]; var_dump($arr === null, null !== $arr);
+echo "end\n";
+"#;
+        let expected = "bool(true)\nint(1)\nNULL\n~1\nbool(true)\nafter 1\n~2\nbool(false)\nafter 2\n~3\nbool(true)\nafter 3\n~4\nin if 4\nafter 4\n~5\nafter 5\n~6\nbool(false)\nafter 6\n~7\nloop 7\nafter 7\nbool(false)\nbool(true)\nend\n";
         assert_eq!(run(src), expected);
     }
 }
