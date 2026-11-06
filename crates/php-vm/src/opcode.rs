@@ -641,18 +641,30 @@ pub enum Op {
         dst: Option<u32>,
         place: PlaceId,
     },
-    /// `Fetch` (read mode) of `$cv[dim]` (`ZEND_FETCH_DIM_R_SPEC_CV_*`
-    /// with `zend_fetch_dimension_address_inner` on an array and an int or
+    /// `Fetch` (`Read` or `Is` mode) of `$cv[dim]`
+    /// (`ZEND_FETCH_DIM_R_SPEC_CV_*` / `ZEND_FETCH_DIM_IS_SPEC_CV_*` with
+    /// `zend_fetch_dimension_address_inner` on an array and an int or
     /// string offset). With `to`, the `AssignCv { cv: to, val: Tmp(dst),
     /// dst: None }` right after it is done here too when the CV holds no
     /// refcounted value. A missing key or a non-array falls back to
-    /// `place`.
+    /// `place` in `mode`.
     FetchDimCv {
         cv: u32,
         dim: Operand,
         place: PlaceId,
         dst: u32,
         to: Option<u32>,
+        mode: FetchMode,
+    },
+    /// `Isset` / `Empty` (`empty`) of `$cv[dim]`
+    /// (`ZEND_ISSET_ISEMPTY_DIM_OBJ_SPEC_CV_*` on an array with an int or
+    /// string offset); anything else goes through `place`.
+    IssetDimCv {
+        cv: u32,
+        dim: Operand,
+        place: PlaceId,
+        dst: u32,
+        empty: bool,
     },
     /// `Assign` of `$cv[dim] = val` without a used result
     /// (`ZEND_ASSIGN_DIM_SPEC_CV_*_OP_DATA_*` on an array with an int or

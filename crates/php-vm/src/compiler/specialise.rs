@@ -55,16 +55,29 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
             dst: *dst,
             place: *place,
         }),
-        Op::Fetch {
-            place,
-            mode: FetchMode::Read,
-            dst,
-        } => cv_dim(places, *place).map(|(cv, dim)| Op::FetchDimCv {
+        Op::Fetch { place, mode, dst } if *mode != FetchMode::List => {
+            cv_dim(places, *place).map(|(cv, dim)| Op::FetchDimCv {
+                cv,
+                dim,
+                place: *place,
+                dst: *dst,
+                to: assigned_cv(next, *dst),
+                mode: *mode,
+            })
+        }
+        Op::Isset { place, dst } => cv_dim(places, *place).map(|(cv, dim)| Op::IssetDimCv {
             cv,
             dim,
             place: *place,
             dst: *dst,
-            to: assigned_cv(next, *dst),
+            empty: false,
+        }),
+        Op::Empty { place, dst } => cv_dim(places, *place).map(|(cv, dim)| Op::IssetDimCv {
+            cv,
+            dim,
+            place: *place,
+            dst: *dst,
+            empty: true,
         }),
         Op::Assign {
             place,
@@ -190,7 +203,7 @@ fn cv_dim(places: &[Place], pid: PlaceId) -> Option<(u32, Operand)> {
 #[cfg(test)]
 mod tests {
     use super::super::{compile, CompileOptions};
-    use crate::opcode::{BinKind, IncDecKind, Op, Operand};
+    use crate::opcode::{BinKind, FetchMode, IncDecKind, Op, Operand};
     use std::rc::Rc;
 
     fn main_ops(src: &str) -> Vec<Op> {
@@ -343,8 +356,44 @@ mod tests {
     fn cv_dimensions_are_specialised() {
         let ops = main_ops("<?php $a = [1, 2]; $i = 1; $s = $a[$i & 1]; $a[$i] = 3;");
         assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchDimCv {
+                    to: Some(_),
+                    mode: FetchMode::Read,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        let ops = main_ops(
+            "<?php $a = []; $k = 'k'; $v = $a[$k] ?? 1; $i = isset($a[$k]); $e = empty($a[0]);",
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchDimCv {
+                    to: None,
+                    mode: FetchMode::Is,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
             ops.iter()
-                .any(|op| matches!(op, Op::FetchDimCv { to: Some(_), .. })),
+                .any(|op| matches!(op, Op::IssetDimCv { empty: false, .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::IssetDimCv { empty: true, .. })),
+            "{ops:?}"
+        );
+        // list() element fetches keep the generic op.
+        let ops = main_ops("<?php $a = [1]; [$x] = $a;");
+        assert!(
+            !ops.iter().any(|op| matches!(op, Op::FetchDimCv { .. })),
             "{ops:?}"
         );
         assert!(

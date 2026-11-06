@@ -60,25 +60,31 @@ fn operand_simple<'a>(f: &'a Frame, vars: &'a VarStore, op: Operand) -> Option<&
     }
 }
 
+/// `zend_is_true` of `v` when it needs neither a diagnostic nor a copy:
+/// null, bool, int, a non-NaN float (NaN's coercion warns), a string or an
+/// array. References, objects and resources give `None`.
+#[inline]
+fn plain_truth(v: &Value) -> Option<bool> {
+    match v {
+        Value::Null => Some(false),
+        Value::Bool(b) => Some(*b),
+        Value::Int(i) => Some(*i != 0),
+        Value::Float(x) if !x.is_nan() => Some(*x != 0.0),
+        Value::Str(s) => Some(!(s.is_empty() || s.as_bytes() == b"0")),
+        Value::Array(a) => Some(!a.is_empty()),
+        _ => None,
+    }
+}
+
 impl Vm {
-    /// `zend_is_true` of compiled variable `cv` when it needs neither a
-    /// diagnostic nor a copy (the type switch inlined into
-    /// `ZEND_JMPZ_SPEC_CV`/`ZEND_JMPNZ_SPEC_CV`): null, bool, int, a
-    /// non-NaN float (NaN's coercion warns), a string or an array.
-    /// References, objects, resources and undefined variables go generic.
+    /// [`plain_truth`] of compiled variable `cv` (the type switch inlined
+    /// into `ZEND_JMPZ_SPEC_CV`/`ZEND_JMPNZ_SPEC_CV`); undefined variables
+    /// go generic.
     #[inline]
     pub(super) fn peek_cv_bool(&self, cv: u32) -> Option<bool> {
         let f = self.frame();
         let vars = f.vars.borrow();
-        match vars.slots.get(f.cv_idx(cv))?.as_ref()? {
-            Value::Null => Some(false),
-            Value::Bool(b) => Some(*b),
-            Value::Int(i) => Some(*i != 0),
-            Value::Float(x) if !x.is_nan() => Some(*x != 0.0),
-            Value::Str(s) => Some(!(s.is_empty() || s.as_bytes() == b"0")),
-            Value::Array(a) => Some(!a.is_empty()),
-            _ => None,
-        }
+        plain_truth(vars.slots.get(f.cv_idx(cv))?.as_ref()?)
     }
 
     /// `==`, `!=`, `===`, `!==` on operands that are not both numbers,
@@ -386,11 +392,12 @@ impl Vm {
         place: PlaceId,
         dst: u32,
         to: Option<u32>,
+        mode: FetchMode,
     ) -> VmResult<bool> {
         let Some(v) = self.fetch_dim_cv_fast(cv, dim) else {
             // The generic fetch may warn or call user code: the
             // `AssignCv` then runs as its own op, after the safe point.
-            let v = self.place_fetch(place, FetchMode::Read)?;
+            let v = self.place_fetch(place, mode)?;
             self.set_tmp(dst, v);
             return Ok(false);
         };
@@ -403,6 +410,59 @@ impl Vm {
             self.set_tmp(dst, v);
         }
         Ok(false)
+    }
+
+    /// `isset($cv[dim])` / `empty($cv[dim])` when `$cv` holds an array
+    /// (directly or through a reference) and the offset is an int or
+    /// string (`zend_isset_dim_slow` is never reached: the
+    /// `ZEND_ISSET_ISEMPTY_DIM_OBJ` array fast path). `None` leaves it to
+    /// the generic `place_isset`.
+    #[inline]
+    fn isset_dim_cv_fast(&self, cv: u32, dim: Operand, empty: bool) -> Option<bool> {
+        let key = self.peek_dim_key(dim)?;
+        let f = self.frame();
+        let vars = f.vars.borrow();
+        let slot = vars.slots.get(f.cv_idx(cv))?.as_ref()?;
+        let guard;
+        let arr = match slot {
+            Value::Array(a) => a,
+            Value::Reference(r) => {
+                guard = r.try_borrow()?;
+                match &*guard {
+                    Value::Array(a) => a,
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        let Some(v) = arr.get(&key) else {
+            return Some(empty);
+        };
+        if empty {
+            return plain_truth(v).map(|t| !t);
+        }
+        Some(match v {
+            Value::Reference(r) => !r.try_borrow()?.is_null(),
+            v => !v.is_null(),
+        })
+    }
+
+    /// [`crate::opcode::Op::IssetDimCv`].
+    #[inline]
+    pub(super) fn op_isset_dim_cv(
+        &mut self,
+        cv: u32,
+        dim: Operand,
+        place: PlaceId,
+        dst: u32,
+        empty: bool,
+    ) -> VmResult<()> {
+        let r = match self.isset_dim_cv_fast(cv, dim, empty) {
+            Some(r) => r,
+            None => self.place_isset(place, empty)?,
+        };
+        self.set_tmp(dst, Value::Bool(r));
+        Ok(())
     }
 
     /// A plain value (see [`is_plain_value`]) an `OP_DATA` operand holds,
@@ -731,6 +791,43 @@ echo "end\n";
         );
         assert!(out.contains("Undefined variable $undef_key"), "{out}");
         assert!(out.ends_with("end\n"), "{out}");
+    }
+
+    #[test]
+    fn isset_empty_and_coalesce_on_cv_dimensions() {
+        let src = r#"<?php
+$a = [1, 0, null, 'x' => 'y', '7' => 'seven', 'e' => '', 'z' => '0', 'arr' => [], 'f' => 0.0];
+var_dump(isset($a[0]), isset($a[1]), isset($a[2]), isset($a[3]), isset($a['x']), isset($a[7]), isset($a['7']), isset($a['missing']));
+var_dump(empty($a[0]), empty($a[1]), empty($a[2]), empty($a[3]), empty($a['x']), empty($a['e']), empty($a['z']), empty($a['arr']), empty($a['f']));
+$k = 'x'; $i = 1; $fl = 1.5;
+var_dump(isset($a[$k]), isset($a[$i]), isset($a[$fl]), empty($a[$k]), empty($a[$i]));
+var_dump($a[$k] ?? 'd', $a[2] ?? 'd', $a['missing'] ?? 'd', $a[$i] ?? 'd');
+$r = &$a; var_dump(isset($r['x']), isset($r['q']), $r['x'] ?? 'd');
+$s = 'str'; var_dump(isset($s[1]), isset($s[5]), empty($s[0]), $s[1] ?? 'd');
+$o = new ArrayObject(['k' => 1, 'n' => null]); var_dump(isset($o['k']), isset($o['n']), isset($o['m']), empty($o['k']), $o['k'] ?? 'd', $o['m'] ?? 'd');
+$b = [&$i, [1]]; $i = null; var_dump(isset($b[0]), $b[0] ?? 'd', isset($b[1][0]), isset($b[1][1]), $b[1][0] ?? 'd');
+var_dump(isset($undef[0]), empty($undef[0]), $undef[0] ?? 'd');
+$ai = ['1' => 'a', '01' => 'b']; var_dump(isset($ai[1]), isset($ai['1']), isset($ai['01']), $ai['01'] ?? 'd');
+$nan = [NAN]; var_dump(empty($nan[0]));
+$t = ['x' => true]; $v = isset($t['x']) ? 'yes' : 'no'; echo $v, "\n";
+if (isset($t['x'])) { echo "set\n"; }
+if (!empty($t['y'])) { echo "X"; } else { echo "empty\n"; }
+$m = ['q' => 5]; $w = $m['q'] ?? 0; $w2 = $m['zz'] ?? 0; var_dump($w, $w2);
+"#;
+        let out = run(src);
+        let head = "bool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\n";
+        assert!(out.starts_with(head), "{out}");
+        assert!(
+            out.contains("Implicit conversion from float 1.5 to int loses precision"),
+            "{out}"
+        );
+        let middle = "bool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(true)\nstring(1) \"y\"\nstring(1) \"d\"\nstring(1) \"d\"\nint(0)\nbool(true)\nbool(false)\nstring(1) \"y\"\nbool(true)\nbool(false)\nbool(false)\nstring(1) \"t\"\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nint(1)\nstring(1) \"d\"\nbool(false)\nstring(1) \"d\"\nbool(true)\nbool(false)\nint(1)\nbool(false)\nbool(true)\nstring(1) \"d\"\nbool(true)\nbool(true)\nbool(true)\nstring(1) \"b\"\n";
+        assert!(out.contains(middle), "{out}");
+        assert!(out.contains("NAN value was coerced to bool"), "{out}");
+        assert!(
+            out.ends_with("bool(false)\nyes\nset\nempty\nint(5)\nint(0)\n"),
+            "{out}"
+        );
     }
 
     #[test]

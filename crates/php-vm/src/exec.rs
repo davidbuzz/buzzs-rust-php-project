@@ -1553,10 +1553,21 @@ impl Vm {
                         place,
                         dst,
                         to,
+                        mode,
                     } => {
-                        if self.op_fetch_dim_cv(*cv, *dim, *place, *dst, *to)? {
+                        if self.op_fetch_dim_cv(*cv, *dim, *place, *dst, *to, *mode)? {
                             self.frame_mut().ip += 1;
                         }
+                        Flow::Next
+                    }
+                    Op::IssetDimCv {
+                        cv,
+                        dim,
+                        place,
+                        dst,
+                        empty,
+                    } => {
+                        self.op_isset_dim_cv(*cv, *dim, *place, *dst, *empty)?;
                         Flow::Next
                     }
                     Op::AssignDimCv {
