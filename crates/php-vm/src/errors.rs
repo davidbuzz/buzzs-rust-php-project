@@ -296,13 +296,14 @@ impl Vm {
                         Value::Int(i64::from(line)),
                     ];
                     // zend_error_impl: EG(user_error_handler) is UNDEF while
-                    // the handler runs (so its own errors take the default
-                    // path, or a handler it installs), and is put back
-                    // afterwards unless the handler installed another one.
+                    // the handler runs (so its own errors, and the callable
+                    // deprecations of resolving it, take the default path or
+                    // a handler it installs), and is put back afterwards
+                    // unless the handler installed another one.
                     if let Some(top) = self.error_handlers.last_mut() {
                         top.callback = Value::Null;
                     }
-                    let r = self.call_value(&h.callback, args);
+                    let r = self.call_user_function(&h.callback, args);
                     match self.error_handlers.last_mut() {
                         Some(top) if top.callback.is_null() => top.callback = h.callback,
                         Some(_) => {}
@@ -646,19 +647,58 @@ impl Vm {
         false
     }
 
+    /// `call_user_function()`: `zend_call_function()` without a
+    /// `zend_fcall_info_cache`, for the callables the engine keeps as given
+    /// (user error and exception handlers). `zend_is_callable_ex` resolves
+    /// `cb` at every call, in the calling user frame's scope (the code that
+    /// raised the error; none for an exception handler), raising the
+    /// callable deprecations each time; the call is `ZEND_CALL_DYNAMIC`.
+    /// A callable that does not resolve there is `invalid_callback`.
+    pub(crate) fn call_user_function(&mut self, cb: &Value, args: Vec<Value>) -> VmResult<Value> {
+        let mut call = match self.zend_is_callable(cb, false)? {
+            Ok(call) => call,
+            Err(reason) => return Err(self.invalid_callback(cb, &reason)),
+        };
+        call.dynamic = true;
+        call.args = args.into_iter().map(Some).collect();
+        self.call_pending(call)
+    }
+
+    /// `zend_throw_error(NULL, "Invalid callback %s, %s", ...)` from
+    /// `zend_call_function()` (the callable's name as
+    /// `zend_get_callable_name_ex` spells it): an `Error`; with no user
+    /// frame executing (an exception handler run after the script ended,
+    /// at shutdown) `zend_throw_error()` raises the fatal error instead,
+    /// "in Unknown on line 0", and the shutdown functions still run.
+    #[cold]
+    #[inline(never)]
+    fn invalid_callback(&mut self, cb: &Value, reason: &str) -> Throw {
+        let msg = format!("Invalid callback {}, {reason}", self.callable_name(cb));
+        if self.is_executing() {
+            return self.make_throw("Error", &msg);
+        }
+        match self.error(level::ERROR, &msg) {
+            Err(t) => t,
+            Ok(()) => Throw::Fatal,
+        }
+    }
+
     /// Handles an exception that escaped all frames: the user exception
     /// handler or the "Uncaught" fatal error.
     ///
     /// `zend_user_exception_handler`: the handler is pushed and none is
     /// current while it runs; afterwards it becomes current again unless
-    /// it installed another one (or restored an older one). An exception
-    /// the handler throws goes to the handler current at that point
-    /// (`zend_throw_exception_internal` without a frame), else is fatal.
+    /// it installed another one (or restored an older one). The handler is
+    /// resolved when it is called ([`Vm::call_user_function`]), with no
+    /// frame: `'parent::h'` is an "Invalid callback" fatal error then. An
+    /// exception the handler throws goes to the handler current at that
+    /// point (`zend_throw_exception_internal` without a frame), else is
+    /// fatal.
     pub(crate) fn uncaught_exception(&mut self, e: Obj) -> Result<(), Throw> {
         if let Some(h) = self.exception_handlers.last().cloned() {
             if !h.is_null() {
                 self.exception_handlers.push(Value::Null);
-                let r = match self.call_value(&h, vec![Value::Object(e)]) {
+                let r = match self.call_user_function(&h, vec![Value::Object(e)]) {
                     Ok(_) => Ok(()),
                     Err(Throw::Exception(e2)) => self.uncaught_exception(e2),
                     Err(t) => Err(t),
