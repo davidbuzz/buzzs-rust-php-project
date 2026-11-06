@@ -1,7 +1,10 @@
 //! Handlers of the opcodes that `zend_try_compile_special_func()` compiles
 //! builtin calls to (ref: Zend/zend_compile.c `zend_compile_func_strlen`,
-//! `_count`, `_typecheck`, `_gettype`; Zend/zend_vm_def.h `ZEND_STRLEN`,
-//! `ZEND_COUNT`, `ZEND_TYPE_CHECK`, `ZEND_GET_TYPE`).
+//! `_count`, `_typecheck`, `_gettype`, `_defined`, `_in_array`,
+//! `_array_key_exists`; Zend/zend_vm_def.h `ZEND_STRLEN`, `ZEND_COUNT`,
+//! `ZEND_TYPE_CHECK`, `ZEND_GET_TYPE`, `ZEND_DEFINED`, `ZEND_IN_ARRAY`,
+//! `ZEND_ARRAY_KEY_EXISTS`; Zend/zend_execute.c `zend_quick_check_constant`,
+//! `zend_array_key_exists_fast`, `zend_array_key_exists_error`).
 //!
 //! The opcodes run in the caller's frame: no builtin frame is pushed, so
 //! a `TypeError` they raise has no `strlen()` line in its trace, exactly as
@@ -14,14 +17,18 @@ use crate::object;
 use crate::opcode::Operand;
 use crate::typecheck::given_type;
 use crate::vm::{PendingCall, Vm, VmResult};
-use php_runtime::{Value, ZStr};
+use php_runtime::{Value, ZArray, ZStr};
 
 impl Vm {
     /// [`crate::compiler::CompileOptions::special_builtins`] for the
     /// current function table: the special builtins registered as
     /// (non-deprecated) internal functions. A disabled function redeclared
-    /// in user code keeps its calls.
+    /// in user code keeps its calls, and so does everything under
+    /// [`Vm::compile_no_builtins`] (`ZEND_COMPILE_NO_BUILTINS`).
     pub(crate) fn special_builtins(&self) -> u32 {
+        if self.compile_no_builtins {
+            return 0;
+        }
         let mut mask = 0;
         for (i, name) in SPECIAL_BUILTINS.iter().enumerate() {
             let internal = matches!(
@@ -126,6 +133,163 @@ impl Vm {
                 "get_called_class() must be called from within a class",
             )),
         }
+    }
+
+    /// `ZEND_DEFINED`: whether the constant named by literal `name` exists.
+    /// Like `zend_quick_check_constant`, only the exact name is looked up:
+    /// `true`/`false`/`null` were resolved at compile time, and
+    /// `__COMPILER_HALT_OFFSET__` is registered under a mangled name.
+    #[inline]
+    pub(crate) fn op_defined(&mut self, name: u32) -> VmResult<bool> {
+        if let Value::Str(n) = &self.frame().code.literals[name as usize] {
+            return Ok(self.constants.contains_key(n));
+        }
+        self.op_defined_slow(name)
+    }
+
+    /// `defined()` of a number literal (`defined(1.5)`): the name is
+    /// `zval_get_string` of the literal, formatted with the `precision`
+    /// setting in effect.
+    #[cold]
+    #[inline(never)]
+    fn op_defined_slow(&mut self, name: u32) -> VmResult<bool> {
+        let v = self.lit(name);
+        let n = self.to_zstr(&v)?;
+        Ok(self.constants.contains_key(&n))
+    }
+
+    /// `ZEND_IN_ARRAY`: whether `needle` is one of the keys of the literal
+    /// `set`. A string needle is looked up as a string key and, in strict
+    /// mode, an integer as an integer key; in loose mode `null` and `false`
+    /// equal only the empty string, and any other needle is compared with
+    /// `==` against each key in order.
+    pub(crate) fn op_in_array(&mut self, needle: &Value, set: u32, strict: bool) -> VmResult<bool> {
+        let keys = {
+            let Value::Array(keys) = &self.frame().code.literals[set as usize] else {
+                unreachable!("the haystack literal of ZEND_IN_ARRAY is an array");
+            };
+            match needle {
+                Value::Str(s) => return Ok(keys.get_str(s.as_bytes()).is_some()),
+                Value::Int(i) if strict => return Ok(keys.get_int(*i).is_some()),
+                _ if strict => return Ok(false),
+                Value::Null | Value::Bool(false) => return Ok(keys.get_str(b"").is_some()),
+                _ => keys.clone(),
+            }
+        };
+        self.in_array_compare(needle, &keys)
+    }
+
+    /// The loose-comparison loop of `ZEND_IN_ARRAY`: `zend_compare` of the
+    /// needle with each string key, in order, until the first match.
+    #[cold]
+    #[inline(never)]
+    fn in_array_compare(&mut self, needle: &Value, keys: &ZArray) -> VmResult<bool> {
+        for key in keys.keys() {
+            let key = key.to_value();
+            if php_runtime::ops::is_equal(needle, &key, self).map_err(|e| self.rt_throw(e))? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// `ZEND_ARRAY_KEY_EXISTS`: both operands are read without the
+    /// undefined-variable warning first (`GET_OP*_ZVAL_PTR_UNDEF`); the
+    /// warnings come from the lookup or the type error, in php-src's order.
+    pub(crate) fn op_key_exists(&mut self, key: Operand, array: Operand) -> VmResult<bool> {
+        let k = self.read_quiet(key)?;
+        let subject = self.read_quiet(array)?;
+        match subject {
+            Some(Value::Array(a)) => match k {
+                Some(Value::Str(s)) => Ok(a.get_sym(s.as_bytes()).is_some()),
+                Some(Value::Int(i)) => Ok(a.get_int(i).is_some()),
+                k => self.key_exists_slow(key, k, &a),
+            },
+            subject => self.key_exists_error(key, k.is_none(), array, subject),
+        }
+    }
+
+    /// `zend_array_key_exists_fast` for the key types the fast path leaves
+    /// out: an undefined variable (warning, then `""`), `null` (deprecated,
+    /// then `""`), floats (converted with their diagnostics while the array
+    /// is kept alive), booleans, resources (warning) and arrays or objects
+    /// (`zend_illegal_array_offset_access`).
+    #[cold]
+    #[inline(never)]
+    fn key_exists_slow(
+        &mut self,
+        key_op: Operand,
+        key: Option<Value>,
+        a: &ZArray,
+    ) -> VmResult<bool> {
+        match key {
+            None => {
+                self.warn_undefined_cv(key_op)?;
+                Ok(a.get_str(b"").is_some())
+            }
+            Some(v @ (Value::Array(_) | Value::Object(_))) => Err(self.make_throw(
+                "TypeError",
+                &format!("Cannot access offset of type {} on array", given_type(&v)),
+            )),
+            Some(v @ Value::Float(_)) => {
+                // php-src addrefs the array while the conversion warns: a
+                // handler that drops the last other owner makes the lookup
+                // fail (`GC_DELREF` reaching zero destroys the array).
+                let had_owner = a.refcount() > 1;
+                let found = php_stdarr::basic::array_key_exists(self, "array_key_exists", &v, a)
+                    .map_err(|e| self.rt_throw(e))?;
+                Ok(found && !(had_owner && a.refcount() == 1))
+            }
+            Some(v) => php_stdarr::basic::array_key_exists(self, "array_key_exists", &v, a)
+                .map_err(|e| self.rt_throw(e)),
+        }
+    }
+
+    /// `zend_array_key_exists_error`: the undefined-variable warnings for
+    /// the key and then the subject, then the `TypeError` (which an
+    /// exception thrown by a warning handler pre-empts).
+    #[cold]
+    #[inline(never)]
+    fn key_exists_error(
+        &mut self,
+        key_op: Operand,
+        key_undefined: bool,
+        array_op: Operand,
+        subject: Option<Value>,
+    ) -> VmResult<bool> {
+        if key_undefined {
+            self.warn_undefined_cv(key_op)?;
+        }
+        if subject.is_none() {
+            self.warn_undefined_cv(array_op)?;
+        }
+        let given = subject
+            .as_ref()
+            .map_or_else(|| "null".to_string(), given_type);
+        Err(self.make_throw(
+            "TypeError",
+            &format!(
+                "array_key_exists(): Argument #2 ($array) must be of type array, {given} given"
+            ),
+        ))
+    }
+
+    /// Reads an operand without the undefined-variable warning; `None` is
+    /// an undefined variable (`GET_OP1_ZVAL_PTR_UNDEF`).
+    fn read_quiet(&mut self, op: Operand) -> VmResult<Option<Value>> {
+        match op {
+            Operand::Cv(cv) => Ok(self.read_cv_defined(cv)),
+            other => self.read(other).map(Some),
+        }
+    }
+
+    /// `ZVAL_UNDEFINED_OP*()` for a compiled-variable operand.
+    fn warn_undefined_cv(&mut self, op: Operand) -> VmResult<()> {
+        if let Operand::Cv(cv) = op {
+            let name = self.frame().code.cv_names[cv as usize].clone();
+            self.warning(&crate::exec::undefined_var_msg(&name))?;
+        }
+        Ok(())
     }
 
     /// Runs special builtin `name` as a regular internal call with

@@ -1370,9 +1370,12 @@ impl Compiler {
             // zend_compile_args: a function call compiled into a builtin
             // instruction (`strlen()`, `func_get_args()`, ...) yields a
             // CONST/TMP, sent with SEND_VAL_EX ("could not be passed by
-            // reference" for a by-reference parameter).
+            // reference" for a by-reference parameter). A call folded to a
+            // constant (`chr(65)`, `strlen("ab")`) emits nothing, so the
+            // previous argument's call must not be mistaken for it.
             if matches!(e.kind, ExprKind::Call { .. })
-                && !matches!(self.fref().ops.last(), Some(Op::DoCall { .. }))
+                && (matches!(op, Operand::Lit(_))
+                    || !matches!(self.fref().ops.last(), Some(Op::DoCall { .. })))
             {
                 return Ok(ArgSrc::Val(op));
             }

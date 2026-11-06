@@ -104,8 +104,9 @@ impl std::fmt::Debug for CtConstants {
 }
 
 /// The builtins of `zend_try_compile_special_func_ex()` that compile to a
-/// dedicated opcode here (bit order of [`CompileOptions::special_builtins`]).
-/// Aliases (`is_integer`, `doubleval`, ...) are not special in php-src.
+/// dedicated opcode or a constant here (bit order of
+/// [`CompileOptions::special_builtins`]). Aliases (`is_integer`,
+/// `doubleval`, `key_exists`, ...) are not special in php-src.
 pub const SPECIAL_BUILTINS: &[&str] = &[
     "strlen",
     "count",
@@ -126,6 +127,11 @@ pub const SPECIAL_BUILTINS: &[&str] = &[
     "gettype",
     "get_class",
     "get_called_class",
+    "defined",
+    "in_array",
+    "array_key_exists",
+    "chr",
+    "ord",
 ];
 
 /// The [`CompileOptions::special_builtins`] bit of lower-case `name`.

@@ -824,6 +824,11 @@ pub struct Vm {
     /// keyed by the number of internal and deprecated constants it was
     /// built from (see [`Vm::ct_constants`]).
     pub(crate) ct_constants: Option<((usize, usize), crate::compiler::CtConstants)>,
+    /// `ZEND_COMPILE_NO_BUILTINS`: compile every builtin call as a call
+    /// instead of the dedicated opcodes and constants of
+    /// `zend_try_compile_special_func()` (see [`Vm::special_builtins`]).
+    /// Off by default, as in php-src.
+    pub compile_no_builtins: bool,
     /// Shared empty code for builtin frames.
     pub empty_code: Rc<OpArray>,
     /// Shared empty variable store for builtin frames.

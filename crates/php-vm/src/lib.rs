@@ -220,6 +220,7 @@ impl Vm {
             deprecated_constants: std::collections::HashMap::new(),
             const_deprecation_filter: std::cell::RefCell::new((0, Vec::new())),
             ct_constants: None,
+            compile_no_builtins: false,
             pending_call_dst: None,
             builtin_deprecation_reported: false,
             empty_code,
