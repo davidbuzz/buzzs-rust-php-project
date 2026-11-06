@@ -559,7 +559,9 @@ fn array_key_exists_opcode_follows_php_src_order() {
     // Operands are read when the opcode runs (`$key` after `change()`), an
     // undefined key warns without the null deprecation, a non-array subject
     // warns for both operands before the TypeError (no frame), and a float
-    // key whose diagnostics drop the array's last other owner is not found.
+    // key whose diagnostics drop the array's last other owner is not found
+    // (`zend_array_key_exists_fast`); a constant literal stays owned by the
+    // op array, so only a runtime-built array can be dropped that way.
     assert_eq!(
         run_with(
             r#"<?php
@@ -588,6 +590,8 @@ function f(&$x) {}
 try { f(array_key_exists("a", $a)); } catch (Error $e) { echo $e->getMessage(), "\n"; }
 $arr = [1 => 7];
 set_error_handler(function ($level, $message) { global $arr; $arr = null; echo $message, "\n"; });
+var_dump(array_key_exists(1.5, $arr));
+$one = 1; $arr = [$one => 7];
 var_dump(array_key_exists(1.5, $arr));
 $arr = [1 => 7]; $copy = $arr;
 var_dump(array_key_exists(1.5, $arr));
@@ -633,6 +637,8 @@ bool(true)
 array
 bool(false)
 f(): Argument #1 ($x) could not be passed by reference
+Implicit conversion from float 1.5 to int loses precision
+bool(true)
 Implicit conversion from float 1.5 to int loses precision
 bool(false)
 Implicit conversion from float 1.5 to int loses precision
