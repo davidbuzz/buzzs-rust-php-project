@@ -424,11 +424,23 @@ impl Vm {
     /// The boolean held by temporary `op`, consumed, if it holds one: the
     /// `IS_TRUE`/`IS_FALSE` fast path of php-src's `ZEND_JMPZ`/`ZEND_JMPNZ`
     /// handlers (comparison results), without the out-of-line read,
-    /// conversion and drop of the generic path.
+    /// conversion and drop of the generic path. A compiled variable holding
+    /// a bool, null or int is tested in place (`if ($found)`), without the
+    /// clone; anything else (undefined: warning, references, strings,
+    /// arrays, objects) takes the generic path.
     #[inline]
     fn take_tmp_bool(&mut self, op: Operand) -> Option<bool> {
-        let Operand::Tmp(t) = op else {
-            return None;
+        let t = match op {
+            Operand::Tmp(t) => t,
+            Operand::Cv(cv) => {
+                return self.frame().peek_cv(cv, |s| match s {
+                    Some(Value::Bool(b)) => Some(*b),
+                    Some(Value::Null) => Some(false),
+                    Some(Value::Int(i)) => Some(*i != 0),
+                    _ => None,
+                });
+            }
+            _ => return None,
         };
         let slot = self.frame_mut().tmps.get_mut(t as usize)?;
         if let Value::Bool(b) = *slot {

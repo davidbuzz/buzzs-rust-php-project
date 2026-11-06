@@ -104,3 +104,23 @@ $u = "a"; $w = &$u; $copy = $u; $w = "b"; var_dump($copy, $u);
         "string(4) \"dflt\"\nint(0)\nNULL\n\nDeprecated: Creation of dynamic property D::$p is deprecated in t.php on line 4\nint(5)\n~1\no gone\nin take\n~2\nint(4)\nafter take\n~3\ng reset\nint(2)\nit 4\nit 5\n~4\nloop done\n~5\nint(8)\nstring(1) \"a\"\nstring(1) \"b\"\n"
     );
 }
+
+/// `JMPZ`/`JMPNZ` on a compiled variable: bools, null and ints are tested
+/// in place; strings, floats behind references, arrays and undefined
+/// variables (warning) keep the generic conversion.
+#[test]
+fn conditions_on_compiled_variables() {
+    assert_eq!(
+        run(r#"<?php
+$f = 0; if ($f) { echo "no\n"; } else { echo "zero\n"; }
+$f = 3; while ($f) { echo $f--; } echo "\n";
+$b = true; if (!$b) { echo "no\n"; } if ($b) { echo "yes\n"; }
+$n = null; echo $n ? "t" : "f", "\n";
+$s = "0"; if ($s) { echo "no\n"; } else { echo "str0\n"; }
+$x = 1.0; $r = &$x; if ($r) { echo "ref\n"; }
+if ($nope) { echo "no\n"; } else { echo "undef\n"; }
+$a = []; if ($a) { echo "no\n"; } else { echo "empty\n"; }
+"#),
+        "zero\n321\nyes\nf\nstr0\nref\n\nWarning: Undefined variable $nope in t.php on line 8\nundef\nempty\n"
+    );
+}
