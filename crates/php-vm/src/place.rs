@@ -719,6 +719,11 @@ pub(crate) fn descend(
                                 Step::Done(r)
                             }
                             _ => {
+                                if rw && existed && diags.is_empty() {
+                                    if let Some(step) = concat_in_place(slot, segs, wop) {
+                                        return step;
+                                    }
+                                }
                                 let step = apply_final(slot, wop);
                                 if !existed && rw {
                                     watch_rw_container(arr);
@@ -990,6 +995,43 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
             Step::Done(Value::Null)
         }
     }
+}
+
+/// `.=` on a slot holding a string, in place. php-src's `ZEND_ASSIGN_DIM_OP`
+/// and `ZEND_ASSIGN_STATIC_PROP_OP` operate on the fetched slot
+/// (`zend_binary_op(var_ptr, var_ptr, value)`: `concat_function` with
+/// `result == op1` extends the string with `zend_string_extend` when
+/// nothing else holds it; a shared or interned string is copied once and
+/// grows in place from then on), where the generic walk yields a copy of
+/// the value, concatenates into a new string of the full length and writes
+/// that back with a second, silent walk. `None` leaves the operation to
+/// that walk: a right-hand side that is neither a string nor an int (its
+/// conversion may warn or call `__toString()`), a slot not holding a
+/// string directly (a reference, another type), or a `[]` segment in
+/// `segs` (its appended element is recorded for the write-back walk).
+/// Callers use it only while no diagnostic of the walk is pending: an
+/// error handler raised afterwards could otherwise observe or abort an
+/// operation that has already happened. The operation becomes
+/// [`WOp::FetchRw`], whose finished step is the result, so the callers'
+/// write-back of a compound assignment is skipped.
+fn concat_in_place(slot: &mut Value, segs: &[RSeg], wop: &mut WOp) -> Option<Step> {
+    let WOp::AssignOp(BinaryOp::Concat, rhs) = wop else {
+        return None;
+    };
+    if segs.iter().any(|seg| matches!(seg, RSeg::Append)) {
+        return None;
+    }
+    let Value::Str(s) = slot else {
+        return None;
+    };
+    match rhs {
+        Value::Str(add) => s.append(add.as_bytes()),
+        Value::Int(i) => s.append(php_runtime::convert::long_to_zstr(*i).as_bytes()),
+        _ => return None,
+    }
+    let result = Value::Str(s.clone());
+    *wop = WOp::FetchRw;
+    Some(Step::Done(result))
 }
 
 /// The index of the segment whose container the walk over `segs` (from
@@ -1373,7 +1415,13 @@ impl Vm {
                 }
                 if segs.is_empty() {
                     let mut b = cell.borrow_mut();
-                    let s = apply_final(&mut b, &mut wop);
+                    // `ZEND_ASSIGN_STATIC_PROP_OP` with `.=` on a string
+                    // extends it in place (`typed_static_write` has let a
+                    // typed property holding a string through).
+                    let s = match concat_in_place(&mut b, segs, &mut wop) {
+                        Some(s) => s,
+                        None => apply_final(&mut b, &mut wop),
+                    };
                     drop(b);
                     return self.finish_step(s, segs, wop);
                 }
