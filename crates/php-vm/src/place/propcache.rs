@@ -84,6 +84,14 @@ enum Probe<T> {
     Miss,
 }
 
+/// The offset of an element write the cache performs.
+enum DimTarget {
+    /// `[$k]` (see [`simple_key`]).
+    Key(ArrayKey),
+    /// `[]`.
+    Append,
+}
+
 /// The plain-data part of a cache entry, copied out of the cache so that
 /// no borrow of it is held while the property is accessed.
 #[derive(Clone, Copy)]
@@ -380,10 +388,13 @@ fn with_array<R>(value: &Value, access: impl FnOnce(&ZArray) -> Probe<R>) -> Pro
     }
 }
 
-/// Runs `access` on the array a declared slot holds directly: the
-/// container `FETCH_OBJ_W` hands a `$this->a[$k]` write walk without
-/// promoting anything (so without a typed-property check), and which the
-/// walk separates (`SEPARATE_ARRAY`).
+/// Runs `access` on the array a declared slot holds: the container
+/// `FETCH_OBJ_W` hands a `$this->a[$k]` write walk without promoting
+/// anything (so without a typed-property check), and which the walk
+/// separates (`SEPARATE_ARRAY`). Also through a reference (left by
+/// `&$this->a`, a by-reference argument or `foreach` by reference): the
+/// walk descends into it the same way, its type sources only constrain
+/// a promotion of null or false (`walk_auto_init_error`).
 #[inline(always)]
 fn with_array_mut<R>(
     key: &Key,
@@ -396,10 +407,39 @@ fn with_array_mut<R>(
     let mut slots = data.slots.borrow_mut();
     let res = match slots.get_mut(key.slot as usize) {
         Some(Some(Value::Array(arr))) => access(arr),
+        Some(Some(Value::Reference(r))) => match r.try_borrow_mut() {
+            Some(mut inner) => match &mut *inner {
+                Value::Array(arr) => access(arr),
+                _ => Probe::Slow,
+            },
+            None => Probe::Slow,
+        },
         _ => Probe::Slow,
     };
     drop(slots);
     res
+}
+
+/// Runs `access` on a property value, or on the value a reference holds
+/// when no typed property constrains it (`ZVAL_DEREF`, as
+/// `zend_assign_to_variable` and the inc/dec and compound-assignment
+/// handlers do); `Slow` for a reference with type sources
+/// (`zend_assign_to_typed_ref` & co.) or one borrowed elsewhere (the
+/// deferred self-assignment cases of the walk).
+#[inline(always)]
+fn deref_mut<R>(value: &mut Value, access: impl FnOnce(&mut Value) -> Probe<R>) -> Probe<R> {
+    match value {
+        Value::Reference(r) => {
+            if crate::typed_refs::has_type_sources(r) {
+                return Probe::Slow;
+            }
+            match r.try_borrow_mut() {
+                Some(mut inner) => access(&mut inner),
+                None => Probe::Slow,
+            }
+        }
+        other => access(other),
+    }
 }
 
 /// `ZVAL_DEREF` + `ZVAL_COPY`: the value a read hands out.
@@ -411,15 +451,13 @@ fn deref_clone(value: &Value) -> Value {
     }
 }
 
-/// Replaces a current non-reference value (`Slow` for a reference: its
-/// type sources and the deferred self-assignment cases are the walk's).
+/// Replaces a current value, also through a reference without type
+/// sources (see [`deref_mut`]).
 #[inline(always)]
 fn store_over(cur: &mut Value, value: &Value) -> Probe<Option<Value>> {
-    if matches!(cur, Value::Reference(_)) {
-        Probe::Slow
-    } else {
-        Probe::Hit(Some(std::mem::replace(cur, value.clone())))
-    }
+    deref_mut(cur, |target| {
+        Probe::Hit(Some(std::mem::replace(target, value.clone())))
+    })
 }
 
 /// `ZEND_ASSIGN_OBJ` into the property `key` describes: over its current
@@ -1052,23 +1090,41 @@ impl Vm {
         }
     }
 
-    /// `$base->name[$k] = v` of place `pid` (`ZEND_FETCH_OBJ_W` +
-    /// `ZEND_ASSIGN_DIM`) on a cached property holding an array: the
-    /// (separated) array's element is replaced or added, and `v` returned;
-    /// `Err` hands `v` back for the generic walk (an element holding a
-    /// reference, a property not holding an array, an offset of another
-    /// type).
+    /// The offset of a `$base->name[$k] = v` / `$base->name[] = v` place
+    /// `pid` the cache may write: [`Vm::simple_dim_key`]'s, or the append.
+    #[inline]
+    fn dim_target(&self, pid: PlaceId) -> Option<DimTarget> {
+        let code: &OpArray = &self.frame().code;
+        match code.places.get(pid as usize)?.segs.as_slice() {
+            [Seg::Prop(Operand::Lit(_)), Seg::Append] => Some(DimTarget::Append),
+            _ => self.simple_dim_key(pid).map(DimTarget::Key),
+        }
+    }
+
+    /// `$base->name[$k] = v` and `$base->name[] = v` of place `pid`
+    /// (`ZEND_FETCH_OBJ_W` + `ZEND_ASSIGN_DIM`) on a cached property holding
+    /// an array: the (separated) array's element is replaced or added
+    /// (`zend_hash_next_index_insert` for `[]`), and `v` returned; `Err`
+    /// hands `v` back for the generic walk (an element holding a reference,
+    /// a property not holding an array, an offset of another type, a full
+    /// array's "Cannot add element").
     pub(crate) fn prop_cache_dim_assign(&mut self, pid: PlaceId, v: Value) -> Result<Value, Value> {
         if matches!(v, Value::Reference(_)) {
             return Err(v);
         }
-        let Some(dim) = self.simple_dim_key(pid) else {
+        let Some(target) = self.dim_target(pid) else {
             return Err(v);
         };
         let old = self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
             with_array_mut(key, data, |arr| {
                 let table = arr.make_mut();
-                match table.get_mut(&dim) {
+                let DimTarget::Key(dim) = &target else {
+                    return match table.push(v.clone()) {
+                        Ok(_) => Probe::Hit(None),
+                        Err(_) => Probe::Slow,
+                    };
+                };
+                match table.get_mut(dim) {
                     Some(Value::Reference(_)) => Probe::Slow,
                     Some(elem) => Probe::Hit(Some(std::mem::replace(elem, v.clone()))),
                     None => {
@@ -1093,7 +1149,9 @@ impl Vm {
     #[inline]
     pub(crate) fn prop_cache_incdec(&mut self, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
         self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, code| {
-            with_value_mut(key, data, code, |value| incdec_in_place(value, kind))
+            with_value_mut(key, data, code, |value| {
+                deref_mut(value, |num| incdec_in_place(num, kind))
+            })
         })
     }
 
@@ -1143,12 +1201,14 @@ impl Vm {
             // `zend_binary_op(zptr, zptr, value)`: nothing can intervene.
             return Ok(
                 self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, code| {
-                    with_value_mut(key, data, code, |cur| match numeric_op(op, cur, rhs) {
-                        Some(new) if accepts(key.accept, &new) => {
-                            *cur = new.clone();
-                            Probe::Hit(new)
-                        }
-                        _ => Probe::Slow,
+                    with_value_mut(key, data, code, |value| {
+                        deref_mut(value, |cur| match numeric_op(op, cur, rhs) {
+                            Some(new) if accepts(key.accept, &new) => {
+                                *cur = new.clone();
+                                Probe::Hit(new)
+                            }
+                            _ => Probe::Slow,
+                        })
                     })
                 }),
             );
@@ -1253,7 +1313,9 @@ impl Vm {
             if key.accept != u32::MAX && key.accept & mask::STRING == 0 {
                 return Probe::Slow;
             }
-            with_value_mut(key, data, code, |value| append_in_place(value, rhs))
+            with_value_mut(key, data, code, |value| {
+                deref_mut(value, |s| append_in_place(s, rhs))
+            })
         })
     }
 
@@ -2457,6 +2519,163 @@ SE
 Se
 z:SE n:sE o:SE f:SE e:SE t:Se missing:sE 
 z:SE n:sE o:SE f:SE e:SE t:Se missing:sE 
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    /// `$this->a[] = v` from the cached slot: the result value, copy-on-write,
+    /// next keys after explicit ones, auto-vivification of null, strings and
+    /// `ArrayAccess` objects, a full array, an array held by reference. (The
+    /// readonly lines are php-src master's "Cannot indirectly modify".)
+    #[test]
+    #[allow(clippy::too_many_lines)] // one oracle-checked script
+    fn appends_to_cached_array_properties() {
+        let src = r#"<?php
+class AA implements ArrayAccess {
+    function offsetExists($o): bool { return false; }
+    function offsetGet($o): mixed { return null; }
+    function offsetSet($o, $v): void { echo "offsetSet(", var_export($o, true), ", $v)\n"; }
+    function offsetUnset($o): void {}
+}
+class Bag {
+    public $items = [];
+    public array $typed = [];
+    public $none;
+    public $str = 'ab';
+    public $obj;
+    public $full = [PHP_INT_MAX => 'last'];
+    function __construct() { $this->obj = new AA; }
+    function run() {
+        for ($i = 0; $i < 3; $i++) {
+            $this->items[] = $i;
+            $r = ($this->typed[] = $i * 2);
+            echo $r, ' ';
+        }
+        echo "\n";
+        $copy = $this->items;
+        $this->items[] = 'more';
+        echo implode(',', $copy), ' | ', implode(',', $this->items), "\n";
+        $this->items[10] = 'ten';
+        $this->items[] = 'eleven';
+        $this->items['k'] = 'str';
+        $this->items[] = 'twelve';
+        foreach ($this->items as $k => $v) { echo "$k=$v "; }
+        echo "\n";
+        $this->none[] = 'vivified';
+        echo implode(',', $this->none), "\n";
+        try { $this->str[] = 'c'; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+        $this->obj[] = 'to-object';
+        for ($i = 0; $i < 2; $i++) {
+            try { $this->full[] = 'overflow'; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        }
+        $ref = &$this->items;
+        $this->items[] = 'through-ref';
+        echo count2($ref), "\n";
+        unset($ref);
+        $this->items[] = 'after';
+        echo count2($this->items), "\n";
+    }
+}
+function count2($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
+$b = new Bag;
+$b->run();
+class RoBag { public function __construct(public readonly array $list = []) {} function add($v) { $this->list[] = $v; } }
+$rb = new RoBag;
+for ($i = 0; $i < 2; $i++) { try { $rb->add($i); } catch (Error $e) { echo $e->getMessage(), "\n"; } }
+$std = new stdClass;
+$std->list = [];
+for ($i = 0; $i < 3; $i++) { $std->list[] = $i; }
+echo implode(',', $std->list), "\n";
+"#;
+        let expected = r#"0 2 4 
+0,1,2 | 0,1,2,more
+0=0 1=1 2=2 3=more 10=ten 11=eleven k=str 12=twelve 
+vivified
+Error: [] operator not supported for strings
+offsetSet(NULL, to-object)
+Cannot add element to the array as the next element is already occupied
+Cannot add element to the array as the next element is already occupied
+9
+10
+Cannot indirectly modify readonly property RoBag::$list
+Cannot indirectly modify readonly property RoBag::$list
+0,1,2
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    /// A property holding a reference (`$r = &$this->p`, `foreach` by
+    /// reference, by-reference arguments): writes, `++`, `op=`, `.=` and
+    /// element writes go through it; typed references keep their checks.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one oracle-checked script
+    fn writes_through_references_held_by_properties() {
+        let src = r#"<?php
+class RefHolder {
+    public $b = 0;
+    public $s = 'x';
+    public $a = [1, 2, 3];
+    public int $typed = 0;
+    public array $ta = [5];
+    function run() {
+        $r = &$this->b;
+        $rs = &$this->s;
+        $ra = &$this->a;
+        $rt = &$this->typed;
+        $rta = &$this->ta;
+        for ($i = 0; $i < 3; $i++) {
+            $this->b = $i;
+            $this->b++;
+            $this->b += 10;
+            $this->s .= $i;
+            $this->a[$i] = $i * 100;
+            $this->a[] = 'app';
+            $this->a[$i]++;
+            $this->a[$i] .= '!';
+            $this->typed = $i;
+            $this->typed++;
+            $this->ta[] = $i;
+            $this->ta[0] += 1;
+        }
+        echo $r, ' ', $rs, ' ', implode(',', $ra), ' ', $rt, ' ', implode(',', $rta), "\n";
+        try { $this->typed = 'abc'; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        $rt = PHP_INT_MAX;
+        try { $this->typed++; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        echo $rt, "\n";
+        foreach ($this->a as &$v) { $v = "v$v"; }
+        unset($v);
+        $this->a[0] = 'after-foreach';
+        echo implode(',', $this->a), "\n";
+        sort2($this->a);
+        $this->a[] = 'after-sort';
+        echo implode(',', $this->a), "\n";
+        unset($r);
+        $this->b = 'no-longer-shared';
+        echo $this->b, "\n";
+    }
+}
+function sort2(array &$a) { $a[] = 'sorted'; }
+$h = new RefHolder;
+$h->run();
+$o = new stdClass;
+$x = 1;
+$o->v = &$x;
+for ($i = 0; $i < 3; $i++) { $o->v = $o->v + 1; $o->v++; $o->v *= 2; $o->v .= ''; }
+var_dump($x);
+class Self2 { public $p; function run() { $this->p = [1]; $this->p[0] = &$this->p; $this->p[1] = 'x'; echo count3($this->p), "\n"; } }
+function count3($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
+$s2 = new Self2;
+$s2->run();
+"#;
+        let expected = r#"13 x012 1!,101!,201!,app,app,app 3 8,0,1,2
+Cannot assign string to property RefHolder::$typed of type int
+Cannot increment a reference held by property RefHolder::$typed of type int past its maximal value
+9223372036854775807
+after-foreach,v101!,v201!,vapp,vapp,vapp
+after-foreach,v101!,v201!,vapp,vapp,vapp,sorted,after-sort
+no-longer-shared
+string(2) "36"
+2
 "#;
         assert_eq!(run(src), expected);
     }
