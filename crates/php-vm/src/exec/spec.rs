@@ -35,7 +35,7 @@
 
 use super::{discard_unrooted, num_bin, CvOpData, Num};
 use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Operand, PlaceId, Seg};
-use crate::vm::{Frame, VarStore, Vm, VmResult};
+use crate::vm::{CvSlot, Frame, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
 mod props;
@@ -101,9 +101,9 @@ fn string_offset_char(s: &ZStr, offset: i64) -> Option<Value> {
 /// destructor that may run, so it does not outlive its statement in the
 /// slot (`$weak->get() !== null`, `new D !== null`).
 #[inline]
-fn operand_simple<'a>(f: &'a Frame, vars: &'a VarStore, op: Operand) -> Option<&'a Value> {
+fn operand_simple<'a>(f: &'a Frame, op: Operand) -> Option<&'a Value> {
     let v = match op {
-        Operand::Cv(cv) => vars.slots.get(f.cv_idx(cv))?.as_ref()?,
+        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
         Operand::Lit(i) => f.code.literals.get(i as usize)?,
         Operand::Tmp(t) => {
             let v = f.tmps.get(t as usize)?;
@@ -223,16 +223,14 @@ fn release_str_tmp_in(f: &mut Frame, op: Operand) {
 #[allow(clippy::inline_always)] // hot folded AssignCv store in the dispatch pre-match
 fn store_fetched_in(f: &mut Frame, dst: u32, to: Option<u32>, v: Value) -> bool {
     if let Some(to) = to {
-        let idx = f.cv_idx(to);
-        if let Ok(mut vars) = f.vars.try_borrow_mut() {
-            if let Some(slot) = vars.slots.get_mut(idx) {
-                if is_plain_slot(slot.as_ref()) {
-                    let old = slot.replace(v);
-                    drop(vars);
-                    // A scalar is forgotten; a string is released.
-                    discard_unrooted(old);
-                    return true;
-                }
+        let idx = to as usize;
+        if let Some(slot) = f.cvs.get(idx) {
+            if is_plain_slot(slot.get()) {
+                let old = slot.set(Some(v.clone()));
+                f.sync_cv_to_symtab(to, &v);
+                // A scalar is forgotten; a string is released.
+                discard_unrooted(old);
+                return true;
             }
         }
     }
@@ -247,10 +245,7 @@ fn store_fetched_in(f: &mut Frame, dst: u32, to: Option<u32>, v: Value) -> bool 
 #[inline]
 fn dims_value_in(f: &Frame, cv: u32, place: PlaceId) -> Option<Value> {
     let segs = &f.code.places.get(place as usize)?.segs;
-    // A shared borrow across the walk (the offsets may be variables too,
-    // peeked under it).
-    let vars = f.vars.try_borrow().ok()?;
-    let slot = vars.slots.get(f.cv_idx(cv))?.as_ref()?;
+    let slot = f.cvs.get(cv as usize).and_then(CvSlot::get)?;
     let guard;
     let mut cur = match slot {
         Value::Reference(r) => {
@@ -409,8 +404,7 @@ fn assign_op_dims(tbl: &mut HashTable, keys: &[Option<ArrayKey>], op: BinaryOp, 
 #[inline]
 fn isset_dim_in(f: &Frame, cv: u32, dim: Operand, empty: bool) -> Option<bool> {
     let key = dim_key_in(f, dim)?;
-    let vars = f.vars.try_borrow().ok()?;
-    let slot = vars.slots.get(f.cv_idx(cv))?.as_ref()?;
+    let slot = f.cvs.get(cv as usize).and_then(CvSlot::get)?;
     let guard;
     let arr = match slot {
         Value::Array(a) => a,
@@ -464,9 +458,8 @@ impl Vm {
         let negate = matches!(op, BinKind::NotIdentical | BinKind::NotEqual);
         let same = {
             let frame = self.frame();
-            let vars = frame.vars.borrow();
-            let lhs = operand_simple(frame, &vars, a)?;
-            let rhs = operand_simple(frame, &vars, b)?;
+            let lhs = operand_simple(frame, a)?;
+            let rhs = operand_simple(frame, b)?;
             match (lhs, rhs) {
                 (Value::Null, Value::Null) => true,
                 (Value::Bool(p), Value::Bool(q)) => p == q,
@@ -674,16 +667,14 @@ impl Vm {
         let x = Self::peek_num(f, a)?;
         let y = Self::peek_num(f, b)?;
         let r = num_bin(op, x, y)?;
-        let idx = f.cv_idx(cv);
-        if let Ok(mut vars) = f.vars.try_borrow_mut() {
-            if let Some(slot) = vars.slots.get_mut(idx) {
-                if is_plain_slot(slot.as_ref()) {
-                    let old = slot.replace(r);
-                    drop(vars);
-                    // A scalar is forgotten; a string is released.
-                    discard_unrooted(old);
-                    return Some(true);
-                }
+        let idx = cv as usize;
+        if let Some(slot) = f.cvs.get(idx) {
+            if is_plain_slot(slot.get()) {
+                let old = slot.set(Some(r.clone()));
+                f.sync_cv_to_symtab(cv, &r);
+                // A scalar is forgotten; a string is released.
+                discard_unrooted(old);
+                return Some(true);
             }
         }
         put_tmp(f.tmps.get_mut(dst as usize)?, r);
@@ -791,28 +782,22 @@ impl Vm {
         let Some(y) = Self::peek_num(f, val) else {
             return false;
         };
-        let idx = f.cv_idx(cv);
-        let r = {
-            let Ok(mut vars) = f.vars.try_borrow_mut() else {
-                return false;
-            };
-            // Only a slot holding an int or a float directly (no
-            // reference): overwritten without side effects.
-            let Some(Some(slot)) = vars.slots.get_mut(idx) else {
-                return false;
-            };
-            let x = match *slot {
-                Value::Int(i) => Num::Int(i),
-                Value::Float(v) => Num::Float(v),
-                _ => return false,
-            };
-            let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
-                return false;
-            };
-            // A number replaces a number: no drop glue to run.
-            std::mem::forget(std::mem::replace(slot, r.clone()));
-            r
+        let idx = cv as usize;
+        let slot = match f.cvs.get(idx) {
+            Some(s) => s,
+            None => return false,
         };
+        let x = match slot.get() {
+            Some(Value::Int(i)) => Num::Int(*i),
+            Some(Value::Float(v)) => Num::Float(*v),
+            _ => return false,
+        };
+        let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
+            return false;
+        };
+        let old = slot.set(Some(r.clone()));
+        f.sync_cv_to_symtab(cv, &r);
+        discard_unrooted(old);
         if let Some(t) = dst {
             if let Some(slot) = f.tmps.get_mut(t as usize) {
                 put_tmp(slot, r);
@@ -865,21 +850,23 @@ impl Vm {
             },
             _ => return false,
         };
-        let idx = f.cv_idx(cv);
-        let result = {
-            let Ok(mut vars) = f.vars.try_borrow_mut() else {
-                return false;
-            };
-            let Some(Some(Value::Str(s))) = vars.slots.get_mut(idx) else {
-                return false;
-            };
-            match add {
-                Value::Str(t) if !ZStr::ptr_eq(s, t) => s.append_str(t),
-                Value::Int(i) => s.append_long(*i),
-                _ => return false,
-            }
-            dst.map(|_| Value::Str(s.clone()))
+        let idx = cv as usize;
+        let slot = match f.cvs.get(idx) {
+            Some(s) => s,
+            None => return false,
         };
+        let val_mut = unsafe { slot.get_mut_unchecked() };
+        let Some(Value::Str(s)) = val_mut else {
+            return false;
+        };
+        match add {
+            Value::Str(t) if !ZStr::ptr_eq(s, t) => s.append_str(t),
+            Value::Int(i) => s.append_long(*i),
+            _ => return false,
+        }
+        let syn = Value::Str(s.clone());
+        f.sync_cv_to_symtab(cv, &syn);
+        let result = dst.map(|_| syn);
         drop(from_cv);
         // The OP_DATA temporary is consumed (a string is released here),
         // before the result is written (it may reuse the slot).
@@ -931,11 +918,10 @@ impl Vm {
                 let ArrayKey::Int(offset) = key else {
                     return None;
                 };
-                let vars = f.vars.try_borrow().ok()?;
-                let Some(Value::Str(s)) = vars.slots.get(f.cv_idx(cv))? else {
-                    return None;
-                };
-                string_offset_char(s, offset)?
+                match f.cvs.get(cv as usize).and_then(CvSlot::get) {
+                    Some(Value::Str(s)) => string_offset_char(s, offset)?,
+                    _ => return None,
+                }
             }
         };
         release_str_tmp_in(f, dim);
@@ -1009,11 +995,13 @@ impl Vm {
         let Some(y) = Self::peek_num(f, val) else {
             return false;
         };
-        let idx = f.cv_idx(cv);
-        let Ok(mut vars) = f.vars.try_borrow_mut() else {
-            return false;
+        let idx = cv as usize;
+        let slot = match f.cvs.get(idx) {
+            Some(s) => s,
+            None => return false,
         };
-        let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
+        let val_mut = unsafe { slot.get_mut_unchecked() };
+        let Some(Value::Array(arr)) = val_mut else {
             return false;
         };
         let x = match arr.get(&key) {
@@ -1029,7 +1017,7 @@ impl Vm {
         };
         // A number replaces a number: no drop glue to run.
         std::mem::forget(std::mem::replace(slot, r));
-        drop(vars);
+        f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
         self.release_tmp_str(dim);
         true
     }
@@ -1056,11 +1044,13 @@ impl Vm {
             _ => return false,
         };
         let f = self.frame();
-        let idx = f.cv_idx(cv);
-        let Ok(mut vars) = f.vars.try_borrow_mut() else {
-            return false;
+        let idx = cv as usize;
+        let slot = match f.cvs.get(idx) {
+            Some(s) => s,
+            None => return false,
         };
-        let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
+        let val_mut = unsafe { slot.get_mut_unchecked() };
+        let Some(Value::Array(arr)) = val_mut else {
             return false;
         };
         if !matches!(arr.get(&key), Some(Value::Str(_))) {
@@ -1075,7 +1065,7 @@ impl Vm {
             // `add` is a string or an int (checked above).
             _ => {}
         }
-        drop(vars);
+        f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
         drop(add);
         // The offset and OP_DATA temporaries are consumed.
         self.release_tmp_str(dim);
@@ -1100,9 +1090,10 @@ impl Vm {
     ) -> Option<Value> {
         let key = self.peek_dim_key(dim)?;
         let f = self.frame();
-        let idx = f.cv_idx(cv);
-        let mut vars = f.vars.try_borrow_mut().ok()?;
-        let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
+        let idx = cv as usize;
+        let slot = f.cvs.get(idx)?;
+        let val_mut = unsafe { slot.get_mut_unchecked() };
+        let Some(Value::Array(arr)) = val_mut else {
             return None;
         };
         let (old, new) = match arr.get(&key)? {
@@ -1125,7 +1116,7 @@ impl Vm {
         let slot = arr.make_mut().get_mut(&key)?;
         // A number replaces a number: no drop glue to run.
         std::mem::forget(std::mem::replace(slot, new.clone()));
-        drop(vars);
+        f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
         self.release_tmp_str(dim);
         Some(if kind.is_post() { old } else { new })
     }
@@ -1159,11 +1150,13 @@ impl Vm {
         let Some(v) = plain_value_in(f, val) else {
             return false;
         };
-        let idx = f.cv_idx(cv);
-        let Ok(mut vars) = f.vars.try_borrow_mut() else {
-            return false;
+        let idx = cv as usize;
+        let slot = match f.cvs.get(idx) {
+            Some(s) => s,
+            None => return false,
         };
-        let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
+        let val_mut = unsafe { slot.get_mut_unchecked() };
+        let Some(Value::Array(arr)) = val_mut else {
             return false;
         };
         let tbl = arr.make_mut();
@@ -1172,7 +1165,7 @@ impl Vm {
             return false;
         }
         let old = std::mem::replace(slot, v);
-        drop(vars);
+        f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
         drop(old);
         // The offset and OP_DATA temporaries are consumed.
         release_str_tmp_in(f, dim);
@@ -1198,17 +1191,19 @@ impl Vm {
         let Some(v) = plain_value_in(f, val) else {
             return false;
         };
-        let idx = f.cv_idx(cv);
-        let Ok(mut vars) = f.vars.try_borrow_mut() else {
-            return false;
+        let idx = cv as usize;
+        let slot = match f.cvs.get(idx) {
+            Some(s) => s,
+            None => return false,
         };
-        let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
+        let val_mut = unsafe { slot.get_mut_unchecked() };
+        let Some(Value::Array(arr)) = val_mut else {
             return false;
         };
         let Ok(old) = assign_dims(arr.make_mut(), &keys[..n], v) else {
             return false;
         };
-        drop(vars);
+        f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
         drop(old);
         release_place_str_tmps(f, place);
         if let Operand::Tmp(t) = val {
@@ -1239,17 +1234,19 @@ impl Vm {
         let Some(y) = Self::peek_num(f, val) else {
             return false;
         };
-        let idx = f.cv_idx(cv);
-        let Ok(mut vars) = f.vars.try_borrow_mut() else {
-            return false;
+        let idx = cv as usize;
+        let slot = match f.cvs.get(idx) {
+            Some(s) => s,
+            None => return false,
         };
-        let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
+        let val_mut = unsafe { slot.get_mut_unchecked() };
+        let Some(Value::Array(arr)) = val_mut else {
             return false;
         };
         if !assign_op_dims(arr.make_mut(), &keys[..n], op, y) {
             return false;
         }
-        drop(vars);
+        f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
         release_place_str_tmps(f, place);
         true
     }

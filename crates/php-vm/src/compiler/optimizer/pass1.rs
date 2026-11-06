@@ -126,8 +126,7 @@ pub(crate) fn run_pass1(op_array: &mut OpArray, level: u32) -> bool {
                         None
                     };
                     if let Some(len) = len {
-                        let lit =
-                            add_or_find_literal(&mut op_array.literals, Value::Int(len));
+                        let lit = add_or_find_literal(&mut op_array.literals, Value::Int(len));
                         replacement = Some(match dst {
                             Some(d) => Op::Move {
                                 src: Operand::Lit(lit),
@@ -227,11 +226,15 @@ pub(crate) fn run_pass1(op_array: &mut OpArray, level: u32) -> bool {
                         Some(Value::Str(s)) if s.is_empty() => Some(EchoAction::Nop),
                         Some(Value::Null) => Some(EchoAction::Nop),
                         Some(Value::Bool(b)) => {
-                            Some(EchoAction::Preconvert(Value::Str(ZStr::from(if *b { "1" } else { "" }))))
+                            Some(EchoAction::Preconvert(Value::Str(ZStr::from(if *b {
+                                "1"
+                            } else {
+                                ""
+                            }))))
                         }
-                        Some(Value::Int(n)) => {
-                            Some(EchoAction::Preconvert(Value::Str(ZStr::from(n.to_string()))))
-                        }
+                        Some(Value::Int(n)) => Some(EchoAction::Preconvert(Value::Str(
+                            ZStr::from(n.to_string()),
+                        ))),
                         _ => None,
                     };
                     match action {
@@ -257,7 +260,7 @@ pub(crate) fn run_pass1(op_array: &mut OpArray, level: u32) -> bool {
     changed
 }
 
-fn fold_bin_op(op: BinKind, a: &Value, b: &Value) -> Option<Value> {
+pub(crate) fn fold_bin_op(op: BinKind, a: &Value, b: &Value) -> Option<Value> {
     // Never fold compound types, references, or resources
     if matches!(
         (a, b),
@@ -345,7 +348,7 @@ fn fold_bin_op(op: BinKind, a: &Value, b: &Value) -> Option<Value> {
     }
 }
 
-fn fold_unary_op(op: UnKind, a: &Value) -> Option<Value> {
+pub(crate) fn fold_unary_op(op: UnKind, a: &Value) -> Option<Value> {
     match op {
         UnKind::Not => crate::compiler::expr::const_truthiness(a).map(|t| Value::Bool(!t)),
         UnKind::Bool => crate::compiler::expr::const_truthiness(a).map(Value::Bool),
@@ -379,7 +382,7 @@ fn fold_unary_op(op: UnKind, a: &Value) -> Option<Value> {
     }
 }
 
-fn fold_cast(kind: CastKind, a: &Value) -> Option<Value> {
+pub(crate) fn fold_cast(kind: CastKind, a: &Value) -> Option<Value> {
     match kind {
         CastKind::Bool => crate::compiler::expr::const_truthiness(a).map(Value::Bool),
         CastKind::Int => {

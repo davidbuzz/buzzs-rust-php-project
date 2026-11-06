@@ -1,6 +1,6 @@
 # phprust
 
-A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test suite.
+A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test suite, 100%.
 
 The original PHP is written in C. This project ports it to idiomatic, best-practice Rust
 (clippy-pedantic clean, `unsafe` only in audited FFI modules), matching PHP's observable

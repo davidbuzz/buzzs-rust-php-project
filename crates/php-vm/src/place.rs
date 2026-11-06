@@ -1719,8 +1719,15 @@ impl Vm {
         Ok(match base {
             PlaceBase::Cv(cv) => {
                 self.frame_mut().attach_symbol_table();
+                self.frame_mut().sync_cvs_to_symtab();
                 let f = self.frame();
-                RBase::Var(f.vars.clone(), *cv as usize)
+                let idx = if let Some(name) = f.code.cv_names.get(*cv as usize) {
+                    let mut st = f.vars.borrow_mut();
+                    st.find_or_add(name.as_bytes()) as usize
+                } else {
+                    *cv as usize
+                };
+                RBase::Var(f.vars.clone(), idx)
             }
             PlaceBase::VarVar(op) => {
                 let n = self.read(*op)?;
@@ -1862,6 +1869,7 @@ impl Vm {
     pub(crate) fn write_place(&mut self, base: RBase, segs: &[RSeg], wop: WOp) -> VmResult<Value> {
         let r = self.write_place_inner(base, segs, wop, false);
         flush_deferred_ref_assigns();
+        self.frame_mut().sync_from_symbol_table();
         r
     }
 
@@ -3236,7 +3244,7 @@ impl Vm {
             if op == BinaryOp::Concat {
                 if let Value::Str(add) = &v {
                     let mut st = store.borrow_mut();
-                    if let Some(Value::Str(s)) = &mut st.slots[*idx] {
+                    if let Some(Value::Str(s)) = st.slots.get_mut(*idx).and_then(Option::as_mut) {
                         if !ZStr::ptr_eq(s, add) {
                             s.append(add.as_bytes());
                             return Ok(Value::Str(s.clone()));

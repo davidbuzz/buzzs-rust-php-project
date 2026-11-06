@@ -2,10 +2,9 @@
 
 use crate::object;
 use crate::opcode::{
-    BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Op, Operand, PlaceId,
-    UnKind,
+    BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Op, Operand, PlaceId, UnKind,
 };
-use crate::vm::{FinState, Frame, RetTarget, Throw, Vm, VmResult};
+use crate::vm::{CvSlot, FinState, Frame, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ops, BinaryOp, ErrorLevel, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
@@ -453,16 +452,16 @@ impl Vm {
         let Some(f) = self.frames.last_mut() else {
             return false;
         };
-        let idx = f.cv_idx(cv);
-        let Ok(mut vars) = f.vars.try_borrow_mut() else {
-            return false;
+        let idx = cv as usize;
+        let slot = match f.cvs.get(idx) {
+            Some(slot) => match slot.get() {
+                Some(Value::Reference(_) | Value::Array(_) | Value::Object(_)) => {
+                    return false;
+                }
+                _ => slot,
+            },
+            None => return false,
         };
-        match vars.slots.get(idx) {
-            Some(Some(Value::Reference(_) | Value::Array(_) | Value::Object(_))) | None => {
-                return false;
-            }
-            Some(_) => {}
-        }
         let v = match val {
             // Consumed, as `read` does; a reference held by the temporary
             // is left to the generic path (it derefs and releases it).
@@ -480,16 +479,16 @@ impl Vm {
             },
             // `ZVAL_COPY_DEREF` of a defined variable (an undefined one
             // warns: generic path).
-            Operand::Cv(src) => match vars.slots.get(f.cv_idx(src)) {
-                Some(Some(Value::Reference(r))) => r.get(),
-                Some(Some(s)) => s.clone(),
-                _ => return false,
+            Operand::Cv(src) => match f.cvs.get(src as usize).and_then(CvSlot::get) {
+                Some(Value::Reference(r)) => r.get(),
+                Some(s) => s.clone(),
+                None => return false,
             },
             Operand::Unused => return false,
         };
         let keep = dst.map(|_| v.clone());
-        let old = vars.slots[idx].replace(v);
-        drop(vars);
+        let old = slot.set(Some(v.clone()));
+        f.sync_cv_to_symtab(cv, &v);
         discard_unrooted(old);
         if let (Some(d), Some(k)) = (dst, keep) {
             self.set_tmp(d, k);

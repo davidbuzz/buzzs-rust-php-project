@@ -485,11 +485,8 @@ mod tests {
 
     fn run(src: &str) -> String {
         let sink = Sink::default();
-        let mut vm = Vm::new(VmOptions {
-            output: Box::new(sink.clone()),
-            ..Default::default()
-        });
-        vm.run_script("test.php", src.as_bytes()).unwrap();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(src.as_bytes(), "test.php");
         let bytes = sink.0.borrow().clone();
         String::from_utf8(bytes).unwrap()
     }

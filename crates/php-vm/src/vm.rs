@@ -1084,6 +1084,9 @@ impl Frame {
         self.symtab_attached = true;
         let mut st = self.vars.borrow_mut();
         st.names.share(&self.code);
+        if st.slots.len() < self.code.cv_names.len() {
+            st.slots.resize(self.code.cv_names.len(), None);
+        }
         for (i, name) in self.code.cv_names.iter().enumerate() {
             let slot = st.find_or_add(name.as_bytes()) as usize;
             if slot < st.slots.len() {

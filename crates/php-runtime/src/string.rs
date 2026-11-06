@@ -44,13 +44,16 @@
 //! # Interning (ref: `Zend/zend_string.c` `zend_new_interned_string`)
 //!
 //! [`ZStr::intern`] returns the canonical instance for some bytes, so that
-//! interned strings compare by pointer. php-src keeps request-interned
-//! strings (compiled literals) in `CG(interned_strings)` until the request
-//! ends because it does not refcount them. Here every handle counts, so the
-//! thread's intern table does not own its strings: an interned string
-//! leaves the table when its last handle drops. The literals of a released
-//! `eval()`'d or included unit go with it, and a thread that runs several
-//! requests (`--repeat`) keeps none of an earlier request's literals.
+//! interned strings compare by pointer. In request scope (the default), an
+//! interned string lives as long as its handles or until the request intern
+//! table is reset between requests ([`ZStr::reset_request_interned`]).
+//! In permanent scope (or via [`ZStr::intern_permanent`]), the string is
+//! immortal (refcount 0) and lives in the permanent table for the lifetime of
+//! the thread. Every request handle counts, so the thread's request intern table
+//! does not own its strings: an interned string leaves the table when its last
+//! handle drops. The literals of a released `eval()`'d or included unit go with
+//! it, and a thread that runs several requests (`--repeat`) keeps none of an
+//! earlier request's literals.
 
 use std::alloc::{self, Layout};
 use std::borrow::Borrow;
@@ -71,8 +74,11 @@ const EXTERNAL: usize = 1 << (usize::BITS - 2);
 /// (`IS_STR_VALID_UTF8`, "valid UTF-8 according to PCRE"). Never set on
 /// invalid bytes: php-pcre skips PCRE2's own validation for such subjects.
 const VALID_UTF8: usize = 1 << (usize::BITS - 3);
+/// `Header::meta` flag: permanent interned string (`IS_STR_PERMANENT` in php-src).
+/// Immortal, never freed, refcount 0.
+const PERMANENT: usize = 1 << (usize::BITS - 4);
 /// `Header::meta` bits holding the capacity.
-const CAP_MASK: usize = VALID_UTF8 - 1;
+const CAP_MASK: usize = PERMANENT - 1;
 /// Byte vectors longer than this are adopted by [`ZStr::new`]; shorter ones
 /// are copied into the header block (dropping any spare capacity, like
 /// `smart_str_extract`).
@@ -117,8 +123,20 @@ pub struct ZStr(NonNull<Header>);
 /// heap-interned string, found by content. The table holds no handles.
 type InternTable = HashSet<InternEntry, BuildHasherDefault<InternHasher>>;
 
+/// The intern scope: whether newly interned strings belong to the permanent
+/// table (immortal builtins, language keywords) or the request table (cleared
+/// between requests in long-running SAPIs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum InternScope {
+    Permanent,
+    #[default]
+    Request,
+}
+
 thread_local! {
-    static INTERNED_SET: RefCell<InternTable> = RefCell::new(InternTable::default());
+    static PERMANENT_INTERNED: RefCell<InternTable> = RefCell::new(InternTable::default());
+    static REQUEST_INTERNED: RefCell<InternTable> = RefCell::new(InternTable::default());
+    static SCOPE: Cell<InternScope> = const { Cell::new(InternScope::Request) };
 }
 
 /// An intern table entry: the header of a live interned string. It does
@@ -430,6 +448,9 @@ unsafe fn free_block(block: NonNull<Header>) {
         let h = block.as_ref();
         (h.ptr, h.len, h.meta.get())
     };
+    if meta & PERMANENT != 0 {
+        return;
+    }
     if meta & INTERNED != 0 && !unregister(block) {
         // The table is borrowed, which cannot happen (no handle is dropped
         // while it is): keeping the block is the memory-safe outcome.
@@ -449,15 +470,13 @@ unsafe fn free_block(block: NonNull<Header>) {
 }
 
 /// Removes the interned string at `block` (live, with its hash cached)
-/// from the thread's intern table. `false` when the table is borrowed;
-/// `true` once the table is gone (thread exit), as nothing can find the
-/// string any more.
+/// from the thread's request intern table. `false` when the table is borrowed;
+/// `true` once the table is gone (thread exit) or if the table was reset between requests.
 fn unregister(block: NonNull<Header>) -> bool {
-    INTERNED_SET
+    REQUEST_INTERNED
         .try_with(|set| match set.try_borrow_mut() {
             Ok(mut set) => {
-                let removed = set.remove(&InternEntry(block));
-                debug_assert!(removed, "interned string missing from the intern table");
+                set.remove(&InternEntry(block));
                 true
             }
             Err(_) => false,
@@ -743,14 +762,93 @@ impl ZStr {
     /// needed (`zend_string_init_interned`: a new instance carries no
     /// `IS_STR_VALID_UTF8`).
     ///
-    /// An interned string lives as long as its handles: the intern table
-    /// does not keep it alive (see the module documentation).
+    /// In request scope (the default), an interned string lives as long as its
+    /// handles or until the request intern table is reset between requests.
+    /// In permanent scope (or via [`ZStr::intern_permanent`]), the string is
+    /// immortal (refcount 0) and lives for the life of the thread.
     #[must_use]
     pub fn intern(bytes: &[u8]) -> Self {
+        if SCOPE.get() == InternScope::Permanent {
+            return Self::intern_permanent(bytes);
+        }
         if let Some(existing) = Self::existing_interned(bytes) {
             return existing;
         }
         Self::register(Self::from_parts(bytes, &[], INTERNED))
+    }
+
+    /// Returns the canonical permanent (immortal) interned instance for `bytes`,
+    /// creating it in the permanent table if needed.
+    #[must_use]
+    pub fn intern_permanent(bytes: &[u8]) -> Self {
+        match bytes {
+            [] => return Self::empty(),
+            &[c] => return Self::from_byte(c),
+            _ => {}
+        }
+        let key = InternKey::new(bytes);
+        if let Some(entry) = PERMANENT_INTERNED.with(|set| set.borrow().get(key).copied()) {
+            let found = ManuallyDrop::new(ZStr(entry.0));
+            return ZStr::clone(&found);
+        }
+        if let Some(entry) = REQUEST_INTERNED.with(|set| set.borrow_mut().take(key)) {
+            let s = ZStr(entry.0);
+            s.header().rc.set(0);
+            s.header().meta.set(s.header().meta.get() | PERMANENT);
+            let _ = s.hash_value();
+            PERMANENT_INTERNED.with(|set| {
+                set.borrow_mut().insert(InternEntry(s.0));
+            });
+            return s;
+        }
+        let s = Self::from_parts(bytes, &[], INTERNED | PERMANENT);
+        s.header().rc.set(0);
+        let _ = s.hash_value();
+        PERMANENT_INTERNED.with(|set| {
+            set.borrow_mut().insert(InternEntry(s.0));
+        });
+        s
+    }
+
+    /// Whether this string is permanent (immortal with refcount 0).
+    #[inline]
+    #[must_use]
+    pub fn is_permanent(&self) -> bool {
+        self.header().rc.get() == 0 || (self.header().meta.get() & PERMANENT != 0)
+    }
+
+    /// Sets the interning scope.
+    pub fn set_intern_scope(scope: InternScope) {
+        SCOPE.set(scope);
+    }
+
+    /// Gets the current interning scope.
+    #[must_use]
+    pub fn intern_scope() -> InternScope {
+        SCOPE.get()
+    }
+
+    /// Runs `f` within the specified intern scope, restoring the previous scope on completion.
+    pub fn with_intern_scope<R>(scope: InternScope, f: impl FnOnce() -> R) -> R {
+        let prev = SCOPE.get();
+        SCOPE.set(scope);
+        struct ScopeGuard(InternScope);
+        impl Drop for ScopeGuard {
+            fn drop(&mut self) {
+                SCOPE.set(self.0);
+            }
+        }
+        let _guard = ScopeGuard(prev);
+        f()
+    }
+
+    /// Clears the request interned string table between requests in long-running SAPIs.
+    /// Permanent interned strings are unaffected.
+    pub fn reset_request_interned() {
+        SCOPE.set(InternScope::Request);
+        REQUEST_INTERNED.with(|set| {
+            set.borrow_mut().clear();
+        });
     }
 
     /// Returns the interned version of this string (itself if already
@@ -769,6 +867,54 @@ impl ZStr {
     /// interned instance, as php-src interns a refcount-1 string in place.
     #[must_use]
     pub fn into_interned(self) -> Self {
+        let scope = SCOPE.get();
+        if scope == InternScope::Permanent {
+            if self.is_permanent() {
+                return self;
+            }
+            match self.as_bytes() {
+                [] => return Self::empty(),
+                &[c] => return Self::from_byte(c),
+                _ => {}
+            }
+            let key = InternKey::new(self.as_bytes());
+            if let Some(entry) = PERMANENT_INTERNED.with(|set| set.borrow().get(key).copied()) {
+                let found = ManuallyDrop::new(ZStr(entry.0));
+                return ZStr::clone(&found);
+            }
+            if let Some(entry) = REQUEST_INTERNED.with(|set| set.borrow_mut().take(key)) {
+                let s = ZStr(entry.0);
+                s.header().rc.set(0);
+                s.header().meta.set(s.header().meta.get() | PERMANENT);
+                let _ = s.hash_value();
+                PERMANENT_INTERNED.with(|set| {
+                    set.borrow_mut().insert(InternEntry(s.0));
+                });
+                return s;
+            }
+            let meta = self.header().meta.get();
+            if self.is_unique_mutable() && meta & CAP_MASK == self.len() {
+                self.header().rc.set(0);
+                self.header().meta.set(meta | INTERNED | PERMANENT);
+                let _ = self.hash_value();
+                PERMANENT_INTERNED.with(|set| {
+                    set.borrow_mut().insert(InternEntry(self.0));
+                });
+                return self;
+            }
+            let s = Self::from_parts(
+                self.as_bytes(),
+                &[],
+                INTERNED | PERMANENT | (meta & VALID_UTF8),
+            );
+            s.header().rc.set(0);
+            let _ = s.hash_value();
+            PERMANENT_INTERNED.with(|set| {
+                set.borrow_mut().insert(InternEntry(s.0));
+            });
+            return s;
+        }
+
         if self.is_interned() {
             return self;
         }
@@ -788,38 +934,67 @@ impl ZStr {
     }
 
     /// The interned instance holding `bytes`, if there is one: the static
-    /// empty and one-byte strings, else the intern table's entry.
+    /// empty and one-byte strings, the permanent table, or the request table.
     fn existing_interned(bytes: &[u8]) -> Option<Self> {
         match bytes {
             [] => return Some(Self::empty()),
             &[c] => return Some(Self::from_byte(c)),
             _ => {}
         }
-        let entry = INTERNED_SET.with(|set| set.borrow().get(InternKey::new(bytes)).copied())?;
-        // A new handle of the live entry: counted like any clone.
+        let key = InternKey::new(bytes);
+        if let Some(entry) = PERMANENT_INTERNED.with(|set| set.borrow().get(key).copied()) {
+            let found = ManuallyDrop::new(ZStr(entry.0));
+            return Some(ZStr::clone(&found));
+        }
+        let entry = REQUEST_INTERNED.with(|set| set.borrow().get(key).copied())?;
         let found = ManuallyDrop::new(ZStr(entry.0));
         Some(ZStr::clone(&found))
     }
 
-    /// Enters `s` into the intern table under its (now cached) hash
-    /// (`zend_add_interned_string`). `s` must be a fresh interned heap
-    /// string, the only one with its bytes.
+    /// Enters `s` into the appropriate intern table under its (now cached) hash.
     fn register(s: Self) -> Self {
         debug_assert!(s.is_interned() && s.len() > 1);
         let _ = s.hash_value();
-        INTERNED_SET.with(|set| {
-            let inserted = set.borrow_mut().insert(InternEntry(s.0));
-            debug_assert!(inserted, "two interned instances of one string");
-        });
+        let is_perm =
+            SCOPE.get() == InternScope::Permanent || (s.header().meta.get() & PERMANENT != 0);
+        if is_perm {
+            s.header().rc.set(0);
+            s.header().meta.set(s.header().meta.get() | PERMANENT);
+            PERMANENT_INTERNED.with(|set| {
+                let inserted = set.borrow_mut().insert(InternEntry(s.0));
+                debug_assert!(
+                    inserted,
+                    "two interned instances of one string in permanent table"
+                );
+            });
+        } else {
+            REQUEST_INTERNED.with(|set| {
+                let inserted = set.borrow_mut().insert(InternEntry(s.0));
+                debug_assert!(
+                    inserted,
+                    "two interned instances of one string in request table"
+                );
+            });
+        }
         s
     }
 
-    /// Number of live heap-interned strings of the calling thread (the
-    /// static empty and one-byte strings are not counted): what the
-    /// thread's intern table holds, for diagnostics and tests.
+    /// Number of live heap-interned strings of the calling thread (permanent + request).
     #[must_use]
     pub fn live_interned_count() -> usize {
-        INTERNED_SET.with(|set| set.borrow().len())
+        PERMANENT_INTERNED.with(|p| p.borrow().len()) + REQUEST_INTERNED.with(|r| r.borrow().len())
+    }
+
+    /// Number of live request-interned strings.
+    #[must_use]
+    pub fn live_request_interned_count() -> usize {
+        REQUEST_INTERNED.with(|r| r.borrow().len())
+    }
+
+    /// Number of live permanent heap-interned strings.
+    #[must_use]
+    pub fn live_permanent_interned_count() -> usize {
+        PERMANENT_INTERNED.with(|p| p.borrow().len())
     }
 
     /// A string literal's value as the scanner makes it
@@ -1865,7 +2040,9 @@ mod tests {
 
     /// Whether the intern table has an entry for `bytes`.
     fn intern_table_contains(bytes: &[u8]) -> bool {
-        INTERNED_SET.with(|set| set.borrow().contains(InternKey::new(bytes)))
+        let key = InternKey::new(bytes);
+        PERMANENT_INTERNED.with(|p| p.borrow().contains(key))
+            || REQUEST_INTERNED.with(|r| r.borrow().contains(key))
     }
 
     /// `zend_interned_strings_init`: the empty string and the one-byte
@@ -2165,5 +2342,101 @@ mod tests {
             tags.insert(h.finish() >> 57);
         }
         assert!(tags.len() > 64, "{} distinct tags", tags.len());
+    }
+
+    #[test]
+    fn permanent_vs_request_interned_scoping() {
+        // Initial state: scope is Request
+        assert_eq!(ZStr::intern_scope(), InternScope::Request);
+
+        // 1. Request-scoped interning
+        let req1 = ZStr::intern(b"request_scope_str_1");
+        assert!(req1.is_interned());
+        assert!(!req1.is_permanent());
+        assert_eq!(req1.refcount(), 1);
+        assert_eq!(ZStr::intern(b"request_scope_str_1").refcount(), 2);
+
+        // 2. with_intern_scope switching
+        let perm1 = ZStr::with_intern_scope(InternScope::Permanent, || {
+            assert_eq!(ZStr::intern_scope(), InternScope::Permanent);
+            let s = ZStr::intern(b"perm_scope_str_1");
+            assert!(s.is_interned());
+            assert!(s.is_permanent());
+            assert_eq!(s.refcount(), 0);
+            s
+        });
+        // Scope restored to Request
+        assert_eq!(ZStr::intern_scope(), InternScope::Request);
+        assert!(perm1.is_permanent());
+        assert_eq!(perm1.refcount(), 0);
+        let perm1_clone = perm1.clone();
+        assert_eq!(perm1_clone.refcount(), 0);
+        drop(perm1_clone);
+        assert_eq!(perm1.refcount(), 0);
+
+        // 3. intern_permanent direct creation
+        let perm2 = ZStr::intern_permanent(b"perm_scope_str_2");
+        assert!(perm2.is_interned());
+        assert!(perm2.is_permanent());
+        assert_eq!(perm2.refcount(), 0);
+
+        // 4. Existing permanent strings are found from Request scope
+        let perm2_found = ZStr::intern(b"perm_scope_str_2");
+        assert!(ZStr::ptr_eq(&perm2, &perm2_found));
+        assert!(perm2_found.is_permanent());
+        assert_eq!(perm2_found.refcount(), 0);
+
+        // 5. Promotion of request-interned string to permanent
+        let to_promote = ZStr::intern(b"promote_me_to_perm");
+        assert!(!to_promote.is_permanent());
+        assert_eq!(to_promote.refcount(), 1);
+
+        let promoted = ZStr::intern_permanent(b"promote_me_to_perm");
+        assert!(ZStr::ptr_eq(&to_promote, &promoted));
+        assert!(promoted.is_permanent());
+        assert_eq!(promoted.refcount(), 0);
+        assert_eq!(to_promote.refcount(), 0);
+
+        // 6. into_interned in Permanent scope
+        let plain = ZStr::from("into_interned_perm");
+        let into_perm = ZStr::with_intern_scope(InternScope::Permanent, || plain.into_interned());
+        assert!(into_perm.is_interned());
+        assert!(into_perm.is_permanent());
+        assert_eq!(into_perm.refcount(), 0);
+
+        // 7. reset_request_interned clears request table but keeps permanent
+        let req2 = ZStr::intern(b"request_scope_str_to_reset");
+        assert!(intern_table_contains(b"request_scope_str_to_reset"));
+        assert!(intern_table_contains(b"perm_scope_str_1"));
+        assert!(intern_table_contains(b"perm_scope_str_2"));
+
+        ZStr::reset_request_interned();
+
+        // Request string is no longer in intern table
+        assert!(!intern_table_contains(b"request_scope_str_to_reset"));
+        // Permanent strings remain in intern table
+        assert!(intern_table_contains(b"perm_scope_str_1"));
+        assert!(intern_table_contains(b"perm_scope_str_2"));
+        assert!(intern_table_contains(b"promote_me_to_perm"));
+
+        // Dropping old request handle after reset doesn't panic
+        drop(req2);
+        drop(req1);
+
+        // Re-interning after reset creates new request interned string
+        let req2_again = ZStr::intern(b"request_scope_str_to_reset");
+        assert!(intern_table_contains(b"request_scope_str_to_reset"));
+        assert!(!req2_again.is_permanent());
+    }
+
+    #[test]
+    fn static_strings_are_permanent() {
+        assert!(ZStr::empty().is_permanent());
+        assert_eq!(ZStr::empty().refcount(), 0);
+        for c in 0..=255u8 {
+            let s = ZStr::from_byte(c);
+            assert!(s.is_permanent(), "byte {c}");
+            assert_eq!(s.refcount(), 0, "byte {c}");
+        }
     }
 }
