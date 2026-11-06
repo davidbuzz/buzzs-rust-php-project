@@ -1046,6 +1046,25 @@ impl Vm {
                                 break 'slow;
                             }
                         }
+                        // A loop's step and its condition: after the
+                        // `++`/`--`, the `CmpJmp` at `ip` on plain numbers
+                        // jumps or skips itself and its jump op here;
+                        // otherwise it runs as the next op.
+                        Op::IncDecCvCmpJmp { cv, kind, .. } => {
+                            if !self.incdec_cv_fast(*cv, *kind, None) {
+                                break 'slow;
+                            }
+                            if let Some(Op::CmpJmp {
+                                a, b, target, mask, ..
+                            }) = ops.get(ip)
+                            {
+                                match self.cmp_jmp_num(*a, *b, *mask) {
+                                    Some(true) => ip = *target as usize,
+                                    Some(false) => ip += 2,
+                                    None => {}
+                                }
+                            }
+                        }
                         Op::AssignOpCv {
                             cv,
                             op: kind,
@@ -1401,6 +1420,14 @@ impl Vm {
                                 self.set_dst(*dst, r);
                             }
                         }
+                        Flow::Next
+                    }
+                    // The generic `IncDec` of the specialised
+                    // `IncDecCvCmpJmp` (its `CmpJmp` then runs as its own
+                    // op).
+                    Op::IncDecCvCmpJmp { kind, place, .. } => {
+                        let r = self.place_incdec(*place, *kind)?;
+                        self.set_dst(None, r);
                         Flow::Next
                     }
                     // Also the generic form of the specialised `IncDecCv` /

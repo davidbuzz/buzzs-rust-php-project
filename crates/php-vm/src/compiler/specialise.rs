@@ -35,6 +35,22 @@ pub(crate) fn specialise(ops: &mut [Op], places: &[Place]) {
             *cur = op;
         }
     }
+    // Second pass, over the specialised ops: a loop's step right before its
+    // smart-branch condition.
+    for i in 1..ops.len() {
+        if !matches!(ops[i], Op::CmpJmp { .. }) {
+            continue;
+        }
+        if let Op::IncDecCv {
+            cv,
+            kind,
+            dst: None,
+            place,
+        } = ops[i - 1]
+        {
+            ops[i - 1] = Op::IncDecCvCmpJmp { cv, kind, place };
+        }
+    }
 }
 
 /// The specialised form of `op` (followed by `next`), if any.
@@ -434,15 +450,15 @@ mod tests {
             matches!(ops[cond + 1], Op::JmpNz(Operand::Tmp(t), l) if t == dst && l == target),
             "{ops:?}"
         );
+        // The step right before the condition carries it along.
         assert!(
-            ops.iter().any(|op| matches!(
-                op,
-                Op::IncDecCv {
+            matches!(
+                ops[cond - 1],
+                Op::IncDecCvCmpJmp {
                     kind: IncDecKind::PostInc,
-                    dst: None,
                     ..
                 }
-            )),
+            ),
             "{ops:?}"
         );
     }

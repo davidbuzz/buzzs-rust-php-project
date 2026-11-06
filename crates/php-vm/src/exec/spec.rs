@@ -1608,6 +1608,41 @@ z01122
     }
 
     #[test]
+    fn loop_steps_carry_their_conditions() {
+        // IncDecCvCmpJmp: the step of `for`/`while` loops with int, float,
+        // numeric-string, changing and reference bounds, `continue`, nested
+        // loops, overflow at the step, a null counter, NaN, a loop that never
+        // runs (entered at the condition) and `do`/`while`.
+        let src = r#"<?php
+$out = '';
+for ($i = 0; $i < 5; $i++) { $out .= $i; } $out .= '|';
+for ($i = 5; $i > 0; $i--) { $out .= $i; } $out .= '|';
+for ($i = 0; $i <= 4; ++$i) { if ($i % 2) { continue; } $out .= $i; } $out .= '|';
+for ($i = 0.5; $i < 3; $i++) { $out .= $i . ','; } $out .= '|';
+for ($i = 0; $i < "3"; $i++) { $out .= $i; } $out .= '|';
+for ($i = 0; $i != 4; $i++) { $out .= $i; } $out .= '|';
+for ($i = 0; $i !== 3; $i++) { $out .= $i; } $out .= '|';
+$n = 3; for ($i = 0; $i < $n; $i++) { $out .= $i; if ($i == 1) { $n = 2.5; } } $out .= '|';
+for ($i = 10; $i < 5; $i++) { $out .= 'never'; } $out .= '|';
+for ($i = PHP_INT_MAX - 2; $i < PHP_INT_MAX; $i++) { $out .= 'm'; } var_dump($i); $out .= '|';
+$j = PHP_INT_MAX - 1; for (; $j < PHP_INT_MAX + 1; $j++) { $out .= 'o'; if ($j > PHP_INT_MAX) { break; } } var_dump($j); $out .= '|';
+for ($i = 0; $i < 3; $i++) { for ($k = 0; $k < 2; $k++) { $out .= "$i$k "; } } $out .= '|';
+$r = 0; $ref = &$r; for (; $r < 3; $ref++) { $out .= $r; } $out .= '|';
+$w = 0; while ($w < 4) { $out .= $w; $w++; } $out .= '|';
+$x = null; for (; $x < 2; $x++) { $out .= var_export($x, true); } $out .= '|';
+$t = 0; do { $out .= $t; $t++; } while ($t < 3); $out .= '|';
+for ($i = 0; $i < 3; $i++) { $nan = NAN; } $out .= ($i < NAN ? 'y' : 'n') . '|';
+for ($i = 0, $e = 3; $i < $e; $i++) {} $out .= $i;
+echo $out, "\n";
+"#;
+        let expected = r#"int(9223372036854775807)
+int(9223372036854775806)
+01234|54321|024|0.5,1.5,2.5,|012|0123|012|012||mm||00 01 10 11 20 21 |012|0123|NULL1|012|n|3
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
     fn simple_identity_and_truth_tests() {
         let src = r#"<?php
 $n = null; $f = false; $s = "abc"; $t = "abc"; $i = 1; $z = 0; $e = ""; $a = [];

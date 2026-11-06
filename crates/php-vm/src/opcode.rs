@@ -861,6 +861,20 @@ pub enum Op {
         dst: u32,
         to: u32,
     },
+    /// An [`Op::IncDecCv`] without a used result right before an
+    /// [`Op::CmpJmp`]: a rotated loop's step and condition (`for (...; $i <
+    /// $n; $i++)`, `while (...) { ...; $i++; }`). After the in-place `++` /
+    /// `--`, the comparison of that `CmpJmp` is decided here too when its
+    /// operands are plain numbers: the op jumps to the `CmpJmp`'s target or
+    /// skips the `CmpJmp` and its jump op; otherwise the `CmpJmp` runs as
+    /// its own op. Entering at the `CmpJmp` (the loop's entry jump) runs it
+    /// alone; anything but a plain number in the variable is the generic
+    /// `IncDec` of `place`.
+    IncDecCvCmpJmp {
+        cv: u32,
+        kind: IncDecKind,
+        place: PlaceId,
+    },
 }
 
 /// The bits of [`Op::CmpJmp`]'s `mask`: the outcomes of comparing two
