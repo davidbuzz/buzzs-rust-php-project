@@ -179,11 +179,12 @@ fn ensure_main_stack(argv: &[Vec<u8>]) -> bool {
         return false;
     }
     let sp = approx_stack_pointer();
-    if std::fs::read("/proc/self/maps")
+    let roomy = std::fs::read("/proc/self/maps")
         .ok()
         .and_then(|maps| main_stack_room(&maps, sp))
-        .is_some_and(|room| room >= VM_STACK + STACK_GUARD_ALLOWANCE)
-    {
+        .filter(|&(_, room)| room >= VM_STACK + STACK_GUARD_ALLOWANCE);
+    if let Some((top, _)) = roomy {
+        hand_stack_to_parser(top);
         return true;
     }
     let mut cmd = std::process::Command::new("/proc/self/exe");
@@ -213,10 +214,27 @@ fn approx_stack_pointer() -> u64 {
     u64::try_from(addr).unwrap_or(0)
 }
 
-/// How far the stack mapping that contains `sp` may grow down, in the
-/// `/proc/self/maps` listing `maps`: from its top to the end of the next
-/// lower mapping. `None` when no mapping contains `sp` or the listing does
-/// not parse.
+/// Hands the main stack's bounds to the parser, which would otherwise probe
+/// them itself on the first parse (`pthread_getattr_np` reads and parses
+/// `/proc/self/maps` again: about 0.9 M instructions per `php` run). `top`
+/// is the end of the stack mapping; with the limit raised to [`VM_STACK`]
+/// the stack may grow down to `top - VM_STACK`, which is what the probe
+/// computes from the limit.
+fn hand_stack_to_parser(top: u64) {
+    if let (Ok(low), Ok(high)) = (
+        usize::try_from(top.saturating_sub(VM_STACK)),
+        usize::try_from(top),
+    ) {
+        // False only when the bounds do not contain the stack pointer,
+        // which the mapping that contains it rules out.
+        let _ = php_parser::set_thread_stack(low, high);
+    }
+}
+
+/// The top of the stack mapping that contains `sp` in the
+/// `/proc/self/maps` listing `maps`, and how far that stack may grow
+/// down: from its top to the end of the next lower mapping. `None` when
+/// no mapping contains `sp` or the listing does not parse.
 ///
 /// The kernel places shared libraries and anonymous mappings below
 /// `mmap_base`. When it loads the program, it keeps only the stack limit
@@ -225,27 +243,52 @@ fn approx_stack_pointer() -> u64 {
 /// address-space randomisation `mmap_base` itself sits a random amount of
 /// up to terabytes lower, so the room is almost always far larger than
 /// [`VM_STACK`].
-fn main_stack_room(maps: &[u8], sp: u64) -> Option<u64> {
-    let mut prev_end = 0u64;
-    for line in maps.split(|&c| c == b'\n') {
-        let range = line.split(|&c| c == b' ').next()?;
-        if range.is_empty() {
-            continue;
-        }
+fn main_stack_room(maps: &[u8], sp: u64) -> Option<(u64, u64)> {
+    let (top, below) = stack_mapping(maps, sp)?;
+    Some((top, top.checked_sub(below)?))
+}
+
+/// The stack mapping that contains `sp` in the `/proc/self/maps` listing
+/// `maps`: its end, and the end of the next lower mapping (0 without one).
+/// `None` when no mapping contains `sp` or the listing does not parse.
+///
+/// The listing is read from its end: the stack is the last of the
+/// process's own mappings, followed only by `[vvar]`, `[vdso]` and
+/// `[vsyscall]`, so a few lines are parsed instead of the four hundred a
+/// `php` process has.
+fn stack_mapping(maps: &[u8], sp: u64) -> Option<(u64, u64)> {
+    let mut ranges = maps
+        .rsplit(|&c| c == b'\n')
+        .map(|line| line.split(|&c| c == b' ').next().unwrap_or_default())
+        .filter(|range| !range.is_empty());
+    let bounds = |range: &[u8]| -> Option<(u64, u64)> {
         let dash = range.iter().position(|&c| c == b'-')?;
-        let hex = |b: &[u8]| {
-            std::str::from_utf8(b)
-                .ok()
-                .and_then(|s| u64::from_str_radix(s, 16).ok())
-        };
-        let start = hex(&range[..dash])?;
-        let end = hex(&range[dash + 1..])?;
+        Some((parse_hex(&range[..dash])?, parse_hex(&range[dash + 1..])?))
+    };
+    loop {
+        let (start, end) = bounds(ranges.next()?)?;
         if start <= sp && sp < end {
-            return end.checked_sub(prev_end);
+            let below = match ranges.next() {
+                Some(range) => bounds(range)?.1,
+                None => 0,
+            };
+            return Some((end, below));
         }
-        prev_end = end;
     }
-    None
+}
+
+/// A hexadecimal number without prefix, as `/proc/self/maps` prints
+/// addresses.
+fn parse_hex(digits: &[u8]) -> Option<u64> {
+    if digits.is_empty() {
+        return None;
+    }
+    let mut v = 0u64;
+    for &c in digits {
+        let d = char::from(c).to_digit(16)?;
+        v = v.checked_mul(16)?.checked_add(u64::from(d))?;
+    }
+    Some(v)
 }
 
 php_memlimit::install_global_allocator!();
@@ -1311,7 +1354,8 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
 
     #[test]
     fn stack_room_reaches_the_next_lower_mapping() {
-        let room = main_stack_room(MAPS, 0x7fff_f001_0000).unwrap();
+        let (top, room) = main_stack_room(MAPS, 0x7fff_f001_0000).unwrap();
+        assert_eq!(top, 0x7fff_f002_1000);
         assert_eq!(room, 0x7fff_f002_1000 - 0x7f00_0002_0000);
         assert!(room >= VM_STACK + STACK_GUARD_ALLOWANCE);
     }
@@ -1322,7 +1366,8 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
 7ffff0000000-7ffff0001000 rw-p 00000000 00:00 0
 7ffff8000000-7ffff8021000 rw-p 00000000 00:00 0 [stack]
 ";
-        let room = main_stack_room(maps, 0x7fff_f801_0000).unwrap();
+        let (top, room) = main_stack_room(maps, 0x7fff_f801_0000).unwrap();
+        assert_eq!(top, 0x7fff_f802_1000);
         assert_eq!(room, 0x7fff_f802_1000 - 0x7fff_f000_1000);
         assert!(room < VM_STACK + STACK_GUARD_ALLOWANCE);
     }
@@ -1332,6 +1377,43 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
         assert_eq!(main_stack_room(MAPS, 0x1000), None);
         assert_eq!(main_stack_room(b"garbage line\n", 0x1000), None);
         assert_eq!(main_stack_room(b"", 0x1000), None);
+    }
+
+    #[test]
+    fn stack_mapping_reports_the_top_and_the_mapping_below() {
+        assert_eq!(
+            stack_mapping(MAPS, 0x7fff_f001_0000),
+            Some((0x7fff_f002_1000, 0x7f00_0002_0000))
+        );
+        // The lowest mapping has nothing below it.
+        assert_eq!(
+            stack_mapping(MAPS, 0x5a00_0000_0800),
+            Some((0x5a00_0000_1000, 0))
+        );
+        // Without a trailing newline, and with the stack line last.
+        let maps = b"7f0000000000-7f0000010000 r-xp 00000000 08:01 99 /usr/lib/libc.so.6\n\
+7ffff0000000-7ffff0021000 rw-p 00000000 00:00 0 [stack]";
+        assert_eq!(
+            stack_mapping(maps, 0x7fff_f000_0000),
+            Some((0x7fff_f002_1000, 0x7f00_0001_0000))
+        );
+        assert_eq!(stack_mapping(maps, 0x7fff_f002_1000), None);
+        assert_eq!(
+            stack_mapping(b"7ffff0000000+7ffff0021000 rw-p\n", 0x7fff_f000_0000),
+            None
+        );
+    }
+
+    #[test]
+    fn hex_addresses_parse() {
+        assert_eq!(parse_hex(b"0"), Some(0));
+        assert_eq!(parse_hex(b"7ffff0021000"), Some(0x7fff_f002_1000));
+        assert_eq!(parse_hex(b"ffffffffff600000"), Some(0xffff_ffff_ff60_0000));
+        assert_eq!(parse_hex(b"ABCdef"), Some(0xabc_def));
+        assert_eq!(parse_hex(b""), None);
+        assert_eq!(parse_hex(b"0x10"), None);
+        assert_eq!(parse_hex(b"12g"), None);
+        assert_eq!(parse_hex(b"10000000000000000"), None);
     }
 
     #[test]
