@@ -156,10 +156,10 @@ impl Vm {
         let empty_code = Rc::new(opcode::OpArray::default());
         Vm {
             frames: Vec::new(),
-            functions: HashMap::new(),
-            classes: HashMap::new(),
+            functions: class::NameMap::default(),
+            classes: class::NameMap::default(),
             class_order: Vec::new(),
-            constants: HashMap::new(),
+            constants: class::NameMap::default(),
             user_constants: Vec::new(),
             globals: Rc::new(RefCell::new(vm::VarStore::default())),
             ini,
