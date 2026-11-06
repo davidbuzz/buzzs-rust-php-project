@@ -962,4 +962,61 @@ mod tests {
         set_server_pid(0);
         assert_eq!(server_pid(), std::process::id());
     }
+
+    /// A context for a request with `content` (on a loopback connection).
+    fn ctx_with(content: Option<&[u8]>) -> RequestCtx {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let request = Request {
+            content: content.map(<[u8]>::to_vec),
+            ..Request::default()
+        };
+        RequestCtx::new(request, stream, "127.0.0.1:1".to_string())
+    }
+
+    /// `php://input` creates the request body buffer from what the SAPI
+    /// has not read (`php_stream_input_read()`), and keeps it.
+    #[test]
+    fn php_input_buffers_the_unread_body() {
+        let ctx = ctx_with(Some(b"a=1&b=2"));
+        assert_eq!(ctx.request_body(), None);
+        assert_eq!(ctx.input(), b"a=1&b=2");
+        assert_eq!(ctx.request_body(), Some(&b"a=1&b=2"[..]));
+        let mut buf = [0u8; 8];
+        assert_eq!(ctx.read_post(&mut buf), 0, "the SAPI has nothing left");
+        assert_eq!(ctx.input(), b"a=1&b=2");
+    }
+
+    /// The multipart parser reads the SAPI directly: `php://input` gets
+    /// only what it left.
+    #[test]
+    fn php_input_after_a_partial_read() {
+        let ctx = ctx_with(Some(b"0123456789"));
+        let mut buf = [0u8; 4];
+        assert_eq!(ctx.read_post(&mut buf), 4);
+        assert_eq!(&buf, b"0123");
+        assert_eq!(ctx.input(), b"456789");
+    }
+
+    /// `sapi_read_standard_form_data()` replaces the buffer with what the
+    /// SAPI still has: everything the first time, nothing afterwards.
+    #[test]
+    fn standard_form_data_rereads_a_consumed_body() {
+        let ctx = ctx_with(Some(b"a=1"));
+        ctx.buffer_body();
+        assert_eq!(ctx.request_body(), Some(&b"a=1"[..]));
+        ctx.buffer_body();
+        assert_eq!(ctx.request_body(), Some(&b""[..]));
+        assert_eq!(ctx.input(), b"");
+    }
+
+    /// A request without a body.
+    #[test]
+    fn no_content() {
+        let ctx = ctx_with(None);
+        assert_eq!(ctx.input(), b"");
+        ctx.buffer_body();
+        assert_eq!(ctx.request_body(), Some(&b""[..]));
+        assert!(ctx.orphaned_uploads.borrow().is_empty());
+    }
 }

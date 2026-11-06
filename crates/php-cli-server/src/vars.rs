@@ -869,4 +869,73 @@ mod tests {
             b"multipart/form-data"
         );
     }
+
+    fn vm_with(ini: &[(&str, &str)]) -> Vm {
+        let opts = php_vm::VmOptions {
+            ini: ini
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+        };
+        Vm::with_extensions(&opts, Box::new(std::io::sink()), &[])
+    }
+
+    /// `REQUEST_PARSE_BODY_OPTION_GET()`: an option replaces its INI value.
+    #[test]
+    fn limits_prefer_the_options() {
+        let vm = vm_with(&[("max_input_vars", "7"), ("post_max_size", "1K")]);
+        let ini = Limits::new(&vm, &ParseBodyOptions::default());
+        assert_eq!(ini.max_input_vars, 7);
+        assert_eq!(ini.post_max_size, 1024);
+        assert_eq!(ini.max_multipart_body_parts, -1);
+        let options = ParseBodyOptions {
+            max_input_vars: Some(1),
+            max_multipart_body_parts: Some(3),
+            upload_max_filesize: Some(0),
+            ..ParseBodyOptions::default()
+        };
+        let set = Limits::new(&vm, &options);
+        assert_eq!(set.max_input_vars, 1);
+        assert_eq!(set.max_multipart_body_parts, 3);
+        assert_eq!(set.upload_max_filesize, 0);
+        assert_eq!(set.post_max_size, 1024);
+        assert_eq!(set.max_file_uploads, ini.max_file_uploads);
+    }
+
+    /// Exceptions raised during one parse chain like
+    /// `zend_throw_exception_internal()`; a fatal error ends the parse.
+    #[test]
+    fn pending_exceptions_chain() {
+        let mut vm = vm_with(&[]);
+        let first = vm.throw("RequestParseBodyException", "first");
+        let Throw::Exception(first_obj) = first.clone() else {
+            panic!("not an exception");
+        };
+        let second = vm.throw("RequestParseBodyException", "second");
+        let mut pending = None;
+        pend(&mut vm, &mut pending, first).unwrap();
+        pend_err(&mut vm, &mut pending, Ok(())).unwrap();
+        pend_err(&mut vm, &mut pending, Err(second)).unwrap();
+        let Some(Throw::Exception(last)) = pending.clone() else {
+            panic!("nothing pending");
+        };
+        let previous = vm
+            .call_method_by_name(&last, "getPrevious", Vec::new())
+            .unwrap();
+        assert!(matches!(previous, Value::Object(o) if php_runtime::Obj::ptr_eq(&o, &first_obj)));
+        assert!(matches!(
+            pend(&mut vm, &mut pending, Throw::Fatal),
+            Err(Throw::Fatal)
+        ));
+    }
+
+    /// Startup problems are startup warnings; `request_parse_body()` ones
+    /// name the function (docref) or not (`sapi_error()`).
+    #[test]
+    fn phase_prefixes() {
+        assert_eq!(Phase::Startup.func(), "");
+        assert_eq!(Phase::Startup.docref_prefix(), STARTUP);
+        assert_eq!(Phase::ParseBody.func(), "request_parse_body");
+        assert_eq!(Phase::ParseBody.docref_prefix(), "request_parse_body(): ");
+    }
 }
