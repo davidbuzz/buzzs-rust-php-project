@@ -73,48 +73,45 @@ impl Vm {
             order.sort(&mut table, |(k, _, pi)| (pi.as_ref().map(|p| p.slot), k));
         }
         for (k, _, pi) in table {
-            match pi {
-                Some(pi) => {
-                    let name = pi.name.clone();
-                    match self.lookup_prop(&cls, &name, scope.as_ref()) {
-                        PropLookup::Found(found) if found.slot == pi.slot => {
-                            // A parent's private property seen from the
-                            // parent's scope is not in the object's own
-                            // property map: record its declaring class so
-                            // the fetch does not look it up there.
-                            let private_of = (pi.visibility() == flags::PRIVATE
-                                && !pi.class.eq_ignore_ascii_case(cls.name.as_bytes()))
-                            .then(|| pi.class.clone());
-                            out.push((Value::Str(name.clone()), name, private_of));
-                        }
-                        _ => {
-                            // Private props of other classes / inaccessible.
-                            if pi.visibility() == flags::PRIVATE
-                                && scope.as_ref().is_some_and(|s| {
-                                    s.name.eq_ignore_ascii_case(pi.class.as_bytes())
-                                })
-                            {
-                                out.push((Value::Str(name.clone()), name, Some(pi.class.clone())));
-                            }
+            if let Some(pi) = pi {
+                let name = pi.name.clone();
+                match self.lookup_prop(&cls, &name, scope.as_ref()) {
+                    PropLookup::Found(found) if found.slot == pi.slot => {
+                        // A parent's private property seen from the
+                        // parent's scope is not in the object's own
+                        // property map: record its declaring class so
+                        // the fetch does not look it up there.
+                        let private_of = (pi.visibility() == flags::PRIVATE
+                            && !pi.class.eq_ignore_ascii_case(cls.name.as_bytes()))
+                        .then(|| pi.class.clone());
+                        out.push((Value::Str(name.clone()), name, private_of));
+                    }
+                    _ => {
+                        // Private props of other classes / inaccessible.
+                        if pi.visibility() == flags::PRIVATE
+                            && scope
+                                .as_ref()
+                                .is_some_and(|s| s.name.eq_ignore_ascii_case(pi.class.as_bytes()))
+                        {
+                            out.push((Value::Str(name.clone()), name, Some(pi.class.clone())));
                         }
                     }
                 }
-                None => {
-                    let name = match &k {
-                        ArrayKey::Str(s) => s.clone(),
-                        ArrayKey::Int(i) => ZStr::from(i.to_string()),
-                    };
-                    if name.as_bytes().first() == Some(&0) {
-                        // `zend_fe_fetch_object_helper`: a dynamic key that
-                        // looks mangled (`(object)["\0A\0b" => 1]`) is
-                        // always accessible and yields its unmangled name.
-                        out.push((unmangled_key(&name), name, None));
-                    } else if !matches!(
-                        self.lookup_prop(&cls, &name, scope.as_ref()),
-                        PropLookup::Found(pi) if pi.visibility() == flags::PRIVATE
-                    ) {
-                        out.push((k.to_value(), name, None));
-                    }
+            } else {
+                let name = match &k {
+                    ArrayKey::Str(s) => s.clone(),
+                    ArrayKey::Int(i) => ZStr::from(i.to_string()),
+                };
+                if name.as_bytes().first() == Some(&0) {
+                    // `zend_fe_fetch_object_helper`: a dynamic key that
+                    // looks mangled (`(object)["\0A\0b" => 1]`) is
+                    // always accessible and yields its unmangled name.
+                    out.push((unmangled_key(&name), name, None));
+                } else if !matches!(
+                    self.lookup_prop(&cls, &name, scope.as_ref()),
+                    PropLookup::Found(pi) if pi.visibility() == flags::PRIVATE
+                ) {
+                    out.push((k.to_value(), name, None));
                 }
             }
         }
@@ -191,6 +188,9 @@ impl Vm {
         Ok(true)
     }
 
+    /// `FE_RESET_R` / `FE_RESET_RW` on an object: `ce->get_iterator()`
+    /// (`zend_fe_reset_iterator`) for a `Traversable`, its properties
+    /// table otherwise.
     fn object_iter(&mut self, o: Obj, by_ref: bool) -> VmResult<ForeachIter> {
         // `ce->get_iterator` is only set for `Traversable` classes; other
         // classes with extension hooks (`SplFileInfo`) iterate properties.
@@ -199,92 +199,109 @@ impl Vm {
             .and_then(|h| h.get_iterator)
             .filter(|_| traversable && !object::has_internal::<crate::generator::GenData>(&o))
         {
-            let mut it = f(self, &o, by_ref)?;
-            let handle = object::HandleGuard::reserve();
-            it.rewind(self)?;
-            return Ok(ForeachIter::Native(
+            let it = f(self, &o, by_ref)?;
+            // The iterator holds its handle from here on (`zend_iterator_init`
+            // in the handler); if `rewind` throws, it is released before the
+            // handle (`OBJ_RELEASE(&iter->std)` frees the iterator's data
+            // first), as the variant's field order drops them.
+            let mut fe = ForeachIter::Native(
                 crate::vm::NativeIter(it),
                 false,
-                handle,
-            ));
+                object::HandleGuard::reserve(),
+            );
+            if let ForeachIter::Native(it, ..) = &mut fe {
+                it.0.rewind(self)?;
+            }
+            return Ok(fe);
         }
         if object::has_internal::<crate::generator::GenData>(&o) {
-            if by_ref
-                && !object::internal::<crate::generator::GenData, _>(&o, |d| {
-                    d.frame
-                        .as_ref()
-                        .and_then(|f| f.ufunc.as_ref())
-                        .is_some_and(|u| u.flags & flags::RETURN_REF != 0)
-                })
-                .unwrap_or(false)
-            {
+            return self.generator_foreach(o, by_ref);
+        }
+        if traversable {
+            return self.traversable_foreach(o, by_ref);
+        }
+        self.props_foreach(o, by_ref)
+    }
+
+    /// `zend_generator_get_iterator`: a `foreach` over the generator `gen`
+    /// (the subject, or what `getIterator()` returned). The iterator takes
+    /// its handle before the generator runs to its first `yield`.
+    fn generator_foreach(&mut self, gen: Obj, by_ref: bool) -> VmResult<ForeachIter> {
+        if self.gen_finished(&gen) {
+            return Err(self.make_throw("Exception", "Cannot traverse an already closed generator"));
+        }
+        if by_ref
+            && !object::internal::<crate::generator::GenData, _>(&gen, |d| {
+                d.frame
+                    .as_ref()
+                    .and_then(|f| f.ufunc.as_ref())
+                    .is_some_and(|u| u.flags & flags::RETURN_REF != 0)
+            })
+            .unwrap_or(false)
+        {
+            return Err(self.make_throw(
+                "Exception",
+                "You can only iterate a generator by-reference if it declared that it yields by-reference",
+            ));
+        }
+        let fe = ForeachIter::Generator {
+            obj: gen,
+            started: false,
+            handle: object::HandleGuard::reserve(),
+        };
+        if let ForeachIter::Generator { obj, .. } = &fe {
+            self.gen_rewind(obj)?;
+        }
+        Ok(fe)
+    }
+
+    /// A `foreach` over a user `Traversable`: `zend_user_it_get_new_iterator`
+    /// resolves `IteratorAggregate::getIterator()` chains, then the iterator
+    /// takes its handle (`zend_user_it_get_iterator`) and rewinds.
+    fn traversable_foreach(&mut self, o: Obj, by_ref: bool) -> VmResult<ForeachIter> {
+        if by_ref {
+            // `zend_user_it_get_new_iterator`: an IteratorAggregate
+            // delegates to its iterator's own by-ref support (a
+            // by-reference generator); user Iterators have none.
+            if !self.instance_of(&o, b"iterator") && self.instance_of(&o, b"iteratoraggregate") {
+                let r = self.call_method_name(&o, "getIterator", Vec::new())?;
+                if let Value::Object(n) = r {
+                    if self.instance_of(&n, b"traversable") {
+                        return self.object_iter(n, true);
+                    }
+                }
                 return Err(self.make_throw(
                     "Exception",
-                    "You can only iterate a generator by-reference if it declared that it yields by-reference",
+                    &format!(
+                        "Objects returned by {}::getIterator() must be traversable or implement interface Iterator",
+                        object::display_name(&object::class_of(&o).name)
+                    ),
                 ));
             }
-            if self.gen_finished(&o) {
-                return Err(
-                    self.make_throw("Exception", "Cannot traverse an already closed generator")
-                );
-            }
-            let handle = object::HandleGuard::reserve();
-            self.gen_rewind(&o)?;
-            return Ok(ForeachIter::Generator {
-                obj: o,
-                started: false,
-                handle,
-            });
+            return Err(self.make_throw(
+                "Error",
+                "An iterator cannot be used with foreach by reference",
+            ));
         }
-        if self.instance_of(&o, b"traversable") {
-            if by_ref {
-                // `zend_user_it_get_new_iterator`: an IteratorAggregate
-                // delegates to its iterator's own by-ref support (a
-                // by-reference generator); user Iterators have none.
-                if !self.instance_of(&o, b"iterator") && self.instance_of(&o, b"iteratoraggregate")
-                {
-                    let r = self.call_method_name(&o, "getIterator", Vec::new())?;
-                    if let Value::Object(n) = r {
-                        if self.instance_of(&n, b"traversable") {
-                            return self.object_iter(n, true);
-                        }
-                    }
-                    return Err(self.make_throw(
-                        "Exception",
-                        &format!(
-                            "Objects returned by {}::getIterator() must be traversable or implement interface Iterator",
-                            object::display_name(&object::class_of(&o).name)
-                        ),
-                    ));
-                }
-                return Err(self.make_throw(
-                    "Error",
-                    "An iterator cannot be used with foreach by reference",
-                ));
-            }
-            let it = self.get_iterator(&o)?;
-            if object::has_internal::<crate::generator::GenData>(&it) {
-                if self.gen_finished(&it) {
-                    return Err(
-                        self.make_throw("Exception", "Cannot traverse an already closed generator")
-                    );
-                }
-                let handle = object::HandleGuard::reserve();
-                self.gen_rewind(&it)?;
-                return Ok(ForeachIter::Generator {
-                    obj: it,
-                    started: false,
-                    handle,
-                });
-            }
-            let handle = object::HandleGuard::reserve();
-            self.call_method_name(&it, "rewind", Vec::new())?;
-            return Ok(ForeachIter::Iterator {
-                obj: it,
-                started: false,
-                handle,
-            });
+        let it = self.get_iterator(&o)?;
+        if object::has_internal::<crate::generator::GenData>(&it) {
+            return self.generator_foreach(it, false);
         }
+        let fe = ForeachIter::Iterator {
+            obj: it,
+            started: false,
+            handle: object::HandleGuard::reserve(),
+        };
+        if let ForeachIter::Iterator { obj, .. } = &fe {
+            self.call_method_name(obj, "rewind", Vec::new())?;
+        }
+        Ok(fe)
+    }
+
+    /// A `foreach` over an object's properties (`FE_RESET_R` / `FE_RESET_RW`
+    /// without `get_iterator`): the loop walks `zobj->properties`, built
+    /// here if it does not exist yet.
+    fn props_foreach(&mut self, o: Obj, by_ref: bool) -> VmResult<ForeachIter> {
         // Iterating properties initializes a lazy object (a proxy iterates
         // its real instance).
         let o = self.lazy_object_for(&o, None)?;
@@ -302,6 +319,14 @@ impl Vm {
                 }
             }
         }
+        // A table shared with a ghost's initialization snapshot is
+        // separated first (`GC_REFCOUNT(properties) > 1`: `zend_array_dup`),
+        // which freezes the declared properties' values in it; a table of
+        // frozen copies is what the loop then walks.
+        crate::lazy::separate_props_for_iteration(&o);
+        if object::data(&o).flags.get() & object::oflags::STALE_PROPS != 0 {
+            return self.frozen_props_foreach(&o, by_ref);
+        }
         let keys = self.visible_props(&o)?;
         if keys.is_empty() {
             return Ok(ForeachIter::Empty);
@@ -313,6 +338,54 @@ impl Vm {
             pos: 0,
             by_ref,
         })
+    }
+
+    /// A `foreach` over an object whose properties table holds frozen copies
+    /// of its declared properties ([`crate::lazy::stale_slots`]): php-src
+    /// walks that table, so the loop sees the copies rather than the slots.
+    /// Its plain entries pass `zend_check_property_access()` as dynamic
+    /// ones do: a mangled key is accessible from any scope and yields the
+    /// unmangled name, an unmangled one must not name a non-public declared
+    /// property. By reference, the entries become references
+    /// (`ZEND_FE_FETCH_RW`), so writes land in the table.
+    #[cold]
+    #[inline(never)]
+    fn frozen_props_foreach(&mut self, o: &Obj, by_ref: bool) -> VmResult<ForeachIter> {
+        let cls = object::class_of(o).clone();
+        let scope = self.scope();
+        let mut table = php_runtime::HashTable::new();
+        for (key, value) in crate::lazy::property_table(o, by_ref) {
+            let Some(value) = value else {
+                continue;
+            };
+            let key = match key {
+                ArrayKey::Str(name) if name.as_bytes().first() == Some(&0) => {
+                    let (_, prop) = php_runtime::dump::unmangle_property_name(name.as_bytes());
+                    ArrayKey::Str(ZStr::from(prop))
+                }
+                ArrayKey::Str(name) => match self.lookup_prop(&cls, &name, scope.as_ref()) {
+                    PropLookup::NotFound => ArrayKey::Str(name),
+                    PropLookup::Found(pi) if pi.visibility() == flags::PUBLIC => {
+                        ArrayKey::Str(name)
+                    }
+                    PropLookup::Found(_) | PropLookup::Inaccessible(_) => continue,
+                },
+                key @ ArrayKey::Int(_) => key,
+            };
+            table.insert(key, value);
+        }
+        if table.is_empty() {
+            return Ok(ForeachIter::Empty);
+        }
+        let mut arr = ZArray::from_table(table);
+        if by_ref {
+            let id = arr.make_mut().iterator_add(0);
+            return Ok(ForeachIter::ArrayRef {
+                r: PhpRef::new(Value::Array(arr)),
+                id,
+            });
+        }
+        Ok(ForeachIter::Array { arr, pos: 0 })
     }
 
     #[allow(clippy::too_many_lines)]
@@ -343,21 +416,15 @@ impl Vm {
                 // overwritten by the loop body with a non-array.
                 let mut not_array = None;
                 let item = {
-                    let mut b = r.borrow_mut();
-                    match &mut *b {
-                        Value::Array(a) => {
-                            let t = a.make_mut();
-                            match t.iterator_fetch(id) {
-                                Some(p) => {
-                                    let k = t.at(p).map(|(k, _)| k.to_value());
-                                    let slot = t.at_mut(p);
-                                    match (k, slot) {
-                                        (Some(k), Some(slot)) => Some((k, slot.make_ref())),
-                                        _ => None,
-                                    }
-                                }
-                                None => None,
-                            }
+                    let mut held = r.borrow_mut();
+                    match &mut *held {
+                        Value::Array(arr) => {
+                            let table = arr.make_mut();
+                            table.iterator_fetch(id).and_then(|pos| {
+                                let key = table.at(pos).map(|(key, _)| key.to_value())?;
+                                let slot = table.at_mut(pos)?;
+                                Some((key, slot.make_ref()))
+                            })
                         }
                         Value::Object(_) => None,
                         other => {
@@ -425,7 +492,7 @@ impl Vm {
                     // Skip properties removed since the reset.
                     let exists = match &private_of {
                         Some(_) => true,
-                        None => self.has_property_raw(&obj, &name),
+                        None => Self::has_property_raw(&obj, &name),
                     };
                     if exists {
                         found = Some((k, name, private_of));
@@ -534,7 +601,7 @@ impl Vm {
         res
     }
 
-    fn has_property_raw(&self, o: &Obj, name: &ZStr) -> bool {
+    fn has_property_raw(o: &Obj, name: &ZStr) -> bool {
         let cls = object::class_of(o);
         if let Some(pi) = cls.prop_map.get(name) {
             if pi.flags & flags::STATIC == 0 {
@@ -622,67 +689,89 @@ impl Vm {
         }
     }
 
-    /// Collects the (key, value) pairs of an array or `Traversable`.
+    /// Collects the (key, value) pairs of an array or `Traversable`
+    /// (`ZEND_SEND_UNPACK`, `ZEND_ADD_ARRAY_UNPACK`).
     pub(crate) fn iterate_to_vec(&mut self, v: &Value) -> VmResult<Vec<(Value, Value)>> {
         match v {
             Value::Array(a) => Ok(a.iter().map(|(k, v)| (k.to_value(), v.deref())).collect()),
-            Value::Object(o) => {
-                let mut out = Vec::new();
-                if let Some(f) = crate::ext::hooks_of(o).and_then(|h| h.get_iterator) {
-                    let mut it = f(self, o, false)?;
-                    it.rewind(self)?;
-                    while it.valid(self)? {
-                        let v = it.current(self)?;
-                        let k = it.key(self)?;
-                        out.push((k, v));
-                        it.next(self)?;
-                    }
-                    return Ok(out);
-                }
-                if object::has_internal::<crate::generator::GenData>(o) {
-                    if self.gen_finished(o) {
-                        return Err(self.make_throw(
-                            "Exception",
-                            "Cannot traverse an already closed generator",
-                        ));
-                    }
-                    self.gen_rewind(o)?;
-                    while self.gen_valid(o)? {
-                        out.push(self.gen_current(o)?);
-                        self.gen_next(o)?;
-                    }
-                    return Ok(out);
-                }
-                if self.instance_of(o, b"traversable") {
-                    let it = self.get_iterator(o)?;
-                    if object::has_internal::<crate::generator::GenData>(&it) {
-                        return self.iterate_to_vec(&Value::Object(it));
-                    }
-                    self.call_method_name(&it, "rewind", Vec::new())?;
-                    loop {
-                        let valid = self.call_method_name(&it, "valid", Vec::new())?;
-                        if !self.to_bool(&valid)? {
-                            break;
-                        }
-                        let v = self.call_method_name(&it, "current", Vec::new())?;
-                        let k = self.call_method_name(&it, "key", Vec::new())?;
-                        out.push((k, v));
-                        self.call_method_name(&it, "next", Vec::new())?;
-                    }
-                    return Ok(out);
-                }
-                for (k, name, _) in self.visible_props(o)? {
-                    let v = if name.as_bytes().first() == Some(&0) {
-                        nul_dynamic_prop(o, &name)
-                    } else {
-                        self.read_property(o, &name, crate::opcode::FetchMode::Is)?
-                    };
-                    out.push((k, v));
-                }
-                Ok(out)
-            }
+            Value::Object(o) => self.object_to_vec(o),
             _ => Ok(Vec::new()),
         }
+    }
+
+    /// `ce->get_iterator()` on `o`, then a `rewind` / `valid` / `current` /
+    /// `key` / `next` walk to the end. The iterator holds an object handle
+    /// for the walk ([`UnpackIter`]), as `zend_iterator_init` gives one.
+    fn object_to_vec(&mut self, o: &Obj) -> VmResult<Vec<(Value, Value)>> {
+        if let Some(f) = crate::ext::hooks_of(o).and_then(|h| h.get_iterator) {
+            let mut it = UnpackIter::new(f(self, o, false)?);
+            let mut out = Vec::new();
+            it.inner.rewind(self)?;
+            while it.inner.valid(self)? {
+                let value = it.inner.current(self)?;
+                let key = it.inner.key(self)?;
+                out.push((key, value));
+                it.inner.next(self)?;
+            }
+            it.finish(self)?;
+            return Ok(out);
+        }
+        if object::has_internal::<crate::generator::GenData>(o) {
+            return self.generator_to_vec(o.clone());
+        }
+        if self.instance_of(o, b"traversable") {
+            let it = self.get_iterator(o)?;
+            if object::has_internal::<crate::generator::GenData>(&it) {
+                return self.generator_to_vec(it);
+            }
+            // `zend_user_it_get_iterator`: the handle comes after the
+            // `getIterator()` calls, before `rewind`.
+            let it = UnpackIter::new(it);
+            let mut out = Vec::new();
+            self.call_method_name(&it.inner, "rewind", Vec::new())?;
+            loop {
+                let valid = self.call_method_name(&it.inner, "valid", Vec::new())?;
+                if !self.to_bool(&valid)? {
+                    break;
+                }
+                let value = self.call_method_name(&it.inner, "current", Vec::new())?;
+                let key = self.call_method_name(&it.inner, "key", Vec::new())?;
+                out.push((key, value));
+                self.call_method_name(&it.inner, "next", Vec::new())?;
+            }
+            it.finish(self)?;
+            return Ok(out);
+        }
+        // Not traversable (the bare VM's `iterator_to_array()`): the
+        // visible properties.
+        let mut out = Vec::new();
+        for (key, name, _) in self.visible_props(o)? {
+            let value = if name.as_bytes().first() == Some(&0) {
+                nul_dynamic_prop(o, &name)
+            } else {
+                self.read_property(o, &name, crate::opcode::FetchMode::Is)?
+            };
+            out.push((key, value));
+        }
+        Ok(out)
+    }
+
+    /// `zend_generator_get_iterator` and the walk over the generator `gen`
+    /// (unpacked directly or returned by `getIterator()`): the handle is
+    /// taken before the generator runs to its first `yield`.
+    fn generator_to_vec(&mut self, gen: Obj) -> VmResult<Vec<(Value, Value)>> {
+        if self.gen_finished(&gen) {
+            return Err(self.make_throw("Exception", "Cannot traverse an already closed generator"));
+        }
+        let it = UnpackIter::new(gen);
+        let mut out = Vec::new();
+        self.gen_rewind(&it.inner)?;
+        while self.gen_valid(&it.inner)? {
+            out.push(self.gen_current(&it.inner)?);
+            self.gen_next(&it.inner)?;
+        }
+        it.finish(self)?;
+        Ok(out)
     }
 
     /// Converts iteration results to an array (`iterator_to_array`).
@@ -725,13 +814,42 @@ impl Vm {
             Err(e) => Err(self.walk_err(e)),
         }
     }
+}
 
-    /// A reference to a value for by-ref iteration helpers.
-    pub(crate) fn make_value_ref(v: Value) -> PhpRef {
-        match v {
-            Value::Reference(r) => r,
-            o => PhpRef::new(o),
+/// A `zend_object_iterator` driven to its end outside `foreach`
+/// (`ZEND_SEND_UNPACK`, `ZEND_ADD_ARRAY_UNPACK`): the iterated object (or
+/// the native iterator) and the object handle `zend_iterator_init` gives the
+/// iterator, taken after any `getIterator()` call and before `rewind`. The
+/// fields drop in order: `zend_iterator_dtor` releases the object
+/// (`zend_user_it_dtor`) before the iterator's own handle returns to the
+/// free list (`zend_objects_store_del` of `iter->std`).
+struct UnpackIter<T> {
+    inner: T,
+    handle: object::HandleGuard,
+}
+
+impl<T> UnpackIter<T> {
+    fn new(inner: T) -> Self {
+        Self {
+            inner,
+            handle: object::HandleGuard::reserve(),
         }
+    }
+
+    /// `zend_iterator_dtor` after the walk: the object goes first (a
+    /// destructor its release queues runs now, as it would inside
+    /// `zend_objects_store_del`), then the handle. The caller releases the
+    /// unpacked operand afterwards (`FREE_OP1`).
+    fn finish(self, vm: &mut Vm) -> VmResult<()> {
+        let Self { inner, handle } = self;
+        drop(inner);
+        let r = if object::has_pending_destructors() {
+            vm.run_pending_destructors()
+        } else {
+            Ok(())
+        };
+        drop(handle);
+        r
     }
 }
 
