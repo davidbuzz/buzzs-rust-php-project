@@ -1,0 +1,19 @@
+- [CURRENT HANDOVER — read first if continuing this work](current_handover.md) — master fdf4df95 clean (5.21x C PHP, PHPT 99.9%); ws29 perf+opcache round stopped before commits, relaunch from BRIEF29
+- [User profile](user-profile.md) — hands-off director, Opus subagents, wants measured numbers and runnable commands
+- [Scope decisions](phprust-scope-decisions.md) — apache2handler + mysqli in; opcache scheduled now (6 Nov); php-cgi/FPM/pgsql/ffi/etc. out
+- [Resource rules](phprust-resource-rules.md) — OOM history, Cargo.toml sweep lesson, scratchpad etiquette, worktrees
+- [Worktree rule for subagents](phprust-worktrees.md) — exclusively use git worktrees for subagents; each gets a dedicated worktree and branch, edit-only, merge before ONE build
+- [Memories in project repo](memories-in-project-repo.md) — store all memories in-project-repo under `memories/repo/`
+- [Status 5 Nov 2026](phprust-status-2026-11-05.md) — 98.7% of run tests, 253 known failures; remaining design-level blockers
+- [Status 4 Nov 2026](phprust-status-2026-11-04.md) — 91.8% of run tests; remaining failure clusters
+- [Performance goal](phprust-performance-goal.md) — parity-or-better with C PHP by porting the Zend VM design (10% floor); baseline 15-20x on 4 Nov 2026
+- [One full build rule](phprust-one-build-rule.md) — merge everything, then ONE consolidated build/test/PHPT; no per-branch or verifier builds (user stopped 12 queued builds on 6 Nov 2026)
+- [ws20 batch 6 Nov 2026](phprust-ws20-batch.md) — 17 edit-only agents on high-priority rows; status files + helper-split plan for stragglers
+- [PHPT workers](phprust-phpt-workers.md) — full PHPT runs use -j 12 (user, 6 Nov 2026); cargo stays at 6 jobs
+- [Oracle INI](phprust-oracle-ini.md) — run /usr/bin/php with -n: Ubuntu php.ini hides deprecations (error_reporting=22527, display_errors=Off)
+- [Straggler helpers](phprust-straggler-helpers.md) — below the user's per-batch threshold (5, then 10 for ws24 perf), split stragglers' open items to helpers
+- [Project name](brp-project-name.md) — provisional public name php-rust-buzz (owner, 6 Nov 2026); never make renaming edits for it
+- [No invented labels](feedback-no-invented-labels.md) — describe findings and stages in plain words, never "D1"- or "Tier 4"-style labels
+- [No foreground waits](feedback-no-foreground-wait.md) — long commands and agent waits go to the background; act on notifications, never block (6 Nov 2026)
+- [Environmental failures pass](feedback-environmental-failures-pass.md) — PHPT failures that C PHP fails identically here for host reasons (libgd GD2, MariaDB JSON) count as PASS (6 Nov 2026)
+- [Status 6 Nov 2026 15:10](phprust-status-2026-11-06-ws29.md) — work stopped (tokens): master 0f5a015c validated (5.21x, 99.9%); round ws29 stopped before any commits
