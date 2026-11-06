@@ -115,12 +115,16 @@ impl Compiler {
                 else_branch,
             } => {
                 let mut end_jumps = Vec::new();
-                for br in branches {
+                for (i, br) in branches.iter().enumerate() {
                     self.f().line = br.cond.span.line;
                     let c = self.compile_expr(&br.cond)?;
                     let jz = self.emit(Op::JmpZ(c, 0));
                     self.compile_stmt(&br.body)?;
-                    end_jumps.push(self.emit(Op::Jmp(0)));
+                    // zend_compile_if: "Don't generate a jump for the last
+                    // branch".
+                    if i + 1 < branches.len() || else_branch.is_some() {
+                        end_jumps.push(self.emit(Op::Jmp(0)));
+                    }
                     self.patch_here(jz);
                 }
                 if let Some(e) = else_branch {
@@ -131,16 +135,20 @@ impl Compiler {
                 }
             }
             StmtKind::While { cond, body } => {
-                let start = self.here();
-                self.f().line = cond.span.line;
-                let c = self.compile_expr(cond)?;
-                let jz = self.emit(Op::JmpZ(c, 0));
+                // zend_compile_while: a forward JMP to the condition, which
+                // follows the body and loops with JMPNZ (one jump per
+                // iteration).
+                let jmp = self.emit(Op::Jmp(0));
                 self.push_loop(LoopKind::Loop, Cleanup::None);
+                let start = self.here();
                 self.compile_stmt(body)?;
                 let info = self.pop_loop();
-                self.emit(Op::Jmp(start));
-                self.patch_here(jz);
-                self.finish_loop(info, start);
+                let cond_at = self.here();
+                self.patch(jmp, cond_at);
+                self.f().line = cond.span.line;
+                let c = self.compile_expr(cond)?;
+                self.emit(Op::JmpNz(c, start));
+                self.finish_loop(info, cond_at);
             }
             StmtKind::DoWhile { body, cond } => {
                 let start = self.here();
@@ -162,27 +170,31 @@ impl Compiler {
                 for e in init {
                     self.compile_expr_discard(e)?;
                 }
-                let start = self.here();
-                let mut jz = None;
-                for (i, e) in cond.iter().enumerate() {
-                    if i + 1 == cond.len() {
-                        let c = self.compile_expr(e)?;
-                        jz = Some(self.emit(Op::JmpZ(c, 0)));
-                    } else {
-                        self.compile_expr_discard(e)?;
-                    }
-                }
+                // zend_compile_for: JMP to the condition; body; step;
+                // condition; JMPNZ to the body (no condition: always).
+                let jmp = self.emit(Op::Jmp(0));
                 self.push_loop(LoopKind::Loop, Cleanup::None);
+                let start = self.here();
                 self.compile_stmt(body)?;
                 let info = self.pop_loop();
                 let cont = self.here();
                 for e in step {
                     self.compile_expr_discard(e)?;
                 }
-                self.emit(Op::Jmp(start));
-                if let Some(j) = jz {
-                    self.patch_here(j);
+                self.patch_here(jmp);
+                let mut c = None;
+                for (i, e) in cond.iter().enumerate() {
+                    if i + 1 == cond.len() {
+                        self.f().line = e.span.line;
+                        c = Some(self.compile_expr(e)?);
+                    } else {
+                        self.compile_expr_discard(e)?;
+                    }
                 }
+                match c {
+                    Some(c) => self.emit(Op::JmpNz(c, start)),
+                    None => self.emit(Op::Jmp(start)),
+                };
                 self.finish_loop(info, cont);
             }
             StmtKind::Foreach {

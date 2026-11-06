@@ -6,6 +6,8 @@ use crate::vm::{FinState, Frame, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ops, BinaryOp, ErrorLevel, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
+mod spec;
+
 /// Upper bound on nested `execute()` runs (internal-to-user callbacks,
 /// destructors, `__clone`, magic methods); each one uses native stack.
 const MAX_NESTED_EXECUTIONS: u32 = 20000;
@@ -901,13 +903,22 @@ impl Vm {
                     Op::AssignCv { cv, val, dst } => {
                         let v = self.read(*val)?;
                         let v = self.copy_on_assign(v);
-                        if let Some(d) = dst {
-                            self.set_tmp(*d, v.clone());
-                        }
-                        if let Some((r, v)) = self.cv_assign(*cv, v) {
-                            let v = self.assign_ref(&r, v)?;
+                        // ZEND_ASSIGN_SPEC_CV_*_RETVAL_UNUSED onto a
+                        // variable that is neither a reference nor
+                        // refcounted: a plain store.
+                        let v = match dst {
+                            None => self.cv_store_plain(*cv, v).err(),
+                            Some(_) => Some(v),
+                        };
+                        if let Some(v) = v {
                             if let Some(d) = dst {
-                                self.set_tmp(*d, v);
+                                self.set_tmp(*d, v.clone());
+                            }
+                            if let Some((r, v)) = self.cv_assign(*cv, v) {
+                                let v = self.assign_ref(&r, v)?;
+                                if let Some(d) = dst {
+                                    self.set_tmp(*d, v);
+                                }
                             }
                         }
                         Flow::Next
@@ -1480,6 +1491,65 @@ impl Vm {
                                 return Err(self.non_enum_const_prop());
                             }
                         }
+                        Flow::Next
+                    }
+                    Op::CmpJmp {
+                        op,
+                        a,
+                        b,
+                        dst,
+                        target,
+                        jmp_if,
+                    } => {
+                        // Smart branch: a numeric comparison jumps (or
+                        // skips the JmpZ/JmpNz after it) directly; other
+                        // operands compute `dst` for that jump op.
+                        if let Some(r) = self.cmp_num_fast(*op, *a, *b) {
+                            let f = self.frame_mut();
+                            if r == *jmp_if {
+                                f.ip = *target as usize;
+                            } else {
+                                f.ip += 1;
+                            }
+                        } else {
+                            self.bin_slow(*op, *a, *b, *dst)?;
+                        }
+                        Flow::Next
+                    }
+                    Op::BinAssignCv { op, a, b, dst, cv } => {
+                        if self.op_bin_assign_cv(*op, *a, *b, *dst, *cv)? {
+                            self.frame_mut().ip += 1;
+                        }
+                        Flow::Next
+                    }
+                    Op::IncDecCv {
+                        cv,
+                        kind,
+                        dst,
+                        place,
+                    } => {
+                        self.op_incdec_cv(*cv, *kind, *dst, *place)?;
+                        Flow::Next
+                    }
+                    Op::FetchDimCv {
+                        cv,
+                        dim,
+                        place,
+                        dst,
+                        to,
+                    } => {
+                        if self.op_fetch_dim_cv(*cv, *dim, *place, *dst, *to)? {
+                            self.frame_mut().ip += 1;
+                        }
+                        Flow::Next
+                    }
+                    Op::AssignDimCv {
+                        cv,
+                        dim,
+                        val,
+                        place,
+                    } => {
+                        self.op_assign_dim_cv(*cv, *dim, *val, *place)?;
                         Flow::Next
                     }
                     Op::AssertCheck { dst, skip } => {
@@ -2175,6 +2245,8 @@ fn defers_oom(op: &Op) -> bool {
             | Op::AssignCv { .. }
             | Op::Assign { .. }
             | Op::AssignOp { .. }
+            | Op::BinAssignCv { .. }
+            | Op::AssignDimCv { .. }
             | Op::Echo(_)
             | Op::Free(_)
     )

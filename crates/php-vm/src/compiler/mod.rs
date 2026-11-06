@@ -6,6 +6,7 @@ mod decl;
 mod expr;
 #[cfg(test)]
 mod fold_tests;
+mod specialise;
 mod stack;
 mod stmt;
 
@@ -750,6 +751,12 @@ impl Compiler {
             if let Op::Jmp(t) = &mut f.ops[at] {
                 *t = target_op;
             }
+        }
+        // Handler specialisation, last: every jump target is final. A
+        // `zend_set_user_opcode_handler()` hook runs before its generic
+        // opcode, so hooked code keeps the generic ops.
+        if self.opts.user_opcodes.is_empty() {
+            specialise::specialise(&mut f.ops, &f.places);
         }
         let mut try_table: Vec<(TryEntry, Label)> = std::mem::take(&mut f.try_table);
         try_table.sort_by(|a, b| b.0.try_start.cmp(&a.0.try_start));

@@ -584,6 +584,75 @@ pub enum Op {
     /// throws when the (kept) container `obj` of a constant-expression
     /// dimension fetch is an object, before the offset is evaluated.
     ConstDimCheck { obj: Operand },
+
+    // ------------------------------------------------------------------
+    // Specialised forms (zend_vm_def.h `SPEC(...)` handlers). The compiler's
+    // last pass (`compiler/specialise.rs`) rewrites a generic op in place
+    // into one of these; the op after it is left untouched. Each handler
+    // runs a typed fast path and, when an operand is not of the expected
+    // type, does exactly what the generic op it replaced does, so
+    // behaviour never depends on the rewrite.
+    // ------------------------------------------------------------------
+    /// `Bin` (a comparison) whose result is only tested by the `JmpZ` /
+    /// `JmpNz` right after it: php-src's smart branch
+    /// (`zend_emit_cond_jump` marks `IS_SMART_BRANCH_JMPZ/JMPNZ`;
+    /// `ZEND_IS_SMALLER_LONG_SPEC` + `ZEND_VM_SMART_BRANCH`). When both
+    /// operands are plain numbers the comparison jumps to `target` when
+    /// its result equals `jmp_if` and otherwise skips the jump op; any other
+    /// operands compute the comparison into `dst` and fall through to the
+    /// jump op.
+    CmpJmp {
+        op: BinKind,
+        a: Operand,
+        b: Operand,
+        dst: u32,
+        target: Label,
+        jmp_if: bool,
+    },
+    /// `Bin` whose result is only assigned by the `AssignCv { cv, val:
+    /// Tmp(dst), dst: None }` right after it (opcache's DFA pass writes
+    /// such a result straight into the CV, `zend_dfa_optimize_op_array`).
+    /// A numeric result stored into a CV holding no refcounted value skips
+    /// the `AssignCv`; anything else writes `dst` and falls through to it.
+    BinAssignCv {
+        op: BinKind,
+        a: Operand,
+        b: Operand,
+        dst: u32,
+        cv: u32,
+    },
+    /// `IncDec` of a plain compiled variable (`ZEND_PRE_INC_SPEC_CV`,
+    /// `ZEND_POST_INC_SPEC_CV`, ...: the `IS_LONG`/`IS_DOUBLE` fast paths);
+    /// other values go through `place`.
+    IncDecCv {
+        cv: u32,
+        kind: IncDecKind,
+        dst: Option<u32>,
+        place: PlaceId,
+    },
+    /// `Fetch` (read mode) of `$cv[dim]` (`ZEND_FETCH_DIM_R_SPEC_CV_*`
+    /// with `zend_fetch_dimension_address_inner` on an array and an int or
+    /// string offset). With `to`, the `AssignCv { cv: to, val: Tmp(dst),
+    /// dst: None }` right after it is done here too when the CV holds no
+    /// refcounted value. A missing key or a non-array falls back to
+    /// `place`.
+    FetchDimCv {
+        cv: u32,
+        dim: Operand,
+        place: PlaceId,
+        dst: u32,
+        to: Option<u32>,
+    },
+    /// `Assign` of `$cv[dim] = val` without a used result
+    /// (`ZEND_ASSIGN_DIM_SPEC_CV_*_OP_DATA_*` on an array with an int or
+    /// string offset and a scalar value); anything else goes through
+    /// `place`.
+    AssignDimCv {
+        cv: u32,
+        dim: Operand,
+        val: Operand,
+        place: PlaceId,
+    },
 }
 
 /// A temporary that an exception thrown by an op in `start..end` releases
