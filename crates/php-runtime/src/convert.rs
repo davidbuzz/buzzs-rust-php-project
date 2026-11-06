@@ -126,7 +126,9 @@ pub fn nan_coerced_warning(
 /// and copied into an exactly sized string: `i64::to_string` reserves the
 /// worst-case 20 bytes for every number, which made each int-to-string
 /// conversion (array keys, property names, concatenation operands) cost
-/// up to 19 bytes more than php-src's exactly sized `zend_string`.
+/// up to 19 bytes more than php-src's exactly sized `zend_string`. One
+/// digit is the shared `ZSTR_CHAR`; longer numbers are flagged
+/// `IS_STR_VALID_UTF8`, as `zend_long_to_str` flags them.
 #[must_use]
 pub fn long_to_zstr(n: i64) -> ZStr {
     if (0..=9).contains(&n) {
@@ -134,7 +136,7 @@ pub fn long_to_zstr(n: i64) -> ZStr {
         return ZStr::from_byte(b'0' + n as u8);
     }
     let mut buf = [0u8; LONG_MAX_LEN];
-    ZStr::from(format_long(n, &mut buf))
+    ZStr::from_ascii(format_long(n, &mut buf))
 }
 
 /// `zend_double_to_str`: formats a float with the `precision` setting and
@@ -308,7 +310,9 @@ impl Value {
             Value::Str(s) => s.clone(),
             Value::Array(_) => {
                 ctx.diagnostic(ErrorLevel::Warning, "Array to string conversion")?;
-                ZStr::from("Array")
+                // `ZSTR_KNOWN(ZEND_STR_ARRAY_CAPITALIZED)`, a valid UTF-8
+                // known string.
+                ZStr::from_ascii(b"Array")
             }
             Value::Object(o) => match ctx.cast_object(o, CastTarget::String)? {
                 Some(Value::Str(s)) => s,

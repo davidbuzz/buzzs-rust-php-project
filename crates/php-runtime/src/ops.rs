@@ -556,7 +556,19 @@ fn plain_to_zstr(v: &Value, text: &[u8]) -> ZStr {
         Value::Int(i) => long_to_zstr(*i),
         Value::Bool(true) => ZStr::from_byte(b'1'),
         Value::Null | Value::Bool(false) => ZStr::empty(),
-        _ => ZStr::from(text),
+        // `zend_double_to_str`: ASCII, flagged `IS_STR_VALID_UTF8`.
+        _ => ZStr::from_ascii(text),
+    }
+}
+
+/// Whether the text [`plain_str_bytes`] gives for `v` is known to be valid
+/// UTF-8 (`ZSTR_GET_COPYABLE_CONCAT_PROPERTIES` of `zval_get_string(v)`):
+/// a string's flag; the formatted numbers and bools are ASCII.
+#[inline]
+fn plain_valid_utf8(v: &Value) -> bool {
+    match v {
+        Value::Str(s) => s.is_valid_utf8(),
+        _ => true,
     }
 }
 
@@ -589,7 +601,9 @@ pub fn concat(a: &Value, b: &Value, ctx: &mut (impl RuntimeContext + ?Sized)) ->
         if y.is_empty() {
             return Ok(Value::Str(plain_to_zstr(&da, x)));
         }
-        return Ok(Value::Str(ZStr::concat(x, y)));
+        // `GC_ADD_FLAGS(result_str, ZSTR_GET_COPYABLE_CONCAT_PROPERTIES_BOTH)`.
+        let valid_utf8 = plain_valid_utf8(&da) && plain_valid_utf8(&db);
+        return Ok(Value::Str(ZStr::concat_utf8(x, y, valid_utf8)));
     }
     if !matches!(&*da, Value::Str(_)) || !matches!(&*db, Value::Str(_)) {
         if let Some(r) = try_object_op(BinaryOp::Concat, &da, &db, ctx)? {
@@ -604,7 +618,7 @@ pub fn concat(a: &Value, b: &Value, ctx: &mut (impl RuntimeContext + ?Sized)) ->
     if y.is_empty() {
         return Ok(Value::Str(x));
     }
-    Ok(Value::Str(ZStr::concat(&x, &y)))
+    Ok(Value::Str(ZStr::concat_str(&x, &y)))
 }
 
 /// In-place `.=` that appends to a uniquely owned string buffer when
@@ -622,7 +636,7 @@ pub fn concat_assign(
     }
     if let (Value::Str(_), Value::Str(y)) = (&*target, &*deref(b)) {
         if let Value::Str(x) = target {
-            x.append(y.as_bytes());
+            x.append_str(y);
         }
         return Ok(());
     }
@@ -1563,6 +1577,60 @@ mod tests {
             v.as_str().map(ZStr::to_string_lossy).as_deref(),
             Some("ab1c")
         );
+    }
+
+    /// `IS_STR_VALID_UTF8` through `concat_function` and the conversions:
+    /// the cases of ext/zend_test/tests/strings_marked_as_utf8.phpt and
+    /// strings_not_marked_as_utf8.phpt this layer sees.
+    #[test]
+    fn concat_and_conversions_carry_the_valid_utf8_flag() {
+        let mut c = CollectingContext::new();
+        let flag = |v: &Value| v.as_str().is_some_and(ZStr::is_valid_utf8);
+        // Integer and float casts (`zend_long_to_str`, `zend_double_to_str`).
+        assert!(flag(&Value::Str(Value::Int(2563).to_zstr(&mut c).unwrap())));
+        assert!(flag(&Value::Str(
+            Value::Float(26.7).to_zstr(&mut c).unwrap()
+        )));
+        assert!(flag(&Value::Str(
+            Value::Float(2e100).to_zstr(&mut c).unwrap()
+        )));
+        assert!(flag(&Value::Str(Value::Int(7).to_zstr(&mut c).unwrap())));
+        let (f, o) = (
+            Value::Str(ZStr::from_byte(b'f')),
+            Value::Str(ZStr::from_byte(b'o')),
+        );
+        let fo = concat(&f, &o, &mut c).unwrap();
+        assert!(flag(&fo));
+        let foo = concat(&fo, &o, &mut c).unwrap();
+        assert!(flag(&foo));
+        assert!(flag(
+            &concat(&f, &Value::Str(ZStr::empty()), &mut c).unwrap()
+        ));
+        assert!(flag(
+            &concat(&Value::Str(ZStr::empty()), &f, &mut c).unwrap()
+        ));
+        assert!(flag(&concat(&f, &Value::Int(12), &mut c).unwrap()));
+        assert!(flag(&concat(&Value::Float(1.5), &f, &mut c).unwrap()));
+        // Invalid UTF-8 (and strings nothing is known about) is not flagged.
+        let invalid = Value::Str(ZStr::new(b"\xc3\x28".to_vec()));
+        assert!(!flag(&concat(&fo, &invalid, &mut c).unwrap()));
+        assert!(!flag(&concat(&Value::Int(2563), &invalid, &mut c).unwrap()));
+        assert!(!flag(&concat(&f, &Value::from("unknown"), &mut c).unwrap()));
+        // `.=` in place and on a shared string.
+        let mut s = Value::Str(ZStr::from_byte(b'a'));
+        for _ in 1..100 {
+            concat_assign(&mut s, &Value::Str(ZStr::from_byte(b'a')), &mut c).unwrap();
+        }
+        assert!(flag(&s));
+        let shared = s.clone();
+        concat_assign(&mut s, &Value::Int(5), &mut c).unwrap();
+        assert!(flag(&s) && flag(&shared));
+        concat_assign(&mut s, &invalid, &mut c).unwrap();
+        assert!(!flag(&s));
+        assert!(flag(&shared));
+        // `"Array"` is a known string (`ZSTR_KNOWN`).
+        let arr = Value::Array(crate::ZArray::new()).to_zstr(&mut c).unwrap();
+        assert!(arr.is_valid_utf8());
     }
 
     #[test]

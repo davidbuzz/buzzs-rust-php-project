@@ -255,22 +255,31 @@ impl SapiHeaders {
         true
     }
 
+    /// The first half of `sapi_send_headers()`: the default `Content-Type`
+    /// header, added once.  php-src adds it before the
+    /// `header_register_callback()` callable runs, so the callable sees
+    /// (and may replace) it.
+    pub fn add_default_content_type(&mut self, facts: &HeaderFacts, backend: &dyn Backend) {
+        if self.sent || !self.send_default_content_type {
+            return;
+        }
+        let default = default_content_type(facts);
+        if !default.is_empty() {
+            self.mimetype = Some(default.clone());
+            let mut h = b"Content-type: ".to_vec();
+            h.extend_from_slice(&default);
+            self.add_op(false, h, backend);
+        }
+        self.send_default_content_type = false;
+    }
+
     /// `sapi_send_headers()` + `php_apache_sapi_send_headers()`.  Returns
     /// `false` when the headers had already been sent.
     pub fn send(&mut self, facts: &HeaderFacts, backend: &dyn Backend) -> bool {
         if self.sent {
             return false;
         }
-        if self.send_default_content_type {
-            let default = default_content_type(facts);
-            if !default.is_empty() {
-                self.mimetype = Some(default.clone());
-                let mut h = b"Content-type: ".to_vec();
-                h.extend_from_slice(&default);
-                self.add_op(false, h, backend);
-            }
-            self.send_default_content_type = false;
-        }
+        self.add_default_content_type(facts, backend);
         self.sent = true;
         let (status_line, proto_num) = match &self.status_line {
             Some(s) if s.len() > 12 && s.starts_with(b"HTTP/1.") && s[8] == b' ' => (
@@ -286,6 +295,25 @@ impl SapiHeaders {
             .unwrap_or_else(|| default_content_type(facts));
         backend.set_content_type(&ct);
         true
+    }
+
+    /// `php_apache_sapi_send_headers()` once more, as the outer
+    /// `sapi_send_headers()` runs it after a `header_register_callback()`
+    /// callable whose own output already sent the headers through a nested
+    /// `sapi_send_headers()`.  That first send freed `http_status_line`
+    /// (`sapi_send_headers_free()`) and consumed `ctx->content_type`, so
+    /// this sets the response code again and the *default* content type —
+    /// replacing a `Content-Type` the script had set, as in php-src.
+    pub fn resend(&mut self, facts: &HeaderFacts, backend: &dyn Backend) {
+        if !self.sent {
+            return;
+        }
+        backend.set_status(self.response_code, None, 0);
+        let ct = self
+            .content_type
+            .take()
+            .unwrap_or_else(|| default_content_type(facts));
+        backend.set_content_type(&ct);
     }
 }
 
@@ -466,6 +494,30 @@ mod tests {
     }
 
     #[test]
+    fn default_content_type_is_added_once_before_the_send() {
+        let (mut h, f, b) = setup();
+        h.add_default_content_type(&f, &b);
+        assert_eq!(
+            h.headers,
+            vec![b"Content-type: text/html; charset=UTF-8".to_vec()]
+        );
+        assert!(!h.sent, "the callback still runs before the send");
+        // A header_register_callback() callable may replace it.
+        h.op(HeaderOp::Replace(b"Content-Type: text/plain", 0), &f, &b)
+            .unwrap();
+        h.add_default_content_type(&f, &b);
+        assert!(h.send(&f, &b));
+        assert_eq!(
+            h.headers,
+            vec![b"Content-type: text/plain;charset=UTF-8".to_vec()]
+        );
+        assert_eq!(
+            b.content_type.borrow().as_deref(),
+            Some(&b"text/plain;charset=UTF-8"[..])
+        );
+    }
+
+    #[test]
     fn default_content_type_on_send() {
         let (mut h, f, b) = setup();
         assert!(h.send(&f, &b));
@@ -482,6 +534,39 @@ mod tests {
         assert_eq!(
             h.op(HeaderOp::Replace(b"X: y", 0), &f, &b),
             Err(HeaderError::AlreadySent)
+        );
+    }
+
+    #[test]
+    fn resend_applies_the_code_and_the_default_content_type() {
+        let (mut h, f, b) = setup();
+        // Nothing was sent yet: nothing to repeat.
+        h.resend(&f, &b);
+        assert_eq!(*b.status.borrow(), None);
+        h.op(HeaderOp::Replace(b"Content-Type: text/plain", 0), &f, &b)
+            .unwrap();
+        h.op(HeaderOp::Replace(b"HTTP/1.1 404 Not Found", 0), &f, &b)
+            .unwrap();
+        assert!(h.send(&f, &b));
+        assert_eq!(
+            *b.status.borrow(),
+            Some((404, Some(b"404 Not Found".to_vec()), 1001))
+        );
+        assert_eq!(
+            b.content_type.borrow().as_deref(),
+            Some(&b"text/plain;charset=UTF-8"[..])
+        );
+        // The outer sapi_send_headers() after a callback that sent them.
+        h.resend(&f, &b);
+        assert_eq!(*b.status.borrow(), Some((404, None, 0)));
+        assert_eq!(
+            b.content_type.borrow().as_deref(),
+            Some(&b"text/html; charset=UTF-8"[..])
+        );
+        assert_eq!(
+            h.headers,
+            vec![b"Content-type: text/plain;charset=UTF-8".to_vec()],
+            "the SAPI list (headers_list()) is unchanged"
         );
     }
 

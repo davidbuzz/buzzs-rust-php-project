@@ -1,8 +1,9 @@
-//! The native extensions linked into the module: the same set as the
-//! `php` CLI (`crates/php-cli/src/extensions.rs`) plus the stream/file
-//! functions (needed for `php://input`) and the SAPI's own
-//! `apache2handler` module, registered last so its `header()`,
-//! `flush()`, `php_sapi_name()`, ... replace the CLI stubs.
+//! The native extensions linked into the module: a subset of the `php`
+//! CLI's (`crates/php-cli/src/extensions.rs`) in the same order, including
+//! the stream/file functions (needed for `php://input`) and ext/session
+//! (whose `php_rfc1867_callback` the multipart parser reports to), plus
+//! the SAPI's own `apache2handler` module, registered last so its
+//! `header()`, `flush()`, `php_sapi_name()`, ... replace the CLI stubs.
 
 use php_vm::ext::Extension;
 
@@ -10,6 +11,7 @@ use php_vm::ext::Extension;
 pub fn all() -> Vec<Box<dyn Extension>> {
     vec![
         Box::new(php_ext_stdstr::StdStr),
+        Box::new(php_ext_streams::Streams),
         Box::new(php_ext_date::Date),
         Box::new(php_ext_json::Json),
         Box::new(php_ext_hash::Hash),
@@ -20,7 +22,7 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_stdmisc::StdMisc),
         Box::new(php_ext_spl::Spl),
         Box::new(php_ext_pdo::Pdo),
-        Box::new(php_ext_streams::Streams),
+        Box::new(php_ext_session::Session),
         Box::new(crate::functions::Apache2Handler),
     ]
 }

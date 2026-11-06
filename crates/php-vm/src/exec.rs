@@ -107,18 +107,49 @@ impl Vm {
     /// promotion is the generic path's job). Mixed int/float pairs use
     /// php-src's `(double)` widening; `===`/`!==` on mixed types is a type
     /// mismatch.
-    #[inline]
+    ///
+    /// Always inlined: a hint is not enough inside `Vm::run`, where the
+    /// release build of 4e1c2df8 called it (and [`num_bin`]) out of line
+    /// from every hot arm (`Bin`, `BinAssignCv`, `AssignOpCv`): 72 + 29
+    /// instructions per `$x = $x + $i`, its `Option<Value>` returned
+    /// through memory.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above: the hot arms of the dispatch loop
     fn bin_num_fast(&self, op: BinKind, a: Operand, b: Operand) -> Option<Value> {
         let f = self.frame();
         let lhs = Self::peek_num(f, a)?;
         let rhs = Self::peek_num(f, b)?;
         num_bin(op, lhs, rhs)
     }
+
+    /// [`Vm::cmp_simple_fast`] for the operators it decides (`==`, `!=`,
+    /// `===`, `!==`), and `None` at once for any other. The call is out of
+    /// line: in the release build of 4e1c2df8 its own early `None` still
+    /// cost the call and a full prologue and epilogue (about 30
+    /// instructions) on every `Bin` that missed the numeric form (`.`,
+    /// `**`, arithmetic on strings) and every non-numeric `<`/`<=` branch.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the operator test must stay at the call site
+    fn equality_fast(&mut self, op: BinKind, a: Operand, b: Operand) -> Option<bool> {
+        if matches!(
+            op,
+            BinKind::Equal | BinKind::NotEqual | BinKind::Identical | BinKind::NotIdentical
+        ) {
+            self.cmp_simple_fast(op, a, b)
+        } else {
+            None
+        }
+    }
 }
 
 /// The arithmetic of [`Vm::bin_num_fast`] on two peeked numbers: `None`
-/// when the operator has no sealed numeric form or an int result overflows.
-#[inline]
+/// when the operator has no sealed numeric form, an int result overflows,
+/// or the generic path must throw or convert (a zero divisor, a negative
+/// shift or one of 64 bits or more, a float operand of `%`, `<<`, `>>`).
+/// Always inlined with it (a call returns the `Option<Value>` through
+/// memory, and the operator is usually known at the call site's arm).
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of the hot numeric fast path
 fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
     if let (Num::Int(x), Num::Int(y)) = (x, y) {
         return Some(match op {
@@ -128,6 +159,29 @@ fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
             BinKind::Arith(BinaryOp::BitOr) => Value::Int(x | y),
             BinKind::Arith(BinaryOp::BitAnd) => Value::Int(x & y),
             BinKind::Arith(BinaryOp::BitXor) => Value::Int(x ^ y),
+            // `mod_function`: `checked_rem` refuses a zero divisor (the
+            // generic path throws "Modulo by zero") and `PHP_INT_MIN % -1`
+            // (the generic path answers 0, as for any `x % -1`).
+            BinKind::Arith(BinaryOp::Mod) => Value::Int(x.checked_rem(y)?),
+            // `div_function`: an exact quotient stays an int, any other is
+            // `(double) x / y`; a zero divisor ("Division by zero") and
+            // `PHP_INT_MIN / -1` (a float) are the generic path's.
+            BinKind::Arith(BinaryOp::Div) => {
+                if x.checked_rem(y)? == 0 {
+                    Value::Int(x / y)
+                } else {
+                    Value::Float(Num::Int(x).as_f64() / Num::Int(y).as_f64())
+                }
+            }
+            // `shift_left_function` / `shift_right_function` by 0..=63 bits
+            // (bits shifted out are lost, `>>` is arithmetic); a negative
+            // shift (ArithmeticError) or a wider one (0 or -1) goes generic.
+            BinKind::Arith(BinaryOp::ShiftLeft) => {
+                Value::Int(x.checked_shl(u32::try_from(y).ok()?)?)
+            }
+            BinKind::Arith(BinaryOp::ShiftRight) => {
+                Value::Int(x.checked_shr(u32::try_from(y).ok()?)?)
+            }
             BinKind::Equal | BinKind::Identical => Value::Bool(x == y),
             BinKind::NotEqual | BinKind::NotIdentical => Value::Bool(x != y),
             BinKind::Less => Value::Bool(x < y),
@@ -150,6 +204,9 @@ fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
         BinKind::Arith(BinaryOp::Add) => Value::Float(xf + yf),
         BinKind::Arith(BinaryOp::Sub) => Value::Float(xf - yf),
         BinKind::Arith(BinaryOp::Mul) => Value::Float(xf * yf),
+        // `div_function` with a double operand; a zero divisor (also -0.0)
+        // throws on the generic path.
+        BinKind::Arith(BinaryOp::Div) if yf != 0.0 => Value::Float(xf / yf),
         BinKind::Equal => Value::Bool(xf == yf),
         BinKind::NotEqual => Value::Bool(xf != yf),
         BinKind::Identical => Value::Bool(!mixed && xf == yf),
@@ -280,7 +337,13 @@ impl Vm {
 
     /// [`Vm::read_cv`] for a defined variable (dereferenced); `None` when
     /// undefined, leaving the warning to the caller.
-    #[inline]
+    ///
+    /// Always inlined: as a call (what the inline hint got in `Vm::read`,
+    /// release build of 4e1c2df8) the call, the argument set-up and the
+    /// `Option<Value>` returned through memory are about a fifth of its ~45
+    /// instructions, paid for every compiled variable an instruction reads.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above: every CV operand read
     pub(crate) fn read_cv_defined(&self, cv: u32) -> Option<Value> {
         self.frame().peek_cv(cv, |s| match s {
             Some(Value::Reference(r)) => Some(r.get()),
@@ -293,7 +356,12 @@ impl Vm {
     /// [`Vm::read_cv_defined`], except that a reference to null, false or
     /// an array is left to the place walk, which reads it after fetching
     /// the containers ([`Vm::place_assign_cv_ref`]).
-    #[inline]
+    ///
+    /// Always inlined: `Vm::run`'s `Assign` arm called it out of line in
+    /// the release build of 4e1c2df8, the `CvOpData` returned through
+    /// memory, on every `$obj->p = $v` / `$a[$k] = $v`.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above
     pub(crate) fn read_cv_op_data(&self, cv: u32) -> CvOpData {
         self.frame().peek_cv(cv, |s| match s {
             Some(Value::Reference(r)) => {
@@ -312,7 +380,8 @@ impl Vm {
     /// Reads a compiled variable without warning (`None` if undefined).
     #[inline]
     pub(crate) fn cv_get(&self, cv: u32) -> Option<Value> {
-        self.frame().peek_cv(cv, |slot: Option<&Value>| slot.cloned())
+        self.frame()
+            .peek_cv(cv, |slot: Option<&Value>| slot.cloned())
     }
 
     /// Assigns to a compiled variable (through references). A typed
@@ -469,7 +538,12 @@ impl Vm {
     }
 
     /// Stores a temporary.
-    #[inline]
+    ///
+    /// Always inlined: `Vm::run` called it out of line from 17 arms in the
+    /// release build of 4e1c2df8 (the inline hint was not taken there),
+    /// ~25 instructions for a 16-byte store and a tag test.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above: the result store of most instructions
     pub(crate) fn set_tmp(&mut self, t: u32, v: Value) {
         let old = std::mem::replace(&mut self.frame_mut().tmps[t as usize], v);
         // The slot almost always holds a scalar (or the `Null` a consuming
@@ -489,7 +563,11 @@ impl Vm {
     /// a plain value is tested in place (`if ($found)`), without the clone;
     /// anything else (undefined: warning, references, objects, resources)
     /// takes the generic path.
-    #[inline]
+    ///
+    /// Always inlined: the hot `JmpZ`/`JmpNz` arms of `Vm::run` called it
+    /// out of line in the release build of 4e1c2df8.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above: the jump fast path
     fn take_tmp_bool(&mut self, op: Operand) -> Option<bool> {
         let t = match op {
             Operand::Tmp(t) => t,
@@ -522,8 +600,11 @@ impl Vm {
         self.to_bool(&v)
     }
 
-    /// Stores an optional result.
-    #[inline]
+    /// Stores an optional result. Always inlined, like [`Vm::set_tmp`]
+    /// (five arms of `Vm::run` called it out of line in the release build
+    /// of 4e1c2df8).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see `set_tmp`
     pub(crate) fn set_dst(&mut self, dst: Option<u32>, v: Value) {
         if let Some(t) = dst {
             self.set_tmp(t, v);
@@ -929,9 +1010,15 @@ impl Vm {
     #[allow(clippy::too_many_lines)]
     fn run(&mut self, base: usize) -> VmResult<Value> {
         'frames: loop {
-            let code = self.frame().code.clone();
+            // `LOAD_OPLINE()`: one lookup of the current frame, its `ip`
+            // read before the op array's count is bumped (a store the
+            // compiler cannot tell apart from the frame, so a second
+            // `self.frame()` would be a second lookup). The op array is
+            // held so that `ops` outlives a frame popped by `Return`.
+            let top = self.frame();
+            let mut ip = top.ip;
+            let code = top.code.clone();
             let ops: &[Op] = &code.ops;
-            let mut ip = self.frame().ip;
             'ops: loop {
                 let at = ip;
                 let op = &ops[at];
@@ -969,7 +1056,7 @@ impl Vm {
                         } => {
                             let r = self
                                 .cmp_num_fast(*kind, *a, *b)
-                                .or_else(|| self.cmp_simple_fast(*kind, *a, *b));
+                                .or_else(|| self.equality_fast(*kind, *a, *b));
                             match r {
                                 Some(r) if r == *jmp_if => ip = *target as usize,
                                 Some(_) => ip += 1,
@@ -987,7 +1074,7 @@ impl Vm {
                             // instruction.
                             if let Some(r) = self.bin_num_fast(*kind, *a, *b) {
                                 self.set_tmp(*dst, r);
-                            } else if let Some(r) = self.cmp_simple_fast(*kind, *a, *b) {
+                            } else if let Some(r) = self.equality_fast(*kind, *a, *b) {
                                 self.set_tmp(*dst, Value::Bool(r));
                             } else {
                                 self.frame_mut().ip = ip;
@@ -1003,7 +1090,7 @@ impl Vm {
                         } => {
                             let r = self
                                 .bin_num_fast(*kind, *a, *b)
-                                .or_else(|| self.cmp_simple_fast(*kind, *a, *b).map(Value::Bool));
+                                .or_else(|| self.equality_fast(*kind, *a, *b).map(Value::Bool));
                             match r {
                                 // Stored into the variable: the `AssignCv`
                                 // after the op is done; otherwise it runs on
@@ -1114,12 +1201,12 @@ impl Vm {
                         // long/double handlers): operands are CVs or
                         // literals currently holding plain numbers.
                         // Anything else - references, undefined variables,
-                        // strings, overflow, division - takes the
+                        // strings, overflow, zero divisors - takes the
                         // out-of-line generic path with its exact
                         // semantics.
                         if let Some(r) = self.bin_num_fast(*op, *a, *b) {
                             self.set_tmp(*dst, r);
-                        } else if let Some(r) = self.cmp_simple_fast(*op, *a, *b) {
+                        } else if let Some(r) = self.equality_fast(*op, *a, *b) {
                             self.set_tmp(*dst, Value::Bool(r));
                         } else {
                             self.bin_slow(*op, *a, *b, *dst)?;
@@ -1408,8 +1495,7 @@ impl Vm {
                     }
                     Op::InitMethodCall { obj, name } => {
                         let o = self.read(*obj)?;
-                        let n = self.read(*name)?;
-                        self.op_init_method_call(o, n)?;
+                        self.op_init_method_call_op(o, *name)?;
                         Flow::Next
                     }
                     Op::InitStaticCall { class, name } => {
@@ -2125,7 +2211,11 @@ impl Vm {
     }
 
     /// Value copy semantics for assignment: references are unwrapped.
-    #[inline]
+    /// Always inlined: a call passes and returns the `Value` through memory
+    /// (`Vm::run`'s `Assign` arm made one in the release build of 4e1c2df8)
+    /// for what is a tag test in the common case.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above
     pub(crate) fn copy_on_assign(&self, v: Value) -> Value {
         match v {
             Value::Reference(r) => r.get(),
@@ -2302,40 +2392,15 @@ impl Vm {
                 Ok(())
             }
             Value::Object(o) if self.instance_of(&o, b"traversable") => {
-                let items = self.iterate_to_vec(&Value::Object(o))?;
-                let mut a = std::mem::take(&mut self.frame_mut().tmps[arr as usize]);
-                if let Value::Array(za) = &mut a {
-                    let t = za.make_mut();
-                    for (k, v) in items {
-                        match k {
-                            Value::Int(_) => {
-                                let _ = t.push(v);
-                            }
-                            // ZEND_ADD_ARRAY_UNPACK: a numeric string key
-                            // (ZEND_HANDLE_NUMERIC) is appended, not kept.
-                            Value::Str(s) => match php_runtime::ArrayKey::from_zstr(&s) {
-                                k @ php_runtime::ArrayKey::Str(_) => {
-                                    t.insert(k, v);
-                                }
-                                php_runtime::ArrayKey::Int(_) => {
-                                    let _ = t.push(v);
-                                }
-                            },
-                            other => {
-                                self.frame_mut().tmps[arr as usize] = a;
-                                return Err(self.make_throw(
-                                    "Error",
-                                    &format!(
-                                        "Keys must be of type int|string during array unpacking"
-                                    ),
-                                ))
-                                .map(|()| drop(other));
-                            }
-                        }
-                    }
-                }
-                self.frame_mut().tmps[arr as usize] = a;
-                Ok(())
+                // Each element goes into the array as the iterator yields it
+                // (`ZEND_ADD_ARRAY_UNPACK`): the array under construction
+                // stays in its temporary, so when an exception ends the walk
+                // the iterator, then the operand (`o`), then the array with
+                // the elements added so far (`cleanup_live_vars`) are
+                // released.
+                self.iterate_each(&o, &mut |vm: &mut Vm, key: Value, v: Value| {
+                    vm.array_unpack_add(arr, key, v)
+                })
             }
             other => Err(self.make_throw(
                 "Error",
@@ -2345,6 +2410,49 @@ impl Vm {
                 ),
             )),
         }
+    }
+
+    /// Adds the element `v` with key `k` of an unpacked `Traversable` to the
+    /// array being built in temporary `arr` (one step of
+    /// `ZEND_ADD_ARRAY_UNPACK`): a string key that is not numeric
+    /// (`ZEND_HANDLE_NUMERIC`) is kept, an integer or numeric string key
+    /// appends.
+    fn array_unpack_add(&mut self, arr: u32, k: Value, v: Value) -> VmResult<()> {
+        let key = match k {
+            Value::Int(_) => None,
+            Value::Str(s) => match php_runtime::ArrayKey::from_zstr(&s) {
+                k @ php_runtime::ArrayKey::Str(_) => Some(k),
+                php_runtime::ArrayKey::Int(_) => None,
+            },
+            _ => {
+                return Err(self.make_throw(
+                    "Error",
+                    "Keys must be of type int|string during array unpacking",
+                ));
+            }
+        };
+        let Some(Value::Array(za)) = self.frame_mut().tmps.get_mut(arr as usize) else {
+            return Ok(());
+        };
+        let t = za.make_mut();
+        match key {
+            Some(k) => {
+                t.insert(k, v);
+            }
+            None => {
+                if let Err(v) = t.push(v) {
+                    // `zend_cannot_add_element()`, then the element is
+                    // released.
+                    let e = self.make_throw(
+                        "Error",
+                        "Cannot add element to the array as the next element is already occupied",
+                    );
+                    drop(v);
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// `ZEND_THROW` + `zend_throw_exception_object`.
@@ -2528,10 +2636,11 @@ impl Vm {
             (frame.ret, by_ref, should_pool)
         };
         if should_pool {
+            // Released in `zend_leave_helper`'s order (`Frame`), then moved
+            // into the pool with one copy (`pop` + `push` or a `drain` copy
+            // the frame twice, through a temporary).
             self.frames[fidx].clear_for_pool(&self.empty_code);
-            // One copy into the pool (`pop` + `push` would copy the frame
-            // twice, through a temporary).
-            self.call_bufs.user_frames.extend(self.frames.drain(fidx..));
+            crate::vm::move_last_frame(&mut self.frames, &mut self.call_bufs.user_frames);
         } else {
             self.frames.truncate(fidx);
         }

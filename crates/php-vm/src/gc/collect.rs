@@ -248,7 +248,7 @@ impl Vm {
         let in_d: Vec<bool> = g
             .nodes
             .iter()
-            .map(|n| !n.live && n.data().is_some_and(|d| has_pending_dtor(d)) && n.obj().is_some())
+            .map(|n| !n.live && n.data().is_some_and(has_pending_dtor) && n.obj().is_some())
             .collect();
         let mut removed = vec![false; n];
         let mut dtors: Vec<Weak<dyn PhpObject>> = Vec::new();
@@ -328,7 +328,6 @@ impl Vm {
         for (i, node) in g.nodes.iter_mut().enumerate() {
             if node.live || removed[i] {
                 node.handle = Handle::Taken;
-                node.outer = None;
             }
         }
         let to_free = g.nodes;
@@ -350,7 +349,7 @@ impl Vm {
         let mut states: Vec<Box<dyn Any>> = Vec::new();
         for node in to_free.iter() {
             match &node.handle {
-                Handle::Obj(inner) => clear_object(inner, &mut trash, &mut states),
+                Handle::Obj(o) => clear_object(object::data(o), &mut trash, &mut states),
                 Handle::Ref(r) => {
                     if let Some(mut v) = r.try_borrow_mut() {
                         trash.push(std::mem::take(&mut *v));
@@ -446,17 +445,14 @@ impl Vm {
                 other => return Err(other),
             }
         }
-        let sole = o
-            .downcast_ref::<crate::object::ObjBox>()
-            .is_some_and(|b| Rc::strong_count(&b.0) == 1);
-        Ok((o.refcount() == 1 && sole).then_some(o))
+        Ok((o.refcount() == 1).then_some(o))
     }
 }
 
 /// `free_obj` for a garbage object: empties its properties and traversed
 /// native state into `trash`, and drops the `WeakMap` entries keyed by it
 /// (which may hold the object itself).
-fn clear_object(d: &Rc<ObjectData>, trash: &mut Vec<Value>, states: &mut Vec<Box<dyn Any>>) {
+fn clear_object(d: &ObjectData, trash: &mut Vec<Value>, states: &mut Vec<Box<dyn Any>>) {
     if let Ok(mut slots) = d.slots.try_borrow_mut() {
         trash.extend(slots.iter_mut().filter_map(Option::take));
     }

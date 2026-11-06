@@ -3,11 +3,12 @@
 //! `php_apache_sapi_register_variables()`, `sapi_read_post_data()` and the
 //! rfc1867 handler).
 
-use crate::backend::{IntField, StrField, Table};
+use crate::backend::{Backend, IntField, StrField, Table};
 use crate::multipart::{self, RegValue, Target, UploadSettings};
 use crate::request::{Body, RequestCtx, POST_BLOCK_SIZE};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_stdmisc::query::{self, InputSettings, ParseKind, RegisterOptions};
+use php_vm::ext::Rfc1867Event;
 use php_vm::Vm;
 use std::path::PathBuf;
 
@@ -136,6 +137,17 @@ pub fn build_argv(query: &[u8]) -> Vec<Vec<u8>> {
     query.split(|&c| c == b'+').map(<[u8]>::to_vec).collect()
 }
 
+/// `$_COOKIE` (`treat_data(PARSE_COOKIE)`), empty unless `enabled`.
+fn parse_cookie(vm: &mut Vm, b: &dyn Backend, settings: &InputSettings, enabled: bool) -> ZArray {
+    let mut cookie = ZArray::new();
+    if enabled {
+        if let Some(c) = b.table_get(Table::HeadersIn, b"Cookie") {
+            let _ = query::treat_data(ParseKind::Cookie, &c, &mut cookie, settings, "", None, vm);
+        }
+    }
+    cookie
+}
+
 /// `php_autoglobal_merge()`.
 fn merge(dest: &mut HashTable, src: &ZArray) {
     for (k, v) in src.iter() {
@@ -175,6 +187,8 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, auth: &Auth) {
     // $_POST / $_FILES (sapi_activate + php_auto_globals_create_post)
     let mut post = ZArray::new();
     let mut files = ZArray::new();
+    // `$_COOKIE` parsed early for the upload observer.
+    let mut early_cookie: Option<ZArray> = None;
     let method = b.str_field(StrField::Method).unwrap_or_default();
     let content_type = b.table_get(Table::HeadersIn, b"Content-Type");
     let content_length = b
@@ -214,8 +228,27 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, auth: &Auth) {
                             file_uploads: vm.ini_bool("file_uploads"),
                             tmp_dirs: tmp_dirs(vm),
                         };
+                        let callback = vm.rfc1867_callback;
+                        if callback.is_some() {
+                            // php_session_rfc1867_early_find_sid(): the
+                            // observer looks the session ID up in
+                            // $_COOKIE / $_GET while the body is parsed.
+                            let cookie = parse_cookie(vm, b, &settings, has(b'C'));
+                            set_global(vm, "_GET", get.clone());
+                            set_global(vm, "_COOKIE", cookie.clone());
+                            early_cookie = Some(cookie);
+                        }
                         let mut read = |buf: &mut [u8]| ctx.read_post(buf);
-                        let outcome = multipart::parse(ct, content_length, &upload, &mut read);
+                        let outcome = match callback {
+                            Some(cb) => multipart::parse_with_events(
+                                ct,
+                                content_length,
+                                &upload,
+                                &mut read,
+                                &mut |event: Rfc1867Event<'_>, bytes| cb(vm, event, bytes),
+                            ),
+                            None => multipart::parse(ct, content_length, &upload, &mut read),
+                        };
                         *ctx.body.borrow_mut() = Body::Consumed;
                         for w in &outcome.warnings {
                             startup_warning(vm, &w.message, w.docref);
@@ -240,12 +273,10 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, auth: &Auth) {
     }
 
     // $_COOKIE
-    let mut cookie = ZArray::new();
-    if has(b'C') {
-        if let Some(c) = b.table_get(Table::HeadersIn, b"Cookie") {
-            let _ = query::treat_data(ParseKind::Cookie, &c, &mut cookie, &settings, "", None, vm);
-        }
-    }
+    let cookie = match early_cookie {
+        Some(parsed) => parsed,
+        None => parse_cookie(vm, b, &settings, has(b'C')),
+    };
 
     // $_SERVER
     let mut server = ZArray::new();
