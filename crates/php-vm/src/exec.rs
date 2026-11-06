@@ -2528,10 +2528,11 @@ impl Vm {
             (frame.ret, by_ref, should_pool)
         };
         if should_pool {
+            // Released in `zend_leave_helper`'s order (`Frame`), then moved
+            // into the pool with one copy (`pop` + `push` or a `drain` copy
+            // the frame twice, through a temporary).
             self.frames[fidx].clear_for_pool(&self.empty_code);
-            // One copy into the pool (`pop` + `push` would copy the frame
-            // twice, through a temporary).
-            self.call_bufs.user_frames.extend(self.frames.drain(fidx..));
+            crate::vm::move_last_frame(&mut self.frames, &mut self.call_bufs.user_frames);
         } else {
             self.frames.truncate(fidx);
         }

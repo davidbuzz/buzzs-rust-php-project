@@ -34,7 +34,8 @@ fn run(source: &str) -> String {
 
 /// What `arguments_bound_at_frame_push_match_recv_semantics` prints in
 /// php-src (`/usr/bin/php -n`).
-const BOUND_ARGS_EXPECTED: &str = r#"1:a:1:{i:0;i:1;}:a:3:{i:0;i:1;i:1;i:2;i:2;a:1:{i:0;i:3;}}
+const BOUND_ARGS_EXPECTED: &str = concat!(
+    r#"1:a:1:{i:0;i:1;}:a:3:{i:0;i:1;i:1;i:2;i:2;a:1:{i:0;i:3;}}
 2:a:2:{i:0;i:1;i:1;i:5;}:a:3:{i:0;i:1;i:1;i:5;i:2;a:1:{i:0;i:3;}}
 4:a:4:{i:0;i:1;i:1;i:5;i:2;i:6;i:3;i:7;}:a:3:{i:0;i:1;i:1;i:5;i:2;i:6;}
 3:a:3:{i:0;i:0;i:1;i:2;i:2;i:9;}:a:3:{i:0;i:0;i:1;i:2;i:2;i:9;}
@@ -86,9 +87,11 @@ int(1)
 abc
 [toString]string(3) "str"
 int(1)
-10 2 1
-10 20 2
-a:1:{i:0;i:0;}abc01
+"#,
+    // `echo $v, " "` ends both generator lines in a space: spelled out
+    // so that no editor strips it.
+    "10 2 1 \n10 20 2 \n",
+    r#"a:1:{i:0;i:0;}abc01
 a:1:{i:0;i:1;}abc0111
 a:1:{i:0;i:2;}abc011121
 69
@@ -97,7 +100,8 @@ a:1:{i:0;i:2;}abc011121
 O:1:"P":2:{s:1:"x";i:1;s:1:"y";i:3;}O:1:"P":2:{s:1:"x";s:1:"a";s:1:"y";i:4;}
 20
 1275
-"#;
+"#
+);
 
 #[test]
 fn arguments_bound_at_frame_push_match_recv_semantics() {
@@ -142,6 +146,138 @@ function rec($n) { return $n ? $n + rec($n - 1) : 0; }
 echo rec(50), "\n";
 "#),
         BOUND_ARGS_EXPECTED
+    );
+}
+
+/// What `return_releases_in_zend_leave_helper_order` prints in php-src
+/// (`/usr/bin/php -n`).
+const LEAVE_ORDER_EXPECTED: &str = r#"in f
+d:arg-a
+d:cv-b
+d:cv-c
+d:extra1
+d:extra2
+after f
+in m
+d:m-arg
+d:m-cv-b
+d:m-extra
+M gone
+after m
+d:g-cv
+d:g-extra
+after g
+d:g-arg
+in closure
+d:cl-arg
+d:cl-cv
+d:cl-extra
+after closure call
+d:use-x
+in v
+d:v-a
+d:v-cv
+d:v-r1
+d:v-r2
+after v
+in n
+d:n-a
+d:n-c
+d:n-cv
+after n
+leave 0
+d:rec-0
+leave 1
+d:rec-1
+leave 2
+d:rec-2
+leave 3
+d:rec-3
+leave 4
+d:rec-4
+leave 5
+d:rec-5
+leave 6
+d:rec-6
+leave 7
+d:rec-7
+leave 8
+d:rec-8
+leave 9
+d:rec-9
+after rec
+d:t-cv
+d:mid-cv
+caught
+d:t-arg
+d:t-extra
+d:mid-arg
+d:mid-extra
+after catch
+got
+gen resumed
+d:gen-cv
+d:gen-extra
+d:gen-arg
+after gen
+in __call undefined
+d:call-a
+d:call-b
+d:call-cv
+end
+"#;
+
+#[test]
+fn return_releases_in_zend_leave_helper_order() {
+    // `zend_leave_helper`: a returning frame releases its compiled
+    // variables in order (`i_free_compiled_variables`), then the extra
+    // named and the extra positional arguments, then `$this` or the
+    // closure; a frame left by an exception, a frame dropped beyond the
+    // pool (`rec`) and a generator's frame release in the same order.
+    assert_eq!(
+        run(r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "d:{$this->n}\n"; } }
+function f($a) { $b = new D('cv-b'); $c = new D('cv-c'); echo "in f\n"; }
+f(new D('arg-a'), new D('extra1'), new D('extra2'));
+echo "after f\n";
+class M { function m($a) { $b = new D('m-cv-b'); echo "in m\n"; } function __destruct() { echo "M gone\n"; } }
+(new M)->m(new D('m-arg'), new D('m-extra'));
+echo "after m\n";
+function g($a) { $b = new D('g-cv'); return $a; }
+$r = g(new D('g-arg'), new D('g-extra'));
+echo "after g\n";
+$r = null;
+$x = new D('use-x');
+$cl = function ($p) use ($x) { $y = new D('cl-cv'); echo "in closure\n"; };
+$x = null;
+$cl(new D('cl-arg'), new D('cl-extra'));
+echo "after closure call\n";
+$cl = null;
+function v($a, ...$rest) { $b = new D('v-cv'); echo "in v\n"; }
+v(new D('v-a'), new D('v-r1'), new D('v-r2'));
+echo "after v\n";
+function n($a, $b = null, $c = null) { $z = new D('n-cv'); echo "in n\n"; }
+n(c: new D('n-c'), a: new D('n-a'));
+echo "after n\n";
+function rec($n) { $o = new D("rec-$n"); if ($n > 0) rec($n - 1); echo "leave $n\n"; }
+rec(9);
+echo "after rec\n";
+function thrower($a) { $b = new D('t-cv'); throw new Exception('x'); }
+function mid($a) { $m = new D('mid-cv'); thrower(new D('t-arg'), new D('t-extra')); }
+try { mid(new D('mid-arg'), new D('mid-extra')); } catch (Exception $e) { echo "caught\n"; }
+$e = null;
+echo "after catch\n";
+function gen($a) { $b = new D('gen-cv'); yield $a; echo "gen resumed\n"; }
+$g = gen(new D('gen-arg'), new D('gen-extra'));
+foreach ($g as $v) { echo "got\n"; }
+$v = null;
+$g = null;
+echo "after gen\n";
+class C { function __call($name, $args) { $l = new D('call-cv'); echo "in __call $name\n"; } }
+(new C)->undefined(new D('call-a'), new D('call-b'));
+echo "end\n";
+"#),
+        LEAVE_ORDER_EXPECTED
     );
 }
 

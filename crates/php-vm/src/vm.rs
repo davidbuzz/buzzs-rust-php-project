@@ -425,20 +425,20 @@ impl std::fmt::Debug for NativeIter {
 }
 
 /// A call frame.
+///
+/// The fields are declared in the order php-src's `zend_leave_helper`
+/// releases what a frame holds, so that dropping a `Frame` (unwinding,
+/// `frames.truncate`, a generator destroyed with its suspended frame) and
+/// recycling one ([`Frame::clear_for_pool`]) queue destructors in the same
+/// order: temporaries, iterators, finally states and unfinished calls (all
+/// empty after a normal return: an exception releases them before leaving
+/// the frame), then the compiled variables in order
+/// (`i_free_compiled_variables`), the extra named arguments
+/// (`zend_free_extra_named_params`), the extra positional arguments
+/// (`zend_vm_stack_free_extra_args_ex`), `$this` and the closure object
+/// (`OBJ_RELEASE`), and last the state no PHP code can observe.
 #[derive(Debug)]
 pub struct Frame {
-    /// The function (None for top-level code).
-    pub func: Option<Func>,
-    /// The user function (for user frames).
-    pub ufunc: Option<Rc<UserFunction>>,
-    /// The code.
-    pub code: Rc<OpArray>,
-    /// Next instruction.
-    pub ip: usize,
-    /// Variables.
-    pub vars: Rc<RefCell<VarStore>>,
-    /// CV index → slot index in `vars` (identity when `None`).
-    pub cv_map: Option<Rc<[u32]>>,
     /// Temporaries.
     pub tmps: Vec<Value>,
     /// Foreach iterators.
@@ -447,31 +447,46 @@ pub struct Frame {
     pub fins: Vec<FinState>,
     /// Pending calls.
     pub calls: Vec<PendingCall>,
-    /// `$this`.
-    pub this: Option<Obj>,
-    /// Class scope (`self`).
-    pub scope: Option<Rc<Class>>,
-    /// Called scope (`static`).
-    pub called: Option<Rc<Class>>,
-    /// Arguments as passed (positional; `None` = skipped).
-    pub args: Vec<Option<Value>>,
+    /// Variables.
+    pub vars: Rc<RefCell<VarStore>>,
     /// Extra named args.
     pub named: Vec<(ZStr, Value)>,
-    /// Where the return value goes.
-    pub ret: RetTarget,
+    /// Arguments as passed (positional; `None` = skipped, or already moved
+    /// into its compiled variable when the frame was pushed).
+    pub args: Vec<Option<Value>>,
+    /// `$this`.
+    pub this: Option<Obj>,
     /// The closure being executed.
     pub closure: Option<Obj>,
     /// The generator this frame belongs to.
     pub generator: Option<Obj>,
     /// The exception being matched by `Catch` ops.
     pub pending_exc: Option<Obj>,
-    /// Frame kind.
-    pub kind: FrameKind,
     /// Static variable storage for this call (closures have their own).
     pub statics: Option<Rc<RefCell<Vec<Option<PhpRef>>>>>,
+    /// The function (None for top-level code).
+    pub func: Option<Func>,
+    /// The user function (for user frames).
+    pub ufunc: Option<Rc<UserFunction>>,
+    /// The code.
+    pub code: Rc<OpArray>,
+    /// Next instruction.
+    pub ip: usize,
+    /// CV index → slot index in `vars` (identity when `None`).
+    pub cv_map: Option<Rc<[u32]>>,
+    /// Class scope (`self`).
+    pub scope: Option<Rc<Class>>,
+    /// Called scope (`static`).
+    pub called: Option<Rc<Class>>,
+    /// Where the return value goes.
+    pub ret: RetTarget,
+    /// Frame kind.
+    pub kind: FrameKind,
     /// Whether this is a constructor call (`new` result is the object).
     pub is_ctor: bool,
-    /// For include frames: the result temporary in the caller.
+    /// The `error_reporting` masks saved by the `@` operators active in
+    /// this frame (`ZEND_BEGIN_SILENCE`), restored when an exception
+    /// leaves them.
     pub silence_saved: Vec<i64>,
     /// Builtin being executed (for backtraces).
     pub builtin_name: Option<ZStr>,
@@ -497,35 +512,83 @@ fn clear_frame_buffer<T>(buffer: &mut Vec<T>) {
     }
 }
 
+/// Empties `v` and fills it with `n` values made by `make`: the
+/// `Vec::resize` of a pooled frame buffer, without the generic growth
+/// machinery (`extend_with`/`extend_trusted` cost ~45 instructions per
+/// call), for buffers that usually have the capacity already and a small
+/// `n` (the temporaries, iterators, finally slots and compiled variables
+/// of one function).
+#[inline]
+fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
+    v.clear();
+    if n != 0 {
+        v.reserve(n);
+        for _ in 0..n {
+            v.push(make());
+        }
+    }
+}
+
+/// Moves the last frame of `from` onto the end of `to` with one copy.
+///
+/// php-src reuses the VM stack memory in place
+/// (`zend_vm_stack_push_call_frame` / `zend_vm_stack_free_call_frame`); the
+/// frame pool stands in for that, and a `Frame` is a few hundred bytes, so
+/// how it travels matters: `Vec::pop` + `Vec::push` and `extend(drain(..))`
+/// both copy it twice, through a temporary (measured at 227 instructions
+/// per transfer). Returns `false`, moving nothing, when `from` is empty.
+#[inline]
+pub(crate) fn move_last_frame(from: &mut Vec<Frame>, to: &mut Vec<Frame>) -> bool {
+    let Some(last) = from.len().checked_sub(1) else {
+        return false;
+    };
+    to.reserve(1);
+    let len = to.len();
+    // SAFETY: `from[last]` is an initialised element, and `to` has room
+    // for one more element after `reserve`. The frame's bytes are copied
+    // once into that spare slot; `from` then stops owning the frame (its
+    // length is cut below `last`) and `to` starts owning the copy (its
+    // length is raised over it). Nothing between the copy and the two
+    // length stores can panic, so the frame is owned by exactly one of the
+    // two vectors at every point: this is `Vec::pop` followed by
+    // `Vec::push` without the intermediate value.
+    unsafe {
+        std::ptr::copy_nonoverlapping(from.as_ptr().add(last), to.as_mut_ptr().add(len), 1);
+        from.set_len(last);
+        to.set_len(len + 1);
+    }
+    true
+}
+
 impl Frame {
     /// Creates a pre-allocated empty frame for the pool.
     pub fn new_pooled(empty_code: Rc<OpArray>) -> Self {
         Frame {
-            func: None,
-            ufunc: None,
-            code: empty_code,
-            ip: 0,
+            tmps: Vec::with_capacity(16),
+            iters: Vec::with_capacity(4),
+            fins: Vec::with_capacity(2),
+            calls: Vec::with_capacity(4),
             vars: Rc::new(RefCell::new(VarStore {
                 slots: Vec::with_capacity(8),
                 names: VarNames::default(),
                 index: None,
             })),
-            cv_map: None,
-            tmps: Vec::with_capacity(16),
-            iters: Vec::with_capacity(4),
-            fins: Vec::with_capacity(2),
-            calls: Vec::with_capacity(4),
-            this: None,
-            scope: None,
-            called: None,
-            args: Vec::with_capacity(8),
             named: Vec::with_capacity(4),
-            ret: RetTarget::Discard,
+            args: Vec::with_capacity(8),
+            this: None,
             closure: None,
             generator: None,
             pending_exc: None,
-            kind: FrameKind::Function,
             statics: None,
+            func: None,
+            ufunc: None,
+            code: empty_code,
+            ip: 0,
+            cv_map: None,
+            scope: None,
+            called: None,
+            ret: RetTarget::Discard,
+            kind: FrameKind::Function,
             is_ctor: false,
             silence_saved: Vec::with_capacity(2),
             builtin_name: None,
@@ -537,36 +600,17 @@ impl Frame {
         }
     }
 
-    /// Cleans up state when returning to the frame pool, dropping all user values
-    /// while preserving ordinary buffer capacities and releasing oversized buffers.
+    /// Releases everything the frame holds, in the order a dropped `Frame`
+    /// releases it (see the type's documentation: php-src's
+    /// `zend_leave_helper` order), and leaves it ready for the pool:
+    /// ordinary buffers keep their capacity, oversized ones are released,
+    /// and a variable store shared with another frame is left to that
+    /// frame and replaced.
     pub fn clear_for_pool(&mut self, empty_code: &Rc<OpArray>) {
-        self.func = None;
-        self.ufunc = None;
-        self.code = empty_code.clone();
-        self.ip = 0;
-        self.cv_map = None;
         clear_frame_buffer(&mut self.tmps);
         clear_frame_buffer(&mut self.iters);
         clear_frame_buffer(&mut self.fins);
         clear_frame_buffer(&mut self.calls);
-        self.this = None;
-        self.scope = None;
-        self.called = None;
-        clear_frame_buffer(&mut self.args);
-        clear_frame_buffer(&mut self.named);
-        self.ret = RetTarget::Discard;
-        self.closure = None;
-        self.generator = None;
-        self.pending_exc = None;
-        self.statics = None;
-        self.is_ctor = false;
-        clear_frame_buffer(&mut self.silence_saved);
-        self.builtin_name = None;
-        self.magic_name = None;
-        self.caller_strict = false;
-        self.called_from_internal = false;
-        self.observed = false;
-        self.observer_hidden = false;
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
             clear_frame_buffer(&mut vs.slots);
@@ -575,34 +619,64 @@ impl Frame {
         } else {
             self.vars = Rc::new(RefCell::new(VarStore::default()));
         }
+        clear_frame_buffer(&mut self.named);
+        clear_frame_buffer(&mut self.args);
+        self.this = None;
+        self.closure = None;
+        self.generator = None;
+        self.pending_exc = None;
+        self.statics = None;
+        self.func = None;
+        self.ufunc = None;
+        self.code = empty_code.clone();
+        self.ip = 0;
+        self.cv_map = None;
+        self.scope = None;
+        self.called = None;
+        self.ret = RetTarget::Discard;
+        self.is_ctor = false;
+        clear_frame_buffer(&mut self.silence_saved);
+        self.builtin_name = None;
+        self.magic_name = None;
+        self.caller_strict = false;
+        self.called_from_internal = false;
+        self.observed = false;
+        self.observer_hidden = false;
     }
 
-    /// Re-initializes a pooled frame for a new user function call.
-    pub fn reinit_for_user(&mut self, code: Rc<OpArray>, kind: FrameKind) {
-        self.code = code;
+    /// Re-initializes a pooled frame for a new user function call, leaving
+    /// the compiled variables empty for the caller to fill (the arguments
+    /// move into them, [`crate::call`]'s `init_cvs`).
+    pub(crate) fn reinit_for_call(&mut self, code: Rc<OpArray>, kind: FrameKind) {
         self.kind = kind;
         self.ip = 0;
-        let ntmps = self.code.num_tmps as usize;
-        self.tmps.clear();
-        self.tmps.resize(ntmps, Value::Null);
-        let niters = self.code.num_iters as usize;
-        self.iters.clear();
-        self.iters.resize_with(niters, || None);
-        let nfin = self.code.num_finally as usize;
-        self.fins.clear();
-        self.fins.resize(nfin, FinState::None);
+        refill_with(&mut self.tmps, code.num_tmps as usize, || Value::Null);
+        refill_with(&mut self.iters, code.num_iters as usize, || None);
+        refill_with(&mut self.fins, code.num_finally as usize, || FinState::None);
         self.calls.clear();
         self.silence_saved.clear();
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
             vs.slots.clear();
-            vs.slots.resize(self.code.cv_names.len(), None);
             // The CV names stay the op array's (`op_array->vars`): no
             // per-call copy of them.
-            vs.names.share(&self.code);
+            vs.names.share(&code);
             vs.index = None;
         } else {
-            self.vars = Rc::new(RefCell::new(VarStore::for_code(&self.code)));
+            let mut vs = VarStore::for_code(&code);
+            vs.slots.clear();
+            self.vars = Rc::new(RefCell::new(vs));
+        }
+        self.code = code;
+    }
+
+    /// Re-initializes a pooled frame for a new user function call, with
+    /// every compiled variable undefined.
+    pub fn reinit_for_user(&mut self, code: Rc<OpArray>, kind: FrameKind) {
+        self.reinit_for_call(code, kind);
+        let ncv = self.code.cv_names.len();
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+            refill_with(&mut rc_mut.get_mut().slots, ncv, || None);
         }
     }
 
@@ -624,12 +698,6 @@ impl Frame {
         let niters = code.num_iters as usize;
         let nfin = code.num_finally as usize;
         Frame {
-            func: None,
-            ufunc: None,
-            code,
-            ip: 0,
-            vars,
-            cv_map,
             // Empty vectors are built without the generic `from_elem` /
             // `collect` machinery (builtin frames and most functions need
             // no iterators or finally slots; this matters in debug builds).
@@ -649,17 +717,23 @@ impl Frame {
                 vec![FinState::None; nfin]
             },
             calls: Vec::new(),
-            this: None,
-            scope: None,
-            called: None,
-            args: Vec::new(),
+            vars,
             named: Vec::new(),
-            ret: RetTarget::Discard,
+            args: Vec::new(),
+            this: None,
             closure: None,
             generator: None,
             pending_exc: None,
-            kind,
             statics: None,
+            func: None,
+            ufunc: None,
+            code,
+            ip: 0,
+            cv_map,
+            scope: None,
+            called: None,
+            ret: RetTarget::Discard,
+            kind,
             is_ctor: false,
             silence_saved: Vec::new(),
             builtin_name: None,
@@ -1088,5 +1162,117 @@ mod tests {
         let f = frame_with(&["a"]);
         let _guard = f.vars.borrow_mut();
         let _ = f.peek_cv(0, |s| s.is_some());
+    }
+
+    #[test]
+    fn move_last_frame_transfers_ownership_once() {
+        let code = Rc::new(OpArray::default());
+        let mut pool = vec![
+            Frame::new_pooled(code.clone()),
+            Frame::new_pooled(code.clone()),
+        ];
+        let mut stack: Vec<Frame> = Vec::new();
+        let held = ZStr::from("held by the moved frame");
+        pool[1].tmps.push(Value::Str(held.clone()));
+        pool[1].ip = 7;
+        // The op array: this handle plus one per frame.
+        assert_eq!(Rc::strong_count(&code), 3);
+        assert!(super::move_last_frame(&mut pool, &mut stack));
+        assert_eq!((pool.len(), stack.len()), (1, 1));
+        assert_eq!(stack[0].ip, 7);
+        assert!(
+            matches!(stack[0].tmps.as_slice(), [Value::Str(s)] if s.as_bytes() == held.as_bytes())
+        );
+        // Moved, not copied: one frame holds the string and the code.
+        assert_eq!(held.refcount(), 2);
+        assert_eq!(Rc::strong_count(&code), 3);
+        // And back.
+        assert!(super::move_last_frame(&mut stack, &mut pool));
+        assert_eq!((pool.len(), stack.len()), (2, 0));
+        assert_eq!(pool[1].ip, 7);
+        assert_eq!(held.refcount(), 2);
+        // An empty source moves nothing.
+        assert!(!super::move_last_frame(&mut stack, &mut pool));
+        assert_eq!((pool.len(), stack.len()), (2, 0));
+        drop(pool);
+        assert_eq!(held.refcount(), 1);
+        assert_eq!(Rc::strong_count(&code), 1);
+    }
+
+    #[test]
+    fn refill_with_reuses_the_buffer_and_fills_exactly_n() {
+        let mut v: Vec<Value> = Vec::with_capacity(8);
+        v.push(Value::Int(1));
+        let p = v.as_ptr();
+        super::refill_with(&mut v, 3, || Value::Null);
+        assert_eq!(v.len(), 3);
+        assert!(v.iter().all(Value::is_null));
+        assert_eq!(v.as_ptr(), p);
+        super::refill_with(&mut v, 0, || Value::Null);
+        assert!(v.is_empty());
+        assert_eq!(v.capacity(), 8);
+        super::refill_with(&mut v, 20, || Value::Int(2));
+        assert_eq!(v.len(), 20);
+        assert!(v.iter().all(|x| matches!(x, Value::Int(2))));
+    }
+
+    #[test]
+    fn reinit_for_call_leaves_the_compiled_variables_to_the_caller() {
+        let empty = Rc::new(OpArray::default());
+        let code = Rc::new(OpArray {
+            cv_names: vec![ZStr::from("a"), ZStr::from("b")],
+            num_tmps: 3,
+            num_iters: 1,
+            num_finally: 1,
+            ..OpArray::default()
+        });
+        let mut f = Frame::new_pooled(empty.clone());
+        f.reinit_for_call(code.clone(), FrameKind::Function);
+        assert_eq!(f.tmps.len(), 3);
+        assert_eq!(f.iters.len(), 1);
+        assert_eq!(f.fins.len(), 1);
+        assert_eq!(f.kind, FrameKind::Function);
+        assert!(Rc::ptr_eq(&f.code, &code));
+        {
+            let vars = f.vars.borrow();
+            assert!(vars.slots.is_empty());
+            assert_eq!(vars.names.len(), 2);
+        }
+        // `reinit_for_user` fills them as undefined.
+        f.clear_for_pool(&empty);
+        f.reinit_for_user(code.clone(), FrameKind::Function);
+        let vars = f.vars.borrow();
+        assert_eq!(vars.slots.len(), 2);
+        assert!(vars.slots.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn clear_for_pool_releases_every_handle() {
+        let empty = Rc::new(OpArray::default());
+        let code = Rc::new(OpArray {
+            cv_names: vec![ZStr::from("a")],
+            num_tmps: 1,
+            ..OpArray::default()
+        });
+        let mut f = Frame::new_pooled(empty.clone());
+        f.reinit_for_user(code.clone(), FrameKind::Function);
+        let s = ZStr::from("value");
+        f.vars.borrow_mut().slots[0] = Some(Value::Str(s.clone()));
+        f.tmps[0] = Value::Str(s.clone());
+        f.args.push(Some(Value::Str(s.clone())));
+        f.named.push((ZStr::from("n"), Value::Str(s.clone())));
+        f.ip = 5;
+        f.ret = super::RetTarget::Tmp(2);
+        f.caller_strict = true;
+        assert_eq!(s.refcount(), 5);
+        f.clear_for_pool(&empty);
+        assert_eq!(s.refcount(), 1);
+        assert_eq!(Rc::strong_count(&code), 1);
+        assert!(Rc::ptr_eq(&f.code, &empty));
+        assert_eq!(f.ip, 0);
+        assert_eq!(f.ret, super::RetTarget::Discard);
+        assert!(!f.caller_strict);
+        assert!(f.tmps.is_empty() && f.args.is_empty() && f.named.is_empty());
+        assert!(f.vars.borrow().slots.is_empty());
     }
 }
