@@ -85,9 +85,26 @@ thread_local! {
 /// The result always has its most significant bit set, so it is never zero.
 #[must_use]
 pub fn zend_hash_bytes(bytes: &[u8]) -> u64 {
+    #[inline]
+    fn step(hash: u64, b: u8) -> u64 {
+        hash.wrapping_mul(33).wrapping_add(u64::from(b))
+    }
     let mut hash: u64 = 5381;
-    for &b in bytes {
-        hash = hash.wrapping_mul(33).wrapping_add(u64::from(b));
+    // Eight bytes per iteration, like `zend_inline_hash_func`'s unrolled
+    // loop: the same sequential chain, without per-byte loop overhead.
+    let mut chunks = bytes.chunks_exact(8);
+    for c in &mut chunks {
+        hash = step(hash, c[0]);
+        hash = step(hash, c[1]);
+        hash = step(hash, c[2]);
+        hash = step(hash, c[3]);
+        hash = step(hash, c[4]);
+        hash = step(hash, c[5]);
+        hash = step(hash, c[6]);
+        hash = step(hash, c[7]);
+    }
+    for &b in chunks.remainder() {
+        hash = step(hash, b);
     }
     hash | 0x8000_0000_0000_0000
 }
@@ -920,6 +937,24 @@ mod tests {
         assert_eq!(s.hash_value(), zend_hash_bytes(b"abc"));
         // cached
         assert_eq!(s.hash_value(), zend_hash_bytes(b"abc"));
+    }
+
+    #[test]
+    fn unrolled_hash_matches_bytewise_hash() {
+        let data: Vec<u8> = (0..100u32)
+            .map(|i| u8::try_from((i * 37 + 11) % 256).unwrap_or(0))
+            .collect();
+        for n in 0..data.len() {
+            let mut h: u64 = 5381;
+            for &b in &data[..n] {
+                h = h.wrapping_mul(33).wrapping_add(u64::from(b));
+            }
+            assert_eq!(
+                zend_hash_bytes(&data[..n]),
+                h | 0x8000_0000_0000_0000,
+                "{n}"
+            );
+        }
     }
 
     #[test]
