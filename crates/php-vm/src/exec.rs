@@ -972,10 +972,13 @@ impl Vm {
                         val,
                         dst,
                     } => {
-                        let v = self.read(*val)?;
-                        if !(*op == BinaryOp::Concat && self.concat_assign_cv(*place, &v, *dst)) {
-                            let r = self.place_assign_op(*place, *op, v)?;
-                            self.set_dst(*dst, r);
+                        let concat = *op == BinaryOp::Concat;
+                        if !(concat && self.concat_assign_cv_lit(*place, *val, *dst)) {
+                            let v = self.read(*val)?;
+                            if !(concat && self.concat_assign_cv(*place, &v, *dst)) {
+                                let r = self.place_assign_op(*place, *op, v)?;
+                                self.set_dst(*dst, r);
+                            }
                         }
                         Flow::Next
                     }
