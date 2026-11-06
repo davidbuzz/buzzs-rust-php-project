@@ -47,7 +47,10 @@ impl Vm {
     #[cold]
     #[inline(never)]
     pub(crate) fn op_strlen_slow(&mut self, v: Value) -> VmResult<Value> {
-        let mut v = v.deref();
+        let mut v = match v {
+            Value::Reference(r) => r.get(),
+            other => other,
+        };
         if let Value::Str(s) = &v {
             return Ok(Value::Int(i64::try_from(s.len()).unwrap_or(i64::MAX)));
         }
@@ -81,7 +84,11 @@ impl Vm {
     #[inline(never)]
     pub(crate) fn op_count_slow(&mut self, v: Value, sizeof: bool) -> VmResult<Value> {
         let name = if sizeof { "sizeof" } else { "count" };
-        match v.deref() {
+        let v = match v {
+            Value::Reference(r) => r.get(),
+            other => other,
+        };
+        match v {
             Value::Array(a) => Ok(Value::Int(i64::try_from(a.len()).unwrap_or(i64::MAX))),
             v @ Value::Object(_) => self.special_func_fallback(name, v),
             v => Err(self.make_throw(
