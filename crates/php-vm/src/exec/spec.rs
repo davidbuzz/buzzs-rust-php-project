@@ -463,6 +463,81 @@ impl Vm {
         true
     }
 
+    /// [`crate::opcode::Op::ConcatCv`]: `$cv .= val` when the variable holds
+    /// a string directly (not a reference) and `val` is a string or an int
+    /// (a literal, a defined variable holding one directly, a temporary):
+    /// `concat_function` with `result == op1`, so the string is extended in
+    /// place when nothing else holds it (`zend_string_extend`) and copied
+    /// once otherwise; an int's digits go straight into it. A consumed
+    /// temporary operand is released and the result written to `dst` when
+    /// used, under one look at the frame. Returns `false`, having changed
+    /// nothing, otherwise: the string itself as the operand (`$s .= $s`,
+    /// which the generic path appends from its own buffer), an undefined
+    /// variable (warning), references and other types (conversions may warn
+    /// or call `__toString()`).
+    #[inline]
+    pub(super) fn concat_cv_fast(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        // Another variable's value is cloned: it lives in the store that is
+        // written below.
+        let from_cv = match val {
+            Operand::Cv(src) => {
+                let v = f.peek_cv(src, |slot| match slot {
+                    Some(v @ (Value::Str(_) | Value::Int(_))) => Some(v.clone()),
+                    _ => None,
+                });
+                let Some(v) = v else {
+                    return false;
+                };
+                Some(v)
+            }
+            _ => None,
+        };
+        let add = match (&from_cv, val) {
+            (Some(v), _) => v,
+            (None, Operand::Lit(i)) => match f.code.literals.get(i as usize) {
+                Some(v) => v,
+                None => return false,
+            },
+            (None, Operand::Tmp(t) | Operand::TmpKeep(t)) => match f.tmps.get(t as usize) {
+                Some(v) => v,
+                None => return false,
+            },
+            _ => return false,
+        };
+        let idx = f.cv_idx(cv);
+        let result = {
+            let Ok(mut vars) = f.vars.try_borrow_mut() else {
+                return false;
+            };
+            let Some(Some(Value::Str(s))) = vars.slots.get_mut(idx) else {
+                return false;
+            };
+            match add {
+                Value::Str(t) if !ZStr::ptr_eq(s, t) => s.append(t.as_bytes()),
+                Value::Int(i) => s.append_long(*i),
+                _ => return false,
+            }
+            dst.map(|_| Value::Str(s.clone()))
+        };
+        drop(from_cv);
+        // The OP_DATA temporary is consumed (a string is released here),
+        // before the result is written (it may reuse the slot).
+        if let Operand::Tmp(t) = val {
+            if let Some(slot) = f.tmps.get_mut(t as usize) {
+                *slot = Value::Null;
+            }
+        }
+        if let (Some(d), Some(r)) = (dst, result) {
+            if let Some(slot) = f.tmps.get_mut(d as usize) {
+                put_tmp(slot, r);
+            }
+        }
+        true
+    }
+
     /// The array key an offset operand converts to without diagnostics:
     /// an int, or a string (symbol-table semantics, `"1"` is key 1).
     /// Nothing is consumed: an int in a temporary can stay in its slot
@@ -953,6 +1028,75 @@ float(9.223372036854776E+18)
 float(-9.223372036854776E+18)
 float(5)
 float(5)
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn concat_assign_on_cvs() {
+        // `$cv .= v` (ConcatCv): strings extended in place from literals,
+        // ints, floats, variables, references and temporaries, with a used
+        // result; and the generic cases: self-append, an aliased string,
+        // non-string targets, conversions with warnings, undefined
+        // variables, typed references.
+        let src = r#"<?php
+class T { function __toString(): string { return 'T'; } }
+class P { public string $p = 'p'; public int $n = 1; }
+$s = '';
+for ($i = 0; $i < 3; $i++) { $s .= 'ab'; $s .= $i; $s .= "c$i"; }
+var_dump($s);
+$a = 'x'; $b = 'y'; $n = 7;
+for ($i = 0; $i < 2; $i++) { $a .= $b; $a .= $n; $a .= 1.5; }
+var_dump($a);
+$c = 'c'; $c .= $c; $c .= $c; var_dump($c);
+$d = 'd'; $e = $d; $d .= $e; var_dump($d, $e);
+$r = 'r'; $ref = &$r; $ref .= 'R'; $r .= 'S'; var_dump($r, $ref);
+$t = 't'; $u = 'u'; $tr = &$u; $t .= $tr; var_dump($t);
+$x = ($s2 = 's2') . ''; $y = ($x .= '!'); var_dump($x, $y);
+$m = 5; $m .= 'm'; var_dump($m);
+$nul = null; $nul .= 'n'; var_dump($nul);
+$arr = [1]; $arr .= 'a'; var_dump($arr);
+$v = 'v'; $v .= new T; var_dump($v);
+$w = 'w'; $w .= [1]; var_dump($w);
+$z = 'z'; $z .= $undef; var_dump($z);
+$undef2 .= 'u2'; var_dump($undef2);
+$o = new P; $pr = &$o->p; $pr .= 'q'; var_dump($o->p);
+$ni = &$o->n; try { $ni .= 'x'; } catch (TypeError $e) { echo $e->getMessage(), "\n"; } var_dump($o->n);
+$big = str_repeat('-', 10); for ($i = 0; $i < 3; $i++) { $big .= $big; } var_dump(strlen($big));
+$k = 'k'; $k .= true; $k .= false; $k .= null; var_dump($k);
+$f = 'f'; $f .= -0.0; $f .= 1e100; var_dump($f);
+"#;
+        let expected = r#"string(15) "ab0c0ab1c1ab2c2"
+string(11) "xy71.5y71.5"
+string(4) "cccc"
+string(2) "dd"
+string(1) "d"
+string(3) "rRS"
+string(3) "rRS"
+string(2) "tu"
+string(3) "s2!"
+string(3) "s2!"
+string(2) "5m"
+string(1) "n"
+
+Warning: Array to string conversion in t.php on line 17
+string(6) "Arraya"
+string(2) "vT"
+
+Warning: Array to string conversion in t.php on line 19
+string(6) "wArray"
+
+Warning: Undefined variable $undef in t.php on line 20
+string(1) "z"
+
+Warning: Undefined variable $undef2 in t.php on line 21
+string(2) "u2"
+string(2) "pq"
+Cannot assign string to reference held by property P::$n of type int
+int(1)
+int(80)
+string(2) "k1"
+string(11) "f-01.0E+100"
 "#;
         assert_eq!(run(src), expected);
     }

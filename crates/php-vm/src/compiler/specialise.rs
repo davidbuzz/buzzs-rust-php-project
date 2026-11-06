@@ -69,6 +69,16 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
                     dst: *dst,
                 });
             }
+            if *op == BinaryOp::Concat {
+                if let Some(cv) = plain_cv(places, *place) {
+                    return Some(Op::ConcatCv {
+                        cv,
+                        val: *val,
+                        dst: *dst,
+                        place: *place,
+                    });
+                }
+            }
             if is_numeric_assign_op(*op) {
                 if let Some(cv) = plain_cv(places, *place) {
                     return Some(Op::AssignOpCv {
@@ -538,13 +548,18 @@ mod tests {
             )),
             "{ops:?}"
         );
-        // `.=` on the CV (its own fast path runs from the generic op) and a
-        // compound assignment with a used result keep the generic op.
+        // `.=` on the CV is `ConcatCv`; a compound assignment of an element
+        // with a used result keeps the generic op.
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::ConcatCv { dst: None, .. })),
+            "{ops:?}"
+        );
         assert_eq!(
             ops.iter()
                 .filter(|op| matches!(op, Op::AssignOp { .. }))
                 .count(),
-            2,
+            1,
             "{ops:?}"
         );
         // Nested dimension reads get the chain form; appends and nested

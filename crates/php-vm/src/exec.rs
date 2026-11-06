@@ -1133,6 +1133,11 @@ impl Vm {
                                 None => break 'slow,
                             }
                         }
+                        Op::ConcatCv { cv, val, dst, .. } => {
+                            if !self.concat_cv_fast(*cv, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
                         _ => break 'slow,
                     }
                     if Self::safe_point_due() {
@@ -2015,6 +2020,18 @@ impl Vm {
                         self.assign_place_unused(*place, *val)?;
                         Flow::Next
                     }
+                    // The `.=` of `AssignOp` (the literal form is part of
+                    // the fast path that did not apply).
+                    Op::ConcatCv {
+                        val, dst, place, ..
+                    } => {
+                        let v = self.read(*val)?;
+                        if !self.concat_assign_cv(*place, &v, *dst) {
+                            let r = self.place_assign_op(*place, BinaryOp::Concat, v)?;
+                            self.set_dst(*dst, r);
+                        }
+                        Flow::Next
+                    }
                     Op::AssertCheck { dst, skip } => {
                         let a = self.ini.get_long("zend.assertions");
                         if a != 1 {
@@ -2818,6 +2835,7 @@ fn defers_oom(op: &Op) -> bool {
             | Op::AssignDimCv { .. }
             | Op::AssignStaticProp { .. }
             | Op::AssignOpStaticProp { .. }
+            | Op::ConcatCv { .. }
             | Op::Echo(_)
             | Op::Free(_)
     )

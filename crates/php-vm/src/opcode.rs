@@ -807,6 +807,17 @@ pub enum Op {
         dst: u32,
         empty: bool,
     },
+    /// `AssignOp` `.=` of a plain compiled variable (`$cv .= val`,
+    /// `ZEND_ASSIGN_OP_SPEC_CV_*` with `ZEND_CONCAT`, whose
+    /// `concat_function` has `result == op1`): a variable holding a string
+    /// is extended in place by a string or the digits of an int; anything
+    /// else is the generic `.=` of `place`.
+    ConcatCv {
+        cv: u32,
+        val: Operand,
+        dst: Option<u32>,
+        place: PlaceId,
+    },
 }
 
 /// The bits of [`Op::CmpJmp`]'s `mask`: the outcomes of comparing two
