@@ -714,21 +714,36 @@ impl Compiler {
         Operand::Tmp(t)
     }
 
+    /// `zend_compile_encaps_list` (`Zend/zend_compile.c`). php-src converts
+    /// a part to a string as soon as it has been evaluated, in its
+    /// `ZEND_ROPE_INIT` / `ZEND_ROPE_ADD` opcode on the line the compiler
+    /// is on after compiling it (`CG(zend_lineno)`); only the last part is
+    /// converted by `ZEND_ROPE_END`. Our `Rope` op reads and converts its
+    /// operands in order when it runs, so a part can be left to it when no
+    /// later part runs code before the rope (nothing can observe the delay)
+    /// and the rope's line is the line the part would have been converted
+    /// on. Every other non-final part is converted right after its code by
+    /// a `Cast`, which keeps "Array to string conversion", `__toString`
+    /// calls and their exceptions in php-src's order and on php-src's line.
+    /// A one-part rope is that cast (`zend_compile_rope_finalize`) and an
+    /// all-literal one is its constant.
     fn compile_rope(&mut self, parts: &[InterpPart]) -> CResult<Operand> {
-        // php-src reads each part where it is compiled (`ZEND_ROPE_ADD`
-        // with a CV operand). A CV part after the last part that runs
-        // code, on the line the rope is emitted at (that of the last
-        // expression part), is read by the rope itself: nothing can change
-        // it in between and its "Undefined variable" warning keeps its
-        // line, so the `Move` into a temporary is not needed.
+        let last_expr = parts
+            .iter()
+            .rposition(|p| matches!(p, InterpPart::Expr { .. }));
+        // The last part whose code runs before the rope (reading a plain CV
+        // emits none).
         let last_code = parts
             .iter()
             .rposition(|p| matches!(p, InterpPart::Expr { expr, .. } if !is_plain_cv_part(expr)));
-        let rope_line = parts.iter().rev().find_map(|p| match p {
-            InterpPart::Expr { expr, .. } => Some(expr.span.line),
-            InterpPart::Literal(..) => None,
+        // The line the rope is emitted on when its last part is a plain CV:
+        // the line that CV is read on. A code-emitting last part is final,
+        // so only it is left to the rope.
+        let rope_line = last_expr.and_then(|i| match &parts[i] {
+            InterpPart::Expr { expr, .. } if is_plain_cv_part(expr) => Some(expr.span.line),
+            _ => None,
         });
-        let mut ops = Vec::new();
+        let mut ops = Vec::with_capacity(parts.len());
         for (i, p) in parts.iter().enumerate() {
             match p {
                 InterpPart::Literal(s, _) => {
@@ -736,20 +751,19 @@ impl Compiler {
                 }
                 InterpPart::Expr { expr, .. } => {
                     let v = self.compile_expr(expr)?;
-                    let direct =
-                        last_code.is_none_or(|l| i > l) && Some(expr.span.line) == rope_line;
-                    // Otherwise materialise CVs now: interpolation reads in
-                    // order.
-                    let v = if let (Operand::Cv(_), false) = (v, direct) {
-                        let t = self.tmp();
-                        self.emit(Op::Move { src: v, dst: t });
-                        Operand::Tmp(t)
-                    } else {
-                        v
-                    };
-                    ops.push(v);
+                    // `self.f().line` is now where php-src would convert it.
+                    let deferred = Some(i) == last_expr
+                        || (last_code.is_none_or(|l| i >= l) && Some(self.f().line) == rope_line);
+                    ops.push(if deferred { v } else { self.cast_to_string(v) });
                 }
             }
+        }
+        if ops.len() <= 1 {
+            return Ok(match ops.first().copied() {
+                None => self.lit(Value::Str(ZStr::empty())),
+                Some(part @ Operand::Lit(_)) => part,
+                Some(part) => self.cast_to_string(part),
+            });
         }
         let t = self.tmp();
         self.emit(Op::Rope {
@@ -757,6 +771,17 @@ impl Compiler {
             dst: t,
         });
         Ok(Operand::Tmp(t))
+    }
+
+    /// `ZEND_CAST` to string of `v`, on the current line.
+    fn cast_to_string(&mut self, v: Operand) -> Operand {
+        let dst = self.tmp();
+        self.emit(Op::Cast {
+            kind: CastKind::String,
+            a: v,
+            dst,
+        });
+        Operand::Tmp(dst)
     }
 
     fn compile_array(&mut self, items: &[Option<ArrayItem>], line: u32) -> CResult<Operand> {
@@ -2169,9 +2194,16 @@ impl Compiler {
             return Ok(Some(Operand::Tmp(t)));
         }
         self.compile_args(args)?;
+        // `zend_compile_call_common` gives the call opcode the call's own
+        // line (`opline->lineno = lineno`) but leaves `CG(zend_lineno)`
+        // where compiling the last argument put it, so the opcodes that
+        // consume the result (ECHO, ROPE_ADD, CAST, VERIFY_RETURN_TYPE, ...)
+        // report that line.
+        let after_args = self.f().line;
         self.f().line = call_line;
         let dst = need.then(|| self.tmp());
         self.emit(Op::DoCall { dst });
+        self.f().line = after_args;
         Ok(dst.map(Operand::Tmp))
     }
 
