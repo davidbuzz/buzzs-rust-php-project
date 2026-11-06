@@ -7,6 +7,7 @@
 use crate::backend::{Backend, LookupValue, Table, TableOp};
 use crate::cookie::{Cookie, CookieError};
 use crate::headers::{HeaderError, HeaderOp};
+use crate::multipart::upload_err;
 use crate::request::{php_header, sapi_flush, with_ctx, RequestCtx};
 use php_runtime::{ArrayKey, Value, ZArray, ZStr};
 use php_support::ini::{Access, Stage};
@@ -23,19 +24,16 @@ const E_WARNING: i64 = 2;
 
 /// The `UPLOAD_ERR_*` constants of `main/main.stub.php`, in its order:
 /// main's own constants, which every SAPI has.
-const UPLOAD_ERR_CONSTANTS: &[(&str, i64)] = {
-    use crate::multipart::upload_err;
-    &[
-        ("UPLOAD_ERR_OK", upload_err::OK),
-        ("UPLOAD_ERR_INI_SIZE", upload_err::INI_SIZE),
-        ("UPLOAD_ERR_FORM_SIZE", upload_err::FORM_SIZE),
-        ("UPLOAD_ERR_PARTIAL", upload_err::PARTIAL),
-        ("UPLOAD_ERR_NO_FILE", upload_err::NO_FILE),
-        ("UPLOAD_ERR_NO_TMP_DIR", upload_err::NO_TMP_DIR),
-        ("UPLOAD_ERR_CANT_WRITE", upload_err::CANT_WRITE),
-        ("UPLOAD_ERR_EXTENSION", upload_err::EXTENSION),
-    ]
-};
+const UPLOAD_ERR_CONSTANTS: &[(&str, i64)] = &[
+    ("UPLOAD_ERR_OK", upload_err::OK),
+    ("UPLOAD_ERR_INI_SIZE", upload_err::INI_SIZE),
+    ("UPLOAD_ERR_FORM_SIZE", upload_err::FORM_SIZE),
+    ("UPLOAD_ERR_PARTIAL", upload_err::PARTIAL),
+    ("UPLOAD_ERR_NO_FILE", upload_err::NO_FILE),
+    ("UPLOAD_ERR_NO_TMP_DIR", upload_err::NO_TMP_DIR),
+    ("UPLOAD_ERR_CANT_WRITE", upload_err::CANT_WRITE),
+    ("UPLOAD_ERR_EXTENSION", upload_err::EXTENSION),
+];
 
 thread_local! {
     static ORIG_INI_SET: Cell<Option<NativeFn>> = const { Cell::new(None) };
