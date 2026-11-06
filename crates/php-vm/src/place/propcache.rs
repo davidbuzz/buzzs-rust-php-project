@@ -754,15 +754,26 @@ impl Vm {
         match self.probe(pid, need, &access) {
             Probe::Hit(res) => Some(res),
             Probe::Slow => None,
-            Probe::Miss => {
-                if !self.prop_cache_fill(pid) {
-                    return None;
-                }
-                match self.probe(pid, need, &access) {
-                    Probe::Hit(res) => Some(res),
-                    Probe::Slow | Probe::Miss => None,
-                }
-            }
+            Probe::Miss => self.probe_refill(pid, need, &access),
+        }
+    }
+
+    /// The miss half of [`Vm::probe_fill`], out of line so that each
+    /// access inlines one probe.
+    #[cold]
+    #[inline(never)]
+    fn probe_refill<T>(
+        &self,
+        pid: PlaceId,
+        need: u8,
+        access: &dyn Fn(&Key, &Obj, &ObjectData, &OpArray) -> Probe<T>,
+    ) -> Option<T> {
+        if !self.prop_cache_fill(pid) {
+            return None;
+        }
+        match self.probe(pid, need, access) {
+            Probe::Hit(res) => Some(res),
+            Probe::Slow | Probe::Miss => None,
         }
     }
 
