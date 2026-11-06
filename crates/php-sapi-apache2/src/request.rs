@@ -75,9 +75,9 @@ struct TimerState {
     hard_secs: i64,
     /// The soft expiry fired; the armed limit is `hard_timeout`.
     hard_armed: bool,
-    /// `PG(connection_status) & PHP_CONNECTION_TIMEOUT` (`php_on_timeout`):
-    /// stays set for the rest of the request.
-    timed_out: bool,
+    /// Soft expiries so far: each is `php_on_timeout()`, which ORs
+    /// `PHP_CONNECTION_TIMEOUT` into `PG(connection_status)`.
+    timeouts: u64,
 }
 
 impl Timer {
@@ -114,7 +114,12 @@ impl Timer {
 
     /// Whether the limit was exceeded (`PHP_CONNECTION_TIMEOUT`).
     pub fn timed_out(&self) -> bool {
-        self.state().timed_out
+        self.timeouts() > 0
+    }
+
+    /// How many times the limit was exceeded in this request.
+    pub fn timeouts(&self) -> u64 {
+        self.state().timeouts
     }
 
     /// Disarms the timer (`zend_unset_timeout()`).
@@ -140,7 +145,7 @@ impl Timer {
             s.hard_armed = false;
             return Expiry::Hard;
         }
-        s.timed_out = true;
+        s.timeouts += 1;
         if s.hard_secs > 0 {
             s.start_cpu_ns = cpu_ns;
             s.limit_secs = s.hard_secs;
@@ -194,6 +199,10 @@ pub struct RequestCtx {
     /// `php_handle_aborted_connection()` ran for the abort an `ap_rwrite`
     /// noticed (see [`abort_interrupt`]).
     abort_handled: Cell<bool>,
+    /// [`Timer::timeouts`] when the abort was last recorded: the abort
+    /// assigns `PG(connection_status) = PHP_CONNECTION_ABORTED`, dropping
+    /// the `PHP_CONNECTION_TIMEOUT` bit of earlier timeouts.
+    timeouts_at_abort: Cell<u64>,
     /// The request body.
     pub body: RefCell<Body>,
     /// Whether `ap_setup_client_block` ran (and whether a body follows).
@@ -247,6 +256,7 @@ impl RequestCtx {
             headers_only,
             aborted: Cell::new(false),
             abort_handled: Cell::new(false),
+            timeouts_at_abort: Cell::new(0),
             body: RefCell::new(Body::Unread),
             body_ready: Cell::new(None),
             read_post_bytes: Cell::new(0),
@@ -297,19 +307,24 @@ impl RequestCtx {
         self.headers_only
     }
 
-    /// `PG(connection_status)`.
+    /// `PG(connection_status)`: `PHP_CONNECTION_ABORTED` once the client
+    /// is gone, plus `PHP_CONNECTION_TIMEOUT` for a timeout since the abort
+    /// was last recorded (or since the request started).
     pub fn connection_status(&self) -> i64 {
-        let aborted = if self.aborted.get() {
-            CONNECTION_ABORTED
-        } else {
-            0
-        };
-        let timed_out = if self.timer.timed_out() {
-            CONNECTION_TIMEOUT
-        } else {
-            0
-        };
-        aborted | timed_out
+        let mut status = 0;
+        if self.aborted.get() {
+            status |= CONNECTION_ABORTED;
+        }
+        if self.timer.timeouts() > self.timeouts_at_abort.get() {
+            status |= CONNECTION_TIMEOUT;
+        }
+        status
+    }
+
+    /// `PG(connection_status) = PHP_CONNECTION_ABORTED`.
+    fn record_abort(&self) {
+        self.aborted.set(true);
+        self.timeouts_at_abort.set(self.timer.timeouts());
     }
 
     /// The client went away (`ap_rwrite` / `ap_rflush` failed).  Records
@@ -317,7 +332,9 @@ impl RequestCtx {
     /// [`abort_interrupt`] runs `php_handle_aborted_connection()`; a caller
     /// holding the VM does that directly.
     fn note_abort(&self) {
-        if !self.aborted.replace(true) {
+        let first = !self.aborted.get();
+        self.record_abort();
+        if first {
             php_vm::interrupt::request_interrupt();
         }
     }
@@ -481,15 +498,19 @@ pub fn implicit_flush(vm: &mut Vm) {
     }
 }
 
-/// `php_handle_aborted_connection()`: `PG(connection_status)`, output
-/// disabled for the rest of the request (`php_output_set_status`), and a
-/// bailout — the script stops, shutdown functions and destructors still
-/// run — unless `ignore_user_abort` is on.
+/// `php_handle_aborted_connection()`: `PG(connection_status) =
+/// PHP_CONNECTION_ABORTED`, output disabled for the rest of the request
+/// (`php_output_set_status`), and a bailout — the script stops, shutdown
+/// functions and destructors still run — unless `ignore_user_abort` is on.
 pub fn handle_aborted_connection(vm: &mut Vm) -> VmResult<()> {
-    with_ctx(|c| {
-        c.aborted.set(true);
-        c.abort_handled.set(true);
-    });
+    with_ctx(RequestCtx::record_abort);
+    stop_for_aborted_connection(vm)
+}
+
+/// The rest of `php_handle_aborted_connection()` once the status is
+/// recorded.
+fn stop_for_aborted_connection(vm: &mut Vm) -> VmResult<()> {
+    with_ctx(|c| c.abort_handled.set(true));
     // `php_output_set_status(PHP_OUTPUT_DISABLED)`.  Spelled out: `Vm`
     // has an inherent `output(&[u8])` method.
     OutputHost::output(vm).set_status(output_status::DISABLED);
@@ -500,13 +521,14 @@ pub fn handle_aborted_connection(vm: &mut Vm) -> VmResult<()> {
     }
 }
 
-/// The module's VM interrupt handler: runs `php_handle_aborted_connection()`
-/// once for an abort that `ap_rwrite` noticed ([`RequestCtx::write`] has
-/// no VM; php-src bails out from inside `ub_write`).
+/// The module's VM interrupt handler: finishes
+/// `php_handle_aborted_connection()` once for an abort that `ap_rwrite`
+/// noticed — [`RequestCtx::write`] recorded the status but has no VM;
+/// php-src bails out from inside `ub_write`.
 pub fn abort_interrupt(vm: &mut Vm) -> VmResult<()> {
     let due = with_ctx(|c| c.aborted.get() && !c.abort_handled.get()).unwrap_or(false);
     if due {
-        handle_aborted_connection(vm)
+        stop_for_aborted_connection(vm)
     } else {
         Ok(())
     }
@@ -940,12 +962,30 @@ mod tests {
         let ctx = RequestCtx::new(Box::new(MockBackend::default()), timer.clone());
         timer.reset_at(0, 1, 0);
         assert_eq!(timer.check(SEC), Expiry::Soft);
+        assert_eq!(timer.timeouts(), 1);
         assert_eq!(ctx.connection_status(), CONNECTION_TIMEOUT);
-        ctx.aborted.set(true);
+    }
+
+    #[test]
+    fn an_abort_replaces_the_status_and_a_timeout_adds_to_it() {
+        // `PG(connection_status) = PHP_CONNECTION_ABORTED` drops an earlier
+        // timeout; `php_on_timeout()` ORs a later one in.
+        let timer = Arc::new(Timer::default());
+        let ctx = RequestCtx::new(Box::new(MockBackend::default()), timer.clone());
+        timer.reset_at(0, 1, 0);
+        assert_eq!(timer.check(SEC), Expiry::Soft);
+        ctx.record_abort();
+        assert_eq!(ctx.connection_status(), CONNECTION_ABORTED);
+        // set_time_limit() in a shutdown function, then a second timeout.
+        timer.reset_at(SEC, 1, 0);
+        assert_eq!(timer.check(2 * SEC), Expiry::Soft);
         assert_eq!(
             ctx.connection_status(),
             CONNECTION_ABORTED | CONNECTION_TIMEOUT
         );
+        // Another failed flush records the abort again.
+        ctx.record_abort();
+        assert_eq!(ctx.connection_status(), CONNECTION_ABORTED);
     }
 
     #[test]
