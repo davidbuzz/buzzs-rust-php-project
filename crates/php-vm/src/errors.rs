@@ -268,6 +268,11 @@ impl Vm {
         // A message `php_verror` composed as HTML applies to this report
         // only, not to errors raised by the user handler below.
         let html_ready = std::mem::take(&mut self.error_msg_html_ready);
+        if is_fatal(level) {
+            // "Emit any delayed error before handling fatal error": before
+            // the pending exception, the backtrace and the user handler.
+            crate::classlink::emit_recorded_before_fatal(self);
+        }
         self.note_error_backtrace(level);
         // User error handler.
         let handleable = level
@@ -312,9 +317,6 @@ impl Vm {
                 }
             }
         }
-        if is_fatal(level) {
-            crate::classlink::emit_recorded_before_fatal(self);
-        }
         // `php_error_cb`: a repeated error is neither stored nor shown.
         if !self.is_repeated_error(msg, file, line) {
             self.last_error = Some(LastError {
@@ -340,23 +342,47 @@ impl Vm {
     }
 
     /// `zend_error_impl`: every reported error clears
-    /// `EG(last_fatal_error_backtrace)`; a fatal one (`E_FATAL_ERRORS`)
-    /// records the stack for `php_error_cb` and `error_get_last()` when
+    /// `EG(last_fatal_error_backtrace)`. For a fatal one (`E_FATAL_ERRORS`)
+    /// an exception still pending is reported first, as an "Uncaught ..."
+    /// warning (`zend_exception_error(EG(exception), E_WARNING)`), and the
+    /// fatal error then carries no backtrace; otherwise the stack is
+    /// recorded for `php_error_cb` and `error_get_last()` when
     /// `fatal_error_backtraces` is on.
     fn note_error_backtrace(&mut self, level: i64) {
-        if is_fatal(level) {
-            self.record_fatal_backtrace();
-        } else if self.last_fatal_error_backtrace.is_some() {
+        if self.last_fatal_error_backtrace.is_some() {
             self.last_fatal_error_backtrace = None;
+        }
+        if !is_fatal(level) {
+            return;
+        }
+        match self.take_pending_exception() {
+            Some(e) => self.exception_error(&e, level::WARNING),
+            None => self.record_fatal_backtrace(),
+        }
+    }
+
+    /// `EG(exception)` when a fatal error is raised: an exception a native
+    /// caller still holds while it goes on (an output or header callback
+    /// threw). Left alone while the delayed memory-limit error is reported
+    /// (`EG(delayed_oom).state == ZEND_OOM_STATE_HANDLING`).
+    fn take_pending_exception(&mut self) -> Option<Obj> {
+        if self.reporting_oom || !matches!(self.pending_throw, Some(Throw::Exception(_))) {
+            return None;
+        }
+        match self.pending_throw.take() {
+            Some(Throw::Exception(e)) => Some(e),
+            _ => None,
         }
     }
 
     /// `zend_fetch_debug_backtrace(&EG(last_fatal_error_backtrace), 0,
     /// EG(exception_ignore_args) ? DEBUG_BACKTRACE_IGNORE_ARGS : 0, 0)`.
+    /// With nothing executing (a compile error of the main script) the
+    /// trace is empty, which `zend_trace_to_string(..., include_main)`
+    /// prints as `#0 {main}`.
     #[cold]
     #[inline(never)]
     fn record_fatal_backtrace(&mut self) {
-        self.last_fatal_error_backtrace = None;
         if self.ini.get_bool("fatal_error_backtraces") {
             let ignore_args = self.ini.get_bool("zend.exception_ignore_args");
             self.last_fatal_error_backtrace = Some(self.backtrace(false, ignore_args, false, 0));
@@ -522,38 +548,43 @@ impl Vm {
     fn report_fatal_bytes(&mut self, msg: &[u8], file: &ZStr, line: u32) {
         crate::classlink::emit_recorded_before_fatal(self);
         self.note_error_backtrace(level::ERROR);
-        self.display_fatal_bytes(msg, file, line);
+        self.error_cb_dont_bail(level::ERROR, msg, file, line);
         object::set_destructors_enabled(false);
     }
 
-    /// Records and displays an `E_ERROR` without the bailout's
-    /// `zend_objects_store_mark_destructed` — the `E_DONT_BAIL` path of
-    /// `php_error_cb` that `zend_exception_error` takes, so objects still
-    /// get their destructors at shutdown after an uncaught exception.
-    fn display_fatal_bytes(&mut self, msg: &[u8], file: &ZStr, line: u32) {
+    /// `php_error_cb` with `E_DONT_BAIL`, the path `zend_exception_error`
+    /// takes: records and displays the error without the bailout's
+    /// `zend_objects_store_mark_destructed`, so objects still get their
+    /// destructors at shutdown after an uncaught exception. An `E_ERROR`
+    /// sets the exit status.
+    fn error_cb_dont_bail(&mut self, level: i64, msg: &[u8], file: &ZStr, line: u32) {
         self.last_error = Some(LastError {
-            level: level::ERROR,
+            level,
             message: msg.to_vec(),
             file: file.clone(),
             line,
         });
-        if self.error_reporting & level::ERROR != 0 {
-            self.display_error(level::ERROR, msg, file, line);
+        if self.error_reporting & level != 0 {
+            self.display_error(level, msg, file, line);
         }
-        self.exit_status = 255;
+        if level == level::ERROR {
+            self.exit_status = 255;
+        }
     }
 
-    /// Reports a compile error (`E_COMPILE_ERROR`, or `E_PARSE`) raised
-    /// with `zend_error_noreturn()`.
+    /// Reports a compile error: an `E_COMPILE_ERROR` raised with
+    /// `zend_error_noreturn()`, which carries the fatal backtrace, or
+    /// (`parse`) the `E_PARSE` a `ParseError` stands for, which reaches
+    /// `php_error_cb` only through `zend_exception_error` and so never
+    /// carries one.
     pub(crate) fn report_compile_error(&mut self, msg: &str, file: &ZStr, line: u32, parse: bool) {
-        let lv = if parse {
-            level::PARSE
-        } else {
-            level::COMPILE_ERROR
-        };
         crate::classlink::emit_recorded_before_fatal(self);
-        self.note_error_backtrace(lv);
-        self.show_compile_error(lv, msg, file, line);
+        if parse {
+            self.compile_exception_error(level::PARSE, msg, file, line);
+        } else {
+            self.note_error_backtrace(level::COMPILE_ERROR);
+            self.show_compile_error(level::COMPILE_ERROR, msg, file, line);
+        }
     }
 
     /// Records and displays a compile error and bails out (destructors
@@ -570,6 +601,16 @@ impl Vm {
         }
         self.exit_status = 255;
         object::set_destructors_enabled(false);
+    }
+
+    /// `zend_exception_error` of a `ParseError` or `CompileError`: the
+    /// compile error it stands for, reported with `E_DONT_BAIL` (no fatal
+    /// backtrace; the destructors still run at shutdown).
+    fn compile_exception_error(&mut self, lv: i64, msg: &str, file: &ZStr, line: u32) {
+        self.last_fatal_error_backtrace = None;
+        let enabled = object::destructors_enabled();
+        self.show_compile_error(lv, msg, file, line);
+        object::set_destructors_enabled(enabled);
     }
 
     /// Handles an exception that escaped all frames: the user exception
@@ -601,8 +642,16 @@ impl Vm {
 
     /// Prints "Fatal error: Uncaught ...".
     pub(crate) fn report_uncaught(&mut self, e: &Obj) {
-        // `zend_exception_error`: an uncaught exception is reported
-        // without a fatal backtrace (its own trace is in the message).
+        self.exception_error(e, level::ERROR);
+    }
+
+    /// `zend_exception_error(ex, severity)`: reports `e` as "Uncaught ...
+    /// thrown" at `severity` (`E_ERROR` for an uncaught exception,
+    /// `E_WARNING` for one still pending when a fatal error is raised),
+    /// without a fatal backtrace (its own trace is in the message). A
+    /// `ParseError` or `CompileError` is reported as the compile error it
+    /// stands for; a fiber's graceful exit reports nothing.
+    fn exception_error(&mut self, e: &Obj, severity: i64) {
         self.last_fatal_error_backtrace = None;
         let cls = object::class_of(e).clone();
         if cls.lc_name.as_bytes() == b"parseerror" || cls.lc_name.as_bytes() == b"compileerror" {
@@ -612,18 +661,17 @@ impl Vm {
             let msg = msg.as_str().map(ZStr::to_string_lossy).unwrap_or_default();
             let file = file.as_str().cloned().unwrap_or_default();
             let line = u32::try_from(line.as_int().unwrap_or(0)).unwrap_or(0);
-            // Reported with `E_DONT_BAIL` as well: the destructors still run.
-            let enabled = object::destructors_enabled();
             let lv = if cls.lc_name.as_bytes() == b"parseerror" {
                 level::PARSE
             } else {
                 level::COMPILE_ERROR
             };
-            self.show_compile_error(lv, &msg, &file, line);
-            object::set_destructors_enabled(enabled);
+            self.compile_exception_error(lv, &msg, &file, line);
             return;
         }
-        // `zend_exception_error`.
+        if crate::fiber::is_graceful_exit(e) {
+            return;
+        }
         match self.call_method_name(e, "__toString", Vec::new()) {
             Ok(v) => match v.deref() {
                 Value::Str(s) => self.set_exc_prop(e, "string", Value::Str(s)),
@@ -636,7 +684,7 @@ impl Vm {
                 // Thrown with no executing frame: php-src reports the inner
                 // exception right away (`zend_throw_exception_internal`).
                 if !self.is_executing() {
-                    self.report_uncaught(&inner);
+                    self.exception_error(&inner, level::ERROR);
                     return;
                 }
                 let file = self
@@ -676,7 +724,7 @@ impl Vm {
         let mut msg = b"Uncaught ".to_vec();
         msg.extend_from_slice(s.as_bytes());
         msg.extend_from_slice(b"\n  thrown");
-        self.display_fatal_bytes(&msg, &file, line);
+        self.error_cb_dont_bail(severity, &msg, &file, line);
     }
 }
 
@@ -723,7 +771,37 @@ fn html_escape(msg: &[u8], charset: Option<&[u8]>) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::docref_page;
+    use super::{docref_page, level};
+    use crate::vm::Throw;
+    use crate::{Vm, VmOptions};
+    use php_runtime::{Value, ZStr};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn vm_with_sink() -> (Vm, Sink) {
+        let sink = Sink::default();
+        let vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        (vm, sink)
+    }
+
+    fn output(vm: Vm, sink: &Sink) -> String {
+        drop(vm);
+        String::from_utf8_lossy(&sink.0.borrow()).into_owned()
+    }
 
     #[test]
     fn docref_pages_follow_php_verror() {
@@ -734,5 +812,60 @@ mod tests {
             "splfileobject.construct"
         );
         assert_eq!(docref_page("Foo_Bar::do_it"), "foo-bar.do-it");
+    }
+
+    /// `zend_error_impl` with `EG(exception)` set: the pending exception is
+    /// reported as a warning (`zend_exception_error(..., E_WARNING)`) and
+    /// the fatal error that follows carries no backtrace
+    /// (Zend/tests/assert/gh16293_001: the warning, then no trace).
+    #[test]
+    fn fatal_error_with_a_pending_exception_reports_it_as_a_warning_first() {
+        let (mut vm, sink) = vm_with_sink();
+        let e = vm.create_exception("Exception", "Boo", 0).unwrap();
+        vm.set_exc_prop(&e, "file", Value::Str(ZStr::from("t.php")));
+        vm.set_exc_prop(&e, "line", Value::Int(3));
+        vm.pending_throw = Some(Throw::Exception(e));
+        let r = vm.error_at(level::ERROR, "boom", &ZStr::from("t.php"), 7);
+        assert!(matches!(r, Err(Throw::Fatal)));
+        assert!(vm.pending_throw.is_none());
+        assert_eq!(vm.exit_status, 255);
+        assert_eq!(
+            output(vm, &sink),
+            "\nWarning: Uncaught Exception: Boo in t.php:3\nStack trace:\n#0 {main}\n  thrown in t.php on line 3\n\nFatal error: boom in t.php on line 7\n"
+        );
+    }
+
+    /// With nothing executing, `zend_fetch_debug_backtrace` yields an
+    /// empty trace, which `zend_trace_to_string(..., include_main)` prints
+    /// as `#0 {main}`: the compile errors of a main script get it too.
+    #[test]
+    fn frameless_fatal_error_has_a_main_only_backtrace() {
+        let (mut vm, sink) = vm_with_sink();
+        let r = vm.error_at(level::ERROR, "boom", &ZStr::from("t.php"), 7);
+        assert!(matches!(r, Err(Throw::Fatal)));
+        assert_eq!(
+            output(vm, &sink),
+            "\nFatal error: boom in t.php on line 7\nStack trace:\n#0 {main}\n"
+        );
+    }
+
+    /// `E_PARSE` only ever comes from a `ParseError` through
+    /// `zend_exception_error`, which clears the fatal backtrace; an
+    /// `E_COMPILE_ERROR` from `zend_error_noreturn` records one.
+    #[test]
+    fn parse_level_compile_errors_carry_no_backtrace() {
+        let (mut vm, sink) = vm_with_sink();
+        vm.report_compile_error("oops", &ZStr::from("t.php"), 4, true);
+        assert_eq!(vm.exit_status, 255);
+        assert_eq!(
+            output(vm, &sink),
+            "\nParse error: oops in t.php on line 4\n"
+        );
+        let (mut vm, sink) = vm_with_sink();
+        vm.report_compile_error("oops", &ZStr::from("t.php"), 4, false);
+        assert_eq!(
+            output(vm, &sink),
+            "\nFatal error: oops in t.php on line 4\nStack trace:\n#0 {main}\n"
+        );
     }
 }
