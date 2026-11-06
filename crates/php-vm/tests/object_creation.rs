@@ -175,3 +175,74 @@ M::$map = new WeakMap; $m = new M; M::$map[$m] = 1; unset($m); var_dump(M::$map-
 "#);
     assert_eq!(out, "bool(true)\nbool(true)\nint(1)\nint(0)\n");
 }
+
+/// Objects of every slot size class (inline up to 64 declared slots, then
+/// a buffer of their own): defaults, writes, `clone`, `unset`, the
+/// `serialize` round trip, comparison, the property count and destructor
+/// order. Expected output from `/usr/bin/php -n` (8.3), also the debug
+/// build's of master 4e1c2df8.
+#[test]
+fn slot_storage_of_every_size_class() {
+    let out = run(r#"<?php
+// `json_encode()` of the values used here, with the builtins of the bare VM.
+function j($v) { return is_array($v) ? '[' . implode(',', $v) . ']' : (string) $v; }
+foreach ([1, 2, 9, 48, 64, 65, 70] as $n) {
+    $decl = '';
+    for ($i = 0; $i < $n; $i++) { $decl .= "public \$p$i = $i; "; }
+    eval("class C$n { $decl public int \$t; public function __destruct() { echo 'd', \$this->t, ' '; } }");
+    $c = "C$n";
+    $o = new $c;
+    $last = 'p' . ($n - 1);
+    $mid = 'p' . intdiv($n, 2);
+    $o->$last = [$n];
+    $o->t = -$n;
+    $k = clone $o;
+    $k->p0 = 'k';
+    $k->t = $n;
+    if ($n > 1) { unset($o->$mid); }
+    $u = unserialize(serialize($o));
+    $u->t = 100 + $n;
+    echo $n, ": ", count(get_object_vars($o)), " ", j($o->p0), " ", $k->p0, " ", j($u->$last), " ",
+        isset($o->$mid) ? "set" : "unset", " ", isset($u->$mid) ? "set" : "unset", " ",
+        $o == $k ? "eq" : "ne", " ", count((array) $u), "\n";
+    unset($o, $k, $u);
+    echo "\n";
+}
+"#);
+    assert_eq!(
+        out,
+        "1: 2 [1] k [1] set set ne 2\nd-1 d1 d101 \n\
+         2: 2 0 k 1 unset set ne 3\nd-2 d2 d102 \n\
+         9: 9 0 k [9] unset set ne 10\nd-9 d9 d109 \n\
+         48: 48 0 k [48] unset set ne 49\nd-48 d48 d148 \n\
+         64: 64 0 k [64] unset set ne 65\nd-64 d64 d164 \n\
+         65: 65 0 k [65] unset set ne 66\nd-65 d65 d165 \n\
+         70: 70 0 k [70] unset set ne 71\nd-70 d70 d170 \n"
+    );
+}
+
+/// A lazy ghost whose initializer throws gets its slots back
+/// (`zend_lazy_object_revert_init`: the snapshot is written back into the
+/// object's own slots), so it is still lazy and marking it initialized
+/// gives the defaults, not the initializer's values. PHP 8.4+ semantics
+/// (Zend/tests/lazy_objects/init_exception_reverts_initializer_changes);
+/// expected output from the debug build of master 4e1c2df8.
+#[test]
+fn failed_lazy_initialization_reverts_the_slots() {
+    let out = run(r#"<?php
+// `json_encode()` of a property array, with the builtins of the bare VM.
+function j(array $props): string {
+    $out = [];
+    foreach ($props as $k => $v) { $out[] = "\"$k\":" . (is_array($v) ? '[' . implode(',', $v) . ']' : $v); }
+    return '{' . implode(',', $out) . '}';
+}
+class L { public $a = 1; public int $b = 2; public $c = [3]; }
+$r = new ReflectionClass(L::class);
+$g = $r->newLazyGhost(function (L $l) { $l->a = 'x'; $l->b = 5; $l->c[] = 4; throw new Exception("init failed"); });
+try { $g->a; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+echo (int) $r->isUninitializedLazyObject($g), "\n";
+$r->markLazyObjectAsInitialized($g);
+echo j(get_object_vars($g)), "\n";
+"#);
+    assert_eq!(out, "init failed\n1\n{\"a\":1,\"b\":2,\"c\":[3]}\n");
+}
