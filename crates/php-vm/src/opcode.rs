@@ -732,6 +732,9 @@ pub struct PropCacheEntry {
     /// Builtin type bits (`types::mask`) a written value may have to be
     /// stored without coercion; `u32::MAX` for an untyped property.
     pub accept: u32,
+    /// The lower-case class a typed property names (exactly one, not
+    /// `self`/`parent`/`static`): instances of it are stored as-is too.
+    pub class_lc: Option<ZStr>,
     /// `PC_*` bits of `place::propcache`: which fast paths apply.
     pub flags: u8,
 }

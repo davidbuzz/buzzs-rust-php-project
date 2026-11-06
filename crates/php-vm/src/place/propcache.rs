@@ -31,7 +31,7 @@ use crate::opcode::{
     IncDecKind, OpArray, Operand, Place, PlaceBase, PlaceId, PropCacheEntry, Seg, PROP_CACHE_THIS,
 };
 use crate::props::PropLookup;
-use crate::types::mask;
+use crate::types::{mask, TypeDecl};
 use crate::vm::{Frame, FrameKind, Vm, VmResult};
 use php_runtime::{ops, ArrayKey, BinaryOp, Obj, PhpRef, Value, ZStr};
 use std::rc::Rc;
@@ -127,6 +127,33 @@ fn accepts(accept: u32, value: &Value) -> bool {
         Value::Reference(_) => 0,
     };
     accept & bit != 0
+}
+
+/// The lower-case class name of a property type naming exactly one class
+/// (`Foo`, `?Foo`, `Foo|int`), other than `self`/`parent`/`static`.
+fn single_class_name(ty: &TypeDecl) -> Option<ZStr> {
+    if !ty.intersections.is_empty() || ty.classes.len() != 1 {
+        return None;
+    }
+    let lc = ty.classes[0].to_ascii_lowercase();
+    if matches!(lc.as_bytes(), b"self" | b"parent" | b"static") {
+        return None;
+    }
+    Some(lc)
+}
+
+/// Whether `value` may be stored as-is in the property of `entry`: its
+/// builtin type bits accept it ([`accepts`]), or it is an instance of the
+/// one class the type names (`class_matches` in `check_type`).
+#[inline]
+fn entry_accepts(entry: &PropCacheEntry, value: &Value) -> bool {
+    if accepts(entry.accept, value) {
+        return true;
+    }
+    match (value, &entry.class_lc) {
+        (Value::Object(obj), Some(lc)) => object::class_of(obj).instance_of_name(lc.as_bytes()),
+        _ => false,
+    }
 }
 
 /// Runs `access` on the object the base of a cached place holds (a CV,
@@ -379,6 +406,7 @@ impl Vm {
             slot: 0,
             lit,
             accept: 0,
+            class_lc: None,
             flags: PC_FILLED,
         };
         let hooks = cls.hooks.as_deref();
@@ -398,6 +426,7 @@ impl Vm {
                     if write_ok && info.flags & (flags::READONLY | flags::SET_MASK) == 0 {
                         entry.flags |= PC_WRITE;
                         entry.accept = info.ty.as_ref().map_or(u32::MAX, |ty| ty.mask);
+                        entry.class_lc = info.ty.as_ref().and_then(single_class_name);
                     }
                 }
             }
@@ -539,7 +568,7 @@ impl Vm {
             return Err(v);
         }
         let old = self.prop_probe_fill(pid, PC_FILLED | PC_WRITE, |entry, obj, home| {
-            if !accepts(entry.accept, &v) {
+            if !entry_accepts(entry, &v) {
                 return Probe::Slow;
             }
             match store_home(obj, &home, &v) {
@@ -1120,6 +1149,44 @@ object(U)#6 (0) {
 }
 Cannot assign string to property U::$x of type int
 int(42)
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    /// Class-typed properties: instances of the one named class (or a
+    /// subclass / implementation) are stored directly; others still get
+    /// the `TypeError`, `self` types keep the generic check.
+    #[test]
+    fn class_typed_properties() {
+        let src = r#"<?php
+interface Shape {}
+class Sq implements Shape {}
+class BigSq extends Sq {}
+class Other {}
+class Holder {
+    public ?Sq $sq = null;
+    public Shape $shape;
+    public self $me;
+    function set($v) {
+        try { $this->sq = $v; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        try { $this->shape = $v; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        $this->me = $this;
+    }
+}
+$h = new Holder;
+foreach ([new Sq, new BigSq, new Other, null, new Sq] as $v) {
+    $h->set($v);
+    echo get_class($h->sq ?? new stdClass), ' ', isset($h->shape) ? get_class($h->shape) : '-', "\n";
+}
+"#;
+        let expected = r#"Sq Sq
+BigSq BigSq
+Cannot assign Other to property Holder::$sq of type ?Sq
+Cannot assign Other to property Holder::$shape of type Shape
+BigSq BigSq
+Cannot assign null to property Holder::$shape of type Shape
+stdClass BigSq
+Sq Sq
 "#;
         assert_eq!(run(src), expected);
     }
