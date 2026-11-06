@@ -308,9 +308,10 @@ impl Slots {
 
 impl fmt::Debug for Slots {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.try_borrow() {
-            Ok(s) => fmt::Debug::fmt(&*s, f),
-            Err(_) => write!(f, "Slots(<borrowed>, {})", self.len),
+        if let Ok(s) = self.try_borrow() {
+            fmt::Debug::fmt(&*s, f)
+        } else {
+            write!(f, "Slots(<borrowed>, {})", self.len)
         }
     }
 }

@@ -61,10 +61,19 @@ thread_local! {
 /// Called by the engine when an object is freed (`zend_weakrefs_notify`):
 /// drops the `WeakMap` entries keyed by it (releasing their values) and its
 /// `WeakReference` registration. Must run before the handle is recycled.
+/// Inline: every free pays only the [`ACTIVE`] test (php-src's
+/// `IS_OBJ_WEAKLY_REFERENCED` flag test) until a weak reference exists.
+#[inline]
 pub(crate) fn object_freed(handle: u32) {
-    if !ACTIVE.try_with(Cell::get).unwrap_or(false) {
-        return;
+    if ACTIVE.try_with(Cell::get).unwrap_or(false) {
+        notify_freed(handle);
     }
+}
+
+/// [`object_freed`] once weak references or maps exist.
+#[cold]
+#[inline(never)]
+fn notify_freed(handle: u32) {
     let _ = REFS.try_with(|r| {
         if let Ok(mut r) = r.try_borrow_mut() {
             if r.get(&handle)
