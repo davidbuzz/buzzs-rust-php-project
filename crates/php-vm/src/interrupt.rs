@@ -91,6 +91,10 @@ impl SafePoint {
     /// and `sources_set` sees the source, or the raiser's store comes later
     /// and the flag ends up set.
     fn resync(&self, sources_set: impl FnOnce() -> bool) {
+        if self.executing.load(Ordering::Acquire) > 1 {
+            // Keep it (and skip the swap): another thread may need it.
+            return;
+        }
         let _ = self.due.swap(false, Ordering::AcqRel);
         if sources_set() || self.executing.load(Ordering::Acquire) > 1 {
             self.raise();
@@ -279,8 +283,9 @@ fn timer_expired(current: &AtomicU64, timed_out: &AtomicBool, gen: u64, hard: u6
 }
 
 impl Vm {
-    /// Polled after each opcode: runs the interrupt handlers when the flag
-    /// is set (`zend_interrupt_helper`).
+    /// Runs the interrupt handlers when an interrupt was requested
+    /// (`zend_interrupt_helper`). Called at the executor's safe point (once
+    /// the combined flag is set) and at call boundaries.
     #[inline]
     pub(crate) fn check_interrupt(&mut self) -> VmResult<()> {
         if INTERRUPT.load(Ordering::Relaxed) {
