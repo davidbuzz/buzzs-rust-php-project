@@ -7,14 +7,20 @@
 //! a `TypeError` they raise has no `strlen()` line in its trace, exactly as
 //! in php-src. The common operand types are handled inline by the run
 //! loop; the rest comes here.
+//!
+//! Also here: frameless internal calls (ref: Zend/zend_frameless_function.h,
+//! `ZEND_FRAMELESS_ICALL_n` in Zend/zend_vm_def.h), which call a handler
+//! without pushing its call frame.
 
+use crate::call::accepts_without_coercion;
 use crate::compiler::SPECIAL_BUILTINS;
-use crate::func::{flags, Func};
+use crate::func::{flags, Args, Builtin, Func};
 use crate::object;
 use crate::opcode::Operand;
 use crate::typecheck::given_type;
 use crate::vm::{PendingCall, Vm, VmResult};
 use php_runtime::{Value, ZStr};
+use std::rc::Rc;
 
 impl Vm {
     /// [`crate::compiler::CompileOptions::special_builtins`] for the
@@ -145,6 +151,109 @@ impl Vm {
             self.observer.quiet_builtin = true;
         }
         self.call_builtin(&b, call, strict)
+    }
+}
+
+/// Whether `call` of builtin `b` runs frameless: php-src's frameless
+/// internal calls (`ZEND_FRAMELESS_ICALL_n`) skip the call frame and
+/// materialise it only when the function reports an error. Here a call is
+/// frameless only when nothing can see the frame: a function of the list
+/// below whose handler has no diagnostic, exception or callback for
+/// arguments that already have an accepted scalar type (so zpp coerces
+/// nothing and no object can be released), called by name without named
+/// arguments. Everything else pushes the builtin frame as before.
+pub(crate) fn frameless_call(b: &Builtin, call: &PendingCall) -> bool {
+    if call.magic_name.is_some()
+        || call.is_ctor
+        || call.has_named
+        || !call.named.is_empty()
+        || call.dynamic
+        || call.this.is_some()
+        || call.scope.is_some()
+        || call.pfa.is_some()
+        || b.flags & (flags::DEPRECATED | flags::VARIADIC | flags::NODISCARD) != 0
+    {
+        return false;
+    }
+    let n = call.args.len();
+    // The arities without an error path: strpos()'s offset can be out of
+    // range, trim()'s character list can hold an invalid `..` range.
+    let error_free = match b.name.as_bytes() {
+        b"abs" | b"dechex" | b"strtolower" | b"strtoupper" | b"trim" | b"ltrim" | b"rtrim" => {
+            n == 1
+        }
+        b"strpos" | b"str_contains" | b"str_starts_with" | b"str_ends_with" => n == 2,
+        b"substr" => n == 2 || n == 3,
+        _ => false,
+    };
+    if !error_free || n < b.required as usize || n > b.params.len() {
+        return false;
+    }
+    call.args.iter().zip(&b.params).all(|(arg, p)| {
+        let Some(v) = arg else {
+            return false;
+        };
+        let scalar = matches!(
+            v,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+        );
+        let accepted = match &p.ty {
+            None => true,
+            Some(ty) => ty.is_mixed() || accepts_without_coercion(ty.mask, v),
+        };
+        scalar && accepted && !p.by_ref && p.promote & crate::opcode::UNCHECKED_TYPE == 0
+    })
+}
+
+impl Vm {
+    /// A [`frameless_call`]: the handler runs on the caller's frame with
+    /// the arguments moved out of the pending call (and the declared
+    /// defaults of omitted trailing parameters, as for a framed call).
+    pub(crate) fn call_builtin_frameless(
+        &mut self,
+        b: &Rc<Builtin>,
+        mut call: PendingCall,
+    ) -> VmResult<Value> {
+        self.magic_call_name = None;
+        let nparams = b.params.len();
+        let mut values = self.call_bufs.values.pop().unwrap_or_default();
+        values.reserve(nparams);
+        let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+        passed.reserve(nparams);
+        for arg in call.args.drain(..) {
+            values.push(arg.unwrap_or_default());
+            passed.push(true);
+        }
+        self.put_arg_vec(std::mem::take(&mut call.args));
+        while values.len() < nparams {
+            let i = values.len();
+            match self.builtin_default(b, i) {
+                Some(d) if i >= b.required as usize => {
+                    values.push(d);
+                    passed.push(false);
+                }
+                _ => break,
+            }
+        }
+        let mut args = Args {
+            values,
+            passed,
+            named: Vec::new(),
+            this: None,
+            called: None,
+            func: Some(b.clone()),
+        };
+        let mut r = (b.handler)(self, &mut args);
+        // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
+        if r.is_ok() {
+            if let Err(e) = self.check_interrupt() {
+                r = Err(e);
+            }
+        }
+        let Args { values, passed, .. } = args;
+        self.put_val_vec(values);
+        self.put_bool_vec(passed);
+        r
     }
 }
 

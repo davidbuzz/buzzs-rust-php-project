@@ -77,7 +77,7 @@ impl Vm {
     /// Returns an argument buffer to the pool, keeping larger capacities when
     /// small Rust-origin callback buffers compete with prewarmed buffers.
     #[inline]
-    fn put_arg_vec(&mut self, mut v: Vec<Option<Value>>) {
+    pub(crate) fn put_arg_vec(&mut self, mut v: Vec<Option<Value>>) {
         if v.capacity() > 0 && v.capacity() <= 256 {
             v.clear();
             if self.call_bufs.args.len() < 4 {
@@ -97,7 +97,7 @@ impl Vm {
 
     /// Returns a ZPP value buffer to the pool.
     #[inline]
-    fn put_val_vec(&mut self, mut v: Vec<Value>) {
+    pub(crate) fn put_val_vec(&mut self, mut v: Vec<Value>) {
         if v.capacity() > 0 && v.capacity() <= 256 && self.call_bufs.values.len() < 4 {
             v.clear();
             self.call_bufs.values.push(v);
@@ -106,7 +106,7 @@ impl Vm {
 
     /// Returns a ZPP passed-flag buffer to the pool.
     #[inline]
-    fn put_bool_vec(&mut self, mut v: Vec<bool>) {
+    pub(crate) fn put_bool_vec(&mut self, mut v: Vec<bool>) {
         if v.capacity() > 0 && v.capacity() <= 256 && self.call_bufs.passed.len() < 4 {
             v.clear();
             self.call_bufs.passed.push(v);
@@ -1485,6 +1485,10 @@ impl Vm {
         strict: bool,
         quiet: bool,
     ) -> VmResult<Value> {
+        // php-src's frameless internal calls, where no frame can be seen.
+        if !self.observer.enabled && crate::special::frameless_call(b, &call) {
+            return self.call_builtin_frameless(b, call);
+        }
         // A native `__call`/`__callStatic` gets the called name through
         // `vm.magic_call_name()`.
         self.magic_call_name = call.magic_name.take();
@@ -1828,7 +1832,7 @@ impl Vm {
 
     /// The default of native parameter `i`: a parsed literal, or a
     /// constant (`SOME_CONST`, `Class::CONST`) resolved at call time.
-    fn builtin_default(&mut self, b: &Builtin, i: usize) -> Option<Value> {
+    pub(crate) fn builtin_default(&mut self, b: &Builtin, i: usize) -> Option<Value> {
         if let Some(v) = b.defaults.get(i).cloned().flatten() {
             return Some(v);
         }
@@ -2582,7 +2586,7 @@ pub(crate) fn find_double_colon(s: &[u8]) -> Option<usize> {
 
 /// Whether `verify_type` would accept `v` for a type with mask `m` as-is:
 /// the side-effect-free subset of `type_accepts` (no callable/class checks).
-fn accepts_without_coercion(m: u32, v: &Value) -> bool {
+pub(crate) fn accepts_without_coercion(m: u32, v: &Value) -> bool {
     use crate::types::mask;
     let bit = match v {
         Value::Null => mask::NULL,

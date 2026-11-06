@@ -2,8 +2,11 @@
 //! `ZEND_STRLEN`, `ZEND_TYPE_CHECK`, `ZEND_CAST`, `ZEND_GET_TYPE`): same
 //! results as the calls, and no builtin frame (expected outputs from
 //! `/usr/bin/php -n`).
+use php_runtime::{Value, ZStr};
 use php_vm::compiler::{compile, CompileOptions, SPECIAL_BUILTINS};
+use php_vm::ext::{Extension, ModuleBuilder};
 use php_vm::opcode::Op;
+use php_vm::vm::FrameKind;
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;
@@ -240,4 +243,69 @@ fn special_opcodes_are_emitted_only_for_registered_builtins() {
             .count(),
         11
     );
+}
+
+/// Whether the running builtin has a frame of its own: `B` when the top
+/// frame is a builtin frame, `F` (frameless) when it is the caller's.
+fn frame_mark(vm: &Vm) -> &'static str {
+    if vm
+        .frames
+        .last()
+        .is_some_and(|f| f.kind == FrameKind::Builtin)
+    {
+        "B"
+    } else {
+        "F"
+    }
+}
+
+/// Stand-ins for two frameless builtins that report how they were called.
+struct FramelessProbe;
+
+impl Extension for FramelessProbe {
+    fn name(&self) -> &'static str {
+        "frameless_probe"
+    }
+
+    fn register(&self, module: &mut ModuleBuilder<'_>) {
+        module.function("abs(int|float $num): int|float", |vm, _args| {
+            Ok(Value::Str(ZStr::from(frame_mark(vm))))
+        });
+        module.function(
+            "substr(string $string, int $offset, ?int $length = null): string",
+            |vm, args| {
+                Ok(Value::Str(ZStr::from(format!(
+                    "{}:{}",
+                    frame_mark(vm),
+                    args.has(2)
+                ))))
+            },
+        );
+    }
+}
+
+#[test]
+fn frameless_calls_skip_the_frame_only_without_coercion() {
+    let sink = Sink::default();
+    let mut vm = Vm::with_extensions(
+        &VmOptions::default(),
+        Box::new(sink.clone()),
+        &[&FramelessProbe],
+    );
+    let status = vm.run_script(
+        br#"<?php
+echo abs(1), abs(2.5), abs("1"), abs(true), "\n";
+function f() { return abs(1) . abs("1"); }
+echo f(), "\n";
+echo substr("x", 0), substr("x", 0, null), substr("x", "0"), "\n";
+$f = 'abs';
+echo $f(1), "\n";
+"#,
+        "t.php",
+    );
+    drop(vm);
+    let output = String::from_utf8(sink.0.borrow().clone()).expect("UTF-8 output");
+    assert_eq!(status, 0, "{output}");
+    // Coerced arguments and dynamic calls push the builtin frame.
+    assert_eq!(output, "FFBB\nFB\nF:falseF:trueB:false\nB\n");
 }
