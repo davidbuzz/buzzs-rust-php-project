@@ -676,7 +676,17 @@ fn root_obj(o: &Obj) {
 /// (`GC_MAY_LEAK`); returns its slot. Roots released by destructors during
 /// a run are kept for the next one (they never trigger a nested run).
 fn buffer_obj(s: &mut GcState, o: &Obj) -> Option<usize> {
-    if s.protected || s.roots.contains(o) {
+    if s.protected {
+        return None;
+    }
+    // php-src reads `GC_INFO` from the object itself. Here an object none
+    // of whose handles was ever buffered (`oflags::GC_BUFFERED` clear, the
+    // case of every fresh object) cannot be in the index, so the lookup
+    // is skipped.
+    let data = o.downcast_ref::<ObjBox>().map(|b| &*b.0);
+    let maybe_buffered =
+        data.is_none_or(|d| d.flags.get() & crate::object::oflags::GC_BUFFERED != 0);
+    if maybe_buffered && s.roots.contains(o) {
         return None;
     }
     if !s.roots.has_unused() {
@@ -685,7 +695,7 @@ fn buffer_obj(s: &mut GcState, o: &Obj) -> Option<usize> {
         note_new_slot(s);
     }
     let i = s.roots.insert_new(o);
-    let d = crate::object::data(o);
+    let d = data.unwrap_or_else(|| crate::object::data(o));
     d.flags
         .set(d.flags.get() | crate::object::oflags::GC_BUFFERED);
     Some(i)
