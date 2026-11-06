@@ -3,10 +3,13 @@
 //! The layout mirrors `Zend/zend_hash.c` closely because several PHP-visible
 //! behaviours depend on it:
 //!
-//! * buckets live in insertion order in a vector that may contain holes
+//! * elements live in insertion order in a vector that may contain holes
 //!   (deleted slots); `nNumUsed` is the vector length;
-//! * *packed* arrays (keys `0..n` in order, possibly with holes) have no hash
-//!   index; inserting out of order converts them to *hash* arrays;
+//! * *packed* arrays (keys `0..n` in order, possibly with holes) store bare
+//!   values and no hash index (`zval *arPacked`): the key is the position,
+//!   and `&ArrayKey` views of it come from a shared immortal table (the
+//!   `int_keys` module); inserting out of order converts them to *hash* arrays
+//!   of buckets (value + key) whose collision chains live in the index;
 //! * `nNextFreeElement` follows Zend's rules exactly (including negative keys
 //!   since PHP 8.3 and the packed-array quirk where it is reset to `h + 1`);
 //! * positions (`HashPosition`) index into the bucket vector, so iteration by
