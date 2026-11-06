@@ -115,10 +115,16 @@ fn limit_memory() {
 /// (pcntl), the process stays single-threaded (`unshare()`, `fork()`
 /// children exit with the script's status) — as in PHP.
 ///
-/// The main thread's stack limit is fixed when the program is loaded, so
-/// a too small `RLIMIT_STACK` is raised and the binary re-executed once
-/// (the raised limit is then inherited, which ends the recursion).
-/// Returns false when that is impossible; the VM then runs on a
+/// A too small `RLIMIT_STACK` is raised. Linux checks the limit each
+/// time the stack grows, so raising it is enough when the addresses
+/// below the stack are still free. The kernel only keeps the old limit's
+/// worth of room free when it loads the program, but with address-space
+/// randomisation the gap is almost always much larger (see
+/// [`main_stack_room`]). If the room is too small, the binary is
+/// re-executed once. That costs a second dynamic link and runtime
+/// start-up, about a fifth of `php -r 'echo 1;'`. The raised limit is
+/// inherited, which ends the recursion, and the kernel then reserves room
+/// for it. Returns false when neither works; the VM then runs on a
 /// dedicated thread with a large stack instead.
 fn ensure_main_stack(argv: &[Vec<u8>]) -> bool {
     let mut rl = libc::rlimit {
@@ -143,6 +149,14 @@ fn ensure_main_stack(argv: &[Vec<u8>]) -> bool {
     if unsafe { libc::setrlimit(libc::RLIMIT_STACK, &raw const raised) } != 0 {
         return false;
     }
+    let sp = approx_stack_pointer();
+    if std::fs::read("/proc/self/maps")
+        .ok()
+        .and_then(|maps| main_stack_room(&maps, sp))
+        .is_some_and(|room| room >= VM_STACK + STACK_GUARD_ALLOWANCE)
+    {
+        return true;
+    }
     let mut cmd = std::process::Command::new("/proc/self/exe");
     if let Some(a0) = argv.first() {
         cmd.arg0(std::ffi::OsStr::from_bytes(a0));
@@ -155,6 +169,54 @@ fn ensure_main_stack(argv: &[Vec<u8>]) -> bool {
         libc::setrlimit(libc::RLIMIT_STACK, &raw const rl);
     }
     false
+}
+
+/// Room kept free below a stack grown to [`VM_STACK`]. The kernel will
+/// not grow a stack to within `stack_guard_gap` (1 MiB by default) of the
+/// mapping below it.
+const STACK_GUARD_ALLOWANCE: u64 = 16 << 20;
+
+/// An address inside the calling thread's stack.
+#[inline(never)]
+fn approx_stack_pointer() -> u64 {
+    let marker = 0u8;
+    let addr = std::hint::black_box(std::ptr::addr_of!(marker)) as usize;
+    u64::try_from(addr).unwrap_or(0)
+}
+
+/// How far the stack mapping that contains `sp` may grow down, in the
+/// `/proc/self/maps` listing `maps`: from its top to the end of the next
+/// lower mapping. `None` when no mapping contains `sp` or the listing does
+/// not parse.
+///
+/// The kernel places shared libraries and anonymous mappings below
+/// `mmap_base`. When it loads the program, it keeps only the stack limit
+/// of that moment (at least 128 MiB) plus the stack's random offset free
+/// below `mmap_base`, so this is checked rather than assumed. With
+/// address-space randomisation `mmap_base` itself sits a random amount of
+/// up to terabytes lower, so the room is almost always far larger than
+/// [`VM_STACK`].
+fn main_stack_room(maps: &[u8], sp: u64) -> Option<u64> {
+    let mut prev_end = 0u64;
+    for line in maps.split(|&c| c == b'\n') {
+        let range = line.split(|&c| c == b' ').next()?;
+        if range.is_empty() {
+            continue;
+        }
+        let dash = range.iter().position(|&c| c == b'-')?;
+        let hex = |b: &[u8]| {
+            std::str::from_utf8(b)
+                .ok()
+                .and_then(|s| u64::from_str_radix(s, 16).ok())
+        };
+        let start = hex(&range[..dash])?;
+        let end = hex(&range[dash + 1..])?;
+        if start <= sp && sp < end {
+            return end.checked_sub(prev_end);
+        }
+        prev_end = end;
+    }
+    None
 }
 
 php_memlimit::install_global_allocator!();
@@ -1147,6 +1209,46 @@ fn lint(cfg: &Config, src: &[u8], php_self: &[u8]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MAPS: &[u8] = b"\
+5a0000000000-5a0000001000 r--p 00000000 08:01 1234 /usr/bin/php
+7f0000000000-7f0000010000 r-xp 00000000 08:01 99 /usr/lib/libc.so.6
+7f0000010000-7f0000020000 rw-p 00000000 00:00 0
+7ffff0000000-7ffff0021000 rw-p 00000000 00:00 0                          [stack]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
+";
+
+    #[test]
+    fn stack_room_reaches_the_next_lower_mapping() {
+        let room = main_stack_room(MAPS, 0x7fff_f001_0000).unwrap();
+        assert_eq!(room, 0x7fff_f002_1000 - 0x7f00_0002_0000);
+        assert!(room >= VM_STACK + STACK_GUARD_ALLOWANCE);
+    }
+
+    #[test]
+    fn stack_room_is_small_when_a_mapping_sits_close_below() {
+        let maps = b"\
+7ffff0000000-7ffff0001000 rw-p 00000000 00:00 0
+7ffff8000000-7ffff8021000 rw-p 00000000 00:00 0 [stack]
+";
+        let room = main_stack_room(maps, 0x7fff_f801_0000).unwrap();
+        assert_eq!(room, 0x7fff_f802_1000 - 0x7fff_f000_1000);
+        assert!(room < VM_STACK + STACK_GUARD_ALLOWANCE);
+    }
+
+    #[test]
+    fn stack_room_needs_a_mapping_that_contains_sp() {
+        assert_eq!(main_stack_room(MAPS, 0x1000), None);
+        assert_eq!(main_stack_room(b"garbage line\n", 0x1000), None);
+        assert_eq!(main_stack_room(b"", 0x1000), None);
+    }
+
+    #[test]
+    fn stack_room_of_this_process_parses() {
+        let maps = std::fs::read("/proc/self/maps").unwrap();
+        // Test threads run on their own stacks, which are mappings too.
+        assert!(main_stack_room(&maps, approx_stack_pointer()).is_some());
+    }
 
     #[test]
     fn usage_uses_program_basename() {
