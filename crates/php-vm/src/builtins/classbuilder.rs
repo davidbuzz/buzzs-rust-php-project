@@ -306,8 +306,8 @@ impl ClassBuilder {
             let mut consts: Vec<Rc<ClassConst>> = Vec::with_capacity(nconsts);
             let mut const_map = HashMap::with_capacity(nconsts);
             let push_const = |c: Rc<ClassConst>,
-                                  consts: &mut Vec<Rc<ClassConst>>,
-                                  map: &mut HashMap<ZStr, usize>| {
+                              consts: &mut Vec<Rc<ClassConst>>,
+                              map: &mut HashMap<ZStr, usize>| {
                 match map.entry(c.name.clone()) {
                     Entry::Occupied(e) => consts[*e.get()] = c,
                     Entry::Vacant(e) => {

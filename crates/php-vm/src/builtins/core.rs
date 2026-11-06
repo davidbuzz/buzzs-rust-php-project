@@ -598,7 +598,7 @@ type InfoEntry = (ZStr, ZStr, u32, Option<u32>);
 /// `ce->properties_info` order: own declarations first, then the parent's.
 fn properties_info(c: &Rc<Class>, out: &mut Vec<InfoEntry>) {
     let own = |decl: &ZStr| decl.eq_ignore_ascii_case(&c.name);
-    let mut add = |out: &mut Vec<InfoEntry>, e: InfoEntry| {
+    let add = |out: &mut Vec<InfoEntry>, e: InfoEntry| {
         if !out.iter().any(|x| x.0 == e.0) {
             out.push(e);
         }

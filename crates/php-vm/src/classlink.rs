@@ -2857,7 +2857,7 @@ fn build_class(
     let display = object::display_name(&name);
     let mut consts: Vec<Rc<ClassConst>> = Vec::new();
     let mut const_map: HashMap<ZStr, usize> = HashMap::new();
-    let mut add_const =
+    let add_const =
         |c: Rc<ClassConst>, consts: &mut Vec<Rc<ClassConst>>, map: &mut HashMap<ZStr, usize>| {
             if let Some(&i) = map.get(&c.name) {
                 consts[i] = c;
