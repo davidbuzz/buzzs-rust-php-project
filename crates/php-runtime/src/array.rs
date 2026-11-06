@@ -582,9 +582,7 @@ impl HashData {
     /// (`_zend_hash_del_el_ex`), returning its value.
     fn unlink_take(&mut self, ts: u32, idx: u32) -> Option<Value> {
         let b = self.buckets.get(idx as usize)?;
-        if b.val.is_none() {
-            return None;
-        }
+        b.val.as_ref()?;
         let s = hash_slot(ts, b.key.hash());
         let next = self.next_of(ts, idx);
         let head = self.index.get(s).copied().unwrap_or(INVALID);
@@ -1081,10 +1079,10 @@ impl HashTable {
     /// `zend_hash_lookup`: the position of `key` (one probe), inserted with
     /// `null` when absent, and whether it already existed.
     fn lookup_idx(&mut self, key: ArrayKey) -> (u32, bool) {
-        match self.key_insert(key, Value::Null, Mode::Lookup) {
-            Ok(r) => r,
-            Err(_) => unreachable!("lookup never fails"),
-        }
+        let Ok(r) = self.key_insert(key, Value::Null, Mode::Lookup) else {
+            unreachable!("lookup never fails")
+        };
+        r
     }
 
     fn val_at_mut(&mut self, idx: u32) -> &mut Value {
@@ -2107,9 +2105,8 @@ impl HashTable {
     /// Inserts a string key verbatim, without numeric normalization
     /// (`zend_hash_update` with a string key; used for property tables).
     pub fn insert_str_raw(&mut self, key: ZStr, val: Value) -> Option<Value> {
-        let (idx, existed) = match self.str_insert(key, Value::Null, Mode::Lookup) {
-            Ok(r) => r,
-            Err(_) => unreachable!("lookup never fails"),
+        let Ok((idx, existed)) = self.str_insert(key, Value::Null, Mode::Lookup) else {
+            unreachable!("lookup never fails")
         };
         let slot = self.val_at_mut(idx);
         if existed {
