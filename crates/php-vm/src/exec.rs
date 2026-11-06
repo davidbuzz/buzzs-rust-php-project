@@ -160,6 +160,13 @@ impl Vm {
             (BinKind::Arith(BinaryOp::Concat), Operand::Tmp(_), Value::Str(s), Value::Str(t)) => {
                 Value::Str(s.concat_owned(t.as_bytes()))
             }
+            // The same with an integer right operand (`"k" . $i . ...`
+            // chains): its digits are appended straight from a stack
+            // buffer, as `concat_function` does after `zval_get_string`.
+            (BinKind::Arith(BinaryOp::Concat), Operand::Tmp(_), Value::Str(s), Value::Int(i)) => {
+                let mut buf = [0u8; php_runtime::string::LONG_MAX_LEN];
+                Value::Str(s.concat_owned(php_runtime::string::format_long(i, &mut buf)))
+            }
             (_, _, x, y) => {
                 let r = self.binary(op, &x, &y)?;
                 drop((x, y));
@@ -168,6 +175,47 @@ impl Vm {
         };
         self.set_tmp(dst, r);
         Ok(())
+    }
+
+    /// `ZEND_ROPE_INIT` / `ZEND_ROPE_ADD` / `ZEND_ROPE_END`: each part is
+    /// read and converted to a string in order (warnings, `__toString`),
+    /// then the result is built in ONE exactly sized allocation
+    /// (`zend_string_alloc(len)` + `memcpy` per part), with integer parts
+    /// formatted straight into it instead of through temporary strings.
+    #[inline(never)]
+    pub(crate) fn op_rope(&mut self, parts: &[Operand]) -> VmResult<ZStr> {
+        // Most ropes have a handful of parts: keep them on the stack.
+        const INLINE: usize = 8;
+        let mut inline: [Value; INLINE] = Default::default();
+        let mut spill: Vec<Value> = Vec::new();
+        let vals: &mut [Value] = if parts.len() <= INLINE {
+            &mut inline[..parts.len()]
+        } else {
+            spill.resize(parts.len(), Value::Null);
+            spill.as_mut_slice()
+        };
+        let mut len = 0usize;
+        for (slot, p) in vals.iter_mut().zip(parts) {
+            let v = match self.read(*p)? {
+                v @ (Value::Str(_) | Value::Int(_)) => v,
+                v => Value::Str(self.to_zstr(&v)?),
+            };
+            len = len.saturating_add(match &v {
+                Value::Str(s) => s.len(),
+                Value::Int(i) => php_runtime::string::long_str_len(*i),
+                _ => 0,
+            });
+            *slot = v;
+        }
+        let mut out = php_runtime::string::ZStrBuf::with_capacity(len);
+        for v in vals.iter() {
+            match v {
+                Value::Str(s) => out.push(s.as_bytes()),
+                Value::Int(i) => out.push_long(*i),
+                _ => {}
+            }
+        }
+        Ok(out.finish())
     }
 
     /// Reads an operand (dereferenced), warning on undefined variables.
@@ -887,18 +935,8 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Rope { parts, dst } => {
-                        let mut out: Vec<u8> = Vec::new();
-                        for p in parts.iter() {
-                            let v = self.read(*p)?;
-                            match &v {
-                                Value::Str(s) => out.extend_from_slice(s.as_bytes()),
-                                _ => {
-                                    let s = self.to_zstr(&v)?;
-                                    out.extend_from_slice(s.as_bytes());
-                                }
-                            }
-                        }
-                        self.set_tmp(*dst, Value::Str(ZStr::from(out)));
+                        let s = self.op_rope(parts)?;
+                        self.set_tmp(*dst, Value::Str(s));
                         Flow::Next
                     }
                     Op::InitArray { dst } => {
@@ -1043,9 +1081,14 @@ impl Vm {
                         val,
                         dst,
                     } => {
-                        let v = self.read(*val)?;
-                        let r = self.place_assign_op(*place, *op, v)?;
-                        self.set_dst(*dst, r);
+                        let concat = *op == BinaryOp::Concat;
+                        if !(concat && self.concat_assign_cv_lit(*place, *val, *dst)) {
+                            let v = self.read(*val)?;
+                            if !(concat && self.concat_assign_cv(*place, &v, *dst)) {
+                                let r = self.place_assign_op(*place, *op, v)?;
+                                self.set_dst(*dst, r);
+                            }
+                        }
                         Flow::Next
                     }
                     Op::IncDec { place, kind, dst } => {
@@ -1401,6 +1444,12 @@ impl Vm {
                         let v = self.read(*a)?;
                         match &v {
                             Value::Str(s) => self.echo(s.as_bytes()),
+                            // `zend_long_to_str` digits from a stack buffer:
+                            // no string is materialised for an echoed int.
+                            Value::Int(i) => {
+                                let mut buf = [0u8; php_runtime::string::LONG_MAX_LEN];
+                                self.echo(php_runtime::string::format_long(*i, &mut buf));
+                            }
                             _ => {
                                 let s = self.to_zstr(&v)?;
                                 self.echo(s.as_bytes());

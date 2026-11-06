@@ -22,6 +22,14 @@ pub(crate) fn is_superglobal(name: &[u8]) -> bool {
     name.first() == Some(&b'_') && crate::auto_globals::note_compiled(name)
 }
 
+/// Whether an interpolated part is a plain variable that compiles to a
+/// bare CV operand without emitting code (`$name`; not `$this`,
+/// `$GLOBALS` or a possible superglobal).
+fn is_plain_cv_part(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::Var(VarName::Name(id))
+        if id.name != b"this" && id.name != b"GLOBALS" && id.name.first() != Some(&b'_'))
+}
+
 pub(crate) fn map_binop(op: AB) -> Option<BinaryOp> {
     Some(match op {
         AB::Add => BinaryOp::Add,
@@ -707,16 +715,32 @@ impl Compiler {
     }
 
     fn compile_rope(&mut self, parts: &[InterpPart]) -> CResult<Operand> {
+        // php-src reads each part where it is compiled (`ZEND_ROPE_ADD`
+        // with a CV operand). A CV part after the last part that runs
+        // code, on the line the rope is emitted at (that of the last
+        // expression part), is read by the rope itself: nothing can change
+        // it in between and its "Undefined variable" warning keeps its
+        // line, so the `Move` into a temporary is not needed.
+        let last_code = parts
+            .iter()
+            .rposition(|p| matches!(p, InterpPart::Expr { expr, .. } if !is_plain_cv_part(expr)));
+        let rope_line = parts.iter().rev().find_map(|p| match p {
+            InterpPart::Expr { expr, .. } => Some(expr.span.line),
+            InterpPart::Literal(..) => None,
+        });
         let mut ops = Vec::new();
-        for p in parts {
+        for (i, p) in parts.iter().enumerate() {
             match p {
                 InterpPart::Literal(s, _) => {
                     ops.push(self.lit(Value::Str(ZStr::from(s.as_slice()))));
                 }
                 InterpPart::Expr { expr, .. } => {
                     let v = self.compile_expr(expr)?;
-                    // Materialise CVs now: interpolation reads in order.
-                    let v = if let Operand::Cv(_) = v {
+                    let direct =
+                        last_code.is_none_or(|l| i > l) && Some(expr.span.line) == rope_line;
+                    // Otherwise materialise CVs now: interpolation reads in
+                    // order.
+                    let v = if let (Operand::Cv(_), false) = (v, direct) {
                         let t = self.tmp();
                         self.emit(Op::Move { src: v, dst: t });
                         Operand::Tmp(t)

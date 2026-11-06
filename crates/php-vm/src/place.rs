@@ -889,6 +889,40 @@ enum UndefDimHit {
     Str(ZStr),
 }
 
+/// The in-place append behind [`Vm::concat_assign_cv`]: `None` when place
+/// `pid` is not a plain compiled variable holding a string, or `rhs` is
+/// neither a string nor an int; otherwise the string was extended (a
+/// shared one is copied first, as `zend_string_extend` requires a
+/// refcount of 1) and the result is returned: the new string when
+/// `want_result`, else `Null`.
+#[inline]
+fn concat_cv_in_place(
+    f: &crate::vm::Frame,
+    pid: PlaceId,
+    rhs: &Value,
+    want_result: bool,
+) -> Option<Value> {
+    let p = &f.code.places[pid as usize];
+    let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) else {
+        return None;
+    };
+    let idx = f.cv_idx(*cv);
+    let mut st = f.vars.borrow_mut();
+    let Some(Some(Value::Str(s))) = st.slots.get_mut(idx) else {
+        return None;
+    };
+    match rhs {
+        Value::Str(add) => s.append(add.as_bytes()),
+        Value::Int(i) => s.append_long(*i),
+        _ => return None,
+    }
+    Some(if want_result {
+        Value::Str(s.clone())
+    } else {
+        Value::Null
+    })
+}
+
 /// Takes the pending undefined final offset of the walk over `segs`.
 fn take_pending_undef_dim(segs: &[RSeg]) -> Option<u32> {
     PENDING_UNDEF_DIM.with(|c| match c.get() {
@@ -2402,6 +2436,52 @@ impl Vm {
         let skipped = RW_SKIPPED.with(|c| c.replace(saved_skip));
         let r = r?;
         Ok((!skipped).then_some((r, mine)))
+    }
+
+    /// `$cv .= <string or int>` (`ZEND_ASSIGN_OP` on a CV, whose
+    /// `concat_function` call has `result == op1`): a compiled variable
+    /// holding a string (not a reference) is appended to in place, which
+    /// extends the buffer when nothing else holds it (`zend_string_extend`),
+    /// without resolving the place generically. Writes the result to `dst`
+    /// and returns `true`; `false` leaves the operation to
+    /// [`Vm::place_assign_op`], whose string fast path does the same after
+    /// the generic resolution (integers it converts to a temporary string
+    /// first).
+    #[inline]
+    pub(crate) fn concat_assign_cv(&mut self, pid: PlaceId, v: &Value, dst: Option<u32>) -> bool {
+        let Some(result) = concat_cv_in_place(self.frame(), pid, v, dst.is_some()) else {
+            return false;
+        };
+        if let Some(t) = dst {
+            self.set_tmp(t, result);
+        }
+        true
+    }
+
+    /// [`Vm::concat_assign_cv`] for a literal right operand (`$s .= "x"`,
+    /// `ZEND_ASSIGN_OP` CV, CONST), appended straight from the literal
+    /// table without reading (cloning) the operand. `false` when `val` is
+    /// not a literal or the fast path does not apply; the caller then
+    /// reads the operand as usual.
+    #[inline]
+    pub(crate) fn concat_assign_cv_lit(
+        &mut self,
+        pid: PlaceId,
+        val: Operand,
+        dst: Option<u32>,
+    ) -> bool {
+        let Operand::Lit(l) = val else {
+            return false;
+        };
+        let f = self.frame();
+        let Some(result) = concat_cv_in_place(f, pid, &f.code.literals[l as usize], dst.is_some())
+        else {
+            return false;
+        };
+        if let Some(t) = dst {
+            self.set_tmp(t, result);
+        }
+        true
     }
 
     /// `++place` etc.
