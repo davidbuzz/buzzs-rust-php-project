@@ -1,28 +1,28 @@
 //! Objects (`zend_object`): property slots, dynamic properties, handles and
 //! destructor scheduling.
 //!
-//! An [`Obj`] from `php-runtime` is an `Rc<dyn PhpObject>`; ours is an
-//! [`ObjBox`] wrapping an `Rc<ObjectData>`. When the last `Obj` handle is
-//! dropped, `ObjBox::drop` runs: if the class has a destructor that has not
-//! been called yet, a fresh `Obj` is created around the same data and queued
-//! so that the VM calls `__destruct` at the next safe point — this gives
-//! PHP's refcount-driven destructor timing without access to the VM from
-//! `Drop`.
+//! An [`Obj`] from `php-runtime` is a thin handle to an `Rc<dyn PhpObject>`
+//! allocation; ours holds an [`ObjBox`] wrapping an `Rc<ObjectData>`. When
+//! the last `Obj` handle is dropped, `ObjBox::drop` runs: if the class has
+//! a destructor that has not been called yet, a fresh `Obj` is created
+//! around the same data and queued so that the VM calls `__destruct` at the
+//! next safe point — this gives PHP's refcount-driven destructor timing
+//! without access to the VM from `Drop`.
 //!
 //! The object store (`EG(objects_store)`, ref: Zend/zend_objects_API.c)
-//! holds a weak handle to the current outer `Rc` of every object, so a
+//! holds a weak handle to the current outer `Obj` of every object, so a
 //! lookup by handle (shutdown destructors, `WeakReference::get()`) yields
 //! the same `Obj` — the same identity for `===` and recursion guards, and
 //! the same refcount — as every other holder, as php-src's one
 //! `zend_object *` per handle does.
 
 use crate::class::Class;
-use php_runtime::{ArrayKey, HashTable, Obj, PhpObject, Value, ZStr};
+use php_runtime::{ArrayKey, HashTable, Obj, ObjWeak, PhpObject, Value, ZStr};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
 /// Object flags.
 pub mod oflags {
@@ -209,8 +209,8 @@ const STORE_INITIAL: usize = 1024;
 
 struct ObjectStore {
     /// Live objects by handle (index = handle - 1): the object's current
-    /// outer `Rc` (thin, so a slot stays one word).
-    objects: Vec<Option<Weak<ObjBox>>>,
+    /// outer `Obj` (a thin weak handle, so a slot stays one word).
+    objects: Vec<Option<ObjWeak>>,
     /// Free handles (LIFO, like Zend's free list).
     free: Vec<u32>,
     /// `EG_FLAGS_OBJECT_STORE_NO_REUSE`: while shutdown destructors run,
@@ -358,7 +358,7 @@ impl Drop for ObjBox {
         let data = &self.0;
         if data.flags.get() & oflags::GC_BUFFERED != 0 {
             // `GC_REMOVE_FROM_BUFFER` in `zend_objects_store_del`.
-            crate::gc::forget_root(std::ptr::from_ref(self).cast::<u8>() as usize);
+            crate::gc::forget_root(Obj::addr_of_payload::<ObjBox>(self));
         }
         if data.flags.get() & oflags::DESTRUCTED != 0 || !data.class.has_destructor() {
             return;
@@ -367,9 +367,8 @@ impl Drop for ObjBox {
             return;
         }
         data.flags.set(data.flags.get() | oflags::DESTRUCTED);
-        let rc = Rc::new(ObjBox(data.clone()));
-        register_outer(&rc);
-        let revived = Obj::from_rc(rc);
+        let revived = Obj::new(ObjBox(data.clone()));
+        register_outer(&revived);
         let _ = PENDING.try_with(|p| {
             if let Ok(mut p) = p.try_borrow_mut() {
                 p.push(revived);
@@ -403,23 +402,24 @@ pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {
             unset_bits: Cell::new(0),
             lazy: RefCell::new(None),
         });
-        let rc = Rc::new(ObjBox(data));
-        s.objects[handle as usize - 1] = Some(Rc::downgrade(&rc));
-        Obj::from_rc(rc)
+        let o = Obj::new(ObjBox(data));
+        s.objects[handle as usize - 1] = Some(o.downgrade());
+        o
     })
 }
 
-/// Makes `rc` the store's handle of its object: lookups by handle return
-/// this `Obj` from now on (the previous outer `Rc` is gone or going).
-fn register_outer(rc: &Rc<ObjBox>) {
+/// Makes `o` the store's handle of its object: lookups by handle return
+/// this `Obj` from now on (the previous outer `Obj` is gone or going).
+fn register_outer(o: &Obj) {
+    let handle = data(o).handle;
     // `try_with`/`try_borrow_mut`: called from `Drop`.
     let _ = STORE.try_with(|s| {
         if let Ok(mut s) = s.try_borrow_mut() {
-            if let Some(slot) = (rc.0.handle as usize)
+            if let Some(slot) = (handle as usize)
                 .checked_sub(1)
                 .and_then(|i| s.objects.get_mut(i))
             {
-                *slot = Some(Rc::downgrade(rc));
+                *slot = Some(o.downgrade());
             }
         }
     });
@@ -529,13 +529,17 @@ pub fn destructors_enabled() -> bool {
 
 /// All live objects in handle order (for shutdown destructors).
 pub fn live_objects() -> Vec<Rc<ObjectData>> {
-    // The upgraded `Rc<ObjBox>` is a second strong handle, so dropping it
-    // inside the borrow never runs `ObjBox::drop`.
+    // The upgraded `Obj` is a second strong handle, so dropping it inside
+    // the borrow never runs `ObjBox::drop`.
     STORE.with(|s| {
         s.borrow()
             .objects
             .iter()
-            .filter_map(|w| w.as_ref().and_then(Weak::upgrade).map(|b| b.0.clone()))
+            .filter_map(|w| {
+                w.as_ref()
+                    .and_then(ObjWeak::upgrade)
+                    .and_then(|o| box_data(&o))
+            })
             .collect()
     })
 }
@@ -547,24 +551,27 @@ pub fn store_len() -> usize {
 
 /// The live object in store slot `i` (handle `i + 1`), if any.
 pub fn live_object_at(i: usize) -> Option<Rc<ObjectData>> {
-    live_box_at(i).map(|b| b.0.clone())
+    live_box_at(i).and_then(|o| box_data(&o))
 }
 
 /// The live object in store slot `i` (handle `i + 1`) as the `Obj` every
 /// other holder has (same identity and refcount).
-// A closure: `Rc<ObjBox>` coerces to `Rc<dyn PhpObject>` at the call.
-#[allow(clippy::redundant_closure)]
 pub fn live_obj_at(i: usize) -> Option<Obj> {
-    live_box_at(i).map(|b| Obj::from_rc(b))
+    live_box_at(i)
 }
 
-fn live_box_at(i: usize) -> Option<Rc<ObjBox>> {
+fn live_box_at(i: usize) -> Option<Obj> {
     STORE.with(|s| {
         s.borrow()
             .objects
             .get(i)
-            .and_then(|w| w.as_ref().and_then(Weak::upgrade))
+            .and_then(|w| w.as_ref().and_then(ObjWeak::upgrade))
     })
+}
+
+/// The `Rc<ObjectData>` behind one of our objects.
+fn box_data(o: &Obj) -> Option<Rc<ObjectData>> {
+    o.downcast_ref::<ObjBox>().map(|b| b.0.clone())
 }
 
 /// Suspends (`true`) or restores handle reuse
@@ -576,20 +583,22 @@ pub fn set_handle_no_reuse(on: bool) {
 
 /// The `Obj` of existing object data: the store's current handle when one
 /// is alive (so identity and refcount match every other holder), else a
-/// new outer `Rc`, which becomes the store's handle.
+/// new outer `Obj`, which becomes the store's handle.
 pub fn revive(data: Rc<ObjectData>) -> Obj {
     let live = (data.handle as usize).checked_sub(1).and_then(live_box_at);
-    if let Some(b) = &live {
-        if Rc::ptr_eq(&b.0, &data) {
-            return Obj::from_rc(b.clone());
+    if let Some(o) = &live {
+        if o.downcast_ref::<ObjBox>()
+            .is_some_and(|b| Rc::ptr_eq(&b.0, &data))
+        {
+            return o.clone();
         }
     }
-    let rc = Rc::new(ObjBox(data));
+    let o = Obj::new(ObjBox(data));
     if live.is_none() {
-        register_outer(&rc);
+        register_outer(&o);
     }
     drop(live);
-    Obj::from_rc(rc)
+    o
 }
 
 /// `rebuild_object_properties`: `d` now has a materialized property table
@@ -861,8 +870,8 @@ fn prune_prop_orders(m: &mut HashMap<u32, Rc<PropOrder>>) {
                 .checked_sub(1)
                 .and_then(|i| s.objects.get(i))
                 .and_then(Option::as_ref)
-                .and_then(Weak::upgrade)
-                .is_some_and(|b| b.0.flags.get() & oflags::PROP_ORDER != 0)
+                .and_then(ObjWeak::upgrade)
+                .is_some_and(|o| data(&o).flags.get() & oflags::PROP_ORDER != 0)
         });
     });
     let next = (m.len() * 2).max(PROP_ORDERS_MIN_PRUNE);
