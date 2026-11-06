@@ -489,6 +489,118 @@ impl Vm {
         release_str_tmp_in(self.frame_mut(), op);
     }
 
+    /// [`crate::opcode::Op::Move`] when its read needs no diagnostic: a
+    /// literal, a defined compiled variable (dereferenced and cloned,
+    /// `ZEND_QM_ASSIGN_SPEC_CV`), a temporary not holding a reference
+    /// (moved, or cloned when kept), into temporary `dst`. `false`,
+    /// nothing changed, otherwise (an undefined variable warns).
+    #[inline]
+    pub(super) fn move_fast(&mut self, src: Operand, dst: u32) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        let v = match src {
+            Operand::Lit(i) => match f.code.literals.get(i as usize) {
+                Some(v) if !matches!(v, Value::Reference(_)) => v.clone(),
+                _ => return false,
+            },
+            Operand::Cv(cv) => {
+                let v = f.peek_cv(cv, |slot| match slot {
+                    Some(Value::Reference(r)) => Some(r.get()),
+                    Some(v) => Some(v.clone()),
+                    None => None,
+                });
+                let Some(v) = v else {
+                    return false;
+                };
+                v
+            }
+            Operand::Tmp(t) => match f.tmps.get_mut(t as usize) {
+                Some(slot) if !matches!(slot, Value::Reference(_)) => std::mem::take(slot),
+                _ => return false,
+            },
+            Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+                Some(slot) if !matches!(slot, Value::Reference(_)) => slot.clone(),
+                _ => return false,
+            },
+            Operand::Unused => Value::Null,
+        };
+        put_tmp(&mut f.tmps[dst as usize], v);
+        true
+    }
+
+    /// `??` ([`crate::opcode::Op::Coalesce`], `ZEND_COALESCE_SPEC_CV`) on
+    /// a compiled variable, which never warns: `Some(true)` when it holds a
+    /// value other than null (dereferenced, cloned into `dst`: the op
+    /// jumps), `Some(false)` when it is undefined or null (nothing read: the
+    /// op falls through). `None` for any other operand (the generic read).
+    #[inline]
+    pub(super) fn coalesce_cv_fast(&mut self, a: Operand, dst: u32) -> Option<bool> {
+        let Operand::Cv(cv) = a else {
+            return None;
+        };
+        let f = self.frames.last_mut()?;
+        let v = f.peek_cv(cv, |slot| match slot {
+            None | Some(Value::Null) => None,
+            Some(Value::Reference(r)) => {
+                let inner = r.get();
+                (!matches!(inner, Value::Null)).then_some(inner)
+            }
+            Some(v) => Some(v.clone()),
+        });
+        let Some(v) = v else {
+            return Some(false);
+        };
+        put_tmp(&mut f.tmps[dst as usize], v);
+        Some(true)
+    }
+
+    /// `?:` ([`crate::opcode::Op::JmpSet`], `ZEND_JMP_SET_SPEC_CV`) on a
+    /// defined compiled variable whose truth needs no conversion (see
+    /// [`plain_truth`]): `Some(true)` when truthy (cloned into `dst`: the op
+    /// jumps), `Some(false)` when falsy (the op falls through). `None` for an
+    /// undefined variable (warning), a reference, an object, a resource,
+    /// NaN and any other operand.
+    #[inline]
+    pub(super) fn jmp_set_cv_fast(&mut self, a: Operand, dst: u32) -> Option<bool> {
+        let Operand::Cv(cv) = a else {
+            return None;
+        };
+        let f = self.frames.last_mut()?;
+        let found = f.peek_cv(cv, |slot| {
+            let v = slot?;
+            Some(plain_truth(v)?.then(|| v.clone()))
+        })?;
+        let Some(v) = found else {
+            return Some(false);
+        };
+        put_tmp(&mut f.tmps[dst as usize], v);
+        Some(true)
+    }
+
+    /// `?->`'s null test ([`crate::opcode::Op::JmpNull`],
+    /// `ZEND_JMP_NULL_SPEC_CV`) on a defined compiled variable:
+    /// `Some(true)` when it holds null (directly or through a reference:
+    /// `dst` becomes null and the op jumps), `Some(false)` otherwise
+    /// (nothing read: the op falls through). `None` for an undefined
+    /// variable (the generic read warns) and any other operand.
+    #[inline]
+    pub(super) fn jmp_null_cv_fast(&mut self, a: Operand, dst: u32) -> Option<bool> {
+        let Operand::Cv(cv) = a else {
+            return None;
+        };
+        let f = self.frames.last_mut()?;
+        let null = f.peek_cv(cv, |slot| match slot? {
+            Value::Null => Some(true),
+            Value::Reference(r) => Some(matches!(&*r.try_borrow()?, Value::Null)),
+            _ => Some(false),
+        })?;
+        if null {
+            put_tmp(&mut f.tmps[dst as usize], Value::Null);
+        }
+        Some(null)
+    }
+
     /// The jump decision of a smart branch ([`crate::opcode::Op::CmpJmp`])
     /// on two plain numbers: the `IS_LONG`/`IS_DOUBLE` pairs of
     /// `ZEND_IS_EQUAL`, `ZEND_IS_IDENTICAL`, `ZEND_IS_SMALLER` and
@@ -1421,6 +1533,76 @@ Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php o
 [0=>[0=>0,1=>9,],]
 [0=>[1=>'u',],]
 [0=>[0=>'over',],]
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn coalesce_elvis_nullsafe_and_moves_on_cvs() {
+        // `??`, `?:`, `?->`, ternary moves and assignments from variables
+        // over every kind of value, through a reference and on undefined
+        // variables (the generic ops' warnings), in the hot pre-match.
+        let src = r#"<?php
+class O { public $p = 'p'; function m() { return 'm'; } }
+class F { function __toString(): string { return ''; } }
+$vals = ['null' => null, 'false' => false, 'true' => true, 'zero' => 0, 'one' => 1, 'fzero' => 0.0, 'half' => 0.5,
+    'empty' => '', 'szero' => '0', 'str' => 'a', 'arr0' => [], 'arr1' => [1], 'obj' => new O, 'f' => new F];
+foreach ($vals as $name => $v) {
+    $c = $v ?? 'dflt'; $e = $v ?: 'elvis'; $t = $v ? 'yes' : 'no'; $m = $v;
+    $n = $v?->p ?? 'np';
+    echo $name, ': ', is_object($c) ? 'obj' : var_export($c, true), ' ', is_object($e) ? 'obj' : var_export($e, true), ' ', $t, ' ', gettype($m), ' ', var_export($n, true), "\n";
+}
+$r = null; $ref = &$r; var_dump($ref ?? 'rd', $ref ?: 'rel', $ref?->p);
+$r = 'set'; var_dump($ref ?? 'rd', $ref ?: 'rel');
+$r = new O; var_dump($ref?->m());
+var_dump($undef1 ?? 'u1');
+var_dump($undef2 ?: 'u2');
+var_dump($undef3?->p);
+$x = $undef4; var_dump($x);
+$a = 1; $b = $a; $a = 2; var_dump($b);
+$s = 'str'; $s2 = $s; $s .= 'x'; var_dump($s2);
+$arr = [1]; $arr2 = $arr; $arr[] = 2; var_dump(count($arr2));
+for ($i = 0; $i < 3; $i++) { $k = $i ?: 'z'; $l = $vals['null'] ?? $i; echo $k, $l; } echo "\n";
+"#;
+        let expected = r#"null: 'dflt' 'elvis' no NULL 'np'
+false: false 'elvis' no boolean 'np'
+true: true true yes boolean 'np'
+zero: 0 'elvis' no integer 'np'
+one: 1 1 yes integer 'np'
+fzero: 0.0 'elvis' no double 'np'
+half: 0.5 0.5 yes double 'np'
+empty: '' 'elvis' no string 'np'
+szero: '0' 'elvis' no string 'np'
+str: 'a' 'a' yes string 'np'
+arr0: array (
+) 'elvis' no array 'np'
+arr1: array (
+  0 => 1,
+) array (
+  0 => 1,
+) yes array 'np'
+obj: obj obj yes object 'p'
+f: obj obj yes object 'np'
+string(2) "rd"
+string(3) "rel"
+NULL
+string(3) "set"
+string(3) "set"
+string(1) "m"
+string(2) "u1"
+
+Warning: Undefined variable $undef2 in t.php on line 15
+string(2) "u2"
+
+Warning: Undefined variable $undef3 in t.php on line 16
+NULL
+
+Warning: Undefined variable $undef4 in t.php on line 17
+NULL
+int(1)
+string(3) "str"
+int(1)
+z01122
 "#;
         assert_eq!(run(src), expected);
     }

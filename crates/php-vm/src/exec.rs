@@ -372,19 +372,8 @@ impl Vm {
     }
 
     /// `ZEND_ASSIGN` with a CV result operand (`$cv = val`, the
-    /// [`Op::AssignCv`] instruction): `zend_assign_to_variable`. The
-    /// common forms are done in place ([`Vm::assign_cv_fast`]); the rest
-    /// (reads that warn, references on either side, old values that are
-    /// possible GC roots) take the generic path.
-    #[inline]
-    pub(crate) fn op_assign_cv(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> VmResult<()> {
-        if self.assign_cv_fast(cv, val, dst) {
-            return Ok(());
-        }
-        self.assign_cv_generic(cv, val, dst)
-    }
-
-    /// The in-place form of [`Vm::op_assign_cv`], php-src's
+    /// [`Op::AssignCv`] instruction, `zend_assign_to_variable`) in place,
+    /// in the hot pre-match of [`Vm::run`]: php-src's
     /// `ZEND_ASSIGN_SPEC_CV_{CONST,TMP,CV}` fast case: the source is a
     /// literal, a temporary or a defined compiled variable whose value
     /// needs no dereferencing work with side effects, and the target slot
@@ -443,7 +432,9 @@ impl Vm {
         true
     }
 
-    /// The generic path of [`Vm::op_assign_cv`].
+    /// The generic `AssignCv` (reads that warn, references on either side,
+    /// old values that are possible GC roots), after
+    /// [`Vm::assign_cv_fast`] did not apply.
     #[inline(never)]
     fn assign_cv_generic(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> VmResult<()> {
         let v = self.read(val)?;
@@ -959,6 +950,35 @@ impl Vm {
                             Some(false) => {}
                             None => break 'slow,
                         },
+                        // `$cv = val` in place (`assign_cv_fast`).
+                        Op::AssignCv { cv, val, dst } => {
+                            if !self.assign_cv_fast(*cv, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        Op::Move { src, dst } => {
+                            if !self.move_fast(*src, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        // `??`, `?:` and `?->` on a compiled variable,
+                        // tested in place (`exec/spec.rs`): `Some(true)`
+                        // jumps.
+                        Op::Coalesce { a, dst, target } => match self.coalesce_cv_fast(*a, *dst) {
+                            Some(true) => ip = *target as usize,
+                            Some(false) => {}
+                            None => break 'slow,
+                        },
+                        Op::JmpSet { a, dst, target } => match self.jmp_set_cv_fast(*a, *dst) {
+                            Some(true) => ip = *target as usize,
+                            Some(false) => {}
+                            None => break 'slow,
+                        },
+                        Op::JmpNull { a, dst, target } => match self.jmp_null_cv_fast(*a, *dst) {
+                            Some(true) => ip = *target as usize,
+                            Some(false) => {}
+                            None => break 'slow,
+                        },
                         // Smart branch (`ZEND_IS_SMALLER_LONG_SPEC` +
                         // `ZEND_VM_SMART_BRANCH`): a comparison decided
                         // without conversions jumps, or skips the jump op
@@ -1338,8 +1358,9 @@ impl Vm {
                         }
                         Flow::Next
                     }
+                    // The pre-match's `assign_cv_fast` did not apply.
                     Op::AssignCv { cv, val, dst } => {
-                        self.op_assign_cv(*cv, *val, *dst)?;
+                        self.assign_cv_generic(*cv, *val, *dst)?;
                         Flow::Next
                     }
                     // Also the generic form of `AssignStaticProp`.
