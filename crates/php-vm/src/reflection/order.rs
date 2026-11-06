@@ -266,15 +266,11 @@ pub(crate) fn consts(c: &Rc<Class>) -> Vec<Rc<ClassConst>> {
         }
     };
     if let Some(decl) = &c.decl {
-        let mut own: Vec<(u32, usize, ZStr)> = Vec::new();
-        for (i, cd) in decl.consts.iter().enumerate() {
-            own.push((cd.line, i, cd.name.clone()));
-        }
-        for (i, (n, _, line)) in decl.cases.iter().enumerate() {
-            own.push((*line, decl.consts.len() + i, n.clone()));
-        }
-        own.sort_by_key(|(l, i, _)| (*l, *i));
-        for (_, _, n) in &own {
+        for member in decl.own_constants() {
+            let n = match member {
+                crate::class::OwnConstant::Const(i) => &decl.consts[i].name,
+                crate::class::OwnConstant::Case(i) => &decl.cases[i].0,
+            };
             push(n, &mut order);
         }
         if let Some(p) = &c.parent {

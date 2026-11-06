@@ -1893,6 +1893,7 @@ impl Compiler<'_> {
                             doc_comment: c.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
                             attributes: attrs.clone(),
                             line: c.span.line,
+                            cases_before: u32::try_from(cases.len()).unwrap_or(u32::MAX),
                         });
                     }
                 }

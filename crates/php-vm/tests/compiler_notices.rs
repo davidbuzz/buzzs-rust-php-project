@@ -252,3 +252,24 @@ fn namespaced_calls_compile_append_by_their_frameless_branch() {
         )
     );
 }
+
+/// `zend_compile_class_decl` adds an enum's constants and cases to the
+/// constants table in declaration order, also when they share a line
+/// (`ConstDecl::cases_before`); `cases()` keeps the cases' own order.
+#[test]
+fn enum_constants_and_cases_keep_declaration_order() {
+    let out = run("<?php\n\
+         enum E { const X = 1; case A; const Y = 2; case B; }\n\
+         enum F { case A; const X = 1; case B; const Y = 2; const Z = 3; case C; }\n\
+         foreach ([E::class, F::class] as $class) {\n\
+         \x20   foreach ((new ReflectionClass($class))->getReflectionConstants() as $c) {\n\
+         \x20       echo $c->getName(), $c->isEnumCase() ? '*' : '', ' ';\n\
+         \x20   }\n\
+         \x20   echo \"\\n\";\n\
+         }\n\
+         foreach ((new ReflectionClass('E'))->getConstants() as $k => $_) { echo $k, ' '; }\n\
+         echo \"\\n\";\n\
+         foreach (F::cases() as $case) { echo $case->name, ' '; }\n\
+         echo \"\\n\";\n");
+    assert_eq!(out, "X A* Y B* \nA* X B* Y Z C* \nX A Y B \nA B C \n");
+}
