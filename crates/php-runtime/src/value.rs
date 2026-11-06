@@ -11,10 +11,13 @@
 
 use crate::array::ZArray;
 use crate::string::ZStr;
-use std::any::Any;
-use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::any::{Any, TypeId};
+use std::cell::{Cell, Ref, RefCell, RefMut, UnsafeCell};
 use std::fmt;
-use std::rc::Rc;
+use std::marker::PhantomData;
+use std::mem::MaybeUninit;
+use std::ptr::{self, NonNull};
+use std::rc::{Rc, Weak};
 
 /// A PHP value (`zval`).
 #[derive(Clone, Default)]
@@ -470,64 +473,277 @@ pub trait PhpObject: Any {
     fn class_name(&self) -> ZStr;
     /// Upcast for downcasting to the VM's concrete type.
     fn as_any(&self) -> &dyn Any;
+    /// Marks the allocation [`Obj::new`] makes, so that [`Obj::from_rc`]
+    /// can recognise its `Rc`. Implementors keep the default.
+    #[doc(hidden)]
+    fn obj_cell_tag(&self) -> Option<ObjCellTag> {
+        None
+    }
+}
+
+/// The claim of an [`Obj`]'s allocation to be one, returned by
+/// [`PhpObject::obj_cell_tag`]: the `TypeId` of its `ObjCell<T>`. Only
+/// php-runtime can make one, and [`Obj::from_rc`] checks the claim against
+/// the object's real dynamic type (`Any::type_id` through the vtable, which
+/// no implementor can fake), so a tag forwarded from another object, or a
+/// stale one, is rejected.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub struct ObjCellTag(TypeId);
+
+/// The header in front of every object payload (`zend_object`'s
+/// `handlers` pointer: what a thin handle needs to reach the object's
+/// vtable).
+#[repr(C)]
+struct ObjHeader {
+    /// The allocation's own `Rc`, written once by [`Obj::new`] right after
+    /// the allocation and never again. It owns no strong count (it is never
+    /// dropped: `MaybeUninit` has no drop glue); it lends [`Obj::rc`] a real
+    /// `&Rc<dyn PhpObject>` and carries the vtable (drop, size, methods).
+    this: UnsafeCell<MaybeUninit<Rc<dyn PhpObject>>>,
+    /// `TypeId` of the payload: [`Obj::downcast_ref`] to the payload type
+    /// is one comparison instead of two virtual calls.
+    type_id: TypeId,
+}
+
+/// One object allocation: header, then the payload (`repr(C)`, so the
+/// header is at offset 0 and the payload at
+/// [`payload_offset`]`::<T>()`).
+#[repr(C)]
+struct ObjCell<T> {
+    header: ObjHeader,
+    value: T,
+}
+
+/// Offset of the payload in an `ObjCell<T>` (`repr(C)` field placement).
+const fn payload_offset<T>() -> usize {
+    std::mem::size_of::<ObjHeader>().next_multiple_of(std::mem::align_of::<T>())
+}
+
+impl<T: PhpObject> PhpObject for ObjCell<T> {
+    #[inline]
+    fn handle(&self) -> u32 {
+        self.value.handle()
+    }
+    #[inline]
+    fn class_name(&self) -> ZStr {
+        self.value.class_name()
+    }
+    #[inline]
+    fn as_any(&self) -> &dyn Any {
+        self.value.as_any()
+    }
+    fn obj_cell_tag(&self) -> Option<ObjCellTag> {
+        Some(ObjCellTag(TypeId::of::<Self>()))
+    }
+}
+
+/// An `Rc<dyn PhpObject>` that was not made by [`Obj::new`], adopted by
+/// [`Obj::from_rc`] as the payload of a new object handle.
+struct ForeignObj(Rc<dyn PhpObject>);
+
+impl PhpObject for ForeignObj {
+    fn handle(&self) -> u32 {
+        self.0.handle()
+    }
+    fn class_name(&self) -> ZStr {
+        self.0.class_name()
+    }
+    fn as_any(&self) -> &dyn Any {
+        self.0.as_any()
+    }
 }
 
 /// A handle to a PHP object. Clones share the object; equality is identity.
-#[derive(Clone)]
-pub struct Obj(Rc<dyn PhpObject>);
+///
+/// The handle is one thin pointer (8 bytes, with a niche for `Option`), like
+/// the `zend_object *` in a zval, so that [`Value`] is 16 bytes. It points at
+/// an `Rc` allocation whose header holds the allocation's own
+/// `Rc<dyn PhpObject>` (the vtable) and the payload's `TypeId`; the payload
+/// follows. Each handle owns one strong count of that `Rc`, so
+/// [`Obj::refcount`], [`Obj::rc`] and `Weak` handles made from it behave as
+/// they did when `Obj` was an `Rc<dyn PhpObject>`. Like `Rc`, it is neither
+/// `Send` nor `Sync`.
+pub struct Obj {
+    ptr: NonNull<ObjHeader>,
+    _owns: PhantomData<Rc<dyn PhpObject>>,
+}
 
 impl Obj {
-    /// Wraps a VM object.
+    /// Wraps a VM object (one allocation: header + `object`).
     pub fn new<T: PhpObject>(object: T) -> Self {
-        Obj(Rc::new(object))
+        let rc: Rc<dyn PhpObject> = Rc::new(ObjCell {
+            header: ObjHeader {
+                this: UnsafeCell::new(MaybeUninit::uninit()),
+                type_id: TypeId::of::<T>(),
+            },
+            value: object,
+        });
+        let raw = Rc::into_raw(rc);
+        let header = Obj::header_of(raw);
+        // SAFETY: `raw` points at the live `ObjCell<T>` whose one strong
+        // count the new handle takes over. Nothing has seen `this` yet, and
+        // writing through `UnsafeCell::get` is allowed from a shared
+        // pointer. The `Rc` written is rebuilt from `into_raw`'s own pointer
+        // and is never dropped, so it adds no count.
+        unsafe {
+            (*(*header).this.get())
+                .as_mut_ptr()
+                .write(Rc::from_raw(raw));
+            Obj::from_header(header)
+        }
     }
 
-    /// Wraps an already reference-counted VM object.
+    /// The header of the `ObjCell` at `cell`, the data pointer of its
+    /// `Rc<dyn PhpObject>`.
+    #[inline]
+    // The pointee is an `ObjCell<T>`: `repr(C)` with the header first, so
+    // at least as aligned as the header. Clippy only sees the `dyn`.
+    #[allow(clippy::cast_ptr_alignment)]
+    fn header_of(cell: *const dyn PhpObject) -> *const ObjHeader {
+        cell.cast::<ObjHeader>()
+    }
+
+    /// # Safety
+    /// `header` must be [`Obj::header_of`] a live `ObjCell` (from
+    /// `Rc::into_raw` of its `Rc<dyn PhpObject>`) whose `this` is written,
+    /// and the caller must hand one strong count of it to the new handle.
+    #[inline]
+    unsafe fn from_header(header: *const ObjHeader) -> Self {
+        Obj {
+            // SAFETY: `Rc::into_raw` never returns null (caller contract).
+            ptr: unsafe { NonNull::new_unchecked(header.cast_mut()) },
+            _owns: PhantomData,
+        }
+    }
+
+    #[inline]
+    fn header(&self) -> &ObjHeader {
+        // SAFETY: this handle owns a strong count, so the allocation and
+        // its header are alive; the header is only written by `Obj::new`
+        // before the first handle exists.
+        unsafe { self.ptr.as_ref() }
+    }
+
+    /// Wraps an already reference-counted object.
+    ///
+    /// An `Rc` obtained from an [`Obj`] (by [`Obj::rc`], or by upgrading a
+    /// `Weak` downgraded from it) becomes a handle to that same object (same
+    /// identity and refcount). Any other `Rc` is adopted as the payload of a
+    /// new object: create VM objects with [`Obj::new`] so that their `Rc`s
+    /// keep their identity.
     #[must_use]
     pub fn from_rc(rc: Rc<dyn PhpObject>) -> Self {
-        Obj(rc)
+        // `Any::type_id` through the vtable (not `rc.type_id()`, which is
+        // the `Rc`'s own): the object's dynamic type.
+        let dynamic = Any::type_id(&*rc);
+        match rc.obj_cell_tag() {
+            Some(ObjCellTag(cell)) if cell == dynamic => {
+                let raw = Rc::into_raw(rc);
+                // SAFETY: the object's dynamic type is an `ObjCell<T>`,
+                // which only `Obj::new` makes (writing `this`), so `rc` is
+                // that cell's `Rc<dyn PhpObject>`; its strong count moves
+                // into the handle.
+                unsafe { Obj::from_header(Obj::header_of(raw)) }
+            }
+            _ => Obj::new(ForeignObj(rc)),
+        }
     }
 
-    /// The underlying reference-counted object.
+    /// The object's own reference-counted handle (`Rc::strong_count` of it
+    /// is [`Obj::refcount`]; `Rc::downgrade` of it gives a weak handle that
+    /// [`Obj::from_rc`] turns back into this object).
+    #[inline]
     #[must_use]
     pub fn rc(&self) -> &Rc<dyn PhpObject> {
-        &self.0
+        // SAFETY: `this` was written by `Obj::new` before any handle existed
+        // and is never written again; the allocation is alive (see
+        // `header`).
+        unsafe { (*self.header().this.get()).assume_init_ref() }
+    }
+
+    /// A weak handle to the object (see [`ObjWeak`]).
+    #[must_use]
+    pub fn downgrade(&self) -> ObjWeak {
+        ObjWeak(Rc::downgrade(self.rc()))
     }
 
     /// The object handle number.
+    #[inline]
     #[must_use]
     pub fn handle(&self) -> u32 {
-        self.0.handle()
+        self.rc().handle()
     }
 
     /// The class name.
     #[must_use]
     pub fn class_name(&self) -> ZStr {
-        self.0.class_name()
+        self.rc().class_name()
     }
 
     /// Downcasts to the VM's concrete object type.
+    #[inline]
     #[must_use]
     pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
-        self.0.as_any().downcast_ref::<T>()
+        if self.header().type_id == TypeId::of::<T>() {
+            // SAFETY: the payload's type is `T`, so the allocation is an
+            // `ObjCell<T>` (alive while this handle is); only shared
+            // references to the payload are ever made.
+            Some(unsafe { &(*self.ptr.as_ptr().cast::<ObjCell<T>>()).value })
+        } else {
+            self.rc().as_any().downcast_ref::<T>()
+        }
     }
 
     /// Whether two handles denote the same object (`===`).
+    #[inline]
     #[must_use]
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
-        Rc::ptr_eq(&a.0, &b.0)
+        a.ptr == b.ptr
     }
 
     /// Number of handles to the object (`GC_REFCOUNT`).
     #[must_use]
     pub fn refcount(&self) -> usize {
-        Rc::strong_count(&self.0)
+        Rc::strong_count(self.rc())
     }
 
-    /// An address usable as an identity key.
+    /// An address usable as an identity key. It is the data address of
+    /// [`Obj::rc`] (and of `Weak`s downgraded from it, `Weak::as_ptr`).
+    #[inline]
     #[must_use]
     pub fn addr(&self) -> usize {
-        Rc::as_ptr(&self.0).cast::<u8>() as usize
+        self.ptr.as_ptr().cast::<u8>() as usize
+    }
+
+    /// The [`Obj::addr`] of the object whose payload is `payload`, for a
+    /// payload that knows only itself (its `Drop`). Meaningful only for a
+    /// payload placed by [`Obj::new`].
+    #[must_use]
+    pub fn addr_of_payload<T: PhpObject>(payload: &T) -> usize {
+        (ptr::from_ref(payload).cast::<u8>() as usize).wrapping_sub(payload_offset::<T>())
+    }
+}
+
+impl Clone for Obj {
+    #[inline]
+    fn clone(&self) -> Self {
+        std::mem::forget(Rc::clone(self.rc()));
+        Obj {
+            ptr: self.ptr,
+            _owns: PhantomData,
+        }
+    }
+}
+
+impl Drop for Obj {
+    #[inline]
+    fn drop(&mut self) {
+        // SAFETY: this handle owns one strong count; the bitwise copy of the
+        // allocation's own `Rc` is an `Rc` owning exactly that count, and
+        // dropping it releases it (and frees the object if it was the last).
+        // `self` is not used afterwards.
+        unsafe { drop(ptr::read(self.rc())) };
     }
 }
 
@@ -540,6 +756,54 @@ impl PartialEq for Obj {
 impl fmt::Debug for Obj {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Object({}#{})", self.class_name(), self.handle())
+    }
+}
+
+/// A weak handle to an [`Obj`]: it does not keep the object alive, and
+/// [`ObjWeak::upgrade`] returns the same object (identity and refcount)
+/// while it is.
+///
+/// It is the allocation's own `Weak<dyn PhpObject>` (two words), not a thin
+/// pointer that would re-read the header: weak handles are used while their
+/// object's payload is being dropped (the VM's object store and destructor
+/// revival replace, drop and upgrade the weak handle of the dying object
+/// from inside `Drop`), and the drop glue holds an exclusive reference to
+/// the whole cell, header included, for as long as it runs. `Weak` only
+/// touches the counts in front of the cell, which is allowed then (Miri,
+/// `payload_drop_may_create_objects_and_drop_weaks`).
+#[derive(Clone)]
+pub struct ObjWeak(Weak<dyn PhpObject>);
+
+impl ObjWeak {
+    /// The object, if it is still alive.
+    #[must_use]
+    pub fn upgrade(&self) -> Option<Obj> {
+        let rc = self.0.upgrade()?;
+        let raw = Rc::into_raw(rc);
+        // SAFETY: an `ObjWeak` is only made by `Obj::downgrade`, so `rc` is
+        // the `Rc<dyn PhpObject>` of an `ObjCell` made by `Obj::new` (its
+        // `this` is written); the strong count `upgrade` took moves into
+        // the handle.
+        Some(unsafe { Obj::from_header(Obj::header_of(raw)) })
+    }
+
+    /// Number of strong handles to the object (`0` once it is freed).
+    #[must_use]
+    pub fn strong_count(&self) -> usize {
+        self.0.strong_count()
+    }
+
+    /// The [`Obj::addr`] of the object (valid as a key even after the
+    /// object is freed, while this handle exists).
+    #[must_use]
+    pub fn addr(&self) -> usize {
+        self.0.as_ptr().cast::<u8>() as usize
+    }
+}
+
+impl fmt::Debug for ObjWeak {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ObjWeak({:#x})", self.addr())
     }
 }
 
@@ -713,6 +977,262 @@ mod tests {
         assert!(!Obj::ptr_eq(&o, &q));
         assert!(o.downcast_ref::<TestObj>().is_some());
         assert_eq!(o.handle(), 1);
+    }
+
+    /// A zval is 16 bytes (`zend_types.h`); every handle is one pointer.
+    #[test]
+    fn value_is_16_bytes() {
+        use std::mem::size_of;
+        assert_eq!(size_of::<Value>(), 16);
+        assert_eq!(size_of::<Option<Value>>(), 16);
+        assert_eq!(size_of::<Obj>(), 8);
+        assert_eq!(size_of::<Option<Obj>>(), 8);
+        // A weak handle is the allocation's fat `Weak` (see `ObjWeak`).
+        assert_eq!(size_of::<ObjWeak>(), 16);
+        assert_eq!(size_of::<Option<ObjWeak>>(), 16);
+        assert_eq!(size_of::<PhpRef>(), 8);
+        assert_eq!(size_of::<Resource>(), 8);
+    }
+
+    /// Counts payload drops.
+    struct Counted(u32, Rc<Cell<u32>>);
+    impl PhpObject for Counted {
+        fn handle(&self) -> u32 {
+            self.0
+        }
+        fn class_name(&self) -> ZStr {
+            ZStr::from("Counted")
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            self.1.set(self.1.get() + 1);
+        }
+    }
+
+    #[test]
+    fn object_refcount_and_single_drop() {
+        let drops = Rc::new(Cell::new(0));
+        let o = Obj::new(Counted(4, drops.clone()));
+        assert_eq!(o.refcount(), 1);
+        let p = o.clone();
+        let q = p.clone();
+        assert_eq!(o.refcount(), 3);
+        assert_eq!(Rc::strong_count(o.rc()), 3);
+        drop(p);
+        assert_eq!(q.refcount(), 2);
+        drop(o);
+        assert_eq!(drops.get(), 0);
+        assert_eq!(q.handle(), 4);
+        assert_eq!(q.class_name(), "Counted");
+        assert_eq!(format!("{q:?}"), "Object(Counted#4)");
+        drop(q);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn object_rc_round_trip_keeps_identity() {
+        let o = Obj::new(TestObj(2));
+        let rc = o.rc().clone();
+        // The dynamic type `from_rc` checks the tag against is the cell's.
+        assert_eq!(Any::type_id(&*rc), TypeId::of::<ObjCell<TestObj>>());
+        assert_eq!(o.refcount(), 2);
+        assert_eq!(Rc::as_ptr(&rc).cast::<u8>() as usize, o.addr());
+        let back = Obj::from_rc(rc);
+        assert!(Obj::ptr_eq(&o, &back));
+        assert_eq!(back, o);
+        assert_eq!(o.refcount(), 2);
+        drop(back);
+        assert_eq!(o.refcount(), 1);
+        // `Rc::as_any` reaches the payload, not the header.
+        assert!(o.rc().as_any().downcast_ref::<TestObj>().is_some());
+        assert_eq!(o.rc().handle(), 2);
+    }
+
+    #[test]
+    fn object_std_weak_round_trip() {
+        let drops = Rc::new(Cell::new(0));
+        let o = Obj::new(Counted(1, drops.clone()));
+        let w: Weak<dyn PhpObject> = Rc::downgrade(o.rc());
+        assert_eq!(w.as_ptr().cast::<u8>() as usize, o.addr());
+        let up = Obj::from_rc(w.upgrade().expect("alive"));
+        assert!(Obj::ptr_eq(&o, &up));
+        assert_eq!(o.refcount(), 2);
+        drop((o, up));
+        assert_eq!(drops.get(), 1);
+        assert!(w.upgrade().is_none());
+        assert_eq!(w.strong_count(), 0);
+    }
+
+    #[test]
+    fn object_thin_weak() {
+        let drops = Rc::new(Cell::new(0));
+        let o = Obj::new(Counted(9, drops.clone()));
+        let w = o.downgrade();
+        let w2 = w.clone();
+        assert_eq!(w.addr(), o.addr());
+        assert_eq!(w.strong_count(), 1);
+        assert_eq!(Rc::weak_count(o.rc()), 2);
+        let up = w.upgrade().expect("alive");
+        assert!(Obj::ptr_eq(&o, &up));
+        assert_eq!(o.refcount(), 2);
+        drop(up);
+        drop(w2);
+        assert_eq!(Rc::weak_count(o.rc()), 1);
+        drop(o);
+        assert_eq!(drops.get(), 1);
+        assert!(w.upgrade().is_none());
+        assert_eq!(w.strong_count(), 0);
+        assert!(format!("{w:?}").starts_with("ObjWeak(0x"));
+        let w3 = w.clone();
+        drop(w);
+        assert!(w3.upgrade().is_none());
+    }
+
+    #[test]
+    fn foreign_rc_is_adopted() {
+        let rc: Rc<dyn PhpObject> = Rc::new(TestObj(7));
+        // Not an `Rc`'s type id, and not a cell's.
+        assert_eq!(Any::type_id(&*rc), TypeId::of::<TestObj>());
+        let o = Obj::from_rc(rc.clone());
+        assert_eq!(o.handle(), 7);
+        assert_eq!(o.class_name(), "Foo");
+        // The payload is reached through the adopted `Rc` (slow path).
+        assert!(o.downcast_ref::<TestObj>().is_some());
+        assert!(o.downcast_ref::<Counted>().is_none());
+        assert_eq!(Rc::strong_count(&rc), 2);
+        // Each adoption is a new object.
+        let p = Obj::from_rc(rc.clone());
+        assert!(!Obj::ptr_eq(&o, &p));
+        drop((o, p));
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    /// An implementor forwarding the tag of another object must not be
+    /// taken for that object.
+    struct Forwarder(Obj);
+    impl PhpObject for Forwarder {
+        fn handle(&self) -> u32 {
+            self.0.handle()
+        }
+        fn class_name(&self) -> ZStr {
+            self.0.class_name()
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn obj_cell_tag(&self) -> Option<ObjCellTag> {
+            self.0.rc().obj_cell_tag()
+        }
+    }
+
+    #[test]
+    fn forwarded_tag_is_rejected() {
+        let inner = Obj::new(TestObj(3));
+        let o = Obj::from_rc(Rc::new(Forwarder(inner.clone())));
+        assert!(!Obj::ptr_eq(&o, &inner));
+        assert!(o.downcast_ref::<Forwarder>().is_some());
+        assert!(o.downcast_ref::<TestObj>().is_none());
+        assert_eq!(inner.refcount(), 2);
+        drop(o);
+        assert_eq!(inner.refcount(), 1);
+    }
+
+    #[repr(align(32))]
+    struct Aligned(u8);
+    impl PhpObject for Aligned {
+        fn handle(&self) -> u32 {
+            u32::from(self.0)
+        }
+        fn class_name(&self) -> ZStr {
+            ZStr::from("Aligned")
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn payload_address_maps_to_object_address() {
+        let a = Obj::new(TestObj(1));
+        let pa = a.downcast_ref::<TestObj>().expect("payload");
+        assert_eq!(Obj::addr_of_payload(pa), a.addr());
+        let b = Obj::new(Aligned(5));
+        let pb = b.downcast_ref::<Aligned>().expect("payload");
+        assert_eq!(std::ptr::from_ref(pb).cast::<u8>() as usize % 32, 0);
+        assert_eq!(Obj::addr_of_payload(pb), b.addr());
+        assert_eq!(b.handle(), 5);
+        let c = Obj::new(Counted(2, Rc::new(Cell::new(0))));
+        let pc = c.downcast_ref::<Counted>().expect("payload");
+        assert_eq!(Obj::addr_of_payload(pc), c.addr());
+    }
+
+    thread_local! {
+        static SLOT: RefCell<Option<ObjWeak>> = const { RefCell::new(None) };
+        static REVIVED: RefCell<Vec<Obj>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Like the VM's `ObjBox`: its drop replaces the weak slot that points
+    /// at the object being freed and creates a new object.
+    struct Reviver(u32);
+    impl PhpObject for Reviver {
+        fn handle(&self) -> u32 {
+            self.0
+        }
+        fn class_name(&self) -> ZStr {
+            ZStr::from("Reviver")
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+    impl Drop for Reviver {
+        fn drop(&mut self) {
+            if self.0 == 0 {
+                return;
+            }
+            let addr = Obj::addr_of_payload(self);
+            SLOT.with(|s| {
+                let old = s.borrow().as_ref().map(ObjWeak::addr);
+                assert_eq!(old, Some(addr));
+                assert!(s.borrow().as_ref().and_then(ObjWeak::upgrade).is_none());
+            });
+            let revived = Obj::new(Reviver(0));
+            SLOT.with(|s| *s.borrow_mut() = Some(revived.downgrade()));
+            REVIVED.with(|r| r.borrow_mut().push(revived));
+        }
+    }
+
+    #[test]
+    fn payload_drop_may_create_objects_and_drop_weaks() {
+        let o = Obj::new(Reviver(1));
+        SLOT.with(|s| *s.borrow_mut() = Some(o.downgrade()));
+        drop(o);
+        let revived = REVIVED.with(|r| r.borrow_mut().pop()).expect("revived");
+        let slot = SLOT.with(|s| s.borrow_mut().take()).expect("slot");
+        assert!(Obj::ptr_eq(&slot.upgrade().expect("alive"), &revived));
+        drop(revived);
+        assert!(slot.upgrade().is_none());
+    }
+
+    #[test]
+    fn values_of_objects_clone_and_drop() {
+        let drops = Rc::new(Cell::new(0));
+        let v = Value::Object(Obj::new(Counted(1, drops.clone())));
+        let copies: Vec<Value> = (0..10).map(|_| v.clone()).collect();
+        if let Value::Object(o) = &v {
+            assert_eq!(o.refcount(), 11);
+        }
+        drop(copies);
+        assert_eq!(drops.get(), 0);
+        let mut r = v;
+        let rf = r.make_ref();
+        assert_eq!(rf.get().type_name(), "Counted");
+        drop((r, rf));
+        assert_eq!(drops.get(), 1);
     }
 
     #[test]
