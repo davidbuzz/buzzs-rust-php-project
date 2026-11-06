@@ -205,7 +205,7 @@ impl Vm {
                 Some(Value::Int(i)) => Ok(a.get_int(i).is_some()),
                 k => self.key_exists_slow(key, k, &a),
             },
-            subject => self.key_exists_error(key, k.is_none(), array, subject),
+            subject => self.key_exists_error(key, k.is_none(), array, subject.as_ref()),
         }
     }
 
@@ -255,7 +255,7 @@ impl Vm {
         key_op: Operand,
         key_undefined: bool,
         array_op: Operand,
-        subject: Option<Value>,
+        subject: Option<&Value>,
     ) -> VmResult<bool> {
         if key_undefined {
             self.warn_undefined_cv(key_op)?;
@@ -263,9 +263,7 @@ impl Vm {
         if subject.is_none() {
             self.warn_undefined_cv(array_op)?;
         }
-        let given = subject
-            .as_ref()
-            .map_or_else(|| "null".to_string(), given_type);
+        let given = subject.map_or_else(|| "null".to_string(), given_type);
         Err(self.make_throw(
             "TypeError",
             &format!(
