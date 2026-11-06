@@ -55,12 +55,16 @@ $r->initializeLazyObject($o);
 /// anything: a proxy of `C` whose factory would return a `D` is
 /// uncomparable with a `D` without the factory running. Two objects of one
 /// class with one of them lazy go through their properties tables, which
-/// initializes the lazy one.
+/// initializes the lazy one. The factory's `D` is a valid real instance:
+/// `zend_lazy_object_compatible` wants the proxy's class to be an
+/// `instanceof` the real one's (`C extends D`, no added properties); the
+/// other way round the initialization is a `TypeError` ("## C vs D" in
+/// `Zend/tests/lazy_objects/initializer_must_return_the_right_type.phpt`).
 #[test]
 fn comparison_checks_the_classes_before_initializing() {
     let src = r#"<?php
-class C { public int $a = 1; }
-class D extends C {}
+class D { public int $a = 1; }
+class C extends D {}
 $r = new ReflectionClass(C::class);
 $ghost = $r->newLazyGhost(function ($o) { echo "init ghost\n"; });
 $proxy = $r->newLazyProxy(function ($o) { echo "init proxy\n"; return new D(); });
