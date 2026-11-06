@@ -221,15 +221,13 @@ impl Vm {
         dst: u32,
         cv: u32,
     ) -> VmResult<bool> {
-        let r = match self.bin_num_fast(op, a, b) {
-            Some(r) => r,
-            None => match self.cmp_simple_fast(op, a, b) {
-                Some(r) => Value::Bool(r),
-                None => {
-                    self.bin_slow(op, a, b, dst)?;
-                    return Ok(false);
-                }
-            },
+        let r = if let Some(r) = self.bin_num_fast(op, a, b) {
+            r
+        } else if let Some(r) = self.cmp_simple_fast(op, a, b) {
+            Value::Bool(r)
+        } else {
+            self.bin_slow(op, a, b, dst)?;
+            return Ok(false);
         };
         match self.cv_store_plain(cv, r) {
             Ok(()) => Ok(true),
@@ -303,18 +301,13 @@ impl Vm {
         // `peek_num` on the CV only succeeds for a non-reference int or
         // float, which the store below overwrites without side effects.
         if let Some(r) = self.bin_num_fast(BinKind::Arith(op), Operand::Cv(cv), val) {
-            match dst {
-                None => {
-                    if self.cv_store_plain(cv, r).is_ok() {
-                        return Ok(());
-                    }
+            if let Some(d) = dst {
+                if self.cv_store_plain(cv, r.clone()).is_ok() {
+                    self.set_tmp(d, r);
+                    return Ok(());
                 }
-                Some(d) => {
-                    if self.cv_store_plain(cv, r.clone()).is_ok() {
-                        self.set_tmp(d, r);
-                        return Ok(());
-                    }
-                }
+            } else if self.cv_store_plain(cv, r).is_ok() {
+                return Ok(());
             }
         }
         let v = self.read(val)?;

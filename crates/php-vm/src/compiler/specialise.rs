@@ -471,13 +471,13 @@ mod tests {
             )),
             "{ops:?}"
         );
-        // `.=` on a dimension and a compound assignment with a used result
-        // keep the generic op.
+        // `.=` (on the CV and on the dimension) and a compound assignment
+        // with a used result keep the generic op.
         assert_eq!(
             ops.iter()
                 .filter(|op| matches!(op, Op::AssignOp { .. }))
                 .count(),
-            2,
+            3,
             "{ops:?}"
         );
         // Nested dimension reads get the chain form; appends and nested
