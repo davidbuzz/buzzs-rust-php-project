@@ -33,7 +33,7 @@ use crate::opcode::{
 use crate::props::PropLookup;
 use crate::types::mask;
 use crate::vm::{Frame, FrameKind, Vm, VmResult};
-use php_runtime::{ops, ArrayKey, BinaryOp, Obj, Value, ZStr};
+use php_runtime::{ops, ArrayKey, BinaryOp, Obj, PhpRef, Value, ZStr};
 use std::rc::Rc;
 
 /// The entry was filled (an unfilled entry never matches).
@@ -475,6 +475,26 @@ impl Vm {
                 }
             })
         })
+    }
+
+    /// `ZEND_FETCH_OBJ_W` + `ZEND_MAKE_REF` of cacheable place `pid`
+    /// (`$r = &$this->p`, by-reference arguments, `foreach` by reference):
+    /// the reference an initialized, in-place-writable declared slot now
+    /// holds (`property_ref` through `PropContainer::Declared`), or `None`
+    /// for the generic walk.
+    pub(crate) fn prop_cache_make_ref(&mut self, pid: PlaceId) -> Option<PhpRef> {
+        let hit = self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |_, obj, home| {
+            let Home::Slot(slot) = &home else {
+                return Probe::Slow;
+            };
+            let slot = *slot as usize;
+            write_home(obj, &home, |value| {
+                Probe::Hit((obj.clone(), slot, value.make_ref()))
+            })
+        });
+        let (obj, slot, rf) = hit?;
+        self.add_slot_type_source(&obj, slot, &rf);
+        Some(rf)
     }
 
     /// `ZEND_ASSIGN_OBJ` of cacheable place `pid`: stores `v` over an
@@ -967,6 +987,46 @@ class Cnt {
 Warning: Undefined array key "b" in t.php on line 10
 {"a":3,"b":3} [-1.5] -0.5 4
 3 3
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    /// References to cached properties (`&$this->p`, by-reference
+    /// arguments, `foreach` by reference, `&$this->a[$k]`): typed
+    /// properties still become type sources of the reference.
+    #[test]
+    fn references_to_cached_properties() {
+        let src = r#"<?php
+class Rf {
+    public $p = 1;
+    public $list = [3, 1, 2];
+    public int $t = 1;
+    public $a = ['k' => 0];
+    function run() {
+        for ($i = 0; $i < 2; $i++) {
+            $r = &$this->p;
+            $r += 10;
+            unset($r);
+        }
+        sort($this->list);
+        foreach ($this->list as &$v) { $v *= 2; }
+        unset($v);
+        $q = &$this->t;
+        try { $q = "x"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        $q = 5;
+        $w = &$this->a['k'];
+        $w = 9;
+        echo $this->p, ' ', json_encode($this->list), ' ', $this->t, ' ', json_encode($this->a), "\n";
+    }
+}
+(new Rf)->run();
+$o = new Rf;
+for ($i = 0; $i < 2; $i++) { array_push($o->list, $i); }
+echo json_encode($o->list), "\n";
+"#;
+        let expected = r#"Cannot assign string to reference held by property Rf::$t of type int
+21 [2,4,6] 5 {"k":9}
+[3,1,2,0,1]
 "#;
         assert_eq!(run(src), expected);
     }

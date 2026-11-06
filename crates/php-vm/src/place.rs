@@ -2707,8 +2707,15 @@ impl Vm {
 
     /// Makes a place a reference.
     pub(crate) fn place_make_ref(&mut self, pid: PlaceId) -> VmResult<PhpRef> {
+        // Fast path: `&$this->p` on a cached declared slot.
+        if propcache::cacheable(&self.frame().code.places[pid as usize]) {
+            if let Some(rf) = self.prop_cache_make_ref(pid) {
+                return Ok(rf);
+            }
+        }
         let (base, segs) = self.resolve_place(pid, true)?;
-        match self.write_place(base, &segs, WOp::MakeRef)? {
+        // `&$this->a[$k]` & co. enter a cached declared slot.
+        match self.write_place_cached(pid, base, &segs, WOp::MakeRef)? {
             Value::Reference(r) => Ok(r),
             other => Ok(PhpRef::new(other)),
         }
