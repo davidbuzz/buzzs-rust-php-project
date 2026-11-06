@@ -170,9 +170,9 @@ impl Drop for ExecutionGuard {
     #[inline]
     fn drop(&mut self) {
         let last = EXECUTION_DEPTH.with(|d| {
-            let n = d.get().saturating_sub(1);
-            d.set(n);
-            n == 0
+            let n = d.get();
+            d.set(n.saturating_sub(1));
+            n == 1
         });
         if last {
             SAFE_POINT.thread_left();
