@@ -197,3 +197,14 @@ fn concat_with_number_allocates_once() {
     assert_allocs("$t = ''; $x = 1.5;", "$t = 'v' . $x;", 1.0);
     assert_allocs("$t = ''; $x = 0.1 + 0.2;", "$t = $x . 'v';", 1.0);
 }
+
+/// `ZEND_ECHO` of an integer prints its digits (no string is built).
+#[test]
+fn echo_of_ints_matches_php() {
+    assert_eq!(
+        output_of(
+            r#"<?php $i = -15; echo $i, " ", 0, " ", PHP_INT_MIN, " ", PHP_INT_MAX, " ", 1234567, "\n";"#
+        ),
+        "-15 0 -9223372036854775808 9223372036854775807 1234567\n"
+    );
+}
