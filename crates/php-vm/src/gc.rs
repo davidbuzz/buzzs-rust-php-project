@@ -421,8 +421,8 @@ impl Default for GcState {
 
 thread_local! {
     static STATE: RefCell<GcState> = RefCell::new(GcState::default());
-    /// Set when an automatic run is due (the per-instruction check is a
-    /// single thread-local load).
+    /// Set when an automatic run is due; setting it also raises the
+    /// executor's safe-point flag (`crate::interrupt::raise_safe_point`).
     static WANT_RUN: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -753,6 +753,7 @@ fn note_new_slot(s: &mut GcState) {
         s.due = true;
         freeze(s);
         WANT_RUN.with(|w| w.set(true));
+        crate::interrupt::raise_safe_point();
     }
 }
 
@@ -826,8 +827,8 @@ pub fn num_roots() -> usize {
     mine + providers.iter().map(|p| (p.len)()).sum::<usize>()
 }
 
-/// Whether an automatic collection is due. The VM checks this after each
-/// instruction and then calls [`Vm::gc_safe_point`].
+/// Whether an automatic collection is due. The VM checks this at its
+/// safe point after an instruction and then calls [`Vm::gc_safe_point`].
 #[inline]
 #[must_use]
 pub fn wants_run() -> bool {

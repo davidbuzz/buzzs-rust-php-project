@@ -374,6 +374,8 @@ impl Drop for ObjBox {
             if let Ok(mut p) = p.try_borrow_mut() {
                 p.push(revived);
                 HAS_PENDING.with(|h| h.set(true));
+                // The executor runs the queue at its next safe point.
+                crate::interrupt::raise_safe_point();
                 PENDING_SEQ.with(|c| c.set(c.get().wrapping_add(1)));
             }
         });
