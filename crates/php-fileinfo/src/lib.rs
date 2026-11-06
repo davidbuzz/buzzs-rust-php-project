@@ -38,6 +38,25 @@
 //! are captured and re-emitted as PHP warnings.  `MAGIC_COMPRESS` and
 //! `MAGIC_COMPRESS_TRANSP` are masked out: PHP builds libmagic without
 //! decompression support.
+//!
+//! # Link order (load-bearing)
+//!
+//! libmagic compiles its `regex` tests with the C library's `regcomp()`;
+//! the dynamic linker resolves that reference through the executable's
+//! `DT_NEEDED` list in order, and accepts an unversioned definition for
+//! libmagic's versioned (`regcomp@GLIBC_2.2.5`) one.  Oniguruma
+//! (`libonig`, behind `mb_ereg*`) exports the POSIX names `regcomp`,
+//! `regexec`, `regerror` and `regfree` unversioned, so a `php` binary that
+//! lists it before libc makes libmagic compile every pattern with
+//! Oniguruma: a text database fails to load ("regex error 8 for
+//! `…require\(', (imbalanced ( and ))" is Oniguruma's `REG_EPAREN` text;
+//! the entry is then left without a description and its `!:mime` line warns
+//! "Current entry does not yet have a description for adding a MIME type"),
+//! and the default database misdescribes text (`ASCII text` for a PHP
+//! script).  `crates/php-cli/build.rs` links libc as the binary's own first
+//! library, which puts it first in `DT_NEEDED`; that order is what keeps
+//! this crate working.  `LD_PRELOAD=libonig.so.5 file x.txt` reproduces the
+//! failure with file(1) itself.
 
 mod capture;
 mod compat;
