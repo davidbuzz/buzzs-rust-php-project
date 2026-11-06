@@ -21,6 +21,9 @@ use crate::limit::{
 /// [`CountingAlloc::set_hard_limit_handler`]). It must not return.
 pub type HardLimitHandler = fn(HardLimitExceeded) -> !;
 
+/// Signature of the pending hook (see [`CountingAlloc::set_pending_hook`]).
+pub type PendingHook = fn();
+
 /// One heap operation reported to the [heap observer](CountingAlloc::set_observer)
 /// while [observing](CountingAlloc::observe) is on (the custom heap handlers
 /// of `zend_mm_set_custom_handlers_ex`, as `ext/zend_test`'s
@@ -302,6 +305,8 @@ pub struct CountingAlloc<A> {
     huge_base: AtomicUsize,
     hard_handler: OnceLock<HardLimitHandler>,
     in_hard_handler: AtomicBool,
+    /// Called when a violation becomes pending.
+    pending_hook: OnceLock<PendingHook>,
     /// Zend's tracked allocator (`USE_ZEND_ALLOC=0 USE_TRACKED_ALLOC=1`):
     /// real usage is the exact live-byte count, not whole chunks.
     tracked: AtomicBool,
@@ -353,6 +358,7 @@ impl<A> CountingAlloc<A> {
             huge_base: AtomicUsize::new(0),
             hard_handler: OnceLock::new(),
             in_hard_handler: AtomicBool::new(false),
+            pending_hook: OnceLock::new(),
             tracked: AtomicBool::new(false),
             uncounted_slots: [const { AtomicUsize::new(SLOT_FREE) }; UNCOUNTED_SLOTS],
             uncounted_used: AtomicUsize::new(0),
@@ -619,6 +625,9 @@ impl<A> CountingAlloc<A> {
             self.over_limit.store(over.limit, Relaxed);
             self.over_tried.store(over.tried, Relaxed);
             self.over_state.store(PENDING, Release);
+            if let Some(hook) = self.pending_hook.get() {
+                hook();
+            }
             true
         } else {
             false
@@ -754,6 +763,22 @@ impl<A> CountingAlloc<A> {
     /// already installed.
     pub fn set_hard_limit_handler(&self, handler: HardLimitHandler) -> bool {
         self.hard_handler.set(handler).is_ok()
+    }
+
+    /// Installs the function called each time a memory-limit violation is
+    /// recorded, i.e. becomes [pending](Self::is_pending): by an allocation
+    /// crossing the soft limit or by [`try_reserve`](Self::try_reserve).
+    /// The VM can use it to raise its combined interrupt flag (php-src's
+    /// `EG(vm_interrupt)`) instead of polling [`is_pending`](Self::is_pending)
+    /// on every opcode. It runs once per recorded violation (none is
+    /// recorded again until the pending one is [taken](Self::take) and
+    /// [cleared](Self::clear)), after the violation is visible to
+    /// [`check`](Self::check), on the thread that recorded it and possibly
+    /// inside the allocator: it must not panic or block and should not
+    /// allocate (setting an atomic flag is the intended use). Installed
+    /// once; returns `false` if a hook was already installed.
+    pub fn set_pending_hook(&self, hook: PendingHook) -> bool {
+        self.pending_hook.set(hook).is_ok()
     }
 
     // ---- heap observer ------------------------------------------------

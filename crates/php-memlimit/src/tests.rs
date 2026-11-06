@@ -965,3 +965,38 @@ fn heap_survives_cross_thread_churn() {
     });
     assert_eq!(a.raw_usage(), 0);
 }
+
+// ---- pending hook ---------------------------------------------------------
+
+/// Calls of [`count_pending`] (only `pending_hook_runs_once_per_violation`
+/// installs it).
+static PENDING_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn count_pending() {
+    PENDING_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[test]
+fn pending_hook_runs_once_per_violation() {
+    let calls = || PENDING_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+    let a = CountingAlloc::new(System);
+    assert!(a.set_pending_hook(count_pending));
+    assert!(!a.set_pending_hook(count_pending), "installed once");
+    a.request_start(Some(4 * M)).expect("limit");
+    let _small = alloc(&a, 100);
+    assert_eq!(calls(), 0, "no violation, no call");
+    let over = alloc(&a, 5 * M);
+    assert!(a.is_pending());
+    assert_eq!(calls(), 1, "an allocation over the soft limit");
+    let _more = alloc(&a, 3 * M);
+    assert_eq!(calls(), 1, "the first violation wins: nothing new recorded");
+    assert!(a.take().is_some());
+    assert!(a.try_reserve(16 * M).is_err());
+    assert_eq!(calls(), 1, "nothing is recorded while handled");
+    a.clear();
+    assert!(a.try_reserve(16 * M).is_err());
+    assert_eq!(calls(), 2, "try_reserve records, and calls, too");
+    a.clear();
+    drop(over);
+    a.request_end();
+}

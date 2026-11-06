@@ -41,7 +41,8 @@ mod limit;
 pub use mimalloc::MiMalloc;
 
 pub use counting::{
-    fallible, uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, Stats,
+    fallible, uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, PendingHook,
+    Stats,
 };
 pub use heap::{MAX_SMALL_ALIGN, MAX_SMALL_SIZE};
 pub use limit::{
@@ -244,6 +245,11 @@ pub fn would_fit(bytes: usize) -> bool {
 /// [`CountingAlloc::set_hard_limit_handler`] on [`GLOBAL`].
 pub fn set_hard_limit_handler(handler: HardLimitHandler) -> bool {
     GLOBAL.set_hard_limit_handler(handler)
+}
+
+/// [`CountingAlloc::set_pending_hook`] on [`GLOBAL`].
+pub fn set_pending_hook(hook: PendingHook) -> bool {
+    GLOBAL.set_pending_hook(hook)
 }
 
 /// [`CountingAlloc::request_start`] on [`GLOBAL`].
