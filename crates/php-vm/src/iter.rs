@@ -588,24 +588,38 @@ impl Vm {
     }
 
     /// Takes iterator `iter` out of the frame, detaching a by-reference
-    /// array iterator from its array.
+    /// array iterator from its array. The reference a by-reference loop
+    /// holds (`FE_RESET_RW` made the subject one) is released here the way
+    /// `FE_FREE` does, with `zval_ptr_dtor_nogc`: no possible root is
+    /// buffered for it.
     fn fe_take(&mut self, iter: u32) -> Option<ForeachIter> {
         let it = self
             .frame_mut()
             .iters
             .get_mut(iter as usize)
             .and_then(Option::take);
-        if let Some(ForeachIter::ArrayRef { r, id }) = &it {
-            if r.try_borrow().is_some() {
-                let mut b = r.borrow_mut();
-                if let Value::Array(a) = &mut *b {
-                    if a.has_iterators() {
-                        a.make_mut().iterator_del(*id);
+        match it {
+            Some(ForeachIter::ArrayRef { r, id }) => {
+                if r.try_borrow().is_some() {
+                    let mut b = r.borrow_mut();
+                    if let Value::Array(a) = &mut *b {
+                        if a.has_iterators() {
+                            a.make_mut().iterator_del(id);
+                        }
                     }
                 }
+                crate::gc::release_duplicate(Value::Reference(r));
+                None
             }
+            Some(ForeachIter::Props {
+                subject: subject @ Value::Reference(_),
+                ..
+            }) => {
+                crate::gc::release_duplicate(subject);
+                None
+            }
+            other => other,
         }
-        it
     }
 
     /// Collects the (key, value) pairs of an array or `Traversable`.

@@ -20,9 +20,9 @@ z->addGlob = [0=>"{DIR}/g/foo.txt"]
 ! ValueError: Option "remove_path" must be less than 4095 bytes
 ! TypeError: Option "add_path" must be of type string, false given
 ! ValueError: Option "add_path" must not be empty
-[Warning] ZipArchive::addGlob(): Entry name too long (max: 4095, 4148 given)
+[Warning] ZipArchive::addGlob(): Entry name too long (max: 4095, 4102 given)
 z->addGlob = false
-[Warning] ZipArchive::addGlob(): Entry name too long (max: 4095, 4147 given)
+[Warning] ZipArchive::addGlob(): Entry name too long (max: 4095, 4101 given)
 z->addGlob = false
 ! TypeError: Option "flags" must be of type int, string given
 z->addGlob = false

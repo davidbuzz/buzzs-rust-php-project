@@ -71,8 +71,10 @@ fn default_database_overlay() {
     let (r, w) = warnings(|warn| f.buffer(php, 0, warn));
     assert_eq!(r.unwrap(), b"text/x-php");
     assert!(w.is_empty());
+    // `FILEINFO_NONE` (0) sets no per-call options (`_php_finfo_get_type`:
+    // `if (options)`), so the finfo's own MIME_TYPE flags stay in force.
     let (r, _) = warnings(|warn| f.buffer(php, FILEINFO_NONE, warn));
-    assert_eq!(r.unwrap(), b"PHP script, ASCII text");
+    assert_eq!(r.unwrap(), b"text/x-php");
     // FILEINFO_CONTINUE runs on the plain database, so the overlaid `<?php`
     // entry is not reported twice.
     let (r, _) = warnings(|warn| f.buffer(b"<?php echo 1;\n", FILEINFO_CONTINUE, warn));

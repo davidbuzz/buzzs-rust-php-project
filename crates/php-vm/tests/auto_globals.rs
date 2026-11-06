@@ -47,9 +47,10 @@ fn run(source: &str) -> String {
     assert!(vm.arm_auto_global(b"_ENV", create));
     assert!(vm.arm_auto_global(b"_REQUEST", create));
     assert!(!vm.arm_auto_global(b"argv", create));
-    // `array_keys` is not a php-vm builtin.
+    // `array_keys` and `count` are not php-vm builtins.
     let source = format!(
-        "{source}\nfunction keys() {{ $o = []; foreach ($GLOBALS as $k => $v) {{ $o[] = $k; }} return implode(',', $o); }}\n"
+        "{source}\nfunction keys() {{ $o = []; foreach ($GLOBALS as $k => $v) {{ $o[] = $k; }} return implode(',', $o); }}\n\
+         function cnt($a) {{ $n = 0; foreach ($a as $_) {{ $n++; }} return $n; }}\n"
     );
     vm.run_script(source.as_bytes(), "t.php");
     drop(vm);
@@ -88,7 +89,7 @@ fn eval_and_constant_var_var_names_create_them() {
     // the first line runs; eval() compiles `$_ENV` later.
     assert_eq!(
         run(r#"<?php
-echo count($GLOBALS), "\n";
+echo cnt($GLOBALS), "\n";
 eval('$_ENV;');
 echo keys(), "\n";
 function g() { return ${'_REQUEST'}['made']; }

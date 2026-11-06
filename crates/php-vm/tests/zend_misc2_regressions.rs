@@ -36,18 +36,19 @@ fn compound_assignment_to_append_adds_one_element() {
     let out = run(r#"<?php
 $t = [];
 $t[] .= "ok";
-echo count($t), $t[0], "\n";
+echo cnt($t), $t[0], "\n";
 $u = [];
 $u[][] .= "x";
-echo count($u), count($u[0]), $u[0][0], "\n";
+echo cnt($u), cnt($u[0]), $u[0][0], "\n";
 $o = new stdClass;
 $o->a = [5 => 1];
 $o->a[] += 2;
-echo count($o->a), $o->a[6], "\n";
+echo cnt($o->a), $o->a[6], "\n";
 $r = [];
 $b = &$r;
 $b[] .= "y";
-echo count($r), $r[0], "\n";
+echo cnt($r), $r[0], "\n";
+function cnt($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
 "#);
     assert_eq!(out, "1ok\n11x\n22\n1y\n");
 }
@@ -161,11 +162,12 @@ set_error_handler(function ($code, $msg) {
 $capture = true;
 $y = [];
 $y[1e20] = 1;
-echo count($y), "\n";
+echo cnt($y), "\n";
 $capture = false;
 $z = [];
 $z[1.5] = 2;
-echo count($z), $z[1], "\n";
+echo cnt($z), $z[1], "\n";
+function cnt($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
 "#);
     assert_eq!(
         out,

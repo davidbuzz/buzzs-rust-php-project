@@ -1251,6 +1251,9 @@ impl Compiler {
             ExprKind::Assign { target, value } => {
                 self.compile_assign(target, value, e.span.line, false)?;
             }
+            ExprKind::AssignRef { target, value } => {
+                self.compile_assign_ref(target, value, e.span.line, false)?;
+            }
             ExprKind::AssignOp { .. } | ExprKind::IncDec { .. } => {
                 let op = self.compile_expr_nodst(e)?;
                 if let Some(op) = op {

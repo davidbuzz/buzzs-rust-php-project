@@ -69,9 +69,10 @@ $o->a = 1;
 $o->{'2'} = 'two';
 $c = clone $o;
 $c->b = [3];
-var_dump((array) $o, $c == $o, count(get_object_vars($c)));
+var_dump((array) $o, $c == $o, cnt(get_object_vars($c)));
 unset($c->a);
 foreach ($c as $k => $v) { echo $k, "\n"; }
+function cnt($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
 "#);
     assert_eq!(
         out,

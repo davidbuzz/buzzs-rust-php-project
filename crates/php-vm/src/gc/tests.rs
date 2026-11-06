@@ -379,6 +379,19 @@ fn binding_references_buffers_no_roots() {
     assert_eq!(out, "int(0)\n");
 }
 
+/// gc_047: a run finds the cycle alive through the reference the
+/// by-reference `foreach` still holds and drops the root; the loop
+/// variable is rooted again afterwards (`zend_gc_check_root_tmpvars`), so
+/// the cycles are collected once the loop releases it without a GC check.
+#[test]
+fn live_loop_reference_is_rooted_again_after_a_run() {
+    let out = run("<?php $a = [0, 1];\n\
+         foreach ($a as &$v) { $a[0] =& $a; $a[1] = array(); $a[1][0] =& $a[1]; $b = 1; $a =& $b;\n\
+         var_dump(gc_collect_cycles(), gc_status()['roots']); break; }\n\
+         var_dump(gc_collect_cycles());");
+    assert_eq!(out, "int(0)\nint(1)\nint(2)\n");
+}
+
 /// gc_023: the automatic run collects the roots buffered when the
 /// threshold was reached, not the root that crossed it
 /// (`gc_possible_root_when_full`).
@@ -422,11 +435,13 @@ fn live_root_hole_takes_the_last_root() {
 }
 
 /// `new` of a class with a native constructor buffers the object
-/// (`ZEND_CALL_RELEASE_THIS`), as a user constructor does.
+/// (`ZEND_CALL_RELEASE_THIS`), as a user constructor does. (`Exception`
+/// is the bare VM's class with a native constructor; `ArrayObject` gives
+/// the same output under `/usr/bin/php -n`.)
 #[test]
 fn native_constructor_buffers_the_new_object() {
     let out = run(&format!(
-        "<?php {CYCLE}$y = new ArrayObject([]);\n\
+        "<?php {CYCLE}$y = new Exception('x');\n\
          new C(0); new C(1); new C(2); gc_collect_cycles();"
     ));
     assert_eq!(out, "201");
@@ -439,7 +454,7 @@ fn native_constructor_buffers_the_new_object() {
 fn closure_call_buffers_the_closure() {
     let out = run(&format!(
         "<?php {CYCLE}function t($mk) {{ $x = $mk(); new C(0); new C(1); new C(2); gc_collect_cycles(); echo \"\\n\"; }}\n\
-         t(fn() => new stdClass); gc_collect_cycles(); t(fn() => new ArrayObject([]));"
+         t(fn() => new stdClass); gc_collect_cycles(); t(fn() => new Exception('x'));"
     ));
     assert_eq!(out, "201\n210\n");
 }

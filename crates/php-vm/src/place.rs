@@ -2551,7 +2551,21 @@ impl Vm {
                 if let Value::Str(add) = &v {
                     let mut st = store.borrow_mut();
                     if let Some(Value::Str(s)) = &mut st.slots[*idx] {
-                        s.append(add.as_bytes());
+                        if !ZStr::ptr_eq(s, add) {
+                            s.append(add.as_bytes());
+                            return Ok(Value::Str(s.clone()));
+                        }
+                        // `$s .= $s`: php-src extends the one string in
+                        // place (`concat_function`, result == op1 == op2),
+                        // so the operand's handle goes first and the memory
+                        // limit sees only the growth.
+                        drop(st);
+                        drop(v);
+                        let mut st = store.borrow_mut();
+                        let Some(Value::Str(s)) = &mut st.slots[*idx] else {
+                            unreachable!("the slot held the string a moment ago")
+                        };
+                        s.append_self();
                         return Ok(Value::Str(s.clone()));
                     }
                 }

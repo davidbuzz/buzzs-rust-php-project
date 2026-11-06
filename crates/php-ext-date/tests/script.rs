@@ -196,6 +196,8 @@ DateMalformedStringException: DateTime::modify(): Failed to parse time string (g
 DateInvalidTimeZoneException: DateTimeZone::__construct(): Unknown or bad timezone (Foo/Bar)
 DateMalformedIntervalStringException: Unknown or bad format (PXD)
 DateMalformedIntervalStringException: String '2020-01-01' contains non-relative elements
+
+Warning: The return value of method DateTimeImmutable::sub() should either be used or intentionally ignored by casting it as (void), as DateTimeImmutable::sub() does not modify the object itself in test.php(1) : eval()'d code on line 1
 DateInvalidOperationException: DateTimeImmutable::sub(): Only non-special relative time specifications are supported for subtraction
 "
     );
@@ -564,6 +566,7 @@ fn nul_parser_diagnostics() {
          2000-01-01 12:34:56.789012 Europe/Paris\n\
          1 11\n\
          Failed to parse time string (2000-01-01) at position 11 (b): The timezone could not be found in the database\n\
+         \nWarning: The return value of method DateTimeImmutable::modify() should either be used or intentionally ignored by casting it as (void), as DateTimeImmutable::modify() does not modify the object itself in test.php on line 8\n\
          DateTimeImmutable::modify(): Failed to parse time string (2000-01-01) at position 11 (b): The timezone could not be found in the database\n\
          2000-01-01 12:34:56.789012 Europe/Paris\n\
          1 11\n\
@@ -672,6 +675,7 @@ fn date_period_get_object_vars_native_properties() {
         "prop\nstart\ncurrent\nend\ninterval\nrecurrences\ninclude_start_date\ninclude_end_date\n\
          DateTimeImmutable 2012-07-01 00:00:00.000000\n\
          NULL\nNULL\nint(7)\nint(5)\nbool(true)\nbool(false)\n\
+         \nWarning: The return value of method DateTimeImmutable::modify() should either be used or intentionally ignored by casting it as (void), as DateTimeImmutable::modify() does not modify the object itself in test.php on line 12\n\
          2012-07-01 7\n2012-07-01\n"
     );
 }

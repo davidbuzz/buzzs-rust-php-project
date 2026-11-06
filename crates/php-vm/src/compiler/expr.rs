@@ -375,7 +375,7 @@ impl Compiler {
                 .compile_assign(target, value, line, true)?
                 .unwrap_or(Operand::Unused),
             ExprKind::AssignRef { target, value } => {
-                self.compile_assign_ref(target, value, line)?
+                self.compile_assign_ref(target, value, line, true)?
             }
             ExprKind::AssignOp { op, target, value } => self
                 .compile_assign_op(*op, target, value, true, line)?
@@ -1811,7 +1811,18 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_assign_ref(&mut self, target: &Expr, value: &Expr, line: u32) -> CResult<Operand> {
+    /// `ZEND_ASSIGN_REF`; `used` is whether the result is wanted. An
+    /// unused result has no destination: php-src frees TMP/VAR operands
+    /// without a GC check (`zval_ptr_dtor_nogc`), so a result handle this
+    /// VM dropped later would buffer the reference as a spurious possible
+    /// root (`gc::release_duplicate` drops it quietly in the handler).
+    pub(crate) fn compile_assign_ref(
+        &mut self,
+        target: &Expr,
+        value: &Expr,
+        line: u32,
+        used: bool,
+    ) -> CResult<Operand> {
         if contains_nullsafe(value) {
             return self.err("Cannot take reference of a nullsafe chain", line);
         }
@@ -1836,13 +1847,13 @@ impl Compiler {
         let p = self.compile_write_place(target)?;
         self.f().line = line;
         let pid = self.place(p);
-        let t = self.tmp();
+        let dst = used.then(|| self.tmp());
         self.emit(Op::AssignRef {
             place: pid,
             src,
-            dst: Some(t),
+            dst,
         });
-        Ok(Operand::Tmp(t))
+        Ok(dst.map_or(Operand::Unused, Operand::Tmp))
     }
 
     fn compile_assign_op(

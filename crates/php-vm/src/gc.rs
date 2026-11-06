@@ -672,6 +672,33 @@ pub(crate) fn release_duplicate(v: Value) {
     }
 }
 
+/// `zend_gc_check_root_tmpvars` for one value: after a collection, the
+/// collectable values held by the live temporaries and loop variables of
+/// the running frames become possible roots again
+/// (`gc_check_possible_root`, through a reference to its value). TMPVARs
+/// are freed without a GC check (`zval_ptr_dtor_nogc`), so a root the run
+/// found alive only through such a holder would otherwise leak once the
+/// holder is released (`Zend/tests/gc/gc_047`).
+pub(crate) fn root_live_value(v: &Value) {
+    match v {
+        Value::Object(o) => root_live_obj(o),
+        Value::Reference(r) => match r.try_borrow().as_deref() {
+            Some(Value::Object(o)) => root_live_obj(o),
+            // A reference to an array is the root in this model.
+            Some(Value::Array(_)) => php_runtime::ref_roots::check_possible_root(r),
+            _ => {}
+        },
+        _ => {}
+    }
+}
+
+/// [`root_live_value`] for an object held by a live temporary.
+pub(crate) fn root_live_obj(o: &Obj) {
+    if o.downcast_ref::<ObjBox>().is_some() {
+        with_state(|s| buffer_obj(s, o));
+    }
+}
+
 /// Buffers `o`, one handle of which is about to be released.
 fn root_obj(o: &Obj) {
     // A count of 1 drops to zero: the object is freed, not a root.
