@@ -737,51 +737,24 @@ impl Vm {
         }
     }
 
-    /// `ce->get_iterator()` on `o`, then a `rewind` / `valid` / `current` /
-    /// `key` / `next` walk to the end. The iterator holds an object handle
-    /// for the walk ([`UnpackIter`]), as `zend_iterator_init` gives one.
+    /// The pairs of `o`: those its iterator walks ([`Vm::iterate_each`]),
+    /// or, for an object that is not traversable (the bare VM's
+    /// `iterator_to_array()`), its visible properties. When an error ends
+    /// the walk, the iterator is released before the pairs collected so far
+    /// (`spl_iterator_apply`'s `zend_iterator_dtor`, then the partial
+    /// result).
     fn object_to_vec(&mut self, o: &Obj) -> VmResult<Vec<(Value, Value)>> {
-        if let Some(f) = crate::ext::hooks_of(o).and_then(|h| h.get_iterator) {
-            let mut it = UnpackIter::new(f(self, o, false)?);
+        let iterable = crate::ext::hooks_of(o).is_some_and(|h| h.get_iterator.is_some())
+            || object::has_internal::<crate::generator::GenData>(o)
+            || self.instance_of(o, b"traversable");
+        if iterable {
             let mut out = Vec::new();
-            it.inner.rewind(self)?;
-            while it.inner.valid(self)? {
-                let value = it.inner.current(self)?;
-                let key = it.inner.key(self)?;
+            self.iterate_each(o, &mut |_: &mut Vm, key: Value, value: Value| {
                 out.push((key, value));
-                it.inner.next(self)?;
-            }
-            it.finish(self)?;
+                Ok(())
+            })?;
             return Ok(out);
         }
-        if object::has_internal::<crate::generator::GenData>(o) {
-            return self.generator_to_vec(o.clone());
-        }
-        if self.instance_of(o, b"traversable") {
-            let it = self.get_iterator(o)?;
-            if object::has_internal::<crate::generator::GenData>(&it) {
-                return self.generator_to_vec(it);
-            }
-            // `zend_user_it_get_iterator`: the handle comes after the
-            // `getIterator()` calls, before `rewind`.
-            let it = UnpackIter::new(it);
-            let mut out = Vec::new();
-            self.call_method_name(&it.inner, "rewind", Vec::new())?;
-            loop {
-                let valid = self.call_method_name(&it.inner, "valid", Vec::new())?;
-                if !self.to_bool(&valid)? {
-                    break;
-                }
-                let value = self.call_method_name(&it.inner, "current", Vec::new())?;
-                let key = self.call_method_name(&it.inner, "key", Vec::new())?;
-                out.push((key, value));
-                self.call_method_name(&it.inner, "next", Vec::new())?;
-            }
-            it.finish(self)?;
-            return Ok(out);
-        }
-        // Not traversable (the bare VM's `iterator_to_array()`): the
-        // visible properties.
         let mut out = Vec::new();
         for (key, name, _) in self.visible_props(o)? {
             let value = if name.as_bytes().first() == Some(&0) {
@@ -794,22 +767,78 @@ impl Vm {
         Ok(out)
     }
 
-    /// `zend_generator_get_iterator` and the walk over the generator `gen`
-    /// (unpacked directly or returned by `getIterator()`): the handle is
-    /// taken before the generator runs to its first `yield`.
-    fn generator_to_vec(&mut self, gen: Obj) -> VmResult<Vec<(Value, Value)>> {
+    /// Walks the iterable object `o` the way `ZEND_SEND_UNPACK` and
+    /// `ZEND_ADD_ARRAY_UNPACK` do: `ce->get_iterator()`, `rewind`, then for
+    /// each element `valid`, `current`, `key`, `each(key, value)` and
+    /// `move_forward`, so whatever `each` does with an element (send it,
+    /// warn, fail) happens before the iterator moves on. The iterator holds
+    /// an object handle for the walk ([`UnpackIter`]), as
+    /// `zend_iterator_init` gives one. An error, from the iterator or from
+    /// `each`, ends the walk: the iterator is released
+    /// (`zend_iterator_dtor`) before the error returns, and what `each`
+    /// kept stays where it put it, for the caller to release after its
+    /// operand (`FREE_OP1`, then `cleanup_unfinished_calls` /
+    /// `cleanup_live_vars`).
+    pub(crate) fn iterate_each(
+        &mut self,
+        o: &Obj,
+        each: &mut dyn FnMut(&mut Vm, Value, Value) -> VmResult<()>,
+    ) -> VmResult<()> {
+        if let Some(f) = crate::ext::hooks_of(o).and_then(|h| h.get_iterator) {
+            let mut it = UnpackIter::new(f(self, o, false)?);
+            it.inner.rewind(self)?;
+            while it.inner.valid(self)? {
+                let value = it.inner.current(self)?;
+                let key = it.inner.key(self)?;
+                each(self, key, value)?;
+                it.inner.next(self)?;
+            }
+            return it.finish(self);
+        }
+        if object::has_internal::<crate::generator::GenData>(o) {
+            return self.generator_each(o.clone(), each);
+        }
+        let it = self.get_iterator(o)?;
+        if object::has_internal::<crate::generator::GenData>(&it) {
+            return self.generator_each(it, each);
+        }
+        // `zend_user_it_get_iterator`: the handle comes after the
+        // `getIterator()` calls, before `rewind`.
+        let it = UnpackIter::new(it);
+        self.call_method_name(&it.inner, "rewind", Vec::new())?;
+        loop {
+            let valid = self.call_method_name(&it.inner, "valid", Vec::new())?;
+            if !self.to_bool(&valid)? {
+                break;
+            }
+            let value = self.call_method_name(&it.inner, "current", Vec::new())?;
+            let key = self.call_method_name(&it.inner, "key", Vec::new())?;
+            each(self, key, value)?;
+            self.call_method_name(&it.inner, "next", Vec::new())?;
+        }
+        it.finish(self)
+    }
+
+    /// `zend_generator_get_iterator` and the walk of [`Vm::iterate_each`]
+    /// over the generator `gen` (unpacked directly or returned by
+    /// `getIterator()`): the handle is taken before the generator runs to
+    /// its first `yield`.
+    fn generator_each(
+        &mut self,
+        gen: Obj,
+        each: &mut dyn FnMut(&mut Vm, Value, Value) -> VmResult<()>,
+    ) -> VmResult<()> {
         if self.gen_finished(&gen) {
             return Err(self.make_throw("Exception", "Cannot traverse an already closed generator"));
         }
         let it = UnpackIter::new(gen);
-        let mut out = Vec::new();
         self.gen_rewind(&it.inner)?;
         while self.gen_valid(&it.inner)? {
-            out.push(self.gen_current(&it.inner)?);
+            let (key, value) = self.gen_current(&it.inner)?;
+            each(self, key, value)?;
             self.gen_next(&it.inner)?;
         }
-        it.finish(self)?;
-        Ok(out)
+        it.finish(self)
     }
 
     /// Converts iteration results to an array (`iterator_to_array`).

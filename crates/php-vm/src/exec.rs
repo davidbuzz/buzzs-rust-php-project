@@ -312,7 +312,8 @@ impl Vm {
     /// Reads a compiled variable without warning (`None` if undefined).
     #[inline]
     pub(crate) fn cv_get(&self, cv: u32) -> Option<Value> {
-        self.frame().peek_cv(cv, |slot: Option<&Value>| slot.cloned())
+        self.frame()
+            .peek_cv(cv, |slot: Option<&Value>| slot.cloned())
     }
 
     /// Assigns to a compiled variable (through references). A typed
@@ -1408,8 +1409,7 @@ impl Vm {
                     }
                     Op::InitMethodCall { obj, name } => {
                         let o = self.read(*obj)?;
-                        let n = self.read(*name)?;
-                        self.op_init_method_call(o, n)?;
+                        self.op_init_method_call_op(o, *name)?;
                         Flow::Next
                     }
                     Op::InitStaticCall { class, name } => {
@@ -2302,40 +2302,15 @@ impl Vm {
                 Ok(())
             }
             Value::Object(o) if self.instance_of(&o, b"traversable") => {
-                let items = self.iterate_to_vec(&Value::Object(o))?;
-                let mut a = std::mem::take(&mut self.frame_mut().tmps[arr as usize]);
-                if let Value::Array(za) = &mut a {
-                    let t = za.make_mut();
-                    for (k, v) in items {
-                        match k {
-                            Value::Int(_) => {
-                                let _ = t.push(v);
-                            }
-                            // ZEND_ADD_ARRAY_UNPACK: a numeric string key
-                            // (ZEND_HANDLE_NUMERIC) is appended, not kept.
-                            Value::Str(s) => match php_runtime::ArrayKey::from_zstr(&s) {
-                                k @ php_runtime::ArrayKey::Str(_) => {
-                                    t.insert(k, v);
-                                }
-                                php_runtime::ArrayKey::Int(_) => {
-                                    let _ = t.push(v);
-                                }
-                            },
-                            other => {
-                                self.frame_mut().tmps[arr as usize] = a;
-                                return Err(self.make_throw(
-                                    "Error",
-                                    &format!(
-                                        "Keys must be of type int|string during array unpacking"
-                                    ),
-                                ))
-                                .map(|()| drop(other));
-                            }
-                        }
-                    }
-                }
-                self.frame_mut().tmps[arr as usize] = a;
-                Ok(())
+                // Each element goes into the array as the iterator yields it
+                // (`ZEND_ADD_ARRAY_UNPACK`): the array under construction
+                // stays in its temporary, so when an exception ends the walk
+                // the iterator, then the operand (`o`), then the array with
+                // the elements added so far (`cleanup_live_vars`) are
+                // released.
+                self.iterate_each(&o, &mut |vm: &mut Vm, key: Value, v: Value| {
+                    vm.array_unpack_add(arr, key, v)
+                })
             }
             other => Err(self.make_throw(
                 "Error",
@@ -2345,6 +2320,49 @@ impl Vm {
                 ),
             )),
         }
+    }
+
+    /// Adds the element `v` with key `k` of an unpacked `Traversable` to the
+    /// array being built in temporary `arr` (one step of
+    /// `ZEND_ADD_ARRAY_UNPACK`): a string key that is not numeric
+    /// (`ZEND_HANDLE_NUMERIC`) is kept, an integer or numeric string key
+    /// appends.
+    fn array_unpack_add(&mut self, arr: u32, k: Value, v: Value) -> VmResult<()> {
+        let key = match k {
+            Value::Int(_) => None,
+            Value::Str(s) => match php_runtime::ArrayKey::from_zstr(&s) {
+                k @ php_runtime::ArrayKey::Str(_) => Some(k),
+                php_runtime::ArrayKey::Int(_) => None,
+            },
+            _ => {
+                return Err(self.make_throw(
+                    "Error",
+                    "Keys must be of type int|string during array unpacking",
+                ));
+            }
+        };
+        let Some(Value::Array(za)) = self.frame_mut().tmps.get_mut(arr as usize) else {
+            return Ok(());
+        };
+        let t = za.make_mut();
+        match key {
+            Some(k) => {
+                t.insert(k, v);
+            }
+            None => {
+                if let Err(v) = t.push(v) {
+                    // `zend_cannot_add_element()`, then the element is
+                    // released.
+                    let e = self.make_throw(
+                        "Error",
+                        "Cannot add element to the array as the next element is already occupied",
+                    );
+                    drop(v);
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// `ZEND_THROW` + `zend_throw_exception_object`.
@@ -2528,10 +2546,11 @@ impl Vm {
             (frame.ret, by_ref, should_pool)
         };
         if should_pool {
+            // Released in `zend_leave_helper`'s order (`Frame`), then moved
+            // into the pool with one copy (`pop` + `push` or a `drain` copy
+            // the frame twice, through a temporary).
             self.frames[fidx].clear_for_pool(&self.empty_code);
-            // One copy into the pool (`pop` + `push` would copy the frame
-            // twice, through a temporary).
-            self.call_bufs.user_frames.extend(self.frames.drain(fidx..));
+            crate::vm::move_last_frame(&mut self.frames, &mut self.call_bufs.user_frames);
         } else {
             self.frames.truncate(fidx);
         }
