@@ -67,6 +67,20 @@ pub(crate) fn cacheable(p: &Place) -> bool {
     )
 }
 
+/// Whether place `p` starts with a cacheable property (`$this->a[$i]`,
+/// `$cv->a->b`): reads may take its first segment from the cache. The
+/// entry only describes that first property.
+#[inline]
+pub(crate) fn cacheable_head(p: &Place) -> bool {
+    matches!(
+        (&p.base, p.segs.as_slice()),
+        (
+            PlaceBase::Cv(_) | PlaceBase::This,
+            [Seg::Prop(Operand::Lit(_)), ..]
+        )
+    )
+}
+
 /// Whether entry `e` was filled for class `cls` in scope `scope`.
 #[inline]
 fn key_matches(e: &PropCacheEntry, cls: &Rc<Class>, scope: Option<&Rc<Class>>) -> bool {
@@ -194,8 +208,8 @@ impl Vm {
         let code = &f.code;
         let p = &code.places[pid as usize];
         let (base, lit) = match (&p.base, p.segs.as_slice()) {
-            (PlaceBase::Cv(cv), [Seg::Prop(Operand::Lit(l))]) => (*cv, *l),
-            (PlaceBase::This, [Seg::Prop(Operand::Lit(l))]) => (PROP_CACHE_THIS, *l),
+            (PlaceBase::Cv(cv), [Seg::Prop(Operand::Lit(l)), ..]) => (*cv, *l),
+            (PlaceBase::This, [Seg::Prop(Operand::Lit(l)), ..]) => (PROP_CACHE_THIS, *l),
             _ => return false,
         };
         let Some(Value::Str(name)) = code.literals.get(lit as usize) else {
@@ -275,9 +289,9 @@ impl Vm {
         }
     }
 
-    /// `ZEND_FETCH_OBJ_R`/`_IS` of cacheable place `pid`: the
-    /// (dereferenced) value of an initialized declared slot, or `None` for
-    /// the generic walk.
+    /// `ZEND_FETCH_OBJ_R`/`_IS` of the first segment of place `pid` (see
+    /// [`cacheable_head`]): the (dereferenced) value of an initialized
+    /// declared slot, or `None` for the generic walk.
     #[inline]
     pub(crate) fn prop_cache_read(&mut self, pid: PlaceId) -> Option<Value> {
         self.prop_probe_fill(pid, PC_FILLED | PC_READ, |e, o| {
@@ -595,6 +609,37 @@ int(11)\n\
 Cannot modify readonly property R::$ro\nCannot modify readonly property R::$ro\n\
 Cannot modify readonly property R::$ro\nCannot modify readonly property R::$ro\n\
 hook\n2\nhook\n4\n";
+        assert_eq!(run(src), expected);
+    }
+
+    /// A chain starting with a cached property (`$this->a[$i]`,
+    /// `$this->o->p`) goes on from the cached value, with the later
+    /// segments' warnings and `??` semantics.
+    #[test]
+    fn cached_head_of_a_longer_chain() {
+        let src = r#"<?php
+class N {
+    public $a = [1, 2, 3];
+    public $o;
+    public $n = null;
+    function __construct() { $this->o = new stdClass; $this->o->p = 'deep'; }
+    function run() {
+        $s = 0;
+        for ($i = 0; $i < 3; $i++) { $s += $this->a[$i]; }
+        echo $s, "\n";
+        for ($i = 0; $i < 2; $i++) { echo $this->o->p, "\n"; }
+        echo $this->a[7] ?? 'dflt', "\n";
+        echo $this->n['k'] ?? 'null-head', "\n";
+        echo $this->n->q ?? 'null-obj', "\n";
+        echo $this->a[5], "|\n";
+        echo $this->n->q, "|\n";
+    }
+}
+(new N)->run();
+"#;
+        let expected = "6\ndeep\ndeep\ndflt\nnull-head\nnull-obj\n\
+\nWarning: Undefined array key 5 in t.php on line 15\n|\n\
+\nWarning: Attempt to read property \"q\" on null in t.php on line 16\n|\n";
         assert_eq!(run(src), expected);
     }
 }

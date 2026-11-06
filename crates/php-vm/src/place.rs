@@ -2718,17 +2718,81 @@ impl Vm {
             }
         }
         // Fast path: `$cv->name` / `$this->name` on a cached declared slot
-        // (FETCH_OBJ_R/IS with a runtime cache slot).
-        if mode != FetchMode::List && propcache::cacheable(p) {
-            if let Some(v) = self.prop_cache_read(pid) {
-                return Ok(v);
+        // (FETCH_OBJ_R/IS with a runtime cache slot); a longer chain
+        // (`$this->a[$i]`, `$this->a->b`) goes on from that value.
+        let head = if mode != FetchMode::List && propcache::cacheable_head(p) {
+            let single = p.segs.len() == 1;
+            match self.prop_cache_read(pid) {
+                Some(v) if single => return Ok(v),
+                h => h,
             }
-        }
+        } else {
+            None
+        };
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];
-        let base = self.resolve_base(&place.base, false, mode == FetchMode::Is, None)?;
         let segs = &place.segs;
-        let mut cur = match base {
+        let (mut cur, rest) = if let Some(v) = head {
+            (v, &segs[1..])
+        } else {
+            let base = self.resolve_base(&place.base, false, mode == FetchMode::Is, None)?;
+            (self.fetch_base_value(pid, base, segs, mode)?, &segs[..])
+        };
+        // Each offset/name operand is read when its FETCH_DIM_*/FETCH_OBJ_*
+        // runs (after the container's warnings); a quiet chain that reached
+        // null still reads, and reports, the remaining operands.
+        let mut settled = mode == FetchMode::Is && rest.len() < segs.len() && cur.is_null();
+        for seg in rest {
+            match seg {
+                Seg::Dim(op) => {
+                    let k = self.read_dim_operand(*op)?;
+                    if !settled {
+                        cur = self.fetch_dim(cur, &k, mode)?;
+                    }
+                }
+                Seg::Append => {
+                    return Err(self.make_throw("Error", "Cannot use [] for reading"));
+                }
+                Seg::Prop(op) => {
+                    let v = self.read(*op)?;
+                    if !settled {
+                        cur = match cur {
+                            Value::Object(o) => {
+                                let name = self.to_zstr(&v)?;
+                                self.read_property(&o, &name, mode)?
+                            }
+                            other => {
+                                if mode == FetchMode::Read {
+                                    let name = self.to_zstr(&v)?;
+                                    self.warning(&format!(
+                                        "Attempt to read property \"{}\" on {}",
+                                        name.to_string_lossy(),
+                                        other.value_name()
+                                    ))?;
+                                }
+                                Value::Null
+                            }
+                        };
+                    }
+                }
+            }
+            if mode == FetchMode::Is && cur.is_null() {
+                settled = true;
+            }
+        }
+        Ok(cur)
+    }
+
+    /// The value of a read place's resolved base (`place_fetch` without a
+    /// cached head), with the undefined-variable warnings of a read.
+    fn fetch_base_value(
+        &mut self,
+        pid: PlaceId,
+        base: RBase,
+        segs: &[Seg],
+        mode: FetchMode,
+    ) -> VmResult<Value> {
+        Ok(match base {
             RBase::Var(store, idx) => {
                 let v = store.borrow().slots[idx].as_ref().map(Value::deref);
                 match v {
@@ -2769,50 +2833,7 @@ impl Vm {
                 Value::Null
             }
             RBase::Globals => Value::Array(ZArray::from_table(self.globals.borrow().to_array())),
-        };
-        // Each offset/name operand is read when its FETCH_DIM_*/FETCH_OBJ_*
-        // runs (after the container's warnings); a quiet chain that reached
-        // null still reads, and reports, the remaining operands.
-        let mut settled = false;
-        for seg in segs {
-            match seg {
-                Seg::Dim(op) => {
-                    let k = self.read_dim_operand(*op)?;
-                    if !settled {
-                        cur = self.fetch_dim(cur, &k, mode)?;
-                    }
-                }
-                Seg::Append => {
-                    return Err(self.make_throw("Error", "Cannot use [] for reading"));
-                }
-                Seg::Prop(op) => {
-                    let v = self.read(*op)?;
-                    if !settled {
-                        cur = match cur {
-                            Value::Object(o) => {
-                                let name = self.to_zstr(&v)?;
-                                self.read_property(&o, &name, mode)?
-                            }
-                            other => {
-                                if mode == FetchMode::Read {
-                                    let name = self.to_zstr(&v)?;
-                                    self.warning(&format!(
-                                        "Attempt to read property \"{}\" on {}",
-                                        name.to_string_lossy(),
-                                        other.value_name()
-                                    ))?;
-                                }
-                                Value::Null
-                            }
-                        };
-                    }
-                }
-            }
-            if mode == FetchMode::Is && cur.is_null() {
-                settled = true;
-            }
-        }
-        Ok(cur)
+        })
     }
 
     /// One dimension read (`zend_fetch_dimension_address_read`).
