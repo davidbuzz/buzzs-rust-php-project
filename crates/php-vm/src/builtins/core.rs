@@ -82,6 +82,7 @@ fn func_get_arg(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)] // builtin signature
 fn strlen(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(i64::try_from(s(a, 0).len()).unwrap_or(0)))
 }
@@ -2742,7 +2743,7 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "compact($var_name, ...$var_names): array", compact);
     reg(
         vm,
-        "extract(array &$array, int $flags = 0, string $prefix = \"\"): int",
+        "extract(@prefer-ref array &$array, int $flags = 0, string $prefix = \"\"): int",
         extract,
     );
     reg(vm, "spl_autoload_register(?callable $callback = null, bool $throw = true, bool $prepend = false): bool", spl_autoload_register);
