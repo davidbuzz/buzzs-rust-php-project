@@ -2071,8 +2071,10 @@ impl Vm {
 
     /// `place = v`
     pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
-        let p = &self.frame().code.places[pid as usize];
-        let (single, head) = (propcache::cacheable(p), propcache::cacheable_head(p));
+        let (single, head) = {
+            let p = &self.frame().code.places[pid as usize];
+            (propcache::cacheable(p), propcache::cacheable_head(p))
+        };
         // Fast path: ASSIGN_OBJ to a cached property.
         let v = if single {
             match self.prop_cache_assign(pid, v) {
@@ -2361,8 +2363,10 @@ impl Vm {
         op: BinaryOp,
         v: Value,
     ) -> VmResult<Value> {
-        let p = &self.frame().code.places[pid as usize];
-        let (single, head) = (propcache::cacheable(p), propcache::cacheable_head(p));
+        let (single, head) = {
+            let p = &self.frame().code.places[pid as usize];
+            (propcache::cacheable(p), propcache::cacheable_head(p))
+        };
         // Fast path: ASSIGN_OBJ_OP on a cached property holding a number.
         if single {
             if let Some(r) = self.prop_cache_assign_op(pid, op, &v)? {
@@ -2788,31 +2792,33 @@ impl Vm {
     /// Reads a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_fetch(&mut self, pid: PlaceId, mode: FetchMode) -> VmResult<Value> {
-        let p = &self.frame().code.places[pid as usize];
-        // Fast path: reading a plain compiled variable (`f($x)`).
-        if mode == FetchMode::Read {
-            if let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) {
-                let cv = *cv;
-                return self.read_cv(cv);
+        let head = {
+            let p = &self.frame().code.places[pid as usize];
+            // Fast path: reading a plain compiled variable (`f($x)`).
+            if mode == FetchMode::Read {
+                if let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) {
+                    let cv = *cv;
+                    return self.read_cv(cv);
+                }
+                // FETCH_DIM_FUNC_ARG sent by value: `$a[]` fails before its
+                // container or any later offset is read
+                // (`zend_use_undef_in_read_context`).
+                if matches!(p.segs.first(), Some(Seg::Append)) {
+                    return Err(self.make_throw("Error", "Cannot use [] for reading"));
+                }
             }
-            // FETCH_DIM_FUNC_ARG sent by value: `$a[]` fails before its
-            // container or any later offset is read
-            // (`zend_use_undef_in_read_context`).
-            if matches!(p.segs.first(), Some(Seg::Append)) {
-                return Err(self.make_throw("Error", "Cannot use [] for reading"));
+            // Fast path: `$cv->name` / `$this->name` on a cached property
+            // (FETCH_OBJ_R/IS with a runtime cache slot); a longer chain
+            // (`$this->a[$i]`, `$this->a->b`) goes on from that value.
+            if mode != FetchMode::List && propcache::cacheable_head(p) {
+                let single = p.segs.len() == 1;
+                match self.prop_cache_read(pid) {
+                    Some(value) if single => return Ok(value),
+                    found => found,
+                }
+            } else {
+                None
             }
-        }
-        // Fast path: `$cv->name` / `$this->name` on a cached declared slot
-        // (FETCH_OBJ_R/IS with a runtime cache slot); a longer chain
-        // (`$this->a[$i]`, `$this->a->b`) goes on from that value.
-        let head = if mode != FetchMode::List && propcache::cacheable_head(p) {
-            let single = p.segs.len() == 1;
-            match self.prop_cache_read(pid) {
-                Some(v) if single => return Ok(v),
-                h => h,
-            }
-        } else {
-            None
         };
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];
@@ -3045,8 +3051,10 @@ impl Vm {
     /// `isset(place)` / `empty(place)` (returns the isset or empty result).
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
-        let p = &self.frame().code.places[pid as usize];
-        let (single, head) = (propcache::cacheable(p), propcache::cacheable_head(p));
+        let (single, head) = {
+            let p = &self.frame().code.places[pid as usize];
+            (propcache::cacheable(p), propcache::cacheable_head(p))
+        };
         // Fast path: ISSET_ISEMPTY_PROP_OBJ on a cached property.
         if single {
             if let Some(r) = self.prop_cache_isset(pid, empty)? {

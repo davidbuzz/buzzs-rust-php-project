@@ -67,12 +67,12 @@ enum Home {
     Dyn(ZStr),
 }
 
-/// Whether place `p` has the shape the cache covers: a CV or `$this` with
+/// Whether `place` has the shape the cache covers: a CV or `$this` with
 /// one property segment named by a literal.
 #[inline]
-pub(crate) fn cacheable(p: &Place) -> bool {
+pub(crate) fn cacheable(place: &Place) -> bool {
     matches!(
-        (&p.base, p.segs.as_slice()),
+        (&place.base, place.segs.as_slice()),
         (
             PlaceBase::Cv(_) | PlaceBase::This,
             [Seg::Prop(Operand::Lit(_))]
@@ -80,13 +80,13 @@ pub(crate) fn cacheable(p: &Place) -> bool {
     )
 }
 
-/// Whether place `p` starts with a cacheable property (`$this->a[$i]`,
+/// Whether `place` starts with a cacheable property (`$this->a[$i]`,
 /// `$cv->a->b`): reads may take its first segment from the cache. The
 /// entry only describes that first property.
 #[inline]
-pub(crate) fn cacheable_head(p: &Place) -> bool {
+pub(crate) fn cacheable_head(place: &Place) -> bool {
     matches!(
-        (&p.base, p.segs.as_slice()),
+        (&place.base, place.segs.as_slice()),
         (
             PlaceBase::Cv(_) | PlaceBase::This,
             [Seg::Prop(Operand::Lit(_)), ..]
@@ -94,27 +94,27 @@ pub(crate) fn cacheable_head(p: &Place) -> bool {
     )
 }
 
-/// Whether entry `e` was filled for class `cls` in scope `scope`.
+/// Whether `entry` was filled for class `cls` in scope `scope`.
 #[inline]
-fn key_matches(e: &PropCacheEntry, cls: &Rc<Class>, scope: Option<&Rc<Class>>) -> bool {
-    std::ptr::eq(e.class.as_ptr(), Rc::as_ptr(cls))
-        && match (&e.scope, scope) {
+fn key_matches(entry: &PropCacheEntry, cls: &Rc<Class>, scope: Option<&Rc<Class>>) -> bool {
+    std::ptr::eq(entry.class.as_ptr(), Rc::as_ptr(cls))
+        && match (&entry.scope, scope) {
             (None, None) => true,
-            (Some(w), Some(s)) => std::ptr::eq(w.as_ptr(), Rc::as_ptr(s)),
+            (Some(cached), Some(cur)) => std::ptr::eq(cached.as_ptr(), Rc::as_ptr(cur)),
             _ => false,
         }
 }
 
-/// Whether a value may be stored as-is in a property accepting the
-/// builtin type bits `m` (`u32::MAX`: untyped): the side-effect-free
+/// Whether `value` may be stored as-is in a property accepting the
+/// builtin type bits `accept` (`u32::MAX`: untyped): the side-effect-free
 /// subset of `zend_verify_property_type` that needs no coercion, class or
 /// callable check.
 #[inline]
-fn accepts(m: u32, v: &Value) -> bool {
-    if m == u32::MAX {
+fn accepts(accept: u32, value: &Value) -> bool {
+    if accept == u32::MAX {
         return true;
     }
-    let bit = match v {
+    let bit = match value {
         Value::Null => mask::NULL,
         Value::Bool(true) => mask::TRUE,
         Value::Bool(false) => mask::FALSE,
@@ -126,25 +126,25 @@ fn accepts(m: u32, v: &Value) -> bool {
         Value::Resource(_) => mask::RESOURCE,
         Value::Reference(_) => 0,
     };
-    m & bit != 0
+    accept & bit != 0
 }
 
-/// Runs `k` on the object the base of a cached place holds (a CV, also
-/// through a reference, or `$this`), without cloning the handle; `None`
-/// when it holds no object.
+/// Runs `access` on the object the base of a cached place holds (a CV,
+/// also through a reference, or `$this`), without cloning the handle;
+/// `None` when it holds no object.
 #[inline]
-fn with_base_obj<R>(f: &Frame, base: u32, k: impl FnOnce(&Obj) -> R) -> Option<R> {
+fn with_base_obj<R>(frame: &Frame, base: u32, access: impl FnOnce(&Obj) -> R) -> Option<R> {
     if base == PROP_CACHE_THIS {
-        return f.this.as_ref().map(k);
+        return frame.this.as_ref().map(access);
     }
-    let vars = f.vars.borrow();
-    let out = match vars.slots.get(f.cv_idx(base)) {
-        Some(Some(Value::Object(o))) => Some(k(o)),
+    let vars = frame.vars.borrow();
+    let out = match vars.slots.get(frame.cv_idx(base)) {
+        Some(Some(Value::Object(obj))) => Some(access(obj)),
         // A reference being modified elsewhere (`descend`'s "Cannot modify
         // a value while it is being iterated") is left to the walk.
-        Some(Some(Value::Reference(r))) => match r.try_borrow() {
+        Some(Some(Value::Reference(rf))) => match rf.try_borrow() {
             Some(inner) => match &*inner {
-                Value::Object(o) => Some(k(o)),
+                Value::Object(obj) => Some(access(obj)),
                 _ => None,
             },
             None => None,
@@ -155,88 +155,88 @@ fn with_base_obj<R>(f: &Frame, base: u32, k: impl FnOnce(&Obj) -> R) -> Option<R
     out
 }
 
-/// The home of entry `e`'s property (the dynamic name from `code`).
+/// The home of `entry`'s property (the dynamic name from `code`).
 #[inline]
-fn home_of(e: &PropCacheEntry, code: &OpArray) -> Option<Home> {
-    if e.flags & PC_DYN == 0 {
-        return Some(Home::Slot(e.slot));
+fn home_of(entry: &PropCacheEntry, code: &OpArray) -> Option<Home> {
+    if entry.flags & PC_DYN == 0 {
+        return Some(Home::Slot(entry.slot));
     }
-    match code.literals.get(e.lit as usize) {
-        Some(Value::Str(s)) => Some(Home::Dyn(s.clone())),
+    match code.literals.get(entry.lit as usize) {
+        Some(Value::Str(name)) => Some(Home::Dyn(name.clone())),
         _ => None,
     }
 }
 
-/// Runs `k` on the current value of a property: an initialized declared
-/// slot or an existing dynamic property (`Slow` otherwise).
+/// Runs `access` on the current value of a property: an initialized
+/// declared slot or an existing dynamic property (`Slow` otherwise).
 #[inline]
-fn read_home<R>(o: &Obj, h: &Home, k: impl FnOnce(&Value) -> Probe<R>) -> Probe<R> {
-    let d = object::data(o);
-    match h {
-        Home::Slot(s) => match d.slots.borrow().get(*s as usize) {
-            Some(Some(v)) => k(v),
+fn read_home<R>(obj: &Obj, home: &Home, access: impl FnOnce(&Value) -> Probe<R>) -> Probe<R> {
+    let data = object::data(obj);
+    match home {
+        Home::Slot(slot) => match data.slots.borrow().get(*slot as usize) {
+            Some(Some(value)) => access(value),
             _ => Probe::Slow,
         },
         Home::Dyn(name) => {
-            let dynp = d.dynamic.borrow();
-            let r = match dynp
+            let table = data.dynamic.borrow();
+            let res = match table
                 .as_ref()
                 .and_then(|t| t.get(&ArrayKey::Str(name.clone())))
             {
-                Some(v) => k(v),
+                Some(value) => access(value),
                 None => Probe::Slow,
             };
-            drop(dynp);
-            r
+            drop(table);
+            res
         }
     }
 }
 
 /// [`read_home`] with the value mutable.
 #[inline]
-fn write_home<R>(o: &Obj, h: &Home, k: impl FnOnce(&mut Value) -> Probe<R>) -> Probe<R> {
-    let d = object::data(o);
-    match h {
-        Home::Slot(s) => {
-            let mut slots = d.slots.borrow_mut();
-            let r = match slots.get_mut(*s as usize) {
-                Some(Some(v)) => k(v),
+fn write_home<R>(obj: &Obj, home: &Home, access: impl FnOnce(&mut Value) -> Probe<R>) -> Probe<R> {
+    let data = object::data(obj);
+    match home {
+        Home::Slot(slot) => {
+            let mut slots = data.slots.borrow_mut();
+            let res = match slots.get_mut(*slot as usize) {
+                Some(Some(value)) => access(value),
                 _ => Probe::Slow,
             };
             drop(slots);
-            r
+            res
         }
         Home::Dyn(name) => {
-            let mut dynp = d.dynamic.borrow_mut();
-            let r = match dynp
+            let mut table = data.dynamic.borrow_mut();
+            let res = match table
                 .as_mut()
                 .and_then(|t| t.get_mut(&ArrayKey::Str(name.clone())))
             {
-                Some(v) => k(v),
+                Some(value) => access(value),
                 None => Probe::Slow,
             };
-            drop(dynp);
-            r
+            drop(table);
+            res
         }
     }
 }
 
-/// Stores `v` over a property's current non-reference value; returns the
-/// old value (to be dropped once all borrows are released), or `None`
+/// Stores `value` over a property's current non-reference value; returns
+/// the old value (to be dropped once all borrows are released), or `None`
 /// when the property is undefined or holds a reference.
 #[inline]
-fn store_home(o: &Obj, h: &Home, v: &Value) -> Option<Value> {
-    let r = write_home(o, h, |cur| {
+fn store_home(obj: &Obj, home: &Home, value: &Value) -> Option<Value> {
+    let res = write_home(obj, home, |cur| {
         if matches!(cur, Value::Reference(_)) {
             Probe::Slow
         } else {
-            Probe::Hit(std::mem::replace(cur, v.clone()))
+            Probe::Hit(std::mem::replace(cur, value.clone()))
         }
     });
-    match r {
+    match res {
         Probe::Hit(old) => {
-            if let Home::Slot(s) = h {
-                object::data(o).set_slot_unset(*s as usize, false);
+            if let Home::Slot(slot) = home {
+                object::data(obj).set_slot_unset(*slot as usize, false);
             }
             Some(old)
         }
@@ -249,69 +249,72 @@ fn store_home(o: &Obj, h: &Home, v: &Value) -> Option<Value> {
 /// `increment_function` on a double): the result, `Slow` otherwise. The
 /// value keeps its type, so a typed property stays valid.
 #[inline]
-fn incdec_in_place(v: &mut Value, kind: IncDecKind) -> Probe<Value> {
-    match v {
-        Value::Int(i) => {
-            let old = *i;
+fn incdec_in_place(value: &mut Value, kind: IncDecKind) -> Probe<Value> {
+    match value {
+        Value::Int(cur) => {
+            let old = *cur;
             let new = if kind.is_inc() {
                 old.checked_add(1)
             } else {
                 old.checked_sub(1)
             };
             match new {
-                Some(n) => {
-                    *i = n;
-                    Probe::Hit(Value::Int(if kind.is_post() { old } else { n }))
+                Some(new) => {
+                    *cur = new;
+                    Probe::Hit(Value::Int(if kind.is_post() { old } else { new }))
                 }
                 None => Probe::Slow,
             }
         }
-        Value::Float(x) => {
-            let old = *x;
-            let n = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
-            *x = n;
-            Probe::Hit(Value::Float(if kind.is_post() { old } else { n }))
+        Value::Float(cur) => {
+            let old = *cur;
+            let new = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
+            *cur = new;
+            Probe::Hit(Value::Float(if kind.is_post() { old } else { new }))
         }
         _ => Probe::Slow,
     }
 }
 
 impl Vm {
-    /// Runs `k` on the matching cache entry of place `pid`, the object its
-    /// base holds and the property's home. `need` are the `PC_*` bits the
-    /// access requires; lazy objects always take the generic walk
-    /// (`zend_lazy_object_init` runs there).
+    /// Runs `access` on the matching cache entry of place `pid`, the
+    /// object its base holds and the property's home. `need` are the
+    /// `PC_*` bits the access requires; lazy objects always take the
+    /// generic walk (`zend_lazy_object_init` runs there).
     #[inline]
     fn prop_probe<T>(
         &self,
         pid: PlaceId,
         need: u8,
-        k: impl FnOnce(&PropCacheEntry, &Obj, Home) -> Probe<T>,
+        access: impl FnOnce(&PropCacheEntry, &Obj, Home) -> Probe<T>,
     ) -> Probe<T> {
-        let f = self.frame();
-        if f.kind == FrameKind::Builtin {
+        let frame = self.frame();
+        if frame.kind == FrameKind::Builtin {
             return Probe::Slow;
         }
-        let cache = f.code.prop_cache.borrow();
-        let Some(e) = cache.get(pid as usize).filter(|e| e.flags & PC_FILLED != 0) else {
+        let cache = frame.code.prop_cache.borrow();
+        let Some(entry) = cache
+            .get(pid as usize)
+            .filter(|entry| entry.flags & PC_FILLED != 0)
+        else {
             return Probe::Miss;
         };
-        let scope = f.scope.as_ref();
-        let r = with_base_obj(f, e.base, |o| {
-            let d = object::data(o);
-            if !key_matches(e, &d.class, scope) {
+        let scope = frame.scope.as_ref();
+        let res = with_base_obj(frame, entry.base, |obj| {
+            let data = object::data(obj);
+            if !key_matches(entry, &data.class, scope) {
                 return Probe::Miss;
             }
-            if e.flags & need != need || d.lazy.borrow().is_some() {
+            if entry.flags & need != need || data.lazy.borrow().is_some() {
                 return Probe::Slow;
             }
-            match home_of(e, &f.code) {
-                Some(h) => k(e, o, h),
+            match home_of(entry, &frame.code) {
+                Some(home) => access(entry, obj, home),
                 None => Probe::Slow,
             }
         });
         drop(cache);
-        r.unwrap_or(Probe::Slow)
+        res.unwrap_or(Probe::Slow)
     }
 
     /// Fills the cache entry of property place `pid` for the object its
@@ -319,25 +322,25 @@ impl Vm {
     /// `CACHE_POLYMORPHIC_PTR`). Returns whether an entry was stored.
     #[inline(never)]
     fn prop_cache_fill(&mut self, pid: PlaceId) -> bool {
-        let f = self.frame();
-        if f.kind == FrameKind::Builtin {
+        let frame = self.frame();
+        if frame.kind == FrameKind::Builtin {
             return false;
         }
-        let code = &f.code;
-        let p = &code.places[pid as usize];
-        let (base, lit) = match (&p.base, p.segs.as_slice()) {
-            (PlaceBase::Cv(cv), [Seg::Prop(Operand::Lit(l)), ..]) => (*cv, *l),
-            (PlaceBase::This, [Seg::Prop(Operand::Lit(l)), ..]) => (PROP_CACHE_THIS, *l),
+        let code = &frame.code;
+        let place = &code.places[pid as usize];
+        let (base, lit) = match (&place.base, place.segs.as_slice()) {
+            (PlaceBase::Cv(cv), [Seg::Prop(Operand::Lit(lit)), ..]) => (*cv, *lit),
+            (PlaceBase::This, [Seg::Prop(Operand::Lit(lit)), ..]) => (PROP_CACHE_THIS, *lit),
             _ => return false,
         };
         let Some(Value::Str(name)) = code.literals.get(lit as usize) else {
             return false;
         };
-        let Some(cls) = with_base_obj(f, base, |o| object::class_of(o).clone()) else {
+        let Some(cls) = with_base_obj(frame, base, |obj| object::class_of(obj).clone()) else {
             return false;
         };
-        let scope = f.scope.as_ref();
-        let mut e = PropCacheEntry {
+        let scope = frame.scope.as_ref();
+        let mut entry = PropCacheEntry {
             class: Rc::downgrade(&cls),
             scope: scope.map(Rc::downgrade),
             base,
@@ -346,23 +349,23 @@ impl Vm {
             accept: 0,
             flags: PC_FILLED,
         };
-        let h = cls.hooks.as_deref();
-        let read_ok = h.is_none_or(|h| h.read_property.is_none());
-        let isset_ok = h.is_none_or(|h| h.has_property.is_none());
-        let write_ok = h.is_none_or(|h| h.write_property.is_none());
+        let hooks = cls.hooks.as_deref();
+        let read_ok = hooks.is_none_or(|hk| hk.read_property.is_none());
+        let isset_ok = hooks.is_none_or(|hk| hk.has_property.is_none());
+        let write_ok = hooks.is_none_or(|hk| hk.write_property.is_none());
         match self.lookup_prop(&cls, name, scope) {
-            PropLookup::Found(pi) => {
-                if pi.hooks.is_none() && !pi.is_virtual() {
-                    e.slot = pi.slot;
+            PropLookup::Found(info) => {
+                if info.hooks.is_none() && !info.is_virtual() {
+                    entry.slot = info.slot;
                     if read_ok {
-                        e.flags |= PC_READ;
+                        entry.flags |= PC_READ;
                     }
                     if isset_ok {
-                        e.flags |= PC_ISSET;
+                        entry.flags |= PC_ISSET;
                     }
-                    if write_ok && pi.flags & (flags::READONLY | flags::SET_MASK) == 0 {
-                        e.flags |= PC_WRITE;
-                        e.accept = pi.ty.as_ref().map_or(u32::MAX, |t| t.mask);
+                    if write_ok && info.flags & (flags::READONLY | flags::SET_MASK) == 0 {
+                        entry.flags |= PC_WRITE;
+                        entry.accept = info.ty.as_ref().map_or(u32::MAX, |ty| ty.mask);
                     }
                 }
             }
@@ -373,29 +376,29 @@ impl Vm {
                 // (`undeclared_prop_check` would return `false` silently).
                 let plain = name.as_bytes().first() != Some(&0)
                     && cls.find_static(name.as_bytes()).is_none()
-                    && scope.is_none_or(|s| s.find_static(name.as_bytes()).is_none());
+                    && scope.is_none_or(|sc| sc.find_static(name.as_bytes()).is_none());
                 if plain {
-                    e.flags |= PC_DYN;
-                    e.accept = u32::MAX;
+                    entry.flags |= PC_DYN;
+                    entry.accept = u32::MAX;
                     if read_ok {
-                        e.flags |= PC_READ;
+                        entry.flags |= PC_READ;
                     }
                     if isset_ok {
-                        e.flags |= PC_ISSET;
+                        entry.flags |= PC_ISSET;
                     }
                     if write_ok {
-                        e.flags |= PC_WRITE;
+                        entry.flags |= PC_WRITE;
                     }
                 }
             }
             PropLookup::Inaccessible(_) => {}
         }
-        let n = code.places.len();
+        let len = code.places.len();
         let mut cache = code.prop_cache.borrow_mut();
-        if cache.len() < n {
-            cache.resize(n, PropCacheEntry::default());
+        if cache.len() < len {
+            cache.resize(len, PropCacheEntry::default());
         }
-        cache[pid as usize] = e;
+        cache[pid as usize] = entry;
         true
     }
 
@@ -405,17 +408,17 @@ impl Vm {
         &mut self,
         pid: PlaceId,
         need: u8,
-        k: impl Fn(&PropCacheEntry, &Obj, Home) -> Probe<T>,
+        access: impl Fn(&PropCacheEntry, &Obj, Home) -> Probe<T>,
     ) -> Option<T> {
-        match self.prop_probe(pid, need, &k) {
-            Probe::Hit(v) => Some(v),
+        match self.prop_probe(pid, need, &access) {
+            Probe::Hit(res) => Some(res),
             Probe::Slow => None,
             Probe::Miss => {
                 if !self.prop_cache_fill(pid) {
                     return None;
                 }
-                match self.prop_probe(pid, need, &k) {
-                    Probe::Hit(v) => Some(v),
+                match self.prop_probe(pid, need, &access) {
+                    Probe::Hit(res) => Some(res),
                     Probe::Slow | Probe::Miss => None,
                 }
             }
@@ -426,8 +429,8 @@ impl Vm {
     fn prop_cache_name(&self, pid: PlaceId) -> ZStr {
         let code = &self.frame().code;
         match code.places[pid as usize].segs.first() {
-            Some(Seg::Prop(Operand::Lit(l))) => match code.literals.get(*l as usize) {
-                Some(Value::Str(s)) => s.clone(),
+            Some(Seg::Prop(Operand::Lit(lit))) => match code.literals.get(*lit as usize) {
+                Some(Value::Str(name)) => name.clone(),
                 _ => ZStr::default(),
             },
             _ => ZStr::default(),
@@ -440,8 +443,8 @@ impl Vm {
     /// generic walk.
     #[inline]
     pub(crate) fn prop_cache_read(&mut self, pid: PlaceId) -> Option<Value> {
-        self.prop_probe_fill(pid, PC_FILLED | PC_READ, |_, o, h| {
-            read_home(o, &h, |v| Probe::Hit(v.deref()))
+        self.prop_probe_fill(pid, PC_FILLED | PC_READ, |_, obj, home| {
+            read_home(obj, &home, |value| Probe::Hit(value.deref()))
         })
     }
 
@@ -454,16 +457,22 @@ impl Vm {
     /// holding an array or object (nothing to auto-vivify, so no type
     /// check: `typed_prop_dim_write_check`).
     pub(crate) fn prop_cache_container(&mut self, pid: PlaceId) -> Option<(Obj, usize)> {
-        self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |e, o, h| {
-            let Home::Slot(s) = &h else {
+        self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |entry, obj, home| {
+            let Home::Slot(slot) = &home else {
                 return Probe::Slow;
             };
-            let s = *s as usize;
-            read_home(o, &h, |v| match v {
-                Value::Reference(_) => Probe::Slow,
-                Value::Array(_) | Value::Object(_) => Probe::Hit((o.clone(), s)),
-                _ if e.accept == u32::MAX => Probe::Hit((o.clone(), s)),
-                _ => Probe::Slow,
+            let slot = *slot as usize;
+            read_home(obj, &home, |value| {
+                let ok = match value {
+                    Value::Reference(_) => false,
+                    Value::Array(_) | Value::Object(_) => true,
+                    _ => entry.accept == u32::MAX,
+                };
+                if ok {
+                    Probe::Hit((obj.clone(), slot))
+                } else {
+                    Probe::Slow
+                }
             })
         })
     }
@@ -477,11 +486,11 @@ impl Vm {
         if matches!(v, Value::Reference(_)) {
             return Err(v);
         }
-        let old = self.prop_probe_fill(pid, PC_FILLED | PC_WRITE, |e, o, h| {
-            if !accepts(e.accept, &v) {
+        let old = self.prop_probe_fill(pid, PC_FILLED | PC_WRITE, |entry, obj, home| {
+            if !accepts(entry.accept, &v) {
                 return Probe::Slow;
             }
-            match store_home(o, &h, &v) {
+            match store_home(obj, &home, &v) {
                 Some(old) => Probe::Hit(old),
                 None => Probe::Slow,
             }
@@ -499,8 +508,8 @@ impl Vm {
     /// result, or `None` for the generic walk.
     #[inline]
     pub(crate) fn prop_cache_incdec(&mut self, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
-        self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |_, o, h| {
-            write_home(o, &h, |v| incdec_in_place(v, kind))
+        self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |_, obj, home| {
+            write_home(obj, &home, |value| incdec_in_place(value, kind))
         })
     }
 
@@ -522,32 +531,32 @@ impl Vm {
         if !matches!(rhs, Value::Int(_) | Value::Float(_)) {
             return Ok(None);
         }
-        let hit = self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |e, o, h| {
-            let cur = read_home(o, &h, |v| match v {
-                Value::Int(_) | Value::Float(_) => Probe::Hit(v.clone()),
+        let hit = self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |entry, obj, home| {
+            let cur = read_home(obj, &home, |value| match value {
+                Value::Int(_) | Value::Float(_) => Probe::Hit(value.clone()),
                 _ => Probe::Slow,
             });
             match cur {
-                Probe::Hit(cur) => Probe::Hit((o.clone(), cur, h, e.accept)),
+                Probe::Hit(cur) => Probe::Hit((obj.clone(), cur, home, entry.accept)),
                 Probe::Slow | Probe::Miss => Probe::Slow,
             }
         });
         let Some((obj, cur, home, accept)) = hit else {
             return Ok(None);
         };
-        let nv = ops::binary_op(op, &cur, rhs, self).map_err(|e| self.rt_throw(e))?;
+        let new = ops::binary_op(op, &cur, rhs, self).map_err(|e| self.rt_throw(e))?;
         // A diagnostic of the operation (a float-to-int deprecation) may
         // have run an error handler that changed the object: the direct
         // store needs the property as it was, anything else goes through
         // the property handlers.
-        if accepts(accept, &nv) && object::data(&obj).lazy.borrow().is_none() {
-            if let Some(old) = store_home(&obj, &home, &nv) {
+        if accepts(accept, &new) && object::data(&obj).lazy.borrow().is_none() {
+            if let Some(old) = store_home(&obj, &home, &new) {
                 drop(old);
-                return Ok(Some(nv));
+                return Ok(Some(new));
             }
         }
         let name = self.prop_cache_name(pid);
-        self.write_property(&obj, &name, nv).map(Some)
+        self.write_property(&obj, &name, new).map(Some)
     }
 
     /// `ZEND_ISSET_ISEMPTY_PROP_OBJ` of cacheable place `pid` on an
@@ -559,16 +568,16 @@ impl Vm {
     /// The conversion of the value to bool for `empty()`.
     #[inline]
     pub(crate) fn prop_cache_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<Option<bool>> {
-        let v = self.prop_probe_fill(pid, PC_FILLED | PC_ISSET, |_, o, h| {
-            read_home(o, &h, |v| Probe::Hit(v.deref()))
+        let value = self.prop_probe_fill(pid, PC_FILLED | PC_ISSET, |_, obj, home| {
+            read_home(obj, &home, |value| Probe::Hit(value.deref()))
         });
-        let Some(v) = v else {
+        let Some(value) = value else {
             return Ok(None);
         };
         Ok(Some(if empty {
-            !self.to_bool(&v)?
+            !self.to_bool(&value)?
         } else {
-            !v.is_null()
+            !value.is_null()
         }))
     }
 }
