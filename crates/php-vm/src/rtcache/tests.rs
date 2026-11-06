@@ -391,3 +391,101 @@ k(): Argument #1 ($x) must be of type I&A, C given
 "#
     );
 }
+
+/// `$obj::X` (a dynamic class operand): cached per class of the object,
+/// so a subclass instance, a private constant seen through a subclass,
+/// a class-name string, an enum case and a temporary object (freed by the
+/// fetch, before the echo) all behave as uncached.
+#[test]
+fn class_constants_through_objects() {
+    let out = run(r#"<?php
+class P { const X = 'px'; const ARR = [1, 2]; protected const PROT = 'prot'; }
+class C extends P {
+    const X = 'cx'; const Y = self::X . '!'; private const PRIV = 'priv';
+    function run() {
+        for ($i = 0; $i < 3; $i++) {
+            echo $this::X, ' ', $this::Y, ' ', $this::PROT, ' ', count($this::ARR), "\n";
+            try { echo $this::PRIV, "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+            $o = new P; echo $o::X, "\n";
+            $n = 'C'; echo $n::X, "\n";
+        }
+    }
+}
+class D extends C { const X = 'dx'; }
+(new C)->run();
+(new D)->run();
+$c = new C;
+for ($i = 0; $i < 2; $i++) {
+    echo $c::X, "\n";
+    try { echo $c::PRIV, "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { echo $c::NOPE, "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    $c = new D;
+}
+enum E: string { case A = 'a'; const K = self::A; }
+$e = E::A;
+for ($i = 0; $i < 2; $i++) { var_dump($e::K, $e::A->value); }
+class W { function __destruct() { echo "~W\n"; } const Z = 'z'; }
+for ($i = 0; $i < 2; $i++) { echo (new W)::Z, "\n"; echo "after\n"; }
+"#);
+    let c_run = "cx cx! prot 2\npriv\npx\ncx\n";
+    let d_run = "dx cx! prot 2\nUndefined constant D::PRIV\npx\ncx\n";
+    let expected = format!(
+        "{}{}cx\nCannot access private constant C::PRIV\nUndefined constant C::NOPE\ndx\nUndefined constant D::PRIV\nUndefined constant D::NOPE\nenum(E::A)\nstring(1) \"a\"\nenum(E::A)\nstring(1) \"a\"\n~W\nz\nafter\n~W\nz\nafter\n",
+        c_run.repeat(3),
+        d_run.repeat(3)
+    );
+    assert_eq!(out, expected);
+}
+
+/// `$x = NAME;` / `$x = A::NAME;` with the `AssignCv` folded into the fetch
+/// (`FetchConstTo`, `FetchClassConstTo`): namespaced, global, fallback and
+/// array constants, class constants through a name, `self`, `static`,
+/// `parent` and `$this`, a target holding an object (destructed by the
+/// assignment), a reference and an array; the errors of uncached fetches
+/// each time.
+#[test]
+fn constant_fetches_assigned_to_variables() {
+    let out = run(r#"<?php
+namespace N;
+const LOCAL = 'local';
+define('GLOBAL_C', 'global');
+define('M_INT', 8);
+define('ARR', [1, 2]);
+class D { function __destruct() { echo "~D\n"; } }
+class A { const X = 'ax'; const ARR = ['k' => 1]; private const P = 'priv'; static function p() { $v = self::P; return $v; } }
+class B extends A { const X = 'bx'; function get() { $a = static::X; $b = self::X; $c = parent::X; $d = $this::X; return "$a $b $c $d"; } }
+for ($i = 0; $i < 3; $i++) {
+    $l = LOCAL; $g = GLOBAL_C; $p = \M_INT; $arr = ARR; $e = \N\LOCAL;
+    $x = A::X; $y = B::X; $ca = A::ARR;
+    echo $l, ' ', $g, ' ', $p, ' ', $arr[1], ' ', $e, ' ', $x, ' ', $y, ' ', $ca['k'], ' ', A::p(), ' ', (new B)->get(), "\n";
+}
+$o = new D; echo "made\n"; $o = A::X; echo "replaced ", $o, "\n";
+$t = 1; $r = &$t; $t = GLOBAL_C; echo $r, "\n";
+$q = [1]; $q = LOCAL; echo $q, "\n";
+for ($i = 0; $i < 2; $i++) { try { $u = UNDEF_CONST; } catch (\Error $e) { echo $e->getMessage(), "\n"; } }
+for ($i = 0; $i < 2; $i++) { try { $u = A::P; } catch (\Error $e) { echo $e->getMessage(), "\n"; } }
+for ($i = 0; $i < 2; $i++) { try { $u = A::NOPE; } catch (\Error $e) { echo $e->getMessage(), "\n"; } }
+define('N\LATE', 'late-ns');
+function late() { $z = LATE; return $z; }
+echo late(), "\n";
+"#);
+    assert_eq!(
+        out,
+        r#"local global 8 2 local ax bx 1 priv bx bx ax bx
+local global 8 2 local ax bx 1 priv bx bx ax bx
+local global 8 2 local ax bx 1 priv bx bx ax bx
+made
+~D
+replaced ax
+global
+local
+Undefined constant "N\UNDEF_CONST"
+Undefined constant "N\UNDEF_CONST"
+Cannot access private constant N\A::P
+Cannot access private constant N\A::P
+Undefined constant N\A::NOPE
+Undefined constant N\A::NOPE
+late-ns
+"#
+    );
+}

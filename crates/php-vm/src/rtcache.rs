@@ -154,6 +154,16 @@ fn immutable_value(v: &Value) -> bool {
     }
 }
 
+/// The value a class-constant entry caches for the class `cls` it was
+/// filled for.
+fn class_const_value(cls: &Class, e: &MemberSlot) -> Option<Value> {
+    match &e.target {
+        Target::Value(v) => Some(v.clone()),
+        Target::Index(idx) => cls.consts.get(*idx)?.value.borrow().clone(),
+        Target::Method(_) => None,
+    }
+}
+
 impl Vm {
     // ------------------------------------------------------------------
     // Class resolution without side effects
@@ -301,6 +311,14 @@ impl Vm {
         }
     }
 
+    /// The cached value of `Op::FetchConst` (name literal `name`,
+    /// namespace fallback `fallback`), if the slot holds one: no lookup,
+    /// no diagnostic (the hot pre-match of `Vm::run`).
+    #[inline]
+    pub(crate) fn const_hit(&self, name: u32, fallback: Option<u32>) -> Option<Value> {
+        self.const_probe(name, fallback.is_some()).ok()
+    }
+
     /// The cached value, or whether the slot should be filled after the
     /// uncached fetch.
     #[inline]
@@ -372,23 +390,92 @@ impl Vm {
         spec: &ClassSpec,
         name: Operand,
     ) -> VmResult<Value> {
-        if let Operand::Lit(l) = name {
-            if let Some(v) = self.class_const_hit(spec, l) {
-                return Ok(v);
+        let Operand::Lit(l) = name else {
+            let n = self.read(name)?;
+            return self.op_fetch_class_const(spec, n);
+        };
+        // `$obj::X` (`ZEND_FETCH_CLASS_CONSTANT` with a VAR class operand
+        // caches the constant for the class, `CACHED_PTR(...) == ce`): the
+        // class of the object the operand holds, peeked before the generic
+        // path consumes the operand.
+        let dyn_class = match spec {
+            ClassSpec::Dyn(op) => Some(self.rt_dyn_class(*op)),
+            _ => None,
+        };
+        if let Some(v) = self.class_const_hit(spec, l, dyn_class.as_ref()) {
+            if let ClassSpec::Dyn(op) = spec {
+                self.rt_release_dyn_class(*op);
             }
+            return Ok(v);
         }
         let n = self.read(name)?;
         let v = self.op_fetch_class_const(spec, n)?;
-        if let Operand::Lit(l) = name {
-            self.class_const_fill(spec, l);
-        }
+        self.class_const_fill(spec, l, dyn_class.flatten());
         Ok(v)
     }
 
+    /// The cached value of `A::NAME` (`name` the constant-name literal) for
+    /// a class named or `self`/`parent`/`static`, if the op's slot holds
+    /// one valid for the calling scope: no lookup, no diagnostic, nothing
+    /// consumed (the hot pre-match of `Vm::run`). A dynamic class (its
+    /// operand is consumed on a hit) gives `None`.
     #[inline]
-    fn class_const_hit(&self, spec: &ClassSpec, name: u32) -> Option<Value> {
+    pub(crate) fn class_const_cached(&self, spec: &ClassSpec, name: u32) -> Option<Value> {
+        if matches!(spec, ClassSpec::Dyn(_)) {
+            return None;
+        }
+        self.class_const_hit(spec, name, None)
+    }
+
+    /// The class of the object a dynamic class operand (`$obj::X`) holds,
+    /// looked at without reading the operand: a temporary or a compiled
+    /// variable holding the object directly. A class name string, a
+    /// reference or anything else gives `None` (not cached).
+    #[inline]
+    fn rt_dyn_class(&self, op: Operand) -> Option<Rc<Class>> {
+        let f = self.frame();
+        match op {
+            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+                Some(Value::Object(o)) => Some(object::class_of(o).clone()),
+                _ => None,
+            },
+            Operand::Cv(cv) => f.peek_cv(cv, |slot| match slot {
+                Some(Value::Object(o)) => Some(object::class_of(o).clone()),
+                _ => None,
+            }),
+            Operand::Lit(_) | Operand::Unused => None,
+        }
+    }
+
+    /// Releases a consumed temporary class operand after a cache hit,
+    /// as the read of the generic path would have (`FREE_OP1`).
+    #[inline]
+    fn rt_release_dyn_class(&mut self, op: Operand) {
+        if let Operand::Tmp(t) = op {
+            let v = std::mem::take(&mut self.frame_mut().tmps[t as usize]);
+            drop(v);
+        }
+    }
+
+    /// The cached value of the class constant named by literal `name`
+    /// for the class `spec` resolves to. `dyn_class` is `Some` for a
+    /// `ClassSpec::Dyn` spec: the class [`Vm::rt_dyn_class`] found, if any.
+    #[inline]
+    fn class_const_hit(
+        &self,
+        spec: &ClassSpec,
+        name: u32,
+        dyn_class: Option<&Option<Rc<Class>>>,
+    ) -> Option<Value> {
         let cache = self.frame().code.rt_cache.class_consts.borrow();
         let entries = cache.get(name as usize)?;
+        if let Some(cls) = dyn_class {
+            let cls = cls.as_ref()?;
+            let e = entries
+                .iter()
+                .find(|e| Rc::as_ptr(cls) == e.class.as_ptr() && self.rt_access_ok(&e.access))?;
+            return class_const_value(cls, e);
+        }
         // `A::X` of a public scalar constant: php-src's `CACHED_PTR` fast
         // path, the class itself is not needed.
         if let ClassSpec::Named(l) = spec {
@@ -405,23 +492,17 @@ impl Vm {
             }
         }
         let (cls, e) = self.rt_find(spec, entries)?;
-        match &e.target {
-            Target::Value(v) => Some(v.clone()),
-            Target::Index(idx) => {
-                let v = cls.consts.get(*idx)?.value.borrow().clone();
-                v
-            }
-            Target::Method(_) => None,
-        }
+        class_const_value(&cls, e)
     }
 
     /// Fills the slot of a `FetchClassConst` that just succeeded: an
     /// evaluated constant of a class (not a trait) without
-    /// `#[\Deprecated]`.
+    /// `#[\Deprecated]`. `dyn_class` is the class a `ClassSpec::Dyn`
+    /// operand held before the fetch consumed it.
     #[cold]
     #[inline(never)]
-    fn class_const_fill(&self, spec: &ClassSpec, name: u32) {
-        let Some(cls) = self.rt_peek_class(spec) else {
+    fn class_const_fill(&self, spec: &ClassSpec, name: u32, dyn_class: Option<Rc<Class>>) {
+        let Some(cls) = dyn_class.or_else(|| self.rt_peek_class(spec)) else {
             return;
         };
         if cls.is_trait() {
@@ -481,16 +562,34 @@ impl Vm {
         let Operand::Lit(l) = name else {
             return None;
         };
+        self.static_prop_cached(spec, l).map(|(cell, _)| cell)
+    }
+
+    /// [`Vm::static_prop_hit`] for the literal name `name`, also telling
+    /// whether the property is typed (a type other than `mixed`: its
+    /// writes are checked and its null may mean "uninitialized", see
+    /// `typed_refs::note_static_prop`). The static-property ops'
+    /// fast paths (`exec/spec/statics.rs`) take only untyped properties
+    /// where a write would need the type check.
+    #[inline]
+    pub(crate) fn static_prop_cached(
+        &self,
+        spec: &ClassSpec,
+        name: u32,
+    ) -> Option<(Rc<RefCell<Value>>, bool)> {
         let cache = self.frame().code.rt_cache.static_props.borrow();
-        let (cls, e) = self.rt_find(spec, cache.get(l as usize)?)?;
+        let (cls, e) = self.rt_find(spec, cache.get(name as usize)?)?;
         let Target::Index(idx) = e.target else {
             return None;
         };
         let sp = cls.static_props.get(idx)?;
+        let typed = !sp.ty.as_ref().is_none_or(crate::types::TypeDecl::is_mixed);
         // What `static_prop_slot` does on every fetch of an initialised
-        // property of a class.
-        crate::typed_refs::note_static_prop(sp);
-        Some(sp.cell.clone())
+        // property of a class (nothing for an untyped one).
+        if typed {
+            crate::typed_refs::note_static_prop(sp);
+        }
+        Some((sp.cell.clone(), typed))
     }
 
     /// Fills the slot of an `A::$name` place base that just resolved to a

@@ -11,13 +11,17 @@
 //!
 //! Every rewrite keeps the op count and the op after the rewritten one, so
 //! jump targets, try ranges, live ranges and lines stay valid. A specialised
-//! op skips its successor only on its fast path, where the successor (the
-//! jump testing the comparison, the `AssignCv` storing the result) would
-//! have done nothing but consume the temporary; on any other path it writes
-//! the temporary and the successor runs as before. A jump landing on the
-//! successor from elsewhere also runs it as before.
+//! op skips its successor only where the successor (the jump testing the
+//! comparison, the `AssignCv` storing the result) would have done nothing
+//! but consume the temporary: on its fast path, and for the constant
+//! fetches (`FetchConstTo`, `FetchClassConstTo`) also after the generic
+//! fetch, when the variable holds no refcounted value; on any other path it
+//! writes the temporary and the successor runs as before. A jump landing on
+//! the successor from elsewhere also runs it as before.
 
-use crate::opcode::{BinKind, FetchMode, Op, Operand, Place, PlaceBase, PlaceId, Seg};
+use crate::opcode::{
+    cmp_outcome, BinKind, ClassSpec, FetchMode, Op, Operand, Place, PlaceBase, PlaceId, Seg,
+};
 use php_runtime::BinaryOp;
 
 /// Rewrites `ops` (the finished body whose places are `places`) in place.
@@ -29,6 +33,22 @@ pub(crate) fn specialise(ops: &mut [Op], places: &[Place]) {
         };
         if let Some(op) = rewrite(cur, tail.first(), places) {
             *cur = op;
+        }
+    }
+    // Second pass, over the specialised ops: a loop's step right before its
+    // smart-branch condition.
+    for i in 1..ops.len() {
+        if !matches!(ops[i], Op::CmpJmp { .. }) {
+            continue;
+        }
+        if let Op::IncDecCv {
+            cv,
+            kind,
+            dst: None,
+            place,
+        } = ops[i - 1]
+        {
+            ops[i - 1] = Op::IncDecCvCmpJmp { cv, kind, place };
         }
     }
 }
@@ -58,32 +78,7 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
             op,
             val,
             dst,
-        } => {
-            if is_numeric_assign_op(*op) {
-                if let Some(cv) = plain_cv(places, *place) {
-                    return Some(Op::AssignOpCv {
-                        cv,
-                        op: *op,
-                        val: *val,
-                        dst: *dst,
-                        place: *place,
-                    });
-                }
-            }
-            // `$cv[k] op= v` as a statement: a number operated on in place,
-            // or `.=` extending a string element in place
-            // (`ZEND_ASSIGN_DIM_OP` on the fetched slot).
-            if dst.is_some() || !(is_numeric_assign_op(*op) || *op == BinaryOp::Concat) {
-                return None;
-            }
-            cv_dim(places, *place).map(|(cv, dim)| Op::AssignOpDimCv {
-                cv,
-                dim,
-                op: *op,
-                val: *val,
-                place: *place,
-            })
-        }
+        } => assign_op(places, *place, *op, *val, *dst),
         Op::Fetch { place, mode, dst } if *mode != FetchMode::List => cv_dim(places, *place)
             .map(|(cv, dim)| Op::FetchDimCv {
                 cv,
@@ -101,33 +96,167 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
                     to: assigned_cv(next, *dst),
                     mode: *mode,
                 })
+            })
+            .or_else(|| {
+                static_prop(places, *place).then(|| Op::FetchStaticProp {
+                    place: *place,
+                    dst: *dst,
+                    to: assigned_cv(next, *dst),
+                    mode: *mode,
+                })
             }),
-        Op::Isset { place, dst } => cv_dim(places, *place).map(|(cv, dim)| Op::IssetDimCv {
-            cv,
-            dim,
-            place: *place,
+        Op::FetchConst {
+            name,
+            fallback,
+            dst,
+        } => assigned_cv(next, *dst).map(|to| Op::FetchConstTo {
+            name: *name,
+            fallback: *fallback,
             dst: *dst,
-            empty: false,
+            to,
         }),
-        Op::Empty { place, dst } => cv_dim(places, *place).map(|(cv, dim)| Op::IssetDimCv {
-            cv,
-            dim,
-            place: *place,
+        Op::FetchClassConst {
+            class,
+            name: Operand::Lit(name),
+            dst,
+        } => assigned_cv(next, *dst).map(|to| Op::FetchClassConstTo {
+            class: class.clone(),
+            name: *name,
             dst: *dst,
-            empty: true,
+            to,
         }),
-        Op::Assign {
-            place,
-            val,
-            dst: None,
-        } => cv_dim(places, *place).map(|(cv, dim)| Op::AssignDimCv {
-            cv,
-            dim,
-            val: *val,
-            place: *place,
-        }),
+        Op::Isset { place, dst } => isset(places, *place, *dst, false),
+        Op::Empty { place, dst } => isset(places, *place, *dst, true),
+        Op::Assign { place, val, dst } => assign(places, *place, *val, *dst),
         _ => None,
     }
+}
+
+/// The specialised `Assign` of `place = val` (result `dst`).
+fn assign(places: &[Place], place: PlaceId, val: Operand, dst: Option<u32>) -> Option<Op> {
+    if static_prop(places, place) {
+        return Some(Op::AssignStaticProp { place, val, dst });
+    }
+    if dst.is_some() {
+        return None;
+    }
+    if let Some((cv, dim)) = cv_dim(places, place) {
+        return Some(Op::AssignDimCv {
+            cv,
+            dim,
+            val,
+            place,
+        });
+    }
+    // `$cv[d1][d2]... = val;` (`mkmatrix`'s `$mx[$i][$j] = $count++`).
+    short_cv_dims(places, place).map(|cv| Op::AssignDimsCv { cv, val, place })
+}
+
+/// The specialised `AssignOp` of `place op= val` (result `dst`).
+fn assign_op(
+    places: &[Place],
+    place: PlaceId,
+    op: BinaryOp,
+    val: Operand,
+    dst: Option<u32>,
+) -> Option<Op> {
+    if static_prop(places, place) {
+        return Some(Op::AssignOpStaticProp {
+            place,
+            op,
+            val,
+            dst,
+        });
+    }
+    if op == BinaryOp::Concat {
+        if let Some(cv) = plain_cv(places, place) {
+            return Some(Op::ConcatCv {
+                cv,
+                val,
+                dst,
+                place,
+            });
+        }
+    }
+    if is_numeric_assign_op(op) {
+        if let Some(cv) = plain_cv(places, place) {
+            return Some(Op::AssignOpCv {
+                cv,
+                op,
+                val,
+                dst,
+                place,
+            });
+        }
+    }
+    // `$cv[k] op= v` as a statement: a number operated on in place, or `.=`
+    // extending a string element in place (`ZEND_ASSIGN_DIM_OP` on the
+    // fetched slot).
+    if dst.is_some() || !(is_numeric_assign_op(op) || op == BinaryOp::Concat) {
+        return None;
+    }
+    if let Some((cv, dim)) = cv_dim(places, place) {
+        return Some(Op::AssignOpDimCv {
+            cv,
+            dim,
+            op,
+            val,
+            place,
+        });
+    }
+    // `$cv[d1][d2]... op= v` on numbers.
+    if !is_numeric_assign_op(op) {
+        return None;
+    }
+    short_cv_dims(places, place).map(|cv| Op::AssignOpDimsCv { cv, op, val, place })
+}
+
+/// The deepest dimension chain the nested write fast paths take
+/// (`exec/spec.rs`, `MAX_WRITE_DIMS`).
+const MAX_WRITE_DIMS: usize = 4;
+
+/// [`cv_dims`] with at most [`MAX_WRITE_DIMS`] dimensions.
+fn short_cv_dims(places: &[Place], pid: PlaceId) -> Option<u32> {
+    let cv = cv_dims(places, pid)?;
+    (places.get(pid as usize)?.segs.len() <= MAX_WRITE_DIMS).then_some(cv)
+}
+
+/// The specialised `isset()` (`empty` false) or `empty()` of `pid`
+/// writing `dst`.
+fn isset(places: &[Place], pid: PlaceId, dst: u32, empty: bool) -> Option<Op> {
+    if let Some((cv, dim)) = cv_dim(places, pid) {
+        return Some(Op::IssetDimCv {
+            cv,
+            dim,
+            place: pid,
+            dst,
+            empty,
+        });
+    }
+    static_prop(places, pid).then_some(Op::IssetStaticProp {
+        place: pid,
+        dst,
+        empty,
+    })
+}
+
+/// Whether `pid` is a static property `A::$name` the run-time cache can
+/// hold: a literal name, a class that is named or `self`/`parent`/
+/// `static` (not an expression), no further segments.
+fn static_prop(places: &[Place], pid: PlaceId) -> bool {
+    places.get(pid as usize).is_some_and(|p| {
+        p.segs.is_empty()
+            && matches!(
+                &p.base,
+                PlaceBase::StaticProp {
+                    class: ClassSpec::Named(_)
+                        | ClassSpec::SelfClass
+                        | ClassSpec::Parent
+                        | ClassSpec::Static,
+                    name: Operand::Lit(_),
+                }
+            )
+    })
 }
 
 /// `zend_is_smart_branch`: the comparisons whose result can drive the
@@ -180,27 +309,27 @@ fn bin(op: BinKind, a: Operand, b: Operand, dst: u32, next: Option<&Op>) -> Opti
     if !has_numeric_fast_path(op) {
         return None;
     }
-    match next? {
-        Op::JmpZ(Operand::Tmp(t), target) if *t == dst && is_smart_branch(op) => Some(Op::CmpJmp {
-            op,
-            a,
-            b,
-            dst,
-            target: *target,
-            jmp_if: false,
-        }),
-        Op::JmpNz(Operand::Tmp(t), target) if *t == dst && is_smart_branch(op) => {
-            Some(Op::CmpJmp {
+    let branch = match next? {
+        Op::JmpZ(Operand::Tmp(t), target) if *t == dst => Some((*target, false)),
+        Op::JmpNz(Operand::Tmp(t), target) if *t == dst => Some((*target, true)),
+        _ => None,
+    };
+    if let Some((target, jmp_if)) = branch {
+        // `for_branch` is `None` for the operators that are not smart
+        // branches (`zend_is_smart_branch`).
+        if let Some(mask) = cmp_outcome::for_branch(op, jmp_if) {
+            return Some(Op::CmpJmp {
                 op,
                 a,
                 b,
                 dst,
-                target: *target,
-                jmp_if: true,
-            })
+                target,
+                jmp_if,
+                mask,
+            });
         }
-        _ => assigned_cv(next, dst).map(|cv| Op::BinAssignCv { op, a, b, dst, cv }),
     }
+    assigned_cv(next, dst).map(|cv| Op::BinAssignCv { op, a, b, dst, cv })
 }
 
 /// The CV that `next` assigns temporary `dst` to, as a statement
@@ -254,7 +383,8 @@ fn cv_dims(places: &[Place], pid: PlaceId) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::super::{compile, CompileOptions};
-    use crate::opcode::{BinKind, FetchMode, IncDecKind, Op, Operand};
+    use crate::opcode::{cmp_outcome, BinKind, FetchMode, IncDecKind, Op, Operand};
+    use php_runtime::BinaryOp;
     use std::rc::Rc;
 
     fn main_ops(src: &str) -> Vec<Op> {
@@ -308,25 +438,27 @@ mod tests {
             target,
             jmp_if: true,
             dst,
+            mask,
         } = ops[cond]
         else {
             panic!("no smart branch at {cond}: {ops:?}");
         };
         assert_eq!(target as usize, jmp + 1, "{ops:?}");
+        assert_eq!(mask, cmp_outcome::LESS, "{ops:?}");
         // The jump the smart branch stands for is kept after it.
         assert!(
             matches!(ops[cond + 1], Op::JmpNz(Operand::Tmp(t), l) if t == dst && l == target),
             "{ops:?}"
         );
+        // The step right before the condition carries it along.
         assert!(
-            ops.iter().any(|op| matches!(
-                op,
-                Op::IncDecCv {
+            matches!(
+                ops[cond - 1],
+                Op::IncDecCvCmpJmp {
                     kind: IncDecKind::PostInc,
-                    dst: None,
                     ..
                 }
-            )),
+            ),
             "{ops:?}"
         );
     }
@@ -483,17 +615,22 @@ mod tests {
             )),
             "{ops:?}"
         );
-        // `.=` on the CV (its own fast path runs from the generic op) and a
-        // compound assignment with a used result keep the generic op.
+        // `.=` on the CV is `ConcatCv`; a compound assignment of an element
+        // with a used result keeps the generic op.
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::ConcatCv { dst: None, .. })),
+            "{ops:?}"
+        );
         assert_eq!(
             ops.iter()
                 .filter(|op| matches!(op, Op::AssignOp { .. }))
                 .count(),
-            2,
+            1,
             "{ops:?}"
         );
-        // Nested dimension reads get the chain form; appends and nested
-        // writes keep the generic place ops.
+        // Nested dimension reads and writes get the chain forms; appends
+        // keep the generic place ops.
         let ops = main_ops(
             "<?php $a = [[1]]; echo $a[0][0]; $a[] = 1; $a[0][0] = 2; $x = $a[0][0]; $y = $a[0][0] ?? 1;",
         );
@@ -538,7 +675,131 @@ mod tests {
             ops.iter()
                 .filter(|op| matches!(op, Op::Assign { .. }))
                 .count(),
+            1,
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::AssignDimsCv { .. })),
+            "{ops:?}"
+        );
+        // Nested compound assignments: numeric ones get the chain form; `.=`,
+        // a used result and more than four dimensions keep the generic ops.
+        let ops = main_ops(
+            "<?php $m = [[1]]; $m[0][0] += 2; $m[0][0] .= 'x'; $y = ($m[0][0] -= 1); $m[0][0][0][0][0] = 1; $m[0][0][0][0][0] *= 2;",
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(
+                    op,
+                    Op::AssignOpDimsCv {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                ))
+                .count(),
+            1,
+            "{ops:?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::AssignOp { .. }))
+                .count(),
+            3,
+            "{ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|op| matches!(op, Op::AssignDimsCv { .. })),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn static_properties_are_specialised() {
+        let ops = main_ops(
+            "<?php class A { static $a = 0; } $x = A::$a; A::$a = 1; A::$a .= 'x'; $y = isset(A::$a); $z = empty(A::$a); $w = A::$a ?? 2; $d = 'a'; $v = A::$$d; A::$a[] = 1;",
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchStaticProp {
+                    to: Some(_),
+                    mode: FetchMode::Read,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchStaticProp {
+                    mode: FetchMode::Is,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::AssignStaticProp { dst: None, .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::AssignOpStaticProp {
+                    op: BinaryOp::Concat,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        for empty in [false, true] {
+            assert!(
+                ops.iter()
+                    .any(|op| matches!(op, Op::IssetStaticProp { empty: e, .. } if *e == empty)),
+                "{ops:?}"
+            );
+        }
+        // A variable property name (`A::$$d`) and a dimension (`A::$a[]`)
+        // keep the generic ops.
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::Fetch { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::Assign { .. })),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn constant_fetches_into_variables_are_specialised() {
+        // Classes not declared in the file: nothing is folded at compile
+        // time.
+        let ops = main_ops("<?php $x = C; $y = B::X; echo C; echo B::X; $w = $o::X;");
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::FetchConstTo { .. }))
+                .count(),
+            1,
+            "{ops:?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::FetchClassConstTo { .. }))
+                .count(),
             2,
+            "{ops:?}"
+        );
+        // A fetch whose value is used otherwise keeps the generic op.
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::FetchConst { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::FetchClassConst { .. })),
             "{ops:?}"
         );
     }

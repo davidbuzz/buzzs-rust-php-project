@@ -34,9 +34,11 @@
 //! [`Frame::peek_cv_dim`]: crate::vm::Frame::peek_cv_dim
 
 use super::{discard_unrooted, num_bin, CvOpData, Num};
-use crate::opcode::{BinKind, IncDecKind, Operand, PlaceId, Seg};
+use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Operand, PlaceId, Seg};
 use crate::vm::{Frame, VarStore, Vm, VmResult};
-use php_runtime::{ArrayKey, BinaryOp, Value, ZStr};
+use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
+
+mod statics;
 
 /// Whether replacing `v` needs no destructor, GC root buffering or
 /// reference semantics: no value, or null, bool, int, float or string
@@ -137,6 +139,295 @@ fn slot_truth(v: Option<&Value>) -> Option<bool> {
     v.and_then(plain_truth)
 }
 
+/// The outcome of comparing the plain numbers `x` and `y`, as one
+/// [`cmp_outcome`] bit: two ints compare as ints, an int and a float as
+/// doubles (php-src's `(double)` widening) unless `identity` (`===`,
+/// `!==`), where they are a type mismatch; a NaN is unordered.
+#[inline(always)]
+#[allow(clippy::inline_always, clippy::float_cmp)] // the smart branch's test; PHP compares doubles exactly
+fn num_outcome(x: Num, y: Num, identity: bool) -> u8 {
+    let (xf, yf) = match (x, y) {
+        // 0, 1 or 2: LESS, EQUAL or GREATER.
+        (Num::Int(p), Num::Int(q)) => return 1 << (u8::from(p > q) + u8::from(p >= q)),
+        (Num::Float(p), Num::Float(q)) => (p, q),
+        _ if identity => return cmp_outcome::MISMATCH,
+        _ => (x.as_f64(), y.as_f64()),
+    };
+    if xf < yf {
+        cmp_outcome::LESS
+    } else if xf > yf {
+        cmp_outcome::GREATER
+    } else if xf == yf {
+        cmp_outcome::EQUAL
+    } else {
+        cmp_outcome::UNORDERED
+    }
+}
+
+/// Stores `v` into the temporary slot `slot` as [`Vm::set_tmp`] does: an
+/// old scalar (or the `Null` a consuming read left) is overwritten without
+/// the out-of-line drop call.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a store and a tag test
+fn put_tmp(slot: &mut Value, v: Value) {
+    let old = std::mem::replace(slot, v);
+    if matches!(
+        old,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    ) {
+        std::mem::forget(old);
+    }
+}
+
+/// The array key an offset operand of frame `f` converts to without
+/// diagnostics: an int, or a string (symbol-table semantics, `"1"` is key
+/// 1). Nothing is consumed: an int in a temporary can stay in its slot
+/// (like [`Vm::peek_num`]); a string there is cloned into the key and the
+/// caller releases the temporary once its fast path succeeded
+/// ([`release_str_tmp_in`], the `FREE_OP2` of the dimension fetch), or
+/// leaves it to the generic read.
+#[inline]
+fn dim_key_in(f: &Frame, dim: Operand) -> Option<ArrayKey> {
+    match dim {
+        Operand::Tmp(t) | Operand::TmpKeep(t) => plain_key(f.tmps.get(t as usize)),
+        Operand::Lit(i) => plain_key(f.code.literals.get(i as usize)),
+        Operand::Cv(cv) => f.peek_cv(cv, plain_key),
+        Operand::Unused => None,
+    }
+}
+
+/// Releases the string a consumed temporary operand of frame `f` holds;
+/// other temporaries are left in place (see [`Vm::peek_num`]).
+#[inline]
+fn release_str_tmp_in(f: &mut Frame, op: Operand) {
+    if let Operand::Tmp(t) = op {
+        if let Some(slot) = f.tmps.get_mut(t as usize) {
+            if matches!(slot, Value::Str(_)) {
+                *slot = Value::Null;
+            }
+        }
+    }
+}
+
+/// Stores a fetched value `v` (never a reference) into compiled variable
+/// `to` of frame `f` when that is undefined or holds a plain value (the
+/// folded `AssignCv`: `zend_assign_to_variable` for a variable that is
+/// neither a reference nor refcounted; `true`, the loop skips that op),
+/// else into temporary `dst` (`false`).
+#[inline]
+fn store_fetched_in(f: &mut Frame, dst: u32, to: Option<u32>, v: Value) -> bool {
+    if let Some(to) = to {
+        let idx = f.cv_idx(to);
+        if let Ok(mut vars) = f.vars.try_borrow_mut() {
+            if let Some(slot) = vars.slots.get_mut(idx) {
+                if is_plain_slot(slot.as_ref()) {
+                    let old = slot.replace(v);
+                    drop(vars);
+                    // A scalar is forgotten; a string is released.
+                    discard_unrooted(old);
+                    return true;
+                }
+            }
+        }
+    }
+    put_tmp(&mut f.tmps[dst as usize], v);
+    false
+}
+
+/// The value of `$cv[d1][d2]...` (place `place` of frame `f`) when every
+/// container on the way is an array (the variable itself possibly through
+/// a reference) holding the offset and every offset peeks as an int or a
+/// string ([`dim_key_in`]); dereferenced and cloned.
+#[inline]
+fn dims_value_in(f: &Frame, cv: u32, place: PlaceId) -> Option<Value> {
+    let segs = &f.code.places.get(place as usize)?.segs;
+    // A shared borrow across the walk (the offsets may be variables too,
+    // peeked under it).
+    let vars = f.vars.try_borrow().ok()?;
+    let slot = vars.slots.get(f.cv_idx(cv))?.as_ref()?;
+    let guard;
+    let mut cur = match slot {
+        Value::Reference(r) => {
+            guard = r.try_borrow()?;
+            &*guard
+        }
+        v => v,
+    };
+    for seg in segs {
+        let Seg::Dim(dim) = seg else {
+            return None;
+        };
+        let key = dim_key_in(f, *dim)?;
+        let Value::Array(a) = cur else {
+            return None;
+        };
+        cur = a.get(&key)?;
+    }
+    Some(match cur {
+        Value::Reference(r) => Value::clone(&*r.try_borrow()?),
+        v => v.clone(),
+    })
+}
+
+/// A plain value (see [`is_plain_value`]) an `OP_DATA` operand of frame
+/// `f` holds, cloned, without consuming it: a literal, a defined
+/// non-reference variable or a temporary.
+#[inline]
+fn plain_value_in(f: &Frame, op: Operand) -> Option<Value> {
+    match op {
+        Operand::Tmp(t) | Operand::TmpKeep(t) => {
+            let v = f.tmps.get(t as usize)?;
+            is_plain_value(v).then(|| v.clone())
+        }
+        Operand::Lit(i) => {
+            let v = f.code.literals.get(i as usize)?;
+            is_plain_value(v).then(|| v.clone())
+        }
+        Operand::Cv(cv) => f.peek_cv(cv, |s| match s {
+            Some(v) if is_plain_value(v) => Some(v.clone()),
+            _ => None,
+        }),
+        Operand::Unused => None,
+    }
+}
+
+/// The deepest dimension chain of [`Op::AssignDimsCv`] /
+/// [`Op::AssignOpDimsCv`] (the compiler's `MAX_WRITE_DIMS`).
+///
+/// [`Op::AssignDimsCv`]: crate::opcode::Op::AssignDimsCv
+/// [`Op::AssignOpDimsCv`]: crate::opcode::Op::AssignOpDimsCv
+const MAX_WRITE_DIMS: usize = 4;
+
+/// The keys of the dimension chain `place` of frame `f` (and how many):
+/// every segment a dimension whose offset peeks as an int or a string
+/// ([`dim_key_in`]), at most [`MAX_WRITE_DIMS`] of them. All are computed
+/// before a write walk changes anything.
+fn write_keys_in(f: &Frame, place: PlaceId) -> Option<([Option<ArrayKey>; MAX_WRITE_DIMS], usize)> {
+    let segs = &f.code.places.get(place as usize)?.segs;
+    if segs.len() > MAX_WRITE_DIMS {
+        return None;
+    }
+    let mut keys: [Option<ArrayKey>; MAX_WRITE_DIMS] = Default::default();
+    for (key, seg) in keys.iter_mut().zip(segs) {
+        let Seg::Dim(dim) = seg else {
+            return None;
+        };
+        *key = Some(dim_key_in(f, *dim)?);
+    }
+    Some((keys, segs.len()))
+}
+
+/// Releases the consumed string temporaries among the offsets of `place`
+/// of frame `f` (see [`release_str_tmp_in`]).
+fn release_place_str_tmps(f: &mut Frame, place: PlaceId) {
+    let Some(p) = f.code.places.get(place as usize) else {
+        return;
+    };
+    for seg in &p.segs {
+        if let Seg::Dim(Operand::Tmp(t)) = seg {
+            if let Some(slot) = f.tmps.get_mut(*t as usize) {
+                if matches!(slot, Value::Str(_)) {
+                    *slot = Value::Null;
+                }
+            }
+        }
+    }
+}
+
+/// `tbl[k1][k2]... = v` along `keys` (all `Some`): the `FETCH_DIM_W`
+/// chain, separating each nested array (`SEPARATE_ARRAY`) and turning a
+/// missing or null container element into an empty array (as the generic
+/// walk's `descend` does, silently), then the `ASSIGN_DIM` store of `v`
+/// over a plain element or none. The old element on success; `v` back
+/// otherwise: the walk then met an existing element of another kind
+/// (reference, object, string, `false`, ...), having separated arrays on
+/// the way, which the generic write repeats as a no-op, and created
+/// nothing (a created array has no elements to stop at).
+fn assign_dims(tbl: &mut HashTable, keys: &[Option<ArrayKey>], v: Value) -> Result<Value, Value> {
+    let Some((Some(key), rest)) = keys.split_first() else {
+        return Err(v);
+    };
+    if rest.is_empty() {
+        return match tbl.get_mut(key) {
+            Some(slot) if is_plain_value(slot) => Ok(std::mem::replace(slot, v)),
+            Some(_) => Err(v),
+            None => Ok(std::mem::replace(tbl.lookup_ex(key.clone()).0, v)),
+        };
+    }
+    let (elem, _) = tbl.lookup_ex(key.clone());
+    if matches!(elem, Value::Null) {
+        *elem = Value::Array(ZArray::new());
+    }
+    let Value::Array(inner) = elem else {
+        return Err(v);
+    };
+    assign_dims(inner.make_mut(), rest, v)
+}
+
+/// `tbl[k1][k2]... op= y` along `keys` (all `Some`) when every container
+/// exists and is an array and the element is a plain number, the result
+/// staying in the int domain or being a float (the `FETCH_DIM_RW` hits,
+/// each array separated, and `ZEND_ASSIGN_DIM_OP`'s numeric fast path).
+/// `false` otherwise, the walk having at most separated arrays (a missing
+/// key warns on the generic path).
+fn assign_op_dims(tbl: &mut HashTable, keys: &[Option<ArrayKey>], op: BinaryOp, y: Num) -> bool {
+    let Some((Some(key), rest)) = keys.split_first() else {
+        return false;
+    };
+    let Some(elem) = tbl.get_mut(key) else {
+        return false;
+    };
+    if rest.is_empty() {
+        let x = match *elem {
+            Value::Int(i) => Num::Int(i),
+            Value::Float(v) => Num::Float(v),
+            _ => return false,
+        };
+        let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
+            return false;
+        };
+        // A number replaces a number: no drop glue to run.
+        std::mem::forget(std::mem::replace(elem, r));
+        return true;
+    }
+    let Value::Array(inner) = elem else {
+        return false;
+    };
+    assign_op_dims(inner.make_mut(), rest, op, y)
+}
+
+/// `isset($cv[dim])` (`empty` false) or `empty($cv[dim])` of frame `f`
+/// when `$cv` holds an array (directly or through a reference) and the
+/// offset is an int or string; `None` for the generic path.
+#[inline]
+fn isset_dim_in(f: &Frame, cv: u32, dim: Operand, empty: bool) -> Option<bool> {
+    let key = dim_key_in(f, dim)?;
+    let vars = f.vars.try_borrow().ok()?;
+    let slot = vars.slots.get(f.cv_idx(cv))?.as_ref()?;
+    let guard;
+    let arr = match slot {
+        Value::Array(a) => a,
+        Value::Reference(r) => {
+            guard = r.try_borrow()?;
+            match &*guard {
+                Value::Array(a) => a,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let Some(v) = arr.get(&key) else {
+        return Some(empty);
+    };
+    if empty {
+        return plain_truth(v).map(|t| !t);
+    }
+    Some(match v {
+        Value::Reference(r) => !r.try_borrow()?.is_null(),
+        v => !v.is_null(),
+    })
+}
+
 impl Vm {
     /// [`plain_truth`] of compiled variable `cv` in place (the type switch
     /// inlined into `ZEND_JMPZ_SPEC_CV`/`ZEND_JMPNZ_SPEC_CV`); undefined
@@ -195,50 +486,198 @@ impl Vm {
     /// temporaries are left in place (see [`Vm::peek_num`]).
     #[inline]
     pub(super) fn release_tmp_str(&mut self, op: Operand) {
-        if let Operand::Tmp(t) = op {
-            if let Some(slot) = self.frame_mut().tmps.get_mut(t as usize) {
-                if matches!(slot, Value::Str(_)) {
-                    *slot = Value::Null;
+        release_str_tmp_in(self.frame_mut(), op);
+    }
+
+    /// [`crate::opcode::Op::Move`] when its read needs no diagnostic: a
+    /// literal, a defined compiled variable (dereferenced and cloned,
+    /// `ZEND_QM_ASSIGN_SPEC_CV`), a temporary not holding a reference
+    /// (moved, or cloned when kept), into temporary `dst`. `false`,
+    /// nothing changed, otherwise (an undefined variable warns).
+    #[inline]
+    pub(super) fn move_fast(&mut self, src: Operand, dst: u32) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        let v = match src {
+            Operand::Lit(i) => match f.code.literals.get(i as usize) {
+                Some(v) if !matches!(v, Value::Reference(_)) => v.clone(),
+                _ => return false,
+            },
+            Operand::Cv(cv) => {
+                let v = f.peek_cv(cv, |slot| match slot {
+                    Some(Value::Reference(r)) => Some(r.get()),
+                    Some(v) => Some(v.clone()),
+                    None => None,
+                });
+                let Some(v) = v else {
+                    return false;
+                };
+                v
+            }
+            Operand::Tmp(t) => match f.tmps.get_mut(t as usize) {
+                Some(slot) if !matches!(slot, Value::Reference(_)) => std::mem::take(slot),
+                _ => return false,
+            },
+            Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+                Some(slot) if !matches!(slot, Value::Reference(_)) => slot.clone(),
+                _ => return false,
+            },
+            Operand::Unused => Value::Null,
+        };
+        put_tmp(&mut f.tmps[dst as usize], v);
+        true
+    }
+
+    /// `??` ([`crate::opcode::Op::Coalesce`], `ZEND_COALESCE_SPEC_CV`) on
+    /// a compiled variable, which never warns: `Some(true)` when it holds a
+    /// value other than null (dereferenced, cloned into `dst`: the op
+    /// jumps), `Some(false)` when it is undefined or null (nothing read: the
+    /// op falls through). `None` for any other operand (the generic read).
+    #[inline]
+    pub(super) fn coalesce_cv_fast(&mut self, a: Operand, dst: u32) -> Option<bool> {
+        let Operand::Cv(cv) = a else {
+            return None;
+        };
+        let f = self.frames.last_mut()?;
+        let v = f.peek_cv(cv, |slot| match slot {
+            None | Some(Value::Null) => None,
+            Some(Value::Reference(r)) => {
+                let inner = r.get();
+                (!matches!(inner, Value::Null)).then_some(inner)
+            }
+            Some(v) => Some(v.clone()),
+        });
+        let Some(v) = v else {
+            return Some(false);
+        };
+        put_tmp(&mut f.tmps[dst as usize], v);
+        Some(true)
+    }
+
+    /// `?:` ([`crate::opcode::Op::JmpSet`], `ZEND_JMP_SET_SPEC_CV`) on a
+    /// defined compiled variable whose truth needs no conversion (see
+    /// [`plain_truth`]): `Some(true)` when truthy (cloned into `dst`: the op
+    /// jumps), `Some(false)` when falsy (the op falls through). `None` for an
+    /// undefined variable (warning), a reference, an object, a resource,
+    /// NaN and any other operand.
+    #[inline]
+    pub(super) fn jmp_set_cv_fast(&mut self, a: Operand, dst: u32) -> Option<bool> {
+        let Operand::Cv(cv) = a else {
+            return None;
+        };
+        let f = self.frames.last_mut()?;
+        let found = f.peek_cv(cv, |slot| {
+            let v = slot?;
+            Some(plain_truth(v)?.then(|| v.clone()))
+        })?;
+        let Some(v) = found else {
+            return Some(false);
+        };
+        put_tmp(&mut f.tmps[dst as usize], v);
+        Some(true)
+    }
+
+    /// `?->`'s null test ([`crate::opcode::Op::JmpNull`],
+    /// `ZEND_JMP_NULL_SPEC_CV`) on a defined compiled variable:
+    /// `Some(true)` when it holds null (directly or through a reference:
+    /// `dst` becomes null and the op jumps), `Some(false)` otherwise
+    /// (nothing read: the op falls through). `None` for an undefined
+    /// variable (the generic read warns) and any other operand.
+    #[inline]
+    pub(super) fn jmp_null_cv_fast(&mut self, a: Operand, dst: u32) -> Option<bool> {
+        let Operand::Cv(cv) = a else {
+            return None;
+        };
+        let f = self.frames.last_mut()?;
+        let null = f.peek_cv(cv, |slot| match slot? {
+            Value::Null => Some(true),
+            Value::Reference(r) => Some(matches!(&*r.try_borrow()?, Value::Null)),
+            _ => Some(false),
+        })?;
+        if null {
+            put_tmp(&mut f.tmps[dst as usize], Value::Null);
+        }
+        Some(null)
+    }
+
+    /// The jump decision of a smart branch ([`crate::opcode::Op::CmpJmp`])
+    /// on two plain numbers: the `IS_LONG`/`IS_DOUBLE` pairs of
+    /// `ZEND_IS_EQUAL`, `ZEND_IS_IDENTICAL`, `ZEND_IS_SMALLER` and
+    /// `ZEND_IS_SMALLER_OR_EQUAL` with `ZEND_VM_SMART_BRANCH`, as the one
+    /// [`cmp_outcome`] bit of the comparison tested against the op's mask
+    /// (mixed pairs compare as doubles; under `===` they are a type
+    /// mismatch). `None` when an operand is not a plain number.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // every loop's condition: no call, one frame look
+    pub(super) fn cmp_jmp_num(&self, a: Operand, b: Operand, mask: u8) -> Option<bool> {
+        let f = self.frames.last()?;
+        let x = Self::peek_num(f, a)?;
+        let y = Self::peek_num(f, b)?;
+        let identity = (mask & cmp_outcome::IDENTITY) != 0;
+        Some((mask & num_outcome(x, y, identity)) != 0)
+    }
+
+    /// [`crate::opcode::Op::Bin`] on two plain numbers ([`Vm::peek_num`],
+    /// [`num_bin`]), the result written straight into temporary `dst`
+    /// under one look at the frame. `false`, nothing changed, when an
+    /// operand is not a plain number or the operator has no numeric form
+    /// (or an int result overflows).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the hot pre-match arm: no Value through memory
+    pub(super) fn bin_tmp_fast(&mut self, op: BinKind, a: Operand, b: Operand, dst: u32) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        let Some(x) = Self::peek_num(f, a) else {
+            return false;
+        };
+        let Some(y) = Self::peek_num(f, b) else {
+            return false;
+        };
+        let Some(r) = num_bin(op, x, y) else {
+            return false;
+        };
+        let Some(slot) = f.tmps.get_mut(dst as usize) else {
+            return false;
+        };
+        put_tmp(slot, r);
+        true
+    }
+
+    /// [`crate::opcode::Op::BinAssignCv`] on two plain numbers: the result
+    /// goes straight into compiled variable `cv` when the variable holds no
+    /// refcounted value (`Some(true)`: the `AssignCv` after the op is
+    /// done), else into `dst` for that `AssignCv` (`Some(false)`), under
+    /// one look at the frame. `None`, nothing changed, as for
+    /// [`Vm::bin_tmp_fast`].
+    #[inline]
+    pub(super) fn bin_assign_cv_fast(
+        &mut self,
+        op: BinKind,
+        a: Operand,
+        b: Operand,
+        cv: u32,
+        dst: u32,
+    ) -> Option<bool> {
+        let f = self.frames.last_mut()?;
+        let x = Self::peek_num(f, a)?;
+        let y = Self::peek_num(f, b)?;
+        let r = num_bin(op, x, y)?;
+        let idx = f.cv_idx(cv);
+        if let Ok(mut vars) = f.vars.try_borrow_mut() {
+            if let Some(slot) = vars.slots.get_mut(idx) {
+                if is_plain_slot(slot.as_ref()) {
+                    let old = slot.replace(r);
+                    drop(vars);
+                    // A scalar is forgotten; a string is released.
+                    discard_unrooted(old);
+                    return Some(true);
                 }
             }
         }
-    }
-
-    /// The comparison of a smart branch ([`crate::opcode::Op::CmpJmp`])
-    /// when both operands are plain numbers: the `IS_LONG`/`IS_DOUBLE`
-    /// pairs of `ZEND_IS_EQUAL`, `ZEND_IS_IDENTICAL`, `ZEND_IS_SMALLER`
-    /// and `ZEND_IS_SMALLER_OR_EQUAL` (mixed pairs compare as doubles;
-    /// `===` on a mixed pair is a type mismatch). The same results as
-    /// [`Vm::bin_num_fast`], without building a `Value`.
-    #[inline]
-    #[allow(clippy::float_cmp)] // PHP compares doubles exactly
-    pub(super) fn cmp_num_fast(&self, op: BinKind, a: Operand, b: Operand) -> Option<bool> {
-        let frame = self.frame();
-        let lhs = Self::peek_num(frame, a)?;
-        let rhs = Self::peek_num(frame, b)?;
-        if let (Num::Int(x), Num::Int(y)) = (lhs, rhs) {
-            return Some(match op {
-                BinKind::Equal | BinKind::Identical => x == y,
-                BinKind::NotEqual | BinKind::NotIdentical => x != y,
-                BinKind::Less => x < y,
-                BinKind::LessEqual => x <= y,
-                _ => return None,
-            });
-        }
-        let mixed = matches!(
-            (lhs, rhs),
-            (Num::Int(_), Num::Float(_)) | (Num::Float(_), Num::Int(_))
-        );
-        let (xf, yf) = (lhs.as_f64(), rhs.as_f64());
-        Some(match op {
-            BinKind::Equal => xf == yf,
-            BinKind::NotEqual => xf != yf,
-            BinKind::Identical => !mixed && xf == yf,
-            BinKind::NotIdentical => mixed || xf != yf,
-            BinKind::Less => xf < yf,
-            BinKind::LessEqual => xf <= yf,
-            _ => return None,
-        })
+        put_tmp(f.tmps.get_mut(dst as usize)?, r);
+        Some(false)
     }
 
     /// Stores `v` (never a reference) into compiled variable `cv` when the
@@ -268,55 +707,64 @@ impl Vm {
 
     /// Stores a fetched value: into CV `to` when that holds no refcounted
     /// value (the folded `AssignCv`; `true`: the loop skips it), else into
-    /// `dst`.
+    /// `dst` ([`store_fetched_in`]).
     #[inline]
     pub(super) fn store_fetched(&mut self, dst: u32, to: Option<u32>, v: Value) -> bool {
-        if let Some(to) = to {
-            match self.cv_store_plain(to, v) {
-                Ok(()) => return true,
-                Err(v) => self.set_tmp(dst, v),
-            }
-        } else {
-            self.set_tmp(dst, v);
-        }
-        false
+        store_fetched_in(self.frame_mut(), dst, to, v)
     }
 
     /// `++`/`--` of compiled variable `cv` holding an int that does not
     /// overflow, or a float (`ZEND_PRE_INC_LONG_SPEC_CV` & co.,
-    /// `increment_function` on `IS_DOUBLE`): the result of the expression,
-    /// or `None` (nothing changed) for the generic path.
+    /// `increment_function` on `IS_DOUBLE`), the expression's value written
+    /// to `dst` when used, under one look at the frame. `false` (nothing
+    /// changed) for the generic path.
     #[inline]
-    pub(super) fn incdec_cv_fast(&self, cv: u32, kind: IncDecKind) -> Option<Value> {
-        let f = self.frame();
+    pub(super) fn incdec_cv_fast(&mut self, cv: u32, kind: IncDecKind, dst: Option<u32>) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
         let idx = f.cv_idx(cv);
-        let mut vars = f.vars.try_borrow_mut().ok()?;
-        match vars.slots.get_mut(idx)? {
-            Some(Value::Int(i)) => {
-                let old = *i;
-                let new = if kind.is_inc() {
-                    old.checked_add(1)?
-                } else {
-                    old.checked_sub(1)?
-                };
-                *i = new;
-                Some(Value::Int(if kind.is_post() { old } else { new }))
+        let r = {
+            let Ok(mut vars) = f.vars.try_borrow_mut() else {
+                return false;
+            };
+            match vars.slots.get_mut(idx) {
+                Some(Some(Value::Int(i))) => {
+                    let old = *i;
+                    let next = if kind.is_inc() {
+                        old.checked_add(1)
+                    } else {
+                        old.checked_sub(1)
+                    };
+                    let Some(new) = next else {
+                        return false;
+                    };
+                    *i = new;
+                    Value::Int(if kind.is_post() { old } else { new })
+                }
+                Some(Some(Value::Float(x))) => {
+                    let old = *x;
+                    let new = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
+                    *x = new;
+                    Value::Float(if kind.is_post() { old } else { new })
+                }
+                _ => return false,
             }
-            Some(Value::Float(x)) => {
-                let old = *x;
-                let new = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
-                *x = new;
-                Some(Value::Float(if kind.is_post() { old } else { new }))
+        };
+        if let Some(t) = dst {
+            if let Some(slot) = f.tmps.get_mut(t as usize) {
+                put_tmp(slot, r);
             }
-            _ => None,
         }
+        true
     }
 
     /// [`crate::opcode::Op::AssignOpCv`]: `$cv op= val` in place when both
     /// hold plain numbers and the result stays in the int domain (or is a
     /// float): `ZEND_ASSIGN_OP_SPEC_CV_*` with the `IS_LONG`/`IS_DOUBLE`
-    /// fast paths of `zend_binary_op`. Returns `false`, having changed
-    /// nothing, when the generic `AssignOp` must run.
+    /// fast paths of `zend_binary_op`, under one look at the frame. Returns
+    /// `false`, having changed nothing, when the generic `AssignOp` must
+    /// run.
     #[inline]
     pub(super) fn assign_op_cv_fast(
         &mut self,
@@ -325,161 +773,200 @@ impl Vm {
         val: Operand,
         dst: Option<u32>,
     ) -> bool {
-        // `peek_num` on the CV only succeeds for a slot holding an int or a
-        // float directly (no reference), which the store below overwrites
-        // without side effects.
-        let Some(r) = self.bin_num_fast(BinKind::Arith(op), Operand::Cv(cv), val) else {
+        let Some(f) = self.frames.last_mut() else {
             return false;
         };
-        let f = self.frame();
+        // The operand first: it may be this very variable (`$x += $x`).
+        let Some(y) = Self::peek_num(f, val) else {
+            return false;
+        };
         let idx = f.cv_idx(cv);
-        let Ok(mut vars) = f.vars.try_borrow_mut() else {
-            return false;
+        let r = {
+            let Ok(mut vars) = f.vars.try_borrow_mut() else {
+                return false;
+            };
+            // Only a slot holding an int or a float directly (no
+            // reference): overwritten without side effects.
+            let Some(Some(slot)) = vars.slots.get_mut(idx) else {
+                return false;
+            };
+            let x = match *slot {
+                Value::Int(i) => Num::Int(i),
+                Value::Float(v) => Num::Float(v),
+                _ => return false,
+            };
+            let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
+                return false;
+            };
+            // A number replaces a number: no drop glue to run.
+            std::mem::forget(std::mem::replace(slot, r.clone()));
+            r
         };
-        let Some(slot @ Some(Value::Int(_) | Value::Float(_))) = vars.slots.get_mut(idx) else {
-            return false;
-        };
-        let keep = dst.map(|_| r.clone());
-        // The old value is a number: nothing to drop.
-        std::mem::forget(slot.replace(r));
-        drop(vars);
-        if let (Some(d), Some(k)) = (dst, keep) {
-            self.set_tmp(d, k);
+        if let Some(t) = dst {
+            if let Some(slot) = f.tmps.get_mut(t as usize) {
+                put_tmp(slot, r);
+            }
         }
         true
     }
 
-    /// The array key an offset operand converts to without diagnostics:
-    /// an int, or a string (symbol-table semantics, `"1"` is key 1).
-    /// Nothing is consumed: an int in a temporary can stay in its slot
-    /// (like [`Vm::peek_num`]); a string there is cloned into the key and
-    /// the caller releases the temporary once its fast path succeeded
-    /// ([`Vm::release_tmp_str`], the `FREE_OP2` of the dimension fetch),
-    /// or leaves it to the generic read.
+    /// [`crate::opcode::Op::ConcatCv`]: `$cv .= val` when the variable holds
+    /// a string directly (not a reference) and `val` is a string or an int
+    /// (a literal, a defined variable holding one directly, a temporary):
+    /// `concat_function` with `result == op1`, so the string is extended in
+    /// place when nothing else holds it (`zend_string_extend`) and copied
+    /// once otherwise; an int's digits go straight into it. A consumed
+    /// temporary operand is released and the result written to `dst` when
+    /// used, under one look at the frame. Returns `false`, having changed
+    /// nothing, otherwise: the string itself as the operand (`$s .= $s`,
+    /// which the generic path appends from its own buffer), an undefined
+    /// variable (warning), references and other types (conversions may warn
+    /// or call `__toString()`).
+    #[inline]
+    pub(super) fn concat_cv_fast(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        // Another variable's value is cloned: it lives in the store that is
+        // written below.
+        let from_cv = match val {
+            Operand::Cv(src) => {
+                let v = f.peek_cv(src, |slot| match slot {
+                    Some(v @ (Value::Str(_) | Value::Int(_))) => Some(v.clone()),
+                    _ => None,
+                });
+                let Some(v) = v else {
+                    return false;
+                };
+                Some(v)
+            }
+            _ => None,
+        };
+        let add = match (&from_cv, val) {
+            (Some(v), _) => v,
+            (None, Operand::Lit(i)) => match f.code.literals.get(i as usize) {
+                Some(v) => v,
+                None => return false,
+            },
+            (None, Operand::Tmp(t) | Operand::TmpKeep(t)) => match f.tmps.get(t as usize) {
+                Some(v) => v,
+                None => return false,
+            },
+            _ => return false,
+        };
+        let idx = f.cv_idx(cv);
+        let result = {
+            let Ok(mut vars) = f.vars.try_borrow_mut() else {
+                return false;
+            };
+            let Some(Some(Value::Str(s))) = vars.slots.get_mut(idx) else {
+                return false;
+            };
+            match add {
+                Value::Str(t) if !ZStr::ptr_eq(s, t) => s.append(t.as_bytes()),
+                Value::Int(i) => s.append_long(*i),
+                _ => return false,
+            }
+            dst.map(|_| Value::Str(s.clone()))
+        };
+        drop(from_cv);
+        // The OP_DATA temporary is consumed (a string is released here),
+        // before the result is written (it may reuse the slot).
+        if let Operand::Tmp(t) = val {
+            if let Some(slot) = f.tmps.get_mut(t as usize) {
+                *slot = Value::Null;
+            }
+        }
+        if let (Some(d), Some(r)) = (dst, result) {
+            if let Some(slot) = f.tmps.get_mut(d as usize) {
+                put_tmp(slot, r);
+            }
+        }
+        true
+    }
+
+    /// The array key an offset operand converts to without diagnostics
+    /// ([`dim_key_in`] of the current frame).
     #[inline]
     fn peek_dim_key(&self, dim: Operand) -> Option<ArrayKey> {
-        let f = self.frame();
-        match dim {
-            Operand::Tmp(t) | Operand::TmpKeep(t) => plain_key(f.tmps.get(t as usize)),
-            Operand::Lit(i) => plain_key(f.code.literals.get(i as usize)),
-            Operand::Cv(cv) => f.peek_cv(cv, plain_key),
-            Operand::Unused => None,
-        }
+        dim_key_in(self.frame(), dim)
     }
 
-    /// `$cv[dim]` read when `$cv` holds an array (directly or through a
-    /// reference) that has the key: `zend_fetch_dimension_address_inner`
-    /// with `BP_VAR_R` on a hit; or a string and the offset is an int
-    /// inside it: `zend_fetch_dimension_str`'s one-byte result
-    /// (`ZSTR_CHAR`). `None` (a miss, an offset that needs converting or
-    /// lies outside the string, another container) leaves everything to the
-    /// generic fetch, nothing consumed.
+    /// [`crate::opcode::Op::FetchDimCv`]: `$cv[dim]` read when `$cv` holds
+    /// an array (directly or through a reference) that has the key:
+    /// `zend_fetch_dimension_address_inner` with `BP_VAR_R` on a hit; or a
+    /// string and the offset is an int inside it: `zend_fetch_dimension_str`'s
+    /// one-byte result (`ZSTR_CHAR`). The value goes to the folded
+    /// `AssignCv`'s variable `to` (`Some(true)`: the loop skips that op) or
+    /// to `dst` (`Some(false)`), and a consumed string offset is released,
+    /// under one look at the frame. `None` (a miss, an offset that needs
+    /// converting or lies outside the string, another container) leaves
+    /// everything to the generic fetch, nothing consumed.
     #[inline]
-    pub(super) fn fetch_dim_cv_fast(&self, cv: u32, dim: Operand) -> Option<Value> {
-        let key = self.peek_dim_key(dim)?;
-        let frame = self.frame();
-        if let Some(v) = frame.peek_cv_dim(cv, &key) {
-            return Some(v);
-        }
-        let ArrayKey::Int(offset) = key else {
-            return None;
-        };
-        let vars = frame.vars.try_borrow().ok()?;
-        match vars.slots.get(frame.cv_idx(cv))? {
-            Some(Value::Str(s)) => string_offset_char(s, offset),
-            _ => None,
-        }
-    }
-
-    /// `$cv[d1][d2]...` read when every container on the way is an array
-    /// (the variable itself possibly through a reference) holding the
-    /// offset, and every offset peeks as an int or string: the chain of
-    /// `ZEND_FETCH_DIM_R` hits. `None` (nothing consumed) leaves all of it
-    /// to the generic fetch.
-    #[inline]
-    pub(super) fn fetch_dims_cv_fast(&self, cv: u32, place: PlaceId) -> Option<Value> {
-        let f = self.frame();
-        let segs = &f.code.places.get(place as usize)?.segs;
-        // A shared borrow across the walk (the offsets may be variables
-        // too, peeked under it).
-        let vars = f.vars.borrow();
-        let slot = vars.slots.get(f.cv_idx(cv))?.as_ref()?;
-        let guard;
-        let mut cur = match slot {
-            Value::Reference(r) => {
-                guard = r.try_borrow()?;
-                &*guard
+    pub(super) fn fetch_dim_cv(
+        &mut self,
+        cv: u32,
+        dim: Operand,
+        dst: u32,
+        to: Option<u32>,
+    ) -> Option<bool> {
+        let f = self.frames.last_mut()?;
+        let key = dim_key_in(f, dim)?;
+        let v = match f.peek_cv_dim(cv, &key) {
+            Some(v) => v,
+            None => {
+                let ArrayKey::Int(offset) = key else {
+                    return None;
+                };
+                let vars = f.vars.try_borrow().ok()?;
+                let Some(Value::Str(s)) = vars.slots.get(f.cv_idx(cv))? else {
+                    return None;
+                };
+                string_offset_char(s, offset)?
             }
-            v => v,
         };
-        for seg in segs {
-            let Seg::Dim(dim) = seg else {
-                return None;
-            };
-            let key = self.peek_dim_key(*dim)?;
-            let Value::Array(a) = cur else {
-                return None;
-            };
-            cur = a.get(&key)?;
-        }
-        Some(match cur {
-            Value::Reference(r) => Value::clone(&*r.try_borrow()?),
-            v => v.clone(),
-        })
+        release_str_tmp_in(f, dim);
+        Some(store_fetched_in(f, dst, to, v))
     }
 
-    /// Releases the consumed string temporaries among the offsets of
-    /// `place` (see [`Vm::release_tmp_str`]).
+    /// [`crate::opcode::Op::FetchDimsCv`]: `$cv[d1][d2]...` read when every
+    /// container on the way is an array (the variable itself possibly
+    /// through a reference) holding the offset, and every offset peeks as
+    /// an int or string: the chain of `ZEND_FETCH_DIM_R` hits. Stored and
+    /// released as in [`Vm::fetch_dim_cv`]; `None` (nothing consumed)
+    /// leaves all of it to the generic fetch.
     #[inline]
-    pub(super) fn release_dim_tmps(&mut self, place: PlaceId) {
-        let f = self.frame_mut();
-        let Some(p) = f.code.places.get(place as usize) else {
-            return;
-        };
-        for seg in &p.segs {
-            if let Seg::Dim(Operand::Tmp(t)) = seg {
-                if let Some(slot) = f.tmps.get_mut(*t as usize) {
-                    if matches!(slot, Value::Str(_)) {
-                        *slot = Value::Null;
-                    }
-                }
-            }
-        }
+    pub(super) fn fetch_dims_cv(
+        &mut self,
+        cv: u32,
+        place: PlaceId,
+        dst: u32,
+        to: Option<u32>,
+    ) -> Option<bool> {
+        let f = self.frames.last_mut()?;
+        let v = dims_value_in(f, cv, place)?;
+        release_place_str_tmps(f, place);
+        Some(store_fetched_in(f, dst, to, v))
     }
 
-    /// `isset($cv[dim])` / `empty($cv[dim])` when `$cv` holds an array
-    /// (directly or through a reference) and the offset is an int or
-    /// string (`zend_isset_dim_slow` is never reached: the
-    /// `ZEND_ISSET_ISEMPTY_DIM_OBJ` array fast path). `None` leaves it to
-    /// the generic `place_isset`.
+    /// [`crate::opcode::Op::IssetDimCv`]: `isset($cv[dim])` /
+    /// `empty($cv[dim])` when `$cv` holds an array (directly or through a
+    /// reference) and the offset is an int or string (the array fast path
+    /// of `ZEND_ISSET_ISEMPTY_DIM_OBJ`; `zend_isset_dim_slow` is never
+    /// reached), the result written to `dst` and a consumed string offset
+    /// released. `false`, nothing changed, leaves it to the generic
+    /// `place_isset`.
     #[inline]
-    pub(super) fn isset_dim_cv_fast(&self, cv: u32, dim: Operand, empty: bool) -> Option<bool> {
-        let key = self.peek_dim_key(dim)?;
-        let f = self.frame();
-        let vars = f.vars.borrow();
-        let slot = vars.slots.get(f.cv_idx(cv))?.as_ref()?;
-        let guard;
-        let arr = match slot {
-            Value::Array(a) => a,
-            Value::Reference(r) => {
-                guard = r.try_borrow()?;
-                match &*guard {
-                    Value::Array(a) => a,
-                    _ => return None,
-                }
-            }
-            _ => return None,
+    pub(super) fn isset_dim_cv(&mut self, cv: u32, dim: Operand, dst: u32, empty: bool) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
         };
-        let Some(v) = arr.get(&key) else {
-            return Some(empty);
+        let Some(r) = isset_dim_in(f, cv, dim, empty) else {
+            return false;
         };
-        if empty {
-            return plain_truth(v).map(|t| !t);
-        }
-        Some(match v {
-            Value::Reference(r) => !r.try_borrow()?.is_null(),
-            v => !v.is_null(),
-        })
+        release_str_tmp_in(f, dim);
+        put_tmp(&mut f.tmps[dst as usize], Value::Bool(r));
+        true
     }
 
     /// `$cv[dim] op= val` when `$cv` holds a non-reference array whose
@@ -628,43 +1115,32 @@ impl Vm {
     }
 
     /// A plain value (see [`is_plain_value`]) an `OP_DATA` operand holds,
-    /// without consuming it: a literal, a defined non-reference CV or a
-    /// temporary.
+    /// without consuming it ([`plain_value_in`] of the current frame).
     #[inline]
     fn peek_plain_value(&self, op: Operand) -> Option<Value> {
-        let f = self.frame();
-        match op {
-            Operand::Tmp(t) | Operand::TmpKeep(t) => {
-                let v = f.tmps.get(t as usize)?;
-                is_plain_value(v).then(|| v.clone())
-            }
-            Operand::Lit(i) => {
-                let v = f.code.literals.get(i as usize)?;
-                is_plain_value(v).then(|| v.clone())
-            }
-            Operand::Cv(cv) => f.peek_cv(cv, |s| match s {
-                Some(v) if is_plain_value(v) => Some(v.clone()),
-                _ => None,
-            }),
-            Operand::Unused => None,
-        }
+        plain_value_in(self.frame(), op)
     }
 
     /// `$cv[dim] = val;` when `$cv` holds an array (not a reference), the
     /// offset is an int or string, the value is plain and the element it
     /// replaces (if any) is plain: the `zend_fetch_dimension_address_inner_W`
     /// and `zend_assign_to_variable` path of `ZEND_ASSIGN_DIM` on an array,
-    /// separating a shared array first (`SEPARATE_ARRAY`). Returns `false`,
-    /// having changed nothing, otherwise.
+    /// separating a shared array first (`SEPARATE_ARRAY`): an existing
+    /// element is overwritten where it is, a missing key added (as null,
+    /// then overwritten, like the generic walk's `descend`), under one look
+    /// at the frame. Returns `false` otherwise, having changed nothing but
+    /// possibly the separation the generic write repeats as a no-op.
     #[inline]
     pub(super) fn assign_dim_cv_fast(&mut self, cv: u32, dim: Operand, val: Operand) -> bool {
-        let Some(key) = self.peek_dim_key(dim) else {
+        let Some(f) = self.frames.last_mut() else {
             return false;
         };
-        let Some(v) = self.peek_plain_value(val) else {
+        let Some(key) = dim_key_in(f, dim) else {
             return false;
         };
-        let f = self.frame();
+        let Some(v) = plain_value_in(f, val) else {
+            return false;
+        };
         let idx = f.cv_idx(cv);
         let Ok(mut vars) = f.vars.try_borrow_mut() else {
             return false;
@@ -672,20 +1148,91 @@ impl Vm {
         let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
             return false;
         };
-        if !is_plain_slot(arr.get(&key)) {
-            return false;
-        }
-        // The same write fetch as the generic walk (`descend`): the key is
-        // looked up, or added as null, then overwritten.
-        let (slot, _) = arr.make_mut().lookup_ex(key);
-        let old = std::mem::replace(slot, v);
+        let tbl = arr.make_mut();
+        let old = match tbl.get_mut(&key) {
+            Some(slot) if is_plain_value(slot) => std::mem::replace(slot, v),
+            Some(_) => return false,
+            None => std::mem::replace(tbl.lookup_ex(key).0, v),
+        };
         drop(vars);
         drop(old);
         // The offset and OP_DATA temporaries are consumed.
-        self.release_tmp_str(dim);
+        release_str_tmp_in(f, dim);
         if let Operand::Tmp(t) = val {
-            self.set_tmp(t, Value::Null);
+            put_tmp(&mut f.tmps[t as usize], Value::Null);
         }
+        true
+    }
+
+    /// [`crate::opcode::Op::AssignDimsCv`]: `$cv[d1][d2]... = val;` when
+    /// `$cv` holds an array (not a reference), every offset is an int or a
+    /// string and the value is plain ([`assign_dims`]); the offset and
+    /// `OP_DATA` temporaries are consumed. Returns `false` otherwise, having
+    /// changed nothing but possibly separations the generic write repeats.
+    #[inline]
+    pub(super) fn assign_dims_cv_fast(&mut self, cv: u32, place: PlaceId, val: Operand) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        let Some((keys, n)) = write_keys_in(f, place) else {
+            return false;
+        };
+        let Some(v) = plain_value_in(f, val) else {
+            return false;
+        };
+        let idx = f.cv_idx(cv);
+        let Ok(mut vars) = f.vars.try_borrow_mut() else {
+            return false;
+        };
+        let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
+            return false;
+        };
+        let Ok(old) = assign_dims(arr.make_mut(), &keys[..n], v) else {
+            return false;
+        };
+        drop(vars);
+        drop(old);
+        release_place_str_tmps(f, place);
+        if let Operand::Tmp(t) = val {
+            put_tmp(&mut f.tmps[t as usize], Value::Null);
+        }
+        true
+    }
+
+    /// [`crate::opcode::Op::AssignOpDimsCv`]: `$cv[d1][d2]... op= val;` when
+    /// `$cv` holds an array (not a reference), every offset is an int or a
+    /// string, `val` is a plain number and [`assign_op_dims`] applies; the
+    /// offset temporaries are consumed. Returns `false` otherwise, having
+    /// changed nothing but possibly separations the generic op repeats.
+    #[inline]
+    pub(super) fn assign_op_dims_cv_fast(
+        &mut self,
+        cv: u32,
+        op: BinaryOp,
+        place: PlaceId,
+        val: Operand,
+    ) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        let Some((keys, n)) = write_keys_in(f, place) else {
+            return false;
+        };
+        let Some(y) = Self::peek_num(f, val) else {
+            return false;
+        };
+        let idx = f.cv_idx(cv);
+        let Ok(mut vars) = f.vars.try_borrow_mut() else {
+            return false;
+        };
+        let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
+            return false;
+        };
+        if !assign_op_dims(arr.make_mut(), &keys[..n], op, y) {
+            return false;
+        }
+        drop(vars);
+        release_place_str_tmps(f, place);
         true
     }
 
@@ -765,6 +1312,333 @@ echo "\n";
 "#;
         let expected =
             "3\n0.5 1.5 2.5 \nge\neq\nnot id\nnot id2\nno nan\narrays\n0\n3\n010 19 28 \n";
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn smart_branches_and_numeric_ops_on_every_number_pair() {
+        // Each comparison as an `if` (JmpZ) and a rotated `while` (JmpNz)
+        // over int, float, -0.0, NaN, infinities and large ints (the
+        // `(double)` widening of int/float pairs, `===` type mismatch),
+        // then fused arithmetic, overflow and compound assignments.
+        let src = r#"<?php
+$vals = [0, 1, -1, 1.0, 0.5, -0.0, NAN, INF, -INF, PHP_INT_MAX, 9007199254740993, 9007199254740992.0];
+foreach ($vals as $x) {
+    $line = '';
+    foreach ($vals as $y) {
+        $r = '';
+        if ($x < $y) { $r .= 'L'; } else { $r .= 'l'; }
+        if ($x <= $y) { $r .= 'E'; } else { $r .= 'e'; }
+        if ($x == $y) { $r .= 'Q'; } else { $r .= 'q'; }
+        if ($x != $y) { $r .= 'N'; } else { $r .= 'n'; }
+        if ($x === $y) { $r .= 'I'; } else { $r .= 'i'; }
+        if ($x !== $y) { $r .= 'D'; } else { $r .= 'd'; }
+        while ($x < $y) { $r .= '1'; break; }
+        while ($x <= $y) { $r .= '2'; break; }
+        while ($x == $y) { $r .= '3'; break; }
+        while ($x != $y) { $r .= '4'; break; }
+        while ($x === $y) { $r .= '5'; break; }
+        while ($x !== $y) { $r .= '6'; break; }
+        if ($x > 0.5) { $r .= 'g'; }
+        if (1 >= $y) { $r .= 'h'; }
+        $line .= $r . ' ';
+    }
+    echo $line, "\n";
+}
+$i = 0; $f = 0.0; $n = 0;
+for ($k = 0; $k < 3; $k++) { $i++; $f += 0.5; $n = $n + $k * 2; }
+var_dump($i, $f, $n);
+$m = PHP_INT_MAX; $o = $m + 1; $p = $m; $p = $p + 1; var_dump($o, $p);
+$q = PHP_INT_MIN; $q--; var_dump($q);
+$s = 5; $t = $s++ + ++$s; var_dump($s, $t);
+$u = 1.5; $v = $u-- * --$u; var_dump($u, $v);
+$w = 7; $w -= 2; $w *= 3; $w ^= 1; $w |= 64; $w &= 0x7f; var_dump($w);
+$z = 3; $z += $z; var_dump($z); $z -= $z; var_dump($z);
+$big = PHP_INT_MAX; $big += 1; var_dump($big); $neg = PHP_INT_MIN; $neg -= 1; var_dump($neg);
+$e = 2; $res = ($e *= 2.5); var_dump($e, $res);
+"#;
+        let expected = r#"lEQnId235h LEqNiD1246h leqNiD46h LEqNiD1246h LEqNiD1246h lEQniD236h leqNiD46 LEqNiD1246 leqNiD46h LEqNiD1246 LEqNiD1246 LEqNiD1246 
+leqNiD46gh lEQnId235gh leqNiD46gh lEQniD236gh leqNiD46gh leqNiD46gh leqNiD46g LEqNiD1246g leqNiD46gh LEqNiD1246g LEqNiD1246g LEqNiD1246g 
+LEqNiD1246h LEqNiD1246h lEQnId235h LEqNiD1246h LEqNiD1246h LEqNiD1246h leqNiD46 LEqNiD1246 leqNiD46h LEqNiD1246 LEqNiD1246 LEqNiD1246 
+leqNiD46gh lEQniD236gh leqNiD46gh lEQnId235gh leqNiD46gh leqNiD46gh leqNiD46g LEqNiD1246g leqNiD46gh LEqNiD1246g LEqNiD1246g LEqNiD1246g 
+leqNiD46h LEqNiD1246h leqNiD46h LEqNiD1246h lEQnId235h leqNiD46h leqNiD46 LEqNiD1246 leqNiD46h LEqNiD1246 LEqNiD1246 LEqNiD1246 
+lEQniD236h LEqNiD1246h leqNiD46h LEqNiD1246h LEqNiD1246h lEQnId235h leqNiD46 LEqNiD1246 leqNiD46h LEqNiD1246 LEqNiD1246 LEqNiD1246 
+leqNiD46h leqNiD46h leqNiD46h leqNiD46h leqNiD46h leqNiD46h leqNiD46 leqNiD46 leqNiD46h leqNiD46 leqNiD46 leqNiD46 
+leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46g lEQnId235g leqNiD46gh leqNiD46g leqNiD46g leqNiD46g 
+LEqNiD1246h LEqNiD1246h LEqNiD1246h LEqNiD1246h LEqNiD1246h LEqNiD1246h leqNiD46 LEqNiD1246 lEQnId235h LEqNiD1246 LEqNiD1246 LEqNiD1246 
+leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46g LEqNiD1246g leqNiD46gh lEQnId235g leqNiD46g leqNiD46g 
+leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46g LEqNiD1246g leqNiD46gh LEqNiD1246g lEQnId235g lEQniD236g 
+leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46gh leqNiD46g LEqNiD1246g leqNiD46gh LEqNiD1246g lEQniD236g lEQnId235g 
+int(3)
+float(1.5)
+int(6)
+float(9.223372036854776E+18)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+int(7)
+int(12)
+float(-0.5)
+float(-0.75)
+int(78)
+int(6)
+int(0)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(5)
+float(5)
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn concat_assign_on_cvs() {
+        // `$cv .= v` (ConcatCv): strings extended in place from literals,
+        // ints, floats, variables, references and temporaries, with a used
+        // result; and the generic cases: self-append, an aliased string,
+        // non-string targets, conversions with warnings, undefined
+        // variables, typed references.
+        let src = r#"<?php
+class T { function __toString(): string { return 'T'; } }
+class P { public string $p = 'p'; public int $n = 1; }
+$s = '';
+for ($i = 0; $i < 3; $i++) { $s .= 'ab'; $s .= $i; $s .= "c$i"; }
+var_dump($s);
+$a = 'x'; $b = 'y'; $n = 7;
+for ($i = 0; $i < 2; $i++) { $a .= $b; $a .= $n; $a .= 1.5; }
+var_dump($a);
+$c = 'c'; $c .= $c; $c .= $c; var_dump($c);
+$d = 'd'; $e = $d; $d .= $e; var_dump($d, $e);
+$r = 'r'; $ref = &$r; $ref .= 'R'; $r .= 'S'; var_dump($r, $ref);
+$t = 't'; $u = 'u'; $tr = &$u; $t .= $tr; var_dump($t);
+$x = ($s2 = 's2') . ''; $y = ($x .= '!'); var_dump($x, $y);
+$m = 5; $m .= 'm'; var_dump($m);
+$nul = null; $nul .= 'n'; var_dump($nul);
+$arr = [1]; $arr .= 'a'; var_dump($arr);
+$v = 'v'; $v .= new T; var_dump($v);
+$w = 'w'; $w .= [1]; var_dump($w);
+$z = 'z'; $z .= $undef; var_dump($z);
+$undef2 .= 'u2'; var_dump($undef2);
+$o = new P; $pr = &$o->p; $pr .= 'q'; var_dump($o->p);
+$ni = &$o->n; try { $ni .= 'x'; } catch (TypeError $e) { echo $e->getMessage(), "\n"; } var_dump($o->n);
+$big = str_repeat('-', 10); for ($i = 0; $i < 3; $i++) { $big .= $big; } var_dump(strlen($big));
+$k = 'k'; $k .= true; $k .= false; $k .= null; var_dump($k);
+$f = 'f'; $f .= -0.0; $f .= 1e100; var_dump($f);
+"#;
+        let expected = r#"string(15) "ab0c0ab1c1ab2c2"
+string(11) "xy71.5y71.5"
+string(4) "cccc"
+string(2) "dd"
+string(1) "d"
+string(3) "rRS"
+string(3) "rRS"
+string(2) "tu"
+string(3) "s2!"
+string(3) "s2!"
+string(2) "5m"
+string(1) "n"
+
+Warning: Array to string conversion in t.php on line 17
+string(6) "Arraya"
+string(2) "vT"
+
+Warning: Array to string conversion in t.php on line 19
+string(6) "wArray"
+
+Warning: Undefined variable $undef in t.php on line 20
+string(1) "z"
+
+Warning: Undefined variable $undef2 in t.php on line 21
+string(2) "u2"
+string(2) "pq"
+Cannot assign string to reference held by property P::$n of type int
+int(1)
+int(80)
+string(2) "k1"
+string(11) "f-01.0E+100"
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn nested_dimension_writes_on_cvs() {
+        // `$cv[a][b]... = v` and `op= v` (AssignDimsCv, AssignOpDimsCv):
+        // rows created on the way (`mkmatrix`), copy-on-write of a shared
+        // array, null and missing containers, string keys from temporaries,
+        // four levels; and the generic cases with their diagnostics: false
+        // (deprecation), a string, ArrayAccess, a scalar, a reference, a
+        // missing key under `op=`, numeric strings, overflow, `.=`, a float
+        // offset, an undefined variable, five levels.
+        let src = r#"<?php
+function enc($v) { if (!is_array($v)) { return var_export($v, true); } $s = "["; foreach ($v as $k => $x) { $s .= var_export($k, true) . "=>" . enc($x) . ","; } return $s . "]"; }
+class AO implements ArrayAccess { public $a = []; function offsetExists($k): bool { return isset($this->a[$k]); } function offsetGet($k): mixed { return $this->a[$k] ?? null; } function offsetSet($k, $v): void { echo "set $k\n"; $this->a[$k] = $v; } function offsetUnset($k): void { unset($this->a[$k]); } }
+$mx = []; $count = 1;
+for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 2; $j++) { $mx[$i][$j] = $count++; } }
+echo enc($mx), "\n";
+$b = $mx; $mx[1][1] = '7'; $mx[2][5] = 2.5; echo enc($mx), ' ', enc($b), "\n";
+for ($i = 0; $i < 3; $i++) { $mx[$i][0] += 10; $mx[$i][1] *= 2; }
+echo enc($mx), "\n";
+$n = ['a' => null, 'f' => false, 's' => 'str', 'o' => new AO, 'i' => 5];
+$n['a']['k'] = 1; $n['new']['k'] = 2; echo enc($n['a']), enc($n['new']), "\n";
+$n['f']['k'] = 3; echo enc($n['f']), "\n";
+$n['s'][1] = 'X'; echo $n['s'], "\n";
+$n['o']['k'] = 4; echo enc($n['o']->a), "\n";
+try { $n['i']['k'] = 5; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$t = [[1, 2]]; $r = &$t[0]; $t[0][1] = 7; echo $r[1], "\n"; unset($r);
+$d = []; for ($i = 0; $i < 2; $i++) { $d["k$i"]["x"]["y"] = "v$i"; $d["1"][$i] = $i; $d[1]["z"][0][1] = 0; }
+echo enc($d), "\n";
+$c = [[[[1]]]]; $c[0][0][0][0] = 2; try { $c[0][0][0][0][0] = 3; } catch (Error $e) { echo $e->getMessage(), "\n"; } $c[0][0][0][1] = [4]; $c[0][0][0][1][0] = 5;
+echo enc($c), "\n";
+$m = [[1, 'a' => 1.5]]; $m[0][0] += 1; $m[0]['a'] -= 0.5; $m[0][0] |= 8; $m[0][0] ^= 3; $m[0][0] &= 7;
+echo enc($m), "\n";
+$m[0]['missing'] += 1; echo enc($m), "\n";
+$m[0][0] = '5'; $m[0][0] += 1; var_dump($m[0][0]);
+$m[0][0] = PHP_INT_MAX; $m[0][0] += 1; var_dump($m[0][0]);
+$m[0][0] .= 'x'; var_dump($m[0][0]);
+$m[1][0] += 1; echo enc($m), "\n";
+$s = [[0]]; $s2 = $s; $s[0][0] += 5; echo enc($s), enc($s2), "\n";
+$k = 1.5; $f = [[0, 1]]; $f[0][$k] = 9; echo enc($f), "\n";
+$u[0][1] = 'u'; echo enc($u), "\n";
+$z = [[0]]; $z[0][0] = [1]; $z[0][0] = 'over'; echo enc($z), "\n";
+"#;
+        let expected = r#"[0=>[0=>1,1=>2,],1=>[0=>3,1=>4,],2=>[0=>5,1=>6,],]
+[0=>[0=>1,1=>2,],1=>[0=>3,1=>'7',],2=>[0=>5,1=>6,5=>2.5,],] [0=>[0=>1,1=>2,],1=>[0=>3,1=>4,],2=>[0=>5,1=>6,],]
+[0=>[0=>11,1=>4,],1=>[0=>13,1=>14,],2=>[0=>15,1=>12,5=>2.5,],]
+['k'=>1,]['k'=>2,]
+
+Deprecated: Automatic conversion of false to array is deprecated in t.php on line 12
+['k'=>3,]
+sXr
+set k
+['k'=>4,]
+Cannot use a scalar value as an array
+7
+['k0'=>['x'=>['y'=>'v0',],],1=>[0=>0,'z'=>[0=>[1=>0,],],1=>1,],'k1'=>['x'=>['y'=>'v1',],],]
+Cannot use a scalar value as an array
+[0=>[0=>[0=>[0=>2,1=>[0=>5,],],],],]
+[0=>[0=>1,'a'=>1.0,],]
+
+Warning: Undefined array key "missing" in t.php on line 23
+[0=>[0=>1,'a'=>1.0,'missing'=>1,],]
+int(6)
+float(9.223372036854776E+18)
+string(20) "9.2233720368548E+18x"
+
+Warning: Undefined array key 1 in t.php on line 27
+
+Warning: Undefined array key 0 in t.php on line 27
+[0=>[0=>'9.2233720368548E+18x','a'=>1.0,'missing'=>1,],1=>[0=>1,],]
+[0=>[0=>5,],][0=>[0=>0,],]
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 29
+[0=>[0=>0,1=>9,],]
+[0=>[1=>'u',],]
+[0=>[0=>'over',],]
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn coalesce_elvis_nullsafe_and_moves_on_cvs() {
+        // `??`, `?:`, `?->`, ternary moves and assignments from variables
+        // over every kind of value, through a reference and on undefined
+        // variables (the generic ops' warnings), in the hot pre-match.
+        let src = r#"<?php
+class O { public $p = 'p'; function m() { return 'm'; } }
+class F { function __toString(): string { return ''; } }
+$vals = ['null' => null, 'false' => false, 'true' => true, 'zero' => 0, 'one' => 1, 'fzero' => 0.0, 'half' => 0.5,
+    'empty' => '', 'szero' => '0', 'str' => 'a', 'arr0' => [], 'arr1' => [1], 'obj' => new O, 'f' => new F];
+foreach ($vals as $name => $v) {
+    $c = $v ?? 'dflt'; $e = $v ?: 'elvis'; $t = $v ? 'yes' : 'no'; $m = $v;
+    $n = $v?->p ?? 'np';
+    echo $name, ': ', is_object($c) ? 'obj' : var_export($c, true), ' ', is_object($e) ? 'obj' : var_export($e, true), ' ', $t, ' ', gettype($m), ' ', var_export($n, true), "\n";
+}
+$r = null; $ref = &$r; var_dump($ref ?? 'rd', $ref ?: 'rel', $ref?->p);
+$r = 'set'; var_dump($ref ?? 'rd', $ref ?: 'rel');
+$r = new O; var_dump($ref?->m());
+var_dump($undef1 ?? 'u1');
+var_dump($undef2 ?: 'u2');
+var_dump($undef3?->p);
+$x = $undef4; var_dump($x);
+$a = 1; $b = $a; $a = 2; var_dump($b);
+$s = 'str'; $s2 = $s; $s .= 'x'; var_dump($s2);
+$arr = [1]; $arr2 = $arr; $arr[] = 2; var_dump(count($arr2));
+for ($i = 0; $i < 3; $i++) { $k = $i ?: 'z'; $l = $vals['null'] ?? $i; echo $k, $l; } echo "\n";
+"#;
+        let expected = r#"null: 'dflt' 'elvis' no NULL 'np'
+false: false 'elvis' no boolean 'np'
+true: true true yes boolean 'np'
+zero: 0 'elvis' no integer 'np'
+one: 1 1 yes integer 'np'
+fzero: 0.0 'elvis' no double 'np'
+half: 0.5 0.5 yes double 'np'
+empty: '' 'elvis' no string 'np'
+szero: '0' 'elvis' no string 'np'
+str: 'a' 'a' yes string 'np'
+arr0: array (
+) 'elvis' no array 'np'
+arr1: array (
+  0 => 1,
+) array (
+  0 => 1,
+) yes array 'np'
+obj: obj obj yes object 'p'
+f: obj obj yes object 'np'
+string(2) "rd"
+string(3) "rel"
+NULL
+string(3) "set"
+string(3) "set"
+string(1) "m"
+string(2) "u1"
+
+Warning: Undefined variable $undef2 in t.php on line 15
+string(2) "u2"
+
+Warning: Undefined variable $undef3 in t.php on line 16
+NULL
+
+Warning: Undefined variable $undef4 in t.php on line 17
+NULL
+int(1)
+string(3) "str"
+int(1)
+z01122
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn loop_steps_carry_their_conditions() {
+        // IncDecCvCmpJmp: the step of `for`/`while` loops with int, float,
+        // numeric-string, changing and reference bounds, `continue`, nested
+        // loops, overflow at the step, a null counter, NaN, a loop that never
+        // runs (entered at the condition) and `do`/`while`.
+        let src = r#"<?php
+$out = '';
+for ($i = 0; $i < 5; $i++) { $out .= $i; } $out .= '|';
+for ($i = 5; $i > 0; $i--) { $out .= $i; } $out .= '|';
+for ($i = 0; $i <= 4; ++$i) { if ($i % 2) { continue; } $out .= $i; } $out .= '|';
+for ($i = 0.5; $i < 3; $i++) { $out .= $i . ','; } $out .= '|';
+for ($i = 0; $i < "3"; $i++) { $out .= $i; } $out .= '|';
+for ($i = 0; $i != 4; $i++) { $out .= $i; } $out .= '|';
+for ($i = 0; $i !== 3; $i++) { $out .= $i; } $out .= '|';
+$n = 3; for ($i = 0; $i < $n; $i++) { $out .= $i; if ($i == 1) { $n = 2.5; } } $out .= '|';
+for ($i = 10; $i < 5; $i++) { $out .= 'never'; } $out .= '|';
+for ($i = PHP_INT_MAX - 2; $i < PHP_INT_MAX; $i++) { $out .= 'm'; } var_dump($i); $out .= '|';
+$j = PHP_INT_MAX - 1; for (; $j < PHP_INT_MAX + 1; $j++) { $out .= 'o'; if ($j > PHP_INT_MAX) { break; } } var_dump($j); $out .= '|';
+for ($i = 0; $i < 3; $i++) { for ($k = 0; $k < 2; $k++) { $out .= "$i$k "; } } $out .= '|';
+$r = 0; $ref = &$r; for (; $r < 3; $ref++) { $out .= $r; } $out .= '|';
+$w = 0; while ($w < 4) { $out .= $w; $w++; } $out .= '|';
+$x = null; for (; $x < 2; $x++) { $out .= var_export($x, true); } $out .= '|';
+$t = 0; do { $out .= $t; $t++; } while ($t < 3); $out .= '|';
+for ($i = 0; $i < 3; $i++) { $nan = NAN; } $out .= ($i < NAN ? 'y' : 'n') . '|';
+for ($i = 0, $e = 3; $i < $e; $i++) {} $out .= $i;
+echo $out, "\n";
+"#;
+        let expected = r#"int(9223372036854775807)
+int(9223372036854775806)
+01234|54321|024|0.5,1.5,2.5,|012|0123|012|012||mm||00 01 10 11 20 21 |012|0123|NULL1|012|n|3
+"#;
         assert_eq!(run(src), expected);
     }
 
