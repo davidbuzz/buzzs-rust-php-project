@@ -27,23 +27,52 @@
 //! refcount of 0 that handles never touch, as php-src never counts
 //! `ZSTR_IS_INTERNED` strings, so [`ZStr::empty`] and [`ZStr::from_byte`]
 //! cost a pointer load and no allocation.
+//!
+//! # UTF-8 validity (ref: `Zend/zend_string.h` `ZSTR_IS_VALID_UTF8`)
+//!
+//! A header flag caches "these bytes are valid UTF-8" (`IS_STR_VALID_UTF8`)
+//! so that `preg_*` with `/u` and the mbstring UTF-8 checks validate a
+//! string once instead of on every call. It is set where php-src sets it:
+//! on the empty and the ASCII one-byte strings, on formatted numbers
+//! ([`ZStr::from_ascii`]), on concatenations of flagged strings (the
+//! `ZSTR_COPYABLE_CONCAT_PROPERTIES`: [`ZStr::concat_str`],
+//! [`ZStr::append_str`], [`ZStrBuf::push_str`], ...) and by validators
+//! ([`ZStr::mark_valid_utf8`], [`ZStr::check_valid_utf8`]). Every in-place
+//! mutation forgets it together with the hash (`zend_string_forget_hash_val`),
+//! and an interned string keeps the flags it was created with.
+//!
+//! # Interning (ref: `Zend/zend_string.c` `zend_new_interned_string`)
+//!
+//! [`ZStr::intern`] returns the canonical instance for some bytes, so that
+//! interned strings compare by pointer. php-src keeps request-interned
+//! strings (compiled literals) in `CG(interned_strings)` until the request
+//! ends because it does not refcount them. Here every handle counts, so the
+//! thread's intern table does not own its strings: an interned string
+//! leaves the table when its last handle drops. The literals of a released
+//! `eval()`'d or included unit go with it, and a thread that runs several
+//! requests (`--repeat`) keeps none of an earlier request's literals.
 
 use std::alloc::{self, Layout};
 use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::mem::ManuallyDrop;
 use std::ptr::{self, NonNull};
 
-/// `Header::meta` flag: the instance lives in the intern table.
+/// `Header::meta` flag: the instance is interned (`IS_STR_INTERNED`): a
+/// static immortal string or an entry of the thread's intern table.
 const INTERNED: usize = 1 << (usize::BITS - 1);
 /// `Header::meta` flag: the bytes live in an adopted `Vec` buffer (`ptr`,
 /// `len`, capacity) rather than inline after the header.
 const EXTERNAL: usize = 1 << (usize::BITS - 2);
+/// `Header::meta` flag: the bytes are known to be valid UTF-8
+/// (`IS_STR_VALID_UTF8`, "valid UTF-8 according to PCRE"). Never set on
+/// invalid bytes: php-pcre skips PCRE2's own validation for such subjects.
+const VALID_UTF8: usize = 1 << (usize::BITS - 3);
 /// `Header::meta` bits holding the capacity.
-const CAP_MASK: usize = EXTERNAL - 1;
+const CAP_MASK: usize = VALID_UTF8 - 1;
 /// Byte vectors longer than this are adopted by [`ZStr::new`]; shorter ones
 /// are copied into the header block (dropping any spare capacity, like
 /// `smart_str_extract`).
@@ -65,8 +94,11 @@ struct Header {
     /// Length in bytes.
     len: usize,
     /// Capacity in bytes (inline: of the block after the header; external:
-    /// of the vector) in `CAP_MASK`, plus the `INTERNED` / `EXTERNAL` flags.
-    meta: usize,
+    /// of the vector) in `CAP_MASK`, plus the `INTERNED` / `EXTERNAL` /
+    /// `VALID_UTF8` flags. A `Cell` (of the same size) because
+    /// `VALID_UTF8` is recorded through shared handles, as php-src's
+    /// `GC_ADD_FLAGS` marks a string whatever its refcount.
+    meta: Cell<usize>,
 }
 
 /// Size of [`Header`]; the inline bytes start at this offset.
@@ -81,8 +113,109 @@ const HEADER: usize = std::mem::size_of::<Header>();
 /// `Rc`, it is neither `Send` nor `Sync`.
 pub struct ZStr(NonNull<Header>);
 
+/// The thread's intern table (`CG(interned_strings)`): one entry per live
+/// heap-interned string, found by content. The table holds no handles.
+type InternTable = HashSet<InternEntry, BuildHasherDefault<InternHasher>>;
+
 thread_local! {
-    static INTERNED_SET: RefCell<HashSet<ZStr>> = RefCell::new(HashSet::new());
+    static INTERNED_SET: RefCell<InternTable> = RefCell::new(InternTable::default());
+}
+
+/// An intern table entry: the header of a live interned string. It does
+/// not count as a handle; the string removes its entry in [`free_block`]
+/// when its last handle drops, before the block is freed, so an entry
+/// always points at a live header whose bytes never change (interned
+/// strings are never mutated).
+#[derive(Debug, Clone, Copy)]
+struct InternEntry(NonNull<Header>);
+
+impl InternEntry {
+    fn header(&self) -> &Header {
+        // SAFETY: entries are removed before their block is freed (see the
+        // type's documentation), so the header is live.
+        unsafe { self.0.as_ref() }
+    }
+
+    fn bytes(&self) -> &[u8] {
+        let h = self.header();
+        // SAFETY: a live header's `ptr` is valid for `len` initialised
+        // bytes, and an interned string's bytes are never mutated.
+        unsafe { std::slice::from_raw_parts(h.ptr, h.len) }
+    }
+}
+
+impl Hash for InternEntry {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // The hash was cached when the string was interned
+        // (`ZStr::register`); a cached hash is never 0.
+        state.write_u64(self.header().hash.get());
+    }
+}
+
+impl PartialEq for InternEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 || self.bytes() == other.bytes()
+    }
+}
+
+impl Eq for InternEntry {}
+
+impl Borrow<InternKey> for InternEntry {
+    fn borrow(&self) -> &InternKey {
+        InternKey::new(self.bytes())
+    }
+}
+
+/// The lookup form of an [`InternEntry`]: bytes, hashed as the entry is
+/// (`zend_hash_bytes`, which an interned string caches).
+#[repr(transparent)]
+struct InternKey([u8]);
+
+impl InternKey {
+    fn new(bytes: &[u8]) -> &InternKey {
+        // SAFETY: `InternKey` is a `repr(transparent)` wrapper of `[u8]`:
+        // same layout and slice metadata, and the lifetime is kept.
+        unsafe { &*(ptr::from_ref(bytes) as *const InternKey) }
+    }
+}
+
+impl Hash for InternKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(zend_hash_bytes(&self.0));
+    }
+}
+
+impl PartialEq for InternKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for InternKey {}
+
+/// The intern table's hasher: entries and keys feed it their PHP hash
+/// (`zend_inline_hash_func`, which keys php-src's interned table too), so
+/// interning hashes the bytes once with DJBX33A instead of `SipHash`.
+/// DJBX33A leaves the top bits of a short string's hash at 0 while the
+/// table keys its control bytes on the top 7 bits, so the value is spread
+/// by a multiplication with an odd constant (a bijection that keeps the
+/// low bits' entropy too).
+#[derive(Debug, Default, Clone, Copy)]
+struct InternHasher(u64);
+
+impl Hasher for InternHasher {
+    fn finish(&self) -> u64 {
+        self.0.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        // Not used by the table (entries and keys call `write_u64`).
+        self.0 = zend_hash_bytes(bytes);
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.0 = n;
+    }
 }
 
 /// The bytes of the one-byte strings: `CHAR_BYTES[c] == c`.
@@ -103,45 +236,52 @@ static CHAR_BYTES: [u8; 256] = {
 /// are immortal: the refcount is 0 and counts no handles ([`Clone`] and
 /// [`Drop`] skip it, as `zend_string_copy` / `zend_string_release` skip
 /// `ZSTR_IS_INTERNED` strings), the hash is computed at compile time, and
-/// as interned strings they are never extended in place.
+/// as interned strings they are never extended in place. Their
+/// `IS_STR_VALID_UTF8` flag is fixed at compile time too: set on the empty
+/// string and on the bytes below `0x80`, as `zend_interned_strings_init`
+/// sets it.
 #[repr(transparent)]
 struct StaticHeader(Header);
 
 // SAFETY: a `StaticHeader` is never written through. `rc` is 0, which
 // `Clone` and `Drop` leave alone; `hash` is non-zero from the start, so
-// `hash_value` never stores it; and every in-place mutation
-// (`extend_unique`, `take_vec`, `put_vec`) requires `is_unique_mutable`,
-// which an interned string never is. Its bytes are the immutable
-// `CHAR_BYTES`. Immutable data can be shared between threads.
+// `hash_value` never stores it; every in-place mutation (`extend_unique`,
+// `take_vec`, `put_vec`, `grow_inline`) requires `is_unique_mutable`,
+// which an interned string never is; and the flag setters (`add_props`,
+// behind `mark_valid_utf8` and the concat operations) skip interned
+// strings, whose flags are fixed when they are created. Its bytes are the
+// immutable `CHAR_BYTES`. Immutable data can be shared between threads.
 unsafe impl Sync for StaticHeader {}
 
 impl StaticHeader {
     /// The header of the immortal string of the `len` bytes at `ptr`, whose
-    /// hash is `hash`.
-    const fn new(ptr: *const u8, len: usize, hash: u64) -> Self {
+    /// hash is `hash`; `valid_utf8` sets `IS_STR_VALID_UTF8`.
+    const fn new(ptr: *const u8, len: usize, hash: u64, valid_utf8: bool) -> Self {
+        let utf8 = if valid_utf8 { VALID_UTF8 } else { 0 };
         StaticHeader(Header {
             rc: Cell::new(0),
             hash: Cell::new(hash),
             ptr: ptr.cast_mut(),
             len,
-            meta: len | INTERNED,
+            meta: Cell::new(len | INTERNED | utf8),
         })
     }
 }
 
 /// `zend_empty_string`.
-static EMPTY: StaticHeader = StaticHeader::new(CHAR_BYTES.as_ptr(), 0, zend_hash_bytes_const(b""));
+static EMPTY: StaticHeader =
+    StaticHeader::new(CHAR_BYTES.as_ptr(), 0, zend_hash_bytes_const(b""), true);
 
 /// `zend_one_char_string`: `CHARS[c]` is the string of the single byte `c`.
 #[allow(clippy::cast_possible_truncation)]
 static CHARS: [StaticHeader; 256] = {
-    let mut table =
-        [const { StaticHeader::new(CHAR_BYTES.as_ptr(), 0, zend_hash_bytes_const(b"")) }; 256];
+    // Every element is replaced below.
+    let mut table = [const { StaticHeader::new(ptr::null(), 0, 0, false) }; 256];
     let mut i = 0;
     while i < table.len() {
         // SAFETY: `i < 256`, so the offset stays inside `CHAR_BYTES`.
         let ptr = unsafe { CHAR_BYTES.as_ptr().add(i) };
-        table[i] = StaticHeader::new(ptr, 1, zend_hash_bytes_const(&[i as u8]));
+        table[i] = StaticHeader::new(ptr, 1, zend_hash_bytes_const(&[i as u8]), i < 0x80);
         i += 1;
     }
     table
@@ -277,7 +417,9 @@ fn alloc_block(inline_cap: usize) -> NonNull<Header> {
     }
 }
 
-/// Releases a block whose last handle is gone (`zend_string_free`).
+/// Releases a block whose last handle is gone (`zend_string_free`). An
+/// interned string first leaves the intern table, which must never point
+/// at freed memory.
 ///
 /// # Safety
 /// `block` must be a live header block with no remaining handles.
@@ -286,8 +428,13 @@ unsafe fn free_block(block: NonNull<Header>) {
     // SAFETY: the caller guarantees the block is live.
     let (data, len, meta) = unsafe {
         let h = block.as_ref();
-        (h.ptr, h.len, h.meta)
+        (h.ptr, h.len, h.meta.get())
     };
+    if meta & INTERNED != 0 && !unregister(block) {
+        // The table is borrowed, which cannot happen (no handle is dropped
+        // while it is): keeping the block is the memory-safe outcome.
+        return;
+    }
     let inline_cap = if meta & EXTERNAL == 0 {
         meta & CAP_MASK
     } else {
@@ -299,6 +446,23 @@ unsafe fn free_block(block: NonNull<Header>) {
     // SAFETY: the block was allocated by `alloc_block(inline_cap)` (or
     // reallocated to that layout by `ZStr::extend_unique`).
     unsafe { alloc::dealloc(block.as_ptr().cast::<u8>(), block_layout(inline_cap)) };
+}
+
+/// Removes the interned string at `block` (live, with its hash cached)
+/// from the thread's intern table. `false` when the table is borrowed;
+/// `true` once the table is gone (thread exit), as nothing can find the
+/// string any more.
+fn unregister(block: NonNull<Header>) -> bool {
+    INTERNED_SET
+        .try_with(|set| match set.try_borrow_mut() {
+            Ok(mut set) => {
+                let removed = set.remove(&InternEntry(block));
+                debug_assert!(removed, "interned string missing from the intern table");
+                true
+            }
+            Err(_) => false,
+        })
+        .unwrap_or(true)
 }
 
 impl ZStr {
@@ -336,16 +500,16 @@ impl ZStr {
                 hash: Cell::new(0),
                 ptr: data,
                 len,
-                meta: len | flags,
+                meta: Cell::new(len | flags),
             });
         }
         ZStr(block)
     }
 
     /// An empty, unique string with room for `cap` inline bytes
-    /// (`zend_string_alloc(cap)` with the length still 0): the start of a
-    /// [`ZStrBuf`].
-    fn with_inline_capacity(cap: usize) -> Self {
+    /// (`zend_string_alloc(cap)` with the length still 0) and the given
+    /// `meta` flags: the start of a [`ZStrBuf`].
+    fn with_inline_capacity(cap: usize, flags: usize) -> Self {
         if cap > CAP_MASK {
             capacity_overflow();
         }
@@ -361,7 +525,7 @@ impl ZStr {
                 hash: Cell::new(0),
                 ptr: data,
                 len: 0,
-                meta: cap,
+                meta: Cell::new(cap | flags),
             });
         }
         ZStr(block)
@@ -393,7 +557,7 @@ impl ZStr {
                 hash: Cell::new(0),
                 ptr: data,
                 len,
-                meta: cap | EXTERNAL,
+                meta: Cell::new(cap | EXTERNAL),
             });
         }
         ZStr(block)
@@ -411,7 +575,7 @@ impl ZStr {
     #[inline]
     fn is_unique_mutable(&self) -> bool {
         let h = self.header();
-        h.rc.get() == 1 && h.meta & INTERNED == 0
+        h.rc.get() == 1 && h.meta.get() & INTERNED == 0
     }
 
     /// Takes the adopted vector out of a unique external string, leaving
@@ -422,11 +586,12 @@ impl ZStr {
     unsafe fn take_vec(&mut self) -> Vec<u8> {
         // SAFETY: unique handle, so no other reference to the header exists.
         let h = unsafe { self.0.as_mut() };
+        let meta = h.meta.get_mut();
         // SAFETY: an external header owns a `Vec` with exactly these parts.
-        let v = unsafe { Vec::from_raw_parts(h.ptr, h.len, h.meta & CAP_MASK) };
+        let v = unsafe { Vec::from_raw_parts(h.ptr, h.len, *meta & CAP_MASK) };
+        *meta = (*meta & !CAP_MASK) | EXTERNAL;
         h.ptr = NonNull::<u8>::dangling().as_ptr();
         h.len = 0;
-        h.meta = (h.meta & !CAP_MASK) | EXTERNAL;
         v
     }
 
@@ -443,17 +608,20 @@ impl ZStr {
         let h = unsafe { self.0.as_mut() };
         h.ptr = v.as_mut_ptr();
         h.len = v.len();
-        h.meta = (h.meta & !CAP_MASK) | v.capacity();
+        let meta = h.meta.get_mut();
+        *meta = (*meta & !CAP_MASK) | v.capacity();
     }
 
     /// Appends `other` in place to a unique, non-interned string
     /// (`zend_string_extend`): to exactly the new length with `exact`,
-    /// else with amortized doubling (repeated `.=`).
+    /// else with amortized doubling (repeated `.=`). Like
+    /// `zend_string_forget_hash_val`, the hash and `IS_STR_VALID_UTF8` are
+    /// forgotten; the concat operations put back what holds for the result.
     fn extend_unique(&mut self, other: &[u8], exact: bool) {
         debug_assert!(self.is_unique_mutable());
         let (len, meta) = {
             let h = self.header();
-            (h.len, h.meta)
+            (h.len, h.meta.get())
         };
         if meta & EXTERNAL != 0 {
             // SAFETY: unique (caller) and external (just checked).
@@ -475,7 +643,16 @@ impl ZStr {
                 h.len = needed;
             }
         }
-        self.header().hash.set(0);
+        self.forget_hash();
+    }
+
+    /// `zend_string_forget_hash_val`: after an in-place change of a unique
+    /// string, the cached hash and `IS_STR_VALID_UTF8` no longer hold.
+    #[inline]
+    fn forget_hash(&self) {
+        let h = self.header();
+        h.hash.set(0);
+        h.meta.set(h.meta.get() & !VALID_UTF8);
     }
 
     /// Makes the inline area of a unique inline string of length `len`
@@ -517,7 +694,7 @@ impl ZStr {
             unsafe {
                 let h = self.0.as_mut();
                 h.ptr = block.as_ptr().cast::<u8>().add(HEADER);
-                h.meta = (meta & !CAP_MASK) | new_cap;
+                *h.meta.get_mut() = (meta & !CAP_MASK) | new_cap;
             }
         }
         needed
@@ -533,11 +710,14 @@ impl ZStr {
         if len == 0 {
             return;
         }
+        // The copyable concat properties of the one string hold for the
+        // result (`ZSTR_GET_COPYABLE_CONCAT_PROPERTIES_BOTH(s, s)`).
+        let props = self.concat_props();
         if !self.is_unique_mutable() {
-            *self = Self::from_parts(self.as_bytes(), self.as_bytes(), 0);
+            *self = Self::from_parts(self.as_bytes(), self.as_bytes(), props);
             return;
         }
-        let meta = self.header().meta;
+        let meta = self.header().meta.get();
         if meta & EXTERNAL != 0 {
             // SAFETY: unique (just checked) and external.
             let mut v = unsafe { self.take_vec() };
@@ -555,37 +735,94 @@ impl ZStr {
                 h.len = needed;
             }
         }
-        self.header().hash.set(0);
+        self.forget_hash();
+        self.add_props(props);
     }
 
-    /// Returns the canonical interned instance for `bytes`, creating it if needed.
+    /// Returns the canonical interned instance for `bytes`, creating it if
+    /// needed (`zend_string_init_interned`: a new instance carries no
+    /// `IS_STR_VALID_UTF8`).
     ///
-    /// Interned strings live for the remainder of the thread.
+    /// An interned string lives as long as its handles: the intern table
+    /// does not keep it alive (see the module documentation).
     #[must_use]
     pub fn intern(bytes: &[u8]) -> Self {
-        // The empty and one-byte strings have immortal static instances.
-        match bytes {
-            [] => return Self::empty(),
-            &[c] => return Self::from_byte(c),
-            _ => {}
+        if let Some(existing) = Self::existing_interned(bytes) {
+            return existing;
         }
-        INTERNED_SET.with(|set| {
-            if let Some(existing) = set.borrow().get(bytes) {
-                return existing.clone();
-            }
-            let s = Self::from_parts(bytes, &[], INTERNED);
-            set.borrow_mut().insert(s.clone());
-            s
-        })
+        Self::register(Self::from_parts(bytes, &[], INTERNED))
     }
 
-    /// Returns the interned version of this string (itself if already interned).
+    /// Returns the interned version of this string (itself if already
+    /// interned), as [`ZStr::into_interned`] does.
     #[must_use]
     pub fn interned(&self) -> Self {
+        self.clone().into_interned()
+    }
+
+    /// The interned instance for this string's bytes
+    /// (`zend_new_interned_string`): itself when already interned; else the
+    /// existing instance, which keeps its own flags; else a new one that
+    /// carries this string's `IS_STR_VALID_UTF8` (`zend_add_interned_string`,
+    /// `zend_init_string_for_interning`). When this handle is the only one
+    /// and the block has no spare capacity, the block itself becomes the
+    /// interned instance, as php-src interns a refcount-1 string in place.
+    #[must_use]
+    pub fn into_interned(self) -> Self {
         if self.is_interned() {
-            self.clone()
-        } else {
-            Self::intern(self.as_bytes())
+            return self;
+        }
+        if let Some(existing) = Self::existing_interned(self.as_bytes()) {
+            return existing;
+        }
+        let meta = self.header().meta.get();
+        if self.is_unique_mutable() && meta & CAP_MASK == self.len() {
+            self.header().meta.set(meta | INTERNED);
+            return Self::register(self);
+        }
+        Self::register(Self::from_parts(
+            self.as_bytes(),
+            &[],
+            INTERNED | (meta & VALID_UTF8),
+        ))
+    }
+
+    /// The interned instance holding `bytes`, if there is one: the static
+    /// empty and one-byte strings, else the intern table's entry.
+    fn existing_interned(bytes: &[u8]) -> Option<Self> {
+        match bytes {
+            [] => return Some(Self::empty()),
+            &[c] => return Some(Self::from_byte(c)),
+            _ => {}
+        }
+        let entry = INTERNED_SET.with(|set| set.borrow().get(InternKey::new(bytes)).copied())?;
+        // A new handle of the live entry: counted like any clone.
+        let found = ManuallyDrop::new(ZStr(entry.0));
+        Some(ZStr::clone(&found))
+    }
+
+    /// Enters `s` into the intern table under its (now cached) hash
+    /// (`zend_add_interned_string`). `s` must be a fresh interned heap
+    /// string, the only one with its bytes.
+    fn register(s: Self) -> Self {
+        debug_assert!(s.is_interned() && s.len() > 1);
+        let _ = s.hash_value();
+        INTERNED_SET.with(|set| {
+            let inserted = set.borrow_mut().insert(InternEntry(s.0));
+            debug_assert!(inserted, "two interned instances of one string");
+        });
+        s
+    }
+
+    /// A string literal's value as the scanner makes it
+    /// (`zend_scan_escape_string`): the shared `ZSTR_EMPTY_ALLOC()` /
+    /// `ZSTR_CHAR(c)` for zero or one byte, otherwise a new string.
+    #[must_use]
+    pub fn from_literal(bytes: &[u8]) -> Self {
+        match bytes {
+            [] => Self::empty(),
+            &[c] => Self::from_byte(c),
+            _ => Self::from_slice(bytes),
         }
     }
 
@@ -632,7 +869,80 @@ impl ZStr {
     /// Whether this instance is interned.
     #[must_use]
     pub fn is_interned(&self) -> bool {
-        self.header().meta & INTERNED != 0
+        self.header().meta.get() & INTERNED != 0
+    }
+
+    /// Whether the bytes are known to be valid UTF-8 (`ZSTR_IS_VALID_UTF8`).
+    /// `false` means "not known", not "invalid".
+    #[inline]
+    #[must_use]
+    pub fn is_valid_utf8(&self) -> bool {
+        self.header().meta.get() & VALID_UTF8 != 0
+    }
+
+    /// Records that the bytes are valid UTF-8 (`GC_ADD_FLAGS(s,
+    /// IS_STR_VALID_UTF8)`), through any handle. Interned strings are left
+    /// alone, as every php-src caller does (`!ZSTR_IS_INTERNED(s)`): their
+    /// flags are fixed when they are created.
+    ///
+    /// Only call this for bytes a validation (or the construction) proved
+    /// to be valid UTF-8: php-pcre skips PCRE2's own check
+    /// (`PCRE2_NO_UTF_CHECK`) for a flagged subject. Debug builds verify.
+    #[inline]
+    pub fn mark_valid_utf8(&self) {
+        debug_assert!(
+            std::str::from_utf8(self.as_bytes()).is_ok(),
+            "IS_STR_VALID_UTF8 on invalid UTF-8"
+        );
+        self.add_props(VALID_UTF8);
+    }
+
+    /// Whether the bytes are valid UTF-8: the cached flag, else a
+    /// validation whose positive answer is recorded on a non-interned
+    /// string (`mb_check_str_encoding`), so checking a string again is free.
+    #[must_use]
+    pub fn check_valid_utf8(&self) -> bool {
+        if self.is_valid_utf8() {
+            return true;
+        }
+        let valid = std::str::from_utf8(self.as_bytes()).is_ok();
+        if valid {
+            self.add_props(VALID_UTF8);
+        }
+        valid
+    }
+
+    /// The copyable concat properties of this string
+    /// (`ZSTR_GET_COPYABLE_CONCAT_PROPERTIES`): `VALID_UTF8` or 0.
+    #[inline]
+    fn concat_props(&self) -> usize {
+        self.header().meta.get() & VALID_UTF8
+    }
+
+    /// `ZSTR_GET_COPYABLE_CONCAT_PROPERTIES_BOTH(a, b)` for `a . b`. An
+    /// empty operand passes the other one's properties on, since php-src's
+    /// concatenations return the other operand itself then.
+    #[inline]
+    fn concat_props_both(a: &Self, b: &Self) -> usize {
+        if a.is_empty() {
+            b.concat_props()
+        } else if b.is_empty() {
+            a.concat_props()
+        } else {
+            a.concat_props() & b.concat_props()
+        }
+    }
+
+    /// `GC_ADD_FLAGS(s, props)` on a string that is not interned (the flags
+    /// of interned strings, among them the static ones shared between
+    /// threads, are never written after creation).
+    #[inline]
+    fn add_props(&self, props: usize) {
+        let meta = &self.header().meta;
+        let m = meta.get();
+        if props != 0 && m & INTERNED == 0 {
+            meta.set(m | props);
+        }
     }
 
     /// Returns the (cached) PHP hash of the string.
@@ -680,7 +990,8 @@ impl ZStr {
     /// When this handle is the only owner (and the string is not interned) the
     /// buffer is extended in place, like `zend_string_extend` on a refcount-1
     /// string, which makes repeated `.=` amortized O(1). Otherwise a new string
-    /// is allocated.
+    /// is allocated. Nothing is known about `other`, so a changed string
+    /// loses `IS_STR_VALID_UTF8`; [`ZStr::append_str`] keeps it.
     pub fn append(&mut self, other: &[u8]) {
         if other.is_empty() {
             return;
@@ -692,19 +1003,37 @@ impl ZStr {
         *self = Self::from_parts(self.as_bytes(), other, 0);
     }
 
+    /// `$s .= $t` (`concat_function` with `result == op1`): [`ZStr::append`]
+    /// of another string, keeping `IS_STR_VALID_UTF8` when it holds for both
+    /// (`ZSTR_GET_COPYABLE_CONCAT_PROPERTIES_BOTH`).
+    pub fn append_str(&mut self, other: &ZStr) {
+        let props = Self::concat_props_both(self, other);
+        self.append(other.as_bytes());
+        self.add_props(props);
+    }
+
     /// Appends the decimal form of `n` (`concat_function` with an integer
     /// right operand, `smart_str_append_long`), extending in place like
-    /// [`ZStr::append`] without materialising the number as a string.
+    /// [`ZStr::append`] without materialising the number as a string. The
+    /// digits are ASCII, so `IS_STR_VALID_UTF8` stays as it was (and holds
+    /// for an empty string grown by them).
     pub fn append_long(&mut self, n: i64) {
+        let props = if self.is_empty() {
+            VALID_UTF8
+        } else {
+            self.concat_props()
+        };
         let mut buf = [0u8; LONG_MAX_LEN];
         self.append(format_long(n, &mut buf));
+        self.add_props(props);
     }
 
     /// `ZEND_CONCAT` with a temporary left operand: when this handle is the
     /// only owner (and the string is not interned) the buffer is extended
     /// in place to exactly the new length (`zend_string_extend`), so the
     /// operand and the result never exist side by side; otherwise a new
-    /// exactly sized string is built.
+    /// exactly sized string is built. A changed string loses
+    /// `IS_STR_VALID_UTF8` (see [`ZStr::concat_owned_str`]).
     #[must_use]
     pub fn concat_owned(mut self, other: &[u8]) -> Self {
         if self.is_unique_mutable() {
@@ -716,10 +1045,63 @@ impl ZStr {
         Self::concat(self.as_bytes(), other)
     }
 
-    /// Concatenates two byte slices into a new string.
+    /// [`ZStr::concat_owned`] of another string, keeping
+    /// `IS_STR_VALID_UTF8` when it holds for both (`ZEND_CONCAT`'s
+    /// `GC_ADD_FLAGS(str, flags)`); an empty `other` returns this string
+    /// itself, as `ZEND_CONCAT` does.
+    #[must_use]
+    pub fn concat_owned_str(self, other: &ZStr) -> Self {
+        if other.is_empty() {
+            return self;
+        }
+        let props = Self::concat_props_both(&self, other);
+        let s = self.concat_owned(other.as_bytes());
+        s.add_props(props);
+        s
+    }
+
+    /// [`ZStr::concat_owned`] of the decimal form of `n` (the digits are
+    /// ASCII, so `IS_STR_VALID_UTF8` stays as it was).
+    #[must_use]
+    pub fn concat_owned_long(self, n: i64) -> Self {
+        let props = if self.is_empty() {
+            VALID_UTF8
+        } else {
+            self.concat_props()
+        };
+        let mut buf = [0u8; LONG_MAX_LEN];
+        let s = self.concat_owned(format_long(n, &mut buf));
+        s.add_props(props);
+        s
+    }
+
+    /// Concatenates two byte slices into a new string (nothing is known
+    /// about their encoding: see [`ZStr::concat_str`]).
     #[must_use]
     pub fn concat(a: &[u8], b: &[u8]) -> Self {
         Self::from_parts(a, b, 0)
+    }
+
+    /// Concatenates two strings into a new one that is `IS_STR_VALID_UTF8`
+    /// when both are (`concat_function`'s `ZSTR_COPY_CONCAT_PROPERTIES_BOTH`).
+    #[must_use]
+    pub fn concat_str(a: &ZStr, b: &ZStr) -> Self {
+        Self::from_parts(a.as_bytes(), b.as_bytes(), Self::concat_props_both(a, b))
+    }
+
+    /// A copy of `bytes`, which must be ASCII (formatted numbers, built-in
+    /// names), flagged `IS_STR_VALID_UTF8` as `zend_long_to_str`,
+    /// `zend_double_to_str` and the known strings (`ZSTR_KNOWN`) are.
+    /// Zero or one byte gives the shared static string, as
+    /// `zend_long_to_str` returns `ZSTR_CHAR` for one digit.
+    #[must_use]
+    pub fn from_ascii(bytes: &[u8]) -> Self {
+        debug_assert!(bytes.is_ascii(), "ZStr::from_ascii of non-ASCII bytes");
+        match bytes {
+            [] => Self::empty(),
+            &[c] => Self::from_byte(c),
+            _ => Self::from_parts(bytes, &[], VALID_UTF8),
+        }
     }
 
     /// Returns an ASCII-lowercased copy (`zend_string_tolower`); returns a clone
@@ -754,7 +1136,7 @@ impl ZStr {
     /// the only handle to an adopted vector).
     #[must_use]
     pub fn into_bytes(mut self) -> Vec<u8> {
-        if self.is_unique_mutable() && self.header().meta & EXTERNAL != 0 {
+        if self.is_unique_mutable() && self.header().meta.get() & EXTERNAL != 0 {
             // SAFETY: unique and external (just checked); `self` is then
             // dropped with an empty external header.
             return unsafe { self.take_vec() };
@@ -803,6 +1185,11 @@ impl Drop for ZStr {
 /// block over as a [`ZStr`] without copying. Reserving the exact final
 /// length up front (`with_capacity`) gives one exactly sized allocation,
 /// like php-src's `zend_string_alloc(len)` + `memcpy` in `ZEND_ROPE_END`.
+///
+/// Like `ZEND_ROPE_END`, the buffer starts out with every copyable concat
+/// property (`IS_STR_VALID_UTF8`) and keeps those that hold for every
+/// piece: [`ZStrBuf::push_str`] and [`ZStrBuf::push_long`] keep them when
+/// they hold, a raw [`ZStrBuf::push`] of unknown bytes drops them.
 #[derive(Debug)]
 pub struct ZStrBuf(ZStr);
 
@@ -810,10 +1197,11 @@ impl ZStrBuf {
     /// An empty buffer with room for `cap` bytes.
     #[must_use]
     pub fn with_capacity(cap: usize) -> Self {
-        ZStrBuf(ZStr::with_inline_capacity(cap))
+        ZStrBuf(ZStr::with_inline_capacity(cap, VALID_UTF8))
     }
 
-    /// Appends bytes (`smart_str_appendl`).
+    /// Appends bytes (`smart_str_appendl`); nothing is known about their
+    /// encoding, so the result is not `IS_STR_VALID_UTF8`.
     #[inline]
     pub fn push(&mut self, bytes: &[u8]) {
         if !bytes.is_empty() {
@@ -821,11 +1209,26 @@ impl ZStrBuf {
         }
     }
 
-    /// Appends the decimal form of `n` (`smart_str_append_long`).
+    /// Appends a string, keeping `IS_STR_VALID_UTF8` when it holds for the
+    /// buffer so far and for `s` (`ROPE_END`'s `flags &=
+    /// ZSTR_GET_COPYABLE_CONCAT_PROPERTIES(rope[i])`).
+    #[inline]
+    pub fn push_str(&mut self, s: &ZStr) {
+        if !s.is_empty() {
+            let props = self.0.concat_props() & s.concat_props();
+            self.0.extend_unique(s.as_bytes(), false);
+            self.0.add_props(props);
+        }
+    }
+
+    /// Appends the decimal form of `n` (`smart_str_append_long`); the
+    /// digits are ASCII, so `IS_STR_VALID_UTF8` stays as it was.
     #[inline]
     pub fn push_long(&mut self, n: i64) {
+        let props = self.0.concat_props();
         let mut buf = [0u8; LONG_MAX_LEN];
         self.push(format_long(n, &mut buf));
+        self.0.add_props(props);
     }
 
     /// Bytes appended so far.
@@ -923,7 +1326,7 @@ impl PartialEq for ZStr {
             return true;
         }
         let (a, b) = (self.header(), other.header());
-        if a.meta & b.meta & INTERNED != 0 {
+        if a.meta.get() & b.meta.get() & INTERNED != 0 {
             return false;
         }
         let (h1, h2) = (a.hash.get(), b.hash.get());
@@ -1439,5 +1842,311 @@ mod tests {
         g2.append(b"!");
         assert_eq!(g.len() + 1, g2.len());
         assert!(ZStrBuf::with_capacity(0).finish().is_empty());
+    }
+
+    /// Number of live heap-interned strings of this thread.
+    fn intern_table_len() -> usize {
+        INTERNED_SET.with(|set| set.borrow().len())
+    }
+
+    /// Whether the intern table has an entry for `bytes`.
+    fn intern_table_contains(bytes: &[u8]) -> bool {
+        INTERNED_SET.with(|set| set.borrow().contains(InternKey::new(bytes)))
+    }
+
+    /// `zend_interned_strings_init`: the empty string and the one-byte
+    /// strings below `0x80` are `IS_STR_VALID_UTF8`, the others are not.
+    #[test]
+    fn static_strings_carry_the_valid_utf8_flag_below_0x80() {
+        assert!(ZStr::empty().is_valid_utf8());
+        assert!(ZStr::default().is_valid_utf8());
+        for c in 0..=255u8 {
+            assert_eq!(ZStr::from_byte(c).is_valid_utf8(), c < 0x80, "{c}");
+        }
+        // Interned strings are never marked after creation: the static
+        // headers shared between threads stay unwritten.
+        let high = ZStr::from_byte(0xff);
+        assert!(!high.check_valid_utf8());
+        assert!(!high.is_valid_utf8());
+        ZStr::from_byte(b'a').mark_valid_utf8();
+        assert_eq!(
+            CHARS[usize::from(b'a')].0.meta.get(),
+            1 | INTERNED | VALID_UTF8
+        );
+        assert_eq!(CHARS[0xff].0.meta.get(), 1 | INTERNED);
+    }
+
+    /// `GC_ADD_FLAGS(s, IS_STR_VALID_UTF8)` through any handle, the
+    /// `mb_check_str_encoding`-style check that caches a positive answer,
+    /// and `zend_string_forget_hash_val` on in-place changes.
+    #[test]
+    fn valid_utf8_is_marked_checked_and_forgotten() {
+        let s = ZStr::from("h\u{e9}llo w\u{f6}rld");
+        assert!(!s.is_valid_utf8(), "nothing is known about a new string");
+        let other_handle = s.clone();
+        other_handle.mark_valid_utf8();
+        assert!(s.is_valid_utf8(), "the flag is on the shared string");
+        drop(other_handle);
+
+        let t = ZStr::from("caf\u{e9} au lait");
+        assert!(t.check_valid_utf8());
+        assert!(t.is_valid_utf8(), "a positive check is recorded");
+        let bad = ZStr::new(b"\xc3\x28 broken".to_vec());
+        assert!(!bad.check_valid_utf8());
+        assert!(!bad.is_valid_utf8());
+        let surrogate = ZStr::new(b"\xed\xa0\x80".to_vec());
+        assert!(!surrogate.check_valid_utf8(), "surrogates are invalid");
+
+        // A heap-interned string keeps the flags it was created with.
+        let interned = ZStr::intern(b"interned text");
+        interned.mark_valid_utf8();
+        assert!(!interned.is_valid_utf8());
+        assert!(interned.check_valid_utf8());
+        assert!(!interned.is_valid_utf8());
+
+        // In-place growth with unknown bytes forgets the flag and the hash.
+        let mut grown = ZStr::from_ascii(b"abc");
+        let _ = grown.hash_value();
+        grown.append(b"\xff");
+        assert!(!grown.is_valid_utf8());
+        assert_eq!(grown.hash_value(), zend_hash_bytes(b"abc\xff"));
+        let mut shared = ZStr::from_ascii(b"abc");
+        let keep = shared.clone();
+        shared.append(b"d");
+        assert!(!shared.is_valid_utf8(), "a raw append is not known valid");
+        assert!(keep.is_valid_utf8(), "the shared original keeps its flag");
+        let mut unchanged = ZStr::from_ascii(b"abc");
+        unchanged.append(b"");
+        assert!(
+            unchanged.is_valid_utf8(),
+            "appending nothing changes nothing"
+        );
+        let owned = ZStr::from_ascii(b"abc").concat_owned(b"\xc3");
+        assert!(!owned.is_valid_utf8());
+    }
+
+    /// `ZSTR_COPYABLE_CONCAT_PROPERTIES`: concatenations of flagged strings
+    /// stay flagged (`concat_function`, `ZEND_CONCAT`, `ZEND_ROPE_END`), an
+    /// empty operand passes the other one's flag on, and formatted numbers
+    /// are flagged (`zend_long_to_str`).
+    #[test]
+    fn concatenations_keep_the_flags_both_operands_have() {
+        let valid = ZStr::from_ascii(b"ab");
+        let unknown = ZStr::from("cd");
+        assert!(valid.is_valid_utf8());
+        assert!(ZStr::concat_str(&valid, &valid).is_valid_utf8());
+        assert!(!ZStr::concat_str(&valid, &unknown).is_valid_utf8());
+        assert!(!ZStr::concat_str(&unknown, &valid).is_valid_utf8());
+        assert!(!ZStr::concat(valid.as_bytes(), valid.as_bytes()).is_valid_utf8());
+        let unflagged_empty = ZStr::from("");
+        assert!(!unflagged_empty.is_valid_utf8());
+        assert!(ZStr::concat_str(&unflagged_empty, &valid).is_valid_utf8());
+        assert!(ZStr::concat_str(&valid, &unflagged_empty).is_valid_utf8());
+        assert!(!ZStr::concat_str(&unflagged_empty, &unknown).is_valid_utf8());
+
+        // `$s .= $t` in place and on a shared string.
+        let mut s = ZStr::from_ascii(b"x1");
+        s.append_str(&valid);
+        assert_eq!(s, "x1ab");
+        assert!(s.is_valid_utf8());
+        let copy = s.clone();
+        s.append_str(&valid);
+        assert!(s.is_valid_utf8() && copy.is_valid_utf8());
+        s.append_str(&unknown);
+        assert!(!s.is_valid_utf8());
+        let mut from_empty = ZStr::empty();
+        from_empty.append_str(&valid);
+        assert!(from_empty.is_valid_utf8());
+        let mut empty_then_unknown = ZStr::empty();
+        empty_then_unknown.append_str(&unknown);
+        assert!(!empty_then_unknown.is_valid_utf8());
+
+        // Digits and the string itself keep what holds.
+        let mut n = ZStr::from_ascii(b"n=");
+        n.append_long(-42);
+        assert!(n.is_valid_utf8());
+        n.append_self();
+        assert_eq!(n, "n=-42n=-42");
+        assert!(n.is_valid_utf8());
+        let mut digits = ZStr::from("");
+        digits.append_long(7);
+        assert!(digits.is_valid_utf8(), "an empty string grown by digits");
+        let mut plain = ZStr::from("plain");
+        plain.append_long(1);
+        assert!(!plain.is_valid_utf8());
+
+        // `ZEND_CONCAT` with a temporary left operand.
+        let t = ZStr::from_ascii(b"tmp").concat_owned_str(&valid);
+        assert_eq!(t, "tmpab");
+        assert!(t.is_valid_utf8());
+        let t = t.concat_owned_long(12);
+        assert_eq!(t, "tmpab12");
+        assert!(t.is_valid_utf8());
+        let t = t.concat_owned_str(&unknown);
+        assert!(!t.is_valid_utf8());
+        let kept = valid.clone().concat_owned_str(&unflagged_empty);
+        assert!(
+            ZStr::ptr_eq(&kept, &valid),
+            "an empty operand returns the string"
+        );
+
+        // Formatted numbers.
+        assert!(ZStr::from_ascii(b"2.0E+100").is_valid_utf8());
+        assert!(ZStr::ptr_eq(
+            &ZStr::from_ascii(b"7"),
+            &ZStr::from_byte(b'7')
+        ));
+        assert!(ZStr::ptr_eq(&ZStr::from_ascii(b""), &ZStr::empty()));
+    }
+
+    /// `ZEND_ROPE_END`: the rope keeps the properties of all its parts.
+    #[test]
+    fn zstrbuf_keeps_the_flags_of_its_pieces() {
+        let part = ZStr::from_ascii(b"part");
+        let mut b = ZStrBuf::with_capacity(16);
+        b.push_str(&part);
+        b.push_long(3);
+        b.push_str(&ZStr::from_byte(b'!'));
+        let s = b.finish();
+        assert_eq!(s, "part3!");
+        assert!(s.is_valid_utf8());
+
+        let mut b = ZStrBuf::with_capacity(4);
+        b.push_str(&part);
+        b.push(b"raw");
+        b.push_str(&part);
+        let s = b.finish();
+        assert_eq!(s, "partrawpart");
+        assert!(!s.is_valid_utf8(), "raw bytes are not known valid");
+
+        let mut b = ZStrBuf::with_capacity(0);
+        b.push_str(&ZStr::from("unknown"));
+        b.push_long(1);
+        assert!(!b.finish().is_valid_utf8());
+        assert!(ZStrBuf::with_capacity(0).finish().is_valid_utf8());
+    }
+
+    /// `zend_new_interned_string`: a new interned instance carries the
+    /// flag of the string it is made from; an existing instance keeps its
+    /// own (php-src's `"f" . "o" . "o"` resolving to an unflagged
+    /// permanent "foo"). A unique, exactly sized block is interned in
+    /// place.
+    #[test]
+    fn interning_keeps_the_flags_of_the_canonical_instance() {
+        let flagged = ZStr::concat_str(&ZStr::from_ascii(b"fl"), &ZStr::from_ascii(b"ag"));
+        assert!(flagged.is_valid_utf8());
+        let interned = flagged.interned();
+        assert!(interned.is_interned() && interned.is_valid_utf8());
+        assert!(
+            !ZStr::ptr_eq(&interned, &flagged),
+            "a shared string is copied"
+        );
+
+        let plain = ZStr::intern(b"plainxyz");
+        assert!(!plain.is_valid_utf8());
+        let same = ZStr::from_ascii(b"plainxyz").into_interned();
+        assert!(ZStr::ptr_eq(&same, &plain));
+        assert!(!same.is_valid_utf8(), "the existing instance's flags win");
+
+        let unique = ZStr::from("in place please");
+        let bytes_at = unique.as_bytes().as_ptr();
+        let block = unique.into_interned();
+        assert!(block.is_interned());
+        assert_eq!(block.as_bytes().as_ptr(), bytes_at, "the block is reused");
+        assert_eq!(block.hash_value(), zend_hash_bytes(b"in place please"));
+        assert!(ZStr::ptr_eq(&ZStr::intern(b"in place please"), &block));
+
+        let mut spare = ZStrBuf::with_capacity(64);
+        spare.push(b"with spare room");
+        let spare = spare.finish();
+        let spare_at = spare.as_bytes().as_ptr();
+        let copied = spare.into_interned();
+        assert_ne!(copied.as_bytes().as_ptr(), spare_at, "no slack is interned");
+        assert!(ZStr::ptr_eq(&copied.interned(), &copied));
+        assert!(ZStr::ptr_eq(
+            &ZStr::from_literal(b"x").into_interned(),
+            &ZStr::from_byte(b'x')
+        ));
+    }
+
+    /// The intern table holds no handles: an interned string leaves it
+    /// with its last handle, and the bytes can be interned again later.
+    #[test]
+    fn interned_strings_leave_the_table_with_their_last_handle() {
+        let before = intern_table_len();
+        assert!(!intern_table_contains(b"transient literal"));
+        let a = ZStr::intern(b"transient literal");
+        assert_eq!(a.refcount(), 1, "the table does not count");
+        let b = ZStr::intern(b"transient literal");
+        assert!(ZStr::ptr_eq(&a, &b));
+        assert_eq!(a.refcount(), 2);
+        assert!(intern_table_contains(b"transient literal"));
+        drop(a);
+        assert!(intern_table_contains(b"transient literal"));
+        drop(b);
+        assert!(!intern_table_contains(b"transient literal"));
+        assert_eq!(intern_table_len(), before);
+
+        let again = ZStr::intern(b"transient literal");
+        assert!(again.is_interned());
+        assert_eq!(again, ZStr::from("transient literal"));
+        assert_ne!(again, ZStr::intern(b"transient literaL"));
+
+        // An interned string reused in place leaves the table as well.
+        let in_place = ZStr::from("reused block").into_interned();
+        assert!(intern_table_contains(b"reused block"));
+        drop(in_place);
+        assert!(!intern_table_contains(b"reused block"));
+        drop(again);
+        assert_eq!(intern_table_len(), before);
+    }
+
+    /// Many unique interned strings (an `eval()` loop over unique code):
+    /// the table grows with the live ones and empties again.
+    #[test]
+    fn intern_table_follows_the_live_strings() {
+        let before = intern_table_len();
+        for round in 0..2 {
+            let live: Vec<ZStr> = (0..5000)
+                .map(|i| ZStr::intern(format!("unique literal {round} {i}").as_bytes()))
+                .collect();
+            assert_eq!(intern_table_len(), before + 5000);
+            for (i, s) in live.iter().enumerate() {
+                let again = ZStr::intern(format!("unique literal {round} {i}").as_bytes());
+                assert!(ZStr::ptr_eq(s, &again), "{round} {i}");
+            }
+            drop(live);
+            assert_eq!(intern_table_len(), before, "round {round}");
+        }
+    }
+
+    /// A thread's intern table can be destroyed before strings that other
+    /// thread-locals still hold: those are freed without it.
+    #[test]
+    fn interned_strings_may_outlive_the_table_at_thread_exit() {
+        thread_local! {
+            static KEEP: RefCell<Option<ZStr>> = const { RefCell::new(None) };
+        }
+        std::thread::spawn(|| {
+            // Registered before the intern table, so destroyed after it.
+            KEEP.with(|k| k.borrow_mut().take());
+            let s = ZStr::intern(b"outlives the table");
+            KEEP.with(|k| *k.borrow_mut() = Some(s));
+        })
+        .join()
+        .expect("the thread exits cleanly");
+    }
+
+    /// The table's hasher spreads DJBX33A values of short strings, whose
+    /// top bits are all equal, over the top 7 bits the control bytes use.
+    #[test]
+    fn intern_hasher_spreads_short_string_hashes() {
+        let mut tags = HashSet::new();
+        for c in 0..=255u8 {
+            let mut h = InternHasher::default();
+            h.write_u64(zend_hash_bytes(&[b'k', c]));
+            tags.insert(h.finish() >> 57);
+        }
+        assert!(tags.len() > 64, "{} distinct tags", tags.len());
     }
 }
