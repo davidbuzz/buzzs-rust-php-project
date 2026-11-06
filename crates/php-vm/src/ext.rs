@@ -621,11 +621,12 @@ impl Vm {
         let mut vm = Vm::new(opts, stdout);
         // Room for what the extensions register (the bundled ones average
         // about 36 functions, 7 classes and 52 constants each), so the
-        // symbol tables do not rehash during start-up.
+        // symbol tables do not rehash during start-up. (With all 54 the
+        // tables end up with 4 096, 1 024 and 4 096 buckets.)
         let n = extensions.len();
         vm.functions.reserve(n * 48);
         vm.classes.reserve(n * 10);
-        vm.constants.reserve(n * 64);
+        vm.constants.reserve(n * 56);
         for e in extensions {
             if !vm
                 .loaded_extensions
