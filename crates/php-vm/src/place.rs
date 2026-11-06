@@ -893,14 +893,15 @@ enum UndefDimHit {
 /// `pid` is not a plain compiled variable holding a string, or `rhs` is
 /// neither a string nor an int; otherwise the string was extended (a
 /// shared one is copied first, as `zend_string_extend` requires a
-/// refcount of 1) and the result is returned when `want_result`.
+/// refcount of 1) and the result is returned: the new string when
+/// `want_result`, else `Null`.
 #[inline]
 fn concat_cv_in_place(
     f: &crate::vm::Frame,
     pid: PlaceId,
     rhs: &Value,
     want_result: bool,
-) -> Option<Option<ZStr>> {
+) -> Option<Value> {
     let p = &f.code.places[pid as usize];
     let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) else {
         return None;
@@ -915,7 +916,11 @@ fn concat_cv_in_place(
         Value::Int(i) => s.append_long(*i),
         _ => return None,
     }
-    Some(want_result.then(|| s.clone()))
+    Some(if want_result {
+        Value::Str(s.clone())
+    } else {
+        Value::Null
+    })
 }
 
 /// Takes the pending undefined final offset of the walk over `segs`.
@@ -2437,8 +2442,8 @@ impl Vm {
         let Some(result) = concat_cv_in_place(self.frame(), pid, v, dst.is_some()) else {
             return false;
         };
-        if let (Some(t), Some(r)) = (dst, result) {
-            self.set_tmp(t, Value::Str(r));
+        if let Some(t) = dst {
+            self.set_tmp(t, result);
         }
         true
     }
@@ -2463,8 +2468,8 @@ impl Vm {
         else {
             return false;
         };
-        if let (Some(t), Some(r)) = (dst, result) {
-            self.set_tmp(t, Value::Str(r));
+        if let Some(t) = dst {
+            self.set_tmp(t, result);
         }
         true
     }
