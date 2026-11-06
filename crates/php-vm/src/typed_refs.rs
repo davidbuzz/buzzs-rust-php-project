@@ -15,11 +15,11 @@
 //! is bound to, a reference.
 
 use crate::class::{Class, PropInfo, StaticProp};
-use crate::object::{self, ObjBox, ObjectData};
+use crate::object::{self, ObjectData};
 use crate::typecheck::TypeCtx;
 use crate::types::{mask, TypeDecl};
 use crate::vm::{Throw, Vm, VmResult};
-use php_runtime::{ArrayKey, Obj, PhpRef, Value, ZStr};
+use php_runtime::{ArrayKey, Obj, ObjWeak, PhpRef, Value, ZStr};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -27,7 +27,7 @@ use std::rc::{Rc, Weak};
 /// Where a source property stores its value.
 enum Holder {
     /// Declared property slot `.1` of an object.
-    Slot(Weak<ObjectData>, usize),
+    Slot(ObjWeak, usize),
     /// A static property cell.
     Static(Weak<RefCell<Value>>),
 }
@@ -35,7 +35,7 @@ enum Holder {
 impl Holder {
     fn same(&self, other: &Holder) -> bool {
         match (self, other) {
-            (Holder::Slot(a, i), Holder::Slot(b, j)) => i == j && Weak::ptr_eq(a, b),
+            (Holder::Slot(a, i), Holder::Slot(b, j)) => i == j && a.addr() == b.addr(),
             (Holder::Static(a), Holder::Static(b)) => Weak::ptr_eq(a, b),
             _ => false,
         }
@@ -56,9 +56,9 @@ impl Source {
     fn holds(&self, r: &PhpRef) -> bool {
         let is_r = |v: &Value| matches!(v, Value::Reference(x) if PhpRef::ptr_eq(x, r));
         match &self.holder {
-            Holder::Slot(w, idx) => w.upgrade().is_some_and(|d| {
+            Holder::Slot(w, idx) => w.upgrade().is_some_and(|o| {
                 // A slot borrowed by an ongoing write walk still holds it.
-                d.slots.try_borrow().map_or(true, |s| {
+                object::data(&o).slots.try_borrow().map_or(true, |s| {
                     s.get(*idx).and_then(Option::as_ref).is_some_and(is_r)
                 })
             }),
@@ -173,9 +173,9 @@ fn is_checked_type(pi: &PropInfo) -> bool {
     pi.ty.as_ref().is_some_and(|t| !t.is_mixed())
 }
 
-/// The `Rc<ObjectData>` behind a VM object.
-fn object_rc(o: &Obj) -> Option<&Rc<ObjectData>> {
-    o.downcast_ref::<ObjBox>().map(|b| &b.0)
+/// The data of a VM object (`None` for other `PhpObject` implementations).
+fn object_rc(o: &Obj) -> Option<&ObjectData> {
+    o.downcast_ref::<ObjectData>()
 }
 
 /// The reference held by declared slot `idx` of `o`, if any.
@@ -593,10 +593,10 @@ impl Vm {
         if !is_checked_type(&pi) {
             return;
         }
-        let Some(d) = object_rc(o) else {
+        if object_rc(o).is_none() {
             return;
-        };
-        let holder = Holder::Slot(Rc::downgrade(d), idx);
+        }
+        let holder = Holder::Slot(o.downgrade(), idx);
         let decl = self.find_class(pi.class.as_bytes());
         add_source(r, holder, pi, decl);
     }
