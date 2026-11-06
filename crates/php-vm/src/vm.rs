@@ -594,12 +594,14 @@ impl Frame {
     /// compiler can keep the frame in registers across them. `read` is a
     /// plain function (a closure without captures), so it can reach
     /// neither the VM nor this store: it can only inspect or clone the
-    /// value, which runs no PHP code.
+    /// value, which runs no PHP code. (It must not dig the store out of
+    /// global state either; crate-private for that reason.)
     ///
     /// # Panics
     /// Like `RefCell::borrow`, if the store is mutably borrowed.
-    #[inline]
-    pub fn peek_cv<R>(&self, cv: u32, read: fn(Option<&Value>) -> R) -> R {
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // `read` must become a direct (inlined) call
+    pub(crate) fn peek_cv<R>(&self, cv: u32, read: fn(Option<&Value>) -> R) -> R {
         let idx = self.cv_idx(cv);
         // SAFETY: `try_borrow_unguarded` fails while a mutable borrow of the
         // store is active, so no `&mut VarStore` exists now. The shared
@@ -607,17 +609,25 @@ impl Frame {
         // cannot name this store (it receives one slot and nothing else),
         // and `R` cannot borrow from it (the reference's lifetime is
         // higher-ranked), so no mutable borrow can begin while it is alive.
-        match unsafe { self.vars.try_borrow_unguarded() } {
-            Ok(vs) => read(vs.slots.get(idx).and_then(Option::as_ref)),
-            // Mutably borrowed: panics exactly as `borrow()` always did.
-            Err(_) => read(self.vars.borrow().slots.get(idx).and_then(Option::as_ref)),
-        }
+        let Ok(vs) = (unsafe { self.vars.try_borrow_unguarded() }) else {
+            store_mutably_borrowed()
+        };
+        read(vs.slots.get(idx).and_then(Option::as_ref))
     }
 
     /// The current line.
     pub fn line(&self) -> u32 {
         self.code.line(self.ip.saturating_sub(1))
     }
+}
+
+/// [`Frame::peek_cv`] on a mutably borrowed store: the panic
+/// `RefCell::borrow` raises.
+#[cold]
+#[inline(never)]
+#[track_caller]
+fn store_mutably_borrowed() -> ! {
+    panic!("already mutably borrowed: BorrowError")
 }
 
 /// An entry of the error handler stack.
