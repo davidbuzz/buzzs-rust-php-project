@@ -326,9 +326,11 @@ impl Vm {
 /// The frameless-call classes, kept in bits 27..=31 of a builtin
 /// function's flags ([`crate::func::flags::FRAMELESS`]): php-src's
 /// frameless functions (`ZEND_FRAMELESS_FUNCTION` in ext/standard) plus
-/// `abs()`, `chr()` and `ord()`. Each class names the argument shapes for
-/// which its handler has no diagnostic, exception, callback, frame
-/// inspection or immediate memory-limit fatal (see [`frameless_args`]).
+/// `abs()`, `chr()`, `ord()` and the math functions. Each class names the
+/// argument shapes for which its handler has no diagnostic, exception,
+/// callback, frame inspection or immediate memory-limit fatal (see
+/// [`frameless_args`]); for those shapes no frame can be observed, so
+/// whether php-src has a frameless variant does not matter.
 mod fl {
     /// `abs(int|float)`.
     pub(super) const ABS: u32 = 1;
@@ -369,6 +371,22 @@ mod fl {
     pub(super) const STR_REPLACE: u32 = 15;
     /// `strtr(string, string, string)`.
     pub(super) const STRTR: u32 = 16;
+    /// The one-argument float functions (`sqrt()`, `sin()`, `exp()`, ...,
+    /// `floor()`, `ceil()`, `is_nan()`) of an int or a float: zpp widens an
+    /// int silently in both modes (`zend_parse_arg_double_slow`), and the
+    /// handlers read it as a float either way.
+    pub(super) const FLOAT: u32 = 17;
+    /// The two-argument float functions (`atan2()`, `hypot()`, `fmod()`,
+    /// `fdiv()`, `fpow()`) of ints or floats.
+    pub(super) const FLOAT2: u32 = 18;
+    /// `log()` of an int or a float without a base (a base can be invalid).
+    pub(super) const LOG: u32 = 19;
+    /// `round(int|float[, int])` without a mode (a mode can be invalid).
+    pub(super) const ROUND: u32 = 20;
+    /// `intdiv(int, int)` neither by zero nor of `PHP_INT_MIN` by -1.
+    pub(super) const INTDIV: u32 = 21;
+    /// `pi()`.
+    pub(super) const PI: u32 = 22;
 }
 
 /// The frameless-call class bits ([`flags::FRAMELESS`]) of the builtin
@@ -392,6 +410,15 @@ pub(crate) fn frameless_flags(lc: &[u8]) -> u32 {
         b"in_array" => fl::IN_ARRAY,
         b"str_replace" => fl::STR_REPLACE,
         b"strtr" => fl::STRTR,
+        b"sqrt" | b"exp" | b"expm1" | b"log10" | b"log1p" | b"sin" | b"cos" | b"tan" | b"asin"
+        | b"acos" | b"atan" | b"sinh" | b"cosh" | b"tanh" | b"asinh" | b"acosh" | b"atanh"
+        | b"deg2rad" | b"rad2deg" | b"floor" | b"ceil" | b"is_nan" | b"is_finite"
+        | b"is_infinite" => fl::FLOAT,
+        b"atan2" | b"hypot" | b"fmod" | b"fdiv" | b"fpow" => fl::FLOAT2,
+        b"log" => fl::LOG,
+        b"round" => fl::ROUND,
+        b"intdiv" => fl::INTDIV,
+        b"pi" => fl::PI,
         _ => return 0,
     };
     class << flags::FRAMELESS_SHIFT
@@ -441,7 +468,10 @@ fn plain_call(call: &PendingCall) -> bool {
 pub(crate) fn frameless_args(class: u32, args: &[Option<Value>]) -> bool {
     use Value::{Array, Bool, Float, Int, Null, Str};
     match (class, args) {
-        (fl::ABS, [Some(Int(_) | Float(_))])
+        (fl::ABS | fl::FLOAT | fl::LOG | fl::ROUND, [Some(Int(_) | Float(_))])
+        | (fl::FLOAT2, [Some(Int(_) | Float(_)), Some(Int(_) | Float(_))])
+        | (fl::ROUND, [Some(Int(_) | Float(_)), Some(Int(_))])
+        | (fl::PI, [])
         | (fl::DECHEX, [Some(Int(_))])
         | (fl::CASE | fl::TRIM | fl::DIRNAME, [Some(Str(_))])
         | (fl::STRPOS | fl::STR_TEST | fl::STRSTR, [Some(Str(_)), Some(Str(_))])
@@ -466,6 +496,9 @@ pub(crate) fn frameless_args(class: u32, args: &[Option<Value>]) -> bool {
         }
         (fl::STR_REPLACE, [Some(Str(search)), Some(Str(replace)), Some(Str(_))]) => {
             replace.len() <= search.len()
+        }
+        (fl::INTDIV, [Some(Int(dividend)), Some(Int(divisor))]) => {
+            *divisor != 0 && !(*dividend == i64::MIN && *divisor == -1)
         }
         _ => false,
     }
@@ -688,6 +721,12 @@ mod tests {
             b"in_array",
             b"str_replace",
             b"strtr",
+            b"sqrt",
+            b"fmod",
+            b"log",
+            b"round",
+            b"intdiv",
+            b"pi",
         ];
         let mut seen = Vec::new();
         for name in names {
@@ -702,6 +741,9 @@ mod tests {
         assert_eq!(frameless_flags(b"implode"), 0);
         assert_eq!(frameless_flags(b"preg_match"), 0);
         assert_eq!(frameless_flags(b"ltrim"), frameless_flags(b"rtrim"));
+        assert_eq!(frameless_flags(b"sqrt"), frameless_flags(b"floor"));
+        assert_eq!(frameless_flags(b"pow"), 0);
+        assert_eq!(frameless_flags(b"mt_rand"), 0);
         assert_eq!(frameless_flags(b"min"), frameless_flags(b"max"));
     }
 
@@ -772,6 +814,29 @@ mod tests {
         assert!(!ok(fl::MIN_MAX, &[i(1), i(2), i(3)]));
         assert!(ok(fl::STRTR, &[s("abc"), s("a"), s("b")]));
         assert!(!ok(fl::STRTR, &[s("abc"), arr(vec![])]));
+        // Math: ints are widened silently; log() bases, round() modes and
+        // intdiv() by zero or overflowing can fail.
+        let f = |x: f64| Some(Value::Float(x));
+        assert!(ok(fl::FLOAT, &[i(4)]));
+        assert!(ok(fl::FLOAT, &[f(-1.0)]));
+        assert!(!ok(fl::FLOAT, &[s("4")]));
+        assert!(!ok(fl::FLOAT, &[Some(Value::Null)]));
+        assert!(!ok(fl::FLOAT, &[i(4), i(4)]));
+        assert!(ok(fl::FLOAT2, &[i(4), f(2.0)]));
+        assert!(!ok(fl::FLOAT2, &[i(4)]));
+        assert!(ok(fl::LOG, &[i(8)]));
+        assert!(!ok(fl::LOG, &[i(8), i(2)]));
+        assert!(ok(fl::ROUND, &[f(1.5)]));
+        assert!(ok(fl::ROUND, &[f(1.55), i(1)]));
+        assert!(!ok(fl::ROUND, &[f(1.55), f(1.0)]));
+        assert!(!ok(fl::ROUND, &[f(1.55), i(1), i(2)]));
+        assert!(ok(fl::INTDIV, &[i(7), i(2)]));
+        assert!(ok(fl::INTDIV, &[i(i64::MIN), i(1)]));
+        assert!(!ok(fl::INTDIV, &[i(7), i(0)]));
+        assert!(!ok(fl::INTDIV, &[i(i64::MIN), i(-1)]));
+        assert!(!ok(fl::INTDIV, &[f(7.0), i(2)]));
+        assert!(ok(fl::PI, &[]));
+        assert!(!ok(fl::PI, &[i(1)]));
         // Unknown classes and gaps never run frameless.
         assert!(!ok(0, &[i(1)]));
         assert!(!ok(fl::ABS, &[None]));

@@ -243,3 +243,59 @@ bool(true)
 bool(true)
 bool(true)
 "#;
+
+#[test]
+fn math_functions_run_frameless_and_keep_the_frame_for_their_errors() {
+    // `intdiv()` by zero or of `PHP_INT_MIN` by -1 and `log()` with an
+    // invalid base throw from their frame; ints passed for `float`
+    // parameters are widened silently, as zpp does.
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    let status = vm.run_script(MATH_SCRIPT.as_bytes(), "math.php");
+    assert_eq!(output(vm, &sink, status), MATH_EXPECTED);
+}
+
+const MATH_SCRIPT: &str = r#"<?php
+function m($a, $b) { return intdiv($a, $b); }
+try { m(1, 0); } catch (DivisionByZeroError $e) { echo get_class($e), ": ", $e->getMessage(), "\n", $e->getTraceAsString(), "\n"; }
+try { m(PHP_INT_MIN, -1); } catch (ArithmeticError $e) { echo get_class($e), ": ", $e->getMessage(), "\n", $e->getTraceAsString(), "\n"; }
+function lg($x, $b) { return log($x, $b); }
+try { lg(8, 0); } catch (ValueError $e) { echo $e->getMessage(), "\n", $e->getTraceAsString(), "\n"; }
+$i = 16; $f = 2.25;
+var_dump(m(7, 2), m(-7, 2), sqrt($i), sqrt($f), floor(5), ceil(4.1), round(2.5), round(1.955, 2), round(-5), log(1), lg(8, 2), fmod(7, 3), atan2(1, 1), hypot(3, 4), fdiv(1, 0), pi(), is_nan(sqrt(-1)), is_finite(1), exp(0), sin(0), cos(0));
+"#;
+
+const MATH_EXPECTED: &str = r#"DivisionByZeroError: Division by zero
+#0 math.php(2): intdiv(1, 0)
+#1 math.php(3): m(1, 0)
+#2 {main}
+ArithmeticError: Division of PHP_INT_MIN by -1 is not an integer
+#0 math.php(2): intdiv(-9223372036854775808, -1)
+#1 math.php(4): m(-9223372036854775808, -1)
+#2 {main}
+log(): Argument #2 ($base) must be greater than 0
+#0 math.php(5): log(8, 0)
+#1 math.php(6): lg(8, 0)
+#2 {main}
+int(3)
+int(-3)
+float(4)
+float(1.5)
+float(5)
+float(5)
+float(3)
+float(1.96)
+float(-5)
+float(0)
+float(3)
+float(1)
+float(0.7853981633974483)
+float(5)
+float(INF)
+float(3.141592653589793)
+bool(true)
+bool(true)
+float(1)
+float(0)
+float(1)
+"#;
