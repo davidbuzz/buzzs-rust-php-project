@@ -177,16 +177,21 @@ impl RootBuffer {
 
     /// Buffers `o` (`gc_possible_root`); its slot, or `None` if it already
     /// is buffered.
+    #[cfg(test)]
     fn push(&mut self, o: &Obj) -> Option<usize> {
-        let addr = o.addr();
-        if self.index.contains_key(&addr) {
+        if self.contains(o) {
             return None;
         }
+        Some(self.insert_new(o))
+    }
+
+    /// Buffers `o`, which is not buffered; returns its slot.
+    fn insert_new(&mut self, o: &Obj) -> usize {
         let i = self.fetch();
         self.slots[i] = Some(Rc::downgrade(o.rc()));
-        self.index.insert(addr, i);
+        self.index.insert(o.addr(), i);
         self.num_roots += 1;
-        Some(i)
+        i
     }
 
     /// Takes a slot for garbage that is no possible root (`gc_add_garbage`
@@ -631,9 +636,11 @@ fn buffer_obj(s: &mut GcState, o: &Obj) -> Option<usize> {
         return None;
     }
     if !s.roots.has_unused() {
+        // May set the buffered roots aside (the new root then starts an
+        // empty buffer).
         note_new_slot(s);
     }
-    let i = s.roots.push(o)?;
+    let i = s.roots.insert_new(o);
     let d = crate::object::data(o);
     d.flags
         .set(d.flags.get() | crate::object::oflags::GC_BUFFERED);
