@@ -1589,6 +1589,18 @@ impl Vm {
                         }
                         Flow::Next
                     }
+                    Op::FetchDimsCv {
+                        cv,
+                        place,
+                        dst,
+                        to,
+                        mode,
+                    } => {
+                        if self.op_fetch_dims_cv(*cv, *place, *dst, *to, *mode)? {
+                            self.frame_mut().ip += 1;
+                        }
+                        Flow::Next
+                    }
                     Op::IssetDimCv {
                         cv,
                         dim,

@@ -78,8 +78,8 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
                     place: *place,
                 })
             }),
-        Op::Fetch { place, mode, dst } if *mode != FetchMode::List => {
-            cv_dim(places, *place).map(|(cv, dim)| Op::FetchDimCv {
+        Op::Fetch { place, mode, dst } if *mode != FetchMode::List => cv_dim(places, *place)
+            .map(|(cv, dim)| Op::FetchDimCv {
                 cv,
                 dim,
                 place: *place,
@@ -87,7 +87,15 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
                 to: assigned_cv(next, *dst),
                 mode: *mode,
             })
-        }
+            .or_else(|| {
+                cv_dims(places, *place).map(|cv| Op::FetchDimsCv {
+                    cv,
+                    place: *place,
+                    dst: *dst,
+                    to: assigned_cv(next, *dst),
+                    mode: *mode,
+                })
+            }),
         Op::Isset { place, dst } => cv_dim(places, *place).map(|(cv, dim)| Op::IssetDimCv {
             cv,
             dim,
@@ -221,6 +229,20 @@ fn cv_dim(places: &[Place], pid: PlaceId) -> Option<(u32, Operand)> {
         }
         _ => None,
     }
+}
+
+/// The CV of a place `$cv[d1][d2]...` with two or more dimensions, all
+/// with defined offset operands.
+fn cv_dims(places: &[Place], pid: PlaceId) -> Option<u32> {
+    let p = places.get(pid as usize)?;
+    let PlaceBase::Cv(cv) = &p.base else {
+        return None;
+    };
+    let all_dims = p
+        .segs
+        .iter()
+        .all(|s| matches!(s, Seg::Dim(d) if *d != Operand::Unused));
+    (p.segs.len() >= 2 && all_dims).then_some(*cv)
 }
 
 #[cfg(test)]
@@ -458,11 +480,53 @@ mod tests {
             2,
             "{ops:?}"
         );
-        // Nested dimensions and appends keep the generic place ops.
-        let ops = main_ops("<?php $a = [[1]]; echo $a[0][0]; $a[] = 1; $a[0][0] = 2;");
+        // Nested dimension reads get the chain form; appends and nested
+        // writes keep the generic place ops.
+        let ops = main_ops(
+            "<?php $a = [[1]]; echo $a[0][0]; $a[] = 1; $a[0][0] = 2; $x = $a[0][0]; $y = $a[0][0] ?? 1;",
+        );
         assert!(
             !ops.iter()
                 .any(|op| matches!(op, Op::FetchDimCv { .. } | Op::AssignDimCv { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchDimsCv {
+                    to: None,
+                    mode: FetchMode::Read,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchDimsCv {
+                    to: Some(_),
+                    mode: FetchMode::Read,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchDimsCv {
+                    mode: FetchMode::Is,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::Assign { .. }))
+                .count(),
+            2,
             "{ops:?}"
         );
     }

@@ -17,7 +17,7 @@
 //! [`Op::AssignDimCv`]: crate::opcode::Op::AssignDimCv
 
 use super::{num_bin, CvOpData, Num};
-use crate::opcode::{BinKind, FetchMode, IncDecKind, Operand, PlaceId};
+use crate::opcode::{BinKind, FetchMode, IncDecKind, Operand, PlaceId, Seg};
 use crate::vm::{Frame, VarStore, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, Value, ZStr};
 
@@ -400,15 +400,91 @@ impl Vm {
             return Ok(false);
         };
         self.release_tmp_str(dim);
+        Ok(self.store_fetched(dst, to, v))
+    }
+
+    /// Stores a fetched value: into CV `to` when that holds no refcounted
+    /// value (the folded `AssignCv`; true: skip it), else into `dst`.
+    #[inline]
+    fn store_fetched(&mut self, dst: u32, to: Option<u32>, v: Value) -> bool {
         if let Some(to) = to {
             match self.cv_store_plain(to, v) {
-                Ok(()) => return Ok(true),
+                Ok(()) => return true,
                 Err(v) => self.set_tmp(dst, v),
             }
         } else {
             self.set_tmp(dst, v);
         }
-        Ok(false)
+        false
+    }
+
+    /// `$cv[d1][d2]...` read when every container on the way is an array
+    /// (the variable itself possibly through a reference) holding the
+    /// offset, and every offset peeks as an int or string: the chain of
+    /// `ZEND_FETCH_DIM_R` hits. `None` (nothing consumed) leaves all of it
+    /// to the generic fetch.
+    #[inline]
+    fn fetch_dims_cv_fast(&self, cv: u32, place: PlaceId) -> Option<Value> {
+        let f = self.frame();
+        let segs = &f.code.places.get(place as usize)?.segs;
+        let vars = f.vars.borrow();
+        let slot = vars.slots.get(f.cv_idx(cv))?.as_ref()?;
+        let guard;
+        let mut cur = match slot {
+            Value::Reference(r) => {
+                guard = r.try_borrow()?;
+                &*guard
+            }
+            v => v,
+        };
+        for seg in segs {
+            let Seg::Dim(dim) = seg else {
+                return None;
+            };
+            let key = self.peek_dim_key(*dim)?;
+            let Value::Array(a) = cur else {
+                return None;
+            };
+            cur = a.get(&key)?;
+        }
+        Some(match cur {
+            Value::Reference(r) => Value::clone(&r.try_borrow()?),
+            v => v.clone(),
+        })
+    }
+
+    /// Releases the consumed string temporaries among the offsets of
+    /// `place` (see [`Vm::release_tmp_str`]).
+    #[inline]
+    fn release_dim_tmps(&mut self, place: PlaceId) {
+        let code = self.frame().code.clone();
+        if let Some(p) = code.places.get(place as usize) {
+            for seg in &p.segs {
+                if let Seg::Dim(dim) = seg {
+                    self.release_tmp_str(*dim);
+                }
+            }
+        }
+    }
+
+    /// [`crate::opcode::Op::FetchDimsCv`]: whether the `AssignCv` after the
+    /// op was done here too (and is to be skipped).
+    #[inline]
+    pub(super) fn op_fetch_dims_cv(
+        &mut self,
+        cv: u32,
+        place: PlaceId,
+        dst: u32,
+        to: Option<u32>,
+        mode: FetchMode,
+    ) -> VmResult<bool> {
+        let Some(v) = self.fetch_dims_cv_fast(cv, place) else {
+            let v = self.place_fetch(place, mode)?;
+            self.set_tmp(dst, v);
+            return Ok(false);
+        };
+        self.release_dim_tmps(place);
+        Ok(self.store_fetched(dst, to, v))
     }
 
     /// `isset($cv[dim])` / `empty($cv[dim])` when `$cv` holds an array
@@ -1038,6 +1114,55 @@ $b = [true]; $b[0]++; $b[0] += 1; var_dump($b);
             "{out}"
         );
         assert!(out.ends_with("array(1) {\n  [0]=>\n  int(2)\n}\n"), "{out}");
+    }
+
+    #[test]
+    fn nested_dimension_reads_on_cvs() {
+        let src = r#"<?php
+$m = [[1, 2], [3, 4]]; $s = 0;
+for ($i = 0; $i < 2; $i++) { for ($j = 0; $j < 2; $j++) { $s += $m[$i][$j]; } }
+var_dump($s);
+$v = $m[1][0]; var_dump($v);
+$d = ['a' => ['b' => ['c' => 'deep']]];
+var_dump($d['a']['b']['c'], $d['a']['b']['x'] ?? 'dflt', $d['a']['x']['c'] ?? 'dflt2', isset($d['a']['b']['c']), isset($d['a']['x']['c']));
+$k = 'b'; var_dump($d['a'][$k]['c'], $d['a']["$k"]['c']);
+$r = [&$m, 'x']; var_dump($r[0][1][1]);
+$e = [1]; var_dump($e[0][0]);
+var_dump($m[5][0]);
+var_dump($m[0][7]);
+$str = ['ab']; var_dump($str[0][1]);
+$n = [null]; var_dump($n[0][0]);
+$o = [new ArrayObject([[7]])]; var_dump($o[0][0][0]);
+$ref = &$m[0]; $ref[0] = 99; var_dump($m[0][0]);
+$t = [[1]]; $x = $t[0][0]; var_dump($x);
+$w = ['k' => [1.5]]; $y = $w['k'][0] ?? 0; var_dump($y);
+var_dump($undef[0][0] ?? 'u');
+$f = [[0]]; var_dump($f[0][1.7] ?? 'fl');
+echo "end\n";
+"#;
+        let out = run(src);
+        let head = "int(10)\nint(3)\nstring(4) \"deep\"\nstring(4) \"dflt\"\nstring(5) \"dflt2\"\nbool(true)\nbool(false)\nstring(4) \"deep\"\nstring(4) \"deep\"\nint(4)\n";
+        assert!(out.starts_with(head), "{out}");
+        assert!(
+            out.contains("Trying to access array offset on int"),
+            "{out}"
+        );
+        assert!(out.contains("Undefined array key 5"), "{out}");
+        assert!(
+            out.contains("Trying to access array offset on null"),
+            "{out}"
+        );
+        assert!(out.contains("Undefined array key 7"), "{out}");
+        assert!(out.contains("NULL\nstring(1) \"b\"\n"), "{out}");
+        assert!(
+            out.contains("NULL\nint(7)\nint(99)\nint(1)\nfloat(1.5)\nstring(1) \"u\"\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Implicit conversion from float 1.7 to int loses precision"),
+            "{out}"
+        );
+        assert!(out.ends_with("string(2) \"fl\"\nend\n"), "{out}");
     }
 
     #[test]

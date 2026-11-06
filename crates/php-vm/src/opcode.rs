@@ -678,6 +678,18 @@ pub enum Op {
         to: Option<u32>,
         mode: FetchMode,
     },
+    /// `Fetch` (`Read` or `Is` mode) of `$cv[d1][d2]...`: a chain of two or
+    /// more dimensions (`ZEND_FETCH_DIM_R` hits all the way down when
+    /// every container is an array holding the int or string offset);
+    /// `to` as in [`Op::FetchDimCv`]. Any miss falls back to `place` in
+    /// `mode`.
+    FetchDimsCv {
+        cv: u32,
+        place: PlaceId,
+        dst: u32,
+        to: Option<u32>,
+        mode: FetchMode,
+    },
     /// `Isset` / `Empty` (`empty`) of `$cv[dim]`
     /// (`ZEND_ISSET_ISEMPTY_DIM_OBJ_SPEC_CV_*` on an array with an int or
     /// string offset); anything else goes through `place`.
