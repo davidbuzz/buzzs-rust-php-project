@@ -653,7 +653,8 @@ pub enum Op {
     /// operands are plain numbers the comparison jumps to `target` when
     /// its result equals `jmp_if` and otherwise skips the jump op; any other
     /// operands compute the comparison into `dst` and fall through to the
-    /// jump op.
+    /// jump op. `mask` is [`cmp_outcome::for_branch`] of `op` and `jmp_if`:
+    /// the numeric outcomes that take the jump.
     CmpJmp {
         op: BinKind,
         a: Operand,
@@ -661,6 +662,7 @@ pub enum Op {
         dst: u32,
         target: Label,
         jmp_if: bool,
+        mask: u8,
     },
     /// `Bin` whose result is only assigned by the `AssignCv { cv, val:
     /// Tmp(dst), dst: None }` right after it (opcache's DFA pass writes
@@ -763,6 +765,160 @@ pub enum Op {
         val: Operand,
         place: PlaceId,
     },
+    /// `Fetch` (`Read` or `Is` mode) of a static property `A::$name`
+    /// (`place` has a `PlaceBase::StaticProp` base with a literal name and
+    /// a non-dynamic class, and no segments): `ZEND_FETCH_STATIC_PROP_R` /
+    /// `_IS` on a run-time cache hit (`zend_fetch_static_property_address`
+    /// with `CACHED_PTR`). `to` as in [`Op::FetchDimCv`]. A miss, or a
+    /// typed property holding null in `Read` mode (possibly uninitialized),
+    /// falls back to `place` in `mode`.
+    FetchStaticProp {
+        place: PlaceId,
+        dst: u32,
+        to: Option<u32>,
+        mode: FetchMode,
+    },
+    /// `Assign` of a static property place (as in
+    /// [`Op::FetchStaticProp`]): `ZEND_ASSIGN_STATIC_PROP` on a cache hit
+    /// of an untyped property holding a scalar or string, with a scalar or
+    /// string value; anything else is the generic `Assign`.
+    AssignStaticProp {
+        place: PlaceId,
+        val: Operand,
+        dst: Option<u32>,
+    },
+    /// `AssignOp` of a static property place (as in
+    /// [`Op::FetchStaticProp`]): `ZEND_ASSIGN_STATIC_PROP_OP` on a cache
+    /// hit, `.=` extending a string the property holds in place
+    /// (`zend_binary_assign_op_typed_prop`'s in-place concatenation), or a
+    /// numeric operator on an untyped property holding a number; anything
+    /// else is the generic `AssignOp`.
+    AssignOpStaticProp {
+        place: PlaceId,
+        op: BinaryOp,
+        val: Operand,
+        dst: Option<u32>,
+    },
+    /// `Isset` / `Empty` (`empty`) of a static property place (as in
+    /// [`Op::FetchStaticProp`]): `ZEND_ISSET_ISEMPTY_STATIC_PROP` on a
+    /// cache hit; anything else goes through `place`.
+    IssetStaticProp {
+        place: PlaceId,
+        dst: u32,
+        empty: bool,
+    },
+    /// `AssignOp` `.=` of a plain compiled variable (`$cv .= val`,
+    /// `ZEND_ASSIGN_OP_SPEC_CV_*` with `ZEND_CONCAT`, whose
+    /// `concat_function` has `result == op1`): a variable holding a string
+    /// is extended in place by a string or the digits of an int; anything
+    /// else is the generic `.=` of `place`.
+    ConcatCv {
+        cv: u32,
+        val: Operand,
+        dst: Option<u32>,
+        place: PlaceId,
+    },
+    /// `Assign` of `$cv[d1][d2]... = val` (two to four dimensions, none
+    /// `[]`) without a used result: the chain of `FETCH_DIM_W`s and the
+    /// `ASSIGN_DIM` on arrays, each separated (`SEPARATE_ARRAY`), a missing
+    /// or null container element becoming an empty array, with a scalar or
+    /// string value replacing a scalar or string element (or none);
+    /// anything else is the generic `Assign` of `place`.
+    AssignDimsCv {
+        cv: u32,
+        val: Operand,
+        place: PlaceId,
+    },
+    /// `AssignOp` (`+=`, `-=`, `*=`, `|=`, `&=`, `^=`) of `$cv[d1][d2]...`
+    /// (as in [`Op::AssignDimsCv`]) without a used result, when every
+    /// container exists and is an array and the element is a plain number
+    /// (the `FETCH_DIM_RW` chain and `ZEND_ASSIGN_DIM_OP`'s numeric fast
+    /// path); anything else is the generic `AssignOp` of `place`.
+    AssignOpDimsCv {
+        cv: u32,
+        op: BinaryOp,
+        val: Operand,
+        place: PlaceId,
+    },
+    /// `FetchConst` whose result is only assigned by the `AssignCv { cv:
+    /// to, val: Tmp(dst), dst: None }` right after it: the value is stored
+    /// into `to` directly when that variable holds no refcounted value,
+    /// skipping the `AssignCv` (else written to `dst` for it). A cached
+    /// value (`ZEND_FETCH_CONSTANT`'s `CACHED_PTR` hit) needs no lookup; a
+    /// miss runs the generic fetch first.
+    FetchConstTo {
+        name: u32,
+        fallback: Option<u32>,
+        dst: u32,
+        to: u32,
+    },
+    /// `FetchClassConst` of `class::NAME` (literal `name`) followed by such
+    /// an `AssignCv` (as in [`Op::FetchConstTo`]), with
+    /// `ZEND_FETCH_CLASS_CONSTANT`'s cache.
+    FetchClassConstTo {
+        class: ClassSpec,
+        name: u32,
+        dst: u32,
+        to: u32,
+    },
+    /// An [`Op::IncDecCv`] without a used result right before an
+    /// [`Op::CmpJmp`]: a rotated loop's step and condition (`for (...; $i <
+    /// $n; $i++)`, `while (...) { ...; $i++; }`). After the in-place `++` /
+    /// `--`, the comparison of that `CmpJmp` is decided here too when its
+    /// operands are plain numbers: the op jumps to the `CmpJmp`'s target or
+    /// skips the `CmpJmp` and its jump op; otherwise the `CmpJmp` runs as
+    /// its own op. Entering at the `CmpJmp` (the loop's entry jump) runs it
+    /// alone; anything but a plain number in the variable is the generic
+    /// `IncDec` of `place`.
+    IncDecCvCmpJmp {
+        cv: u32,
+        kind: IncDecKind,
+        place: PlaceId,
+    },
+}
+
+/// The bits of [`Op::CmpJmp`]'s `mask`: the outcomes of comparing two
+/// plain numbers for which the smart branch jumps, plus the
+/// [`IDENTITY`](cmp_outcome::IDENTITY) flag. Decided once by the compiler
+/// from the comparison and the jump's sense, so the handler tests one bit
+/// instead of decoding the operator (php-src generates one handler per
+/// comparison and jump sense, `ZEND_IS_SMALLER_SPEC_..._JMPZ` & co.).
+pub mod cmp_outcome {
+    use super::BinKind;
+
+    /// `a < b`.
+    pub const LESS: u8 = 1 << 0;
+    /// `a == b`.
+    pub const EQUAL: u8 = 1 << 1;
+    /// `a > b`.
+    pub const GREATER: u8 = 1 << 2;
+    /// A NaN operand: no order (every comparison but `!=`/`!==` is false).
+    pub const UNORDERED: u8 = 1 << 3;
+    /// An int and a float under `===` / `!==` (different types).
+    pub const MISMATCH: u8 = 1 << 4;
+    /// Flag, not an outcome: the comparison is `===` / `!==`, so an int
+    /// and a float are a [`MISMATCH`] instead of being compared as floats.
+    pub const IDENTITY: u8 = 1 << 5;
+    /// Every outcome.
+    pub const ALL: u8 = LESS | EQUAL | GREATER | UNORDERED | MISMATCH;
+
+    /// The mask of a smart branch on comparison `op` that jumps when the
+    /// comparison's result is `jmp_if`; `None` when `op` is not one of the
+    /// smart-branch comparisons (`zend_is_smart_branch`).
+    #[must_use]
+    pub fn for_branch(op: BinKind, jmp_if: bool) -> Option<u8> {
+        let (taken, identity) = match op {
+            BinKind::Less => (LESS, false),
+            BinKind::LessEqual => (LESS | EQUAL, false),
+            BinKind::Equal => (EQUAL, false),
+            BinKind::NotEqual => (LESS | GREATER | UNORDERED, false),
+            BinKind::Identical => (EQUAL, true),
+            BinKind::NotIdentical => (LESS | GREATER | UNORDERED | MISMATCH, true),
+            BinKind::Arith(_) | BinKind::Spaceship => return None,
+        };
+        let taken = if jmp_if { taken } else { ALL & !taken };
+        Some(if identity { taken | IDENTITY } else { taken })
+    }
 }
 
 /// The type bits of [`Op::TypeCheck`] (`zend_compile_func_typecheck`'s

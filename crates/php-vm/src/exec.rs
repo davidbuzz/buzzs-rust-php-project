@@ -146,8 +146,9 @@ impl Vm {
 /// when the operator has no sealed numeric form, an int result overflows,
 /// or the generic path must throw or convert (a zero divisor, a negative
 /// shift or one of 64 bits or more, a float operand of `%`, `<<`, `>>`).
-/// Always inlined with it (a call returns the `Option<Value>` through
-/// memory, and the operator is usually known at the call site's arm).
+/// Always inlined: as a call, both numbers and the `Option<Value>` result
+/// go through memory (here and in the specialised handlers' fast paths,
+/// `exec/spec.rs`), and the operator is usually known at the call site's arm.
 #[inline(always)]
 #[allow(clippy::inline_always)] // part of the hot numeric fast path
 fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
@@ -437,19 +438,8 @@ impl Vm {
     }
 
     /// `ZEND_ASSIGN` with a CV result operand (`$cv = val`, the
-    /// [`Op::AssignCv`] instruction): `zend_assign_to_variable`. The
-    /// common forms are done in place ([`Vm::assign_cv_fast`]); the rest
-    /// (reads that warn, references on either side, old values that are
-    /// possible GC roots) take the generic path.
-    #[inline]
-    pub(crate) fn op_assign_cv(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> VmResult<()> {
-        if self.assign_cv_fast(cv, val, dst) {
-            return Ok(());
-        }
-        self.assign_cv_generic(cv, val, dst)
-    }
-
-    /// The in-place form of [`Vm::op_assign_cv`], php-src's
+    /// [`Op::AssignCv`] instruction, `zend_assign_to_variable`) in place,
+    /// in the hot pre-match of [`Vm::run`]: php-src's
     /// `ZEND_ASSIGN_SPEC_CV_{CONST,TMP,CV}` fast case: the source is a
     /// literal, a temporary or a defined compiled variable whose value
     /// needs no dereferencing work with side effects, and the target slot
@@ -508,7 +498,9 @@ impl Vm {
         true
     }
 
-    /// The generic path of [`Vm::op_assign_cv`].
+    /// The generic `AssignCv` (reads that warn, references on either side,
+    /// old values that are possible GC roots), after
+    /// [`Vm::assign_cv_fast`] did not apply.
     #[inline(never)]
     fn assign_cv_generic(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> VmResult<()> {
         let v = self.read(val)?;
@@ -1042,6 +1034,35 @@ impl Vm {
                             Some(false) => {}
                             None => break 'slow,
                         },
+                        // `$cv = val` in place (`assign_cv_fast`).
+                        Op::AssignCv { cv, val, dst } => {
+                            if !self.assign_cv_fast(*cv, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        Op::Move { src, dst } => {
+                            if !self.move_fast(*src, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        // `??`, `?:` and `?->` on a compiled variable,
+                        // tested in place (`exec/spec.rs`): `Some(true)`
+                        // jumps.
+                        Op::Coalesce { a, dst, target } => match self.coalesce_cv_fast(*a, *dst) {
+                            Some(true) => ip = *target as usize,
+                            Some(false) => {}
+                            None => break 'slow,
+                        },
+                        Op::JmpSet { a, dst, target } => match self.jmp_set_cv_fast(*a, *dst) {
+                            Some(true) => ip = *target as usize,
+                            Some(false) => {}
+                            None => break 'slow,
+                        },
+                        Op::JmpNull { a, dst, target } => match self.jmp_null_cv_fast(*a, *dst) {
+                            Some(true) => ip = *target as usize,
+                            Some(false) => {}
+                            None => break 'slow,
+                        },
                         // Smart branch (`ZEND_IS_SMALLER_LONG_SPEC` +
                         // `ZEND_VM_SMART_BRANCH`): a comparison decided
                         // without conversions jumps, or skips the jump op
@@ -1052,14 +1073,18 @@ impl Vm {
                             b,
                             target,
                             jmp_if,
+                            mask,
                             ..
                         } => {
-                            let r = self
-                                .cmp_num_fast(*kind, *a, *b)
-                                .or_else(|| self.equality_fast(*kind, *a, *b));
-                            match r {
-                                Some(r) if r == *jmp_if => ip = *target as usize,
-                                Some(_) => ip += 1,
+                            // Numbers: one outcome bit against the mask; the
+                            // same-type identity forms: the comparison's
+                            // result against the jump's sense.
+                            let jump = self.cmp_jmp_num(*a, *b, *mask).or_else(|| {
+                                self.equality_fast(*kind, *a, *b).map(|r| r == *jmp_if)
+                            });
+                            match jump {
+                                Some(true) => ip = *target as usize,
+                                Some(false) => ip += 1,
                                 None => break 'slow,
                             }
                         }
@@ -1072,13 +1097,13 @@ impl Vm {
                             // The sealed numeric and same-type forms cannot
                             // warn or throw; the generic path can, at this
                             // instruction.
-                            if let Some(r) = self.bin_num_fast(*kind, *a, *b) {
-                                self.set_tmp(*dst, r);
-                            } else if let Some(r) = self.equality_fast(*kind, *a, *b) {
-                                self.set_tmp(*dst, Value::Bool(r));
-                            } else {
-                                self.frame_mut().ip = ip;
-                                self.bin_slow(*kind, *a, *b, *dst)?;
+                            if !self.bin_tmp_fast(*kind, *a, *b, *dst) {
+                                if let Some(r) = self.equality_fast(*kind, *a, *b) {
+                                    self.set_tmp(*dst, Value::Bool(r));
+                                } else {
+                                    self.frame_mut().ip = ip;
+                                    self.bin_slow(*kind, *a, *b, *dst)?;
+                                }
                             }
                         }
                         Op::BinAssignCv {
@@ -1087,25 +1112,41 @@ impl Vm {
                             b,
                             dst,
                             cv,
-                        } => {
-                            let r = self
-                                .bin_num_fast(*kind, *a, *b)
-                                .or_else(|| self.equality_fast(*kind, *a, *b).map(Value::Bool));
-                            match r {
-                                // Stored into the variable: the `AssignCv`
-                                // after the op is done; otherwise it runs on
-                                // `dst`.
-                                Some(r) => match self.cv_store_plain(*cv, r) {
+                        } => match self.bin_assign_cv_fast(*kind, *a, *b, *cv, *dst) {
+                            // Stored into the variable: the `AssignCv` after
+                            // the op is done; otherwise it runs on `dst`.
+                            Some(true) => ip += 1,
+                            Some(false) => {}
+                            None => match self.equality_fast(*kind, *a, *b) {
+                                Some(r) => match self.cv_store_plain(*cv, Value::Bool(r)) {
                                     Ok(()) => ip += 1,
                                     Err(r) => self.set_tmp(*dst, r),
                                 },
                                 None => break 'slow,
+                            },
+                        },
+                        Op::IncDecCv { cv, kind, dst, .. } => {
+                            if !self.incdec_cv_fast(*cv, *kind, *dst) {
+                                break 'slow;
                             }
                         }
-                        Op::IncDecCv { cv, kind, dst, .. } => {
-                            match self.incdec_cv_fast(*cv, *kind) {
-                                Some(r) => self.set_dst(*dst, r),
-                                None => break 'slow,
+                        // A loop's step and its condition: after the
+                        // `++`/`--`, the `CmpJmp` at `ip` on plain numbers
+                        // jumps or skips itself and its jump op here;
+                        // otherwise it runs as the next op.
+                        Op::IncDecCvCmpJmp { cv, kind, .. } => {
+                            if !self.incdec_cv_fast(*cv, *kind, None) {
+                                break 'slow;
+                            }
+                            if let Some(Op::CmpJmp {
+                                a, b, target, mask, ..
+                            }) = ops.get(ip)
+                            {
+                                match self.cmp_jmp_num(*a, *b, *mask) {
+                                    Some(true) => ip = *target as usize,
+                                    Some(false) => ip += 2,
+                                    None => {}
+                                }
                             }
                         }
                         Op::AssignOpCv {
@@ -1138,27 +1179,19 @@ impl Vm {
                         },
                         // With `to`, the `AssignCv` after a dimension fetch
                         // is done here when the variable holds a plain
-                        // value (`store_fetched`: skip it).
+                        // value (`Some(true)`: skip it).
                         Op::FetchDimCv {
                             cv, dim, dst, to, ..
-                        } => match self.fetch_dim_cv_fast(*cv, *dim) {
-                            Some(v) => {
-                                self.release_tmp_str(*dim);
-                                if self.store_fetched(*dst, *to, v) {
-                                    ip += 1;
-                                }
-                            }
+                        } => match self.fetch_dim_cv(*cv, *dim, *dst, *to) {
+                            Some(true) => ip += 1,
+                            Some(false) => {}
                             None => break 'slow,
                         },
                         Op::FetchDimsCv {
                             cv, place, dst, to, ..
-                        } => match self.fetch_dims_cv_fast(*cv, *place) {
-                            Some(v) => {
-                                self.release_dim_tmps(*place);
-                                if self.store_fetched(*dst, *to, v) {
-                                    ip += 1;
-                                }
-                            }
+                        } => match self.fetch_dims_cv(*cv, *place, *dst, *to) {
+                            Some(true) => ip += 1,
+                            Some(false) => {}
                             None => break 'slow,
                         },
                         Op::IssetDimCv {
@@ -1167,18 +1200,101 @@ impl Vm {
                             dst,
                             empty,
                             ..
-                        } => match self.isset_dim_cv_fast(*cv, *dim, *empty) {
-                            Some(r) => {
-                                self.release_tmp_str(*dim);
-                                self.set_tmp(*dst, Value::Bool(r));
+                        } => {
+                            if !self.isset_dim_cv(*cv, *dim, *dst, *empty) {
+                                break 'slow;
                             }
-                            None => break 'slow,
-                        },
+                        }
                         Op::AssignDimCv { cv, dim, val, .. } => {
                             if !self.assign_dim_cv_fast(*cv, *dim, *val) {
                                 break 'slow;
                             }
                         }
+                        Op::AssignDimsCv { cv, val, place } => {
+                            if !self.assign_dims_cv_fast(*cv, *place, *val) {
+                                break 'slow;
+                            }
+                        }
+                        Op::AssignOpDimsCv {
+                            cv,
+                            op: kind,
+                            val,
+                            place,
+                        } => {
+                            if !self.assign_op_dims_cv_fast(*cv, *kind, *place, *val) {
+                                break 'slow;
+                            }
+                        }
+                        // Static properties on a run-time cache hit
+                        // (`exec/spec/statics.rs`).
+                        Op::FetchStaticProp {
+                            place,
+                            dst,
+                            to,
+                            mode,
+                        } => match self.fetch_static_prop_fast(*place, *mode) {
+                            Some(v) => {
+                                if self.store_fetched(*dst, *to, v) {
+                                    ip += 1;
+                                }
+                            }
+                            None => break 'slow,
+                        },
+                        Op::AssignStaticProp { place, val, dst } => {
+                            if !self.assign_static_prop_fast(*place, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        Op::AssignOpStaticProp {
+                            place,
+                            op: kind,
+                            val,
+                            dst,
+                        } => {
+                            if !self.assign_op_static_prop_fast(*place, *kind, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        Op::IssetStaticProp { place, dst, empty } => {
+                            match self.isset_static_prop_fast(*place, *empty) {
+                                Some(r) => self.set_tmp(*dst, Value::Bool(r)),
+                                None => break 'slow,
+                            }
+                        }
+                        Op::ConcatCv { cv, val, dst, .. } => {
+                            if !self.concat_cv_fast(*cv, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        // Cached constants with the `AssignCv` after them
+                        // folded in (`Some(true)` from `store_fetched`: skip
+                        // it).
+                        Op::FetchConstTo {
+                            name,
+                            fallback,
+                            dst,
+                            to,
+                        } => match self.const_hit(*name, *fallback) {
+                            Some(v) => {
+                                if self.store_fetched(*dst, Some(*to), v) {
+                                    ip += 1;
+                                }
+                            }
+                            None => break 'slow,
+                        },
+                        Op::FetchClassConstTo {
+                            class,
+                            name,
+                            dst,
+                            to,
+                        } => match self.class_const_cached(class, *name) {
+                            Some(v) => {
+                                if self.store_fetched(*dst, Some(*to), v) {
+                                    ip += 1;
+                                }
+                            }
+                            None => break 'slow,
+                        },
                         _ => break 'slow,
                     }
                     if Self::safe_point_due() {
@@ -1345,11 +1461,13 @@ impl Vm {
                         }
                         Flow::Next
                     }
+                    // The pre-match's `assign_cv_fast` did not apply.
                     Op::AssignCv { cv, val, dst } => {
-                        self.op_assign_cv(*cv, *val, *dst)?;
+                        self.assign_cv_generic(*cv, *val, *dst)?;
                         Flow::Next
                     }
-                    Op::Assign { place, val, dst } => {
+                    // Also the generic form of `AssignStaticProp`.
+                    Op::Assign { place, val, dst } | Op::AssignStaticProp { place, val, dst } => {
                         let r = match *val {
                             Operand::Cv(cv) => match self.read_cv_op_data(cv) {
                                 CvOpData::Value(v) => self.place_assign(*place, v)?,
@@ -1365,7 +1483,14 @@ impl Vm {
                         self.set_dst(*dst, r);
                         Flow::Next
                     }
+                    // Also the generic form of `AssignOpStaticProp`.
                     Op::AssignOp {
+                        place,
+                        op,
+                        val,
+                        dst,
+                    }
+                    | Op::AssignOpStaticProp {
                         place,
                         op,
                         val,
@@ -1379,6 +1504,14 @@ impl Vm {
                                 self.set_dst(*dst, r);
                             }
                         }
+                        Flow::Next
+                    }
+                    // The generic `IncDec` of the specialised
+                    // `IncDecCvCmpJmp` (its `CmpJmp` then runs as its own
+                    // op).
+                    Op::IncDecCvCmpJmp { kind, place, .. } => {
+                        let r = self.place_incdec(*place, *kind)?;
+                        self.set_dst(None, r);
                         Flow::Next
                     }
                     // Also the generic form of the specialised `IncDecCv` /
@@ -1423,6 +1556,9 @@ impl Vm {
                         place, dst, mode, ..
                     }
                     | Op::FetchDimsCv {
+                        place, dst, mode, ..
+                    }
+                    | Op::FetchStaticProp {
                         place, dst, mode, ..
                     } => {
                         let v = self.place_fetch(*place, *mode)?;
@@ -1712,6 +1848,33 @@ impl Vm {
                     Op::FetchClassConst { class, name, dst } => {
                         let v = self.fetch_class_const_cached(class, *name)?;
                         self.set_tmp(*dst, v);
+                        Flow::Next
+                    }
+                    // A miss of the specialised forms: the generic fetch,
+                    // then the store of the folded `AssignCv` (which runs as
+                    // its own op when the variable holds a refcounted value).
+                    Op::FetchConstTo {
+                        name,
+                        fallback,
+                        dst,
+                        to,
+                    } => {
+                        let v = self.fetch_constant_cached(*name, *fallback)?;
+                        if self.store_fetched(*dst, Some(*to), v) {
+                            ip += 1;
+                        }
+                        Flow::Next
+                    }
+                    Op::FetchClassConstTo {
+                        class,
+                        name,
+                        dst,
+                        to,
+                    } => {
+                        let v = self.fetch_class_const_cached(class, Operand::Lit(*name))?;
+                        if self.store_fetched(*dst, Some(*to), v) {
+                            ip += 1;
+                        }
                         Flow::Next
                     }
                     Op::FetchClassName {
@@ -2032,20 +2195,34 @@ impl Vm {
                         self.set_dst(*dst, r);
                         Flow::Next
                     }
-                    Op::AssignOpDimCv { op, val, place, .. } => {
+                    Op::AssignOpDimCv { op, val, place, .. }
+                    | Op::AssignOpDimsCv { op, val, place, .. } => {
                         let v = self.read(*val)?;
                         self.place_assign_op(*place, *op, v)?;
                         Flow::Next
                     }
                     Op::IssetDimCv {
                         place, dst, empty, ..
-                    } => {
+                    }
+                    | Op::IssetStaticProp { place, dst, empty } => {
                         let v = self.place_isset(*place, *empty)?;
                         self.set_tmp(*dst, Value::Bool(v));
                         Flow::Next
                     }
-                    Op::AssignDimCv { val, place, .. } => {
+                    Op::AssignDimCv { val, place, .. } | Op::AssignDimsCv { val, place, .. } => {
                         self.assign_place_unused(*place, *val)?;
+                        Flow::Next
+                    }
+                    // The `.=` of `AssignOp` (the literal form is part of
+                    // the fast path that did not apply).
+                    Op::ConcatCv {
+                        val, dst, place, ..
+                    } => {
+                        let v = self.read(*val)?;
+                        if !self.concat_assign_cv(*place, &v, *dst) {
+                            let r = self.place_assign_op(*place, BinaryOp::Concat, v)?;
+                            self.set_dst(*dst, r);
+                        }
                         Flow::Next
                     }
                     Op::AssertCheck { dst, skip } => {
@@ -2872,6 +3049,11 @@ fn defers_oom(op: &Op) -> bool {
             | Op::AssignOpCv { .. }
             | Op::AssignOpDimCv { .. }
             | Op::AssignDimCv { .. }
+            | Op::AssignDimsCv { .. }
+            | Op::AssignOpDimsCv { .. }
+            | Op::AssignStaticProp { .. }
+            | Op::AssignOpStaticProp { .. }
+            | Op::ConcatCv { .. }
             | Op::Echo(_)
             | Op::Free(_)
     )
