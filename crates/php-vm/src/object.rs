@@ -389,6 +389,16 @@ impl std::ops::Deref for ObjBox {
     }
 }
 
+/// `object_properties_init`: the slots of a new object, copied from its
+/// class's evaluated default properties (`ce->default_properties_table`).
+#[inline]
+#[must_use]
+pub fn copy_slots(defaults: &[Option<Value>]) -> Vec<Option<Value>> {
+    let mut slots = Vec::with_capacity(defaults.len());
+    slots.extend_from_slice(defaults);
+    slots
+}
+
 /// Allocates a handle and creates an object of `class` with the given slot
 /// values.
 pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {

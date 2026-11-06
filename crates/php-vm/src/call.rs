@@ -10,6 +10,21 @@ use crate::vm::{Frame, FrameKind, PendingCall, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
+thread_local! {
+    /// The stand-in constructor of `new` on a constructor-less class with
+    /// arguments, built once: it is never called, it only lets the SEND ops
+    /// evaluate the arguments (see `Vm::op_new`).
+    static NO_CTOR: Rc<Builtin> = Rc::new(Builtin {
+        name: ZStr::from("__construct"),
+        params: Vec::new(),
+        defaults: Vec::new(),
+        required: 0,
+        return_type: None,
+        flags: flags::NO_BODY,
+        handler: |_vm, _args| Ok(Value::Null),
+    });
+}
+
 impl Vm {
     /// Display name of a function for messages (`A::m`, `foo`).
     pub(crate) fn func_display(&self, func: &Func, scope: Option<&Rc<Class>>) -> String {
@@ -751,15 +766,7 @@ impl Vm {
             }
             // A constructor-less class still evaluates positional arguments and
             // rejects named arguments, without declaring a reflected constructor.
-            let func = Func::Builtin(Rc::new(Builtin {
-                name: ZStr::from("__construct"),
-                params: Vec::new(),
-                defaults: Vec::new(),
-                required: 0,
-                return_type: None,
-                flags: flags::NO_BODY,
-                handler: |_vm, _args| Ok(Value::Null),
-            }));
+            let func = Func::Builtin(NO_CTOR.with(Rc::clone));
             let mut call = PendingCall::new(func);
             call.is_ctor = true;
             // Never called; marks the object constructor-failed when an
@@ -768,11 +775,26 @@ impl Vm {
             self.push_pending(call);
             return Ok(true);
         };
+        // `zend_std_get_constructor` checks the scope only for a
+        // non-public constructor.
+        if ctor.visibility() != flags::PUBLIC {
+            self.check_ctor_access(&ctor, &o)?;
+        }
+        let mut call = self.pending_for_method(&ctor, Some(o), cls);
+        call.is_ctor = true;
+        self.push_pending(call);
+        Ok(true)
+    }
+
+    /// The scope check of a non-public constructor called by `new`.
+    #[cold]
+    #[inline(never)]
+    fn check_ctor_access(&mut self, ctor: &Rc<Method>, o: &Obj) -> VmResult<()> {
         let scope = self.scope();
-        if !self.can_access_method(&ctor, scope.as_ref()) {
+        if !self.can_access_method(ctor, scope.as_ref()) {
             // zend_std_get_constructor: zend_object_store_ctor_failed()
             // (GH-14456), so the destructor never runs.
-            let d = object::data(&o);
+            let d = object::data(o);
             d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
             let vis = if ctor.visibility() == flags::PRIVATE {
                 "private"
@@ -789,10 +811,7 @@ impl Vm {
                 ),
             ));
         }
-        let mut call = self.pending_for_method(&ctor, Some(o), cls);
-        call.is_ctor = true;
-        self.push_pending(call);
-        Ok(true)
+        Ok(())
     }
 
     // ------------------------------------------------------------------
