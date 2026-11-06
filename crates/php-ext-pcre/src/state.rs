@@ -18,30 +18,21 @@ thread_local! {
     /// Whether the `pcre.*` INI values must be re-read (set by the
     /// on-modify handlers and at request boundaries).
     static CONFIG_STALE: Cell<bool> = const { Cell::new(true) };
-    /// The last large subject a `/u` match proved to be valid UTF-8.
-    ///
-    /// Stand-in for PHP's `IS_STR_VALID_UTF8` string flag (which `ZStr`
-    /// does not have yet, see `PROPOSALS.md`). Holding a handle keeps the
-    /// instance alive, so a pointer match can never hit a different (freed
-    /// and reallocated) string, and `ZStr` is never mutated while shared.
-    static VALID_UTF8: RefCell<Option<ZStr>> = const { RefCell::new(None) };
 }
 
-/// Subjects shorter than this are not remembered: validating them is cheap,
-/// and not holding on to them keeps refcounts and `memory_get_usage()`
-/// exactly as in PHP for ordinary strings.
-const VALID_UTF8_MIN_LEN: usize = 4096;
-
-/// Whether `s` is known to be valid UTF-8 (see [`remember_valid_utf8`]).
+/// Whether `s` is known to be valid UTF-8: the string's
+/// `IS_STR_VALID_UTF8` flag (`is_known_valid_utf8()`; the start-offset
+/// check is php-pcre's).
 pub(crate) fn known_valid_utf8(s: &ZStr) -> bool {
-    VALID_UTF8.with(|c| c.borrow().as_ref().is_some_and(|k| ZStr::ptr_eq(k, s)))
+    s.is_valid_utf8()
 }
 
-/// Records that a `/u` match validated `s` (`MatchOutcome::subject_valid_utf8`).
+/// Records that a `/u` match validated the whole subject
+/// (`MatchOutcome::subject_valid_utf8`: no error, offset 0), as
+/// `php_pcre_match_impl` adds `IS_STR_VALID_UTF8` to it; interned subjects
+/// are left alone (`!ZSTR_IS_INTERNED`), which `mark_valid_utf8` does.
 pub(crate) fn remember_valid_utf8(s: &ZStr) {
-    if s.len() >= VALID_UTF8_MIN_LEN && !s.is_interned() {
-        VALID_UTF8.with(|c| *c.borrow_mut() = Some(s.clone()));
-    }
+    s.mark_valid_utf8();
 }
 
 /// The match configuration for `subject`, carrying the UTF-8 validity hint.
@@ -72,7 +63,6 @@ pub(crate) fn last_error() -> PregError {
 /// `RINIT`/`RSHUTDOWN`: drops the cache and resets the error state.
 pub(crate) fn reset() {
     with(|p| *p = Pcre::new());
-    VALID_UTF8.with(|c| c.borrow_mut().take());
     invalidate_config();
 }
 
@@ -162,22 +152,34 @@ mod tests {
         assert!(!is_c_locale(b"de_DE.ISO-8859-1"));
     }
 
+    /// The hint is the subject's own `IS_STR_VALID_UTF8` flag: any size,
+    /// any number of subjects, shared by every handle, kept across
+    /// requests' pcre state, never on interned strings.
     #[test]
-    fn valid_utf8_cache_is_by_identity() {
+    fn valid_utf8_hint_is_the_string_flag() {
         reset();
-        let big = ZStr::from(vec![b'a'; VALID_UTF8_MIN_LEN]);
-        let same_bytes = ZStr::from(vec![b'a'; VALID_UTF8_MIN_LEN]);
+        let big = ZStr::from(vec![b'a'; 64 * 1024]);
+        let small = ZStr::from("abc");
+        let same_bytes = ZStr::from("abc");
         assert!(!known_valid_utf8(&big));
         remember_valid_utf8(&big);
-        assert!(known_valid_utf8(&big));
-        assert!(known_valid_utf8(&big.clone()));
-        assert!(!known_valid_utf8(&same_bytes));
-        let small = ZStr::from("abc");
         remember_valid_utf8(&small);
-        assert!(!known_valid_utf8(&small));
-        assert!(known_valid_utf8(&big));
+        assert!(known_valid_utf8(&big) && known_valid_utf8(&small));
+        assert!(known_valid_utf8(&big.clone()));
+        assert!(
+            !known_valid_utf8(&same_bytes),
+            "a flag, not a content cache"
+        );
+        assert_eq!(big.refcount(), 1, "no handle is kept");
+        let interned = ZStr::intern(b"interned subject");
+        remember_valid_utf8(&interned);
+        assert!(!known_valid_utf8(&interned));
         reset();
-        assert!(!known_valid_utf8(&big));
+        assert!(known_valid_utf8(&small));
+        // A flagged string loses the flag when it changes in place.
+        let mut grown = small;
+        grown.append(b"\xff");
+        assert!(!known_valid_utf8(&grown));
     }
 
     #[test]

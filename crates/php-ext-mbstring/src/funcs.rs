@@ -368,13 +368,26 @@ macro_rules! str_enc_fn {
     )*};
 }
 
-str_enc_fn!(
-    mb_strtoupper,
-    mb_strtolower,
-    mb_ucfirst,
-    mb_lcfirst,
-    mb_scrub
-);
+str_enc_fn!(mb_strtoupper, mb_strtolower, mb_ucfirst, mb_lcfirst);
+
+/// `mb_scrub()`: a valid UTF-8 string is not changed by scrubbing it as
+/// UTF-8, so one known to be valid (`ZSTR_IS_VALID_UTF8`) is returned
+/// itself (`RETURN_STR_COPY(str)`); anything else is converted from and to
+/// the encoding.
+fn mb_scrub(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let (s, enc) = (a.str(0), opt_str(a, 1));
+    let encoding = call(vm, a, |st| {
+        st.get_encoding(opt_bytes(enc.as_ref()), 2, "encoding")
+    })?;
+    if encoding.is_utf8() && s.is_valid_utf8() {
+        return Ok(Value::Str(s));
+    }
+    let v = call(vm, a, |st| {
+        Ok(st.convert_ex(s.as_bytes(), encoding, encoding))
+    })
+    .map(bytes)?;
+    mem::result(vm, mem::zstr(s.as_bytes().len()), v)
+}
 
 macro_rules! trim_fn {
     ($($name:ident),* $(,)?) => {$(
