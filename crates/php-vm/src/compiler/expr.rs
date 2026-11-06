@@ -274,7 +274,7 @@ impl Compiler {
                 });
                 Operand::Tmp(t)
             }
-            ExprKind::MagicConst(m) => self.compile_magic(*m, line)?,
+            ExprKind::MagicConst(m) => self.compile_magic(*m, line),
             ExprKind::ClassConst { class, name } => {
                 let spec = self.class_spec(class)?;
                 let n = self.member_name(name)?;
@@ -881,9 +881,9 @@ impl Compiler {
         }
     }
 
-    fn compile_magic(&mut self, m: MagicConst, line: u32) -> CResult<Operand> {
+    fn compile_magic(&mut self, m: MagicConst, line: u32) -> Operand {
         let s: Vec<u8> = match m {
-            MagicConst::Line => return Ok(self.lit(Value::Int(i64::from(line)))),
+            MagicConst::Line => return self.lit(Value::Int(i64::from(line))),
             MagicConst::File => self.filename.as_bytes().to_vec(),
             MagicConst::Dir => {
                 let f = self.filename.as_bytes();
@@ -899,7 +899,7 @@ impl Compiler {
                             dst: t,
                             const_expr: false,
                         });
-                        return Ok(Operand::Tmp(t));
+                        return Operand::Tmp(t);
                     }
                     c.name.as_bytes().to_vec()
                 } else {
@@ -931,15 +931,14 @@ impl Compiler {
             }
             MagicConst::Property => self.hook_prop.clone().unwrap_or_default(),
         };
-        Ok(self.lit(Value::Str(ZStr::from(s))))
+        self.lit(Value::Str(ZStr::from(s)))
     }
 
     fn innermost_named_fn(&self) -> (Vec<u8>, bool) {
         let f = self.fref();
         match f.kind {
             FnKind::Main | FnKind::ConstExpr => (Vec::new(), false),
-            FnKind::Closure => (f.func_name.as_bytes().to_vec(), false),
-            FnKind::Function => (f.func_name.as_bytes().to_vec(), false),
+            FnKind::Closure | FnKind::Function => (f.func_name.as_bytes().to_vec(), false),
             FnKind::Method => (f.method_name.as_bytes().to_vec(), true),
         }
     }
@@ -2558,7 +2557,7 @@ impl Compiler {
             // zend_compile_func_defined / _in_array / _chr / _ord decide
             // from the literal arguments and otherwise keep the call.
             b"defined" if fb.is_none() && only_positional && positional.len() == 1 => {
-                self.compile_defined(positional[0], need)
+                Ok(self.compile_defined(positional[0], need))
             }
             b"in_array" if fb.is_none() && only_positional => {
                 self.compile_in_array(&positional, need)
@@ -2805,16 +2804,16 @@ impl Compiler {
     /// number is converted with `zval_get_string` instead of the call's
     /// parameter check, so `defined(1)` is `false` even under
     /// `strict_types`. `None` keeps the call.
-    fn compile_defined(&mut self, arg: &Expr, need: bool) -> CResult<Option<Operand>> {
+    fn compile_defined(&mut self, arg: &Expr, need: bool) -> Option<Operand> {
         if !self.special_builtin_enabled(b"defined") || !defined_literal_name(arg) {
-            return Ok(None);
+            return None;
         }
         let name = match &arg.kind {
             ExprKind::String(s) => Value::Str(ZStr::from(s.as_slice())),
             ExprKind::Int(i) => Value::Str(ZStr::from(i.to_string())),
             // Formatted at run time, with the `precision` setting in effect.
             ExprKind::Float(f) => Value::Float(*f),
-            _ => return Ok(None),
+            _ => return None,
         };
         if let Value::Str(s) = &name {
             let n = s.as_bytes();
@@ -2823,15 +2822,13 @@ impl Compiler {
                 || n.eq_ignore_ascii_case(b"null")
                 || self.ct_eval_const(n).is_some()
             {
-                return Ok(Some(self.lit(Value::Bool(true))));
+                return Some(self.lit(Value::Bool(true)));
             }
         }
         let name = self.lit_idx(name);
         let dst = need.then(|| self.tmp());
         self.emit(Op::Defined { name, dst });
-        Ok(Some(
-            dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
-        ))
+        Some(dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp))
     }
 
     /// `zend_compile_func_in_array`: `in_array()` whose haystack is a
@@ -3312,8 +3309,8 @@ pub(crate) fn contains_nullsafe(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Prop {
             object, nullsafe, ..
-        } => *nullsafe || contains_nullsafe(object),
-        ExprKind::MethodCall {
+        }
+        | ExprKind::MethodCall {
             object, nullsafe, ..
         } => *nullsafe || contains_nullsafe(object),
         ExprKind::Dim { base, .. } => contains_nullsafe(base),

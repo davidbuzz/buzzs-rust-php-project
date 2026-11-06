@@ -3,8 +3,8 @@
 //! autoloading, class constants and static properties.
 
 use crate::class::{
-    cflags, Class, ClassConst, ClassDecl, ClassKind, ConstExpr, InternalKind, Magic, PropInfo,
-    StaticProp, TraitRule,
+    cflags, name_map_with_capacity, Class, ClassConst, ClassDecl, ClassKind, ConstExpr,
+    InternalKind, Magic, NameMap, PropInfo, StaticProp, TraitRule,
 };
 use crate::func::{flags, Func, Method, UserFunction};
 use crate::object;
@@ -12,11 +12,10 @@ use crate::opcode::ClassSpec;
 use crate::vm::{Frame, FrameKind, Throw, Vm, VmResult};
 use php_runtime::{Value, ZStr};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 /// Builds magic-method shortcuts from a method table.
-pub(crate) fn build_magic(methods: &HashMap<ZStr, Rc<Method>>) -> Magic {
+pub(crate) fn build_magic(methods: &NameMap<Rc<Method>>) -> Magic {
     // Up to this many methods, one pass over the table that only looks at
     // `__` names is cheaper than sixteen hashed lookups.
     const SCAN_MAX: usize = 32;
@@ -296,9 +295,10 @@ impl Vm {
         let cls = match spec {
             // `ZEND_INSTANCEOF` caches the class once found (it never
             // autoloads, so a miss is looked up again next time).
-            ClassSpec::Named(l) => match self.peek_named_class(*l) {
-                Some(c) => c,
-                None => {
+            ClassSpec::Named(l) => {
+                if let Some(c) = self.peek_named_class(*l) {
+                    c
+                } else {
                     let n = self.lit_str(*l);
                     match self.find_class(n.as_bytes()) {
                         Some(c) => {
@@ -308,7 +308,7 @@ impl Vm {
                         None => return Ok(false),
                     }
                 }
-            },
+            }
             ClassSpec::Dyn(op) => {
                 let c = self.read(*op)?;
                 match c {
@@ -732,12 +732,11 @@ impl Vm {
         // caller, not the VM); misses (instance-property visibility errors,
         // ancestors' private statics, undeclared) are cold.
         let missed;
-        let sp = match cls.find_static(name.as_bytes()) {
-            Some(sp) => sp,
-            None => {
-                missed = self.static_prop_miss(cls, name)?;
-                &missed
-            }
+        let sp = if let Some(sp) = cls.find_static(name.as_bytes()) {
+            sp
+        } else {
+            missed = self.static_prop_miss(cls, name)?;
+            &missed
         };
         if sp.flags & flags::VISIBILITY != flags::PUBLIC {
             let scope = self.scope();
@@ -806,7 +805,7 @@ impl Vm {
 
     /// Declares a user function.
     pub(crate) fn declare_function(&mut self, f: &Rc<UserFunction>) -> VmResult<()> {
-        let lc = ZStr::from(f.name.to_ascii_lowercase());
+        let lc = f.name.to_ascii_lowercase();
         if let Some(existing) = self.functions.get(&lc) {
             let msg = match existing {
                 Func::User(u) => format!(
@@ -837,7 +836,7 @@ impl Vm {
         if let Some(c) = self.bound_decls.get(&key) {
             return Ok(c.clone());
         }
-        let lc = ZStr::from(decl.name.to_ascii_lowercase());
+        let lc = decl.name.to_ascii_lowercase();
         if let Some(old) = self.classes.get(&lc) {
             // `zend_class_redeclaration_error(E_COMPILE_ERROR, ...)`: names
             // the class already declared under that name (its kind and
@@ -1153,7 +1152,6 @@ impl Vm {
     /// method: the final/static errors (message, file, line), else the
     /// signature check to perform.
     fn check_trait_abstract(
-        &self,
         cls: &Rc<Class>,
         c: &TraitAbstractCheck,
     ) -> Result<crate::variance::Obligation, (String, ZStr, u32)> {
@@ -1328,7 +1326,7 @@ impl Vm {
         &mut self,
         decl: &Rc<ClassDecl>,
         is_anon: bool,
-    ) -> VmResult<(Rc<Class>, Vec<(i64, String, u32)>)> {
+    ) -> VmResult<(Rc<Class>, Recorded)> {
         // While it is linked, the class is visible (unlinked) to the
         // variance checks of the classes its dependencies declare.
         let guard = LinkingGuard::enter(decl);
@@ -1488,9 +1486,9 @@ impl Vm {
             && !interfaces
                 .iter()
                 .any(|i| matches!(i.lc_name.as_bytes(), b"iterator" | b"iteratoraggregate"))
-            && !parent
+            && parent
                 .as_ref()
-                .is_some_and(|p| p.flags & cflags::INTERNAL != 0)
+                .is_none_or(|p| p.flags & cflags::INTERNAL == 0)
         {
             // `zend_get_object_type_uc`.
             let what = if decl.kind == ClassKind::Enum {
@@ -1675,7 +1673,7 @@ impl Vm {
         }
         let mut cc = crate::variance::ClassCheck::default();
         for c in &link_out.trait_checks {
-            match self.check_trait_abstract(&cls, c) {
+            match Self::check_trait_abstract(&cls, c) {
                 Ok(ob) => {
                     if cc.record(self, &cls, ob) {
                         break;
@@ -2182,11 +2180,11 @@ struct TraitMethodBinder<'a> {
     parent: Option<&'a Rc<Class>>,
     traits: &'a [Rc<Class>],
     rules: &'a TraitRules,
-    methods: &'a mut HashMap<ZStr, Rc<Method>>,
+    methods: &'a mut NameMap<Rc<Method>>,
     order: &'a mut Vec<ZStr>,
     /// Methods copied from a trait whose scope has not been fixed up to
     /// the class yet: lowercase name -> trait index.
-    unfixed: HashMap<ZStr, usize>,
+    unfixed: NameMap<usize>,
     checks: &'a mut Vec<TraitAbstractCheck>,
     warnings: &'a mut Vec<String>,
     err: &'a mut Option<String>,
@@ -2550,14 +2548,13 @@ fn trait_prop_decls(t: &Rc<Class>) -> Vec<crate::class::PropDecl> {
 /// `class` in an incompatible way. Traits are bound before inheritance, so
 /// inherited properties are not considered here.
 #[allow(clippy::mutable_key_type, clippy::too_many_arguments)] // `ZStr` keys hash by content only.
-#[allow(clippy::mutable_key_type)] // ZStr's cached-hash cell never changes Hash/Eq
 fn trait_property_conflict(
     class: &ZStr,
     traits: &[Rc<Class>],
     ti: usize,
     pd: &crate::class::PropDecl,
-    prop_map: &HashMap<ZStr, Rc<PropInfo>>,
-    static_map: &HashMap<ZStr, usize>,
+    prop_map: &NameMap<Rc<PropInfo>>,
+    static_map: &NameMap<usize>,
     static_props: &[StaticProp],
     link_out: &mut LinkOut,
 ) -> Option<String> {
@@ -2627,8 +2624,8 @@ fn visibility_name(f: u32) -> &'static str {
 fn static_prop_override_error(
     pd: &crate::class::PropDecl,
     name: &ZStr,
-    prop_map: &HashMap<ZStr, Rc<PropInfo>>,
-    static_map: &HashMap<ZStr, usize>,
+    prop_map: &NameMap<Rc<PropInfo>>,
+    static_map: &NameMap<usize>,
     static_props: &[StaticProp],
 ) -> Option<String> {
     if let Some(e) = prop_map
@@ -2855,10 +2852,18 @@ fn build_class(
 ) -> Class {
     let name = decl.name.clone();
     let display = object::display_name(&name);
-    let mut consts: Vec<Rc<ClassConst>> = Vec::new();
-    let mut const_map: HashMap<ZStr, usize> = HashMap::new();
+    // Upper bounds of the table sizes (inherited members may be overridden
+    // in place), so the tables are built without regrowing, as
+    // `zend_hash_extend` sizes them in `zend_do_inheritance`.
+    let nconsts = parent.as_ref().map_or(0, |p| p.consts.len())
+        + interfaces.iter().map(|i| i.consts.len()).sum::<usize>()
+        + traits.iter().map(|t| t.consts.len()).sum::<usize>()
+        + decl.consts.len()
+        + decl.cases.len();
+    let mut consts: Vec<Rc<ClassConst>> = Vec::with_capacity(nconsts);
+    let mut const_map: NameMap<usize> = name_map_with_capacity(nconsts);
     let add_const =
-        |c: Rc<ClassConst>, consts: &mut Vec<Rc<ClassConst>>, map: &mut HashMap<ZStr, usize>| {
+        |c: Rc<ClassConst>, consts: &mut Vec<Rc<ClassConst>>, map: &mut NameMap<usize>| {
             if let Some(&i) = map.get(&c.name) {
                 consts[i] = c;
             } else {
@@ -2896,7 +2901,50 @@ fn build_class(
             }
         }
     }
-    for cd in &decl.consts {
+    // Own constants and enum cases in declaration order (`zend_compile_
+    // class_decl` adds both to `constants_table` as they appear, the order
+    // `ReflectionClass::getConstants()` shows). The declaration keeps them
+    // in two lists, so an enum's are merged by line, constants first on a
+    // shared line.
+    let mut own_members: Vec<(u32, bool, usize)> =
+        Vec::with_capacity(decl.consts.len() + decl.cases.len());
+    own_members.extend(
+        decl.consts
+            .iter()
+            .enumerate()
+            .map(|(idx, cd)| (cd.line, false, idx)),
+    );
+    own_members.extend(
+        decl.cases
+            .iter()
+            .enumerate()
+            .map(|(idx, c)| (c.2, true, idx)),
+    );
+    if !decl.cases.is_empty() {
+        own_members.sort_by_key(|&(line, is_case, _)| (line, is_case));
+    }
+    for &(_, is_case, idx) in &own_members {
+        if is_case {
+            let (cname, value, _line) = &decl.cases[idx];
+            add_const(
+                Rc::new(ClassConst {
+                    name: cname.clone(),
+                    value: RefCell::new(None),
+                    expr: value.clone().unwrap_or(ConstExpr::Value(Value::Null)),
+                    flags: flags::PUBLIC,
+                    class: name.clone(),
+                    ty: None,
+                    is_case: true,
+                    evaluating: Cell::new(false),
+                    doc_comment: decl.case_doc_comments.get(idx).cloned().flatten(),
+                    attributes: decl.case_attributes.get(idx).cloned().unwrap_or_default(),
+                }),
+                &mut consts,
+                &mut const_map,
+            );
+            continue;
+        }
+        let cd = &decl.consts[idx];
         if let Some(&i) = const_map.get(&cd.name) {
             let existing = &consts[i];
             if existing.flags & flags::FINAL != 0 && err.is_none() {
@@ -2951,24 +2999,6 @@ fn build_class(
             &mut const_map,
         );
     }
-    for (i, (cname, value, _line)) in decl.cases.iter().enumerate() {
-        add_const(
-            Rc::new(ClassConst {
-                name: cname.clone(),
-                value: RefCell::new(None),
-                expr: value.clone().unwrap_or(ConstExpr::Value(Value::Null)),
-                flags: flags::PUBLIC,
-                class: name.clone(),
-                ty: None,
-                is_case: true,
-                evaluating: Cell::new(false),
-                doc_comment: decl.case_doc_comments.get(i).cloned().flatten(),
-                attributes: decl.case_attributes.get(i).cloned().unwrap_or_default(),
-            }),
-            &mut consts,
-            &mut const_map,
-        );
-    }
 
     // `zend_do_traits_constant_binding` (traits are bound before
     // inheritance, so a constant inherited from the parent or an interface
@@ -3016,25 +3046,7 @@ fn build_class(
         }
     }
 
-    // Properties.
-    let mut props: Vec<Rc<PropInfo>> = parent.as_ref().map(|p| p.props.clone()).unwrap_or_default();
-    let mut prop_map: HashMap<ZStr, Rc<PropInfo>> = HashMap::new();
-    let mut static_props: Vec<StaticProp> = Vec::new();
-    let mut static_map: HashMap<ZStr, usize> = HashMap::new();
-    if let Some(p) = &parent {
-        for (k, pi) in &p.prop_map {
-            if pi.visibility() != flags::PRIVATE {
-                prop_map.insert(k.clone(), pi.clone());
-            }
-        }
-        for sp in &p.static_props {
-            if sp.flags & flags::PRIVATE == 0 {
-                static_map.insert(sp.name.clone(), static_props.len());
-                static_props.push(sp.clone());
-            }
-        }
-    }
-    // (declaration, owner, index of the trait it comes from)
+    // Properties: (declaration, owner, index of the trait it comes from).
     let mut all_props: Vec<(crate::class::PropDecl, ZStr, Option<usize>)> = Vec::new();
     if decl.kind == ClassKind::Enum {
         let mk = |n: &str, ty: crate::types::TypeDecl| crate::class::PropDecl {
@@ -3071,6 +3083,31 @@ fn build_class(
     for (ti, t) in traits.iter().enumerate() {
         for p in trait_prop_decls(t) {
             all_props.push((p, name.clone(), Some(ti)));
+        }
+    }
+    let nstatic_decls = all_props
+        .iter()
+        .filter(|(pd, _, _)| pd.flags & flags::STATIC != 0)
+        .count();
+    let ninstance_decls = all_props.len() - nstatic_decls;
+    let mut props: Vec<Rc<PropInfo>> = parent.as_ref().map(|p| p.props.clone()).unwrap_or_default();
+    props.reserve(ninstance_decls);
+    let mut prop_map: NameMap<Rc<PropInfo>> =
+        name_map_with_capacity(parent.as_ref().map_or(0, |p| p.prop_map.len()) + ninstance_decls);
+    let nstatics = parent.as_ref().map_or(0, |p| p.static_props.len()) + nstatic_decls;
+    let mut static_props: Vec<StaticProp> = Vec::with_capacity(nstatics);
+    let mut static_map: NameMap<usize> = name_map_with_capacity(nstatics);
+    if let Some(p) = &parent {
+        for (k, pi) in &p.prop_map {
+            if pi.visibility() != flags::PRIVATE {
+                prop_map.insert(k.clone(), pi.clone());
+            }
+        }
+        for sp in &p.static_props {
+            if sp.flags & flags::PRIVATE == 0 {
+                static_map.insert(sp.name.clone(), static_props.len());
+                static_props.push(sp.clone());
+            }
         }
     }
     for (pd, owner, from_trait) in all_props {
@@ -3175,7 +3212,9 @@ fn build_class(
         let existing = prop_map.get(&pd.name).cloned();
         let slot = match &existing {
             Some(e) => {
-                if e.visibility() != flags::PRIVATE {
+                if e.visibility() == flags::PRIVATE {
+                    u32::try_from(props.len()).unwrap_or(0)
+                } else {
                     let weaker = match e.visibility() {
                         flags::PUBLIC => pd.flags & flags::VISIBILITY != flags::PUBLIC,
                         flags::PROTECTED => pd.flags & flags::PRIVATE != 0,
@@ -3249,8 +3288,6 @@ fn build_class(
                         }
                     }
                     e.slot
-                } else {
-                    u32::try_from(props.len()).unwrap_or(0)
                 }
             }
             None => u32::try_from(props.len()).unwrap_or(0),
@@ -3336,13 +3373,34 @@ fn build_class(
     }
     // Private props of this class must be accessible by name too.
 
-    // Methods.
-    let mut methods: HashMap<ZStr, Rc<Method>> = HashMap::new();
-    let mut method_order: Vec<ZStr> = Vec::new();
+    // Methods. A concrete class has every interface method among its own,
+    // trait or inherited ones; only an interface or an abstract class can
+    // take new entries from its interfaces.
+    let ntrait_methods = traits.iter().map(|t| t.method_order.len()).sum::<usize>();
+    let niface_methods = if decl.kind == ClassKind::Interface || cflag & cflags::ABSTRACT != 0 {
+        interfaces
+            .iter()
+            .map(|i| i.method_order.len())
+            .sum::<usize>()
+    } else {
+        0
+    };
+    let nmethods = decl.methods.len()
+        + if decl.kind == ClassKind::Enum {
+            crate::builtins::enum_methods().len()
+        } else {
+            0
+        }
+        + ntrait_methods
+        + decl.trait_rules.len()
+        + parent.as_ref().map_or(0, |p| p.method_order.len())
+        + niface_methods;
+    let mut methods: NameMap<Rc<Method>> = name_map_with_capacity(nmethods);
+    let mut method_order: Vec<ZStr> = Vec::with_capacity(nmethods);
     // Own methods first (for get_class_methods order), then trait methods,
     // then inherited ones.
     for md in &decl.methods {
-        let lc = ZStr::from(md.name.to_ascii_lowercase());
+        let lc = md.name.to_ascii_lowercase();
         let proto = inherited_proto_scope(parent.as_ref(), &lc, weak);
         let m = Rc::new(Method {
             name: md.name.clone(),
@@ -3402,7 +3460,7 @@ fn build_class(
         rules,
         methods: &mut methods,
         order: &mut method_order,
-        unfixed: HashMap::new(),
+        unfixed: name_map_with_capacity(ntrait_methods),
         checks: &mut link_out.trait_checks,
         warnings: &mut link_out.warnings,
         err,
@@ -3449,7 +3507,7 @@ fn build_class(
     let _ = is_anon;
     let hooks = parent.as_ref().and_then(|p| p.hooks.clone());
     Class {
-        lc_name: ZStr::from(name.to_ascii_lowercase()),
+        lc_name: name.to_ascii_lowercase(),
         name,
         flags: cflag,
         parent,
@@ -3466,7 +3524,7 @@ fn build_class(
         magic,
         defaults: RefCell::new(None),
         backing: decl.backing,
-        enum_cases: RefCell::new(HashMap::new()),
+        enum_cases: RefCell::new(NameMap::default()),
         decl: Some(decl.clone()),
         internal,
         attributes: decl.attributes.clone(),

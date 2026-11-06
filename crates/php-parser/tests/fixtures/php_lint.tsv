@@ -1295,7 +1295,7 @@ Zend/tests/declare/declare_006.phpt	0	FATAL	2	declare(ticks) value must be a lit
 Zend/tests/declare/declare_007.phpt	0	OK					
 Zend/tests/declare/gh18033_1.phpt	0	OK					
 Zend/tests/declare/gh18033_2.phpt	0	OK					
-Zend/tests/declare/gh19719.phpt	0	FATAL	6	strict_types declaration must be the very first statement in the script			
+Zend/tests/declare/gh19719.phpt	0	OK
 Zend/tests/deprecate_dollar_brace_string_interpolation_1.phpt	0	OK					
 Zend/tests/deprecate_namespace_class_constant.phpt	0	OK					
 Zend/tests/deprecated_identifiers/is/class_alias.phpt	0	OK					

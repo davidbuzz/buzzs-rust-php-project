@@ -3,6 +3,7 @@
 //! `zend_shutdown_executor_values()`; Zend/zend_hash.c `zend_hash_discard()`).
 
 use crate::class::cflags;
+use crate::func::Func;
 use crate::vm::Vm;
 use php_runtime::Value;
 
@@ -25,7 +26,13 @@ impl Vm {
     /// holding an object or a resource) are released, so that whatever they
     /// hold runs its [`Drop`]; the internal entries, which hold no state of
     /// the request, are leaked. Every other part of the VM, the global symbol
-    /// table, output, fibers and handlers, drops as usual.
+    /// table, output, fibers and handlers, drops as usual. The `static`
+    /// variables, static properties, constants and property defaults of the
+    /// user functions and classes are emptied first, as
+    /// `zend_shutdown_executor_values()` empties them, because the function
+    /// and class objects themselves may outlive their table entries (the
+    /// declaration tables of the compiled units refer to them and they to
+    /// the tables).
     ///
     /// The side effects of request shutdown have all run in [`Vm::shutdown`]
     /// already: shutdown functions, destructors, the extensions' request
@@ -59,6 +66,38 @@ impl Vm {
             loaded_extensions,
             ..
         } = self;
+        // `zend_shutdown_executor_values()`: "Release static properties and
+        // static variables prior to the final GC run, as they may hold GC
+        // roots", and the class constants and property defaults, which "may
+        // contain objects as well". They are released by hand rather than
+        // with their function or class: a declaration table and the op
+        // arrays declared in it refer to each other (`OpArray::decls`), so
+        // dropping a user function's table entry does not free it, and
+        // php-src frees every object left in the store at this point anyway
+        // (`zend_objects_store_free_object_storage()`).
+        for f in functions.values() {
+            if let Func::User(u) = f {
+                u.statics.borrow_mut().clear();
+            }
+        }
+        for c in classes.values() {
+            if c.flags & cflags::INTERNAL != 0 {
+                continue;
+            }
+            for m in c.methods.values() {
+                if let Func::User(u) = &m.func {
+                    u.statics.borrow_mut().clear();
+                }
+            }
+            for p in &c.static_props {
+                *p.cell.borrow_mut() = Value::Null;
+            }
+            for k in &c.consts {
+                *k.value.borrow_mut() = None;
+            }
+            *c.defaults.borrow_mut() = None;
+            c.enum_cases.borrow_mut().clear();
+        }
         // The user part of each table, which `zend_hash_discard()` unlinks:
         // released here, so that the objects and resources reachable only
         // from static properties, class constants, enum cases, `static`

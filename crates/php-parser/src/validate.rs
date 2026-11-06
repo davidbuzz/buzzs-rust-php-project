@@ -128,6 +128,11 @@ fn is_globals(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::Var(VarName::Name(id)) if id.name == b"GLOBALS")
 }
 
+/// `$GLOBALS[]`: `is_global_var_fetch` without a dimension.
+fn is_globals_append(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Dim { base, index: None } if is_globals(base))
+}
+
 const AUTO_GLOBALS: &[&[u8]] = &[
     b"GLOBALS",
     b"_GET",
@@ -775,6 +780,11 @@ impl Validator {
         self.ensure_writable(v)?;
         if is_this(v) {
             return err("Cannot unset $this", v.span.line);
+        }
+        // `zend_compile_unset` tests `is_global_var_fetch` before it compiles
+        // the variable, so a direct `unset($GLOBALS[])` keeps the `[]` message.
+        if is_globals_append(v) {
+            return err("Cannot use [] for unsetting", v.span.line);
         }
         self.var(v, Mode::Unset)
     }
@@ -1529,14 +1539,17 @@ impl Validator {
             ExprKind::Var(VarName::Expr(x)) => self.expr(x),
             ExprKind::Var(VarName::Name(_)) => Ok(()),
             ExprKind::Dim { base, index } => {
-                let base_mode = match mode {
-                    Mode::Read => Mode::Read,
-                    Mode::Isset => Mode::Isset,
-                    Mode::FuncArg => Mode::FuncArg,
-                    _ if const_based(base) == (true, true) => Mode::Read,
-                    _ => Mode::Write,
-                };
-                self.var(base, base_mode)?;
+                // `zend_delayed_compile_dim`: `$GLOBALS[]` is rejected before
+                // the base is compiled and before the `[]` checks below, in
+                // every fetch mode.
+                if index.is_none() && is_globals(base) {
+                    return err("Cannot append to $GLOBALS", line);
+                }
+                // The fetch type reaches the base unchanged
+                // (`zend_delayed_compile_var(var_ast, type)`): `[]` inside an
+                // `unset()` chain is an `[]` for unsetting, and `$a[]['k'] = 1`
+                // appends.
+                self.var(base, mode)?;
                 match index {
                     None => match mode {
                         Mode::Read | Mode::Isset => err("Cannot use [] for reading", line),
@@ -1553,7 +1566,9 @@ impl Validator {
                     && is_variable(object)
                     && !const_based(object).0
                 {
-                    self.var(object, Mode::Write)?;
+                    // `zend_delayed_compile_prop` fetches the object with the
+                    // same type (`unset($a[]->b)` is an `[]` for unsetting).
+                    self.var(object, mode)?;
                 } else if is_variable(object) {
                     self.var(object, Mode::Read)?;
                 } else {
@@ -1774,22 +1789,28 @@ impl Validator {
             }
             ExprKind::Isset(vars) => {
                 for v in vars {
-                    if !is_variable(v) {
+                    // `zend_is_variable()`: a call is not a variable here, and
+                    // the check precedes the compilation of the operand.
+                    if !is_variable(v) || is_call(v) {
                         return err(
                             "Cannot use isset() on the result of an expression (you can use \"null !== expression\" instead)",
                             v.span.line,
                         );
                     }
-                    if is_call(v) {
-                        self.expr(v)?;
-                    } else {
-                        self.var(v, Mode::Isset)?;
+                    // `zend_compile_isset_or_empty` tests `is_global_var_fetch`
+                    // before it compiles the variable.
+                    if is_globals_append(v) {
+                        return err("Cannot use [] for reading", v.span.line);
                     }
+                    self.var(v, Mode::Isset)?;
                 }
                 Ok(())
             }
             ExprKind::Empty(x) => {
                 if is_variable(x) && !is_call(x) {
+                    if is_globals_append(x) {
+                        return err("Cannot use [] for reading", x.span.line);
+                    }
                     self.var(x, Mode::Isset)
                 } else {
                     self.expr(x)

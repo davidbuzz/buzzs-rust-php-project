@@ -5,7 +5,7 @@
 
 use super::{rexc, set_name_props, str_arg, this, this_refl, zs, FnRef, Refl, PRIV, PUB, RO, STAT};
 use crate::builtins::classbuilder::ClassBuilder;
-use crate::class::{cflags, Class, ClassConst, ConstExpr, InternalKind, Magic, PropInfo};
+use crate::class::{cflags, Class, ClassConst, ConstExpr, InternalKind, Magic, NameMap, PropInfo};
 use crate::func::{flags, Args, Builtin, Func, Method};
 use crate::object;
 use crate::types::{mask, TypeDecl};
@@ -1321,7 +1321,7 @@ pub(crate) fn register_hook_type(vm: &mut Vm) {
             })
         };
         let consts = vec![mk_const("Get", "get"), mk_const("Set", "set")];
-        let const_map: HashMap<ZStr, usize> = consts
+        let const_map: NameMap<usize> = consts
             .iter()
             .enumerate()
             .map(|(i, c)| (c.name.clone(), i))
@@ -1340,9 +1340,9 @@ pub(crate) fn register_hook_type(vm: &mut Vm) {
             })
         };
         let props = vec![mk_prop("name", 0), mk_prop("value", 1)];
-        let prop_map: HashMap<ZStr, Rc<PropInfo>> =
+        let prop_map: NameMap<Rc<PropInfo>> =
             props.iter().map(|p| (p.name.clone(), p.clone())).collect();
-        let mut methods: HashMap<ZStr, Rc<Method>> = HashMap::new();
+        let mut methods: NameMap<Rc<Method>> = NameMap::default();
         let mut order = Vec::new();
         for (sig, fl, h) in crate::builtins::enum_methods() {
             let s = crate::builtins::sig::parse_sig(sig);
@@ -1391,13 +1391,13 @@ pub(crate) fn register_hook_type(vm: &mut Vm) {
             props,
             prop_map,
             static_props: Vec::new(),
-            static_map: HashMap::new(),
+            static_map: NameMap::default(),
             methods,
             method_order: order,
             magic,
             defaults: RefCell::new(None),
             backing: Some(mask::STRING),
-            enum_cases: RefCell::new(HashMap::new()),
+            enum_cases: RefCell::new(NameMap::default()),
             decl: None,
             internal: InternalKind::None,
             attributes: Vec::new(),

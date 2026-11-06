@@ -10,7 +10,7 @@
 //! default texts are classified by their first bytes instead of being
 //! copied or run through the standard library's pattern machinery.
 
-use crate::opcode::ParamInfo;
+use crate::opcode::{ParamInfo, PREFER_REF, UNCHECKED_TYPE};
 use crate::types::{mask, TypeDecl, TypeMember};
 use php_runtime::{Value, ZArray, ZStr};
 
@@ -41,19 +41,19 @@ const fn is_ascii_ws(c: u8) -> bool {
 #[inline(always)]
 #[allow(clippy::inline_always)] // see above: called ~15 times per signature
 fn trim(s: &str) -> &str {
-    let b = s.as_bytes();
+    let bytes = s.as_bytes();
     let mut start = 0;
-    let mut end = b.len();
-    while start < end && is_ascii_ws(b[start]) {
+    let mut end = bytes.len();
+    while start < end && is_ascii_ws(bytes[start]) {
         start += 1;
     }
-    while end > start && is_ascii_ws(b[end - 1]) {
+    while end > start && is_ascii_ws(bytes[end - 1]) {
         end -= 1;
     }
     if start == end {
         return "";
     }
-    if b[start] >= 0x80 || b[end - 1] >= 0x80 {
+    if bytes[start] >= 0x80 || bytes[end - 1] >= 0x80 {
         return trim_unicode(&s[start..end]);
     }
     // Only ASCII bytes were skipped, so both ends are char boundaries.
@@ -395,8 +395,9 @@ struct ParamParts<'a> {
     by_ref: bool,
     variadic: bool,
     sensitive: bool,
-    prefer_ref: bool,
-    unchecked: bool,
+    /// The [`NATIVE_PARAM_BITS`](crate::opcode::NATIVE_PARAM_BITS) of the
+    /// `@prefer-ref` and `@unchecked` markers.
+    native: u32,
 }
 
 /// Splits a parameter declaration.
@@ -413,8 +414,7 @@ fn split_param(p: &str) -> ParamParts<'_> {
     // `@unchecked` (an arginfo-only type). They all start with `#` or `@`,
     // which no type or `$name` does.
     let mut sensitive = false;
-    let mut prefer_ref = false;
-    let mut unchecked = false;
+    let mut native = 0;
     while matches!(decl.as_bytes().first(), Some(b'#' | b'@')) {
         if let Some(r) = decl
             .strip_prefix("#[\\SensitiveParameter]")
@@ -423,10 +423,10 @@ fn split_param(p: &str) -> ParamParts<'_> {
             sensitive = true;
             decl = r.trim_start();
         } else if let Some(r) = decl.strip_prefix("@prefer-ref") {
-            prefer_ref = true;
+            native |= PREFER_REF;
             decl = r.trim_start();
         } else if let Some(r) = decl.strip_prefix("@unchecked") {
-            unchecked = true;
+            native |= UNCHECKED_TYPE;
             decl = r.trim_start();
         } else {
             break;
@@ -456,8 +456,7 @@ fn split_param(p: &str) -> ParamParts<'_> {
         by_ref,
         variadic,
         sensitive,
-        prefer_ref,
-        unchecked,
+        native,
     }
 }
 
@@ -531,13 +530,6 @@ pub(crate) fn parse_sig_borrowed(sig: &str) -> Sig<&str> {
         if p.variadic {
             variadic = true;
         }
-        let mut native_bits = 0;
-        if p.prefer_ref {
-            native_bits |= crate::opcode::PREFER_REF;
-        }
-        if p.unchecked {
-            native_bits |= crate::opcode::UNCHECKED_TYPE;
-        }
         if p.default.is_none() && !p.variadic {
             required = u32::try_from(i + 1).unwrap_or(0);
         }
@@ -548,7 +540,7 @@ pub(crate) fn parse_sig_borrowed(sig: &str) -> Sig<&str> {
             ty,
             has_default: p.default.is_some(),
             default_text: p.default.map(str::to_string),
-            promote: native_bits,
+            promote: p.native,
             sensitive: p.sensitive,
             default_expr: None,
             // The generated arginfo registers the marker as a real parameter
@@ -715,11 +707,9 @@ mod reference {
             "php_int_max" => return Some(Value::Int(i64::MAX)),
             "php_int_min" => return Some(Value::Int(i64::MIN)),
             "e_all" => return Some(Value::Int(30719)),
-            "e_error" => return Some(Value::Int(1)),
+            "e_error" | "php_round_half_up" => return Some(Value::Int(1)),
             "e_user_notice" => return Some(Value::Int(1024)),
-            "php_round_half_up" => return Some(Value::Int(1)),
-            "sort_regular" => return Some(Value::Int(0)),
-            "count_normal" => return Some(Value::Int(0)),
+            "sort_regular" | "count_normal" => return Some(Value::Int(0)),
             "ent_quotes | ent_substitute | ent_html401" => return Some(Value::Int(3 | 8)),
             _ => {}
         }
@@ -813,6 +803,7 @@ mod reference {
 mod equivalence_tests {
     use super::{may_be_float, parse_default, parse_int_literal, parse_sig, parse_type};
     use super::{reference, split_param, trim, ParamSplit};
+    use crate::opcode::{PREFER_REF, UNCHECKED_TYPE};
     use crate::types::mask;
 
     #[test]
@@ -1003,7 +994,7 @@ mod equivalence_tests {
         assert_eq!(p.name, "name");
         assert_eq!(p.default, Some("null"));
         assert!(p.sensitive && p.by_ref && p.variadic);
-        assert!(!p.prefer_ref && !p.unchecked);
+        assert_eq!(p.native, 0);
         let p = split_param("int ...&$refs");
         assert_eq!(p.ty, "int");
         assert!(p.by_ref && p.variadic);
@@ -1013,7 +1004,8 @@ mod equivalence_tests {
         let p = split_param("@prefer-ref #[SensitiveParameter] @unchecked array &$a = []");
         assert_eq!(p.ty, "array");
         assert_eq!(p.default, Some("[]"));
-        assert!(p.prefer_ref && p.sensitive && p.unchecked && p.by_ref);
+        assert!(p.sensitive && p.by_ref);
+        assert_eq!(p.native, PREFER_REF | UNCHECKED_TYPE);
         let p = split_param("#[Other] Foo $x");
         assert_eq!(p.ty, "#[Other] Foo");
         assert!(!p.sensitive);

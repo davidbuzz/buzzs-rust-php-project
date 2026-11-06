@@ -355,7 +355,7 @@ impl Parser<'_> {
                 let mut vars = Vec::new();
                 loop {
                     let v = self.expect1(T::Variable)?;
-                    let name = Ident::new(self.text(&v)[1..].to_vec(), v.span);
+                    let name = Ident::new(v.text()[1..].to_vec(), v.span);
                     let default = if self.eat(T::Equals).is_some() {
                         Some(self.parse_expr()?)
                     } else {
@@ -396,7 +396,7 @@ impl Parser<'_> {
             }
             T::InlineHtml => {
                 let t = self.bump();
-                StmtKind::InlineHtml(self.text(&t).to_vec())
+                StmtKind::InlineHtml(t.text().to_vec())
             }
             T::Unset => {
                 self.bump();
@@ -812,13 +812,7 @@ impl Parser<'_> {
                         line,
                     ));
                 }
-                if !self.multibyte {
-                    self.warnings.push(crate::ast::Diagnostic {
-                        level: crate::ast::DiagnosticLevel::CompileWarning,
-                        message: "declare(encoding=...) ignored because Zend multibyte feature is turned off by settings".to_owned(),
-                        line,
-                    });
-                } else {
+                if self.multibyte {
                     let name = match &d.value.kind {
                         ExprKind::Int(value) => value.to_string().into_bytes(),
                         ExprKind::Float(value) => {
@@ -848,6 +842,12 @@ impl Parser<'_> {
                             line,
                         });
                     }
+                } else {
+                    self.warnings.push(crate::ast::Diagnostic {
+                        level: crate::ast::DiagnosticLevel::CompileWarning,
+                        message: "declare(encoding=...) ignored because Zend multibyte feature is turned off by settings".to_owned(),
+                        line,
+                    });
                 }
             }
         }
@@ -895,7 +895,7 @@ impl Parser<'_> {
             }
             let var = if self.peek() == T::Variable {
                 let v = self.bump();
-                Some(Ident::new(self.text(&v)[1..].to_vec(), v.span))
+                Some(Ident::new(v.text()[1..].to_vec(), v.span))
             } else {
                 None
             };
@@ -982,7 +982,7 @@ impl Parser<'_> {
                 } else {
                     NameKind::Unqualified
                 },
-                name: self.text(&t).to_vec(),
+                name: t.text().to_vec(),
                 span: t.span,
             })
         } else {
