@@ -2286,7 +2286,10 @@ impl Vm {
                 self.warning(&crate::exec::undefined_var_msg(&name))?;
             }
         }
-        let rw_fetch = matches!(wop, WOp::FetchRw);
+        // Read by `Vm::fetch_rw` for a place ending in a dimension (a
+        // property's `++` on the temporary throws instead).
+        let rw_fetch =
+            matches!(wop, WOp::FetchRw) && matches!(segs.last(), Some(RSeg::Dim(_) | RSeg::Append));
         let r = if last {
             match wop {
                 WOp::MakeRef => Ok(Value::Reference(PhpRef::new(Value::Null))),
