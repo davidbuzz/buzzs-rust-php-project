@@ -2,7 +2,7 @@
 //! attribution of functions, classes and constants to extensions).
 //!
 //! Their keys are the names of internal symbols, not request data, so they
-//! need no protection against chosen-key collisions. SipHash, the standard
+//! need no protection against chosen-key collisions. `SipHash`, the standard
 //! library's default, took about 15 % of start-up instructions. This is
 //! rustc's `FxHasher` word mix, finished with a folded 128-bit multiply so
 //! that the low bits hashbrown picks buckets with depend on every input
