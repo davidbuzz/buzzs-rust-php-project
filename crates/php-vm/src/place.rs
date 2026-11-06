@@ -1035,7 +1035,15 @@ fn store_self_reference(segs: &[RSeg], src: &PhpRef) -> Option<Value> {
     }
     let mut b = src.try_borrow_mut()?;
     let stored = match &mut *b {
-        Value::Array(a) => a.store_self_at(&path),
+        Value::Array(a) => {
+            let stored = a.store_self_at(&path);
+            if stored.is_some() {
+                // The collector tracks arrays that contain themselves, so
+                // the cycle is freed like php-src's array roots.
+                crate::gc::self_array_created(a);
+            }
+            stored
+        }
         _ => None,
     };
     drop(b);

@@ -238,7 +238,7 @@ fn freed_objects_leave_the_root_buffer() {
         b"<?php class Q { function m() {} }\nfor ($i = 0; $i < 1000; $i++) { $q = new Q; $q->m(); }\necho 'ok';",
         "t.php",
     );
-    let len = super::with_state(|s| s.roots.entries.len()).unwrap_or_default();
+    let len = super::with_state(|s| s.roots.slots.len()).unwrap_or_default();
     drop(vm);
     assert_eq!(sink.0.borrow().as_slice(), b"ok");
     assert!(len < 16, "{len} buffered entries");
@@ -402,4 +402,132 @@ fn large_cycle_is_collected() {
          var_dump(gc_collect_cycles());\n\
          $o = new N; var_dump(spl_object_id($o) <= 10000);");
     assert_eq!(out, "int(10000)\nbool(true)\n");
+}
+
+/// The cycle class of the root-buffer order tests: destructors print ids.
+const CYCLE: &str =
+    "class C { public $self; function __construct(public $id) { $this->self = $this; }\n\
+     function __destruct() { echo $this->id; } }\n";
+
+/// destructors_005: a live root in the first slot leaves the buffer when
+/// the collection finds it black, and `gc_compact` moves the last root
+/// into the hole: the garbage is destructed in the order 2, 0, 1.
+#[test]
+fn live_root_hole_takes_the_last_root() {
+    let out = run(&format!(
+        "<?php {CYCLE}$x = new stdClass; $y = $x; unset($y);\n\
+         new C(0); new C(1); new C(2); gc_collect_cycles();"
+    ));
+    assert_eq!(out, "201");
+}
+
+/// `new` of a class with a native constructor buffers the object
+/// (`ZEND_CALL_RELEASE_THIS`), as a user constructor does.
+#[test]
+fn native_constructor_buffers_the_new_object() {
+    let out = run(&format!(
+        "<?php {CYCLE}$y = new ArrayObject([]);\n\
+         new C(0); new C(1); new C(2); gc_collect_cycles();"
+    ));
+    assert_eq!(out, "201");
+}
+
+/// A closure call releases the closure (`ZEND_CALL_CLOSURE`): with the
+/// object its body created with a native constructor, two live roots come
+/// before the cycles, and the last two roots move into their slots.
+#[test]
+fn closure_call_buffers_the_closure() {
+    let out = run(&format!(
+        "<?php {CYCLE}function t($mk) {{ $x = $mk(); new C(0); new C(1); new C(2); gc_collect_cycles(); echo \"\\n\"; }}\n\
+         t(fn() => new stdClass); gc_collect_cycles(); t(fn() => new ArrayObject([]));"
+    ));
+    assert_eq!(out, "201\n210\n");
+}
+
+/// `$this->m()` passes `$this` without a reference of its own: returning
+/// from it buffers no root.
+#[test]
+fn this_method_call_buffers_no_root() {
+    let out = run(&format!(
+        "<?php {CYCLE}class A {{ function run() {{ $this->h(); new C(0); new C(1); new C(2); gc_collect_cycles(); }} function h() {{}} }}\n\
+         $a = new A; $a->run();"
+    ));
+    assert_eq!(out, "012");
+}
+
+/// The slot of a freed root is the next one reused (LIFO unused list).
+#[test]
+fn freed_root_slot_is_reused() {
+    let out = run(&format!(
+        "<?php {CYCLE}new C(0); $f = new stdClass; $g = $f; unset($g); new C(1);\n\
+         unset($f); new C(2); gc_collect_cycles();"
+    ));
+    assert_eq!(out, "021");
+}
+
+/// Garbage that is no root is destructed in `gc_collect_white`'s order:
+/// the first child is visited next, the others are stacked (php 1, 3, 2).
+#[test]
+fn non_root_garbage_follows_the_collect_white_walk() {
+    let out = run(
+        "<?php class E { public $id; public $back; function __destruct() { echo $this->id; } }\n\
+         $r = new stdClass; $r->self = $r;\n\
+         $r->a = new E; $r->a->id = 1; $r->a->back = $r;\n\
+         $r->b = new E; $r->b->id = 2; $r->c = new E; $r->c->id = 3;\n\
+         unset($r); gc_collect_cycles();",
+    );
+    assert_eq!(out, "132");
+}
+
+/// The buffer compaction (`gc_compact`): the first hole gets the last
+/// entry, until the used slots are the first `num_roots`.
+#[test]
+fn compaction_fills_holes_with_the_last_entries() {
+    let sink = Sink::default();
+    let vm = Vm::new(&VmOptions::default(), Box::new(sink));
+    let objs: Vec<php_runtime::Obj> = (0..5)
+        .map(|_| {
+            crate::object::new_object(vm.find_class(b"stdClass").expect("stdClass"), Vec::new())
+        })
+        .collect();
+    let mut b = super::RootBuffer::default();
+    for o in &objs {
+        assert!(b.push(o).is_some());
+    }
+    assert!(b.push(&objs[0]).is_none());
+    // Free slots 1 and 2: [A, _, _, D, E] becomes [A, E, D].
+    b.release(1);
+    b.release(2);
+    // The last freed slot is reused first.
+    let extra =
+        crate::object::new_object(vm.find_class(b"stdClass").expect("stdClass"), Vec::new());
+    assert_eq!(b.push(&extra), Some(2));
+    b.release(2);
+    b.compact();
+    let order: Vec<usize> = b
+        .roots()
+        .iter()
+        .map(|(_, o)| {
+            objs.iter()
+                .position(|x| php_runtime::Obj::ptr_eq(x, o))
+                .unwrap_or(99)
+        })
+        .collect();
+    assert_eq!(order, vec![0, 4, 3]);
+    assert_eq!((b.num_roots, b.slots.len()), (3, 3));
+    drop(vm);
+}
+
+/// A registered self-containing array that is still referenced is left
+/// alone by a collection.
+#[test]
+fn live_registered_array_is_kept() {
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    let a = php_runtime::ZArray::from_values([php_runtime::Value::Int(1)]);
+    super::self_array_created(&a);
+    vm.run_script(b"<?php var_dump(gc_collect_cycles());", "t.php");
+    drop(vm);
+    assert_eq!(sink.0.borrow().as_slice(), b"int(0)\n");
+    assert_eq!(a.len(), 1);
 }

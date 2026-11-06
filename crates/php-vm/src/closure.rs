@@ -222,10 +222,13 @@ impl Vm {
         object::internal::<ClosureData, _>(o, |d| d.clone())
     }
 
-    /// A pending call for invoking a closure object.
+    /// A pending call for invoking a closure object. Built from a borrow of
+    /// the closure's data: a copy would clone the bound variables and
+    /// release the clones afterwards, which php-src never does here (a
+    /// released reference handle would be buffered as a GC possible root).
+    #[allow(clippy::unused_self)] // method-style API used across the VM
     pub(crate) fn closure_call(&self, o: &Obj) -> Option<PendingCall> {
-        let d = self.closure_data(o)?;
-        Some(PendingCall {
+        object::internal::<ClosureData, _>(o, |d| PendingCall {
             this: d.this.clone(),
             scope: d.scope.clone(),
             called: d.called.clone(),

@@ -13,6 +13,10 @@
 //!    `gc_collect_cycles()` additionally scans every live object (the object
 //!    store is enumerable, [`crate::object::live_objects`]), which makes
 //!    collection robust against release sites that were never instrumented.
+//!    Object roots are kept in php-src's root buffer layout ([`RootBuffer`]:
+//!    freed slots are reused last-in first-out, `gc_compact` fills holes
+//!    with the last entries), because the buffer order is the order in
+//!    which garbage is destructed.
 //! 2. **Trial deletion.** Rust cannot decrement an `Rc` without freeing, so
 //!    instead of php-src's "mark grey" pass the collector counts, for every
 //!    candidate node, the references that come from *other candidate nodes*
@@ -98,118 +102,229 @@ impl std::fmt::Debug for RootProvider {
     }
 }
 
-/// The root buffer for objects (`GC_G(buf)`): weak handles, deduplicated by
-/// address so that a node is buffered at most once (`GC_INFO != 0`).
-#[derive(Default)]
+/// No slot (`GC_INVALID`).
+const NO_SLOT: usize = usize::MAX;
+
+/// The object root buffer (`GC_G(buf)`), laid out like php-src's: slot `i`
+/// is php-src's `GC_FIRST_ROOT + i`.
+///
+/// * A slot holds a weak handle of a buffered object (`GC_ROOT`), a dead
+///   weak handle standing for garbage of the running collection
+///   (`GC_GARBAGE`, see [`RootBuffer::push_garbage`]), or nothing
+///   (`GC_UNUSED`).
+/// * Removing a root (`gc_remove_from_roots`) puts its slot on the unused
+///   list, and the next root takes the most recently freed slot
+///   (`GC_FETCH_UNUSED`) before the buffer grows (`GC_FETCH_NEXT_UNUSED`).
+/// * [`RootBuffer::compact`] (`gc_compact`) moves the last entries into the
+///   holes.
+///
+/// A collection visits the roots in slot order, so this layout decides the
+/// order in which garbage is destructed (`Zend/tests/fibers/destructors_005`).
+/// Each object is buffered at most once (`GC_INFO != 0`): `index` maps a
+/// buffered handle's address to its slot (a weak handle keeps the address
+/// from being reused while it is buffered).
 struct RootBuffer {
-    entries: Vec<Weak<dyn PhpObject>>,
+    slots: Vec<Option<Weak<dyn PhpObject>>>,
+    /// The unused list (`GC_G(unused)`): freed slots, the last freed on top.
+    unused: Vec<usize>,
+    /// Used slots (`GC_G(num_roots)`).
+    num_roots: usize,
     index: HashMap<usize, usize>,
-    /// Compact (drop dead entries) when `entries` grows past this, so that
-    /// the buffer stays bounded while no collection runs (GC disabled).
-    compact_at: usize,
+}
+
+impl Default for RootBuffer {
+    fn default() -> Self {
+        RootBuffer {
+            slots: Vec::new(),
+            unused: Vec::new(),
+            num_roots: 0,
+            index: HashMap::new(),
+        }
+    }
+}
+
+/// The address a buffered weak handle is indexed by ([`Obj::addr`]).
+fn weak_addr(w: &Weak<dyn PhpObject>) -> usize {
+    w.as_ptr().cast::<u8>() as usize
 }
 
 impl RootBuffer {
-    /// Buffers `o`; `false` if it already is.
-    fn push(&mut self, o: &Obj) -> bool {
-        if self.entries.len() >= self.compact_at.max(4096) {
-            self.compact();
+    /// `GC_HAS_UNUSED()`.
+    fn has_unused(&self) -> bool {
+        !self.unused.is_empty()
+    }
+
+    /// `GC_G(first_unused) - GC_FIRST_ROOT`: the slots handed out so far.
+    fn first_unused(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Whether `o` is buffered.
+    fn contains(&self, o: &Obj) -> bool {
+        self.index.contains_key(&o.addr())
+    }
+
+    /// `GC_FETCH_UNUSED()`, else `GC_FETCH_NEXT_UNUSED()`.
+    fn fetch(&mut self) -> usize {
+        while let Some(i) = self.unused.pop() {
+            if matches!(self.slots.get(i), Some(None)) {
+                return i;
+            }
         }
-        let addr = o.addr();
-        if let Some(&i) = self.index.get(&addr) {
-            if let Some(e) = self.entries.get(i) {
-                if e.strong_count() > 0 && std::ptr::addr_eq(e.as_ptr(), Rc::as_ptr(o.rc())) {
-                    return false;
+        self.slots.push(None);
+        self.slots.len() - 1
+    }
+
+    /// Buffers `o` (`gc_possible_root`); its slot, or `None` if it already
+    /// is buffered.
+    #[cfg(test)]
+    fn push(&mut self, o: &Obj) -> Option<usize> {
+        if self.contains(o) {
+            return None;
+        }
+        Some(self.insert_new(o))
+    }
+
+    /// Buffers `o`, which is not buffered; returns its slot.
+    fn insert_new(&mut self, o: &Obj) -> usize {
+        let i = self.fetch();
+        self.slots[i] = Some(Rc::downgrade(o.rc()));
+        self.index.insert(o.addr(), i);
+        self.num_roots += 1;
+        i
+    }
+
+    /// Takes a slot for garbage that is no possible root (`gc_add_garbage`
+    /// of an array, or of an object without destructor): it only holds its
+    /// place in the buffer until the garbage is freed.
+    fn push_garbage(&mut self) -> usize {
+        let i = self.fetch();
+        let empty: Weak<dyn PhpObject> = Weak::<ObjBox>::new();
+        self.slots[i] = Some(empty);
+        self.num_roots += 1;
+        i
+    }
+
+    /// `gc_remove_from_roots`: slot `i` goes to the unused list.
+    fn release(&mut self, i: usize) {
+        match self.slots.get(i) {
+            Some(Some(w)) => {
+                let addr = weak_addr(w);
+                if self.index.get(&addr) == Some(&i) {
+                    self.index.remove(&addr);
                 }
             }
-            // A dead entry whose address was reused: replace it.
-            if let Some(slot) = self.entries.get_mut(i) {
-                *slot = Rc::downgrade(o.rc());
-                return true;
-            }
+            _ => return,
         }
-        self.index.insert(addr, self.entries.len());
-        self.entries.push(Rc::downgrade(o.rc()));
-        true
+        self.slots[i] = None;
+        self.unused.push(i);
+        self.num_roots = self.num_roots.saturating_sub(1);
     }
 
-    /// Drops the entry of the freed handle at `addr` (`gc_remove_from_buffer`);
-    /// `false` if it was not buffered.
-    /// The order of the other entries is kept (it is the collection order);
-    /// trailing dead entries are popped so the buffer does not grow while
-    /// short-lived objects come and go.
+    /// Releases slot `i` if it holds no live object: a garbage placeholder
+    /// (or a root freed without notice), never a root buffered since.
+    fn release_dead(&mut self, i: usize) {
+        if matches!(self.slots.get(i), Some(Some(w)) if w.strong_count() == 0) {
+            self.release(i);
+        }
+    }
+
+    /// `GC_REMOVE_FROM_BUFFER` of the handle at `addr`; `false` if it was
+    /// not buffered.
     fn remove(&mut self, addr: usize) -> bool {
-        let Some(i) = self.index.remove(&addr) else {
-            return false;
-        };
-        if let Some(slot) = self.entries.get_mut(i) {
-            let empty: Weak<dyn PhpObject> = Weak::<ObjBox>::new();
-            *slot = empty;
-        }
-        while let Some(last) = self.entries.last() {
-            if last.strong_count() > 0 {
-                break;
+        match self.index.get(&addr).copied() {
+            Some(i) => {
+                self.release(i);
+                true
             }
-            let a = last.as_ptr().cast::<u8>() as usize;
-            let j = self.entries.len() - 1;
-            if self.index.get(&a) == Some(&j) {
-                self.index.remove(&a);
-            }
-            self.entries.pop();
+            None => false,
         }
-        true
     }
 
+    /// Releases the slots of roots that were freed without notice.
+    fn drop_dead(&mut self) {
+        let dead: Vec<usize> = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.as_ref().is_some_and(|w| w.strong_count() == 0))
+            .map(|(i, _)| i)
+            .collect();
+        for i in dead {
+            self.release(i);
+        }
+    }
+
+    /// `gc_compact`: moves the last entries into the holes (two fingers,
+    /// the first hole gets the last entry) until the used slots are
+    /// `0..num_roots`; empties the unused list.
     fn compact(&mut self) {
-        self.entries.retain(|e| e.strong_count() > 0);
-        self.index.clear();
-        for (i, e) in self.entries.iter().enumerate() {
-            self.index.insert(e.as_ptr().cast::<u8>() as usize, i);
-        }
-        self.compact_at = self.entries.len() * 2;
-    }
-
-    fn live_len(&self) -> usize {
-        self.entries.iter().filter(|e| e.strong_count() > 0).count()
-    }
-
-    /// Moves the live entries out, weakly (see [`Frozen`]).
-    fn take_weak(&mut self) -> Vec<Weak<dyn PhpObject>> {
-        self.index.clear();
-        let mut v = std::mem::take(&mut self.entries);
-        v.retain(|e| e.strong_count() > 0);
-        v
-    }
-
-    /// Puts entries taken by [`RootBuffer::take_weak`] back ahead of the
-    /// current ones; freed ones are dropped, re-buffered ones kept once.
-    fn restore_weak(&mut self, older: Vec<Weak<dyn PhpObject>>) {
-        if older.is_empty() {
+        let len = self.slots.len();
+        if self.num_roots == len {
             return;
         }
-        let newer = std::mem::take(&mut self.entries);
-        self.index.clear();
-        for e in older.into_iter().chain(newer) {
-            if e.strong_count() == 0 {
+        if self.num_roots > 0 {
+            // `end = GC_IDX2PTR(GC_G(num_roots))`: the last slot kept.
+            let end = self.num_roots - 1;
+            let mut free = 0;
+            let mut scan = len - 1;
+            while free < scan {
+                while free < len && self.slots[free].is_some() {
+                    free += 1;
+                }
+                while scan > 0 && self.slots[scan].is_none() {
+                    scan -= 1;
+                }
+                if scan > free && free < len {
+                    let moved = self.slots[scan].take();
+                    if let Some(w) = &moved {
+                        let addr = weak_addr(w);
+                        if self.index.get(&addr) == Some(&scan) {
+                            self.index.insert(addr, free);
+                        }
+                    }
+                    self.slots[free] = moved;
+                    free += 1;
+                    scan -= 1;
+                    if scan <= end {
+                        break;
+                    }
+                }
+            }
+        }
+        self.slots.truncate(self.num_roots);
+        self.unused.clear();
+    }
+
+    /// The buffered objects in slot order, with their slots.
+    fn roots(&self) -> Vec<(usize, Obj)> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                s.as_ref()
+                    .and_then(Weak::upgrade)
+                    .map(|rc| (i, Obj::from_rc(rc)))
+            })
+            .collect()
+    }
+
+    /// Buffers `later`'s roots after these (roots buffered while a due run
+    /// waited for its safe point: php-src buffers them after the run).
+    fn append(&mut self, later: RootBuffer) {
+        for w in later.slots.into_iter().flatten() {
+            if w.strong_count() == 0 {
                 continue;
             }
-            let addr = e.as_ptr().cast::<u8>() as usize;
+            let addr = weak_addr(&w);
             if self.index.contains_key(&addr) {
                 continue;
             }
-            self.index.insert(addr, self.entries.len());
-            self.entries.push(e);
+            let i = self.fetch();
+            self.slots[i] = Some(w);
+            self.index.insert(addr, i);
+            self.num_roots += 1;
         }
-        self.compact_at = self.compact_at.max(self.entries.len() * 2);
-    }
-
-    fn take(&mut self) -> Vec<Value> {
-        self.index.clear();
-        std::mem::take(&mut self.entries)
-            .into_iter()
-            .filter_map(|e| e.upgrade())
-            .map(|rc| Value::Object(Obj::from_rc(rc)))
-            .collect()
     }
 }
 
@@ -220,13 +335,13 @@ impl RootBuffer {
 /// then and the roots released meanwhile are buffered separately.
 #[derive(Default)]
 struct Frozen {
-    objs: Vec<Weak<dyn PhpObject>>,
+    objs: RootBuffer,
     refs: php_runtime::ref_roots::Stash,
 }
 
 impl Frozen {
     fn len(&self) -> usize {
-        self.objs.iter().filter(|e| e.strong_count() > 0).count() + self.refs.len()
+        self.objs.num_roots + self.refs.len()
     }
 }
 
@@ -252,9 +367,15 @@ struct GcState {
     buf_size: usize,
     /// Object roots.
     roots: RootBuffer,
-    /// Possible roots recorded since the buffer was last emptied (also
-    /// those buffered by providers): drives the threshold.
-    pending: usize,
+    /// Possible roots buffered by providers (references) since their
+    /// buffers were last emptied: with the object slots handed out, they
+    /// drive the threshold.
+    ref_pending: usize,
+    /// Arrays that were made to contain themselves (see
+    /// [`self_array_created`]), weakly; dead entries are pruned as it grows.
+    self_arrays: Vec<php_runtime::WeakZArray>,
+    /// Prune [`GcState::self_arrays`] when it grows past this.
+    self_arrays_prune_at: usize,
     /// The buffer reached the threshold: an automatic run is due at the
     /// next safe point (`gc_possible_root_when_full`).
     due: bool,
@@ -284,7 +405,9 @@ impl Default for GcState {
             threshold: THRESHOLD_DEFAULT,
             buf_size: DEFAULT_BUF_SIZE,
             roots: RootBuffer::default(),
-            pending: 0,
+            ref_pending: 0,
+            self_arrays: Vec::new(),
+            self_arrays_prune_at: 16,
             due: false,
             frozen: None,
             providers: Vec::new(),
@@ -502,36 +625,87 @@ fn root_obj(o: &Obj) {
     if o.refcount() < 2 || o.downcast_ref::<ObjBox>().is_none() {
         return;
     }
+    with_state(|s| buffer_obj(s, o));
+}
+
+/// `gc_possible_root` of an object: buffers `o` unless it already is
+/// (`GC_MAY_LEAK`); returns its slot. Roots released by destructors during
+/// a run are kept for the next one (they never trigger a nested run).
+fn buffer_obj(s: &mut GcState, o: &Obj) -> Option<usize> {
+    if s.protected || s.roots.contains(o) {
+        return None;
+    }
+    if !s.roots.has_unused() {
+        // May set the buffered roots aside (the new root then starts an
+        // empty buffer).
+        note_new_slot(s);
+    }
+    let i = s.roots.insert_new(o);
+    let d = crate::object::data(o);
+    d.flags
+        .set(d.flags.get() | crate::object::oflags::GC_BUFFERED);
+    Some(i)
+}
+
+/// `a` was made to contain itself by value (`$t = &$a; $a[] = $t;`,
+/// `ZArray::store_self_at`): a cycle of arrays alone. php-src finds it
+/// through the array's root buffer entry (arrays are possible roots there);
+/// here every run looks at the arrays registered by this call, and frees
+/// those found unreachable by emptying them (`zend_hash_destroy` of a
+/// garbage array whatever its count). Cold: call it where such an array
+/// is made.
+#[cold]
+#[inline(never)]
+pub fn self_array_created(a: &php_runtime::ZArray) {
     with_state(|s| {
-        // Roots released by destructors during a run are kept for the
-        // next one (they never trigger a nested run).
-        if !s.protected && s.roots.push(o) {
-            let d = crate::object::data(o);
-            d.flags
-                .set(d.flags.get() | crate::object::oflags::GC_BUFFERED);
-            if !s.active {
-                note_new_root(s, Some(o));
-            }
+        if s.self_arrays.len() >= s.self_arrays_prune_at {
+            s.self_arrays.retain(php_runtime::WeakZArray::is_alive);
+            s.self_arrays_prune_at = (s.self_arrays.len() * 2).max(16);
         }
+        s.self_arrays.push(a.downgrade());
     });
 }
 
+/// The registered self-containing arrays still alive (pruning the others).
+fn take_self_arrays(s: &mut GcState) -> Vec<php_runtime::ZArray> {
+    s.self_arrays.retain(php_runtime::WeakZArray::is_alive);
+    s.self_arrays_prune_at = (s.self_arrays.len() * 2).max(16);
+    s.self_arrays
+        .iter()
+        .filter_map(php_runtime::WeakZArray::upgrade)
+        .collect()
+}
+
+/// `OBJ_RELEASE(Z_OBJ(call->This))` after a native constructor called by
+/// `new` (`ZEND_CALL_RELEASE_THIS`): the new object, still held by the
+/// result of `new`, becomes a possible root. Call it before dropping the
+/// call's handle.
+pub(crate) fn released_ctor_this(o: &Obj) {
+    root_obj(o);
+}
+
 /// A buffered object handle (`oflags::GC_BUFFERED`) at `addr` is being
-/// freed: its root buffer entry goes (`GC_REMOVE_FROM_BUFFER`).
+/// freed: its root buffer entry goes (`GC_REMOVE_FROM_BUFFER`), and its
+/// slot is the next one reused.
 pub(crate) fn forget_root(addr: usize) {
     with_state(|s| {
-        // The freed slot no longer counts towards the threshold
-        // (`gc_remove_from_buffer` decrements `num_roots`).
-        if s.roots.remove(addr) {
-            s.pending = s.pending.saturating_sub(1);
+        s.roots.remove(addr);
+        if let Some(f) = &mut s.frozen {
+            f.objs.remove(addr);
         }
     });
 }
 
 /// Records the objects held by the variables of a frame being torn down
-/// (`i_free_compiled_variables` → `gc_check_possible_root`). Call it just
-/// before dropping a returning frame.
-pub fn frame_released(f: &crate::vm::Frame) {
+/// (`i_free_compiled_variables` → `gc_check_possible_root`), then the
+/// handle the call held (`zend_leave_helper`): a closure's object
+/// (`ZEND_CALL_CLOSURE`), or `$this` of `new` and of a method called on a
+/// variable or a temporary (`ZEND_CALL_RELEASE_THIS`). `$this->m()`,
+/// `parent::m()`/`self::m()` (same `$this` as `caller_this`, the calling
+/// frame's) and calls made by internal code (`zend_call_function`) pass
+/// `$this` without a reference of their own, so releasing it is no
+/// possible root. Call it just before dropping a returning frame.
+pub fn frame_released(f: &crate::vm::Frame, caller_this: Option<&Obj>) {
     if Rc::strong_count(&f.vars) != 1 {
         return;
     }
@@ -540,8 +714,12 @@ pub fn frame_released(f: &crate::vm::Frame) {
             possible_root(v);
         }
     }
-    if let Some(this) = &f.this {
-        root_obj(this);
+    if let Some(c) = &f.closure {
+        root_obj(c);
+    } else if let Some(this) = &f.this {
+        if !f.called_from_internal && !caller_this.is_some_and(|t| Obj::ptr_eq(t, this)) {
+            root_obj(this);
+        }
     }
 }
 
@@ -550,58 +728,54 @@ pub fn frame_released(f: &crate::vm::Frame) {
 /// previous roots only, like `gc_possible_root_when_full`).
 pub fn note_possible_root() {
     with_state(|s| {
-        if !s.protected && !s.active {
-            note_new_root(s, None);
+        if s.protected {
+            return;
         }
+        if !s.roots.has_unused() {
+            note_new_slot(s);
+        }
+        s.ref_pending += 1;
     });
 }
 
-/// Counts a new root; `newest` is an object root already pushed to the
-/// buffer (a reference root is buffered after this call).
-fn note_new_root(s: &mut GcState, newest: Option<&Obj>) {
-    s.pending += 1;
-    if s.pending > s.buf_size {
+/// A new root is about to take a slot past those handed out (no freed slot
+/// to reuse, `GC_HAS_UNUSED()` is false): the buffer grows when full, and
+/// with `threshold - 1` slots handed out the new root triggers a run
+/// (`GC_HAS_NEXT_UNUSED_UNDER_THRESHOLD`). The run cannot happen inside the
+/// release (it may be in `Drop`): it is due at the next safe point, over
+/// the roots buffered until now (frozen), not the new one.
+fn note_new_slot(s: &mut GcState) {
+    let used = s.roots.first_unused() + s.ref_pending + 1;
+    if used > s.buf_size {
         grow_buffer(s);
     }
-    // The buffer holds `threshold - 1` roots when the next one triggers a
-    // run (`GC_HAS_NEXT_UNUSED_UNDER_THRESHOLD`). The run cannot happen
-    // inside the release (it may be in `Drop`): it is due at the next safe
-    // point, over the roots buffered until now (frozen), not the new one.
-    if s.enabled && !s.due && s.pending >= s.threshold {
+    if s.enabled && !s.active && !s.due && used >= s.threshold {
         s.due = true;
-        freeze(s, newest);
+        freeze(s);
         WANT_RUN.with(|w| w.set(true));
     }
 }
 
-/// Sets the buffered roots aside for the due run (see [`Frozen`]); only
-/// `newest`, the root that crossed the threshold, stays buffered.
+/// Sets the buffered roots aside for the due run (see [`Frozen`]); the
+/// root about to be buffered goes to the emptied buffers.
 #[cold]
 #[inline(never)]
-fn freeze(s: &mut GcState, newest: Option<&Obj>) {
+fn freeze(s: &mut GcState) {
     // Roots still frozen for a run that did not happen stay the oldest.
     thaw(s);
-    let mut objs = s.roots.take_weak();
-    if let Some(o) = newest {
-        let addr = o.addr();
-        if let Some(i) = objs
-            .iter()
-            .rposition(|e| e.as_ptr().cast::<u8>() as usize == addr)
-        {
-            objs.remove(i);
-        }
-        s.roots.push(o);
-    }
+    let objs = std::mem::take(&mut s.roots);
     let refs = php_runtime::ref_roots::stash();
     s.frozen = Some(Frozen { objs, refs });
-    s.pending = 1;
+    s.ref_pending = 0;
 }
 
 /// Puts frozen roots back into the buffers (ahead of the newer ones).
 fn thaw(s: &mut GcState) {
     if let Some(f) = s.frozen.take() {
-        s.roots.restore_weak(f.objs);
+        let later = std::mem::replace(&mut s.roots, f.objs);
+        s.roots.append(later);
         php_runtime::ref_roots::unstash(f.refs);
+        s.ref_pending = php_runtime::ref_roots::len();
     }
 }
 
@@ -621,7 +795,7 @@ fn grow_buffer(s: &mut GcState) {
 /// `gc_adjust_threshold`: raise the threshold after unproductive automatic
 /// runs, lower it back after productive ones.
 fn adjust_threshold(s: &mut GcState, count: i64) {
-    if count < THRESHOLD_TRIGGER || s.pending >= s.threshold {
+    if count < THRESHOLD_TRIGGER || s.roots.num_roots + s.ref_pending >= s.threshold {
         if s.threshold < THRESHOLD_MAX {
             let new = (s.threshold + THRESHOLD_STEP).min(THRESHOLD_MAX);
             if new > s.buf_size {
@@ -644,7 +818,7 @@ fn adjust_threshold(s: &mut GcState, count: i64) {
 pub fn num_roots() -> usize {
     let (mine, providers) = with_state(|s| {
         (
-            s.roots.live_len() + s.frozen.as_ref().map_or(0, Frozen::len),
+            s.roots.num_roots + s.frozen.as_ref().map_or(0, Frozen::len),
             s.providers.clone(),
         )
     })
@@ -766,10 +940,9 @@ impl Vm {
                 return Some(Frozen::default());
             };
             let late = Frozen {
-                objs: s.roots.take_weak(),
+                objs: std::mem::replace(&mut s.roots, f.objs),
                 refs: php_runtime::ref_roots::stash(),
             };
-            s.roots.restore_weak(f.objs);
             php_runtime::ref_roots::unstash(f.refs);
             Some(late)
         });
@@ -777,10 +950,11 @@ impl Vm {
             return Ok(());
         };
         let r = self.gc_run(collect::Mode::Auto);
+        // php-src buffers the late roots after the run.
         with_state(|s| {
-            s.roots.restore_weak(late.objs);
+            s.roots.append(late.objs);
             php_runtime::ref_roots::unstash(late.refs);
-            s.pending = s.roots.live_len() + php_runtime::ref_roots::len();
+            s.ref_pending = php_runtime::ref_roots::len();
         });
         let count = r?;
         with_state(|s| adjust_threshold(s, count));

@@ -519,7 +519,7 @@ impl Vm {
             if let Some(p) = &popped {
                 // `i_free_compiled_variables`: released values may be
                 // cycle roots (and may fill the root buffer).
-                crate::gc::frame_released(p);
+                crate::gc::frame_released(p, self.frames.last().and_then(|c| c.this.as_ref()));
                 if let Some(g) = &p.generator {
                     crate::generator::mark_finished(g);
                 }
@@ -1965,7 +1965,10 @@ impl Vm {
         // destructors, which run at the next safe point, after the pop.
         let (ret, by_ref, should_pool) = {
             let frame = &self.frames[fidx];
-            crate::gc::frame_released(frame);
+            let caller_this = fidx
+                .checked_sub(1)
+                .and_then(|i| self.frames[i].this.as_ref());
+            crate::gc::frame_released(frame, caller_this);
             let by_ref = frame
                 .ufunc
                 .as_ref()
