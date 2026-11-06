@@ -1,6 +1,6 @@
 //! Handlers of the opcodes that `zend_try_compile_special_func()` compiles
-//! builtin calls to (ref: Zend/zend_compile.c `zend_compile_func_strlen`,
-//! `_count`, `_typecheck`, `_gettype`; Zend/zend_vm_def.h `ZEND_STRLEN`,
+//! builtin calls to (ref: `Zend/zend_compile.c` `zend_compile_func_strlen`,
+//! `_count`, `_typecheck`, `_gettype`; `Zend/zend_vm_def.h` `ZEND_STRLEN`,
 //! `ZEND_COUNT`, `ZEND_TYPE_CHECK`, `ZEND_GET_TYPE`).
 //!
 //! The opcodes run in the caller's frame: no builtin frame is pushed, so
@@ -8,8 +8,8 @@
 //! in php-src. The common operand types are handled inline by the run
 //! loop; the rest comes here.
 //!
-//! Also here: frameless internal calls (ref: Zend/zend_frameless_function.h,
-//! `ZEND_FRAMELESS_ICALL_n` in Zend/zend_vm_def.h), which call a handler
+//! Also here: frameless internal calls (ref: `Zend/zend_frameless_function.h`,
+//! `ZEND_FRAMELESS_ICALL_n` in `Zend/zend_vm_def.h`), which call a handler
 //! without pushing its call frame.
 
 use crate::call::accepts_without_coercion;
