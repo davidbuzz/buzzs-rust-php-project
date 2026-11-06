@@ -2394,6 +2394,41 @@ impl Vm {
         Ok((!skipped).then_some((r, mine)))
     }
 
+    /// `$cv .= <string or int>` (`ZEND_ASSIGN_OP` on a CV, whose
+    /// `concat_function` call has `result == op1`): a compiled variable
+    /// holding a string (not a reference) is appended to in place, which
+    /// extends the buffer when nothing else holds it (`zend_string_extend`),
+    /// without resolving the place generically. Writes the result to `dst`
+    /// and returns `true`; `false` leaves the operation to
+    /// [`Vm::place_assign_op`], whose string fast path does the same after
+    /// the generic resolution (integers it converts to a temporary string
+    /// first).
+    #[inline]
+    pub(crate) fn concat_assign_cv(&mut self, pid: PlaceId, v: &Value, dst: Option<u32>) -> bool {
+        let result = {
+            let f = self.frame();
+            let p = &f.code.places[pid as usize];
+            let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) else {
+                return false;
+            };
+            let idx = f.cv_idx(*cv);
+            let mut st = f.vars.borrow_mut();
+            let Some(Some(Value::Str(s))) = st.slots.get_mut(idx) else {
+                return false;
+            };
+            match v {
+                Value::Str(add) => s.append(add.as_bytes()),
+                Value::Int(i) => s.append_long(*i),
+                _ => return false,
+            }
+            dst.map(|_| s.clone())
+        };
+        if let (Some(t), Some(r)) = (dst, result) {
+            self.set_tmp(t, Value::Str(r));
+        }
+        true
+    }
+
     /// `++place` etc.
     pub(crate) fn place_incdec(&mut self, pid: PlaceId, kind: IncDecKind) -> VmResult<Value> {
         // Fast path: `$i++` on a compiled variable holding an int (no
