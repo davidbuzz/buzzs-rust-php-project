@@ -584,10 +584,50 @@ impl Frame {
         }
     }
 
+    /// Looks at compiled variable `cv` in place (php-src's `EX_VAR(cv)`):
+    /// `read` gets the slot's value (`None` = undefined), and what it
+    /// returns cannot borrow from it.
+    ///
+    /// Unlike `self.vars.borrow()`, no borrow guard is taken: the borrow
+    /// flag is only checked, never written, so the hot reads (operand
+    /// peeks, `read_cv`) do no read-modify-write on the store and the
+    /// compiler can keep the frame in registers across them. `read` is a
+    /// plain function (a closure without captures), so it can reach
+    /// neither the VM nor this store: it can only inspect or clone the
+    /// value, which runs no PHP code. (It must not dig the store out of
+    /// global state either; crate-private for that reason.)
+    ///
+    /// # Panics
+    /// Like `RefCell::borrow`, if the store is mutably borrowed.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // `read` must become a direct (inlined) call
+    pub(crate) fn peek_cv<R>(&self, cv: u32, read: fn(Option<&Value>) -> R) -> R {
+        let idx = self.cv_idx(cv);
+        // SAFETY: `try_borrow_unguarded` fails while a mutable borrow of the
+        // store is active, so no `&mut VarStore` exists now. The shared
+        // reference is only handed to `read`, a non-capturing function that
+        // cannot name this store (it receives one slot and nothing else),
+        // and `R` cannot borrow from it (the reference's lifetime is
+        // higher-ranked), so no mutable borrow can begin while it is alive.
+        let Ok(vs) = (unsafe { self.vars.try_borrow_unguarded() }) else {
+            store_mutably_borrowed()
+        };
+        read(vs.slots.get(idx).and_then(Option::as_ref))
+    }
+
     /// The current line.
     pub fn line(&self) -> u32 {
         self.code.line(self.ip.saturating_sub(1))
     }
+}
+
+/// [`Frame::peek_cv`] on a mutably borrowed store: the panic
+/// `RefCell::borrow` raises.
+#[cold]
+#[inline(never)]
+#[track_caller]
+fn store_mutably_borrowed() -> ! {
+    panic!("already mutably borrowed: BorrowError")
 }
 
 /// An entry of the error handler stack.
@@ -843,5 +883,78 @@ impl std::fmt::Debug for Vm {
         f.debug_struct("Vm")
             .field("frames", &self.frames.len())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Frame, FrameKind, VarStore};
+    use crate::opcode::OpArray;
+    use php_runtime::{Value, ZStr};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn frame_with(names: &[&str]) -> Frame {
+        let code = OpArray {
+            cv_names: names.iter().map(|n| ZStr::from(*n)).collect(),
+            ..OpArray::default()
+        };
+        Frame::new(Rc::new(code), FrameKind::Function)
+    }
+
+    fn as_int(s: Option<&Value>) -> Option<i64> {
+        match s {
+            Some(Value::Int(i)) => Some(*i),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn peek_cv_reads_slots_in_place_without_holding_a_borrow() {
+        let f = frame_with(&["a", "b"]);
+        f.vars.borrow_mut().slots[0] = Some(Value::Int(7));
+        assert_eq!(f.peek_cv(0, as_int), Some(7));
+        // Undefined.
+        assert!(f.peek_cv(1, |s| s.is_none()));
+        // No guard outlives the peek: the store can be borrowed mutably
+        // right after it.
+        assert!(f.vars.try_borrow_mut().is_ok());
+        // Shared borrows elsewhere do not stop a peek.
+        let shared = f.vars.borrow();
+        assert_eq!(f.peek_cv(0, as_int), Some(7));
+        drop(shared);
+    }
+
+    #[test]
+    fn peek_cv_follows_the_cv_map_of_a_shared_store() {
+        let code = Rc::new(OpArray {
+            cv_names: vec![ZStr::from("x")],
+            ..OpArray::default()
+        });
+        let vars = Rc::new(RefCell::new(VarStore::with_names(&[
+            ZStr::from("argv"),
+            ZStr::from("x"),
+        ])));
+        vars.borrow_mut().slots[1] = Some(Value::Int(3));
+        let f = Frame::with_vars(code, FrameKind::Main, vars, Some(Rc::from(vec![1u32])));
+        assert_eq!(f.peek_cv(0, as_int), Some(3));
+    }
+
+    #[test]
+    fn peek_cv_clones_share_the_string() {
+        let f = frame_with(&["s"]);
+        f.vars.borrow_mut().slots[0] = Some(Value::Str(ZStr::from("abc")));
+        let v = f.peek_cv(0, |s| s.cloned());
+        assert!(matches!(&v, Some(Value::Str(s)) if s.as_bytes() == b"abc"));
+        // The slot still holds its value.
+        assert!(f.peek_cv(0, |s| matches!(s, Some(Value::Str(_)))));
+    }
+
+    #[test]
+    #[should_panic(expected = "already mutably borrowed")]
+    fn peek_cv_panics_like_borrow_while_mutably_borrowed() {
+        let f = frame_with(&["a"]);
+        let _guard = f.vars.borrow_mut();
+        let _ = f.peek_cv(0, |s| s.is_some());
     }
 }

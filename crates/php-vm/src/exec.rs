@@ -71,18 +71,15 @@ impl Vm {
     /// call it returns its `Option<Num>` through memory.
     #[inline(always)]
     #[allow(clippy::inline_always)] // as a call, the `Option<Num>` is returned through memory
-    fn peek_num(&self, op: Operand) -> Option<Num> {
+    fn peek_num(f: &Frame, op: Operand) -> Option<Num> {
         match op {
-            Operand::Cv(cv) => {
-                let f = self.frame();
-                let idx = f.cv_idx(cv);
-                match f.vars.borrow().slots.get(idx) {
-                    Some(Some(Value::Int(i))) => Some(Num::Int(*i)),
-                    Some(Some(Value::Float(x))) => Some(Num::Float(*x)),
-                    _ => None,
-                }
-            }
-            Operand::Lit(i) => match self.frame().code.literals.get(i as usize) {
+            // In place, without a borrow guard (`EX_VAR`).
+            Operand::Cv(cv) => f.peek_cv(cv, |s| match s {
+                Some(Value::Int(i)) => Some(Num::Int(*i)),
+                Some(Value::Float(x)) => Some(Num::Float(*x)),
+                _ => None,
+            }),
+            Operand::Lit(i) => match f.code.literals.get(i as usize) {
                 Some(Value::Int(v)) => Some(Num::Int(*v)),
                 Some(Value::Float(v)) => Some(Num::Float(*v)),
                 _ => None,
@@ -90,9 +87,9 @@ impl Vm {
             // Numbers have no Drop: the slot's value can be left in place
             // (consuming reads leave Null behind, but every later use of a
             // tmp slot is preceded by a write).
-            Operand::Tmp(t) | Operand::TmpKeep(t) => match self.frame().tmps.get(t as usize) {
+            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
                 Some(Value::Int(i)) => Some(Num::Int(*i)),
-                Some(Value::Float(f)) => Some(Num::Float(*f)),
+                Some(Value::Float(x)) => Some(Num::Float(*x)),
                 _ => None,
             },
             Operand::Unused => None,
@@ -108,8 +105,9 @@ impl Vm {
     /// mismatch.
     #[inline]
     fn bin_num_fast(&self, op: BinKind, a: Operand, b: Operand) -> Option<Value> {
-        let x = self.peek_num(a)?;
-        let y = self.peek_num(b)?;
+        let f = self.frame();
+        let x = Self::peek_num(f, a)?;
+        let y = Self::peek_num(f, b)?;
         if let (Num::Int(x), Num::Int(y)) = (x, y) {
             return Some(match op {
                 BinKind::Arith(BinaryOp::Add) => Value::Int(x.checked_add(y)?),
@@ -199,37 +197,35 @@ impl Vm {
         }
     }
 
-    /// Reads a compiled variable.
+    /// Reads a compiled variable (dereferenced), warning when undefined.
+    /// The defined case is a borrow-free peek and a clone ([`Frame::peek_cv`]);
+    /// the warning is out of line.
+    #[inline]
     pub(crate) fn read_cv(&mut self, cv: u32) -> VmResult<Value> {
-        let f = self.frame();
-        let idx = f.cv_idx(cv);
-        let v = f
-            .vars
-            .borrow()
-            .slots
-            .get(idx)
-            .and_then(|s| s.as_ref().map(Value::deref));
-        match v {
+        match self.read_cv_defined(cv) {
             Some(v) => Ok(v),
-            None => {
-                let name = self.frame().code.cv_names[cv as usize].clone();
-                self.warning(&crate::exec::undefined_var_msg(&name))?;
-                Ok(Value::Null)
-            }
+            None => self.read_undefined_cv(cv),
         }
+    }
+
+    /// The undefined-variable path of [`Vm::read_cv`]: the warning, then null.
+    #[cold]
+    #[inline(never)]
+    fn read_undefined_cv(&mut self, cv: u32) -> VmResult<Value> {
+        let name = self.frame().code.cv_names[cv as usize].clone();
+        self.warning(&crate::exec::undefined_var_msg(&name))?;
+        Ok(Value::Null)
     }
 
     /// [`Vm::read_cv`] for a defined variable (dereferenced); `None` when
     /// undefined, leaving the warning to the caller.
     #[inline]
     pub(crate) fn read_cv_defined(&self, cv: u32) -> Option<Value> {
-        let f = self.frame();
-        let idx = f.cv_idx(cv);
-        f.vars
-            .borrow()
-            .slots
-            .get(idx)
-            .and_then(|s| s.as_ref().map(Value::deref))
+        self.frame().peek_cv(cv, |s| match s {
+            Some(Value::Reference(r)) => Some(r.get()),
+            Some(v) => Some(v.clone()),
+            None => None,
+        })
     }
 
     /// The `OP_DATA` read of [`Op::Assign`] from a compiled variable:
@@ -238,11 +234,8 @@ impl Vm {
     /// the containers ([`Vm::place_assign_cv_ref`]).
     #[inline]
     pub(crate) fn read_cv_op_data(&self, cv: u32) -> CvOpData {
-        let f = self.frame();
-        let idx = f.cv_idx(cv);
-        let vars = f.vars.borrow();
-        match vars.slots.get(idx) {
-            Some(Some(Value::Reference(r))) => {
+        self.frame().peek_cv(cv, |s| match s {
+            Some(Value::Reference(r)) => {
                 let inner = r.borrow();
                 if matches!(*inner, Value::Null | Value::Bool(false) | Value::Array(_)) {
                     CvOpData::Deferred
@@ -250,23 +243,50 @@ impl Vm {
                     CvOpData::Value(inner.clone())
                 }
             }
-            Some(Some(v)) => CvOpData::Value(v.clone()),
-            _ => CvOpData::Undefined,
-        }
+            Some(v) => CvOpData::Value(v.clone()),
+            None => CvOpData::Undefined,
+        })
     }
 
     /// Reads a compiled variable without warning (`None` if undefined).
+    #[inline]
     pub(crate) fn cv_get(&self, cv: u32) -> Option<Value> {
-        let f = self.frame();
-        let idx = f.cv_idx(cv);
-        f.vars.borrow().slots.get(idx).cloned().flatten()
+        self.frame().peek_cv(cv, |s| s.cloned())
     }
 
     /// Assigns to a compiled variable (through references). A typed
     /// reference is handed back with the value, unassigned: the caller
     /// assigns through it with [`Vm::assign_ref`].
+    ///
+    /// The common case, a slot that is undefined or holds no reference,
+    /// array or object (nothing to assign through, no possible GC root to
+    /// buffer), is a plain store; the old value is dropped without the
+    /// out-of-line drop call when it is a scalar.
     #[must_use]
+    #[inline]
     pub(crate) fn cv_assign(&mut self, cv: u32, v: Value) -> Option<(PhpRef, Value)> {
+        let f = self.frame();
+        let idx = f.cv_idx(cv);
+        let mut vars = f.vars.borrow_mut();
+        let slot = &mut vars.slots[idx];
+        if matches!(
+            slot,
+            Some(Value::Reference(_) | Value::Array(_) | Value::Object(_))
+        ) {
+            drop(vars);
+            return self.cv_assign_slow(cv, v);
+        }
+        let old = slot.replace(v);
+        drop(vars);
+        discard_unrooted(old);
+        None
+    }
+
+    /// [`Vm::cv_assign`] when the slot holds a reference (assigned
+    /// through), an array or an object (a possible GC root once released).
+    #[must_use]
+    #[inline(never)]
+    fn cv_assign_slow(&mut self, cv: u32, v: Value) -> Option<(PhpRef, Value)> {
         let f = self.frame();
         let idx = f.cv_idx(cv);
         let mut vars = f.vars.borrow_mut();
@@ -286,15 +306,105 @@ impl Vm {
         None
     }
 
+    /// `ZEND_ASSIGN` with a CV result operand (`$cv = val`, the
+    /// [`Op::AssignCv`] instruction): `zend_assign_to_variable`. The
+    /// common forms are done in place ([`Vm::assign_cv_fast`]); the rest
+    /// (reads that warn, references on either side, old values that are
+    /// possible GC roots) take the generic path.
+    #[inline]
+    pub(crate) fn op_assign_cv(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> VmResult<()> {
+        if self.assign_cv_fast(cv, val, dst) {
+            return Ok(());
+        }
+        self.assign_cv_generic(cv, val, dst)
+    }
+
+    /// The in-place form of [`Vm::op_assign_cv`], php-src's
+    /// `ZEND_ASSIGN_SPEC_CV_{CONST,TMP,CV}` fast case: the source is a
+    /// literal, a temporary or a defined compiled variable whose value
+    /// needs no dereferencing work with side effects, and the target slot
+    /// is undefined or holds a value whose release needs no GC root (no
+    /// reference to assign through, no array or object). One store into
+    /// the slot, no intermediate `VmResult`, no drop call for a scalar old
+    /// value. Returns `false`, having changed nothing, when the generic
+    /// path must run.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the point is to avoid the call and the Value moves through memory
+    fn assign_cv_fast(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        let idx = f.cv_idx(cv);
+        let Ok(mut vars) = f.vars.try_borrow_mut() else {
+            return false;
+        };
+        match vars.slots.get(idx) {
+            Some(Some(Value::Reference(_) | Value::Array(_) | Value::Object(_))) | None => {
+                return false;
+            }
+            Some(_) => {}
+        }
+        let v = match val {
+            // Consumed, as `read` does; a reference held by the temporary
+            // is left to the generic path (it derefs and releases it).
+            Operand::Tmp(t) => match f.tmps.get_mut(t as usize) {
+                Some(s) if !matches!(s, Value::Reference(_)) => std::mem::take(s),
+                _ => return false,
+            },
+            Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
+                Some(s) if !matches!(s, Value::Reference(_)) => s.clone(),
+                _ => return false,
+            },
+            Operand::Lit(i) => match f.code.literals.get(i as usize) {
+                Some(l) if !matches!(l, Value::Reference(_)) => l.clone(),
+                _ => return false,
+            },
+            // `ZVAL_COPY_DEREF` of a defined variable (an undefined one
+            // warns: generic path).
+            Operand::Cv(src) => match vars.slots.get(f.cv_idx(src)) {
+                Some(Some(Value::Reference(r))) => r.get(),
+                Some(Some(s)) => s.clone(),
+                _ => return false,
+            },
+            Operand::Unused => return false,
+        };
+        let keep = dst.map(|_| v.clone());
+        let old = std::mem::replace(&mut vars.slots[idx], Some(v));
+        drop(vars);
+        discard_unrooted(old);
+        if let (Some(d), Some(k)) = (dst, keep) {
+            self.set_tmp(d, k);
+        }
+        true
+    }
+
+    /// The generic path of [`Vm::op_assign_cv`].
+    #[inline(never)]
+    fn assign_cv_generic(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> VmResult<()> {
+        let v = self.read(val)?;
+        let v = self.copy_on_assign(v);
+        if let Some(d) = dst {
+            self.set_tmp(d, v.clone());
+        }
+        if let Some((r, v)) = self.cv_assign(cv, v) {
+            let v = self.assign_ref(&r, v)?;
+            if let Some(d) = dst {
+                self.set_tmp(d, v);
+            }
+        }
+        Ok(())
+    }
+
     /// Binds a compiled variable to a reference.
+    ///
+    /// Also the store of `RECV`: the slot is then undefined, and nothing
+    /// is released.
+    #[inline]
     pub(crate) fn cv_bind(&mut self, cv: u32, v: Value) {
         let f = self.frame();
         let idx = f.cv_idx(cv);
         let old = f.vars.borrow_mut().slots[idx].replace(v);
-        if let Some(old) = &old {
-            crate::gc::possible_root(old);
-        }
-        drop(old);
+        release_slot_value(old);
     }
 
     /// Stores a temporary.
@@ -314,11 +424,23 @@ impl Vm {
     /// The boolean held by temporary `op`, consumed, if it holds one: the
     /// `IS_TRUE`/`IS_FALSE` fast path of php-src's `ZEND_JMPZ`/`ZEND_JMPNZ`
     /// handlers (comparison results), without the out-of-line read,
-    /// conversion and drop of the generic path.
+    /// conversion and drop of the generic path. A compiled variable holding
+    /// a bool, null or int is tested in place (`if ($found)`), without the
+    /// clone; anything else (undefined: warning, references, strings,
+    /// arrays, objects) takes the generic path.
     #[inline]
     fn take_tmp_bool(&mut self, op: Operand) -> Option<bool> {
-        let Operand::Tmp(t) = op else {
-            return None;
+        let t = match op {
+            Operand::Tmp(t) => t,
+            Operand::Cv(cv) => {
+                return self.frame().peek_cv(cv, |s| match s {
+                    Some(Value::Bool(b)) => Some(*b),
+                    Some(Value::Null) => Some(false),
+                    Some(Value::Int(i)) => Some(*i != 0),
+                    _ => None,
+                });
+            }
+            _ => return None,
         };
         let slot = self.frame_mut().tmps.get_mut(t as usize)?;
         if let Value::Bool(b) = *slot {
@@ -869,9 +991,7 @@ impl Vm {
                     }
                     Op::Coalesce { a, dst, target } => {
                         let v = match a {
-                            Operand::Cv(cv) => {
-                                self.cv_get(*cv).map(|v| v.deref()).unwrap_or_default()
-                            }
+                            Operand::Cv(cv) => self.read_cv_defined(*cv).unwrap_or_default(),
                             o => self.read(*o)?,
                         };
                         if !v.is_null() {
@@ -882,13 +1002,10 @@ impl Vm {
                     }
                     Op::JmpNull { a, dst, target } => {
                         let v = match a {
-                            Operand::Cv(cv) => {
-                                let v = self.cv_get(*cv).map(|v| v.deref());
-                                match v {
-                                    Some(v) => v,
-                                    None => self.read(*a)?,
-                                }
-                            }
+                            Operand::Cv(cv) => match self.read_cv_defined(*cv) {
+                                Some(v) => v,
+                                None => self.read(*a)?,
+                            },
                             o => self.read(*o)?,
                         };
                         if v.is_null() {
@@ -901,17 +1018,7 @@ impl Vm {
                         Flow::Next
                     }
                     Op::AssignCv { cv, val, dst } => {
-                        let v = self.read(*val)?;
-                        let v = self.copy_on_assign(v);
-                        if let Some(d) = dst {
-                            self.set_tmp(*d, v.clone());
-                        }
-                        if let Some((r, v)) = self.cv_assign(*cv, v) {
-                            let v = self.assign_ref(&r, v)?;
-                            if let Some(d) = dst {
-                                self.set_tmp(*d, v);
-                            }
-                        }
+                        self.op_assign_cv(*cv, *val, *dst)?;
                         Flow::Next
                     }
                     Op::Assign { place, val, dst } => {
@@ -2077,10 +2184,7 @@ impl Vm {
     /// operand is read without an undefined-variable warning.
     fn op_type_assert_array(&mut self, val: Operand, msg: u32) -> VmResult<()> {
         let v = if let Operand::Cv(cv) = val {
-            let f = self.frame();
-            let idx = f.cv_idx(cv);
-            let slot = f.vars.borrow().slots.get(idx).cloned().flatten();
-            slot.as_ref().map_or(Value::Null, Value::deref)
+            self.read_cv_defined(cv).unwrap_or(Value::Null)
         } else {
             self.read_raw(val)?
         };
@@ -2101,6 +2205,47 @@ impl Vm {
         );
         self.make_throw("TypeError", &m)
     }
+}
+
+/// Releases the old value of a variable slot that holds no possible GC
+/// root (no array, object or reference: `gc::possible_root` would ignore
+/// it). Scalars own nothing and are forgotten, which skips the
+/// out-of-line `drop_in_place` call; strings and resources are dropped.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a call would defeat the point
+fn discard_unrooted(old: Option<Value>) {
+    match old {
+        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+            std::mem::forget(old);
+        }
+        other => drop(other),
+    }
+}
+
+/// Releases the old value of a variable slot (`i_zval_ptr_dtor` /
+/// `zval_ptr_dtor` of a variable): an array, object or reference may
+/// become a GC possible root ([`crate::gc::possible_root`], out of line);
+/// anything else is released at once by [`discard_unrooted`].
+#[inline(always)]
+#[allow(clippy::inline_always)] // the common case is an empty or scalar slot
+fn release_slot_value(old: Option<Value>) {
+    if matches!(
+        old,
+        Some(Value::Array(_) | Value::Object(_) | Value::Reference(_))
+    ) {
+        release_rooted(old);
+    } else {
+        discard_unrooted(old);
+    }
+}
+
+/// [`release_slot_value`] of an array, object or reference.
+#[inline(never)]
+fn release_rooted(old: Option<Value>) {
+    if let Some(old) = &old {
+        crate::gc::possible_root(old);
+    }
+    drop(old);
 }
 
 /// A compiled variable read as the value of an assignment to a place
