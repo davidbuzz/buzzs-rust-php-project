@@ -21,6 +21,7 @@ mod closure;
 pub mod compiler;
 mod configuration;
 mod context;
+mod discard;
 mod enums;
 mod errors;
 mod exceptions;
