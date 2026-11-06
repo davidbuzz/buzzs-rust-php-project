@@ -150,23 +150,7 @@ impl Compiler {
                 }
             }
             StmtKind::Expr(e) => self.compile_expr_discard(e)?,
-            StmtKind::Unset(vars) => {
-                for v in vars {
-                    self.f().line = v.span.line;
-                    if let ExprKind::Var(VarName::Name(id)) = &v.kind {
-                        if id.name == b"this" {
-                            return self.err("Cannot unset $this", v.span.line);
-                        }
-                    }
-                    if let ExprKind::Prop { nullsafe: true, .. } = &v.kind {
-                        return self
-                            .err("Can't use nullsafe operator in write context", v.span.line);
-                    }
-                    let p = self.compile_place(v, true)?;
-                    let pid = self.place(p);
-                    self.emit(Op::Unset { place: pid });
-                }
-            }
+            StmtKind::Unset(vars) => self.compile_unset(vars)?,
             StmtKind::Declare { directives, body } => {
                 self.compile_declare(directives, body.as_deref())?;
             }
@@ -176,29 +160,8 @@ impl Compiler {
                 catches,
                 finally,
             } => self.compile_try(body, catches, finally.as_deref())?,
-            StmtKind::Goto(label) => {
-                let unwind = self.emit_goto_unwind();
-                let at = self.emit(Op::Jmp(0));
-                let loops = self.f().loop_ids.clone();
-                self.f().gotos.push(PendingGoto {
-                    at,
-                    label: label.name.clone(),
-                    line: s.span.line,
-                    loops,
-                    unwind,
-                });
-            }
-            StmtKind::Label(label) => {
-                let here = self.here();
-                let loops = self.f().loop_ids.clone();
-                if self.f().labels.contains_key(&label.name) {
-                    return self.err(
-                        format!("Label '{}' already defined", label.as_str_lossy()),
-                        s.span.line,
-                    );
-                }
-                self.f().labels.insert(label.name.clone(), (here, loops));
-            }
+            StmtKind::Goto(label) => self.compile_goto(label, s.span.line),
+            StmtKind::Label(label) => self.compile_label(label, s.span.line)?,
             StmtKind::Function(fd) => self.compile_function_decl(fd, false)?,
             StmtKind::Class(cd) => self.compile_class_stmt(cd, false)?,
             StmtKind::Const { consts, attributes } => {
@@ -233,6 +196,55 @@ impl Compiler {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// `unset($a, $b[1], $c->p);` (`zend_compile_unset`): `$this` and a
+    /// nullsafe chain cannot be unset.
+    fn compile_unset(&mut self, vars: &[Expr]) -> CResult<()> {
+        for v in vars {
+            self.f().line = v.span.line;
+            if let ExprKind::Var(VarName::Name(id)) = &v.kind {
+                if id.name == b"this" {
+                    return self.err("Cannot unset $this", v.span.line);
+                }
+            }
+            if let ExprKind::Prop { nullsafe: true, .. } = &v.kind {
+                return self.err("Can't use nullsafe operator in write context", v.span.line);
+            }
+            let p = self.compile_place(v, true)?;
+            let pid = self.place(p);
+            self.emit(Op::Unset { place: pid });
+        }
+        Ok(())
+    }
+
+    /// `goto label;`: a jump patched once the label is known, with the
+    /// loops to unwind on the way (`zend_compile_goto`).
+    fn compile_goto(&mut self, label: &ast::Ident, line: u32) {
+        let unwind = self.emit_goto_unwind();
+        let at = self.emit(Op::Jmp(0));
+        let loops = self.f().loop_ids.clone();
+        self.f().gotos.push(PendingGoto {
+            at,
+            label: label.name.clone(),
+            line,
+            loops,
+            unwind,
+        });
+    }
+
+    /// `label:` (`zend_compile_label`): defined once per function.
+    fn compile_label(&mut self, label: &ast::Ident, line: u32) -> CResult<()> {
+        let here = self.here();
+        let loops = self.f().loop_ids.clone();
+        if self.f().labels.contains_key(&label.name) {
+            return self.err(
+                format!("Label '{}' already defined", label.as_str_lossy()),
+                line,
+            );
+        }
+        self.f().labels.insert(label.name.clone(), (here, loops));
         Ok(())
     }
 
