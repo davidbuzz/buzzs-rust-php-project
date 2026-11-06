@@ -994,6 +994,23 @@ mod tests {
         assert_eq!(size_of::<Resource>(), 8);
     }
 
+    /// The allocation behind a reference. php-src's `zend_reference` is 32
+    /// bytes: `zend_refcounted_h` (8), the `zval` (16) and the typed-property
+    /// `sources` pointer (8). Ours is the `Rc` header (two `usize` counts,
+    /// 16) plus `RefInner`: `RefCell<Value>` (an `isize` borrow flag and the
+    /// 16-byte value, 24) and `RefCell<Option<Rc<dyn Any>>>` (a flag and a
+    /// fat pointer, 24), 64 bytes in all. (FEATURE_GAP's "72" was measured
+    /// when `Value` was still 24 bytes.)
+    #[test]
+    fn reference_allocation_size() {
+        use std::mem::size_of;
+        assert_eq!(size_of::<RefCell<Value>>(), 24);
+        assert_eq!(size_of::<RefCell<Option<Rc<dyn Any>>>>(), 24);
+        assert_eq!(size_of::<RefInner>(), 48);
+        // `Rc<T>` allocates `RcBox<T>`: strong + weak counts, then `T`.
+        assert_eq!(2 * size_of::<usize>() + size_of::<RefInner>(), 64);
+    }
+
     /// Counts payload drops.
     struct Counted(u32, Rc<Cell<u32>>);
     impl PhpObject for Counted {
