@@ -110,6 +110,35 @@ fn limit_memory() {
     }
 }
 
+/// A reference into libstdc++, so that the linker records the library in
+/// this binary's own `DT_NEEDED` list (`--as-needed` drops a library nothing
+/// refers to); `build.rs` names it right after libc. libstdc++ is loaded
+/// anyway (ICU is C++), but as a dependency of a dependency it came 41st in
+/// the dynamic linker's search scope, behind every other library, and the
+/// 1 900 start-up symbol lookups that resolve to it walked all of them
+/// first. Named here it comes 2nd: about 3 M fewer instructions per start
+/// (`perf/README.md`, "Startup").
+#[used]
+static LIBSTDCXX_IS_NEEDED: Demangle = __cxa_demangle;
+
+/// `abi::__cxa_demangle` of libstdc++'s `<cxxabi.h>`; declared only for
+/// [`LIBSTDCXX_IS_NEEDED`], never called.
+type Demangle = unsafe extern "C" fn(
+    *const std::ffi::c_char,
+    *mut std::ffi::c_char,
+    *mut usize,
+    *mut std::ffi::c_int,
+) -> *mut std::ffi::c_char;
+
+extern "C" {
+    fn __cxa_demangle(
+        mangled: *const std::ffi::c_char,
+        buf: *mut std::ffi::c_char,
+        len: *mut usize,
+        status: *mut std::ffi::c_int,
+    ) -> *mut std::ffi::c_char;
+}
+
 /// Makes sure the main thread may grow its stack to [`VM_STACK`], so the
 /// VM runs on the main thread: process-directed signals then reach it
 /// (pcntl), the process stays single-threaded (`unshare()`, `fork()`
@@ -576,15 +605,21 @@ fn do_cli(argv: &[Vec<u8>], cfg: &Config) -> i32 {
     while let Some((c, _)) = g.next_opt() {
         match u8::try_from(c).unwrap_or(0) {
             b'i' => {
-                return run_snippet(cfg, b"<?php phpinfo(INFO_ALL & ~INFO_CREDITS);", &[], false)
-                    .min(0);
+                return run_snippet(
+                    cfg,
+                    b"<?php phpinfo(INFO_ALL & ~INFO_CREDITS);",
+                    &[],
+                    false,
+                    Release::Discard,
+                )
+                .min(0);
             }
             b'v' => {
                 out(version_banner().as_bytes());
                 return 0;
             }
             b'm' => {
-                return run_snippet(cfg, MODULES_SNIPPET, &[], false).min(0);
+                return run_snippet(cfg, MODULES_SNIPPET, &[], false, Release::Discard).min(0);
             }
             _ => {}
         }
@@ -615,7 +650,15 @@ fn do_cli(argv: &[Vec<u8>], cfg: &Config) -> i32 {
             req.script_file = Some(argv[optind].clone());
             optind += 1;
         }
-        let status = run_request(argv, optind, &req, cfg);
+        // Nothing runs on this thread after the last request: its VM is
+        // discarded as php-src's fast shutdown does, not dropped.
+        let more_lint_files = mode == Mode::Lint && argv.len() > optind && argv[optind] != b"--";
+        let how = if repeats > 1 || more_lint_files {
+            Release::Drop
+        } else {
+            Release::Discard
+        };
+        let status = run_request(argv, optind, &req, cfg, how);
         if mode == Mode::Lint {
             // Failures stick: the last failing status wins.
             if status != 0 {
@@ -624,7 +667,7 @@ fn do_cli(argv: &[Vec<u8>], cfg: &Config) -> i32 {
         } else {
             exit_status = status;
         }
-        if mode == Mode::Lint && argv.len() > optind && argv[optind] != b"--" {
+        if more_lint_files {
             req.script_file = None;
             continue;
         }
@@ -676,6 +719,26 @@ fn new_request_vm(cfg: &Config) -> Result<Vm, i32> {
     Ok(vm)
 }
 
+/// How a request's VM is released once `Vm::shutdown` has run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Release {
+    /// Dropped: another request follows on this thread (`--repeat`, `-l`
+    /// with more files to check).
+    Drop,
+    /// Discarded like php-src's fast request shutdown (`Vm::discard`): the
+    /// process exits next, so the internal function, class and constant
+    /// tables need not be freed one entry at a time.
+    Discard,
+}
+
+/// Releases `vm` after its request.
+fn release(vm: Vm, how: Release) {
+    match how {
+        Release::Drop => drop(vm),
+        Release::Discard => vm.discard(),
+    }
+}
+
 /// `php_request_startup()` (what `Vm::run_script` does before running).
 fn request_startup(vm: &mut Vm) {
     let ob = vm.ini_long("output_buffering");
@@ -692,7 +755,13 @@ fn request_startup(vm: &mut Vm) {
 
 /// Runs PHP code for an informational mode (`-i`, `-m`, `--r*`); `args`
 /// become `$argv[1..]`.
-fn run_snippet(cfg: &Config, code: &[u8], args: &[Vec<u8>], with_handles: bool) -> i32 {
+fn run_snippet(
+    cfg: &Config,
+    code: &[u8],
+    args: &[Vec<u8>],
+    with_handles: bool,
+    how: Release,
+) -> i32 {
     let _ = with_handles;
     let mut vm = match new_request_vm(cfg) {
         Ok(vm) => vm,
@@ -711,7 +780,9 @@ fn run_snippet(cfg: &Config, code: &[u8], args: &[Vec<u8>], with_handles: bool) 
     );
     request_startup(&mut vm);
     let r = vm.run_main(code, &ZStr::from("Command line code"));
-    vm.shutdown(r)
+    let status = vm.shutdown(r);
+    release(vm, how);
+    status
 }
 
 /// `cli_seek_file_begin()` and reading the script: a directory opens
@@ -746,7 +817,7 @@ fn lossy(b: &[u8]) -> String {
 
 /// One request (`do_repeat:` to `out:` of `do_cli()`).
 #[allow(clippy::too_many_lines)]
-fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config) -> i32 {
+fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config, how: Release) -> i32 {
     let mode = req.mode();
     // The script source (from the file, or stdin for file modes).
     let mut src: Option<Vec<u8>> = None;
@@ -775,7 +846,7 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config) -> 
     match mode {
         Mode::Lint => {
             let src = src.unwrap_or_default();
-            lint(cfg, &src, &php_self)
+            lint(cfg, &src, &php_self, how)
         }
         Mode::Strip | Mode::Highlight => {
             let func = if mode == Mode::Strip {
@@ -795,7 +866,7 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config) -> 
                 tmp.into_os_string().into_vec()
             };
             let code = format!("<?php {echo}{func}($argv[1]);").into_bytes();
-            let r = run_snippet(cfg, &code, std::slice::from_ref(&file), false);
+            let r = run_snippet(cfg, &code, std::slice::from_ref(&file), false, how);
             if req.script_file.is_none() {
                 let _ = std::fs::remove_file(std::ffi::OsStr::from_bytes(&file));
             }
@@ -815,7 +886,7 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config) -> 
                     argv: &request_argv,
                 },
             );
-            match mode {
+            let status = match mode {
                 Mode::Standard => {
                     let src = src.unwrap_or_default();
                     let path = if req.script_file.is_some() {
@@ -835,7 +906,9 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config) -> 
                     vm.shutdown(r)
                 }
                 _ => process_stdin(&mut vm, req),
-            }
+            };
+            release(vm, how);
+            status
         }
         Mode::ReflectionFunction
         | Mode::ReflectionClass
@@ -854,7 +927,7 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config) -> 
             let code = format!(
                 "<?php try {{ $r = {ctor}; }} catch (Throwable $e) {{ echo 'Exception: ', $e->getMessage(), \"\\n\"; exit(1); }} echo $r, \"\\n\";"
             );
-            run_snippet(cfg, code.as_bytes(), std::slice::from_ref(what), false)
+            run_snippet(cfg, code.as_bytes(), std::slice::from_ref(what), false, how)
         }
         Mode::ReflectionExtInfo => {
             if req.reflection_what == b"main" {
@@ -864,12 +937,20 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config) -> 
                 };
                 request_startup(&mut vm);
                 out(&show_main_ini(&vm.ini));
-                return vm.shutdown(Ok(()));
+                let status = vm.shutdown(Ok(()));
+                release(vm, how);
+                return status;
             }
             let code = b"<?php $n = $argv[1];
 if (extension_loaded($n)) { (new ReflectionExtension($n))->info(); }
 else { echo \"Extension '$n' not present.\\n\"; exit(1); }";
-            run_snippet(cfg, code, std::slice::from_ref(&req.reflection_what), false)
+            run_snippet(
+                cfg,
+                code,
+                std::slice::from_ref(&req.reflection_what),
+                false,
+                how,
+            )
         }
         Mode::ShowIniConfig => {
             out(show_ini_config(cfg).as_bytes());
@@ -882,7 +963,9 @@ else { echo \"Extension '$n' not present.\\n\"; exit(1); }";
             };
             request_startup(&mut vm);
             out(&show_ini_diff(&vm.ini));
-            vm.shutdown(Ok(()))
+            let status = vm.shutdown(Ok(()));
+            release(vm, how);
+            status
         }
     }
 }
@@ -1153,7 +1236,7 @@ fn process_stdin(vm: &mut Vm, req: &Request) -> i32 {
 }
 
 /// `-l`: `php_lint_script()` then the CLI's verdict line.
-fn lint(cfg: &Config, src: &[u8], php_self: &[u8]) -> i32 {
+fn lint(cfg: &Config, src: &[u8], php_self: &[u8], how: Release) -> i32 {
     let name = lossy(php_self);
     let mut vm = match new_request_vm(cfg) {
         Ok(vm) => vm,
@@ -1180,7 +1263,7 @@ fn lint(cfg: &Config, src: &[u8], php_self: &[u8]) -> i32 {
         }
     }
     vm.flush_stdout();
-    match parsed.map(|_| ()).map_err(|error| {
+    let status = match parsed.map(|_| ()).map_err(|error| {
         (
             error.message,
             error.line,
@@ -1209,7 +1292,9 @@ fn lint(cfg: &Config, src: &[u8], php_self: &[u8]) -> i32 {
             out(format!("Errors parsing {name}\n").as_bytes());
             255
         }
-    }
+    };
+    release(vm, how);
+    status
 }
 
 #[cfg(test)]
