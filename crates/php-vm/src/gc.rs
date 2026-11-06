@@ -276,13 +276,22 @@ impl RootBuffer {
     /// `GC_REMOVE_FROM_BUFFER` of the handle at `addr`; `false` if it was
     /// not buffered.
     fn remove(&mut self, addr: usize) -> bool {
-        match self.index.get(&addr).copied() {
-            Some(i) => {
-                self.release(i);
-                true
-            }
-            None => false,
+        // One index lookup: the entry goes first, then its slot (which
+        // holds this handle, as the index follows the slots).
+        let Some(i) = self.index.remove(&addr) else {
+            return false;
+        };
+        if matches!(self.slots.get(i), Some(Some(w)) if weak_addr(w) == addr) {
+            self.slots[i] = None;
+            self.unused.push(i);
+            self.num_roots = self.num_roots.saturating_sub(1);
+        } else {
+            // Not reached while the index follows the slots; what
+            // `release` does for an entry it finds in place.
+            self.index.insert(addr, i);
+            self.release(i);
         }
+        true
     }
 
     /// Releases the slots of roots that were freed without notice.
