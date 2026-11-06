@@ -10,7 +10,6 @@ use php_vm::ext::{
 };
 use php_vm::func::Method;
 use php_vm::Vm;
-use std::cell::RefCell;
 use std::rc::Rc;
 
 /// The `create_object` handler of `PDO` (`pdo_dbh_new`).
@@ -325,49 +324,50 @@ const SQLITE_DBH_METHODS: [(&str, NativeFn); 3] = [
     ),
 ];
 
-thread_local! {
-    /// `dbh->cls_methods[PDO_DBH_DRIVER_METHOD_KIND_DBH]` of `SQLite`
-    /// connections: built on first use for the running VM's `PDO` class
-    /// (rebuilt when a new VM registered a new one).
-    static SQLITE_DRIVER_METHODS: RefCell<Vec<Rc<Method>>> = const { RefCell::new(Vec::new()) };
-}
-
 /// `dbh_method_get` (ext/pdo/pdo_dbh.c) after `zend_std_get_method` found
-/// nothing: the driver's methods (`pdo_hash_methods`), which are not in
-/// `PDO`'s method table. Only an `SQLite` connection has any, so on other
-/// `PDO`s the legacy `sqlite*` methods do not exist at all
+/// nothing: the driver's methods, which are not in `PDO`'s method table.
+/// `pdo_hash_methods` builds them on that first lookup, once per
+/// connection (`dbh->cls_methods[PDO_DBH_DRIVER_METHOD_KIND_DBH]`: shared
+/// by the objects of a persistent connection and destroyed with it), as
+/// functions with `scope = pdo_dbh_ce`, no module and
+/// `ZEND_ACC_DEPRECATED` with the 8.5 message; being distinct function
+/// objects per connection, an observer reports their `init` for every
+/// connection. Only the `SQLite` driver has any (`get_driver_methods`), so
+/// on other `PDO`s the legacy `sqlite*` methods do not exist at all
 /// (`method_exists()`, `is_callable()`, "Call to undefined method") and a
 /// subclass may declare methods of those names with any signature.
-/// `pdo_hash_methods` gives them `scope = pdo_dbh_ce`, no module and
-/// `ZEND_ACC_DEPRECATED` with the 8.5 message.
-fn pdo_driver_method(vm: &mut Vm, o: &Obj, name: &ZStr) -> Option<Rc<Method>> {
-    if !pdo_of(o).is_some_and(|p| p.sqlite().is_some()) {
-        return None;
-    }
-    let n = name.as_bytes();
-    if !LEGACY_METHODS
-        .iter()
-        .any(|(m, _)| m.as_bytes().eq_ignore_ascii_case(n))
-    {
-        return None;
-    }
+pub(crate) fn pdo_driver_method(vm: &mut Vm, o: &Obj, name: &ZStr) -> Option<Rc<Method>> {
+    let p = pdo_of(o)?;
     let pdo = vm.find_class(b"PDO")?;
-    SQLITE_DRIVER_METHODS.with(|t| {
-        let mut t = t.borrow_mut();
-        if t.first()
-            .is_none_or(|m| !std::ptr::eq(m.scope.as_ptr(), Rc::as_ptr(&pdo)))
-        {
-            *t = SQLITE_DBH_METHODS
+    let built = p
+        .driver_methods()
+        .and_then(|t| t.downcast::<Vec<Rc<Method>>>().ok())
+        // A persistent connection outlives the VM whose `PDO` class scoped
+        // its table: the table is rebuilt for the current one.
+        .filter(|t| {
+            t.first()
+                .is_some_and(|m| m.scope.upgrade().is_some_and(|c| Rc::ptr_eq(&c, &pdo)))
+        });
+    let table = if let Some(t) = built {
+        t
+    } else {
+        p.sqlite()?;
+        let t: Rc<Vec<Rc<Method>>> = Rc::new(
+            SQLITE_DBH_METHODS
                 .iter()
                 .map(|&(sig, h)| {
                     native_method(&pdo, sig, acc::PUBLIC | acc::DEPRECATED | acc::NO_MODULE, h)
                 })
-                .collect();
-        }
-        t.iter()
-            .find(|m| m.name.as_bytes().eq_ignore_ascii_case(n))
-            .cloned()
-    })
+                .collect(),
+        );
+        p.set_driver_methods(t.clone());
+        t
+    };
+    let n = name.as_bytes();
+    table
+        .iter()
+        .find(|m| m.name.as_bytes().eq_ignore_ascii_case(n))
+        .cloned()
 }
 
 /// The legacy driver methods, found only on a `PDO` connected to `SQLite`
