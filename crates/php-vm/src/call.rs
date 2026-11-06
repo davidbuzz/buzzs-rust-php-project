@@ -1437,6 +1437,10 @@ impl Vm {
         strict: bool,
     ) -> VmResult<Value> {
         if !self.observer.enabled {
+            // php-src's frameless internal calls, where no frame can be seen.
+            if crate::special::frameless_call(b, &call) {
+                return self.call_builtin_frameless(b, call);
+            }
             return self.call_builtin_impl(b, call, strict, false);
         }
         let depth = self.frames.len();
@@ -1485,10 +1489,6 @@ impl Vm {
         strict: bool,
         quiet: bool,
     ) -> VmResult<Value> {
-        // php-src's frameless internal calls, where no frame can be seen.
-        if !self.observer.enabled && crate::special::frameless_call(b, &call) {
-            return self.call_builtin_frameless(b, call);
-        }
         // A native `__call`/`__callStatic` gets the called name through
         // `vm.magic_call_name()`.
         self.magic_call_name = call.magic_name.take();
