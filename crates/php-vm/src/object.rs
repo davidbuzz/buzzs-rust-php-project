@@ -422,6 +422,17 @@ pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {
     })
 }
 
+/// Frees an object that `new` rejected after creating it (its
+/// `get_constructor` threw: `new Generator`, `new Closure`). No destructor
+/// runs for it (`zend_generator_dtor_storage` has no frame to close) and
+/// its handle returns to the free list at once, as the `OBJ_RELEASE` of the
+/// rejected object does in php-src.
+pub(crate) fn discard_rejected(o: Obj) {
+    let d = data(&o);
+    d.flags.set(d.flags.get() | oflags::DESTRUCTED);
+    drop(o);
+}
+
 /// Makes `o` the store's handle of its object: lookups by handle return
 /// this `Obj` from now on (the previous outer `Obj` is gone or going).
 fn register_outer(o: &Obj) {
