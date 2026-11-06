@@ -1406,16 +1406,17 @@ impl HashTable {
     /// Mutable lookup.
     #[inline]
     pub fn get_mut(&mut self, key: &ArrayKey) -> Option<&mut Value> {
-        let s = match key {
-            ArrayKey::Int(i) => return self.get_int_mut(*i),
-            ArrayKey::Str(s) => s,
-        };
-        let ts = self.table_size;
-        let Store::Hash(d) = &mut self.store else {
-            return None;
-        };
-        let idx = d.find_zstr(ts, s)?;
-        d.buckets.get_mut(idx as usize)?.val.as_mut()
+        match key {
+            ArrayKey::Int(i) => self.get_int_mut(*i),
+            ArrayKey::Str(s) => {
+                let ts = self.table_size;
+                let Store::Hash(d) = &mut self.store else {
+                    return None;
+                };
+                let idx = d.find_zstr(ts, s)?;
+                d.buckets.get_mut(idx as usize)?.val.as_mut()
+            }
+        }
     }
 
     /// Whether the key exists.
