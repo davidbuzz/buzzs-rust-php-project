@@ -5,7 +5,8 @@ The TODO list for the Rust port of PHP: everything that has to be built to pass 
 - **%**: 100% means done; anything lower is the share done. Where possible it is the share of the row's run `.phpt` tests that pass (skips excluded, XFAIL counted as passing), refreshed by `scripts/update_feature_gap.py`.
 - **Performance rows** (`Performance (as fast as C): …`): % is C PHP's cost divided by ours on the measurement the row names (user-space instructions from `scripts/perf_gate.sh` against `/usr/bin/php`, or bytes for memory layout), capped at 100%: 100% means as fast as (or smaller than) C. Per-operation rows subtract the empty-loop cost on both sides (`ops:<x>` minus `ops:empty_loop`). Measured in the 6 Nov 2026 run (master `93f994f`) unless stated.
 - **Pri**: `high` blocks most other work or tests; `med` is a widely used feature; `low` is niche or optional.
-- **out**: out of scope and excluded from all pass rates (decided 3 Nov 2026): opcache/JIT, non-CLI SAPIs except apache2handler, server-backed DB/protocol clients except mysqli, ffi, readline, tidy/enchant/com_dotnet/imap.
+- **out**: out of scope and excluded from all pass rates (decided 3 Nov 2026): non-CLI SAPIs except apache2handler, server-backed DB/protocol clients except mysqli, ffi, readline, tidy/enchant/com_dotnet/imap.
+- **Planned after high and med**: opcache (opcode cache, optimizer, JIT) is no longer out of scope (owner, 6 Nov 2026): not having it is a TODO bug, and the work starts once every `high` and `med` row is at 100%. Until then its tests stay excluded through `phpt-scope.txt`.
 - **Test counts** in parentheses are `.phpt` files in `modules/php-src/` at commit `0c7255dc521` (23,792 in the tree).
 
 | Item | % | Pri | Description |
@@ -85,8 +86,8 @@ The TODO list for the Rust port of PHP: everything that has to be built to pass 
 | ext/odbc, pdo_odbc, pdo_dblib, pdo_firebird, dba | n/a | out | **Out of scope** (external drivers/servers). (54 / 26 / 33 / 51 / 61). |
 | ext/ldap, ext/snmp | n/a | out | **Out of scope** (external services). Need external services (142 / 42). |
 | ext/readline | n/a | out | **Out of scope** (interactive php -a only). Interactive shell `php -a` (36). |
-| ext/opcache | n/a | out | **Out of scope** (opcache.enable_cli=0 by default; tests probe optimizer/JIT internals). Many of its 1,038 tests check optimizer/JIT internals; decide which behaviour-only tests to keep. Ref: `Zend/Optimizer`. |
-| Optimizer passes | n/a | out | **Out of scope** (no observable behaviour without opcache). Only needed where they change observable behaviour, e.g. some warnings. Ref: `Zend/Optimizer/`. |
+| ext/opcache (opcode cache, JIT) | 0% | low | **TODO, planned once every `high` and `med` row is at 100%** (owner decision, 6 Nov 2026; was out of scope since 3 Nov). Not having it is a bug: request SAPIs recompile every script on every request. In the in-house WordPress test (6 Nov 2026), C PHP 8.5 under `php -S` (where opcache is on by default) served pages in 0.014-0.12 s against ours at 0.55-1.7 s, and Site Health reports "Opcode cache is not enabled" on ours. Also 29 in-scope tests elsewhere skip with "Required extension missing: opcache". Scope of the work: the shared-memory script cache (`opcache.enable`, `opcache_*()` functions, `opcache_get_status()`), file cache and preloading, then the JIT. Its 1,038 tests (`ext/opcache/tests`) are excluded through `phpt-scope.txt` until the work starts; many probe optimizer/JIT internals (`opcache.opt_debug_level` dumps). Ref: `ext/opcache`. |
+| Optimizer passes | 0% | low | **TODO with ext/opcache** (same decision, same start condition): the `Zend/Optimizer` passes that opcache runs, including their observable effects (some warnings and the `opt_debug_level` dumps that opcache tests compare). Ref: `Zend/Optimizer/`. |
 | ext/ffi | n/a | out | **Out of scope** (default-disabled (ffi.enable=preload); needs a C declaration parser + libffi). C FFI from PHP (109). |
 | ext/tidy, enchant, com_dotnet, imap | n/a | out | **Out of scope** (niche libraries / Windows-only). Niche or Windows-only; probably out of scope (53 / 33 / 42 / 1). |
 | **Done (100%)** | | | |
