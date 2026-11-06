@@ -896,10 +896,13 @@ enum UndefDimHit {
 
 /// The in-place append behind [`Vm::concat_assign_cv`]: `None` when place
 /// `pid` is not a plain compiled variable holding a string, or `rhs` is
-/// neither a string nor an int; otherwise the string was extended (a
-/// shared one is copied first, as `zend_string_extend` requires a
-/// refcount of 1) and the result is returned: the new string when
-/// `want_result`, else `Null`.
+/// neither a string nor an int, or is a second handle of that very string
+/// (`$s .= $s`: the generic path releases the operand first and extends
+/// the one string in place with [`ZStr::append_self`], php-src's
+/// `concat_function` with `result == op1 == op2`, so the memory limit sees
+/// only the growth); otherwise the string was extended (a shared one is
+/// copied first, as `zend_string_extend` requires a refcount of 1) and the
+/// result is returned: the new string when `want_result`, else `Null`.
 #[inline]
 fn concat_cv_in_place(
     f: &crate::vm::Frame,
@@ -917,6 +920,7 @@ fn concat_cv_in_place(
         return None;
     };
     match rhs {
+        Value::Str(add) if ZStr::ptr_eq(s, add) => return None,
         Value::Str(add) => s.append(add.as_bytes()),
         Value::Int(i) => s.append_long(*i),
         _ => return None,
@@ -1060,7 +1064,7 @@ fn concat_in_place(slot: &mut Value, segs: &[RSeg], wop: &mut WOp) -> Option<Ste
     };
     match rhs {
         Value::Str(add) => s.append(add.as_bytes()),
-        Value::Int(i) => s.append(php_runtime::convert::long_to_zstr(*i).as_bytes()),
+        Value::Int(i) => s.append_long(*i),
         _ => return None,
     }
     let result = Value::Str(s.clone());
@@ -1761,21 +1765,20 @@ impl Vm {
     /// [`concat_in_place`] does. `None` leaves the operation to the generic
     /// read, operate and write-back path.
     fn plain_prop_concat(o: &Obj, name: &ZStr, rhs: &Value) -> Option<Value> {
-        let tmp;
-        let add: &[u8] = match rhs {
-            Value::Str(s) => s.as_bytes(),
-            Value::Int(i) => {
-                tmp = php_runtime::convert::long_to_zstr(*i);
-                tmp.as_bytes()
-            }
-            _ => return None,
-        };
+        if !matches!(rhs, Value::Str(_) | Value::Int(_)) {
+            return None;
+        }
         let idx = Self::plain_property_slot(o, name, true)?;
         let data = object::data(o);
         let mut slots = data.slots.borrow_mut();
-        let r = match slots.get_mut(idx) {
-            Some(Some(Value::Str(s))) => {
-                s.append(add);
+        let r = match (slots.get_mut(idx), rhs) {
+            (Some(Some(Value::Str(s))), Value::Str(add)) => {
+                s.append(add.as_bytes());
+                Some(Value::Str(s.clone()))
+            }
+            // The digits go straight into the string (`ZStr::append_long`).
+            (Some(Some(Value::Str(s))), Value::Int(i)) => {
+                s.append_long(*i);
                 Some(Value::Str(s.clone()))
             }
             _ => None,
