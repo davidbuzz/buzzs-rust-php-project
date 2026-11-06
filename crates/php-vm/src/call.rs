@@ -48,8 +48,10 @@ impl Vm {
     // INIT
     // ------------------------------------------------------------------
 
-    /// Pushes a pending call.
-    #[inline]
+    /// Pushes a pending call. Always inlined: as a call, the ~140-byte
+    /// `PendingCall` is copied once more on the way into `calls`.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // see above: one copy of the call less per INIT
     fn push_pending(&mut self, call: PendingCall) {
         self.frame_mut().calls.push(call);
     }
@@ -370,6 +372,22 @@ impl Vm {
                 ),
             ));
         };
+        // A hit in the run-time cache of `ZEND_INIT_METHOD_CALL`: the call
+        // is pushed straight from the cached method, `$this` moved in.
+        let cls = object::class_of(&o).clone();
+        if cls.hooks.as_ref().and_then(|h| h.get_method).is_none() {
+            let scope = self.scope();
+            if let Some(m) = self.call_bufs.methods.get(&cls, scope.as_ref(), &name) {
+                let is_static = m.is_static() && m.flags & flags::STATIC_KEEPS_THIS == 0;
+                self.push_pending(PendingCall {
+                    this: if is_static { None } else { Some(o) },
+                    scope: Some(m.scope()),
+                    called: Some(cls),
+                    ..PendingCall::new(m.func.clone())
+                });
+                return Ok(());
+            }
+        }
         let call = self.method_call(&o, &name)?;
         self.push_pending(call);
         Ok(())
