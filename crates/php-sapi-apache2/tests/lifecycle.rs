@@ -631,6 +631,18 @@ fn multipart_upload() {
 }
 
 #[test]
+fn upload_error_constants_are_core_constants() {
+    let r = run(
+        "uperr.php",
+        Req {
+            script: "<?php var_dump(UPLOAD_ERR_OK, UPLOAD_ERR_EXTENSION, get_defined_constants(true)['Core']['UPLOAD_ERR_NO_TMP_DIR'] ?? null);",
+            ..Req::default()
+        },
+    );
+    assert_eq!(r.body, "int(0)\nint(8)\nint(6)\n");
+}
+
+#[test]
 fn post_max_size_warning() {
     let r = run(
         "big.php",

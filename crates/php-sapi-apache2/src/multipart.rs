@@ -21,6 +21,8 @@ const FILLUNIT: usize = 1024 * 5;
 
 /// `UPLOAD_ERR_*` codes (`PHP_UPLOAD_ERROR_*`).
 pub mod upload_err {
+    /// `UPLOAD_ERR_OK`.
+    pub const OK: i64 = 0;
     /// `UPLOAD_ERR_INI_SIZE` (`upload_max_filesize`).
     pub const INI_SIZE: i64 = 1;
     /// `UPLOAD_ERR_FORM_SIZE` (`MAX_FILE_SIZE`).

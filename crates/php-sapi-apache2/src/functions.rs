@@ -21,6 +21,22 @@ pub const FATAL_CHECK: &str = "__apache2handler_fatal_status";
 /// `E_WARNING`.
 const E_WARNING: i64 = 2;
 
+/// The `UPLOAD_ERR_*` constants of `main/main.stub.php`, in its order:
+/// main's own constants, which every SAPI has.
+const UPLOAD_ERR_CONSTANTS: &[(&str, i64)] = {
+    use crate::multipart::upload_err;
+    &[
+        ("UPLOAD_ERR_OK", upload_err::OK),
+        ("UPLOAD_ERR_INI_SIZE", upload_err::INI_SIZE),
+        ("UPLOAD_ERR_FORM_SIZE", upload_err::FORM_SIZE),
+        ("UPLOAD_ERR_PARTIAL", upload_err::PARTIAL),
+        ("UPLOAD_ERR_NO_FILE", upload_err::NO_FILE),
+        ("UPLOAD_ERR_NO_TMP_DIR", upload_err::NO_TMP_DIR),
+        ("UPLOAD_ERR_CANT_WRITE", upload_err::CANT_WRITE),
+        ("UPLOAD_ERR_EXTENSION", upload_err::EXTENSION),
+    ]
+};
+
 thread_local! {
     static ORIG_INI_SET: Cell<Option<NativeFn>> = const { Cell::new(None) };
     static ORIG_INI_RESTORE: Cell<Option<NativeFn>> = const { Cell::new(None) };
@@ -619,6 +635,12 @@ impl Extension for Apache2Handler {
             let vm = m.vm();
             for c in ["STDIN", "STDOUT", "STDERR"] {
                 vm.constants.remove(c.as_bytes());
+            }
+            // Defined unattributed (not through `m.constant`), so that
+            // `get_defined_constants(true)` files them under `Core`, like
+            // the other engine constants.
+            for (name, value) in UPLOAD_ERR_CONSTANTS {
+                vm.constants.insert(ZStr::from(*name), Value::Int(*value));
             }
             if let Some(b) = vm.native_function("ini_set") {
                 ORIG_INI_SET.with(|c| c.set(Some(b.handler)));
