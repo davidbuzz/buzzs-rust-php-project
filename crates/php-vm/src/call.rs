@@ -841,15 +841,42 @@ impl Vm {
     }
 
     pub(crate) fn op_send(&mut self, src: &ArgSrc, name: Option<ZStr>) -> VmResult<()> {
-        self.pooled_args();
         // Fast path: a positional by-value argument of an ordinary call
         // (the general path below computes the same thing in more steps).
         if name.is_none() {
             let by_val = {
-                let call = self.frame().calls.last().expect("pending call");
-                call.magic_name.is_none()
+                let frame = self.frames.last_mut().expect("active frame");
+                let call = frame.calls.last_mut().expect("pending call");
+                if call.args.capacity() == 0 {
+                    if let Some(v) = self.call_bufs.args.pop() {
+                        install_buffer(&mut call.args, v);
+                    }
+                }
+                let by_val = call.magic_name.is_none()
                     && !call.has_named
-                    && !call.func.arg_by_ref(call.args.len())
+                    && !call.func.arg_by_ref(call.args.len());
+                // `ZEND_SEND_VAL` of a literal or temporary
+                // (`ZEND_SEND_VAL_SPEC_CONST`/`_TMP`): copied (moved) into
+                // the call without leaving the frame.
+                if by_val {
+                    match src {
+                        ArgSrc::Val(Operand::Lit(i)) => {
+                            let v = frame.code.literals[*i as usize].clone();
+                            call.args.push(Some(v));
+                            return Ok(());
+                        }
+                        ArgSrc::Val(Operand::Tmp(t)) => {
+                            let v = match std::mem::take(&mut frame.tmps[*t as usize]) {
+                                Value::Reference(r) => r.get(),
+                                v => v,
+                            };
+                            call.args.push(Some(v));
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
+                by_val
             };
             if by_val {
                 let v = match src {
@@ -864,6 +891,7 @@ impl Vm {
                 return Ok(());
             }
         }
+        self.pooled_args();
         let pos = match &name {
             Some(n) => self.arg_position(n)?,
             None => Some(self.frame().calls.last().expect("pending call").args.len()),

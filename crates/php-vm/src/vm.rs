@@ -398,6 +398,7 @@ pub struct Frame {
 }
 
 /// Keep small call buffers allocation-free without retaining exceptional frame sizes.
+#[inline]
 fn clear_frame_buffer<T>(buffer: &mut Vec<T>) {
     if buffer.capacity() > 256 {
         *buffer = Vec::new();
