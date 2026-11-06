@@ -222,6 +222,15 @@ fn backend_supports_et(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 // --- StreamPollHandle -----------------------------------------------------------
 
+/// `php_stream_poll_handle_create_object`: no stream until the constructor
+/// runs. Like the other `create_object` handlers of these final internal
+/// classes, it also bars `ReflectionClass::newInstanceWithoutConstructor()`.
+#[allow(clippy::unnecessary_wraps)] // ClassHooks::create signature
+fn handle_create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
+    object::set_internal(o, HandleData(None));
+    Ok(())
+}
+
 fn handle_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let this = a.this_obj();
     let (r, _) = res::stream_arg_res(vm, a, 0)?;
@@ -311,6 +320,18 @@ fn notify_close(id: u64) {
             retire(&ctx, &w);
         }
     }
+}
+
+/// `php_io_poll_watcher_create_object`: an inactive watcher with no
+/// handle and no context; `Context::add()` fills the state in.
+#[allow(clippy::unnecessary_wraps)] // ClassHooks::create signature
+fn watcher_create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
+    let state = WatcherState {
+        fd: -1,
+        ..WatcherState::default()
+    };
+    object::set_internal(o, Rc::new(RefCell::new(state)));
+    Ok(())
 }
 
 fn watcher_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -447,6 +468,14 @@ fn watcher_remove(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 // --- Context ---------------------------------------------------------------
+
+/// `php_io_poll_context_create_object`: the poll context is `NULL` until
+/// the constructor runs.
+#[allow(clippy::unnecessary_wraps)] // ClassHooks::create signature
+fn context_create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
+    object::set_internal(o, ContextData(None));
+    Ok(())
+}
 
 fn context_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let this = a.this_obj();
@@ -784,8 +813,16 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
         | class_flags::NOT_SERIALIZABLE
         | class_flags::NO_CLONE
         | class_flags::NO_DYNAMIC_PROPERTIES;
+    // `create_object` handlers: the state exists before any constructor,
+    // and a final internal class with one cannot be instantiated by
+    // `ReflectionClass::newInstanceWithoutConstructor()`.
+    let created_by = |create: fn(&mut Vm, &Obj) -> VmResult<()>| ClassHooks {
+        create: Some(create),
+        ..ClassHooks::default()
+    };
     let watcher = ClassBuilder::new("Io\\Poll\\Watcher")
         .flags(strict)
+        .hooks(created_by(watcher_create))
         .method(
             "__construct()",
             acc::PRIVATE | acc::FINAL,
@@ -833,6 +870,7 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
     WATCHER_CLASS.with(|c| *c.borrow_mut() = Some(watcher));
     ClassBuilder::new("Io\\Poll\\Context")
         .flags(strict)
+        .hooks(created_by(context_create))
         .method(
             "__construct(Io\\Poll\\Backend $backend = Io\\Poll\\Backend::Auto)",
             acc::PUBLIC,
@@ -900,6 +938,7 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
     }
     ClassBuilder::new("StreamPollHandle")
         .flags(strict)
+        .hooks(created_by(handle_create))
         .implements(vm, &["Io\\Poll\\Handle"])
         .method("__construct($stream)", acc::PUBLIC, handle_construct)
         .method("getStream()", acc::PUBLIC, handle_get_stream)
@@ -910,6 +949,90 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use php_vm::ext::Extension;
+    use php_vm::VmOptions;
+
+    /// A `Write` sink shared with the test.
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn vm(sink: &Sink) -> Vm {
+        let streams = crate::Streams;
+        let exts: [&dyn Extension; 1] = [&streams];
+        Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts)
+    }
+
+    /// The `create_object` handlers: a new instance carries its (empty)
+    /// internal state before any constructor runs.
+    #[test]
+    fn final_classes_create_their_state_before_the_constructor() {
+        let mut vm = vm(&Sink::default());
+        let cls = vm.find_class(b"Io\\Poll\\Context").expect("Context");
+        let o = vm.new_object(&cls).expect("new Context");
+        assert!(object::has_internal::<ContextData>(&o));
+        assert!(context_of(&o).is_none());
+        let cls = vm.find_class(b"Io\\Poll\\Watcher").expect("Watcher");
+        let o = vm.new_object(&cls).expect("new Watcher");
+        let w = watcher_of(&o).expect("watcher state");
+        assert!(!w.borrow().active);
+        assert_eq!(w.borrow().fd, -1);
+        assert!(w.borrow().handle.is_none());
+        drop(w);
+        let cls = vm
+            .find_class(b"StreamPollHandle")
+            .expect("StreamPollHandle");
+        let o = vm.new_object(&cls).expect("new StreamPollHandle");
+        assert!(object::has_internal::<HandleData>(&o));
+        assert!(handle_resource(&o).is_none());
+    }
+
+    /// `ReflectionClass::newInstanceWithoutConstructor()` refuses a final
+    /// internal class with a `create_object` handler
+    /// (`ext/reflection/php_reflection.c`); constructing a context the
+    /// normal way still works.
+    #[test]
+    fn reflection_cannot_skip_the_constructors() {
+        let sink = Sink::default();
+        let mut vm = vm(&sink);
+        vm.run_script(
+            br#"<?php
+foreach (['Io\Poll\Context', 'Io\Poll\Watcher', 'StreamPollHandle'] as $c) {
+    try {
+        (new ReflectionClass($c))->newInstanceWithoutConstructor();
+        echo "created\n";
+    } catch (ReflectionException $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+$ctx = new Io\Poll\Context();
+var_dump($ctx->getBackend() instanceof Io\Poll\Backend);
+"#,
+            "poll.php",
+        );
+        drop(vm);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        let refused = |c: &str| {
+            format!("Class {c} is an internal class marked as final that cannot be instantiated without invoking its constructor\n")
+        };
+        assert_eq!(
+            out,
+            refused("Io\\Poll\\Context")
+                + &refused("Io\\Poll\\Watcher")
+                + &refused("StreamPollHandle")
+                + "bool(true)\n"
+        );
+    }
 
     #[test]
     fn event_bits_follow_declaration_order() {
