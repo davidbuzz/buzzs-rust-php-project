@@ -6,7 +6,7 @@ use crate::util::{attribute, s, value_name};
 use php_runtime::{Value, ZArray, ZStr};
 use php_vm::class::{cflags, ClassConst, ClassDecl, ClassKind, ConstExpr, PropDecl, StaticProp};
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ModuleBuilder, VmResult};
-use php_vm::types::TypeDecl;
+use php_vm::types::{mask, TypeDecl, TypeMember};
 use php_vm::vm::FrameKind;
 use php_vm::Vm;
 use std::cell::{Cell, RefCell};
@@ -26,18 +26,298 @@ fn ret_zero(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// A type as the compiler resolves it in a declaration (exact union,
 /// intersection and DNF shapes, which the stub-signature parser
-/// flattens): compiled from `function f(TYPE $x) {}`.
+/// flattens), for the declared types this extension patches into its
+/// classes and functions: builtin names, class names (as the global
+/// namespace resolves them: as written, without a leading `\`), `?T`,
+/// `A|B`, `A&B` and `A|(B&C)`.
+///
+/// Built directly rather than compiled from `function f(TYPE $x) {}`: the
+/// eighteen probes cost 1.4 M instructions of every `php` start-up. The
+/// tests check each shape against the compiler. `None`, as from the probe,
+/// for what does not parse or names no class: `?` on a union or an
+/// intersection, a parenthesised group outside a union or an
+/// unparenthesised one inside, an empty or malformed name, a reserved word
+/// as a class name, `self`/`parent`/`static` (no class scope). The
+/// compiler's redundancy errors (`int|int`, `object|Foo`, `mixed|int`,
+/// ...) are not repeated: the extension's declarations have none.
 pub(crate) fn type_of(_vm: &mut Vm, ty: &str) -> Option<TypeDecl> {
-    let src = format!("<?php function __zend_test_type_probe({ty} $x) {{}}");
-    let program = php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).ok()?;
-    let unit = php_vm::compiler::compile(
-        &program,
-        std::rc::Rc::from(src.as_bytes()),
-        php_vm::compiler::CompileOptions::default(),
-    )
-    .ok()?;
-    let fns = unit.decls.functions.borrow();
-    fns.first()?.params.first()?.ty.clone()
+    let ty = ty.trim();
+    let (ty, nullable) = match ty.strip_prefix('?') {
+        Some(inner) => (inner, true),
+        None => (ty, false),
+    };
+    let members = split_union(ty);
+    let in_union = members.len() > 1;
+    if nullable && in_union {
+        return None;
+    }
+    let mut t = TypeDecl::default();
+    for member in members {
+        let member = member.trim();
+        let intersection = member.contains('&');
+        // A group `(A&B)` only as a member of a union (DNF), and there an
+        // intersection only as such a group.
+        let group = member.strip_prefix('(').and_then(|m| m.strip_suffix(')'));
+        if group.is_some() != (in_union && intersection) {
+            return None;
+        }
+        let group = group.unwrap_or(member);
+        if intersection {
+            if nullable {
+                return None;
+            }
+            let names = group
+                .split('&')
+                .map(|name| class_name(name.trim()))
+                .collect::<Option<Vec<ZStr>>>()?;
+            t.members
+                .push(TypeMember::Intersection(t.intersections.len()));
+            t.intersections.push(names);
+            if !in_union {
+                t.pure_intersection = true;
+            }
+        } else if let Some(m) = builtin_type_mask(group) {
+            if m == mask::ITERABLE {
+                t.members.push(TypeMember::Iterable);
+            }
+            t.mask |= m;
+        } else {
+            let name = class_name(group)?;
+            t.members.push(TypeMember::Class(t.classes.len()));
+            t.classes.push(name);
+        }
+    }
+    if nullable {
+        t.mask |= mask::NULL;
+    }
+    Some(t)
+}
+
+/// The `|`-separated members of a type, parentheses kept with their group.
+fn split_union(ty: &str) -> Vec<&str> {
+    let mut members = Vec::new();
+    let mut depth = 0u32;
+    let mut start = 0;
+    for (i, c) in ty.bytes().enumerate() {
+        match c {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b'|' if depth == 0 => {
+                members.push(&ty[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    members.push(&ty[start..]);
+    members
+}
+
+/// The builtin type names an unqualified name resolves to
+/// (`zend_compile_single_typename`), without `static`, which needs a
+/// class scope.
+const BUILTIN_TYPES: [(&str, u32); 14] = [
+    ("int", mask::LONG),
+    ("float", mask::DOUBLE),
+    ("string", mask::STRING),
+    ("bool", mask::BOOL),
+    ("false", mask::FALSE),
+    ("true", mask::TRUE),
+    ("null", mask::NULL),
+    ("void", mask::VOID),
+    ("never", mask::NEVER),
+    ("mixed", mask::ANY),
+    ("object", mask::OBJECT),
+    ("iterable", mask::ITERABLE),
+    ("array", mask::ARRAY),
+    ("callable", mask::CALLABLE),
+];
+
+/// The mask of a builtin type name (case-insensitive), `None` for any
+/// other name.
+fn builtin_type_mask(name: &str) -> Option<u32> {
+    BUILTIN_TYPES
+        .iter()
+        .find(|(builtin, _)| builtin.eq_ignore_ascii_case(name))
+        .map(|&(_, m)| m)
+}
+
+/// A class name of a declaration in the global namespace: as written,
+/// without a leading `\`. `None` unless every `\`-separated segment is a
+/// label, and for a reserved last segment (a builtin type name, `self`,
+/// `parent` or `static`: `Cannot use "..." as a type name as it is
+/// reserved`, or no class scope).
+fn class_name(name: &str) -> Option<ZStr> {
+    let name = name.strip_prefix('\\').unwrap_or(name);
+    let label = |segment: &str| {
+        segment.bytes().next().is_some_and(|c| !c.is_ascii_digit())
+            && segment
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80)
+    };
+    let last = name.rsplit('\\').next()?;
+    let reserved = builtin_type_mask(last).is_some()
+        || ["self", "parent", "static"]
+            .iter()
+            .any(|word| word.eq_ignore_ascii_case(last));
+    (name.split('\\').all(label) && !reserved).then(|| ZStr::from(name))
+}
+
+#[cfg(test)]
+mod type_of_tests {
+    use super::type_of;
+    use php_vm::types::{mask, TypeDecl, TypeMember};
+    use php_vm::Vm;
+
+    /// The first function `src` declares, compiled.
+    fn compiled_function<T>(
+        src: &str,
+        part: impl FnOnce(&php_vm::func::UserFunction) -> Option<T>,
+    ) -> Option<T> {
+        let program =
+            php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).ok()?;
+        let unit = php_vm::compiler::compile(
+            &program,
+            std::rc::Rc::from(src.as_bytes()),
+            php_vm::compiler::CompileOptions::default(),
+        )
+        .ok()?;
+        let fns = unit.decls.functions.borrow();
+        part(fns.first()?)
+    }
+
+    /// The probe `type_of` replaced: the type as `function f(TYPE $x) {}`
+    /// compiles it.
+    fn compiled(ty: &str) -> Option<TypeDecl> {
+        compiled_function(
+            &format!("<?php function __zend_test_type_probe({ty} $x) {{}}"),
+            |f| f.params.first()?.ty.clone(),
+        )
+    }
+
+    /// The type as `function f(): TYPE {}` compiles it, for the types a
+    /// parameter cannot have.
+    fn compiled_return(ty: &str) -> Option<TypeDecl> {
+        compiled_function(
+            &format!("<?php function __zend_test_type_probe(): {ty} {{}}"),
+            |f| f.return_type.clone(),
+        )
+    }
+
+    fn vm() -> Vm {
+        Vm::new(&php_vm::VmOptions::default(), Box::new(std::io::sink()))
+    }
+
+    #[test]
+    fn matches_the_compiler_for_every_type_this_extension_declares() {
+        let mut vm = vm();
+        for ty in [
+            // test.stub.php: class constants, properties, trait properties
+            // and `zend_test_internal_dnf_arguments`.
+            "mixed",
+            "int|array",
+            "int|string",
+            "int",
+            "string",
+            "Traversable&Countable",
+            "Iterator|(Traversable&Countable)",
+            "Traversable|Countable",
+            "ZendTestNS2\\ZendSubNS\\Foo",
+            "ZendTestNS2\\ZendSubNS\\Foo&ZendTestNS\\Bar",
+            "ZendTestNS2\\ZendSubNS\\Foo|ZendTestNS\\Bar",
+            "ZendTestNS\\Foo",
+            "ZendTestNS\\UnlikelyCompileError",
+            "ZendTestNS\\NotUnlikelyCompileError",
+            // Other shapes the builder supports.
+            "?int",
+            "? int",
+            "?Foo",
+            "?\\Foo",
+            "\\Foo|\\ZendTestNS\\Bar",
+            "(\\A&\\B)|\\C",
+            "( A & B )|C",
+            "iterable",
+            "?iterable",
+            "iterable|Foo",
+            "Foo|iterable",
+            "int|Foo|null",
+            "(A&B)|(C&D)",
+            "A|(B&C)|D",
+            "(A&B)|int",
+            "A&B&C",
+            " int | string ",
+            "INT|Foo",
+            "bool|float|object|callable|array",
+            "false",
+            "true",
+            "null",
+            "null|Foo",
+            "_Foo1\\B2",
+        ] {
+            let ours = type_of(&mut vm, ty).unwrap_or_else(|| panic!("{ty} is built"));
+            let theirs = compiled(ty).unwrap_or_else(|| panic!("{ty} compiles"));
+            assert_eq!(ours, theirs, "{ty}");
+        }
+        for ty in ["void", "never"] {
+            let ours = type_of(&mut vm, ty).unwrap_or_else(|| panic!("{ty} is built"));
+            let theirs = compiled_return(ty).unwrap_or_else(|| panic!("{ty} compiles"));
+            assert_eq!(ours, theirs, "{ty}");
+        }
+    }
+
+    #[test]
+    fn what_the_probe_rejected_is_no_type() {
+        let mut vm = vm();
+        for ty in [
+            "",
+            "int|",
+            "|int",
+            "?",
+            "?int|string",
+            "?A&B",
+            "?(A&B)",
+            "(A&B)",
+            "A|(B)",
+            "A&B|C",
+            "C|A&B",
+            "A&&B",
+            "A&int",
+            "Foo\\int",
+            "\\int",
+            "self",
+            "Self",
+            "parent",
+            "static",
+            "STATIC",
+        ] {
+            assert_eq!(type_of(&mut vm, ty), None, "{ty}");
+            assert_eq!(compiled(ty), None, "{ty}");
+        }
+    }
+
+    #[test]
+    fn shapes() {
+        let mut vm = vm();
+        let dnf = type_of(&mut vm, "Iterator|(Traversable&Countable)").unwrap();
+        assert_eq!(dnf.mask, 0);
+        assert_eq!(dnf.classes.len(), 1);
+        assert_eq!(dnf.classes[0].as_bytes(), b"Iterator");
+        assert_eq!(dnf.intersections.len(), 1);
+        assert_eq!(dnf.intersections[0].len(), 2);
+        assert_eq!(
+            dnf.members,
+            [TypeMember::Class(0), TypeMember::Intersection(0)]
+        );
+        assert!(!dnf.pure_intersection);
+        let inter = type_of(&mut vm, "Traversable&Countable").unwrap();
+        assert!(inter.pure_intersection);
+        assert_eq!(inter.members, [TypeMember::Intersection(0)]);
+        let nullable = type_of(&mut vm, "?int").unwrap();
+        assert_eq!(nullable.mask, mask::LONG | mask::NULL);
+        assert!(nullable.members.is_empty());
+        let qualified = type_of(&mut vm, "\\ZendTestNS\\Foo").unwrap();
+        assert_eq!(qualified.classes[0].as_bytes(), b"ZendTestNS\\Foo");
+    }
 }
 
 /// Sets the declared type of the class constant `name`.

@@ -26,7 +26,9 @@ impl Write for Sink {
 
 /// Inheritance, an interface, a trait and an enum whose cases and constant
 /// interleave; the printed orders are those of php-src (8.3 and master
-/// agree on every line).
+/// agree on every line). The bare VM has no ext/standard array functions
+/// (`array_keys`, `array_map`), so the keys and names are collected with
+/// `foreach`.
 const SCRIPT: &str = "<?php
 interface I { const IC = 1; function i(); }
 trait T { public static $ts = 1; const TC = 2; public $tp = 3; function t() {} abstract function ta(); }
@@ -39,12 +41,14 @@ enum E: string implements I {
     case B = 'b';
     function i() {}
 }
+function keys($a) { $k = []; foreach ($a as $n => $_) { $k[] = $n; } return implode(',', $k); }
+function names($a) { $k = []; foreach ($a as $p) { $k[] = $p->name; } return implode(',', $k); }
 echo implode(',', get_class_methods('C')), \"\\n\";
 echo implode(',', get_class_methods('U')), \"\\n\";
-echo implode(',', array_keys((new ReflectionClass('C'))->getConstants())), \"\\n\";
-echo implode(',', array_keys((new ReflectionClass('U'))->getConstants())), \"\\n\";
-echo implode(',', array_keys((new ReflectionClass('E'))->getConstants())), \"\\n\";
-echo implode(',', array_map(fn($p) => $p->name, (new ReflectionClass('C'))->getProperties())), \"\\n\";
+echo keys((new ReflectionClass('C'))->getConstants()), \"\\n\";
+echo keys((new ReflectionClass('U'))->getConstants()), \"\\n\";
+echo keys((new ReflectionClass('E'))->getConstants()), \"\\n\";
+echo names((new ReflectionClass('C'))->getProperties()), \"\\n\";
 echo C::IC + C::PC + C::CC + U::TC + U::UC, \"\\n\";
 ";
 
@@ -98,8 +102,9 @@ fn check_tables(cls: &Rc<Class>) {
 fn linked_tables_are_consistent_and_ordered_like_php() {
     let sink = Sink::default();
     let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
-    assert_eq!(vm.run_script(SCRIPT.as_bytes(), "t.php"), 0);
+    let status = vm.run_script(SCRIPT.as_bytes(), "t.php");
     let output = String::from_utf8(sink.0.borrow().clone()).expect("UTF-8 output");
+    assert_eq!(status, 0, "{output}");
     assert_eq!(output, EXPECTED);
     for name in ["I", "T", "P", "C", "U", "E"] {
         let cls = vm

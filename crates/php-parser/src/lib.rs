@@ -36,7 +36,7 @@ pub use ast::Program;
 pub use error::{ErrorKind, ParseError};
 pub use parser::ParseOptions;
 pub use php_lexer::ScriptEncodingOptions;
-pub use stack::StackPolicy;
+pub use stack::{set_thread_stack, StackPolicy};
 
 /// Parses a PHP file (starting in inline-HTML mode, like a script file).
 ///
