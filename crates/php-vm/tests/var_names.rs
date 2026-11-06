@@ -157,45 +157,44 @@ function dyn($n) {
     $$name = $n * 10;
     extract(["e" => $n, "a" => 100]);
     $r = compact("a", "b", "e", $name);
-    ksort($r);
-    echo json_encode($r), " ", json_encode(get_defined_vars()), "\n";
+    echo serialize($r), " ", serialize(get_defined_vars()), "\n";
 }
 for ($i = 0; $i < 3; $i++) { dyn($i); }
 function plain($x) { return get_defined_vars(); }
-echo json_encode(plain(5)), "\n";
-function rec($n) { if ($n > 0) { $k = "d$n"; $$k = $n; rec($n - 1); } echo json_encode(get_defined_vars()), "\n"; }
+echo serialize(plain(5)), "\n";
+function rec($n) { if ($n > 0) { $k = "d$n"; $$k = $n; rec($n - 1); } echo serialize(get_defined_vars()), "\n"; }
 rec(2);
 function gv() { global $g; $g = 7; $h = &$GLOBALS['g']; return get_defined_vars(); }
-echo json_encode(gv()), "\n";
+echo serialize(gv()), "\n";
 function unsetcv($a) { unset($a); $b = 1; return get_defined_vars(); }
-echo json_encode(unsetcv(1)), "\n";
-function ev($x) { eval('$y = $x + 1; $z = "zz";'); echo json_encode(get_defined_vars()), "\n"; return $y; }
+echo serialize(unsetcv(1)), "\n";
+function ev($x) { eval('$y = $x + 1; $z = "zz";'); echo serialize(get_defined_vars()), "\n"; return $y; }
 echo ev(1), ev(2), "\n";
-function many($a, $b, $c, $d, $e, $f, $g, $h, $i) { $$a = 1; ${"q$b"} = 2; return json_encode(get_defined_vars()); }
+function many($a, $b, $c, $d, $e, $f, $g, $h, $i) { $$a = 1; ${"q$b"} = 2; return serialize(get_defined_vars()); }
 echo many("p", 1, 2, 3, 4, 5, 6, 7, 8), "\n";
 echo many("r", 1, 2, 3, 4, 5, 6, 7, 8), "\n";
 function cl() { $c = function() { $q = 1; $$q = 2; return get_defined_vars(); }; return $c(); }
-echo json_encode(cl()), json_encode(cl()), "\n";
+echo serialize(cl()), serialize(cl()), "\n";
 function g1() { $x = 1; yield get_defined_vars(); $y = 2; ${"w"} = 3; yield get_defined_vars(); }
-foreach (g1() as $v) echo json_encode($v), "\n";
+foreach (g1() as $v) echo serialize($v), "\n";
 "#),
-        r#"{"a":100,"b":2,"e":0,"v0":0} {"n":0,"a":100,"b":2,"name":"v0","r":{"a":100,"b":2,"e":0,"v0":0},"v0":0,"e":0}
-{"a":100,"b":2,"e":1,"v1":10} {"n":1,"a":100,"b":2,"name":"v1","r":{"a":100,"b":2,"e":1,"v1":10},"v1":10,"e":1}
-{"a":100,"b":2,"e":2,"v2":20} {"n":2,"a":100,"b":2,"name":"v2","r":{"a":100,"b":2,"e":2,"v2":20},"v2":20,"e":2}
-{"x":5}
-{"n":0}
-{"n":1,"k":"d1","d1":1}
-{"n":2,"k":"d2","d2":2}
-{"g":7,"h":7}
-{"b":1}
-{"x":1,"y":2,"z":"zz"}
-2{"x":2,"y":3,"z":"zz"}
+        r#"a:4:{s:1:"a";i:100;s:1:"b";i:2;s:1:"e";i:0;s:2:"v0";i:0;} a:7:{s:1:"n";i:0;s:1:"a";i:100;s:1:"b";i:2;s:4:"name";s:2:"v0";s:1:"r";a:4:{s:1:"a";i:100;s:1:"b";i:2;s:1:"e";i:0;s:2:"v0";i:0;}s:2:"v0";i:0;s:1:"e";i:0;}
+a:4:{s:1:"a";i:100;s:1:"b";i:2;s:1:"e";i:1;s:2:"v1";i:10;} a:7:{s:1:"n";i:1;s:1:"a";i:100;s:1:"b";i:2;s:4:"name";s:2:"v1";s:1:"r";a:4:{s:1:"a";i:100;s:1:"b";i:2;s:1:"e";i:1;s:2:"v1";i:10;}s:2:"v1";i:10;s:1:"e";i:1;}
+a:4:{s:1:"a";i:100;s:1:"b";i:2;s:1:"e";i:2;s:2:"v2";i:20;} a:7:{s:1:"n";i:2;s:1:"a";i:100;s:1:"b";i:2;s:4:"name";s:2:"v2";s:1:"r";a:4:{s:1:"a";i:100;s:1:"b";i:2;s:1:"e";i:2;s:2:"v2";i:20;}s:2:"v2";i:20;s:1:"e";i:2;}
+a:1:{s:1:"x";i:5;}
+a:1:{s:1:"n";i:0;}
+a:3:{s:1:"n";i:1;s:1:"k";s:2:"d1";s:2:"d1";i:1;}
+a:3:{s:1:"n";i:2;s:1:"k";s:2:"d2";s:2:"d2";i:2;}
+a:2:{s:1:"g";i:7;s:1:"h";R:2;}
+a:1:{s:1:"b";i:1;}
+a:3:{s:1:"x";i:1;s:1:"y";i:2;s:1:"z";s:2:"zz";}
+2a:3:{s:1:"x";i:2;s:1:"y";i:3;s:1:"z";s:2:"zz";}
 3
-{"a":"p","b":1,"c":2,"d":3,"e":4,"f":5,"g":6,"h":7,"i":8,"p":1,"q1":2}
-{"a":"r","b":1,"c":2,"d":3,"e":4,"f":5,"g":6,"h":7,"i":8,"r":1,"q1":2}
-{"q":1,"1":2}{"q":1,"1":2}
-{"x":1}
-{"x":1,"y":2,"w":3}
+a:11:{s:1:"a";s:1:"p";s:1:"b";i:1;s:1:"c";i:2;s:1:"d";i:3;s:1:"e";i:4;s:1:"f";i:5;s:1:"g";i:6;s:1:"h";i:7;s:1:"i";i:8;s:1:"p";i:1;s:2:"q1";i:2;}
+a:11:{s:1:"a";s:1:"r";s:1:"b";i:1;s:1:"c";i:2;s:1:"d";i:3;s:1:"e";i:4;s:1:"f";i:5;s:1:"g";i:6;s:1:"h";i:7;s:1:"i";i:8;s:1:"r";i:1;s:2:"q1";i:2;}
+a:2:{s:1:"q";i:1;s:1:"1";i:2;}a:2:{s:1:"q";i:1;s:1:"1";i:2;}
+a:1:{s:1:"x";i:1;}
+a:3:{s:1:"x";i:1;s:1:"y";i:2;s:1:"w";i:3;}
 "#
     );
 }
@@ -207,13 +206,14 @@ fn an_include_adds_its_variables_to_the_including_frame() {
     let inc = dir.join("inc.php");
     std::fs::write(&inc, b"<?php $from_include = $x + 1; $x = 'changed';").expect("include file");
     let script = format!(
-        "<?php\nfunction f($x) {{ include '{}'; return get_defined_vars(); }}\necho json_encode(f(1)), json_encode(f(2)), \"\\n\";\n",
+        "<?php\nfunction f($x) {{ include '{}'; return get_defined_vars(); }}\necho serialize(f(1)), serialize(f(2)), \"\\n\";\n",
         inc.display()
     );
     let output = run(&script);
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(
         output,
-        "{\"x\":\"changed\",\"from_include\":2}{\"x\":\"changed\",\"from_include\":3}\n"
+        "a:2:{s:1:\"x\";s:7:\"changed\";s:12:\"from_include\";i:2;}\
+         a:2:{s:1:\"x\";s:7:\"changed\";s:12:\"from_include\";i:3;}\n"
     );
 }

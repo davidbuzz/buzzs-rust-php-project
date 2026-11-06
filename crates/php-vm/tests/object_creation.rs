@@ -65,7 +65,7 @@ $x = new N(f(), f());
 try { $y = new N(a: 1); } catch (Error $e) { echo $e->getMessage(), "\n"; }
 $x->a[] = 3; $x->b .= 'y'; $x->c++;
 $z = new N;
-echo json_encode([$x, $z]), " ", spl_object_id($x), " ", spl_object_id($z), "\n";
+echo serialize([$x, $z]), " ", spl_object_id($x), " ", spl_object_id($z), "\n";
 "#);
     assert_eq!(
         out,
@@ -73,7 +73,8 @@ echo json_encode([$x, $z]), " ", spl_object_id($x), " ", spl_object_id($z), "\n"
          Call to protected Q::__construct() from global scope\n\
          P\nQ\nf\nf\n\
          Unknown named parameter $a\n\
-         [{\"a\":[1,2,3],\"b\":\"xy\",\"c\":4},{\"a\":[1,2],\"b\":\"x\",\"c\":3}] 2 3\n"
+         a:2:{i:0;O:1:\"N\":3:{s:1:\"a\";a:3:{i:0;i:1;i:1;i:2;i:2;i:3;}s:1:\"b\";s:2:\"xy\";s:1:\"c\";i:4;}\
+         i:1;O:1:\"N\":3:{s:1:\"a\";a:2:{i:0;i:1;i:1;i:2;}s:1:\"b\";s:1:\"x\";s:1:\"c\";i:3;}} 2 3\n"
     );
 }
 

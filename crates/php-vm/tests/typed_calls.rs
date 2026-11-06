@@ -63,8 +63,8 @@ class C { static function make(): static { return new static; } function self():
 class D extends C {}
 echo get_class(D::make()), get_class((new D)->self()), "\n";
 try { (new D)->bad(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
-function it(iterable $i) { return count(is_array($i) ? $i : iterator_to_array($i)); }
-echo it([1,2]), it(new ArrayIterator([1])), "\n";
+function it(iterable $i) { $n = 0; foreach ($i as $_) { $n++; } return $n; }
+echo it([1,2]), it((fn() => yield 1)()), "\n";
 function cb(callable $c) { return $c(); }
 echo cb(fn() => "cb"), cb("phpversion") === PHP_VERSION ? "ok" : "no", "\n";
 function byref(int &$r) { $r++; }
@@ -128,11 +128,11 @@ echo get_class(k(new A)), "\n";
 function w(): float { return 2; }
 var_dump(w());
 "#),
-        r#"float(1)
+        r"float(1)
 g(): Argument #1 ($x) must be of type int, string given, called in t.php on line 6
 h(): Return value must be of type int, float returned
 A
 float(2)
-"#
+"
     );
 }
