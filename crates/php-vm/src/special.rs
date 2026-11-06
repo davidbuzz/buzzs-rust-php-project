@@ -15,7 +15,7 @@
 //! `ZEND_FRAMELESS_ICALL_n` in `Zend/zend_vm_def.h`), which call a handler
 //! without pushing its call frame.
 
-use crate::call::accepts_without_coercion;
+use crate::call::forget_unallocated;
 use crate::compiler::SPECIAL_BUILTINS;
 use crate::func::{flags, Args, Builtin, Func};
 use crate::object;
@@ -323,90 +323,228 @@ impl Vm {
     }
 }
 
-/// Whether `call` of builtin `b` runs frameless: php-src's frameless
-/// internal calls (`ZEND_FRAMELESS_ICALL_n`) skip the call frame and
-/// materialise it only when the function reports an error. Here a call is
-/// frameless only when nothing can see the frame: a function of the list
-/// below whose handler has no diagnostic, exception or callback for
-/// arguments that already have an accepted scalar type (so zpp coerces
-/// nothing and no object can be released), called by name without named
-/// arguments. Everything else pushes the builtin frame as before.
-pub(crate) fn frameless_call(b: &Builtin, call: &PendingCall) -> bool {
-    if call.magic_name.is_some()
-        || call.is_ctor
-        || call.has_named
-        || !call.named.is_empty()
-        || call.dynamic
-        || call.this.is_some()
-        || call.scope.is_some()
-        || call.called.is_some()
-        || call.closure.is_some()
-        || call.pfa.is_some()
-        || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
-    {
-        return false;
-    }
-    let n = call.args.len();
-    let name = b.name.as_bytes();
-    // The arities (and values) without an error path: strpos()'s offset
-    // can be out of range, trim()'s character list can hold an invalid
-    // `..` range, dirname()'s levels can be below 1, ord() and chr()
-    // deprecate other lengths and values, max()/min() need two values.
-    let error_free = match name {
-        b"abs" | b"dechex" | b"strtolower" | b"strtoupper" | b"trim" | b"ltrim" | b"rtrim"
-        | b"dirname" | b"is_numeric" => n == 1,
-        b"ord" => n == 1 && matches!(&call.args[0], Some(Value::Str(s)) if s.len() == 1),
-        b"chr" => n == 1 && matches!(&call.args[0], Some(Value::Int(c)) if (0..=255).contains(c)),
-        b"strpos" | b"str_contains" | b"str_starts_with" | b"str_ends_with" | b"max" | b"min" => {
-            n == 2
-        }
-        b"substr" | b"strstr" => n == 2 || n == 3,
-        _ => false,
+/// The frameless-call classes, kept in bits 27..=31 of a builtin
+/// function's flags ([`crate::func::flags::FRAMELESS`]): php-src's
+/// frameless functions (`ZEND_FRAMELESS_FUNCTION` in ext/standard) plus
+/// `abs()`, `chr()` and `ord()`. Each class names the argument shapes for
+/// which its handler has no diagnostic, exception, callback, frame
+/// inspection or immediate memory-limit fatal (see [`frameless_args`]).
+mod fl {
+    /// `abs(int|float)`.
+    pub(super) const ABS: u32 = 1;
+    /// `dechex(int)`.
+    pub(super) const DECHEX: u32 = 2;
+    /// `strtolower(string)`, `strtoupper(string)`.
+    pub(super) const CASE: u32 = 3;
+    /// `trim()`, `ltrim()`, `rtrim()` of a string, with a character list
+    /// without a `..` range (`php_charmask()` warns about invalid ones).
+    pub(super) const TRIM: u32 = 4;
+    /// `dirname(string[, int])` with at least one level (else a
+    /// `ValueError`).
+    pub(super) const DIRNAME: u32 = 5;
+    /// `is_numeric()` of a scalar.
+    pub(super) const IS_NUMERIC: u32 = 6;
+    /// `ord()` of a one-byte string (master deprecates other lengths).
+    pub(super) const ORD: u32 = 7;
+    /// `chr()` of 0..=255 (master deprecates other values).
+    pub(super) const CHR: u32 = 8;
+    /// `strpos(string, string[, int])` with an offset inside the haystack
+    /// (else a `ValueError`).
+    pub(super) const STRPOS: u32 = 9;
+    /// `str_contains()`, `str_starts_with()`, `str_ends_with()`.
+    pub(super) const STR_TEST: u32 = 10;
+    /// `max()`, `min()` of two scalars.
+    pub(super) const MIN_MAX: u32 = 11;
+    /// `substr(string, int[, ?int])`.
+    pub(super) const SUBSTR: u32 = 12;
+    /// `strstr(string, string[, bool])`.
+    pub(super) const STRSTR: u32 = 13;
+    /// `in_array()` of a scalar in an array, strict, or loose over a short
+    /// haystack without objects or resources (whose comparisons can warn
+    /// or call `__toString()`).
+    pub(super) const IN_ARRAY: u32 = 14;
+    /// `str_replace(string, string, string)` with a replacement no longer
+    /// than the search string (a growing result first reserves its memory,
+    /// which can fail with the memory-limit fatal).
+    pub(super) const STR_REPLACE: u32 = 15;
+    /// `strtr(string, string, string)`.
+    pub(super) const STRTR: u32 = 16;
+}
+
+/// The frameless-call class bits ([`flags::FRAMELESS`]) of the builtin
+/// function named `lc` (lower case), set when it is registered. Aliases
+/// copy them with the other flags.
+pub(crate) fn frameless_flags(lc: &[u8]) -> u32 {
+    let class = match lc {
+        b"abs" => fl::ABS,
+        b"dechex" => fl::DECHEX,
+        b"strtolower" | b"strtoupper" => fl::CASE,
+        b"trim" | b"ltrim" | b"rtrim" => fl::TRIM,
+        b"dirname" => fl::DIRNAME,
+        b"is_numeric" => fl::IS_NUMERIC,
+        b"ord" => fl::ORD,
+        b"chr" => fl::CHR,
+        b"strpos" => fl::STRPOS,
+        b"str_contains" | b"str_starts_with" | b"str_ends_with" => fl::STR_TEST,
+        b"max" | b"min" => fl::MIN_MAX,
+        b"substr" => fl::SUBSTR,
+        b"strstr" => fl::STRSTR,
+        b"in_array" => fl::IN_ARRAY,
+        b"str_replace" => fl::STR_REPLACE,
+        b"strtr" => fl::STRTR,
+        _ => return 0,
     };
-    let variadic = b.flags & flags::VARIADIC != 0;
-    if !error_free
-        || (variadic && !matches!(name, b"max" | b"min"))
-        || n < b.required as usize
-        || n > b.params.len()
-    {
-        return false;
+    class << flags::FRAMELESS_SHIFT
+}
+
+/// Whether `call` of builtin `b` runs frameless. php-src's frameless
+/// internal calls (`ZEND_FRAMELESS_ICALL_n`) skip the call frame and
+/// synthesise one from the opline when the function reports an error
+/// (`zend_fetch_debug_backtrace`, `zend_active_function_ex`). Here the
+/// choice is made per call instead: a plain call ([`plain_call`]) of a
+/// function with a frameless class runs without a frame only for
+/// arguments with which nothing can see the frame ([`frameless_args`]:
+/// accepted types, so zpp coerces nothing, and values the handler cannot
+/// report about). Every other call, including each one that could warn or
+/// throw, pushes the real builtin frame, which is the frame php-src would
+/// synthesise: traces still show `#0 file(line): strpos(...)`.
+#[inline]
+pub(crate) fn frameless_call(b: &Builtin, call: &PendingCall) -> bool {
+    let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
+    class != 0
+        && b.flags & (flags::DEPRECATED | flags::NODISCARD) == 0
+        && plain_call(call)
+        && frameless_args(class, &call.args)
+}
+
+/// A call by name with positional arguments only and nothing bound to it:
+/// what `ZEND_INIT_FCALL` and the `SEND` ops make of `f($a, $b)`.
+#[inline]
+fn plain_call(call: &PendingCall) -> bool {
+    !call.has_named
+        && !call.dynamic
+        && !call.is_ctor
+        && call.named.is_empty()
+        && call.magic_name.is_none()
+        && call.this.is_none()
+        && call.scope.is_none()
+        && call.called.is_none()
+        && call.closure.is_none()
+        && call.pfa.is_none()
+}
+
+/// Whether the handler of frameless class `class` ([`fl`]) runs for
+/// `args` (as sent: by value, all passed) without anything that could
+/// observe its frame: the values already have the declared types (no
+/// coercion, deprecation or `TypeError`), and none of the class's error
+/// conditions holds.
+pub(crate) fn frameless_args(class: u32, args: &[Option<Value>]) -> bool {
+    use Value::{Array, Bool, Float, Int, Null, Str};
+    match (class, args) {
+        (fl::ABS, [Some(Int(_) | Float(_))])
+        | (fl::DECHEX, [Some(Int(_))])
+        | (fl::CASE | fl::TRIM | fl::DIRNAME, [Some(Str(_))])
+        | (fl::STRPOS | fl::STR_TEST | fl::STRSTR, [Some(Str(_)), Some(Str(_))])
+        | (fl::STRSTR, [Some(Str(_)), Some(Str(_)), Some(Bool(_))])
+        | (fl::SUBSTR, [Some(Str(_)), Some(Int(_))])
+        | (fl::SUBSTR, [Some(Str(_)), Some(Int(_)), Some(Int(_) | Null)])
+        | (fl::STRTR, [Some(Str(_)), Some(Str(_)), Some(Str(_))]) => true,
+        (fl::TRIM, [Some(Str(_)), Some(Str(chars))]) => !has_char_range(chars.as_bytes()),
+        (fl::DIRNAME, [Some(Str(_)), Some(Int(levels))]) => *levels >= 1,
+        (fl::IS_NUMERIC, [Some(v)]) => is_scalar(v),
+        (fl::ORD, [Some(Str(s))]) => s.len() == 1,
+        (fl::CHR, [Some(Int(c))]) => (0..=255).contains(c),
+        (fl::STRPOS, [Some(Str(haystack)), Some(Str(_)), Some(Int(offset))]) => {
+            offset_within(haystack.len(), *offset)
+        }
+        (fl::MIN_MAX, [Some(a), Some(b)]) => is_scalar(a) && is_scalar(b),
+        (fl::IN_ARRAY, [Some(needle), Some(Array(haystack))]) => {
+            is_scalar(needle) && loose_comparisons_silent(haystack)
+        }
+        (fl::IN_ARRAY, [Some(needle), Some(Array(haystack)), Some(Bool(strict))]) => {
+            is_scalar(needle) && (*strict || loose_comparisons_silent(haystack))
+        }
+        (fl::STR_REPLACE, [Some(Str(search)), Some(Str(replace)), Some(Str(_))]) => {
+            replace.len() <= search.len()
+        }
+        _ => false,
     }
-    call.args.iter().zip(&b.params).all(|(arg, p)| {
-        let Some(v) = arg else {
-            return false;
-        };
-        let scalar = matches!(
-            v,
-            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
-        );
-        let accepted = match &p.ty {
-            None => true,
-            Some(ty) => ty.is_mixed() || accepts_without_coercion(ty.mask, v),
-        };
-        scalar && accepted && !p.by_ref && p.promote & crate::opcode::UNCHECKED_TYPE == 0
-    })
+}
+
+/// Whether `v` is null or a scalar: a value whose comparisons and
+/// conversions run no PHP code and report nothing.
+#[inline]
+fn is_scalar(v: &Value) -> bool {
+    matches!(
+        v,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+    )
+}
+
+/// Whether `php_charmask()` reads a `..` range in the character list
+/// `chars` (and may warn that it is invalid).
+fn has_char_range(chars: &[u8]) -> bool {
+    chars.windows(2).any(|w| w == b"..")
+}
+
+/// Whether `offset` is inside a haystack of `len` bytes as `strpos()`
+/// requires (`-len <= offset <= len`).
+fn offset_within(len: usize, offset: i64) -> bool {
+    let len = i64::try_from(len).unwrap_or(i64::MAX);
+    (-len..=len).contains(&offset)
+}
+
+/// The longest haystack a loose frameless `in_array()` checks up front;
+/// longer ones take the framed call rather than being walked twice.
+const LOOSE_SCAN_MAX: usize = 32;
+
+/// Whether the loose comparisons (`==`) of a scalar with each element of
+/// `haystack` are silent: no element is an object (conversion warnings,
+/// `__toString()`) or a resource, also behind a reference.
+fn loose_comparisons_silent(haystack: &ZArray) -> bool {
+    let silent = |v: &Value| !matches!(v, Value::Object(_) | Value::Resource(_));
+    haystack.len() <= LOOSE_SCAN_MAX
+        && haystack.values().all(|v| match v {
+            Value::Reference(r) => r.try_borrow().is_some_and(|inner| silent(&inner)),
+            v => silent(v),
+        })
 }
 
 impl Vm {
     /// A [`frameless_call`]: the handler runs on the caller's frame with
     /// the arguments moved out of the pending call (and the declared
     /// defaults of omitted trailing parameters, as for a framed call).
+    /// The call is a [`plain_call`], so only the function handle (moved
+    /// into the handler's arguments) and the argument buffer (back to the
+    /// pool) are left to release.
     pub(crate) fn call_builtin_frameless(
         &mut self,
         b: &Rc<Builtin>,
-        mut call: PendingCall,
+        call: PendingCall,
     ) -> VmResult<Value> {
-        self.magic_call_name = None;
+        if self.magic_call_name.is_some() {
+            self.magic_call_name = None;
+        }
+        let PendingCall {
+            func,
+            args: mut sent,
+            named,
+            ..
+        } = call;
+        forget_unallocated(named);
+        let handle = match func {
+            Func::Builtin(handle) => handle,
+            Func::User(_) => b.clone(),
+        };
         let nparams = b.params.len();
         let mut values = self.call_bufs.values.pop().unwrap_or_default();
         values.reserve(nparams);
         let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
         passed.reserve(nparams);
-        for arg in call.args.drain(..) {
-            values.push(arg.unwrap_or_default());
+        for arg in &mut sent {
+            values.push(arg.take().unwrap_or_default());
             passed.push(true);
         }
-        self.put_arg_vec(std::mem::take(&mut call.args));
         while values.len() < nparams {
             let i = values.len();
             match self.builtin_default(b, i) {
@@ -423,7 +561,7 @@ impl Vm {
             named: Vec::new(),
             this: None,
             called: None,
-            func: Some(b.clone()),
+            func: Some(handle),
         };
         let mut r = (b.handler)(self, &mut args);
         // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
@@ -432,16 +570,23 @@ impl Vm {
                 r = Err(e);
             }
         }
-        let Args { values, passed, .. } = args;
+        let Args {
+            values,
+            passed,
+            named,
+            ..
+        } = args;
+        forget_unallocated(named);
         self.put_val_vec(values);
         self.put_bool_vec(passed);
+        self.put_arg_vec(sent);
         r
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::frameless_call;
+    use super::{fl, frameless_args, frameless_call, frameless_flags};
     use crate::compiler::{special_builtin_bit, SPECIAL_BUILTINS};
     use crate::func::Func;
     use crate::opcode::type_mask;
@@ -476,7 +621,12 @@ mod tests {
         assert!(frameless("chr", vec![Value::Int(65)]));
         assert!(!frameless("chr", vec![Value::Int(256)]));
         assert!(frameless("strpos", vec![s("abc"), s("b")]));
-        assert!(!frameless("strpos", vec![s("abc"), s("b"), Value::Int(1)]));
+        // An offset inside the haystack cannot fail; one outside throws
+        // the `ValueError` whose trace shows the frame.
+        assert!(frameless("strpos", vec![s("abc"), s("b"), Value::Int(1)]));
+        assert!(frameless("strpos", vec![s("abc"), s("b"), Value::Int(-3)]));
+        assert!(!frameless("strpos", vec![s("abc"), s("b"), Value::Int(4)]));
+        assert!(!frameless("strpos", vec![s("abc"), s("b"), Value::Int(-4)]));
         assert!(frameless("substr", vec![s("abc"), Value::Int(1)]));
         assert!(frameless(
             "substr",
@@ -494,6 +644,163 @@ mod tests {
         let (b, mut named) = call("abs", vec![Value::Int(1)]);
         named.has_named = true;
         assert!(!frameless_call(&b, &named));
+        let (b, mut ctor) = call("abs", vec![Value::Int(1)]);
+        ctor.is_ctor = true;
+        assert!(!frameless_call(&b, &ctor));
+        let (b, mut magic) = call("abs", vec![Value::Int(1)]);
+        magic.magic_name = Some(ZStr::from("abs"));
+        assert!(!frameless_call(&b, &magic));
+    }
+
+    #[test]
+    fn registration_stores_the_frameless_class_in_the_flags() {
+        use crate::func::flags;
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        vm.register_function(
+            "in_array(mixed $needle, array $haystack, bool $strict = false): bool",
+            |_vm, _a| Ok(Value::Bool(false)),
+        );
+        vm.register_function("unrelated(int $n): int", |_vm, _a| Ok(Value::Int(0)));
+        let class_of = |name: &str| match vm.functions.get(&ZStr::from(name)) {
+            Some(Func::Builtin(b)) => (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT,
+            _ => panic!("{name} is registered"),
+        };
+        assert_eq!(class_of("in_array"), fl::IN_ARRAY);
+        assert_eq!(class_of("abs"), fl::ABS);
+        assert_eq!(class_of("strtolower"), fl::CASE);
+        assert_eq!(class_of("unrelated"), 0);
+        assert_eq!(class_of("strlen"), 0);
+        // Distinct, non-zero classes that fit the five flag bits.
+        let names: &[&[u8]] = &[
+            b"abs",
+            b"dechex",
+            b"strtolower",
+            b"trim",
+            b"dirname",
+            b"is_numeric",
+            b"ord",
+            b"chr",
+            b"strpos",
+            b"str_contains",
+            b"max",
+            b"substr",
+            b"strstr",
+            b"in_array",
+            b"str_replace",
+            b"strtr",
+        ];
+        let mut seen = Vec::new();
+        for name in names {
+            let bits = frameless_flags(name);
+            assert_ne!(bits, 0, "{}", String::from_utf8_lossy(name));
+            assert_eq!(bits & !flags::FRAMELESS, 0);
+            assert!(!seen.contains(&bits));
+            seen.push(bits);
+        }
+        assert_eq!(frameless_flags(b"STRPOS"), 0);
+        assert_eq!(frameless_flags(b"chop"), 0);
+        assert_eq!(frameless_flags(b"implode"), 0);
+        assert_eq!(frameless_flags(b"preg_match"), 0);
+        assert_eq!(frameless_flags(b"ltrim"), frameless_flags(b"rtrim"));
+        assert_eq!(frameless_flags(b"min"), frameless_flags(b"max"));
+    }
+
+    #[test]
+    fn frameless_argument_shapes_exclude_every_error_path() {
+        let s = |v: &str| Some(Value::Str(ZStr::from(v)));
+        let i = |n: i64| Some(Value::Int(n));
+        let ok = |class: u32, args: &[Option<Value>]| frameless_args(class, args);
+        // trim(): character lists with a `..` range can warn.
+        assert!(ok(fl::TRIM, &[s(" a ")]));
+        assert!(ok(fl::TRIM, &[s("xay"), s("xy")]));
+        assert!(ok(fl::TRIM, &[s("xay"), s("")]));
+        assert!(ok(fl::TRIM, &[s("xay"), s("a.b")]));
+        assert!(!ok(fl::TRIM, &[s("xay"), s("a..z")]));
+        assert!(!ok(fl::TRIM, &[s("xay"), s("..")]));
+        assert!(!ok(fl::TRIM, &[s("xay"), i(1)]));
+        // dirname(): levels below 1 throw.
+        assert!(ok(fl::DIRNAME, &[s("/a/b")]));
+        assert!(ok(fl::DIRNAME, &[s("/a/b"), i(2)]));
+        assert!(!ok(fl::DIRNAME, &[s("/a/b"), i(0)]));
+        assert!(!ok(fl::DIRNAME, &[s("/a/b"), s("2")]));
+        // strpos(): the offset must be inside the haystack.
+        assert!(ok(fl::STRPOS, &[s(""), s(""), i(0)]));
+        assert!(!ok(fl::STRPOS, &[s(""), s(""), i(1)]));
+        assert!(!ok(fl::STRPOS, &[s("ab"), s("b"), i(i64::MIN)]));
+        assert!(!ok(fl::STRPOS, &[s("ab"), s("b"), Some(Value::Null)]));
+        // in_array(): scalar needles; loose comparisons only with
+        // silent elements of a short haystack, strict ones always.
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        let std_class = vm.find_class(b"stdClass").expect("stdClass");
+        let instance = vm.new_object(&std_class).expect("an instance");
+        let obj = || Value::Object(instance.clone());
+        let arr = |vals: Vec<Value>| Some(Value::Array(php_runtime::ZArray::from_values(vals)));
+        assert!(ok(
+            fl::IN_ARRAY,
+            &[i(2), arr(vec![Value::Int(1), Value::Int(2)])]
+        ));
+        assert!(ok(
+            fl::IN_ARRAY,
+            &[s("a"), arr(vec![Value::Array(php_runtime::ZArray::new())])]
+        ));
+        assert!(!ok(fl::IN_ARRAY, &[i(2), arr(vec![obj()])]));
+        assert!(ok(
+            fl::IN_ARRAY,
+            &[i(2), arr(vec![obj()]), Some(Value::Bool(true))]
+        ));
+        assert!(!ok(
+            fl::IN_ARRAY,
+            &[i(2), arr(vec![obj()]), Some(Value::Bool(false))]
+        ));
+        let by_ref = Value::Reference(php_runtime::PhpRef::new(obj()));
+        assert!(!ok(fl::IN_ARRAY, &[i(2), arr(vec![by_ref])]));
+        let scalar_ref = Value::Reference(php_runtime::PhpRef::new(Value::Int(2)));
+        assert!(ok(fl::IN_ARRAY, &[i(2), arr(vec![scalar_ref])]));
+        let long = arr((0..=32).map(Value::Int).collect());
+        assert!(!ok(fl::IN_ARRAY, &[i(2), long.clone()]));
+        assert!(ok(fl::IN_ARRAY, &[i(2), long, Some(Value::Bool(true))]));
+        assert!(!ok(fl::IN_ARRAY, &[arr(vec![]), arr(vec![])]));
+        assert!(!ok(fl::IN_ARRAY, &[i(2), arr(vec![]), i(1)]));
+        // str_replace(): a growing result reserves memory first.
+        assert!(ok(fl::STR_REPLACE, &[s("ab"), s("c"), s("xabx")]));
+        assert!(ok(fl::STR_REPLACE, &[s("ab"), s("cd"), s("xabx")]));
+        assert!(!ok(fl::STR_REPLACE, &[s("a"), s("cd"), s("xax")]));
+        assert!(!ok(fl::STR_REPLACE, &[s("a"), s("b"), arr(vec![])]));
+        // max()/min() of two scalars; strtr() of three strings.
+        assert!(ok(fl::MIN_MAX, &[i(1), s("x")]));
+        assert!(!ok(fl::MIN_MAX, &[i(1), arr(vec![])]));
+        assert!(!ok(fl::MIN_MAX, &[i(1), i(2), i(3)]));
+        assert!(ok(fl::STRTR, &[s("abc"), s("a"), s("b")]));
+        assert!(!ok(fl::STRTR, &[s("abc"), arr(vec![])]));
+        // Unknown classes and gaps never run frameless.
+        assert!(!ok(0, &[i(1)]));
+        assert!(!ok(fl::ABS, &[None]));
+        assert!(!ok(fl::ABS, &[]));
+    }
+
+    #[test]
+    fn frameless_calls_return_their_buffers_to_the_pools() {
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        let pools = |vm: &Vm| {
+            let mut sizes: Vec<_> = vm.call_bufs.args.iter().map(Vec::capacity).collect();
+            sizes.sort_unstable();
+            (sizes, vm.call_bufs.values.len(), vm.call_bufs.passed.len())
+        };
+        let before = pools(&vm);
+        let status = vm.run_script(
+            br#"<?php
+$s = 'abc';
+for ($i = 0; $i < 3; $i++) {
+    strpos($s, 'b'); strpos($s, 'b', 1); trim($s); trim($s, 'ac'); substr($s, 1);
+    abs(-$i); str_replace('a', 'b', $s); strtr($s, 'a', 'b'); dirname('/a/b', 2);
+}
+"#,
+            "pools.php",
+        );
+        assert_eq!(status, 0);
+        assert_eq!(pools(&vm), before);
+        assert!(vm.call_bufs.args.iter().all(Vec::is_empty));
+        assert!(vm.call_bufs.values.iter().all(Vec::is_empty));
     }
 
     #[test]

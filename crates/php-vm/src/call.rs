@@ -2937,7 +2937,7 @@ fn bind_args(uf: &UserFunction, f: &mut Frame) -> usize {
 /// Drops `v`, skipping the out-of-line `drop_in_place` call when it owns
 /// no allocation (and so, for a sized element type, no elements).
 #[inline]
-fn forget_unallocated<T>(v: Vec<T>) {
+pub(crate) fn forget_unallocated<T>(v: Vec<T>) {
     if v.capacity() == 0 && std::mem::size_of::<T>() != 0 {
         std::mem::forget(v);
     }

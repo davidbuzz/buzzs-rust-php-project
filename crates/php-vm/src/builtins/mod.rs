@@ -52,6 +52,7 @@ pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
     // Shares `name`'s buffer when it is already lower case, as method
     // names do (`ClassBuilder::register`).
     let lc = name.to_ascii_lowercase();
+    fl |= crate::special::frameless_flags(lc.as_bytes());
     let b = Builtin {
         name,
         params: s.params,
