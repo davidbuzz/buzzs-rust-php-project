@@ -32,6 +32,18 @@ pub(crate) fn specialise(ops: &mut [Op], places: &[Place]) {
                 dst: *dst,
                 place: *place,
             }),
+            Op::AssignOp {
+                place,
+                op,
+                val,
+                dst,
+            } if is_numeric_assign_op(*op) => plain_cv(places, *place).map(|cv| Op::AssignOpCv {
+                cv,
+                op: *op,
+                val: *val,
+                dst: *dst,
+                place: *place,
+            }),
             Op::Fetch {
                 place,
                 mode: FetchMode::Read,
@@ -91,6 +103,19 @@ fn has_numeric_fast_path(op: BinKind) -> bool {
                         | BinaryOp::BitXor
                 )
         )
+}
+
+/// The compound assignments `Vm::bin_num_fast` computes on numbers.
+fn is_numeric_assign_op(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::BitOr
+            | BinaryOp::BitAnd
+            | BinaryOp::BitXor
+    )
 }
 
 /// A `Bin` writing `dst`, followed by `next`.
@@ -317,6 +342,14 @@ mod tests {
         );
         assert!(
             ops.iter().any(|op| matches!(op, Op::AssignDimCv { .. })),
+            "{ops:?}"
+        );
+        let ops = main_ops("<?php $s = 0; $s += 2; $s .= 'x'; $a = [1]; $a[0] += 1;");
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::AssignOpCv { .. }))
+                .count(),
+            1,
             "{ops:?}"
         );
         // Nested dimensions and appends keep the generic place ops.

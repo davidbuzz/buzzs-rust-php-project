@@ -630,6 +630,17 @@ pub enum Op {
         dst: Option<u32>,
         place: PlaceId,
     },
+    /// `AssignOp` (`+=`, `-=`, `*=`, `|=`, `&=`, `^=`) of a plain compiled
+    /// variable (`ZEND_ASSIGN_OP_SPEC_CV_*` with the `IS_LONG`/`IS_DOUBLE`
+    /// fast paths of `zend_binary_op`): a CV and value holding plain
+    /// numbers are combined in place; anything else goes through `place`.
+    AssignOpCv {
+        cv: u32,
+        op: BinaryOp,
+        val: Operand,
+        dst: Option<u32>,
+        place: PlaceId,
+    },
     /// `Fetch` (read mode) of `$cv[dim]` (`ZEND_FETCH_DIM_R_SPEC_CV_*`
     /// with `zend_fetch_dimension_address_inner` on an array and an int or
     /// string offset). With `to`, the `AssignCv { cv: to, val: Tmp(dst),

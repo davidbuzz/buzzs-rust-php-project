@@ -19,7 +19,7 @@
 use super::{CvOpData, Num};
 use crate::opcode::{BinKind, FetchMode, IncDecKind, Operand, PlaceId};
 use crate::vm::{Vm, VmResult};
-use php_runtime::{ArrayKey, Value};
+use php_runtime::{ArrayKey, BinaryOp, Value};
 
 /// Whether replacing `v` needs no destructor, GC root buffering or
 /// reference semantics: no value, or null, bool, int, float or string
@@ -180,6 +180,41 @@ impl Vm {
             return Ok(());
         }
         let r = self.place_incdec(place, kind)?;
+        self.set_dst(dst, r);
+        Ok(())
+    }
+
+    /// [`crate::opcode::Op::AssignOpCv`]: `$cv op= val` in place when both
+    /// hold plain numbers and the result stays in the int domain (or is a
+    /// float); otherwise the generic `AssignOp`.
+    #[inline]
+    pub(super) fn op_assign_op_cv(
+        &mut self,
+        cv: u32,
+        op: BinaryOp,
+        val: Operand,
+        dst: Option<u32>,
+        place: PlaceId,
+    ) -> VmResult<()> {
+        // `peek_num` on the CV only succeeds for a non-reference int or
+        // float, which the store below overwrites without side effects.
+        if let Some(r) = self.bin_num_fast(BinKind::Arith(op), Operand::Cv(cv), val) {
+            match dst {
+                None => {
+                    if self.cv_store_plain(cv, r).is_ok() {
+                        return Ok(());
+                    }
+                }
+                Some(d) => {
+                    if self.cv_store_plain(cv, r.clone()).is_ok() {
+                        self.set_tmp(d, r);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        let v = self.read(val)?;
+        let r = self.place_assign_op(place, op, v)?;
         self.set_dst(dst, r);
         Ok(())
     }
@@ -476,6 +511,27 @@ $m = "5"; $m = $m + 1; var_dump($m);
 "#;
         let expected = "int(6)\nfloat(3)\nfloat(9.223372036854776E+18)\nint(3)\nint(2)\nint(6)\ndestructed\nafter\nint(2)\nbool(true)\nint(6)\n";
         assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn compound_assignments_on_cvs() {
+        let src = r#"<?php
+$s = 0;
+for ($i = 0; $i < 5; $i++) { $s += $i * 2 % 7; }
+var_dump($s);
+$f = 1.5; $f *= 2; var_dump($f);
+$m = PHP_INT_MAX; $m += 1; var_dump($m);
+$b = 6; $b &= 3; $b |= 8; $b ^= 1; var_dump($b);
+$x = 1; $y = ($x += 2); var_dump($x, $y);
+$n = "3"; $n += 1; var_dump($n);
+$r = 1; $q = &$r; $r += 4; var_dump($q);
+$u += 1; var_dump($u);
+"#;
+        let out = run(src);
+        let expected_head = "int(13)\nfloat(3)\nfloat(9.223372036854776E+18)\nint(11)\nint(3)\nint(3)\nint(4)\nint(5)\n";
+        assert!(out.starts_with(expected_head), "{out}");
+        assert!(out.contains("Undefined variable $u"), "{out}");
+        assert!(out.ends_with("int(1)\n"), "{out}");
     }
 
     #[test]

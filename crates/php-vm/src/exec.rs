@@ -1531,6 +1531,16 @@ impl Vm {
                         self.op_incdec_cv(*cv, *kind, *dst, *place)?;
                         Flow::Next
                     }
+                    Op::AssignOpCv {
+                        cv,
+                        op,
+                        val,
+                        dst,
+                        place,
+                    } => {
+                        self.op_assign_op_cv(*cv, *op, *val, *dst, *place)?;
+                        Flow::Next
+                    }
                     Op::FetchDimCv {
                         cv,
                         dim,
@@ -2246,6 +2256,7 @@ fn defers_oom(op: &Op) -> bool {
             | Op::Assign { .. }
             | Op::AssignOp { .. }
             | Op::BinAssignCv { .. }
+            | Op::AssignOpCv { .. }
             | Op::AssignDimCv { .. }
             | Op::Echo(_)
             | Op::Free(_)
