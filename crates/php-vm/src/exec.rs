@@ -387,7 +387,9 @@ impl Vm {
             return Err(crate::builtins::dump::stack_size_error(self));
         }
         self.depth += 1;
+        let guard = crate::interrupt::ExecutionGuard::enter();
         let r = self.execute_inner(base);
+        drop(guard);
         self.depth -= 1;
         r
     }
@@ -1491,18 +1493,13 @@ impl Vm {
                         Flow::Next
                     }
                 };
-                if object::has_pending_destructors() {
-                    self.run_pending_destructors()?;
+                // Safe point (`EG(vm_interrupt)`): one flag says whether
+                // destructors, a collection or interrupt handlers wait; the
+                // delayed memory_limit violation is still polled on its own
+                // (php-memlimit cannot raise the flag).
+                if crate::interrupt::safe_point_due() || php_memlimit::is_pending() {
+                    self.safe_point(&code.ops[ip])?;
                 }
-                // Root buffer reached the threshold (`gc_possible_root_when_full`).
-                if crate::gc::wants_run() {
-                    self.gc_safe_point()?;
-                }
-                // Delayed memory_limit violation (`zend_mm_delayed_error`).
-                if php_memlimit::is_pending() {
-                    self.poll_pending_oom(&code.ops[ip])?;
-                }
-                self.check_interrupt()?;
                 match flow {
                     Flow::Next => {}
                     Flow::Reload => continue 'frames,
@@ -1510,6 +1507,34 @@ impl Vm {
                 }
             }
         }
+    }
+
+    /// The work waiting for the end of an instruction, in this order:
+    /// queued destructors, a due collection, a delayed `memory_limit`
+    /// violation, interrupt handlers. Each source is checked on its own (the
+    /// flag that led here may be stale); afterwards the flag is cleared
+    /// unless a source is still set, also when the work threw.
+    #[cold]
+    #[inline(never)]
+    fn safe_point(&mut self, op: &Op) -> VmResult<()> {
+        let r = self.safe_point_work(op);
+        crate::interrupt::resync_safe_point();
+        r
+    }
+
+    fn safe_point_work(&mut self, op: &Op) -> VmResult<()> {
+        if object::has_pending_destructors() {
+            self.run_pending_destructors()?;
+        }
+        // Root buffer reached the threshold (`gc_possible_root_when_full`).
+        if crate::gc::wants_run() {
+            self.gc_safe_point()?;
+        }
+        // Delayed memory_limit violation (`zend_mm_delayed_error`).
+        if php_memlimit::is_pending() {
+            self.poll_pending_oom(op)?;
+        }
+        self.check_interrupt()
     }
 
     /// Applies a binary operator.
