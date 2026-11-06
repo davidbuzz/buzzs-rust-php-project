@@ -2335,8 +2335,14 @@ impl Vm {
     ) -> VmResult<Value> {
         let p = &self.frame().code.places[pid as usize];
         let (single, head) = (propcache::cacheable(p), propcache::cacheable_head(p));
-        // Fast path: ASSIGN_OBJ_OP on a cached property holding a number.
+        // Fast paths: ASSIGN_OBJ_OP on a cached property: `.=` on a string
+        // appends in place, another operator on a number operates in place.
         if single {
+            if op == BinaryOp::Concat {
+                if let Some(r) = self.prop_cache_concat(pid, &v) {
+                    return Ok(r);
+                }
+            }
             if let Some(r) = self.prop_cache_assign_op(pid, op, &v)? {
                 return Ok(r);
             }
