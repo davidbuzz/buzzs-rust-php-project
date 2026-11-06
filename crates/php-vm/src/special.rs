@@ -476,8 +476,10 @@ pub(crate) fn frameless_args(class: u32, args: &[Option<Value>]) -> bool {
         | (fl::CASE | fl::TRIM | fl::DIRNAME, [Some(Str(_))])
         | (fl::STRPOS | fl::STR_TEST | fl::STRSTR, [Some(Str(_)), Some(Str(_))])
         | (fl::STRSTR, [Some(Str(_)), Some(Str(_)), Some(Bool(_))])
-        | (fl::SUBSTR, [Some(Str(_)), Some(Int(_))])
-        | (fl::SUBSTR, [Some(Str(_)), Some(Int(_)), Some(Int(_) | Null)])
+        | (
+            fl::SUBSTR,
+            [Some(Str(_)), Some(Int(_))] | [Some(Str(_)), Some(Int(_)), Some(Int(_) | Null)],
+        )
         | (fl::STRTR, [Some(Str(_)), Some(Str(_)), Some(Str(_))]) => true,
         (fl::TRIM, [Some(Str(_)), Some(Str(chars))]) => !has_char_range(chars.as_bytes()),
         (fl::DIRNAME, [Some(Str(_)), Some(Int(levels))]) => *levels >= 1,
