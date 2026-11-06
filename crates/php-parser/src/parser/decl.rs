@@ -448,7 +448,7 @@ impl Parser<'_> {
         let by_ref = self.eat(T::AmpersandFollowedByVarOrVararg).is_some();
         let variadic = self.eat(T::Ellipsis).is_some();
         let var = self.expect1(T::Variable)?;
-        let name = Ident::new(self.text(&var)[1..].to_vec(), var.span);
+        let name = Ident::new(var.text()[1..].to_vec(), var.span);
         let default = if self.eat(T::Equals).is_some() {
             Some(self.parse_expr()?)
         } else {
@@ -608,7 +608,7 @@ impl Parser<'_> {
                 }
                 let v = self.bump();
                 uses.push(ClosureUse {
-                    name: Ident::new(self.text(&v)[1..].to_vec(), v.span),
+                    name: Ident::new(v.text()[1..].to_vec(), v.span),
                     by_ref,
                     span: self.span_from(ustart),
                 });
@@ -980,7 +980,7 @@ impl Parser<'_> {
         let mut props = Vec::new();
         loop {
             let v = self.expect1(T::Variable)?;
-            let name = Ident::new(self.text(&v)[1..].to_vec(), v.span);
+            let name = Ident::new(v.text()[1..].to_vec(), v.span);
             let default = if self.eat(T::Equals).is_some() {
                 Some(self.parse_expr()?)
             } else {
