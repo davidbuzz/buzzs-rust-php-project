@@ -3404,7 +3404,7 @@ pub(crate) fn dirname(path: &[u8]) -> Vec<u8> {
 
 /// `zend_is_true` of a compile-time literal (`None` for values whose
 /// truthiness is not static).
-fn const_truthiness(v: &Value) -> Option<bool> {
+pub(crate) fn const_truthiness(v: &Value) -> Option<bool> {
     match v {
         Value::Null => Some(false),
         Value::Bool(b) => Some(*b),

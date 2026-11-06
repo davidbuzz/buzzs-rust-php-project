@@ -170,3 +170,86 @@ impl Vm {
 /// Registers the array functions: they are provided by the
 /// `php-ext-stdarr` extension, so there is nothing to do here.
 pub(crate) fn register(_vm: &mut Vm) {}
+
+fn count(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value> {
+    let v = a.at(0);
+    let f = a.func_name();
+    sa::basic::count(vm, &f, &v, a.int(1))
+        .map(Value::Int)
+        .map_err(|e| vm.rt_throw(e))
+}
+
+/// Registers `count()`, `sizeof()` and the `COUNT_*` constants for the
+/// bare [`Vm::new`], attributed to `standard` as `php-ext-stdarr`
+/// attributes them.
+pub(crate) fn register_bare_count(vm: &mut Vm) {
+    crate::reflection::record_module(vm, "standard", true);
+    let mut m = crate::ext::ModuleBuilder::new(vm, "standard");
+    m.function(
+        "count(Countable|array $value, int $mode = COUNT_NORMAL): int",
+        count,
+    );
+    m.function(
+        "sizeof(Countable|array $value, int $mode = COUNT_NORMAL): int",
+        count,
+    );
+    m.constant("COUNT_NORMAL", Value::Int(sa::COUNT_NORMAL));
+    m.constant("COUNT_RECURSIVE", Value::Int(sa::COUNT_RECURSIVE));
+    crate::reflection::record_module(vm, "standard", false);
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn bare_vm_has_count_and_with_extensions_starts_without_it() {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        let status = vm.run_script(
+            br#"<?php
+class C implements Countable { function count(): int { return 7; } }
+echo count([1, 2, 3]), " ", sizeof([1, [2, 3]], COUNT_RECURSIVE), " ",
+    count(new C), " ", COUNT_NORMAL, " ", COUNT_RECURSIVE, " ",
+    (new ReflectionFunction('count'))->getExtensionName(), " ",
+    (new ReflectionConstant('COUNT_NORMAL'))->getExtensionName(), "\n";
+try { count(42); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+            "t.php",
+        );
+        assert_eq!(status, 0);
+        let out = String::from_utf8(sink.0.borrow().clone()).expect("utf8");
+        assert_eq!(
+            out,
+            "3 4 7 0 1 standard standard\ncount(): Argument #1 ($value) must be of type Countable|array, int given\n"
+        );
+
+        let sink2 = Sink::default();
+        let mut ext_vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink2.clone()), &[]);
+        let status2 = ext_vm.run_script(
+            br"<?php
+var_dump(function_exists('count'), function_exists('sizeof'), defined('COUNT_NORMAL'), defined('COUNT_RECURSIVE'));
+",
+            "t2.php",
+        );
+        assert_eq!(status2, 0);
+        let out2 = String::from_utf8(sink2.0.borrow().clone()).expect("utf8");
+        assert_eq!(out2, "bool(false)\nbool(false)\nbool(false)\nbool(false)\n");
+    }
+}

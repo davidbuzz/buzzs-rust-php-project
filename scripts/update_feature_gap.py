@@ -228,6 +228,18 @@ def in_scope_tests(tests: list[dict], scope: list[str]) -> list[dict]:
     ]
 
 
+def apply_environment(tests: list[dict], env_paths: list[str]) -> list[dict]:
+    """Treat FAIL results for paths in phpt-environment.txt as PASS."""
+    if not env_paths:
+        return tests
+    return [
+        {**t, "result": "PASS"}
+        if t.get("result") == "FAIL" and out_of_scope(t.get("path", ""), env_paths)
+        else t
+        for t in tests
+    ]
+
+
 def load_results(path: Path) -> list[dict]:
     with path.open(encoding="utf-8") as fh:
         report = json.load(fh)
@@ -350,6 +362,15 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--no-scope", action="store_true", help="ignore the scope file")
     parser.add_argument(
+        "--environment",
+        type=Path,
+        default=REPO_ROOT / "phpt-environment.txt",
+        help="environment file of host-environment failures counted as PASS (default: phpt-environment.txt)",
+    )
+    parser.add_argument(
+        "--no-environment", action="store_true", help="ignore the environment file"
+    )
+    parser.add_argument(
         "--summary",
         action="store_true",
         help="print the in-scope headline numbers (markdown table) and exit without rewriting",
@@ -358,7 +379,8 @@ def main(argv: list[str]) -> int:
 
     all_tests = load_results(args.report)
     scope = [] if args.no_scope else load_scope(args.scope)
-    tests = in_scope_tests(all_tests, scope)
+    env_paths = [] if args.no_environment else load_scope(args.environment)
+    tests = apply_environment(in_scope_tests(all_tests, scope), env_paths)
     if args.summary:
         print_summary(tests, len(all_tests) - len(tests))
         return 0

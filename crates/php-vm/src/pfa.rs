@@ -642,8 +642,16 @@ impl Vm {
         let mut f = Frame::new(unit.main.code.clone(), FrameKind::Eval);
         f.observer_hidden = true;
         {
-            let mut vars = f.vars.borrow_mut();
-            let set = |vars: &mut crate::vm::VarStore, name: &str, v: Value| {
+            let mut set = |f: &mut Frame, name: &str, v: Value| {
+                if let Some(idx) = f
+                    .code
+                    .cv_names
+                    .iter()
+                    .position(|n| n.as_bytes() == name.as_bytes())
+                {
+                    f.cvs[idx].set(Some(v.clone()));
+                }
+                let mut vars = f.vars.borrow_mut();
                 if let Some(idx) = vars
                     .names
                     .iter()
@@ -653,7 +661,7 @@ impl Vm {
                 }
             };
             if let (Some(n), Some(c)) = (&names.inner, &inner_closure) {
-                set(&mut vars, n, Value::Object(c.clone()));
+                set(&mut f, n, Value::Object(c.clone()));
             }
             for i in 0..new_argc {
                 if let Slot::Bound(v) = &slots[i] {
@@ -665,7 +673,7 @@ impl Vm {
                     } else {
                         v.deref()
                     };
-                    set(&mut vars, names.params[i].as_deref().unwrap_or(""), v);
+                    set(&mut f, names.params[i].as_deref().unwrap_or(""), v);
                 }
             }
             if let Some(n) = &names.extra_named {
@@ -673,11 +681,7 @@ impl Vm {
                 for (k, v) in &extra_named {
                     t.insert(php_runtime::ArrayKey::Str(k.clone()), v.deref());
                 }
-                set(
-                    &mut vars,
-                    n,
-                    Value::Array(php_runtime::ZArray::from_table(t)),
-                );
+                set(&mut f, n, Value::Array(php_runtime::ZArray::from_table(t)));
             }
         }
         f.this.clone_from(&this_obj);
@@ -830,6 +834,7 @@ impl Vm {
             ct_constants: Some(self.ct_constants()),
             stack_limit: None,
             user_opcodes: Vec::new(),
+            optimization_level: 0,
         };
         let compiled = crate::compiler::compile(&program, Rc::from(src), opts);
         self.activate_compiled_auto_globals();

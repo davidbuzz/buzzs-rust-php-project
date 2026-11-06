@@ -375,6 +375,14 @@ thread_local! {
     static DZ_STATE: RefCell<Option<DzState>> = const { RefCell::new(None) };
 }
 
+/// Resets dumping recursion and exception state for a new request.
+pub(crate) fn reset() {
+    DEFERRED_THROW.with(|d| *d.borrow_mut() = None);
+    DUMP_DEPTH.with(|d| d.set(0));
+    DEPTH.with(|d| d.set(0));
+    DZ_STATE.with(|d| *d.borrow_mut() = None);
+}
+
 /// The identity of a refcounted value (`None` for scalars, resources and
 /// interned or empty strings).
 fn identity(v: &Value) -> Option<usize> {

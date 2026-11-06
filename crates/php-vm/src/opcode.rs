@@ -875,6 +875,105 @@ pub enum Op {
         kind: IncDecKind,
         place: PlaceId,
     },
+
+    // Property ops (`ZEND_FETCH_OBJ_R` & co. with a `CACHE_SLOT`): `place`
+    // is `$cv->name` or `$this->name` with a literal name (the `...Dim`
+    // forms: followed by one `[dim]`, or `[]` where `dim` is
+    // `Operand::Unused`). On a hit of the place's property cache entry
+    // (`place/propcache.rs`) the handler (`exec/spec/props.rs`) accesses
+    // the property's slot directly, without the place walk; anything the
+    // cache declines (magic methods, hooks, readonly or visibility errors,
+    // typed-property coercion, references where they matter, diagnostics)
+    // is the generic op of `place`.
+    /// `Fetch` (`Read` or `Is` mode) of `$cv->name` / `$this->name`
+    /// (`ZEND_FETCH_OBJ_R` / `ZEND_FETCH_OBJ_IS`). With `to`, the `AssignCv
+    /// { cv: to, val: Tmp(dst), dst: None }` right after it is done here
+    /// too when the variable holds no refcounted value (as in
+    /// [`Op::FetchDimCv`]).
+    FetchObjProp {
+        place: PlaceId,
+        dst: u32,
+        to: Option<u32>,
+        mode: FetchMode,
+    },
+    /// `Fetch` (`Read` or `Is` mode) of `$cv->name[dim]` /
+    /// `$this->name[dim]` (`ZEND_FETCH_OBJ_R` + `ZEND_FETCH_DIM_R`, or the
+    /// `_IS` pair) when the property holds an array with the element; `to`
+    /// as in [`Op::FetchObjProp`].
+    FetchObjPropDim {
+        place: PlaceId,
+        dim: Operand,
+        dst: u32,
+        to: Option<u32>,
+        mode: FetchMode,
+    },
+    /// `Assign` of `$cv->name = val` / `$this->name = val`
+    /// (`ZEND_ASSIGN_OBJ` + `OP_DATA`).
+    AssignObjProp {
+        place: PlaceId,
+        val: Operand,
+        dst: Option<u32>,
+    },
+    /// `Assign` of `$cv->name[dim] = val`, or `$cv->name[] = val` when
+    /// `dim` is [`Operand::Unused`] (`ZEND_FETCH_OBJ_W` +
+    /// `ZEND_ASSIGN_DIM` + `OP_DATA`), on a property holding an array.
+    AssignObjPropDim {
+        place: PlaceId,
+        dim: Operand,
+        val: Operand,
+        dst: Option<u32>,
+    },
+    /// `AssignOp` of `$cv->name op= val` (`ZEND_ASSIGN_OBJ_OP`): `.=` of a
+    /// string or int onto a string the property holds, extended in place;
+    /// `+=`, `-=`, `*=`, `|=`, `&=`, `^=` of a number on a number.
+    AssignOpObjProp {
+        place: PlaceId,
+        op: BinaryOp,
+        val: Operand,
+        dst: Option<u32>,
+    },
+    /// `AssignOp` of `$cv->name[dim] op= val` (`ZEND_FETCH_OBJ_RW` +
+    /// `ZEND_ASSIGN_DIM_OP`) on an existing element of an array property,
+    /// with the operators of [`Op::AssignOpObjProp`].
+    AssignOpObjPropDim {
+        place: PlaceId,
+        dim: Operand,
+        op: BinaryOp,
+        val: Operand,
+        dst: Option<u32>,
+    },
+    /// `IncDec` of `$cv->name` (`ZEND_PRE_INC_OBJ`, `ZEND_POST_DEC_OBJ`,
+    /// ...) on a property holding an int (without overflow) or a float.
+    IncDecObjProp {
+        place: PlaceId,
+        kind: IncDecKind,
+        dst: Option<u32>,
+    },
+    /// `IncDec` of `$cv->name[dim]` (`ZEND_FETCH_OBJ_RW` +
+    /// `ZEND_FETCH_DIM_RW` + `ZEND_PRE_INC` & co.) on an existing int
+    /// (without overflow) or float element of an array property.
+    IncDecObjPropDim {
+        place: PlaceId,
+        dim: Operand,
+        kind: IncDecKind,
+        dst: Option<u32>,
+    },
+    /// `Isset` / `Empty` (`empty`) of `$cv->name`
+    /// (`ZEND_ISSET_ISEMPTY_PROP_OBJ`) when the answer needs no conversion.
+    IssetObjProp {
+        place: PlaceId,
+        dst: u32,
+        empty: bool,
+    },
+    /// `Isset` / `Empty` (`empty`) of `$cv->name[dim]` (`ZEND_FETCH_OBJ_IS`,
+    /// then `ZEND_ISSET_ISEMPTY_DIM_OBJ`) on a property holding an array,
+    /// when the answer needs no conversion.
+    IssetObjPropDim {
+        place: PlaceId,
+        dim: Operand,
+        dst: u32,
+        empty: bool,
+    },
 }
 
 /// The bits of [`Op::CmpJmp`]'s `mask`: the outcomes of comparing two
@@ -1188,5 +1287,13 @@ impl OpArray {
     /// The line of op `ip`.
     pub fn line(&self, ip: usize) -> u32 {
         self.lines.get(ip).copied().unwrap_or(0)
+    }
+
+    /// Clears run-time caches so this op array carries no request state.
+    pub fn clear_runtime_caches(&self) {
+        self.fcall_cache.borrow_mut().clear();
+        self.class_cache.borrow_mut().clear();
+        self.rt_cache.clear();
+        self.prop_cache.borrow_mut().clear();
     }
 }

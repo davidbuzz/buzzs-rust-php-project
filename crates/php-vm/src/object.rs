@@ -594,6 +594,19 @@ pub(crate) fn prewarm_store() {
     STORE.with(|_| {});
 }
 
+/// Resets the thread-local object store and handle counters for a new request.
+pub fn reset_store() {
+    STORE.with(|s| *s.borrow_mut() = ObjectStore::default());
+    PENDING.with(|p| p.borrow_mut().clear());
+    HAS_PENDING.with(|p| p.set(false));
+    PENDING_SEQ.with(|p| p.set(0));
+    DESTRUCTORS_ENABLED.with(|d| d.set(true));
+    PROP_ORDERS.with(|p| p.borrow_mut().clear());
+    PROP_ORDERS_PRUNE_AT.with(|p| p.set(PROP_ORDERS_MIN_PRUNE));
+    STALE_COUNTS.with(|s| s.borrow_mut().clear());
+    UNSET_OVERFLOW.with(|m| m.borrow_mut().clear());
+}
+
 impl ObjectData {
     /// `zend_objects_store_del` on `GC_REFCOUNT == 0` (the payload's
     /// [`PhpObject::release_last`]): an object whose `__destruct` has not

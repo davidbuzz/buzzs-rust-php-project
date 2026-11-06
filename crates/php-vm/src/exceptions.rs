@@ -543,15 +543,9 @@ impl Vm {
         let Some(uf) = &f.ufunc else {
             return out;
         };
-        let vars = f.vars.borrow();
         let nparams = uf.params.len();
         let passed = f.args.len();
-        let cv = |i: usize| {
-            vars.slots
-                .get(f.cv_idx(u32::try_from(i).unwrap_or(0)))
-                .cloned()
-                .flatten()
-        };
+        let cv = |i: usize| f.cvs.get(i).and_then(crate::vm::CvSlot::get_clone);
         for (i, p) in uf.params.iter().enumerate() {
             if p.variadic {
                 for a in f.args.iter().skip(i).flatten() {

@@ -332,7 +332,11 @@ impl Args {
     /// Argument `n` (dereferenced) if passed.
     pub fn get(&self, n: usize) -> Option<Value> {
         if self.passed.get(n).copied().unwrap_or(false) {
-            self.values.get(n).map(Value::deref)
+            match self.values.get(n) {
+                Some(Value::Reference(r)) => Some(r.get()),
+                Some(v) => Some(v.clone()),
+                None => None,
+            }
         } else {
             None
         }
@@ -340,7 +344,23 @@ impl Args {
 
     /// Argument `n` (dereferenced), `Null` if missing.
     pub fn at(&self, n: usize) -> Value {
-        self.values.get(n).map(Value::deref).unwrap_or_default()
+        match self.values.get(n) {
+            Some(Value::Reference(r)) => r.get(),
+            Some(v) => v.clone(),
+            None => Value::Null,
+        }
+    }
+
+    /// Argument `n` as a borrowed value if passed and not a PHP reference.
+    pub fn get_ref(&self, n: usize) -> Option<&Value> {
+        if self.passed.get(n).copied().unwrap_or(false) {
+            match self.values.get(n) {
+                Some(Value::Reference(_)) => None,
+                other => other,
+            }
+        } else {
+            None
+        }
     }
 
     /// Whether argument `n` was passed.

@@ -6,50 +6,98 @@ use php_runtime::{Value, ZArray, ZStr};
 
 /// String argument (already coerced by the signature).
 pub(crate) fn s(a: &Args, i: usize) -> ZStr {
-    match a.at(i) {
-        Value::Str(s) => s,
-        Value::Int(n) => ZStr::from(n.to_string()),
+    match a.values.get(i) {
+        Some(Value::Str(s)) => s.clone(),
+        Some(Value::Int(n)) => ZStr::from(n.to_string()),
+        Some(Value::Reference(r)) => match r.get() {
+            Value::Str(s) => s,
+            Value::Int(n) => ZStr::from(n.to_string()),
+            _ => ZStr::empty(),
+        },
         _ => ZStr::empty(),
+    }
+}
+
+/// String argument as a byte slice without cloning the string.
+pub(crate) fn str_bytes<'a>(a: &'a Args, i: usize) -> Option<&'a [u8]> {
+    match a.values.get(i) {
+        Some(Value::Str(s)) => Some(s.as_bytes()),
+        _ => None,
     }
 }
 
 /// Integer argument.
 pub(crate) fn i(a: &Args, i: usize) -> i64 {
-    match a.at(i) {
-        Value::Int(n) => n,
-        Value::Bool(b) => i64::from(b),
+    match a.values.get(i) {
+        Some(Value::Int(n)) => *n,
+        Some(Value::Bool(b)) => i64::from(*b),
         #[allow(clippy::cast_possible_truncation)]
-        Value::Float(f) => f as i64,
+        Some(Value::Float(f)) => *f as i64,
+        Some(Value::Reference(r)) => match r.get() {
+            Value::Int(n) => n,
+            Value::Bool(b) => i64::from(b),
+            #[allow(clippy::cast_possible_truncation)]
+            Value::Float(f) => f as i64,
+            _ => 0,
+        },
         _ => 0,
     }
 }
 
 /// Float argument.
 pub(crate) fn f(a: &Args, i: usize) -> f64 {
-    match a.at(i) {
-        Value::Float(f) => f,
+    match a.values.get(i) {
+        Some(Value::Float(f)) => *f,
         #[allow(clippy::cast_precision_loss)]
-        Value::Int(n) => n as f64,
+        Some(Value::Int(n)) => *n as f64,
+        Some(Value::Reference(r)) => match r.get() {
+            Value::Float(f) => f,
+            #[allow(clippy::cast_precision_loss)]
+            Value::Int(n) => n as f64,
+            _ => 0.0,
+        },
         _ => 0.0,
     }
 }
 
 /// Bool argument.
 pub(crate) fn b(a: &Args, i: usize) -> bool {
-    matches!(a.at(i), Value::Bool(true))
+    match a.values.get(i) {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Reference(r)) => matches!(r.get(), Value::Bool(true)),
+        _ => false,
+    }
 }
 
 /// Array argument.
 pub(crate) fn arr(a: &Args, i: usize) -> ZArray {
-    match a.at(i) {
-        Value::Array(x) => x,
+    match a.values.get(i) {
+        Some(Value::Array(x)) => x.clone(),
+        Some(Value::Reference(r)) => match r.get() {
+            Value::Array(x) => x,
+            _ => ZArray::new(),
+        },
         _ => ZArray::new(),
     }
 }
 
 /// Optional argument (passed and not null).
 pub(crate) fn opt(a: &Args, i: usize) -> Option<Value> {
-    a.get(i).filter(|v| !v.is_null())
+    if !a.has(i) {
+        return None;
+    }
+    match a.values.get(i) {
+        Some(Value::Null) | None => None,
+        Some(Value::Reference(r)) => {
+            let v = r.get();
+            if v.is_null() {
+                None
+            } else {
+                Some(v)
+            }
+        }
+        Some(v) => Some(v.clone()),
+    }
 }
 
 /// A string value.

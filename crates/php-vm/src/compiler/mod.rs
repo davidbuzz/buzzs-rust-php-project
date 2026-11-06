@@ -12,6 +12,7 @@ mod fbc_tests;
 mod fold_tests;
 #[cfg(test)]
 mod loop_layout_tests;
+pub mod optimizer;
 mod specialise;
 mod stack;
 mod stmt;
@@ -239,6 +240,8 @@ pub struct CompileOptions {
     /// Zend opcodes with a `zend_set_user_opcode_handler()` hook: each is
     /// preceded by an `Op::UserOpcode`.
     pub user_opcodes: Vec<&'static str>,
+    /// `opcache.optimization_level` bits (`0` = disabled).
+    pub optimization_level: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1003,15 +1006,9 @@ impl Compiler<'_> {
                 *t = target_op;
             }
         }
-        // Handler specialisation, last: every jump target is final. A
-        // `zend_set_user_opcode_handler()` hook runs before its generic
-        // opcode, so hooked code keeps the generic ops.
-        if self.opts.user_opcodes.is_empty() {
-            specialise::specialise(&mut f.ops, &f.places);
-        }
         let mut try_table: Vec<(TryEntry, Label)> = std::mem::take(&mut f.try_table);
         try_table.sort_by(|a, b| b.0.try_start.cmp(&a.0.try_start));
-        Ok(OpArray {
+        let mut op_array = OpArray {
             ops: f.ops,
             lines: f.lines,
             literals: f.literals,
@@ -1030,7 +1027,19 @@ impl Compiler<'_> {
             class_cache: std::cell::RefCell::default(),
             rt_cache: crate::rtcache::RuntimeCache::default(),
             prop_cache: std::cell::RefCell::default(),
-        })
+        };
+        // Optimizer passes run when opcache.optimization_level is nonzero
+        // and no user opcode handlers are hooked.
+        if self.opts.optimization_level != 0 && self.opts.user_opcodes.is_empty() {
+            optimizer::optimize_op_array(&mut op_array, self.opts.optimization_level);
+        }
+        // Handler specialisation, last: every jump target is final. A
+        // `zend_set_user_opcode_handler()` hook runs before its generic
+        // opcode, so hooked code keeps the generic ops.
+        if self.opts.user_opcodes.is_empty() {
+            specialise::specialise(&mut op_array.ops, &op_array.places);
+        }
+        Ok(op_array)
     }
 
     // ------------------------------------------------------------------

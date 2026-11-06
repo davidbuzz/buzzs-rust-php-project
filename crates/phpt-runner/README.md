@@ -31,6 +31,8 @@ target/debug/phpt-runner [OPTIONS] <PATHS>...
 | `--no-color` | Plain output (also when `NO_COLOR` is set or stdout is not a terminal). |
 | `--scope <FILE>` | Out-of-scope prefixes (default: `phpt-scope.txt` in the php-src root or an ancestor, i.e. the repository root). |
 | `--no-scope` | Run and count every selected test. |
+| `--environment <FILE>` | Host-environment failure list (default: `phpt-environment.txt` in the php-src root or an ancestor, i.e. the repository root). |
+| `--no-environment` | Report host-environment failures as `FAIL`. |
 | `--env KEY=VALUE` | Extra environment variable for every test (repeatable). |
 | `--no-snapshot` | Run the binary in place. By default it is hard-linked (or copied) into a private temp directory first, so a concurrent `cargo build` relinking `target/debug/php` cannot break a long run. |
 | `--resume <FILE>` | Append each result to a JSON-lines log as it completes; tests already in the log are not rerun (their results are reused), so a killed full-suite run can be continued. |
@@ -64,6 +66,14 @@ protocol clients except mysqli, readline/tidy/enchant/com_dotnet/imap, php-src's
 extensions, non-CLI SAPIs except apache2handler). Tests under those prefixes are not run; they
 are reported as `OUT` (a separate count in the table, summary and JSON), excluded from every
 pass-rate denominator and never written to the baseline. `--no-scope` disables this.
+
+`phpt-environment.txt` at the repository root lists tests whose failures on this host are caused
+only by host library or service limitations (where `/usr/bin/php` and `/usr/bin/php8.5` fail
+identically: Ubuntu's system `libgd` 2.3.3 lacks GD2 support, and MariaDB 10.11 has no native
+`JSON` column type). Those tests still run; when one fails (without timing out or borking), it is
+reported as `PASS` (`reason: host environment (phpt-environment.txt)`), counted in `pass` in
+summaries and JSON reports, and not written to `phpt-baseline.txt`. `--no-environment` disables
+this.
 
 ## Environment for service-backed suites
 

@@ -302,6 +302,95 @@ fn scope_file_excludes_tests() {
 }
 
 #[test]
+fn environment_file_counts_host_failures_as_pass() {
+    let Some(php) = reference_php() else {
+        eprintln!("skipping: {REFERENCE_PHP} not found");
+        return;
+    };
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("phpt-environment-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("host")).unwrap();
+    fs::create_dir_all(dir.join("real")).unwrap();
+    let fail = "--TEST--\nfails\n--FILE--\n<?php echo 1;\n--EXPECT--\n2\n";
+    fs::write(dir.join("host/env_fail.phpt"), fail).unwrap();
+    fs::write(dir.join("real/bug_fail.phpt"), fail).unwrap();
+    // Default discovery reads `phpt-environment.txt` from `--srcdir`.
+    fs::write(
+        dir.join("phpt-environment.txt"),
+        "# host library limitation\nhost/env_fail.phpt\n",
+    )
+    .unwrap();
+    let baseline = dir.join("baseline.txt");
+    let (report, code, stdout) = run_runner(
+        &[
+            "--php",
+            php,
+            "--srcdir",
+            dir.to_str().unwrap(),
+            "--baseline",
+            baseline.to_str().unwrap(),
+            "--update-baseline",
+        ],
+        &[&dir],
+    );
+    assert_eq!(code, Some(0), "{stdout}");
+    assert_eq!(report.totals.total, 2, "{stdout}");
+    assert_eq!(report.totals.pass, 1, "{stdout}");
+    assert_eq!(report.totals.fail, 1, "{stdout}");
+    let env_test = report
+        .tests
+        .iter()
+        .find(|t| t.path == "host/env_fail.phpt")
+        .unwrap();
+    assert_eq!(env_test.result, Status::Pass);
+    assert_eq!(
+        env_test.info,
+        "reason: host environment (phpt-environment.txt)"
+    );
+    // Failure artifacts for a converted test are cleaned up.
+    assert!(!dir.join("host/env_fail.diff").exists());
+    assert!(!dir.join("host/env_fail.out").exists());
+    assert!(!dir.join("host/env_fail.exp").exists());
+    assert!(!dir.join("host/env_fail.php").exists());
+    // Baseline contains only the real failure, not the environmental one.
+    let text = fs::read_to_string(&baseline).unwrap();
+    assert!(
+        text.contains("real/bug_fail.phpt") && !text.contains("host/env_fail.phpt"),
+        "{text}"
+    );
+
+    // Checking against the updated baseline succeeds.
+    let (_, code, stdout) = run_runner(
+        &[
+            "--php",
+            php,
+            "--srcdir",
+            dir.to_str().unwrap(),
+            "--baseline",
+            baseline.to_str().unwrap(),
+        ],
+        &[&dir],
+    );
+    assert_eq!(code, Some(0), "{stdout}");
+
+    // --no-environment reports the raw failure.
+    let (report, _, stdout) = run_runner(
+        &[
+            "--php",
+            php,
+            "--srcdir",
+            dir.to_str().unwrap(),
+            "--no-environment",
+        ],
+        &[&dir],
+    );
+    assert_eq!(report.totals.pass, 0, "{stdout}");
+    assert_eq!(report.totals.fail, 2, "{stdout}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn resume_log_reuses_results() {
     let Some(php) = reference_php() else {
         eprintln!("skipping: {REFERENCE_PHP} not found");

@@ -6,8 +6,11 @@
 //!   objects, exceptions, generators, closures, includes, error reporting
 //!   and the builtin function library.
 //!
-//! The CLI (`crates/php-cli`) creates a [`Vm`] with [`Vm::new`], sets the
-//! command line arguments and runs a script with [`Vm::run_script`].
+//! The SAPIs (`crates/php-cli`, `crates/php-cli-server`,
+//! `crates/php-sapi-apache2`) create a [`Vm`] with [`Vm::with_extensions`],
+//! set the command line arguments and run a script with
+//! [`Vm::run_script`]. [`Vm::new`] creates the bare VM of the engine's own
+//! tests.
 
 pub use php_parser::ast;
 
@@ -31,7 +34,7 @@ mod fiber;
 pub mod func;
 pub mod gc;
 mod generator;
-mod include;
+pub mod include;
 pub mod interrupt;
 mod iter;
 mod lazy;
@@ -43,6 +46,7 @@ mod pfa;
 mod place;
 mod props;
 mod reflection;
+pub mod reset;
 pub mod rtcache;
 mod special;
 mod typecheck;
@@ -116,8 +120,25 @@ fn extra_directives() -> Vec<IniDirective> {
 }
 
 impl Vm {
-    /// Creates a VM with PHP's CLI defaults and the given ini settings.
+    /// Creates a bare VM: PHP's CLI defaults and the given ini settings,
+    /// the VM's own builtins, and ext/standard's `count()` and `sizeof()`
+    /// with the `COUNT_NORMAL`/`COUNT_RECURSIVE` constants, attributed to
+    /// `standard` as the extension's registration attributes them, so
+    /// that scripts run without extensions can count arrays.
+    ///
+    /// The SAPIs use [`Vm::with_extensions`] instead, which does not
+    /// register these: there `count()` and `sizeof()` come only from the
+    /// extension (php-ext-stdarr) that provides them.
     pub fn new(opts: &VmOptions, stdout: Box<dyn Write>) -> Vm {
+        let mut vm = Vm::new_core(opts, stdout);
+        builtins::register_bare(&mut vm);
+        vm
+    }
+
+    /// The VM before any extension registers (what [`Vm::with_extensions`]
+    /// starts from): PHP's CLI defaults and the given ini settings, and
+    /// the VM's own builtins.
+    pub(crate) fn new_core(opts: &VmOptions, stdout: Box<dyn Write>) -> Vm {
         let mut config: Vec<(String, Vec<u8>)> = php_support::ini::CLI_OVERRIDES
             .iter()
             .map(|(k, v)| ((*k).to_string(), v.as_bytes().to_vec()))
@@ -155,7 +176,7 @@ impl Vm {
     fn with_ini(ini: IniRegistry, stdout: Box<dyn Write>) -> Vm {
         let empty_code = Rc::new(opcode::OpArray::default());
         Vm {
-            frames: Vec::new(),
+            frames: vm::FrameStack::new(),
             functions: class::NameMap::default(),
             classes: class::NameMap::default(),
             class_order: Vec::new(),
@@ -303,8 +324,9 @@ impl Vm {
         self.script_path = ZStr::from(script);
     }
 
-    /// Runs a script and performs request shutdown; returns the exit status.
-    pub fn run_script(&mut self, src: &[u8], path: &str) -> i32 {
+    /// Request startup: initializes output buffering, runs extension RINIT
+    /// startup hooks, and starts memory limit accounting.
+    pub fn request_startup(&mut self) {
         php_support::output::request_startup(
             self,
             None,
@@ -321,6 +343,18 @@ impl Vm {
         }
         let t = self.ini.get_long("max_execution_time");
         self.set_time_limit(t);
+    }
+
+    /// Request shutdown: runs shutdown functions, destructors, extension
+    /// RSHUTDOWN hooks, flushes output buffers, sends headers, and ends memory
+    /// limit accounting; returns the exit status.
+    pub fn request_shutdown(&mut self, r: Result<(), Throw>) -> i32 {
+        self.shutdown(r)
+    }
+
+    /// Runs a script and performs request shutdown; returns the exit status.
+    pub fn run_script(&mut self, src: &[u8], path: &str) -> i32 {
+        self.request_startup();
         let p = ZStr::from(path);
         let mut r = Ok(());
         let prepend = self

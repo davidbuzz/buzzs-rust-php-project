@@ -652,12 +652,18 @@ pub(crate) fn hooks_of(o: &Obj) -> Option<Rc<ClassHooks>> {
 
 impl Vm {
     /// Creates a VM and registers the given extensions.
+    ///
+    /// It starts from the VM's own builtins only, without the `count()`
+    /// and `sizeof()` the bare [`Vm::new`] adds: every function an
+    /// extension provides comes from that extension (its attribution,
+    /// its place in `get_extension_funcs()` and in the function table,
+    /// and the special opcodes the compiler chooses for it).
     pub fn with_extensions(
         opts: &crate::VmOptions,
         stdout: Box<dyn std::io::Write>,
         extensions: &[&dyn Extension],
     ) -> Vm {
-        let mut vm = Vm::new(opts, stdout);
+        let mut vm = Vm::new_core(opts, stdout);
         // Room for what the extensions register (the bundled ones average
         // about 36 functions, 7 classes and 52 constants each), so the
         // symbol tables do not rehash during start-up. (With all 54 the
@@ -1229,31 +1235,43 @@ impl Vm {
 
 impl Args {
     /// String argument `n` (declared `string`; already coerced).
+    #[inline]
     pub fn str(&self, n: usize) -> ZStr {
         crate::builtins::util::s(self, n)
     }
 
+    /// Borrowed string bytes of argument `n` if it is a string without reference.
+    #[inline]
+    pub fn str_bytes(&self, n: usize) -> Option<&[u8]> {
+        crate::builtins::util::str_bytes(self, n)
+    }
+
     /// Integer argument `n` (declared `int`).
+    #[inline]
     pub fn int(&self, n: usize) -> i64 {
         crate::builtins::util::i(self, n)
     }
 
     /// Float argument `n` (declared `float`).
+    #[inline]
     pub fn float(&self, n: usize) -> f64 {
         crate::builtins::util::f(self, n)
     }
 
     /// Bool argument `n` (declared `bool`).
+    #[inline]
     pub fn bool(&self, n: usize) -> bool {
         crate::builtins::util::b(self, n)
     }
 
     /// Array argument `n` (declared `array`).
+    #[inline]
     pub fn array(&self, n: usize) -> ZArray {
         crate::builtins::util::arr(self, n)
     }
 
     /// Argument `n` if it was passed and is not `null`.
+    #[inline]
     pub fn opt(&self, n: usize) -> Option<Value> {
         crate::builtins::util::opt(self, n)
     }

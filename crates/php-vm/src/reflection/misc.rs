@@ -713,7 +713,7 @@ fn rfb_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let head: Vec<crate::vm::Frame> = vm.frames.drain(..base).collect();
             let t = vm.backtrace(false, ignore_args, provide_object, 0);
             let mid = std::mem::take(&mut vm.frames);
-            vm.frames = head;
+            vm.frames = head.into();
             vm.frames.extend(mid);
             vm.frames.extend(above);
             Ok(Value::Array(t))
@@ -724,10 +724,10 @@ fn rfb_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 std::mem::take(&mut d.frames)
             })
             .unwrap_or_default();
-            let outer = std::mem::replace(&mut vm.frames, saved);
+            let outer = std::mem::replace(&mut vm.frames, saved.into());
             let t = vm.backtrace(false, ignore_args, provide_object, 0);
             let saved = std::mem::replace(&mut vm.frames, outer);
-            object::internal::<crate::fiber::FiberData, _>(&f, |d| d.frames = saved);
+            object::internal::<crate::fiber::FiberData, _>(&f, |d| d.frames = saved.into_vec());
             Ok(Value::Array(t))
         }
     }

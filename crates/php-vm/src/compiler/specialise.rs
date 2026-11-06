@@ -20,7 +20,8 @@
 //! the successor from elsewhere also runs it as before.
 
 use crate::opcode::{
-    cmp_outcome, BinKind, ClassSpec, FetchMode, Op, Operand, Place, PlaceBase, PlaceId, Seg,
+    cmp_outcome, BinKind, ClassSpec, FetchMode, IncDecKind, Op, Operand, Place, PlaceBase, PlaceId,
+    Seg,
 };
 use php_runtime::BinaryOp;
 
@@ -72,7 +73,8 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
                     dst: *dst,
                     place: *place,
                 })
-            }),
+            })
+            .or_else(|| incdec_prop(places, *place, *kind, *dst)),
         Op::AssignOp {
             place,
             op,
@@ -104,7 +106,8 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
                     to: assigned_cv(next, *dst),
                     mode: *mode,
                 })
-            }),
+            })
+            .or_else(|| fetch_prop(places, *place, *mode, *dst, next)),
         Op::FetchConst {
             name,
             fallback,
@@ -137,6 +140,24 @@ fn assign(places: &[Place], place: PlaceId, val: Operand, dst: Option<u32>) -> O
     if static_prop(places, place) {
         return Some(Op::AssignStaticProp { place, val, dst });
     }
+    if let Some(shape) = prop_shape(places, place) {
+        return Some(match shape {
+            PropShape::Prop => Op::AssignObjProp { place, val, dst },
+            PropShape::Dim(dim) => Op::AssignObjPropDim {
+                place,
+                dim,
+                val,
+                dst,
+            },
+            // `ZEND_ASSIGN_DIM` with an unused offset operand appends.
+            PropShape::Append => Op::AssignObjPropDim {
+                place,
+                dim: Operand::Unused,
+                val,
+                dst,
+            },
+        });
+    }
     if dst.is_some() {
         return None;
     }
@@ -167,6 +188,31 @@ fn assign_op(
             val,
             dst,
         });
+    }
+    // `$base->name op= v` / `$base->name[$k] op= v`: the operators the
+    // property cache performs in place (anything else would only add a
+    // failed check before the generic op).
+    if op == BinaryOp::Concat || is_numeric_assign_op(op) {
+        match prop_shape(places, place) {
+            Some(PropShape::Prop) => {
+                return Some(Op::AssignOpObjProp {
+                    place,
+                    op,
+                    val,
+                    dst,
+                })
+            }
+            Some(PropShape::Dim(dim)) => {
+                return Some(Op::AssignOpObjPropDim {
+                    place,
+                    dim,
+                    op,
+                    val,
+                    dst,
+                })
+            }
+            Some(PropShape::Append) | None => {}
+        }
     }
     if op == BinaryOp::Concat {
         if let Some(cv) = plain_cv(places, place) {
@@ -233,11 +279,104 @@ fn isset(places: &[Place], pid: PlaceId, dst: u32, empty: bool) -> Option<Op> {
             empty,
         });
     }
-    static_prop(places, pid).then_some(Op::IssetStaticProp {
-        place: pid,
-        dst,
-        empty,
-    })
+    if static_prop(places, pid) {
+        return Some(Op::IssetStaticProp {
+            place: pid,
+            dst,
+            empty,
+        });
+    }
+    match prop_shape(places, pid)? {
+        PropShape::Prop => Some(Op::IssetObjProp {
+            place: pid,
+            dst,
+            empty,
+        }),
+        PropShape::Dim(dim) => Some(Op::IssetObjPropDim {
+            place: pid,
+            dim,
+            dst,
+            empty,
+        }),
+        PropShape::Append => None,
+    }
+}
+
+/// What follows the literal property name of a place the property ops
+/// cover ([`prop_shape`]).
+#[derive(Clone, Copy)]
+enum PropShape {
+    /// `$base->name`
+    Prop,
+    /// `$base->name[dim]`, a defined offset operand.
+    Dim(Operand),
+    /// `$base->name[]`
+    Append,
+}
+
+/// The shape of place `pid` when it is one the property cache serves
+/// (`place::propcache`): a compiled variable or `$this`, a property named
+/// by a literal, and at most one dimension (or `[]`) after it.
+fn prop_shape(places: &[Place], pid: PlaceId) -> Option<PropShape> {
+    let p = places.get(pid as usize)?;
+    if !matches!(p.base, PlaceBase::Cv(_) | PlaceBase::This) {
+        return None;
+    }
+    match p.segs.as_slice() {
+        [Seg::Prop(Operand::Lit(_))] => Some(PropShape::Prop),
+        [Seg::Prop(Operand::Lit(_)), Seg::Dim(dim)] if *dim != Operand::Unused => {
+            Some(PropShape::Dim(*dim))
+        }
+        [Seg::Prop(Operand::Lit(_)), Seg::Append] => Some(PropShape::Append),
+        _ => None,
+    }
+}
+
+/// The property op of a `Fetch` (`Read` or `Is` mode) of `pid` writing
+/// `dst`, followed by `next` (whose `AssignCv` of `dst` it may fold).
+fn fetch_prop(
+    places: &[Place],
+    pid: PlaceId,
+    mode: FetchMode,
+    dst: u32,
+    next: Option<&Op>,
+) -> Option<Op> {
+    let to = assigned_cv(next, dst);
+    match prop_shape(places, pid)? {
+        PropShape::Prop => Some(Op::FetchObjProp {
+            place: pid,
+            dst,
+            to,
+            mode,
+        }),
+        PropShape::Dim(dim) => Some(Op::FetchObjPropDim {
+            place: pid,
+            dim,
+            dst,
+            to,
+            mode,
+        }),
+        // "Cannot use [] for reading".
+        PropShape::Append => None,
+    }
+}
+
+/// The property op of an `IncDec` of `pid`.
+fn incdec_prop(places: &[Place], pid: PlaceId, kind: IncDecKind, dst: Option<u32>) -> Option<Op> {
+    match prop_shape(places, pid)? {
+        PropShape::Prop => Some(Op::IncDecObjProp {
+            place: pid,
+            kind,
+            dst,
+        }),
+        PropShape::Dim(dim) => Some(Op::IncDecObjPropDim {
+            place: pid,
+            dim,
+            kind,
+            dst,
+        }),
+        PropShape::Append => None,
+    }
 }
 
 /// Whether `pid` is a static property `A::$name` the run-time cache can
@@ -284,6 +423,10 @@ fn has_numeric_fast_path(op: BinKind) -> bool {
                     BinaryOp::Add
                         | BinaryOp::Sub
                         | BinaryOp::Mul
+                        | BinaryOp::Div
+                        | BinaryOp::Mod
+                        | BinaryOp::ShiftLeft
+                        | BinaryOp::ShiftRight
                         | BinaryOp::BitOr
                         | BinaryOp::BitAnd
                         | BinaryOp::BitXor
@@ -298,6 +441,10 @@ fn is_numeric_assign_op(op: BinaryOp) -> bool {
         BinaryOp::Add
             | BinaryOp::Sub
             | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod
+            | BinaryOp::ShiftLeft
+            | BinaryOp::ShiftRight
             | BinaryOp::BitOr
             | BinaryOp::BitAnd
             | BinaryOp::BitXor
@@ -800,6 +947,115 @@ mod tests {
         assert!(
             ops.iter()
                 .any(|op| matches!(op, Op::FetchClassConst { .. })),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn object_properties_are_specialised() {
+        let ops = main_ops(
+            "<?php
+            $x = $o->p;
+            $y = $o->p['k'];
+            $o->p = 1;
+            $o->p['k'] = 2;
+            $o->p[] = 3;
+            $o->p += 4;
+            $o->p /= 2;
+            $o->p['k'] += 5;
+            $o->p++;
+            $o->p['k']--;
+            $a = isset($o->p);
+            $b = empty($o->p);
+            $c = isset($o->p['k']);
+            $d = empty($o->p['k']);
+            ",
+        );
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::FetchObjProp { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::FetchObjPropDim { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::AssignObjProp { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::AssignObjPropDim {
+                    dim: Operand::Unused,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::AssignObjPropDim { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::AssignOpObjProp {
+                    op: BinaryOp::Add,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::AssignOpObjProp {
+                    op: BinaryOp::Div,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::AssignOpObjPropDim {
+                    op: BinaryOp::Add,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::IncDecObjProp { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::IncDecObjPropDim { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::IssetObjProp { empty: false, .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::IssetObjProp { empty: true, .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::IssetObjPropDim { empty: false, .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::IssetObjPropDim { empty: true, .. })),
             "{ops:?}"
         );
     }

@@ -10,6 +10,7 @@ use clap::Parser;
 
 use phpt_runner::baseline::Baseline;
 use phpt_runner::discover::{collect, find_srcdir, ConflictResolver};
+use phpt_runner::environment::Environment;
 use phpt_runner::ini::{
     default_ini_overwrites, escapeshellarg, IniSettings, E_ALL, NO_EXTENSION_DIR,
 };
@@ -86,6 +87,13 @@ struct Cli {
     /// Ignore the scope file: run and count every selected test.
     #[arg(long, conflicts_with = "scope")]
     no_scope: bool,
+    /// File listing tests whose host-environment failures count as PASS [default:
+    /// `phpt-environment.txt` in the php-src root or one of its ancestors].
+    #[arg(long, value_name = "FILE")]
+    environment: Option<PathBuf>,
+    /// Ignore the environment file: report host-environment failures as FAIL.
+    #[arg(long, conflicts_with = "environment")]
+    no_environment: bool,
     /// Append each result to this JSON-lines file as soon as it completes; tests already
     /// recorded there are not run again (their recorded results are reused). Makes long runs
     /// resumable after the runner is killed.
@@ -335,6 +343,44 @@ fn load_scope(cli: &Cli, srcdir: &Path) -> Result<Option<(Scope, PathBuf)>, Stri
     Ok(Some((scope, path)))
 }
 
+/// Load the environment file (explicit `--environment`, else the default one if present).
+fn load_environment(cli: &Cli, srcdir: &Path) -> Result<Option<(Environment, String)>, String> {
+    if cli.no_environment {
+        return Ok(None);
+    }
+    let Some(path) = cli
+        .environment
+        .clone()
+        .or_else(|| Environment::find_default(srcdir))
+    else {
+        return Ok(None);
+    };
+    let env = Environment::load(&path)
+        .map_err(|e| format!("cannot read environment file {}: {e}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    Ok(Some((env, file_name)))
+}
+
+/// Remove failure artifacts (`.exp`, `.out`, `.diff`, `.php`) written for a test whose
+/// failure was converted to `PASS` by the environment file.
+fn remove_failure_artifacts(srcdir: &Path, rel_path: &str) {
+    let full = srcdir.join(rel_path);
+    let stem = full
+        .to_str()
+        .and_then(|s| s.strip_suffix("phpt"))
+        .map(PathBuf::from);
+    if let Some(prefix) = stem {
+        let prefix = prefix.into_os_string();
+        for ext in ["exp", "out", "diff", "php"] {
+            let mut p = prefix.clone();
+            p.push(ext);
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
 /// Split off out-of-scope tests, returning their (not run) results.
 fn apply_scope(
     tests: &mut Vec<PathBuf>,
@@ -456,6 +502,7 @@ fn execute(
     cli: &Cli,
     runner: &Runner,
     tests: &[PathBuf],
+    environment: Option<&(Environment, String)>,
     mut log: Option<&mut std::fs::File>,
     keep_diffs: bool,
 ) -> Vec<TestResult> {
@@ -488,11 +535,15 @@ fn execute(
         workers,
         |job| runner.run_file(&job.path),
         |batch| {
-            for r in batch {
+            for mut r in batch {
+                if let Some((env, file_name)) = environment {
+                    if env.apply_one(&mut r, file_name) && !cli.no_artifacts {
+                        remove_failure_artifacts(&runner.config().srcdir, &r.path);
+                    }
+                }
                 print_result(&r, cli, color, show_diff);
                 // Diffs can be large; they were printed (and written to .diff) already. A `JUnit`
                 // report embeds them, so they are kept for it.
-                let mut r = r;
                 if !keep_diffs {
                     r.diff = None;
                 }
@@ -555,6 +606,7 @@ fn check_baseline(cli: &Cli, results: &[TestResult]) -> Result<ExitCode, String>
 fn run(cli: &Cli) -> Result<ExitCode, String> {
     let (mut tests, srcdir) = select_tests(cli)?;
     let scope = load_scope(cli, &srcdir)?;
+    let environment = load_environment(cli, &srcdir)?;
     let out_of_scope = apply_scope(&mut tests, &srcdir, scope.as_ref());
     if cli.list {
         for t in &tests {
@@ -615,7 +667,17 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             .map_err(|e| format!("Failed to open {} for writing: {e}", path.display()))?;
     }
     let start = Instant::now();
-    let mut results = execute(cli, &runner, &tests, log.as_mut(), junit_path.is_some());
+    if let Some((env, file_name)) = &environment {
+        env.apply(&mut previous, file_name);
+    }
+    let mut results = execute(
+        cli,
+        &runner,
+        &tests,
+        environment.as_ref(),
+        log.as_mut(),
+        junit_path.is_some(),
+    );
     results.append(&mut previous);
     results.extend(out_of_scope);
     let elapsed = start.elapsed().as_secs_f64();

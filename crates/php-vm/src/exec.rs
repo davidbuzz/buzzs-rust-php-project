@@ -1,7 +1,10 @@
 //! The interpreter loop (`execute_ex`) and simple instructions.
 
 use crate::object;
-use crate::opcode::{BinKind, CastKind, Op, Operand, UnKind};
+use crate::opcode::{
+    BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Op, Operand, PlaceId,
+    UnKind,
+};
 use crate::vm::{FinState, Frame, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ops, BinaryOp, ErrorLevel, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
@@ -229,14 +232,13 @@ impl Vm {
             // `ZEND_CONCAT` with a TMP op1: a string nothing else holds is
             // extended in place (`zend_string_extend`), not copied.
             (BinKind::Arith(BinaryOp::Concat), Operand::Tmp(_), Value::Str(s), Value::Str(t)) => {
-                Value::Str(s.concat_owned(t.as_bytes()))
+                Value::Str(s.concat_owned_str(&t))
             }
             // The same with an integer right operand (`"k" . $i . ...`
             // chains): its digits are appended straight from a stack
             // buffer, as `concat_function` does after `zval_get_string`.
             (BinKind::Arith(BinaryOp::Concat), Operand::Tmp(_), Value::Str(s), Value::Int(i)) => {
-                let mut buf = [0u8; php_runtime::string::LONG_MAX_LEN];
-                Value::Str(s.concat_owned(php_runtime::string::format_long(i, &mut buf)))
+                Value::Str(s.concat_owned_long(i))
             }
             (_, _, lhs, rhs) => {
                 let result = self.binary(op, &lhs, &rhs)?;
@@ -281,7 +283,7 @@ impl Vm {
         let mut out = php_runtime::string::ZStrBuf::with_capacity(len);
         for v in vals.iter() {
             match v {
-                Value::Str(s) => out.push(s.as_bytes()),
+                Value::Str(s) => out.push_str(s),
                 Value::Int(i) => out.push_long(*i),
                 _ => {}
             }
@@ -396,19 +398,17 @@ impl Vm {
     #[must_use]
     #[inline]
     pub(crate) fn cv_assign(&mut self, cv: u32, v: Value) -> Option<(PhpRef, Value)> {
-        let f = self.frame();
-        let idx = f.cv_idx(cv);
-        let mut vars = f.vars.borrow_mut();
-        let slot = &mut vars.slots[idx];
+        let f = self.frame_mut();
+        let idx = cv as usize;
+        let slot = f.cvs.get_mut(idx)?;
         if matches!(
-            slot,
+            slot.get(),
             Some(Value::Reference(_) | Value::Array(_) | Value::Object(_))
         ) {
-            drop(vars);
             return self.cv_assign_slow(cv, v);
         }
-        let old = slot.replace(v);
-        drop(vars);
+        let old = slot.set(Some(v.clone()));
+        f.sync_cv_to_symtab(cv, &v);
         discard_unrooted(old);
         None
     }
@@ -418,18 +418,17 @@ impl Vm {
     #[must_use]
     #[inline(never)]
     fn cv_assign_slow(&mut self, cv: u32, v: Value) -> Option<(PhpRef, Value)> {
-        let f = self.frame();
-        let idx = f.cv_idx(cv);
-        let mut vars = f.vars.borrow_mut();
-        let slot = &mut vars.slots[idx];
-        let old = match slot {
+        let f = self.frame_mut();
+        let idx = cv as usize;
+        let slot = f.cvs.get_mut(idx)?;
+        let old = match slot.get() {
             Some(Value::Reference(r)) if crate::typed_refs::has_type_sources(r) => {
                 return Some((r.clone(), v));
             }
-            Some(Value::Reference(r)) => Some(r.set(v)),
-            _ => slot.replace(v),
+            Some(Value::Reference(r)) => Some(r.set(v.clone())),
+            _ => slot.set(Some(v.clone())),
         };
-        drop(vars);
+        f.sync_cv_to_symtab(cv, &v);
         if let Some(old) = &old {
             crate::gc::possible_root(old);
         }
@@ -523,10 +522,13 @@ impl Vm {
     /// is released.
     #[inline]
     pub(crate) fn cv_bind(&mut self, cv: u32, v: Value) {
-        let f = self.frame();
-        let idx = f.cv_idx(cv);
-        let old = f.vars.borrow_mut().slots[idx].replace(v);
-        release_slot_value(old);
+        let f = self.frame_mut();
+        let idx = cv as usize;
+        if let Some(slot) = f.cvs.get_mut(idx) {
+            let old = slot.set(Some(v.clone()));
+            f.sync_cv_to_symtab(cv, &v);
+            release_slot_value(old);
+        }
     }
 
     /// Stores a temporary.
@@ -1261,6 +1263,94 @@ impl Vm {
                                 None => break 'slow,
                             }
                         }
+                        // Object properties on a cache hit (`exec/spec/props.rs`).
+                        Op::FetchObjProp {
+                            place,
+                            dst,
+                            to,
+                            mode,
+                        } => match self.fetch_obj_prop_fast(*place, *dst, *to, *mode) {
+                            Some(true) => ip += 1,
+                            Some(false) => {}
+                            None => break 'slow,
+                        },
+                        Op::FetchObjPropDim {
+                            place,
+                            dim,
+                            dst,
+                            to,
+                            mode,
+                        } => match self.fetch_obj_prop_dim_fast(*place, *dim, *dst, *to, *mode) {
+                            Some(true) => ip += 1,
+                            Some(false) => {}
+                            None => break 'slow,
+                        },
+                        Op::AssignObjProp { place, val, dst } => {
+                            if !self.assign_obj_prop_fast(*place, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        Op::AssignObjPropDim {
+                            place,
+                            dim,
+                            val,
+                            dst,
+                        } => {
+                            if !self.assign_obj_prop_dim_fast(*place, *dim, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        Op::AssignOpObjProp {
+                            place,
+                            op: kind,
+                            val,
+                            dst,
+                        } => {
+                            if !self.assign_op_obj_prop_fast(*place, *kind, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        Op::AssignOpObjPropDim {
+                            place,
+                            dim,
+                            op: kind,
+                            val,
+                            dst,
+                        } => {
+                            if !self.assign_op_obj_prop_dim_fast(*place, *dim, *kind, *val, *dst) {
+                                break 'slow;
+                            }
+                        }
+                        Op::IncDecObjProp { place, kind, dst } => {
+                            match self.incdec_obj_prop_fast(*place, *kind) {
+                                Some(r) => self.set_dst(*dst, r),
+                                None => break 'slow,
+                            }
+                        }
+                        Op::IncDecObjPropDim {
+                            place,
+                            dim,
+                            kind,
+                            dst,
+                        } => match self.incdec_obj_prop_dim_fast(*place, *dim, *kind) {
+                            Some(r) => self.set_dst(*dst, r),
+                            None => break 'slow,
+                        },
+                        Op::IssetObjProp { place, dst, empty } => {
+                            match self.isset_obj_prop_fast(*place, *empty) {
+                                Some(r) => self.set_tmp(*dst, Value::Bool(r)),
+                                None => break 'slow,
+                            }
+                        }
+                        Op::IssetObjPropDim {
+                            place,
+                            dim,
+                            dst,
+                            empty,
+                        } => match self.isset_obj_prop_dim_fast(*place, *dim, *empty) {
+                            Some(r) => self.set_tmp(*dst, Value::Bool(r)),
+                            None => break 'slow,
+                        },
                         Op::ConcatCv { cv, val, dst, .. } => {
                             if !self.concat_cv_fast(*cv, *val, *dst) {
                                 break 'slow;
@@ -1910,27 +2000,45 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Strlen { a, dst } => {
-                        let v = self.read(*a)?;
-                        let len = match &v {
-                            Value::Str(s) => Some(s.len()),
+                        let len = match a {
+                            Operand::Cv(cv) => self.frame().peek_cv(*cv, |s| match s {
+                                Some(Value::Str(z)) => Some(z.len()),
+                                _ => None,
+                            }),
+                            Operand::Lit(i) => match self.frame().code.literals.get(*i as usize) {
+                                Some(Value::Str(s)) => Some(s.len()),
+                                _ => None,
+                            },
                             _ => None,
                         };
                         let r = match len {
                             Some(n) => Value::Int(i64::try_from(n).unwrap_or(i64::MAX)),
-                            None => self.op_strlen_slow(v)?,
+                            None => {
+                                let v = self.read(*a)?;
+                                self.op_strlen_slow(v)?
+                            }
                         };
                         self.set_dst(*dst, r);
                         Flow::Next
                     }
                     Op::Count { a, dst, sizeof } => {
-                        let v = self.read(*a)?;
-                        let len = match &v {
-                            Value::Array(arr) => Some(arr.len()),
+                        let len = match a {
+                            Operand::Cv(cv) => self.frame().peek_cv(*cv, |s| match s {
+                                Some(Value::Array(arr)) => Some(arr.len()),
+                                _ => None,
+                            }),
+                            Operand::Lit(i) => match self.frame().code.literals.get(*i as usize) {
+                                Some(Value::Array(arr)) => Some(arr.len()),
+                                _ => None,
+                            },
                             _ => None,
                         };
                         let r = match len {
                             Some(n) => Value::Int(i64::try_from(n).unwrap_or(i64::MAX)),
-                            None => self.op_count_slow(v, *sizeof)?,
+                            None => {
+                                let v = self.read(*a)?;
+                                self.op_count_slow(v, *sizeof)?
+                            }
                         };
                         self.set_dst(*dst, r);
                         Flow::Next
@@ -1979,18 +2087,42 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Echo(a) => {
-                        let v = self.read(*a)?;
-                        match &v {
-                            Value::Str(s) => self.echo(s.as_bytes()),
-                            // `zend_long_to_str` digits from a stack buffer:
-                            // no string is materialised for an echoed int.
-                            Value::Int(i) => {
+                        let fast = match a {
+                            Operand::Cv(cv) => self.frame().peek_cv(*cv, |s| match s {
+                                Some(Value::Int(i)) => Some(Ok(*i)),
+                                Some(Value::Str(s)) => Some(Err(s.clone())),
+                                _ => None,
+                            }),
+                            Operand::Lit(i) => match self.frame().code.literals.get(*i as usize) {
+                                Some(Value::Int(i)) => Some(Ok(*i)),
+                                Some(Value::Str(s)) => Some(Err(s.clone())),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        match fast {
+                            Some(Ok(i)) => {
                                 let mut buf = [0u8; php_runtime::string::LONG_MAX_LEN];
-                                self.echo(php_runtime::string::format_long(*i, &mut buf));
+                                self.echo(php_runtime::string::format_long(i, &mut buf));
                             }
-                            _ => {
-                                let s = self.to_zstr(&v)?;
+                            Some(Err(s)) => {
                                 self.echo(s.as_bytes());
+                            }
+                            None => {
+                                let v = self.read(*a)?;
+                                match &v {
+                                    Value::Str(s) => self.echo(s.as_bytes()),
+                                    // `zend_long_to_str` digits from a stack buffer:
+                                    // no string is materialised for an echoed int.
+                                    Value::Int(i) => {
+                                        let mut buf = [0u8; php_runtime::string::LONG_MAX_LEN];
+                                        self.echo(php_runtime::string::format_long(*i, &mut buf));
+                                    }
+                                    _ => {
+                                        let s = self.to_zstr(&v)?;
+                                        self.echo(s.as_bytes());
+                                    }
+                                }
                             }
                         }
                         self.take_pending_throw()?;
@@ -2233,6 +2365,60 @@ impl Vm {
                         }
                         Flow::Next
                     }
+                    // Handlers for the dedicated property ops (`exec/spec/props.rs`).
+                    Op::FetchObjProp {
+                        place,
+                        dst,
+                        to,
+                        mode,
+                    } => self.op_fetch_obj_prop(*place, *dst, *to, *mode, &mut ip)?,
+                    Op::FetchObjPropDim {
+                        place,
+                        dim,
+                        dst,
+                        to,
+                        mode,
+                    } => self.op_fetch_obj_prop_dim(*place, *dim, *dst, *to, *mode, &mut ip)?,
+                    Op::AssignObjProp { place, val, dst } => {
+                        self.op_assign_obj_prop(*place, *val, *dst)?
+                    }
+                    Op::AssignObjPropDim {
+                        place,
+                        dim,
+                        val,
+                        dst,
+                    } => self.op_assign_obj_prop_dim(*place, *dim, *val, *dst)?,
+                    Op::AssignOpObjProp {
+                        place,
+                        op: kind,
+                        val,
+                        dst,
+                    } => self.op_assign_op_obj_prop(*place, *kind, *val, *dst)?,
+                    Op::AssignOpObjPropDim {
+                        place,
+                        dim,
+                        op: kind,
+                        val,
+                        dst,
+                    } => self.op_assign_op_obj_prop_dim(*place, *dim, *kind, *val, *dst)?,
+                    Op::IncDecObjProp { place, kind, dst } => {
+                        self.op_incdec_obj_prop(*place, *kind, *dst)?
+                    }
+                    Op::IncDecObjPropDim {
+                        place,
+                        dim,
+                        kind,
+                        dst,
+                    } => self.op_incdec_obj_prop_dim(*place, *dim, *kind, *dst)?,
+                    Op::IssetObjProp { place, dst, empty } => {
+                        self.op_isset_obj_prop(*place, *dst, *empty)?
+                    }
+                    Op::IssetObjPropDim {
+                        place,
+                        dim,
+                        dst,
+                        empty,
+                    } => self.op_isset_obj_prop_dim(*place, *dim, *dst, *empty)?,
                 };
                 match flow {
                     Flow::Next => {
@@ -2329,7 +2515,7 @@ impl Vm {
                     None => ops::sub(a, b, self),
                 },
                 (BinaryOp::Concat, Value::Str(x), Value::Str(y)) => {
-                    Ok(Value::Str(ZStr::concat(x.as_bytes(), y.as_bytes())))
+                    Ok(Value::Str(ZStr::concat_str(x, y)))
                 }
                 _ => ops::binary_op(o, a, b, self),
             },
@@ -2790,11 +2976,15 @@ impl Vm {
             }
             return Ok(Flow::Reload);
         }
-        // The frame is released where it lives on the frame stack (a
-        // `Frame` is a few hundred bytes, every move of one is a `memcpy`):
-        // only a pooled frame moves, once. Values released here only queue
-        // destructors, which run at the next safe point, after the pop.
-        let (ret, by_ref, should_pool) = {
+        if self.frames[fidx].symtab_attached {
+            self.frames[fidx].sync_cvs_to_symtab();
+            if let Some(prev) = fidx.checked_sub(1) {
+                if self.frames[prev].symtab_attached {
+                    self.frames[prev].sync_from_symbol_table();
+                }
+            }
+        }
+        let (ret, by_ref) = {
             let frame = &self.frames[fidx];
             let caller_this = fidx
                 .checked_sub(1)
@@ -2804,23 +2994,9 @@ impl Vm {
                 .ufunc
                 .as_ref()
                 .is_some_and(|u| u.flags & crate::func::flags::RETURN_REF != 0);
-            let is_user_func =
-                frame.kind == crate::vm::FrameKind::Function && frame.ufunc.is_some();
-            let should_pool = is_user_func
-                && self.call_bufs.user_frames.len() < 8
-                && frame.tmps.capacity() <= 256
-                && frame.calls.capacity() <= 64;
-            (frame.ret, by_ref, should_pool)
+            (frame.ret, by_ref)
         };
-        if should_pool {
-            // Released in `zend_leave_helper`'s order (`Frame`), then moved
-            // into the pool with one copy (`pop` + `push` or a `drain` copy
-            // the frame twice, through a temporary).
-            self.frames[fidx].clear_for_pool(&self.empty_code);
-            crate::vm::move_last_frame(&mut self.frames, &mut self.call_bufs.user_frames);
-        } else {
-            self.frames.truncate(fidx);
-        }
+        self.frames.release_top(&self.empty_code);
         let v = if by_ref { v } else { self.copy_on_assign(v) };
         if fidx <= base {
             return Ok(Flow::Done(v));
@@ -3053,6 +3229,10 @@ fn defers_oom(op: &Op) -> bool {
             | Op::AssignOpDimsCv { .. }
             | Op::AssignStaticProp { .. }
             | Op::AssignOpStaticProp { .. }
+            | Op::AssignObjProp { .. }
+            | Op::AssignObjPropDim { .. }
+            | Op::AssignOpObjProp { .. }
+            | Op::AssignOpObjPropDim { .. }
             | Op::ConcatCv { .. }
             | Op::Echo(_)
             | Op::Free(_)

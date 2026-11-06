@@ -13,14 +13,12 @@
 //! not return) ends the child process, as `zend_timeout_handler` does.
 //!
 //! # Threading
-//! The VM is single-threaded (`Rc` everywhere, thread-local state in the
-//! extension crates), so every PHP request runs on a fresh thread (fresh
-//! thread-locals, 256 MiB stack like the CLI) while the httpd worker
-//! thread waits for it.  Requests of one process are serialised by a
-//! process-wide mutex: under `mpm_prefork` (one request per process) this
-//! costs nothing; under `mpm_worker`/`mpm_event` — only allowed with
-//! `PhpRustAllowThreads On` — PHP requests of a child run one at a time,
-//! so throughput is bounded by the number of child processes.
+//! Each httpd worker thread maintains a persistent VM instance across requests
+//! with per-request clean state restoration via `request_reset()`.
+//! Requests of one process are serialised by a process-wide mutex: under
+//! `mpm_prefork` (one request per process) this costs nothing; under
+//! `mpm_worker`/`mpm_event` — only allowed with `PhpRustAllowThreads On` —
+//! PHP requests of a child run one at a time.
 
 use crate::backend::{Backend, IntField, LogLevel, StrField};
 use crate::request::{Expiry, RunParams, Timer};
@@ -50,12 +48,7 @@ thread_local! {
 
 /// `child_init` hook.
 pub fn child_init() {
-    // Nothing is shared between requests; make sure the configuration is
-    // materialised before the first request.  php-memlimit's request heap
-    // is not bound here, unlike php-cli's single request thread: every
-    // request runs on a thread of its own, which takes the heap for the
-    // request (`request::run`); an httpd thread owning it would leave
-    // every request on the inner allocator.
+    let _ = php_memlimit::bind_to_current_thread();
     let _ = crate::config::current();
 }
 
@@ -130,38 +123,57 @@ pub fn run_watched(r: &dyn Backend, make: BackendFactory, params: RunParams) -> 
     run_thread(make, params, Some((r, None)))
 }
 
-/// Runs the request on a new thread and waits for it, enforcing
-/// `max_execution_time` when `watch` is given.
+/// Runs the request on the current thread, enforcing `max_execution_time`
+/// with a background watchdog thread when `watch` is given.
 fn run_thread(
     make: BackendFactory,
     params: RunParams,
     watch: Option<(&dyn Backend, Option<&StderrCapture>)>,
 ) -> i32 {
-    let timer = params.timer.clone();
-    let (tx, rx) = mpsc::channel::<()>();
-    let spawned = std::thread::Builder::new()
-        .name("php-request".into())
-        .stack_size(STACK_SIZE)
-        .spawn(move || {
-            IN_REQUEST.with(|c| c.set(true));
-            if let Some(backend) = make() {
-                crate::request::run(backend, &params);
-            }
-            let _ = tx.send(());
-        });
-    let Ok(handle) = spawned else {
-        return 500;
-    };
-    if let Some((r, capture)) = watch {
-        if let Some(clock) = cpu_clock(&handle) {
-            let mut sink = EngineTimeout { r, capture };
-            watchdog(&timer, &rx, &mut || clock_ns(clock), &mut sink);
+    let _ = php_memlimit::bind_to_current_thread();
+    let prev_in_request = IN_REQUEST.with(|c| c.replace(true));
+    struct InRequestGuard(bool);
+    impl Drop for InRequestGuard {
+        fn drop(&mut self) {
+            IN_REQUEST.with(|c| c.set(self.0));
         }
     }
-    match handle.join() {
-        Ok(()) => OK,
-        Err(_) => 500,
+    let _guard = InRequestGuard(prev_in_request);
+
+    let timer = params.timer.clone();
+    let (tx, rx) = mpsc::channel::<()>();
+
+    let watchdog_handle = if let Some((r, capture)) = watch {
+        if let Some(clock) = current_cpu_clock() {
+            let timer_clone = timer.clone();
+            let raw_r: (usize, usize) = unsafe { std::mem::transmute(r as *const dyn Backend) };
+            let raw_cap: Option<usize> = capture.map(|c| c as *const StderrCapture as usize);
+            std::thread::Builder::new()
+                .name("php-watchdog".into())
+                .spawn(move || {
+                    let r: &dyn Backend = unsafe { std::mem::transmute(raw_r) };
+                    let capture: Option<&StderrCapture> =
+                        raw_cap.map(|p| unsafe { &*(p as *const StderrCapture) });
+                    let mut sink = EngineTimeout { r, capture };
+                    watchdog(&timer_clone, &rx, &mut || clock_ns(clock), &mut sink);
+                })
+                .ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(backend) = make() {
+        crate::request::run(backend, &params);
     }
+
+    let _ = tx.send(());
+    if let Some(h) = watchdog_handle {
+        let _ = h.join();
+    }
+    OK
 }
 
 /// Where the watchdog reports: the engine's interrupt flags in production
@@ -223,12 +235,11 @@ pub(crate) fn watchdog(
     }
 }
 
-/// The CPU-time clock of a thread.
-fn cpu_clock(handle: &std::thread::JoinHandle<()>) -> Option<libc::clockid_t> {
-    use std::os::unix::thread::JoinHandleExt;
+/// The CPU-time clock of the calling thread.
+fn current_cpu_clock() -> Option<libc::clockid_t> {
     let mut clock: libc::clockid_t = 0;
-    // SAFETY: the thread is alive (joined later), the out-pointer is ours.
-    let rc = unsafe { libc::pthread_getcpuclockid(handle.as_pthread_t(), &raw mut clock) };
+    // SAFETY: pthread_self is valid for the current thread, &raw mut clock points to our stack variable.
+    let rc = unsafe { libc::pthread_getcpuclockid(libc::pthread_self(), &raw mut clock) };
     (rc == 0).then_some(clock)
 }
 

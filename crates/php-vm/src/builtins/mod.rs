@@ -131,6 +131,13 @@ pub(crate) fn register_all(vm: &mut Vm) {
     info::register(vm);
 }
 
+/// Registers what the bare VM (`Vm::new`) has on top of [`register_all`]:
+/// ext/standard's `count()` and `sizeof()`, which the SAPIs get from the
+/// php-ext-stdarr extension instead.
+pub(crate) fn register_bare(vm: &mut Vm) {
+    array::register_bare_count(vm);
+}
+
 /// Defines a constant.
 pub(crate) fn constant(vm: &mut Vm, name: &str, v: Value) {
     let n = ZStr::from(name);

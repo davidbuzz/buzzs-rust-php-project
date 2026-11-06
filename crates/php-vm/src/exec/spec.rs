@@ -38,6 +38,7 @@ use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Operand, PlaceId, Seg};
 use crate::vm::{Frame, VarStore, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
+mod props;
 mod statics;
 
 /// Whether replacing `v` needs no destructor, GC root buffering or
@@ -120,7 +121,8 @@ fn operand_simple<'a>(f: &'a Frame, vars: &'a VarStore, op: Operand) -> Option<&
 /// `zend_is_true` of `v` when it needs neither a diagnostic nor a copy:
 /// null, bool, int, a non-NaN float, a string or an array. References,
 /// objects and resources give `None`.
-#[inline]
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot JmpZ/JmpNz truth check in the dispatch pre-match
 fn plain_truth(v: &Value) -> Option<bool> {
     match v {
         Value::Null => Some(false),
@@ -134,7 +136,8 @@ fn plain_truth(v: &Value) -> Option<bool> {
 }
 
 /// [`plain_truth`] of a variable slot (`None` = undefined: generic path).
-#[inline]
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot JmpZ/JmpNz CV truth check in the dispatch pre-match
 fn slot_truth(v: Option<&Value>) -> Option<bool> {
     v.and_then(plain_truth)
 }
@@ -186,7 +189,8 @@ fn put_tmp(slot: &mut Value, v: Value) {
 /// caller releases the temporary once its fast path succeeded
 /// ([`release_str_tmp_in`], the `FREE_OP2` of the dimension fetch), or
 /// leaves it to the generic read.
-#[inline]
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot dimension-key extraction in the dispatch pre-match
 fn dim_key_in(f: &Frame, dim: Operand) -> Option<ArrayKey> {
     match dim {
         Operand::Tmp(t) | Operand::TmpKeep(t) => plain_key(f.tmps.get(t as usize)),
@@ -198,7 +202,8 @@ fn dim_key_in(f: &Frame, dim: Operand) -> Option<ArrayKey> {
 
 /// Releases the string a consumed temporary operand of frame `f` holds;
 /// other temporaries are left in place (see [`Vm::peek_num`]).
-#[inline]
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot FREE_OP2 string-temp release in the dispatch pre-match
 fn release_str_tmp_in(f: &mut Frame, op: Operand) {
     if let Operand::Tmp(t) = op {
         if let Some(slot) = f.tmps.get_mut(t as usize) {
@@ -214,7 +219,8 @@ fn release_str_tmp_in(f: &mut Frame, op: Operand) {
 /// folded `AssignCv`: `zend_assign_to_variable` for a variable that is
 /// neither a reference nor refcounted; `true`, the loop skips that op),
 /// else into temporary `dst` (`false`).
-#[inline]
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot folded AssignCv store in the dispatch pre-match
 fn store_fetched_in(f: &mut Frame, dst: u32, to: Option<u32>, v: Value) -> bool {
     if let Some(to) = to {
         let idx = f.cv_idx(to);
@@ -272,7 +278,8 @@ fn dims_value_in(f: &Frame, cv: u32, place: PlaceId) -> Option<Value> {
 /// A plain value (see [`is_plain_value`]) an `OP_DATA` operand of frame
 /// `f` holds, cloned, without consuming it: a literal, a defined
 /// non-reference variable or a temporary.
-#[inline]
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot OP_DATA operand read for AssignDimCv
 fn plain_value_in(f: &Frame, op: Operand) -> Option<Value> {
     match op {
         Operand::Tmp(t) | Operand::TmpKeep(t) => {
@@ -432,7 +439,8 @@ impl Vm {
     /// [`plain_truth`] of compiled variable `cv` in place (the type switch
     /// inlined into `ZEND_JMPZ_SPEC_CV`/`ZEND_JMPNZ_SPEC_CV`); undefined
     /// variables go generic.
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot JmpZ/JmpNz CV truth check in the dispatch pre-match
     pub(super) fn peek_cv_bool(&self, cv: u32) -> Option<bool> {
         self.frame().peek_cv(cv, slot_truth)
     }
@@ -484,7 +492,8 @@ impl Vm {
 
     /// Releases the string a consumed temporary operand holds; other
     /// temporaries are left in place (see [`Vm::peek_num`]).
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot FREE_OP string-temp release in the dispatch pre-match
     pub(super) fn release_tmp_str(&mut self, op: Operand) {
         release_str_tmp_in(self.frame_mut(), op);
     }
@@ -651,7 +660,8 @@ impl Vm {
     /// done), else into `dst` for that `AssignCv` (`Some(false)`), under
     /// one look at the frame. `None`, nothing changed, as for
     /// [`Vm::bin_tmp_fast`].
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot BinAssignCv pre-match arm
     pub(super) fn bin_assign_cv_fast(
         &mut self,
         op: BinKind,
@@ -685,21 +695,19 @@ impl Vm {
     /// [`is_plain_slot`]): the `zend_assign_to_variable` path for a
     /// variable that is neither a reference nor refcounted. Gives `v` back
     /// otherwise, having changed nothing, for the generic assignment.
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot plain CV write in the dispatch pre-match
     pub(super) fn cv_store_plain(&self, cv: u32, v: Value) -> Result<(), Value> {
         let f = self.frame();
-        let idx = f.cv_idx(cv);
-        let Ok(mut vars) = f.vars.try_borrow_mut() else {
+        let idx = cv as usize;
+        let Some(slot) = f.cvs.get(idx) else {
             return Err(v);
         };
-        let Some(slot) = vars.slots.get_mut(idx) else {
-            return Err(v);
-        };
-        if !is_plain_slot(slot.as_ref()) {
+        if !is_plain_slot(slot.get()) {
             return Err(v);
         }
-        let old = slot.replace(v);
-        drop(vars);
+        let old = slot.set(Some(v.clone()));
+        f.sync_cv_to_symtab(cv, &v);
         // A scalar is forgotten; a string is released (no side effects).
         discard_unrooted(old);
         Ok(())
@@ -708,7 +716,8 @@ impl Vm {
     /// Stores a fetched value: into CV `to` when that holds no refcounted
     /// value (the folded `AssignCv`; `true`: the loop skips it), else into
     /// `dst` ([`store_fetched_in`]).
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot folded AssignCv store in the dispatch pre-match
     pub(super) fn store_fetched(&mut self, dst: u32, to: Option<u32>, v: Value) -> bool {
         store_fetched_in(self.frame_mut(), dst, to, v)
     }
@@ -718,38 +727,39 @@ impl Vm {
     /// `increment_function` on `IS_DOUBLE`), the expression's value written
     /// to `dst` when used, under one look at the frame. `false` (nothing
     /// changed) for the generic path.
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot loop-counter increment in the dispatch pre-match
     pub(super) fn incdec_cv_fast(&mut self, cv: u32, kind: IncDecKind, dst: Option<u32>) -> bool {
         let Some(f) = self.frames.last_mut() else {
             return false;
         };
-        let idx = f.cv_idx(cv);
-        let r = {
-            let Ok(mut vars) = f.vars.try_borrow_mut() else {
-                return false;
-            };
-            match vars.slots.get_mut(idx) {
-                Some(Some(Value::Int(i))) => {
-                    let old = *i;
-                    let next = if kind.is_inc() {
-                        old.checked_add(1)
-                    } else {
-                        old.checked_sub(1)
-                    };
-                    let Some(new) = next else {
-                        return false;
-                    };
-                    *i = new;
-                    Value::Int(if kind.is_post() { old } else { new })
-                }
-                Some(Some(Value::Float(x))) => {
-                    let old = *x;
-                    let new = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
-                    *x = new;
-                    Value::Float(if kind.is_post() { old } else { new })
-                }
-                _ => return false,
+        let idx = cv as usize;
+        let Some(slot) = f.cvs.get(idx) else {
+            return false;
+        };
+        let r = match slot.get() {
+            Some(Value::Int(i)) => {
+                let old = *i;
+                let next = if kind.is_inc() {
+                    old.checked_add(1)
+                } else {
+                    old.checked_sub(1)
+                };
+                let Some(new) = next else {
+                    return false;
+                };
+                slot.set(Some(Value::Int(new)));
+                f.sync_cv_to_symtab(cv, &Value::Int(new));
+                Value::Int(if kind.is_post() { old } else { new })
             }
+            Some(Value::Float(x)) => {
+                let old = *x;
+                let new = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
+                slot.set(Some(Value::Float(new)));
+                f.sync_cv_to_symtab(cv, &Value::Float(new));
+                Value::Float(if kind.is_post() { old } else { new })
+            }
+            _ => return false,
         };
         if let Some(t) = dst {
             if let Some(slot) = f.tmps.get_mut(t as usize) {
@@ -765,7 +775,8 @@ impl Vm {
     /// fast paths of `zend_binary_op`, under one look at the frame. Returns
     /// `false`, having changed nothing, when the generic `AssignOp` must
     /// run.
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot numeric compound assignment in the dispatch pre-match
     pub(super) fn assign_op_cv_fast(
         &mut self,
         cv: u32,
@@ -863,7 +874,7 @@ impl Vm {
                 return false;
             };
             match add {
-                Value::Str(t) if !ZStr::ptr_eq(s, t) => s.append(t.as_bytes()),
+                Value::Str(t) if !ZStr::ptr_eq(s, t) => s.append_str(t),
                 Value::Int(i) => s.append_long(*i),
                 _ => return false,
             }
@@ -887,8 +898,9 @@ impl Vm {
 
     /// The array key an offset operand converts to without diagnostics
     /// ([`dim_key_in`] of the current frame).
-    #[inline]
-    fn peek_dim_key(&self, dim: Operand) -> Option<ArrayKey> {
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot dimension-key extraction in the dispatch pre-match
+    pub(super) fn peek_dim_key(&self, dim: Operand) -> Option<ArrayKey> {
         dim_key_in(self.frame(), dim)
     }
 
@@ -902,7 +914,8 @@ impl Vm {
     /// under one look at the frame. `None` (a miss, an offset that needs
     /// converting or lies outside the string, another container) leaves
     /// everything to the generic fetch, nothing consumed.
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot array-dimension read in the dispatch pre-match
     pub(super) fn fetch_dim_cv(
         &mut self,
         cv: u32,
@@ -956,7 +969,8 @@ impl Vm {
     /// reached), the result written to `dst` and a consumed string offset
     /// released. `false`, nothing changed, leaves it to the generic
     /// `place_isset`.
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot isset/empty array-dimension check in the dispatch pre-match
     pub(super) fn isset_dim_cv(&mut self, cv: u32, dim: Operand, dst: u32, empty: bool) -> bool {
         let Some(f) = self.frames.last_mut() else {
             return false;
@@ -976,7 +990,8 @@ impl Vm {
     /// slot, after `SEPARATE_ARRAY`; `.=` is [`Vm::concat_dim_cv_fast`].
     /// Returns `false`, having changed nothing, otherwise (a missing key
     /// warns and inserts on the generic path).
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot array-element compound assignment in the dispatch pre-match
     pub(super) fn assign_op_dim_cv_fast(
         &mut self,
         cv: u32,
@@ -1055,7 +1070,7 @@ impl Vm {
             return false;
         };
         match &add {
-            Value::Str(t) => s.append(t.as_bytes()),
+            Value::Str(t) => s.append_str(t),
             Value::Int(i) => s.append_long(*i),
             // `add` is a string or an int (checked above).
             _ => {}
@@ -1075,7 +1090,8 @@ impl Vm {
     /// overflow, or a float (`FETCH_DIM_RW` + the `IS_LONG`/`IS_DOUBLE`
     /// fast path of `PRE/POST_INC/DEC`): the expression's value, or `None`
     /// (nothing changed) for the generic path.
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot array-element increment/decrement in the dispatch pre-match
     pub(super) fn incdec_dim_cv_fast(
         &mut self,
         cv: u32,
@@ -1116,8 +1132,9 @@ impl Vm {
 
     /// A plain value (see [`is_plain_value`]) an `OP_DATA` operand holds,
     /// without consuming it ([`plain_value_in`] of the current frame).
-    #[inline]
-    fn peek_plain_value(&self, op: Operand) -> Option<Value> {
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot OP_DATA operand read in the dispatch pre-match
+    pub(super) fn peek_plain_value(&self, op: Operand) -> Option<Value> {
         plain_value_in(self.frame(), op)
     }
 
@@ -1130,7 +1147,8 @@ impl Vm {
     /// then overwritten, like the generic walk's `descend`), under one look
     /// at the frame. Returns `false` otherwise, having changed nothing but
     /// possibly the separation the generic write repeats as a no-op.
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot array-dimension write in the dispatch pre-match
     pub(super) fn assign_dim_cv_fast(&mut self, cv: u32, dim: Operand, val: Operand) -> bool {
         let Some(f) = self.frames.last_mut() else {
             return false;
@@ -1149,11 +1167,11 @@ impl Vm {
             return false;
         };
         let tbl = arr.make_mut();
-        let old = match tbl.get_mut(&key) {
-            Some(slot) if is_plain_value(slot) => std::mem::replace(slot, v),
-            Some(_) => return false,
-            None => std::mem::replace(tbl.lookup_ex(key).0, v),
-        };
+        let (slot, added) = tbl.lookup_ex(key);
+        if !added && !is_plain_value(slot) {
+            return false;
+        }
+        let old = std::mem::replace(slot, v);
         drop(vars);
         drop(old);
         // The offset and OP_DATA temporaries are consumed.

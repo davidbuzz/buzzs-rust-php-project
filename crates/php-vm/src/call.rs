@@ -1333,6 +1333,19 @@ impl Vm {
                 return Ok(true);
             }
         }
+        // Builtin fast path: plain calls without named arguments that are not
+        // `#[\NoDiscard]` and not constructors skip `op_do_call_checked`.
+        if let Func::Builtin(b) = &call.func {
+            if b.flags & flags::NODISCARD == 0 && !call.is_ctor {
+                let b = b.clone();
+                self.pending_call_dst = dst;
+                let v = self.call_builtin(&b, call, strict)?;
+                if let Some(d) = dst {
+                    self.set_tmp(d, v);
+                }
+                return Ok(false);
+            }
+        }
         if dst.is_none() && call.func.flags() & flags::NODISCARD != 0 {
             return self.op_do_call_nodiscard(call, strict);
         }
@@ -1600,13 +1613,9 @@ impl Vm {
             is_ctor,
             ..
         } = call;
-        let idx = self.frames.len();
-        if move_last_frame(&mut self.call_bufs.user_frames, &mut self.frames) {
-            self.frames[idx].reinit_for_call(uf.code.clone(), FrameKind::Function);
-        } else {
-            self.frames
-                .push(Frame::new(uf.code.clone(), FrameKind::Function));
-        }
+        let idx = self
+            .frames
+            .push_in_place(uf.code.clone(), FrameKind::Function);
         let spare_args = {
             let f = &mut self.frames[idx];
             f.this = this;
@@ -1730,20 +1739,19 @@ impl Vm {
         } else {
             None
         };
-        // The display name is only needed for error messages: build it lazily.
-        let fname = |vm: &Self| vm.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
         let nparams = b.params.len();
         let variadic = b.flags & flags::VARIADIC != 0;
         let npassed = call.args.len();
         // Zero-argument calls (func_num_args() and friends) never touch the
         // buffer pools: empty Vecs are free.
-        let (mut values, mut passed): (Vec<Value>, Vec<bool>) = if npassed == 0 {
+        let (mut values, mut passed): (Vec<Value>, Vec<bool>) = if npassed == 0 && nparams == 0 {
             (Vec::new(), Vec::new())
         } else {
+            let cap = nparams.max(npassed);
             let mut values = self.call_bufs.values.pop().unwrap_or_default();
-            values.reserve(npassed);
+            values.reserve(cap);
             let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
-            passed.reserve(npassed);
+            passed.reserve(cap);
             (values, passed)
         };
         if b.flags & flags::DEPRECATED != 0
@@ -1789,133 +1797,184 @@ impl Vm {
             // A new frame has no named arguments, `$this` or scopes: only
             // the ones the call has are copied.
             let f = &mut self.frames[depth - 1];
-            f.func = Some(Func::Builtin(b.clone()));
+            f.func = Some(call.func.clone());
             f.builtin_name = builtin_name;
             if !call.named.is_empty() {
-                f.named.clone_from(&call.named);
+                f.named = call.named.clone();
             }
             install_buffer(&mut f.args, pushed_args);
-            if call.this.is_some() {
-                f.this.clone_from(&call.this);
-            }
-            if call.scope.is_some() {
-                f.scope.clone_from(&call.scope);
-            }
-            if call.called.is_some() {
-                f.called.clone_from(&call.called);
-            }
+            f.this = call.this.clone();
+            f.scope = call.scope.clone();
+            f.called = call.called.clone();
             f.observer_hidden = observer_hidden;
         }
         self.observer_begin_top();
         // `zend_execute_internal` wraps the handler, which parses its own
         // arguments: internal enter precedes arity and type checks.
         self.observer_internal(depth - 1, None);
+        // The display name is only needed for error messages: build it lazily.
+        let fname = |vm: &Self| {
+            vm.func_display(
+                &Func::Builtin(b.clone()),
+                vm.frames[depth - 1].scope.as_ref(),
+            )
+        };
         // Arity.
         if npassed < b.required as usize && (!call.has_named || !call.named.is_empty()) {
-            let e = self.arg_count_error_builtin(&fname(self), b, npassed);
+            let name = fname(self);
+            let e = self.arg_count_error_builtin(&name, b, npassed);
             return self.builtin_arg_error(depth, e);
         }
         if !variadic && npassed > nparams {
-            let e = self.arg_count_error_builtin(&fname(self), b, npassed);
+            let name = fname(self);
+            let e = self.arg_count_error_builtin(&name, b, npassed);
             return self.builtin_arg_error(depth, e);
         }
-        for i in 0..npassed {
-            match self.frames[depth - 1].args[i].clone() {
-                Some(v) => {
-                    values.push(v);
-                    passed.push(true);
-                }
-                None => {
-                    if i < b.required as usize {
-                        let pname = b
-                            .params
-                            .get(i)
-                            .map_or_else(String::new, |p| p.name.to_string_lossy());
-                        let fname = fname(self);
-                        let e = self.make_throw(
-                            "ArgumentCountError",
-                            &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
-                        );
+        let nframe_args = npassed;
+        if !call.has_named {
+            // Positional fast path: all passed arguments are in place without
+            // gaps. Arity, type acceptance check and copying into `values` are
+            // performed in a single pass.
+            for i in 0..npassed {
+                let p = if i < nparams {
+                    &b.params[i]
+                } else {
+                    &b.params[nparams - 1]
+                };
+                let mut v = self.frames[depth - 1].args[i].as_ref().unwrap().clone();
+                let accepted = match &p.ty {
+                    None => true,
+                    Some(ty) => {
+                        p.by_ref
+                            || p.promote & crate::opcode::UNCHECKED_TYPE != 0
+                            || ty.is_mixed()
+                            || accepts_without_coercion(ty.mask, &v)
+                    }
+                };
+                if !accepted {
+                    if let Err(e) =
+                        self.coerce_builtin_arg(b, &call, strict, i, &mut v, depth, nframe_args)
+                    {
                         return self.builtin_arg_error(depth, e);
                     }
-                    values.push(self.builtin_default(b, i).unwrap_or_default());
-                    passed.push(false);
+                }
+                values.push(v);
+                passed.push(true);
+            }
+            if !variadic || values.len() + 1 < nparams {
+                let upto = if variadic {
+                    nparams.saturating_sub(1)
+                } else {
+                    nparams
+                };
+                while values.len() < upto {
+                    let i = values.len();
+                    match self.builtin_default(b, i) {
+                        Some(d) if i >= b.required as usize => {
+                            values.push(d);
+                            passed.push(false);
+                        }
+                        _ => break,
+                    }
                 }
             }
-        }
-        // Omitted trailing optional parameters get their declared defaults
-        // (not marked as passed); backtraces only show the passed ones.
-        let nframe_args = values.len();
-        if !variadic || values.len() + 1 < nparams {
-            let upto = if variadic { nparams - 1 } else { nparams };
-            while values.len() < upto {
-                let i = values.len();
-                match self.builtin_default(b, i) {
-                    Some(d) if i >= b.required as usize => {
-                        values.push(d);
+        } else {
+            for i in 0..npassed {
+                match self.frames[depth - 1].args[i].clone() {
+                    Some(v) => {
+                        values.push(v);
+                        passed.push(true);
+                    }
+                    None => {
+                        if i < b.required as usize {
+                            let pname = b
+                                .params
+                                .get(i)
+                                .map_or_else(String::new, |p| p.name.to_string_lossy());
+                            let fname = fname(self);
+                            let e = self.make_throw(
+                                "ArgumentCountError",
+                                &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
+                            );
+                            return self.builtin_arg_error(depth, e);
+                        }
+                        values.push(self.builtin_default(b, i).unwrap_or_default());
                         passed.push(false);
                     }
-                    _ => break,
                 }
             }
-        }
-        if call.has_named && values.len() < b.required as usize {
-            let i = values.len();
-            let pname = b
-                .params
-                .get(i)
-                .map_or_else(String::new, |p| p.name.to_string_lossy());
-            let fname = fname(self);
-            let e = self.make_throw(
-                "ArgumentCountError",
-                &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
-            );
-            return self.builtin_arg_error(depth, e);
-        }
-        // Only named-argument gaps (`None`s, now filled with defaults) can
-        // make `values` differ from the copy taken when the frame was pushed.
-        if call.has_named {
+            // Omitted trailing optional parameters get their declared defaults
+            // (not marked as passed); backtraces only show the passed ones.
+            if !variadic || values.len() + 1 < nparams {
+                let upto = if variadic { nparams - 1 } else { nparams };
+                while values.len() < upto {
+                    let i = values.len();
+                    match self.builtin_default(b, i) {
+                        Some(d) if i >= b.required as usize => {
+                            values.push(d);
+                            passed.push(false);
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            if values.len() < b.required as usize {
+                let i = values.len();
+                let pname = b
+                    .params
+                    .get(i)
+                    .map_or_else(String::new, |p| p.name.to_string_lossy());
+                let fname = fname(self);
+                let e = self.make_throw(
+                    "ArgumentCountError",
+                    &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
+                );
+                return self.builtin_arg_error(depth, e);
+            }
+            // Only named-argument gaps (`None`s, now filled with defaults) can
+            // make `values` differ from the copy taken when the frame was pushed.
             if let Some(f) = self.frames.get_mut(depth - 1) {
                 frame_args(&values[..nframe_args], &mut f.args);
             }
-        }
-        // Array variadics use Z_PARAM_VARIADIC, not Z_PARAM_VARIADIC_WITH_NAMED.
-        if !call.named.is_empty() && b.name.as_bytes().starts_with(b"array_") {
-            let e = self.make_throw(
-                "ArgumentCountError",
-                &format!(
-                    "Internal function {}() does not accept named variadic arguments",
-                    fname(self)
-                ),
-            );
-            return self.builtin_arg_error(depth, e);
-        }
-        // Type coercion.
-        for (i, v) in values.iter_mut().enumerate() {
-            if !passed[i] {
-                continue;
-            }
-            let p = if i < nparams {
-                &b.params[i]
-            } else if variadic {
-                &b.params[nparams - 1]
-            } else {
-                continue;
-            };
-            let Some(ty) = &p.ty else { continue };
-            if p.by_ref || p.promote & crate::opcode::UNCHECKED_TYPE != 0 {
-                continue;
-            }
-            // Fast path: the value already has an accepted type, so
-            // `verify_type` would accept it unchanged and without side effects.
-            if ty.is_mixed() || accepts_without_coercion(ty.mask, v) {
-                continue;
-            }
-            if let Err(e) = self.coerce_builtin_arg(b, &call, strict, i, v, depth, nframe_args) {
+            // Array variadics use Z_PARAM_VARIADIC, not Z_PARAM_VARIADIC_WITH_NAMED.
+            if !call.named.is_empty() && b.name.as_bytes().starts_with(b"array_") {
+                let e = self.make_throw(
+                    "ArgumentCountError",
+                    &format!(
+                        "Internal function {}() does not accept named variadic arguments",
+                        fname(self)
+                    ),
+                );
                 return self.builtin_arg_error(depth, e);
             }
+            // Type coercion.
+            for (i, v) in values.iter_mut().enumerate() {
+                if !passed[i] {
+                    continue;
+                }
+                let p = if i < nparams {
+                    &b.params[i]
+                } else if variadic {
+                    &b.params[nparams - 1]
+                } else {
+                    continue;
+                };
+                let Some(ty) = &p.ty else { continue };
+                if p.by_ref || p.promote & crate::opcode::UNCHECKED_TYPE != 0 {
+                    continue;
+                }
+                // Fast path: the value already has an accepted type, so
+                // `verify_type` would accept it unchanged and without side effects.
+                if ty.is_mixed() || accepts_without_coercion(ty.mask, v) {
+                    continue;
+                }
+                if let Err(e) = self.coerce_builtin_arg(b, &call, strict, i, v, depth, nframe_args)
+                {
+                    return self.builtin_arg_error(depth, e);
+                }
+            }
         }
-        if call.dynamic && call.scope.is_none() {
+        if call.dynamic && self.frames[depth - 1].scope.is_none() {
             if let Some(e) = self.forbidden_dynamic_call(b) {
                 return self.builtin_arg_error(depth, e);
             }
@@ -2066,8 +2125,8 @@ impl Vm {
     /// The default of native parameter `i`: a parsed literal, or a
     /// constant (`SOME_CONST`, `Class::CONST`) resolved at call time.
     pub(crate) fn builtin_default(&mut self, b: &Builtin, i: usize) -> Option<Value> {
-        if let Some(v) = b.defaults.get(i).cloned().flatten() {
-            return Some(v);
+        if let Some(Some(v)) = b.defaults.get(i) {
+            return Some(v.clone());
         }
         let text = b.params.get(i)?.default_text.as_deref()?.trim();
         let text = text.strip_prefix('\\').unwrap_or(text);
@@ -2089,35 +2148,12 @@ impl Vm {
 
     /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
     fn pop_frames_to(&mut self, depth: usize) {
-        if self.frames.len() > depth && !self.observer.keep_builtin_frame {
-            // Frames left above the builtin one: dropped after it, in order.
+        if self.observer.keep_builtin_frame {
+            return;
+        }
+        if self.frames.len() >= depth {
             let args = std::mem::take(&mut self.frames[depth - 1].args);
             self.frames.truncate(depth - 1);
-            self.put_arg_vec(args);
-        } else if self.frames.len() == depth && !self.observer.keep_builtin_frame {
-            let args = {
-                let Some(frame) = self.frames.pop() else {
-                    return;
-                };
-                // A builtin frame's operand buffers were never allocated:
-                // they are forgotten instead of dropped, which skips an
-                // out-of-line empty `Vec` drop each (see `install_buffer`).
-                // The rest of the frame is dropped at the end of this
-                // block, before the arguments are released.
-                let Frame {
-                    args,
-                    tmps,
-                    iters,
-                    fins,
-                    calls,
-                    ..
-                } = frame;
-                forget_unallocated(tmps);
-                forget_unallocated(iters);
-                forget_unallocated(fins);
-                forget_unallocated(calls);
-                args
-            };
             self.put_arg_vec(args);
         }
     }
@@ -2313,9 +2349,8 @@ impl Vm {
     fn recv_bound(&mut self, n: u32, cv: u32) -> VmResult<bool> {
         let idx = {
             let f = self.frame();
-            let idx = f.cv_idx(cv);
-            let vars = f.vars.borrow();
-            let Some(Some(v)) = vars.slots.get(idx) else {
+            let idx = cv as usize;
+            let Some(v) = f.cvs.get(idx).and_then(crate::vm::CvSlot::get) else {
                 return Ok(false);
             };
             let uf = f.ufunc.as_ref().expect("user frame");
@@ -2337,24 +2372,18 @@ impl Vm {
     #[cold]
     #[inline(never)]
     fn recv_bound_slow(&mut self, n: u32, idx: usize) -> VmResult<bool> {
-        let taken = self
-            .frame()
-            .vars
-            .borrow_mut()
-            .slots
-            .get_mut(idx)
-            .and_then(Option::take);
+        let taken = self.frame_mut().cvs.get_mut(idx).and_then(|c| c.set(None));
         let Some(mut v) = taken else {
             return Ok(false);
         };
         let accepted = self.recv_verify(n, &mut v)?;
         if accepted {
-            self.frame().vars.borrow_mut().slots[idx] = Some(v);
+            self.frame_mut().cvs[idx].set(Some(v));
             return Ok(true);
         }
         // php-src's CV holds the rejected value: the TypeError's trace
         // shows it.
-        self.frame().vars.borrow_mut().slots[idx] = Some(v.clone());
+        self.frame_mut().cvs[idx].set(Some(v.clone()));
         Err(self.recv_type_error(n, &v))
     }
 
@@ -3003,13 +3032,7 @@ impl MethodCache {
 /// (the compiler's layout). A frame on a shared, mapped store (never a
 /// function frame) is left alone.
 fn init_cvs(uf: &UserFunction, f: &mut Frame) -> usize {
-    if f.cv_map.is_some() {
-        return 0;
-    }
     let ncv = uf.code.cv_names.len();
-    let mut vars = f.vars.borrow_mut();
-    vars.slots.clear();
-    vars.slots.reserve(ncv);
     let ops = &uf.code.ops;
     let mut skipping = uf.params.iter().all(|p| p.ty.is_none());
     let mut first_op = 0;
@@ -3019,7 +3042,9 @@ fn init_cvs(uf: &UserFunction, f: &mut Frame) -> usize {
         }
         match arg.take() {
             Some(v) => {
-                vars.slots.push(Some(v));
+                if let Some(slot) = f.cvs.get_mut(i) {
+                    slot.set(Some(v));
+                }
                 if skipping {
                     match ops.get(first_op) {
                         Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
@@ -3031,13 +3056,9 @@ fn init_cvs(uf: &UserFunction, f: &mut Frame) -> usize {
                 }
             }
             None => {
-                vars.slots.push(None);
                 skipping = false;
             }
         }
-    }
-    while vars.slots.len() < ncv {
-        vars.slots.push(None);
     }
     first_op
 }

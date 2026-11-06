@@ -170,7 +170,7 @@ impl Vm {
             return false;
         };
         match &add {
-            Value::Str(t) if !ZStr::ptr_eq(s, t) => s.append(t.as_bytes()),
+            Value::Str(t) if !ZStr::ptr_eq(s, t) => s.append_str(t),
             Value::Int(i) => s.append_long(*i),
             _ => return false,
         }

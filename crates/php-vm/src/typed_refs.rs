@@ -912,6 +912,13 @@ thread_local! {
         RefCell::new(std::collections::HashMap::new());
 }
 
+/// Resets typed reference state and static property caches for a new request.
+pub(crate) fn reset() {
+    INCDEC_OVERFLOW.with(|c| c.set(None));
+    DEFERRED_ARG_WRITES.with(|d| d.borrow_mut().clear());
+    STATIC_INFO.with(|m| m.borrow_mut().clear());
+}
+
 fn cell_key(cell: &Rc<RefCell<Value>>) -> usize {
     Rc::as_ptr(cell) as usize
 }

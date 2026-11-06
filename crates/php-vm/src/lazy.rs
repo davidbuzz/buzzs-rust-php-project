@@ -51,6 +51,11 @@ thread_local! {
     static STALE: RefCell<HashMap<u32, Rc<Vec<Option<Value>>>>> = RefCell::new(HashMap::new());
 }
 
+/// Resets lazy object stale property cache for a new request.
+pub(crate) fn reset() {
+    STALE.with(|s| s.borrow_mut().clear());
+}
+
 /// Whether php-src's `zobj->properties` table of `d` exists: it is built
 /// by the first listing that goes through it (`rebuild_object_properties`)
 /// and by the first dynamic property, and then kept.

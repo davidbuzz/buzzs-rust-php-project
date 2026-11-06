@@ -58,6 +58,13 @@ thread_local! {
     static MAPS: RefCell<HashMap<u32, Vec<Weak<MapCell>>>> = RefCell::new(HashMap::new());
 }
 
+/// Resets weak reference state for a new request.
+pub(crate) fn reset() {
+    ACTIVE.with(|a| a.set(false));
+    REFS.with(|r| r.borrow_mut().clear());
+    MAPS.with(|m| m.borrow_mut().clear());
+}
+
 /// Called by the engine when an object is freed (`zend_weakrefs_notify`):
 /// drops the `WeakMap` entries keyed by it (releasing their values) and its
 /// `WeakReference` registration. Must run before the handle is recycled.

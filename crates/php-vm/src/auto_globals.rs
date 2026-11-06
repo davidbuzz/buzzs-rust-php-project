@@ -44,6 +44,11 @@ thread_local! {
     static COMPILED: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Resets compiled auto-globals state for a new request.
+pub(crate) fn reset() {
+    COMPILED.with(|c| c.borrow_mut().clear());
+}
+
 /// `zend_is_auto_global()` as the compiler calls it: whether `name` is an
 /// auto-global, remembering it so that its armed callback runs once the
 /// compilation finishes ([`Vm::activate_compiled_auto_globals`]).

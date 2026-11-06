@@ -386,6 +386,7 @@ dependencies = [
  "php-ext-json",
  "php-ext-mbstring",
  "php-ext-mysqli",
+ "php-ext-opcache",
  "php-ext-openssl",
  "php-ext-pcntl",
  "php-ext-pcre",
@@ -700,6 +701,7 @@ version = "0.1.0"
 dependencies = [
  "php-opcache",
  "php-runtime",
+ "php-support",
  "php-vm",
 ]
 

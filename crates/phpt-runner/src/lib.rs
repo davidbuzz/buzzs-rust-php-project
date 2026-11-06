@@ -8,6 +8,7 @@ pub mod baseline;
 pub mod bytes;
 pub mod diff;
 pub mod discover;
+pub mod environment;
 pub mod expectf;
 pub mod ini;
 pub mod junit;

@@ -235,6 +235,7 @@ impl std::fmt::Debug for RequestCtx {
 
 thread_local! {
     static CURRENT: RefCell<Option<Rc<RequestCtx>>> = const { RefCell::new(None) };
+    static PERSISTENT_VM: RefCell<Option<Vm>> = const { RefCell::new(None) };
 }
 
 /// Runs `f` with the current request context (`None` outside a request).
@@ -559,22 +560,18 @@ pub fn arm_timer(vm: &mut Vm, secs: i64) {
 }
 
 /// The VM's standard output: `ub_write` to Apache, sending the headers
-/// before the first byte.  `flush()` is a no-op: the VM flushes its stdout
+/// before the first byte.  Writes are dispatched to the active request
+/// context through [`with_ctx`].  `flush()` is a no-op: the VM flushes its stdout
 /// before log writes and at shutdown, which must neither commit the
 /// headers nor force a chunked response (Apache computes Content-Length
 /// for responses that end without an intermediate flush).  PHP's
 /// `flush()` and the implicit flush go through [`sapi_flush`] instead.
-pub struct ApacheOutput(pub Rc<RequestCtx>);
-
-impl std::fmt::Debug for ApacheOutput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ApacheOutput")
-    }
-}
+#[derive(Debug, Default, Clone)]
+pub struct ApacheOutput;
 
 impl Write for ApacheOutput {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.write(buf);
+        with_ctx(|c| c.write(buf));
         Ok(buf.len())
     }
 
@@ -731,117 +728,107 @@ fn php_single_quoted(s: &[u8]) -> Vec<u8> {
 }
 
 /// Runs one request on the current thread (`php_handler()` from
-/// `php_apache_request_ctor()` to `php_apache_request_dtor()`).
+/// `php_apache_request_ctor()` to `php_apache_request_dtor()`), maintaining
+/// a persistent VM per worker thread and resetting state between requests.
 pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
-    // Declared first, dropped last: after the VM's teardown.
-    let _heap = HeapBinding::take();
+    let _ = php_memlimit::bind_to_current_thread();
     let ctx = Rc::new(RequestCtx::new(backend, params.timer.clone()));
     CURRENT.with(|c| *c.borrow_mut() = Some(ctx.clone()));
+    let _cleanup = RequestScopeGuard;
 
-    let opts = VmOptions {
-        ini: params.config.ini.clone(),
-    };
-    let exts = crate::extensions::all();
-    let refs: Vec<&dyn php_vm::ext::Extension> = exts.iter().map(AsRef::as_ref).collect();
-    let mut vm = Vm::with_extensions(&opts, Box::new(ApacheOutput(ctx.clone())), &refs);
-    apply_dir_config(&mut vm, &ctx.backend.dir_config());
-    ctx.refresh_facts(&vm);
-    // `zend_set_timeout(EG(timeout_seconds))` at request startup, through
-    // the VM's timer hook ([`arm_timer`] → `params.timer`): it also clears
-    // an engine timeout flag a previous request left unhandled.  With
-    // `max_input_time` at -1 the limit covers reading the input too;
-    // `Vm::run_script` re-arms it when the script starts.
-    let limit = vm.ini_long("max_execution_time");
-    vm.set_time_limit(limit);
+    PERSISTENT_VM.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if borrow.is_none() {
+            let opts = VmOptions {
+                ini: params.config.ini.clone(),
+            };
+            let exts = crate::extensions::all();
+            let refs: Vec<&dyn php_vm::ext::Extension> = exts.iter().map(AsRef::as_ref).collect();
+            let vm = Vm::with_extensions(&opts, Box::new(ApacheOutput), &refs);
+            *borrow = Some(vm);
+        }
+        let vm = borrow.as_mut().unwrap();
 
-    // php_apache_request_ctor()
-    let headers_in_auth = ctx.backend.table_get(Table::HeadersIn, b"Authorization");
-    let (mut user, password, digest) = auth_data(headers_in_auth.as_deref());
-    if user.is_none() {
-        user = ctx.backend.str_field(StrField::User);
-    }
-    ctx.backend.set_user(user.as_deref());
-    for h in ["Content-Length", "Last-Modified", "Expires", "ETag"] {
-        ctx.backend
-            .table_op(Table::HeadersOut, TableOp::Unset, h.as_bytes(), b"");
-    }
-    if vm.ini_bool("last_modified") {
-        ctx.backend.set_last_modified();
-    }
+        apply_dir_config(vm, &ctx.backend.dir_config());
+        ctx.refresh_facts(vm);
+        // `zend_set_timeout(EG(timeout_seconds))` at request startup, through
+        // the VM's timer hook ([`arm_timer`] → `params.timer`): it also clears
+        // an engine timeout flag a previous request left unhandled.  With
+        // `max_input_time` at -1 the limit covers reading the input too;
+        // `Vm::run_script` re-arms it when the script starts.
+        let limit = vm.ini_long("max_execution_time");
+        vm.set_time_limit(limit);
 
-    // php_request_startup()
-    vm.script_path = ZStr::from("Unknown");
-    if vm.ini_bool("expose_php") {
-        let line = format!("X-Powered-By: PHP/{}", php_vm::PHP_VERSION);
-        let _ = ctx.header_op(HeaderOp::Replace(line.as_bytes(), 0));
-    }
-    crate::vars::populate(
-        &mut vm,
-        &ctx,
-        &crate::vars::Auth {
-            user,
-            password,
-            digest,
-        },
-    );
-    install_input_hook(&ctx);
-    vm.shutdown_functions
-        .insert(0, (Value::from(crate::functions::FATAL_CHECK), Vec::new()));
+        // php_apache_request_ctor()
+        let headers_in_auth = ctx.backend.table_get(Table::HeadersIn, b"Authorization");
+        let (mut user, password, digest) = auth_data(headers_in_auth.as_deref());
+        if user.is_none() {
+            user = ctx.backend.str_field(StrField::User);
+        }
+        ctx.backend.set_user(user.as_deref());
+        for h in ["Content-Length", "Last-Modified", "Expires", "ETag"] {
+            ctx.backend
+                .table_op(Table::HeadersOut, TableOp::Unset, h.as_bytes(), b"");
+        }
+        if vm.ini_bool("last_modified") {
+            ctx.backend.set_last_modified();
+        }
 
-    let filename = ctx
-        .backend
-        .str_field(StrField::Filename)
-        .unwrap_or_default();
-    let path = PathBuf::from(std::ffi::OsStr::from_bytes(&filename));
-    let saved_cwd = std::env::current_dir().ok();
-    if let Some(dir) = path.parent() {
-        let _ = std::env::set_current_dir(dir);
-    }
-    let script = String::from_utf8_lossy(&filename).into_owned();
-    if params.highlight {
-        let mut src = b"<?php highlight_file(".to_vec();
-        src.extend_from_slice(&php_single_quoted(&filename));
-        src.extend_from_slice(b");");
-        vm.run_script(&src, &script);
-    } else {
-        let src = std::fs::read(&path).unwrap_or_default();
-        vm.run_script(&src, &script);
-    }
-    finish(&mut vm, &ctx);
-    if let Some(cwd) = saved_cwd {
-        let _ = std::env::set_current_dir(cwd);
-    }
-    drop(vm);
-    CURRENT.with(|c| *c.borrow_mut() = None);
-    // `_heap` collects and releases php-memlimit's heap here.
+        // php_request_startup()
+        vm.script_path = ZStr::from("Unknown");
+        if vm.ini_bool("expose_php") {
+            let line = format!("X-Powered-By: PHP/{}", php_vm::PHP_VERSION);
+            let _ = ctx.header_op(HeaderOp::Replace(line.as_bytes(), 0));
+        }
+        crate::vars::populate(
+            vm,
+            &ctx,
+            &crate::vars::Auth {
+                user,
+                password,
+                digest,
+            },
+        );
+        install_input_hook();
+        vm.shutdown_functions
+            .insert(0, (Value::from(crate::functions::FATAL_CHECK), Vec::new()));
+
+        let filename = ctx
+            .backend
+            .str_field(StrField::Filename)
+            .unwrap_or_default();
+        let path = PathBuf::from(std::ffi::OsStr::from_bytes(&filename));
+        let saved_cwd = std::env::current_dir().ok();
+        if let Some(dir) = path.parent() {
+            let _ = std::env::set_current_dir(dir);
+        }
+        let script = String::from_utf8_lossy(&filename).into_owned();
+        if params.highlight {
+            let mut src = b"<?php highlight_file(".to_vec();
+            src.extend_from_slice(&php_single_quoted(&filename));
+            src.extend_from_slice(b");");
+            vm.run_script(&src, &script);
+        } else {
+            let src = std::fs::read(&path).unwrap_or_default();
+            vm.run_script(&src, &script);
+        }
+        finish(vm, &ctx);
+        if let Some(cwd) = saved_cwd {
+            let _ = std::env::set_current_dir(cwd);
+        }
+        vm.request_reset();
+    });
 }
 
-/// php-memlimit's request heap (the `zend_mm` small-block heap) held by
-/// the request thread for the whole of [`run`]: taken before the VM is
-/// built, so that module startup's allocations come from it as in php-cli
-/// (php-memlimit's INTEGRATION.md, "Where the memory comes from"), and
-/// kept across `request_end` so that the VM's teardown frees on the owner
-/// path.  On drop — after the teardown, and also when the request thread
-/// unwinds — the heap is collected (`zend_mm_gc`: empty runs go back at
-/// once) and given up for the next request's thread.  Every request has a
-/// thread of its own, so the httpd thread never binds the heap: an owner
-/// that outlives requests would leave every request on the inner
-/// allocator.  The thread of a `virtual()` sub-request finds its parent's
-/// thread holding the heap and runs on the inner allocator, which
-/// php-memlimit allows.
-struct HeapBinding;
+/// Cleanup guard executed at the end of each request on the worker thread,
+/// collecting freed heap memory back to mimalloc chunks while retaining thread
+/// ownership for subsequent requests.
+struct RequestScopeGuard;
 
-impl HeapBinding {
-    fn take() -> Self {
-        let _ = php_memlimit::bind_to_current_thread();
-        HeapBinding
-    }
-}
-
-impl Drop for HeapBinding {
+impl Drop for RequestScopeGuard {
     fn drop(&mut self) {
+        CURRENT.with(|c| *c.borrow_mut() = None);
         let _ = php_memlimit::collect_heap();
-        php_memlimit::unbind_current_thread();
     }
 }
 
@@ -861,9 +848,8 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx) {
 /// Makes `php://input` read the request body through the SAPI (the
 /// streams layer's output/filename hooks are re-installed as
 /// `php-ext-streams` sets them up).
-fn install_input_hook(ctx: &Rc<RequestCtx>) {
+fn install_input_hook() {
     use php_ext_streams::bridge::with_vm;
-    let body_ctx = ctx.clone();
     php_streams::state::set_hooks(php_streams::state::Hooks {
         output: Some(Box::new(|data: &[u8]| {
             let data = data.to_vec();
@@ -872,7 +858,7 @@ fn install_input_hook(ctx: &Rc<RequestCtx>) {
         executed_filename: Some(Box::new(|| {
             with_vm(|vm| vm.current_location().0.as_bytes().to_vec())
         })),
-        request_body: Some(Box::new(move || body_ctx.input())),
+        request_body: Some(Box::new(|| with_ctx(|c| c.input()).unwrap_or_default())),
     });
     php_streams::state::update_settings(|s| s.sapi_is_cli = false);
 }

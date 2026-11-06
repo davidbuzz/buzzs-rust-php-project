@@ -1891,6 +1891,7 @@ fn get_defined_vars(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let Some(idx) = caller_idx(vm) else {
         return Ok(Value::Array(ZArray::new()));
     };
+    vm.frames[idx].attach_symbol_table();
     let vars = vm.frames[idx].vars.borrow();
     // `zend_array_dup`: check ownership before copying the symbol-table slots.
     let mut out = HashTable::new();
@@ -1909,6 +1910,7 @@ fn compact(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(idx) = caller_idx(vm) else {
         return Ok(Value::Array(ZArray::new()));
     };
+    vm.frames[idx].attach_symbol_table();
     let mut out = HashTable::new();
     let vars = vm.frames[idx].vars.clone();
     fn add(
@@ -1986,6 +1988,7 @@ fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let prefix = if a.has(2) { s(a, 2) } else { ZStr::empty() };
     let refs = flags_v & 256 != 0;
     let mode = flags_v & 0xff;
+    vm.frames[idx].attach_symbol_table();
     let vars = vm.frames[idx].vars.clone();
     let mut n = 0;
     for (k, v) in arr.iter() {
@@ -2067,6 +2070,7 @@ fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         n += 1;
     }
+    vm.frames[idx].sync_from_symbol_table();
     Ok(Value::Int(n))
 }
 

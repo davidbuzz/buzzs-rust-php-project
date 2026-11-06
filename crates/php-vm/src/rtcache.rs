@@ -64,6 +64,16 @@ pub struct RuntimeCache {
     static_calls: RefCell<Vec<Vec<MemberSlot>>>,
 }
 
+impl RuntimeCache {
+    /// Clears all cached lookups so an op array carries no request state.
+    pub fn clear(&self) {
+        self.consts.borrow_mut().clear();
+        self.class_consts.borrow_mut().clear();
+        self.static_props.borrow_mut().clear();
+        self.static_calls.borrow_mut().clear();
+    }
+}
+
 /// A cached global constant.
 #[derive(Debug, Default)]
 enum ConstSlot {

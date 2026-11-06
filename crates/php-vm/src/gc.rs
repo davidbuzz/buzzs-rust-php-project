@@ -795,12 +795,16 @@ pub(crate) fn forget_root(addr: usize, handle: u32) {
 /// `$this` without a reference of their own, so releasing it is no
 /// possible root. Call it just before dropping a returning frame.
 pub fn frame_released(f: &crate::vm::Frame, caller_this: Option<&Obj>) {
-    if Rc::strong_count(&f.vars) != 1 {
-        return;
-    }
-    if let Ok(vars) = f.vars.try_borrow() {
-        for v in vars.slots.iter().flatten() {
+    for slot in &f.cvs {
+        if let Some(v) = slot.get() {
             possible_root(v);
+        }
+    }
+    if f.symtab_attached && Rc::strong_count(&f.vars) == 1 {
+        if let Ok(vars) = f.vars.try_borrow() {
+            for v in vars.slots.iter().flatten() {
+                possible_root(v);
+            }
         }
     }
     if let Some(c) = &f.closure {

@@ -449,6 +449,12 @@ pub fn timeout_pending() -> bool {
     TIMED_OUT.load(Ordering::Acquire)
 }
 
+/// Clears pending timeout and interrupt flags for a new request.
+pub fn clear_interrupt() {
+    TIMED_OUT.store(false, Ordering::Release);
+    INTERRUPT.store(false, Ordering::Release);
+}
+
 /// `register_tick_function(callable $callback, mixed ...$args): bool`.
 pub(crate) fn register_tick_function(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value> {
     let cb = a.at(0);

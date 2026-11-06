@@ -212,7 +212,14 @@ fn pending_call(v: &mut GcVisitor<'_>, c: &PendingCall) {
 
 /// A suspended frame (generator or fiber).
 fn frame(v: &mut GcVisitor<'_>, f: &Frame) {
-    var_store(v, &f.vars);
+    for slot in &f.cvs {
+        if let Some(val) = slot.get() {
+            v.value(val);
+        }
+    }
+    if f.symtab_attached {
+        var_store(v, &f.vars);
+    }
     v.values(&f.tmps);
     for it in f.iters.iter().flatten() {
         match it {

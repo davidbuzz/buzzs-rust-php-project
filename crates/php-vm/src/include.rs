@@ -8,7 +8,8 @@ use php_runtime::{Value, ZStr};
 use std::rc::Rc;
 
 /// Outcome of compiling source code.
-pub(crate) enum CompileOutcome {
+#[derive(Clone)]
+pub enum CompileOutcome {
     Ok(Rc<CompiledUnit>),
     /// A `ParseError` (or thrown `CompileError`) exception was created.
     ParseError(php_runtime::Obj),
@@ -16,7 +17,19 @@ pub(crate) enum CompileOutcome {
     Fatal,
 }
 
+/// A hook called when compiling file source (`zend_compile_file` override point).
+pub type CompileHookFn = fn(&mut Vm, Rc<[u8]>, &ZStr, bool) -> VmResult<CompileOutcome>;
+
+thread_local! {
+    static COMPILE_HOOK: std::cell::Cell<Option<CompileHookFn>> = const { std::cell::Cell::new(None) };
+}
+
 impl Vm {
+    /// Installs a compile hook (`zend_compile_file` override point) for files.
+    pub fn set_compile_hook(f: CompileHookFn) {
+        COMPILE_HOOK.with(|h| h.set(Some(f)));
+    }
+
     /// The constants the compiler may substitute (`zend_try_ct_eval_const`,
     /// `can_ct_eval_const` in `Zend/zend_compile.c`): the internal (not
     /// user-defined) constants with a scalar value that are not deprecated.
@@ -102,12 +115,28 @@ impl Vm {
         php_parser::parse_with_encoding(src, &opts, &encoding)
     }
 
-    /// Parses and compiles source code.
+    /// Parses and compiles source code, calling the compile hook for files.
+    pub(crate) fn compile_source(
+        &mut self,
+        src: Rc<[u8]>,
+        filename: &ZStr,
+        is_eval: bool,
+        skip_shebang: bool,
+    ) -> VmResult<CompileOutcome> {
+        if !is_eval {
+            if let Some(hook) = COMPILE_HOOK.with(|h| h.get()) {
+                return hook(self, src, filename, skip_shebang);
+            }
+        }
+        self.compile_source_default(src, filename, is_eval, skip_shebang)
+    }
+
+    /// Parses and compiles source code with the default compiler pipeline.
     ///
     /// The source comes as the `Rc` the compiled unit keeps, so the caller's
     /// buffer is released before parsing and a large include is not held
     /// twice while its AST is alive.
-    pub(crate) fn compile_source(
+    pub fn compile_source_default(
         &mut self,
         src: Rc<[u8]>,
         filename: &ZStr,
@@ -173,6 +202,7 @@ impl Vm {
             ct_constants: Some(self.ct_constants()),
             stack_limit: self.compile_stack_limit(),
             user_opcodes: self.user_opcodes(),
+            optimization_level: crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL,
         };
         let halt_compiler_offset = program.halt_compiler_offset;
         // A multibyte script's AST is kept for the semantic text of
@@ -266,20 +296,6 @@ impl Vm {
             }
         }
         Ok(())
-    }
-
-    /// Maps a unit's CVs onto an existing variable store.
-    fn cv_map_for(
-        &mut self,
-        code: &crate::opcode::OpArray,
-        vars: &Rc<std::cell::RefCell<crate::vm::VarStore>>,
-    ) -> Rc<[u32]> {
-        let mut st = vars.borrow_mut();
-        code.cv_names
-            .iter()
-            .map(|n| st.find_or_add(n.as_bytes()))
-            .collect::<Vec<_>>()
-            .into()
     }
 
     /// php-src's C stack at the start of a compilation, for the compiler's
@@ -385,8 +401,7 @@ impl Vm {
             Err(t) => return self.handle_top_throw(t),
         };
         let globals = self.globals.clone();
-        let map = self.cv_map_for(&unit.main.code, &globals);
-        let mut f = Frame::with_vars(unit.main.code.clone(), FrameKind::Main, globals, Some(map));
+        let mut f = Frame::with_vars(unit.main.code.clone(), FrameKind::Main, globals, None);
         f.ufunc = None;
         self.frames.push(f);
         let base = self.frames.len() - 1;
@@ -628,9 +643,9 @@ impl Vm {
         dst: u32,
         kind_name: Option<&str>,
     ) {
+        self.frame_mut().attach_symbol_table();
         let vars = self.frame().vars.clone();
-        let map = self.cv_map_for(&unit.main.code, &vars);
-        let mut f = Frame::with_vars(unit.main.code.clone(), kind, vars, Some(map));
+        let mut f = Frame::with_vars(unit.main.code.clone(), kind, vars, None);
         let cur = self.frame();
         f.this = cur.this.clone();
         f.scope = cur.scope.clone();
@@ -662,8 +677,7 @@ impl Vm {
         };
         self.declare_hoisted(&unit)?;
         let globals = self.globals.clone();
-        let map = self.cv_map_for(&unit.main.code, &globals);
-        let f = Frame::with_vars(unit.main.code.clone(), FrameKind::Main, globals, Some(map));
+        let f = Frame::with_vars(unit.main.code.clone(), FrameKind::Main, globals, None);
         self.frames.push(f);
         self.observer_begin_top();
         let base = self.frames.len() - 1;
@@ -701,4 +715,23 @@ fn declares_anything(unit: &CompiledUnit) -> bool {
         || !unit.decls.functions.borrow().is_empty()
         || !unit.decls.classes.borrow().is_empty()
         || !unit.decls.const_attributes.borrow().is_empty()
+}
+
+impl CompiledUnit {
+    /// Clears run-time caches on all op arrays in this unit so the unit
+    /// carries no request state.
+    pub fn clear_runtime_caches(&self) {
+        self.main.code.clear_runtime_caches();
+        self.main.statics.borrow_mut().clear();
+        for f in self.decls.functions.borrow().iter() {
+            f.code.clear_runtime_caches();
+            f.statics.borrow_mut().clear();
+        }
+        for c in self.decls.classes.borrow().iter() {
+            for m in &c.methods {
+                m.func.code.clear_runtime_caches();
+                m.func.statics.borrow_mut().clear();
+            }
+        }
+    }
 }

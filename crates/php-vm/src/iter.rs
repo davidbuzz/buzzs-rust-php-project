@@ -415,21 +415,19 @@ impl Vm {
             return Ok(false);
         };
         let res = match &mut it {
-            ForeachIter::Array { arr, pos } => {
-                let p = arr.valid_pos(*pos);
-                match arr.at(p) {
-                    Some((k, v)) => {
-                        let (k, v) = (k.to_value(), v.deref());
-                        *pos = p + 1;
-                        self.set_tmp(val, v);
-                        if let Some(kt) = key {
-                            self.set_tmp(kt, k);
-                        }
-                        Ok(true)
+            ForeachIter::Array { arr, pos } => match arr.fe_fetch(*pos) {
+                Some((p, v)) => {
+                    let v = v.deref();
+                    let k = key.and_then(|_| arr.key_value_at(p));
+                    *pos = p + 1;
+                    self.set_tmp(val, v);
+                    if let (Some(kt), Some(k)) = (key, k) {
+                        self.set_tmp(kt, k);
                     }
-                    None => Ok(false),
+                    Ok(true)
                 }
-            }
+                None => Ok(false),
+            },
             ForeachIter::ArrayRef { r, id } => {
                 let id = *id;
                 // `ZEND_FE_FETCH_RW`: the iterated variable may have been
@@ -441,7 +439,7 @@ impl Vm {
                         Value::Array(arr) => {
                             let table = arr.make_mut();
                             table.iterator_fetch(id).and_then(|pos| {
-                                let key = table.at(pos).map(|(key, _)| key.to_value())?;
+                                let key = table.key_value_at(pos)?;
                                 let slot = table.at_mut(pos)?;
                                 Some((key, slot.make_ref()))
                             })

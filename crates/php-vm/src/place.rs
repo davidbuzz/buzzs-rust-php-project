@@ -1355,9 +1355,10 @@ fn concat_cv_in_place(
     let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) else {
         return None;
     };
-    let idx = f.cv_idx(*cv);
-    let mut st = f.vars.borrow_mut();
-    let Some(Some(Value::Str(s))) = st.slots.get_mut(idx) else {
+    let idx = *cv as usize;
+    let slot = f.cvs.get(idx)?;
+    let val = unsafe { slot.get_mut_unchecked() };
+    let Some(Value::Str(s)) = val else {
         return None;
     };
     match rhs {
@@ -1717,8 +1718,9 @@ impl Vm {
     ) -> VmResult<RBase> {
         Ok(match base {
             PlaceBase::Cv(cv) => {
+                self.frame_mut().attach_symbol_table();
                 let f = self.frame();
-                RBase::Var(f.vars.clone(), f.cv_idx(*cv))
+                RBase::Var(f.vars.clone(), *cv as usize)
             }
             PlaceBase::VarVar(op) => {
                 let n = self.read(*op)?;
@@ -1736,6 +1738,7 @@ impl Vm {
                         None => RBase::Undef(n),
                     }
                 } else {
+                    self.frame_mut().attach_symbol_table();
                     let vars = self.frame().vars.clone();
                     let idx = if write {
                         Some(vars.borrow_mut().find_or_add(n.as_bytes()))
@@ -3273,7 +3276,10 @@ impl Vm {
         if !matches!(p.segs.first(), Some(Seg::Dim(_) | Seg::Append)) {
             return None;
         }
-        let undef = matches!(f.vars.borrow().slots.get(f.cv_idx(cv)), Some(None));
+        let undef = f
+            .cvs
+            .get(cv as usize)
+            .map_or(false, crate::vm::CvSlot::is_none);
         undef.then_some(cv)
     }
 
@@ -3285,12 +3291,12 @@ impl Vm {
     #[inline(never)]
     fn rw_undef_container_first(&mut self, cv: u32) -> VmResult<()> {
         self.read_cv(cv)?;
-        let f = self.frame();
-        let idx = f.cv_idx(cv);
-        let vars = f.vars.clone();
-        if let Some(slot) = vars.borrow_mut().slots.get_mut(idx) {
+        let f = self.frame_mut();
+        let idx = cv as usize;
+        if let Some(slot) = f.cvs.get_mut(idx) {
             if slot.is_none() {
-                *slot = Some(Value::Null);
+                slot.set(Some(Value::Null));
+                f.sync_cv_to_symtab(cv, &Value::Null);
             }
         }
         Ok(())
@@ -3394,10 +3400,16 @@ impl Vm {
         let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) else {
             return None;
         };
-        let idx = f.cv_idx(*cv);
-        let mut st = f.vars.borrow_mut();
-        match st.slots.get_mut(idx)? {
-            Some(Value::Int(i)) => incdec_int_slot(i, kind),
+        let idx = *cv as usize;
+        let slot = f.cvs.get(idx)?;
+        match slot.get() {
+            Some(Value::Int(i)) => {
+                let mut int_val = *i;
+                let res = incdec_int_slot(&mut int_val, kind)?;
+                slot.set(Some(Value::Int(int_val)));
+                f.sync_cv_to_symtab(*cv, &Value::Int(int_val));
+                Some(res)
+            }
             _ => None,
         }
     }

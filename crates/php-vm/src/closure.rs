@@ -14,18 +14,18 @@ use std::rc::Rc;
 /// Internal state of a `Closure` object.
 #[derive(Debug, Clone)]
 pub struct ClosureData {
-    /// The function.
-    pub func: Func,
+    /// Captured `use` variables: (CV index, value; references for by-ref).
+    pub vars: Vec<(u32, Value)>,
+    /// Static variables of this closure object.
+    pub statics: Rc<RefCell<Vec<Option<PhpRef>>>>,
     /// Bound `$this`.
     pub this: Option<Obj>,
     /// Class scope.
     pub scope: Option<Rc<Class>>,
     /// Called scope.
     pub called: Option<Rc<Class>>,
-    /// Captured `use` variables: (CV index, value; references for by-ref).
-    pub vars: Vec<(u32, Value)>,
-    /// Static variables of this closure object.
-    pub statics: Rc<RefCell<Vec<Option<PhpRef>>>>,
+    /// The function.
+    pub func: Func,
     /// Created by `Closure::fromCallable` / first-class callable syntax.
     pub fake: bool,
     /// `__call` target name for fake closures of magic methods.
@@ -47,12 +47,17 @@ impl Vm {
         let mut vars = Vec::with_capacity(f.uses.len());
         for u in &f.uses {
             if u.by_ref {
-                let fr = self.frame();
-                let idx = fr.cv_idx(u.parent_cv);
-                let vstore = fr.vars.clone();
-                let mut st = vstore.borrow_mut();
-                let slot = st.slots[idx].get_or_insert(Value::Null);
-                let r = slot.make_ref();
+                let fr = self.frame_mut();
+                let idx = u.parent_cv as usize;
+                let r = match fr.cvs.get_mut(idx).and_then(|c| c.as_mut().as_mut()) {
+                    Some(Value::Reference(r)) => r.clone(),
+                    Some(v) => v.make_ref(),
+                    None => {
+                        let r = PhpRef::new(Value::Null);
+                        fr.cvs[idx].set(Some(Value::Reference(r.clone())));
+                        r
+                    }
+                };
                 vars.push((u.cv, Value::Reference(r)));
             } else if u.implicit {
                 if let Some(v) = self.cv_get(u.parent_cv) {
@@ -228,13 +233,22 @@ impl Vm {
     /// released reference handle would be buffered as a GC possible root).
     #[allow(clippy::unused_self)] // method-style API used across the VM
     pub(crate) fn closure_call(&self, o: &Obj) -> Option<PendingCall> {
-        object::internal::<ClosureData, _>(o, |d| PendingCall {
-            this: d.this.clone(),
-            scope: d.scope.clone(),
-            called: d.called.clone(),
-            closure: if d.fake { None } else { Some(o.clone()) },
-            magic_name: d.magic_name.clone(),
-            ..PendingCall::new(d.func.clone())
+        object::internal::<ClosureData, _>(o, |d| {
+            if d.fake {
+                PendingCall {
+                    this: d.this.clone(),
+                    scope: d.scope.clone(),
+                    called: d.called.clone(),
+                    closure: None,
+                    magic_name: d.magic_name.clone(),
+                    ..PendingCall::new(d.func.clone())
+                }
+            } else {
+                PendingCall {
+                    closure: Some(o.clone()),
+                    ..PendingCall::new(d.func.clone())
+                }
+            }
         })
     }
 
@@ -288,22 +302,27 @@ impl Vm {
     }
 
     /// Binds captured variables and statics into the new frame at index
-    /// `frame` of the frame stack (set up in place by `push_user_frame`).
+    /// `frame` of the frame stack.
     pub(crate) fn bind_closure_vars(&mut self, frame: usize, c: &Obj) {
         let Some(f) = self.frames.get_mut(frame) else {
             return;
         };
-        // Copies the bound variables out of a borrow of the closure's data
-        // (`zend_closure_bind_var` / `ZEND_BIND_STATIC` copy them with an
-        // addref): cloning the whole `ClosureData` would copy and release
-        // everything else on every call.
         object::internal::<ClosureData, _>(c, |d| {
-            {
-                let mut st = f.vars.borrow_mut();
-                for (cv, v) in &d.vars {
-                    if let Some(slot) = st.slots.get_mut(*cv as usize) {
-                        *slot = Some(v.clone());
-                    }
+            if f.this.is_none() && d.this.is_some() {
+                f.this = d.this.clone();
+            }
+            if f.scope.is_none() && d.scope.is_some() {
+                f.scope = d.scope.clone();
+            }
+            if f.called.is_none() && d.called.is_some() {
+                f.called = d.called.clone();
+            }
+            if f.magic_name.is_none() && d.magic_name.is_some() {
+                f.magic_name = d.magic_name.clone();
+            }
+            for (cv, v) in &d.vars {
+                if let Some(slot) = f.cvs.get_mut(*cv as usize) {
+                    slot.set(Some(v.clone()));
                 }
             }
             f.statics = Some(d.statics.clone());

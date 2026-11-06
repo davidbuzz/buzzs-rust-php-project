@@ -293,12 +293,15 @@ fn with_base_obj<R>(frame: &Frame, base: u32, access: impl FnOnce(&Obj) -> R) ->
     if base == PROP_CACHE_THIS {
         return frame.this.as_ref().map(access);
     }
-    let vars = frame.vars.borrow();
-    let out = match vars.slots.get(frame.cv_idx(base)) {
-        Some(Some(Value::Object(obj))) => Some(access(obj)),
+    let out = match frame
+        .cvs
+        .get(base as usize)
+        .and_then(crate::vm::CvSlot::get)
+    {
+        Some(Value::Object(obj)) => Some(access(obj)),
         // A reference being modified elsewhere (`descend`'s "Cannot modify
         // a value while it is being iterated") is left to the walk.
-        Some(Some(Value::Reference(rf))) => match rf.try_borrow() {
+        Some(Value::Reference(rf)) => match rf.try_borrow() {
             Some(inner) => match &*inner {
                 Value::Object(obj) => Some(access(obj)),
                 _ => None,
@@ -307,7 +310,6 @@ fn with_base_obj<R>(frame: &Frame, base: u32, access: impl FnOnce(&Obj) -> R) ->
         },
         _ => None,
     };
-    drop(vars);
     out
 }
 
@@ -659,6 +661,40 @@ fn append_in_place(value: &mut Value, rhs: &Value) -> Probe<Value> {
     }
 }
 
+/// Whether the compound assignment `op` with right-hand side `rhs` is one
+/// the nested hits operate in place ([`operate_in_place`]): `.=` of a
+/// string or an int, or a [`numeric_op`] operator with a number.
+#[inline(always)]
+fn in_place_op(op: BinaryOp, rhs: &Value) -> bool {
+    if op == BinaryOp::Concat {
+        matches!(rhs, Value::Str(_) | Value::Int(_))
+    } else {
+        pure_op(op) && matches!(rhs, Value::Int(_) | Value::Float(_))
+    }
+}
+
+/// `zend_binary_op(var_ptr, var_ptr, value)` of an [`in_place_op`] on
+/// `cur`, a value whose slot accepts the builtin type bits `accept`
+/// (`u32::MAX`: untyped): `.=` appends to a string ([`append_in_place`];
+/// a typed slot must admit strings), a numeric operator replaces a number
+/// by a result the type admits. The result, or `Slow`, nothing changed.
+#[inline(always)]
+fn operate_in_place(cur: &mut Value, accept: u32, op: BinaryOp, rhs: &Value) -> Probe<Value> {
+    if op == BinaryOp::Concat {
+        if accept != u32::MAX && accept & mask::STRING == 0 {
+            return Probe::Slow;
+        }
+        return append_in_place(cur, rhs);
+    }
+    match numeric_op(op, cur, rhs) {
+        Some(new) if accepts(accept, &new) => {
+            *cur = new.clone();
+            Probe::Hit(new)
+        }
+        _ => Probe::Slow,
+    }
+}
+
 /// `isset()` (or, with `empty`, `empty()`) of a property or element
 /// value, dereferenced; `Err` with the value when only `to_bool` can tell
 /// (`empty()` of an object, a resource or NAN: a cast handler or a
@@ -953,7 +989,7 @@ impl Vm {
     /// declared slot or an existing dynamic property, or `None` for the
     /// generic walk.
     #[inline]
-    pub(crate) fn prop_cache_read(&mut self, pid: PlaceId) -> Option<Value> {
+    pub(crate) fn prop_cache_read(&self, pid: PlaceId) -> Option<Value> {
         self.probe_fill(pid, PC_READ, |key, _, data, code| {
             with_value(key, data, code, |value| Probe::Hit(deref_clone(value)))
         })
@@ -966,9 +1002,16 @@ impl Vm {
     #[inline]
     pub(crate) fn prop_cache_read_dim(&mut self, pid: PlaceId) -> Option<Value> {
         let dim = self.simple_dim_key(pid)?;
+        self.prop_cache_read_elem(pid, &dim)
+    }
+
+    /// [`Vm::prop_cache_read_dim`] of the element at `dim` (the key of the
+    /// place's offset, see [`simple_key`]).
+    #[inline]
+    pub(crate) fn prop_cache_read_elem(&self, pid: PlaceId, dim: &ArrayKey) -> Option<Value> {
         self.probe_fill(pid, PC_READ, |key, _, data, code| {
             with_value(key, data, code, |value| {
-                with_array(value, |arr| match arr.get(&dim) {
+                with_array(value, |arr| match arr.get(dim) {
                     Some(elem) => Probe::Hit(deref_clone(elem)),
                     None => Probe::Slow,
                 })
@@ -1118,7 +1161,7 @@ impl Vm {
     /// [`store_value`]), and returns the assigned value, or hands `v` back
     /// (`Err`) for the generic walk.
     #[inline]
-    pub(crate) fn prop_cache_assign(&mut self, pid: PlaceId, v: Value) -> Result<Value, Value> {
+    pub(crate) fn prop_cache_assign(&self, pid: PlaceId, v: Value) -> Result<Value, Value> {
         if matches!(v, Value::Reference(_)) {
             return Err(v);
         }
@@ -1166,31 +1209,52 @@ impl Vm {
                     store_value(key, data, code, &v)
                 })
             }
-            Some(target) => self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
-                with_array_mut(key, data, |arr| {
-                    let table = arr.make_mut();
-                    let dim = match &target {
-                        Nested::Dim(dim) => dim,
-                        Nested::Append => {
-                            return match table.push(v.clone()) {
-                                Ok(_) => Probe::Hit(None),
-                                Err(_) => Probe::Slow,
-                            };
-                        }
-                        Nested::Prop(_) => return Probe::Slow,
-                    };
-                    match table.get_mut(dim) {
-                        Some(Value::Reference(_)) => Probe::Slow,
-                        Some(elem) => Probe::Hit(Some(std::mem::replace(elem, v.clone()))),
-                        None => {
-                            table.insert(dim.clone(), v.clone());
-                            Probe::Hit(None)
-                        }
-                    }
-                })
-            }),
+            Some(Nested::Dim(dim)) => return self.prop_cache_assign_elem(pid, Some(&dim), v),
+            Some(Nested::Append) => return self.prop_cache_assign_elem(pid, None, v),
             None => None,
         };
+        match old {
+            Some(old) => {
+                drop(old);
+                Ok(v)
+            }
+            None => Err(v),
+        }
+    }
+
+    /// `$base->a[$k] = v` (`dim` the key of the place's offset, see
+    /// [`simple_key`]) or `$base->a[] = v` (`dim` `None`) of a two-segment
+    /// place `pid` with a cached head, on a property holding an array: see
+    /// [`Vm::prop_cache_nested_assign`]. Returns `v`, or hands it back
+    /// (`Err`) for the generic walk.
+    pub(crate) fn prop_cache_assign_elem(
+        &self,
+        pid: PlaceId,
+        dim: Option<&ArrayKey>,
+        v: Value,
+    ) -> Result<Value, Value> {
+        if matches!(v, Value::Reference(_)) {
+            return Err(v);
+        }
+        let old = self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
+            with_array_mut(key, data, |arr| {
+                let table = arr.make_mut();
+                let Some(dim) = dim else {
+                    return match table.push(v.clone()) {
+                        Ok(_) => Probe::Hit(None),
+                        Err(_) => Probe::Slow,
+                    };
+                };
+                match table.get_mut(dim) {
+                    Some(Value::Reference(_)) => Probe::Slow,
+                    Some(elem) => Probe::Hit(Some(std::mem::replace(elem, v.clone()))),
+                    None => {
+                        table.insert(dim.clone(), v.clone());
+                        Probe::Hit(None)
+                    }
+                }
+            })
+        });
         match old {
             Some(old) => {
                 drop(old);
@@ -1204,7 +1268,7 @@ impl Vm {
     /// holding an int (without overflow) or a float, updated in place: the
     /// result, or `None` for the generic walk.
     #[inline]
-    pub(crate) fn prop_cache_incdec(&mut self, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
+    pub(crate) fn prop_cache_incdec(&self, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
         self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, code| {
             with_value_mut(key, data, code, |value| {
                 deref_mut(value, |num| incdec_in_place(num, kind))
@@ -1224,17 +1288,7 @@ impl Vm {
         kind: IncDecKind,
     ) -> Option<Value> {
         match self.nested(pid)? {
-            Nested::Dim(dim) => self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
-                with_array_mut(key, data, |arr| {
-                    if !matches!(arr.get(&dim), Some(Value::Int(_) | Value::Float(_))) {
-                        return Probe::Slow;
-                    }
-                    match arr.make_mut().get_mut(&dim) {
-                        Some(elem) => incdec_in_place(elem, kind),
-                        None => Probe::Slow,
-                    }
-                })
-            }),
+            Nested::Dim(dim) => self.prop_cache_incdec_elem(pid, &dim, kind),
             Nested::Prop(lit) => {
                 let obj = self.head_object(pid)?;
                 self.tail_probe(pid, &obj, lit, PC_READ | PC_WRITE, |key, data, code, _| {
@@ -1245,6 +1299,28 @@ impl Vm {
             }
             Nested::Append => None,
         }
+    }
+
+    /// `$base->a[$k]++` & co. of a two-segment place `pid` with a cached
+    /// head (`dim` the key of the place's offset, see [`simple_key`]): see
+    /// [`Vm::prop_cache_nested_incdec`].
+    pub(crate) fn prop_cache_incdec_elem(
+        &self,
+        pid: PlaceId,
+        dim: &ArrayKey,
+        kind: IncDecKind,
+    ) -> Option<Value> {
+        self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
+            with_array_mut(key, data, |arr| {
+                if !matches!(arr.get(dim), Some(Value::Int(_) | Value::Float(_))) {
+                    return Probe::Slow;
+                }
+                match arr.make_mut().get_mut(dim) {
+                    Some(elem) => incdec_in_place(elem, kind),
+                    None => Probe::Slow,
+                }
+            })
+        })
     }
 
     /// `ZEND_ASSIGN_OBJ_OP` of cacheable place `pid` with a numeric
@@ -1267,20 +1343,7 @@ impl Vm {
             return Ok(None);
         }
         if pure_op(op) {
-            // `zend_binary_op(zptr, zptr, value)`: nothing can intervene.
-            return Ok(
-                self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, code| {
-                    with_value_mut(key, data, code, |value| {
-                        deref_mut(value, |cur| match numeric_op(op, cur, rhs) {
-                            Some(new) if accepts(key.accept, &new) => {
-                                *cur = new.clone();
-                                Probe::Hit(new)
-                            }
-                            _ => Probe::Slow,
-                        })
-                    })
-                }),
-            );
+            return Ok(self.prop_cache_assign_op_pure(pid, op, rhs));
         }
         let hit = self.probe_fill(pid, PC_READ | PC_WRITE, |key, obj, data, code| {
             with_value(key, data, code, |value| match value {
@@ -1310,6 +1373,35 @@ impl Vm {
         self.write_property(&obj, &name, new).map(Some)
     }
 
+    /// The in-place half of [`Vm::prop_cache_assign_op`]: an operator of
+    /// [`numeric_op`] with a numeric right-hand side on a property holding
+    /// a number, operated on the slot (`zend_binary_op(zptr, zptr, value)`:
+    /// nothing can intervene, no diagnostic is possible). The result, or
+    /// `None`, nothing changed, for the generic walk (any other operator or
+    /// right-hand side, a result the property's type does not accept).
+    #[inline]
+    pub(crate) fn prop_cache_assign_op_pure(
+        &self,
+        pid: PlaceId,
+        op: BinaryOp,
+        rhs: &Value,
+    ) -> Option<Value> {
+        if !pure_op(op) || !matches!(rhs, Value::Int(_) | Value::Float(_)) {
+            return None;
+        }
+        self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, code| {
+            with_value_mut(key, data, code, |value| {
+                deref_mut(value, |cur| match numeric_op(op, cur, rhs) {
+                    Some(new) if accepts(key.accept, &new) => {
+                        *cur = new.clone();
+                        Probe::Hit(new)
+                    }
+                    _ => Probe::Slow,
+                })
+            })
+        })
+    }
+
     /// A compound assignment of a two-segment place `pid` with a cached
     /// head, operated in place (`zend_binary_op(var_ptr, var_ptr, value)`):
     /// a [`numeric_op`] operator with a numeric right-hand side on a number,
@@ -1324,58 +1416,54 @@ impl Vm {
         op: BinaryOp,
         rhs: &Value,
     ) -> Option<Value> {
-        let concat = op == BinaryOp::Concat;
-        let applies = if concat {
-            matches!(rhs, Value::Str(_) | Value::Int(_))
-        } else {
-            pure_op(op) && matches!(rhs, Value::Int(_) | Value::Float(_))
-        };
-        if !applies {
+        if !in_place_op(op, rhs) {
             return None;
         }
-        // `zend_binary_op` on the operand in place.
-        let operate = |cur: &mut Value, accept: u32| {
-            if concat {
-                if accept != u32::MAX && accept & mask::STRING == 0 {
-                    return Probe::Slow;
-                }
-                return append_in_place(cur, rhs);
-            }
-            match numeric_op(op, cur, rhs) {
-                Some(new) if accepts(accept, &new) => {
-                    *cur = new.clone();
-                    Probe::Hit(new)
-                }
-                _ => Probe::Slow,
-            }
-        };
         match self.nested(pid)? {
-            Nested::Dim(dim) => self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
-                with_array_mut(key, data, |arr| {
-                    let fits = match arr.get(&dim) {
-                        Some(Value::Str(_)) => concat,
-                        Some(Value::Int(_) | Value::Float(_)) => !concat,
-                        _ => false,
-                    };
-                    if !fits {
-                        return Probe::Slow;
-                    }
-                    match arr.make_mut().get_mut(&dim) {
-                        Some(elem) => operate(elem, u32::MAX),
-                        None => Probe::Slow,
-                    }
-                })
-            }),
+            Nested::Dim(dim) => self.prop_cache_assign_op_elem(pid, &dim, op, rhs),
             Nested::Prop(lit) => {
                 let obj = self.head_object(pid)?;
                 self.tail_probe(pid, &obj, lit, PC_READ | PC_WRITE, |key, data, code, _| {
                     with_value_mut(key, data, code, |value| {
-                        deref_mut(value, |cur| operate(cur, key.accept))
+                        deref_mut(value, |cur| operate_in_place(cur, key.accept, op, rhs))
                     })
                 })
             }
             Nested::Append => None,
         }
+    }
+
+    /// `$base->a[$k] op= v` of a two-segment place `pid` with a cached
+    /// head (`dim` the key of the place's offset, see [`simple_key`]) on an
+    /// existing element of an array property, operated in place: see
+    /// [`Vm::prop_cache_nested_assign_op`].
+    pub(crate) fn prop_cache_assign_op_elem(
+        &self,
+        pid: PlaceId,
+        dim: &ArrayKey,
+        op: BinaryOp,
+        rhs: &Value,
+    ) -> Option<Value> {
+        if !in_place_op(op, rhs) {
+            return None;
+        }
+        let concat = op == BinaryOp::Concat;
+        self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
+            with_array_mut(key, data, |arr| {
+                let fits = match arr.get(dim) {
+                    Some(Value::Str(_)) => concat,
+                    Some(Value::Int(_) | Value::Float(_)) => !concat,
+                    _ => false,
+                };
+                if !fits {
+                    return Probe::Slow;
+                }
+                match arr.make_mut().get_mut(dim) {
+                    Some(elem) => operate_in_place(elem, u32::MAX, op, rhs),
+                    None => Probe::Slow,
+                }
+            })
+        })
     }
 
     /// `ZEND_ASSIGN_OBJ_OP` with `.=` of cacheable place `pid` on a property
@@ -1393,7 +1481,7 @@ impl Vm {
     /// `__toString()`), a property not holding a string directly
     /// (undefined, a reference, a number), and readonly, set-restricted,
     /// hooked or natively handled properties (no `PC_WRITE`).
-    pub(crate) fn prop_cache_concat(&mut self, pid: PlaceId, rhs: &Value) -> Option<Value> {
+    pub(crate) fn prop_cache_concat(&self, pid: PlaceId, rhs: &Value) -> Option<Value> {
         if !matches!(rhs, Value::Str(_) | Value::Int(_)) {
             return None;
         }
@@ -1427,12 +1515,27 @@ impl Vm {
     /// The conversion of the value to bool for `empty()`.
     #[inline]
     pub(crate) fn prop_cache_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<Option<bool>> {
-        let found = self.probe_fill(pid, PC_ISSET, |key, _, data, code| {
+        let found = self.isset_probe(pid, empty);
+        self.finish_isset(found)
+    }
+
+    /// [`Vm::prop_cache_isset`] when the answer needs no conversion: `None`
+    /// also where only `to_bool` can tell (`empty()` of an object, a
+    /// resource or NAN, see [`isset_value`]), which the generic walk then
+    /// answers.
+    #[inline]
+    pub(crate) fn prop_cache_isset_pure(&self, pid: PlaceId, empty: bool) -> Option<bool> {
+        self.isset_probe(pid, empty).and_then(Result::ok)
+    }
+
+    /// The probe of [`Vm::prop_cache_isset`].
+    #[inline(always)]
+    fn isset_probe(&self, pid: PlaceId, empty: bool) -> Option<Result<bool, Value>> {
+        self.probe_fill(pid, PC_ISSET, |key, _, data, code| {
             with_value(key, data, code, |value| {
                 Probe::Hit(isset_value(value, empty))
             })
-        });
-        self.finish_isset(found)
+        })
     }
 
     /// `isset()`/`empty()` of a two-segment place `pid` with a cached head
@@ -1449,16 +1552,7 @@ impl Vm {
         empty: bool,
     ) -> VmResult<Option<bool>> {
         let found = match self.nested(pid) {
-            Some(Nested::Dim(dim)) => self.probe_fill(pid, PC_READ, |key, _, data, code| {
-                with_value(key, data, code, |value| {
-                    with_array(value, |arr| {
-                        Probe::Hit(match arr.get(&dim) {
-                            Some(elem) => isset_value(elem, empty),
-                            None => Ok(empty),
-                        })
-                    })
-                })
-            }),
+            Some(Nested::Dim(dim)) => self.isset_elem_probe(pid, &dim, empty),
             Some(Nested::Prop(lit)) => self.head_object(pid).and_then(|obj| {
                 self.tail_probe(pid, &obj, lit, PC_ISSET, |key, data, code, _| {
                     with_value(key, data, code, |value| {
@@ -1469,6 +1563,42 @@ impl Vm {
             Some(Nested::Append) | None => None,
         };
         self.finish_isset(found)
+    }
+
+    /// `isset($base->a[$k])` / `empty($base->a[$k])` of a two-segment
+    /// place `pid` with a cached head (`dim` the key of the place's offset,
+    /// see [`simple_key`]) on a property holding an array, when the answer
+    /// needs no conversion (see [`Vm::prop_cache_isset_pure`]); `None` for
+    /// the generic walk.
+    #[inline]
+    pub(crate) fn prop_cache_isset_elem_pure(
+        &self,
+        pid: PlaceId,
+        dim: &ArrayKey,
+        empty: bool,
+    ) -> Option<bool> {
+        self.isset_elem_probe(pid, dim, empty).and_then(Result::ok)
+    }
+
+    /// The element probe of [`Vm::prop_cache_nested_isset`]: a missing
+    /// element is not set (and empty).
+    #[inline(always)]
+    fn isset_elem_probe(
+        &self,
+        pid: PlaceId,
+        dim: &ArrayKey,
+        empty: bool,
+    ) -> Option<Result<bool, Value>> {
+        self.probe_fill(pid, PC_READ, |key, _, data, code| {
+            with_value(key, data, code, |value| {
+                with_array(value, |arr| {
+                    Probe::Hit(match arr.get(dim) {
+                        Some(elem) => isset_value(elem, empty),
+                        None => Ok(empty),
+                    })
+                })
+            })
+        })
     }
 
     /// `ZEND_UNSET_OBJ` of cacheable place `pid` (`zend_std_unset_property`

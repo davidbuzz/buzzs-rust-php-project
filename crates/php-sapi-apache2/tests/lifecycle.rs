@@ -50,101 +50,110 @@ fn ini(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
-fn run(name: &str, req: Req) -> Response {
+fn run_sequence(reqs: Vec<(&str, Req)>) -> Vec<Response> {
     let dir = scratch();
-    let path = dir.join(name);
-    std::fs::write(&path, req.script).unwrap();
-    let path_s = path.to_string_lossy().into_owned();
+    let owned: Vec<(String, Req)> = reqs.into_iter().map(|(n, r)| (n.to_string(), r)).collect();
     std::thread::Builder::new()
         .stack_size(64 << 20)
         .spawn(move || {
-            let mut m = MockBackend::default()
-                .with_str(StrField::Handler, b"application/x-httpd-php")
-                .with_str(StrField::Filename, path_s.as_bytes())
-                .with_str(
-                    StrField::Uri,
-                    format!(
-                        "/{}",
-                        Path::new(&path_s).file_name().unwrap().to_string_lossy()
+            let mut responses = Vec::new();
+            for (name, req) in owned {
+                let path = dir.join(&name);
+                std::fs::write(&path, req.script).unwrap();
+                let path_s = path.to_string_lossy().into_owned();
+                let mut m = MockBackend::default()
+                    .with_str(StrField::Handler, b"application/x-httpd-php")
+                    .with_str(StrField::Filename, path_s.as_bytes())
+                    .with_str(
+                        StrField::Uri,
+                        format!(
+                            "/{}",
+                            Path::new(&path_s).file_name().unwrap().to_string_lossy()
+                        )
+                        .as_bytes(),
                     )
-                    .as_bytes(),
-                )
-                .with_str(
-                    StrField::Method,
-                    if req.method.is_empty() {
-                        b"GET"
-                    } else {
-                        req.method.as_bytes()
-                    },
-                )
-                .with_int(IntField::FileType, 1)
-                .with_int(IntField::ProtoNum, 1001)
-                .with_int(IntField::RequestTime, 1_700_000_000_250_000)
-                .with_int(IntField::IsMain, 1)
-                .with_entry(Table::SubprocessEnv, b"SCRIPT_FILENAME", path_s.as_bytes())
-                .with_entry(
-                    Table::SubprocessEnv,
-                    b"REQUEST_METHOD",
-                    if req.method.is_empty() {
-                        b"GET"
-                    } else {
-                        req.method.as_bytes()
-                    },
-                );
-            if !req.query.is_empty() {
-                m = m.with_str(StrField::Args, req.query.as_bytes());
+                    .with_str(
+                        StrField::Method,
+                        if req.method.is_empty() {
+                            b"GET"
+                        } else {
+                            req.method.as_bytes()
+                        },
+                    )
+                    .with_int(IntField::FileType, 1)
+                    .with_int(IntField::ProtoNum, 1001)
+                    .with_int(IntField::RequestTime, 1_700_000_000_250_000)
+                    .with_int(IntField::IsMain, 1)
+                    .with_entry(Table::SubprocessEnv, b"SCRIPT_FILENAME", path_s.as_bytes())
+                    .with_entry(
+                        Table::SubprocessEnv,
+                        b"REQUEST_METHOD",
+                        if req.method.is_empty() {
+                            b"GET"
+                        } else {
+                            req.method.as_bytes()
+                        },
+                    );
+                if !req.query.is_empty() {
+                    m = m.with_str(StrField::Args, req.query.as_bytes());
+                }
+                for (k, v) in &req.headers {
+                    m = m.with_entry(Table::HeadersIn, k.as_bytes(), v.as_bytes());
+                }
+                m.body_in.borrow_mut().extend_from_slice(&req.body);
+                *m.disconnected.borrow_mut() = req.disconnected;
+                for (n, v, admin) in &req.dir {
+                    m.dir.borrow_mut().push(DirEntry {
+                        name: (*n).to_string(),
+                        value: v.as_bytes().to_vec(),
+                        status: if *admin {
+                            DirStatus::System
+                        } else {
+                            DirStatus::PerDir
+                        },
+                        htaccess: false,
+                    });
+                }
+                let shared = Rc::new(m);
+                let mut config = ProcessConfig::with_defaults();
+                for (k, v) in &req.ini {
+                    config.ini.push((k.clone(), v.clone()));
+                }
+                let params = RunParams {
+                    config: Arc::new(config),
+                    timer: Arc::new(Timer::default()),
+                    highlight: false,
+                };
+                request::run(Box::new(shared.clone()) as Box<dyn Backend>, &params);
+                let s = |v: &[u8]| String::from_utf8_lossy(v).into_owned();
+                let resp = Response {
+                    status: shared.status.borrow().clone(),
+                    content_type: shared.content_type.borrow().as_deref().map(s),
+                    headers_out: shared
+                        .table_entries(Table::HeadersOut)
+                        .iter()
+                        .map(|(k, v)| (s(k), s(v)))
+                        .collect(),
+                    body: s(&shared.body_out.borrow()),
+                    logs: shared
+                        .logs
+                        .borrow()
+                        .iter()
+                        .map(|(l, m)| (*l, s(m)))
+                        .collect(),
+                    flushes: *shared.flushes.borrow(),
+                };
+                responses.push(resp);
             }
-            for (k, v) in &req.headers {
-                m = m.with_entry(Table::HeadersIn, k.as_bytes(), v.as_bytes());
-            }
-            m.body_in.borrow_mut().extend_from_slice(&req.body);
-            *m.disconnected.borrow_mut() = req.disconnected;
-            for (n, v, admin) in &req.dir {
-                m.dir.borrow_mut().push(DirEntry {
-                    name: (*n).to_string(),
-                    value: v.as_bytes().to_vec(),
-                    status: if *admin {
-                        DirStatus::System
-                    } else {
-                        DirStatus::PerDir
-                    },
-                    htaccess: false,
-                });
-            }
-            let shared = Rc::new(m);
-            let mut config = ProcessConfig::with_defaults();
-            for (k, v) in &req.ini {
-                config.ini.push((k.clone(), v.clone()));
-            }
-            let params = RunParams {
-                config: Arc::new(config),
-                timer: Arc::new(Timer::default()),
-                highlight: false,
-            };
-            request::run(Box::new(shared.clone()) as Box<dyn Backend>, &params);
-            let s = |v: &[u8]| String::from_utf8_lossy(v).into_owned();
-            let resp = Response {
-                status: shared.status.borrow().clone(),
-                content_type: shared.content_type.borrow().as_deref().map(s),
-                headers_out: shared
-                    .table_entries(Table::HeadersOut)
-                    .iter()
-                    .map(|(k, v)| (s(k), s(v)))
-                    .collect(),
-                body: s(&shared.body_out.borrow()),
-                logs: shared
-                    .logs
-                    .borrow()
-                    .iter()
-                    .map(|(l, m)| (*l, s(m)))
-                    .collect(),
-                flushes: *shared.flushes.borrow(),
-            };
-            resp
+            responses
         })
         .unwrap()
         .join()
         .unwrap()
+}
+
+fn run(name: &str, req: Req) -> Response {
+    run_sequence(vec![(name, req)]).pop().unwrap()
 }
 
 #[test]
@@ -1195,4 +1204,40 @@ var_dump(request_parse_body()[0]);
 }
 "#;
     assert!(r.body.ends_with(expected), "{}", r.body);
+}
+
+/// Multiple sequential requests running on the same worker thread use the persistent VM,
+/// but each request sees a clean environment (functions, classes, constants, globals reset).
+#[test]
+fn persistent_vm_sequential_requests_clean_state() {
+    let responses = run_sequence(vec![
+        (
+            "pvm_req1.php",
+            Req {
+                script: r#"<?php
+function test_fn() { return 123; }
+class TestClass { public static $val = 999; }
+define('TEST_CONST', 'hello');
+$GLOBALS['test_global'] = 'world';
+echo "req1 ok";
+"#,
+                ..Req::default()
+            },
+        ),
+        (
+            "pvm_req2.php",
+            Req {
+                script: r#"<?php
+$fn = function_exists('test_fn') ? 'yes' : 'no';
+$cls = class_exists('TestClass') ? 'yes' : 'no';
+$cst = defined('TEST_CONST') ? 'yes' : 'no';
+$glb = isset($GLOBALS['test_global']) ? 'yes' : 'no';
+echo "fn:$fn cls:$cls cst:$cst glb:$glb";
+"#,
+                ..Req::default()
+            },
+        ),
+    ]);
+    assert_eq!(responses[0].body, "req1 ok");
+    assert_eq!(responses[1].body, "fn:no cls:no cst:no glb:no");
 }

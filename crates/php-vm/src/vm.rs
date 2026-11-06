@@ -437,6 +437,326 @@ impl std::fmt::Debug for NativeIter {
 /// (`zend_free_extra_named_params`), the extra positional arguments
 /// (`zend_vm_stack_free_extra_args_ex`), `$this` and the closure object
 /// (`OBJ_RELEASE`), and last the state no PHP code can observe.
+use std::cell::UnsafeCell;
+
+/// An inline compiled variable slot in a frame.
+///
+/// Guaranteed zero-overhead `Option<Value>` representation (16 bytes,
+/// identical to `Option<Value>`), providing borrow-free read access
+/// and direct scalar stores.
+#[repr(transparent)]
+pub struct CvSlot(UnsafeCell<Option<Value>>);
+
+impl CvSlot {
+    #[inline(always)]
+    pub fn new(val: Option<Value>) -> Self {
+        Self(UnsafeCell::new(val))
+    }
+
+    #[inline(always)]
+    pub fn get(&self) -> Option<&Value> {
+        unsafe { (*self.0.get()).as_ref() }
+    }
+
+    #[inline(always)]
+    pub fn get_clone(&self) -> Option<Value> {
+        unsafe { (*self.0.get()).clone() }
+    }
+
+    #[inline(always)]
+    pub fn set(&self, val: Option<Value>) -> Option<Value> {
+        unsafe { std::mem::replace(&mut *self.0.get(), val) }
+    }
+
+    #[inline(always)]
+    pub unsafe fn get_mut_unchecked(&self) -> &mut Option<Value> {
+        unsafe { &mut *self.0.get() }
+    }
+
+    #[inline(always)]
+    pub fn as_mut(&mut self) -> &mut Option<Value> {
+        self.0.get_mut()
+    }
+
+    #[inline(always)]
+    pub fn is_none(&self) -> bool {
+        self.get().is_none()
+    }
+
+    #[inline(always)]
+    pub fn is_some(&self) -> bool {
+        self.get().is_some()
+    }
+}
+
+impl Clone for CvSlot {
+    fn clone(&self) -> Self {
+        Self::new(self.get_clone())
+    }
+}
+
+impl std::fmt::Debug for CvSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.get().fmt(f)
+    }
+}
+
+/// Contiguous execution stack for call frames.
+///
+/// Frames live in place on a contiguous vector (`vec[..live]`).
+/// Released frames in `vec[live..]` are retained in place (up to 8) as the pool,
+/// avoiding all frame moves between stack and pool.
+#[derive(Debug, Default)]
+pub struct FrameStack {
+    pub(crate) vec: Vec<Frame>,
+    pub(crate) live: usize,
+}
+
+impl FrameStack {
+    pub fn new() -> Self {
+        Self {
+            vec: Vec::with_capacity(32),
+            live: 0,
+        }
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            vec: Vec::with_capacity(cap),
+            live: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.live
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.live == 0
+    }
+
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[Frame] {
+        &self.vec[..self.live]
+    }
+
+    #[inline(always)]
+    pub fn as_mut_slice(&mut self) -> &mut [Frame] {
+        &mut self.vec[..self.live]
+    }
+
+    #[inline]
+    pub fn push(&mut self, frame: Frame) {
+        if self.live < self.vec.len() {
+            self.vec[self.live] = frame;
+        } else {
+            self.vec.push(frame);
+        }
+        self.live += 1;
+    }
+
+    #[inline]
+    pub fn pop(&mut self) -> Option<Frame> {
+        if self.live == 0 {
+            return None;
+        }
+        self.live -= 1;
+        Some(self.vec.remove(self.live))
+    }
+
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.live {
+            self.live = len;
+            if self.vec.len() > self.live + 8 {
+                self.vec.truncate(self.live + 8);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.live = 0;
+        self.vec.clear();
+    }
+
+    #[inline]
+    pub fn last(&self) -> Option<&Frame> {
+        self.as_slice().last()
+    }
+
+    #[inline]
+    pub fn last_mut(&mut self) -> Option<&mut Frame> {
+        self.as_mut_slice().last_mut()
+    }
+
+    #[inline]
+    pub fn get(&self, index: usize) -> Option<&Frame> {
+        if index < self.live {
+            self.vec.get(index)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut Frame> {
+        if index < self.live {
+            self.vec.get_mut(index)
+        } else {
+            None
+        }
+    }
+
+    /// Reinitializes and advances the callee frame at `self.live` in place.
+    #[inline]
+    pub fn push_in_place(&mut self, code: Rc<OpArray>, kind: FrameKind) -> usize {
+        let idx = self.live;
+        if idx < self.vec.len() {
+            self.vec[idx].reinit_for_call(code, kind);
+        } else {
+            self.vec.push(Frame::new(code, kind));
+        }
+        self.live += 1;
+        idx
+    }
+
+    /// Releases the topmost frame in place (retaining it in `vec[live..]` for pool reuse).
+    #[inline]
+    pub fn release_top(&mut self, empty_code: &Rc<OpArray>) {
+        if self.live > 0 {
+            let last_idx = self.live - 1;
+            self.vec[last_idx].clear_for_pool(empty_code);
+            self.live -= 1;
+            if self.vec.len() > self.live + 8 {
+                self.vec.truncate(self.live + 8);
+            }
+        }
+    }
+
+    pub fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, Frame>
+    where
+        R: std::ops::RangeBounds<usize>,
+    {
+        let start = match range.start_bound() {
+            std::ops::Bound::Included(&s) => s,
+            std::ops::Bound::Excluded(&s) => s + 1,
+            std::ops::Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            std::ops::Bound::Included(&e) => (e + 1).min(self.live),
+            std::ops::Bound::Excluded(&e) => e.min(self.live),
+            std::ops::Bound::Unbounded => self.live,
+        };
+        let count = end.saturating_sub(start);
+        self.live = self.live.saturating_sub(count);
+        self.vec.drain(start..end)
+    }
+
+    pub fn extend<I: IntoIterator<Item = Frame>>(&mut self, iter: I) {
+        for f in iter {
+            self.push(f);
+        }
+    }
+
+    pub fn split_off(&mut self, at: usize) -> Vec<Frame> {
+        if at >= self.live {
+            return Vec::new();
+        }
+        let count = self.live - at;
+        self.live = at;
+        self.vec.drain(at..(at + count)).collect()
+    }
+
+    pub fn splice<R, I>(&mut self, range: R, replace_with: I) -> Vec<Frame>
+    where
+        R: std::ops::RangeBounds<usize>,
+        I: IntoIterator<Item = Frame>,
+    {
+        self.vec.truncate(self.live);
+        let removed: Vec<Frame> = self.vec.splice(range, replace_with).collect();
+        self.live = self.vec.len();
+        removed
+    }
+
+    pub fn insert(&mut self, index: usize, element: Frame) {
+        self.vec.truncate(self.live);
+        self.vec.insert(index, element);
+        self.live += 1;
+    }
+
+    pub fn into_vec(mut self) -> Vec<Frame> {
+        self.vec.truncate(self.live);
+        self.vec
+    }
+}
+
+impl IntoIterator for FrameStack {
+    type Item = Frame;
+    type IntoIter = std::vec::IntoIter<Frame>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_vec().into_iter()
+    }
+}
+
+impl std::ops::Deref for FrameStack {
+    type Target = [Frame];
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl std::ops::DerefMut for FrameStack {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut_slice()
+    }
+}
+
+impl<I: std::slice::SliceIndex<[Frame]>> std::ops::Index<I> for FrameStack {
+    type Output = I::Output;
+    #[inline(always)]
+    fn index(&self, index: I) -> &Self::Output {
+        &self.as_slice()[index]
+    }
+}
+
+impl<I: std::slice::SliceIndex<[Frame]>> std::ops::IndexMut<I> for FrameStack {
+    #[inline(always)]
+    fn index_mut(&mut self, index: I) -> &mut Self::Output {
+        &mut self.as_mut_slice()[index]
+    }
+}
+
+impl From<Vec<Frame>> for FrameStack {
+    fn from(v: Vec<Frame>) -> Self {
+        let live = v.len();
+        Self { vec: v, live }
+    }
+}
+
+impl<'a> IntoIterator for &'a FrameStack {
+    type Item = &'a Frame;
+    type IntoIter = std::slice::Iter<'a, Frame>;
+    #[inline(always)]
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut FrameStack {
+    type Item = &'a mut Frame;
+    type IntoIter = std::slice::IterMut<'a, Frame>;
+    #[inline(always)]
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_mut_slice().iter_mut()
+    }
+}
+
 #[derive(Debug)]
 pub struct Frame {
     /// Temporaries.
@@ -447,7 +767,11 @@ pub struct Frame {
     pub fins: Vec<FinState>,
     /// Pending calls.
     pub calls: Vec<PendingCall>,
-    /// Variables.
+    /// Compiled variables (inline values).
+    pub cvs: Vec<CvSlot>,
+    /// Whether a symbol table has been attached.
+    pub symtab_attached: bool,
+    /// Variables / attached symbol table.
     pub vars: Rc<RefCell<VarStore>>,
     /// Extra named args.
     pub named: Vec<(ZStr, Value)>,
@@ -472,8 +796,6 @@ pub struct Frame {
     pub code: Rc<OpArray>,
     /// Next instruction.
     pub ip: usize,
-    /// CV index → slot index in `vars` (identity when `None`).
-    pub cv_map: Option<Rc<[u32]>>,
     /// Class scope (`self`).
     pub scope: Option<Rc<Class>>,
     /// Called scope (`static`).
@@ -568,6 +890,8 @@ impl Frame {
             iters: Vec::with_capacity(4),
             fins: Vec::with_capacity(2),
             calls: Vec::with_capacity(4),
+            cvs: Vec::with_capacity(8),
+            symtab_attached: false,
             vars: Rc::new(RefCell::new(VarStore {
                 slots: Vec::with_capacity(8),
                 names: VarNames::default(),
@@ -584,7 +908,6 @@ impl Frame {
             ufunc: None,
             code: empty_code,
             ip: 0,
-            cv_map: None,
             scope: None,
             called: None,
             ret: RetTarget::Discard,
@@ -611,6 +934,8 @@ impl Frame {
         clear_frame_buffer(&mut self.iters);
         clear_frame_buffer(&mut self.fins);
         clear_frame_buffer(&mut self.calls);
+        clear_frame_buffer(&mut self.cvs);
+        self.symtab_attached = false;
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
             clear_frame_buffer(&mut vs.slots);
@@ -630,7 +955,6 @@ impl Frame {
         self.ufunc = None;
         self.code = empty_code.clone();
         self.ip = 0;
-        self.cv_map = None;
         self.scope = None;
         self.called = None;
         self.ret = RetTarget::Discard;
@@ -655,28 +979,26 @@ impl Frame {
         refill_with(&mut self.fins, code.num_finally as usize, || FinState::None);
         self.calls.clear();
         self.silence_saved.clear();
-        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
-            let vs = rc_mut.get_mut();
-            vs.slots.clear();
-            // The CV names stay the op array's (`op_array->vars`): no
-            // per-call copy of them.
-            vs.names.share(&code);
-            vs.index = None;
-        } else {
-            let mut vs = VarStore::for_code(&code);
-            vs.slots.clear();
-            self.vars = Rc::new(RefCell::new(vs));
-        }
+        let ncv = code.cv_names.len();
+        refill_with(&mut self.cvs, ncv, || CvSlot::new(None));
+        self.symtab_attached = false;
         self.code = code;
     }
 
     /// Re-initializes a pooled frame for a new user function call, with
     /// every compiled variable undefined.
     pub fn reinit_for_user(&mut self, code: Rc<OpArray>, kind: FrameKind) {
-        self.reinit_for_call(code, kind);
+        self.reinit_for_call(code.clone(), kind);
         let ncv = self.code.cv_names.len();
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
-            refill_with(&mut rc_mut.get_mut().slots, ncv, || None);
+            let vs = rc_mut.get_mut();
+            vs.slots.clear();
+            vs.names.share(&code);
+            refill_with(&mut vs.slots, ncv, || None);
+        } else {
+            let mut vs = VarStore::for_code(&code);
+            refill_with(&mut vs.slots, ncv, || None);
+            self.vars = Rc::new(RefCell::new(vs));
         }
     }
 
@@ -692,15 +1014,22 @@ impl Frame {
         code: Rc<OpArray>,
         kind: FrameKind,
         vars: Rc<RefCell<VarStore>>,
-        cv_map: Option<Rc<[u32]>>,
+        _cv_map: Option<Rc<[u32]>>,
     ) -> Self {
+        let ncv = code.cv_names.len();
+        let mut cvs = Vec::with_capacity(ncv);
+        {
+            let mut st = vars.borrow_mut();
+            for name in &code.cv_names {
+                let slot = st.find_or_add(name.as_bytes()) as usize;
+                let val = st.slots.get(slot).cloned().flatten();
+                cvs.push(CvSlot::new(val));
+            }
+        }
         let ntmps = code.num_tmps as usize;
         let niters = code.num_iters as usize;
         let nfin = code.num_finally as usize;
         Frame {
-            // Empty vectors are built without the generic `from_elem` /
-            // `collect` machinery (builtin frames and most functions need
-            // no iterators or finally slots; this matters in debug builds).
             tmps: if ntmps == 0 {
                 Vec::new()
             } else {
@@ -717,6 +1046,8 @@ impl Frame {
                 vec![FinState::None; nfin]
             },
             calls: Vec::new(),
+            cvs,
+            symtab_attached: kind != FrameKind::Function,
             vars,
             named: Vec::new(),
             args: Vec::new(),
@@ -729,7 +1060,6 @@ impl Frame {
             ufunc: None,
             code,
             ip: 0,
-            cv_map,
             scope: None,
             called: None,
             ret: RetTarget::Discard,
@@ -745,70 +1075,98 @@ impl Frame {
         }
     }
 
-    /// The slot index of compiled variable `cv`.
-    #[inline]
-    pub fn cv_idx(&self, cv: u32) -> usize {
-        match &self.cv_map {
-            None => cv as usize,
-            Some(m) => m[cv as usize] as usize,
+    /// Attaches the symbol table to this frame on demand (`zend_attach_symbol_table`),
+    /// populating it from the current CV slots.
+    pub fn attach_symbol_table(&mut self) {
+        if self.symtab_attached {
+            return;
         }
+        self.symtab_attached = true;
+        let mut st = self.vars.borrow_mut();
+        st.names.share(&self.code);
+        for (i, name) in self.code.cv_names.iter().enumerate() {
+            let slot = st.find_or_add(name.as_bytes()) as usize;
+            if slot < st.slots.len() {
+                if let Some(val) = self.cvs.get(i).and_then(CvSlot::get) {
+                    st.slots[slot] = Some(val.clone());
+                }
+            }
+        }
+    }
+
+    /// Synchronizes CV slots from the attached symbol table (`zend_detach_symbol_table`).
+    pub fn sync_from_symbol_table(&mut self) {
+        if !self.symtab_attached {
+            return;
+        }
+        let mut st = self.vars.borrow_mut();
+        for (i, name) in self.code.cv_names.iter().enumerate() {
+            if let Some(slot) = st.find(name.as_bytes()) {
+                if let Some(val) = st.slots.get(slot as usize).cloned().flatten() {
+                    if let Some(cv) = self.cvs.get_mut(i) {
+                        cv.set(Some(val));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Synchronizes all CV slots into the attached symbol table.
+    pub fn sync_cvs_to_symtab(&self) {
+        if !self.symtab_attached {
+            return;
+        }
+        let mut st = self.vars.borrow_mut();
+        for (i, name) in self.code.cv_names.iter().enumerate() {
+            if let Some(slot) = st.find(name.as_bytes()) {
+                let slot = slot as usize;
+                if slot < st.slots.len() {
+                    let val = self.cvs.get(i).and_then(CvSlot::get_clone);
+                    st.slots[slot] = val;
+                }
+            }
+        }
+    }
+
+    /// Synchronizes a single modified CV slot into the attached symbol table.
+    #[inline]
+    pub fn sync_cv_to_symtab(&self, cv: u32, v: &Value) {
+        if self.symtab_attached {
+            if let Some(name) = self.code.cv_names.get(cv as usize) {
+                let mut st = self.vars.borrow_mut();
+                if let Some(idx) = st.find(name.as_bytes()) {
+                    st.slots[idx as usize] = Some(v.clone());
+                }
+            }
+        }
+    }
+
+    /// The slot index of compiled variable `cv`.
+    #[inline(always)]
+    pub fn cv_idx(&self, cv: u32) -> usize {
+        cv as usize
     }
 
     /// Looks at compiled variable `cv` in place (php-src's `EX_VAR(cv)`):
     /// `read` gets the slot's value (`None` = undefined), and what it
     /// returns cannot borrow from it.
-    ///
-    /// Unlike `self.vars.borrow()`, no borrow guard is taken: the borrow
-    /// flag is only checked, never written, so the hot reads (operand
-    /// peeks, `read_cv`) do no read-modify-write on the store and the
-    /// compiler can keep the frame in registers across them. `read` is a
-    /// plain function (a closure without captures), so it can reach
-    /// neither the VM nor this store: it can only inspect or clone the
-    /// value, which runs no PHP code. (It must not dig the store out of
-    /// global state either; crate-private for that reason.)
-    ///
-    /// # Panics
-    /// Like `RefCell::borrow`, if the store is mutably borrowed.
     #[inline(always)]
-    #[allow(clippy::inline_always)] // `read` must become a direct (inlined) call
+    #[allow(clippy::inline_always)]
     pub(crate) fn peek_cv<R>(&self, cv: u32, read: fn(Option<&Value>) -> R) -> R {
-        let idx = self.cv_idx(cv);
-        // SAFETY: `try_borrow_unguarded` fails while a mutable borrow of the
-        // store is active, so no `&mut VarStore` exists now. The shared
-        // reference is only handed to `read`, a non-capturing function that
-        // cannot name this store (it receives one slot and nothing else),
-        // and `R` cannot borrow from it (the reference's lifetime is
-        // higher-ranked), so no mutable borrow can begin while it is alive.
-        let Ok(vs) = (unsafe { self.vars.try_borrow_unguarded() }) else {
-            store_mutably_borrowed()
-        };
-        read(vs.slots.get(idx).and_then(Option::as_ref))
+        let idx = cv as usize;
+        read(self.cvs.get(idx).and_then(CvSlot::get))
     }
 
     /// `$cv[key]` looked up in place: the element of the array compiled
     /// variable `cv` holds (directly or through a reference), dereferenced
     /// and cloned; `None` when the variable is undefined, holds no array or
-    /// the array has no such key. The keyed form of [`Frame::peek_cv`]
-    /// (whose `read` cannot capture the key); the lookup and the clone run
-    /// no PHP code.
-    ///
-    /// # Panics
-    /// Like `RefCell::borrow`, if the store is mutably borrowed.
+    /// the array has no such key.
     #[inline]
     pub(crate) fn peek_cv_dim(&self, cv: u32, key: &ArrayKey) -> Option<Value> {
-        let idx = self.cv_idx(cv);
-        // SAFETY: as in `peek_cv`: `try_borrow_unguarded` fails while a
-        // mutable borrow of the store is active, so no `&mut VarStore`
-        // exists now, and the shared reference is used only here, to look
-        // up and clone one element (a refcount bump, or the clone of a
-        // reference's inner value: no PHP code, no access to the store),
-        // and is gone before this function returns.
-        let Ok(vs) = (unsafe { self.vars.try_borrow_unguarded() }) else {
-            store_mutably_borrowed()
-        };
-        match vs.slots.get(idx)? {
-            Some(Value::Array(a)) => a.get(key).map(Value::deref),
-            Some(Value::Reference(r)) => match &*r.try_borrow()? {
+        let idx = cv as usize;
+        match self.cvs.get(idx).and_then(CvSlot::get)? {
+            Value::Array(a) => a.get(key).map(Value::deref),
+            Value::Reference(r) => match &*r.try_borrow()? {
                 Value::Array(a) => a.get(key).map(Value::deref),
                 _ => None,
             },
@@ -856,7 +1214,7 @@ pub struct LastError {
 /// The PHP virtual machine (one request).
 pub struct Vm {
     /// Call frames.
-    pub frames: Vec<Frame>,
+    pub frames: FrameStack,
     /// Functions by lower-case name (`EG(function_table)`). A [`NameMap`],
     /// like php-src's tables hashed with the unseeded
     /// `zend_inline_hash_func`; nothing depends on its iteration order
@@ -1141,38 +1499,16 @@ mod tests {
     #[test]
     fn peek_cv_reads_slots_in_place_without_holding_a_borrow() {
         let f = frame_with(&["a", "b"]);
-        f.vars.borrow_mut().slots[0] = Some(Value::Int(7));
+        f.cvs[0].set(Some(Value::Int(7)));
         assert_eq!(f.peek_cv(0, as_int), Some(7));
         // Undefined.
         assert!(f.peek_cv(1, |s| s.is_none()));
-        // No guard outlives the peek: the store can be borrowed mutably
-        // right after it.
-        assert!(f.vars.try_borrow_mut().is_ok());
-        // Shared borrows elsewhere do not stop a peek.
-        let shared = f.vars.borrow();
-        assert_eq!(f.peek_cv(0, as_int), Some(7));
-        drop(shared);
-    }
-
-    #[test]
-    fn peek_cv_follows_the_cv_map_of_a_shared_store() {
-        let code = Rc::new(OpArray {
-            cv_names: vec![ZStr::from("x")],
-            ..OpArray::default()
-        });
-        let vars = Rc::new(RefCell::new(VarStore::with_names(&[
-            ZStr::from("argv"),
-            ZStr::from("x"),
-        ])));
-        vars.borrow_mut().slots[1] = Some(Value::Int(3));
-        let f = Frame::with_vars(code, FrameKind::Main, vars, Some(Rc::from(vec![1u32])));
-        assert_eq!(f.peek_cv(0, as_int), Some(3));
     }
 
     #[test]
     fn peek_cv_clones_share_the_string() {
         let f = frame_with(&["s"]);
-        f.vars.borrow_mut().slots[0] = Some(Value::Str(ZStr::from("abc")));
+        f.cvs[0].set(Some(Value::Str(ZStr::from("abc"))));
         let v = f.peek_cv(0, |slot: Option<&Value>| slot.cloned());
         assert!(matches!(&v, Some(Value::Str(s)) if s.as_bytes() == b"abc"));
         // The slot still holds its value.
@@ -1180,11 +1516,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "already mutably borrowed")]
-    fn peek_cv_panics_like_borrow_while_mutably_borrowed() {
-        let f = frame_with(&["a"]);
-        let _guard = f.vars.borrow_mut();
-        let _ = f.peek_cv(0, |s| s.is_some());
+    fn frame_stack_reuses_frames_in_place() {
+        let code = Rc::new(OpArray::default());
+        let mut stack = super::FrameStack::new();
+        let idx0 = stack.push_in_place(code.clone(), FrameKind::Function);
+        assert_eq!(idx0, 0);
+        assert_eq!(stack.len(), 1);
+        stack.release_top(&code);
+        assert_eq!(stack.len(), 0);
+        let idx1 = stack.push_in_place(code.clone(), FrameKind::Function);
+        assert_eq!(idx1, 0);
+        assert_eq!(stack.len(), 1);
     }
 
     #[test]
