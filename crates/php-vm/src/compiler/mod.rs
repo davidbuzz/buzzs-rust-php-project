@@ -771,6 +771,7 @@ impl Compiler {
             fcall_cache: std::cell::RefCell::default(),
             class_cache: std::cell::RefCell::default(),
             rt_cache: crate::rtcache::RuntimeCache::default(),
+            prop_cache: std::cell::RefCell::default(),
         })
     }
 

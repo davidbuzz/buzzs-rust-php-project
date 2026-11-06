@@ -704,6 +704,42 @@ pub struct OpArray {
     /// static method lookups (php-src's `run_time_cache`; see
     /// [`crate::rtcache`]).
     pub rt_cache: crate::rtcache::RuntimeCache,
+    /// Per-place cache of property lookups, indexed by [`PlaceId`]
+    /// (php-src's `CACHE_ADDR` slot of `FETCH_OBJ_*`/`ASSIGN_OBJ` & co.,
+    /// filled by `zend_fetch_property_address`): sized on first use.
+    pub prop_cache: RefCell<Vec<PropCacheEntry>>,
+}
+
+/// [`PropCacheEntry::base`] of a `$this->name` place.
+pub const PROP_CACHE_THIS: u32 = u32::MAX;
+
+/// An [`OpArray::prop_cache`] entry: the property the first segment of a
+/// property place (`$cv->name`, `$this->name`, literal name) resolved to
+/// for one class and calling scope, like php-src's cached
+/// `(ce, offset, prop_info)` triple: a declared slot or a dynamic
+/// property. Classes are compared by address and held weakly, which pins
+/// the address without keeping the class alive (a method's op array
+/// caching its own class would otherwise be an `Rc` cycle).
+#[derive(Debug, Default, Clone)]
+pub struct PropCacheEntry {
+    /// The object's class (`Weak::new()` in an unfilled entry).
+    pub class: std::rc::Weak<crate::class::Class>,
+    /// The class scope the lookup ran in (`None`: no class scope).
+    pub scope: Option<std::rc::Weak<crate::class::Class>>,
+    /// The place's base: a CV, or [`PROP_CACHE_THIS`].
+    pub base: u32,
+    /// The declared property's slot.
+    pub slot: u32,
+    /// The literal index of the property name.
+    pub lit: u32,
+    /// Builtin type bits (`types::mask`) a written value may have to be
+    /// stored without coercion; `u32::MAX` for an untyped property.
+    pub accept: u32,
+    /// The lower-case class a typed property names (exactly one, not
+    /// `self`/`parent`/`static`): instances of it are stored as-is too.
+    pub class_lc: Option<ZStr>,
+    /// `PC_*` bits of `place::propcache`: which fast paths apply.
+    pub flags: u8,
 }
 
 /// An [`OpArray::fcall_cache`] entry. User functions are held weakly: the
