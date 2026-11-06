@@ -97,10 +97,10 @@ fn with_names_owns_its_copy() {
 #[test]
 fn pooled_frames_share_names_on_reinit_and_drop_them_on_clear() {
     let vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
-    let code = code(&["p", "q"]);
+    let first = code(&["p", "q"]);
     let mut frame = Frame::new_pooled(vm.empty_code.clone());
     assert!(frame.vars.borrow().names.is_empty());
-    frame.reinit_for_user(code.clone(), FrameKind::Function);
+    frame.reinit_for_user(first.clone(), FrameKind::Function);
     {
         let vars = frame.vars.borrow();
         assert_eq!(vars.slots.len(), 2);
@@ -109,9 +109,9 @@ fn pooled_frames_share_names_on_reinit_and_drop_them_on_clear() {
         assert_eq!(vars.names.capacity(), 0);
     }
     // This handle, the frame's `code` and the store.
-    assert_eq!(Rc::strong_count(&code), 3);
+    assert_eq!(Rc::strong_count(&first), 3);
     assert_eq!(frame.vars.borrow_mut().find_or_add(b"dyn"), 2);
-    assert_eq!(Rc::strong_count(&code), 2);
+    assert_eq!(Rc::strong_count(&first), 2);
     frame.clear_for_pool(&vm.empty_code);
     {
         let vars = frame.vars.borrow();
@@ -121,7 +121,7 @@ fn pooled_frames_share_names_on_reinit_and_drop_them_on_clear() {
         assert!(vars.names.capacity() >= 1);
     }
     // Nothing in the pool holds the op array.
-    assert_eq!(Rc::strong_count(&code), 1);
+    assert_eq!(Rc::strong_count(&first), 1);
     // Reused for another function: that one's names, nothing left over.
     let other = code(&["z"]);
     frame.reinit_for_user(other.clone(), FrameKind::Function);
