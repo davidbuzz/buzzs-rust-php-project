@@ -99,6 +99,9 @@ struct MemberSlot {
 /// What a [`MemberSlot`] caches.
 #[derive(Debug)]
 enum Target {
+    /// The value of a class constant whose refcount is not observable
+    /// (see [`immutable_value`]): read without touching the class.
+    Value(Value),
     /// Index into the class's `consts` / `static_props`.
     Index(usize),
     /// The resolved method of a static call (a static method, or an
@@ -385,12 +388,31 @@ impl Vm {
     #[inline]
     fn class_const_hit(&self, spec: &ClassSpec, name: u32) -> Option<Value> {
         let cache = self.frame().code.rt_cache.class_consts.borrow();
-        let (cls, e) = self.rt_find(spec, cache.get(name as usize)?)?;
-        let Target::Index(idx) = e.target else {
-            return None;
-        };
-        let v = cls.consts.get(idx)?.value.borrow().clone();
-        v
+        let entries = cache.get(name as usize)?;
+        // `A::X` of a public scalar constant: php-src's `CACHED_PTR` fast
+        // path, the class itself is not needed.
+        if let ClassSpec::Named(l) = spec {
+            if let Some(MemberSlot {
+                class,
+                access: Access::Public,
+                target: Target::Value(v),
+                ..
+            }) = entries.iter().find(|e| e.class_lit == *l)
+            {
+                if class.strong_count() > 0 {
+                    return Some(v.clone());
+                }
+            }
+        }
+        let (cls, e) = self.rt_find(spec, entries)?;
+        match &e.target {
+            Target::Value(v) => Some(v.clone()),
+            Target::Index(idx) => {
+                let v = cls.consts.get(*idx)?.value.borrow().clone();
+                v
+            }
+            Target::Method(_) => None,
+        }
     }
 
     /// Fills the slot of a `FetchClassConst` that just succeeded: an
@@ -412,13 +434,17 @@ impl Vm {
             return;
         };
         let c = &cls.consts[idx];
-        if c.value.borrow().is_none()
-            || c.attributes
-                .iter()
-                .any(|a| a.name.eq_ignore_ascii_case(b"Deprecated"))
+        if c.attributes
+            .iter()
+            .any(|a| a.name.eq_ignore_ascii_case(b"Deprecated"))
         {
             return;
         }
+        let target = match c.value.borrow().as_ref() {
+            None => return,
+            Some(v) if immutable_value(v) => Target::Value(v.clone()),
+            Some(_) => Target::Index(idx),
+        };
         let Some(access) = self.rt_access(c.flags & flags::VISIBILITY == flags::PUBLIC) else {
             return;
         };
@@ -430,7 +456,7 @@ impl Vm {
             class_lit,
             class: Rc::downgrade(&cls),
             access,
-            target: Target::Index(idx),
+            target,
         };
         put_member(
             &self.frame().code.rt_cache.class_consts,
