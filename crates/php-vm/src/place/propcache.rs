@@ -84,12 +84,14 @@ enum Probe<T> {
     Miss,
 }
 
-/// The offset of an element write the cache performs.
-enum DimTarget {
+/// What follows the cached head of a two-segment place.
+enum Nested {
     /// `[$k]` (see [`simple_key`]).
-    Key(ArrayKey),
+    Dim(ArrayKey),
     /// `[]`.
     Append,
+    /// `->name`: the literal index of the name.
+    Prop(u32),
 }
 
 /// The plain-data part of a cache entry, copied out of the cache so that
@@ -703,19 +705,6 @@ fn simple_key(v: &Value) -> Option<ArrayKey> {
     }
 }
 
-/// The read of a matching entry for a later segment (see
-/// [`Vm::prop_cache_read_tail`]).
-#[inline(always)]
-fn read_tail(key: &Key, data: &ObjectData, code: &OpArray) -> Option<Value> {
-    if key.flags & PC_READ == 0 || data.lazy.borrow().is_some() {
-        return None;
-    }
-    match with_value(key, data, code, |value| Probe::Hit(deref_clone(value))) {
-        Probe::Hit(value) => Some(value),
-        Probe::Slow | Probe::Miss => None,
-    }
-}
-
 impl Vm {
     /// Runs `access` on the matching cache entry of place `pid` (its
     /// [`Key`]), the object its base holds and that object's data. `need`
@@ -901,23 +890,51 @@ impl Vm {
         }
     }
 
-    /// The key of the `[$k]` segment of a `$base->name[$k]` place `pid`
-    /// when reading the offset can neither warn nor convert noisily: a
-    /// literal or a compiled variable holding an int or a string, also
-    /// through a reference (see [`simple_key`]).
+    /// The second segment of a two-segment place `pid` with a cached head,
+    /// when the cache can perform it: an offset whose reading can neither
+    /// warn nor convert noisily (a literal or a compiled variable holding an
+    /// int or a string, also through a reference: see [`simple_key`]), `[]`,
+    /// or a literal property name.
     #[inline]
-    fn simple_dim_key(&self, pid: PlaceId) -> Option<ArrayKey> {
+    fn nested(&self, pid: PlaceId) -> Option<Nested> {
         let frame = self.frame();
         let code: &OpArray = &frame.code;
-        let place = code.places.get(pid as usize)?;
-        let [Seg::Prop(Operand::Lit(_)), Seg::Dim(op)] = place.segs.as_slice() else {
-            return None;
-        };
-        match *op {
-            Operand::Lit(lit) => code.literals.get(lit as usize).and_then(simple_key),
-            Operand::Cv(cv) => frame.peek_cv(cv, |v| v.and_then(simple_key)),
+        match code.places.get(pid as usize)?.segs.as_slice() {
+            [Seg::Prop(Operand::Lit(_)), Seg::Dim(op)] => match *op {
+                Operand::Lit(lit) => code.literals.get(lit as usize).and_then(simple_key),
+                Operand::Cv(cv) => frame.peek_cv(cv, |v| v.and_then(simple_key)),
+                _ => None,
+            }
+            .map(Nested::Dim),
+            [Seg::Prop(Operand::Lit(_)), Seg::Append] => Some(Nested::Append),
+            [Seg::Prop(Operand::Lit(_)), Seg::Prop(Operand::Lit(lit))] => Some(Nested::Prop(*lit)),
             _ => None,
         }
+    }
+
+    /// The offset key of a `$base->name[$k]` place `pid` (see
+    /// [`Vm::nested`]).
+    #[inline]
+    fn simple_dim_key(&self, pid: PlaceId) -> Option<ArrayKey> {
+        match self.nested(pid)? {
+            Nested::Dim(key) => Some(key),
+            Nested::Append | Nested::Prop(_) => None,
+        }
+    }
+
+    /// The object the cached head of place `pid` holds directly: what
+    /// `ZEND_FETCH_OBJ_W`/`_RW`/`_IS` hand the next segment's opcode when
+    /// no hook, native handler or lazy object is involved (a readonly or
+    /// set-restricted property holding an object hands it out too:
+    /// `zend_std_read_property` "might not actually modify object").
+    #[inline]
+    fn head_object(&self, pid: PlaceId) -> Option<Obj> {
+        self.probe_fill(pid, PC_READ, |key, _, data, code| {
+            with_value(key, data, code, |value| match value {
+                Value::Object(obj) => Probe::Hit(obj.clone()),
+                _ => Probe::Slow,
+            })
+        })
     }
 
     /// `ZEND_FETCH_OBJ_R`/`_IS` of the first segment of place `pid` (see
@@ -948,25 +965,20 @@ impl Vm {
         })
     }
 
-    /// `ZEND_FETCH_OBJ_R`/`_IS` of a later `->name` segment of place `pid`
-    /// on `obj` (`$list[$i]->p`, `f()->p`, `$this->o->p`): php-src gives
-    /// every such opline its own cache slot, here the last segment of a
-    /// place has one (see [`OpArray::prop_cache`]); `name` is the
-    /// segment's name operand. `None` leaves the read to `read_property`.
-    #[inline]
-    pub(crate) fn prop_cache_read_tail(
-        &mut self,
+    /// Runs `access` on the entry of place `pid`'s last segment, named by
+    /// literal `lit`, for `obj` (an object the place's walk reached): the
+    /// cache slot php-src gives every `FETCH_OBJ_*`/`ASSIGN_OBJ` & co.
+    /// opline, filled on a miss. `need` are the `PC_*` bits the access
+    /// requires; `access` also gets the entry's index.
+    #[inline(always)]
+    fn tail_probe<T>(
+        &self,
         pid: PlaceId,
         obj: &Obj,
-        name: Operand,
-        mode: FetchMode,
-    ) -> Option<Value> {
-        let Operand::Lit(lit) = name else {
-            return None;
-        };
-        if mode == FetchMode::List {
-            return None;
-        }
+        lit: u32,
+        need: u8,
+        access: impl FnOnce(&Key, &ObjectData, &OpArray, usize) -> Probe<T>,
+    ) -> Option<T> {
         let frame = self.frame();
         if frame.kind == FrameKind::Builtin {
             return None;
@@ -974,20 +986,24 @@ impl Vm {
         let code: &OpArray = &frame.code;
         let idx = tail_index(code, pid)?;
         let data = object::data(obj);
-        match Key::of(code, idx) {
-            Some(key) if key.lit == lit && key.matches(data, scope_addr(frame)) => {
-                read_tail(&key, data, code)
-            }
-            _ => self.prop_cache_fill_tail(pid, idx, obj, lit),
+        let key = match Key::of(code, idx) {
+            Some(key) if key.lit == lit && key.matches(data, scope_addr(frame)) => key,
+            _ => self.prop_cache_fill_tail(pid, idx, obj, lit)?,
+        };
+        if key.flags & need != need || data.lazy.borrow().is_some() {
+            return None;
+        }
+        match access(&key, data, code, idx) {
+            Probe::Hit(res) => Some(res),
+            Probe::Slow | Probe::Miss => None,
         }
     }
 
     /// Fills entry `idx`, the one of the last segment of place `pid`, for
-    /// `obj` when `lit` names that segment, then reads it like
-    /// [`Vm::prop_cache_read_tail`].
+    /// `obj` when `lit` names that segment; its key, or `None`.
     #[cold]
     #[inline(never)]
-    fn prop_cache_fill_tail(&self, pid: PlaceId, idx: usize, obj: &Obj, lit: u32) -> Option<Value> {
+    fn prop_cache_fill_tail(&self, pid: PlaceId, idx: usize, obj: &Obj, lit: u32) -> Option<Key> {
         let frame = self.frame();
         let code: &OpArray = &frame.code;
         let place = code.places.get(pid as usize)?;
@@ -1006,10 +1022,30 @@ impl Vm {
         let key = Key::from_entry(&entry);
         let places = code.places.len();
         let len = if idx < places { places } else { 2 * places };
-        if !store_entry(code, idx, len, entry) {
+        store_entry(code, idx, len, entry).then_some(key)
+    }
+
+    /// `ZEND_FETCH_OBJ_R`/`_IS` of a later `->name` segment of place `pid`
+    /// on `obj` (`$list[$i]->p`, `f()->p`, `$this->o->p`) with the last
+    /// segment's entry (see [`OpArray::prop_cache`]); `name` is the
+    /// segment's name operand. `None` leaves the read to `read_property`.
+    #[inline]
+    pub(crate) fn prop_cache_read_tail(
+        &mut self,
+        pid: PlaceId,
+        obj: &Obj,
+        name: Operand,
+        mode: FetchMode,
+    ) -> Option<Value> {
+        let Operand::Lit(lit) = name else {
+            return None;
+        };
+        if mode == FetchMode::List {
             return None;
         }
-        read_tail(&key, object::data(obj), code)
+        self.tail_probe(pid, obj, lit, PC_READ, |key, data, code, _| {
+            with_value(key, data, code, |value| Probe::Hit(deref_clone(value)))
+        })
     }
 
     /// `FETCH_OBJ_W` of the first segment of place `pid` for a write walk
@@ -1090,50 +1126,60 @@ impl Vm {
         }
     }
 
-    /// The offset of a `$base->name[$k] = v` / `$base->name[] = v` place
-    /// `pid` the cache may write: [`Vm::simple_dim_key`]'s, or the append.
-    #[inline]
-    fn dim_target(&self, pid: PlaceId) -> Option<DimTarget> {
-        let code: &OpArray = &self.frame().code;
-        match code.places.get(pid as usize)?.segs.as_slice() {
-            [Seg::Prop(Operand::Lit(_)), Seg::Append] => Some(DimTarget::Append),
-            _ => self.simple_dim_key(pid).map(DimTarget::Key),
-        }
-    }
-
-    /// `$base->name[$k] = v` and `$base->name[] = v` of place `pid`
-    /// (`ZEND_FETCH_OBJ_W` + `ZEND_ASSIGN_DIM`) on a cached property holding
-    /// an array: the (separated) array's element is replaced or added
-    /// (`zend_hash_next_index_insert` for `[]`), and `v` returned; `Err`
-    /// hands `v` back for the generic walk (an element holding a reference,
-    /// a property not holding an array, an offset of another type, a full
-    /// array's "Cannot add element").
-    pub(crate) fn prop_cache_dim_assign(&mut self, pid: PlaceId, v: Value) -> Result<Value, Value> {
+    /// The assignment of a two-segment place `pid` with a cached head
+    /// (`ZEND_FETCH_OBJ_W`, then `ZEND_ASSIGN_DIM` or `ZEND_ASSIGN_OBJ`):
+    /// `$base->a[$k] = v` and `$base->a[] = v` on a property holding an
+    /// array (the separated array's element is replaced or added,
+    /// `zend_hash_next_index_insert` for `[]`), `$base->a->b = v` on the
+    /// object the head holds (see [`Vm::prop_cache_assign`]). Returns `v`,
+    /// or hands it back (`Err`) for the generic walk: an element holding a
+    /// reference, a property not holding an array or object, an offset of
+    /// another type, a full array's "Cannot add element".
+    pub(crate) fn prop_cache_nested_assign(
+        &mut self,
+        pid: PlaceId,
+        v: Value,
+    ) -> Result<Value, Value> {
         if matches!(v, Value::Reference(_)) {
             return Err(v);
         }
-        let Some(target) = self.dim_target(pid) else {
-            return Err(v);
-        };
-        let old = self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
-            with_array_mut(key, data, |arr| {
-                let table = arr.make_mut();
-                let DimTarget::Key(dim) = &target else {
-                    return match table.push(v.clone()) {
-                        Ok(_) => Probe::Hit(None),
-                        Err(_) => Probe::Slow,
-                    };
+        let old = match self.nested(pid) {
+            Some(Nested::Prop(lit)) => {
+                let Some(obj) = self.head_object(pid) else {
+                    return Err(v);
                 };
-                match table.get_mut(dim) {
-                    Some(Value::Reference(_)) => Probe::Slow,
-                    Some(elem) => Probe::Hit(Some(std::mem::replace(elem, v.clone()))),
-                    None => {
-                        table.insert(dim.clone(), v.clone());
-                        Probe::Hit(None)
+                self.tail_probe(pid, &obj, lit, PC_WRITE, |key, data, code, idx| {
+                    if !accepts(key.accept, &v) && !class_accepts(code, idx, key, &v) {
+                        return Probe::Slow;
                     }
-                }
-            })
-        });
+                    store_value(key, data, code, &v)
+                })
+            }
+            Some(target) => self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
+                with_array_mut(key, data, |arr| {
+                    let table = arr.make_mut();
+                    let dim = match &target {
+                        Nested::Dim(dim) => dim,
+                        Nested::Append => {
+                            return match table.push(v.clone()) {
+                                Ok(_) => Probe::Hit(None),
+                                Err(_) => Probe::Slow,
+                            };
+                        }
+                        Nested::Prop(_) => return Probe::Slow,
+                    };
+                    match table.get_mut(dim) {
+                        Some(Value::Reference(_)) => Probe::Slow,
+                        Some(elem) => Probe::Hit(Some(std::mem::replace(elem, v.clone()))),
+                        None => {
+                            table.insert(dim.clone(), v.clone());
+                            Probe::Hit(None)
+                        }
+                    }
+                })
+            }),
+            None => None,
+        };
         match old {
             Some(old) => {
                 drop(old);
@@ -1155,27 +1201,39 @@ impl Vm {
         })
     }
 
-    /// `$base->name[$k]++` & co. of place `pid` (`ZEND_FETCH_OBJ_RW` +
-    /// `ZEND_FETCH_DIM_RW` + `ZEND_PRE/POST_INC/DEC`) on an existing int
-    /// (without overflow) or float element of a cached array property,
-    /// updated in place: the result, or `None` for the generic walk.
-    pub(crate) fn prop_cache_dim_incdec(
+    /// `++`/`--` of a two-segment place `pid` with a cached head:
+    /// `$base->a[$k]++` (`ZEND_FETCH_DIM_RW` + `ZEND_PRE/POST_INC`) on an
+    /// existing int (without overflow) or float element of an array
+    /// property, `$base->a->b++` (`ZEND_PRE/POST_INC_OBJ`) on the object
+    /// the head holds; updated in place. The result, or `None` for the
+    /// generic walk.
+    pub(crate) fn prop_cache_nested_incdec(
         &mut self,
         pid: PlaceId,
         kind: IncDecKind,
     ) -> Option<Value> {
-        let dim = self.simple_dim_key(pid)?;
-        self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
-            with_array_mut(key, data, |arr| {
-                if !matches!(arr.get(&dim), Some(Value::Int(_) | Value::Float(_))) {
-                    return Probe::Slow;
-                }
-                match arr.make_mut().get_mut(&dim) {
-                    Some(elem) => incdec_in_place(elem, kind),
-                    None => Probe::Slow,
-                }
-            })
-        })
+        match self.nested(pid)? {
+            Nested::Dim(dim) => self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
+                with_array_mut(key, data, |arr| {
+                    if !matches!(arr.get(&dim), Some(Value::Int(_) | Value::Float(_))) {
+                        return Probe::Slow;
+                    }
+                    match arr.make_mut().get_mut(&dim) {
+                        Some(elem) => incdec_in_place(elem, kind),
+                        None => Probe::Slow,
+                    }
+                })
+            }),
+            Nested::Prop(lit) => {
+                let obj = self.head_object(pid)?;
+                self.tail_probe(pid, &obj, lit, PC_READ | PC_WRITE, |key, data, code, _| {
+                    with_value_mut(key, data, code, |value| {
+                        deref_mut(value, |num| incdec_in_place(num, kind))
+                    })
+                })
+            }
+            Nested::Append => None,
+        }
     }
 
     /// `ZEND_ASSIGN_OBJ_OP` of cacheable place `pid` with a numeric
@@ -1241,13 +1299,15 @@ impl Vm {
         self.write_property(&obj, &name, new).map(Some)
     }
 
-    /// `$base->name[$k] op= v` of place `pid` (`ZEND_FETCH_OBJ_RW` +
-    /// `ZEND_ASSIGN_DIM_OP`) on an existing element of a cached array
-    /// property, operated in place (`zend_binary_op(var_ptr, var_ptr,
-    /// value)`): an int or float element with a [`numeric_op`] operator
-    /// and a numeric right-hand side, or `.=` of a string or int onto a
-    /// string element. The result, or `None` for the generic walk.
-    pub(crate) fn prop_cache_dim_assign_op(
+    /// A compound assignment of a two-segment place `pid` with a cached
+    /// head, operated in place (`zend_binary_op(var_ptr, var_ptr, value)`):
+    /// a [`numeric_op`] operator with a numeric right-hand side on a number,
+    /// or `.=` of a string or int onto a string. `$base->a[$k] op= v`
+    /// (`ZEND_ASSIGN_DIM_OP`) on an existing element of an array property,
+    /// `$base->a->b op= v` (`ZEND_ASSIGN_OBJ_OP`) on the object the head
+    /// holds (see [`Vm::prop_cache_assign_op`], [`Vm::prop_cache_concat`]).
+    /// The result, or `None` for the generic walk.
+    pub(crate) fn prop_cache_nested_assign_op(
         &mut self,
         pid: PlaceId,
         op: BinaryOp,
@@ -1262,32 +1322,49 @@ impl Vm {
         if !applies {
             return None;
         }
-        let dim = self.simple_dim_key(pid)?;
-        self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
-            with_array_mut(key, data, |arr| {
-                let fits = match arr.get(&dim) {
-                    Some(Value::Str(_)) => concat,
-                    Some(Value::Int(_) | Value::Float(_)) => !concat,
-                    _ => false,
-                };
-                if !fits {
+        // `zend_binary_op` on the operand in place.
+        let operate = |cur: &mut Value, accept: u32| {
+            if concat {
+                if accept != u32::MAX && accept & mask::STRING == 0 {
                     return Probe::Slow;
                 }
-                let Some(elem) = arr.make_mut().get_mut(&dim) else {
-                    return Probe::Slow;
-                };
-                if concat {
-                    return append_in_place(elem, rhs);
+                return append_in_place(cur, rhs);
+            }
+            match numeric_op(op, cur, rhs) {
+                Some(new) if accepts(accept, &new) => {
+                    *cur = new.clone();
+                    Probe::Hit(new)
                 }
-                match numeric_op(op, elem, rhs) {
-                    Some(new) => {
-                        *elem = new.clone();
-                        Probe::Hit(new)
+                _ => Probe::Slow,
+            }
+        };
+        match self.nested(pid)? {
+            Nested::Dim(dim) => self.probe_fill(pid, PC_READ | PC_WRITE, |key, _, data, _| {
+                with_array_mut(key, data, |arr| {
+                    let fits = match arr.get(&dim) {
+                        Some(Value::Str(_)) => concat,
+                        Some(Value::Int(_) | Value::Float(_)) => !concat,
+                        _ => false,
+                    };
+                    if !fits {
+                        return Probe::Slow;
                     }
-                    None => Probe::Slow,
-                }
-            })
-        })
+                    match arr.make_mut().get_mut(&dim) {
+                        Some(elem) => operate(elem, u32::MAX),
+                        None => Probe::Slow,
+                    }
+                })
+            }),
+            Nested::Prop(lit) => {
+                let obj = self.head_object(pid)?;
+                self.tail_probe(pid, &obj, lit, PC_READ | PC_WRITE, |key, data, code, _| {
+                    with_value_mut(key, data, code, |value| {
+                        deref_mut(value, |cur| operate(cur, key.accept))
+                    })
+                })
+            }
+            Nested::Append => None,
+        }
     }
 
     /// `ZEND_ASSIGN_OBJ_OP` with `.=` of cacheable place `pid` on a property
@@ -1347,30 +1424,40 @@ impl Vm {
         self.finish_isset(found)
     }
 
-    /// `isset($base->name[$k])` / `empty(...)` of place `pid`
-    /// (`ZEND_FETCH_OBJ_IS` + `ZEND_ISSET_ISEMPTY_DIM_OBJ`) on a cached
-    /// property holding an array, or `Ok(None)` for the generic walk.
+    /// `isset()`/`empty()` of a two-segment place `pid` with a cached head
+    /// (`ZEND_FETCH_OBJ_IS`, then `ZEND_ISSET_ISEMPTY_DIM_OBJ` or
+    /// `_PROP_OBJ`): `$base->a[$k]` on a property holding an array,
+    /// `$base->a->b` on the object the head holds; `Ok(None)` for the
+    /// generic walk.
     ///
     /// # Errors
-    /// The conversion of the element to bool for `empty()`.
-    pub(crate) fn prop_cache_isset_dim(
+    /// The conversion of the value to bool for `empty()`.
+    pub(crate) fn prop_cache_nested_isset(
         &mut self,
         pid: PlaceId,
         empty: bool,
     ) -> VmResult<Option<bool>> {
-        let Some(dim) = self.simple_dim_key(pid) else {
-            return Ok(None);
-        };
-        let found = self.probe_fill(pid, PC_READ, |key, _, data, code| {
-            with_value(key, data, code, |value| {
-                with_array(value, |arr| {
-                    Probe::Hit(match arr.get(&dim) {
-                        Some(elem) => isset_value(elem, empty),
-                        None => Ok(empty),
+        let found = match self.nested(pid) {
+            Some(Nested::Dim(dim)) => self.probe_fill(pid, PC_READ, |key, _, data, code| {
+                with_value(key, data, code, |value| {
+                    with_array(value, |arr| {
+                        Probe::Hit(match arr.get(&dim) {
+                            Some(elem) => isset_value(elem, empty),
+                            None => Ok(empty),
+                        })
                     })
                 })
-            })
-        });
+            }),
+            Some(Nested::Prop(lit)) => match self.head_object(pid) {
+                Some(obj) => self.tail_probe(pid, &obj, lit, PC_ISSET, |key, data, code, _| {
+                    with_value(key, data, code, |value| {
+                        Probe::Hit(isset_value(value, empty))
+                    })
+                }),
+                None => None,
+            },
+            Some(Nested::Append) | None => None,
+        };
         self.finish_isset(found)
     }
 
@@ -2676,6 +2763,95 @@ after-foreach,v101!,v201!,vapp,vapp,vapp,sorted,after-sort
 no-longer-shared
 string(2) "36"
 2
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    /// `$this->o->p = v`, `++`, `op=`, `.=` and `isset()` on the object a
+    /// cached head holds (also a readonly head), with the last segment's
+    /// entry: typed, private, dynamic and referenced properties, a null or
+    /// int head, a class change, a head holding `$this`, `__get` heads.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one oracle-checked script
+    fn writes_through_a_cached_head_object() {
+        let src = r#"<?php
+class Inner { public $v = 0; public int $n = 0; public $s = 'a'; public ?Inner $next = null; private $priv = 'p'; }
+class Sub extends Inner { public $v = 100; }
+class Outer {
+    public $in;
+    public readonly Inner $ro;
+    public $none = null;
+    public $num = 5;
+    public $self;
+    function __construct() { $this->in = new Inner; $this->ro = new Inner; $this->self = $this; }
+    function run() {
+        for ($i = 0; $i < 3; $i++) {
+            $this->in->v = $i;
+            $this->in->v++;
+            $this->in->v += 10;
+            $this->in->s .= $i;
+            $this->in->n = $i * 2;
+            $this->in->n++;
+            $this->ro->v = $i;
+            $this->ro->n += 3;
+            $r = isset($this->in->v) ? 'S' : 's';
+            $e = empty($this->in->s) ? 'E' : 'e';
+            echo $this->in->v, ' ', $this->in->s, ' ', $this->in->n, ' ', $this->ro->v, ' ', $this->ro->n, " $r$e\n";
+        }
+        try { $this->in->n = 'x'; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        $this->in->n = PHP_INT_MAX;
+        try { $this->in->n++; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        try { $this->none->v = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        try { $this->num->v = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        echo isset($this->none->v) ? 'S' : 's', isset($this->in->missing) ? 'S' : 's', "\n";
+        try { $this->in->priv = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        $this->in->dyn = 'dynamic';
+        echo $this->in->dyn, "\n";
+        $this->in = new Sub;
+        for ($i = 0; $i < 2; $i++) { $this->in->v++; echo $this->in->v, "\n"; }
+        $this->self->num = 42;
+        $this->self->num++;
+        echo $this->num, "\n";
+        $this->in->next = new Inner;
+        $this->in->next->v = 'deep';
+        echo $this->in->next->v, "\n";
+        $x = 1;
+        $this->in->v = &$x;
+        $this->in->v = 7;
+        $this->in->v++;
+        echo $x, "\n";
+        try { $this->ro = new Inner; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    }
+}
+$o = new Outer;
+$o->run();
+$m = new Outer;
+for ($i = 0; $i < 2; $i++) { $m->in->v = "m$i"; $m->in->v .= '!'; echo $m->in->v, isset($m->in->v) ? '+' : '-', "\n"; }
+class Magic { private $hidden; function __get($n) { echo "__get($n)\n"; return $this->inner ??= new Inner; } public $inner; }
+$g = new Magic;
+$g->hidden->v = 5;
+"#;
+        let expected = r#"11 a0 1 0 3 Se
+12 a01 3 1 6 Se
+13 a012 5 2 9 Se
+Cannot assign string to property Inner::$n of type int
+Cannot increment property Inner::$n of type int past its maximal value
+Attempt to assign property "v" on null
+Attempt to assign property "v" on int
+ss
+Cannot access private property Inner::$priv
+
+Deprecated: Creation of dynamic property Inner::$dyn is deprecated in t.php on line 32
+dynamic
+101
+102
+43
+deep
+8
+Cannot modify readonly property Outer::$ro
+m0!+
+m1!+
+__get(hidden)
 "#;
         assert_eq!(run(src), expected);
     }

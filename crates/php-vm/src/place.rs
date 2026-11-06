@@ -2262,7 +2262,7 @@ impl Vm {
                 Err(v) => v,
             }
         } else if head {
-            match self.prop_cache_dim_assign(pid, v) {
+            match self.prop_cache_nested_assign(pid, v) {
                 Ok(r) => return Ok(r),
                 Err(v) => v,
             }
@@ -2565,7 +2565,7 @@ impl Vm {
             }
         } else if head {
             // ASSIGN_DIM_OP on an element of a cached array property.
-            if let Some(r) = self.prop_cache_dim_assign_op(pid, op, &v) {
+            if let Some(r) = self.prop_cache_nested_assign_op(pid, op, &v) {
                 return Ok(r);
             }
         }
@@ -2783,7 +2783,7 @@ impl Vm {
                 return Ok(r);
             }
         } else if head {
-            if let Some(r) = self.prop_cache_dim_incdec(pid, kind) {
+            if let Some(r) = self.prop_cache_nested_incdec(pid, kind) {
                 return Ok(r);
             }
         }
@@ -3333,7 +3333,7 @@ impl Vm {
                 return Ok(r);
             }
         } else if head {
-            if let Some(r) = self.prop_cache_isset_dim(pid, empty)? {
+            if let Some(r) = self.prop_cache_nested_isset(pid, empty)? {
                 return Ok(r);
             }
         }
