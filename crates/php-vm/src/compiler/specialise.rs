@@ -11,11 +11,13 @@
 //!
 //! Every rewrite keeps the op count and the op after the rewritten one, so
 //! jump targets, try ranges, live ranges and lines stay valid. A specialised
-//! op skips its successor only on its fast path, where the successor (the
-//! jump testing the comparison, the `AssignCv` storing the result) would
-//! have done nothing but consume the temporary; on any other path it writes
-//! the temporary and the successor runs as before. A jump landing on the
-//! successor from elsewhere also runs it as before.
+//! op skips its successor only where the successor (the jump testing the
+//! comparison, the `AssignCv` storing the result) would have done nothing
+//! but consume the temporary: on its fast path, and for the constant
+//! fetches (`FetchConstTo`, `FetchClassConstTo`) also after the generic
+//! fetch, when the variable holds no refcounted value; on any other path it
+//! writes the temporary and the successor runs as before. A jump landing on
+//! the successor from elsewhere also runs it as before.
 
 use crate::opcode::{
     cmp_outcome, BinKind, ClassSpec, FetchMode, Op, Operand, Place, PlaceBase, PlaceId, Seg,
