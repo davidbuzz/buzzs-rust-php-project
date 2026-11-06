@@ -2400,7 +2400,7 @@ pub(crate) fn register(vm: &mut Vm) {
 mod tests {
     use super::{unescape, valid_class_name};
     use crate::{Vm, VmOptions};
-    use php_runtime::{ArrayKey, PhpRef, Value, ZArray};
+    use php_runtime::{ArrayKey, PhpRef, Value};
     use std::cell::RefCell;
     use std::io::Write;
     use std::rc::Rc;

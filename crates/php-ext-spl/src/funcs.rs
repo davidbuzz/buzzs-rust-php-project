@@ -20,6 +20,7 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = a.passed.iter().rposition(|&p| p).map_or(0, |i| i + 1);
     let mut args: Vec<Value> = a.values.iter().take(n).cloned().collect();
     let mut fcc = None;
+    let mut resolved = false;
     if matches!(
         name.as_str(),
         "spl_autoload_register" | "spl_autoload_unregister"
@@ -30,12 +31,19 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 // deprecations raised) in the registering scope.
                 fcc = vm.resolve_callable(&*cb)?.ok();
                 *cb = scope_keyword_callable(vm, &static_method_callable(cb));
+                resolved = true;
             }
         }
     }
     let r = {
         let _entry = crate::files::enter();
-        let mut host = VmHost::new(vm);
+        // `php-spl` validates the (rewritten) callable again: without
+        // raising the deprecations a second time.
+        let mut host = if resolved {
+            VmHost::callable_checked(vm)
+        } else {
+            VmHost::new(vm)
+        };
         php_spl::call_function(&mut host, &name, &args)
     };
     let Some(r) = r else {

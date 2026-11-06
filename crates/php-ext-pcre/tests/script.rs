@@ -130,6 +130,39 @@ fn callback_array_keys_must_be_patterns() {
     );
 }
 
+/// `Z_PARAM_FUNC` resolves `$callback` once, in the calling scope, raising
+/// the callable deprecations there; `preg_replace_callback_array()`
+/// resolves each entry with `zend_is_callable()` (deprecations too). The
+/// calls are `ZEND_CALL_DYNAMIC` (`compact()` refuses them).
+#[test]
+fn callbacks_resolve_in_the_calling_scope_with_deprecations() {
+    let out = run(r#"
+class foo { public function rc($m) { return strtoupper($m[0]); } }
+class bar extends foo {
+    function go() {
+        echo preg_replace_callback('/a/', 'parent::rc', 'banana'), "\n";
+        echo preg_replace_callback('/a/', [$this, 'parent::rc'], 'banana'), "\n";
+        echo preg_replace_callback_array(['/n/' => 'parent::rc', '/b/' => 'self::rc'], 'banana'), "\n";
+    }
+}
+(new bar)->go();
+try { preg_replace_callback_array(['/a/' => 'parent::rc'], 'a'); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { echo preg_replace_callback('/a/', 'compact', 'a'); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "\nDeprecated: Use of \"parent\" in callables is deprecated in test.php on line 5\n\
+         bAnAnA\n\
+         \nDeprecated: Callables of the form [\"bar\", \"parent::rc\"] are deprecated in test.php on line 6\n\
+         bAnAnA\n\
+         \nDeprecated: Use of \"parent\" in callables is deprecated in test.php on line 7\n\
+         \nDeprecated: Use of \"self\" in callables is deprecated in test.php on line 7\n\
+         BaNaNa\n\
+         preg_replace_callback_array(): Argument #1 ($pattern) must contain only valid callbacks\n\
+         Cannot call compact() dynamically\n"
+    );
+}
+
 #[test]
 fn split_grep_quote() {
     let out = run(

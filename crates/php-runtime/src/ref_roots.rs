@@ -7,15 +7,14 @@
 //! collector can start from it. Nothing is recorded until the collector
 //! turns recording on.
 
-use crate::value::{PhpRef, RefInner};
+use crate::reference::{PhpRef, WeakRef};
 use crate::Value;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::rc::Weak;
 
 #[derive(Default)]
 struct Buf {
-    entries: Vec<Weak<RefInner>>,
+    entries: Vec<WeakRef>,
     index: HashMap<usize, usize>,
     /// Dead entries are dropped when `entries` grows past this (keeps the
     /// buffer bounded while the collector does not run).
@@ -27,7 +26,7 @@ impl Buf {
         self.entries.retain(|w| w.strong_count() > 0);
         self.index.clear();
         for (i, w) in self.entries.iter().enumerate() {
-            self.index.insert(w.as_ptr() as usize, i);
+            self.index.insert(w.addr(), i);
         }
         self.compact_at = self.entries.len() * 2;
     }
@@ -60,7 +59,7 @@ pub(crate) fn released(r: &PhpRef) {
                 b.index.get(&addr).is_some_and(|&i| {
                     b.entries
                         .get(i)
-                        .is_some_and(|w| w.strong_count() > 0 && w.as_ptr() as usize == addr)
+                        .is_some_and(|w| w.strong_count() > 0 && w.addr() == addr)
                 })
             })
         })
@@ -110,7 +109,7 @@ pub fn take() -> Vec<Value> {
     entries
         .into_iter()
         .filter_map(|w| w.upgrade())
-        .map(|rc| Value::Reference(PhpRef::from_inner(rc)))
+        .map(Value::Reference)
         .collect()
 }
 
@@ -129,7 +128,7 @@ pub fn len() -> usize {
 /// due collection will look at, kept apart from roots buffered after it
 /// became due (`gc_possible_root_when_full` collects before buffering).
 #[derive(Default)]
-pub struct Stash(Vec<Weak<RefInner>>);
+pub struct Stash(Vec<WeakRef>);
 
 impl Stash {
     /// Number of set-aside references still alive.
@@ -188,7 +187,7 @@ pub fn unstash(s: Stash) {
                 if w.strong_count() == 0 {
                     continue;
                 }
-                let addr = w.as_ptr() as usize;
+                let addr = w.addr();
                 if index.contains_key(&addr) {
                     continue;
                 }

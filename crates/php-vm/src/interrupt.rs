@@ -409,11 +409,43 @@ impl Vm {
         Ok(())
     }
 
-    /// `set_time_limit()` / `max_execution_time`: restarts the timer.
-    pub(crate) fn set_time_limit(&mut self, seconds: i64) {
+    /// `set_time_limit()` / `max_execution_time` (`zend_set_timeout`):
+    /// restarts the timer. A SAPI that runs the timer itself
+    /// ([`Vm::timer_hook`]) is told the new limit instead; it reports
+    /// expiry with [`sapi_timer_expired`].
+    pub fn set_time_limit(&mut self, seconds: i64) {
         self.timeout_seconds = seconds;
+        if let Some(hook) = self.timer_hook {
+            // Cancels a wall-clock timer armed before the hook was
+            // installed and clears a flagged timeout (`zend_set_timeout`
+            // resets `EG(timed_out)`).
+            arm_timer(0, 0);
+            hook(self, seconds);
+            return;
+        }
         arm_timer(seconds, self.ini.get_long("hard_timeout"));
     }
+}
+
+/// A timer run by the SAPI ([`Vm::timer_hook`]) expired: the
+/// `zend_timeout_handler` half the VM's own timer thread performs in
+/// `arm_timer`. Flags the timeout and requests an interrupt, so the
+/// executor raises the "Maximum execution time" fatal at its next safe
+/// point. Returns `false` when the previous expiry is still unhandled:
+/// php-src's hard-timeout condition, on which it kills the process.
+#[inline(never)]
+pub fn sapi_timer_expired() -> bool {
+    if TIMED_OUT.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+    request_interrupt();
+    true
+}
+
+/// Whether a flagged timeout still waits for the executor (`EG(timed_out)`).
+#[inline(never)]
+pub fn timeout_pending() -> bool {
+    TIMED_OUT.load(Ordering::Acquire)
 }
 
 /// `register_tick_function(callable $callback, mixed ...$args): bool`.

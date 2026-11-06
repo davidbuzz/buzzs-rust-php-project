@@ -240,9 +240,9 @@ impl fmt::Debug for Value {
             Value::Array(a) => write!(f, "Array({a:?})"),
             Value::Object(o) => write!(f, "{o:?}"),
             Value::Resource(r) => write!(f, "{r:?}"),
-            Value::Reference(r) => match r.0.value.try_borrow() {
-                Ok(v) => write!(f, "Reference({:?})", &*v),
-                Err(_) => f.write_str("Reference(<borrowed>)"),
+            Value::Reference(r) => match r.try_borrow() {
+                Some(v) => write!(f, "Reference({:?})", &*v),
+                None => f.write_str("Reference(<borrowed>)"),
             },
         }
     }
@@ -318,143 +318,7 @@ impl<T: Into<Value>> From<Option<T>> for Value {
 // References
 // ---------------------------------------------------------------------------
 
-pub(crate) struct RefInner {
-    value: RefCell<Value>,
-    /// Opaque slot for the VM (e.g. typed-property type sources,
-    /// `ZEND_REF_HAS_TYPE_SOURCES`).
-    meta: RefCell<Option<Rc<dyn Any>>>,
-}
-
-/// A PHP reference (`zend_reference`): a shared mutable slot holding a value.
-///
-/// Cloning a `PhpRef` creates another handle to the *same* slot (it is how
-/// `$a = &$b` is represented); [`PhpRef::refcount`] reports the number of
-/// handles, which `var_dump` uses to decide whether to print `&`.
-#[derive(Clone)]
-pub struct PhpRef(Rc<RefInner>);
-
-impl PhpRef {
-    /// Creates a new reference holding `value`. A reference never directly
-    /// contains another reference: nested references are unwrapped.
-    #[must_use]
-    pub fn new(value: Value) -> Self {
-        let value = match value {
-            Value::Reference(r) => r.get(),
-            v => v,
-        };
-        PhpRef(Rc::new(RefInner {
-            value: RefCell::new(value),
-            meta: RefCell::new(None),
-        }))
-    }
-
-    /// Returns a clone of the referenced value.
-    #[must_use]
-    pub fn get(&self) -> Value {
-        self.0.value.borrow().clone()
-    }
-
-    /// Replaces the referenced value, returning the old one.
-    pub fn set(&self, value: Value) -> Value {
-        let value = match value {
-            Value::Reference(r) if !PhpRef::ptr_eq(&r, self) => r.get(),
-            Value::Reference(_) => return self.get(),
-            v => v,
-        };
-        std::mem::replace(&mut *self.0.value.borrow_mut(), value)
-    }
-
-    /// Borrows the referenced value.
-    ///
-    /// # Panics
-    /// Panics if the value is currently mutably borrowed.
-    #[must_use]
-    pub fn borrow(&self) -> Ref<'_, Value> {
-        self.0.value.borrow()
-    }
-
-    /// Mutably borrows the referenced value.
-    ///
-    /// # Panics
-    /// Panics if the value is currently borrowed.
-    #[must_use]
-    pub fn borrow_mut(&self) -> RefMut<'_, Value> {
-        self.0.value.borrow_mut()
-    }
-
-    /// Borrows the referenced value unless it is currently mutably borrowed.
-    #[must_use]
-    pub fn try_borrow(&self) -> Option<Ref<'_, Value>> {
-        self.0.value.try_borrow().ok()
-    }
-
-    /// Mutably borrows the referenced value unless it is currently borrowed.
-    #[must_use]
-    pub fn try_borrow_mut(&self) -> Option<RefMut<'_, Value>> {
-        self.0.value.try_borrow_mut().ok()
-    }
-
-    /// Whether two handles denote the same reference.
-    #[must_use]
-    pub fn ptr_eq(a: &Self, b: &Self) -> bool {
-        Rc::ptr_eq(&a.0, &b.0)
-    }
-
-    /// Number of handles to this reference (`GC_REFCOUNT`).
-    #[must_use]
-    pub fn refcount(&self) -> usize {
-        Rc::strong_count(&self.0)
-    }
-
-    /// An address usable as an identity key (for recursion detection and
-    /// serialization back-references).
-    #[must_use]
-    pub fn addr(&self) -> usize {
-        Rc::as_ptr(&self.0).cast::<u8>() as usize
-    }
-
-    /// The VM's metadata attached to this reference, if any.
-    #[must_use]
-    pub fn meta(&self) -> Option<Rc<dyn Any>> {
-        self.0.meta.borrow().clone()
-    }
-
-    /// Attaches (or clears) VM metadata.
-    pub fn set_meta(&self, meta: Option<Rc<dyn Any>>) {
-        *self.0.meta.borrow_mut() = meta;
-    }
-}
-
-impl PhpRef {
-    /// A weak handle (for the cycle collector's root buffer).
-    pub(crate) fn downgrade(&self) -> std::rc::Weak<RefInner> {
-        Rc::downgrade(&self.0)
-    }
-
-    /// Re-wraps an upgraded weak handle.
-    pub(crate) fn from_inner(rc: Rc<RefInner>) -> Self {
-        PhpRef(rc)
-    }
-}
-
-/// Releasing a handle while others remain (`GC_DELREF` to a non-zero
-/// count) makes the reference a possible cycle root
-/// (`gc_check_possible_root`).
-impl Drop for PhpRef {
-    fn drop(&mut self) {
-        // Only a reference to an array or object can close a cycle
-        // (`Z_COLLECTABLE`).
-        if Rc::strong_count(&self.0) > 1 {
-            crate::ref_roots::released(self);
-        }
-    }
-}
-
-impl fmt::Debug for PhpRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PhpRef({:?})", self.get())
-    }
-}
+pub use crate::reference::PhpRef;
 
 // ---------------------------------------------------------------------------
 // Objects

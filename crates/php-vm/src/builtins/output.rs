@@ -2,8 +2,9 @@
 
 use super::reg;
 use super::util::{arr, b, i, s, sv};
-use crate::func::Args;
-use crate::vm::{Vm, VmResult};
+use crate::func::{flags, Args, Func};
+use crate::object;
+use crate::vm::{PendingCall, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_support::fmt::{php_formatted_print, ArgSource, FormatArg, FormatError, FormatOptions};
 use php_support::output::{self as ob, StartHandler};
@@ -172,18 +173,25 @@ fn ob_start(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             init(vm, size, flags)?;
         }
         StartHandler::Alias { name, callback: cb }
-    } else if vm.is_callable_value(&cb) {
-        let name = handler_name(vm, &cb);
-        StartHandler::User { name, callback: cb }
     } else {
-        let err = vm.callable_error(&cb);
-        if vm.output.status() & ob::status::LOCKED != 0 {
-            // `php_output_handler_create_user()` warns, then
-            // `php_output_handler_start()` hits the lock error (fatal).
-            vm.docref(E_WARNING, &err)?;
-            StartHandler::Default
-        } else {
-            StartHandler::Invalid(err)
+        // `php_output_handler_create_user()`: `zend_fcall_info_init()`
+        // resolves the handler here, raising the callable deprecations, and
+        // the handler calls that resolution whenever the buffer is flushed.
+        match vm.resolve_kept_callable(&cb)? {
+            Ok(callback) => {
+                let name = handler_name(vm, &cb);
+                StartHandler::User { name, callback }
+            }
+            Err(err) => {
+                if vm.output.status() & ob::status::LOCKED != 0 {
+                    // `php_output_handler_create_user()` warns, then
+                    // `php_output_handler_start()` hits the lock error (fatal).
+                    vm.docref(E_WARNING, &err)?;
+                    StartHandler::Default
+                } else {
+                    StartHandler::Invalid(err)
+                }
+            }
         }
     };
     let r = ob::ob_start(vm, handler, chunk, fl);
@@ -299,6 +307,109 @@ impl Vm {
             None => Ok(()),
         }
     }
+
+    /// `Z_PARAM_FUNC` / `zend_fcall_info_init()` for a callable that is
+    /// kept and called later, possibly from another scope (`ob_start()`'s
+    /// handler, a `CallbackFilterIterator`'s callback): it is resolved once,
+    /// in the calling user frame's scope, raising the callable deprecations
+    /// there, and php-src calls that `zend_fcall_info_cache` afterwards.
+    ///
+    /// Returns the value to keep and call: `v` itself when calling it again
+    /// resolves the same way from any scope (a function name, a closure or
+    /// invokable object, a public method of an object or of a class named
+    /// outright), else a fake closure of the resolution, so that later
+    /// calls neither depend on their scope nor raise the deprecations again
+    /// (`'parent::m'`, `[$this, 'privateMethod']`, `[$obj, 'C::m']`, a
+    /// `$this` or called class taken from the scope). Unlike the
+    /// `zend_fcall_info_cache`, the fake closure takes an object handle;
+    /// only those scope-bound forms pay it. `Ok(Err(reason))` when `v` is
+    /// not callable here.
+    ///
+    /// # Errors
+    /// An exception thrown while resolving (an autoloader, a user error
+    /// handler turning a deprecation into an exception).
+    pub fn resolve_kept_callable(&mut self, v: &Value) -> VmResult<Result<Value, String>> {
+        let call = match self.resolve_callable(v)? {
+            Ok(call) => call,
+            Err(reason) => return Ok(Err(reason)),
+        };
+        Ok(Ok(if scope_bound(v, &call) {
+            self.fake_closure(call)
+        } else {
+            v.deref()
+        }))
+    }
+}
+
+/// Whether calling `v` from another scope could resolve differently from
+/// `call`, its resolution in the calling scope: the `self`/`parent`/
+/// `static` keywords and `[$obj, "C::m"]` names, a `$this` or called class
+/// that `"C::m"` / `["C", "m"]` took from the scope, and methods only some
+/// scopes may call.
+fn scope_bound(v: &Value, call: &PendingCall) -> bool {
+    let (class, method) = match v.deref() {
+        Value::Str(s) => {
+            let b = s.as_bytes();
+            match b.windows(2).rposition(|w| w == b"::") {
+                Some(p) => (Some(ZStr::from(&b[..p])), ZStr::from(&b[p + 2..])),
+                // A function.
+                None => return false,
+            }
+        }
+        Value::Array(a) => {
+            let Some(Value::Str(method)) = a.get(&ArrayKey::Int(1)).map(Value::deref) else {
+                return true;
+            };
+            if method.as_bytes().windows(2).any(|w| w == b"::") {
+                return true;
+            }
+            match a.get(&ArrayKey::Int(0)).map(Value::deref) {
+                Some(Value::Str(c)) => (Some(c), method),
+                Some(Value::Object(_)) => (None, method),
+                _ => return true,
+            }
+        }
+        // A closure or an object with `__invoke`.
+        _ => return false,
+    };
+    if let Some(class) = class {
+        let name = class.as_bytes();
+        let name = name.strip_prefix(b"\\").unwrap_or(name);
+        if matches!(
+            name.to_ascii_lowercase().as_slice(),
+            b"self" | b"parent" | b"static"
+        ) {
+            return true;
+        }
+        let named = call
+            .called
+            .as_ref()
+            .is_some_and(|c| c.name.eq_ignore_ascii_case(name));
+        if call.this.is_some() || !named {
+            return true;
+        }
+    }
+    restricted_method(call, &method)
+}
+
+/// Whether `call` is a method only some scopes may call: private or
+/// protected, or a `__call`/`__callStatic` trampoline standing in for a
+/// method `name` the resolving scope could not call.
+fn restricted_method(call: &PendingCall, name: &ZStr) -> bool {
+    if call.magic_name.is_some() {
+        let class = match &call.this {
+            Some(o) => Some(object::class_of(o).clone()),
+            None => call.called.clone(),
+        };
+        return class.is_some_and(|c| c.find_method(name.as_bytes()).is_some());
+    }
+    // `scope` is the declaring class of a method (none for a function).
+    call.scope.as_ref().is_some_and(|scope| {
+        scope
+            .methods
+            .values()
+            .any(|m| Func::ptr_eq(&m.func, &call.func) && m.visibility() != flags::PUBLIC)
+    })
 }
 
 /// Registers the output functions.

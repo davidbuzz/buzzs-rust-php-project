@@ -6,8 +6,9 @@
 
 use crate::backend::{Backend, LookupValue, Table, TableOp};
 use crate::cookie::{Cookie, CookieError};
-use crate::headers::HeaderOp;
-use crate::request::{call_header_callback, with_ctx, RequestCtx};
+use crate::headers::{HeaderError, HeaderOp};
+use crate::multipart::upload_err;
+use crate::request::{php_header, sapi_flush, with_ctx, RequestCtx};
 use php_runtime::{ArrayKey, Value, ZArray, ZStr};
 use php_support::ini::{Access, Stage};
 use php_vm::ext::{Args, Extension, ModuleBuilder, NativeFn};
@@ -20,6 +21,19 @@ pub const FATAL_CHECK: &str = "__apache2handler_fatal_status";
 
 /// `E_WARNING`.
 const E_WARNING: i64 = 2;
+
+/// The `UPLOAD_ERR_*` constants of `main/main.stub.php`, in its order:
+/// main's own constants, which every SAPI has.
+const UPLOAD_ERR_CONSTANTS: &[(&str, i64)] = &[
+    ("UPLOAD_ERR_OK", upload_err::OK),
+    ("UPLOAD_ERR_INI_SIZE", upload_err::INI_SIZE),
+    ("UPLOAD_ERR_FORM_SIZE", upload_err::FORM_SIZE),
+    ("UPLOAD_ERR_PARTIAL", upload_err::PARTIAL),
+    ("UPLOAD_ERR_NO_FILE", upload_err::NO_FILE),
+    ("UPLOAD_ERR_NO_TMP_DIR", upload_err::NO_TMP_DIR),
+    ("UPLOAD_ERR_CANT_WRITE", upload_err::CANT_WRITE),
+    ("UPLOAD_ERR_EXTENSION", upload_err::EXTENSION),
+];
 
 thread_local! {
     static ORIG_INI_SET: Cell<Option<NativeFn>> = const { Cell::new(None) };
@@ -41,9 +55,34 @@ fn ctx_or<R>(default: R, f: impl FnOnce(&RequestCtx) -> R) -> R {
     with_ctx(f).unwrap_or(default)
 }
 
-fn header_result(vm: &mut Vm, r: Result<bool, crate::headers::HeaderError>) -> VmResult<bool> {
+/// Where output started (`php_output_get_start_filename/lineno`), as
+/// `file:line`, once the output layer recorded it.
+fn output_start(vm: &Vm) -> Option<Vec<u8>> {
+    let (file, line) = vm.output_started()?;
+    let mut at = file.as_bytes().to_vec();
+    at.extend_from_slice(format!(":{line}").as_bytes());
+    Some(at)
+}
+
+/// The `sapi_header_op()` warning for an operation after the headers went
+/// out (`sapi_module.sapi_error`, no function prefix).
+fn already_sent_warning(vm: &mut Vm) -> VmResult<()> {
+    let mut msg = HeaderError::AlreadySent.message().as_bytes().to_vec();
+    if let Some(at) = output_start(vm) {
+        msg.extend_from_slice(b" by (output started at ");
+        msg.extend_from_slice(&at);
+        msg.push(b')');
+    }
+    vm.raise_bytes(E_WARNING, &msg)
+}
+
+fn header_result(vm: &mut Vm, r: Result<bool, HeaderError>) -> VmResult<bool> {
     match r {
         Ok(ok) => Ok(ok),
+        Err(HeaderError::AlreadySent) => {
+            already_sent_warning(vm)?;
+            Ok(false)
+        }
         Err(e) => {
             vm.raise(E_WARNING, e.message())?;
             Ok(false)
@@ -83,19 +122,33 @@ fn header_remove(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
-#[allow(clippy::unnecessary_wraps)]
+/// `headers_sent(&$filename, &$line)`: `SG(headers_sent)` plus where
+/// output started (empty / 0 when the headers went out without output,
+/// e.g. through `flush()`).
 fn headers_sent(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let sent = ctx_or(false, RequestCtx::headers_sent);
     with_ctx(|c| {
         let h = c.headers.borrow();
         vm.set_response_mime_state(h.mimetype.clone(), h.send_default_content_type);
     });
+    let (file, line) = if sent {
+        vm.output_started().unwrap_or_else(|| (ZStr::empty(), 0))
+    } else {
+        (ZStr::empty(), 0)
+    };
+    // `ZEND_TRY_ASSIGN_REF_STRING` / `_LONG`: a destructor exception of a
+    // replaced value surfaces once both outputs are assigned.
+    let mut thrown = Ok(());
     if a.has(0) {
-        a.set_ref(0, str_value(""));
+        thrown = vm.try_assign_ref_arg(a, 0, Value::Str(file));
     }
     if a.has(1) {
-        a.set_ref(1, Value::Int(0));
+        let r = vm.try_assign_ref_arg(a, 1, Value::Int(i64::from(line)));
+        if thrown.is_ok() {
+            thrown = r;
+        }
     }
+    thrown?;
     Ok(Value::Bool(sent))
 }
 
@@ -117,7 +170,13 @@ fn http_response_code(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     if code != 0 {
         if sent {
-            vm.php_warning("Cannot set response code - headers already sent")?;
+            let mut msg = b"Cannot set response code - headers already sent".to_vec();
+            if let Some(at) = output_start(vm) {
+                msg.extend_from_slice(b" (output started at ");
+                msg.extend_from_slice(&at);
+                msg.push(b')');
+            }
+            vm.php_warning_bytes(&msg)?;
             return Ok(Value::Bool(false));
         }
         if has_line {
@@ -137,10 +196,16 @@ fn http_response_code(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(i64::from(current)))
 }
 
+/// `header_register_callback()`: kept in `SG(send_header_fcc)` for
+/// [`php_header`]; not stored once the headers are out (it would never
+/// run).
 #[allow(clippy::unnecessary_wraps)]
 fn header_register_callback(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
-    with_ctx(|c| *c.header_callback.borrow_mut() = Some(cb));
+    with_ctx(|c| {
+        let keep = if c.headers_sent() { None } else { Some(cb) };
+        *c.header_callback.borrow_mut() = keep;
+    });
     Ok(Value::Bool(true))
 }
 
@@ -230,23 +295,11 @@ fn setrawcookie(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     setcookie_common(vm, a, true)
 }
 
-/// `flush()`: `sapi_flush()` → headers, then `ap_rflush`.
-#[allow(clippy::unnecessary_wraps)]
+/// `flush()`: `sapi_flush()` → the headers (with the
+/// `header_register_callback()` callable), then `ap_rflush`; a lost client
+/// bails out (`php_handle_aborted_connection()`).
 fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    if let Some(cb) = with_ctx(|c| {
-        (!c.headers_sent())
-            .then(|| c.header_callback.borrow_mut().take())
-            .flatten()
-    })
-    .flatten()
-    {
-        let _ = vm.call_value(&cb, Vec::new());
-    }
-    with_ctx(|c| {
-        c.send_headers();
-        c.flush();
-    });
-    vm.headers_sent = true;
+    sapi_flush(vm)?;
     Ok(Value::Null)
 }
 
@@ -255,62 +308,62 @@ fn php_sapi_name(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(str_value("apache2handler"))
 }
 
-fn aborted() -> bool {
-    ctx_or(false, |c| {
-        c.aborted.get() || c.backend.int_field(crate::backend::IntField::Aborted) != 0
-    })
-}
-
+/// `connection_aborted()`: `PG(connection_status) & PHP_CONNECTION_ABORTED`
+/// — set by a failed write or flush, not by polling the connection.
 #[allow(clippy::unnecessary_wraps)]
 fn connection_aborted(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(aborted()))
+    Ok(Value::Bool(ctx_or(false, |c| c.aborted.get())))
 }
 
+/// `connection_status()`: `PG(connection_status)` (`NORMAL`, `ABORTED`,
+/// `TIMEOUT` bits).
 #[allow(clippy::unnecessary_wraps)]
 fn connection_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(i64::from(aborted())))
+    Ok(Value::Int(ctx_or(0, RequestCtx::connection_status)))
 }
 
+/// `ignore_user_abort()`: `zend_alter_ini_entry_chars(..., PHP_INI_USER,
+/// PHP_INI_STAGE_RUNTIME)`, returning the old setting.
 #[allow(clippy::unnecessary_wraps)]
 fn ignore_user_abort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let old = vm.ini_bool("ignore_user_abort");
     if let Some(v) = a.opt(0) {
         let on = matches!(v, Value::Bool(true));
         let mut sink: Vec<php_support::Diagnostic> = Vec::new();
-        let _ = vm
-            .ini
-            .ini_set("ignore_user_abort", if on { b"1" } else { b"0" }, &mut sink);
+        let _ = vm.ini.alter(
+            "ignore_user_abort",
+            if on { b"1" } else { b"0" },
+            Access::USER,
+            Stage::Runtime,
+            false,
+            &mut sink,
+        );
     }
     Ok(Value::Bool(old))
 }
 
-/// Restarts the timer after `max_execution_time` changed at runtime
-/// (`OnUpdateTimeout` → `zend_set_timeout`).
-fn after_ini_change(vm: &mut Vm, name: &[u8]) {
-    if name == b"max_execution_time" {
-        let secs = vm.ini_long("max_execution_time");
-        with_ctx(|c| c.timer.reset(secs));
-    }
+/// Re-reads the SAPI's cached INI values after a runtime change (the
+/// `max_execution_time` timer is restarted by the VM through its timer
+/// hook, `OnUpdateTimeout` → `zend_set_timeout`).
+fn after_ini_change(vm: &mut Vm) {
     with_ctx(|c| c.refresh_facts(vm));
 }
 
 fn ini_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let name = a.str(0);
     let Some(orig) = ORIG_INI_SET.with(Cell::get) else {
         return Ok(Value::Bool(false));
     };
     let r = orig(vm, a)?;
-    after_ini_change(vm, name.as_bytes());
+    after_ini_change(vm);
     Ok(r)
 }
 
 fn ini_restore(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let name = a.str(0);
     let Some(orig) = ORIG_INI_RESTORE.with(Cell::get) else {
         return Ok(Value::Null);
     };
     let r = orig(vm, a)?;
-    after_ini_change(vm, name.as_bytes());
+    after_ini_change(vm);
     Ok(r)
 }
 
@@ -338,6 +391,11 @@ fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
+/// `set_time_limit()`: `zend_alter_ini_entry_chars_ex("max_execution_time",
+/// ..., PHP_INI_USER, PHP_INI_STAGE_RUNTIME)`; `false` when the entry is
+/// locked (`php_admin_value`).  On success the entry's `OnUpdateTimeout`
+/// restarts the timer: [`Vm::set_time_limit`] through the SAPI's timer
+/// hook.
 #[allow(clippy::unnecessary_wraps)]
 fn set_time_limit(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let secs = a.int(0);
@@ -351,7 +409,7 @@ fn set_time_limit(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         &mut sink,
     );
     if ok {
-        with_ctx(|c| c.timer.reset(secs));
+        vm.set_time_limit(secs);
     }
     Ok(Value::Bool(ok))
 }
@@ -501,9 +559,7 @@ fn virtual_(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     // php_output_end_all(); php_header();
     php_support::output::end_all(vm);
-    with_ctx(|c| call_header_callback(vm, c));
-    with_ctx(RequestCtx::send_headers);
-    vm.headers_sent = true;
+    php_header(vm);
     if rr.run() != 0 {
         drop(rr);
         lookup_warning(vm, "request execution failed", &uri)?;
@@ -551,7 +607,18 @@ impl Extension for Apache2Handler {
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         use php_support::ini::{IniDirective, ModifyHandler};
-        m.vm().response_header_hook = Some(add_response_header);
+        {
+            // The SAPI's `sapi_module` entries the VM calls back into:
+            // header_handler, send_headers (php_header), flush, the
+            // execution timer, and the aborted-connection bailout the
+            // output writer cannot raise itself.
+            let vm = m.vm();
+            vm.response_header_hook = Some(add_response_header);
+            vm.send_headers_hook = Some(php_header);
+            vm.sapi_flush_hook = Some(crate::request::implicit_flush);
+            vm.timer_hook = Some(crate::request::arm_timer);
+            vm.interrupt_handlers.push(crate::request::abort_interrupt);
+        }
         // PHP_INI_BEGIN() of php_functions.c.
         for (name, default) in [("xbithack", "0"), ("engine", "1"), ("last_modified", "0")] {
             m.ini(IniDirective::new(
@@ -566,6 +633,12 @@ impl Extension for Apache2Handler {
             let vm = m.vm();
             for c in ["STDIN", "STDOUT", "STDERR"] {
                 vm.constants.remove(c.as_bytes());
+            }
+            // Defined unattributed (not through `m.constant`), so that
+            // `get_defined_constants(true)` files them under `Core`, like
+            // the other engine constants.
+            for (name, value) in UPLOAD_ERR_CONSTANTS {
+                vm.constants.insert(ZStr::from(*name), Value::Int(*value));
             }
             if let Some(b) = vm.native_function("ini_set") {
                 ORIG_INI_SET.with(|c| c.set(Some(b.handler)));
