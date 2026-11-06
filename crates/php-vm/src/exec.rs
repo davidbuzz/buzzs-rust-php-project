@@ -1409,8 +1409,7 @@ impl Vm {
                     }
                     Op::InitMethodCall { obj, name } => {
                         let o = self.read(*obj)?;
-                        let n = self.read(*name)?;
-                        self.op_init_method_call(o, n)?;
+                        self.op_init_method_call_op(o, *name)?;
                         Flow::Next
                     }
                     Op::InitStaticCall { class, name } => {

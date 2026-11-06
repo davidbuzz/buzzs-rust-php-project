@@ -385,6 +385,57 @@ impl Vm {
         }
     }
 
+    /// `ZEND_INIT_METHOD_CALL` with the method name as an operand. A
+    /// literal name (`$o->m()`) probes the run-time cache in place
+    /// ([`Vm::init_cached_method_call`]); other names, and misses, are read
+    /// and take [`Vm::op_init_method_call`].
+    pub(crate) fn op_init_method_call_op(&mut self, obj: Value, name: Operand) -> VmResult<()> {
+        let obj = match name {
+            Operand::Lit(lit) => match self.init_cached_method_call(obj, lit) {
+                Ok(()) => return Ok(()),
+                Err(obj) => obj,
+            },
+            _ => obj,
+        };
+        let n = self.read(name)?;
+        self.op_init_method_call(obj, n)
+    }
+
+    /// The run-time cache hit of `ZEND_INIT_METHOD_CALL` for the method
+    /// named by literal `lit` (`CACHED_POLYMORPHIC_PTR`): the call is pushed
+    /// straight from the cached method, `$this` moved in, with the name read
+    /// in place from the op array and the calling scope from the current
+    /// frame (it executes this op, so it is not a builtin frame and is the
+    /// frame [`Vm::scope`] finds). Gives the operand back on a miss, for an
+    /// object whose class has a native `get_method` handler, and for a
+    /// non-object.
+    #[inline]
+    fn init_cached_method_call(&mut self, obj: Value, lit: u32) -> Result<(), Value> {
+        let Value::Object(o) = obj else {
+            return Err(obj);
+        };
+        let cls = object::class_of(&o);
+        if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
+            return Err(Value::Object(o));
+        }
+        let f = self.frame();
+        let Some(Value::Str(name)) = f.code.literals.get(lit as usize) else {
+            return Err(Value::Object(o));
+        };
+        let Some(m) = self.call_bufs.methods.get(cls, f.scope.as_ref(), name) else {
+            return Err(Value::Object(o));
+        };
+        let called = cls.clone();
+        let is_static = m.is_static() && m.flags & flags::STATIC_KEEPS_THIS == 0;
+        self.push_pending(PendingCall {
+            this: if is_static { None } else { Some(o) },
+            scope: Some(m.scope()),
+            called: Some(called),
+            ..PendingCall::new(m.func.clone())
+        });
+        Ok(())
+    }
+
     pub(crate) fn op_init_method_call(&mut self, obj: Value, name: Value) -> VmResult<()> {
         let Value::Str(name) = name else {
             return Err(self.make_throw("Error", "Method name must be a string"));
