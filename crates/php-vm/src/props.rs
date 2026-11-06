@@ -13,6 +13,11 @@ use crate::vm::{Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
+/// Class flags that make `new` fail (`object_init_ex` checks them in one
+/// test before reporting which one applies).
+const NOT_INSTANTIABLE: u32 =
+    cflags::INTERFACE | cflags::TRAIT | cflags::ENUM | cflags::ABSTRACT | cflags::NO_NEW;
+
 /// Result of a property lookup.
 pub(crate) enum PropLookup {
     /// A declared, accessible property.
@@ -2008,8 +2013,8 @@ impl Vm {
 
     /// Default slot values of a class (evaluated once).
     pub(crate) fn class_defaults(&mut self, cls: &Rc<Class>) -> VmResult<Vec<Option<Value>>> {
-        if let Some(d) = cls.defaults.borrow().as_ref() {
-            return Ok(d.clone());
+        if let Some(d) = cls.defaults.borrow().as_deref() {
+            return Ok(object::copy_slots(d));
         }
         for constant in &cls.consts {
             if !constant.is_case && constant.value.borrow().is_none() {
@@ -2056,6 +2061,19 @@ impl Vm {
 
     /// `object_init_ex`: creates an instance without calling the constructor.
     pub(crate) fn instantiate(&mut self, cls: &Rc<Class>) -> VmResult<Obj> {
+        // `object_and_properties_init`: a single flag test on the common
+        // path (`ce->ce_flags & (ZEND_ACC_INTERFACE|ZEND_ACC_TRAIT|...)`),
+        // plus the "Generator" name (a length test for most names).
+        if cls.flags & NOT_INSTANTIABLE == 0 && cls.lc_name.as_bytes() != b"generator" {
+            return self.instantiate_unchecked(cls);
+        }
+        self.instantiate_checked(cls)
+    }
+
+    /// [`Self::instantiate`] past its fast path: the instantiability errors
+    /// in php-src's order.
+    #[inline(never)]
+    fn instantiate_checked(&mut self, cls: &Rc<Class>) -> VmResult<Obj> {
         if cls.is_interface() {
             return Err(self.make_throw(
                 "Error",
@@ -2092,7 +2110,15 @@ impl Vm {
 
     /// Creates an instance without the instantiability checks.
     pub(crate) fn instantiate_unchecked(&mut self, cls: &Rc<Class>) -> VmResult<Obj> {
-        let slots = self.class_defaults(cls)?;
+        // `object_properties_init`: once the class's default properties are
+        // evaluated (`ZEND_ACC_CONSTANTS_UPDATED`), they are copied straight
+        // into the new object's slots. The `Ref` is released before the
+        // slow path, which fills the cache.
+        let cached = cls.defaults.borrow().as_deref().map(object::copy_slots);
+        let slots = match cached {
+            Some(slots) => slots,
+            None => self.class_defaults(cls)?,
+        };
         let o = object::new_object(cls.clone(), slots);
         if cls.internal == InternalKind::Throwable {
             self.init_throwable(&o)?;
