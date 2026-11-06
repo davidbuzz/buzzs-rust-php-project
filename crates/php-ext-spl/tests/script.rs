@@ -43,10 +43,23 @@ fn output(sink: &Sink) -> String {
     String::from_utf8(sink.0.borrow().clone()).expect("UTF-8 output")
 }
 
+/// Runs `code` as one request, on a thread of its own: the object store
+/// (and so the handle numbers the scripts print) is thread-local, and a
+/// second script in the same test would otherwise inherit the free-list
+/// order the first one left behind.
 fn run(code: &str) -> String {
-    let (mut vm, sink) = vm();
-    assert_eq!(vm.run_script(code.as_bytes(), "test.php"), 0);
-    output(&sink)
+    std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn_scoped(s, || {
+                let (mut vm, sink) = vm();
+                assert_eq!(vm.run_script(code.as_bytes(), "test.php"), 0);
+                output(&sink)
+            })
+            .expect("spawn script thread")
+            .join()
+            .expect("script thread")
+    })
 }
 
 #[test]
