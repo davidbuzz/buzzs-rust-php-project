@@ -260,9 +260,13 @@ impl Drop for PhpRef {
     }
 }
 
+/// Like `Value`'s, does not panic while the value is mutably borrowed.
 impl fmt::Debug for PhpRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PhpRef({:?})", self.get())
+        match self.try_borrow() {
+            Some(v) => write!(f, "PhpRef({:?})", &*v),
+            None => f.write_str("PhpRef(<borrowed>)"),
+        }
     }
 }
 
@@ -286,8 +290,8 @@ fn inc_weak(word: &Cell<u32>) {
 }
 
 /// Frees the value of the allocation at `ptr`, whose strong count has just
-/// reached zero, then its metadata, and releases the strong handles'
-/// collective weak count.
+/// reached zero, releases the strong handles' collective weak count, then
+/// drops its metadata.
 ///
 /// # Safety
 /// `ptr` must be a live reference allocation whose strong count is zero and
@@ -317,8 +321,8 @@ unsafe fn release_last(ptr: NonNull<RefBox>) {
     drop(rest);
 }
 
-/// Drops the metadata of the allocation at `ptr`, whose value is gone, and
-/// releases the strong handles' collective weak count.
+/// Releases the strong handles' collective weak count of the allocation at
+/// `ptr`, whose value is gone, then drops its metadata.
 ///
 /// # Safety
 /// As for [`release_last`], once the value is dropped; this runs once per
@@ -327,17 +331,23 @@ unsafe fn release_meta_and_weak(ptr: NonNull<RefBox>) {
     // SAFETY: the collective weak count keeps the allocation alive; a
     // reference to the count word only.
     let word = unsafe { &(*ptr.as_ptr()).weak };
-    if word.get() & HAS_META != 0 {
+    // The entry goes while the allocation still holds the address, so no
+    // later reference can find it.
+    let meta = if word.get() & HAS_META != 0 {
         word.set(word.get() & !HAS_META);
-        // The value first, then the metadata, as when both were fields of
-        // the payload. The entry goes while the allocation still holds the
-        // address, so no later reference can find it. The table is released
-        // before the metadata drops.
-        drop(meta_remove(addr_of(ptr)));
-    }
+        meta_remove(addr_of(ptr))
+    } else {
+        None
+    };
     // SAFETY: the strong handles' collective weak count, released exactly
     // once (a strong count never comes back from zero).
     unsafe { release_weak(ptr) };
+    // The value first, then the metadata, as when both were fields of the
+    // payload. Nothing in the metadata reaches the allocation without a weak
+    // count of its own (no strong handle is left), so it may be freed by
+    // now; dropping the metadata last, with the table released, leaks
+    // nothing else if that drop panics.
+    drop(meta);
 }
 
 /// Releases one weak count of the allocation at `ptr`, freeing the
@@ -352,6 +362,8 @@ unsafe fn release_weak(ptr: NonNull<RefBox>) {
     // SAFETY: the allocation is alive (caller contract); a reference to the
     // count word only, so this is fine while the value is being dropped.
     let word = unsafe { &(*ptr.as_ptr()).weak };
+    // (`- 1` would borrow from the flag bit, not underflow.)
+    debug_assert_ne!(word.get() & WEAK_COUNT, 0, "weak count released twice");
     let n = word.get() - 1;
     word.set(n);
     if n & WEAK_COUNT == 0 {
@@ -606,6 +618,7 @@ mod tests {
             assert!(r.try_borrow().is_none());
             assert!(r.try_borrow_mut().is_none());
             assert_eq!(format!("{v:?}"), "Reference(<borrowed>)");
+            assert_eq!(format!("{r:?}"), "PhpRef(<borrowed>)");
         }
         assert_eq!(r.get().as_int(), Some(2));
         assert!(r.try_borrow_mut().is_some());
@@ -615,7 +628,7 @@ mod tests {
     fn meta_is_shared_by_handles_and_freed_with_the_reference() {
         let r = PhpRef::new(Value::Int(1));
         assert!(r.meta().is_none());
-        // Clearing what is not there touches nothing.
+        // Clearing what is not there is a no-op.
         r.set_meta(None);
         assert_eq!(meta_table(), (0, 0));
         let m: Rc<dyn Any> = Rc::new(7u8);
