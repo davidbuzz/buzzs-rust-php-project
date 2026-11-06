@@ -2122,14 +2122,20 @@ impl Vm {
     pub(crate) fn instantiate_unchecked(&mut self, cls: &Rc<Class>) -> VmResult<Obj> {
         // `object_properties_init`: once the class's default properties are
         // evaluated (`ZEND_ACC_CONSTANTS_UPDATED`), they are copied straight
-        // into the new object's slots. The `Ref` is released before the
-        // slow path, which fills the cache.
-        let cached = cls.defaults.borrow().as_deref().map(object::copy_slots);
-        let slots = match cached {
-            Some(slots) => slots,
-            None => self.class_defaults(cls)?,
+        // into the new object's inline slots. The `Ref` is released before
+        // the slow path, which fills the cache.
+        let cached = cls
+            .defaults
+            .borrow()
+            .as_deref()
+            .map(|d| object::new_object_from_defaults(cls.clone(), d));
+        let o = match cached {
+            Some(o) => o,
+            None => {
+                let slots = self.class_defaults(cls)?;
+                object::new_object(cls.clone(), slots)
+            }
         };
-        let o = object::new_object(cls.clone(), slots);
         if cls.internal == InternalKind::Throwable {
             self.init_throwable(&o)?;
         }

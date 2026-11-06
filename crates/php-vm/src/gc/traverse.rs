@@ -29,13 +29,12 @@ use super::graph::Graph;
 use crate::closure::ClosureData;
 use crate::fiber::FiberData;
 use crate::generator::{Delegate, GenData};
-use crate::object::ObjectData;
 use crate::vm::{FinState, ForeachIter, Frame, PendingCall, VarStore};
-use php_runtime::{HashTable, Obj, PhpRef, Value, ZArray};
+use php_runtime::{HashTable, Obj, ObjWeak, PhpRef, Value, ZArray};
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
 /// Receives the references held by an object's native state.
 pub struct GcVisitor<'a> {
@@ -92,7 +91,7 @@ impl<'a> GcVisitor<'a> {
 
     /// An entry whose value is kept alive only while both this object and
     /// the (weakly held) `key` object are alive — a `WeakMap` entry.
-    pub fn weak_entry(&mut self, key: &Weak<ObjectData>, v: &Value) {
+    pub fn weak_entry(&mut self, key: &ObjWeak, v: &Value) {
         self.graph.cond_edge(self.from, key, v);
     }
 

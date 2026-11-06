@@ -482,10 +482,12 @@ pub fn format_double_buf(
 /// no heap temporaries for precisions up to 17.
 #[must_use]
 pub fn format_double_zstr(num: f64, precision: i64, zero_fraction: bool) -> ZStr {
+    // The text is ASCII: flagged `IS_STR_VALID_UTF8` like
+    // `zend_double_to_str`'s result.
     let mut buf = DoubleBuf::new();
     match format_double_buf(num, precision, zero_fraction, &mut buf) {
-        Some(text) => ZStr::from(text),
-        None => ZStr::from(format_double(num, precision, zero_fraction)),
+        Some(text) => ZStr::from_ascii(text),
+        None => ZStr::from_ascii(format_double(num, precision, zero_fraction).as_bytes()),
     }
 }
 

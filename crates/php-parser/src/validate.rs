@@ -1569,6 +1569,11 @@ impl Validator {
                     // `zend_delayed_compile_prop` fetches the object with the
                     // same type (`unset($a[]->b)` is an `[]` for unsetting).
                     self.var(object, mode)?;
+                } else if mode == Mode::FuncArg && is_variable(object) {
+                    // ... `BP_VAR_FUNC_ARG` included: `f($a[]->b)` appends or
+                    // throws at run time, unless the compiler knows `f`
+                    // takes the argument by value (`zend_compile_args`).
+                    self.var(object, mode)?;
                 } else if is_variable(object) {
                     self.var(object, Mode::Read)?;
                 } else {

@@ -114,6 +114,20 @@ pub struct ConstDecl {
     pub attributes: Vec<AttributeInfo>,
     /// Line.
     pub line: u32,
+    /// How many of the enum's cases are declared before this constant: its
+    /// place among the cases in declaration order
+    /// ([`ClassDecl::own_constants`]).
+    pub cases_before: u32,
+}
+
+/// One of a class declaration's own constants or enum cases, in
+/// [`ClassDecl::own_constants`] order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnConstant {
+    /// `consts[i]`.
+    Const(usize),
+    /// `cases[i]`.
+    Case(usize),
 }
 
 /// Property hooks (`get`/`set`).
@@ -247,6 +261,27 @@ pub struct ClassDecl {
     pub line_start: u32,
     /// Last line.
     pub line_end: u32,
+}
+
+impl ClassDecl {
+    /// The class's own constants and enum cases in declaration order: the
+    /// order `zend_compile_class_decl` adds them to `constants_table`
+    /// (`zend_compile_class_const_decl`, `zend_compile_enum_case`), which
+    /// `ReflectionClass::getConstants()` shows.
+    pub fn own_constants(&self) -> Vec<OwnConstant> {
+        let mut order = Vec::with_capacity(self.consts.len() + self.cases.len());
+        let mut next_case = 0;
+        for (i, c) in self.consts.iter().enumerate() {
+            let before = usize::try_from(c.cases_before)
+                .unwrap_or(usize::MAX)
+                .min(self.cases.len());
+            order.extend((next_case..before).map(OwnConstant::Case));
+            next_case = next_case.max(before);
+            order.push(OwnConstant::Const(i));
+        }
+        order.extend((next_case..self.cases.len()).map(OwnConstant::Case));
+        order
+    }
 }
 
 /// A declared instance property.
@@ -550,8 +585,71 @@ impl Class {
 
 #[cfg(test)]
 mod tests {
-    use super::{name_map_with_capacity, NameMap};
-    use php_runtime::ZStr;
+    use super::{
+        name_map_with_capacity, ClassDecl, ClassKind, ConstDecl, ConstExpr, NameMap, OwnConstant,
+    };
+    use php_runtime::{Value, ZStr};
+
+    /// An enum declaring `consts` (name, cases declared before it) and
+    /// `cases` cases.
+    fn enum_decl(consts: &[(&str, u32)], cases: usize) -> ClassDecl {
+        ClassDecl {
+            name: ZStr::from("E"),
+            kind: ClassKind::Enum,
+            flags: 0,
+            parent: None,
+            interfaces: Vec::new(),
+            traits: Vec::new(),
+            trait_rules: Vec::new(),
+            consts: consts
+                .iter()
+                .map(|&(name, cases_before)| ConstDecl {
+                    name: ZStr::from(name),
+                    value: ConstExpr::Value(Value::Int(1)),
+                    flags: 0,
+                    ty: None,
+                    doc_comment: None,
+                    attributes: Vec::new(),
+                    line: 1,
+                    cases_before,
+                })
+                .collect(),
+            props: Vec::new(),
+            methods: Vec::new(),
+            cases: (0..cases)
+                .map(|i| (ZStr::from(format!("C{i}")), None, 1))
+                .collect(),
+            case_attributes: Vec::new(),
+            case_doc_comments: Vec::new(),
+            backing: None,
+            attributes: Vec::new(),
+            doc_comment: None,
+            filename: ZStr::from("t.php"),
+            line_start: 1,
+            line_end: 1,
+        }
+    }
+
+    #[test]
+    fn own_constants_interleave_cases_in_declaration_order() {
+        use OwnConstant::{Case, Const};
+        // enum E { const X = 1; case C0; const Y = 2; case C1; }
+        let d = enum_decl(&[("X", 0), ("Y", 1)], 2);
+        assert_eq!(d.own_constants(), [Const(0), Case(0), Const(1), Case(1)]);
+        // enum F { case C0; const X; case C1; const Y; const Z; case C2; }
+        let d = enum_decl(&[("X", 1), ("Y", 2), ("Z", 2)], 3);
+        assert_eq!(
+            d.own_constants(),
+            [Case(0), Const(0), Case(1), Const(1), Const(2), Case(2)]
+        );
+        // Only cases, only constants, and an out-of-range count.
+        assert_eq!(enum_decl(&[], 2).own_constants(), [Case(0), Case(1)]);
+        assert_eq!(enum_decl(&[("X", 0)], 0).own_constants(), [Const(0)]);
+        assert_eq!(
+            enum_decl(&[("X", 5)], 1).own_constants(),
+            [Case(0), Const(0)]
+        );
+    }
 
     #[test]
     fn name_map_finds_keys_by_zstr_and_by_bytes() {

@@ -465,13 +465,15 @@ impl Vm {
                 continue;
             }
             d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
-            if let Some(b) = o.downcast_ref::<object::ObjBox>() {
-                keep.push(b.0.clone());
-            }
             if let Err(e) = self.call_destructor(&o) {
                 return self.destructor_error(e);
             }
-            drop(o);
+            // `GC_DELREF` without the release: the handle `o` took
+            // (`GC_ADDREF(obj)` around `dtor_obj`, the only extra count
+            // the destructor sees) is held until the loop is done, so an
+            // object whose destructor dropped its last reference is not
+            // freed by it.
+            keep.push(o);
             if let Err(e) = self.run_pending_destructors() {
                 return self.destructor_error(e);
             }

@@ -143,6 +143,13 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.php-parser]
 opt-level = 2
+# preg_* per-call overhead: at opt-level 0 the pcre glue alone costs ~1.85 µs per
+# preg_match, which makes ext/pcre/tests/bug72685.phpt (65 536 calls under a 0.5 s
+# limit) fail in the debug build the PHPT runs use (strings2 measurement, 6 Nov 2026).
+[profile.dev.package.php-pcre]
+opt-level = 2
+[profile.dev.package.php-ext-pcre]
+opt-level = 2
 # The interpreter itself: at opt-level 0 every Option/Vec/RefCell helper is
 # an out-of-line call (≈4 000 instructions per empty loop iteration). Level 1
 # cuts per-call overhead 2–3× (with perf/0*.diff ≈4.6×) for ~20 s more per
