@@ -1,5 +1,8 @@
 //! `mb_send_mail()`: MIME-encodes the subject and body according to
-//! `mb_language()` and hands the message to `php-stdmisc`'s `php_mail`.
+//! `mb_language()` and hands the message to `php-stdmisc`'s `php_mail_ex`,
+//! with `mail.log` files written through the stream layer as
+//! `php_mail_log_to_file()` does (so `mail()` and `mb_send_mail()` share
+//! the open-failure warning and the GH-7875 behaviour).
 
 use std::collections::HashMap;
 
@@ -7,7 +10,7 @@ use php_mbstring::convert::{fast_convert, ErrorMode};
 use php_mbstring::detect::guess_encoding_for_strings;
 use php_mbstring::mime::mime_header_encode;
 use php_mbstring::{encoding, Encoding, EncodingNo};
-use php_runtime::Value;
+use php_runtime::{RtResult, Value};
 use php_stdmisc::mail::{self, MailSettings, ScriptInfo};
 use php_stdmisc::system::PageInfo;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
@@ -187,6 +190,49 @@ fn script_info(vm: &Vm) -> ScriptInfo {
         lineno: line,
         uid: page.uid,
     }
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
+}
+
+/// `php_format_date("d-M-Y H:i:s e", ts)` through the date extension
+/// (UTC formatting when `date()` is unavailable).
+fn log_date(vm: &mut Vm, ts: i64) -> String {
+    if vm.native_function("date").is_none() {
+        return mail::format_log_date_utc(ts);
+    }
+    match vm.call_value(
+        &Value::from("date"),
+        vec![Value::from("d-M-Y H:i:s e"), Value::Int(ts)],
+    ) {
+        Ok(Value::Str(s)) => s.to_string_lossy(),
+        _ => mail::format_log_date_utc(ts),
+    }
+}
+
+/// `php_mail_log_to_file()`: `php_stream_open_wrapper(filename, "a",
+/// REPORT_ERRORS | STREAM_DISABLE_OPEN_BASEDIR)`, so a file that cannot be
+/// opened warns as `mb_send_mail(): Failed to open stream: ...`, and an
+/// exception thrown by the error handler for it stops the mail from being
+/// sent (GH-7875).
+fn append_mail_log(vm: &mut Vm, filename: &[u8], line: &[u8]) -> RtResult<()> {
+    php_ext_streams::bridge::run(vm, || {
+        let mut opened = None;
+        if let Some(mut s) = php_streams::open::open_wrapper(
+            filename,
+            "a",
+            php_streams::wrapper::REPORT_ERRORS | php_streams::wrapper::STREAM_DISABLE_OPEN_BASEDIR,
+            &mut opened,
+            None,
+        ) {
+            let _ = s.write(line);
+            s.close();
+        }
+    })
+    .map_err(|t| vm.runtime_error_from(t))
 }
 
 /// `To:` sanitising (`iscntrl` → space, keeping folded continuation lines).
@@ -404,17 +450,18 @@ fn mb_send_mail(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         )
     };
     let script = script_info(vm);
-    let date = mail::format_log_date_utc(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0)),
-    );
+    // The log line's date is only needed for a `mail.log` file.
+    let date = if settings.log.is_empty() || settings.log == b"syslog" {
+        String::new()
+    } else {
+        log_date(vm, now())
+    };
     let to_arg = if to.as_bytes().is_empty() {
         to.as_bytes().to_vec()
     } else {
         to_r
     };
-    mail::php_mail(
+    mail::php_mail_ex(
         &to_arg,
         &subject_enc,
         &body,
@@ -424,6 +471,7 @@ fn mb_send_mail(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         &script,
         &|_| date.clone(),
         vm,
+        &mut append_mail_log,
     )
     .map_err(|e| state::rt_throw(vm, e))
     .map(Value::Bool)
@@ -470,5 +518,81 @@ mod tests {
         assert_eq!(strtok(s, &mut pos, b"= "), Some(&b"charset"[..]));
         assert_eq!(strtok(s, &mut pos, b"= \""), Some(&b"UTF-8"[..]));
         assert_eq!(strtok(s, &mut pos, b"= \""), None);
+    }
+
+    /// A `Write` sink shared with the test.
+    #[derive(Clone, Default)]
+    struct Sink(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// GH-7875 for `mb_send_mail()` (`php_mail()` is shared with `mail()`):
+    /// `mail.log` is opened through the stream layer, so a file that cannot
+    /// be opened warns as `mb_send_mail(): Failed to open stream: ...`; when
+    /// the error handler turns that into an exception no mail is sent, and
+    /// without one the warning shows and the mail still goes out (oracle:
+    /// php 8.3.6 with `sendmail_path="cat > file"`).
+    #[test]
+    fn unopenable_log_file_warns_through_the_stream_layer() {
+        let out_path =
+            std::env::temp_dir().join(format!("phprust-mb-send-mail-{}.out", std::process::id()));
+        let _ = std::fs::remove_file(&out_path);
+        let out_file = out_path.to_string_lossy().into_owned();
+        let opts = php_vm::VmOptions {
+            ini: vec![
+                ("sendmail_path".to_owned(), format!("cat > {out_file}")),
+                (
+                    "mail.log".to_owned(),
+                    "/nonexistent-dir-gh7875/mail.log".to_owned(),
+                ),
+            ],
+        };
+        let sink = Sink::default();
+        let streams = php_ext_streams::Streams;
+        let exts: [&dyn php_vm::ext::Extension; 2] = [&streams, &crate::Mbstring];
+        let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
+        let script = format!(
+            r#"<?php
+set_error_handler(function ($severity, $message, $file, $line) {{
+    throw new ErrorException($message, 0, $severity, $file, $line);
+}});
+try {{
+    mb_send_mail('recipient@example.com', 'Subject', 'Body', []);
+    echo "Not Reached\n";
+}} catch (Throwable $e) {{
+    echo $e::class, ': ', $e->getMessage(), "\n";
+}}
+var_dump(file_exists('{out_file}'));
+restore_error_handler();
+var_dump(mb_send_mail('recipient@example.com', 'Subject', 'Body', []));
+var_dump(file_exists('{out_file}'));
+"#
+        );
+        vm.run_script(script.as_bytes(), "mail.php");
+        drop(vm);
+        let sent = std::fs::read(&out_path).unwrap_or_default();
+        let _ = std::fs::remove_file(&out_path);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "ErrorException: mb_send_mail(): Failed to open stream: No such file or directory\n\
+             bool(false)\n\
+             \nWarning: mb_send_mail(): Failed to open stream: No such file or directory in mail.php on line 13\n\
+             bool(true)\nbool(true)\n"
+        );
+        assert!(
+            sent.starts_with(b"To: recipient@example.com\r\nSubject: Subject\r\n"),
+            "{}",
+            String::from_utf8_lossy(&sent)
+        );
     }
 }
