@@ -53,4 +53,4 @@ pub use error::{
 pub use ops::{GuardKind, RecursionGuard};
 pub use plain::PlainObject;
 pub use string::ZStr;
-pub use value::{Obj, PhpObject, PhpRef, Resource, Value};
+pub use value::{Obj, ObjWeak, PhpObject, PhpRef, Resource, Value};
