@@ -958,9 +958,15 @@ impl Vm {
     #[allow(clippy::too_many_lines)]
     fn run(&mut self, base: usize) -> VmResult<Value> {
         'frames: loop {
-            let code = self.frame().code.clone();
+            // `LOAD_OPLINE()`: one lookup of the current frame, its `ip`
+            // read before the op array's count is bumped (a store the
+            // compiler cannot tell apart from the frame, so a second
+            // `self.frame()` would be a second lookup). The op array is
+            // held so that `ops` outlives a frame popped by `Return`.
+            let top = self.frame();
+            let mut ip = top.ip;
+            let code = top.code.clone();
             let ops: &[Op] = &code.ops;
-            let mut ip = self.frame().ip;
             'ops: loop {
                 let at = ip;
                 let op = &ops[at];
