@@ -720,7 +720,7 @@ fn observing_keeps_the_limit_semantics() {
 
 // ---- the request thread's heap ------------------------------------------
 
-use crate::heap::{is_heap_block, BIN_ELEMENTS, BIN_SIZE};
+use crate::heap::{is_heap_block, small_size_to_bin, BIN_ELEMENTS, BIN_SIZE};
 
 #[test]
 fn owner_small_blocks_come_from_the_heap() {
@@ -964,6 +964,159 @@ fn heap_survives_cross_thread_churn() {
         }
     });
     assert_eq!(a.raw_usage(), 0);
+}
+
+#[test]
+fn another_thread_reallocates_and_frees_the_owners_heap_block() {
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    let layout = Layout::from_size_align(24, 8).expect("layout");
+    // SAFETY: non-zero size; filled below.
+    let p = unsafe { a.alloc(layout) };
+    assert!(is_heap_block(p));
+    // SAFETY: `p` holds 24 bytes.
+    unsafe { ptr::write_bytes(p, 0x5a, 24) };
+    let addr = p.expose_provenance();
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let p = ptr::with_exposed_provenance_mut::<u8>(addr);
+            // Same bin: resized in place, still the heap's block.
+            // SAFETY: allocated by the owner with `layout`; 20 > 0.
+            let q = unsafe { a.realloc(p, layout, 20) };
+            assert_eq!(q, p);
+            let shrunk = Layout::from_size_align(20, 8).expect("layout");
+            // Another bin: this thread does not own the heap, so the block
+            // moves to the inner allocator and the old one is freed
+            // remotely.
+            // SAFETY: `q` is live with `shrunk`; 100 > 0.
+            let r = unsafe { a.realloc(q, shrunk, 100) };
+            assert!(!r.is_null() && !is_heap_block(r));
+            // SAFETY: `r` holds 100 bytes, the first 20 copied from `q`.
+            let kept = unsafe { std::slice::from_raw_parts(r, 20) };
+            assert!(kept.iter().all(|&b| b == 0x5a), "contents moved");
+            // SAFETY: allocated just above with this layout.
+            unsafe { a.dealloc(r, Layout::from_size_align(100, 8).expect("layout")) };
+        });
+    });
+    assert_eq!(a.stats().current, 0);
+    // The owner's list still holds the rest of the run (169 blocks); the
+    // 170th request finds the list dry and takes the remote free over.
+    let per_run = usize::from(BIN_ELEMENTS[small_size_to_bin(24)]);
+    // SAFETY: non-zero size.
+    let got: Vec<*mut u8> = (0..per_run).map(|_| unsafe { a.alloc(layout) }).collect();
+    assert_eq!(
+        got[per_run - 1].addr(),
+        addr,
+        "remote free reused before a new run"
+    );
+    for p in got {
+        // SAFETY: allocated above with `layout`, freed once.
+        unsafe { a.dealloc(p, layout) };
+    }
+    assert_eq!(a.stats().current, 0);
+}
+
+#[test]
+fn shrinking_realloc_moves_to_the_smaller_bin() {
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    let mut b = alloc(&a, 100);
+    let big = b.p;
+    // SAFETY: `b.p` holds 100 bytes.
+    unsafe {
+        for i in 0..100u8 {
+            b.p.add(usize::from(i)).write(i);
+        }
+    }
+    grow(&mut b, 10);
+    assert_ne!(b.p, big, "a 112-byte block is not kept for 10 bytes");
+    assert!(is_heap_block(b.p));
+    // SAFETY: `b.p` holds 10 bytes, copied from the old block.
+    let bytes = unsafe { std::slice::from_raw_parts(b.p, 10) };
+    assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(a.stats().current, 10);
+    // The 112-byte block is free again: its bin hands it out next.
+    let again = alloc(&a, 112);
+    assert_eq!(again.p, big);
+    assert_eq!(a.stats().current, 122);
+}
+
+#[test]
+fn observing_takes_the_owner_off_the_heap_and_gives_it_back() {
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    assert!(a.set_observer(record_event));
+    let before = alloc(&a, 24);
+    assert!(is_heap_block(before.p));
+    a.observe(true);
+    assert!(
+        !a.is_bound_to_current_thread(),
+        "the observed thread gives the heap up"
+    );
+    let during = alloc(&a, 24);
+    assert!(
+        !is_heap_block(during.p),
+        "observed allocations: the inner allocator"
+    );
+    let during_addr = during.p.addr();
+    drop(during);
+    let before_addr = before.p.addr();
+    // A heap block freed while observed: remote list, and reported.
+    drop(before);
+    a.observe(false);
+    assert!(a.is_bound_to_current_thread(), "ownership comes back");
+    let after = alloc(&a, 24);
+    assert!(is_heap_block(after.p));
+    assert_eq!(
+        take_events(),
+        vec![
+            HeapEvent::Alloc {
+                size: 24,
+                addr: during_addr
+            },
+            HeapEvent::Free { addr: during_addr },
+            HeapEvent::Free { addr: before_addr },
+        ]
+    );
+    drop(after);
+    assert_eq!(a.stats().current, 0);
+}
+
+#[test]
+fn sixteen_aligned_requests_of_odd_sizes_are_served_aligned() {
+    let a = CountingAlloc::new(System);
+    assert!(a.bind_to_current_thread());
+    let mut live = Vec::new();
+    for size in [1usize, 17, 33, 100, 1000, 3057, 3072] {
+        let layout = Layout::from_size_align(size, 16).expect("layout");
+        // SAFETY: non-zero size.
+        let p = unsafe { a.alloc(layout) };
+        assert!(!p.is_null() && is_heap_block(p), "{size}");
+        assert_eq!(p.addr() % 16, 0, "{size}");
+        // SAFETY: `p` holds `size` bytes.
+        unsafe { ptr::write_bytes(p, 0xee, size) };
+        live.push((p, layout));
+    }
+    // 3073 bytes at 16 is past the last bin; 8 bytes at 32 is over-aligned.
+    for layout in [
+        Layout::from_size_align(3073, 16).expect("layout"),
+        Layout::from_size_align(8, 32).expect("layout"),
+    ] {
+        // SAFETY: non-zero size.
+        let p = unsafe { a.alloc(layout) };
+        assert!(!p.is_null() && !is_heap_block(p), "{layout:?}");
+        assert_eq!(p.addr() % layout.align(), 0);
+        // SAFETY: allocated just above with `layout`.
+        unsafe { a.dealloc(p, layout) };
+    }
+    for (p, layout) in live {
+        // SAFETY: `p` holds `layout.size()` bytes filled above.
+        let bytes = unsafe { std::slice::from_raw_parts(p, layout.size()) };
+        assert!(bytes.iter().all(|&b| b == 0xee), "{layout:?}: overlap");
+        // SAFETY: allocated above with `layout`, freed once.
+        unsafe { a.dealloc(p, layout) };
+    }
+    assert_eq!(a.stats().current, 0);
 }
 
 // ---- pending hook ---------------------------------------------------------
