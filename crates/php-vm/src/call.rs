@@ -1852,8 +1852,12 @@ impl Vm {
 
     /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
     fn pop_frames_to(&mut self, depth: usize) {
-        if self.frames.len() >= depth && !self.observer.keep_builtin_frame {
-            self.frames.truncate(depth);
+        if self.frames.len() > depth && !self.observer.keep_builtin_frame {
+            // Frames left above the builtin one: dropped after it, in order.
+            let args = std::mem::take(&mut self.frames[depth - 1].args);
+            self.frames.truncate(depth - 1);
+            self.put_arg_vec(args);
+        } else if self.frames.len() == depth && !self.observer.keep_builtin_frame {
             let args = {
                 let Some(frame) = self.frames.pop() else {
                     return;
