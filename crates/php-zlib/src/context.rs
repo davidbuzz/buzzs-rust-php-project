@@ -16,9 +16,9 @@
 use php_streams::value::{Key, Value};
 
 use crate::codec::{buffer_size_guess, fallible_resize, oom_error, valid_encoding};
-use crate::constants::{ZLIB_ENCODING_RAW, z_error};
+use crate::constants::{z_error, ZLIB_ENCODING_RAW};
 use crate::conv::{find, try_get_long, value_name};
-use crate::error::{Error, Result, arg_type_error, arg_value_error};
+use crate::error::{arg_type_error, arg_value_error, Error, Result};
 use crate::ffi::ZStream;
 
 const Z_OK: i32 = 0;
