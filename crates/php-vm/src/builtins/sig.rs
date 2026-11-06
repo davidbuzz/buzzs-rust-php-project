@@ -11,9 +11,10 @@ use crate::opcode::ParamInfo;
 use crate::types::{mask, TypeDecl, TypeMember};
 use php_runtime::{Value, ZArray, ZStr};
 
-/// A parsed signature.
-pub(crate) struct Sig {
-    pub name: String,
+/// A parsed signature; [`parse_sig_borrowed`] leaves the name in the
+/// signature text (`N = &str`).
+pub(crate) struct Sig<N = String> {
+    pub name: N,
     pub params: Vec<ParamInfo>,
     pub defaults: Vec<Option<Value>>,
     pub required: u32,
@@ -348,6 +349,24 @@ fn split_param(p: &str) -> ParamParts<'_> {
 /// # Panics
 /// Panics on malformed signatures (they are compile-time constants).
 pub(crate) fn parse_sig(sig: &str) -> Sig {
+    let s = parse_sig_borrowed(sig);
+    Sig {
+        name: s.name.to_string(),
+        params: s.params,
+        defaults: s.defaults,
+        required: s.required,
+        ret: s.ret,
+        variadic: s.variadic,
+        by_ref_return: s.by_ref_return,
+    }
+}
+
+/// [`parse_sig`] with the name borrowed from `sig` (registration makes its
+/// own `ZStr` of it).
+///
+/// # Panics
+/// Panics on malformed signatures (they are compile-time constants).
+pub(crate) fn parse_sig_borrowed(sig: &str) -> Sig<&str> {
     let open = find_byte(sig, b'(').expect("signature has (");
     let close = sig
         .as_bytes()
@@ -414,7 +433,7 @@ pub(crate) fn parse_sig(sig: &str) -> Sig {
         defaults.push(p.default.and_then(parse_default));
     }
     Sig {
-        name: name.to_string(),
+        name,
         params,
         defaults,
         required,

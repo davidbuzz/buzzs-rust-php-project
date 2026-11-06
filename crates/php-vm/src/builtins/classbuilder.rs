@@ -1,6 +1,6 @@
 //! Construction of internal (builtin) classes.
 
-use super::sig::{parse_sig, parse_type};
+use super::sig::{parse_sig_borrowed, parse_type};
 use crate::class::{
     cflags, AttributeInfo, Class, ClassConst, ConstExpr, InternalKind, PropInfo, StaticProp,
 };
@@ -40,7 +40,7 @@ fn abstract_stub(
 /// The native method of stub signature `sig` with flags `fl` (public
 /// when no visibility is given; `VARIADIC`/`RETURN_REF` from the stub).
 fn builtin_method(sig: &str, fl: u32, h: BuiltinFn) -> Builtin {
-    let s = parse_sig(sig);
+    let s = parse_sig_borrowed(sig);
     let mut bfl = fl;
     if s.variadic {
         bfl |= flags::VARIADIC;
@@ -52,7 +52,7 @@ fn builtin_method(sig: &str, fl: u32, h: BuiltinFn) -> Builtin {
         bfl |= flags::PUBLIC;
     }
     Builtin {
-        name: ZStr::from(s.name.as_str()),
+        name: ZStr::from(s.name),
         params: s.params,
         defaults: s.defaults,
         required: s.required,

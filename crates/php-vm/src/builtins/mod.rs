@@ -40,7 +40,7 @@ pub struct ExtState {
 
 /// Registers a builtin function from a stub signature.
 pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
-    let s = sig::parse_sig(sig);
+    let s = sig::parse_sig_borrowed(sig);
     let mut fl = 0;
     if s.variadic {
         fl |= flags::VARIADIC;
@@ -48,7 +48,7 @@ pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
     if s.by_ref_return {
         fl |= flags::RETURN_REF;
     }
-    let name = ZStr::from(s.name.as_str());
+    let name = ZStr::from(s.name);
     // Shares `name`'s buffer when it is already lower case, as method
     // names do (`ClassBuilder::register`).
     let lc = name.to_ascii_lowercase();
