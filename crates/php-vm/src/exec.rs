@@ -1323,9 +1323,7 @@ impl Vm {
                         let cls = object::class_of(&exc).clone();
                         let mut matched = false;
                         for c in classes.iter() {
-                            let name = self.lit_str(*c);
-                            let lc = name.to_ascii_lowercase();
-                            if cls.instance_of_name(lc.as_bytes()) {
+                            if self.catch_class_matches(&cls, *c) {
                                 matched = true;
                                 break;
                             }

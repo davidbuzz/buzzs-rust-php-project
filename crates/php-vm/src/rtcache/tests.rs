@@ -289,6 +289,40 @@ Deprecated: Constant E_STRICT is deprecated since 8.4, the error level was remov
     );
 }
 
+/// `catch` looks the class up without autoloading and caches it once found (ZEND_CATCH): names in any case, interfaces, multi-catch, a class declared later and a `class_alias` (the alias catches, as in php-src; the name comparison it replaces did not).
+#[test]
+fn catch_looks_classes_up_once_found() {
+    let out = run(r#"<?php
+interface Marker {}
+class MyEx extends Exception implements Marker {}
+function t($e) {
+    try { throw $e; }
+    catch (LATER $x) { return 'later'; }
+    catch (myex $x) { return 'myex'; }
+    catch (MARKER $x) { return 'marker'; }
+    catch (Aliased $x) { return 'aliased'; }
+    catch (runtimeexception | LogicException $x) { return get_class($x); }
+    catch (Throwable $x) { return 'throwable'; }
+}
+for ($i = 0; $i < 2; $i++) {
+    echo t(new MyEx), ' ', t(new RuntimeException), ' ', t(new LogicException), ' ', t(new Error), "\n";
+}
+class_alias('Error', 'Aliased');
+eval('class Later extends Exception {}');
+for ($i = 0; $i < 2; $i++) {
+    echo t(new Later), ' ', t(new MyEx), ' ', t(new Error), ' ', t(new TypeError), "\n";
+}
+"#);
+    assert_eq!(
+        out,
+        r#"myex RuntimeException LogicException throwable
+myex RuntimeException LogicException throwable
+later myex aliased aliased
+later myex aliased aliased
+"#
+    );
+}
+
 /// Class types match in any case, through interfaces, parents, `self`, `parent`, unions and intersections (allocation-free name matching).
 #[test]
 fn class_types_match_names_in_any_case() {

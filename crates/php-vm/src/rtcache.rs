@@ -178,6 +178,26 @@ impl Vm {
         cache[slot] = Rc::downgrade(cls);
     }
 
+    /// `ZEND_CATCH`: whether the exception class `cls` is an instance of
+    /// the class named by literal `lit`, looked up without autoloading and
+    /// cached once found (a class not declared yet catches nothing).
+    pub(crate) fn catch_class_matches(&self, cls: &Rc<Class>, lit: u32) -> bool {
+        let catch_ce = match self.peek_named_class(lit) {
+            Some(c) => c,
+            None => {
+                let Some(c) = self
+                    .rt_lit_str(lit)
+                    .and_then(|n| self.find_class(n.as_bytes()))
+                else {
+                    return false;
+                };
+                self.remember_named_class(lit, &c);
+                c
+            }
+        };
+        cls.is_subclass_of(&catch_ce)
+    }
+
     /// The called scope (`static`), as `resolve_class_spec` finds it.
     #[inline]
     fn rt_called(&self) -> Option<Rc<Class>> {
@@ -266,15 +286,16 @@ impl Vm {
         name: u32,
         fallback: Option<u32>,
     ) -> VmResult<Value> {
-        let fill = match self.const_probe(name, fallback.is_some()) {
-            Ok(v) => return Ok(v),
-            Err(fill) => fill,
-        };
-        let v = self.fetch_constant(name, fallback)?;
-        if fill {
-            self.const_fill(name, fallback);
+        match self.const_probe(name, fallback.is_some()) {
+            Ok(v) => Ok(v),
+            Err(fill) => {
+                let v = self.fetch_constant(name, fallback)?;
+                if fill {
+                    self.const_fill(name, fallback);
+                }
+                Ok(v)
+            }
         }
-        Ok(v)
     }
 
     /// The cached value, or whether the slot should be filled after the
@@ -330,10 +351,10 @@ impl Vm {
                 value: v.clone(),
                 epoch: self.constants.len(),
             },
-            // Not found (a special or case-insensitively namespaced
-            // constant) or not cacheable: leave the slot empty so that a
-            // later definition is still picked up.
-            _ => ConstSlot::Empty,
+            // Not cacheable, or found otherwise (the case-insensitive
+            // namespace lookup): every fetch stays uncached, which also
+            // sees a namespaced constant defined later.
+            _ => ConstSlot::Never,
         }
     }
 
