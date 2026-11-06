@@ -1448,14 +1448,13 @@ impl Vm {
                     })
                 })
             }),
-            Some(Nested::Prop(lit)) => match self.head_object(pid) {
-                Some(obj) => self.tail_probe(pid, &obj, lit, PC_ISSET, |key, data, code, _| {
+            Some(Nested::Prop(lit)) => self.head_object(pid).and_then(|obj| {
+                self.tail_probe(pid, &obj, lit, PC_ISSET, |key, data, code, _| {
                     with_value(key, data, code, |value| {
                         Probe::Hit(isset_value(value, empty))
                     })
-                }),
-                None => None,
-            },
+                })
+            }),
             Some(Nested::Append) | None => None,
         };
         self.finish_isset(found)
