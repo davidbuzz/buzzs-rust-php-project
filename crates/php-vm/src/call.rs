@@ -1519,13 +1519,6 @@ impl Vm {
         // pushed before zpp so arity and argument errors show it. It is
         // pushed first and filled in place: a `Frame` is a few hundred
         // bytes, and every move of one is a `memcpy`.
-        let pushed_args = if call.args.is_empty() {
-            Vec::new()
-        } else {
-            let mut fa = self.call_bufs.args.pop().unwrap_or_default();
-            fa.extend(call.args.iter().cloned());
-            fa
-        };
         // Direct call_user_func calls compile to frameless call forwarding in Zend.
         let builtin_name = (!call.direct
             || !matches!(
@@ -1544,6 +1537,10 @@ impl Vm {
                         )
                     }))
                 || self.compiles_to_opcode(b, &call));
+        // The frame takes the pending call's argument buffer as is
+        // (php-src's arguments stay in the call frame on the VM stack); the
+        // handler gets copies.
+        let pushed_args = std::mem::take(&mut call.args);
         self.frames.push(Frame::with_vars(
             self.empty_code.clone(),
             FrameKind::Builtin,
@@ -1552,14 +1549,24 @@ impl Vm {
         ));
         let depth = self.frames.len();
         {
+            // A new frame has no named arguments, `$this` or scopes: only
+            // the ones the call has are copied.
             let f = &mut self.frames[depth - 1];
             f.func = Some(Func::Builtin(b.clone()));
             f.builtin_name = builtin_name;
-            f.named.clone_from(&call.named);
+            if !call.named.is_empty() {
+                f.named.clone_from(&call.named);
+            }
             install_buffer(&mut f.args, pushed_args);
-            f.this.clone_from(&call.this);
-            f.scope.clone_from(&call.scope);
-            f.called.clone_from(&call.called);
+            if call.this.is_some() {
+                f.this.clone_from(&call.this);
+            }
+            if call.scope.is_some() {
+                f.scope.clone_from(&call.scope);
+            }
+            if call.called.is_some() {
+                f.called.clone_from(&call.called);
+            }
             f.observer_hidden = observer_hidden;
         }
         self.observer_begin_top();
@@ -1575,9 +1582,8 @@ impl Vm {
             let e = self.arg_count_error_builtin(&fname(self), b, npassed);
             return self.builtin_arg_error(depth, e);
         }
-        let mut call_args = std::mem::take(&mut call.args);
-        for (i, a) in call_args.drain(..).enumerate() {
-            match a {
+        for i in 0..npassed {
+            match self.frames[depth - 1].args[i].clone() {
                 Some(v) => {
                     values.push(v);
                     passed.push(true);
@@ -1600,7 +1606,6 @@ impl Vm {
                 }
             }
         }
-        self.put_arg_vec(call_args);
         // Omitted trailing optional parameters get their declared defaults
         // (not marked as passed); backtraces only show the passed ones.
         let nframe_args = values.len();
