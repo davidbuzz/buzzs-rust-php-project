@@ -249,6 +249,33 @@ fn store_home(obj: &Obj, home: &Home, value: &Value) -> Option<Value> {
     }
 }
 
+/// The first write of a typed declared property that was never unset
+/// (`zend_std_write_property` on an `IS_UNDEF` slot that is still
+/// `IS_PROP_UNINIT`: no `__set()`, only the type check, which the caller's
+/// `accepts` already passed): stores `value` into the empty slot. `false`
+/// when the slot is not such a slot (untyped, defined, explicitly unset).
+#[inline]
+fn init_typed_slot(obj: &Obj, entry: &PropCacheEntry, home: &Home, value: &Value) -> bool {
+    let Home::Slot(slot) = home else {
+        return false;
+    };
+    let idx = *slot as usize;
+    let data = object::data(obj);
+    if entry.accept == u32::MAX || data.slot_unset(idx) {
+        return false;
+    }
+    let mut slots = data.slots.borrow_mut();
+    let stored = match slots.get_mut(idx) {
+        Some(cell @ None) => {
+            *cell = Some(value.clone());
+            true
+        }
+        _ => false,
+    };
+    drop(slots);
+    stored
+}
+
 /// `++`/`--` of an int (without overflow) or float in place
 /// (`zend_pre_incdec_property_zval`'s `IS_LONG` fast path, and
 /// `increment_function` on a double): the result, `Slow` otherwise. The
@@ -503,9 +530,9 @@ impl Vm {
     }
 
     /// `ZEND_ASSIGN_OBJ` of cacheable place `pid`: stores `v` over an
-    /// initialized declared slot or an existing dynamic property and
-    /// returns the assigned value, or hands `v` back (`Err`) for the
-    /// generic walk.
+    /// initialized declared slot or an existing dynamic property, or into
+    /// a typed slot not yet initialized (constructors), and returns the
+    /// assigned value, or hands `v` back (`Err`) for the generic walk.
     #[inline]
     pub(crate) fn prop_cache_assign(&mut self, pid: PlaceId, v: Value) -> Result<Value, Value> {
         if matches!(v, Value::Reference(_)) {
@@ -516,7 +543,8 @@ impl Vm {
                 return Probe::Slow;
             }
             match store_home(obj, &home, &v) {
-                Some(old) => Probe::Hit(old),
+                Some(old) => Probe::Hit(Some(old)),
+                None if init_typed_slot(obj, entry, &home, &v) => Probe::Hit(None),
                 None => Probe::Slow,
             }
         });
@@ -1032,6 +1060,66 @@ echo json_encode($o->list), "\n";
         let expected = r#"Cannot assign string to reference held by property Rf::$t of type int
 21 [2,4,6] 5 {"k":9}
 [3,1,2,0,1]
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    /// Constructors initializing typed properties: an uninitialized slot
+    /// that was never unset takes an accepted value directly; coercions,
+    /// type errors and `__set()` after `unset()` keep the generic path.
+    #[test]
+    fn typed_slots_initialized_through_the_cache() {
+        let src = r#"<?php
+class Dep {}
+class Svc {
+    public int $n;
+    public ?Dep $d;
+    public string $s;
+    public float $f;
+    function __construct(int $n, ?Dep $d) {
+        $this->n = $n;
+        $this->d = $d;
+        $this->s = "s$n";
+        $this->f = $n;
+    }
+}
+$all = [];
+for ($i = 0; $i < 3; $i++) { $all[] = new Svc($i, $i ? new Dep : null); }
+var_dump($all[2]);
+class U {
+    public int $x;
+    function __set($n, $v) { echo "__set $n\n"; }
+    function reset() { unset($this->x); }
+    function put($v) { $this->x = $v; }
+}
+$u = new U;
+$u->put(1);
+$u->reset();
+$u->put(2);
+var_dump($u);
+$w = new U;
+try { $w->put("abc"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$w->put("42");
+var_dump($w->x);
+"#;
+        let expected = r#"object(Svc)#4 (4) {
+  ["n"]=>
+  int(2)
+  ["d"]=>
+  object(Dep)#5 (0) {
+  }
+  ["s"]=>
+  string(2) "s2"
+  ["f"]=>
+  float(2)
+}
+__set x
+object(U)#6 (0) {
+  ["x"]=>
+  uninitialized(int)
+}
+Cannot assign string to property U::$x of type int
+int(42)
 "#;
         assert_eq!(run(src), expected);
     }
