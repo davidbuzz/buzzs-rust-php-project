@@ -171,13 +171,6 @@ fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
 fn main() {
     let argv: Vec<Vec<u8>> = std::env::args_os().map(OsStringExt::into_vec).collect();
     let on_main_thread = ensure_main_stack(&argv);
-    if on_main_thread {
-        // The VM runs on this thread: own the request heap from the start,
-        // so module startup's allocations come from it too (php-memlimit's
-        // INTEGRATION.md, "Where the memory comes from"). Not in the
-        // fallback below: the VM thread binds itself at request start.
-        php_memlimit::bind_to_current_thread();
-    }
     limit_memory();
     php_memlimit::set_hard_limit_handler(hard_limit);
     php_memlimit::set_tracked(php_memlimit::tracked_from_env(
@@ -268,6 +261,12 @@ fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
     {
         return status;
     }
+    // This thread runs the request: own php-memlimit's request heap from
+    // here on, so that module startup's allocations come from it too
+    // (php-memlimit's INTEGRATION.md, "Where the memory comes from"). Not
+    // before `maybe_run`: the built-in server's request threads take the
+    // heap per request, so its main thread must not hold it.
+    php_memlimit::bind_to_current_thread();
     let argv0 = argv.first().cloned().unwrap_or_else(|| b"php".to_vec());
     let mut opts = config::Options {
         binary: std::env::current_exe().ok(),
