@@ -2071,6 +2071,15 @@ impl Vm {
 
     /// `place = v`
     pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+        // Fast path: ASSIGN_OBJ to a cached declared slot.
+        let v = if propcache::cacheable(&self.frame().code.places[pid as usize]) {
+            match self.prop_cache_assign(pid, v) {
+                Ok(r) => return Ok(r),
+                Err(v) => v,
+            }
+        } else {
+            v
+        };
         let mut undef_dim = None;
         let (base, segs) =
             self.resolve_place_ex(pid, true, false, Some(&mut undef_dim), PlaceOp::Assign)?;
@@ -2286,6 +2295,13 @@ impl Vm {
         op: BinaryOp,
         v: Value,
     ) -> VmResult<Value> {
+        // Fast path: ASSIGN_OBJ_OP on a cached declared slot holding a
+        // number.
+        if propcache::cacheable(&self.frame().code.places[pid as usize]) {
+            if let Some(r) = self.prop_cache_assign_op(pid, op, &v)? {
+                return Ok(r);
+            }
+        }
         if let Some(cv) = self.rw_undef_cv_container(pid) {
             self.rw_undef_container_first(cv)?;
         }
@@ -2416,6 +2432,12 @@ impl Vm {
                         return Ok(Value::Int(if kind.is_post() { old } else { n }));
                     }
                 }
+            }
+        }
+        // Fast path: PRE/POST_INC/DEC_OBJ on a cached declared slot.
+        if propcache::cacheable(&self.frame().code.places[pid as usize]) {
+            if let Some(r) = self.prop_cache_incdec(pid, kind) {
+                return Ok(r);
             }
         }
         if let Some(cv) = self.rw_undef_cv_container(pid) {
@@ -2681,9 +2703,9 @@ impl Vm {
     /// Reads a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_fetch(&mut self, pid: PlaceId, mode: FetchMode) -> VmResult<Value> {
+        let p = &self.frame().code.places[pid as usize];
         // Fast path: reading a plain compiled variable (`f($x)`).
         if mode == FetchMode::Read {
-            let p = &self.frame().code.places[pid as usize];
             if let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) {
                 let cv = *cv;
                 return self.read_cv(cv);
@@ -2693,6 +2715,13 @@ impl Vm {
             // (`zend_use_undef_in_read_context`).
             if matches!(p.segs.first(), Some(Seg::Append)) {
                 return Err(self.make_throw("Error", "Cannot use [] for reading"));
+            }
+        }
+        // Fast path: `$cv->name` / `$this->name` on a cached declared slot
+        // (FETCH_OBJ_R/IS with a runtime cache slot).
+        if mode != FetchMode::List && propcache::cacheable(p) {
+            if let Some(v) = self.prop_cache_read(pid) {
+                return Ok(v);
             }
         }
         let code = self.frame().code.clone();
@@ -2910,6 +2939,12 @@ impl Vm {
     /// `isset(place)` / `empty(place)` (returns the isset or empty result).
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_isset(&mut self, pid: PlaceId, empty: bool) -> VmResult<bool> {
+        // Fast path: ISSET_ISEMPTY_PROP_OBJ on a cached declared slot.
+        if propcache::cacheable(&self.frame().code.places[pid as usize]) {
+            if let Some(r) = self.prop_cache_isset(pid, empty)? {
+                return Ok(r);
+            }
+        }
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];
         let base = self.resolve_base(&place.base, false, true, None)?;
@@ -3164,6 +3199,8 @@ fn stored_property(obj: &Obj, name: &ZStr) -> Option<Value> {
             .and_then(|t| t.get(&ArrayKey::Str(name.clone())).map(Value::deref)),
     }
 }
+
+mod propcache;
 
 #[cfg(test)]
 mod tests;

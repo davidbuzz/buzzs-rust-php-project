@@ -700,6 +700,37 @@ pub struct OpArray {
     /// are never unregistered once declared). Weak: a method's op array
     /// naming its own class would otherwise form an `Rc` cycle.
     pub class_cache: RefCell<Vec<std::rc::Weak<crate::class::Class>>>,
+    /// Per-place cache of declared property slots, indexed by [`PlaceId`]
+    /// (php-src's `CACHE_ADDR` slot of `FETCH_OBJ_*`/`ASSIGN_OBJ` & co.,
+    /// filled by `zend_fetch_property_address`): sized on first use.
+    pub prop_cache: RefCell<Vec<PropCacheEntry>>,
+}
+
+/// [`PropCacheEntry::base`] of a `$this->name` place.
+pub const PROP_CACHE_THIS: u32 = u32::MAX;
+
+/// An [`OpArray::prop_cache`] entry: the declared property a one-segment
+/// property place (`$cv->name`, `$this->name`, literal name) resolved to
+/// for one class and calling scope, like php-src's cached
+/// `(ce, offset, prop_info)` triple. Classes are compared by address and
+/// held weakly, which pins the address without keeping the class alive (a
+/// method's op array caching its own class would otherwise be an `Rc`
+/// cycle).
+#[derive(Debug, Default, Clone)]
+pub struct PropCacheEntry {
+    /// The object's class (`Weak::new()` in an unfilled entry).
+    pub class: std::rc::Weak<crate::class::Class>,
+    /// The class scope the lookup ran in (`None`: no class scope).
+    pub scope: Option<std::rc::Weak<crate::class::Class>>,
+    /// The place's base: a CV, or [`PROP_CACHE_THIS`].
+    pub base: u32,
+    /// The declared property's slot.
+    pub slot: u32,
+    /// Builtin type bits (`types::mask`) a written value may have to be
+    /// stored without coercion; `u32::MAX` for an untyped property.
+    pub accept: u32,
+    /// `PC_*` bits of `place::propcache`: which fast paths apply.
+    pub flags: u8,
 }
 
 /// An [`OpArray::fcall_cache`] entry. User functions are held weakly: the

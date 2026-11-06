@@ -114,6 +114,7 @@ impl ImageBuilder {
             decls: self.table(&original.decls),
             fcall_cache: RefCell::new(Vec::new()),
             class_cache: RefCell::new(Vec::new()),
+            prop_cache: RefCell::new(Vec::new()),
         });
         self.code.insert(key, code.clone());
         code
