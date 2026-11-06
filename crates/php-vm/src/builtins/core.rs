@@ -1968,10 +1968,13 @@ fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 .as_bytes()
                 .iter()
                 .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80);
-        let exists = vars
-            .borrow_mut()
-            .find(name.as_bytes())
-            .is_some_and(|i| vars.borrow().slots[i as usize].is_some());
+        // One borrow: `find` needs it mutably (it may build the name
+        // index), and the slot test reads through the same guard.
+        let exists = {
+            let mut st = vars.borrow_mut();
+            st.find(name.as_bytes())
+                .is_some_and(|i| st.slots[i as usize].is_some())
+        };
         let target = match mode {
             1 => {
                 if exists {
