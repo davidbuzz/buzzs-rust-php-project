@@ -823,7 +823,7 @@ $u++; var_dump($u);
     #[test]
     fn dim_reads_on_cvs() {
         let src = r#"<?php
-$a = range(0, 9); $s = 0;
+$a = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; $s = 0;
 for ($i = 0; $i < 20; $i++) { $s = $a[$i & 7]; }
 var_dump($s);
 $h = ['x' => 1, '5' => 'five', 7 => [1]];
@@ -858,7 +858,7 @@ echo "end\n";
 
     #[test]
     fn isset_empty_and_coalesce_on_cv_dimensions() {
-        let src = r#"<?php
+        let src = r#"<?php class AO implements ArrayAccess { public $a; function __construct($a) { $this->a = $a; } function offsetExists($k): bool { return isset($this->a[$k]); } function offsetGet($k): mixed { return $this->a[$k]; } function offsetSet($k, $v): void { $this->a[$k] = $v; } function offsetUnset($k): void { unset($this->a[$k]); } }
 $a = [1, 0, null, 'x' => 'y', '7' => 'seven', 'e' => '', 'z' => '0', 'arr' => [], 'f' => 0.0];
 var_dump(isset($a[0]), isset($a[1]), isset($a[2]), isset($a[3]), isset($a['x']), isset($a[7]), isset($a['7']), isset($a['missing']));
 var_dump(empty($a[0]), empty($a[1]), empty($a[2]), empty($a[3]), empty($a['x']), empty($a['e']), empty($a['z']), empty($a['arr']), empty($a['f']));
@@ -867,7 +867,7 @@ var_dump(isset($a[$k]), isset($a[$i]), isset($a[$fl]), empty($a[$k]), empty($a[$
 var_dump($a[$k] ?? 'd', $a[2] ?? 'd', $a['missing'] ?? 'd', $a[$i] ?? 'd');
 $r = &$a; var_dump(isset($r['x']), isset($r['q']), $r['x'] ?? 'd');
 $s = 'str'; var_dump(isset($s[1]), isset($s[5]), empty($s[0]), $s[1] ?? 'd');
-$o = new ArrayObject(['k' => 1, 'n' => null]); var_dump(isset($o['k']), isset($o['n']), isset($o['m']), empty($o['k']), $o['k'] ?? 'd', $o['m'] ?? 'd');
+$o = new AO(['k' => 1, 'n' => null]); var_dump(isset($o['k']), isset($o['n']), isset($o['m']), empty($o['k']), $o['k'] ?? 'd', $o['m'] ?? 'd');
 $b = [&$i, [1]]; $i = null; var_dump(isset($b[0]), $b[0] ?? 'd', isset($b[1][0]), isset($b[1][1]), $b[1][0] ?? 'd');
 var_dump(isset($undef[0]), empty($undef[0]), $undef[0] ?? 'd');
 $ai = ['1' => 'a', '01' => 'b']; var_dump(isset($ai[1]), isset($ai['1']), isset($ai['01']), $ai['01'] ?? 'd');
@@ -900,7 +900,7 @@ $X = [];
 for ($i = 0; $i < 5; $i++) { $X["foo_$i"] = $i; }
 $sum = 0;
 for ($i = 0; $i < 5; $i++) { $sum += $X["foo_$i"]; }
-var_dump($sum, count($X));
+var_dump($sum, cnt($X));
 $n = 0;
 for ($i = 0; $i < 7; $i++) { if (isset($X["foo_$i"])) { $n++; } }
 var_dump($n);
@@ -909,9 +909,10 @@ $v = $X["bar_" . 2] ?? 'd'; var_dump($v);
 $v = $X["foo_" . 9]; var_dump($v);
 $k = 3; $X["foo_$k"] = 'three'; var_dump($X["foo_$k"]);
 $Y = [5 => 'five']; var_dump($Y["" . 5], isset($Y[5 . ""]), $Y[strval(5)]);
-$Y["0" . "7"] = 'oh-seven'; var_dump(array_keys($Y));
+$Y["0" . "7"] = 'oh-seven'; $ks = []; foreach ($Y as $kk => $_) { $ks[] = $kk; } var_dump($ks);
 $s = "k"; $Z = []; $Z[$s . $s] = 1; $Z[$s . $s] += 2; var_dump($Z);
 echo memory_get_usage() > 0 ? "ok\n" : "bad\n";
+function cnt($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
 "#;
         let out = run(src);
         assert!(
@@ -989,7 +990,7 @@ $b = [true]; $b[0]++; $b[0] += 1; var_dump($b);
 
     #[test]
     fn nested_dimension_reads_on_cvs() {
-        let src = r#"<?php
+        let src = r#"<?php class AO implements ArrayAccess { public $a; function __construct($a) { $this->a = $a; } function offsetExists($k): bool { return isset($this->a[$k]); } function offsetGet($k): mixed { return $this->a[$k]; } function offsetSet($k, $v): void { $this->a[$k] = $v; } function offsetUnset($k): void { unset($this->a[$k]); } }
 $m = [[1, 2], [3, 4]]; $s = 0;
 for ($i = 0; $i < 2; $i++) { for ($j = 0; $j < 2; $j++) { $s += $m[$i][$j]; } }
 var_dump($s);
@@ -1003,7 +1004,7 @@ var_dump($m[5][0]);
 var_dump($m[0][7]);
 $str = ['ab']; var_dump($str[0][1]);
 $n = [null]; var_dump($n[0][0]);
-$o = [new ArrayObject([[7]])]; var_dump($o[0][0][0]);
+$o = [new AO([[7]])]; var_dump($o[0][0][0]);
 $ref = &$m[0]; $ref[0] = 99; var_dump($m[0][0]);
 $t = [[1]]; $x = $t[0][0]; var_dump($x);
 $w = ['k' => [1.5]]; $y = $w['k'][0] ?? 0; var_dump($y);
@@ -1038,13 +1039,13 @@ echo "end\n";
 
     #[test]
     fn dim_writes_on_cvs() {
-        let src = r#"<?php
-$a = array_fill(0, 4, 0);
+        let src = r#"<?php class AO implements ArrayAccess { public $a; function __construct($a) { $this->a = $a; } function offsetExists($k): bool { return isset($this->a[$k]); } function offsetGet($k): mixed { return $this->a[$k]; } function offsetSet($k, $v): void { $this->a[$k] = $v; } function offsetUnset($k): void { unset($this->a[$k]); } }
+$a = [0, 0, 0, 0];
 for ($i = 0; $i < 10; $i++) { $a[$i & 3] = $i; }
 var_dump($a);
 $b = $a; $b[0] = 'x'; var_dump($a[0], $b[0]);
 $h = []; $h['k'] = 1.5; $h['3'] = true; $h[] = null; var_dump($h);
-$o = [new ArrayObject([])]; $o[0] = 1; var_dump($o);
+$o = [new AO([])]; $o[0] = 1; var_dump($o);
 $r = [1]; $x = 5; $r[0] = &$x; $r[0] = 6; var_dump($x);
 $str = 'abc'; $str[1] = 'X'; var_dump($str);
 $n = null; $n[2] = 1; var_dump($n);
@@ -1080,10 +1081,11 @@ $c = 'lit'; var_dump($c);
 $i = "0";
 for (; $i < 3; $i++) { echo $i; }
 echo "\n";
-$a = null; $a[0] = 1; $a[1] = 2; var_dump(count($a));
+$a = null; $a[0] = 1; $a[1] = 2; var_dump(cnt($a));
 $s = null; $s += 2; $s += 3; var_dump($s);
 $x = [1, 2]; $y = &$x; $v = $x[1]; $v = $x[0]; var_dump($v);
 $t = 0; $t = $t + "1"; $t = $t + 1; var_dump($t);
+function cnt($a) { $n = 0; foreach ($a as $_) { $n++; } return $n; }
 "#;
         let expected = "012\nint(2)\nint(5)\nint(1)\nint(2)\n";
         assert_eq!(run(src), expected);
