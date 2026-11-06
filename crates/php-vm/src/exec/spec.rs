@@ -16,7 +16,7 @@
 //! [`Op::FetchDimCv`]: crate::opcode::Op::FetchDimCv
 //! [`Op::AssignDimCv`]: crate::opcode::Op::AssignDimCv
 
-use super::{CvOpData, Num};
+use super::{num_bin, CvOpData, Num};
 use crate::opcode::{BinKind, FetchMode, IncDecKind, Operand, PlaceId};
 use crate::vm::{Frame, VarStore, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, Value, ZStr};
@@ -466,6 +466,120 @@ impl Vm {
         Ok(())
     }
 
+    /// `$cv[dim] op= val` when `$cv` holds a non-reference array whose
+    /// element at the (int or string) offset is a plain number and `val`
+    /// peeks as a plain number: `ZEND_ASSIGN_DIM_OP` with the
+    /// `IS_LONG`/`IS_DOUBLE` fast path of `zend_binary_op` on the fetched
+    /// slot, after `SEPARATE_ARRAY`. Returns false, having changed nothing,
+    /// otherwise (a missing key warns and inserts on the generic path).
+    #[inline]
+    fn assign_op_dim_cv_fast(&mut self, cv: u32, dim: Operand, op: BinaryOp, val: Operand) -> bool {
+        let Some(key) = self.peek_dim_key(dim) else {
+            return false;
+        };
+        let Some(y) = self.peek_num(val) else {
+            return false;
+        };
+        let f = self.frame();
+        let idx = f.cv_idx(cv);
+        let mut vars = f.vars.borrow_mut();
+        let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
+            return false;
+        };
+        let x = match arr.get(&key) {
+            Some(Value::Int(i)) => Num::Int(*i),
+            Some(Value::Float(x)) => Num::Float(*x),
+            _ => return false,
+        };
+        let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
+            return false;
+        };
+        let Some(slot) = arr.make_mut().get_mut(&key) else {
+            return false;
+        };
+        // A number replaces a number: no drop glue to run.
+        std::mem::forget(std::mem::replace(slot, r));
+        drop(vars);
+        self.release_tmp_str(dim);
+        true
+    }
+
+    /// [`crate::opcode::Op::AssignOpDimCv`].
+    #[inline]
+    pub(super) fn op_assign_op_dim_cv(
+        &mut self,
+        cv: u32,
+        dim: Operand,
+        op: BinaryOp,
+        val: Operand,
+        place: PlaceId,
+    ) -> VmResult<()> {
+        if self.assign_op_dim_cv_fast(cv, dim, op, val) {
+            return Ok(());
+        }
+        let v = self.read(val)?;
+        self.place_assign_op(place, op, v)?;
+        Ok(())
+    }
+
+    /// `$cv[dim]++` & co. when `$cv` holds a non-reference array whose
+    /// element at the (int or string) offset is an int that does not
+    /// overflow, or a float (`FETCH_DIM_RW` + the `IS_LONG`/`IS_DOUBLE`
+    /// fast path of `PRE/POST_INC/DEC`): the expression's value, or `None`
+    /// (nothing changed) for the generic path.
+    #[inline]
+    fn incdec_dim_cv_fast(&mut self, cv: u32, dim: Operand, kind: IncDecKind) -> Option<Value> {
+        let key = self.peek_dim_key(dim)?;
+        let f = self.frame();
+        let idx = f.cv_idx(cv);
+        let mut vars = f.vars.borrow_mut();
+        let Some(Some(Value::Array(arr))) = vars.slots.get_mut(idx) else {
+            return None;
+        };
+        let (old, new) = match arr.get(&key)? {
+            Value::Int(i) => {
+                let i = *i;
+                let n = if kind.is_inc() {
+                    i.checked_add(1)?
+                } else {
+                    i.checked_sub(1)?
+                };
+                (Value::Int(i), Value::Int(n))
+            }
+            Value::Float(x) => {
+                let x = *x;
+                let n = if kind.is_inc() { x + 1.0 } else { x - 1.0 };
+                (Value::Float(x), Value::Float(n))
+            }
+            _ => return None,
+        };
+        let slot = arr.make_mut().get_mut(&key)?;
+        // A number replaces a number: no drop glue to run.
+        std::mem::forget(std::mem::replace(slot, new.clone()));
+        drop(vars);
+        self.release_tmp_str(dim);
+        Some(if kind.is_post() { old } else { new })
+    }
+
+    /// [`crate::opcode::Op::IncDecDimCv`].
+    #[inline]
+    pub(super) fn op_incdec_dim_cv(
+        &mut self,
+        cv: u32,
+        dim: Operand,
+        kind: IncDecKind,
+        dst: Option<u32>,
+        place: PlaceId,
+    ) -> VmResult<()> {
+        let r = if let Some(r) = self.incdec_dim_cv_fast(cv, dim, kind) {
+            r
+        } else {
+            self.place_incdec(place, kind)?
+        };
+        self.set_dst(dst, r);
+        Ok(())
+    }
+
     /// A plain value (see [`is_plain_value`]) an `OP_DATA` operand holds,
     /// without consuming it: a literal, a defined non-reference CV or a
     /// temporary.
@@ -864,6 +978,66 @@ echo memory_get_usage() > 0 ? "ok\n" : "bad\n";
             ),
             "{out}"
         );
+    }
+
+    #[test]
+    fn compound_assignments_and_incdec_on_cv_dimensions() {
+        let src = r#"<?php
+$X = []; $Y = [];
+for ($i = 0; $i < 5; $i++) { $X[$i] = $i + 1; $Y[$i] = 0; }
+for ($k = 0; $k < 3; $k++) { for ($i = 4; $i >= 0; $i--) { $Y[$i] += $X[$i]; } }
+var_dump($Y);
+$h = ['a' => 1, 'b' => 1.5];
+$h['a'] += 2; $h['b'] *= 2; $h['a'] -= 1; $h['a'] |= 8; $h['a'] &= 12; $h['a'] ^= 1;
+var_dump($h);
+$h['missing'] += 1; var_dump($h['missing']);
+$h['s'] = "3"; $h['s'] += 1; var_dump($h['s']);
+$h['a'] += 0.5; var_dump($h['a']);
+$m = [PHP_INT_MAX]; $m[0] += 1; var_dump($m[0]);
+$m[0] = PHP_INT_MAX; $m[0]++; var_dump($m[0]);
+$c = [0, 1.5, "x", null, "9"]; $c[0]++; $c[1]++; $c[2]++; $c[3]++; $c[4]++; $c[0]--; var_dump($c);
+$d = [5]; $e = $d; $d[0] += 1; $d[0]++; var_dump($d, $e);
+$r = [1]; $v = 10; $r[0] = &$v; $r[0] += 5; $r[0]++; var_dump($v);
+$u[0] += 1; var_dump($u);
+$w = [1]; $z = ($w[0] += 2); $z2 = $w[0]++; $z3 = ++$w[0]; var_dump($z, $z2, $z3, $w);
+$n = null; $n[1]++; var_dump($n);
+$q = [1]; $qq = &$q; $q[0] += 1; $q[0]++; var_dump($qq);
+$f = [1.5]; $f[0]++; $f[0]--; $f[0] += 1; var_dump($f[0]);
+$g = ['k' => 2]; $kk = 'k'; $g[$kk] *= 3; $g[$kk]--; var_dump($g);
+$b = [true]; $b[0]++; $b[0] += 1; var_dump($b);
+"#;
+        let out = run(src);
+        let head = "array(5) {\n  [0]=>\n  int(3)\n  [1]=>\n  int(6)\n  [2]=>\n  int(9)\n  [3]=>\n  int(12)\n  [4]=>\n  int(15)\n}\narray(2) {\n  [\"a\"]=>\n  int(9)\n  [\"b\"]=>\n  float(3)\n}\n";
+        assert!(out.starts_with(head), "{out}");
+        assert!(out.contains("Undefined array key \"missing\""), "{out}");
+        assert!(
+            out.contains("int(1)\nint(4)\nfloat(9.5)\nfloat(9.223372036854776E+18)\nfloat(9.223372036854776E+18)\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Increment on non-numeric string is deprecated"),
+            "{out}"
+        );
+        assert!(
+            out.contains("array(5) {\n  [0]=>\n  int(0)\n  [1]=>\n  float(2.5)\n  [2]=>\n  string(1) \"y\"\n  [3]=>\n  int(1)\n  [4]=>\n  int(10)\n}\narray(1) {\n  [0]=>\n  int(7)\n}\narray(1) {\n  [0]=>\n  int(5)\n}\nint(16)\n"),
+            "{out}"
+        );
+        assert!(out.contains("Undefined variable $u"), "{out}");
+        assert!(out.contains("Undefined array key 0"), "{out}");
+        assert!(
+            out.contains("array(1) {\n  [0]=>\n  int(1)\n}\nint(3)\nint(3)\nint(5)\narray(1) {\n  [0]=>\n  int(5)\n}\n"),
+            "{out}"
+        );
+        assert!(out.contains("Undefined array key 1"), "{out}");
+        assert!(
+            out.contains("array(1) {\n  [1]=>\n  int(1)\n}\narray(1) {\n  [0]=>\n  int(3)\n}\nfloat(2.5)\narray(1) {\n  [\"k\"]=>\n  int(5)\n}\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Increment on type bool has no effect"),
+            "{out}"
+        );
+        assert!(out.ends_with("array(1) {\n  [0]=>\n  int(2)\n}\n"), "{out}");
     }
 
     #[test]

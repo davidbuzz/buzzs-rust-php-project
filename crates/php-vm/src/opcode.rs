@@ -641,6 +641,28 @@ pub enum Op {
         dst: Option<u32>,
         place: PlaceId,
     },
+    /// `AssignOp` (`+=`, `-=`, `*=`, `|=`, `&=`, `^=`) of `$cv[dim]` without
+    /// a used result (`ZEND_ASSIGN_DIM_OP_SPEC_CV_*` on an array whose
+    /// element at the int or string offset is a plain number, with a plain
+    /// number as `OP_DATA`); anything else goes through `place`.
+    AssignOpDimCv {
+        cv: u32,
+        dim: Operand,
+        op: BinaryOp,
+        val: Operand,
+        place: PlaceId,
+    },
+    /// `IncDec` of `$cv[dim]` (`ZEND_PRE_INC_DIM`... no: php-src has no
+    /// dimension inc/dec opcode; `$a[k]++` is `FETCH_DIM_RW` + `PRE_INC` on
+    /// the fetched slot, whose `IS_LONG`/`IS_DOUBLE` fast path this is);
+    /// other elements and containers go through `place`.
+    IncDecDimCv {
+        cv: u32,
+        dim: Operand,
+        kind: IncDecKind,
+        dst: Option<u32>,
+        place: PlaceId,
+    },
     /// `Fetch` (`Read` or `Is` mode) of `$cv[dim]`
     /// (`ZEND_FETCH_DIM_R_SPEC_CV_*` / `ZEND_FETCH_DIM_IS_SPEC_CV_*` with
     /// `zend_fetch_dimension_address_inner` on an array and an int or

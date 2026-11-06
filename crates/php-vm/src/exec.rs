@@ -112,46 +112,55 @@ impl Vm {
     fn bin_num_fast(&self, op: BinKind, a: Operand, b: Operand) -> Option<Value> {
         let x = self.peek_num(a)?;
         let y = self.peek_num(b)?;
-        if let (Num::Int(x), Num::Int(y)) = (x, y) {
-            return Some(match op {
-                BinKind::Arith(BinaryOp::Add) => Value::Int(x.checked_add(y)?),
-                BinKind::Arith(BinaryOp::Sub) => Value::Int(x.checked_sub(y)?),
-                BinKind::Arith(BinaryOp::Mul) => Value::Int(x.checked_mul(y)?),
-                BinKind::Arith(BinaryOp::BitOr) => Value::Int(x | y),
-                BinKind::Arith(BinaryOp::BitAnd) => Value::Int(x & y),
-                BinKind::Arith(BinaryOp::BitXor) => Value::Int(x ^ y),
-                BinKind::Equal | BinKind::Identical => Value::Bool(x == y),
-                BinKind::NotEqual | BinKind::NotIdentical => Value::Bool(x != y),
-                BinKind::Less => Value::Bool(x < y),
-                BinKind::LessEqual => Value::Bool(x <= y),
-                BinKind::Spaceship => Value::Int(match x.cmp(&y) {
-                    std::cmp::Ordering::Less => -1,
-                    std::cmp::Ordering::Equal => 0,
-                    std::cmp::Ordering::Greater => 1,
-                }),
-                _ => return None,
-            });
-        }
-        let mixed = matches!(
-            (x, y),
-            (Num::Int(_), Num::Float(_)) | (Num::Float(_), Num::Int(_))
-        );
-        #[allow(clippy::cast_precision_loss)] // php-src's (double) widening
-        let (xf, yf) = (x.as_f64(), y.as_f64());
-        Some(match op {
-            BinKind::Arith(BinaryOp::Add) => Value::Float(xf + yf),
-            BinKind::Arith(BinaryOp::Sub) => Value::Float(xf - yf),
-            BinKind::Arith(BinaryOp::Mul) => Value::Float(xf * yf),
-            BinKind::Equal => Value::Bool(xf == yf),
-            BinKind::NotEqual => Value::Bool(xf != yf),
-            BinKind::Identical => Value::Bool(!mixed && xf == yf),
-            BinKind::NotIdentical => Value::Bool(mixed || xf != yf),
-            BinKind::Less => Value::Bool(xf < yf),
-            BinKind::LessEqual => Value::Bool(xf <= yf),
-            _ => return None,
-        })
+        num_bin(op, x, y)
     }
+}
 
+/// The arithmetic of [`Vm::bin_num_fast`] on two peeked numbers: `None`
+/// when the operator has no sealed numeric form or an int result overflows.
+#[inline]
+fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
+    if let (Num::Int(x), Num::Int(y)) = (x, y) {
+        return Some(match op {
+            BinKind::Arith(BinaryOp::Add) => Value::Int(x.checked_add(y)?),
+            BinKind::Arith(BinaryOp::Sub) => Value::Int(x.checked_sub(y)?),
+            BinKind::Arith(BinaryOp::Mul) => Value::Int(x.checked_mul(y)?),
+            BinKind::Arith(BinaryOp::BitOr) => Value::Int(x | y),
+            BinKind::Arith(BinaryOp::BitAnd) => Value::Int(x & y),
+            BinKind::Arith(BinaryOp::BitXor) => Value::Int(x ^ y),
+            BinKind::Equal | BinKind::Identical => Value::Bool(x == y),
+            BinKind::NotEqual | BinKind::NotIdentical => Value::Bool(x != y),
+            BinKind::Less => Value::Bool(x < y),
+            BinKind::LessEqual => Value::Bool(x <= y),
+            BinKind::Spaceship => Value::Int(match x.cmp(&y) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            }),
+            _ => return None,
+        });
+    }
+    let mixed = matches!(
+        (x, y),
+        (Num::Int(_), Num::Float(_)) | (Num::Float(_), Num::Int(_))
+    );
+    #[allow(clippy::cast_precision_loss)] // php-src's (double) widening
+    let (xf, yf) = (x.as_f64(), y.as_f64());
+    Some(match op {
+        BinKind::Arith(BinaryOp::Add) => Value::Float(xf + yf),
+        BinKind::Arith(BinaryOp::Sub) => Value::Float(xf - yf),
+        BinKind::Arith(BinaryOp::Mul) => Value::Float(xf * yf),
+        BinKind::Equal => Value::Bool(xf == yf),
+        BinKind::NotEqual => Value::Bool(xf != yf),
+        BinKind::Identical => Value::Bool(!mixed && xf == yf),
+        BinKind::NotIdentical => Value::Bool(mixed || xf != yf),
+        BinKind::Less => Value::Bool(xf < yf),
+        BinKind::LessEqual => Value::Bool(xf <= yf),
+        _ => return None,
+    })
+}
+
+impl Vm {
     /// Generic [`Op::Bin`] evaluation, out of line so the dispatch loop
     /// stays small (the sealed numeric forms handle the hot cases).
     #[inline(never)]
@@ -1547,6 +1556,26 @@ impl Vm {
                         self.op_assign_op_cv(*cv, *op, *val, *dst, *place)?;
                         Flow::Next
                     }
+                    Op::AssignOpDimCv {
+                        cv,
+                        dim,
+                        op,
+                        val,
+                        place,
+                    } => {
+                        self.op_assign_op_dim_cv(*cv, *dim, *op, *val, *place)?;
+                        Flow::Next
+                    }
+                    Op::IncDecDimCv {
+                        cv,
+                        dim,
+                        kind,
+                        dst,
+                        place,
+                    } => {
+                        self.op_incdec_dim_cv(*cv, *dim, *kind, *dst, *place)?;
+                        Flow::Next
+                    }
                     Op::FetchDimCv {
                         cv,
                         dim,
@@ -2274,6 +2303,7 @@ fn defers_oom(op: &Op) -> bool {
             | Op::AssignOp { .. }
             | Op::BinAssignCv { .. }
             | Op::AssignOpCv { .. }
+            | Op::AssignOpDimCv { .. }
             | Op::AssignDimCv { .. }
             | Op::Echo(_)
             | Op::Free(_)
