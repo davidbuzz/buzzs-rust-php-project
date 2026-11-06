@@ -143,16 +143,16 @@ fn add_member(t: &mut TypeDecl, part: &str) {
     let part = trim(part);
     // The parentheses of a DNF group, `(A&B)`: every leading `(` and
     // then every trailing `)`.
-    let b = part.as_bytes();
-    let mut a = 0;
-    while a < b.len() && b[a] == b'(' {
-        a += 1;
+    let bytes = part.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() && bytes[start] == b'(' {
+        start += 1;
     }
-    let mut z = b.len();
-    while z > a && b[z - 1] == b')' {
-        z -= 1;
+    let mut end = bytes.len();
+    while end > start && bytes[end - 1] == b')' {
+        end -= 1;
     }
-    let part = &part[a..z];
+    let part = &part[start..end];
     if find_byte(part, b'&').is_some() {
         t.members
             .push(TypeMember::Intersection(t.intersections.len()));
@@ -160,23 +160,20 @@ fn add_member(t: &mut TypeDecl, part: &str) {
             .push(part.split('&').map(|p| ZStr::from(trim(p))).collect());
         return;
     }
-    match builtin_mask(part) {
-        Some(m) => {
-            if m == mask::ITERABLE {
-                t.members.push(TypeMember::Iterable);
-            }
-            t.mask |= m;
+    if let Some(bits) = builtin_mask(part) {
+        if bits == mask::ITERABLE {
+            t.members.push(TypeMember::Iterable);
         }
-        None => {
-            // A class name, without its leading `\`s.
-            let b = part.as_bytes();
-            let mut k = 0;
-            while k < b.len() && b[k] == b'\\' {
-                k += 1;
-            }
-            t.members.push(TypeMember::Class(t.classes.len()));
-            t.classes.push(ZStr::from(&part[k..]));
+        t.mask |= bits;
+    } else {
+        // A class name, without its leading `\`s.
+        let bytes = part.as_bytes();
+        let mut skip = 0;
+        while skip < bytes.len() && bytes[skip] == b'\\' {
+            skip += 1;
         }
+        t.members.push(TypeMember::Class(t.classes.len()));
+        t.classes.push(ZStr::from(&part[skip..]));
     }
 }
 
@@ -369,19 +366,15 @@ impl<'a> Iterator for ParamSplit<'a> {
         // (not at the list's start) so a list is scanned once in all.
         let s: &'a str = self.s;
         let start = self.pos;
-        match depth0_comma(&s.as_bytes()[start..]) {
-            Some(i) => {
-                // `start` follows a comma and `start + i` is one: both are
-                // char boundaries.
-                self.pos = start + i + 1;
-                Some(&s[start..start + i])
-            }
-            None => {
-                self.done = true;
-                let last = &s[start..];
-                (!trim(last).is_empty()).then_some(last)
-            }
+        if let Some(i) = depth0_comma(&s.as_bytes()[start..]) {
+            // `start` follows a comma and `start + i` is one: both are
+            // char boundaries.
+            self.pos = start + i + 1;
+            return Some(&s[start..start + i]);
         }
+        self.done = true;
+        let last = &s[start..];
+        (!trim(last).is_empty()).then_some(last)
     }
 }
 
@@ -774,16 +767,15 @@ mod reference {
                     .push(part.split('&').map(|p| ZStr::from(p.trim())).collect());
                 continue;
             }
-            let m = match BUILTIN_TYPES
+            let builtin = BUILTIN_TYPES
                 .iter()
-                .find(|(name, _)| part.eq_ignore_ascii_case(name))
-            {
-                Some(&(_, m)) => m,
-                None => {
-                    t.members.push(TypeMember::Class(t.classes.len()));
-                    t.classes.push(ZStr::from(part.trim_start_matches('\\')));
-                    0
-                }
+                .find(|(name, _)| part.eq_ignore_ascii_case(name));
+            let m = if let Some(&(_, m)) = builtin {
+                m
+            } else {
+                t.members.push(TypeMember::Class(t.classes.len()));
+                t.classes.push(ZStr::from(part.trim_start_matches('\\')));
+                0
             };
             if m == mask::ITERABLE {
                 t.members.push(TypeMember::Iterable);

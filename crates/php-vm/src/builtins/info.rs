@@ -138,12 +138,11 @@ impl Attributed {
         match self.index.entry(name.clone()) {
             Entry::Occupied(mut e) => {
                 let slot = e.get_mut();
-                match slot.pos {
-                    Some(p) => self.list[p].1 = module,
-                    None => {
-                        slot.pos = Some(self.list.len());
-                        self.list.push((name.clone(), module));
-                    }
+                if let Some(p) = slot.pos {
+                    self.list[p].1 = module;
+                } else {
+                    slot.pos = Some(self.list.len());
+                    self.list.push((name.clone(), module));
                 }
                 if origin.is_some() {
                     slot.origin = origin;
