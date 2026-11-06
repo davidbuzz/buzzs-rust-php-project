@@ -37,34 +37,78 @@ pub(crate) fn specialise(ops: &mut [Op], places: &[Place]) {
 fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
     match op {
         Op::Bin { op, a, b, dst } => bin(*op, *a, *b, *dst, next),
-        Op::IncDec { place, kind, dst } => plain_cv(places, *place).map(|cv| Op::IncDecCv {
-            cv,
-            kind: *kind,
-            dst: *dst,
-            place: *place,
-        }),
+        Op::IncDec { place, kind, dst } => plain_cv(places, *place)
+            .map(|cv| Op::IncDecCv {
+                cv,
+                kind: *kind,
+                dst: *dst,
+                place: *place,
+            })
+            .or_else(|| {
+                cv_dim(places, *place).map(|(cv, dim)| Op::IncDecDimCv {
+                    cv,
+                    dim,
+                    kind: *kind,
+                    dst: *dst,
+                    place: *place,
+                })
+            }),
         Op::AssignOp {
             place,
             op,
             val,
             dst,
-        } if is_numeric_assign_op(*op) => plain_cv(places, *place).map(|cv| Op::AssignOpCv {
-            cv,
-            op: *op,
-            val: *val,
-            dst: *dst,
-            place: *place,
-        }),
-        Op::Fetch {
-            place,
-            mode: FetchMode::Read,
-            dst,
-        } => cv_dim(places, *place).map(|(cv, dim)| Op::FetchDimCv {
+        } if is_numeric_assign_op(*op) => plain_cv(places, *place)
+            .map(|cv| Op::AssignOpCv {
+                cv,
+                op: *op,
+                val: *val,
+                dst: *dst,
+                place: *place,
+            })
+            .or_else(|| {
+                if dst.is_some() {
+                    return None;
+                }
+                cv_dim(places, *place).map(|(cv, dim)| Op::AssignOpDimCv {
+                    cv,
+                    dim,
+                    op: *op,
+                    val: *val,
+                    place: *place,
+                })
+            }),
+        Op::Fetch { place, mode, dst } if *mode != FetchMode::List => cv_dim(places, *place)
+            .map(|(cv, dim)| Op::FetchDimCv {
+                cv,
+                dim,
+                place: *place,
+                dst: *dst,
+                to: assigned_cv(next, *dst),
+                mode: *mode,
+            })
+            .or_else(|| {
+                cv_dims(places, *place).map(|cv| Op::FetchDimsCv {
+                    cv,
+                    place: *place,
+                    dst: *dst,
+                    to: assigned_cv(next, *dst),
+                    mode: *mode,
+                })
+            }),
+        Op::Isset { place, dst } => cv_dim(places, *place).map(|(cv, dim)| Op::IssetDimCv {
             cv,
             dim,
             place: *place,
             dst: *dst,
-            to: assigned_cv(next, *dst),
+            empty: false,
+        }),
+        Op::Empty { place, dst } => cv_dim(places, *place).map(|(cv, dim)| Op::IssetDimCv {
+            cv,
+            dim,
+            place: *place,
+            dst: *dst,
+            empty: true,
         }),
         Op::Assign {
             place,
@@ -187,10 +231,24 @@ fn cv_dim(places: &[Place], pid: PlaceId) -> Option<(u32, Operand)> {
     }
 }
 
+/// The CV of a place `$cv[d1][d2]...` with two or more dimensions, all
+/// with defined offset operands.
+fn cv_dims(places: &[Place], pid: PlaceId) -> Option<u32> {
+    let p = places.get(pid as usize)?;
+    let PlaceBase::Cv(cv) = &p.base else {
+        return None;
+    };
+    let all_dims = p
+        .segs
+        .iter()
+        .all(|s| matches!(s, Seg::Dim(d) if *d != Operand::Unused));
+    (p.segs.len() >= 2 && all_dims).then_some(*cv)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{compile, CompileOptions};
-    use crate::opcode::{BinKind, IncDecKind, Op, Operand};
+    use crate::opcode::{BinKind, FetchMode, IncDecKind, Op, Operand};
     use std::rc::Rc;
 
     fn main_ops(src: &str) -> Vec<Op> {
@@ -343,15 +401,51 @@ mod tests {
     fn cv_dimensions_are_specialised() {
         let ops = main_ops("<?php $a = [1, 2]; $i = 1; $s = $a[$i & 1]; $a[$i] = 3;");
         assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchDimCv {
+                    to: Some(_),
+                    mode: FetchMode::Read,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        let ops = main_ops(
+            "<?php $a = []; $k = 'k'; $v = $a[$k] ?? 1; $i = isset($a[$k]); $e = empty($a[0]);",
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchDimCv {
+                    to: None,
+                    mode: FetchMode::Is,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
             ops.iter()
-                .any(|op| matches!(op, Op::FetchDimCv { to: Some(_), .. })),
+                .any(|op| matches!(op, Op::IssetDimCv { empty: false, .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::IssetDimCv { empty: true, .. })),
+            "{ops:?}"
+        );
+        // list() element fetches keep the generic op.
+        let ops = main_ops("<?php $a = [1]; [$x] = $a;");
+        assert!(
+            !ops.iter().any(|op| matches!(op, Op::FetchDimCv { .. })),
             "{ops:?}"
         );
         assert!(
             ops.iter().any(|op| matches!(op, Op::AssignDimCv { .. })),
             "{ops:?}"
         );
-        let ops = main_ops("<?php $s = 0; $s += 2; $s .= 'x'; $a = [1]; $a[0] += 1;");
+        let ops = main_ops("<?php $s = 0; $s += 2; $s .= 'x'; $a = [1]; $a[0] += 1; $a[0]++; $a[0] .= 'x'; $y = $a[0] += 1;");
         assert_eq!(
             ops.iter()
                 .filter(|op| matches!(op, Op::AssignOpCv { .. }))
@@ -359,11 +453,80 @@ mod tests {
             1,
             "{ops:?}"
         );
-        // Nested dimensions and appends keep the generic place ops.
-        let ops = main_ops("<?php $a = [[1]]; echo $a[0][0]; $a[] = 1; $a[0][0] = 2;");
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::AssignOpDimCv { .. }))
+                .count(),
+            1,
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::IncDecDimCv {
+                    kind: IncDecKind::PostInc,
+                    dst: None,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        // `.=` (on the CV and on the dimension) and a compound assignment
+        // with a used result keep the generic op.
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::AssignOp { .. }))
+                .count(),
+            3,
+            "{ops:?}"
+        );
+        // Nested dimension reads get the chain form; appends and nested
+        // writes keep the generic place ops.
+        let ops = main_ops(
+            "<?php $a = [[1]]; echo $a[0][0]; $a[] = 1; $a[0][0] = 2; $x = $a[0][0]; $y = $a[0][0] ?? 1;",
+        );
         assert!(
             !ops.iter()
                 .any(|op| matches!(op, Op::FetchDimCv { .. } | Op::AssignDimCv { .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchDimsCv {
+                    to: None,
+                    mode: FetchMode::Read,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchDimsCv {
+                    to: Some(_),
+                    mode: FetchMode::Read,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::FetchDimsCv {
+                    mode: FetchMode::Is,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::Assign { .. }))
+                .count(),
+            2,
             "{ops:?}"
         );
     }

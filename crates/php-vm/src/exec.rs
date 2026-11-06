@@ -112,46 +112,55 @@ impl Vm {
         let f = self.frame();
         let x = Self::peek_num(f, a)?;
         let y = Self::peek_num(f, b)?;
-        if let (Num::Int(x), Num::Int(y)) = (x, y) {
-            return Some(match op {
-                BinKind::Arith(BinaryOp::Add) => Value::Int(x.checked_add(y)?),
-                BinKind::Arith(BinaryOp::Sub) => Value::Int(x.checked_sub(y)?),
-                BinKind::Arith(BinaryOp::Mul) => Value::Int(x.checked_mul(y)?),
-                BinKind::Arith(BinaryOp::BitOr) => Value::Int(x | y),
-                BinKind::Arith(BinaryOp::BitAnd) => Value::Int(x & y),
-                BinKind::Arith(BinaryOp::BitXor) => Value::Int(x ^ y),
-                BinKind::Equal | BinKind::Identical => Value::Bool(x == y),
-                BinKind::NotEqual | BinKind::NotIdentical => Value::Bool(x != y),
-                BinKind::Less => Value::Bool(x < y),
-                BinKind::LessEqual => Value::Bool(x <= y),
-                BinKind::Spaceship => Value::Int(match x.cmp(&y) {
-                    std::cmp::Ordering::Less => -1,
-                    std::cmp::Ordering::Equal => 0,
-                    std::cmp::Ordering::Greater => 1,
-                }),
-                _ => return None,
-            });
-        }
-        let mixed = matches!(
-            (x, y),
-            (Num::Int(_), Num::Float(_)) | (Num::Float(_), Num::Int(_))
-        );
-        #[allow(clippy::cast_precision_loss)] // php-src's (double) widening
-        let (xf, yf) = (x.as_f64(), y.as_f64());
-        Some(match op {
-            BinKind::Arith(BinaryOp::Add) => Value::Float(xf + yf),
-            BinKind::Arith(BinaryOp::Sub) => Value::Float(xf - yf),
-            BinKind::Arith(BinaryOp::Mul) => Value::Float(xf * yf),
-            BinKind::Equal => Value::Bool(xf == yf),
-            BinKind::NotEqual => Value::Bool(xf != yf),
-            BinKind::Identical => Value::Bool(!mixed && xf == yf),
-            BinKind::NotIdentical => Value::Bool(mixed || xf != yf),
-            BinKind::Less => Value::Bool(xf < yf),
-            BinKind::LessEqual => Value::Bool(xf <= yf),
-            _ => return None,
-        })
+        num_bin(op, x, y)
     }
+}
 
+/// The arithmetic of [`Vm::bin_num_fast`] on two peeked numbers: `None`
+/// when the operator has no sealed numeric form or an int result overflows.
+#[inline]
+fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
+    if let (Num::Int(x), Num::Int(y)) = (x, y) {
+        return Some(match op {
+            BinKind::Arith(BinaryOp::Add) => Value::Int(x.checked_add(y)?),
+            BinKind::Arith(BinaryOp::Sub) => Value::Int(x.checked_sub(y)?),
+            BinKind::Arith(BinaryOp::Mul) => Value::Int(x.checked_mul(y)?),
+            BinKind::Arith(BinaryOp::BitOr) => Value::Int(x | y),
+            BinKind::Arith(BinaryOp::BitAnd) => Value::Int(x & y),
+            BinKind::Arith(BinaryOp::BitXor) => Value::Int(x ^ y),
+            BinKind::Equal | BinKind::Identical => Value::Bool(x == y),
+            BinKind::NotEqual | BinKind::NotIdentical => Value::Bool(x != y),
+            BinKind::Less => Value::Bool(x < y),
+            BinKind::LessEqual => Value::Bool(x <= y),
+            BinKind::Spaceship => Value::Int(match x.cmp(&y) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            }),
+            _ => return None,
+        });
+    }
+    let mixed = matches!(
+        (x, y),
+        (Num::Int(_), Num::Float(_)) | (Num::Float(_), Num::Int(_))
+    );
+    #[allow(clippy::cast_precision_loss)] // php-src's (double) widening
+    let (xf, yf) = (x.as_f64(), y.as_f64());
+    Some(match op {
+        BinKind::Arith(BinaryOp::Add) => Value::Float(xf + yf),
+        BinKind::Arith(BinaryOp::Sub) => Value::Float(xf - yf),
+        BinKind::Arith(BinaryOp::Mul) => Value::Float(xf * yf),
+        BinKind::Equal => Value::Bool(xf == yf),
+        BinKind::NotEqual => Value::Bool(xf != yf),
+        BinKind::Identical => Value::Bool(!mixed && xf == yf),
+        BinKind::NotIdentical => Value::Bool(mixed || xf != yf),
+        BinKind::Less => Value::Bool(xf < yf),
+        BinKind::LessEqual => Value::Bool(xf <= yf),
+        _ => return None,
+    })
+}
+
+impl Vm {
     /// Generic [`Op::Bin`] evaluation, out of line so the dispatch loop
     /// stays small (the sealed numeric forms handle the hot cases).
     #[inline(never)]
@@ -477,21 +486,17 @@ impl Vm {
     /// `IS_TRUE`/`IS_FALSE` fast path of php-src's `ZEND_JMPZ`/`ZEND_JMPNZ`
     /// handlers (comparison results), without the out-of-line read,
     /// conversion and drop of the generic path. A compiled variable holding
-    /// a bool, null or int is tested in place (`if ($found)`), without the
-    /// clone; anything else (undefined: warning, references, strings,
-    /// arrays, objects) takes the generic path.
+    /// a plain value is tested in place (`if ($found)`), without the clone;
+    /// anything else (undefined: warning, references, objects, resources)
+    /// takes the generic path.
     #[inline]
     fn take_tmp_bool(&mut self, op: Operand) -> Option<bool> {
         let t = match op {
             Operand::Tmp(t) => t,
-            Operand::Cv(cv) => {
-                return self.frame().peek_cv(cv, |s| match s {
-                    Some(Value::Bool(b)) => Some(*b),
-                    Some(Value::Null) => Some(false),
-                    Some(Value::Int(i)) => Some(*i != 0),
-                    _ => None,
-                });
-            }
+            // In place (`ZEND_JMPZ_SPEC_CV`'s type switch): null, bool,
+            // int, non-NaN float, string, array; undefined (warning),
+            // references, objects and resources go generic.
+            Operand::Cv(cv) => return self.peek_cv_bool(cv),
             _ => return None,
         };
         let slot = self.frame_mut().tmps.get_mut(t as usize)?;
@@ -503,6 +508,18 @@ impl Vm {
         } else {
             None
         }
+    }
+
+    /// The truth value of a jump operand: a boolean temporary (consumed),
+    /// a compiled variable holding a plain value, or the generic read and
+    /// conversion (`ZEND_JMPZ`/`ZEND_JMPNZ` with their inline type switch).
+    #[inline]
+    fn jump_cond(&mut self, op: Operand) -> VmResult<bool> {
+        if let Some(b) = self.take_tmp_bool(op) {
+            return Ok(b);
+        }
+        let v = self.read(op)?;
+        self.to_bool(&v)
     }
 
     /// Stores an optional result.
@@ -939,8 +956,9 @@ impl Vm {
                             None => break 'slow,
                         },
                         // Smart branch (`ZEND_IS_SMALLER_LONG_SPEC` +
-                        // `ZEND_VM_SMART_BRANCH`): a numeric comparison
-                        // jumps, or skips the jump op after it, directly.
+                        // `ZEND_VM_SMART_BRANCH`): a comparison decided
+                        // without conversions jumps, or skips the jump op
+                        // after it, directly.
                         Op::CmpJmp {
                             op: kind,
                             a,
@@ -948,21 +966,29 @@ impl Vm {
                             target,
                             jmp_if,
                             ..
-                        } => match self.cmp_num_fast(*kind, *a, *b) {
-                            Some(r) if r == *jmp_if => ip = *target as usize,
-                            Some(_) => ip += 1,
-                            None => break 'slow,
-                        },
+                        } => {
+                            let r = self
+                                .cmp_num_fast(*kind, *a, *b)
+                                .or_else(|| self.cmp_simple_fast(*kind, *a, *b));
+                            match r {
+                                Some(r) if r == *jmp_if => ip = *target as usize,
+                                Some(_) => ip += 1,
+                                None => break 'slow,
+                            }
+                        }
                         Op::Bin {
                             op: kind,
                             a,
                             b,
                             dst,
                         } => {
-                            // The sealed numeric forms cannot warn or throw;
-                            // the generic path can, at this instruction.
+                            // The sealed numeric and same-type forms cannot
+                            // warn or throw; the generic path can, at this
+                            // instruction.
                             if let Some(r) = self.bin_num_fast(*kind, *a, *b) {
                                 self.set_tmp(*dst, r);
+                            } else if let Some(r) = self.cmp_simple_fast(*kind, *a, *b) {
+                                self.set_tmp(*dst, Value::Bool(r));
                             } else {
                                 self.frame_mut().ip = ip;
                                 self.bin_slow(*kind, *a, *b, *dst)?;
@@ -974,15 +1000,21 @@ impl Vm {
                             b,
                             dst,
                             cv,
-                        } => match self.bin_num_fast(*kind, *a, *b) {
-                            // Stored into the variable: the `AssignCv` after
-                            // the op is done; otherwise it runs on `dst`.
-                            Some(r) => match self.cv_store_plain(*cv, r) {
-                                Ok(()) => ip += 1,
-                                Err(r) => self.set_tmp(*dst, r),
-                            },
-                            None => break 'slow,
-                        },
+                        } => {
+                            let r = self
+                                .bin_num_fast(*kind, *a, *b)
+                                .or_else(|| self.cmp_simple_fast(*kind, *a, *b).map(Value::Bool));
+                            match r {
+                                // Stored into the variable: the `AssignCv`
+                                // after the op is done; otherwise it runs on
+                                // `dst`.
+                                Some(r) => match self.cv_store_plain(*cv, r) {
+                                    Ok(()) => ip += 1,
+                                    Err(r) => self.set_tmp(*dst, r),
+                                },
+                                None => break 'slow,
+                            }
+                        }
                         Op::IncDecCv { cv, kind, dst, .. } => {
                             match self.incdec_cv_fast(*cv, *kind) {
                                 Some(r) => self.set_dst(*dst, r),
@@ -1000,18 +1032,59 @@ impl Vm {
                                 break 'slow;
                             }
                         }
+                        Op::AssignOpDimCv {
+                            cv,
+                            dim,
+                            op: kind,
+                            val,
+                            ..
+                        } => {
+                            if !self.assign_op_dim_cv_fast(*cv, *dim, *kind, *val) {
+                                break 'slow;
+                            }
+                        }
+                        Op::IncDecDimCv {
+                            cv, dim, kind, dst, ..
+                        } => match self.incdec_dim_cv_fast(*cv, *dim, *kind) {
+                            Some(r) => self.set_dst(*dst, r),
+                            None => break 'slow,
+                        },
+                        // With `to`, the `AssignCv` after a dimension fetch
+                        // is done here when the variable holds a plain
+                        // value (`store_fetched`: skip it).
                         Op::FetchDimCv {
                             cv, dim, dst, to, ..
                         } => match self.fetch_dim_cv_fast(*cv, *dim) {
-                            // With `to`, the `AssignCv` after the op is done
-                            // here when the variable holds a plain value.
-                            Some(v) => match to {
-                                Some(to) => match self.cv_store_plain(*to, v) {
-                                    Ok(()) => ip += 1,
-                                    Err(v) => self.set_tmp(*dst, v),
-                                },
-                                None => self.set_tmp(*dst, v),
-                            },
+                            Some(v) => {
+                                self.release_tmp_str(*dim);
+                                if self.store_fetched(*dst, *to, v) {
+                                    ip += 1;
+                                }
+                            }
+                            None => break 'slow,
+                        },
+                        Op::FetchDimsCv {
+                            cv, place, dst, to, ..
+                        } => match self.fetch_dims_cv_fast(*cv, *place) {
+                            Some(v) => {
+                                self.release_dim_tmps(*place);
+                                if self.store_fetched(*dst, *to, v) {
+                                    ip += 1;
+                                }
+                            }
+                            None => break 'slow,
+                        },
+                        Op::IssetDimCv {
+                            cv,
+                            dim,
+                            dst,
+                            empty,
+                            ..
+                        } => match self.isset_dim_cv_fast(*cv, *dim, *empty) {
+                            Some(r) => {
+                                self.release_tmp_str(*dim);
+                                self.set_tmp(*dst, Value::Bool(r));
+                            }
                             None => break 'slow,
                         },
                         Op::AssignDimCv { cv, dim, val, .. } => {
@@ -1046,6 +1119,8 @@ impl Vm {
                         // semantics.
                         if let Some(r) = self.bin_num_fast(*op, *a, *b) {
                             self.set_tmp(*dst, r);
+                        } else if let Some(r) = self.cmp_simple_fast(*op, *a, *b) {
+                            self.set_tmp(*dst, Value::Bool(r));
                         } else {
                             self.bin_slow(*op, *a, *b, *dst)?;
                         }
@@ -1120,34 +1195,19 @@ impl Vm {
                         Flow::Next
                     }
                     Op::JmpZ(a, t) => {
-                        let b = match self.take_tmp_bool(*a) {
-                            Some(b) => b,
-                            None => {
-                                let v = self.read(*a)?;
-                                self.to_bool(&v)?
-                            }
-                        };
-                        if !b {
+                        if !self.jump_cond(*a)? {
                             ip = *t as usize;
                         }
                         Flow::Next
                     }
                     Op::JmpNz(a, t) => {
-                        let b = match self.take_tmp_bool(*a) {
-                            Some(b) => b,
-                            None => {
-                                let v = self.read(*a)?;
-                                self.to_bool(&v)?
-                            }
-                        };
-                        if b {
+                        if self.jump_cond(*a)? {
                             ip = *t as usize;
                         }
                         Flow::Next
                     }
                     Op::JmpZEx { a, dst, target } => {
-                        let v = self.read(*a)?;
-                        let b = self.to_bool(&v)?;
+                        let b = self.jump_cond(*a)?;
                         if !b {
                             self.set_tmp(*dst, Value::Bool(false));
                             ip = *target as usize;
@@ -1155,8 +1215,7 @@ impl Vm {
                         Flow::Next
                     }
                     Op::JmpNzEx { a, dst, target } => {
-                        let v = self.read(*a)?;
-                        let b = self.to_bool(&v)?;
+                        let b = self.jump_cond(*a)?;
                         if b {
                             self.set_tmp(*dst, Value::Bool(true));
                             ip = *target as usize;
@@ -1831,7 +1890,8 @@ impl Vm {
                     // The specialised ops whose fast path did not apply
                     // (the hot pre-match changed nothing): the generic op
                     // each one replaced. The op after a `CmpJmp`,
-                    // `BinAssignCv` or `FetchDimCv` then runs as its own op.
+                    // `BinAssignCv`, `FetchDimCv` or `FetchDimsCv` then runs
+                    // as its own op.
                     Op::CmpJmp { op, a, b, dst, .. } | Op::BinAssignCv { op, a, b, dst, .. } => {
                         self.bin_slow(*op, *a, *b, *dst)?;
                         Flow::Next
@@ -1855,9 +1915,33 @@ impl Vm {
                         self.set_dst(*dst, r);
                         Flow::Next
                     }
-                    Op::FetchDimCv { place, dst, .. } => {
-                        let v = self.place_fetch(*place, crate::opcode::FetchMode::Read)?;
+                    Op::AssignOpDimCv { op, val, place, .. } => {
+                        let v = self.read(*val)?;
+                        self.place_assign_op(*place, *op, v)?;
+                        Flow::Next
+                    }
+                    Op::IncDecDimCv {
+                        kind, dst, place, ..
+                    } => {
+                        let r = self.place_incdec(*place, *kind)?;
+                        self.set_dst(*dst, r);
+                        Flow::Next
+                    }
+                    Op::FetchDimCv {
+                        place, dst, mode, ..
+                    }
+                    | Op::FetchDimsCv {
+                        place, dst, mode, ..
+                    } => {
+                        let v = self.place_fetch(*place, *mode)?;
                         self.set_tmp(*dst, v);
+                        Flow::Next
+                    }
+                    Op::IssetDimCv {
+                        place, dst, empty, ..
+                    } => {
+                        let v = self.place_isset(*place, *empty)?;
+                        self.set_tmp(*dst, Value::Bool(v));
                         Flow::Next
                     }
                     Op::AssignDimCv { val, place, .. } => {
@@ -2657,6 +2741,7 @@ fn defers_oom(op: &Op) -> bool {
             | Op::AssignOp { .. }
             | Op::BinAssignCv { .. }
             | Op::AssignOpCv { .. }
+            | Op::AssignOpDimCv { .. }
             | Op::AssignDimCv { .. }
             | Op::Echo(_)
             | Op::Free(_)
