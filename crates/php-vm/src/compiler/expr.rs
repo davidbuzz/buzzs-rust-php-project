@@ -64,7 +64,7 @@ fn operand_rank(op: Operand) -> u8 {
     }
 }
 
-impl Compiler {
+impl Compiler<'_> {
     fn parent_hook_property(&self, class: &ast::ClassRef, name: &MemberName) -> Option<ZStr> {
         let ast::ClassRef::Expr(expr) = class else {
             return None;
@@ -2027,12 +2027,15 @@ impl Compiler {
                     Callee::Name(n) => Some(n),
                     Callee::Expr(_) => literal.as_ref(),
                 };
+                let mut fbc = None;
+                let mut frameless = false;
                 if let Some(n) = name {
                     if !args.is_partial() {
                         if let Some(r) = self.compile_special_call(n, args, line, need)? {
                             return Ok(Some(r));
                         }
-                        self.check_known_function_args(n, args)?;
+                        fbc = self.known_fbc(n);
+                        frameless = fbc.is_none() && self.frameless_ns_call(n, args);
                     }
                     self.emit_init_fcall(n);
                 } else if let Callee::Expr(ex) = &**callee {
@@ -2040,7 +2043,19 @@ impl Compiler {
                     self.f().line = line;
                     self.emit(Op::InitDynCall { callee: c });
                 }
-                self.finish_call(args, line, need)
+                if !frameless {
+                    return self.finish_call_at(args, line, line, need, fbc);
+                }
+                // `zend_compile_ns_call` with a frameless branch: the
+                // arguments are compiled for the namespaced call (calls in
+                // them get no frameless branch of their own), then again,
+                // for reading, for `ZEND_FRAMELESS_ICALL_n`.
+                self.f().in_frameless_branch = true;
+                let r = self.finish_call_at(args, line, line, need, None);
+                self.f().in_frameless_branch = false;
+                let r = r?;
+                self.check_frameless_args(args)?;
+                Ok(r)
             }
             ExprKind::MethodCall {
                 object,
@@ -2070,7 +2085,7 @@ impl Compiler {
                 let n = self.method_member_name(name, line)?;
                 self.f().line = line;
                 self.emit(Op::InitMethodCall { obj: o, name: n });
-                self.finish_call_at(args, line, member_name_line(name), need)
+                self.finish_call_at(args, line, member_name_line(name), need, None)
             }
             ExprKind::StaticCall { class, name, args }
                 if self.parent_hook_property(class, name).is_some() =>
@@ -2123,7 +2138,7 @@ impl Compiler {
                     prop: p,
                     set: is_set,
                 });
-                self.finish_call(args, line, need)
+                self.finish_call_at(args, line, line, need, None)
             }
             ExprKind::StaticCall { class, name, args } => {
                 let spec = self.chain_class_spec(class)?;
@@ -2133,7 +2148,7 @@ impl Compiler {
                     class: spec,
                     name: n,
                 });
-                self.finish_call_at(args, line, member_name_line(name), need)
+                self.finish_call_at(args, line, member_name_line(name), need, None)
             }
             ExprKind::New { class, args } => {
                 // `ZEND_AST_NEW` takes the line of its class child, which
@@ -2167,7 +2182,7 @@ impl Compiler {
                 if args.is_partial() {
                     return self.err("Cannot create Closure for new expression", line);
                 }
-                self.compile_args(args)?;
+                self.compile_args(args, None)?;
                 self.f().line = line;
                 self.emit(Op::DoCall { dst: None });
                 self.patch_here(at);
@@ -2177,19 +2192,18 @@ impl Compiler {
         }
     }
 
-    fn finish_call(&mut self, args: &ArgList, line: u32, need: bool) -> CResult<Option<Operand>> {
-        self.finish_call_at(args, line, line, need)
-    }
-
-    /// [`Self::finish_call`] with the line of the `DoCall` (the call site
-    /// backtraces report): method and static calls use the line of the
-    /// method name (`zend_compile_call_common(..., method_ast lineno)`).
+    /// The arguments and the `DoCall` of a call (`zend_compile_call_common`)
+    /// whose `DoCall` reports `call_line` (the call site backtraces show):
+    /// method and static calls use the line of the method name
+    /// (`zend_compile_call_common(..., method_ast lineno)`). `fbc` is the
+    /// called function when the compiler knows it ([`Self::known_fbc`]).
     fn finish_call_at(
         &mut self,
         args: &ArgList,
         line: u32,
         call_line: u32,
         need: bool,
+        fbc: Option<super::FunctionInfo>,
     ) -> CResult<Option<Operand>> {
         if args.is_first_class_callable() {
             let t = self.tmp();
@@ -2217,7 +2231,7 @@ impl Compiler {
             });
             return Ok(Some(Operand::Tmp(t)));
         }
-        self.compile_args(args)?;
+        self.compile_args(args, fbc)?;
         // `zend_compile_call_common` gives the call opcode the call's own
         // line (`opline->lineno = lineno`) but leaves `CG(zend_lineno)`
         // where compiling the last argument put it, so the opcodes that
@@ -2330,44 +2344,85 @@ impl Compiler {
         Ok((variadic, const_args))
     }
 
-    /// `zend_compile_args` with a known `fbc` (a top-level function of this
-    /// file compiled earlier): an argument for a by-value parameter is
-    /// compiled for reading (`BP_VAR_R`), so `f($a[])` is the compile error
-    /// "Cannot use [] for reading".
-    fn check_known_function_args(&self, n: &ast::Name, args: &ArgList) -> CResult<()> {
-        if self.known_functions.is_empty() {
-            return Ok(());
-        }
+    /// `zend_compile_args`' `fbc` for a call by name (`zend_compile_call`):
+    /// known unless the name is resolved at run time (unqualified in a
+    /// namespace), when `CG(function_table)` holds it: a finalized
+    /// top-level function of this file, or a function declared when the
+    /// compilation started.
+    pub(crate) fn known_fbc(&self, n: &ast::Name) -> Option<super::FunctionInfo> {
         let (name, fallback) = self.resolve_function_name(n);
         if fallback.is_some() {
-            // Unqualified in a namespace: resolved at runtime.
-            return Ok(());
+            return None;
         }
-        let Some(params) = self.known_functions.get(&name.to_ascii_lowercase()) else {
-            return Ok(());
+        let lc = name.to_ascii_lowercase();
+        if let Some(info) = self.known_functions.get(&lc) {
+            return Some(*info);
+        }
+        self.functions?.find(&lc)
+    }
+
+    /// php-src master's frameless branch of a namespaced call
+    /// (`zend_compile_ns_call`): the global function the name falls back to
+    /// is an internal function with a frameless handler for this many
+    /// arguments (`find_frameless_function_info`), there is no unpacking
+    /// or named argument, and the call is not itself an argument of a call
+    /// with such a branch (`CG(context).in_jmp_frameless_branch`).
+    fn frameless_ns_call(&self, n: &ast::Name, args: &ArgList) -> bool {
+        if self.fref().in_frameless_branch || args.args.len() > 3 {
+            return false;
+        }
+        if args
+            .args
+            .iter()
+            .any(|a| !matches!(a.kind, ArgKind::Positional(_)))
+        {
+            return false;
+        }
+        let (_, Some(fallback)) = self.resolve_function_name(n) else {
+            return false;
         };
-        for (i, a) in args.args.iter().enumerate() {
-            let ArgKind::Positional(e) = &a.kind else {
-                // Named arguments and unpacking end the positional run.
-                return Ok(());
-            };
-            let by_ref = match params.get(i) {
-                Some(&(by_ref, _)) => by_ref,
-                None => params
-                    .last()
-                    .is_some_and(|&(by_ref, variadic)| variadic && by_ref),
-            };
-            if !by_ref && reads_append(e) {
-                return self.err("Cannot use [] for reading", e.span.line);
+        let lc = fallback.to_ascii_lowercase();
+        let Some(arities) = super::frameless_arities(&lc) else {
+            return false;
+        };
+        let Some(fbc) = self.functions.and_then(|t| t.find(&lc)) else {
+            return false;
+        };
+        let count = u32::try_from(args.args.len()).unwrap_or(u32::MAX);
+        fbc.internal
+            && arities.iter().any(|&arity| {
+                arity >= count && fbc.required <= count && (!fbc.variadic || arity == count)
+            })
+    }
+
+    /// The arguments of a frameless branch, compiled for reading
+    /// (`zend_compile_frameless_icall_ex`): "Cannot use [] for reading".
+    fn check_frameless_args(&self, args: &ArgList) -> CResult<()> {
+        for a in &args.args {
+            if let ArgKind::Positional(e) = &a.kind {
+                if reads_append(e) {
+                    return self.err("Cannot use [] for reading", e.span.line);
+                }
             }
         }
         Ok(())
     }
 
-    pub(crate) fn compile_args(&mut self, args: &ArgList) -> CResult<()> {
+    /// The arguments of a call (`zend_compile_args`). With a known `fbc`,
+    /// an argument for a by-value parameter is compiled for reading
+    /// (`BP_VAR_R`): `f($a[])` and `f($a[]->b)` are the compile error
+    /// "Cannot use [] for reading". Otherwise a variable is a
+    /// `BP_VAR_FUNC_ARG` fetch, which appends or throws at run time.
+    /// Named arguments are not matched to parameters here, so they are
+    /// compiled as for an unknown `fbc`.
+    pub(crate) fn compile_args(
+        &mut self,
+        args: &ArgList,
+        fbc: Option<super::FunctionInfo>,
+    ) -> CResult<()> {
         let mut seen_named = false;
         let mut seen_unpack = false;
-        for a in &args.args {
+        for (i, a) in args.args.iter().enumerate() {
             self.f().line = a.span.line;
             match &a.kind {
                 ArgKind::Positional(ex) => {
@@ -2382,6 +2437,9 @@ impl Compiler {
                             "Cannot use positional argument after argument unpacking",
                             a.span.line,
                         );
+                    }
+                    if fbc.is_some_and(|f| !f.sends_by_ref(i)) && reads_append(ex) {
+                        return self.err("Cannot use [] for reading", ex.span.line);
                     }
                     let src = self.arg_src_for(ex)?;
                     self.emit(Op::Send { src });
@@ -2658,7 +2716,10 @@ impl Compiler {
                 let t = self.tmp();
                 let check = self.emit(Op::AssertCheck { dst: t, skip: 0 });
                 self.emit_init_fcall(n);
-                self.compile_args(args)?;
+                // `zend_compile_assert`: the internal `assert()` is the
+                // `fbc`, except for a namespaced call.
+                let fbc = self.known_fbc(n);
+                self.compile_args(args, fbc)?;
                 if args.args.len() == 1 {
                     if matches!(args.args[0].kind, ArgKind::Unpack(_)) {
                         return self.err(

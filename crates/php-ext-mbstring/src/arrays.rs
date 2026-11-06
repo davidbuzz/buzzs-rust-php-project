@@ -141,6 +141,18 @@ fn mb_convert_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 // ---- mb_check_encoding ---------------------------------------------------
 
+/// `mb_check_str_encoding`: whether `s` is valid in `enc`. For UTF-8 the
+/// answer is the string's `IS_STR_VALID_UTF8` flag, else a validation
+/// whose positive result is recorded on the string (not on interned
+/// ones), so checking the same string again costs nothing.
+fn check_str(s: &ZStr, enc: &'static Encoding) -> bool {
+    if enc.is_utf8() {
+        s.check_valid_utf8()
+    } else {
+        check_str_encoding(s.as_bytes(), enc)
+    }
+}
+
 fn check_recursive(
     vm: &mut Vm,
     arr: &ZArray,
@@ -154,14 +166,14 @@ fn check_recursive(
     let mut valid = true;
     for (key, entry) in arr.iter() {
         if let ArrayKey::Str(k) = key {
-            if !check_str_encoding(k.as_bytes(), enc) {
+            if !check_str(&k, enc) {
                 valid = false;
                 break;
             }
         }
         match entry.deref() {
             Value::Str(s) => {
-                if !check_str_encoding(s.as_bytes(), enc) {
+                if !check_str(&s, enc) {
                     valid = false;
                 }
             }
@@ -189,7 +201,8 @@ fn mb_check_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         Some(v) => {
             let s = vm.value_to_string(&v)?;
-            call(vm, a, |st| st.mb_check_encoding(s.as_bytes(), enc_arg)).map(Value::Bool)
+            let enc = call(vm, a, |st| st.get_encoding(enc_arg, 2, "encoding"))?;
+            Ok(Value::Bool(check_str(&s, enc)))
         }
     }
 }
@@ -526,4 +539,30 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         "mb_convert_variables(string $to_encoding, array|string $from_encoding, mixed &$var, mixed &...$vars): string|false",
         mb_convert_variables,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_str;
+    use php_runtime::ZStr;
+
+    /// `mb_check_str_encoding`: a UTF-8 check is answered by and recorded
+    /// in the string's `IS_STR_VALID_UTF8` flag; other encodings are
+    /// checked every time and record nothing.
+    #[test]
+    fn utf8_checks_are_cached_on_the_string() {
+        let utf8 = php_mbstring::encoding::utf8();
+        let s = ZStr::from("caf\u{e9}");
+        assert!(!s.is_valid_utf8());
+        assert!(check_str(&s, utf8));
+        assert!(s.is_valid_utf8());
+        assert!(check_str(&s.clone(), utf8));
+        let bad = ZStr::new(b"caf\xe9".to_vec());
+        assert!(!check_str(&bad, utf8));
+        assert!(!bad.is_valid_utf8());
+        let latin1 = php_mbstring::encoding::by_cname(b"ISO-8859-1").expect("ISO-8859-1");
+        let other = ZStr::from("abc");
+        assert!(check_str(&other, latin1));
+        assert!(!other.is_valid_utf8(), "only UTF-8 checks record the flag");
+    }
 }

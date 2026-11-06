@@ -42,3 +42,45 @@ fn eval_with_declarations_is_retained() {
     );
     assert_eq!(retained, 3);
 }
+
+/// Literals of `eval()`'d units that are released go with them: the intern
+/// table does not keep strings alive, so a loop over unique code does not
+/// grow it (php-src without opcache keeps request-interned strings until
+/// the request ends).
+#[test]
+fn literals_of_released_eval_units_leave_the_intern_table() {
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+    let before = php_runtime::ZStr::live_interned_count();
+    let status = vm.run_script(
+        b"<?php\n\
+          for ($i = 0; $i < 2000; $i++) {\n\
+              eval('$x = \"unique literal number ' . $i . ' of a released unit\";');\n\
+          }\n\
+          if ($x !== 'unique literal number 1999 of a released unit') { exit(1); }\n",
+        "literals.php",
+    );
+    assert_eq!(status, 0);
+    let grown = php_runtime::ZStr::live_interned_count().saturating_sub(before);
+    // The main script's own literals and the one `$x` still holds remain.
+    assert!(grown < 50, "{grown} interned strings kept");
+}
+
+/// A VM that runs after another on the same thread (`php --repeat`) finds
+/// none of the earlier request's literals in the intern table.
+#[test]
+fn a_finished_request_leaves_no_interned_literals_behind() {
+    let run = |src: &[u8]| {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        assert_eq!(vm.run_script(src, "request.php"), 0);
+        drop(vm);
+        php_runtime::ZStr::live_interned_count()
+    };
+    // Twice, so that anything a first VM initialises once per thread is in.
+    run(b"<?php\n");
+    let baseline = run(b"<?php\n");
+    let after = run(b"<?php\n\
+          $a = ['first request literal one' => 'first request literal two'];\n\
+          echo 'first request literal three', \"\\n\";\n\
+          $b = eval('return \"first request literal four\";');\n");
+    assert_eq!(after, baseline);
+}

@@ -177,11 +177,16 @@ impl Vm {
         let halt_compiler_offset = program.halt_compiler_offset;
         // A multibyte script's AST is kept for the semantic text of
         // diagnostics; any other is released statement by statement while
-        // it compiles.
+        // it compiles. The compiler sees the function table as it stands
+        // (`CG(function_table)`), for the `fbc` of calls by name.
+        let functions = &self.functions;
+        let table = |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of);
         let (compiled, kept) = if program.multibyte {
-            (compiler::compile(&program, src, opts), Some(program))
+            let unit = compiler::compile_with_functions(&program, src, opts, &table);
+            (unit, Some(program))
         } else {
-            (compiler::compile_program(program, src, opts), None)
+            let unit = compiler::compile_program_with_functions(program, src, opts, &table);
+            (unit, None)
         };
         self.activate_compiled_auto_globals();
         let unit = match compiled {
@@ -510,9 +515,8 @@ impl Vm {
             }
             return self.include_failed(kind, kind_name, &s, dst);
         };
-        let real = std::fs::canonicalize(&path).unwrap_or(path.clone());
         use std::os::unix::ffi::OsStrExt;
-        let real_z = ZStr::from(real.as_os_str().as_bytes());
+        let real_z = ZStr::from(opened_path(&path).as_os_str().as_bytes());
         if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
             && self.included_set.contains(&real_z)
         {
@@ -529,17 +533,16 @@ impl Vm {
                 return self.include_failed(kind, kind_name, &s, dst);
             }
         };
-        let display_path = if path.is_absolute() {
-            ZStr::from(path.as_os_str().as_bytes())
-        } else {
-            real_z.clone()
-        };
+        // The unit is compiled under the opened path, as `open_file_for_scanning`
+        // uses `file_handle->opened_path` when there is one: `__FILE__`,
+        // `__DIR__`, reflection's `getFileName()`, backtraces and messages
+        // all show the resolved path, not the `..`/symlink spelling used.
         if !self.included_set.contains(&real_z) {
             self.included_set.insert(real_z.clone());
-            self.included.push(real_z);
+            self.included.push(real_z.clone());
         }
-        let src = self.filter_source(&display_path, src)?;
-        let unit = match self.compile_source(Rc::from(src), &display_path, false, true)? {
+        let src = self.filter_source(&real_z, src)?;
+        let unit = match self.compile_source(Rc::from(src), &real_z, false, true)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),
@@ -639,13 +642,19 @@ impl Vm {
     }
 
     /// Runs a file as `include` would from builtin code (e.g. the
-    /// `auto_prepend_file`).
+    /// `auto_prepend_file`, `spl_autoload()`), compiled under its opened
+    /// path like an included file.
     pub fn include_file(&mut self, path: &str) -> Result<(), Throw> {
+        use std::os::unix::ffi::OsStrExt;
         let src = match std::fs::read(path) {
             Ok(s) => s,
             Err(_) => return Ok(()),
         };
-        let p = ZStr::from(path);
+        let p = ZStr::from(
+            opened_path(std::path::Path::new(path))
+                .as_os_str()
+                .as_bytes(),
+        );
         let unit = match self.compile_source(Rc::from(src), &p, false, true)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return self.handle_top_throw(Throw::Exception(e)),
@@ -665,6 +674,17 @@ impl Vm {
             Err(t) => self.handle_top_throw(t),
         }
     }
+}
+
+/// The `opened_path` of a plain file found at `path` for inclusion: its
+/// real path, as `php_resolve_path()` (`tsrm_realpath`) resolves it before
+/// `_php_stream_fopen` opens it with `STREAM_ASSUME_REALPATH`, so `..`
+/// segments and symbolic links are resolved. If that fails the path is
+/// only made absolute (`expand_filepath`).
+fn opened_path(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Whether a compiled unit declares functions, closures, classes or
