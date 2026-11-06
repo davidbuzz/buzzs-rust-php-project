@@ -481,13 +481,15 @@ pub trait PhpObject: Any {
     }
 }
 
-/// The address of an [`Obj`]'s allocation, returned by
-/// [`PhpObject::obj_cell_tag`]. Only php-runtime can make one, and only
-/// from the allocation itself, so a tag equal to an `Rc`'s data address
-/// proves that the `Rc` is an [`Obj`]'s.
+/// The claim of an [`Obj`]'s allocation to be one, returned by
+/// [`PhpObject::obj_cell_tag`]: the `TypeId` of its `ObjCell<T>`. Only
+/// php-runtime can make one, and [`Obj::from_rc`] checks the claim against
+/// the object's real dynamic type (`Any::type_id` through the vtable, which
+/// no implementor can fake), so a tag forwarded from another object, or a
+/// stale one, is rejected.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
-pub struct ObjCellTag(*const ());
+pub struct ObjCellTag(TypeId);
 
 /// The header in front of every object payload (`zend_object`'s
 /// `handlers` pointer: what a thin handle needs to reach the object's
@@ -532,8 +534,7 @@ impl<T: PhpObject> PhpObject for ObjCell<T> {
         self.value.as_any()
     }
     fn obj_cell_tag(&self) -> Option<ObjCellTag> {
-        // The header is at offset 0: its address is the cell's.
-        Some(ObjCellTag(ptr::from_ref(&self.header).cast::<()>()))
+        Some(ObjCellTag(TypeId::of::<Self>()))
     }
 }
 
@@ -579,13 +580,12 @@ impl Obj {
             value: object,
         });
         let raw = Rc::into_raw(rc);
-        let header = raw.cast::<ObjHeader>();
+        let header = Obj::header_of(raw);
         // SAFETY: `raw` points at the live `ObjCell<T>` whose one strong
-        // count the new handle takes over; `ObjCell` is `repr(C)` with the
-        // header first, so `header` is its header. Nothing has seen `this`
-        // yet, and writing through `UnsafeCell::get` is allowed from a
-        // shared pointer. The `Rc` written is rebuilt from `into_raw`'s own
-        // pointer and is never dropped, so it adds no count.
+        // count the new handle takes over. Nothing has seen `this` yet, and
+        // writing through `UnsafeCell::get` is allowed from a shared
+        // pointer. The `Rc` written is rebuilt from `into_raw`'s own pointer
+        // and is never dropped, so it adds no count.
         unsafe {
             (*(*header).this.get())
                 .as_mut_ptr()
@@ -594,8 +594,18 @@ impl Obj {
         }
     }
 
+    /// The header of the `ObjCell` at `cell`, the data pointer of its
+    /// `Rc<dyn PhpObject>`.
+    #[inline]
+    // The pointee is an `ObjCell<T>`: `repr(C)` with the header first, so
+    // at least as aligned as the header. Clippy only sees the `dyn`.
+    #[allow(clippy::cast_ptr_alignment)]
+    fn header_of(cell: *const dyn PhpObject) -> *const ObjHeader {
+        cell.cast::<ObjHeader>()
+    }
+
     /// # Safety
-    /// `header` must point at the header of a live `ObjCell` (from
+    /// `header` must be [`Obj::header_of`] a live `ObjCell` (from
     /// `Rc::into_raw` of its `Rc<dyn PhpObject>`) whose `this` is written,
     /// and the caller must hand one strong count of it to the new handle.
     #[inline]
@@ -624,15 +634,17 @@ impl Obj {
     /// keep their identity.
     #[must_use]
     pub fn from_rc(rc: Rc<dyn PhpObject>) -> Self {
-        let data = Rc::as_ptr(&rc).cast::<()>();
+        // `Any::type_id` through the vtable (not `rc.type_id()`, which is
+        // the `Rc`'s own): the object's dynamic type.
+        let dynamic = Any::type_id(&*rc);
         match rc.obj_cell_tag() {
-            Some(ObjCellTag(cell)) if ptr::eq(cell, data) => {
+            Some(ObjCellTag(cell)) if cell == dynamic => {
                 let raw = Rc::into_raw(rc);
-                // SAFETY: only an `ObjCell` makes a tag, from its own
-                // address, so `rc` is the `Rc<dyn PhpObject>` of an
-                // `ObjCell` made by `Obj::new` (its `this` is written); its
-                // strong count moves into the handle.
-                unsafe { Obj::from_header(raw.cast::<ObjHeader>()) }
+                // SAFETY: the object's dynamic type is an `ObjCell<T>`,
+                // which only `Obj::new` makes (writing `this`), so `rc` is
+                // that cell's `Rc<dyn PhpObject>`; its strong count moves
+                // into the handle.
+                unsafe { Obj::from_header(Obj::header_of(raw)) }
             }
             _ => Obj::new(ForeignObj(rc)),
         }
@@ -772,7 +784,7 @@ impl ObjWeak {
         // the `Rc<dyn PhpObject>` of an `ObjCell` made by `Obj::new` (its
         // `this` is written); the strong count `upgrade` took moves into
         // the handle.
-        Some(unsafe { Obj::from_header(raw.cast::<ObjHeader>()) })
+        Some(unsafe { Obj::from_header(Obj::header_of(raw)) })
     }
 
     /// Number of strong handles to the object (`0` once it is freed).
@@ -1025,6 +1037,8 @@ mod tests {
     fn object_rc_round_trip_keeps_identity() {
         let o = Obj::new(TestObj(2));
         let rc = o.rc().clone();
+        // The dynamic type `from_rc` checks the tag against is the cell's.
+        assert_eq!(Any::type_id(&*rc), TypeId::of::<ObjCell<TestObj>>());
         assert_eq!(o.refcount(), 2);
         assert_eq!(Rc::as_ptr(&rc).cast::<u8>() as usize, o.addr());
         let back = Obj::from_rc(rc);
@@ -1081,6 +1095,8 @@ mod tests {
     #[test]
     fn foreign_rc_is_adopted() {
         let rc: Rc<dyn PhpObject> = Rc::new(TestObj(7));
+        // Not an `Rc`'s type id, and not a cell's.
+        assert_eq!(Any::type_id(&*rc), TypeId::of::<TestObj>());
         let o = Obj::from_rc(rc.clone());
         assert_eq!(o.handle(), 7);
         assert_eq!(o.class_name(), "Foo");
