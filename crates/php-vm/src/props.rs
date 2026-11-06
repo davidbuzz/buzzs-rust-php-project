@@ -321,7 +321,7 @@ impl Vm {
     }
 
     /// Initialized plain public slots need no lazy, native or visibility dispatch.
-    fn plain_property_slot(o: &Obj, name: &ZStr, write: bool) -> Option<usize> {
+    pub(crate) fn plain_property_slot(o: &Obj, name: &ZStr, write: bool) -> Option<usize> {
         let data = object::data(o);
         let cls = &data.class;
         let pi = cls.prop_map.get(name)?;

@@ -1708,6 +1708,38 @@ impl Vm {
         }
     }
 
+    /// `ZEND_ASSIGN_OBJ_OP` with `.=` on an initialized plain public
+    /// property slot holding a string ([`Vm::plain_property_slot`]: the
+    /// slot `get_property_ptr_ptr` hands out, with no hook, magic method,
+    /// native handler, lazy state or type involved), for the places the
+    /// property cache does not cover (`$this->o->s .= 'x'`,
+    /// `$list[$i]->name .= 'x'`): the string is extended in place like
+    /// [`concat_in_place`] does. `None` leaves the operation to the generic
+    /// read, operate and write-back path.
+    fn plain_prop_concat(o: &Obj, name: &ZStr, rhs: &Value) -> Option<Value> {
+        let tmp;
+        let add: &[u8] = match rhs {
+            Value::Str(s) => s.as_bytes(),
+            Value::Int(i) => {
+                tmp = php_runtime::convert::long_to_zstr(*i);
+                tmp.as_bytes()
+            }
+            _ => return None,
+        };
+        let idx = Self::plain_property_slot(o, name, true)?;
+        let data = object::data(o);
+        let mut slots = data.slots.borrow_mut();
+        let r = match slots.get_mut(idx) {
+            Some(Some(Value::Str(s))) => {
+                s.append(add);
+                Some(Value::Str(s.clone()))
+            }
+            _ => None,
+        };
+        drop(slots);
+        r
+    }
+
     /// Continues a write walk at an object.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn obj_walk(
@@ -1732,6 +1764,11 @@ impl Vm {
                             None => self.fetch_property_rw(&obj, name),
                         },
                         WOp::AssignOp(op, rhs) => {
+                            if op == BinaryOp::Concat {
+                                if let Some(r) = Self::plain_prop_concat(&obj, name, &rhs) {
+                                    return Ok(r);
+                                }
+                            }
                             // `zend_assign_op_overloaded_property` and the
                             // `get_property_ptr_ptr` path alike: read, operate,
                             // write back through the property handlers.
