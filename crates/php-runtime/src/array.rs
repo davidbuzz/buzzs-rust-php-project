@@ -1595,10 +1595,14 @@ impl HashTable {
     #[inline]
     #[must_use]
     pub fn valid_pos(&self, pos: u32) -> u32 {
-        match &self.store {
-            Store::Uninit => pos,
-            Store::Packed(v) => first_live(v, pos, Option::is_some),
-            Store::Hash(d) => first_live(&d.buckets, pos, |b| b.val.is_some()),
+        // Packed first: one compare instead of decoding the storage kind.
+        if let Store::Packed(v) = &self.store {
+            return first_live(v, pos, Option::is_some);
+        }
+        if let Store::Hash(d) = &self.store {
+            first_live(&d.buckets, pos, |b| b.val.is_some())
+        } else {
+            pos
         }
     }
 
@@ -1613,37 +1617,38 @@ impl HashTable {
     #[must_use]
     pub fn fe_fetch(&self, pos: u32) -> Option<(u32, &Value)> {
         let start = pos as usize;
-        match &self.store {
-            Store::Uninit => None,
-            Store::Packed(v) => v
+        if let Store::Packed(v) = &self.store {
+            return v
                 .get(start..)?
                 .iter()
                 .enumerate()
-                .find_map(|(i, s)| s.as_ref().map(|x| (to_u32(start + i), x))),
-            Store::Hash(d) => d
-                .buckets
-                .get(start..)?
-                .iter()
-                .enumerate()
-                .find_map(|(i, b)| b.val.as_ref().map(|x| (to_u32(start + i), x))),
+                .find_map(|(i, s)| s.as_ref().map(|x| (to_u32(start + i), x)));
         }
+        let Store::Hash(d) = &self.store else {
+            return None;
+        };
+        d.buckets
+            .get(start..)?
+            .iter()
+            .enumerate()
+            .find_map(|(i, b)| b.val.as_ref().map(|x| (to_u32(start + i), x)))
     }
 
     /// The entry at a position (holes and out-of-range give `None`).
     #[inline]
     #[must_use]
     pub fn at(&self, pos: u32) -> Option<(&ArrayKey, &Value)> {
-        match &self.store {
-            Store::Uninit => None,
-            Store::Packed(v) => v
+        if let Store::Packed(v) = &self.store {
+            return v
                 .get(pos as usize)?
                 .as_ref()
-                .map(|x| (int_keys::get(pos), x)),
-            Store::Hash(d) => {
-                let b = d.buckets.get(pos as usize)?;
-                b.val.as_ref().map(|x| (&b.key, x))
-            }
+                .map(|x| (int_keys::get(pos), x));
         }
+        let Store::Hash(d) = &self.store else {
+            return None;
+        };
+        let b = d.buckets.get(pos as usize)?;
+        b.val.as_ref().map(|x| (&b.key, x))
     }
 
     /// The key at a position, by value (holes and out-of-range give
