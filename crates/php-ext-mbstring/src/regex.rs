@@ -20,7 +20,7 @@ use php_mbstring::onig::{self, MatchLimits, NameList, OnigError};
 use php_mbstring::strings::check_str_encoding;
 use php_mbstring::Encoding;
 use php_runtime::{Value, ZArray, ZStr};
-use php_vm::ext::{Args, ModuleBuilder, VmResult};
+use php_vm::ext::{Args, ModuleBuilder, Throw, VmResult};
 use php_vm::Vm;
 
 use crate::state::{self, bytes, opt_str};
@@ -241,6 +241,52 @@ fn options_arg(vm: &mut Vm, opt: Option<&ZStr>) -> VmResult<(u32, Syntax)> {
     match opt {
         Some(o) => parse_options(o.as_bytes()).map_err(|e| vm.throw(e.class(), &e.to_string())),
         None => Ok(defaults()),
+    }
+}
+
+/// The option letters `_php_mb_regex_init_options` knows; any other one
+/// throws `Option "X" is not supported`.
+const OPTION_LETTERS: &[u8] = b"ixmsplnjugcrzbd";
+
+/// `_php_mb_regex_init_options` as the `mb_ereg_search*` functions call
+/// it, ignoring its result: an unsupported letter throws the `ValueError`
+/// (returned here, to be raised once the function has run) and the
+/// function goes on with no option bits (`*option` is written only when
+/// the whole string parsed) and the syntax chosen by the letters before
+/// the bad one (`*syntax` is written as the string is read).
+fn search_options(vm: &mut Vm, opt: Option<&ZStr>) -> (u32, Syntax, Option<Throw>) {
+    let Some(o) = opt else {
+        let (opts, syntax) = defaults();
+        return (opts, syntax, None);
+    };
+    let s = o.as_bytes();
+    match parse_options(s) {
+        Ok((opts, syntax)) => (opts, syntax, None),
+        Err(e) => {
+            let bad = s
+                .iter()
+                .position(|c| !OPTION_LETTERS.contains(c))
+                .unwrap_or(s.len());
+            let syntax = parse_options(&s[..bad]).map_or(Syntax::Ruby, |(_, syntax)| syntax);
+            (0, syntax, Some(vm.throw(e.class(), &e.to_string())))
+        }
+    }
+}
+
+/// Returns from a search function that ran with the option `ValueError`
+/// pending: `RETVAL_*` is discarded for the exception, and an `Error`
+/// thrown meanwhile ("No pattern was provided") carries it as `previous`
+/// (`zend_throw_exception_internal` with `EG(exception)` set).
+fn finish_search(vm: &mut Vm, r: VmResult<Value>, pending: Option<Throw>) -> VmResult<Value> {
+    match (r, pending) {
+        (Ok(_), Some(t)) => Err(t),
+        (Err(t), Some(prev)) => {
+            if let (Throw::Exception(exc), Throw::Exception(prev)) = (&t, &prev) {
+                vm.chain_exception(exc, prev);
+            }
+            Err(t)
+        }
+        (r, None) => r,
     }
 }
 
@@ -597,13 +643,26 @@ fn set_search_pattern(vm: &mut Vm, pattern: &[u8], opts: u32, syntax: Syntax) ->
 }
 
 /// `_php_mb_regex_ereg_search_exec`; `mode`: 0 bool, 1 pos, 2 regs.
-#[allow(clippy::many_single_char_names)]
 fn search_exec(vm: &mut Vm, a: &mut Args, mode: u8) -> VmResult<Value> {
     let pattern = opt_str(a, 0);
     let opt = opt_str(a, 1);
-    let (opts, syntax) = options_arg(vm, opt.as_ref())?;
+    let (opts, syntax, pending) = search_options(vm, opt.as_ref());
+    let r = search_run(vm, pattern.as_ref(), opts, syntax, mode);
+    finish_search(vm, r, pending)
+}
+
+/// The search of `_php_mb_regex_ereg_search_exec` once the options are
+/// parsed (it runs even with the option `ValueError` pending).
+#[allow(clippy::many_single_char_names)]
+fn search_run(
+    vm: &mut Vm,
+    pattern: Option<&ZStr>,
+    opts: u32,
+    syntax: Syntax,
+    mode: u8,
+) -> VmResult<Value> {
     GLOBALS.with(|g| g.borrow_mut().search.regs = None);
-    if let Some(p) = &pattern {
+    if let Some(p) = pattern {
         if !set_search_pattern(vm, p.as_bytes(), opts, syntax)? {
             return Ok(Value::Bool(false));
         }
@@ -673,8 +732,22 @@ fn mb_ereg_search_init(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if pattern.as_ref().is_some_and(|p| p.as_bytes().is_empty()) {
         return Err(a.value_error(vm, 2, "must not be empty"));
     }
-    let (opts, syntax) = options_arg(vm, opt.as_ref())?;
-    if let Some(p) = &pattern {
+    let (opts, syntax, pending) = search_options(vm, opt.as_ref());
+    let r = search_init(vm, string, pattern.as_ref(), opts, syntax);
+    finish_search(vm, r, pending)
+}
+
+/// Sets the search pattern and string (`mb_ereg_search_init` once its
+/// arguments are parsed; it runs even with the option `ValueError`
+/// pending). A pattern that fails to compile leaves the string alone.
+fn search_init(
+    vm: &mut Vm,
+    string: ZStr,
+    pattern: Option<&ZStr>,
+    opts: u32,
+    syntax: Syntax,
+) -> VmResult<Value> {
+    if let Some(p) = pattern {
         if !set_search_pattern(vm, p.as_bytes(), opts, syntax)? {
             return Ok(Value::Bool(false));
         }
@@ -850,5 +923,113 @@ mod tests {
             true
         ));
         assert!(!simple_match(b"^text/", b"image/png", true));
+    }
+
+    #[test]
+    fn search_options_keep_the_syntax_read_before_the_bad_letter() {
+        let mut vm = Vm::with_extensions(
+            &php_vm::VmOptions::default(),
+            Box::new(Vec::<u8>::new()),
+            &[&crate::Mbstring],
+        );
+        let (opts, syntax, pending) = search_options(&mut vm, None);
+        assert_eq!((opts, syntax), defaults());
+        assert!(pending.is_none());
+        let (opts, syntax, pending) = search_options(&mut vm, Some(&ZStr::from("ij")));
+        assert_eq!((opts, syntax), (OPTION_IGNORECASE, Syntax::Java));
+        assert!(pending.is_none());
+        // `*option` is left at 0, `*syntax` at the last letter parsed.
+        let (opts, syntax, pending) = search_options(&mut vm, Some(&ZStr::from("ijQz")));
+        assert_eq!((opts, syntax), (0, Syntax::Java));
+        assert!(matches!(pending, Some(Throw::Exception(_))));
+        let (_, syntax, pending) = search_options(&mut vm, Some(&ZStr::from("Q")));
+        assert_eq!(syntax, Syntax::Ruby);
+        assert!(pending.is_some());
+    }
+
+    /// A `Write` sink shared with the test.
+    #[derive(Clone, Default)]
+    struct Sink(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Runs a script on a VM with only this extension, deprecations off
+    /// (every `mb_ereg*` function is deprecated since 8.6).
+    fn run(body: &str) -> String {
+        let sink = Sink::default();
+        let mut vm = Vm::with_extensions(
+            &php_vm::VmOptions::default(),
+            Box::new(sink.clone()),
+            &[&crate::Mbstring],
+        );
+        let src = format!("<?php\nerror_reporting(E_ALL & ~E_DEPRECATED);\n{body}");
+        vm.run_script(src.as_bytes(), "regex.php");
+        drop(vm);
+        let out = sink.0.borrow().clone();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// `_php_mb_regex_ereg_search_exec` and `mb_ereg_search_init` ignore
+    /// the result of `_php_mb_regex_init_options`: the search runs with the
+    /// `ValueError` pending (pattern set, position moved), which is thrown
+    /// when the function returns (oracle: php 8.3.6, same php_mbregex.c).
+    #[test]
+    fn search_goes_on_after_an_unsupported_option() {
+        let out = run(r#"mb_ereg_search_init("abcb", "b");
+try { var_dump(mb_ereg_search("b", "Q")); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+var_dump(mb_ereg_search_getpos());
+var_dump(mb_ereg_search_getregs());
+try { var_dump(mb_ereg_search_init("zzz", "z", "Q")); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+var_dump(mb_ereg_search_getpos());
+var_dump(mb_ereg_search());
+var_dump(mb_ereg_search_getpos());
+"#);
+        assert_eq!(
+            out,
+            "Option \"Q\" is not supported\nint(2)\narray(1) {\n  [0]=>\n  string(1) \"b\"\n}\n\
+             Option \"Q\" is not supported\nint(0)\nbool(true)\nint(1)\n"
+        );
+    }
+
+    /// `zend_throw_error("No pattern was provided")` with the option
+    /// `ValueError` already thrown chains it as `previous`.
+    #[test]
+    fn option_error_becomes_the_previous_of_the_no_pattern_error() {
+        let out = run(r#"try { mb_ereg_search(null, "Q"); } catch (Error $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+    echo get_class($e->getPrevious()), ": ", $e->getPrevious()->getMessage(), "\n";
+}
+mb_ereg_search_init("abc");
+try { mb_ereg_search_pos(null, "jQ"); } catch (Error $e) { echo get_class($e), " <- ", get_class($e->getPrevious()), "\n"; }
+"#);
+        assert_eq!(
+            out,
+            "Error: No pattern was provided\nValueError: Option \"Q\" is not supported\nError <- ValueError\n"
+        );
+    }
+
+    /// The pattern is still compiled (and its warning shown) before the
+    /// option `ValueError` is thrown.
+    #[test]
+    fn compile_error_warns_before_the_option_error() {
+        let out = run(
+            r#"try { var_dump(mb_ereg_search_regs("(", "Q")); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+var_dump(mb_ereg_search_getpos());
+"#,
+        );
+        assert_eq!(
+            out,
+            "\nWarning: mb_ereg_search_regs(): mbregex compile err: end pattern with unmatched parenthesis in regex.php on line 3\n\
+             Option \"Q\" is not supported\nint(0)\n"
+        );
     }
 }
