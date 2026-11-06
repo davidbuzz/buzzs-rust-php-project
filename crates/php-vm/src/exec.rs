@@ -2005,14 +2005,15 @@ impl Vm {
 
     /// Whether the safe point after an instruction has work to do
     /// (`EG(vm_interrupt)`): one flag says whether destructors, a
-    /// collection or interrupt handlers wait ([`crate::interrupt`]); the
-    /// delayed `memory_limit` violation is still polled on its own
-    /// (php-memlimit cannot raise the flag). Inline flag tests; the work
-    /// itself is out of line ([`Vm::safe_point_work`]).
+    /// collection, a delayed `memory_limit` violation (php-memlimit raises
+    /// the flag through its pending hook, see [`crate::interrupt`]) or
+    /// interrupt handlers wait. One inline flag test; the work itself is
+    /// out of line ([`Vm::safe_point_work`]), where each source is polled
+    /// on its own.
     #[inline(always)]
     #[allow(clippy::inline_always)] // the per-instruction test of the dispatch loop
     fn safe_point_due() -> bool {
-        crate::interrupt::safe_point_due() || php_memlimit::is_pending()
+        crate::interrupt::safe_point_due()
     }
 
     /// The safe point after an instruction of the current frame that
