@@ -1853,8 +1853,30 @@ impl Vm {
     /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
     fn pop_frames_to(&mut self, depth: usize) {
         if self.frames.len() >= depth && !self.observer.keep_builtin_frame {
-            let args = std::mem::take(&mut self.frames[depth - 1].args);
-            self.frames.truncate(depth - 1);
+            self.frames.truncate(depth);
+            let args = {
+                let Some(frame) = self.frames.pop() else {
+                    return;
+                };
+                // A builtin frame's operand buffers were never allocated:
+                // they are forgotten instead of dropped, which skips an
+                // out-of-line empty `Vec` drop each (see `install_buffer`).
+                // The rest of the frame is dropped at the end of this
+                // block, before the arguments are released.
+                let Frame {
+                    args,
+                    tmps,
+                    iters,
+                    fins,
+                    calls,
+                    ..
+                } = frame;
+                forget_unallocated(tmps);
+                forget_unallocated(iters);
+                forget_unallocated(fins);
+                forget_unallocated(calls);
+                args
+            };
             self.put_arg_vec(args);
         }
     }
@@ -2531,6 +2553,15 @@ fn install_buffer<T>(slot: &mut Vec<T>, buf: Vec<T>) {
     }
 }
 
+/// Drops `v`, skipping the out-of-line `drop_in_place` call when it owns
+/// no allocation (and so, for a sized element type, no elements).
+#[inline]
+fn forget_unallocated<T>(v: Vec<T>) {
+    if v.capacity() == 0 && std::mem::size_of::<T>() != 0 {
+        std::mem::forget(v);
+    }
+}
+
 fn forwarded_called(cur: Option<Rc<Class>>, cls: &Rc<Class>, forward: bool) -> Rc<Class> {
     if forward {
         cur.filter(|c| c.is_subclass_of(cls))
@@ -2666,6 +2697,39 @@ restore_error_handler();
         assert_eq!(capacities(&vm), before);
         assert_eq!(held.refcount(), 1);
         assert!(vm.call_bufs.args.iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn popping_a_builtin_frame_releases_frame_values_before_arguments() {
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        let before = capacities(&vm);
+        let arg = ZStr::from("argument");
+        let tmp = ZStr::from("temporary");
+        let mut frame = Frame::with_vars(
+            vm.empty_code.clone(),
+            FrameKind::Builtin,
+            vm.empty_vars.clone(),
+            None,
+        );
+        frame.args = vm.call_bufs.args.pop().expect("prewarmed buffer");
+        frame.args.push(Some(Value::Str(arg.clone())));
+        frame.tmps.push(Value::Str(tmp.clone()));
+        vm.frames.push(frame);
+        let depth = vm.frames.len();
+        vm.pop_frames_to(depth);
+        assert!(vm.frames.is_empty());
+        assert_eq!(capacities(&vm), before);
+        assert_eq!(arg.refcount(), 1);
+        assert_eq!(tmp.refcount(), 1);
+    }
+
+    #[test]
+    fn forget_unallocated_drops_allocated_vectors() {
+        let held = ZStr::from("held");
+        forget_unallocated(vec![Value::Str(held.clone())]);
+        assert_eq!(held.refcount(), 1);
+        forget_unallocated(Vec::<Value>::new());
+        forget_unallocated(vec![(); 3]);
     }
 
     #[test]
