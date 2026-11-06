@@ -2071,8 +2071,10 @@ impl Vm {
 
     /// `place = v`
     pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
-        // Fast path: ASSIGN_OBJ to a cached declared slot.
-        let v = if propcache::cacheable(&self.frame().code.places[pid as usize]) {
+        let p = &self.frame().code.places[pid as usize];
+        let (single, head) = (propcache::cacheable(p), propcache::cacheable_head(p));
+        // Fast path: ASSIGN_OBJ to a cached property.
+        let v = if single {
             match self.prop_cache_assign(pid, v) {
                 Ok(r) => return Ok(r),
                 Err(v) => v,
@@ -2089,7 +2091,43 @@ impl Vm {
         if !self.error_handlers.is_empty() && final_dim_converts_noisily(segs.last()) {
             return self.assign_converted_dim(base, &segs, v);
         }
+        // Fast path: `$this->a[$k] = v` & co. enter a cached declared slot
+        // (FETCH_OBJ_W with a runtime cache slot).
+        if head && !single {
+            if let Some((obj, idx)) = self.prop_cache_container(pid) {
+                drop(base);
+                return self.write_cached_container(&obj, idx, &segs, WOp::Assign(v));
+            }
+        }
         self.write_place(base, &segs, WOp::Assign(v))
+    }
+
+    /// The write walk of a resolved place whose first segment is a cached
+    /// declared property, from slot `idx` of `obj` on: what
+    /// [`Vm::write_place`] does for an object base reaching `obj_walk`'s
+    /// `PropContainer::Declared(idx)`, once `Vm::prop_cache_container`
+    /// stood in for the property's `FETCH_OBJ_W`.
+    fn write_cached_container(
+        &mut self,
+        obj: &Obj,
+        idx: usize,
+        segs: &[RSeg],
+        wop: WOp,
+    ) -> VmResult<Value> {
+        // `write_place_inner`'s check after the base step.
+        if rw_container_changed(&wop) {
+            flush_deferred_ref_assigns();
+            return Ok(Value::Null);
+        }
+        let walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
+            let data = object::data(obj);
+            let mut slots = data.slots.borrow_mut();
+            let slot = slots[idx].get_or_insert(Value::Null);
+            descend(slot, sg, 1, w, d, false)
+        };
+        let r = self.descend_with(segs, wop, walk);
+        flush_deferred_ref_assigns();
+        r
     }
 
     /// `place[k] = v` where converting `k` raises a diagnostic and an error
@@ -2295,9 +2333,10 @@ impl Vm {
         op: BinaryOp,
         v: Value,
     ) -> VmResult<Value> {
-        // Fast path: ASSIGN_OBJ_OP on a cached declared slot holding a
-        // number.
-        if propcache::cacheable(&self.frame().code.places[pid as usize]) {
+        let p = &self.frame().code.places[pid as usize];
+        let (single, head) = (propcache::cacheable(p), propcache::cacheable_head(p));
+        // Fast path: ASSIGN_OBJ_OP on a cached property holding a number.
+        if single {
             if let Some(r) = self.prop_cache_assign_op(pid, op, &v)? {
                 return Ok(r);
             }
@@ -2313,6 +2352,13 @@ impl Vm {
             self.rw_undefined_global(pid, &base)?;
         }
         if !segs.is_empty() {
+            // `$this->a[$k] op= v` & co.: enter a cached declared slot.
+            if head && !single {
+                if let Some((obj, idx)) = self.prop_cache_container(pid) {
+                    drop(base);
+                    return self.write_cached_container(&obj, idx, &segs, WOp::AssignOp(op, v));
+                }
+            }
             // One walk: offsets convert and object handlers run once.
             return self.write_place(base, &segs, WOp::AssignOp(op, v));
         }

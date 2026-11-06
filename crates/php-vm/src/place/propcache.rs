@@ -1,9 +1,9 @@
 //! Per-place runtime cache of property lookups: php-src's
 //! `CACHE_ADDR(opline->extended_value)` slot of `ZEND_FETCH_OBJ_R`/`_IS`,
 //! `ZEND_ASSIGN_OBJ`, `ZEND_ASSIGN_OBJ_OP`, `ZEND_PRE/POST_INC/DEC_OBJ`
-//! and `ZEND_ISSET_ISEMPTY_PROP_OBJ` (ref: Zend/zend_vm_def.h,
-//! Zend/zend_execute.c `zend_fetch_property_address`,
-//! Zend/zend_object_handlers.c `zend_get_property_offset`).
+//! and `ZEND_ISSET_ISEMPTY_PROP_OBJ` (ref: `Zend/zend_vm_def.h`,
+//! `Zend/zend_execute.c` `zend_fetch_property_address`,
+//! `Zend/zend_object_handlers.c` `zend_get_property_offset`).
 //!
 //! A property place with a literal name on a CV or `$this` (`$o->p`,
 //! `$this->p`) remembers what its last lookup found, keyed by the object's
@@ -140,13 +140,15 @@ fn with_base_obj<R>(f: &Frame, base: u32, k: impl FnOnce(&Obj) -> R) -> Option<R
     let vars = f.vars.borrow();
     let out = match vars.slots.get(f.cv_idx(base)) {
         Some(Some(Value::Object(o))) => Some(k(o)),
-        Some(Some(Value::Reference(r))) => {
-            let inner = r.borrow();
-            match &*inner {
+        // A reference being modified elsewhere (`descend`'s "Cannot modify
+        // a value while it is being iterated") is left to the walk.
+        Some(Some(Value::Reference(r))) => match r.try_borrow() {
+            Some(inner) => match &*inner {
                 Value::Object(o) => Some(k(o)),
                 _ => None,
-            }
-        }
+            },
+            None => None,
+        },
         _ => None,
     };
     drop(vars);
@@ -443,6 +445,29 @@ impl Vm {
         })
     }
 
+    /// `FETCH_OBJ_W` of the first segment of place `pid` for a write walk
+    /// that goes on inside the property (`$this->a[$k] = v`): the object
+    /// and the declared slot `property_container` would hand the walk
+    /// (`PropContainer::Declared`), when the cache covers it: an
+    /// initialized slot without reference, writable in place (no readonly
+    /// or set visibility, no native handler), and for a typed property
+    /// holding an array or object (nothing to auto-vivify, so no type
+    /// check: `typed_prop_dim_write_check`).
+    pub(crate) fn prop_cache_container(&mut self, pid: PlaceId) -> Option<(Obj, usize)> {
+        self.prop_probe_fill(pid, PC_FILLED | PC_READ | PC_WRITE, |e, o, h| {
+            let Home::Slot(s) = &h else {
+                return Probe::Slow;
+            };
+            let s = *s as usize;
+            read_home(o, &h, |v| match v {
+                Value::Reference(_) => Probe::Slow,
+                Value::Array(_) | Value::Object(_) => Probe::Hit((o.clone(), s)),
+                _ if e.accept == u32::MAX => Probe::Hit((o.clone(), s)),
+                _ => Probe::Slow,
+            })
+        })
+    }
+
     /// `ZEND_ASSIGN_OBJ` of cacheable place `pid`: stores `v` over an
     /// initialized declared slot or an existing dynamic property and
     /// returns the assigned value, or hands `v` back (`Err`) for the
@@ -461,12 +486,11 @@ impl Vm {
                 None => Probe::Slow,
             }
         });
-        match old {
-            Some(old) => {
-                drop(old);
-                Ok(v)
-            }
-            None => Err(v),
+        if let Some(old) = old {
+            drop(old);
+            Ok(v)
+        } else {
+            Err(v)
         }
     }
 
@@ -550,6 +574,7 @@ impl Vm {
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_raw_string_hashes)]
 mod tests {
     use crate::{Vm, VmOptions};
     use std::cell::RefCell;
@@ -808,6 +833,55 @@ Notice: Accessing static property S::$st as non static in t.php on line 25
 
 Warning: Undefined property: S::$st in t.php on line 25
 |
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    /// Writes inside a cached property (`$this->a[] = v`, `$this->a[$k]
+    /// op= v`) walk from the slot: copy-on-write, undefined-key warnings,
+    /// string offsets and typed auto-vivification behave as before.
+    #[test]
+    fn writes_inside_a_cached_property() {
+        let src = r#"<?php
+class L {
+    public $items = [];
+    public array $typed = [];
+    public ?array $maybe = null;
+    public $cnt = ['a' => 0];
+    public $str = 'abc';
+    function run() {
+        for ($i = 0; $i < 3; $i++) {
+            $this->items[] = $i;
+            $this->typed['k' . $i] = $i * 2;
+            $this->cnt['a'] += $i;
+        }
+        $this->maybe[] = 1;
+        $copy = $this->items;
+        $this->items[] = 99;
+        echo count($copy), ' ', count($this->items), "\n";
+        echo json_encode([$this->items, $this->typed, $this->maybe, $this->cnt]), "\n";
+        $this->cnt['zz'] .= 'q';
+        echo $this->cnt['zz'], "\n";
+        $this->str[1] = 'X';
+        echo $this->str, "\n";
+    }
+}
+(new L)->run();
+class TI { public int $n = 0; }
+$t = new TI;
+try { $t->n[] = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$o = new L;
+for ($i = 0; $i < 2; $i++) { $o->items['x'][] = $i; }
+echo json_encode($o->items), "\n";
+"#;
+        let expected = r#"3 4
+[[0,1,2,99],{"k0":0,"k1":2,"k2":4},[1],{"a":3}]
+
+Warning: Undefined array key "zz" in t.php on line 19
+q
+aXc
+Cannot use a scalar value as an array
+{"x":[0,1]}
 "#;
         assert_eq!(run(src), expected);
     }
