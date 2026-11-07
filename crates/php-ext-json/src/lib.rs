@@ -15,7 +15,7 @@ mod host;
 
 use host::VmJsonHost;
 use php_json::{functions, JsonState};
-use php_runtime::Value;
+use php_runtime::{ArrayKey, Value, ZStr};
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, Extension, ModuleBuilder, VmResult};
 use php_vm::Vm;
 use std::cell::RefCell;
@@ -91,8 +91,78 @@ fn input_len(v: &Value) -> usize {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Json;
 
+/// Validates string UTF-8 using `s.is_valid_utf8()` to fast-path string validation
+/// without re-checking bytes with `std::str::from_utf8`. If bytes are valid UTF-8,
+/// marks with `s.mark_valid_utf8()`.
+fn check_and_mark_utf8(s: &ZStr) -> bool {
+    if s.is_valid_utf8() {
+        return true;
+    }
+    if std::str::from_utf8(s.as_bytes()).is_ok() {
+        s.mark_valid_utf8();
+        true
+    } else {
+        false
+    }
+}
+
+/// Recursively fast-paths and marks valid UTF-8 on string values and keys before
+/// encoding.
+fn check_value_utf8(v: &Value) {
+    match v {
+        Value::Str(s) => {
+            check_and_mark_utf8(s);
+        }
+        Value::Array(arr) => {
+            for (key, entry) in arr.iter() {
+                if let ArrayKey::Str(k) = key {
+                    check_and_mark_utf8(k);
+                }
+                check_value_utf8(entry);
+            }
+        }
+        Value::Reference(r) => {
+            check_value_utf8(&r.get());
+        }
+        _ => {}
+    }
+}
+
+/// Marks decoded string values and keys as valid UTF-8 since valid JSON is
+/// guaranteed to be UTF-8.
+fn mark_decoded_utf8(vm: &mut Vm, v: &Value) {
+    match v {
+        Value::Str(s) => {
+            s.mark_valid_utf8();
+        }
+        Value::Array(arr) => {
+            for (key, entry) in arr.iter() {
+                if let ArrayKey::Str(k) = key {
+                    k.mark_valid_utf8();
+                }
+                mark_decoded_utf8(vm, entry);
+            }
+        }
+        Value::Object(o) => {
+            if let Ok(Some(props)) = vm.standard_json_properties(o) {
+                for (key, entry) in props.iter() {
+                    if let ArrayKey::Str(k) = key {
+                        k.mark_valid_utf8();
+                    }
+                    mark_decoded_utf8(vm, entry);
+                }
+            }
+        }
+        Value::Reference(r) => {
+            mark_decoded_utf8(vm, &r.get());
+        }
+        _ => {}
+    }
+}
+
 fn json_encode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let value = a.at(0);
+    check_value_utf8(&value);
     let flags = if a.has(1) { a.int(1) } else { 0 };
     let depth = if a.has(2) {
         a.int(2)
@@ -107,6 +177,7 @@ fn json_encode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     STATE.with(|s| *s.borrow_mut() = st);
     let r = r.map_err(|e| host::rt_throw(vm, e))?;
     if let Value::Str(out) = &r {
+        out.mark_valid_utf8();
         check_memory(vm, input_len(&value), out.len())?;
     }
     Ok(r)
@@ -136,6 +207,7 @@ fn json_decode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Value::Str(out) = &r {
         check_memory(vm, json.len(), out.len())?;
     }
+    mark_decoded_utf8(vm, &r);
     Ok(r)
 }
 
@@ -231,5 +303,21 @@ mod tests {
         let names: Vec<&str> = php_json::flags::CONSTANTS.iter().map(|c| c.0).collect();
         assert!(names.contains(&"JSON_THROW_ON_ERROR"));
         assert!(names.contains(&"JSON_ERROR_NON_BACKED_ENUM"));
+    }
+
+    #[test]
+    fn utf8_caching_encode_and_decode() {
+        let s = ZStr::from("hello world");
+        assert!(!s.is_valid_utf8());
+        assert!(check_and_mark_utf8(&s));
+        assert!(s.is_valid_utf8());
+
+        let invalid = ZStr::new(b"\xff\xfe".to_vec());
+        assert!(!check_and_mark_utf8(&invalid));
+        assert!(!invalid.is_valid_utf8());
+
+        let out = ZStr::from(r#"{"key":"val"}"#);
+        out.mark_valid_utf8();
+        assert!(out.is_valid_utf8());
     }
 }

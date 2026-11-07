@@ -17,10 +17,139 @@ mod functions;
 mod memory;
 mod state;
 
-use php_runtime::Value;
+use php_runtime::{ArrayKey, Value, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
-use php_vm::ext::{Extension, InfoItem, ModuleBuilder, VmResult};
+use php_vm::ext::{Args, Extension, InfoItem, ModuleBuilder, VmResult};
+use php_vm::func::{BuiltinFn, Func};
 use php_vm::Vm;
+use std::sync::atomic::{AtomicPtr, Ordering};
+
+static ORIG_PREG_MATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+static ORIG_PREG_MATCH_ALL: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+static ORIG_PREG_SPLIT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// When a pattern has the `/u` modifier (PCRE2_UTF), matched string captures
+/// / substrings extracted from the subject can be marked valid UTF-8 with
+/// `mark_valid_utf8()`.
+#[inline]
+pub fn mark_capture_valid_utf8(s: &ZStr, is_utf: bool) {
+    if is_utf {
+        s.mark_valid_utf8();
+    }
+}
+
+/// Marks all string captures in a matches array / value as valid UTF-8
+/// when the pattern has the `/u` modifier.
+pub fn mark_captures_valid_utf8(v: &Value) {
+    match v {
+        Value::Str(s) => {
+            s.mark_valid_utf8();
+        }
+        Value::Array(arr) => {
+            for (key, entry) in arr.iter() {
+                if let ArrayKey::Str(k) = key {
+                    k.mark_valid_utf8();
+                }
+                mark_captures_valid_utf8(entry);
+            }
+        }
+        Value::Reference(r) => {
+            let inner = r.get();
+            mark_captures_valid_utf8(&inner);
+        }
+        _ => {}
+    }
+}
+
+/// Checks whether a PCRE regex pattern string contains the `/u` modifier (PCRE2_UTF).
+pub fn pattern_has_u(pattern: &[u8]) -> bool {
+    let Some(&delim) = pattern.first() else { return false };
+    if delim.is_ascii_alphanumeric() || delim == b'\\' || delim == b' ' {
+        return false;
+    }
+    let (end_delim, paired) = match delim {
+        b'(' => (b')', true),
+        b'[' => (b']', true),
+        b'{' => (b'}', true),
+        b'<' => (b'>', true),
+        d => (d, false),
+    };
+    let mut end = pattern.len();
+    while end > 1 && pattern[end - 1] != delim && (!paired || pattern[end - 1] != end_delim) {
+        end -= 1;
+    }
+    if end <= 1 {
+        return false;
+    }
+    pattern[end..].contains(&b'u')
+}
+
+fn is_pattern_utf(vm: &mut Vm, a: &Args) -> bool {
+    if !a.has(0) {
+        return false;
+    }
+    let pat = a.str(0);
+    pattern_has_u(pat.as_bytes())
+        || state::compile(vm, pat.as_bytes())
+            .map(|opt| opt.is_some_and(|re| re.is_utf()))
+            .unwrap_or(false)
+}
+
+fn wrapped_preg_match(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let ptr = ORIG_PREG_MATCH.load(Ordering::Relaxed);
+    if ptr.is_null() {
+        return Ok(Value::Bool(false));
+    }
+    let handler: BuiltinFn = unsafe { std::mem::transmute(ptr) };
+    let res = handler(vm, a)?;
+    if a.has(2) && is_pattern_utf(vm, a) {
+        mark_captures_valid_utf8(&a.at(2));
+    }
+    Ok(res)
+}
+
+fn wrapped_preg_match_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let ptr = ORIG_PREG_MATCH_ALL.load(Ordering::Relaxed);
+    if ptr.is_null() {
+        return Ok(Value::Bool(false));
+    }
+    let handler: BuiltinFn = unsafe { std::mem::transmute(ptr) };
+    let res = handler(vm, a)?;
+    if a.has(2) && is_pattern_utf(vm, a) {
+        mark_captures_valid_utf8(&a.at(2));
+    }
+    Ok(res)
+}
+
+fn wrapped_preg_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let ptr = ORIG_PREG_SPLIT.load(Ordering::Relaxed);
+    if ptr.is_null() {
+        return Ok(Value::Bool(false));
+    }
+    let handler: BuiltinFn = unsafe { std::mem::transmute(ptr) };
+    let res = handler(vm, a)?;
+    if is_pattern_utf(vm, a) {
+        mark_captures_valid_utf8(&res);
+    }
+    Ok(res)
+}
+
+fn wrap_pcre_functions(vm: &mut Vm) {
+    let list: [(&str, &AtomicPtr<()>, BuiltinFn); 3] = [
+        ("preg_match", &ORIG_PREG_MATCH, wrapped_preg_match),
+        ("preg_match_all", &ORIG_PREG_MATCH_ALL, wrapped_preg_match_all),
+        ("preg_split", &ORIG_PREG_SPLIT, wrapped_preg_split),
+    ];
+    for (name, slot, wrapper) in list {
+        let key = ZStr::from(name);
+        if let Some(Func::Builtin(b)) = vm.functions.get(&key).cloned() {
+            slot.store(b.handler as *mut (), Ordering::Relaxed);
+            let mut nb = (*b).clone();
+            nb.handler = wrapper;
+            vm.functions.insert(key, Func::Builtin(std::rc::Rc::new(nb)));
+        }
+    }
+}
 
 /// The `pcre` extension.
 #[derive(Debug, Clone, Copy, Default)]
@@ -33,6 +162,7 @@ impl Extension for Pcre {
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         functions::register(m);
+        wrap_pcre_functions(m.vm());
         register_constants(m);
         register_ini(m);
         m.info(module_info);
@@ -162,5 +292,22 @@ mod tests {
         assert!(row("PCRE Library Version"));
         assert!(row("PCRE Unicode Version"));
         assert!(row("PCRE JIT Support"));
+    }
+
+    #[test]
+    fn test_mark_captures_valid_utf8() {
+        let s = ZStr::from("test capture");
+        assert!(!s.is_valid_utf8());
+        mark_capture_valid_utf8(&s, true);
+        assert!(s.is_valid_utf8());
+
+        let non_utf = ZStr::from("other");
+        mark_capture_valid_utf8(&non_utf, false);
+        assert!(!non_utf.is_valid_utf8());
+
+        let pat_u = b"/test/u";
+        assert!(pattern_has_u(pat_u));
+        let pat_no_u = b"/test/i";
+        assert!(!pattern_has_u(pat_no_u));
     }
 }

@@ -386,6 +386,11 @@ fn mb_scrub(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Ok(st.convert_ex(s.as_bytes(), encoding, encoding))
     })
     .map(bytes)?;
+    if encoding.is_utf8() {
+        if let Value::Str(ref out) = v {
+            out.mark_valid_utf8();
+        }
+    }
     mem::result(vm, mem::zstr(s.as_bytes().len()), v)
 }
 
@@ -501,7 +506,61 @@ fn mb_ord(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn mb_chr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (cp, enc) = (a.int(0), opt_str(a, 1));
-    call(vm, a, |st| st.mb_chr(cp, opt_bytes(enc.as_ref()))).map(str_or_false)
+    let r = call(vm, a, |st| st.mb_chr(cp, opt_bytes(enc.as_ref()))).map(str_or_false)?;
+    if let Value::Str(ref s) = r {
+        let is_utf8 = match enc {
+            Some(ref e) => e.as_bytes().eq_ignore_ascii_case(b"utf-8") || e.as_bytes().eq_ignore_ascii_case(b"utf8"),
+            None => call(vm, a, |st| st.get_encoding(None, 2, "encoding")).map(|e| e.is_utf8()).unwrap_or(false),
+        };
+        if is_utf8 {
+            s.mark_valid_utf8();
+        }
+    }
+    Ok(r)
+}
+
+/// `mb_check_encoding`: when encoding is UTF-8 and check passes, call `s.mark_valid_utf8()`.
+/// Validates string UTF-8 validity using cached `s.is_valid_utf8()`, and on successful
+/// validation marks the string with `s.mark_valid_utf8()`.
+#[inline]
+pub fn check_encoding_utf8(s: &ZStr) -> bool {
+    if s.is_valid_utf8() {
+        return true;
+    }
+    if std::str::from_utf8(s.as_bytes()).is_ok() {
+        s.mark_valid_utf8();
+        true
+    } else {
+        false
+    }
+}
+
+/// Standalone `mb_check_encoding` implementation in `funcs.rs`: when encoding is UTF-8
+/// and check passes, calls `s.mark_valid_utf8()`.
+pub fn mb_check_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let enc_name = opt_str(a, 1);
+    let enc_arg = enc_name.as_ref().map(ZStr::as_bytes);
+    let encoding = call(vm, a, |st| st.get_encoding(enc_arg, 2, "encoding"))?;
+    match a.opt(0) {
+        None => call(vm, a, |st| st.mb_check_encoding_noarg(enc_arg)).map(Value::Bool),
+        Some(Value::Str(s)) => {
+            if encoding.is_utf8() {
+                Ok(Value::Bool(check_encoding_utf8(&s)))
+            } else {
+                let valid = call(vm, a, |st| Ok(st.mb_check_encoding(s.as_bytes(), enc_arg)))?;
+                Ok(Value::Bool(valid))
+            }
+        }
+        Some(v) => {
+            let s = vm.value_to_string(&v)?;
+            if encoding.is_utf8() {
+                Ok(Value::Bool(check_encoding_utf8(&s)))
+            } else {
+                let valid = call(vm, a, |st| Ok(st.mb_check_encoding(s.as_bytes(), enc_arg)))?;
+                Ok(Value::Bool(valid))
+            }
+        }
+    }
 }
 
 fn mb_str_pad(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -580,4 +639,21 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             "mb_str_pad(string $string, int $length, string $pad_string = \" \", int $pad_type = STR_PAD_RIGHT, ?string $encoding = null): string",
             mb_str_pad,
         );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_encoding_utf8() {
+        let s = ZStr::from("valid utf8 test");
+        assert!(!s.is_valid_utf8());
+        assert!(check_encoding_utf8(&s));
+        assert!(s.is_valid_utf8());
+
+        let bad = ZStr::new(b"\xff\xfe".to_vec());
+        assert!(!check_encoding_utf8(&bad));
+        assert!(!bad.is_valid_utf8());
+    }
 }
