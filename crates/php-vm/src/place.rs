@@ -1761,11 +1761,20 @@ impl Vm {
             PlaceBase::Global(op) => {
                 let n = self.read(*op)?;
                 let n = self.to_zstr(&n)?;
+                let bytes = n.as_bytes();
                 let g = self.globals.clone();
-                let idx = if write || is_superglobal_name(n.as_bytes()) {
-                    Some(g.borrow_mut().find_or_add(n.as_bytes()))
+                let idx = if bytes == b"_GET" {
+                    if let Some(i) = self.ext.auto_globals.cached_slots[0] {
+                        Some(i)
+                    } else {
+                        let i = g.borrow_mut().find_or_add(bytes);
+                        self.ext.auto_globals.cached_slots[0] = Some(i);
+                        Some(i)
+                    }
+                } else if write || is_superglobal_name(bytes) {
+                    Some(g.borrow_mut().find_or_add(bytes))
                 } else {
-                    g.borrow_mut().find(n.as_bytes())
+                    g.borrow_mut().find(bytes)
                 };
                 match idx {
                     Some(i) => RBase::Var(g, i as usize),
@@ -3716,6 +3725,25 @@ impl Vm {
     /// Reads a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_fetch(&mut self, pid: PlaceId, mode: FetchMode) -> VmResult<Value> {
+        if mode == FetchMode::Read {
+            let direct_auto_global = {
+                let p = &self.frame().code.places[pid as usize];
+                if let (PlaceBase::Global(Operand::Lit(lit)), true) = (&p.base, p.segs.is_empty()) {
+                    match self.frame().code.literals.get(*lit as usize) {
+                        Some(Value::Str(s)) if s.as_bytes() == b"_GET" => Some(0),
+                        Some(Value::Str(s)) if s.as_bytes().first() == Some(&b'_') => {
+                            crate::auto_globals::index(s.as_bytes())
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            };
+            if let Some(idx) = direct_auto_global {
+                return Ok(self.get_auto_global(idx));
+            }
+        }
         let head = {
             let p = &self.frame().code.places[pid as usize];
             // Fast path: reading a plain compiled variable (`f($x)`).

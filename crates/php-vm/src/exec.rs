@@ -507,8 +507,8 @@ impl Vm {
         let slot = f.cvs.get_mut(idx)?;
         if matches!(
             slot.get(),
-            Some(Value::Reference(_) | Value::Array(_) | Value::Object(_))
-        ) {
+            Some(Value::Reference(_) | Value::Object(_))
+        ) || matches!(slot.get(), Some(Value::Array(a)) if !a.is_empty()) {
             return self.cv_assign_slow(cv, v);
         }
         let old = slot.set(Some(v.clone()));
@@ -540,6 +540,51 @@ impl Vm {
         None
     }
 
+    /// Fast path for reading places directly: direct auto-globals (`$_GET`)
+    /// without breaking to the generic place fetcher.
+    #[inline(always)]
+    fn fetch_place_fast(&mut self, place: PlaceId) -> Option<Value> {
+        enum FastKind {
+            Get,
+            AutoGlobal(usize),
+            None,
+        }
+        let kind = {
+            let f = self.frames.last()?;
+            let p = f.code.places.get(place as usize)?;
+            if !p.segs.is_empty() {
+                FastKind::None
+            } else {
+                match &p.base {
+                    crate::opcode::PlaceBase::Global(crate::opcode::Operand::Lit(lit)) => {
+                        let val = f.code.literals.get(*lit as usize)?;
+                        if let Value::Str(s) = val {
+                            let b = s.as_bytes();
+                            if b == b"_GET" {
+                                FastKind::Get
+                            } else if b.first() == Some(&b'_') {
+                                match crate::auto_globals::index(b) {
+                                    Some(idx) => FastKind::AutoGlobal(idx),
+                                    None => FastKind::None,
+                                }
+                            } else {
+                                FastKind::None
+                            }
+                        } else {
+                            FastKind::None
+                        }
+                    }
+                    _ => FastKind::None,
+                }
+            }
+        };
+        match kind {
+            FastKind::Get => Some(self.get_auto_global_get()),
+            FastKind::AutoGlobal(idx) => Some(self.get_auto_global(idx)),
+            FastKind::None => None,
+        }
+    }
+
     /// `ZEND_ASSIGN` with a CV result operand (`$cv = val`, the
     /// [`Op::AssignCv`] instruction, `zend_assign_to_variable`) in place,
     /// in the hot pre-match of [`Vm::run`]: php-src's
@@ -560,7 +605,10 @@ impl Vm {
         let idx = cv as usize;
         let slot = match f.cvs.get(idx) {
             Some(slot) => match slot.get() {
-                Some(Value::Reference(_) | Value::Array(_) | Value::Object(_)) => {
+                Some(Value::Reference(_) | Value::Object(_)) => {
+                    return false;
+                }
+                Some(Value::Array(a)) if !a.is_empty() => {
                     return false;
                 }
                 _ => slot,
@@ -1456,6 +1504,17 @@ impl Vm {
                             }
                             None => break 'slow,
                         },
+                        Op::Fetch { place, mode, dst } => {
+                            if *mode == FetchMode::Read {
+                                if let Some(v) = self.fetch_place_fast(*place) {
+                                    self.set_tmp(*dst, v);
+                                } else {
+                                    break 'slow;
+                                }
+                            } else {
+                                break 'slow;
+                            }
+                        },
                         Op::AssignStaticProp { place, val, dst } => {
                             if !self.assign_static_prop_fast(*place, *val, *dst) {
                                 break 'slow;
@@ -1865,7 +1924,15 @@ impl Vm {
                     | Op::FetchStaticProp {
                         place, dst, mode, ..
                     } => {
-                        let v = self.place_fetch(*place, *mode)?;
+                        let v = if *mode == FetchMode::Read {
+                            if let Some(v) = self.fetch_place_fast(*place) {
+                                v
+                            } else {
+                                self.place_fetch(*place, *mode)?
+                            }
+                        } else {
+                            self.place_fetch(*place, *mode)?
+                        };
                         self.set_tmp(*dst, v);
                         Flow::Next
                     }

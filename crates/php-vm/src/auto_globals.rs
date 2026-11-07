@@ -14,6 +14,7 @@
 //! compilation, in the order the names were first seen.
 
 use crate::Vm;
+use php_runtime::{Value, ZArray};
 use std::cell::RefCell;
 
 /// `zend_auto_global_callback`: creates the auto-global `name` in the
@@ -34,7 +35,7 @@ pub const AUTO_GLOBAL_NAMES: [&[u8]; 8] = [
 ];
 
 /// The index of an auto-global name in [`AUTO_GLOBAL_NAMES`].
-fn index(name: &[u8]) -> Option<usize> {
+pub(crate) fn index(name: &[u8]) -> Option<usize> {
     AUTO_GLOBAL_NAMES.iter().position(|n| *n == name)
 }
 
@@ -67,11 +68,24 @@ pub(crate) fn note_compiled(name: &[u8]) -> bool {
 }
 
 /// The armed (not yet created) auto-globals of a request.
-#[derive(Default)]
 pub struct AutoGlobals {
     /// `zend_auto_global.armed` with its callback, per
     /// [`AUTO_GLOBAL_NAMES`] entry.
     armed: [Option<AutoGlobalCallback>; AUTO_GLOBAL_NAMES.len()],
+    /// Direct cached slot index in `vm.globals` per auto-global.
+    pub(crate) cached_slots: [Option<u32>; AUTO_GLOBAL_NAMES.len()],
+    /// Pre-initialized array for `$_GET`.
+    pub(crate) get_array: Option<Value>,
+}
+
+impl Default for AutoGlobals {
+    fn default() -> Self {
+        Self {
+            armed: [None; AUTO_GLOBAL_NAMES.len()],
+            cached_slots: [None; AUTO_GLOBAL_NAMES.len()],
+            get_array: Some(Value::Array(ZArray::new())),
+        }
+    }
 }
 
 impl std::fmt::Debug for AutoGlobals {
@@ -84,6 +98,7 @@ impl std::fmt::Debug for AutoGlobals {
             .collect();
         f.debug_struct("AutoGlobals")
             .field("armed", &armed)
+            .field("cached_slots", &self.cached_slots)
             .finish()
     }
 }
@@ -110,7 +125,73 @@ impl Vm {
         if let Some(callback) = self.ext.auto_globals.armed[i].take() {
             callback(self, AUTO_GLOBAL_NAMES[i]);
         }
+        if i == 0 && self.ext.auto_globals.cached_slots[0].is_none() {
+            let mut g = self.globals.borrow_mut();
+            let slot = g.find_or_add(name);
+            if g.slots[slot as usize].is_none() {
+                let arr = self
+                    .ext
+                    .auto_globals
+                    .get_array
+                    .clone()
+                    .unwrap_or_else(|| Value::Array(ZArray::new()));
+                g.slots[slot as usize] = Some(arr);
+            }
+            self.ext.auto_globals.cached_slots[0] = Some(slot);
+        }
         true
+    }
+
+    /// Direct read of `$_GET`: hits a direct cached pointer/slot
+    /// or pre-initialized array rather than doing string lookups or full jit-initialization on every read.
+    #[inline]
+    pub fn get_auto_global_get(&mut self) -> Value {
+        self.get_auto_global(0)
+    }
+
+    /// Direct read of an auto-global by registration index: hits a direct cached
+    /// pointer/slot or pre-initialized array.
+    #[inline]
+    pub fn get_auto_global(&mut self, idx: usize) -> Value {
+        if let Some(slot) = self.ext.auto_globals.cached_slots[idx] {
+            let g = self.globals.borrow();
+            if let Some(Some(val)) = g.slots.get(slot as usize) {
+                return val.deref();
+            }
+        }
+        self.init_and_get_auto_global(idx)
+    }
+
+    /// Initializes and fetches an auto-global by index, caching its slot index
+    /// and pre-initializing an array if not yet set in globals.
+    #[cold]
+    pub fn init_and_get_auto_global(&mut self, idx: usize) -> Value {
+        let name = AUTO_GLOBAL_NAMES[idx];
+        if let Some(callback) = self.ext.auto_globals.armed[idx].take() {
+            callback(self, name);
+        }
+        let mut g = self.globals.borrow_mut();
+        let slot = g.find_or_add(name);
+        let val = if let Some(v) = &g.slots[slot as usize] {
+            v.deref()
+        } else {
+            let arr = if idx == 0 {
+                self.ext
+                    .auto_globals
+                    .get_array
+                    .clone()
+                    .unwrap_or_else(|| Value::Array(ZArray::new()))
+            } else {
+                Value::Array(ZArray::new())
+            };
+            g.slots[slot as usize] = Some(arr.clone());
+            arr
+        };
+        self.ext.auto_globals.cached_slots[idx] = Some(slot);
+        if idx == 0 && self.ext.auto_globals.get_array.is_none() {
+            self.ext.auto_globals.get_array = Some(val.clone());
+        }
+        val
     }
 
     /// Runs the armed callbacks of the auto-globals the last compilation
