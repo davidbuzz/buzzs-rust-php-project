@@ -280,24 +280,30 @@ impl Vm {
             self.observer_declared(&lc, false);
             self.functions.insert(lc, crate::func::Func::User(f));
         }
-        for &i in &unit.hoisted_classes {
-            let d = unit.decls.classes.borrow()[i as usize].clone();
-            if self
-                .classes
-                .contains_key(&ZStr::from(d.name.to_ascii_lowercase()))
-            {
-                continue;
-            }
-            if self.can_early_bind(&d) {
-                // Early binding; errors surface when the declaration runs.
-                let saved = self.frames.len();
-                let r = self.declare_class(&d, false);
-                self.frames
-                    .truncate(saved.max(self.frames.len().min(saved)));
-                if let Err(e) = r {
-                    match e {
-                        Throw::Fatal | Throw::Exit | Throw::FiberSuspend => return Err(e),
-                        Throw::Exception(_) => {}
+        let mut progress = true;
+        while progress {
+            progress = false;
+            for &i in &unit.hoisted_classes {
+                let d = unit.decls.classes.borrow()[i as usize].clone();
+                if self
+                    .classes
+                    .contains_key(&ZStr::from(d.name.to_ascii_lowercase()))
+                {
+                    continue;
+                }
+                if self.can_early_bind(&d) {
+                    // Early binding; errors surface when the declaration runs.
+                    let saved = self.frames.len();
+                    let r = self.declare_class(&d, false);
+                    self.frames
+                        .truncate(saved.max(self.frames.len().min(saved)));
+                    if let Err(e) = r {
+                        match e {
+                            Throw::Fatal | Throw::Exit | Throw::FiberSuspend => return Err(e),
+                            Throw::Exception(_) => {}
+                        }
+                    } else {
+                        progress = true;
                     }
                 }
             }
