@@ -63,15 +63,15 @@ BACKEND = None
 def count(binary, args, timeout=None):
     """User-space instructions of one run of `binary args` with a hard timeout."""
     if timeout is None:
-        timeout = float(os.environ.get('GATE_TIMEOUT', '60.0' if BACKEND == 'callgrind' else '15.0'))
+        timeout = float(os.environ.get('GATE_TIMEOUT', '15.0' if BACKEND == 'callgrind' else '2.5'))
     cmd = [binary] + COMMON + args
-    timeout_cmd = ['timeout', '--kill-after=2s', f'{timeout:.1f}s']
+    timeout_cmd = ['timeout', '--kill-after=0.5s', f'{timeout:.1f}s']
     if BACKEND == 'perf':
         full = ['sudo', '-n', 'perf', 'stat', '-x', ',', '-e', 'instructions:u', '--',
                 'setpriv', f'--reuid={os.getuid()}', f'--regid={os.getgid()}', '--init-groups'] + timeout_cmd + cmd
         try:
             p = subprocess.run(full, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=ZEND,
-                               timeout=timeout + 5.0)
+                               timeout=timeout + 1.0)
         except subprocess.TimeoutExpired:
             subprocess.run(['sudo', '-n', 'pkill', '-9', '-f', os.path.basename(binary)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -86,7 +86,7 @@ def count(binary, args, timeout=None):
     full = ['valgrind', '--tool=callgrind', '--callgrind-out-file=/dev/null'] + timeout_cmd + cmd
     try:
         p = subprocess.run(full, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=ZEND,
-                           timeout=timeout + 10.0)
+                           timeout=timeout + 2.0)
     except subprocess.TimeoutExpired:
         subprocess.run(['pkill', '-9', '-f', os.path.basename(binary)],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

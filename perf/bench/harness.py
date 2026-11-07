@@ -45,8 +45,8 @@ MASK = re.compile(rb' *\d+\.\d{3}')
 
 
 def run_once(binary, args, inner, core):
-    timeout_sec = float(os.environ.get('BENCH_TIMEOUT', '20.0'))
-    cmd = ['timeout', '--kill-after=2s', f'{timeout_sec:.1f}s', binary] + COMMON + args
+    timeout_sec = float(os.environ.get('BENCH_TIMEOUT', '3.0'))
+    cmd = ['timeout', '--kill-after=0.5s', f'{timeout_sec:.1f}s', binary] + COMMON + args
     if core is not None:
         cmd = ['taskset', '-c', str(core)] + cmd
     wall = cpu = 0.0

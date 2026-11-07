@@ -9,7 +9,7 @@ bin=$(readlink -f "$1"); shift
 n=${N:-200000}
 uid=$(id -u); gid=$(id -g)
 ins() { sudo -n perf stat -x, -e instructions:u -- setpriv --reuid="$uid" --regid="$gid" --init-groups \
-        timeout --kill-after=2s "${BENCH_TIMEOUT:-15s}" "$1" -d memory_limit=1G -d opcache.enable_cli=0 "$dir/$2.php" "$3" 2>&1 >/dev/null | awk -F, '/instructions/{print $1}'; }
+        timeout --kill-after=0.5s "${BENCH_TIMEOUT:-3s}" "$1" -d memory_limit=1G -d opcache.enable_cli=0 "$dir/$2.php" "$3" 2>&1 >/dev/null | awk -F, '/instructions/{print $1}'; }
 per() { local a c; a=$(ins "$1" "$2" "$n"); c=$(ins "$1" "$2" $((n / 10))); echo $(( (a - c) / (n - n / 10) )); }
 benches=("$@")
 [ ${#benches[@]} -eq 0 ] && benches=(empty_loop int_add float_mul is_smaller_jmp concat_assign dim_read dim_write hash_read prop_read prop_write strlen abs count userfunc userfunc_typed method static_method closure new_obj)
