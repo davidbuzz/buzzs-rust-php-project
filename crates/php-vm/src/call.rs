@@ -233,9 +233,15 @@ impl Vm {
     }
 
     pub(crate) fn op_init_dyn_call(&mut self, callee: Value) -> VmResult<()> {
+        let callee = callee.deref();
         // `$closure()` (`zend_init_dynamic_call_object` of a closure): the
         // call is built straight from the closure's data.
         if let Value::Object(o) = &callee {
+            if let Some(mut call) = self.closure_user_call(o) {
+                call.dynamic = true;
+                self.push_pending(call);
+                return Ok(());
+            }
             if let Some(mut call) = self.closure_call(o) {
                 call.dynamic = true;
                 self.push_pending(call);
@@ -280,6 +286,11 @@ impl Vm {
             _ => None,
         };
         let Some((cls_name, m)) = class_method else {
+            if let Value::Object(o) = callee.deref() {
+                if let Some(c) = self.closure_user_call(&o) {
+                    return Ok(c);
+                }
+            }
             return self.resolve_callable_for_call(callee);
         };
         let cls = self.lookup_class_or_error(&cls_name)?;
@@ -358,6 +369,9 @@ impl Vm {
                 }
             }
             Value::Object(o) => {
+                if let Some(c) = self.closure_user_call(o) {
+                    return Ok(c);
+                }
                 if let Some(c) = self.closure_call(o) {
                     return Ok(c);
                 }
@@ -422,6 +436,12 @@ impl Vm {
         let Some(Value::Str(name)) = f.code.literals.get(lit as usize) else {
             return Err(Value::Object(o));
         };
+        if name.eq_ignore_ascii_case(b"__invoke") {
+            if let Some(call) = self.closure_user_call(&o) {
+                self.push_pending(call);
+                return Ok(());
+            }
+        }
         let Some(m) = self.call_bufs.methods.get(cls, f.scope.as_ref(), name) else {
             return Err(Value::Object(o));
         };
@@ -450,6 +470,12 @@ impl Vm {
                 ),
             ));
         };
+        if name.eq_ignore_ascii_case(b"__invoke") {
+            if let Some(call) = self.closure_user_call(&o) {
+                self.push_pending(call);
+                return Ok(());
+            }
+        }
         // A hit in the run-time cache of `ZEND_INIT_METHOD_CALL`: the call
         // is pushed straight from the cached method, `$this` moved in.
         let cls = object::class_of(&o).clone();
@@ -496,6 +522,11 @@ impl Vm {
         // properly" check before any method runs).
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.get_method) {
             f(self, o, name)?;
+        }
+        if name.eq_ignore_ascii_case(b"__invoke") {
+            if let Some(call) = self.closure_user_call(o) {
+                return Ok(call);
+            }
         }
         // The run-time cache of `ZEND_INIT_METHOD_CALL`.
         let scope = self.scope();
@@ -2732,6 +2763,12 @@ impl Vm {
     /// [`Vm::resolve_callable`]: crate::Vm::resolve_callable
     /// [`Vm::is_callable`]: crate::Vm::is_callable
     pub fn call_value(&mut self, callable: &Value, args: Vec<Value>) -> VmResult<Value> {
+        if let Value::Object(o) = callable.deref() {
+            if let Some(mut call) = self.closure_user_call(&o) {
+                call.args = args.into_iter().map(Some).collect();
+                return self.call_pending(call);
+            }
+        }
         let mut call = match self.zend_is_callable(callable, true)? {
             Ok(call) => call,
             Err(_) => self.resolve_callable_for_call(callable)?,
@@ -2747,6 +2784,11 @@ impl Vm {
         args: Vec<Value>,
         named: Vec<(ZStr, Value)>,
     ) -> VmResult<Value> {
+        if let Value::Object(o) = callable.deref() {
+            if let Some(call) = self.closure_user_call(&o) {
+                return self.call_resolved_named(call, args, named);
+            }
+        }
         let call = match self.zend_is_callable(callable, false)? {
             Ok(call) => call,
             Err(reason) => return Err(self.make_throw("TypeError", &reason)),

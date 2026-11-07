@@ -221,6 +221,30 @@ impl Vm {
         }
     }
 
+    /// Fast-path pending call for invoking a `Closure` wrapping a `UserFunction`.
+    /// Avoids generic dynamic method lookups (`__invoke`) and dispatches directly
+    /// to the internal user function.
+    #[allow(clippy::unused_self)]
+    pub(crate) fn closure_user_call(&self, o: &Obj) -> Option<PendingCall> {
+        if object::class_of(o).lc_name.as_bytes() != b"closure" {
+            return None;
+        }
+        object::internal::<ClosureData, _>(o, |d| {
+            if !matches!(&d.func, Func::User(_)) {
+                return None;
+            }
+            Some(PendingCall {
+                this: d.this.clone(),
+                scope: d.scope.clone(),
+                called: d.called.clone(),
+                closure: if d.fake { None } else { Some(o.clone()) },
+                magic_name: d.magic_name.clone(),
+                ..PendingCall::new(d.func.clone())
+            })
+        })
+        .flatten()
+    }
+
     /// The closure data of a `Closure` object.
     #[allow(clippy::unused_self)] // method-style API used across the VM
     pub(crate) fn closure_data(&self, o: &Obj) -> Option<ClosureData> {
@@ -233,21 +257,17 @@ impl Vm {
     /// released reference handle would be buffered as a GC possible root).
     #[allow(clippy::unused_self)] // method-style API used across the VM
     pub(crate) fn closure_call(&self, o: &Obj) -> Option<PendingCall> {
+        if object::class_of(o).lc_name.as_bytes() != b"closure" {
+            return None;
+        }
         object::internal::<ClosureData, _>(o, |d| {
-            if d.fake {
-                PendingCall {
-                    this: d.this.clone(),
-                    scope: d.scope.clone(),
-                    called: d.called.clone(),
-                    closure: None,
-                    magic_name: d.magic_name.clone(),
-                    ..PendingCall::new(d.func.clone())
-                }
-            } else {
-                PendingCall {
-                    closure: Some(o.clone()),
-                    ..PendingCall::new(d.func.clone())
-                }
+            PendingCall {
+                this: d.this.clone(),
+                scope: d.scope.clone(),
+                called: d.called.clone(),
+                closure: if d.fake { None } else { Some(o.clone()) },
+                magic_name: d.magic_name.clone(),
+                ..PendingCall::new(d.func.clone())
             }
         })
     }
@@ -257,6 +277,9 @@ impl Vm {
     pub(crate) fn closure_method_call(&self, o: &Obj, lc: &ZStr) -> Option<PendingCall> {
         if lc.as_bytes() != b"__invoke" {
             return None;
+        }
+        if let Some(c) = self.closure_user_call(o) {
+            return Some(c);
         }
         let d = self.closure_data(o)?;
         let mut params: Vec<ParamInfo> = d
