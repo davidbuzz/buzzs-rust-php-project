@@ -7,7 +7,8 @@
 //! - Redundant string cast before Echo elision.
 
 use super::{add_or_find_literal, clear_def_tmp, def_tmp, for_each_label_mut};
-use crate::opcode::{CastKind, Op, OpArray, Operand, UnKind};
+use crate::compiler::expr::const_truthiness;
+use crate::opcode::{CastKind, Label, Op, OpArray, Operand, UnKind};
 use php_runtime::{Value, ZStr};
 
 /// Finds all basic block leaders in `op_array`.
@@ -108,12 +109,109 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
         }
     }
     block_starts.push(len);
+    let num_blocks = block_starts.len() - 1;
+
+    let mut inst_to_block = vec![0usize; len + 1];
+    for b in 0..num_blocks {
+        for i in block_starts[b]..block_starts[b + 1] {
+            inst_to_block[i] = b;
+        }
+    }
+    inst_to_block[len] = num_blocks;
+
+    // Jump threading past empty blocks
+    let mut empty_block_dest = vec![None; num_blocks];
+    for b in 0..num_blocks {
+        let b_start = block_starts[b];
+        let b_end = block_starts[b + 1];
+        let non_nops: Vec<usize> = (b_start..b_end)
+            .filter(|&i| !matches!(op_array.ops[i], Op::Nop))
+            .collect();
+        match non_nops.len() {
+            0 => {
+                if b + 1 < num_blocks {
+                    empty_block_dest[b] = Some(block_starts[b + 1]);
+                }
+            }
+            1 => {
+                if let Op::Jmp(t) = op_array.ops[non_nops[0]] {
+                    empty_block_dest[b] = Some(t as usize);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let follow_empty = |mut target: usize| -> usize {
+        let mut hops = 0;
+        while hops < 32 && target < len {
+            let b = inst_to_block[target];
+            if b < num_blocks {
+                if let Some(next_dest) = empty_block_dest[b] {
+                    if next_dest == target {
+                        break;
+                    }
+                    target = next_dest;
+                    hops += 1;
+                    continue;
+                }
+            }
+            break;
+        }
+        target
+    };
+
+    for i in 0..len {
+        let mut op_clone = op_array.ops[i].clone();
+        let mut op_modified = false;
+        for_each_label_mut(&mut op_clone, |lbl| {
+            let orig = *lbl as usize;
+            let resolved = follow_empty(orig);
+            if resolved != orig && resolved <= len {
+                *lbl = resolved as Label;
+                op_modified = true;
+            }
+        });
+        if op_modified {
+            op_array.ops[i] = op_clone;
+            changed = true;
+        }
+    }
+
+    // Eliminate jumps to next instruction
+    for i in 0..len {
+        let mut next_i = i + 1;
+        while next_i < len && matches!(op_array.ops[next_i], Op::Nop) {
+            next_i += 1;
+        }
+        match &op_array.ops[i] {
+            Op::Jmp(t) if *t as usize == next_i => {
+                op_array.ops[i] = Op::Nop;
+                changed = true;
+            }
+            Op::JmpZ(cond, t) if *t as usize == next_i => {
+                op_array.ops[i] = match cond {
+                    Operand::Tmp(ft) => Op::Free(Operand::Tmp(*ft)),
+                    _ => Op::Nop,
+                };
+                changed = true;
+            }
+            Op::JmpNz(cond, t) if *t as usize == next_i => {
+                op_array.ops[i] = match cond {
+                    Operand::Tmp(ft) => Op::Free(Operand::Tmp(*ft)),
+                    _ => Op::Nop,
+                };
+                changed = true;
+            }
+            _ => {}
+        }
+    }
 
     // Compute temporary use counts across the entire op array
     let mut use_counts = vec![0u32; op_array.num_tmps as usize + 1];
     super::count_tmp_uses(op_array, &mut use_counts);
 
-    for b in 0..block_starts.len() - 1 {
+    for b in 0..num_blocks {
         let b_start = block_starts[b];
         let b_end = block_starts[b + 1];
 
@@ -138,7 +236,65 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
             }
         }
 
-        // 2. Boolean negation and branch simplification
+        // 2. Known condition branch simplification
+        for i in b_start..b_end {
+            match op_array.ops[i] {
+                Op::JmpZ(Operand::Lit(l), target) => {
+                    if let Some(va) = op_array.literals.get(l as usize) {
+                        if let Some(truthy) = const_truthiness(va) {
+                            op_array.ops[i] = if !truthy { Op::Jmp(target) } else { Op::Nop };
+                            changed = true;
+                        }
+                    }
+                }
+                Op::JmpNz(Operand::Lit(l), target) => {
+                    if let Some(va) = op_array.literals.get(l as usize) {
+                        if let Some(truthy) = const_truthiness(va) {
+                            op_array.ops[i] = if truthy { Op::Jmp(target) } else { Op::Nop };
+                            changed = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // 3. Consecutive conditional jumps on the same condition
+        for i in b_start..b_end {
+            let (cond, is_jmpz) = match &op_array.ops[i] {
+                Op::JmpZ(c, _) => (*c, true),
+                Op::JmpNz(c, _) => (*c, false),
+                _ => continue,
+            };
+            let mut next_i = i + 1;
+            while next_i < b_end && matches!(op_array.ops[next_i], Op::Nop) {
+                next_i += 1;
+            }
+            if next_i >= b_end {
+                continue;
+            }
+            match &op_array.ops[next_i] {
+                Op::JmpZ(c2, target) if *c2 == cond => {
+                    if is_jmpz {
+                        op_array.ops[next_i] = Op::Nop;
+                    } else {
+                        op_array.ops[next_i] = Op::Jmp(*target);
+                    }
+                    changed = true;
+                }
+                Op::JmpNz(c2, target) if *c2 == cond => {
+                    if is_jmpz {
+                        op_array.ops[next_i] = Op::Jmp(*target);
+                    } else {
+                        op_array.ops[next_i] = Op::Nop;
+                    }
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+
+        // 4. Boolean negation and inverted branch simplification
         for i in b_start..b_end {
             let mut next_i = i + 1;
             while next_i < b_end && matches!(op_array.ops[next_i], Op::Nop) {
@@ -211,6 +367,82 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
                         a,
                         dst: t1,
                     },
+                    Op::JmpZEx {
+                        a: Operand::Tmp(t2),
+                        dst: d,
+                        target,
+                    },
+                ) if t1 == t2 && use_counts.get(*t1 as usize).copied().unwrap_or(0) <= 1 => {
+                    let new_jmp = Op::JmpNzEx {
+                        a: *a,
+                        dst: *d,
+                        target: *target,
+                    };
+                    op_array.ops[next_i] = new_jmp;
+                    op_array.ops[i] = Op::Nop;
+                    changed = true;
+                }
+
+                (
+                    Op::Unary {
+                        op: UnKind::Not,
+                        a,
+                        dst: t1,
+                    },
+                    Op::JmpNzEx {
+                        a: Operand::Tmp(t2),
+                        dst: d,
+                        target,
+                    },
+                ) if t1 == t2 && use_counts.get(*t1 as usize).copied().unwrap_or(0) <= 1 => {
+                    let new_jmp = Op::JmpZEx {
+                        a: *a,
+                        dst: *d,
+                        target: *target,
+                    };
+                    op_array.ops[next_i] = new_jmp;
+                    op_array.ops[i] = Op::Nop;
+                    changed = true;
+                }
+
+                (
+                    Op::Move {
+                        src: Operand::Lit(l),
+                        dst: t1,
+                    },
+                    Op::JmpZ(Operand::Tmp(t2), target),
+                ) if t1 == t2 && use_counts.get(*t1 as usize).copied().unwrap_or(0) <= 1 => {
+                    if let Some(va) = op_array.literals.get(*l as usize) {
+                        if let Some(truthy) = const_truthiness(va) {
+                            op_array.ops[next_i] = if !truthy { Op::Jmp(*target) } else { Op::Nop };
+                            op_array.ops[i] = Op::Nop;
+                            changed = true;
+                        }
+                    }
+                }
+
+                (
+                    Op::Move {
+                        src: Operand::Lit(l),
+                        dst: t1,
+                    },
+                    Op::JmpNz(Operand::Tmp(t2), target),
+                ) if t1 == t2 && use_counts.get(*t1 as usize).copied().unwrap_or(0) <= 1 => {
+                    if let Some(va) = op_array.literals.get(*l as usize) {
+                        if let Some(truthy) = const_truthiness(va) {
+                            op_array.ops[next_i] = if truthy { Op::Jmp(*target) } else { Op::Nop };
+                            op_array.ops[i] = Op::Nop;
+                            changed = true;
+                        }
+                    }
+                }
+
+                (
+                    Op::Unary {
+                        op: UnKind::Not,
+                        a,
+                        dst: t1,
+                    },
                     Op::Unary {
                         op: UnKind::Not,
                         a: Operand::Tmp(t2),
@@ -245,7 +477,7 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
             }
         }
 
-        // 3. Consecutive string literal Echo merging
+        // 5. Consecutive string literal Echo merging
         for i in b_start..b_end {
             if let Op::Echo(Operand::Lit(l1)) = op_array.ops[i] {
                 let mut next_i = i + 1;

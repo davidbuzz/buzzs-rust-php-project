@@ -12,8 +12,8 @@
 use super::pass1::{fold_bin_op, fold_cast, fold_unary_op};
 use super::{add_or_find_literal, for_each_operand_mut, for_each_place_operand_mut};
 use crate::compiler::expr::const_truthiness;
-use crate::opcode::{type_mask, ArgSrc, Op, OpArray, Operand, PlaceBase};
-use php_runtime::Value;
+use crate::opcode::{type_mask, ArgSrc, CastKind, IncDecKind, Op, OpArray, Operand, PlaceBase};
+use php_runtime::{BinaryOp, Value, ZStr};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum CvLattice {
@@ -24,7 +24,8 @@ enum CvLattice {
 
 fn meet_cv(a: CvLattice, b: CvLattice, literals: &[Value]) -> CvLattice {
     match (a, b) {
-        (CvLattice::Top, CvLattice::Top) => CvLattice::Top,
+        (CvLattice::Top, other) => other,
+        (other, CvLattice::Top) => other,
         (CvLattice::Const(l1), CvLattice::Const(l2)) => {
             if l1 == l2 || super::literals_equal(&literals[l1 as usize], &literals[l2 as usize]) {
                 CvLattice::Const(l1)
@@ -36,11 +37,35 @@ fn meet_cv(a: CvLattice, b: CvLattice, literals: &[Value]) -> CvLattice {
     }
 }
 
+fn fold_abs(val: &Value) -> Option<Value> {
+    match val {
+        Value::Int(i) => Some(if *i == i64::MIN {
+            #[allow(clippy::cast_precision_loss)]
+            Value::Float(-(*i as f64))
+        } else {
+            Value::Int(i.abs())
+        }),
+        Value::Float(fl) => Some(Value::Float(fl.abs())),
+        _ => None,
+    }
+}
+
+fn fold_strlen(val: &Value) -> Option<i64> {
+    match val {
+        Value::Str(s) => Some(s.len() as i64),
+        Value::Int(n) => Some(n.to_string().len() as i64),
+        Value::Bool(b) => Some(if *b { 1 } else { 0 }),
+        Value::Null => Some(0),
+        _ => None,
+    }
+}
+
 fn update_cv_state_for_op(
     op: &Op,
     places: &[crate::opcode::Place],
     num_cvs: usize,
     cur_state: &mut [CvLattice],
+    literals: &mut Vec<Value>,
 ) {
     match op {
         Op::AssignCv { cv, val, .. } => {
@@ -64,6 +89,166 @@ fn update_cv_state_for_op(
                 }
             }
         }
+        Op::Abs { to: Some(cv), src, .. } => {
+            let cv_idx = *cv as usize;
+            if cv_idx < num_cvs {
+                let lit_src = match src {
+                    Operand::Lit(l) => Some(*l),
+                    Operand::Cv(c) => match cur_state.get(*c as usize) {
+                        Some(CvLattice::Const(l)) => Some(*l),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(ls) = lit_src {
+                    if let Some(val) = literals.get(ls as usize) {
+                        if let Some(res) = fold_abs(val) {
+                            let new_lit = add_or_find_literal(literals, res);
+                            cur_state[cv_idx] = CvLattice::Const(new_lit);
+                            return;
+                        }
+                    }
+                }
+                cur_state[cv_idx] = CvLattice::Bottom;
+            }
+        }
+        Op::BinAssignCv { cv, op: bkind, a, b, .. } => {
+            let cv_idx = *cv as usize;
+            if cv_idx < num_cvs {
+                let lit_a = match a {
+                    Operand::Lit(l) => Some(*l),
+                    Operand::Cv(c) => match cur_state.get(*c as usize) {
+                        Some(CvLattice::Const(l)) => Some(*l),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let lit_b = match b {
+                    Operand::Lit(l) => Some(*l),
+                    Operand::Cv(c) => match cur_state.get(*c as usize) {
+                        Some(CvLattice::Const(l)) => Some(*l),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let (Some(la), Some(lb)) = (lit_a, lit_b) {
+                    if let (Some(va), Some(vb)) = (
+                        literals.get(la as usize).cloned(),
+                        literals.get(lb as usize).cloned(),
+                    ) {
+                        if let Some(res) = fold_bin_op(*bkind, &va, &vb) {
+                            let new_lit = add_or_find_literal(literals, res);
+                            cur_state[cv_idx] = CvLattice::Const(new_lit);
+                            return;
+                        }
+                    }
+                }
+                if *bkind == BinKind::Arith(BinaryOp::Concat) {
+                    if let Some(la) = lit_a {
+                        if matches!(literals.get(la as usize), Some(Value::Str(s)) if s.is_empty()) {
+                            if let Operand::Cv(cb) = b {
+                                if (*cb as usize) < num_cvs {
+                                    cur_state[cv_idx] = cur_state[*cb as usize];
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    if let Some(lb) = lit_b {
+                        if matches!(literals.get(lb as usize), Some(Value::Str(s)) if s.is_empty()) {
+                            if let Operand::Cv(ca) = a {
+                                if (*ca as usize) < num_cvs {
+                                    cur_state[cv_idx] = cur_state[*ca as usize];
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+                cur_state[cv_idx] = CvLattice::Bottom;
+            }
+        }
+        Op::ConcatCv { cv, val, .. } => {
+            let cv_idx = *cv as usize;
+            if cv_idx < num_cvs {
+                if let CvLattice::Const(l1) = cur_state[cv_idx] {
+                    let lit_val = match val {
+                        Operand::Lit(l) => Some(*l),
+                        Operand::Cv(c) => match cur_state.get(*c as usize) {
+                            Some(CvLattice::Const(l)) => Some(*l),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(l2) = lit_val {
+                        let s1 = match literals.get(l1 as usize) {
+                            Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
+                            Some(Value::Int(n)) => Some(n.to_string().into_bytes()),
+                            _ => None,
+                        };
+                        let s2 = match literals.get(l2 as usize) {
+                            Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
+                            Some(Value::Int(n)) => Some(n.to_string().into_bytes()),
+                            _ => None,
+                        };
+                        if let (Some(mut b1), Some(b2)) = (s1, s2) {
+                            b1.extend_from_slice(&b2);
+                            let new_lit = add_or_find_literal(literals, Value::Str(ZStr::from(b1)));
+                            cur_state[cv_idx] = CvLattice::Const(new_lit);
+                            return;
+                        }
+                    }
+                }
+                cur_state[cv_idx] = CvLattice::Bottom;
+            }
+        }
+        Op::IncDecCv { cv, kind, .. } => {
+            let cv_idx = *cv as usize;
+            if cv_idx < num_cvs {
+                if let CvLattice::Const(l) = cur_state[cv_idx] {
+                    if let Some(Value::Int(i)) = literals.get(l as usize) {
+                        let new_val = match kind {
+                            IncDecKind::PreInc | IncDecKind::PostInc => i.checked_add(1).map(Value::Int),
+                            IncDecKind::PreDec | IncDecKind::PostDec => i.checked_sub(1).map(Value::Int),
+                        };
+                        if let Some(nv) = new_val {
+                            let new_lit = add_or_find_literal(literals, nv);
+                            cur_state[cv_idx] = CvLattice::Const(new_lit);
+                            return;
+                        }
+                    }
+                }
+                cur_state[cv_idx] = CvLattice::Bottom;
+            }
+        }
+        Op::AssignOpCv { cv, op: bop, val, .. } => {
+            let cv_idx = *cv as usize;
+            if cv_idx < num_cvs {
+                if let CvLattice::Const(l1) = cur_state[cv_idx] {
+                    let lit_val = match val {
+                        Operand::Lit(l) => Some(*l),
+                        Operand::Cv(c) => match cur_state.get(*c as usize) {
+                            Some(CvLattice::Const(l)) => Some(*l),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(l2) = lit_val {
+                        if let (Some(va), Some(vb)) = (
+                            literals.get(l1 as usize).cloned(),
+                            literals.get(l2 as usize).cloned(),
+                        ) {
+                            if let Some(res) = fold_bin_op(BinKind::Arith(*bop), &va, &vb) {
+                                let new_lit = add_or_find_literal(literals, res);
+                                cur_state[cv_idx] = CvLattice::Const(new_lit);
+                                return;
+                            }
+                        }
+                    }
+                }
+                cur_state[cv_idx] = CvLattice::Bottom;
+            }
+        }
         Op::IncDec { place, .. }
         | Op::Assign { place, .. }
         | Op::AssignOp { place, .. }
@@ -85,13 +270,9 @@ fn update_cv_state_for_op(
                 }
             }
         }
-        Op::IncDecCv { cv, .. }
-        | Op::AssignOpCv { cv, .. }
-        | Op::IncDecCvCmpJmp { cv, .. }
-        | Op::ConcatCv { cv, .. }
+        Op::IncDecCvCmpJmp { cv, .. }
         | Op::FetchConstTo { to: cv, .. }
         | Op::FetchClassConstTo { to: cv, .. }
-        | Op::BinAssignCv { cv, .. }
         | Op::Global { cv, .. }
         | Op::BindStatic { cv, .. }
         | Op::InitStatic { cv, .. }
@@ -108,14 +289,64 @@ fn update_cv_state_for_op(
                 cur_state[cv_idx] = CvLattice::Bottom;
             }
         }
-        Op::Abs { to: Some(cv), .. } => {
-            let cv_idx = *cv as usize;
-            if cv_idx < num_cvs {
-                cur_state[cv_idx] = CvLattice::Bottom;
-            }
-        }
         _ => {}
     }
+}
+
+fn simplify_constant_branches(ops: &mut [Op], literals: &[Value]) -> bool {
+    let mut changed = false;
+    for op in ops {
+        match op {
+            Op::JmpZ(Operand::Lit(l), target) => {
+                if let Some(va) = literals.get(*l as usize) {
+                    if let Some(truthy) = const_truthiness(va) {
+                        if !truthy {
+                            *op = Op::Jmp(*target);
+                        } else {
+                            *op = Op::Nop;
+                        }
+                        changed = true;
+                    }
+                }
+            }
+            Op::JmpNz(Operand::Lit(l), target) => {
+                if let Some(va) = literals.get(*l as usize) {
+                    if let Some(truthy) = const_truthiness(va) {
+                        if truthy {
+                            *op = Op::Jmp(*target);
+                        } else {
+                            *op = Op::Nop;
+                        }
+                        changed = true;
+                    }
+                }
+            }
+            Op::CmpJmp {
+                op: bkind,
+                a: Operand::Lit(la),
+                b: Operand::Lit(lb),
+                target,
+                jmp_if,
+                ..
+            } => {
+                if let (Some(va), Some(vb)) = (
+                    literals.get(*la as usize).cloned(),
+                    literals.get(*lb as usize).cloned(),
+                ) {
+                    if let Some(Value::Bool(res)) = fold_bin_op(*bkind, &va, &vb) {
+                        if res == *jmp_if {
+                            *op = Op::Jmp(*target);
+                        } else {
+                            *op = Op::Nop;
+                        }
+                        changed = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    changed
 }
 
 /// Runs SCCP / DFA constant propagation on `op_array`. Returns `true` if any substitution was made.
@@ -198,137 +429,253 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
 
         // Fold pure expressions on known temporary constants
         for op in &mut op_array.ops {
-            if let Some(t) = super::def_tmp(op) {
-                let t_idx = t as usize;
-                if t_idx <= num_tmps && def_count[t_idx] == 1 && lit_def[t_idx].is_none() {
-                    match op {
-                        Op::Bin {
-                            op: bkind,
-                            a,
-                            b,
-                            dst,
-                        } => {
-                            let lit_a = match a {
-                                Operand::Lit(l) => Some(*l),
-                                Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
-                                _ => None,
-                            };
-                            let lit_b = match b {
-                                Operand::Lit(l) => Some(*l),
-                                Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
-                                _ => None,
-                            };
-                            if let (Some(la), Some(lb)) = (lit_a, lit_b) {
-                                if let (Some(va), Some(vb)) = (
-                                    op_array.literals.get(la as usize).cloned(),
-                                    op_array.literals.get(lb as usize).cloned(),
-                                ) {
-                                    if let Some(val) = fold_bin_op(*bkind, &va, &vb) {
-                                        let lit = add_or_find_literal(&mut op_array.literals, val);
-                                        lit_def[*dst as usize] = Some(lit);
-                                        *op = Op::Move {
-                                            src: Operand::Lit(lit),
-                                            dst: *dst,
-                                        };
-                                        changed = true;
-                                    }
+            match op {
+                Op::Bin {
+                    op: bkind,
+                    a,
+                    b,
+                    dst,
+                } => {
+                    let lit_a = match a {
+                        Operand::Lit(l) => Some(*l),
+                        Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
+                        _ => None,
+                    };
+                    let lit_b = match b {
+                        Operand::Lit(l) => Some(*l),
+                        Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
+                        _ => None,
+                    };
+                    if let (Some(la), Some(lb)) = (lit_a, lit_b) {
+                        if let (Some(va), Some(vb)) = (
+                            op_array.literals.get(la as usize).cloned(),
+                            op_array.literals.get(lb as usize).cloned(),
+                        ) {
+                            if let Some(val) = fold_bin_op(*bkind, &va, &vb) {
+                                let lit = add_or_find_literal(&mut op_array.literals, val);
+                                if (*dst as usize) <= num_tmps {
+                                    lit_def[*dst as usize] = Some(lit);
                                 }
-                            }
-                        }
-                        Op::Unary { op: ukind, a, dst } => {
-                            let lit_a = match a {
-                                Operand::Lit(l) => Some(*l),
-                                Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
-                                _ => None,
-                            };
-                            if let Some(la) = lit_a {
-                                if let Some(va) = op_array.literals.get(la as usize).cloned() {
-                                    if let Some(val) = fold_unary_op(*ukind, &va) {
-                                        let lit = add_or_find_literal(&mut op_array.literals, val);
-                                        lit_def[*dst as usize] = Some(lit);
-                                        *op = Op::Move {
-                                            src: Operand::Lit(lit),
-                                            dst: *dst,
-                                        };
-                                        changed = true;
-                                    }
-                                }
-                            }
-                        }
-                        Op::Cast { kind, a, dst } => {
-                            let lit_a = match a {
-                                Operand::Lit(l) => Some(*l),
-                                Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
-                                _ => None,
-                            };
-                            if let Some(la) = lit_a {
-                                if let Some(va) = op_array.literals.get(la as usize).cloned() {
-                                    if let Some(val) = fold_cast(*kind, &va) {
-                                        let lit = add_or_find_literal(&mut op_array.literals, val);
-                                        lit_def[*dst as usize] = Some(lit);
-                                        *op = Op::Move {
-                                            src: Operand::Lit(lit),
-                                            dst: *dst,
-                                        };
-                                        changed = true;
-                                    }
-                                }
-                            }
-                        }
-                        Op::Strlen { a, dst } => {
-                            let lit_a = match a {
-                                Operand::Lit(l) => Some(*l),
-                                Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
-                                _ => None,
-                            };
-                            if let Some(la) = lit_a {
-                                let str_len = match op_array.literals.get(la as usize) {
-                                    Some(Value::Str(s)) => Some(s.len() as i64),
-                                    _ => None,
+                                *op = Op::Move {
+                                    src: Operand::Lit(lit),
+                                    dst: *dst,
                                 };
-                                if let Some(len) = str_len {
-                                    let lit = add_or_find_literal(
-                                        &mut op_array.literals,
-                                        Value::Int(len),
-                                    );
-                                    if let Some(d) = dst {
-                                        lit_def[*d as usize] = Some(lit);
-                                        *op = Op::Move {
-                                            src: Operand::Lit(lit),
-                                            dst: *d,
-                                        };
-                                        changed = true;
-                                    }
-                                }
+                                changed = true;
                             }
                         }
-                        Op::TypeCheck { a, mask, dst } => {
-                            let lit_a = match a {
-                                Operand::Lit(l) => Some(*l),
-                                Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
-                                _ => None,
-                            };
-                            if let Some(la) = lit_a {
-                                if let Some(va) = op_array.literals.get(la as usize) {
-                                    let res = type_mask::matches(*mask, va);
-                                    let lit = add_or_find_literal(
-                                        &mut op_array.literals,
-                                        Value::Bool(res),
-                                    );
-                                    if let Some(d) = dst {
-                                        lit_def[*d as usize] = Some(lit);
-                                        *op = Op::Move {
-                                            src: Operand::Lit(lit),
-                                            dst: *d,
-                                        };
-                                        changed = true;
-                                    }
-                                }
+                    } else if *bkind == BinKind::Arith(BinaryOp::Concat) {
+                        if let Some(la) = lit_a {
+                            if matches!(op_array.literals.get(la as usize), Some(Value::Str(s)) if s.is_empty()) {
+                                *op = Op::Cast {
+                                    kind: CastKind::String,
+                                    a: *b,
+                                    dst: *dst,
+                                };
+                                changed = true;
+                            }
+                        } else if let Some(lb) = lit_b {
+                            if matches!(op_array.literals.get(lb as usize), Some(Value::Str(s)) if s.is_empty()) {
+                                *op = Op::Cast {
+                                    kind: CastKind::String,
+                                    a: *a,
+                                    dst: *dst,
+                                };
+                                changed = true;
                             }
                         }
-                        _ => {}
+                    } else if *bkind == BinKind::Identical {
+                        if let Some(lb) = lit_b {
+                            if matches!(op_array.literals.get(lb as usize), Some(Value::Null)) {
+                                *op = Op::TypeCheck {
+                                    a: *a,
+                                    mask: type_mask::NULL,
+                                    dst: Some(*dst),
+                                };
+                                changed = true;
+                            }
+                        } else if let Some(la) = lit_a {
+                            if matches!(op_array.literals.get(la as usize), Some(Value::Null)) {
+                                *op = Op::TypeCheck {
+                                    a: *b,
+                                    mask: type_mask::NULL,
+                                    dst: Some(*dst),
+                                };
+                                changed = true;
+                            }
+                        }
                     }
                 }
+                Op::BinAssignCv {
+                    op: bkind,
+                    a,
+                    b,
+                    dst,
+                    cv,
+                } => {
+                    let lit_a = match a {
+                        Operand::Lit(l) => Some(*l),
+                        Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
+                        _ => None,
+                    };
+                    let lit_b = match b {
+                        Operand::Lit(l) => Some(*l),
+                        Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
+                        _ => None,
+                    };
+                    if let (Some(la), Some(lb)) = (lit_a, lit_b) {
+                        if let (Some(va), Some(vb)) = (
+                            op_array.literals.get(la as usize).cloned(),
+                            op_array.literals.get(lb as usize).cloned(),
+                        ) {
+                            if let Some(val) = fold_bin_op(*bkind, &va, &vb) {
+                                let lit = add_or_find_literal(&mut op_array.literals, val);
+                                if (*dst as usize) <= num_tmps {
+                                    lit_def[*dst as usize] = Some(lit);
+                                }
+                                *op = Op::AssignCv {
+                                    cv: *cv,
+                                    val: Operand::Lit(lit),
+                                    dst: Some(*dst),
+                                };
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                Op::Unary { op: ukind, a, dst } => {
+                    let lit_a = match a {
+                        Operand::Lit(l) => Some(*l),
+                        Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
+                        _ => None,
+                    };
+                    if let Some(la) = lit_a {
+                        if let Some(va) = op_array.literals.get(la as usize).cloned() {
+                            if let Some(val) = fold_unary_op(*ukind, &va) {
+                                let lit = add_or_find_literal(&mut op_array.literals, val);
+                                if (*dst as usize) <= num_tmps {
+                                    lit_def[*dst as usize] = Some(lit);
+                                }
+                                *op = Op::Move {
+                                    src: Operand::Lit(lit),
+                                    dst: *dst,
+                                };
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                Op::Cast { kind, a, dst } => {
+                    let lit_a = match a {
+                        Operand::Lit(l) => Some(*l),
+                        Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
+                        _ => None,
+                    };
+                    if let Some(la) = lit_a {
+                        if let Some(va) = op_array.literals.get(la as usize).cloned() {
+                            if let Some(val) = fold_cast(*kind, &va) {
+                                let lit = add_or_find_literal(&mut op_array.literals, val);
+                                if (*dst as usize) <= num_tmps {
+                                    lit_def[*dst as usize] = Some(lit);
+                                }
+                                *op = Op::Move {
+                                    src: Operand::Lit(lit),
+                                    dst: *dst,
+                                };
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                Op::Strlen { a, dst } => {
+                    let lit_a = match a {
+                        Operand::Lit(l) => Some(*l),
+                        Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
+                        _ => None,
+                    };
+                    if let Some(la) = lit_a {
+                        if let Some(va) = op_array.literals.get(la as usize) {
+                            if let Some(len) = fold_strlen(va) {
+                                let lit = add_or_find_literal(&mut op_array.literals, Value::Int(len));
+                                if let Some(d) = dst {
+                                    if (*d as usize) <= num_tmps {
+                                        lit_def[*d as usize] = Some(lit);
+                                    }
+                                    *op = Op::Move {
+                                        src: Operand::Lit(lit),
+                                        dst: *d,
+                                    };
+                                } else {
+                                    *op = Op::Nop;
+                                }
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                Op::TypeCheck { a, mask, dst } => {
+                    let lit_a = match a {
+                        Operand::Lit(l) => Some(*l),
+                        Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
+                        _ => None,
+                    };
+                    if let Some(la) = lit_a {
+                        if let Some(va) = op_array.literals.get(la as usize) {
+                            let res = type_mask::matches(*mask, va);
+                            let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
+                            if let Some(d) = dst {
+                                if (*d as usize) <= num_tmps {
+                                    lit_def[*d as usize] = Some(lit);
+                                }
+                                *op = Op::Move {
+                                    src: Operand::Lit(lit),
+                                    dst: *d,
+                                };
+                            } else {
+                                *op = Op::Nop;
+                            }
+                            changed = true;
+                        }
+                    }
+                }
+                Op::Abs { src, dst, to } => {
+                    let lit_src = match src {
+                        Operand::Lit(l) => Some(*l),
+                        Operand::Tmp(s) => lit_def.get(*s as usize).copied().flatten(),
+                        _ => None,
+                    };
+                    if let Some(ls) = lit_src {
+                        if let Some(va) = op_array.literals.get(ls as usize) {
+                            if let Some(val) = fold_abs(va) {
+                                let lit = add_or_find_literal(&mut op_array.literals, val);
+                                if let Some(d) = dst {
+                                    if (*d as usize) <= num_tmps {
+                                        lit_def[*d as usize] = Some(lit);
+                                    }
+                                }
+                                match (*to, *dst) {
+                                    (Some(cv), d) => {
+                                        *op = Op::AssignCv {
+                                            cv,
+                                            val: Operand::Lit(lit),
+                                            dst: d,
+                                        };
+                                    }
+                                    (None, Some(d)) => {
+                                        *op = Op::Move {
+                                            src: Operand::Lit(lit),
+                                            dst: d,
+                                        };
+                                    }
+                                    (None, None) => {
+                                        *op = Op::Nop;
+                                    }
+                                }
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -372,57 +719,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
     }
 
     // Branch simplification for constant conditions
-    for op in &mut op_array.ops {
-        match op {
-            Op::JmpZ(Operand::Lit(l), target) => {
-                if let Some(va) = op_array.literals.get(*l as usize) {
-                    if let Some(truthy) = const_truthiness(va) {
-                        if !truthy {
-                            *op = Op::Jmp(*target);
-                        } else {
-                            *op = Op::Nop;
-                        }
-                        changed = true;
-                    }
-                }
-            }
-            Op::JmpNz(Operand::Lit(l), target) => {
-                if let Some(va) = op_array.literals.get(*l as usize) {
-                    if let Some(truthy) = const_truthiness(va) {
-                        if truthy {
-                            *op = Op::Jmp(*target);
-                        } else {
-                            *op = Op::Nop;
-                        }
-                        changed = true;
-                    }
-                }
-            }
-            Op::CmpJmp {
-                op: bkind,
-                a: Operand::Lit(la),
-                b: Operand::Lit(lb),
-                target,
-                jmp_if,
-                ..
-            } => {
-                if let (Some(va), Some(vb)) = (
-                    op_array.literals.get(*la as usize).cloned(),
-                    op_array.literals.get(*lb as usize).cloned(),
-                ) {
-                    if let Some(Value::Bool(res)) = fold_bin_op(*bkind, &va, &vb) {
-                        if res == *jmp_if {
-                            *op = Op::Jmp(*target);
-                        } else {
-                            *op = Op::Nop;
-                        }
-                        changed = true;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+    changed |= simplify_constant_branches(&mut op_array.ops, &op_array.literals);
 
     // 2. Inter-block Forward DFA for CVs
     let mut has_hazard = false;
@@ -536,7 +833,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                     continue;
                 }
 
-                update_cv_state_for_op(op, &op_array.places, num_cvs, &mut cur_state);
+                update_cv_state_for_op(op, &op_array.places, num_cvs, &mut cur_state, &mut op_array.literals);
             }
 
             out_state[b] = cur_state;
@@ -792,10 +1089,151 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                     }
                 });
 
+                // Fold newly constant operations
+                match op {
+                    Op::JmpZ(Operand::Lit(l), target) => {
+                        if let Some(va) = op_array.literals.get(*l as usize) {
+                            if let Some(truthy) = const_truthiness(va) {
+                                *op = if !truthy { Op::Jmp(*target) } else { Op::Nop };
+                                changed = true;
+                            }
+                        }
+                    }
+                    Op::JmpNz(Operand::Lit(l), target) => {
+                        if let Some(va) = op_array.literals.get(*l as usize) {
+                            if let Some(truthy) = const_truthiness(va) {
+                                *op = if truthy { Op::Jmp(*target) } else { Op::Nop };
+                                changed = true;
+                            }
+                        }
+                    }
+                    Op::CmpJmp {
+                        op: bkind,
+                        a: Operand::Lit(la),
+                        b: Operand::Lit(lb),
+                        target,
+                        jmp_if,
+                        ..
+                    } => {
+                        if let (Some(va), Some(vb)) = (
+                            op_array.literals.get(*la as usize).cloned(),
+                            op_array.literals.get(*lb as usize).cloned(),
+                        ) {
+                            if let Some(Value::Bool(res)) = fold_bin_op(*bkind, &va, &vb) {
+                                *op = if res == *jmp_if { Op::Jmp(*target) } else { Op::Nop };
+                                changed = true;
+                            }
+                        }
+                    }
+                    Op::Abs {
+                        src: Operand::Lit(ls),
+                        dst,
+                        to,
+                    } => {
+                        if let Some(va) = op_array.literals.get(*ls as usize) {
+                            if let Some(val) = fold_abs(va) {
+                                let lit = add_or_find_literal(&mut op_array.literals, val);
+                                *op = match (*to, *dst) {
+                                    (Some(cv), d) => Op::AssignCv {
+                                        cv,
+                                        val: Operand::Lit(lit),
+                                        dst: d,
+                                    },
+                                    (None, Some(d)) => Op::Move {
+                                        src: Operand::Lit(lit),
+                                        dst: d,
+                                    },
+                                    (None, None) => Op::Nop,
+                                };
+                                changed = true;
+                            }
+                        }
+                    }
+                    Op::Strlen {
+                        a: Operand::Lit(la),
+                        dst,
+                    } => {
+                        if let Some(va) = op_array.literals.get(*la as usize) {
+                            if let Some(len) = fold_strlen(va) {
+                                let lit = add_or_find_literal(&mut op_array.literals, Value::Int(len));
+                                *op = match dst {
+                                    Some(d) => Op::Move {
+                                        src: Operand::Lit(lit),
+                                        dst: *d,
+                                    },
+                                    None => Op::Nop,
+                                };
+                                changed = true;
+                            }
+                        }
+                    }
+                    Op::Unary {
+                        op: ukind,
+                        a: Operand::Lit(la),
+                        dst,
+                    } => {
+                        if let Some(va) = op_array.literals.get(*la as usize).cloned() {
+                            if let Some(val) = fold_unary_op(*ukind, &va) {
+                                let lit = add_or_find_literal(&mut op_array.literals, val);
+                                *op = Op::Move {
+                                    src: Operand::Lit(lit),
+                                    dst: *dst,
+                                };
+                                changed = true;
+                            }
+                        }
+                    }
+                    Op::Bin {
+                        op: bkind,
+                        a: Operand::Lit(la),
+                        b: Operand::Lit(lb),
+                        dst,
+                    } => {
+                        if let (Some(va), Some(vb)) = (
+                            op_array.literals.get(*la as usize).cloned(),
+                            op_array.literals.get(*lb as usize).cloned(),
+                        ) {
+                            if let Some(val) = fold_bin_op(*bkind, &va, &vb) {
+                                let lit = add_or_find_literal(&mut op_array.literals, val);
+                                *op = Op::Move {
+                                    src: Operand::Lit(lit),
+                                    dst: *dst,
+                                };
+                                changed = true;
+                            }
+                        }
+                    }
+                    Op::BinAssignCv {
+                        op: bkind,
+                        a: Operand::Lit(la),
+                        b: Operand::Lit(lb),
+                        dst,
+                        cv,
+                    } => {
+                        if let (Some(va), Some(vb)) = (
+                            op_array.literals.get(*la as usize).cloned(),
+                            op_array.literals.get(*lb as usize).cloned(),
+                        ) {
+                            if let Some(val) = fold_bin_op(*bkind, &va, &vb) {
+                                let lit = add_or_find_literal(&mut op_array.literals, val);
+                                *op = Op::AssignCv {
+                                    cv: *cv,
+                                    val: Operand::Lit(lit),
+                                    dst: Some(*dst),
+                                };
+                                changed = true;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+
                 // Update CV state
-                update_cv_state_for_op(op, &op_array.places, num_cvs, &mut cur_state);
+                update_cv_state_for_op(op, &op_array.places, num_cvs, &mut cur_state, &mut op_array.literals);
             }
         }
+
+        changed |= simplify_constant_branches(&mut op_array.ops, &op_array.literals);
     }
 
     changed

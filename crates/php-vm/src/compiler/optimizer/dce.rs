@@ -214,6 +214,9 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
                         inner_changed = true;
                     }
                 }
+            } else if is_pure_dead_op(op) {
+                *op = Op::Nop;
+                inner_changed = true;
             } else if let Op::Free(Operand::Tmp(t)) = op {
                 let uses = non_free_uses.get(*t as usize).copied().unwrap_or(0);
                 if uses == 0 {
@@ -271,15 +274,14 @@ fn is_pure_op(op: &Op) -> bool {
                 matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
             }
             UnKind::BitNot | UnKind::Neg | UnKind::Plus => {
-                matches!(a, Operand::Lit(_))
+                matches!(a, Operand::Lit(_) | Operand::Tmp(_))
             }
         },
         Op::Cast { kind, a, .. } => match kind {
-            CastKind::Bool
-            | CastKind::Int
-            | CastKind::Float
-            | CastKind::String
-            | CastKind::Null => {
+            CastKind::Bool | CastKind::Null => {
+                matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
+            }
+            CastKind::Int | CastKind::Float | CastKind::String => {
                 matches!(a, Operand::Lit(_) | Operand::Tmp(_))
             }
             CastKind::Array | CastKind::Object => false,
@@ -299,8 +301,7 @@ fn is_pure_op(op: &Op) -> bool {
                 | BinKind::LessEqual
                 | BinKind::Spaceship => true,
                 BinKind::Arith(bop) => {
-                    matches!((a, b), (Operand::Lit(_), Operand::Lit(_)))
-                        && !matches!(bop, BinaryOp::Div | BinaryOp::Mod)
+                    !matches!(bop, BinaryOp::Div | BinaryOp::Mod)
                 }
             }
         }
@@ -308,18 +309,45 @@ fn is_pure_op(op: &Op) -> bool {
             matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
         }
         Op::Strlen { a, .. } => {
-            matches!(a, Operand::Lit(_) | Operand::Tmp(_))
+            matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
         }
         Op::Count { a, .. } => {
-            matches!(a, Operand::Lit(_))
+            matches!(a, Operand::Lit(_) | Operand::Tmp(_))
         }
         Op::InitArray { .. } => true,
+        Op::Rope { parts, .. } => {
+            parts.iter().all(|p| matches!(p, Operand::Lit(_) | Operand::Tmp(_)))
+        }
         Op::FetchClassName { class, .. } => {
             matches!(
                 class,
                 ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
             )
         }
+        Op::Abs { src, to: None, .. } => {
+            matches!(src, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
+        }
+        _ => false,
+    }
+}
+
+fn is_pure_dead_op(op: &Op) -> bool {
+    match op {
+        Op::Strlen { dst: None, a } => {
+            matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
+        }
+        Op::TypeCheck { dst: None, a, .. } => {
+            matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
+        }
+        Op::Count { dst: None, a, .. } => {
+            matches!(a, Operand::Lit(_) | Operand::Tmp(_))
+        }
+        Op::Abs {
+            dst: None,
+            to: None,
+            src,
+        } => matches!(src, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_)),
+        Op::Free(Operand::Lit(_) | Operand::Unused) => true,
         _ => false,
     }
 }
