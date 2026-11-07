@@ -98,13 +98,17 @@ impl Vm {
             Some(func) => {
                 let mut n = self.func_display(func, f.scope.as_ref());
                 if let Some(m) = &f.magic_name {
-                    n = format!(
-                        "{}::{}",
-                        f.scope
-                            .as_ref()
-                            .map_or_else(String::new, |c| c.name.to_string_lossy()),
-                        m
-                    );
+                    if func.is_closure() && m.eq_ignore_ascii_case(b"__invoke") {
+                        n = "Closure::__invoke".to_string();
+                    } else {
+                        n = format!(
+                            "{}::{}",
+                            f.scope
+                                .as_ref()
+                                .map_or_else(String::new, |c| c.name.to_string_lossy()),
+                            m
+                        );
+                    }
                 }
                 n
             }
@@ -769,7 +773,8 @@ impl Vm {
             f(self, o, name)?;
         }
         if name.eq_ignore_ascii_case(b"__invoke") {
-            if let Some(call) = self.closure_user_call(o) {
+            if let Some(mut call) = self.closure_user_call(o) {
+                call.magic_name = Some(ZStr::from("__invoke"));
                 return Ok(call);
             }
         }
@@ -840,7 +845,8 @@ impl Vm {
                 ),
             ));
         }
-        if let Some(c) = self.closure_method_call(o, &lc) {
+        if let Some(mut c) = self.closure_method_call(o, &lc) {
+            c.magic_name = Some(ZStr::from("__invoke"));
             return Ok(c);
         }
         if let Some(callm) = cls.magic.call.clone() {
@@ -1268,7 +1274,7 @@ impl Vm {
 
     pub(crate) fn arg_position(&mut self, name: &ZStr) -> VmResult<Option<usize>> {
         let call = self.frame().calls.last().expect("pending call");
-        if call.magic_name.is_some() {
+        if call.is_magic_trampoline() {
             return Ok(None);
         }
         let params = call.func.params();
@@ -1289,7 +1295,7 @@ impl Vm {
         let frame = self.frames.last_mut().expect("active frame");
         let call = frame.calls.last_mut().expect("pending call");
         let arg_idx = call.arg_count();
-        let by_val = call.magic_name.is_none() && !call.has_named && !call.func.arg_by_ref(arg_idx);
+        let by_val = !call.is_magic_trampoline() && !call.has_named && !call.func.arg_by_ref(arg_idx);
         if by_val {
             if call.args.is_empty() && (call.inline_count as usize) < call.inline_args.len() {
                 let idx = call.inline_count as usize;
@@ -1317,7 +1323,7 @@ impl Vm {
         }
         let pos = Some(arg_idx);
         let by_ref = {
-            let magic = call.magic_name.is_some();
+            let magic = call.is_magic_trampoline();
             !magic && call.func.arg_by_ref(arg_idx)
         };
         if by_ref {
@@ -1335,7 +1341,7 @@ impl Vm {
                 let call = frame.calls.last_mut().expect("pending call");
                 let arg_idx = call.arg_count();
                 let by_val =
-                    call.magic_name.is_none() && !call.has_named && !call.func.arg_by_ref(arg_idx);
+                    !call.is_magic_trampoline() && !call.has_named && !call.func.arg_by_ref(arg_idx);
                 if by_val {
                     if call.args.is_empty() && (call.inline_count as usize) < call.inline_args.len()
                     {
@@ -1525,7 +1531,7 @@ impl Vm {
         };
         let by_ref = {
             let call = self.frame().calls.last().expect("pending call");
-            let magic = call.magic_name.is_some();
+            let magic = call.is_magic_trampoline();
             !magic && pos.is_some_and(|p| call.func.arg_by_ref(p))
                 || (!magic && pos.is_none() && call.func.arg_by_ref(call.func.params().len()))
         };
@@ -1814,7 +1820,7 @@ impl Vm {
             let n = pos.unwrap_or_else(|| params.len().saturating_sub(1));
             let param = params.get(n).or_else(|| params.last());
             (
-                call.magic_name.is_none() && call.func.arg_by_ref(n),
+                !call.is_magic_trampoline() && call.func.arg_by_ref(n),
                 n,
                 param.is_some_and(|p| p.promote & crate::opcode::PREFER_REF != 0),
             )
@@ -2255,6 +2261,7 @@ impl Vm {
             f.caller_strict = caller_strict;
             f.called_from_internal = from_internal;
             f.is_ctor = is_ctor;
+            f.magic_name = magic_name.clone();
             let spare = if inline_count > 0 {
                 let n = inline_count as usize;
                 f.args.clear();
@@ -2299,7 +2306,7 @@ impl Vm {
                 None
             } else {
                 let spare = match magic_name {
-                    Some(name) => {
+                    Some(name) if !uf.is_closure() => {
                         // __call($name, $args). `ZEND_CALL_TRAMPOLINE` packs the
                         // arguments as sent: `zend_call_function` does not
                         // unwrap references for a trampoline (bug #50394), the
@@ -2311,13 +2318,12 @@ impl Vm {
                         for (k, v) in named {
                             arr.insert(ArrayKey::Str(k), v);
                         }
-                        f.magic_name = Some(name.clone());
                         f.args.clear();
                         f.args.push(Some(Value::Str(name)));
                         f.args.push(Some(Value::Array(ZArray::from_table(arr))));
                         args
                     }
-                    None => {
+                    _ => {
                         if !named.is_empty() {
                             f.named = named;
                         }
@@ -3062,16 +3068,13 @@ impl Vm {
             n + 1,
             given_type(v)
         );
-        let through_call_user_func = self.frames.iter().rev().nth(1).is_some_and(|caller| {
-            caller.builtin_name.is_none()
-                && caller.func.as_ref().is_some_and(|func| {
-                    let name = func.name();
-                    matches!(name.as_bytes(), b"call_user_func" | b"call_user_func_array")
-                })
-        });
+        let is_closure = f.closure.is_some() || uf.is_closure();
+        let is_closure_invoke = is_closure
+            && (f.magic_name.as_deref().is_some_and(|m| m.as_bytes().eq_ignore_ascii_case(b"__invoke"))
+                || f.this.as_ref().is_some_and(|t| object::class_of(t).name.eq_ignore_ascii_case(b"closure")));
         if let Some((file, line)) = self.attribute_caller_site() {
             msg.push_str(&format!(", called in {file} on line {line}"));
-        } else if (!internal || through_call_user_func) && self.frames.len() >= 2 {
+        } else if !internal && !is_closure_invoke && self.frames.len() >= 2 {
             let caller = self
                 .frames
                 .iter()
@@ -3460,7 +3463,7 @@ impl Vm {
         // `zend_call_function` services pending interrupts (async signals)
         // before entering user code from internal code.
         self.check_interrupt()?;
-        if call.magic_name.is_none() {
+        if !call.is_magic_trampoline() {
             for (i, arg) in call.args.iter_mut().enumerate() {
                 let Some(value) = arg else { continue };
                 let param = call
@@ -3475,7 +3478,16 @@ impl Vm {
                         } else {
                             format!(" (${})", param.name)
                         };
-                        let fname = self.func_display(&call.func, call.scope.as_ref());
+                        let fname = if call
+                            .magic_name
+                            .as_deref()
+                            .is_some_and(|m| m.as_bytes().eq_ignore_ascii_case(b"__invoke"))
+                            && call.func.is_closure()
+                        {
+                            "Closure::__invoke".to_string()
+                        } else {
+                            self.func_display(&call.func, call.scope.as_ref())
+                        };
                         self.warning(&format!(
                             "{fname}(): Argument #{}{pname} must be passed by reference, value given", i + 1
                         ))?;
@@ -3489,7 +3501,16 @@ impl Vm {
                 let param = call.func.params().last().filter(|p| p.variadic);
                 if let Some(param) = param.filter(|p| p.by_ref) {
                     if !value.is_reference() && param.promote & crate::opcode::PREFER_REF == 0 {
-                        let fname = self.func_display(&call.func, call.scope.as_ref());
+                        let fname = if call
+                            .magic_name
+                            .as_deref()
+                            .is_some_and(|m| m.as_bytes().eq_ignore_ascii_case(b"__invoke"))
+                            && call.func.is_closure()
+                        {
+                            "Closure::__invoke".to_string()
+                        } else {
+                            self.func_display(&call.func, call.scope.as_ref())
+                        };
                         self.warning(&format!(
                             "{fname}(): Argument #{} must be passed by reference, value given",
                             call.func.params().len()
@@ -3606,7 +3627,7 @@ impl Vm {
         call_args.extend(args.into_iter().map(Some));
         call.args = call_args;
         for (k, v) in named {
-            let pos = if call.magic_name.is_some() {
+            let pos = if call.is_magic_trampoline() {
                 None
             } else {
                 call.func
@@ -3630,7 +3651,7 @@ impl Vm {
                     call.args[p] = Some(v);
                 }
                 None => {
-                    if !call.func.is_variadic() && call.magic_name.is_none() {
+                    if !call.func.is_variadic() && !call.is_magic_trampoline() {
                         return Err(self.make_throw(
                             "Error",
                             &format!("Unknown named parameter ${}", k.to_string_lossy()),

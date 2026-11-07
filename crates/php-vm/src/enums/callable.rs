@@ -399,7 +399,8 @@ impl Vm {
                 } else if lm.as_bytes() == b"__invoke"
                     && object::has_internal::<crate::closure::ClosureData>(&obj)
                 {
-                    if let Some(c) = self.closure_method_call(&obj, &lm) {
+                    if let Some(mut c) = self.closure_method_call(&obj, &lm) {
+                        c.magic_name = Some(ZStr::from("__invoke"));
                         handler = Some(Handler::Invoke(c));
                         via_handler = true;
                     }
@@ -488,7 +489,12 @@ impl Vm {
             fcc.called = Some(object::class_of(o).clone());
         }
         Ok(Ok(match handler {
-            Handler::Invoke(c) => c,
+            Handler::Invoke(mut c) => {
+                if c.magic_name.is_none() {
+                    c.magic_name = Some(ZStr::from("__invoke"));
+                }
+                c
+            }
             Handler::Method(m) => PendingCall {
                 this: if m.is_static() {
                     None

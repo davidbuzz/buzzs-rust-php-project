@@ -381,6 +381,12 @@ impl PendingCall {
             self.args.len()
         }
     }
+
+    /// Whether this is a magic `__call` or `__callStatic` trampoline.
+    #[inline(always)]
+    pub fn is_magic_trampoline(&self) -> bool {
+        self.magic_name.is_some() && !self.func.is_closure()
+    }
 }
 
 /// An active foreach loop.

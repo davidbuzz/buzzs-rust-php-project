@@ -248,6 +248,11 @@ impl Func {
         self.flags() & flags::STATIC != 0
     }
 
+    /// Whether this function is a closure.
+    pub fn is_closure(&self) -> bool {
+        self.flags() & flags::CLOSURE != 0
+    }
+
     /// Identity comparison.
     pub fn ptr_eq(a: &Func, b: &Func) -> bool {
         match (a, b) {

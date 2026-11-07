@@ -276,7 +276,8 @@ impl Vm {
         if lc.as_bytes() != b"__invoke" {
             return None;
         }
-        if let Some(c) = self.closure_user_call(o) {
+        if let Some(mut c) = self.closure_user_call(o) {
+            c.magic_name = Some(ZStr::from("__invoke"));
             return Some(c);
         }
         let d = self.closure_data(o)?;
@@ -318,6 +319,7 @@ impl Vm {
             this: Some(o.clone()),
             scope: cls.clone(),
             called: cls,
+            magic_name: Some(ZStr::from("__invoke")),
             ..PendingCall::new(Func::Builtin(Rc::new(tramp)))
         })
     }
