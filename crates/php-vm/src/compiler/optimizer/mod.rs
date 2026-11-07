@@ -308,7 +308,7 @@ pub(crate) fn for_each_operand_mut(op: &mut Op, mut f: impl FnMut(&mut Operand))
             f(dim)
         }
         Op::FetchDimsCv { .. } => {}
-        Op::FetchStaticProp { .. } => {}
+        Op::FetchStaticProp { .. } | Op::FetchGlobal { .. } => {}
         Op::AssignStaticProp { val, .. } | Op::AssignOpStaticProp { val, .. } => f(val),
         Op::IssetStaticProp { .. } => {}
         Op::ConcatCv { val, .. } => f(val),
@@ -409,6 +409,7 @@ pub(crate) fn def_tmp(op: &Op) -> Option<u32> {
         | Op::FetchDimsCv { dst, .. }
         | Op::IssetDimCv { dst, .. }
         | Op::FetchStaticProp { dst, .. }
+        | Op::FetchGlobal { dst, .. }
         | Op::IssetStaticProp { dst, .. }
         | Op::FetchConstTo { dst, .. }
         | Op::FetchClassConstTo { dst, .. } => Some(*dst),

@@ -62,6 +62,8 @@ pub struct RuntimeCache {
     static_props: RefCell<Vec<Vec<MemberSlot>>>,
     /// `InitStaticCall` method resolutions, by method-name literal.
     static_calls: RefCell<Vec<Vec<MemberSlot>>>,
+    /// Global variable resolutions, by place id.
+    pub(crate) globals: RefCell<Vec<GlobalSlot>>,
 }
 
 impl RuntimeCache {
@@ -71,7 +73,20 @@ impl RuntimeCache {
         self.class_consts.borrow_mut().clear();
         self.static_props.borrow_mut().clear();
         self.static_calls.borrow_mut().clear();
+        self.globals.borrow_mut().clear();
     }
+}
+
+/// A cached global variable lookup.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GlobalSlot {
+    /// Not resolved yet.
+    #[default]
+    Empty,
+    /// Resolved to CV `cv` in the main frame (`self.frames[0]`, the VM's global scope).
+    GlobalCv(u32),
+    /// Resolved to slot `slot` in the global symbol table (`self.globals`).
+    GlobalStore(u32),
 }
 
 /// A cached global constant.

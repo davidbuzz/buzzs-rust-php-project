@@ -35,8 +35,14 @@ pub const AUTO_GLOBAL_NAMES: [&[u8]; 8] = [
 ];
 
 /// The index of an auto-global name in [`AUTO_GLOBAL_NAMES`].
-pub(crate) fn index(name: &[u8]) -> Option<usize> {
+pub fn index(name: &[u8]) -> Option<usize> {
     AUTO_GLOBAL_NAMES.iter().position(|n| *n == name)
+}
+
+/// Returns true if `name` is an auto-global name.
+#[inline]
+pub fn is_auto_global_name(name: &[u8]) -> bool {
+    index(name).is_some()
 }
 
 thread_local! {

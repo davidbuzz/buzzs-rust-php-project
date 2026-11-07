@@ -1514,6 +1514,19 @@ impl Vm {
                             } else {
                                 break 'slow;
                             }
+                        }
+                        Op::FetchGlobal {
+                            place,
+                            dst,
+                            to,
+                            mode,
+                        } => match self.fetch_global_fast(*place, *mode) {
+                            Some(v) => {
+                                if self.store_fetched(*dst, *to, v) {
+                                    ip += 1;
+                                }
+                            }
+                            None => break 'slow,
                         },
                         Op::AssignStaticProp { place, val, dst } => {
                             if !self.assign_static_prop_fast(*place, *val, *dst) {
@@ -1922,6 +1935,9 @@ impl Vm {
                         place, dst, mode, ..
                     }
                     | Op::FetchStaticProp {
+                        place, dst, mode, ..
+                    }
+                    | Op::FetchGlobal {
                         place, dst, mode, ..
                     } => {
                         let v = if *mode == FetchMode::Read {

@@ -34,8 +34,9 @@
 //! [`Frame::peek_cv_dim`]: crate::vm::Frame::peek_cv_dim
 
 use super::{discard_unrooted, num_bin, CvOpData, Num};
-use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Operand, PlaceId, Seg};
-use crate::vm::{CvSlot, Frame, Vm, VmResult};
+use crate::opcode::{cmp_outcome, BinKind, FetchMode, IncDecKind, Operand, PlaceBase, PlaceId, Seg};
+use crate::rtcache::GlobalSlot;
+use crate::vm::{CvSlot, Frame, FrameKind, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
 mod props;
@@ -1070,6 +1071,138 @@ impl Vm {
         let v = dims_value_in(f, cv, place)?;
         release_place_str_tmps(f, place);
         Some(store_fetched_in(f, dst, to, v))
+    }
+
+    /// [`crate::opcode::Op::FetchGlobal`]: global variable read
+    /// (`$GLOBALS['name']`, superglobals) resolved directly from the VM's
+    /// global scope or the global store, with runtime caching.
+    #[inline(always)]
+    pub(crate) fn fetch_global_fast(
+        &mut self,
+        pid: PlaceId,
+        mode: FetchMode,
+    ) -> Option<Value> {
+        let (name_op, code) = {
+            let f = self.frame();
+            let p = f.code.places.get(pid as usize)?;
+            let op = match (&p.base, p.segs.as_slice()) {
+                (PlaceBase::Global(op), []) => *op,
+                (PlaceBase::GlobalsArray, [Seg::Dim(op)]) => *op,
+                _ => return None,
+            };
+            (op, f.code.clone())
+        };
+
+        // Fast path: check runtime cache first.
+        let cached = {
+            let cache = code.rt_cache.globals.borrow();
+            cache.get(pid as usize).copied()
+        };
+
+        if let Some(slot) = cached {
+            match slot {
+                GlobalSlot::GlobalCv(cv) => {
+                    let main_frame = self.frames.first()?;
+                    let slot = main_frame.cvs.get(cv as usize)?;
+                    return match slot.get() {
+                        Some(v) => Some(v.deref()),
+                        None if mode == FetchMode::Is => Some(Value::Null),
+                        None => None,
+                    };
+                }
+                GlobalSlot::GlobalStore(idx) => {
+                    let g = self.globals.borrow();
+                    return match g.slots.get(idx as usize).and_then(Option::as_ref) {
+                        Some(v) => Some(v.deref()),
+                        None if mode == FetchMode::Is => Some(Value::Null),
+                        None => None,
+                    };
+                }
+                GlobalSlot::Empty => {}
+            }
+        }
+
+        // Uncached path: resolve name operand.
+        let name_bytes: std::borrow::Cow<[u8]> = match name_op {
+            Operand::Lit(lit) => match code.literals.get(lit as usize) {
+                Some(Value::Str(s)) => std::borrow::Cow::Borrowed(s.as_bytes()),
+                Some(Value::Int(i)) => std::borrow::Cow::Owned(i.to_string().into_bytes()),
+                _ => return None,
+            },
+            Operand::Cv(cv) => {
+                let slot = self.frame().cvs.get(cv as usize)?;
+                match slot.get()? {
+                    Value::Str(s) => std::borrow::Cow::Owned(s.as_bytes().to_vec()),
+                    Value::Int(i) => std::borrow::Cow::Owned(i.to_string().into_bytes()),
+                    _ => return None,
+                }
+            }
+            Operand::Tmp(t) => {
+                match self.frame().tmps.get(t as usize)? {
+                    Value::Str(s) => std::borrow::Cow::Owned(s.as_bytes().to_vec()),
+                    Value::Int(i) => std::borrow::Cow::Owned(i.to_string().into_bytes()),
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+
+        // Activate auto-global if armed:
+        if crate::place::is_superglobal_name(&name_bytes) {
+            self.is_auto_global(&name_bytes);
+        }
+
+        // Try VM's global scope first:
+        if let Some(main_frame) = self.frames.first() {
+            if main_frame.kind == FrameKind::Main {
+                if let Some(cv) = main_frame
+                    .code
+                    .cv_names
+                    .iter()
+                    .position(|n| n.as_bytes() == &name_bytes[..])
+                {
+                    let cv = cv as u32;
+                    let mut cache = code.rt_cache.globals.borrow_mut();
+                    if cache.len() <= pid as usize {
+                        cache.resize(pid as usize + 1, GlobalSlot::Empty);
+                    }
+                    cache[pid as usize] = GlobalSlot::GlobalCv(cv);
+
+                    if let Some(slot) = main_frame.cvs.get(cv as usize) {
+                        if let Some(v) = slot.get() {
+                            return Some(v.deref());
+                        }
+                    }
+                    return if mode == FetchMode::Is {
+                        Some(Value::Null)
+                    } else {
+                        None
+                    };
+                }
+            }
+        }
+
+        // Fall back to the global symbol table:
+        let idx = self.globals.borrow_mut().find(&name_bytes);
+        if let Some(idx) = idx {
+            let mut cache = code.rt_cache.globals.borrow_mut();
+            if cache.len() <= pid as usize {
+                cache.resize(pid as usize + 1, GlobalSlot::Empty);
+            }
+            cache[pid as usize] = GlobalSlot::GlobalStore(idx);
+            let g = self.globals.borrow();
+            return match g.slots.get(idx as usize).and_then(Option::as_ref) {
+                Some(v) => Some(v.deref()),
+                None if mode == FetchMode::Is => Some(Value::Null),
+                None => None,
+            };
+        }
+
+        if mode == FetchMode::Is {
+            Some(Value::Null)
+        } else {
+            None
+        }
     }
 
     /// [`crate::opcode::Op::IssetDimCv`]: `isset($cv[dim])` /

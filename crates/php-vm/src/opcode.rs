@@ -778,6 +778,15 @@ pub enum Op {
         to: Option<u32>,
         mode: FetchMode,
     },
+    /// `Fetch` (`Read` or `Is` mode) of a global variable (`$GLOBALS['name']`,
+    /// superglobals). With `to`, the `AssignCv { cv: to, val: Tmp(dst), dst: None }`
+    /// following this op is folded.
+    FetchGlobal {
+        place: PlaceId,
+        dst: u32,
+        to: Option<u32>,
+        mode: FetchMode,
+    },
     /// `Assign` of a static property place (as in
     /// [`Op::FetchStaticProp`]): `ZEND_ASSIGN_STATIC_PROP` on a cache hit
     /// of an untyped property holding a scalar or string, with a scalar or

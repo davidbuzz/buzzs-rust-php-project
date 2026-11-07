@@ -1879,6 +1879,11 @@ impl Vm {
         let r = self.write_place_inner(base, segs, wop, false);
         flush_deferred_ref_assigns();
         self.frame_mut().sync_from_symbol_table();
+        if let Some(main) = self.frames.first_mut() {
+            if main.symtab_attached {
+                main.sync_from_symbol_table();
+            }
+        }
         r
     }
 
@@ -3778,10 +3783,20 @@ impl Vm {
                 None
             }
         };
+        if let Some(v) = self.fetch_global_fast(pid, mode) {
+            return Ok(v);
+        }
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];
         let segs = &place.segs;
         let (mut cur, rest) = if let Some(v) = head {
+            (v, &segs[1..])
+        } else if matches!(place.base, PlaceBase::GlobalsArray) && !segs.is_empty() {
+            let Seg::Dim(dim_op) = &segs[0] else {
+                return Err(self.make_throw("Error", "Cannot use [] for reading"));
+            };
+            let k = self.read_dim_operand(*dim_op)?;
+            let v = self.fetch_global_by_key(&k, mode)?;
             (v, &segs[1..])
         } else {
             let base = self.resolve_base(&place.base, false, mode == FetchMode::Is, None)?;
@@ -4043,6 +4058,13 @@ impl Vm {
         let segs = &place.segs;
         let (mut cur, start) = if let Some(v) = head {
             (Some(v), 1)
+        } else if matches!(place.base, PlaceBase::GlobalsArray) && !segs.is_empty() {
+            let Seg::Dim(dim_op) = &segs[0] else {
+                return Ok(empty);
+            };
+            let k = self.read_dim_operand(*dim_op)?;
+            let v = self.fetch_global_by_key_optional(&k);
+            (v, 1)
         } else {
             let base = self.resolve_base(&place.base, false, true, None)?;
             let cur = match base {
@@ -4241,17 +4263,73 @@ impl Vm {
         Ok(l)
     }
 
+    /// Looks up a global variable by key value without rebuilding the global symbol table.
+    pub(crate) fn fetch_global_by_key_optional(&mut self, k: &Value) -> Option<Value> {
+        let name_bytes: std::borrow::Cow<[u8]> = match k {
+            Value::Str(s) => std::borrow::Cow::Borrowed(s.as_bytes()),
+            Value::Int(i) => std::borrow::Cow::Owned(i.to_string().into_bytes()),
+            _ => return None,
+        };
+        if is_superglobal_name(&name_bytes) {
+            self.is_auto_global(&name_bytes);
+        }
+        if let Some(main_frame) = self.frames.first() {
+            if main_frame.kind == crate::vm::FrameKind::Main {
+                if let Some(cv) = main_frame
+                    .code
+                    .cv_names
+                    .iter()
+                    .position(|n| n.as_bytes() == &name_bytes[..])
+                {
+                    if let Some(slot) = main_frame.cvs.get(cv) {
+                        if let Some(v) = slot.get() {
+                            return Some(v.deref());
+                        }
+                    }
+                    return None;
+                }
+            }
+        }
+        let idx = self.globals.borrow_mut().find(&name_bytes)?;
+        let g = self.globals.borrow();
+        g.slots.get(idx as usize)?.as_ref().map(Value::deref)
+    }
+
+    /// Looks up a global variable by key value, emitting a warning if undefined (in non-Is mode).
+    pub(crate) fn fetch_global_by_key(&mut self, k: &Value, mode: FetchMode) -> VmResult<Value> {
+        if let Some(v) = self.fetch_global_by_key_optional(k) {
+            return Ok(v);
+        }
+        if mode != FetchMode::Is {
+            let name_str = match k {
+                Value::Str(s) => s.clone(),
+                Value::Int(i) => ZStr::from(i.to_string()),
+                other => self.to_zstr(other)?,
+            };
+            let msg = format!("Undefined global variable ${name_str}");
+            self.warning(&msg)?;
+        }
+        Ok(Value::Null)
+    }
+
     /// A reference to a global variable (`global $x`).
     pub(crate) fn global_ref(&mut self, name: &[u8]) -> PhpRef {
         let g = self.globals.clone();
         let mut st = g.borrow_mut();
         let idx = st.find_or_add(name) as usize;
         let slot = st.slots[idx].get_or_insert(Value::Null);
-        slot.make_ref()
+        let r = slot.make_ref();
+        drop(st);
+        if let Some(main) = self.frames.first_mut() {
+            if main.symtab_attached {
+                main.sync_from_symbol_table();
+            }
+        }
+        r
     }
 }
 
-fn is_superglobal_name(n: &[u8]) -> bool {
+pub(crate) fn is_superglobal_name(n: &[u8]) -> bool {
     matches!(
         n,
         b"_GET"

@@ -124,6 +124,14 @@ fn rewrite(op: &Op, next: Option<&Op>, places: &[Place]) -> Option<Op> {
                     mode: *mode,
                 })
             })
+            .or_else(|| {
+                global_place(places, *place).then(|| Op::FetchGlobal {
+                    place: *place,
+                    dst: *dst,
+                    to: assigned_cv(next, *dst),
+                    mode: *mode,
+                })
+            })
             .or_else(|| fetch_prop(places, *place, *mode, *dst, next)),
         Op::FetchConst {
             name,
@@ -563,6 +571,19 @@ fn arg_operand(places: &[Place], src: &ArgSrc) -> Option<Operand> {
     match src {
         ArgSrc::Place(pid) | ArgSrc::TempPlace(pid) => plain_cv(places, *pid).map(Operand::Cv),
         ArgSrc::Val(op) | ArgSrc::CallResult(op) => Some(*op),
+    }
+}
+
+/// Whether a place is a direct global variable access (`$GLOBALS['name']` or superglobal)
+/// that can be specialised to [`Op::FetchGlobal`].
+fn global_place(places: &[Place], pid: PlaceId) -> bool {
+    let Some(p) = places.get(pid as usize) else {
+        return false;
+    };
+    match (&p.base, p.segs.as_slice()) {
+        (PlaceBase::Global(_), []) => true,
+        (PlaceBase::GlobalsArray, [Seg::Dim(_)]) => true,
+        _ => false,
     }
 }
 

@@ -188,6 +188,7 @@ pub(crate) fn compact_tmps(op_array: &mut OpArray) -> bool {
             | Op::FetchDimsCv { dst, .. }
             | Op::IssetDimCv { dst, .. }
             | Op::FetchStaticProp { dst, .. }
+            | Op::FetchGlobal { dst, .. }
             | Op::IssetStaticProp { dst, .. }
             | Op::FetchConstTo { dst, .. }
             | Op::FetchClassConstTo { dst, .. } => remap_tmp(dst),
