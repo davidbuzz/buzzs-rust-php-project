@@ -1309,6 +1309,16 @@ impl ArgList {
     pub fn is_first_class_callable(&self) -> bool {
         self.args.len() == 1 && self.args[0].kind == ArgKind::VariadicPlaceholder
     }
+
+    /// Whether the argument list is empty.
+    pub fn is_empty(&self) -> bool {
+        self.args.is_empty()
+    }
+
+    /// Number of arguments.
+    pub fn len(&self) -> usize {
+        self.args.len()
+    }
 }
 
 /// A call argument.

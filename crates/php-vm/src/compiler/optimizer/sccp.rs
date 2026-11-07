@@ -1020,9 +1020,16 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                     | Op::FeFreeOnReturn { loop_at: t, .. }
                     | Op::AssertCheck { skip: t, .. }
                     | Op::BindStatic { skip: t, .. }
-                    | Op::New { skip: t, .. }
                     | Op::RecvInit { skip: t, .. } => {
                         if (*t as usize) < len {
+                            successors.push(inst_to_block[*t as usize]);
+                        }
+                        if b + 1 < num_blocks {
+                            successors.push(b + 1);
+                        }
+                    }
+                    Op::New { skip: t, .. } => {
+                        if *t != 0 && (*t as usize) < len {
                             successors.push(inst_to_block[*t as usize]);
                         }
                         if b + 1 < num_blocks {

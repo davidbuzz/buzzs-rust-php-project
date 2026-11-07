@@ -2169,7 +2169,7 @@ impl Vm {
                     }
                     Op::New { class, dst, skip } => {
                         let has_ctor = self.op_new(class, *dst)?;
-                        if !has_ctor {
+                        if !has_ctor && *skip != 0 {
                             ip = *skip as usize;
                         }
                         Flow::Next

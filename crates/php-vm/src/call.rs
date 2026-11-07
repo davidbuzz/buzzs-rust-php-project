@@ -1167,14 +1167,14 @@ impl Vm {
     pub(crate) fn op_new(&mut self, class: &ClassSpec, dst: u32) -> VmResult<bool> {
         let cls = self.resolve_class_spec(class)?;
         if cls.magic.construct.is_none() {
-            let next_is_docall = matches!(
-                self.frame().code.ops.get(self.frame().ip + 1),
-                Some(Op::DoCall { .. })
-            ) || matches!(
-                self.frame().code.ops.get(self.frame().ip),
-                Some(Op::DoCall { .. })
-            );
-            if next_is_docall {
+            let skip = match self.frame().code.ops.get(self.frame().ip.saturating_sub(1)) {
+                Some(Op::New { skip, .. }) => *skip,
+                _ => match self.frame().code.ops.get(self.frame().ip) {
+                    Some(Op::New { skip, .. }) => *skip,
+                    _ => 0,
+                },
+            };
+            if skip != 0 {
                 let o = self.instantiate(&cls)?;
                 if let Some(hooks) = &cls.hooks {
                     if let Some(f) = hooks.get_constructor {

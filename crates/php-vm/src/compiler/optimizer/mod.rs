@@ -382,7 +382,6 @@ pub(crate) fn for_each_label_mut(op: &mut Op, mut f: impl FnMut(&mut Label)) {
         | Op::Coalesce { target: t, .. }
         | Op::JmpNull { target: t, .. }
         | Op::BindStatic { skip: t, .. }
-        | Op::New { skip: t, .. }
         | Op::RecvInit { skip: t, .. }
         | Op::Catch { next: t, .. }
         | Op::FastCall { target: t, .. }
@@ -393,6 +392,11 @@ pub(crate) fn for_each_label_mut(op: &mut Op, mut f: impl FnMut(&mut Label)) {
         | Op::CmpJmp { target: t, .. }
         | Op::BinAssignCvJmp { target: t, .. }
         | Op::AssignOpCvJmp { target: t, .. } => f(t),
+        Op::New { skip: t, .. } => {
+            if *t != 0 {
+                f(t);
+            }
+        }
         _ => {}
     }
 }

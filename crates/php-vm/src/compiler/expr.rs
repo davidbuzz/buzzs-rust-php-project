@@ -2172,20 +2172,30 @@ impl Compiler<'_> {
                         ClassSpec::Dyn(Operand::Tmp(t))
                     }
                 };
-                self.f().line = line;
-                let r = self.tmp();
-                let at = self.emit(Op::New {
-                    class: spec,
-                    dst: r,
-                    skip: 0,
-                });
                 if args.is_partial() {
                     return self.err("Cannot create Closure for new expression", line);
                 }
-                self.compile_args(args, None)?;
                 self.f().line = line;
-                self.emit(Op::DoCall { dst: None });
-                self.patch_here(at);
+                let r = self.tmp();
+                if args.is_empty() {
+                    let at = self.emit(Op::New {
+                        class: spec,
+                        dst: r,
+                        skip: 0,
+                    });
+                    self.f().line = line;
+                    self.emit(Op::DoCall { dst: None });
+                    self.patch_here(at);
+                } else {
+                    self.emit(Op::New {
+                        class: spec,
+                        dst: r,
+                        skip: 0,
+                    });
+                    self.compile_args(args, None)?;
+                    self.f().line = line;
+                    self.emit(Op::DoCall { dst: None });
+                }
                 Ok(Some(Operand::Tmp(r)))
             }
             _ => Ok(Some(self.compile_expr(e)?)),
