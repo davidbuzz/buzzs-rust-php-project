@@ -1772,6 +1772,7 @@ impl Vm {
                 }
             }
             PlaceBase::Global(op) => {
+                self.attach_globals_symbol_table();
                 let n = self.read(*op)?;
                 let n = self.to_zstr(&n)?;
                 let bytes = n.as_bytes();
@@ -1794,7 +1795,10 @@ impl Vm {
                     None => RBase::Undef(n),
                 }
             }
-            PlaceBase::GlobalsArray => RBase::Globals,
+            PlaceBase::GlobalsArray => {
+                self.attach_globals_symbol_table();
+                RBase::Globals
+            }
             PlaceBase::This => RBase::This(self.frame().this.clone()),
             PlaceBase::StaticProp { class, name } => {
                 // The op's run-time cache slot (`CACHED_PTR`, see
@@ -2730,9 +2734,11 @@ impl Vm {
                                 }
                             }
                             WOp::AssignRef(r) => {
-                                if let Some(f) = h.write_dimension {
-                                    if f(self, &obj, keyopt, r)? {
-                                        return Ok(r.clone());
+                                if keyopt.is_some() {
+                                    if let Some(f) = h.write_dimension {
+                                        if f(self, &obj, keyopt, r)? {
+                                            return Ok(r.clone());
+                                        }
                                     }
                                 }
                             }
@@ -2747,7 +2753,8 @@ impl Vm {
                                 // `zend_binary_assign_op_obj_dim`: read_dimension
                                 // with BP_VAR_R (the hook context outside hook
                                 // calls), operate, then write_dimension.
-                                if let (Some(f), Some(k)) = (h.read_dimension, keyopt) {
+                                let op_read_key = if keyopt.is_none() { Some(&key) } else { keyopt };
+                                if let (Some(f), Some(k)) = (h.read_dimension, op_read_key) {
                                     if let Some(cur) = f(self, &obj, k)? {
                                         let nv = self.assign_op_value(*op, &cur.deref(), rhs)?;
                                         drop(cur);
@@ -2765,13 +2772,24 @@ impl Vm {
                     }
                     // `$o[][..] = v` and `&$o[]` read the appended dimension
                     // (no offset).
-                    let read_key = if keyopt.is_none() && (!last || matches!(wop, WOp::MakeRef)) {
+                    let read_key = if keyopt.is_none()
+                        && (!last
+                            || matches!(
+                                wop,
+                                WOp::MakeRef | WOp::AssignRef(_) | WOp::FetchRw | WOp::AssignOp(..)
+                            ))
+                    {
                         Some(&key)
                     } else {
                         keyopt
                     };
                     if let (Some(f), Some(k)) = (h.read_dimension, read_key) {
-                        if !last || matches!(wop, WOp::FetchRw | WOp::MakeRef) {
+                        if !last
+                            || matches!(
+                                wop,
+                                WOp::FetchRw | WOp::MakeRef | WOp::AssignRef(_) | WOp::AssignOp(..)
+                            )
+                        {
                             let rw = matches!(wop, WOp::FetchRw | WOp::AssignOp(..));
                             self.dim_ctx = match (keyopt.is_none(), rw, &wop, last) {
                                 (true, true, ..) => crate::ext::DimensionCtx::AppendRw,
@@ -2791,6 +2809,17 @@ impl Vm {
                                             Value::Reference(r) => r,
                                             o => PhpRef::new(o),
                                         }),
+                                        WOp::AssignRef(ref r) => {
+                                            if let Value::Reference(target_ref) = &v {
+                                                self.assign_ref(target_ref, r.clone())?;
+                                            } else {
+                                                return Err(self.make_throw(
+                                                    "Error",
+                                                    "Cannot assign by reference to an array dimension of an object",
+                                                ));
+                                            }
+                                            r.clone()
+                                        }
                                         _ => v.deref(),
                                     });
                                 }
@@ -3787,6 +3816,12 @@ impl Vm {
     /// Reads a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_fetch(&mut self, pid: PlaceId, mode: FetchMode) -> VmResult<Value> {
+        if matches!(
+            self.frame().code.places[pid as usize].base,
+            PlaceBase::Global(_) | PlaceBase::GlobalsArray
+        ) {
+            self.attach_globals_symbol_table();
+        }
         if mode == FetchMode::Read {
             let direct_auto_global = {
                 let p = &self.frame().code.places[pid as usize];
@@ -4112,10 +4147,17 @@ impl Vm {
         };
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];
+        if matches!(
+            place.base,
+            PlaceBase::Global(_) | PlaceBase::GlobalsArray
+        ) {
+            self.attach_globals_symbol_table();
+        }
         let segs = &place.segs;
         let (mut cur, start) = if let Some(v) = head {
             (Some(v), 1)
         } else if matches!(place.base, PlaceBase::GlobalsArray) && !segs.is_empty() {
+            self.attach_globals_symbol_table();
             let Seg::Dim(dim_op) = &segs[0] else {
                 return Ok(empty);
             };
@@ -4320,8 +4362,36 @@ impl Vm {
         Ok(l)
     }
 
+    /// Ensures that if the main frame has an unattached symbol table, its CVs
+    /// are synced to `self.globals` before any access to globals.
+    pub(crate) fn attach_globals_symbol_table(&mut self) {
+        if let Some(main) = self.frames.first_mut() {
+            if main.kind == crate::vm::FrameKind::Main {
+                if !main.symtab_attached {
+                    main.attach_symbol_table();
+                }
+                main.sync_cvs_to_symtab();
+            }
+        }
+    }
+
+    /// Binding a global variable: ensures the main frame's symbol table is attached
+    /// and returns a reference to the global slot.
+    pub(crate) fn op_bind_global(&mut self, name: &[u8]) -> PhpRef {
+        self.attach_globals_symbol_table();
+        self.global_ref(name)
+    }
+
+    /// Global read: ensures the main frame's symbol table is attached and fetches
+    /// the global variable by key.
+    pub(crate) fn fetch_global_read(&mut self, k: &Value, mode: FetchMode) -> VmResult<Value> {
+        self.attach_globals_symbol_table();
+        self.fetch_global_by_key(k, mode)
+    }
+
     /// Looks up a global variable by key value without rebuilding the global symbol table.
     pub(crate) fn fetch_global_by_key_optional(&mut self, k: &Value) -> Option<Value> {
+        self.attach_globals_symbol_table();
         let name_bytes: std::borrow::Cow<[u8]> = match k {
             Value::Str(s) => std::borrow::Cow::Borrowed(s.as_bytes()),
             Value::Int(i) => std::borrow::Cow::Owned(i.to_string().into_bytes()),
@@ -4354,6 +4424,7 @@ impl Vm {
 
     /// Looks up a global variable by key value, emitting a warning if undefined (in non-Is mode).
     pub(crate) fn fetch_global_by_key(&mut self, k: &Value, mode: FetchMode) -> VmResult<Value> {
+        self.attach_globals_symbol_table();
         if let Some(v) = self.fetch_global_by_key_optional(k) {
             return Ok(v);
         }
@@ -4371,6 +4442,7 @@ impl Vm {
 
     /// A reference to a global variable (`global $x`).
     pub(crate) fn global_ref(&mut self, name: &[u8]) -> PhpRef {
+        self.attach_globals_symbol_table();
         let g = self.globals.clone();
         let mut st = g.borrow_mut();
         let idx = st.find_or_add(name) as usize;
