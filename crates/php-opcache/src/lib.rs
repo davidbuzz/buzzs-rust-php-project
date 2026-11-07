@@ -2,7 +2,8 @@
 //! `opcache.enable`, its file cache, invalidation and status.
 //!
 //! ref: ext/opcache/ZendAccelerator.c, ext/opcache/zend_accelerator_module.c,
-//! ext/opcache/zend_file_cache.c, ext/opcache/zend_persist.c
+//! ext/opcache/zend_file_cache.c, ext/opcache/zend_persist.c,
+//! ext/opcache/jit/zend_jit.c, ext/opcache/jit/zend_jit_trace.c
 
 pub mod file_cache;
 
@@ -66,6 +67,423 @@ pub struct ScriptCache<T> {
     pub max_accelerated_files: usize,
     /// Preload statistics, if preloading was executed.
     pub preload_stats: Option<PreloadStats>,
+    /// JIT compiled code buffer tracking, if JIT is enabled.
+    pub jit_buffer: Option<JitBuffer>,
+    /// JIT trace tracking structure.
+    pub jit_traces: Option<JitTraceTracker>,
+}
+
+/// JIT buffer management structure.
+///
+/// Tracks the allocated buffer capacity and available free space for JIT compiled code.
+/// Matches php-src `dasm_buf`, `dasm_end`, and `dasm_ptr` accounting:
+/// - Total capacity: buffer_size (minus 16 bytes overhead when > 4096).
+/// - Initial free space: capacity minus initial stubs overhead (2496 bytes).
+/// - Free space decreases as compiled traces and handlers are allocated.
+///
+/// ref: ext/opcache/jit/zend_jit.c
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JitBuffer {
+    /// Raw configured buffer size in bytes (`opcache.jit_buffer_size`).
+    pub raw_size: usize,
+    /// Effective usable buffer capacity (`dasm_end - dasm_buf`).
+    pub capacity: usize,
+    /// Used bytes in the buffer (including initial stubs).
+    pub used: usize,
+}
+
+impl JitBuffer {
+    /// Initial stubs overhead reserved by php-src JIT startup.
+    pub const STUBS_RESERVED_BYTES: usize = 2496;
+    /// Alignment and header overhead (2 pointer words = 16 bytes on 64-bit).
+    pub const HEADER_OVERHEAD_BYTES: usize = 16;
+
+    /// Creates a new `JitBuffer` with the specified raw size in bytes.
+    pub fn new(raw_size: usize) -> Self {
+        let capacity = if raw_size > 4096 {
+            raw_size.saturating_sub(Self::HEADER_OVERHEAD_BYTES)
+        } else {
+            raw_size
+        };
+        let used = if capacity > Self::STUBS_RESERVED_BYTES {
+            Self::STUBS_RESERVED_BYTES
+        } else {
+            0
+        };
+        Self {
+            raw_size,
+            capacity,
+            used,
+        }
+    }
+
+    /// Usable capacity reported as `buffer_size` in `opcache_get_status()["jit"]`.
+    pub fn size(&self) -> usize {
+        self.capacity
+    }
+
+    /// Remaining free space reported as `buffer_free` in `opcache_get_status()["jit"]`.
+    pub fn free(&self) -> usize {
+        self.capacity.saturating_sub(self.used)
+    }
+
+    /// Allocates `bytes` for compiled code or stubs. Returns `true` if sufficient space was available.
+    pub fn allocate(&mut self, bytes: usize) -> bool {
+        if self.used.saturating_add(bytes) <= self.capacity {
+            self.used += bytes;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Frees `bytes` previously allocated.
+    pub fn free_bytes(&mut self, bytes: usize) {
+        let min_used = if self.capacity > Self::STUBS_RESERVED_BYTES {
+            Self::STUBS_RESERVED_BYTES
+        } else {
+            0
+        };
+        self.used = self.used.saturating_sub(bytes).max(min_used);
+    }
+
+    /// Resets the buffer back to initial state (keeping initial stubs reserved).
+    pub fn reset(&mut self) {
+        self.used = if self.capacity > Self::STUBS_RESERVED_BYTES {
+            Self::STUBS_RESERVED_BYTES
+        } else {
+            0
+        };
+    }
+}
+
+/// Single JIT trace record.
+///
+/// ref: ext/opcache/jit/zend_jit_trace.c
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JitTraceInfo {
+    /// Unique trace ID (1-based, matching `ZEND_JIT_TRACE_NUM`).
+    pub id: usize,
+    /// Root trace ID (points to itself if this is a root trace).
+    pub root: usize,
+    /// Parent trace ID (for side traces).
+    pub parent: usize,
+    /// Number of side-traces attached to this root trace.
+    pub child_count: usize,
+    /// Code size in bytes compiled into the JIT buffer.
+    pub code_size: usize,
+    /// Optional stop reason or description.
+    pub stop_reason: Option<String>,
+}
+
+/// JIT trace counter and limit tracking infrastructure.
+///
+/// ref: ext/opcache/jit/zend_jit_trace.c, ext/opcache/jit/zend_jit.h
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JitTraceTracker {
+    /// Maximum root traces permitted (`opcache.jit_max_root_traces`).
+    pub max_root_traces: usize,
+    /// Maximum side traces per root trace (`opcache.jit_max_side_traces`).
+    pub max_side_traces: usize,
+    /// Maximum total exit counters (`opcache.jit_max_exit_counters`).
+    pub max_exit_counters: usize,
+    /// Maximum trace length in opcodes (`opcache.jit_max_trace_length`).
+    pub max_trace_length: usize,
+    /// Active traces recorded by ID.
+    pub traces: Vec<JitTraceInfo>,
+    /// Number of compiled root traces.
+    pub root_trace_count: usize,
+    /// Number of compiled side traces.
+    pub side_trace_count: usize,
+    /// Number of allocated exit counters.
+    pub exit_counter_count: usize,
+    /// Total bytes consumed by all traces in the JIT buffer.
+    pub total_code_size: usize,
+}
+
+impl JitTraceTracker {
+    pub const DEFAULT_MAX_ROOT_TRACES: usize = 1024;
+    pub const DEFAULT_MAX_SIDE_TRACES: usize = 128;
+    pub const DEFAULT_MAX_EXIT_COUNTERS: usize = 8192;
+    pub const DEFAULT_MAX_TRACE_LENGTH: usize = 1024;
+
+    /// Creates a new trace tracker with explicit capacity limits.
+    pub fn new(
+        max_root_traces: usize,
+        max_side_traces: usize,
+        max_exit_counters: usize,
+        max_trace_length: usize,
+    ) -> Self {
+        Self {
+            max_root_traces,
+            max_side_traces,
+            max_exit_counters,
+            max_trace_length,
+            traces: Vec::new(),
+            root_trace_count: 0,
+            side_trace_count: 0,
+            exit_counter_count: 0,
+            total_code_size: 0,
+        }
+    }
+
+    /// Returns whether a new root trace can be admitted.
+    pub fn can_add_root_trace(&self) -> bool {
+        self.root_trace_count < self.max_root_traces
+    }
+
+    /// Returns whether a side trace can be added to the given root trace ID.
+    pub fn can_add_side_trace(&self, root_id: usize) -> bool {
+        if self.root_trace_count + self.side_trace_count >= self.max_root_traces {
+            return false;
+        }
+        if let Some(root_trace) = self.traces.iter().find(|t| t.id == root_id) {
+            root_trace.child_count < self.max_side_traces
+        } else {
+            false
+        }
+    }
+
+    /// Adds a compiled root trace, updating count and code size.
+    pub fn add_root_trace(
+        &mut self,
+        code_size: usize,
+        stop_reason: Option<String>,
+    ) -> Option<usize> {
+        if !self.can_add_root_trace() {
+            return None;
+        }
+        let id = self.traces.len() + 1;
+        let trace = JitTraceInfo {
+            id,
+            root: id,
+            parent: 0,
+            child_count: 0,
+            code_size,
+            stop_reason,
+        };
+        self.traces.push(trace);
+        self.root_trace_count += 1;
+        self.total_code_size += code_size;
+        Some(id)
+    }
+
+    /// Adds a compiled side trace to a root trace.
+    pub fn add_side_trace(
+        &mut self,
+        root_id: usize,
+        parent_id: usize,
+        code_size: usize,
+        stop_reason: Option<String>,
+    ) -> Option<usize> {
+        if !self.can_add_side_trace(root_id) {
+            return None;
+        }
+        let id = self.traces.len() + 1;
+        let trace = JitTraceInfo {
+            id,
+            root: root_id,
+            parent: parent_id,
+            child_count: 0,
+            code_size,
+            stop_reason,
+        };
+        self.traces.push(trace);
+        if let Some(root) = self.traces.iter_mut().find(|t| t.id == root_id) {
+            root.child_count += 1;
+        }
+        self.side_trace_count += 1;
+        self.total_code_size += code_size;
+        Some(id)
+    }
+
+    /// Allocates an exit counter if under the configured limit.
+    pub fn add_exit_counter(&mut self) -> bool {
+        if self.exit_counter_count < self.max_exit_counters {
+            self.exit_counter_count += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Total number of compiled traces (root + side).
+    pub fn trace_count(&self) -> usize {
+        self.root_trace_count + self.side_trace_count
+    }
+
+    /// Resets all trace counts and recorded traces (e.g. on opcache_reset()).
+    pub fn reset(&mut self) {
+        self.traces.clear();
+        self.root_trace_count = 0;
+        self.side_trace_count = 0;
+        self.exit_counter_count = 0;
+        self.total_code_size = 0;
+    }
+}
+
+impl Default for JitTraceTracker {
+    fn default() -> Self {
+        Self::new(
+            Self::DEFAULT_MAX_ROOT_TRACES,
+            Self::DEFAULT_MAX_SIDE_TRACES,
+            Self::DEFAULT_MAX_EXIT_COUNTERS,
+            Self::DEFAULT_MAX_TRACE_LENGTH,
+        )
+    }
+}
+
+/// Parsed JIT runtime configuration and options.
+///
+/// Matches php-src `zend_jit_config` and `zend_jit_parse_config_num`.
+///
+/// ref: ext/opcache/jit/zend_jit.c, ext/opcache/jit/zend_jit.h
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JitConfig {
+    /// Whether JIT is enabled (`opcache_get_status()["jit"]["enabled"]`).
+    pub enabled: bool,
+    /// Whether JIT is active (`opcache_get_status()["jit"]["on"]`).
+    pub on: bool,
+    /// JIT trigger/kind (`ZEND_JIT_ON_*`, 0..=5).
+    pub kind: i64,
+    /// JIT optimization level (`ZEND_JIT_LEVEL_*`, 0..=5).
+    pub opt_level: i64,
+    /// JIT optimization flags (`ZEND_JIT_REG_ALLOC_* | ZEND_JIT_CPU_AVX`).
+    pub opt_flags: i64,
+}
+
+impl Default for JitConfig {
+    fn default() -> Self {
+        // Default in php-src when JIT is enabled is "tracing" (CRTO 1254).
+        Self {
+            enabled: true,
+            on: true,
+            kind: 5,
+            opt_level: 4,
+            opt_flags: 6,
+        }
+    }
+}
+
+impl JitConfig {
+    /// Creates a disabled JIT configuration (`opcache.jit=disable`).
+    pub const fn disabled() -> Self {
+        Self {
+            enabled: false,
+            on: false,
+            kind: 0,
+            opt_level: 0,
+            opt_flags: 0,
+        }
+    }
+
+    /// Creates an off JIT configuration (`opcache.jit=off`).
+    pub const fn off() -> Self {
+        Self {
+            enabled: true,
+            on: false,
+            kind: 0,
+            opt_level: 0,
+            opt_flags: 0,
+        }
+    }
+
+    /// Parses an `opcache.jit` setting string.
+    ///
+    /// Supports:
+    /// - Named modes: `"disable"`, `"off"`, `"no"`, `"false"`, `"0"`, `""`,
+    ///   `"tracing"`, `"function"`, `"on"`, `"1"`, `"yes"`, `"true"`.
+    /// - 4-digit CRTO integer options (or 1..=4 digit integers):
+    ///   - `C`: CPU flags (0 = none, 1 = AVX)
+    ///   - `R`: Register allocation (0 = none, 1 = local, 2 = global)
+    ///   - `T`: Trigger (0 = script load, 1 = first exec, 2 = profile request, 3 = hot counters, 4 = doc comment, 5 = hot trace)
+    ///   - `O`: Optimization pass (1..=5, or 0 when overall value is 0)
+    pub fn parse(s: &str) -> Result<Self, &'static str> {
+        let trimmed = s.trim();
+        if trimmed.eq_ignore_ascii_case("disable") {
+            return Ok(Self::disabled());
+        }
+        if trimmed.is_empty()
+            || trimmed.eq_ignore_ascii_case("off")
+            || trimmed.eq_ignore_ascii_case("no")
+            || trimmed.eq_ignore_ascii_case("false")
+            || trimmed == "0"
+        {
+            return Ok(Self::off());
+        }
+        if trimmed.eq_ignore_ascii_case("tracing")
+            || trimmed.eq_ignore_ascii_case("on")
+            || trimmed.eq_ignore_ascii_case("yes")
+            || trimmed.eq_ignore_ascii_case("true")
+            || trimmed == "1"
+        {
+            return Ok(Self {
+                enabled: true,
+                on: true,
+                kind: 5,
+                opt_level: 4,
+                opt_flags: 6,
+            });
+        }
+        if trimmed.eq_ignore_ascii_case("function") {
+            return Ok(Self {
+                enabled: true,
+                on: true,
+                kind: 0,
+                opt_level: 5,
+                opt_flags: 6,
+            });
+        }
+
+        // Try numeric parsing (CRTO)
+        if trimmed.chars().all(|c| c.is_ascii_digit()) && !trimmed.is_empty() {
+            if let Ok(num) = trimmed.parse::<i64>() {
+                if num == 0 {
+                    return Ok(Self::off());
+                }
+                if num < 0 || num > 9999 {
+                    return Err("Invalid \"opcache.jit\" setting");
+                }
+                let o = num % 10;
+                if o == 0 || o > 5 {
+                    return Err("Invalid \"opcache.jit\" setting");
+                }
+                let rest1 = num / 10;
+                let t = rest1 % 10;
+                if t > 5 {
+                    return Err("Invalid \"opcache.jit\" setting");
+                }
+                let rest2 = rest1 / 10;
+                let r = rest2 % 10;
+                if r > 2 {
+                    return Err("Invalid \"opcache.jit\" setting");
+                }
+                let rest3 = rest2 / 10;
+                let c = rest3 % 10;
+                if c > 1 {
+                    return Err("Invalid \"opcache.jit\" setting");
+                }
+                if rest3 / 10 != 0 {
+                    return Err("Invalid \"opcache.jit\" setting");
+                }
+                let opt_flags = (if c == 1 { 4 } else { 0 })
+                    + match r {
+                        1 => 1,
+                        2 => 2,
+                        _ => 0,
+                    };
+                return Ok(Self {
+                    enabled: true,
+                    on: true,
+                    kind: t,
+                    opt_level: o,
+                    opt_flags,
+                });
+            }
+        }
+
+        Err("Invalid \"opcache.jit\" setting. Should be \"disable\", \"on\", \"off\", \"tracing\", \"function\" or 4-digit number")
+    }
 }
 
 impl<T> ScriptCache<T> {
@@ -84,6 +502,8 @@ impl<T> ScriptCache<T> {
             manual_restarts: 0,
             max_accelerated_files,
             preload_stats: None,
+            jit_buffer: None,
+            jit_traces: None,
         }
     }
 
@@ -98,10 +518,84 @@ impl<T> ScriptCache<T> {
         } else {
             self.scripts.clear();
         }
+        if let Some(ref mut buf) = self.jit_buffer {
+            buf.reset();
+        }
+        if let Some(ref mut traces) = self.jit_traces {
+            traces.reset();
+        }
         self.last_restart_time = now;
         self.manual_restarts += 1;
         self.hits = 0;
         self.misses = 0;
+    }
+
+    /// Configures the JIT buffer and trace tracking.
+    pub fn init_jit(
+        &mut self,
+        buffer_size: usize,
+        max_root_traces: usize,
+        max_side_traces: usize,
+        max_exit_counters: usize,
+        max_trace_length: usize,
+    ) {
+        if buffer_size > 0 {
+            self.jit_buffer = Some(JitBuffer::new(buffer_size));
+            self.jit_traces = Some(JitTraceTracker::new(
+                max_root_traces,
+                max_side_traces,
+                max_exit_counters,
+                max_trace_length,
+            ));
+        } else {
+            self.jit_buffer = None;
+            self.jit_traces = None;
+        }
+    }
+
+    /// Returns a reference to the JIT buffer, if configured.
+    pub fn jit_buffer(&self) -> Option<&JitBuffer> {
+        self.jit_buffer.as_ref()
+    }
+
+    /// Returns a mutable reference to the JIT buffer.
+    pub fn jit_buffer_mut(&mut self) -> Option<&mut JitBuffer> {
+        self.jit_buffer.as_mut()
+    }
+
+    /// Returns a reference to the JIT trace tracker, if configured.
+    pub fn jit_traces(&self) -> Option<&JitTraceTracker> {
+        self.jit_traces.as_ref()
+    }
+
+    /// Returns a mutable reference to the JIT trace tracker.
+    pub fn jit_traces_mut(&mut self) -> Option<&mut JitTraceTracker> {
+        self.jit_traces.as_mut()
+    }
+
+    /// Records a compiled JIT trace, updating buffer allocation and trace counts.
+    pub fn record_jit_trace(
+        &mut self,
+        is_root: bool,
+        root_id: usize,
+        parent_id: usize,
+        code_size: usize,
+        stop_reason: Option<String>,
+    ) -> Option<usize> {
+        if let Some(ref mut buf) = self.jit_buffer {
+            if !buf.allocate(code_size) {
+                return None;
+            }
+        }
+        if let Some(ref mut tracker) = self.jit_traces {
+            if is_root {
+                tracker.add_root_trace(code_size, stop_reason)
+            } else {
+                tracker.add_side_trace(root_id, parent_id, code_size, stop_reason)
+            }
+        } else {
+            None
+        }
     }
 
     /// Looks up a script by path, performing timestamp revalidation if needed.
@@ -209,5 +703,207 @@ impl<T> ScriptCache<T> {
     /// Sets the preload statistics.
     pub fn set_preload_stats(&mut self, stats: PreloadStats) {
         self.preload_stats = Some(stats);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_jit_buffer_accounting() {
+        // 64MB buffer: 67_108_864 bytes
+        let raw = 64 * 1024 * 1024;
+        let mut buf = JitBuffer::new(raw);
+        assert_eq!(buf.size(), 67_108_848);
+        assert_eq!(buf.free(), 67_106_352);
+
+        // Allocate some code
+        assert!(buf.allocate(1000));
+        assert_eq!(buf.free(), 67_106_352 - 1000);
+
+        // Reset restores initial free space
+        buf.reset();
+        assert_eq!(buf.free(), 67_106_352);
+    }
+
+    #[test]
+    fn test_jit_trace_tracker() {
+        let mut tracker = JitTraceTracker::new(2, 2, 4, 1024);
+        assert!(tracker.can_add_root_trace());
+
+        let r1 = tracker.add_root_trace(500, None).unwrap();
+        assert_eq!(r1, 1);
+        assert_eq!(tracker.root_trace_count, 1);
+        assert_eq!(tracker.total_code_size, 500);
+
+        assert!(tracker.can_add_side_trace(r1));
+        let s1 = tracker.add_side_trace(r1, r1, 200, None).unwrap();
+        assert_eq!(s1, 2);
+        assert_eq!(tracker.side_trace_count, 1);
+        assert_eq!(tracker.total_code_size, 700);
+
+        // Max root traces reached
+        assert!(!tracker.can_add_root_trace());
+
+        // Exit counters
+        assert!(tracker.add_exit_counter());
+        assert_eq!(tracker.exit_counter_count, 1);
+
+        tracker.reset();
+        assert_eq!(tracker.trace_count(), 0);
+        assert_eq!(tracker.total_code_size, 0);
+    }
+
+    #[test]
+    fn test_jit_config_named_modes() {
+        assert_eq!(JitConfig::parse("disable"), Ok(JitConfig::disabled()));
+        assert_eq!(JitConfig::parse("off"), Ok(JitConfig::off()));
+        assert_eq!(JitConfig::parse("no"), Ok(JitConfig::off()));
+        assert_eq!(JitConfig::parse("false"), Ok(JitConfig::off()));
+        assert_eq!(JitConfig::parse("0"), Ok(JitConfig::off()));
+        assert_eq!(JitConfig::parse(""), Ok(JitConfig::off()));
+
+        let tracing = JitConfig {
+            enabled: true,
+            on: true,
+            kind: 5,
+            opt_level: 4,
+            opt_flags: 6,
+        };
+        assert_eq!(JitConfig::parse("tracing"), Ok(tracing));
+        assert_eq!(JitConfig::parse("on"), Ok(tracing));
+        assert_eq!(JitConfig::parse("1"), Ok(tracing));
+        assert_eq!(JitConfig::parse("yes"), Ok(tracing));
+        assert_eq!(JitConfig::parse("true"), Ok(tracing));
+
+        let function = JitConfig {
+            enabled: true,
+            on: true,
+            kind: 0,
+            opt_level: 5,
+            opt_flags: 6,
+        };
+        assert_eq!(JitConfig::parse("function"), Ok(function));
+    }
+
+    #[test]
+    fn test_jit_config_crto_parsing() {
+        assert_eq!(JitConfig::parse("0000"), Ok(JitConfig::off()));
+
+        // 1254: C=1, R=2, T=5, O=4 -> opt_flags=6, kind=5, opt_level=4
+        assert_eq!(
+            JitConfig::parse("1254"),
+            Ok(JitConfig {
+                enabled: true,
+                on: true,
+                kind: 5,
+                opt_level: 4,
+                opt_flags: 6,
+            })
+        );
+
+        // 0254: C=0, R=2, T=5, O=4 -> opt_flags=2, kind=5, opt_level=4
+        assert_eq!(
+            JitConfig::parse("0254"),
+            Ok(JitConfig {
+                enabled: true,
+                on: true,
+                kind: 5,
+                opt_level: 4,
+                opt_flags: 2,
+            })
+        );
+
+        // 1154: C=1, R=1, T=5, O=4 -> opt_flags=5, kind=5, opt_level=4
+        assert_eq!(
+            JitConfig::parse("1154"),
+            Ok(JitConfig {
+                enabled: true,
+                on: true,
+                kind: 5,
+                opt_level: 4,
+                opt_flags: 5,
+            })
+        );
+
+        // 1054: C=1, R=0, T=5, O=4 -> opt_flags=4, kind=5, opt_level=4
+        assert_eq!(
+            JitConfig::parse("1054"),
+            Ok(JitConfig {
+                enabled: true,
+                on: true,
+                kind: 5,
+                opt_level: 4,
+                opt_flags: 4,
+            })
+        );
+
+        // 1205: C=1, R=2, T=0, O=5 -> opt_flags=6, kind=0, opt_level=5
+        assert_eq!(
+            JitConfig::parse("1205"),
+            Ok(JitConfig {
+                enabled: true,
+                on: true,
+                kind: 0,
+                opt_level: 5,
+                opt_flags: 6,
+            })
+        );
+
+        // 1201: C=1, R=2, T=0, O=1 -> opt_flags=6, kind=0, opt_level=1
+        assert_eq!(
+            JitConfig::parse("1201"),
+            Ok(JitConfig {
+                enabled: true,
+                on: true,
+                kind: 0,
+                opt_level: 1,
+                opt_flags: 6,
+            })
+        );
+
+        // 254 (integer equivalent to 0254)
+        assert_eq!(
+            JitConfig::parse("254"),
+            Ok(JitConfig {
+                enabled: true,
+                on: true,
+                kind: 5,
+                opt_level: 4,
+                opt_flags: 2,
+            })
+        );
+
+        // Invalid: O is 0 when non-zero number
+        assert!(JitConfig::parse("1250").is_err());
+        // Invalid: T > 5
+        assert!(JitConfig::parse("1264").is_err());
+        // Invalid: R > 2
+        assert!(JitConfig::parse("1354").is_err());
+        // Invalid: C > 1
+        assert!(JitConfig::parse("2254").is_err());
+        // Invalid: non-digit
+        assert!(JitConfig::parse("abcd").is_err());
+    }
+
+    #[test]
+    fn test_script_cache_jit_lifecycle() {
+        let mut cache: ScriptCache<()> = ScriptCache::new(100);
+        assert!(cache.jit_buffer().is_none());
+        assert!(cache.jit_traces().is_none());
+
+        cache.init_jit(64 * 1024 * 1024, 1024, 128, 8192, 1024);
+        assert!(cache.jit_buffer().is_some());
+        assert_eq!(cache.jit_buffer().unwrap().free(), 67_106_352);
+
+        let tid = cache.record_jit_trace(true, 0, 0, 4000, None);
+        assert_eq!(tid, Some(1));
+        assert_eq!(cache.jit_buffer().unwrap().free(), 67_106_352 - 4000);
+        assert_eq!(cache.jit_traces().unwrap().root_trace_count, 1);
+
+        cache.reset();
+        assert_eq!(cache.jit_buffer().unwrap().free(), 67_106_352);
+        assert_eq!(cache.jit_traces().unwrap().root_trace_count, 0);
     }
 }

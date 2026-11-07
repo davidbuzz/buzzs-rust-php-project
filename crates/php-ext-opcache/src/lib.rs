@@ -5,6 +5,7 @@
 
 use php_opcache::file_cache;
 use php_opcache::{CacheLookup, PreloadStats, ScriptCache};
+pub use php_opcache::{JitBuffer, JitConfig, JitTraceInfo, JitTraceTracker};
 use php_runtime::{Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_vm::compiler::CompiledUnit;
@@ -450,11 +451,24 @@ fn module_info(vm: &mut Vm) -> Vec<InfoItem> {
     let (raw_size, _) = php_support::ini::parse_quantity(&raw_buf);
     let jit_setting = get_ini_string(vm, "opcache.jit");
     let jit_setting_trimmed = jit_setting.trim();
-    let is_jit_on = enabled
-        && raw_size > 0
-        && !jit_setting_trimmed.eq_ignore_ascii_case("disable")
-        && !jit_setting_trimmed.eq_ignore_ascii_case("off")
-        && !jit_setting_trimmed.is_empty();
+
+    let jit_status_str = if !enabled
+        || raw_size <= 0
+        || jit_setting_trimmed.eq_ignore_ascii_case("disable")
+        || jit_setting_trimmed.is_empty()
+    {
+        "Disabled"
+    } else if let Ok(cfg) = JitConfig::parse(jit_setting_trimmed) {
+        if !cfg.enabled {
+            "Disabled"
+        } else if cfg.on {
+            "On"
+        } else {
+            "Off"
+        }
+    } else {
+        "On"
+    };
 
     vec![
         InfoItem::TableStart,
@@ -476,35 +490,24 @@ fn module_info(vm: &mut Vm) -> Vec<InfoItem> {
                 "Disabled"
             },
         ),
-        row("JIT", if is_jit_on { "On" } else { "Disabled" }),
+        row("JIT", jit_status_str),
         InfoItem::TableEnd,
         InfoItem::IniEntries,
     ]
 }
 
 fn parse_jit_mode(s: &str) -> (i64, i64, i64) {
-    match s {
-        "function" => (0, 5, 6),
-        "tracing" | "on" => (5, 4, 6),
-        digits if digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()) => {
-            let bytes = digits.as_bytes();
-            let c = bytes[0] - b'0';
-            let r = bytes[1] - b'0';
-            let t = bytes[2] - b'0';
-            let o = bytes[3] - b'0';
-            if c <= 1 && r <= 2 && t <= 5 && o <= 5 {
-                let opt_flags = (if c == 1 { 4 } else { 0 })
-                    + match r {
-                        1 => 1,
-                        2 => 2,
-                        _ => 0,
-                    };
-                (t as i64, o as i64, opt_flags as i64)
+    match JitConfig::parse(s) {
+        Ok(cfg) => {
+            if cfg.enabled && cfg.on {
+                (cfg.kind, cfg.opt_level, cfg.opt_flags)
+            } else if cfg.enabled && !cfg.on {
+                (0, 0, 0)
             } else {
-                (5, 4, 6)
+                (0, 0, 0)
             }
         }
-        _ => (5, 4, 6),
+        Err(_) => (5, 4, 6),
     }
 }
 
@@ -836,7 +839,7 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 
     GLOBAL_CACHE.with(|c| {
-        let cache = c.borrow();
+        let mut cache = c.borrow_mut();
         let mut status = ZArray::new();
         status
             .make_mut()
@@ -1039,55 +1042,122 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
 
         let raw_buf = vm.ini_string("opcache.jit_buffer_size").unwrap_or_default();
-        let (raw_size, _) = php_support::ini::parse_quantity(&raw_buf);
+        let (raw_size_signed, _) = php_support::ini::parse_quantity(&raw_buf);
+        let raw_size = raw_size_signed.max(0) as usize;
         let jit_setting = get_ini_string(vm, "opcache.jit");
         let jit_setting_trimmed = jit_setting.trim();
 
-        let is_jit_disabled = raw_size <= 0
-            || jit_setting_trimmed.eq_ignore_ascii_case("disable")
-            || jit_setting_trimmed.eq_ignore_ascii_case("off")
-            || jit_setting_trimmed.is_empty();
+        let parsed_jit = JitConfig::parse(jit_setting_trimmed);
 
         let mut jit = ZArray::new();
-        if is_jit_disabled {
-            jit.make_mut()
-                .insert(ZStr::from("enabled"), Value::Bool(false));
-            jit.make_mut().insert(ZStr::from("on"), Value::Bool(false));
-            jit.make_mut().insert(ZStr::from("kind"), Value::Int(0));
-            jit.make_mut()
-                .insert(ZStr::from("opt_level"), Value::Int(0));
-            jit.make_mut()
-                .insert(ZStr::from("opt_flags"), Value::Int(0));
-            jit.make_mut()
-                .insert(ZStr::from("buffer_size"), Value::Int(0));
-            jit.make_mut()
-                .insert(ZStr::from("buffer_free"), Value::Int(0));
-        } else {
-            let (kind, opt_level, opt_flags) = parse_jit_mode(jit_setting_trimmed);
-            let buf_bytes = raw_size.max(0);
-            let buf_size = if buf_bytes > 4096 {
-                buf_bytes - 16
-            } else {
-                buf_bytes
-            };
-            let buf_free = if buf_size > 2496 {
-                buf_size - 2496
-            } else {
-                buf_size
-            };
+        match parsed_jit {
+            Ok(cfg) if !cfg.enabled => {
+                // "disable": completely disabled in php-src
+                jit.make_mut()
+                    .insert(ZStr::from("enabled"), Value::Bool(false));
+                jit.make_mut().insert(ZStr::from("on"), Value::Bool(false));
+                jit.make_mut().insert(ZStr::from("kind"), Value::Int(0));
+                jit.make_mut()
+                    .insert(ZStr::from("opt_level"), Value::Int(0));
+                jit.make_mut()
+                    .insert(ZStr::from("opt_flags"), Value::Int(0));
+                jit.make_mut()
+                    .insert(ZStr::from("buffer_size"), Value::Int(0));
+                jit.make_mut()
+                    .insert(ZStr::from("buffer_free"), Value::Int(0));
+            }
+            Ok(cfg) if raw_size == 0 => {
+                // Buffer size 0: enabled and on become false, but kind/opt_level/opt_flags reflect configured mode
+                jit.make_mut()
+                    .insert(ZStr::from("enabled"), Value::Bool(false));
+                jit.make_mut().insert(ZStr::from("on"), Value::Bool(false));
+                jit.make_mut()
+                    .insert(ZStr::from("kind"), Value::Int(cfg.kind));
+                jit.make_mut()
+                    .insert(ZStr::from("opt_level"), Value::Int(cfg.opt_level));
+                jit.make_mut()
+                    .insert(ZStr::from("opt_flags"), Value::Int(cfg.opt_flags));
+                jit.make_mut()
+                    .insert(ZStr::from("buffer_size"), Value::Int(0));
+                jit.make_mut()
+                    .insert(ZStr::from("buffer_free"), Value::Int(0));
+            }
+            Ok(cfg) => {
+                // Configured with buffer_size > 0
+                if cache.jit_buffer.is_none()
+                    || cache.jit_buffer.as_ref().map(|b| b.raw_size) != Some(raw_size)
+                {
+                    let max_root = vm.ini_long("opcache.jit_max_root_traces").max(0) as usize;
+                    let max_side = vm.ini_long("opcache.jit_max_side_traces").max(0) as usize;
+                    let max_exit = vm.ini_long("opcache.jit_max_exit_counters").max(0) as usize;
+                    let max_len = vm.ini_long("opcache.jit_max_trace_length").max(0) as usize;
+                    cache.init_jit(raw_size, max_root, max_side, max_exit, max_len);
+                }
+                let (buf_size, buf_free) = if let Some(ref buf) = cache.jit_buffer {
+                    (buf.size() as i64, buf.free() as i64)
+                } else {
+                    (0, 0)
+                };
 
-            jit.make_mut()
-                .insert(ZStr::from("enabled"), Value::Bool(true));
-            jit.make_mut().insert(ZStr::from("on"), Value::Bool(true));
-            jit.make_mut().insert(ZStr::from("kind"), Value::Int(kind));
-            jit.make_mut()
-                .insert(ZStr::from("opt_level"), Value::Int(opt_level));
-            jit.make_mut()
-                .insert(ZStr::from("opt_flags"), Value::Int(opt_flags));
-            jit.make_mut()
-                .insert(ZStr::from("buffer_size"), Value::Int(buf_size));
-            jit.make_mut()
-                .insert(ZStr::from("buffer_free"), Value::Int(buf_free));
+                jit.make_mut()
+                    .insert(ZStr::from("enabled"), Value::Bool(cfg.enabled));
+                jit.make_mut().insert(ZStr::from("on"), Value::Bool(cfg.on));
+                jit.make_mut()
+                    .insert(ZStr::from("kind"), Value::Int(cfg.kind));
+                jit.make_mut()
+                    .insert(ZStr::from("opt_level"), Value::Int(cfg.opt_level));
+                jit.make_mut()
+                    .insert(ZStr::from("opt_flags"), Value::Int(cfg.opt_flags));
+                jit.make_mut()
+                    .insert(ZStr::from("buffer_size"), Value::Int(buf_size));
+                jit.make_mut()
+                    .insert(ZStr::from("buffer_free"), Value::Int(buf_free));
+            }
+            Err(_) => {
+                // Invalid opcache.jit setting falls back to tracing default
+                if raw_size == 0 {
+                    jit.make_mut()
+                        .insert(ZStr::from("enabled"), Value::Bool(false));
+                    jit.make_mut().insert(ZStr::from("on"), Value::Bool(false));
+                    jit.make_mut().insert(ZStr::from("kind"), Value::Int(5));
+                    jit.make_mut()
+                        .insert(ZStr::from("opt_level"), Value::Int(4));
+                    jit.make_mut()
+                        .insert(ZStr::from("opt_flags"), Value::Int(6));
+                    jit.make_mut()
+                        .insert(ZStr::from("buffer_size"), Value::Int(0));
+                    jit.make_mut()
+                        .insert(ZStr::from("buffer_free"), Value::Int(0));
+                } else {
+                    if cache.jit_buffer.is_none()
+                        || cache.jit_buffer.as_ref().map(|b| b.raw_size) != Some(raw_size)
+                    {
+                        let max_root = vm.ini_long("opcache.jit_max_root_traces").max(0) as usize;
+                        let max_side = vm.ini_long("opcache.jit_max_side_traces").max(0) as usize;
+                        let max_exit = vm.ini_long("opcache.jit_max_exit_counters").max(0) as usize;
+                        let max_len = vm.ini_long("opcache.jit_max_trace_length").max(0) as usize;
+                        cache.init_jit(raw_size, max_root, max_side, max_exit, max_len);
+                    }
+                    let (buf_size, buf_free) = if let Some(ref buf) = cache.jit_buffer {
+                        (buf.size() as i64, buf.free() as i64)
+                    } else {
+                        (0, 0)
+                    };
+
+                    jit.make_mut()
+                        .insert(ZStr::from("enabled"), Value::Bool(true));
+                    jit.make_mut().insert(ZStr::from("on"), Value::Bool(true));
+                    jit.make_mut().insert(ZStr::from("kind"), Value::Int(5));
+                    jit.make_mut()
+                        .insert(ZStr::from("opt_level"), Value::Int(4));
+                    jit.make_mut()
+                        .insert(ZStr::from("opt_flags"), Value::Int(6));
+                    jit.make_mut()
+                        .insert(ZStr::from("buffer_size"), Value::Int(buf_size));
+                    jit.make_mut()
+                        .insert(ZStr::from("buffer_free"), Value::Int(buf_free));
+                }
+            }
         }
         status
             .make_mut()
@@ -1501,4 +1571,28 @@ fn opcache_is_script_cached_in_file_cache(vm: &mut Vm, a: &mut Args) -> VmResult
         validate_timestamps,
     );
     Ok(Value::Bool(cached))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_jit_mode() {
+        assert_eq!(parse_jit_mode("function"), (0, 5, 6));
+        assert_eq!(parse_jit_mode("tracing"), (5, 4, 6));
+        assert_eq!(parse_jit_mode("on"), (5, 4, 6));
+        assert_eq!(parse_jit_mode("off"), (0, 0, 0));
+        assert_eq!(parse_jit_mode("disable"), (0, 0, 0));
+        assert_eq!(parse_jit_mode("0000"), (0, 0, 0));
+        assert_eq!(parse_jit_mode("1254"), (5, 4, 6));
+        assert_eq!(parse_jit_mode("0254"), (5, 4, 2));
+        assert_eq!(parse_jit_mode("1154"), (5, 4, 5));
+        assert_eq!(parse_jit_mode("1054"), (5, 4, 4));
+        assert_eq!(parse_jit_mode("1205"), (0, 5, 6));
+        assert_eq!(parse_jit_mode("1201"), (0, 1, 6));
+        assert_eq!(parse_jit_mode("1235"), (3, 5, 6));
+        assert_eq!(parse_jit_mode("254"), (5, 4, 2));
+        assert_eq!(parse_jit_mode("invalid_mode"), (5, 4, 6));
+    }
 }
