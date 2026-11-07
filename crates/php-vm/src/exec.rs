@@ -1,10 +1,11 @@
 //! The interpreter loop (`execute_ex`) and simple instructions.
 
+use crate::func::Func;
 use crate::object;
 use crate::opcode::{
     BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Op, Operand, PlaceId, UnKind,
 };
-use crate::vm::{CvSlot, FinState, Frame, RetTarget, Throw, Vm, VmResult};
+use crate::vm::{CvSlot, FinState, Frame, PendingCall, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ops, BinaryOp, ErrorLevel, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
@@ -314,6 +315,43 @@ impl Vm {
         };
         self.set_tmp(dst, result);
         Ok(())
+    }
+
+    #[inline(never)]
+    fn op_abs_slow(&mut self, src: Operand) -> VmResult<Value> {
+        let arg = self.read(src)?;
+        if let Some(Func::Builtin(b)) = self.functions.get(b"abs").cloned() {
+            let mut call = PendingCall::new(Func::Builtin(b.clone()));
+            call.args.push(Some(arg));
+            let strict = self.frame().code.strict_types;
+            self.call_builtin(&b, call, strict)
+        } else {
+            match arg {
+                Value::Int(n) => Ok(if n == i64::MIN {
+                    #[allow(clippy::cast_precision_loss)]
+                    Value::Float(-(n as f64))
+                } else {
+                    Value::Int(n.abs())
+                }),
+                Value::Float(f) => Ok(Value::Float(f.abs())),
+                other => {
+                    let r = php_runtime::convert::try_convert_to_number(&other, self)
+                        .map_err(|e| self.rt_throw(e))?;
+                    Ok(match r.unwrap_or(Value::Int(0)) {
+                        Value::Int(n) => {
+                            if n == i64::MIN {
+                                #[allow(clippy::cast_precision_loss)]
+                                Value::Float(-(n as f64))
+                            } else {
+                                Value::Int(n.abs())
+                            }
+                        }
+                        Value::Float(f) => Value::Float(f.abs()),
+                        other => other,
+                    })
+                }
+            }
+        }
     }
 
     /// `ZEND_ROPE_INIT` / `ZEND_ROPE_ADD` / `ZEND_ROPE_END`: each part is
@@ -1246,6 +1284,30 @@ impl Vm {
                                         None => break 'slow,
                                     },
                                 }
+                            }
+                        }
+                        Op::Abs { src, dst, to } => {
+                            if let Some(val) = self.abs_fast(*src) {
+                                if let Some(cv) = *to {
+                                    if let Some(d) = *dst {
+                                        if self.store_fetched(d, Some(cv), val) {
+                                            ip += 3;
+                                        } else {
+                                            ip += 2;
+                                        }
+                                    } else if self.cv_store_plain(cv, val).is_ok() {
+                                        ip += 3;
+                                    } else {
+                                        ip += 2;
+                                    }
+                                } else {
+                                    if let Some(d) = *dst {
+                                        self.set_tmp(d, val);
+                                    }
+                                    ip += 2;
+                                }
+                            } else {
+                                break 'slow;
                             }
                         }
                         Op::IncDecCv { cv, kind, dst, .. } => {
@@ -2467,6 +2529,21 @@ impl Vm {
                         self.bin_slow(*op, *a, *b, *dst)?;
                         Flow::Next
                     }
+                    Op::Abs { src, dst, to } => {
+                        let v = self.op_abs_slow(*src)?;
+                        if let Some(cv) = *to {
+                            if let Some(d) = *dst {
+                                if !self.store_fetched(d, Some(cv), v.clone()) {
+                                    self.assign_cv_fast(cv, Operand::Tmp(d), None);
+                                }
+                            } else if self.cv_store_plain(cv, v.clone()).is_err() {
+                                let _ = self.cv_assign(cv, v.clone());
+                            }
+                        } else if let Some(d) = *dst {
+                            self.set_tmp(d, v);
+                        }
+                        Flow::Next
+                    }
                     Op::AssignOpCv {
                         op,
                         val,
@@ -3386,6 +3463,7 @@ fn defers_oom(op: &Op) -> bool {
             | Op::AssignOpObjProp { .. }
             | Op::AssignOpObjPropDim { .. }
             | Op::ConcatCv { .. }
+            | Op::Abs { .. }
             | Op::Echo(_)
             | Op::Free(_)
     )

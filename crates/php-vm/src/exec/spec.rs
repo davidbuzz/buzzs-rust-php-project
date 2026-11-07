@@ -803,6 +803,22 @@ impl Vm {
         store_fetched_in(self.frame_mut(), dst, to, v)
     }
 
+    /// Fast path for [`crate::opcode::Op::Abs`]: computes `abs` of an int or float operand inline.
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
+    pub(super) fn abs_fast(&mut self, src: Operand) -> Option<Value> {
+        let f = self.frames.last_mut()?;
+        match Self::peek_num(f, src)? {
+            Num::Int(i) => Some(if i == i64::MIN {
+                #[allow(clippy::cast_precision_loss)]
+                Value::Float(-(i as f64))
+            } else {
+                Value::Int(i.abs())
+            }),
+            Num::Float(fl) => Some(Value::Float(fl.abs())),
+        }
+    }
+
     /// `++`/`--` of compiled variable `cv` holding an int that does not
     /// overflow, or a float (`ZEND_PRE_INC_LONG_SPEC_CV` & co.,
     /// `increment_function` on `IS_DOUBLE`), the expression's value written
@@ -2353,6 +2369,23 @@ Cannot use a scalar value as an array
 int(5)
 end
 "#;
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn specialised_abs_computes_inline() {
+        let src = r#"<?php
+$x = -42;
+$y = abs($x);
+var_dump($y);
+$f = -3.14;
+$r = abs($f);
+var_dump($r);
+abs($x);
+$min = -9223372036854775807 - 1;
+var_dump(abs($min));
+"#;
+        let expected = "int(42)\nfloat(3.14)\nfloat(9223372036854775808)\n";
         assert_eq!(run(src), expected);
     }
 }

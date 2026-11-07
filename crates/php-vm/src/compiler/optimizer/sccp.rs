@@ -108,6 +108,12 @@ fn update_cv_state_for_op(
                 cur_state[cv_idx] = CvLattice::Bottom;
             }
         }
+        Op::Abs { to: Some(cv), .. } => {
+            let cv_idx = *cv as usize;
+            if cv_idx < num_cvs {
+                cur_state[cv_idx] = CvLattice::Bottom;
+            }
+        }
         _ => {}
     }
 }

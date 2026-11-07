@@ -220,7 +220,8 @@ pub(crate) fn compact_tmps(op_array: &mut OpArray) -> bool {
             | Op::IncDecDimCv { dst, .. }
             | Op::AssignStaticProp { dst, .. }
             | Op::AssignOpStaticProp { dst, .. }
-            | Op::ConcatCv { dst, .. } => {
+            | Op::ConcatCv { dst, .. }
+            | Op::Abs { dst, .. } => {
                 if let Some(d) = dst {
                     remap_tmp(d);
                 }

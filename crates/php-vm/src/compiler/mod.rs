@@ -1037,7 +1037,7 @@ impl Compiler<'_> {
         // `zend_set_user_opcode_handler()` hook runs before its generic
         // opcode, so hooked code keeps the generic ops.
         if self.opts.user_opcodes.is_empty() {
-            specialise::specialise(&mut op_array.ops, &op_array.places);
+            specialise::specialise(&mut op_array.ops, &op_array.places, &op_array.literals);
         }
         Ok(op_array)
     }

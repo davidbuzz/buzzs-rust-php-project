@@ -875,6 +875,14 @@ pub enum Op {
         kind: IncDecKind,
         place: PlaceId,
     },
+    /// `InitFCall("abs")` + `Send` + `DoCall` specialised into an inline operation.
+    /// When `src` holds an int or float, computes its absolute value inline
+    /// without call frame setup.
+    Abs {
+        src: Operand,
+        dst: Option<u32>,
+        to: Option<u32>,
+    },
 
     // Property ops (`ZEND_FETCH_OBJ_R` & co. with a `CACHE_SLOT`): `place`
     // is `$cv->name` or `$this->name` with a literal name (the `...Dim`

@@ -117,7 +117,7 @@ pub fn optimize_op_array(op_array: &mut OpArray, level: u32) {
     }
 
     // Re-run handler specialisation over the optimized instructions
-    specialise::specialise(&mut op_array.ops, &op_array.places);
+    specialise::specialise(&mut op_array.ops, &op_array.places, &op_array.literals);
 }
 
 /// Optimizes a compiled unit in place (main op array).
@@ -293,6 +293,7 @@ pub(crate) fn for_each_operand_mut(op: &mut Op, mut f: impl FnMut(&mut Operand))
         }
         Op::ConstDimCheck { obj } => f(obj),
         // Specialised ops
+        Op::Abs { src, .. } => f(src),
         Op::CmpJmp { a, b, .. } | Op::BinAssignCv { a, b, .. } => {
             f(a);
             f(b);
@@ -440,7 +441,8 @@ pub(crate) fn def_tmp(op: &Op) -> Option<u32> {
         | Op::IncDecDimCv { dst, .. }
         | Op::AssignStaticProp { dst, .. }
         | Op::AssignOpStaticProp { dst, .. }
-        | Op::ConcatCv { dst, .. } => *dst,
+        | Op::ConcatCv { dst, .. }
+        | Op::Abs { dst, .. } => *dst,
 
         _ => None,
     }
@@ -476,7 +478,8 @@ pub(crate) fn clear_def_tmp(op: &mut Op) -> bool {
         | Op::IncDecDimCv { dst, .. }
         | Op::AssignStaticProp { dst, .. }
         | Op::AssignOpStaticProp { dst, .. }
-        | Op::ConcatCv { dst, .. } => {
+        | Op::ConcatCv { dst, .. }
+        | Op::Abs { dst, .. } => {
             if dst.is_some() {
                 *dst = None;
                 true

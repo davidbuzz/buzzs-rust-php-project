@@ -20,14 +20,31 @@
 //! the successor from elsewhere also runs it as before.
 
 use crate::opcode::{
-    cmp_outcome, BinKind, ClassSpec, FetchMode, IncDecKind, Op, Operand, Place, PlaceBase, PlaceId,
-    Seg,
+    cmp_outcome, ArgSrc, BinKind, ClassSpec, FetchMode, IncDecKind, Literal, Op, Operand, Place,
+    PlaceBase, PlaceId, Seg,
 };
-use php_runtime::BinaryOp;
+use php_runtime::{BinaryOp, Value};
 
 /// Rewrites `ops` (the finished body whose places are `places`) in place.
-pub(crate) fn specialise(ops: &mut [Op], places: &[Place]) {
+pub(crate) fn specialise(ops: &mut [Op], places: &[Place], literals: &[Literal]) {
     for i in 0..ops.len() {
+        if i + 2 < ops.len() && is_abs_call(&ops[i], literals) {
+            if let Op::Send { src } = &ops[i + 1] {
+                if let Op::DoCall { dst } = ops[i + 2] {
+                    if let Some(src_op) = arg_operand(places, src) {
+                        let to = dst.and_then(|d| assigned_cv(ops.get(i + 3), d));
+                        ops[i] = Op::Abs {
+                            src: src_op,
+                            dst,
+                            to,
+                        };
+                        ops[i + 1] = Op::Nop;
+                        ops[i + 2] = Op::Nop;
+                        continue;
+                    }
+                }
+            }
+        }
         let (head, tail) = ops.split_at_mut(i + 1);
         let Some(cur) = head.last_mut() else {
             continue;
@@ -525,6 +542,28 @@ fn cv_dims(places: &[Place], pid: PlaceId) -> Option<u32> {
         .iter()
         .all(|s| matches!(s, Seg::Dim(d) if *d != Operand::Unused));
     (p.segs.len() >= 2 && all_dims).then_some(*cv)
+}
+
+/// Whether `op` is a direct `InitFCall` to the global `abs()` function.
+fn is_abs_call(op: &Op, literals: &[Literal]) -> bool {
+    let Op::InitFCall { name, fallback, .. } = op else {
+        return false;
+    };
+    if fallback.is_some() {
+        return false;
+    }
+    match literals.get(*name) {
+        Some(Value::Str(s)) => s.as_bytes().eq_ignore_ascii_case(b"abs"),
+        _ => false,
+    }
+}
+
+/// The operand of an argument source if it is a plain compiled variable or value.
+fn arg_operand(places: &[Place], src: &ArgSrc) -> Option<Operand> {
+    match src {
+        ArgSrc::Place(pid) | ArgSrc::TempPlace(pid) => plain_cv(places, *pid).map(Operand::Cv),
+        ArgSrc::Val(op) | ArgSrc::CallResult(op) => Some(*op),
+    }
 }
 
 #[cfg(test)]
@@ -1066,6 +1105,33 @@ mod tests {
         assert!(
             !ops.iter()
                 .any(|op| matches!(op, Op::BinAssignCv { .. } | Op::CmpJmp { .. })),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn abs_calls_are_specialised() {
+        let ops = main_ops("<?php $x = -3; abs($x); $y = abs($x);");
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Abs {
+                    dst: None,
+                    to: None,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Abs {
+                    dst: Some(_),
+                    to: Some(_),
+                    ..
+                }
+            )),
             "{ops:?}"
         );
     }
