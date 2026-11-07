@@ -3021,11 +3021,13 @@ impl MethodCache {
 /// backtraces read the CV), as a `RECV` leaves it. Extra arguments and
 /// those of a variadic parameter stay in `args`.
 ///
-/// For a function without parameter types the `RECV`/`RECV_INIT` ops of
+/// For a function without parameter types or when passed arguments satisfy
+/// parameter types without coercion, the `RECV`/`RECV_INIT` ops of
 /// the leading passed arguments are skipped ("Skip useless `ZEND_RECV` and
 /// `ZEND_RECV_INIT` opcodes"): the returned first op is where executing
-/// them would have led. A named-argument gap stops the skipping (its op
-/// reports the missing argument or evaluates the default).
+/// them would have led. A named-argument gap or type mismatch stops the
+/// skipping (its op reports the missing argument, evaluates the default,
+/// or executes the coercion/type check).
 ///
 /// The frame's slots may be empty ([`Frame::reinit_for_call`]) or filled
 /// with undefined values (a fresh [`Frame::new`]); parameter `i` is CV `i`
@@ -3034,7 +3036,7 @@ impl MethodCache {
 fn init_cvs(uf: &UserFunction, f: &mut Frame) -> usize {
     let ncv = uf.code.cv_names.len();
     let ops = &uf.code.ops;
-    let mut skipping = uf.params.iter().all(|p| p.ty.is_none());
+    let mut skipping = true;
     let mut first_op = 0;
     for (i, (arg, p)) in f.args.iter_mut().zip(&uf.params).enumerate() {
         if p.variadic || i == ncv {
@@ -3042,17 +3044,25 @@ fn init_cvs(uf: &UserFunction, f: &mut Frame) -> usize {
         }
         match arg.take() {
             Some(v) => {
+                if skipping {
+                    let type_ok = match &p.ty {
+                        None => true,
+                        Some(ty) => ty.is_mixed() || accepts_without_coercion(ty.mask, &v),
+                    };
+                    if type_ok {
+                        match ops.get(first_op) {
+                            Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
+                            Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
+                                first_op = *skip as usize;
+                            }
+                            _ => skipping = false,
+                        }
+                    } else {
+                        skipping = false;
+                    }
+                }
                 if let Some(slot) = f.cvs.get_mut(i) {
                     slot.set(Some(v));
-                }
-                if skipping {
-                    match ops.get(first_op) {
-                        Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
-                        Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
-                            first_op = *skip as usize;
-                        }
-                        _ => skipping = false,
-                    }
                 }
             }
             None => {
@@ -3088,21 +3098,23 @@ pub(crate) fn find_double_colon(s: &[u8]) -> Option<usize> {
 
 /// Whether `verify_type` would accept `v` for a type with mask `m` as-is:
 /// the side-effect-free subset of `type_accepts` (no callable/class checks).
+#[inline(always)]
 pub(crate) fn accepts_without_coercion(m: u32, v: &Value) -> bool {
     use crate::types::mask;
-    let bit = match v {
-        Value::Null => mask::NULL,
-        Value::Bool(true) => mask::TRUE,
-        Value::Bool(false) => mask::FALSE,
-        Value::Int(_) => mask::LONG,
-        Value::Float(_) => mask::DOUBLE,
-        Value::Str(_) => mask::STRING,
-        Value::Array(_) => mask::ARRAY | mask::ITERABLE,
-        Value::Object(_) => mask::OBJECT,
-        Value::Resource(_) => mask::RESOURCE,
-        Value::Reference(_) => 0,
-    };
-    m & bit != 0
+    match v {
+        Value::Int(_) => m & mask::LONG != 0,
+        Value::Float(_) => m & mask::DOUBLE != 0,
+        Value::Str(_) => m & mask::STRING != 0,
+        Value::Bool(b) => {
+            let bit = if *b { mask::TRUE } else { mask::FALSE };
+            m & bit != 0
+        }
+        Value::Null => m & mask::NULL != 0,
+        Value::Array(_) => m & (mask::ARRAY | mask::ITERABLE) != 0,
+        Value::Object(_) => m & mask::OBJECT != 0,
+        Value::Resource(_) => m & mask::RESOURCE != 0,
+        Value::Reference(_) => false,
+    }
 }
 
 /// The backtrace copy of a builtin's arguments (a plain loop: the iterator

@@ -76,6 +76,15 @@ impl Vm {
     /// Whether `v` satisfies `ty` without coercion, resolving callables
     /// with the callable deprecations suppressed.
     pub(crate) fn type_accepts(&mut self, ty: &TypeDecl, v: &Value, ctx: &TypeCtx<'_>) -> bool {
+        match v {
+            Value::Int(_) => return ty.mask & mask::LONG != 0,
+            Value::Float(_) => return ty.mask & mask::DOUBLE != 0,
+            Value::Bool(b) => {
+                let bit = if *b { mask::TRUE } else { mask::FALSE };
+                return ty.mask & bit != 0;
+            }
+            _ => {}
+        }
         // With the deprecations suppressed nothing in the check can fail.
         matches!(self.check_type(ty, v, ctx, false), Ok(true))
     }
@@ -96,9 +105,6 @@ impl Vm {
     ) -> VmResult<bool> {
         let m = ty.mask;
         Ok(match v {
-            Value::Null => m & mask::NULL != 0,
-            Value::Bool(true) => m & mask::TRUE != 0,
-            Value::Bool(false) => m & mask::FALSE != 0,
             Value::Int(_) => m & mask::LONG != 0,
             Value::Float(_) => m & mask::DOUBLE != 0,
             Value::Str(_) => {
@@ -106,6 +112,9 @@ impl Vm {
                     || (m & mask::CALLABLE != 0
                         && self.callable_accepts(v, emit_callable_deprecations)?)
             }
+            Value::Bool(true) => m & mask::TRUE != 0,
+            Value::Bool(false) => m & mask::FALSE != 0,
+            Value::Null => m & mask::NULL != 0,
             Value::Array(_) => {
                 m & (mask::ARRAY | mask::ITERABLE) != 0
                     || (m & mask::CALLABLE != 0
@@ -175,6 +184,22 @@ impl Vm {
     ) -> VmResult<bool> {
         if ty.is_mixed() {
             return Ok(true);
+        }
+        // Fast-path: primitive values matching the declared mask without coercion
+        match v {
+            Value::Int(_) if ty.mask & mask::LONG != 0 => return Ok(true),
+            Value::Float(_) if ty.mask & mask::DOUBLE != 0 => return Ok(true),
+            Value::Str(_) if ty.mask & mask::STRING != 0 && ty.mask & mask::CALLABLE == 0 => {
+                return Ok(true);
+            }
+            Value::Bool(b) => {
+                let bit = if *b { mask::TRUE } else { mask::FALSE };
+                if ty.mask & bit != 0 {
+                    return Ok(true);
+                }
+            }
+            Value::Null if ty.mask & mask::NULL != 0 => return Ok(true),
+            _ => {}
         }
         if let Value::Reference(r) = v {
             let mut inner = r.get();
