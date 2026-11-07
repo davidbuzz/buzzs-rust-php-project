@@ -2506,7 +2506,7 @@ impl Vm {
                 drop(old);
                 Ok(v)
             }
-            WOp::FetchRw | WOp::AssignOp(..) => {
+            WOp::FetchRw => {
                 let cur = store.borrow().slots[idx].as_ref().map(Value::deref);
                 match cur {
                     Some(v) => Ok(v),
@@ -2516,6 +2516,21 @@ impl Vm {
                         Ok(Value::Null)
                     }
                 }
+            }
+            WOp::AssignOp(op, rhs) => {
+                let cur = {
+                    let cur = store.borrow().slots[idx].as_ref().map(Value::deref);
+                    match cur {
+                        Some(v) => v,
+                        None => {
+                            let name = store.borrow().names[idx].clone();
+                            self.warning(&crate::exec::undefined_var_msg(&name))?;
+                            Value::Null
+                        }
+                    }
+                };
+                let nv = self.assign_op_value(op, &cur, &rhs)?;
+                self.write_var_root(store, idx, WOp::Assign(nv))
             }
             WOp::MakeRef => {
                 let mut st = store.borrow_mut();
@@ -3332,6 +3347,11 @@ impl Vm {
                     *slot = Some(nv.clone());
                 }
                 self.frame_mut().sync_from_symbol_table();
+                if let Some(main) = self.frames.first_mut() {
+                    if main.symtab_attached {
+                        main.sync_from_symbol_table();
+                    }
+                }
                 return Ok(nv);
             }
         }
@@ -3571,6 +3591,11 @@ impl Vm {
         if segs.is_empty() {
             if let Some(r) = incdec_var_int_fast(&base, kind) {
                 self.frame_mut().sync_from_symbol_table();
+                if let Some(main) = self.frames.first_mut() {
+                    if main.symtab_attached {
+                        main.sync_from_symbol_table();
+                    }
+                }
                 return Ok(r);
             }
         }
@@ -3630,6 +3655,11 @@ impl Vm {
                 let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
                 flush_deferred_ref_assigns();
                 self.frame_mut().sync_from_symbol_table();
+                if let Some(main) = self.frames.first_mut() {
+                    if main.symtab_attached {
+                        main.sync_from_symbol_table();
+                    }
+                }
                 r
             };
             if let Some(q) = quiet {
