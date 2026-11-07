@@ -2,11 +2,13 @@
 //! - Pass 9: Temporary variable compaction (ZEND_OPTIMIZER_PASS_9)
 //! - Pass 10: NOP removal with full label and exception table remapping (ZEND_OPTIMIZER_PASS_10)
 //! - Pass 11: Literal table compaction & deduplication (ZEND_OPTIMIZER_PASS_11)
+//! - Pass 12: Adjust used stack / compact CV slots (ZEND_OPTIMIZER_PASS_12)
+//! - Pass 13: Remove unused variables (ZEND_OPTIMIZER_PASS_13)
 
 use super::{
     def_tmp, for_each_label_mut, for_each_operand_mut, for_each_place_operand_mut, literals_equal,
 };
-use crate::opcode::{ClassSpec, Op, OpArray, Operand, PlaceBase};
+use crate::opcode::{ClassSpec, Op, OpArray, Operand, Place, PlaceBase};
 use php_runtime::Value;
 use std::collections::HashMap;
 
@@ -360,5 +362,455 @@ pub(crate) fn compact_literals(op_array: &mut OpArray) -> bool {
     }
 
     op_array.literals = unique_literals;
+    true
+}
+
+// -----------------------------------------------------------------------------
+// Pass 12 & Pass 13: Variable compaction and dead variable removal
+// -----------------------------------------------------------------------------
+
+/// Iterates mutably over all CV indices referenced by instruction `op`.
+pub(crate) fn for_each_cv_mut(op: &mut Op, mut f: impl FnMut(&mut u32)) {
+    // 1. All Operand::Cv in instruction operands
+    for_each_operand_mut(op, |operand| {
+        if let Operand::Cv(cv) = operand {
+            f(cv);
+        }
+    });
+
+    // 2. Direct CV fields in instructions
+    match op {
+        Op::AssignCv { cv, .. }
+        | Op::Global { cv, .. }
+        | Op::BindStatic { cv, .. }
+        | Op::InitStatic { cv, .. }
+        | Op::Recv { cv, .. }
+        | Op::RecvInit { cv, .. }
+        | Op::RecvDefault { cv, .. }
+        | Op::RecvVariadic { cv, .. }
+        | Op::BinAssignCv { cv, .. }
+        | Op::IncDecCv { cv, .. }
+        | Op::AssignOpCv { cv, .. }
+        | Op::AssignOpDimCv { cv, .. }
+        | Op::IncDecDimCv { cv, .. }
+        | Op::IssetDimCv { cv, .. }
+        | Op::AssignDimCv { cv, .. }
+        | Op::ConcatCv { cv, .. }
+        | Op::AssignDimsCv { cv, .. }
+        | Op::AssignOpDimsCv { cv, .. }
+        | Op::IncDecCvCmpJmp { cv, .. } => f(cv),
+
+        Op::Catch { cv, .. } => {
+            if let Some(c) = cv {
+                f(c);
+            }
+        }
+        Op::FetchDimCv { cv, to, .. } | Op::FetchDimsCv { cv, to, .. } => {
+            f(cv);
+            if let Some(t) = to {
+                f(t);
+            }
+        }
+        Op::FetchStaticProp { to, .. }
+        | Op::FetchGlobal { to, .. }
+        | Op::FetchObjProp { to, .. }
+        | Op::FetchObjPropDim { to, .. }
+        | Op::Abs { to, .. } => {
+            if let Some(t) = to {
+                f(t);
+            }
+        }
+        Op::FetchConstTo { to, .. } | Op::FetchClassConstTo { to, .. } => {
+            f(to);
+        }
+        _ => {}
+    }
+}
+
+/// Iterates mutably over all CV indices referenced by place `place`.
+pub(crate) fn for_each_place_cv_mut(place: &mut Place, mut f: impl FnMut(&mut u32)) {
+    if let PlaceBase::Cv(cv) = &mut place.base {
+        f(cv);
+    }
+    for_each_place_operand_mut(place, |operand| {
+        if let Operand::Cv(cv) = operand {
+            f(cv);
+        }
+    });
+}
+
+/// Whether the op array contains dynamic variable access constructs like
+/// `compact`, `extract`, `get_defined_vars`, variable variables, superglobals, or include/eval.
+fn has_dynamic_var_access(op_array: &OpArray) -> bool {
+    for place in &op_array.places {
+        if matches!(
+            place.base,
+            PlaceBase::VarVar(_) | PlaceBase::Global(_) | PlaceBase::GlobalsArray
+        ) {
+            return true;
+        }
+    }
+
+    for op in &op_array.ops {
+        match op {
+            Op::Include { .. } => return true,
+            Op::InitFCall { name, fallback, .. } => {
+                let is_dynamic_fn = |idx: u32| {
+                    if let Some(Value::Str(s)) = op_array.literals.get(idx as usize) {
+                        let bytes = s.as_bytes();
+                        bytes.eq_ignore_ascii_case(b"compact")
+                            || bytes.eq_ignore_ascii_case(b"extract")
+                            || bytes.eq_ignore_ascii_case(b"get_defined_vars")
+                    } else {
+                        false
+                    }
+                };
+                if is_dynamic_fn(*name) {
+                    return true;
+                }
+                if let Some(fb) = fallback {
+                    if is_dynamic_fn(*fb) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
+/// Pass 13: Removes assignments to variables that are never read and never referenced (ZEND_OPTIMIZER_PASS_13).
+pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
+    let num_cvs = op_array.cv_names.len();
+    if num_cvs == 0 || has_dynamic_var_access(op_array) {
+        return false;
+    }
+
+    // Parameters cannot be removed
+    let mut num_param_cvs = 0u32;
+    for op in &op_array.ops {
+        match op {
+            Op::Recv { cv, .. }
+            | Op::RecvInit { cv, .. }
+            | Op::RecvDefault { cv, .. }
+            | Op::RecvVariadic { cv, .. } => {
+                num_param_cvs = num_param_cvs.max(*cv + 1);
+            }
+            _ => {}
+        }
+    }
+
+    let mut read_counts = vec![0u32; num_cvs];
+
+    // Mark parameter CVs as read
+    for i in 0..(num_param_cvs as usize).min(num_cvs) {
+        read_counts[i] += 1;
+    }
+
+    // Mark closure captures as read
+    for f in op_array.decls.functions.borrow().iter() {
+        for u in &f.uses {
+            if (u.parent_cv as usize) < num_cvs {
+                read_counts[u.parent_cv as usize] += 1;
+            }
+        }
+    }
+
+    // Count reads from ops
+    for op in &op_array.ops {
+        let mut op_clone = op.clone();
+        for_each_operand_mut(&mut op_clone, |operand| {
+            if let Operand::Cv(cv) = operand {
+                if let Some(c) = read_counts.get_mut(*cv as usize) {
+                    *c += 1;
+                }
+            }
+        });
+
+        // Instructions that read from CVs (compound assignments, containers, etc.)
+        match op {
+            Op::IncDecCv { cv, .. }
+            | Op::AssignOpCv { cv, .. }
+            | Op::ConcatCv { cv, .. }
+            | Op::AssignOpDimCv { cv, .. }
+            | Op::IncDecDimCv { cv, .. }
+            | Op::FetchDimCv { cv, .. }
+            | Op::FetchDimsCv { cv, .. }
+            | Op::IssetDimCv { cv, .. }
+            | Op::AssignDimCv { cv, .. }
+            | Op::AssignDimsCv { cv, .. }
+            | Op::AssignOpDimsCv { cv, .. }
+            | Op::IncDecCvCmpJmp { cv, .. }
+            | Op::Global { cv, .. }
+            | Op::BindStatic { cv, .. }
+            | Op::InitStatic { cv, .. } => {
+                if let Some(c) = read_counts.get_mut(*cv as usize) {
+                    *c += 1;
+                }
+            }
+            Op::Catch { cv: Some(cv), .. } => {
+                if let Some(c) = read_counts.get_mut(*cv as usize) {
+                    *c += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Count reads from places
+    for (pid, place) in op_array.places.iter().enumerate() {
+        let pid_u32 = pid as u32;
+        let mut used_in_non_plain_assign = false;
+
+        if let PlaceBase::Cv(cv) = place.base {
+            if !place.segs.is_empty() {
+                // If place has segments (e.g. $a[0]), $a is read as container
+                if let Some(c) = read_counts.get_mut(cv as usize) {
+                    *c += 1;
+                }
+            } else {
+                for op in &op_array.ops {
+                    match op {
+                        Op::Assign { place: p, .. } if *p == pid_u32 => {
+                            // Plain write
+                        }
+                        Op::AssignOp { place: p, .. }
+                        | Op::IncDec { place: p, .. }
+                        | Op::AssignRef { place: p, .. }
+                        | Op::MakeRef { place: p, .. }
+                        | Op::ListFetchRef { place: p, .. }
+                        | Op::Fetch { place: p, .. }
+                        | Op::Isset { place: p, .. }
+                        | Op::Empty { place: p, .. }
+                        | Op::Unset { place: p, .. }
+                        | Op::ReturnRef { place: p }
+                        | Op::YieldRef { place: p, .. }
+                        | Op::ArrayAddRef { place: p, .. }
+                        | Op::FeReset { place: Some(p), .. }
+                        | Op::IncDecCv { place: p, .. }
+                        | Op::AssignOpCv { place: p, .. }
+                        | Op::AssignOpDimCv { place: p, .. }
+                        | Op::IncDecDimCv { place: p, .. }
+                        | Op::FetchDimCv { place: p, .. }
+                        | Op::FetchDimsCv { place: p, .. }
+                        | Op::IssetDimCv { place: p, .. }
+                        | Op::AssignDimCv { place: p, .. }
+                        | Op::FetchStaticProp { place: p, .. }
+                        | Op::FetchGlobal { place: p, .. }
+                        | Op::AssignStaticProp { place: p, .. }
+                        | Op::AssignOpStaticProp { place: p, .. }
+                        | Op::IssetStaticProp { place: p, .. }
+                        | Op::ConcatCv { place: p, .. }
+                        | Op::AssignDimsCv { place: p, .. }
+                        | Op::AssignOpDimsCv { place: p, .. }
+                        | Op::IncDecCvCmpJmp { place: p, .. }
+                        | Op::FetchObjProp { place: p, .. }
+                        | Op::FetchObjPropDim { place: p, .. }
+                        | Op::AssignObjProp { place: p, .. }
+                        | Op::AssignObjPropDim { place: p, .. }
+                        | Op::AssignOpObjProp { place: p, .. }
+                        | Op::AssignOpObjPropDim { place: p, .. }
+                        | Op::IncDecObjProp { place: p, .. }
+                        | Op::IncDecObjPropDim { place: p, .. }
+                        | Op::IssetObjProp { place: p, .. }
+                        | Op::IssetObjPropDim { place: p, .. }
+                            if *p == pid_u32 =>
+                        {
+                            used_in_non_plain_assign = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                if used_in_non_plain_assign {
+                    if let Some(c) = read_counts.get_mut(cv as usize) {
+                        *c += 1;
+                    }
+                }
+            }
+        }
+
+        let mut place_clone = place.clone();
+        for_each_place_operand_mut(&mut place_clone, |operand| {
+            if let Operand::Cv(cv) = operand {
+                if let Some(c) = read_counts.get_mut(*cv as usize) {
+                    *c += 1;
+                }
+            }
+        });
+    }
+
+    let mut changed = false;
+
+    // Eliminate assignments to unread variables
+    for op in &mut op_array.ops {
+        match op {
+            Op::AssignCv { cv, val, dst } => {
+                if (*cv as usize) >= num_param_cvs as usize
+                    && read_counts.get(*cv as usize).copied().unwrap_or(0) == 0
+                {
+                    *op = match dst {
+                        Some(d) => Op::Move { src: *val, dst: *d },
+                        None => match val {
+                            Operand::Tmp(t) => Op::Free(Operand::Tmp(*t)),
+                            _ => Op::Nop,
+                        },
+                    };
+                    changed = true;
+                }
+            }
+            Op::Assign { place, val, dst } => {
+                let pid = *place as usize;
+                if let Some(p) = op_array.places.get(pid) {
+                    if let PlaceBase::Cv(cv) = p.base {
+                        if p.segs.is_empty()
+                            && (cv as usize) >= num_param_cvs as usize
+                            && read_counts.get(cv as usize).copied().unwrap_or(0) == 0
+                        {
+                            *op = match dst {
+                                Some(d) => Op::Move { src: *val, dst: *d },
+                                None => match val {
+                                    Operand::Tmp(t) => Op::Free(Operand::Tmp(*t)),
+                                    _ => Op::Nop,
+                                },
+                            };
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            Op::BinAssignCv { op: bin_op, a, b, dst, cv } => {
+                if (*cv as usize) >= num_param_cvs as usize
+                    && read_counts.get(*cv as usize).copied().unwrap_or(0) == 0
+                {
+                    *op = Op::Bin { op: *bin_op, a: *a, b: *b, dst: *dst };
+                    changed = true;
+                }
+            }
+            Op::FetchConstTo { name, fallback, dst, to } => {
+                if (*to as usize) >= num_param_cvs as usize
+                    && read_counts.get(*to as usize).copied().unwrap_or(0) == 0
+                {
+                    *op = Op::FetchConst { name: *name, fallback: *fallback, dst: *dst };
+                    changed = true;
+                }
+            }
+            Op::FetchClassConstTo { class, name, dst, to } => {
+                if (*to as usize) >= num_param_cvs as usize
+                    && read_counts.get(*to as usize).copied().unwrap_or(0) == 0
+                {
+                    *op = Op::FetchClassConst { class: class.clone(), name: Operand::Lit(*name), dst: *dst };
+                    changed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    changed
+}
+
+/// Pass 12: Adjusts used stack by compacting unused CV slots (ZEND_OPTIMIZER_PASS_12).
+pub(crate) fn compact_cvs(op_array: &mut OpArray) -> bool {
+    let num_cvs = op_array.cv_names.len();
+    if num_cvs == 0 || has_dynamic_var_access(op_array) {
+        return false;
+    }
+
+    let mut is_referenced = vec![false; num_cvs];
+
+    // Parameters cannot be moved/removed
+    let mut num_param_cvs = 0u32;
+    for op in &op_array.ops {
+        match op {
+            Op::Recv { cv, .. }
+            | Op::RecvInit { cv, .. }
+            | Op::RecvDefault { cv, .. }
+            | Op::RecvVariadic { cv, .. } => {
+                num_param_cvs = num_param_cvs.max(*cv + 1);
+            }
+            _ => {}
+        }
+    }
+    for i in 0..(num_param_cvs as usize).min(num_cvs) {
+        is_referenced[i] = true;
+    }
+
+    // Closures
+    for f in op_array.decls.functions.borrow().iter() {
+        for u in &f.uses {
+            if (u.parent_cv as usize) < num_cvs {
+                is_referenced[u.parent_cv as usize] = true;
+            }
+        }
+    }
+
+    // Ops
+    for op in &op_array.ops {
+        let mut op_clone = op.clone();
+        for_each_cv_mut(&mut op_clone, |c| {
+            if let Some(r) = is_referenced.get_mut(*c as usize) {
+                *r = true;
+            }
+        });
+    }
+
+    // Places
+    for place in &op_array.places {
+        let mut place_clone = place.clone();
+        for_each_place_cv_mut(&mut place_clone, |c| {
+            if let Some(r) = is_referenced.get_mut(*c as usize) {
+                *r = true;
+            }
+        });
+    }
+
+    if is_referenced.iter().all(|&r| r) {
+        return false;
+    }
+
+    // Build remap and new_cv_names
+    let mut remap = vec![None; num_cvs];
+    let mut new_cv_names = Vec::new();
+    let mut next_id = 0u32;
+
+    for i in 0..num_param_cvs {
+        if (i as usize) < num_cvs {
+            remap[i as usize] = Some(i);
+            new_cv_names.push(op_array.cv_names[i as usize].clone());
+            next_id = i + 1;
+        }
+    }
+
+    for (old_id, &refed) in is_referenced.iter().enumerate() {
+        let old_u32 = old_id as u32;
+        if old_u32 >= num_param_cvs && refed {
+            remap[old_id] = Some(next_id);
+            new_cv_names.push(op_array.cv_names[old_id].clone());
+            next_id += 1;
+        }
+    }
+
+    // Remap CVs in ops
+    for op in &mut op_array.ops {
+        for_each_cv_mut(op, |c| {
+            if let Some(Some(new_c)) = remap.get(*c as usize) {
+                *c = *new_c;
+            }
+        });
+    }
+
+    // Remap CVs in places
+    for place in &mut op_array.places {
+        for_each_place_cv_mut(place, |c| {
+            if let Some(Some(new_c)) = remap.get(*c as usize) {
+                *c = *new_c;
+            }
+        });
+    }
+
+    op_array.cv_names = new_cv_names;
     true
 }

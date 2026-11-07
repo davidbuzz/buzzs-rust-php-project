@@ -83,6 +83,12 @@ pub fn optimize_op_array(op_array: &mut OpArray, level: u32) {
         if (level & PASS_1) != 0 {
             changed |= pass1::run_pass1(op_array, level);
         }
+        if (level & PASS_2) != 0 {
+            changed |= pass1::run_pass2(op_array);
+        }
+        if (level & PASS_4) != 0 {
+            changed |= pass1::run_pass4(op_array);
+        }
         if (level & PASS_3) != 0 {
             changed |= pass3::run_pass3(op_array);
         }
@@ -95,10 +101,23 @@ pub fn optimize_op_array(op_array: &mut OpArray, level: u32) {
         if (level & PASS_14) != 0 {
             changed |= dce::run_dce(op_array);
         }
+        if (level & PASS_13) != 0 {
+            changed |= compact::remove_unused_variables(op_array);
+        }
 
         if !changed {
             break;
         }
+    }
+
+    // Pass 13: Remove unused variables
+    if (level & PASS_13) != 0 {
+        compact::remove_unused_variables(op_array);
+    }
+
+    // Pass 12: Adjust used stack / compact CV slots
+    if (level & PASS_12) != 0 {
+        compact::compact_cvs(op_array);
     }
 
     // Pass 10: NOP removal (remaps all jump targets, try regions, and live ranges)
@@ -623,6 +642,50 @@ mod tests {
         assert!(
             !ops.iter().any(|op| matches!(op, Op::Nop)),
             "Expected no NOPs, got: {ops:?}"
+        );
+    }
+
+    #[test]
+    fn test_pass2_typecheck_folding() {
+        let unit = compile_src("<?php echo is_null(null) ? 'yes' : 'no';", DEFAULT_OPTIMIZATION_LEVEL);
+        let ops = &unit.main.code.ops;
+        assert!(
+            !ops.iter().any(|op| matches!(op, Op::TypeCheck { .. })),
+            "Expected TypeCheck to be folded, got: {ops:?}"
+        );
+        if let Some(Op::Echo(Operand::Lit(l))) = ops.iter().find(|op| matches!(op, Op::Echo(_))) {
+            let lit = &unit.main.code.literals[*l as usize];
+            assert!(
+                matches!(lit, Value::Str(s) if s.as_bytes() == b"yes"),
+                "Expected 'yes', got: {lit:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pass4_builtin_folding() {
+        let unit = compile_src("<?php echo strlen('hello');", DEFAULT_OPTIMIZATION_LEVEL);
+        let ops = &unit.main.code.ops;
+        assert!(
+            !ops.iter().any(|op| matches!(op, Op::Strlen { .. } | Op::InitFCall { .. })),
+            "Expected strlen call to be folded, got: {ops:?}"
+        );
+        if let Some(Op::Echo(Operand::Lit(l))) = ops.iter().find(|op| matches!(op, Op::Echo(_))) {
+            let lit = &unit.main.code.literals[*l as usize];
+            assert!(
+                matches!(lit, Value::Str(s) if s.as_bytes() == b"5"),
+                "Expected '5', got: {lit:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pass12_13_unused_variable_removal() {
+        let unit = compile_src("<?php function f() { $unused = 123; return 42; }", DEFAULT_OPTIMIZATION_LEVEL);
+        let fn_code = unit.decls.functions.borrow()[0].code.clone();
+        assert_eq!(
+            fn_code.cv_names.len(), 0,
+            "Expected unused CV to be removed, got: {:?}", fn_code.cv_names
         );
     }
 }

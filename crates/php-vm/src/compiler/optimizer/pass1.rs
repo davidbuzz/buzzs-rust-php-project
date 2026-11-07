@@ -1,15 +1,10 @@
-//! Pass 1: Simple local optimizations (ZEND_OPTIMIZER_PASS_1)
-//!
-//! - Constant expression evaluation: Op::Bin, Op::Unary, Op::Cast, Op::Strlen, Op::TypeCheck
-//!   on literal operands.
-//! - Constant conditional branches: Op::JmpZ, Op::JmpNz with literal conditions.
-//! - Echo folding: eliminate empty echo, pre-convert literal scalar bool/int/null to string.
-//! - String concat identity: "" . $x -> (string)$x, $x . "" -> (string)$x.
-//! - Pass 2 boolean conversions (ZEND_OPTIMIZER_PASS_2):
-//!   === null -> TypeCheck, (bool)$x -> Unary::Bool.
+//! Pass 1, 2, 4: Local optimizations, strength reduction, and function call optimization:
+//! - Pass 1 (ZEND_OPTIMIZER_PASS_1): Local constant folding, constant branches, echo folding.
+//! - Pass 2 (ZEND_OPTIMIZER_PASS_2): Constant conversion and typecheck strength reduction.
+//! - Pass 4 (ZEND_OPTIMIZER_PASS_4): Function call optimization on pure built-ins with constant arguments.
 
-use super::{add_or_find_literal, PASS_2};
-use crate::opcode::{type_mask, BinKind, CastKind, Op, OpArray, Operand, UnKind};
+use super::{add_or_find_literal, PASS_2, PASS_4};
+use crate::opcode::{type_mask, ArgSrc, BinKind, CastKind, Op, OpArray, Operand, UnKind};
 use php_runtime::error::CollectingContext;
 use php_runtime::{BinaryOp, Value, ZStr};
 
@@ -127,6 +122,21 @@ pub(crate) fn run_pass1(op_array: &mut OpArray, level: u32) -> bool {
                     };
                     if let Some(len) = len {
                         let lit = add_or_find_literal(&mut op_array.literals, Value::Int(len));
+                        replacement = Some(match dst {
+                            Some(d) => Op::Move {
+                                src: Operand::Lit(lit),
+                                dst: *d,
+                            },
+                            None => Op::Nop,
+                        });
+                    }
+                }
+            }
+
+            Op::Count { a, dst, .. } => {
+                if let Operand::Lit(la) = a {
+                    if let Some(Value::Array(arr)) = op_array.literals.get(*la as usize) {
+                        let lit = add_or_find_literal(&mut op_array.literals, Value::Int(arr.len() as i64));
                         replacement = Some(match dst {
                             Some(d) => Op::Move {
                                 src: Operand::Lit(lit),
@@ -257,7 +267,675 @@ pub(crate) fn run_pass1(op_array: &mut OpArray, level: u32) -> bool {
         }
     }
 
+    if (level & PASS_2) != 0 {
+        changed |= run_pass2(op_array);
+    }
+    if (level & PASS_4) != 0 {
+        changed |= run_pass4(op_array);
+    }
+
     changed
+}
+
+/// Runs Pass 2: Constant conversion and typecheck strength reduction (ZEND_OPTIMIZER_PASS_2).
+///
+/// - Fold type checks on constants (Op::TypeCheck on literals, and is_null/is_int/etc. built-in calls on constants).
+/// - Strength reduction: $x === null -> TypeCheck(NULL), null === $x -> TypeCheck(NULL).
+/// - Constant conversion: (bool)$x -> Unary::Bool, literal casts folded.
+pub(crate) fn run_pass2(op_array: &mut OpArray) -> bool {
+    let mut changed = false;
+    let len = op_array.ops.len();
+
+    for i in 0..len {
+        let op = &op_array.ops[i];
+        let mut replacement = None;
+
+        match op {
+            Op::TypeCheck { a, mask, dst } => {
+                if let Operand::Lit(la) = a {
+                    if let Some(va) = op_array.literals.get(*la as usize) {
+                        let res = type_mask::matches(*mask, va);
+                        let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
+                        replacement = Some(match dst {
+                            Some(d) => Op::Move {
+                                src: Operand::Lit(lit),
+                                dst: *d,
+                            },
+                            None => Op::Nop,
+                        });
+                    }
+                }
+            }
+
+            Op::Bin {
+                op: bin_op,
+                a,
+                b,
+                dst,
+            } => {
+                // Strength reduction: $x === null -> TypeCheck(NULL)
+                if *bin_op == BinKind::Identical {
+                    if let Operand::Lit(lb) = b {
+                        if matches!(op_array.literals.get(*lb as usize), Some(Value::Null)) {
+                            replacement = Some(Op::TypeCheck {
+                                a: *a,
+                                mask: type_mask::NULL,
+                                dst: Some(*dst),
+                            });
+                        }
+                    } else if let Operand::Lit(la) = a {
+                        if matches!(op_array.literals.get(*la as usize), Some(Value::Null)) {
+                            replacement = Some(Op::TypeCheck {
+                                a: *b,
+                                mask: type_mask::NULL,
+                                dst: Some(*dst),
+                            });
+                        }
+                    }
+                }
+            }
+
+            Op::Cast { kind, a, dst } => {
+                if let Operand::Lit(la) = a {
+                    let va = &op_array.literals[*la as usize];
+                    if let Some(val) = fold_cast(*kind, va) {
+                        let lit = add_or_find_literal(&mut op_array.literals, val);
+                        replacement = Some(Op::Move {
+                            src: Operand::Lit(lit),
+                            dst: *dst,
+                        });
+                    }
+                } else if *kind == CastKind::Bool {
+                    replacement = Some(Op::Unary {
+                        op: UnKind::Bool,
+                        a: *a,
+                        dst: *dst,
+                    });
+                }
+            }
+
+            _ => {}
+        }
+
+        if let Some(new_op) = replacement {
+            op_array.ops[i] = new_op;
+            changed = true;
+        }
+    }
+
+    // Fold type check function calls (e.g. is_null, is_int, is_float, is_string, is_bool, is_array) on constants
+    changed |= fold_builtin_calls(op_array, is_typecheck_fn);
+
+    changed
+}
+
+/// Runs Pass 4: Function call optimization (ZEND_OPTIMIZER_PASS_4).
+///
+/// - Evaluate pure built-in calls at compile-time when all arguments are known constants
+///   (e.g. strlen, chr, ord, abs, min, max, is_null, is_string, etc.).
+pub(crate) fn run_pass4(op_array: &mut OpArray) -> bool {
+    let mut changed = false;
+
+    // 1. Fold specialized Abs on literal operands if present
+    for i in 0..op_array.ops.len() {
+        if let Op::Abs { src, dst, to } = &op_array.ops[i] {
+            if let Operand::Lit(la) = src {
+                if let Some(val) = op_array.literals.get(*la as usize) {
+                    if let Some(res) = evaluate_pure_builtin(b"abs", &[val]) {
+                        let res_lit = add_or_find_literal(&mut op_array.literals, res);
+                        if let Some(cv) = to {
+                            op_array.ops[i] = Op::AssignCv {
+                                cv: *cv,
+                                val: Operand::Lit(res_lit),
+                                dst: *dst,
+                            };
+                        } else {
+                            op_array.ops[i] = match dst {
+                                Some(d) => Op::Move {
+                                    src: Operand::Lit(res_lit),
+                                    dst: *d,
+                                },
+                                None => Op::Nop,
+                            };
+                        }
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fold pure built-in function calls
+    changed |= fold_builtin_calls(op_array, |_| true);
+
+    changed
+}
+
+fn fold_builtin_calls(op_array: &mut OpArray, filter: impl Fn(&[u8]) -> bool) -> bool {
+    let mut changed = false;
+    let len = op_array.ops.len();
+
+    for i in 0..len {
+        let (fn_name_bytes, fallback_bytes) = match &op_array.ops[i] {
+            Op::InitFCall { name, fallback, .. } => {
+                let fname = match op_array.literals.get(*name as usize) {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => continue,
+                };
+                let fback = fallback.and_then(|fb| match op_array.literals.get(fb as usize) {
+                    Some(Value::Str(s)) => Some(s.clone()),
+                    _ => None,
+                });
+                (fname, fback)
+            }
+            _ => continue,
+        };
+
+        // Determine pure builtin candidate name
+        let name_bytes = if !fn_name_bytes.as_bytes().contains(&b'\\') {
+            fn_name_bytes.as_bytes().to_ascii_lowercase()
+        } else if let Some(fb) = &fallback_bytes {
+            fb.as_bytes().to_ascii_lowercase()
+        } else {
+            continue;
+        };
+
+        if !filter(&name_bytes) {
+            continue;
+        }
+
+        // Collect argument literals and find Op::DoCall
+        let mut arg_lits = Vec::new();
+        let mut send_indices = Vec::new();
+        let mut docall_info = None;
+        let mut valid = true;
+
+        for j in (i + 1)..len {
+            match &op_array.ops[j] {
+                Op::Nop => {}
+                Op::Send { src } => match src {
+                    ArgSrc::Val(Operand::Lit(l)) | ArgSrc::CallResult(Operand::Lit(l)) => {
+                        arg_lits.push(*l);
+                        send_indices.push(j);
+                    }
+                    _ => {
+                        valid = false;
+                        break;
+                    }
+                },
+                Op::DoCall { dst } => {
+                    docall_info = Some((j, *dst));
+                    break;
+                }
+                _ => {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+
+        if !valid {
+            continue;
+        }
+
+        let Some((call_idx, dst)) = docall_info else {
+            continue;
+        };
+
+        // Get literal values for arguments
+        let mut arg_values = Vec::with_capacity(arg_lits.len());
+        let mut all_found = true;
+        for &lit_idx in &arg_lits {
+            if let Some(val) = op_array.literals.get(lit_idx as usize) {
+                arg_values.push(val);
+            } else {
+                all_found = false;
+                break;
+            }
+        }
+
+        if !all_found {
+            continue;
+        }
+
+        if let Some(result) = evaluate_pure_builtin(&name_bytes, &arg_values) {
+            let res_lit = add_or_find_literal(&mut op_array.literals, result);
+            op_array.ops[i] = Op::Nop;
+            for s_idx in send_indices {
+                op_array.ops[s_idx] = Op::Nop;
+            }
+            op_array.ops[call_idx] = match dst {
+                Some(d) => Op::Move {
+                    src: Operand::Lit(res_lit),
+                    dst: d,
+                },
+                None => Op::Nop,
+            };
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+fn is_typecheck_fn(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"is_null"
+            | b"is_bool"
+            | b"is_int"
+            | b"is_integer"
+            | b"is_long"
+            | b"is_float"
+            | b"is_double"
+            | b"is_string"
+            | b"is_array"
+            | b"is_object"
+            | b"is_resource"
+            | b"is_scalar"
+            | b"is_numeric"
+    )
+}
+
+fn is_php_whitespace(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'\0' | 0x0B)
+}
+
+fn trim_bytes<'a>(mut s: &'a [u8], left: bool, right: bool) -> &'a [u8] {
+    if left {
+        while let Some((&first, rest)) = s.split_first() {
+            if is_php_whitespace(first) {
+                s = rest;
+            } else {
+                break;
+            }
+        }
+    }
+    if right {
+        while let Some((&last, rest)) = s.split_last() {
+            if is_php_whitespace(last) {
+                s = rest;
+            } else {
+                break;
+            }
+        }
+    }
+    s
+}
+
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn hex2bin(s: &[u8]) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for chunk in s.chunks_exact(2) {
+        let hi = hex_digit(chunk[0])?;
+        let lo = hex_digit(chunk[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
+}
+
+fn bin2hex(s: &[u8]) -> Vec<u8> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = Vec::with_capacity(s.len() * 2);
+    for &b in s {
+        out.push(HEX[(b >> 4) as usize]);
+        out.push(HEX[(b & 0x0f) as usize]);
+    }
+    out
+}
+
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
+fn evaluate_pure_builtin(name: &[u8], args: &[&Value]) -> Option<Value> {
+    match name {
+        b"strlen" => {
+            if args.len() == 1 {
+                if let Value::Str(s) = args[0] {
+                    return Some(Value::Int(s.len() as i64));
+                }
+            }
+            None
+        }
+        b"chr" => {
+            if args.len() == 1 {
+                if let Value::Int(n) = args[0] {
+                    return Some(Value::Str(ZStr::from(vec![(*n & 0xff) as u8])));
+                }
+            }
+            None
+        }
+        b"ord" => {
+            if args.len() == 1 {
+                if let Value::Str(s) = args[0] {
+                    let b = if s.is_empty() { 0 } else { s.as_bytes()[0] as i64 };
+                    return Some(Value::Int(b));
+                }
+            }
+            None
+        }
+        b"abs" => {
+            if args.len() == 1 {
+                match args[0] {
+                    Value::Int(n) => {
+                        return Some(if *n == i64::MIN {
+                            Value::Float(-(*n as f64))
+                        } else {
+                            Value::Int(n.abs())
+                        });
+                    }
+                    Value::Float(f) => return Some(Value::Float(f.abs())),
+                    _ => {}
+                }
+            }
+            None
+        }
+        b"min" => {
+            if args.len() >= 2 {
+                let mut min_val = args[0];
+                for arg in &args[1..] {
+                    let mut ctx = CollectingContext::new();
+                    if let Ok(true) = php_runtime::ops::is_smaller(arg, min_val, &mut ctx) {
+                        if ctx.diagnostics.is_empty() {
+                            min_val = arg;
+                        } else {
+                            return None;
+                        }
+                    } else if !ctx.diagnostics.is_empty() {
+                        return None;
+                    }
+                }
+                return Some((*min_val).clone());
+            }
+            None
+        }
+        b"max" => {
+            if args.len() >= 2 {
+                let mut max_val = args[0];
+                for arg in &args[1..] {
+                    let mut ctx = CollectingContext::new();
+                    if let Ok(true) = php_runtime::ops::is_smaller(max_val, arg, &mut ctx) {
+                        if ctx.diagnostics.is_empty() {
+                            max_val = arg;
+                        } else {
+                            return None;
+                        }
+                    } else if !ctx.diagnostics.is_empty() {
+                        return None;
+                    }
+                }
+                return Some((*max_val).clone());
+            }
+            None
+        }
+        b"is_null" => {
+            if args.len() == 1 {
+                Some(Value::Bool(matches!(args[0], Value::Null)))
+            } else {
+                None
+            }
+        }
+        b"is_bool" => {
+            if args.len() == 1 {
+                Some(Value::Bool(matches!(args[0], Value::Bool(_))))
+            } else {
+                None
+            }
+        }
+        b"is_int" | b"is_integer" | b"is_long" => {
+            if args.len() == 1 {
+                Some(Value::Bool(matches!(args[0], Value::Int(_))))
+            } else {
+                None
+            }
+        }
+        b"is_float" | b"is_double" => {
+            if args.len() == 1 {
+                Some(Value::Bool(matches!(args[0], Value::Float(_))))
+            } else {
+                None
+            }
+        }
+        b"is_string" => {
+            if args.len() == 1 {
+                Some(Value::Bool(matches!(args[0], Value::Str(_))))
+            } else {
+                None
+            }
+        }
+        b"is_array" => {
+            if args.len() == 1 {
+                Some(Value::Bool(matches!(args[0], Value::Array(_))))
+            } else {
+                None
+            }
+        }
+        b"is_object" => {
+            if args.len() == 1 {
+                Some(Value::Bool(matches!(args[0], Value::Object(_))))
+            } else {
+                None
+            }
+        }
+        b"is_resource" => {
+            if args.len() == 1 {
+                Some(Value::Bool(matches!(args[0], Value::Resource(_))))
+            } else {
+                None
+            }
+        }
+        b"is_scalar" => {
+            if args.len() == 1 {
+                Some(Value::Bool(matches!(
+                    args[0],
+                    Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+                )))
+            } else {
+                None
+            }
+        }
+        b"is_numeric" => {
+            if args.len() == 1 {
+                let is_num = match args[0] {
+                    Value::Int(_) | Value::Float(_) => true,
+                    Value::Str(s) => php_runtime::numeric::is_numeric(s.as_bytes()),
+                    _ => false,
+                };
+                Some(Value::Bool(is_num))
+            } else {
+                None
+            }
+        }
+        b"boolval" => {
+            if args.len() == 1 {
+                fold_cast(CastKind::Bool, args[0])
+            } else {
+                None
+            }
+        }
+        b"intval" => {
+            if args.len() == 1 {
+                fold_cast(CastKind::Int, args[0])
+            } else {
+                None
+            }
+        }
+        b"floatval" | b"doubleval" => {
+            if args.len() == 1 {
+                fold_cast(CastKind::Float, args[0])
+            } else {
+                None
+            }
+        }
+        b"strval" => {
+            if args.len() == 1 {
+                fold_cast(CastKind::String, args[0])
+            } else {
+                None
+            }
+        }
+        b"strtolower" => {
+            if args.len() == 1 {
+                if let Value::Str(s) = args[0] {
+                    return Some(Value::Str(ZStr::from(s.as_bytes().to_ascii_lowercase())));
+                }
+            }
+            None
+        }
+        b"strtoupper" => {
+            if args.len() == 1 {
+                if let Value::Str(s) = args[0] {
+                    return Some(Value::Str(ZStr::from(s.as_bytes().to_ascii_uppercase())));
+                }
+            }
+            None
+        }
+        b"trim" => {
+            if args.len() == 1 {
+                if let Value::Str(s) = args[0] {
+                    return Some(Value::Str(ZStr::from(trim_bytes(s.as_bytes(), true, true))));
+                }
+            }
+            None
+        }
+        b"ltrim" => {
+            if args.len() == 1 {
+                if let Value::Str(s) = args[0] {
+                    return Some(Value::Str(ZStr::from(trim_bytes(s.as_bytes(), true, false))));
+                }
+            }
+            None
+        }
+        b"rtrim" | b"chop" => {
+            if args.len() == 1 {
+                if let Value::Str(s) = args[0] {
+                    return Some(Value::Str(ZStr::from(trim_bytes(s.as_bytes(), false, true))));
+                }
+            }
+            None
+        }
+        b"bin2hex" => {
+            if args.len() == 1 {
+                if let Value::Str(s) = args[0] {
+                    return Some(Value::Str(ZStr::from(bin2hex(s.as_bytes()))));
+                }
+            }
+            None
+        }
+        b"hex2bin" => {
+            if args.len() == 1 {
+                if let Value::Str(s) = args[0] {
+                    if let Some(decoded) = hex2bin(s.as_bytes()) {
+                        return Some(Value::Str(ZStr::from(decoded)));
+                    }
+                }
+            }
+            None
+        }
+        b"substr" => {
+            if args.len() == 2 || args.len() == 3 {
+                if let (Value::Str(st), Value::Int(offset)) = (args[0], args[1]) {
+                    let len = if args.len() == 3 {
+                        if let Value::Int(l) = args[2] {
+                            Some(*l)
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        None
+                    };
+                    let sub = php_stdstr::search::substr(st.as_bytes(), *offset, len);
+                    return Some(Value::Str(ZStr::from(sub)));
+                }
+            }
+            None
+        }
+        b"str_repeat" => {
+            if args.len() == 2 {
+                if let (Value::Str(s), Value::Int(times)) = (args[0], args[1]) {
+                    if *times >= 0 && *times <= 10000 {
+                        let repeated = s.as_bytes().repeat(*times as usize);
+                        return Some(Value::Str(ZStr::from(repeated)));
+                    }
+                }
+            }
+            None
+        }
+        b"sqrt" => {
+            if args.len() == 1 {
+                match args[0] {
+                    Value::Int(n) if *n >= 0 => {
+                        return Some(Value::Float((*n as f64).sqrt()));
+                    }
+                    Value::Float(f) if *f >= 0.0 => return Some(Value::Float(f.sqrt())),
+                    _ => {}
+                }
+            }
+            None
+        }
+        b"floor" => {
+            if args.len() == 1 {
+                match args[0] {
+                    Value::Int(n) => {
+                        return Some(Value::Float(*n as f64));
+                    }
+                    Value::Float(f) => return Some(Value::Float(f.floor())),
+                    _ => {}
+                }
+            }
+            None
+        }
+        b"ceil" => {
+            if args.len() == 1 {
+                match args[0] {
+                    Value::Int(n) => {
+                        return Some(Value::Float(*n as f64));
+                    }
+                    Value::Float(f) => return Some(Value::Float(f.ceil())),
+                    _ => {}
+                }
+            }
+            None
+        }
+        b"round" => {
+            if args.len() == 1 {
+                match args[0] {
+                    Value::Int(n) => {
+                        return Some(Value::Float(*n as f64));
+                    }
+                    Value::Float(f) => return Some(Value::Float(f.round())),
+                    _ => {}
+                }
+            }
+            None
+        }
+        b"intdiv" => {
+            if args.len() == 2 {
+                if let (Value::Int(a), Value::Int(b)) = (args[0], args[1]) {
+                    if *b != 0 && !(*a == i64::MIN && *b == -1) {
+                        return Some(Value::Int(*a / *b));
+                    }
+                }
+            }
+            None
+        }
+        b"pi" => {
+            if args.is_empty() {
+                return Some(Value::Float(std::f64::consts::PI));
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn fold_bin_op(op: BinKind, a: &Value, b: &Value) -> Option<Value> {
