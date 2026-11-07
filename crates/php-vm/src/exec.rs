@@ -1873,7 +1873,10 @@ impl Vm {
                         dst,
                     } => {
                         let concat = *op == BinaryOp::Concat;
-                        if !(concat && self.concat_assign_cv_lit(*place, *val, *dst)) {
+                        if !(concat
+                            && (self.concat_assign_cv_lit(*place, *val, *dst)
+                                || (dst.is_none() && self.concat_dims_cv_fast(*place, *val))))
+                        {
                             let v = self.read(*val)?;
                             if !(concat && self.concat_assign_cv(*place, &v, *dst)) {
                                 let r = self.place_assign_op(*place, *op, v)?;

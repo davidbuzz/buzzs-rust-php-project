@@ -602,6 +602,7 @@ impl ZStr {
     ///
     /// # Safety
     /// `self` must be unique (refcount 1) and external.
+    #[inline]
     unsafe fn take_vec(&mut self) -> Vec<u8> {
         // SAFETY: unique handle, so no other reference to the header exists.
         let h = unsafe { self.0.as_mut() };
@@ -618,6 +619,7 @@ impl ZStr {
     ///
     /// # Safety
     /// As for [`ZStr::take_vec`].
+    #[inline]
     unsafe fn put_vec(&mut self, v: Vec<u8>) {
         let mut v = ManuallyDrop::new(v);
         if v.capacity() > CAP_MASK {
@@ -636,6 +638,7 @@ impl ZStr {
     /// else with amortized doubling (repeated `.=`). Like
     /// `zend_string_forget_hash_val`, the hash and `IS_STR_VALID_UTF8` are
     /// forgotten; the concat operations put back what holds for the result.
+    #[inline]
     fn extend_unique(&mut self, other: &[u8], exact: bool) {
         debug_assert!(self.is_unique_mutable());
         let (len, meta) = {
@@ -678,6 +681,7 @@ impl ZStr {
     /// (header meta `meta`) hold `extra` more bytes, reallocating the block
     /// when its capacity is short (doubling it unless `exact`); returns the
     /// new length. The bytes after `len` are left to the caller.
+    #[inline]
     fn grow_inline(&mut self, len: usize, meta: usize, extra: usize, exact: bool) -> usize {
         debug_assert!(self.is_unique_mutable() && meta & EXTERNAL == 0);
         let needed = len
@@ -686,37 +690,43 @@ impl ZStr {
             .unwrap_or_else(|| capacity_overflow());
         let cap = meta & CAP_MASK;
         if needed > cap {
-            let new_cap = if exact {
-                needed
-            } else {
-                let grown = cap.saturating_mul(2).clamp(16, CAP_MASK);
-                needed.max(grown)
-            };
-            let new_layout = block_layout(new_cap);
-            // SAFETY: the block was allocated with `block_layout(cap)`;
-            // the new size is non-zero. The handle is unique, so moving
-            // the block invalidates no other pointer to it.
-            let raw = unsafe {
-                alloc::realloc(
-                    self.0.as_ptr().cast::<u8>(),
-                    block_layout(cap),
-                    new_layout.size(),
-                )
-            };
-            // `realloc` keeps the layout's (Header) alignment.
-            #[allow(clippy::cast_ptr_alignment)]
-            let Some(block) = NonNull::new(raw.cast::<Header>()) else {
-                alloc::handle_alloc_error(new_layout)
-            };
-            self.0 = block;
-            // SAFETY: unique handle; the inline area follows the header.
-            unsafe {
-                let h = self.0.as_mut();
-                h.ptr = block.as_ptr().cast::<u8>().add(HEADER);
-                *h.meta.get_mut() = (meta & !CAP_MASK) | new_cap;
-            }
+            self.realloc_inline(meta, cap, needed, exact);
         }
         needed
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn realloc_inline(&mut self, meta: usize, cap: usize, needed: usize, exact: bool) {
+        let new_cap = if exact {
+            needed
+        } else {
+            let grown = cap.saturating_mul(2).clamp(16, CAP_MASK);
+            needed.max(grown)
+        };
+        let new_layout = block_layout(new_cap);
+        // SAFETY: the block was allocated with `block_layout(cap)`;
+        // the new size is non-zero. The handle is unique, so moving
+        // the block invalidates no other pointer to it.
+        let raw = unsafe {
+            alloc::realloc(
+                self.0.as_ptr().cast::<u8>(),
+                block_layout(cap),
+                new_layout.size(),
+            )
+        };
+        // `realloc` keeps the layout's (Header) alignment.
+        #[allow(clippy::cast_ptr_alignment)]
+        let Some(block) = NonNull::new(raw.cast::<Header>()) else {
+            alloc::handle_alloc_error(new_layout)
+        };
+        self.0 = block;
+        // SAFETY: unique handle; the inline area follows the header.
+        unsafe {
+            let h = self.0.as_mut();
+            h.ptr = block.as_ptr().cast::<u8>().add(HEADER);
+            *h.meta.get_mut() = (meta & !CAP_MASK) | new_cap;
+        }
     }
 
     /// Appends the string to itself (`$s .= $s`). When this handle is the
@@ -1050,6 +1060,7 @@ impl ZStr {
     }
 
     /// Whether this instance is interned.
+    #[inline]
     #[must_use]
     pub fn is_interned(&self) -> bool {
         self.header().meta.get() & INTERNED != 0
@@ -1151,6 +1162,7 @@ impl ZStr {
     /// Number of live handles to this string instance (the "refcount"); 0
     /// for the immortal [`ZStr::empty`] / [`ZStr::from_byte`] strings, whose
     /// handles are not counted.
+    #[inline]
     #[must_use]
     pub fn refcount(&self) -> usize {
         self.header().rc.get()
@@ -1175,6 +1187,7 @@ impl ZStr {
     /// string, which makes repeated `.=` amortized O(1). Otherwise a new string
     /// is allocated. Nothing is known about `other`, so a changed string
     /// loses `IS_STR_VALID_UTF8`; [`ZStr::append_str`] keeps it.
+    #[inline]
     pub fn append(&mut self, other: &[u8]) {
         if other.is_empty() {
             return;
@@ -1189,10 +1202,51 @@ impl ZStr {
     /// `$s .= $t` (`concat_function` with `result == op1`): [`ZStr::append`]
     /// of another string, keeping `IS_STR_VALID_UTF8` when it holds for both
     /// (`ZSTR_GET_COPYABLE_CONCAT_PROPERTIES_BOTH`).
+    #[inline]
     pub fn append_str(&mut self, other: &ZStr) {
+        let oh = other.header();
+        let other_len = oh.len;
+        if other_len == 0 {
+            return;
+        }
+        let h = self.header();
+        let meta = h.meta.get();
+        if h.rc.get() == 1 && meta & INTERNED == 0 {
+            let len = h.len;
+            let keep_utf8 = if len == 0 {
+                oh.meta.get() & VALID_UTF8
+            } else {
+                meta & oh.meta.get() & VALID_UTF8
+            };
+            if meta & EXTERNAL == 0 {
+                let needed = self.grow_inline(len, meta, other_len, false);
+                // SAFETY: unique handle; the inline area has room for `needed`
+                // bytes and `other` cannot alias `self` when `self` has refcount 1.
+                unsafe {
+                    let h = self.0.as_mut();
+                    ptr::copy_nonoverlapping(oh.ptr, h.ptr.add(len), other_len);
+                    h.len = needed;
+                    *h.hash.get_mut() = 0;
+                    let m = h.meta.get_mut();
+                    *m = (*m & !VALID_UTF8) | keep_utf8;
+                }
+                return;
+            }
+            // SAFETY: `oh.ptr` is valid for `other_len` bytes, and `self` is
+            // unique and external.
+            let other_bytes = unsafe { std::slice::from_raw_parts(oh.ptr, other_len) };
+            let mut v = unsafe { self.take_vec() };
+            v.extend_from_slice(other_bytes);
+            unsafe { self.put_vec(v) };
+            let h = self.header();
+            h.hash.set(0);
+            h.meta.set((h.meta.get() & !VALID_UTF8) | keep_utf8);
+            return;
+        }
         let props = Self::concat_props_both(self, other);
-        self.append(other.as_bytes());
-        self.add_props(props);
+        // SAFETY: `oh.ptr` is valid for `other_len` bytes.
+        let other_bytes = unsafe { std::slice::from_raw_parts(oh.ptr, other_len) };
+        *self = Self::from_parts(self.as_bytes(), other_bytes, props);
     }
 
     /// Appends the decimal form of `n` (`concat_function` with an integer
@@ -1200,6 +1254,7 @@ impl ZStr {
     /// [`ZStr::append`] without materialising the number as a string. The
     /// digits are ASCII, so `IS_STR_VALID_UTF8` stays as it was (and holds
     /// for an empty string grown by them).
+    #[inline]
     pub fn append_long(&mut self, n: i64) {
         let props = if self.is_empty() {
             VALID_UTF8
@@ -1217,6 +1272,7 @@ impl ZStr {
     /// operand and the result never exist side by side; otherwise a new
     /// exactly sized string is built. A changed string loses
     /// `IS_STR_VALID_UTF8` (see [`ZStr::concat_owned_str`]).
+    #[inline]
     #[must_use]
     pub fn concat_owned(mut self, other: &[u8]) -> Self {
         if self.is_unique_mutable() {

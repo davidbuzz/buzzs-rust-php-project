@@ -422,6 +422,41 @@ fn assign_op_dims(tbl: &mut HashTable, keys: &[Option<ArrayKey>], op: BinaryOp, 
     assign_op_dims(inner.make_mut(), rest, op, y)
 }
 
+fn dims_has_str(arr: &ZArray, keys: &[Option<ArrayKey>]) -> bool {
+    let Some((Some(key), rest)) = keys.split_first() else {
+        return false;
+    };
+    match (rest.is_empty(), arr.get(key)) {
+        (true, Some(Value::Str(_))) => true,
+        (false, Some(Value::Array(inner))) => dims_has_str(inner, rest),
+        _ => false,
+    }
+}
+
+fn concat_dims(tbl: &mut HashTable, keys: &[Option<ArrayKey>], add: &Value) -> bool {
+    let Some((Some(key), rest)) = keys.split_first() else {
+        return false;
+    };
+    let Some(elem) = tbl.get_mut(key) else {
+        return false;
+    };
+    if rest.is_empty() {
+        let Value::Str(s) = elem else {
+            return false;
+        };
+        match add {
+            Value::Str(t) => s.append_str(t),
+            Value::Int(i) => s.append_long(*i),
+            _ => return false,
+        }
+        return true;
+    }
+    let Value::Array(inner) = elem else {
+        return false;
+    };
+    concat_dims(inner.make_mut(), rest, add)
+}
+
 /// `isset($cv[dim])` (`empty` false) or `empty($cv[dim])` of frame `f`
 /// when `$cv` holds an array (directly or through a reference) and the
 /// offset is an int or string; `None` for the generic path.
@@ -934,68 +969,135 @@ impl Vm {
     /// once otherwise; an int's digits go straight into it. A consumed
     /// temporary operand is released and the result written to `dst` when
     /// used, under one look at the frame. Returns `false`, having changed
-    /// nothing, otherwise: the string itself as the operand (`$s .= $s`,
-    /// which the generic path appends from its own buffer), an undefined
-    /// variable (warning), references and other types (conversions may warn
-    /// or call `__toString()`).
-    #[inline]
+    /// nothing, otherwise: an undefined variable (warning), references and
+    /// other types (conversions may warn or call `__toString()`).
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // hot string append in the dispatch pre-match
     pub(super) fn concat_cv_fast(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
         let Some(f) = self.frames.last_mut() else {
             return false;
         };
-        // Another variable's value is cloned: it lives in the store that is
-        // written below.
-        let from_cv = match val {
-            Operand::Cv(src) => {
-                let v = f.peek_cv(src, |slot| match slot {
-                    Some(v @ (Value::Str(_) | Value::Int(_))) => Some(v.clone()),
-                    _ => None,
-                });
-                let Some(v) = v else {
-                    return false;
-                };
-                Some(v)
-            }
-            _ => None,
-        };
-        let add = match (&from_cv, val) {
-            (Some(v), _) => v,
-            (None, Operand::Lit(i)) => match f.code.literals.get(i as usize) {
-                Some(v) => v,
-                None => return false,
-            },
-            (None, Operand::Tmp(t) | Operand::TmpKeep(t)) => match f.tmps.get(t as usize) {
-                Some(v) => v,
-                None => return false,
-            },
-            _ => return false,
-        };
         let idx = cv as usize;
-        let slot = match f.cvs.get(idx) {
-            Some(s) => s,
-            None => return false,
-        };
-        let val_mut = unsafe { slot.get_mut_unchecked() };
-        let Some(Value::Str(s)) = val_mut else {
+        let Some(slot) = f.cvs.get(idx) else {
             return false;
         };
-        match add {
-            Value::Str(t) if !ZStr::ptr_eq(s, t) => s.append_str(t),
-            Value::Int(i) => s.append_long(*i),
-            _ => return false,
-        }
-        let syn = Value::Str(s.clone());
-        f.sync_cv_to_symtab(cv, &syn);
-        let result = dst.map(|_| syn);
-        drop(from_cv);
-        // The OP_DATA temporary is consumed (a string is released here),
-        // before the result is written (it may reuse the slot).
-        if let Operand::Tmp(t) = val {
-            if let Some(slot) = f.tmps.get_mut(t as usize) {
-                *slot = Value::Null;
+        let Some(Value::Str(s)) = (unsafe { slot.get_mut_unchecked() }) else {
+            return false;
+        };
+        match val {
+            Operand::Lit(i) => {
+                let Some(lit) = f.code.literals.get(i as usize) else {
+                    return false;
+                };
+                match lit {
+                    Value::Str(t) => {
+                        if f.symtab_attached {
+                            f.unsync_cv_from_symtab(cv);
+                        }
+                        if ZStr::ptr_eq(s, t) {
+                            s.append_self();
+                        } else {
+                            s.append_str(t);
+                        }
+                    }
+                    Value::Int(n) => {
+                        if f.symtab_attached {
+                            f.unsync_cv_from_symtab(cv);
+                        }
+                        s.append_long(*n);
+                    }
+                    _ => return false,
+                }
             }
+            Operand::Cv(src) => {
+                if src == cv {
+                    if f.symtab_attached {
+                        f.unsync_cv_from_symtab(cv);
+                    }
+                    s.append_self();
+                } else {
+                    let Some(rhs) = f.cvs.get(src as usize).and_then(CvSlot::get) else {
+                        return false;
+                    };
+                    match rhs {
+                        Value::Str(t) => {
+                            if f.symtab_attached {
+                                f.unsync_cv_from_symtab(cv);
+                            }
+                            if ZStr::ptr_eq(s, t) {
+                                s.append_self();
+                            } else {
+                                s.append_str(t);
+                            }
+                        }
+                        Value::Int(n) => {
+                            let n = *n;
+                            if f.symtab_attached {
+                                f.unsync_cv_from_symtab(cv);
+                            }
+                            s.append_long(n);
+                        }
+                        _ => return false,
+                    }
+                }
+            }
+            Operand::Tmp(t) => {
+                let Some(rhs) = f.tmps.get_mut(t as usize) else {
+                    return false;
+                };
+                match rhs {
+                    Value::Str(_) => {
+                        let Value::Str(add) = std::mem::replace(rhs, Value::Null) else {
+                            unreachable!()
+                        };
+                        if f.symtab_attached {
+                            f.unsync_cv_from_symtab(cv);
+                        }
+                        s.append_str(&add);
+                    }
+                    Value::Int(n) => {
+                        let n = *n;
+                        *rhs = Value::Null;
+                        if f.symtab_attached {
+                            f.unsync_cv_from_symtab(cv);
+                        }
+                        s.append_long(n);
+                    }
+                    _ => return false,
+                }
+            }
+            Operand::TmpKeep(t) => {
+                let Some(rhs) = f.tmps.get(t as usize) else {
+                    return false;
+                };
+                match rhs {
+                    Value::Str(add) => {
+                        if f.symtab_attached {
+                            f.unsync_cv_from_symtab(cv);
+                        }
+                        if ZStr::ptr_eq(s, add) {
+                            s.append_self();
+                        } else {
+                            s.append_str(add);
+                        }
+                    }
+                    Value::Int(n) => {
+                        let n = *n;
+                        if f.symtab_attached {
+                            f.unsync_cv_from_symtab(cv);
+                        }
+                        s.append_long(n);
+                    }
+                    _ => return false,
+                }
+            }
+            Operand::Unused => return false,
         }
-        if let (Some(d), Some(r)) = (dst, result) {
+        if f.symtab_attached {
+            f.sync_cv_to_symtab(cv, &Value::Str(s.clone()));
+        }
+        if let Some(d) = dst {
+            let r = Value::Str(s.clone());
             if let Some(slot) = f.tmps.get_mut(d as usize) {
                 put_tmp(slot, r);
             }
@@ -1269,7 +1371,13 @@ impl Vm {
         let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
             return false;
         };
+        if f.symtab_attached {
+            f.unsync_cv_from_symtab(cv);
+        }
         let Some(slot) = arr.make_mut().get_mut(&key) else {
+            if f.symtab_attached {
+                f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
+            }
             return false;
         };
         // A number replaces a number: no drop glue to run.
@@ -1315,7 +1423,13 @@ impl Vm {
         if !matches!(arr.get(&key), Some(Value::Str(_))) {
             return false;
         }
+        if f.symtab_attached {
+            f.unsync_cv_from_symtab(cv);
+        }
         let Some(Value::Str(s)) = arr.make_mut().get_mut(&key) else {
+            if f.symtab_attached {
+                f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
+            }
             return false;
         };
         match &add {
@@ -1332,6 +1446,62 @@ impl Vm {
         self.release_tmp_str(dim);
         if let Operand::Tmp(t) = val {
             self.set_tmp(t, Value::Null);
+        }
+        true
+    }
+
+    /// `$cv[d1][d2]... .= val;` when `$cv` holds an array (not a reference),
+    /// every offset is an int or a string, the target element exists and is a
+    /// string, and `val` peeks as a string or an int: extends the nested string
+    /// element in place after separating the arrays along the path, consuming
+    /// offset and `OP_DATA` temporaries. Returns `false` otherwise, having
+    /// changed nothing.
+    #[inline]
+    pub(super) fn concat_dims_cv_fast(&mut self, place: PlaceId, val: Operand) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        let Some(p) = f.code.places.get(place as usize) else {
+            return false;
+        };
+        let crate::opcode::PlaceBase::Cv(cv) = p.base else {
+            return false;
+        };
+        if p.segs.is_empty() {
+            return false;
+        }
+        let Some((keys, n)) = write_keys_in(f, place) else {
+            return false;
+        };
+        let add = match plain_value_in(f, val) {
+            Some(v @ (Value::Str(_) | Value::Int(_))) => v,
+            _ => return false,
+        };
+        let idx = cv as usize;
+        let Some(slot) = f.cvs.get(idx) else {
+            return false;
+        };
+        let val_mut = unsafe { slot.get_mut_unchecked() };
+        let Some(Value::Array(arr)) = val_mut else {
+            return false;
+        };
+        if !dims_has_str(arr, &keys[..n]) {
+            return false;
+        }
+        if f.symtab_attached {
+            f.unsync_cv_from_symtab(cv);
+        }
+        let ok = concat_dims(arr.make_mut(), &keys[..n], &add);
+        if f.symtab_attached {
+            f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
+        }
+        drop(add);
+        if !ok {
+            return false;
+        }
+        release_place_str_tmps(f, place);
+        if let Operand::Tmp(t) = val {
+            put_tmp(&mut f.tmps[t as usize], Value::Null);
         }
         true
     }
@@ -1374,7 +1544,15 @@ impl Vm {
             }
             _ => return None,
         };
-        let slot = arr.make_mut().get_mut(&key)?;
+        if f.symtab_attached {
+            f.unsync_cv_from_symtab(cv);
+        }
+        let Some(slot) = arr.make_mut().get_mut(&key) else {
+            if f.symtab_attached {
+                f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
+            }
+            return None;
+        };
         // A number replaces a number: no drop glue to run.
         std::mem::forget(std::mem::replace(slot, new.clone()));
         if f.symtab_attached {
@@ -1459,20 +1637,21 @@ impl Vm {
             None
         };
         let idx = cv as usize;
-        let (ok, sync_arr) = {
+        let ok = {
             let slot = match f.cvs.get(idx) {
                 Some(s) => s,
                 None => return false,
             };
             let val_mut = unsafe { slot.get_mut_unchecked() };
             if let Some(Value::Array(arr)) = val_mut {
+                if f.symtab_attached {
+                    f.unsync_cv_from_symtab(cv);
+                }
                 let ok = Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v);
-                let sync_arr = if ok && f.symtab_attached {
-                    Some(Value::Array(arr.clone()))
-                } else {
-                    None
-                };
-                (ok, sync_arr)
+                if f.symtab_attached {
+                    f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
+                }
+                ok
             } else if let Some(Value::Reference(r)) = val_mut {
                 let Some(mut guard) = r.try_borrow_mut() else {
                     return false;
@@ -1480,16 +1659,13 @@ impl Vm {
                 let Value::Array(arr) = &mut *guard else {
                     return false;
                 };
-                (Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v), None)
+                Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v)
             } else {
                 return false;
             }
         };
         if !ok {
             return false;
-        }
-        if let Some(arr_val) = sync_arr {
-            f.sync_cv_to_symtab(cv, &arr_val);
         }
         if dim_int.is_none() {
             release_str_tmp_in(f, dim);
@@ -1525,12 +1701,16 @@ impl Vm {
         let Some(Value::Array(arr)) = val_mut else {
             return false;
         };
-        let Ok(old) = assign_dims(arr.make_mut(), &keys[..n], v) else {
-            return false;
-        };
+        if f.symtab_attached {
+            f.unsync_cv_from_symtab(cv);
+        }
+        let res = assign_dims(arr.make_mut(), &keys[..n], v);
         if f.symtab_attached {
             f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
         }
+        let Ok(old) = res else {
+            return false;
+        };
         drop(old);
         release_place_str_tmps(f, place);
         if let Operand::Tmp(t) = val {
@@ -1570,11 +1750,15 @@ impl Vm {
         let Some(Value::Array(arr)) = val_mut else {
             return false;
         };
-        if !assign_op_dims(arr.make_mut(), &keys[..n], op, y) {
-            return false;
+        if f.symtab_attached {
+            f.unsync_cv_from_symtab(cv);
         }
+        let ok = assign_op_dims(arr.make_mut(), &keys[..n], op, y);
         if f.symtab_attached {
             f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
+        }
+        if !ok {
+            return false;
         }
         release_place_str_tmps(f, place);
         true

@@ -1221,15 +1221,74 @@ impl Frame {
         }
     }
 
-    /// Synchronizes a single modified CV slot into the attached symbol table.
+    /// Drops the duplicate handle held by the attached symbol table for `cv`
+    /// before an in-place mutation of `self.cvs[cv]`, so a value owned only by
+    /// this variable sees refcount 1 (`is_unique_mutable` / `make_mut`).
+    /// Call [`Frame::sync_cv_to_symtab`] once the mutation is complete.
+    #[inline(always)]
+    pub fn unsync_cv_from_symtab(&self, cv: u32) {
+        if self.symtab_attached {
+            self.unsync_cv_from_symtab_slow(cv);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn unsync_cv_from_symtab_slow(&self, cv: u32) {
+        if let Some(name) = self.code.cv_names.get(cv as usize) {
+            let mut st = self.vars.borrow_mut();
+            if let Some(idx) = st.find(name.as_bytes()) {
+                st.slots[idx as usize] = None;
+            }
+        }
+    }
+
+    /// Clears the CV slot mirroring `sym_idx` of `store` before an in-place
+    /// mutation of `store.slots[sym_idx]` that will be followed by
+    /// [`Frame::sync_from_symbol_table`].
     #[inline]
+    pub fn clear_cv_for_symtab_slot(&self, store: &Rc<RefCell<VarStore>>, sym_idx: usize) {
+        if self.symtab_attached && Rc::ptr_eq(store, &self.vars) {
+            let st = self.vars.borrow();
+            if let Some(name) = st.names.get(sym_idx) {
+                if self
+                    .code
+                    .cv_names
+                    .get(sym_idx)
+                    .is_some_and(|cv_name| cv_name.as_bytes() == name.as_bytes())
+                {
+                    if let Some(slot) = self.cvs.get(sym_idx) {
+                        slot.set(None);
+                    }
+                } else if let Some(cv_idx) = self
+                    .code
+                    .cv_names
+                    .iter()
+                    .position(|cv_name| cv_name.as_bytes() == name.as_bytes())
+                {
+                    if let Some(slot) = self.cvs.get(cv_idx) {
+                        slot.set(None);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Synchronizes a single modified CV slot into the attached symbol table.
+    #[inline(always)]
     pub fn sync_cv_to_symtab(&self, cv: u32, v: &Value) {
         if self.symtab_attached {
-            if let Some(name) = self.code.cv_names.get(cv as usize) {
-                let mut st = self.vars.borrow_mut();
-                if let Some(idx) = st.find(name.as_bytes()) {
-                    st.slots[idx as usize] = Some(v.clone());
-                }
+            self.sync_cv_to_symtab_slow(cv, v);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn sync_cv_to_symtab_slow(&self, cv: u32, v: &Value) {
+        if let Some(name) = self.code.cv_names.get(cv as usize) {
+            let mut st = self.vars.borrow_mut();
+            if let Some(idx) = st.find(name.as_bytes()) {
+                st.slots[idx as usize] = Some(v.clone());
             }
         }
     }

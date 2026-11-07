@@ -1363,9 +1363,22 @@ fn concat_cv_in_place(
     };
     match rhs {
         Value::Str(add) if ZStr::ptr_eq(s, add) => return None,
-        Value::Str(add) => s.append(add.as_bytes()),
-        Value::Int(i) => s.append_long(*i),
+        Value::Str(add) => {
+            if f.symtab_attached {
+                f.unsync_cv_from_symtab(*cv);
+            }
+            s.append_str(add);
+        }
+        Value::Int(i) => {
+            if f.symtab_attached {
+                f.unsync_cv_from_symtab(*cv);
+            }
+            s.append_long(*i);
+        }
         _ => return None,
+    }
+    if f.symtab_attached {
+        f.sync_cv_to_symtab(*cv, &Value::Str(s.clone()));
     }
     Some(if want_result {
         Value::Str(s.clone())
@@ -1524,7 +1537,7 @@ fn concat_in_place(slot: &mut Value, segs: &[RSeg], wop: &mut WOp) -> Option<Ste
         return None;
     };
     match rhs {
-        Value::Str(add) => s.append(add.as_bytes()),
+        Value::Str(add) => s.append_str(add),
         Value::Int(i) => s.append_long(*i),
         _ => return None,
     }
@@ -1956,6 +1969,9 @@ impl Vm {
                         Live::Over(r) => return r,
                     }
                 } else {
+                    drop(st);
+                    self.frame().clear_cv_for_symtab_slot(&store, idx);
+                    let mut st = store.borrow_mut();
                     let slot = st.slots[idx].as_mut().expect("slot defined");
                     let s = descend(slot, segs, 0, &mut wop, &mut diags, undef);
                     drop(st);
@@ -3250,6 +3266,7 @@ impl Vm {
                 if let Some(slot) = store.borrow_mut().slots.get_mut(*idx) {
                     *slot = Some(nv.clone());
                 }
+                self.frame_mut().sync_from_symbol_table();
                 return Ok(nv);
             }
         }
@@ -3257,11 +3274,15 @@ impl Vm {
         if let RBase::Var(store, idx) = &base {
             if op == BinaryOp::Concat {
                 if let Value::Str(add) = &v {
+                    self.frame().clear_cv_for_symtab_slot(store, *idx);
                     let mut st = store.borrow_mut();
                     if let Some(Value::Str(s)) = st.slots.get_mut(*idx).and_then(Option::as_mut) {
                         if !ZStr::ptr_eq(s, add) {
-                            s.append(add.as_bytes());
-                            return Ok(Value::Str(s.clone()));
+                            s.append_str(add);
+                            let res = Value::Str(s.clone());
+                            drop(st);
+                            self.frame_mut().sync_from_symbol_table();
+                            return Ok(res);
                         }
                         // `$s .= $s`: php-src extends the one string in
                         // place (`concat_function`, result == op1 == op2),
@@ -3274,8 +3295,13 @@ impl Vm {
                             unreachable!("the slot held the string a moment ago")
                         };
                         s.append_self();
-                        return Ok(Value::Str(s.clone()));
+                        let res = Value::Str(s.clone());
+                        drop(st);
+                        self.frame_mut().sync_from_symbol_table();
+                        return Ok(res);
                     }
+                    drop(st);
+                    self.frame_mut().sync_from_symbol_table();
                 }
             }
         }
@@ -3479,6 +3505,7 @@ impl Vm {
         // Fast path for integer variables.
         if segs.is_empty() {
             if let Some(r) = incdec_var_int_fast(&base, kind) {
+                self.frame_mut().sync_from_symbol_table();
                 return Ok(r);
             }
         }
@@ -3537,6 +3564,7 @@ impl Vm {
             } else {
                 let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
                 flush_deferred_ref_assigns();
+                self.frame_mut().sync_from_symbol_table();
                 r
             };
             if let Some(q) = quiet {
