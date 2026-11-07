@@ -4,7 +4,7 @@
 //! ref: ext/opcache/zend_accelerator_module.c, ext/opcache/opcache.stub.php
 
 use php_opcache::file_cache;
-use php_opcache::{CacheLookup, ScriptCache};
+use php_opcache::{CacheLookup, PreloadStats, ScriptCache};
 use php_runtime::{Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_vm::compiler::CompiledUnit;
@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 thread_local! {
     static GLOBAL_CACHE: RefCell<ScriptCache<Rc<CompiledUnit>>> = RefCell::new(ScriptCache::new(10000));
+    static IS_PRELOADING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The `opcache` extension.
@@ -70,6 +71,8 @@ impl Extension for Opcache {
 
         // Install additive compile hook
         Vm::set_compile_hook(opcache_compile_hook);
+
+        maybe_run_preload(module.vm());
     }
 }
 
@@ -443,6 +446,16 @@ fn module_info(vm: &mut Vm) -> Vec<InfoItem> {
     let row = |a: &str, b: &str| InfoItem::Row(vec![a.to_string(), b.to_string()]);
     let enabled = is_opcache_enabled(vm);
     let file_cache_set = !get_ini_string(vm, "opcache.file_cache").is_empty();
+    let raw_buf = vm.ini_string("opcache.jit_buffer_size").unwrap_or_default();
+    let (raw_size, _) = php_support::ini::parse_quantity(&raw_buf);
+    let jit_setting = get_ini_string(vm, "opcache.jit");
+    let jit_setting_trimmed = jit_setting.trim();
+    let is_jit_on = enabled
+        && raw_size > 0
+        && !jit_setting_trimmed.eq_ignore_ascii_case("disable")
+        && !jit_setting_trimmed.eq_ignore_ascii_case("off")
+        && !jit_setting_trimmed.is_empty();
+
     vec![
         InfoItem::TableStart,
         InfoItem::Header(vec![
@@ -463,10 +476,202 @@ fn module_info(vm: &mut Vm) -> Vec<InfoItem> {
                 "Disabled"
             },
         ),
-        row("JIT", "Disabled"),
+        row("JIT", if is_jit_on { "On" } else { "Disabled" }),
         InfoItem::TableEnd,
         InfoItem::IniEntries,
     ]
+}
+
+fn parse_jit_mode(s: &str) -> (i64, i64, i64) {
+    match s {
+        "function" => (0, 5, 6),
+        "tracing" | "on" => (5, 4, 6),
+        digits if digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()) => {
+            let bytes = digits.as_bytes();
+            let c = bytes[0] - b'0';
+            let r = bytes[1] - b'0';
+            let t = bytes[2] - b'0';
+            let o = bytes[3] - b'0';
+            if c <= 1 && r <= 2 && t <= 5 && o <= 5 {
+                let opt_flags = (if c == 1 { 4 } else { 0 })
+                    + match r {
+                        1 => 1,
+                        2 => 2,
+                        _ => 0,
+                    };
+                (t as i64, o as i64, opt_flags as i64)
+            } else {
+                (5, 4, 6)
+            }
+        }
+        _ => (5, 4, 6),
+    }
+}
+
+fn maybe_run_preload(vm: &mut Vm) {
+    let is_preloading = IS_PRELOADING.with(|p| p.get());
+    if is_preloading {
+        return;
+    }
+
+    if !is_opcache_enabled(vm) || vm.ini_bool("opcache.file_cache_only") {
+        return;
+    }
+
+    let preload_setting = get_ini_string(vm, "opcache.preload");
+    let preload_setting = preload_setting.trim();
+    if preload_setting.is_empty() {
+        return;
+    }
+
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::path::Path::new(preload_setting);
+    let realpath = match std::fs::canonicalize(path) {
+        Ok(p) => p,
+        Err(_) => path.to_path_buf(),
+    };
+    let real_str = realpath.to_string_lossy().into_owned();
+    let real_z = ZStr::from(realpath.as_os_str().as_bytes());
+
+    let already_has_stats = GLOBAL_CACHE.with(|c| c.borrow().preload_stats.is_some());
+    if already_has_stats && vm.included_set.contains(&real_z) {
+        return;
+    }
+
+    let source = match std::fs::read(&realpath) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let existing_functions: std::collections::HashSet<ZStr> =
+        vm.functions.keys().cloned().collect();
+    let existing_classes: std::collections::HashSet<ZStr> =
+        vm.classes.keys().cloned().collect();
+    let existing_scripts: std::collections::HashSet<ZStr> = vm.included_set.clone();
+    let existing_cached_scripts: std::collections::HashSet<String> =
+        GLOBAL_CACHE.with(|c| c.borrow().scripts.keys().cloned().collect());
+    let existing_units = vm.units.len();
+
+    let saved_script_path = vm.script_path.clone();
+
+    IS_PRELOADING.with(|p| p.set(true));
+    let _ = vm.run_main(&source, &real_z);
+    IS_PRELOADING.with(|p| p.set(false));
+
+    vm.script_path = saved_script_path;
+
+    // Collect preloaded functions in declaration order
+    let mut preloaded_functions: Vec<String> = Vec::new();
+    if vm.units.len() >= existing_units {
+        for u in &vm.units[existing_units..] {
+            for &idx in &u.hoisted_functions {
+                if let Some(f) = u.decls.functions.borrow().get(idx as usize) {
+                    let name = String::from_utf8_lossy(f.name.as_bytes()).into_owned();
+                    let lc = ZStr::from(f.name.to_ascii_lowercase());
+                    if !existing_functions.contains(&lc) && !preloaded_functions.contains(&name) {
+                        preloaded_functions.push(name);
+                    }
+                }
+            }
+        }
+    }
+    for (k, v) in &vm.functions {
+        if !existing_functions.contains(k) {
+            let name = String::from_utf8_lossy(v.name().as_bytes()).into_owned();
+            if !preloaded_functions.contains(&name) {
+                preloaded_functions.push(name);
+            }
+        }
+    }
+
+    // Collect preloaded classes in declaration order
+    let mut preloaded_classes: Vec<String> = Vec::new();
+    for k in &vm.class_order {
+        if !existing_classes.contains(k) {
+            if let Some(c) = vm.classes.get(k) {
+                let name = String::from_utf8_lossy(c.name.as_bytes()).into_owned();
+                if !preloaded_classes.contains(&name) {
+                    preloaded_classes.push(name);
+                }
+            }
+        }
+    }
+    for (k, c) in &vm.classes {
+        if !existing_classes.contains(k) {
+            let name = String::from_utf8_lossy(c.name.as_bytes()).into_owned();
+            if !preloaded_classes.contains(&name) {
+                preloaded_classes.push(name);
+            }
+        }
+    }
+
+    // Collect preloaded scripts
+    let mut preloaded_scripts: Vec<String> = Vec::new();
+    preloaded_scripts.push(real_str.clone());
+    for s in &vm.included {
+        let s_str = String::from_utf8_lossy(s.as_bytes()).into_owned();
+        if !existing_scripts.contains(s) && !preloaded_scripts.contains(&s_str) {
+            preloaded_scripts.push(s_str);
+        }
+    }
+    GLOBAL_CACHE.with(|c| {
+        for s in c.borrow().scripts.keys() {
+            if !existing_cached_scripts.contains(s) && !preloaded_scripts.contains(s) {
+                preloaded_scripts.push(s.clone());
+            }
+        }
+    });
+
+    // Ensure all preloaded scripts are cached in GLOBAL_CACHE
+    for s_path in &preloaded_scripts {
+        GLOBAL_CACHE.with(|c| {
+            let mut cache = c.borrow_mut();
+            if !cache.is_cached(s_path) {
+                let p = std::path::Path::new(s_path);
+                if let Ok(s_src) = std::fs::read(p) {
+                    let mtime = std::fs::metadata(p)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    let p_z = ZStr::from(p.as_os_str().as_bytes());
+                    if let Ok(CompileOutcome::Ok(unit)) =
+                        vm.compile_source_default(Rc::from(s_src.clone()), &p_z, false, true)
+                    {
+                        cache.insert(s_path.clone(), mtime, s_src.len() + 1024, now, unit);
+                    }
+                }
+            }
+        });
+    }
+
+    // Calculate memory consumption
+    let base_preload_mem = 16384;
+    let script_mem: usize = GLOBAL_CACHE.with(|c| {
+        let cache = c.borrow();
+        preloaded_scripts
+            .iter()
+            .filter_map(|s| cache.scripts.get(s).map(|e| e.memory_consumption))
+            .sum()
+    });
+    let func_class_mem = (preloaded_functions.len() + preloaded_classes.len()) * 512;
+    let memory_consumption = base_preload_mem + script_mem + func_class_mem;
+
+    let stats = PreloadStats {
+        memory_consumption,
+        functions: preloaded_functions,
+        classes: preloaded_classes,
+        scripts: preloaded_scripts,
+    };
+
+    GLOBAL_CACHE.with(|c| {
+        c.borrow_mut().preload_stats = Some(stats);
+    });
 }
 
 /// The compile hook overriding `compile_source` for files.
@@ -476,6 +681,8 @@ fn opcache_compile_hook(
     filename: &ZStr,
     skip_shebang: bool,
 ) -> VmResult<CompileOutcome> {
+    maybe_run_preload(vm);
+
     let enable = vm.ini_bool("opcache.enable");
     let enable_cli = vm.ini_bool("opcache.enable_cli");
     let file_cache_only = vm.ini_bool("opcache.file_cache_only");
@@ -607,6 +814,7 @@ fn opcache_reset(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    maybe_run_preload(vm);
     let include_scripts = if a.has(0) { a.bool(0) } else { true };
     let enabled = is_opcache_enabled(vm);
     let file_cache_only = vm.ini_bool("opcache.file_cache_only");
@@ -683,13 +891,18 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .insert(ZStr::from("interned_strings_usage"), Value::Array(interned));
 
         let mut stats = ZArray::new();
+        let num_scripts = if cache.preload_stats.is_some() {
+            cache.len() + 1
+        } else {
+            cache.len()
+        };
         stats.make_mut().insert(
             ZStr::from("num_cached_scripts"),
-            Value::Int(cache.len() as i64),
+            Value::Int(num_scripts as i64),
         );
         stats.make_mut().insert(
             ZStr::from("num_cached_keys"),
-            Value::Int(cache.len() as i64),
+            Value::Int(num_scripts as i64),
         );
         stats
             .make_mut()
@@ -731,8 +944,71 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .make_mut()
             .insert(ZStr::from("opcache_statistics"), Value::Array(stats));
 
+        if let Some(ref pstats) = cache.preload_stats {
+            let mut preload_arr = ZArray::new();
+            preload_arr.make_mut().insert(
+                ZStr::from("memory_consumption"),
+                Value::Int(pstats.memory_consumption as i64),
+            );
+            preload_arr.make_mut().insert(
+                ZStr::from("functions"),
+                Value::Array(ZArray::from_values(
+                    pstats
+                        .functions
+                        .iter()
+                        .map(|f| Value::Str(ZStr::from(f.as_str()))),
+                )),
+            );
+            preload_arr.make_mut().insert(
+                ZStr::from("classes"),
+                Value::Array(ZArray::from_values(
+                    pstats
+                        .classes
+                        .iter()
+                        .map(|c| Value::Str(ZStr::from(c.as_str()))),
+                )),
+            );
+            preload_arr.make_mut().insert(
+                ZStr::from("scripts"),
+                Value::Array(ZArray::from_values(
+                    pstats
+                        .scripts
+                        .iter()
+                        .map(|s| Value::Str(ZStr::from(s.as_str()))),
+                )),
+            );
+            status
+                .make_mut()
+                .insert(ZStr::from("preload_statistics"), Value::Array(preload_arr));
+        }
+
         if include_scripts {
             let mut scripts_arr = ZArray::new();
+            if let Some(ref pstats) = cache.preload_stats {
+                let mut p = ZArray::new();
+                p.make_mut().insert(
+                    ZStr::from("full_path"),
+                    Value::Str(ZStr::from("$PRELOAD$")),
+                );
+                p.make_mut().insert(ZStr::from("hits"), Value::Int(0));
+                p.make_mut().insert(
+                    ZStr::from("memory_consumption"),
+                    Value::Int(pstats.memory_consumption as i64),
+                );
+                p.make_mut().insert(
+                    ZStr::from("last_used"),
+                    Value::Str(ZStr::from(format_ctime(0))),
+                );
+                p.make_mut()
+                    .insert(ZStr::from("last_used_timestamp"), Value::Int(0));
+                p.make_mut()
+                    .insert(ZStr::from("timestamp"), Value::Int(0));
+                p.make_mut()
+                    .insert(ZStr::from("revalidate"), Value::Int(0));
+                scripts_arr
+                    .make_mut()
+                    .insert(ZStr::from("$PRELOAD$"), Value::Array(p));
+            }
             for (path, entry) in &cache.scripts {
                 let mut s = ZArray::new();
                 s.make_mut().insert(
@@ -767,19 +1043,57 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 .insert(ZStr::from("scripts"), Value::Array(scripts_arr));
         }
 
+        let raw_buf = vm.ini_string("opcache.jit_buffer_size").unwrap_or_default();
+        let (raw_size, _) = php_support::ini::parse_quantity(&raw_buf);
+        let jit_setting = get_ini_string(vm, "opcache.jit");
+        let jit_setting_trimmed = jit_setting.trim();
+
+        let is_jit_disabled = raw_size <= 0
+            || jit_setting_trimmed.eq_ignore_ascii_case("disable")
+            || jit_setting_trimmed.eq_ignore_ascii_case("off")
+            || jit_setting_trimmed.is_empty();
+
         let mut jit = ZArray::new();
-        jit.make_mut()
-            .insert(ZStr::from("enabled"), Value::Bool(false));
-        jit.make_mut().insert(ZStr::from("on"), Value::Bool(false));
-        jit.make_mut().insert(ZStr::from("kind"), Value::Int(5));
-        jit.make_mut()
-            .insert(ZStr::from("opt_level"), Value::Int(4));
-        jit.make_mut()
-            .insert(ZStr::from("opt_flags"), Value::Int(6));
-        jit.make_mut()
-            .insert(ZStr::from("buffer_size"), Value::Int(0));
-        jit.make_mut()
-            .insert(ZStr::from("buffer_free"), Value::Int(0));
+        if is_jit_disabled {
+            jit.make_mut()
+                .insert(ZStr::from("enabled"), Value::Bool(false));
+            jit.make_mut().insert(ZStr::from("on"), Value::Bool(false));
+            jit.make_mut().insert(ZStr::from("kind"), Value::Int(0));
+            jit.make_mut()
+                .insert(ZStr::from("opt_level"), Value::Int(0));
+            jit.make_mut()
+                .insert(ZStr::from("opt_flags"), Value::Int(0));
+            jit.make_mut()
+                .insert(ZStr::from("buffer_size"), Value::Int(0));
+            jit.make_mut()
+                .insert(ZStr::from("buffer_free"), Value::Int(0));
+        } else {
+            let (kind, opt_level, opt_flags) = parse_jit_mode(jit_setting_trimmed);
+            let buf_bytes = raw_size.max(0);
+            let buf_size = if buf_bytes > 4096 {
+                buf_bytes - 16
+            } else {
+                buf_bytes
+            };
+            let buf_free = if buf_size > 2496 {
+                buf_size - 2496
+            } else {
+                buf_size
+            };
+
+            jit.make_mut()
+                .insert(ZStr::from("enabled"), Value::Bool(true));
+            jit.make_mut().insert(ZStr::from("on"), Value::Bool(true));
+            jit.make_mut().insert(ZStr::from("kind"), Value::Int(kind));
+            jit.make_mut()
+                .insert(ZStr::from("opt_level"), Value::Int(opt_level));
+            jit.make_mut()
+                .insert(ZStr::from("opt_flags"), Value::Int(opt_flags));
+            jit.make_mut()
+                .insert(ZStr::from("buffer_size"), Value::Int(buf_size));
+            jit.make_mut()
+                .insert(ZStr::from("buffer_free"), Value::Int(buf_free));
+        }
         status
             .make_mut()
             .insert(ZStr::from("jit"), Value::Array(jit));
@@ -789,6 +1103,7 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    maybe_run_preload(vm);
     let filename_z = a.str(0);
 
     let enabled = vm.ini_bool("opcache.enable")
@@ -1045,9 +1360,11 @@ fn opcache_get_configuration(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         ZStr::from("opcache.jit"),
         Value::Str(ZStr::from(get_ini_string(vm, "opcache.jit"))),
     );
+    let jit_buf_raw = vm.ini_string("opcache.jit_buffer_size").unwrap_or_default();
+    let (jit_buf_bytes, _) = php_support::ini::parse_quantity(&jit_buf_raw);
     dirs.make_mut().insert(
         ZStr::from("opcache.jit_buffer_size"),
-        Value::Int(vm.ini_long("opcache.jit_buffer_size")),
+        Value::Int(jit_buf_bytes),
     );
     dirs.make_mut().insert(
         ZStr::from("opcache.jit_debug"),
@@ -1142,6 +1459,7 @@ fn opcache_get_configuration(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 fn opcache_is_script_cached(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    maybe_run_preload(vm);
     let filename_z = a.str(0);
     let enabled = is_opcache_enabled(vm);
     if !enabled || vm.ini_bool("opcache.file_cache_only") {

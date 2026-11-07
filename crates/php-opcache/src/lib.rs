@@ -8,6 +8,15 @@ pub mod file_cache;
 
 use std::collections::HashMap;
 
+/// Preload statistics tracking for opcache.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PreloadStats {
+    pub memory_consumption: usize,
+    pub functions: Vec<String>,
+    pub classes: Vec<String>,
+    pub scripts: Vec<String>,
+}
+
 /// A cached script entry in the opcache.
 #[derive(Debug, Clone)]
 pub struct ScriptEntry<T> {
@@ -55,6 +64,8 @@ pub struct ScriptCache<T> {
     pub manual_restarts: u64,
     /// Maximum number of accelerated files.
     pub max_accelerated_files: usize,
+    /// Preload statistics, if preloading was executed.
+    pub preload_stats: Option<PreloadStats>,
 }
 
 impl<T> ScriptCache<T> {
@@ -72,16 +83,21 @@ impl<T> ScriptCache<T> {
             misses: 0,
             manual_restarts: 0,
             max_accelerated_files,
+            preload_stats: None,
         }
     }
 
-    /// Resets the cache, evicting all cached scripts.
+    /// Resets the cache, evicting all cached scripts (preserving preloaded scripts if present).
     pub fn reset(&mut self) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        self.scripts.clear();
+        if let Some(ref pstats) = self.preload_stats {
+            self.scripts.retain(|path, _| pstats.scripts.contains(path));
+        } else {
+            self.scripts.clear();
+        }
         self.last_restart_time = now;
         self.manual_restarts += 1;
         self.hits = 0;
@@ -183,5 +199,15 @@ impl<T> ScriptCache<T> {
         } else {
             (self.hits as f64 / total as f64) * 100.0
         }
+    }
+
+    /// Returns the preload statistics if preloading was executed.
+    pub fn preload_stats(&self) -> Option<&PreloadStats> {
+        self.preload_stats.as_ref()
+    }
+
+    /// Sets the preload statistics.
+    pub fn set_preload_stats(&mut self, stats: PreloadStats) {
+        self.preload_stats = Some(stats);
     }
 }
