@@ -1088,8 +1088,8 @@ impl Vm {
     /// Creates an instance and calls its constructor with `args`.
     pub fn new_object_with_args(&mut self, class: &Rc<Class>, args: Vec<Value>) -> VmResult<Obj> {
         let o = self.instantiate(class)?;
-        if let Some(m) = class.magic.construct.clone() {
-            self.call_method(&o, &m, args)?;
+        if let Some(m) = &class.magic.construct {
+            self.call_method(&o, m, args)?;
         }
         Ok(o)
     }

@@ -8,7 +8,7 @@ use crate::opcode::{ArgSrc, ClassSpec, FetchMode, MethodCallCacheEntry, Op, Oper
 use crate::typecheck::{given_type, TypeCtx};
 use crate::vm::{move_last_frame, Frame, FrameKind, PendingCall, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 thread_local! {
     /// The stand-in constructor of `new` on a constructor-less class with
@@ -1112,6 +1112,9 @@ impl Vm {
             // argument throws (`ZEND_LIVE_NEW`).
             call.this = Some(o.clone());
             self.set_tmp(dst, Value::Object(o));
+            if let Some(buf) = self.call_bufs.args.pop() {
+                install_buffer(&mut call.args, buf);
+            }
             self.push_pending(call);
             return Ok(true);
         }
@@ -1127,8 +1130,22 @@ impl Vm {
         if ctor.visibility() != flags::PUBLIC {
             self.check_ctor_access(ctor, &o)?;
         }
-        let mut call = self.pending_for_method(ctor, Some(o), cls);
-        call.is_ctor = true;
+        let is_static = ctor.is_static() && ctor.flags & flags::STATIC_KEEPS_THIS == 0;
+        let scope = if std::rc::Weak::as_ptr(&ctor.scope) == Rc::as_ptr(&cls) {
+            Some(cls.clone())
+        } else {
+            Some(ctor.scope())
+        };
+        let mut call = PendingCall {
+            this: if is_static { None } else { Some(o) },
+            scope,
+            called: Some(cls),
+            is_ctor: true,
+            ..PendingCall::new(ctor.func.clone())
+        };
+        if let Some(buf) = self.call_bufs.args.pop() {
+            install_buffer(&mut call.args, buf);
+        }
         self.push_pending(call);
         Ok(true)
     }
@@ -1136,7 +1153,7 @@ impl Vm {
     /// The scope check of a non-public constructor called by `new`.
     #[cold]
     #[inline(never)]
-    fn check_ctor_access(&mut self, ctor: &Rc<Method>, o: &Obj) -> VmResult<()> {
+    fn check_ctor_access(&mut self, ctor: &Method, o: &Obj) -> VmResult<()> {
         let scope = self.scope();
         if !self.can_access_method(ctor, scope.as_ref()) {
             // zend_std_get_constructor: zend_object_store_ctor_failed()
@@ -1216,6 +1233,16 @@ impl Vm {
                             call.args.push(Some(v));
                             return Ok(());
                         }
+                        ArgSrc::Place(pid) => {
+                            if let Some(p) = frame.code.places.get(*pid as usize) {
+                                if let (crate::opcode::PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) {
+                                    if let Some(v) = frame.peek_cv(*cv, deref_cv) {
+                                        call.args.push(Some(v));
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1272,6 +1299,18 @@ impl Vm {
             _ => None,
         }
     }
+}
+
+#[inline(always)]
+fn deref_cv(s: Option<&Value>) -> Option<Value> {
+    match s {
+        Some(Value::Reference(r)) => Some(r.get()),
+        Some(v) => Some(v.clone()),
+        None => None,
+    }
+}
+
+impl Vm {
 
     /// The value the general path of [`Vm::op_send`] sends for the argument
     /// at `pos`: read by value, or as a reference for a by-reference
@@ -3066,7 +3105,11 @@ impl Vm {
             Ok(call) => call,
             Err(_) => self.resolve_callable_for_call(callable)?,
         };
-        call.args = args.into_iter().map(Some).collect();
+        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+        call_args.clear();
+        call_args.reserve(args.len());
+        call_args.extend(args.into_iter().map(Some));
+        call.args = call_args;
         self.call_pending(call)
     }
 
@@ -3096,7 +3139,11 @@ impl Vm {
         args: Vec<Value>,
         named: Vec<(ZStr, Value)>,
     ) -> VmResult<Value> {
-        call.args = args.into_iter().map(Some).collect();
+        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+        call_args.clear();
+        call_args.reserve(args.len());
+        call_args.extend(args.into_iter().map(Some));
+        call.args = call_args;
         for (k, v) in named {
             let pos = if call.magic_name.is_some() {
                 None
@@ -3144,7 +3191,11 @@ impl Vm {
         args: Vec<Value>,
     ) -> VmResult<Value> {
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
-        call.args = args.into_iter().map(Some).collect();
+        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+        call_args.clear();
+        call_args.reserve(args.len());
+        call_args.extend(args.into_iter().map(Some));
+        call.args = call_args;
         self.call_pending(call)
     }
 
@@ -3173,7 +3224,11 @@ impl Vm {
             None => self.method_call(o, &ZStr::from(name))?,
         };
         let mut call = call;
-        call.args = args.into_iter().map(Some).collect();
+        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+        call_args.clear();
+        call_args.reserve(args.len());
+        call_args.extend(args.into_iter().map(Some));
+        call.args = call_args;
         self.call_pending(call)
     }
 
@@ -3205,7 +3260,11 @@ impl Vm {
         args: Vec<Value>,
     ) -> VmResult<Value> {
         let mut call = self.static_method_call(cls, &ZStr::from(name), false)?;
-        call.args = args.into_iter().map(Some).collect();
+        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+        call_args.clear();
+        call_args.reserve(args.len());
+        call_args.extend(args.into_iter().map(Some));
+        call.args = call_args;
         self.call_pending(call)
     }
 
@@ -3220,7 +3279,11 @@ impl Vm {
         };
         let quiet = matches!(&f, Func::Builtin(_)) && self.observer.enabled;
         let mut call = PendingCall::new(f);
-        call.args = args.into_iter().map(Some).collect();
+        let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+        call_args.clear();
+        call_args.reserve(args.len());
+        call_args.extend(args.into_iter().map(Some));
+        call.args = call_args;
         if !self.observer.enabled {
             return self.call_pending(call);
         }

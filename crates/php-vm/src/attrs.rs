@@ -61,7 +61,7 @@ impl Vm {
         strict: bool,
     ) -> VmResult<Obj> {
         let o = self.instantiate(cls)?;
-        if let Some(m) = cls.magic.construct.clone() {
+        if let Some(m) = &cls.magic.construct {
             let mut call = PendingCall {
                 this: Some(o.clone()),
                 scope: Some(m.scope()),
@@ -69,7 +69,11 @@ impl Vm {
                 strict,
                 ..PendingCall::new(m.func.clone())
             };
-            call.args = pos.into_iter().map(Some).collect();
+            let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+            call_args.clear();
+            call_args.reserve(pos.len());
+            call_args.extend(pos.into_iter().map(Some));
+            call.args = call_args;
             for (k, v) in named {
                 let Some(p) = m.func.params().iter().position(|p| p.name == k) else {
                     return Err(self.make_throw(

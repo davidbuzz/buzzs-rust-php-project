@@ -2019,9 +2019,12 @@ impl Vm {
         }
         for constant in &cls.consts {
             if !constant.is_case && constant.value.borrow().is_none() {
-                let scope = self
-                    .class_by_name(&constant.class)
-                    .unwrap_or_else(|| cls.clone());
+                let scope = if constant.class.eq_ignore_ascii_case(cls.name.as_bytes()) {
+                    cls.clone()
+                } else {
+                    self.class_by_name(&constant.class)
+                        .unwrap_or_else(|| cls.clone())
+                };
                 crate::reflection::with_scope(self, Some(scope), |vm| {
                     vm.update_class_constant(cls, &constant.name)
                 })?;
@@ -2032,7 +2035,11 @@ impl Vm {
             let v = match &pi.default {
                 None => None,
                 Some(e) => {
-                    let decl = self.class_by_name(&pi.class).unwrap_or_else(|| cls.clone());
+                    let decl = if pi.class.eq_ignore_ascii_case(cls.name.as_bytes()) {
+                        cls.clone()
+                    } else {
+                        self.class_by_name(&pi.class).unwrap_or_else(|| cls.clone())
+                    };
                     let v = self.eval_const_expr(e, Some(&decl))?;
                     if pi.ty.is_some() {
                         Some(self.coerce_prop(None, pi, v)?)
@@ -2050,7 +2057,11 @@ impl Vm {
                 continue;
             }
             if let Some(d) = &sp.default {
-                let decl = self.class_by_name(&sp.class).unwrap_or_else(|| cls.clone());
+                let decl = if sp.class.eq_ignore_ascii_case(cls.name.as_bytes()) {
+                    cls.clone()
+                } else {
+                    self.class_by_name(&sp.class).unwrap_or_else(|| cls.clone())
+                };
                 let v = self.eval_const_expr(d, Some(&decl))?;
                 *sp.cell.borrow_mut() = v;
             }
