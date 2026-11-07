@@ -654,6 +654,7 @@ impl Vm {
         kind_name: Option<&str>,
     ) {
         self.frame_mut().attach_symbol_table();
+        self.frame_mut().sync_cvs_to_symtab();
         let vars = self.frame().vars.clone();
         let mut f = Frame::with_vars(unit.main.code.clone(), kind, vars, None);
         let cur = self.frame();

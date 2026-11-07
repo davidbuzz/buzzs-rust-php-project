@@ -3463,6 +3463,7 @@ impl Vm {
             if let Some(prev) = fidx.checked_sub(1) {
                 if self.frames[prev].symtab_attached {
                     self.frames[prev].sync_from_symbol_table();
+                    self.frames[prev].sync_cvs_to_symtab();
                 }
             }
         }

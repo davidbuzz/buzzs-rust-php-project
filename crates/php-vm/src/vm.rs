@@ -1224,15 +1224,12 @@ impl Frame {
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
             if let Some(slot) = st.find(name.as_bytes()) {
-                let val = st.slots.get(slot as usize).cloned().flatten();
-                if let Some(cv) = self.cvs.get_mut(i) {
-                    if let Some(old) = cv.set(val) {
-                        crate::gc::release_duplicate(old);
+                if let Some(val) = st.slots.get(slot as usize).cloned().flatten() {
+                    if let Some(cv) = self.cvs.get_mut(i) {
+                        if let Some(old) = cv.set(Some(val)) {
+                            crate::gc::release_duplicate(old);
+                        }
                     }
-                }
-            } else if let Some(cv) = self.cvs.get_mut(i) {
-                if let Some(old) = cv.set(None) {
-                    crate::gc::release_duplicate(old);
                 }
             }
         }
@@ -1283,8 +1280,13 @@ impl Frame {
                 st.find(name.as_bytes())
             };
             if let Some(idx) = idx {
-                if let Some(old) = st.slots[idx as usize].take() {
-                    crate::gc::release_duplicate(old);
+                let idx = idx as usize;
+                if idx < st.slots.len() {
+                    if let Some(val) = self.cvs.get(cv as usize).and_then(CvSlot::get) {
+                        if let Some(old) = std::mem::replace(&mut st.slots[idx], Some(val.clone())) {
+                            crate::gc::release_duplicate(old);
+                        }
+                    }
                 }
             }
         }
