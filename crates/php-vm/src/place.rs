@@ -197,8 +197,9 @@ pub(crate) enum Check {
     /// handler freed the new array (`GC_DELREF(ht) == 0`); an exception
     /// does not stop the fetch, only the opcodes after it.
     False,
-    /// `slow_index_convert_w`, `zend_undefined_index_write`: a freed or
-    /// shared array (`GC_DELREF(ht) != 1`) or an exception gives it up.
+    /// `slow_index_convert_w`, `zend_undefined_index_write`: a freed
+    /// array (`GC_DELREF(ht) == 0`) or an exception gives it up; modifying
+    /// the index string in an error handler does not abandon the write.
     Index,
     /// The assigned value's "Undefined variable" warning at the final
     /// slot: given up when the array was freed (php-src would write into
@@ -2291,8 +2292,7 @@ impl Vm {
             };
             let raised = self.error(level, &msg);
             let gone = match check {
-                Check::Index => held.refcount() != 2,
-                Check::False | Check::Value => held.refcount() == 1,
+                Check::Index | Check::False | Check::Value => held.refcount() == 1,
             };
             drop(held);
             match raised {
