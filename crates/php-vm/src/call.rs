@@ -97,7 +97,7 @@ impl Vm {
     pub(crate) fn put_arg_vec(&mut self, mut v: Vec<Option<Value>>) {
         if v.capacity() > 0 && v.capacity() <= 256 {
             v.clear();
-            if self.call_bufs.args.len() < 4 {
+            if self.call_bufs.args.len() < 128 {
                 self.call_bufs.args.push(v);
             } else if let Some(smallest) = self
                 .call_bufs
@@ -1615,7 +1615,7 @@ impl Vm {
         } = call;
         let idx = self
             .frames
-            .push_in_place(uf.code.clone(), FrameKind::Function);
+            .push_in_place(&uf.code, FrameKind::Function);
         let spare_args = {
             let f = &mut self.frames[idx];
             f.this = this;

@@ -322,7 +322,7 @@ impl CallBufs {
     /// Zend/tests/bug79514.phpt, must not see the pools grow).
     pub(crate) fn prewarmed(empty_code: &Rc<OpArray>) -> Self {
         let mut b = CallBufs {
-            args: Vec::with_capacity(16),
+            args: Vec::with_capacity(128),
             values: Vec::with_capacity(16),
             passed: Vec::with_capacity(16),
             user_frames: Vec::with_capacity(8),
@@ -515,7 +515,7 @@ pub struct FrameStack {
 impl FrameStack {
     pub fn new() -> Self {
         Self {
-            vec: Vec::with_capacity(32),
+            vec: Vec::with_capacity(128),
             live: 0,
         }
     }
@@ -569,9 +569,12 @@ impl FrameStack {
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         if len < self.live {
+            for f in &mut self.vec[len..self.live] {
+                f.clear_for_reuse();
+            }
             self.live = len;
-            if self.vec.len() > self.live + 8 {
-                self.vec.truncate(self.live + 8);
+            if self.vec.len() > self.live + 128 {
+                self.vec.truncate(self.live + 128);
             }
         }
     }
@@ -612,12 +615,20 @@ impl FrameStack {
 
     /// Reinitializes and advances the callee frame at `self.live` in place.
     #[inline]
-    pub fn push_in_place(&mut self, code: Rc<OpArray>, kind: FrameKind) -> usize {
+    pub fn push_in_place(&mut self, code: &Rc<OpArray>, kind: FrameKind) -> usize {
         let idx = self.live;
         if idx < self.vec.len() {
-            self.vec[idx].reinit_for_call(code, kind);
+            let f = &mut self.vec[idx];
+            if Rc::ptr_eq(&f.code, code)
+                && f.cvs.len() == code.cv_names.len()
+                && f.tmps.len() == code.num_tmps as usize
+            {
+                f.reinit_same_call(kind);
+            } else {
+                f.reinit_for_call(code.clone(), kind);
+            }
         } else {
-            self.vec.push(Frame::new(code, kind));
+            self.vec.push(Frame::new(code.clone(), kind));
         }
         self.live += 1;
         idx
@@ -625,13 +636,13 @@ impl FrameStack {
 
     /// Releases the topmost frame in place (retaining it in `vec[live..]` for pool reuse).
     #[inline]
-    pub fn release_top(&mut self, empty_code: &Rc<OpArray>) {
+    pub fn release_top(&mut self, _empty_code: &Rc<OpArray>) {
         if self.live > 0 {
             let last_idx = self.live - 1;
-            self.vec[last_idx].clear_for_pool(empty_code);
+            self.vec[last_idx].clear_for_reuse();
             self.live -= 1;
-            if self.vec.len() > self.live + 8 {
-                self.vec.truncate(self.live + 8);
+            if self.vec.len() > self.live + 128 {
+                self.vec.truncate(self.live + 128);
             }
         }
     }
@@ -968,6 +979,69 @@ impl Frame {
         self.observer_hidden = false;
     }
 
+    /// Clears a frame for pool reuse while retaining its compiled code and buffer sizes.
+    ///
+    /// Every PHP object, closure, generator, value in CVs and temporaries is dropped
+    /// so no observable state or handles survive, but the allocated vectors (`tmps`, `cvs`,
+    /// `iters`, `fins`) retain their capacity and element counts so that calling the same
+    /// function requires zero reallocation.
+    #[inline]
+    pub fn clear_for_reuse(&mut self) {
+        for t in &mut self.tmps {
+            *t = Value::Null;
+        }
+        for it in &mut self.iters {
+            *it = None;
+        }
+        for fin in &mut self.fins {
+            *fin = FinState::None;
+        }
+        clear_frame_buffer(&mut self.calls);
+        for slot in &mut self.cvs {
+            slot.set(None);
+        }
+        self.symtab_attached = false;
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+            let vs = rc_mut.get_mut();
+            clear_frame_buffer(&mut vs.slots);
+            vs.names.clear();
+            vs.index = None;
+        } else {
+            self.vars = Rc::new(RefCell::new(VarStore::default()));
+        }
+        clear_frame_buffer(&mut self.named);
+        clear_frame_buffer(&mut self.args);
+        self.this = None;
+        self.closure = None;
+        self.generator = None;
+        self.pending_exc = None;
+        self.statics = None;
+        self.func = None;
+        self.ufunc = None;
+        self.ip = 0;
+        self.scope = None;
+        self.called = None;
+        self.ret = RetTarget::Discard;
+        self.is_ctor = false;
+        clear_frame_buffer(&mut self.silence_saved);
+        self.builtin_name = None;
+        self.magic_name = None;
+        self.caller_strict = false;
+        self.called_from_internal = false;
+        self.observed = false;
+        self.observer_hidden = false;
+    }
+
+    /// Re-initializes an existing frame for the same function call.
+    #[inline(always)]
+    pub(crate) fn reinit_same_call(&mut self, kind: FrameKind) {
+        self.kind = kind;
+        self.ip = 0;
+        self.calls.clear();
+        self.silence_saved.clear();
+        self.symtab_attached = false;
+    }
+
     /// Re-initializes a pooled frame for a new user function call, leaving
     /// the compiled variables empty for the caller to fill (the arguments
     /// move into them, [`crate::call`]'s `init_cvs`).
@@ -1045,12 +1119,12 @@ impl Frame {
             } else {
                 vec![FinState::None; nfin]
             },
-            calls: Vec::new(),
+            calls: Vec::with_capacity(4),
             cvs,
             symtab_attached: kind != FrameKind::Function,
             vars,
             named: Vec::new(),
-            args: Vec::new(),
+            args: Vec::with_capacity(8),
             this: None,
             closure: None,
             generator: None,
@@ -1544,12 +1618,12 @@ mod tests {
     fn frame_stack_reuses_frames_in_place() {
         let code = Rc::new(OpArray::default());
         let mut stack = super::FrameStack::new();
-        let idx0 = stack.push_in_place(code.clone(), FrameKind::Function);
+        let idx0 = stack.push_in_place(&code, FrameKind::Function);
         assert_eq!(idx0, 0);
         assert_eq!(stack.len(), 1);
         stack.release_top(&code);
         assert_eq!(stack.len(), 0);
-        let idx1 = stack.push_in_place(code.clone(), FrameKind::Function);
+        let idx1 = stack.push_in_place(&code, FrameKind::Function);
         assert_eq!(idx1, 0);
         assert_eq!(stack.len(), 1);
     }
