@@ -3070,7 +3070,7 @@ impl Vm {
         );
         let is_closure = f.closure.is_some() || uf.is_closure();
         let is_closure_invoke = is_closure
-            && (f.magic_name.as_deref().is_some_and(|m| m.as_bytes().eq_ignore_ascii_case(b"__invoke"))
+            && (f.magic_name.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
                 || f.this.as_ref().is_some_and(|t| object::class_of(t).name.eq_ignore_ascii_case(b"closure")));
         if let Some((file, line)) = self.attribute_caller_site() {
             msg.push_str(&format!(", called in {file} on line {line}"));
