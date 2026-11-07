@@ -25,7 +25,7 @@ use super::super::{Flow, Num};
 use crate::object;
 use crate::opcode::{FetchMode, IncDecKind, Operand, PlaceId};
 use crate::place::propcache::{
-    accepts, scope_addr, with_base_obj, PC_DYN, PC_NO_SET, PC_READ, PC_WRITE,
+    accepts, scope_addr, with_base_obj, PC_DYN, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
 };
 use crate::vm::{FrameKind, Vm, VmResult};
 use php_runtime::{BinaryOp, Value};
@@ -57,13 +57,17 @@ impl Vm {
                         if entry.class_addr != 0 && (entry.flags & (PC_READ | PC_DYN) == PC_READ) {
                             let scope = scope_addr(frame);
                             if entry.scope_addr == scope {
-                                let fast_val = with_base_obj(frame, entry.base, |obj| {
-                                    let data = object::data(obj);
-                                    if Rc::as_ptr(&data.class) as usize == entry.class_addr
-                                        && data.lazy.borrow().is_none()
+                                let slot = entry.slot as usize;
+                                let class_addr = entry.class_addr;
+                                let base = entry.base;
+                                drop(cache);
+
+                                let fast_val = with_base_obj(frame, base, |obj| {
+                                    let od = object::data(obj);
+                                    if std::rc::Rc::as_ptr(&od.class) as usize == class_addr
+                                        && od.lazy.borrow().is_none()
                                     {
-                                        let slot = entry.slot as usize;
-                                        if let Ok(slots) = data.slots.try_borrow() {
+                                        if let Ok(slots) = od.slots.try_borrow() {
                                             if let Some(Some(value)) = slots.get(slot) {
                                                 return match value {
                                                     Value::Reference(r) => {
@@ -175,27 +179,31 @@ impl Vm {
                                         let result = dst.map(|_| new_val.clone());
                                         let mut to_store = Some(new_val);
                                         let stored = with_base_obj(frame, base, |obj| {
-                                            let data = object::data(obj);
-                                            if Rc::as_ptr(&data.class) as usize == class_addr
-                                                && data.lazy.borrow().is_none()
+                                            let od = object::data(obj);
+                                            if std::rc::Rc::as_ptr(&od.class) as usize == class_addr
+                                                && od.lazy.borrow().is_none()
                                             {
-                                                if let Ok(mut slots) = data.slots.try_borrow_mut() {
+                                                if let Ok(mut slots) = od.slots.try_borrow_mut() {
                                                     if let Some(cell) = slots.get_mut(slot) {
                                                         let val = to_store.take().unwrap();
                                                         let mut old = None;
                                                         let ok = match cell {
                                                             Some(cur) => {
                                                                 if !matches!(cur, Value::Reference(_)) {
-                                                                    old = Some(std::mem::replace(cur, val));
+                                                                    if cur.is_plain() && val.is_plain() {
+                                                                        *cur = val;
+                                                                    } else {
+                                                                        old = Some(std::mem::replace(cur, val));
+                                                                    }
                                                                     true
                                                                 } else {
                                                                     false
                                                                 }
                                                             }
                                                             None => {
-                                                                if no_set || (accept != u32::MAX && !data.slot_unset(slot)) {
+                                                                if no_set || (accept != u32::MAX && !od.slot_unset(slot)) {
                                                                     *cell = Some(val);
-                                                                    data.set_slot_unset(slot, false);
+                                                                    od.set_slot_unset(slot, false);
                                                                     true
                                                                 } else {
                                                                     false
@@ -286,7 +294,7 @@ impl Vm {
 
     /// `$cv->name op= val` / `$this->name op= val` on a property cache hit:
     /// `.=` on a string property, or a numeric op on a number property.
-    #[inline]
+    #[inline(always)]
     pub(in crate::exec) fn assign_op_obj_prop_fast(
         &mut self,
         pid: PlaceId,
@@ -294,6 +302,153 @@ impl Vm {
         val: Operand,
         dst: Option<u32>,
     ) -> bool {
+        let fast_done = {
+            let frame = self.frame();
+            let mut done = None;
+            if frame.kind != FrameKind::Builtin {
+                if let Ok(cache) = frame.code.prop_cache.try_borrow() {
+                    if let Some(entry) = cache.get(pid as usize) {
+                        if entry.class_addr != 0
+                            && (entry.flags & (PC_READ | PC_WRITE | PC_DYN) == (PC_READ | PC_WRITE))
+                        {
+                            let scope = scope_addr(frame);
+                            if entry.scope_addr == scope {
+                                if let Some(rhs) = Self::peek_num(frame, val) {
+                                    let slot = entry.slot as usize;
+                                    let accept = entry.accept;
+                                    let class_addr = entry.class_addr;
+                                    let base = entry.base;
+                                    let is_tmp = match val {
+                                        Operand::Tmp(t) => Some(t),
+                                        _ => None,
+                                    };
+                                    drop(cache);
+
+                                    let mutated = with_base_obj(frame, base, |obj| {
+                                        let od = object::data(obj);
+                                        if std::rc::Rc::as_ptr(&od.class) as usize == class_addr
+                                            && od.lazy.borrow().is_none()
+                                        {
+                                            if let Ok(mut slots) = od.slots.try_borrow_mut() {
+                                                if let Some(Some(ref mut cell)) = slots.get_mut(slot) {
+                                                    match cell {
+                                                        Value::Int(ref mut n) => {
+                                                            match rhs {
+                                                                Num::Int(y) => {
+                                                                    match op {
+                                                                        BinaryOp::Add => {
+                                                                            if let Some(res) = n.checked_add(y) {
+                                                                                *n = res;
+                                                                                return Some((is_tmp, Value::Int(res)));
+                                                                            } else {
+                                                                                let res = *n as f64 + y as f64;
+                                                                                if accept == u32::MAX || (accept & crate::types::mask::FLOAT != 0) {
+                                                                                    *cell = Value::Float(res);
+                                                                                    return Some((is_tmp, Value::Float(res)));
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        BinaryOp::Sub => {
+                                                                            if let Some(res) = n.checked_sub(y) {
+                                                                                *n = res;
+                                                                                return Some((is_tmp, Value::Int(res)));
+                                                                            } else {
+                                                                                let res = *n as f64 - y as f64;
+                                                                                if accept == u32::MAX || (accept & crate::types::mask::FLOAT != 0) {
+                                                                                    *cell = Value::Float(res);
+                                                                                    return Some((is_tmp, Value::Float(res)));
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        BinaryOp::Mul => {
+                                                                            if let Some(res) = n.checked_mul(y) {
+                                                                                *n = res;
+                                                                                return Some((is_tmp, Value::Int(res)));
+                                                                            } else {
+                                                                                let res = *n as f64 * y as f64;
+                                                                                if accept == u32::MAX || (accept & crate::types::mask::FLOAT != 0) {
+                                                                                    *cell = Value::Float(res);
+                                                                                    return Some((is_tmp, Value::Float(res)));
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        BinaryOp::BitAnd => {
+                                                                            *n &= y;
+                                                                            return Some((is_tmp, Value::Int(*n)));
+                                                                        }
+                                                                        BinaryOp::BitOr => {
+                                                                            *n |= y;
+                                                                            return Some((is_tmp, Value::Int(*n)));
+                                                                        }
+                                                                        BinaryOp::BitXor => {
+                                                                            *n ^= y;
+                                                                            return Some((is_tmp, Value::Int(*n)));
+                                                                        }
+                                                                        _ => {}
+                                                                    }
+                                                                }
+                                                                Num::Float(y) => {
+                                                                    let res = match op {
+                                                                        BinaryOp::Add => *n as f64 + y,
+                                                                        BinaryOp::Sub => *n as f64 - y,
+                                                                        BinaryOp::Mul => *n as f64 * y,
+                                                                        _ => return None,
+                                                                    };
+                                                                    if accept == u32::MAX || (accept & crate::types::mask::FLOAT != 0) {
+                                                                        *cell = Value::Float(res);
+                                                                        return Some((is_tmp, Value::Float(res)));
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        Value::Float(ref mut f) => {
+                                                            let y = match rhs {
+                                                                Num::Int(i) => i as f64,
+                                                                Num::Float(fl) => fl,
+                                                            };
+                                                            match op {
+                                                                BinaryOp::Add => {
+                                                                    *f += y;
+                                                                    return Some((is_tmp, Value::Float(*f)));
+                                                                }
+                                                                BinaryOp::Sub => {
+                                                                    *f -= y;
+                                                                    return Some((is_tmp, Value::Float(*f)));
+                                                                }
+                                                                BinaryOp::Mul => {
+                                                                    *f *= y;
+                                                                    return Some((is_tmp, Value::Float(*f)));
+                                                                }
+                                                                _ => {}
+                                                            }
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        None
+                                    });
+                                    if let Some(r) = mutated {
+                                        done = Some(r);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            done
+        };
+        if let Some((is_tmp, res)) = fast_done {
+            if let Some(t) = is_tmp {
+                self.set_tmp(t, Value::Null);
+            }
+            if let Some(d) = dst {
+                self.set_tmp(d, res);
+            }
+            return true;
+        }
         if op == BinaryOp::Concat {
             let Some(rhs) = self.peek_plain_value(val) else {
                 return false;
@@ -359,12 +514,79 @@ impl Vm {
     }
 
     /// `++`/`--` of `$cv->name` / `$this->name` on a property cache hit.
-    #[inline]
+    #[inline(always)]
     pub(in crate::exec) fn incdec_obj_prop_fast(
         &self,
         pid: PlaceId,
         kind: IncDecKind,
     ) -> Option<Value> {
+        let frame = self.frame();
+        if frame.kind != FrameKind::Builtin {
+            if let Ok(cache) = frame.code.prop_cache.try_borrow() {
+                if let Some(entry) = cache.get(pid as usize) {
+                    if entry.class_addr != 0
+                        && (entry.flags & (PC_READ | PC_WRITE | PC_DYN) == (PC_READ | PC_WRITE))
+                    {
+                        let scope = scope_addr(frame);
+                        if entry.scope_addr == scope {
+                            let slot = entry.slot as usize;
+                            let class_addr = entry.class_addr;
+                            let base = entry.base;
+                            drop(cache);
+
+                            let fast_val = with_base_obj(frame, base, |obj| {
+                                let od = object::data(obj);
+                                if std::rc::Rc::as_ptr(&od.class) as usize == class_addr
+                                    && od.lazy.borrow().is_none()
+                                {
+                                    if let Ok(mut slots) = od.slots.try_borrow_mut() {
+                                        if let Some(Some(ref mut cell)) = slots.get_mut(slot) {
+                                            match cell {
+                                                Value::Int(ref mut n) => {
+                                                    let old = *n;
+                                                    let new = if kind.is_inc() {
+                                                        old.checked_add(1)
+                                                    } else {
+                                                        old.checked_sub(1)
+                                                    };
+                                                    if let Some(new_n) = new {
+                                                        *n = new_n;
+                                                        return Some(Value::Int(if kind.is_post() {
+                                                            old
+                                                        } else {
+                                                            new_n
+                                                        }));
+                                                    }
+                                                }
+                                                Value::Float(ref mut f) => {
+                                                    let old = *f;
+                                                    let new_f = if kind.is_inc() {
+                                                        old + 1.0
+                                                    } else {
+                                                        old - 1.0
+                                                    };
+                                                    *f = new_f;
+                                                    return Some(Value::Float(if kind.is_post() {
+                                                        old
+                                                    } else {
+                                                        new_f
+                                                    }));
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                }
+                                None
+                            });
+                            if let Some(v) = fast_val {
+                                return Some(v);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         self.prop_cache_incdec(pid, kind)
     }
 
@@ -384,8 +606,77 @@ impl Vm {
     }
 
     /// `isset($cv->name)` / `empty($cv->name)` on a property cache hit.
-    #[inline]
+    #[inline(always)]
     pub(in crate::exec) fn isset_obj_prop_fast(&self, pid: PlaceId, empty: bool) -> Option<bool> {
+        let frame = self.frame();
+        if frame.kind != FrameKind::Builtin {
+            if let Ok(cache) = frame.code.prop_cache.try_borrow() {
+                if let Some(entry) = cache.get(pid as usize) {
+                    if entry.class_addr != 0 && (entry.flags & (PC_ISSET | PC_DYN) == PC_ISSET) {
+                        let scope = scope_addr(frame);
+                        if entry.scope_addr == scope {
+                            let slot = entry.slot as usize;
+                            let class_addr = entry.class_addr;
+                            let base = entry.base;
+                            drop(cache);
+
+                            let fast_val = with_base_obj(frame, base, |obj| {
+                                let od = object::data(obj);
+                                if std::rc::Rc::as_ptr(&od.class) as usize == class_addr
+                                    && od.lazy.borrow().is_none()
+                                {
+                                    if let Ok(slots) = od.slots.try_borrow() {
+                                        if let Some(Some(value)) = slots.get(slot) {
+                                            return match value {
+                                                Value::Reference(r) => match r.try_borrow() {
+                                                    Ok(inner) => match &*inner {
+                                                        Value::Null => Some(empty),
+                                                        Value::Bool(b) => Some(if empty { !*b } else { true }),
+                                                        Value::Int(i) => Some(if empty { *i == 0 } else { true }),
+                                                        Value::Float(f) if !f.is_nan() => {
+                                                            Some(if empty { *f == 0.0 } else { true })
+                                                        }
+                                                        Value::Str(s) => Some(if empty {
+                                                            s.is_empty() || s.as_bytes() == b"0"
+                                                        } else {
+                                                            true
+                                                        }),
+                                                        Value::Array(a) => {
+                                                            Some(if empty { a.is_empty() } else { true })
+                                                        }
+                                                        _ => None,
+                                                    },
+                                                    Err(_) => None,
+                                                },
+                                                Value::Null => Some(empty),
+                                                Value::Bool(b) => Some(if empty { !*b } else { true }),
+                                                Value::Int(i) => Some(if empty { *i == 0 } else { true }),
+                                                Value::Float(f) if !f.is_nan() => {
+                                                    Some(if empty { *f == 0.0 } else { true })
+                                                }
+                                                Value::Str(s) => Some(if empty {
+                                                    s.is_empty() || s.as_bytes() == b"0"
+                                                } else {
+                                                    true
+                                                }),
+                                                Value::Array(a) => {
+                                                    Some(if empty { a.is_empty() } else { true })
+                                                }
+                                                _ => None,
+                                            };
+                                        }
+                                    }
+                                }
+                                None
+                            });
+                            if let Some(b) = fast_val {
+                                return Some(b);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         self.prop_cache_isset_pure(pid, empty)
     }
 

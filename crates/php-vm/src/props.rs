@@ -1013,10 +1013,27 @@ impl Vm {
     ) -> VmResult<Value> {
         if !matches!(v, Value::Reference(_)) {
             if let Some(slot) = Self::plain_property_slot(o, name, true) {
-                let old = object::data(o).slots.borrow_mut()[slot].replace(v.clone());
-                object::data(o).set_slot_unset(slot, false);
-                drop(old);
-                return Ok(v);
+                let data = object::data(o);
+                let mut slots = data.slots.borrow_mut();
+                if let Some(cell) = slots.get_mut(slot) {
+                    let mut old = None;
+                    match cell {
+                        Some(cur) => {
+                            if cur.is_plain() && v.is_plain() {
+                                *cur = v.clone();
+                            } else {
+                                old = Some(std::mem::replace(cur, v.clone()));
+                            }
+                        }
+                        None => {
+                            *cell = Some(v.clone());
+                        }
+                    }
+                    drop(slots);
+                    drop(old);
+                    data.set_slot_unset(slot, false);
+                    return Ok(v);
+                }
             }
         }
         let lazy_target = self.lazy_object_for_write(o, name)?;
@@ -1916,6 +1933,25 @@ impl Vm {
 
     /// `isset($o->name)` / `empty($o->name)`.
     pub(crate) fn has_property(&mut self, o: &Obj, name: &ZStr, empty: bool) -> VmResult<bool> {
+        if let Some(slot) = Self::plain_property_slot(o, name, false) {
+            let data = object::data(o);
+            let slots = data.slots.borrow();
+            if let Some(Some(v)) = slots.get(slot) {
+                return if empty {
+                    Ok(match v {
+                        Value::Null => true,
+                        Value::Bool(b) => !*b,
+                        Value::Int(i) => *i == 0,
+                        Value::Float(f) if !f.is_nan() => *f == 0.0,
+                        Value::Str(s) => s.is_empty() || s.as_bytes() == b"0",
+                        Value::Array(a) => a.is_empty(),
+                        other => !self.to_bool(other)?,
+                    })
+                } else {
+                    Ok(!v.is_null())
+                };
+            }
+        }
         let lazy_target = self.lazy_object_for(o, Some(name))?;
         let o = &lazy_target;
         let cls = object::class_of(o).clone();
