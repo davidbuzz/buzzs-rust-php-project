@@ -116,6 +116,7 @@ impl ImageBuilder {
             class_cache: RefCell::new(Vec::new()),
             rt_cache: crate::rtcache::RuntimeCache::default(),
             prop_cache: RefCell::new(Vec::new()),
+            method_cache: RefCell::new(Vec::new()),
         });
         self.code.insert(key, code.clone());
         code

@@ -1027,6 +1027,7 @@ impl Compiler<'_> {
             class_cache: std::cell::RefCell::default(),
             rt_cache: crate::rtcache::RuntimeCache::default(),
             prop_cache: std::cell::RefCell::default(),
+            method_cache: std::cell::RefCell::default(),
         };
         // Optimizer passes run when opcache.optimization_level is nonzero
         // and no user opcode handlers are hooked.

@@ -4,7 +4,7 @@ use crate::class::Class;
 use crate::exec::scope_display;
 use crate::func::{flags, Args, Builtin, Func, Method, UserFunction};
 use crate::object;
-use crate::opcode::{ArgSrc, ClassSpec, FetchMode, Op, Operand};
+use crate::opcode::{ArgSrc, ClassSpec, FetchMode, MethodCallCacheEntry, Op, Operand};
 use crate::typecheck::{given_type, TypeCtx};
 use crate::vm::{move_last_frame, Frame, FrameKind, PendingCall, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
@@ -467,6 +467,41 @@ impl Vm {
             return Err(Value::Object(o));
         }
         let f = self.frame();
+        let slot = f.ip.saturating_sub(1);
+        let cls_addr = Rc::as_ptr(cls) as usize;
+        let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+
+        let hit = if let Some(Some(cached)) = f.code.method_cache.borrow().get(slot) {
+            if cached.class_addr == cls_addr
+                && cached.scope_addr == scope_addr
+                && cached.name_lit == Some(lit)
+            {
+                cached.func.get().map(|func| {
+                    (
+                        func,
+                        cached.method_scope.as_ref().and_then(std::rc::Weak::upgrade),
+                        cached.is_static,
+                    )
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some((func, scope, is_static)) = hit {
+            let this = if is_static { None } else { Some(o) };
+            let called = cls.clone();
+            self.push_pending(PendingCall {
+                this,
+                scope,
+                called: Some(called),
+                ..PendingCall::new(func)
+            });
+            return Ok(());
+        }
+
         let Some(Value::Str(name)) = f.code.literals.get(lit as usize) else {
             return Err(Value::Object(o));
         };
@@ -481,6 +516,24 @@ impl Vm {
         };
         let called = cls.clone();
         let is_static = m.is_static() && m.flags & flags::STATIC_KEEPS_THIS == 0;
+        let entry = MethodCallCacheEntry {
+            class_addr: cls_addr,
+            scope_addr,
+            class: Rc::downgrade(cls),
+            method_scope: Some(Rc::downgrade(&m.scope())),
+            func: crate::opcode::CachedFunc::new(&m.func),
+            is_static,
+            name_lit: Some(lit),
+            name: name.clone(),
+        };
+        let mut cache = f.code.method_cache.borrow_mut();
+        if cache.len() <= slot {
+            let size = f.code.ops.len().max(slot + 1);
+            cache.resize(size, None);
+        }
+        cache[slot] = Some(entry);
+        drop(cache);
+
         self.push_pending(PendingCall {
             this: if is_static { None } else { Some(o) },
             scope: Some(m.scope()),
@@ -510,13 +563,77 @@ impl Vm {
                 return Ok(());
             }
         }
+        let cls = object::class_of(&o);
+        let has_get_method = cls.hooks.as_ref().and_then(|h| h.get_method).is_some();
+        let slot = self.frame().ip.saturating_sub(1);
+        let cls_addr = Rc::as_ptr(cls) as usize;
+        let scope = self.frame().scope.clone();
+        let scope_addr = scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+
+        let hit = if !has_get_method {
+            if let Some(Some(cached)) = self.frame().code.method_cache.borrow().get(slot) {
+                if cached.class_addr == cls_addr
+                    && cached.scope_addr == scope_addr
+                    && cached.name.as_bytes().eq_ignore_ascii_case(name.as_bytes())
+                {
+                    cached.func.get().map(|func| {
+                        (
+                            func,
+                            cached.method_scope.as_ref().and_then(std::rc::Weak::upgrade),
+                            cached.is_static,
+                        )
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some((func, method_scope, is_static)) = hit {
+            let this = if is_static { None } else { Some(o) };
+            let called = cls.clone();
+            self.push_pending(PendingCall {
+                this,
+                scope: method_scope,
+                called: Some(called),
+                ..PendingCall::new(func)
+            });
+            return Ok(());
+        }
         // A hit in the run-time cache of `ZEND_INIT_METHOD_CALL`: the call
         // is pushed straight from the cached method, `$this` moved in.
-        let cls = object::class_of(&o).clone();
-        if cls.hooks.as_ref().and_then(|h| h.get_method).is_none() {
-            let scope = self.scope();
+        let cls = cls.clone();
+        if !has_get_method {
             if let Some(m) = self.call_bufs.methods.get(&cls, scope.as_ref(), &name) {
                 let is_static = m.is_static() && m.flags & flags::STATIC_KEEPS_THIS == 0;
+                let entry = MethodCallCacheEntry {
+                    class_addr: cls_addr,
+                    scope_addr,
+                    class: Rc::downgrade(&cls),
+                    method_scope: Some(Rc::downgrade(&m.scope())),
+                    func: crate::opcode::CachedFunc::new(&m.func),
+                    is_static,
+                    name_lit: match self.frame().code.ops.get(slot) {
+                        Some(Op::InitMethodCall {
+                            name: Operand::Lit(lit),
+                            ..
+                        }) => Some(*lit),
+                        _ => None,
+                    },
+                    name: name.clone(),
+                };
+                let mut cache = self.frame().code.method_cache.borrow_mut();
+                if cache.len() <= slot {
+                    let size = self.frame().code.ops.len().max(slot + 1);
+                    cache.resize(size, None);
+                }
+                cache[slot] = Some(entry);
+                drop(cache);
+
                 self.push_pending(PendingCall {
                     this: if is_static { None } else { Some(o) },
                     scope: Some(m.scope()),
@@ -527,6 +644,31 @@ impl Vm {
             }
         }
         let call = self.method_call(&o, &name)?;
+        if !has_get_method && call.magic_name.is_none() {
+            let is_static = call.this.is_none();
+            let entry = MethodCallCacheEntry {
+                class_addr: cls_addr,
+                scope_addr,
+                class: Rc::downgrade(&cls),
+                method_scope: call.scope.as_ref().map(Rc::downgrade),
+                func: crate::opcode::CachedFunc::new(&call.func),
+                is_static,
+                name_lit: match self.frame().code.ops.get(slot) {
+                    Some(Op::InitMethodCall {
+                        name: Operand::Lit(lit),
+                        ..
+                    }) => Some(*lit),
+                    _ => None,
+                },
+                name,
+            };
+            let mut cache = self.frame().code.method_cache.borrow_mut();
+            if cache.len() <= slot {
+                let size = self.frame().code.ops.len().max(slot + 1);
+                cache.resize(size, None);
+            }
+            cache[slot] = Some(entry);
+        }
         self.push_pending(call);
         Ok(())
     }

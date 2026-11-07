@@ -1212,6 +1212,9 @@ pub struct OpArray {
     /// segment; entry `places.len() + pid` the last segment of a place
     /// that has both (`$this->a->b`). See `place::propcache`.
     pub prop_cache: RefCell<Vec<PropCacheEntry>>,
+    /// Monomorphic call-site cache of method calls (`InitMethodCall`),
+    /// indexed by instruction pointer (op index).
+    pub method_cache: RefCell<Vec<Option<MethodCallCacheEntry>>>,
 }
 
 /// [`PropCacheEntry::base`] of a `$this->name` place.
@@ -1341,6 +1344,30 @@ impl CachedFunc {
     }
 }
 
+/// An [`OpArray::method_cache`] entry: monomorphic method resolution cached
+/// at an `InitMethodCall` call site. Classes are compared by address;
+/// the entry holds them weakly, which pins the address without keeping
+/// the class alive.
+#[derive(Debug, Clone)]
+pub struct MethodCallCacheEntry {
+    /// Address of the object's class (`Rc::as_ptr`), 0 in an unfilled entry.
+    pub class_addr: usize,
+    /// Address of the calling class scope, 0 for no class scope.
+    pub scope_addr: usize,
+    /// Weak reference to the object's class to pin the address without an `Rc` cycle.
+    pub class: std::rc::Weak<crate::class::Class>,
+    /// Declaring class scope of the resolved method.
+    pub method_scope: Option<std::rc::Weak<crate::class::Class>>,
+    /// The resolved method function.
+    pub func: CachedFunc,
+    /// Whether the method is static and drops `$this`.
+    pub is_static: bool,
+    /// Literal index of the method name, if named by a literal operand.
+    pub name_lit: Option<u32>,
+    /// Method name (for matching when called dynamically).
+    pub name: ZStr,
+}
+
 /// Functions, classes and closures declared inside an op array
 /// ([`OpArray::decls`]).
 #[derive(Debug, Default)]
@@ -1365,5 +1392,6 @@ impl OpArray {
         self.class_cache.borrow_mut().clear();
         self.rt_cache.clear();
         self.prop_cache.borrow_mut().clear();
+        self.method_cache.borrow_mut().clear();
     }
 }
