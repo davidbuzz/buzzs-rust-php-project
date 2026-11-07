@@ -18,7 +18,8 @@
 //! * [`iterators`], [`object_handlers`] — the auxiliary stubs;
 //! * [`ini`] — the `zend_test.*` directives;
 //! * [`mm`] — the custom ZendMM heap handlers (`zend_mm_custom_handlers.c`);
-//! * [`post`] — `zend_test_handle_post_data()` (the SAPI POST handlers).
+//! * [`post`] — `zend_test_handle_post_data()` (the SAPI POST handlers);
+//! * [`observer`] — observer printer and user opcode handlers (`observer.c`).
 
 mod classes;
 mod compile;

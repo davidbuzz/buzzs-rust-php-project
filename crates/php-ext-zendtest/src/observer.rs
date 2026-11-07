@@ -432,7 +432,9 @@ fn module_startup(vm: &mut Vm) {
             .filter(|n| !n.is_empty())
         {
             let name = String::from_utf8_lossy(name);
-            vm.set_user_opcode_handler(&name, show_opcode_in_user_handler);
+            if !vm.set_user_opcode_handler(&name, show_opcode_in_user_handler) {
+                let _ = vm.php_warning(&format!("Invalid opcode name {name}"));
+            }
         }
     }
 }

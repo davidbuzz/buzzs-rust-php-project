@@ -20,6 +20,7 @@ php-ext-uri = { path = "../php-ext-uri" }
 libc = "0.2"
 
 [features]
+default = ["observer"]
 # Parts that need the VM hooks proposed in `proposals/vm-hooks.diff`: the
 # observer printer (`zend_test.observer.*`) and internal attribute
 # classes with validators.

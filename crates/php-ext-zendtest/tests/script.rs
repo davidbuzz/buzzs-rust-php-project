@@ -148,6 +148,21 @@ fn run_with_streams(code: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Runs `code` with the streams and `zend_test` extensions loaded under
+/// the given INI settings.
+fn run_with_ini(code: &str, ini: Vec<(String, String)>) -> String {
+    let sink = Sink::default();
+    let zt = php_ext_zendtest::ZendTest;
+    let streams = php_ext_streams::Streams;
+    let exts: [&dyn Extension; 2] = [&streams, &zt];
+    let opts = VmOptions { ini };
+    let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
+    vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
+    drop(vm);
+    let out = sink.0.borrow().clone();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[test]
 fn handle_post_data_urlencoded_and_post_max_size() {
     let out = run_with_streams(
@@ -358,4 +373,174 @@ try { call_user_func([$o, 'call']); } catch (Error $e) { echo $e->getMessage(), 
          Cannot call ZendTestForbidDynamicCall::callStatic() dynamically\n\
          Cannot call ZendTestForbidDynamicCall::call() dynamically\n"
     );
+}
+
+#[test]
+fn handle_post_data_multipart_uploads() {
+    // ext/zend_test/tests/zend_test_handle_post_data.phpt
+    let out = run_with_streams(
+        r#"
+function stream(string $body) {
+    $s = fopen('php://memory', 'r+');
+    fwrite($s, $body);
+    rewind($s);
+    return $s;
+}
+
+$body = "--b\r\n"
+    . "Content-Disposition: form-data; name=\"foo\"\r\n\r\n"
+    . "bar\r\n"
+    . "--b\r\n"
+    . "Content-Disposition: form-data; name=\"file\"; filename=\"f.txt\"\r\n"
+    . "Content-Type: text/plain\r\n\r\n"
+    . "file contents\r\n"
+    . "--b--\r\n";
+
+zend_test_handle_post_data(stream($body), 'multipart/form-data; boundary=b', strlen($body));
+var_dump($_POST['foo']);
+var_dump($_FILES['file']['name'], $_FILES['file']['size']);
+var_dump(is_uploaded_file($_FILES['file']['tmp_name']));
+var_dump(file_get_contents($_FILES['file']['tmp_name']));
+
+$body2 = 'a=1&b[]=2&b[]=3';
+zend_test_handle_post_data(stream($body2), 'application/x-www-form-urlencoded', strlen($body2));
+var_dump($_POST, $_FILES);
+
+$body3 = '{"a":1}';
+zend_test_handle_post_data(stream($body3), 'application/json', strlen($body3));
+var_dump($_POST);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(3) \"bar\"\n\
+         string(5) \"f.txt\"\n\
+         int(13)\n\
+         bool(true)\n\
+         string(13) \"file contents\"\n\
+         array(2) {\n  \
+           [\"a\"]=>\n  \
+           string(1) \"1\"\n  \
+           [\"b\"]=>\n  \
+           array(2) {\n    \
+             [0]=>\n    \
+             string(1) \"2\"\n    \
+             [1]=>\n    \
+             string(1) \"3\"\n  \
+           }\n\
+         }\n\
+         array(0) {\n\
+         }\n\
+         array(0) {\n\
+         }\n"
+    );
+}
+
+#[cfg(feature = "observer")]
+#[test]
+fn gh24081_user_opcode_handler() {
+    // ext/zend_test/tests/gh24081.phpt
+    let out = run_with_ini(
+        r#"
+function f($a, $b) {
+    $r = $a + $b;
+    return strlen("x") + $r;
+}
+var_dump(f(1, 2));
+"#,
+        vec![
+            ("zend_test.observer.enabled".into(), "1".into()),
+            ("zend_test.observer.show_output".into(), "1".into()),
+            (
+                "zend_test.observer.show_opcode_in_user_handler".into(),
+                "ZEND_ADD".into(),
+            ),
+        ],
+    );
+    assert_eq!(
+        out,
+        "<!-- init 'test.php' -->\n\
+         <!-- init f() -->\n\
+         <!-- opcode: 'ZEND_ADD' in user handler -->\n\
+         <!-- opcode: 'ZEND_ADD' in user handler -->\n\
+         <!-- init var_dump() -->\n\
+         int(4)\n"
+    );
+}
+
+#[cfg(feature = "observer")]
+#[test]
+fn observer_opline_01() {
+    // ext/zend_test/tests/observer_opline_01.phpt
+    let out = run_with_ini(
+        r#"
+function foo() {
+    echo "Foo\n";
+}
+foo();
+foo();
+"#,
+        vec![
+            ("zend_test.observer.enabled".into(), "1".into()),
+            ("zend_test.observer.show_output".into(), "1".into()),
+            ("zend_test.observer.observe_all".into(), "1".into()),
+            ("zend_test.observer.show_opcode".into(), "1".into()),
+        ],
+    );
+    assert_eq!(
+        out,
+        "<!-- init 'test.php' -->\n\
+         <!-- opcode: 'ZEND_INIT_FCALL' -->\n\
+         <file 'test.php'>\n  \
+           <!-- opcode: 'ZEND_INIT_FCALL' -->\n  \
+           <!-- init foo() -->\n  \
+           <!-- opcode: 'ZEND_ECHO' -->\n  \
+           <foo>\n    \
+             <!-- opcode: 'ZEND_ECHO' -->\n\
+Foo\n    \
+             <!-- opcode: 'ZEND_RETURN' -->\n  \
+           </foo>\n  \
+           <foo>\n    \
+             <!-- opcode: 'ZEND_ECHO' -->\n\
+Foo\n    \
+             <!-- opcode: 'ZEND_RETURN' -->\n  \
+           </foo>\n  \
+           <!-- opcode: 'ZEND_RETURN' -->\n\
+         </file 'test.php'>\n"
+    );
+}
+
+#[test]
+fn gh11423_reflection_extension_constants() {
+    // ext/zend_test/tests/gh11423.phpt
+    let out = run(r#"
+$re = new ReflectionExtension('zend_test');
+$c = $re->getConstants();
+ksort($c);
+foreach ($c as $k => $v) {
+    echo "$k => $v\n";
+}
+"#);
+    assert_eq!(
+        out,
+        "ZEND_CONSTANT_A => global\n\
+         ZEND_TEST_ATTRIBUTED_CONSTANT => 42\n\
+         ZEND_TEST_DEPRECATED => 42\n\
+         ZendTestNS2\\ZEND_CONSTANT_A => namespaced\n\
+         ZendTestNS2\\ZendSubNS\\ZEND_CONSTANT_A => namespaced\n"
+    );
+}
+
+#[test]
+fn zend_mm_custom_handlers_toggle() {
+    // ext/zend_test/tests/zend_mm_custom_handlers_alloc_01.phpt, free_01.phpt, gc_01.phpt
+    let out = run(r#"
+ini_set('zend_test.zend_mm_custom_handlers.enabled', 1);
+$s = str_repeat('String', 10);
+unset($s);
+gc_mem_caches();
+ini_set('zend_test.zend_mm_custom_handlers.enabled', 0);
+echo "ok\n";
+"#);
+    assert_eq!(out, "ok\n");
 }
