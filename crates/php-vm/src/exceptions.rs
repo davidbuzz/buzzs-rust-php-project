@@ -546,6 +546,21 @@ impl Vm {
         let nparams = uf.params.len();
         let passed = f.args.len();
         let cv = |i: usize| f.cvs.get(i).and_then(crate::vm::CvSlot::get_clone);
+        let st_ref = f.vars.try_borrow().ok();
+        let from_vars = |i: usize, name: &ZStr| -> Option<Value> {
+            let st = st_ref.as_ref()?;
+            let idx = st
+                .names
+                .get(i)
+                .filter(|n| n.as_bytes() == name.as_bytes())
+                .map(|_| i)
+                .or_else(|| st.names.iter().position(|n| n.as_bytes() == name.as_bytes()))?;
+            if f.symtab_attached {
+                Some(st.slots.get(idx).cloned().flatten().unwrap_or(Value::Null))
+            } else {
+                st.slots.get(idx).cloned().flatten()
+            }
+        };
         for (i, p) in uf.params.iter().enumerate() {
             if p.variadic {
                 for a in f.args.iter().skip(i).flatten() {
@@ -560,7 +575,8 @@ impl Vm {
                 break;
             }
             // Not yet received (RECV pending): the passed value.
-            let v = cv(i)
+            let v = from_vars(i, &p.name)
+                .or_else(|| cv(i))
                 .or_else(|| f.args.get(i).cloned().flatten())
                 .map(|v| v.deref())
                 .unwrap_or_default();
