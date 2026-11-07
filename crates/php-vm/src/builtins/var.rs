@@ -6,7 +6,7 @@ use super::util::{b, i, s, sv};
 use crate::func::Args;
 use crate::object;
 use crate::vm::{Vm, VmResult};
-use php_runtime::{Value, ZArray, ZStr};
+use php_runtime::{ArrayKey, Value, ZArray, ZStr};
 
 fn var_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let _scope = dump::begin_dump();
@@ -315,6 +315,77 @@ fn is_countable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }))
 }
 
+fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    let syntax_only = b(a, 1);
+    let r = if syntax_only {
+        match &v {
+            Value::Str(_) => true,
+            Value::Object(_) => vm.is_callable_value(&v),
+            Value::Array(x) => {
+                x.len() == 2
+                    && matches!(
+                        x.get(&ArrayKey::Int(0)).map(Value::deref),
+                        Some(Value::Object(_) | Value::Str(_))
+                    )
+                    && matches!(
+                        x.get(&ArrayKey::Int(1)).map(Value::deref),
+                        Some(Value::Str(_))
+                    )
+            }
+            _ => false,
+        }
+    } else {
+        let is_relative_array = match &v {
+            Value::Array(x) if x.len() == 2 => {
+                let target = x.get(&ArrayKey::Int(0)).map(Value::deref);
+                let method = x.get(&ArrayKey::Int(1)).map(Value::deref);
+                match (target, method) {
+                    (Some(Value::Object(o)), Some(Value::Str(m))) => {
+                        let cname = object::class_of(&o).name.clone();
+                        Some((cname, m.clone()))
+                    }
+                    (Some(Value::Str(cname)), Some(Value::Str(m))) => {
+                        Some((cname.clone(), m.clone()))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+
+        if let Some((target_name, method_name)) = is_relative_array {
+            let m_bytes = method_name.as_bytes();
+            let is_relative = if let Some(p) = m_bytes.windows(2).position(|w| w == b"::") {
+                let scope = &m_bytes[..p];
+                scope.eq_ignore_ascii_case(b"parent")
+                    || scope.eq_ignore_ascii_case(b"self")
+                    || scope.eq_ignore_ascii_case(b"static")
+            } else {
+                false
+            };
+
+            if is_relative {
+                vm.deprecated(&format!(
+                    "Callables of the form [\"{}\", \"{}\"] are deprecated",
+                    target_name.to_string_lossy(),
+                    method_name.to_string_lossy()
+                ))?;
+                vm.zend_is_callable(&v, true)?.is_ok()
+            } else {
+                vm.zend_is_callable(&v, false)?.is_ok()
+            }
+        } else {
+            vm.zend_is_callable(&v, false)?.is_ok()
+        }
+    };
+    if a.has(2) {
+        let name = vm.callable_name(&v);
+        a.set_ref(2, sv(name));
+    }
+    Ok(Value::Bool(r))
+}
+
 /// Marks a registered builtin `#[\Deprecated(since: ..., message: ...)]`.
 fn deprecate(vm: &mut Vm, name: &str, since: &str, message: &str) {
     let lc = ZStr::from(name);
@@ -375,6 +446,11 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "is_numeric(mixed $value): bool", is_numeric);
     reg(vm, "is_iterable(mixed $value): bool", is_iterable);
     reg(vm, "is_countable(mixed $value): bool", is_countable);
+    reg(
+        vm,
+        "is_callable(mixed $value, bool $syntax_only = false, &$callable_name = null): bool",
+        is_callable,
+    );
     deprecate(vm, "doubleval", "8.6", "use floatval() instead");
     deprecate(vm, "is_integer", "8.6", "use is_int() instead");
     deprecate(vm, "is_long", "8.6", "use is_int() instead");

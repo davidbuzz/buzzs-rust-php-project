@@ -10,7 +10,7 @@
 use crate::object;
 use crate::props::PropLookup;
 use crate::vm::Vm;
-use php_runtime::{ArrayKey, Obj, PhpRef, RtResult, Value, ZStr};
+use php_runtime::{ArrayKey, Obj, PhpRef, RtResult, Value, ZArray, ZStr};
 use php_stdarr as sa;
 
 impl sa::ArrayContext for Vm {
@@ -167,16 +167,141 @@ impl Vm {
     }
 }
 
-/// Registers the array functions: they are provided by the
-/// `php-ext-stdarr` extension, so there is nothing to do here.
-pub(crate) fn register(_vm: &mut Vm) {}
+/// Registers the array functions for the bare VM.
+pub(crate) fn register(vm: &mut Vm) {
+    super::reg(
+        vm,
+        "in_array(mixed $needle, array $haystack, bool $strict = false): bool",
+        in_array,
+    );
+    super::reg(
+        vm,
+        "array_slice(array $array, int $offset, ?int $length = null, bool $preserve_keys = false): array",
+        array_slice,
+    );
+}
 
 fn count(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value> {
     let v = a.at(0);
+    let mode = a.int(1);
+    if mode == sa::COUNT_NORMAL {
+        if let Value::Array(arr) = &v {
+            if arr.is_packed() {
+                return Ok(Value::Int(i64::try_from(arr.len()).unwrap_or(0)));
+            }
+        }
+    }
     let f = a.func_name();
-    sa::basic::count(vm, &f, &v, a.int(1))
+    sa::basic::count(vm, &f, &v, mode)
         .map(Value::Int)
         .map_err(|e| vm.rt_throw(e))
+}
+
+fn in_array(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value> {
+    let n = a.at(0);
+    let h = a.array(1);
+    let strict = a.bool(2);
+    if h.is_packed() {
+        if strict {
+            match &n {
+                Value::Int(target) => {
+                    for v in h.values() {
+                        if let Value::Int(x) = v.deref() {
+                            if x == *target {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                    }
+                    return Ok(Value::Bool(false));
+                }
+                Value::Str(target) => {
+                    for v in h.values() {
+                        if let Value::Str(x) = v.deref() {
+                            if x.as_bytes() == target.as_bytes() {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                    }
+                    return Ok(Value::Bool(false));
+                }
+                Value::Bool(target) => {
+                    for v in h.values() {
+                        if let Value::Bool(x) = v.deref() {
+                            if x == *target {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                    }
+                    return Ok(Value::Bool(false));
+                }
+                _ => {
+                    for v in h.values() {
+                        if php_stdarr::ops::is_identical(&n, &v.deref()).map_err(|e| vm.rt_throw(e))? {
+                            return Ok(Value::Bool(true));
+                        }
+                    }
+                    return Ok(Value::Bool(false));
+                }
+            }
+        } else {
+            for v in h.values() {
+                if php_stdarr::ops::is_equal(&n, v, vm).map_err(|e| vm.rt_throw(e))? {
+                    return Ok(Value::Bool(true));
+                }
+            }
+            return Ok(Value::Bool(false));
+        }
+    }
+    sa::basic::in_array(vm, &n, &h, strict)
+        .map(Value::Bool)
+        .map_err(|e| vm.rt_throw(e))
+}
+
+fn array_slice(_vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value> {
+    let arr = a.array(0);
+    let offset = a.int(1);
+    let length = a.opt(2).map(|_| a.int(2));
+    let preserve_keys = a.bool(3);
+
+    if arr.is_packed() {
+        let num_in = i64::try_from(arr.len()).unwrap_or(i64::MAX);
+        let mut len = length.unwrap_or(num_in);
+        let mut off = offset;
+        if off > num_in {
+            return Ok(Value::Array(ZArray::new()));
+        } else if off < 0 {
+            off += num_in;
+            if off < 0 {
+                off = 0;
+            }
+        }
+        if len < 0 {
+            len += num_in - off;
+        } else if off.unsigned_abs().saturating_add(len.unsigned_abs()) > num_in.unsigned_abs() {
+            len = num_in - off;
+        }
+        if len <= 0 {
+            return Ok(Value::Array(ZArray::new()));
+        }
+        let skip = usize::try_from(off).unwrap_or(0);
+        let take = usize::try_from(len).unwrap_or(usize::MAX);
+
+        if !preserve_keys || (off == 0 && arr.is_without_holes()) {
+            let vals = arr
+                .values()
+                .skip(skip)
+                .take(take)
+                .map(php_stdarr::util::copy_elem);
+            return Ok(Value::Array(ZArray::from_values(vals)));
+        }
+    }
+
+    Ok(Value::Array(sa::basic::array_slice(
+        &arr,
+        offset,
+        length,
+        preserve_keys,
+    )))
 }
 
 /// Registers `count()`, `sizeof()` and the `COUNT_*` constants for the
@@ -192,6 +317,14 @@ pub(crate) fn register_bare_count(vm: &mut Vm) {
     m.function(
         "sizeof(Countable|array $value, int $mode = COUNT_NORMAL): int",
         count,
+    );
+    m.function(
+        "in_array(mixed $needle, array $haystack, bool $strict = false): bool",
+        in_array,
+    );
+    m.function(
+        "array_slice(array $array, int $offset, ?int $length = null, bool $preserve_keys = false): array",
+        array_slice,
     );
     m.constant("COUNT_NORMAL", Value::Int(sa::COUNT_NORMAL));
     m.constant("COUNT_RECURSIVE", Value::Int(sa::COUNT_RECURSIVE));

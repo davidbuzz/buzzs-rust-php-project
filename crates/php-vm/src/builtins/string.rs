@@ -98,10 +98,53 @@ fn explode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     )))
 }
 
+fn str_slice<'a>(a: &'a Args, i: usize, fallback: &'a mut Option<ZStr>) -> &'a [u8] {
+    match a.values.get(i) {
+        Some(Value::Str(s)) => s.as_bytes(),
+        Some(Value::Reference(r)) => {
+            *fallback = match &*r.borrow() {
+                Value::Str(s) => Some(s.clone()),
+                Value::Int(n) => Some(ZStr::from(n.to_string())),
+                _ => Some(ZStr::empty()),
+            };
+            fallback.as_ref().unwrap().as_bytes()
+        }
+        _ => {
+            *fallback = Some(s(a, i));
+            fallback.as_ref().unwrap().as_bytes()
+        }
+    }
+}
+
+fn strlen(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let len = match a.values.get(0) {
+        Some(Value::Str(s)) => s.len(),
+        Some(Value::Reference(r)) => match &*r.borrow() {
+            Value::Str(s) => s.len(),
+            Value::Int(n) => n.to_string().len(),
+            _ => s(a, 0).len(),
+        },
+        Some(Value::Int(n)) => n.to_string().len(),
+        _ => s(a, 0).len(),
+    };
+    Ok(Value::Int(i64::try_from(len).unwrap_or(0)))
+}
+
 fn substr(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = s(a, 0);
     let len = opt(a, 2).map(|_| i(a, 2));
-    Ok(sv(search::substr(st.as_bytes(), i(a, 1), len)))
+    let sub = search::substr(st.as_bytes(), i(a, 1), len);
+    if sub.len() == st.len() {
+        return Ok(Value::Str(st));
+    }
+    if sub.is_empty() {
+        return Ok(Value::Str(ZStr::empty()));
+    }
+    let out = ZStr::from(sub);
+    if st.is_valid_utf8() && std::str::from_utf8(sub).is_ok() {
+        out.mark_valid_utf8();
+    }
+    Ok(Value::Str(out))
 }
 
 fn pos_result(r: Option<i64>) -> Value {
@@ -109,19 +152,35 @@ fn pos_result(r: Option<i64>) -> Value {
 }
 
 fn strpos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = search::strpos(s(a, 0).as_bytes(), s(a, 1).as_bytes(), i(a, 2));
+    let mut fb0 = None;
+    let mut fb1 = None;
+    let h = str_slice(a, 0, &mut fb0);
+    let n = str_slice(a, 1, &mut fb1);
+    let r = search::strpos(h, n, i(a, 2));
     Ok(pos_result(vm.std(r)?))
 }
 fn stripos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = search::stripos(s(a, 0).as_bytes(), s(a, 1).as_bytes(), i(a, 2));
+    let mut fb0 = None;
+    let mut fb1 = None;
+    let h = str_slice(a, 0, &mut fb0);
+    let n = str_slice(a, 1, &mut fb1);
+    let r = search::stripos(h, n, i(a, 2));
     Ok(pos_result(vm.std(r)?))
 }
 fn strrpos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = search::strrpos(s(a, 0).as_bytes(), s(a, 1).as_bytes(), i(a, 2));
+    let mut fb0 = None;
+    let mut fb1 = None;
+    let h = str_slice(a, 0, &mut fb0);
+    let n = str_slice(a, 1, &mut fb1);
+    let r = search::strrpos(h, n, i(a, 2));
     Ok(pos_result(vm.std(r)?))
 }
 fn strripos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = search::strripos(s(a, 0).as_bytes(), s(a, 1).as_bytes(), i(a, 2));
+    let mut fb0 = None;
+    let mut fb1 = None;
+    let h = str_slice(a, 0, &mut fb0);
+    let n = str_slice(a, 1, &mut fb1);
+    let r = search::strripos(h, n, i(a, 2));
     Ok(pos_result(vm.std(r)?))
 }
 
@@ -274,17 +333,31 @@ fn ucwords(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn trim_impl(vm: &mut Vm, a: &Args, mode: transform::TrimMode) -> VmResult<Value> {
     let st = s(a, 0);
-    let what = if a.has(1) { Some(s(a, 1)) } else { None };
+    let mut fb = None;
+    let what = if a.has(1) {
+        Some(str_slice(a, 1, &mut fb))
+    } else {
+        None
+    };
     let mut n = Notices::new();
     let r = transform::trim(
         st.as_bytes(),
-        what.as_ref().map(ZStr::as_bytes),
+        what,
         mode,
         &mut n,
-    )
-    .to_vec();
+    );
     vm.std_notices(n)?;
-    Ok(bytes(r))
+    if r.len() == st.len() {
+        return Ok(Value::Str(st));
+    }
+    if r.is_empty() {
+        return Ok(Value::Str(ZStr::empty()));
+    }
+    let out = ZStr::from(r);
+    if st.is_valid_utf8() && std::str::from_utf8(r).is_ok() {
+        out.mark_valid_utf8();
+    }
+    Ok(Value::Str(out))
 }
 fn trim(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     trim_impl(vm, a, transform::TrimMode::Both)
@@ -757,6 +830,7 @@ fn implode_alias_array(a: &Args) -> ZArray {
 /// Registers the string functions.
 pub(crate) fn register(vm: &mut Vm) {
     let _ = implode_alias_array;
+    reg(vm, "strlen(string $string): int", strlen);
     reg(vm, "implode($separator, $array = null): string", implode);
     alias(vm, "join", "implode");
     reg(
