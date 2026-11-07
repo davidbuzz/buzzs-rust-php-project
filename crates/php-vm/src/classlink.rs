@@ -153,6 +153,7 @@ impl Vm {
     }
 
     /// Resolves a [`ClassSpec`] at runtime.
+    #[inline]
     pub(crate) fn resolve_class_spec(&mut self, spec: &ClassSpec) -> VmResult<Rc<Class>> {
         match spec {
             ClassSpec::Named(l) => {

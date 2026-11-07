@@ -861,18 +861,21 @@ impl Vm {
     }
 
     /// `new`: creates the object, stores it and starts the constructor call.
+    #[inline]
     pub(crate) fn op_new(&mut self, class: &ClassSpec, dst: u32) -> VmResult<bool> {
         let cls = self.resolve_class_spec(class)?;
         let o = self.instantiate(&cls)?;
-        self.set_tmp(dst, Value::Object(o.clone()));
-        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.get_constructor) {
-            f(self, &o)?;
-        }
-        let Some(ctor) = cls.magic.construct.clone() else {
+        if cls.magic.construct.is_none() {
+            if let Some(hooks) = &cls.hooks {
+                if let Some(f) = hooks.get_constructor {
+                    f(self, &o)?;
+                }
+            }
             if matches!(
                 self.frame().code.ops.get(self.frame().ip),
                 Some(Op::DoCall { .. })
             ) {
+                self.set_tmp(dst, Value::Object(o));
                 return Ok(false);
             }
             // A constructor-less class still evaluates positional arguments and
@@ -882,16 +885,24 @@ impl Vm {
             call.is_ctor = true;
             // Never called; marks the object constructor-failed when an
             // argument throws (`ZEND_LIVE_NEW`).
-            call.this = Some(o);
+            call.this = Some(o.clone());
+            self.set_tmp(dst, Value::Object(o));
             self.push_pending(call);
             return Ok(true);
-        };
+        }
+        self.set_tmp(dst, Value::Object(o.clone()));
+        if let Some(hooks) = &cls.hooks {
+            if let Some(f) = hooks.get_constructor {
+                f(self, &o)?;
+            }
+        }
+        let ctor = cls.magic.construct.as_ref().unwrap();
         // `zend_std_get_constructor` checks the scope only for a
         // non-public constructor.
         if ctor.visibility() != flags::PUBLIC {
-            self.check_ctor_access(&ctor, &o)?;
+            self.check_ctor_access(ctor, &o)?;
         }
-        let mut call = self.pending_for_method(&ctor, Some(o), cls);
+        let mut call = self.pending_for_method(ctor, Some(o), cls);
         call.is_ctor = true;
         self.push_pending(call);
         Ok(true)
