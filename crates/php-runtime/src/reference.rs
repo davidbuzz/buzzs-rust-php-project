@@ -32,21 +32,50 @@ use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-/// The allocation behind a [`PhpRef`] (`zend_reference`).
+/// The allocation behind a [`PhpRef`] (`zend_reference`), also known as [`RefInner`].
 ///
 /// `repr(C)` fixes the layout: the two count words (4 + 4), then the value
 /// cell (24), 32 bytes in all.
 #[repr(C)]
-struct RefBox {
+pub struct RefBox {
     /// Number of [`PhpRef`] handles (`GC_REFCOUNT`).
-    strong: Cell<u32>,
+    pub strong: Cell<u32>,
     /// The [`WEAK_COUNT`] bits: the number of [`WeakRef`] handles, plus one
     /// held by the strong handles collectively while any exists (as in
     /// `Rc`). The [`HAS_META`] bit: the reference has an entry in [`META`].
-    weak: Cell<u32>,
+    pub weak: Cell<u32>,
     /// Dropped when the last strong handle goes; the allocation itself stays
     /// until the last weak handle goes.
-    value: ManuallyDrop<RefCell<Value>>,
+    pub value: ManuallyDrop<RefCell<Value>>,
+}
+
+/// Alias for [`RefBox`] (the reference allocation, matching php-src's 32-byte `zend_reference`).
+pub type RefInner = RefBox;
+
+/// Alias for property reference sources attached as metadata.
+pub type PropRefSource = Rc<dyn Any>;
+
+impl RefBox {
+    /// Borrows the referenced value.
+    #[inline]
+    #[must_use]
+    pub fn val(&self) -> Ref<'_, Value> {
+        self.value.borrow()
+    }
+
+    /// Borrows the referenced value.
+    #[inline]
+    #[must_use]
+    pub fn borrow(&self) -> Ref<'_, Value> {
+        self.value.borrow()
+    }
+
+    /// Mutably borrows the referenced value.
+    #[inline]
+    #[must_use]
+    pub fn borrow_mut(&self) -> RefMut<'_, Value> {
+        self.value.borrow_mut()
+    }
 }
 
 /// The bit of [`RefBox::weak`] set while the reference has VM metadata in
@@ -112,6 +141,13 @@ impl PhpRef {
     #[must_use]
     pub fn get(&self) -> Value {
         self.cell().borrow().clone()
+    }
+
+    /// Returns a clone of the referenced value (alias for [`get`]).
+    #[inline]
+    #[must_use]
+    pub fn val(&self) -> Value {
+        self.get()
     }
 
     /// Replaces the referenced value, returning the old one.
@@ -210,6 +246,12 @@ impl PhpRef {
         // Only now, with the table released: dropping metadata may run code
         // that uses it.
         drop(old);
+    }
+
+    /// Attaches a property source to this reference (for typed references).
+    #[inline]
+    pub fn add_source(&self, source: Rc<dyn Any>) {
+        self.set_meta(Some(source));
     }
 
     /// A weak handle (for the cycle collector's root buffer).
@@ -565,7 +607,9 @@ mod tests {
         assert_eq!(size_of::<Option<WeakRef>>(), 8);
         assert_eq!(size_of::<RefCell<Value>>(), 24);
         assert_eq!(size_of::<RefBox>(), 32);
+        assert_eq!(size_of::<RefInner>(), 32);
         assert_eq!(align_of::<RefBox>(), 8);
+        assert_eq!(align_of::<RefInner>(), 8);
         assert_eq!(offset_of!(RefBox, weak), 4);
         assert_eq!(offset_of!(RefBox, value), 8);
     }
@@ -580,6 +624,7 @@ mod tests {
         assert_eq!(r.addr(), r2.addr());
         r2.set(Value::Int(5));
         assert_eq!(r.get().as_int(), Some(5));
+        assert_eq!(r.val().as_int(), Some(5));
         drop(r2);
         assert_eq!(r.refcount(), 1);
         let other = PhpRef::new(Value::Int(0));

@@ -1115,12 +1115,18 @@ impl Frame {
         _cv_map: Option<Rc<[u32]>>,
     ) -> Self {
         let ncv = code.cv_names.len();
+        let symtab_attached = matches!(kind, FrameKind::Include | FrameKind::Eval);
         let mut cvs = Vec::with_capacity(ncv);
         {
             let mut st = vars.borrow_mut();
             for name in &code.cv_names {
-                let slot = st.find_or_add(name.as_bytes()) as usize;
-                let val = st.slots.get(slot).cloned().flatten();
+                let val = if symtab_attached {
+                    let slot = st.find_or_add(name.as_bytes()) as usize;
+                    st.slots.get(slot).cloned().flatten()
+                } else {
+                    st.find(name.as_bytes())
+                        .and_then(|slot| st.slots.get(slot as usize).cloned().flatten())
+                };
                 cvs.push(CvSlot::new(val));
             }
         }
@@ -1145,7 +1151,7 @@ impl Frame {
             },
             calls: Vec::with_capacity(4),
             cvs,
-            symtab_attached: kind != FrameKind::Function,
+            symtab_attached,
             vars,
             named: Vec::new(),
             args: Vec::with_capacity(8),
@@ -1181,9 +1187,11 @@ impl Frame {
         }
         self.symtab_attached = true;
         let mut st = self.vars.borrow_mut();
-        st.names.share(&self.code);
-        if st.slots.len() < self.code.cv_names.len() {
-            st.slots.resize(self.code.cv_names.len(), None);
+        if st.names.is_empty() {
+            st.names.share(&self.code);
+            if st.slots.len() < self.code.cv_names.len() {
+                st.slots.resize(self.code.cv_names.len(), None);
+            }
         }
         for (i, name) in self.code.cv_names.iter().enumerate() {
             let slot = st.find_or_add(name.as_bytes()) as usize;
@@ -1252,7 +1260,16 @@ impl Frame {
     fn unsync_cv_from_symtab_slow(&self, cv: u32) {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
             let mut st = self.vars.borrow_mut();
-            if let Some(idx) = st.find(name.as_bytes()) {
+            let idx = if st
+                .names
+                .get(cv as usize)
+                .is_some_and(|n| n.as_bytes() == name.as_bytes())
+            {
+                Some(cv)
+            } else {
+                st.find(name.as_bytes())
+            };
+            if let Some(idx) = idx {
                 if let Some(old) = st.slots[idx as usize].take() {
                     crate::gc::release_duplicate(old);
                 }
@@ -1308,8 +1325,18 @@ impl Frame {
     fn sync_cv_to_symtab_slow(&self, cv: u32, v: &Value) {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
             let mut st = self.vars.borrow_mut();
-            if let Some(idx) = st.find(name.as_bytes()) {
-                if let Some(old) = std::mem::replace(&mut st.slots[idx as usize], Some(v.clone())) {
+            let idx = if st
+                .names
+                .get(cv as usize)
+                .is_some_and(|n| n.as_bytes() == name.as_bytes())
+            {
+                cv
+            } else {
+                st.find_or_add(name.as_bytes())
+            };
+            let idx = idx as usize;
+            if idx < st.slots.len() {
+                if let Some(old) = std::mem::replace(&mut st.slots[idx], Some(v.clone())) {
                     crate::gc::release_duplicate(old);
                 }
             }
@@ -1667,6 +1694,19 @@ impl std::fmt::Debug for Vm {
         f.debug_struct("Vm")
             .field("frames", &self.frames.len())
             .finish_non_exhaustive()
+    }
+}
+
+impl Vm {
+    /// Attaches the symbol table of the main frame if it is unattached,
+    /// syncing its CV slots to `self.globals`.
+    #[inline]
+    pub(crate) fn attach_globals_symbol_table(&mut self) {
+        if let Some(f) = self.frames.first_mut() {
+            if !f.symtab_attached && Rc::ptr_eq(&f.vars, &self.globals) {
+                f.attach_symbol_table();
+            }
+        }
     }
 }
 

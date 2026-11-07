@@ -673,20 +673,6 @@ impl Vm {
     #[allow(clippy::inline_always, clippy::float_cmp)] // every loop's condition: no call, one frame look
     pub(super) fn cmp_jmp_num(&self, a: Operand, b: Operand, mask: u8) -> Option<bool> {
         let f = self.frames.last()?;
-        if let (Some(&Value::Float(lhs)), Some(&Value::Float(rhs))) =
-            (operand_simple(f, a), operand_simple(f, b))
-        {
-            let outcome = if lhs < rhs {
-                cmp_outcome::LESS
-            } else if lhs > rhs {
-                cmp_outcome::GREATER
-            } else if lhs == rhs {
-                cmp_outcome::EQUAL
-            } else {
-                cmp_outcome::UNORDERED
-            };
-            return Some((mask & outcome) != 0);
-        }
         let x = Self::peek_num(f, a)?;
         let y = Self::peek_num(f, b)?;
         let identity = (mask & cmp_outcome::IDENTITY) != 0;
@@ -741,32 +727,6 @@ impl Vm {
         dst: u32,
     ) -> Option<bool> {
         let f = self.frames.last_mut()?;
-        if let (Some(&Value::Float(lhs)), Some(&Value::Float(rhs))) =
-            (operand_simple(f, a), operand_simple(f, b))
-        {
-            let fres = match op {
-                BinKind::Arith(BinaryOp::Add) => Some(lhs + rhs),
-                BinKind::Arith(BinaryOp::Sub) => Some(lhs - rhs),
-                BinKind::Arith(BinaryOp::Mul) => Some(lhs * rhs),
-                BinKind::Arith(BinaryOp::Div) if rhs != 0.0 => Some(lhs / rhs),
-                _ => None,
-            };
-            if let Some(r) = fres {
-                let idx = cv as usize;
-                if let Some(slot) = f.cvs.get(idx) {
-                    if is_plain_slot(slot.get()) {
-                        let val = Value::Float(r);
-                        let old = slot.set(Some(val));
-                        f.sync_cv_to_symtab(cv, &Value::Float(r));
-                        // A scalar is forgotten; a string is released.
-                        discard_unrooted(old);
-                        return Some(true);
-                    }
-                }
-                put_tmp(f.tmps.get_mut(dst as usize)?, Value::Float(r));
-                return Some(false);
-            }
-        }
         let x = Self::peek_num(f, a)?;
         let y = Self::peek_num(f, b)?;
         let r = num_bin(op, x, y)?;
@@ -1285,6 +1245,7 @@ impl Vm {
         }
 
         // Fall back to the global symbol table:
+        self.attach_globals_symbol_table();
         let idx = self.globals.borrow_mut().find(&name_bytes);
         if let Some(idx) = idx {
             let mut cache = code.rt_cache.globals.borrow_mut();

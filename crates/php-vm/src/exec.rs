@@ -175,7 +175,7 @@ impl Vm {
 
 /// Computes binary arithmetic on floats directly.
 #[inline(always)]
-#[allow(clippy::inline_always)]
+#[allow(dead_code, clippy::inline_always)]
 fn float_bin_arith(op: BinKind, xf: f64, yf: f64) -> Option<f64> {
     match op {
         BinKind::Arith(BinaryOp::Add) => Some(xf + yf),
@@ -1260,26 +1260,7 @@ impl Vm {
                             b,
                             dst,
                         } => {
-                            let mut handled = false;
-                            if let Some(f) = self.frames.last_mut() {
-                                if let Some((xf, is_fa)) = Self::peek_num_f64(f, *a) {
-                                    if let Some((yf, is_fb)) = Self::peek_num_f64(f, *b) {
-                                        if is_fa || is_fb {
-                                            if let Some(res) = float_bin_arith(*kind, xf, yf) {
-                                                if let Some(slot) = f.tmps.get_mut(*dst as usize) {
-                                                    if let Value::Float(ref mut dst_f) = slot {
-                                                        *dst_f = res;
-                                                    } else {
-                                                        spec::put_tmp(slot, Value::Float(res));
-                                                    }
-                                                    handled = true;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if !handled && !self.bin_tmp_fast(*kind, *a, *b, *dst) {
+                            if !self.bin_tmp_fast(*kind, *a, *b, *dst) {
                                 if let Some(r) = self.equality_fast(*kind, *a, *b) {
                                     self.set_tmp(*dst, Value::Bool(r));
                                 } else {
@@ -1294,53 +1275,19 @@ impl Vm {
                             b,
                             dst,
                             cv,
-                        } => {
-                            let mut handled = false;
-                            if let Some(f) = self.frames.last_mut() {
-                                if let Some((xf, is_fa)) = Self::peek_num_f64(f, *a) {
-                                    if let Some((yf, is_fb)) = Self::peek_num_f64(f, *b) {
-                                        if is_fa || is_fb {
-                                            if let Some(res) = float_bin_arith(*kind, xf, yf) {
-                                                let idx = *cv as usize;
-                                                if let Some(slot) = f.cvs.get(idx) {
-                                                    unsafe {
-                                                        if let Some(Value::Float(ref mut dst_f)) =
-                                                            slot.get_mut_unchecked()
-                                                        {
-                                                            *dst_f = res;
-                                                            f.sync_cv_to_symtab(*cv, &Value::Float(res));
-                                                            ip += 1;
-                                                            handled = true;
-                                                        } else if spec::is_plain_slot(slot.get()) {
-                                                            let old = slot.set(Some(Value::Float(res)));
-                                                            f.sync_cv_to_symtab(*cv, &Value::Float(res));
-                                                            discard_unrooted(old);
-                                                            ip += 1;
-                                                            handled = true;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if !handled {
-                                match self.bin_assign_cv_fast(*kind, *a, *b, *cv, *dst) {
-                                    // Stored into the variable: the `AssignCv` after
-                                    // the op is done; otherwise it runs on `dst`.
-                                    Some(true) => ip += 1,
-                                    Some(false) => {}
-                                    None => match self.equality_fast(*kind, *a, *b) {
-                                        Some(r) => match self.cv_store_plain(*cv, Value::Bool(r)) {
-                                            Ok(()) => ip += 1,
-                                            Err(r) => self.set_tmp(*dst, r),
-                                        },
-                                        None => break 'slow,
-                                    },
-                                }
-                            }
-                        }
+                        } => match self.bin_assign_cv_fast(*kind, *a, *b, *cv, *dst) {
+                            // Stored into the variable: the `AssignCv` after
+                            // the op is done; otherwise it runs on `dst`.
+                            Some(true) => ip += 1,
+                            Some(false) => {}
+                            None => match self.equality_fast(*kind, *a, *b) {
+                                Some(r) => match self.cv_store_plain(*cv, Value::Bool(r)) {
+                                    Ok(()) => ip += 1,
+                                    Err(r) => self.set_tmp(*dst, r),
+                                },
+                                None => break 'slow,
+                            },
+                        },
                         Op::Abs { src, dst, to } => {
                             if let Some(val) = self.abs_fast(*src) {
                                 if let Some(cv) = *to {
@@ -1647,6 +1594,50 @@ impl Vm {
                         Op::ConcatCv { cv, val, dst, .. } => {
                             if !self.concat_cv_fast(*cv, *val, *dst) {
                                 break 'slow;
+                            }
+                        }
+                        Op::FetchConst {
+                            name,
+                            fallback,
+                            dst,
+                        } => match self.const_hit(*name, *fallback) {
+                            Some(v) => {
+                                if matches!(
+                                    v,
+                                    Value::Int(_)
+                                        | Value::Float(_)
+                                        | Value::Bool(_)
+                                        | Value::Null
+                                        | Value::Str(_)
+                                ) {
+                                    self.set_tmp(*dst, v);
+                                } else {
+                                    break 'slow;
+                                }
+                            }
+                            None => break 'slow,
+                        },
+                        Op::FetchClassConst { class, name, dst } => {
+                            let name_lit = match name {
+                                Operand::Lit(l) => *l,
+                                _ => break 'slow,
+                            };
+                            match self.class_const_cached(class, name_lit) {
+                                Some(v) => {
+                                    if matches!(
+                                        v,
+                                        Value::Int(_)
+                                            | Value::Float(_)
+                                            | Value::Bool(_)
+                                            | Value::Null
+                                            | Value::Str(_)
+                                    ) {
+                                        self.set_tmp(*dst, v);
+                                    } else {
+                                        break 'slow;
+                                    }
+                                }
+                                None => break 'slow,
                             }
                         }
                         // Cached constants with the `AssignCv` after them

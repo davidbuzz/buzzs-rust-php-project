@@ -418,6 +418,9 @@ impl Vm {
         }
         self.observer_begin_top();
         let r = self.execute(base);
+        if let Some(f) = self.frames.get_mut(base) {
+            f.attach_symbol_table();
+        }
         self.frames.truncate(base);
         match r {
             Ok(v) => {
@@ -689,6 +692,9 @@ impl Vm {
         self.observer_begin_top();
         let base = self.frames.len() - 1;
         let r = self.execute(base);
+        if let Some(f) = self.frames.get_mut(base) {
+            f.attach_symbol_table();
+        }
         self.frames.truncate(base);
         match r {
             Ok(_) => Ok(()),
