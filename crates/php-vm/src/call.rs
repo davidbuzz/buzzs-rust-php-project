@@ -1123,9 +1123,6 @@ impl Vm {
             // argument throws (`ZEND_LIVE_NEW`).
             call.this = Some(o.clone());
             self.set_tmp(dst, Value::Object(o));
-            if let Some(buf) = self.call_bufs.args.pop() {
-                install_buffer(&mut call.args, buf);
-            }
             self.push_pending(call);
             return Ok(true);
         }
@@ -1154,9 +1151,6 @@ impl Vm {
             is_ctor: true,
             ..PendingCall::new(ctor.func.clone())
         };
-        if let Some(buf) = self.call_bufs.args.pop() {
-            install_buffer(&mut call.args, buf);
-        }
         self.push_pending(call);
         Ok(true)
     }
@@ -1772,7 +1766,7 @@ impl Vm {
     pub(crate) fn op_do_call(&mut self, dst: Option<u32>) -> VmResult<bool> {
         let frame = self.frames.last_mut().expect("active frame");
         let strict = frame.code.strict_types;
-        let call = frame.calls.pop().expect("pending call");
+        let mut call = frame.calls.pop().expect("pending call");
         // `ZEND_DO_UCALL`: a user function that is neither deprecated, nor
         // `#[\NoDiscard]`, nor a body-less constructor. The call's parts
         // move into the frame (no copy of the call, no husk to drop).
@@ -1786,8 +1780,9 @@ impl Vm {
         // Builtin fast path: plain calls without named arguments that are not
         // `#[\NoDiscard]` and not constructors skip `op_do_call_checked`.
         if let Func::Builtin(b) = &call.func {
+            let b = b.clone();
             if !self.observer.enabled {
-                if let Some(r) = self.fast_builtin_call(b, &mut call) {
+                if let Some(r) = self.fast_builtin_call(&b, &mut call) {
                     let v = r?;
                     if let Some(d) = dst {
                         self.set_tmp(d, v);
@@ -1796,7 +1791,6 @@ impl Vm {
                 }
             }
             if b.flags & flags::NODISCARD == 0 && !call.is_ctor {
-                let b = b.clone();
                 self.pending_call_dst = dst;
                 let v = self.call_builtin(&b, call, strict)?;
                 if let Some(d) = dst {
@@ -2198,23 +2192,37 @@ impl Vm {
         mut call: PendingCall,
         strict: bool,
     ) -> VmResult<Value> {
-        if call.inline_count > 0 {
-            let n = call.inline_count as usize;
-            call.args.reserve(n);
-            for i in 0..n {
-                call.args.push(call.inline_args[i].take());
-            }
-            call.inline_count = 0;
-        }
         if !self.observer.enabled {
             if let Some(r) = self.fast_builtin_call(b, &mut call) {
                 return r;
+            }
+            if call.inline_count > 0 {
+                let n = call.inline_count as usize;
+                if let Some(buf) = self.call_bufs.args.pop() {
+                    install_buffer(&mut call.args, buf);
+                }
+                call.args.reserve(n);
+                for i in 0..n {
+                    call.args.push(call.inline_args[i].take());
+                }
+                call.inline_count = 0;
             }
             // php-src's frameless internal calls, where no frame can be seen.
             if crate::special::frameless_call(b, &call) {
                 return self.call_builtin_frameless(b, call);
             }
             return self.call_builtin_impl(b, call, strict, false);
+        }
+        if call.inline_count > 0 {
+            let n = call.inline_count as usize;
+            if let Some(buf) = self.call_bufs.args.pop() {
+                install_buffer(&mut call.args, buf);
+            }
+            call.args.reserve(n);
+            for i in 0..n {
+                call.args.push(call.inline_args[i].take());
+            }
+            call.inline_count = 0;
         }
         let depth = self.frames.len();
         let keep = std::mem::replace(&mut self.observer.keep_builtin_frame, true);
@@ -2241,11 +2249,16 @@ impl Vm {
             || call.is_ctor
             || call.magic_name.is_some()
             || call.dynamic
-            || call.args.len() != 1
         {
             return None;
         }
-        let raw = call.args[0].as_ref()?;
+        let raw = if call.inline_count == 1 && call.args.is_empty() {
+            call.inline_args[0].as_ref()?
+        } else if call.inline_count == 0 && call.args.len() == 1 {
+            call.args[0].as_ref()?
+        } else {
+            return None;
+        };
         let res = match raw {
             Value::Reference(r) => {
                 let borrowed = r.try_borrow()?;
@@ -2256,8 +2269,12 @@ impl Vm {
         if let Err(e) = self.check_interrupt() {
             return Some(Err(e));
         }
-        let args = std::mem::take(&mut call.args);
-        self.put_arg_vec(args);
+        call.inline_args[0] = None;
+        call.inline_count = 0;
+        if !call.args.is_empty() || call.args.capacity() > 0 {
+            let args = std::mem::take(&mut call.args);
+            self.put_arg_vec(args);
+        }
         let named = std::mem::take(&mut call.named);
         forget_unallocated(named);
         Some(Ok(res))
