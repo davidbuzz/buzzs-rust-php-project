@@ -36,6 +36,82 @@ fn meet_cv(a: CvLattice, b: CvLattice, literals: &[Value]) -> CvLattice {
     }
 }
 
+fn update_cv_state_for_op(
+    op: &Op,
+    places: &[crate::opcode::Place],
+    num_cvs: usize,
+    cur_state: &mut [CvLattice],
+) {
+    match op {
+        Op::AssignCv { cv, val, .. } => {
+            let cv_idx = *cv as usize;
+            if cv_idx < num_cvs {
+                match val {
+                    Operand::Lit(l) => {
+                        cur_state[cv_idx] = CvLattice::Const(*l);
+                    }
+                    Operand::Cv(other) => {
+                        let o_idx = *other as usize;
+                        if o_idx < num_cvs {
+                            cur_state[cv_idx] = cur_state[o_idx];
+                        } else {
+                            cur_state[cv_idx] = CvLattice::Bottom;
+                        }
+                    }
+                    _ => {
+                        cur_state[cv_idx] = CvLattice::Bottom;
+                    }
+                }
+            }
+        }
+        Op::IncDec { place, .. }
+        | Op::Assign { place, .. }
+        | Op::AssignOp { place, .. }
+        | Op::AssignRef { place, .. }
+        | Op::MakeRef { place, .. }
+        | Op::Unset { place, .. } => {
+            if let Some(p) = places.get(*place as usize) {
+                match p.base {
+                    PlaceBase::Cv(cv) => {
+                        let cv_idx = cv as usize;
+                        if cv_idx < num_cvs {
+                            cur_state[cv_idx] = CvLattice::Bottom;
+                        }
+                    }
+                    PlaceBase::VarVar(_) => {
+                        cur_state.fill(CvLattice::Bottom);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Op::IncDecCv { cv, .. }
+        | Op::AssignOpCv { cv, .. }
+        | Op::IncDecCvCmpJmp { cv, .. }
+        | Op::ConcatCv { cv, .. }
+        | Op::FetchConstTo { to: cv, .. }
+        | Op::FetchClassConstTo { to: cv, .. }
+        | Op::BinAssignCv { cv, .. }
+        | Op::Global { cv, .. }
+        | Op::BindStatic { cv, .. }
+        | Op::InitStatic { cv, .. }
+        | Op::Recv { cv, .. }
+        | Op::RecvInit { cv, .. }
+        | Op::RecvVariadic { cv, .. }
+        | Op::AssignDimCv { cv, .. }
+        | Op::AssignDimsCv { cv, .. }
+        | Op::AssignOpDimsCv { cv, .. }
+        | Op::AssignOpDimCv { cv, .. }
+        | Op::IncDecDimCv { cv, .. } => {
+            let cv_idx = *cv as usize;
+            if cv_idx < num_cvs {
+                cur_state[cv_idx] = CvLattice::Bottom;
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Runs SCCP / DFA constant propagation on `op_array`. Returns `true` if any substitution was made.
 pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
     let num_tmps = op_array.num_tmps as usize;
@@ -454,42 +530,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                     continue;
                 }
 
-                match op {
-                    Op::AssignCv { cv, val, .. } => {
-                        let cv_idx = *cv as usize;
-                        if cv_idx < num_cvs {
-                            match val {
-                                Operand::Lit(l) => {
-                                    cur_state[cv_idx] = CvLattice::Const(*l);
-                                }
-                                Operand::Cv(other) => {
-                                    let o_idx = *other as usize;
-                                    if o_idx < num_cvs {
-                                        cur_state[cv_idx] = cur_state[o_idx];
-                                    } else {
-                                        cur_state[cv_idx] = CvLattice::Bottom;
-                                    }
-                                }
-                                _ => {
-                                    cur_state[cv_idx] = CvLattice::Bottom;
-                                }
-                            }
-                        }
-                    }
-                    Op::IncDecCv { cv, .. }
-                    | Op::AssignOpCv { cv, .. }
-                    | Op::IncDecCvCmpJmp { cv, .. }
-                    | Op::ConcatCv { cv, .. }
-                    | Op::FetchConstTo { to: cv, .. }
-                    | Op::FetchClassConstTo { to: cv, .. }
-                    | Op::BinAssignCv { cv, .. } => {
-                        let cv_idx = *cv as usize;
-                        if cv_idx < num_cvs {
-                            cur_state[cv_idx] = CvLattice::Bottom;
-                        }
-                    }
-                    _ => {}
-                }
+                update_cv_state_for_op(op, &op_array.places, num_cvs, &mut cur_state);
             }
 
             out_state[b] = cur_state;
@@ -746,42 +787,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                 });
 
                 // Update CV state
-                match op {
-                    Op::AssignCv { cv, val, .. } => {
-                        let cv_idx = *cv as usize;
-                        if cv_idx < num_cvs {
-                            match val {
-                                Operand::Lit(l) => {
-                                    cur_state[cv_idx] = CvLattice::Const(*l);
-                                }
-                                Operand::Cv(other) => {
-                                    let o_idx = *other as usize;
-                                    if o_idx < num_cvs {
-                                        cur_state[cv_idx] = cur_state[o_idx];
-                                    } else {
-                                        cur_state[cv_idx] = CvLattice::Bottom;
-                                    }
-                                }
-                                _ => {
-                                    cur_state[cv_idx] = CvLattice::Bottom;
-                                }
-                            }
-                        }
-                    }
-                    Op::IncDecCv { cv, .. }
-                    | Op::AssignOpCv { cv, .. }
-                    | Op::IncDecCvCmpJmp { cv, .. }
-                    | Op::ConcatCv { cv, .. }
-                    | Op::FetchConstTo { to: cv, .. }
-                    | Op::FetchClassConstTo { to: cv, .. }
-                    | Op::BinAssignCv { cv, .. } => {
-                        let cv_idx = *cv as usize;
-                        if cv_idx < num_cvs {
-                            cur_state[cv_idx] = CvLattice::Bottom;
-                        }
-                    }
-                    _ => {}
-                }
+                update_cv_state_for_op(op, &op_array.places, num_cvs, &mut cur_state);
             }
         }
     }
