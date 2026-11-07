@@ -2341,8 +2341,23 @@ impl Vm {
                         Flow::Next
                     }
                     Op::TypeCheck { a, mask, dst } => {
-                        let v = self.read(*a)?;
-                        let r = crate::opcode::type_mask::matches(*mask, &v);
+                        let r = match a {
+                            Operand::Cv(cv) => self.frame().peek_cv(*cv, |s| match s {
+                                Some(v) => Some(crate::opcode::type_mask::matches(*mask, v)),
+                                None => None,
+                            }),
+                            Operand::Lit(i) => self.frame().code.literals.get(*i as usize).map(|v| {
+                                crate::opcode::type_mask::matches(*mask, v)
+                            }),
+                            _ => None,
+                        };
+                        let r = match r {
+                            Some(matched) => matched,
+                            None => {
+                                let v = self.read(*a)?;
+                                crate::opcode::type_mask::matches(*mask, &v)
+                            }
+                        };
                         self.set_dst(*dst, Value::Bool(r));
                         Flow::Next
                     }

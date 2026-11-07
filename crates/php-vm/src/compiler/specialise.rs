@@ -18,6 +18,10 @@
 //! fetch, when the variable holds no refcounted value; on any other path it
 //! writes the temporary and the successor runs as before. A jump landing on
 //! the successor from elsewhere also runs it as before.
+//!
+//! Note: Single-argument builtin function calls matching deterministic type
+//! predicates (`is_int`, `is_string`, `is_array`, etc.) and scalar functions
+//! (`strlen`, `count`) are fast-pathed at call execution in [`crate::call`].
 
 use crate::opcode::{
     cmp_outcome, ArgSrc, BinKind, ClassSpec, FetchMode, IncDecKind, Literal, Op, Operand, Place,

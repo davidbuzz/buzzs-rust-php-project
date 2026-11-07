@@ -1378,6 +1378,15 @@ impl Vm {
         // Builtin fast path: plain calls without named arguments that are not
         // `#[\NoDiscard]` and not constructors skip `op_do_call_checked`.
         if let Func::Builtin(b) = &call.func {
+            if !self.observer.enabled {
+                if let Some(r) = self.fast_builtin_call(b, &mut call) {
+                    let v = r?;
+                    if let Some(d) = dst {
+                        self.set_tmp(d, v);
+                    }
+                    return Ok(false);
+                }
+            }
             if b.flags & flags::NODISCARD == 0 && !call.is_ctor {
                 let b = b.clone();
                 self.pending_call_dst = dst;
@@ -1717,10 +1726,13 @@ impl Vm {
     pub(crate) fn call_builtin(
         &mut self,
         b: &Rc<Builtin>,
-        call: PendingCall,
+        mut call: PendingCall,
         strict: bool,
     ) -> VmResult<Value> {
         if !self.observer.enabled {
+            if let Some(r) = self.fast_builtin_call(b, &mut call) {
+                return r;
+            }
             // php-src's frameless internal calls, where no frame can be seen.
             if crate::special::frameless_call(b, &call) {
                 return self.call_builtin_frameless(b, call);
@@ -1736,6 +1748,93 @@ impl Vm {
         self.frames.truncate(depth);
         result
     }
+
+    /// Fast path for single-argument builtin calls matching deterministic type
+    /// predicates (`is_int`, `is_string`, `is_array`, etc.) or scalar functions
+    /// (`strlen`, `count`). Avoids full call-frame setup and parameter reflection.
+    #[inline]
+    fn fast_builtin_call(
+        &mut self,
+        b: &Builtin,
+        call: &mut PendingCall,
+    ) -> Option<VmResult<Value>> {
+        if b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+            || call.has_named
+            || !call.named.is_empty()
+            || call.is_ctor
+            || call.magic_name.is_some()
+            || call.dynamic
+            || call.args.len() != 1
+        {
+            return None;
+        }
+        let raw = call.args[0].as_ref()?;
+        let res = match raw {
+            Value::Reference(r) => {
+                let borrowed = r.try_borrow()?;
+                fast_builtin_eval(b.name.as_bytes(), &borrowed)?
+            }
+            val => fast_builtin_eval(b.name.as_bytes(), val)?,
+        };
+        if let Err(e) = self.check_interrupt() {
+            return Some(Err(e));
+        }
+        let args = std::mem::take(&mut call.args);
+        self.put_arg_vec(args);
+        let named = std::mem::take(&mut call.named);
+        forget_unallocated(named);
+        Some(Ok(res))
+    }
+}
+
+#[inline]
+fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
+    match name {
+        b"is_int" | b"is_integer" | b"is_long" => Some(Value::Bool(matches!(val, Value::Int(_)))),
+        b"is_string" => Some(Value::Bool(matches!(val, Value::Str(_)))),
+        b"is_array" => Some(Value::Bool(matches!(val, Value::Array(_)))),
+        b"is_bool" => Some(Value::Bool(matches!(val, Value::Bool(_)))),
+        b"is_null" => Some(Value::Bool(matches!(val, Value::Null))),
+        b"is_float" | b"is_double" | b"is_real" => Some(Value::Bool(matches!(val, Value::Float(_)))),
+        b"is_object" => Some(Value::Bool(matches!(val, Value::Object(_)))),
+        b"is_resource" => Some(Value::Bool(matches!(val, Value::Resource(r) if !r.is_closed()))),
+        b"is_scalar" => Some(Value::Bool(matches!(
+            val,
+            Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Bool(_)
+        ))),
+        b"is_numeric" => Some(Value::Bool(match val {
+            Value::Int(_) | Value::Float(_) => true,
+            Value::Str(s) => php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false).is_some(),
+            _ => false,
+        })),
+        b"strlen" => match val {
+            Value::Str(s) => Some(Value::Int(i64::try_from(s.len()).unwrap_or(i64::MAX))),
+            _ => None,
+        },
+        b"count" | b"sizeof" => match val {
+            Value::Array(a) => Some(Value::Int(i64::try_from(a.len()).unwrap_or(i64::MAX))),
+            _ => None,
+        },
+        b"abs" => match val {
+            Value::Int(i) if *i != i64::MIN => Some(Value::Int(i.abs())),
+            Value::Float(f) => Some(Value::Float(f.abs())),
+            _ => None,
+        },
+        b"ord" => match val {
+            Value::Str(s) if s.len() == 1 => Some(Value::Int(i64::from(s.as_bytes()[0]))),
+            _ => None,
+        },
+        b"chr" => match val {
+            Value::Int(c) if (0..=255).contains(c) => {
+                Some(Value::Str(ZStr::from(&[*c as u8][..])))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+impl Vm {
 
     /// `zend_try_compile_special_func()`: statically named calls without
     /// named arguments that php-src compiles to dedicated opcodes, so no
