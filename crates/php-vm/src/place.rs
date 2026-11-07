@@ -4376,7 +4376,7 @@ fn stored_property(obj: &Obj, name: &ZStr) -> Option<Value> {
     }
 }
 
-mod propcache;
+pub(crate) mod propcache;
 
 #[cfg(test)]
 mod tests;

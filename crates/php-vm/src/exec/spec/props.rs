@@ -48,40 +48,46 @@ impl Vm {
         if mode == FetchMode::List {
             return None;
         }
-        let frame = self.frame();
-        if frame.kind != FrameKind::Builtin {
-            if let Ok(cache) = frame.code.prop_cache.try_borrow() {
-                if let Some(entry) = cache.get(pid as usize) {
-                    if entry.class_addr != 0 && (entry.flags & (PC_READ | PC_DYN) == PC_READ) {
-                        let scope = scope_addr(frame);
-                        if entry.scope_addr == scope {
-                            let fast_val = with_base_obj(frame, entry.base, |obj| {
-                                let data = object::data(obj);
-                                if Rc::as_ptr(&data.class) as usize == entry.class_addr
-                                    && data.lazy.borrow().is_none()
-                                {
-                                    let slot = entry.slot as usize;
-                                    if let Ok(slots) = data.slots.try_borrow() {
-                                        if let Some(Some(value)) = slots.get(slot) {
-                                            return match value {
-                                                Value::Reference(r) => {
-                                                    r.try_borrow().map(|inner| inner.clone())
-                                                }
-                                                other => Some(other.clone()),
-                                            };
+        let fast_hit = {
+            let frame = self.frame();
+            let mut hit = None;
+            if frame.kind != FrameKind::Builtin {
+                if let Ok(cache) = frame.code.prop_cache.try_borrow() {
+                    if let Some(entry) = cache.get(pid as usize) {
+                        if entry.class_addr != 0 && (entry.flags & (PC_READ | PC_DYN) == PC_READ) {
+                            let scope = scope_addr(frame);
+                            if entry.scope_addr == scope {
+                                let fast_val = with_base_obj(frame, entry.base, |obj| {
+                                    let data = object::data(obj);
+                                    if Rc::as_ptr(&data.class) as usize == entry.class_addr
+                                        && data.lazy.borrow().is_none()
+                                    {
+                                        let slot = entry.slot as usize;
+                                        if let Ok(slots) = data.slots.try_borrow() {
+                                            if let Some(Some(value)) = slots.get(slot) {
+                                                return match value {
+                                                    Value::Reference(r) => {
+                                                        r.try_borrow().map(|inner| inner.clone())
+                                                    }
+                                                    other => Some(other.clone()),
+                                                };
+                                            }
                                         }
                                     }
+                                    None
+                                });
+                                if let Some(Some(v)) = fast_val {
+                                    hit = Some(v);
                                 }
-                                None
-                            });
-                            if let Some(Some(v)) = fast_val {
-                                drop(cache);
-                                return Some(self.store_fetched(dst, to, v));
                             }
                         }
                     }
                 }
             }
+            hit
+        };
+        if let Some(v) = fast_hit {
+            return Some(self.store_fetched(dst, to, v));
         }
         let v = self.prop_cache_read(pid)?;
         Some(self.store_fetched(dst, to, v))
@@ -118,99 +124,96 @@ impl Vm {
         val: Operand,
         dst: Option<u32>,
     ) -> bool {
-        let frame = self.frame();
-        if frame.kind != FrameKind::Builtin {
-            if let Ok(cache) = frame.code.prop_cache.try_borrow() {
-                if let Some(entry) = cache.get(pid as usize) {
-                    if entry.class_addr != 0 && (entry.flags & (PC_WRITE | PC_DYN) == PC_WRITE) {
-                        let scope = scope_addr(frame);
-                        if entry.scope_addr == scope {
-                            let (new_val, is_tmp) = match val {
-                                Operand::Tmp(t) => {
-                                    match frame.tmps.get(t as usize) {
-                                        Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), Some(t)),
-                                        _ => (None, None),
+        let fast_stored = {
+            let frame = self.frame();
+            let mut hit = None;
+            if frame.kind != FrameKind::Builtin {
+                if let Ok(cache) = frame.code.prop_cache.try_borrow() {
+                    if let Some(entry) = cache.get(pid as usize) {
+                        if entry.class_addr != 0 && (entry.flags & (PC_WRITE | PC_DYN) == PC_WRITE) {
+                            let scope = scope_addr(frame);
+                            if entry.scope_addr == scope {
+                                let (new_val, is_tmp) = match val {
+                                    Operand::Tmp(t) => {
+                                        match frame.tmps.get(t as usize) {
+                                            Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), Some(t)),
+                                            _ => (None, None),
+                                        }
                                     }
-                                }
-                                Operand::TmpKeep(t) => {
-                                    match frame.tmps.get(t as usize) {
-                                        Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), None),
-                                        _ => (None, None),
+                                    Operand::TmpKeep(t) => {
+                                        match frame.tmps.get(t as usize) {
+                                            Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), None),
+                                            _ => (None, None),
+                                        }
                                     }
-                                }
-                                Operand::Cv(cv) => {
-                                    match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
-                                        Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), None),
-                                        _ => (None, None),
+                                    Operand::Cv(cv) => {
+                                        match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                                            Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), None),
+                                            _ => (None, None),
+                                        }
                                     }
-                                }
-                                Operand::Lit(lit) => {
-                                    (frame.code.literals.get(lit as usize).cloned(), None)
-                                }
-                                Operand::Unused => (None, None),
-                            };
+                                    Operand::Lit(lit) => {
+                                        (frame.code.literals.get(lit as usize).cloned(), None)
+                                    }
+                                    Operand::Unused => (None, None),
+                                };
 
-                            if let Some(new_val) = new_val {
-                                let type_ok = entry.accept == u32::MAX
-                                    || accepts(entry.accept, &new_val)
-                                    || (entry.ok_class_addr != 0
-                                        && matches!(&new_val, Value::Object(o) if Rc::as_ptr(object::class_of(o)) as usize == entry.ok_class_addr));
+                                if let Some(new_val) = new_val {
+                                    let type_ok = entry.accept == u32::MAX
+                                        || accepts(entry.accept, &new_val)
+                                        || (entry.ok_class_addr != 0
+                                            && matches!(&new_val, Value::Object(o) if Rc::as_ptr(object::class_of(o)) as usize == entry.ok_class_addr));
 
-                                if type_ok {
-                                    let slot = entry.slot as usize;
-                                    let no_set = entry.flags & PC_NO_SET != 0;
-                                    let accept = entry.accept;
-                                    let class_addr = entry.class_addr;
-                                    let base = entry.base;
-                                    drop(cache);
+                                    if type_ok {
+                                        let slot = entry.slot as usize;
+                                        let no_set = entry.flags & PC_NO_SET != 0;
+                                        let accept = entry.accept;
+                                        let class_addr = entry.class_addr;
+                                        let base = entry.base;
+                                        drop(cache);
 
-                                    let result = dst.map(|_| new_val.clone());
-                                    let mut to_store = Some(new_val);
-                                    let stored = with_base_obj(frame, base, |obj| {
-                                        let data = object::data(obj);
-                                        if Rc::as_ptr(&data.class) as usize == class_addr
-                                            && data.lazy.borrow().is_none()
-                                        {
-                                            if let Ok(mut slots) = data.slots.try_borrow_mut() {
-                                                if let Some(cell) = slots.get_mut(slot) {
-                                                    let val = to_store.take().unwrap();
-                                                    let mut old = None;
-                                                    let ok = match cell {
-                                                        Some(cur) => {
-                                                            if !matches!(cur, Value::Reference(_)) {
-                                                                old = Some(std::mem::replace(cur, val));
-                                                                true
-                                                            } else {
-                                                                false
+                                        let result = dst.map(|_| new_val.clone());
+                                        let mut to_store = Some(new_val);
+                                        let stored = with_base_obj(frame, base, |obj| {
+                                            let data = object::data(obj);
+                                            if Rc::as_ptr(&data.class) as usize == class_addr
+                                                && data.lazy.borrow().is_none()
+                                            {
+                                                if let Ok(mut slots) = data.slots.try_borrow_mut() {
+                                                    if let Some(cell) = slots.get_mut(slot) {
+                                                        let val = to_store.take().unwrap();
+                                                        let mut old = None;
+                                                        let ok = match cell {
+                                                            Some(cur) => {
+                                                                if !matches!(cur, Value::Reference(_)) {
+                                                                    old = Some(std::mem::replace(cur, val));
+                                                                    true
+                                                                } else {
+                                                                    false
+                                                                }
                                                             }
-                                                        }
-                                                        None => {
-                                                            if no_set || (accept != u32::MAX && !data.slot_unset(slot)) {
-                                                                *cell = Some(val);
-                                                                data.set_slot_unset(slot, false);
-                                                                true
-                                                            } else {
-                                                                false
+                                                            None => {
+                                                                if no_set || (accept != u32::MAX && !data.slot_unset(slot)) {
+                                                                    *cell = Some(val);
+                                                                    data.set_slot_unset(slot, false);
+                                                                    true
+                                                                } else {
+                                                                    false
+                                                                }
                                                             }
-                                                        }
-                                                    };
-                                                    drop(slots);
-                                                    drop(old);
-                                                    return ok;
+                                                        };
+                                                        drop(slots);
+                                                        drop(old);
+                                                        return ok;
+                                                    }
                                                 }
                                             }
-                                        }
-                                        false
-                                    });
+                                            false
+                                        });
 
-                                    if stored == Some(true) {
-                                        if let Some(t) = is_tmp {
-                                            self.set_tmp(t, Value::Null);
+                                        if stored == Some(true) {
+                                            hit = Some((is_tmp, result));
                                         }
-                                        if let (Some(d), Some(r)) = (dst, result) {
-                                            self.set_tmp(d, r);
-                                        }
-                                        return true;
                                     }
                                 }
                             }
@@ -218,6 +221,16 @@ impl Vm {
                     }
                 }
             }
+            hit
+        };
+        if let Some((is_tmp, result)) = fast_stored {
+            if let Some(t) = is_tmp {
+                self.set_tmp(t, Value::Null);
+            }
+            if let (Some(d), Some(r)) = (dst, result) {
+                self.set_tmp(d, r);
+            }
+            return true;
         }
         let Some(v) = self.peek_plain_value(val) else {
             return false;

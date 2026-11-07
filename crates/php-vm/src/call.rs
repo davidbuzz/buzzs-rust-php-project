@@ -502,8 +502,8 @@ impl Vm {
         };
 
         if let Some((func, scope, is_static)) = hit {
-            let this = if is_static { None } else { Some(o) };
             let called = cls.clone();
+            let this = if is_static { None } else { Some(o) };
             self.push_pending(PendingCall {
                 this,
                 scope,
@@ -605,8 +605,8 @@ impl Vm {
         };
 
         if let Some((func, method_scope, is_static)) = hit {
-            let this = if is_static { None } else { Some(o) };
             let called = cls.clone();
+            let this = if is_static { None } else { Some(o) };
             self.push_pending(PendingCall {
                 this,
                 scope: method_scope,
@@ -1144,12 +1144,13 @@ impl Vm {
         } else {
             Some(ctor.scope())
         };
-        let mut call = PendingCall {
+        let ctor_func = ctor.func.clone();
+        let call = PendingCall {
             this: if is_static { None } else { Some(o) },
             scope,
             called: Some(cls),
             is_ctor: true,
-            ..PendingCall::new(ctor.func.clone())
+            ..PendingCall::new(ctor_func)
         };
         self.push_pending(call);
         Ok(true)
@@ -1402,7 +1403,8 @@ impl Vm {
                     },
                     ArgSrc::TempPlace(pid) => self.place_fetch(*pid, FetchMode::Read)?,
                 };
-                let call = self.frame_mut().calls.last_mut().expect("pending call");
+                let frame = self.frames.last_mut().expect("active frame");
+                let call = frame.calls.last_mut().expect("pending call");
                 if call.args.is_empty() && (call.inline_count as usize) < call.inline_args.len() {
                     let idx = call.inline_count as usize;
                     call.inline_args[idx] = Some(v);
@@ -1558,7 +1560,8 @@ impl Vm {
     }
 
     fn push_arg(&mut self, pos: Option<usize>, name: Option<ZStr>, value: Value) -> VmResult<()> {
-        let call = self.frame_mut().calls.last_mut().expect("pending call");
+        let frame = self.frames.last_mut().expect("active frame");
+        let call = frame.calls.last_mut().expect("pending call");
         if call.inline_count > 0 {
             let n = call.inline_count as usize;
             if let Some(buf) = self.call_bufs.args.pop() {
@@ -1891,6 +1894,7 @@ impl Vm {
                 Ok(true)
             }
             Func::Builtin(b) => {
+                let b = b.clone();
                 self.pending_call_dst = dst;
                 let v = self.call_builtin(&b, call, strict)?;
                 if let Some(d) = dst {
@@ -2042,7 +2046,6 @@ impl Vm {
         caller_strict: bool,
         from_internal: bool,
     ) -> VmResult<()> {
-        let Func::User(uf) = &call.func else { unreachable!() };
         if self.frames.len() > 50_000 {
             // A backstop like `execute`'s nesting limit: php-src would have
             // hit its native stack limit by now, so the error is
@@ -2067,7 +2070,7 @@ impl Vm {
             inline_count,
             ..
         } = call;
-        let Func::User(uf) = &func else { unreachable!() };
+        let Func::User(uf) = func else { unreachable!() };
         let is_generator = uf.is_generator();
         let idx = self
             .frames
@@ -2081,7 +2084,6 @@ impl Vm {
             f.caller_strict = caller_strict;
             f.called_from_internal = from_internal;
             f.is_ctor = is_ctor;
-            f.func = Some(func);
             let spare = if inline_count > 0 {
                 let n = inline_count as usize;
                 f.args.clear();
@@ -2091,11 +2093,7 @@ impl Vm {
                 let mut skipping = true;
                 let mut first_op = 0;
                 let mut bound_count = 0;
-                let uf_ref = match f.func.as_ref() {
-                    Some(Func::User(u)) => u,
-                    _ => unreachable!(),
-                };
-                for (i, p) in uf_ref.params.iter().enumerate().take(n) {
+                for (i, p) in uf.params.iter().enumerate().take(n) {
                     if p.variadic || i == ncv {
                         break;
                     }
@@ -2158,23 +2156,16 @@ impl Vm {
                         std::mem::replace(&mut f.args, args)
                     }
                 };
-                let uf_ref = match f.func.as_ref() {
-                    Some(Func::User(u)) => u,
-                    _ => unreachable!(),
-                };
-                f.ip = init_cvs(uf_ref, f);
+                f.ip = init_cvs(&uf, f);
                 Some(spare)
             };
+            f.func = Some(Func::User(uf.clone()));
+            f.ufunc = Some(uf);
             spare
         };
         if let Some(spare) = spare_args {
             self.put_arg_vec(spare);
         }
-        let uf_rc = match self.frames[idx].func.as_ref() {
-            Some(Func::User(u)) => u.clone(),
-            _ => unreachable!(),
-        };
-        self.frames[idx].ufunc = Some(uf_rc);
         if let Some(c) = closure {
             self.bind_closure_vars(idx, &c);
             self.frames[idx].closure = Some(c);

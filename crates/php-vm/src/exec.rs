@@ -320,7 +320,7 @@ impl Vm {
     #[inline(never)]
     fn op_abs_slow(&mut self, src: Operand) -> VmResult<Value> {
         let arg = self.read(src)?;
-        if let Some(Func::Builtin(b)) = self.functions.get(b"abs").cloned() {
+        if let Some(Func::Builtin(b)) = self.functions.get(b"abs".as_slice()).cloned() {
             let mut call = PendingCall::new(Func::Builtin(b.clone()));
             call.args.push(Some(arg));
             let strict = self.frame().code.strict_types;
@@ -2342,10 +2342,17 @@ impl Vm {
                     }
                     Op::TypeCheck { a, mask, dst } => {
                         let r = match a {
-                            Operand::Cv(cv) => self.frame().peek_cv(*cv, |s| match s {
-                                Some(v) => Some(crate::opcode::type_mask::matches(*mask, v)),
-                                None => None,
-                            }),
+                            Operand::Cv(cv) => {
+                                let f = self.frame();
+                                if !f.symtab_attached {
+                                    f.cvs
+                                        .get(*cv as usize)
+                                        .and_then(CvSlot::get)
+                                        .map(|v| crate::opcode::type_mask::matches(*mask, v))
+                                } else {
+                                    None
+                                }
+                            }
                             Operand::Lit(i) => self.frame().code.literals.get(*i as usize).map(|v| {
                                 crate::opcode::type_mask::matches(*mask, v)
                             }),

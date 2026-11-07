@@ -564,7 +564,7 @@ fn is_abs_call(op: &Op, literals: &[Literal]) -> bool {
     if fallback.is_some() {
         return false;
     }
-    match literals.get(*name) {
+    match literals.get(*name as usize) {
         Some(Value::Str(s)) => s.as_bytes().eq_ignore_ascii_case(b"abs"),
         _ => false,
     }

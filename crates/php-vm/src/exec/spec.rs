@@ -1392,55 +1392,44 @@ impl Vm {
         plain_value_in(self.frame(), op)
     }
 
-#[inline(always)]
-#[allow(clippy::inline_always)]
-fn assign_to_array_table(
-    f: &mut Frame,
-    tbl: &mut HashTable,
-    dim: Operand,
-    v: Value,
-    val: Operand,
-) -> bool {
-    if let Some(i) = dim_int_in(f, dim) {
-        match tbl.assign_packed_int(i, v) {
-            Ok(old) => {
-                if let Some(old) = old {
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
+    fn assign_to_array_table(
+        tbl: &mut HashTable,
+        dim_int: Option<i64>,
+        dim_key: Option<ArrayKey>,
+        v: Value,
+    ) -> bool {
+        if let Some(i) = dim_int {
+            match tbl.assign_packed_int(i, v) {
+                Ok(old) => {
+                    if let Some(old) = old {
+                        drop(old);
+                    }
+                    return true;
+                }
+                Err(ret_v) => {
+                    let (slot, added) = tbl.lookup_ex(ArrayKey::Int(i));
+                    if !added && !is_plain_value(slot) {
+                        return false;
+                    }
+                    let old = std::mem::replace(slot, ret_v);
                     drop(old);
+                    return true;
                 }
-                if let Operand::Tmp(t) = val {
-                    put_tmp(&mut f.tmps[t as usize], Value::Null);
-                }
-                return true;
-            }
-            Err(ret_v) => {
-                let (slot, added) = tbl.lookup_ex(ArrayKey::Int(i));
-                if !added && !is_plain_value(slot) {
-                    return false;
-                }
-                let old = std::mem::replace(slot, ret_v);
-                drop(old);
-                if let Operand::Tmp(t) = val {
-                    put_tmp(&mut f.tmps[t as usize], Value::Null);
-                }
-                return true;
             }
         }
+        let Some(key) = dim_key else {
+            return false;
+        };
+        let (slot, added) = tbl.lookup_ex(key);
+        if !added && !is_plain_value(slot) {
+            return false;
+        }
+        let old = std::mem::replace(slot, v);
+        drop(old);
+        true
     }
-    let Some(key) = dim_key_in(f, dim) else {
-        return false;
-    };
-    let (slot, added) = tbl.lookup_ex(key);
-    if !added && !is_plain_value(slot) {
-        return false;
-    }
-    let old = std::mem::replace(slot, v);
-    drop(old);
-    release_str_tmp_in(f, dim);
-    if let Operand::Tmp(t) = val {
-        put_tmp(&mut f.tmps[t as usize], Value::Null);
-    }
-    true
-}
 
     /// `$cv[dim] = val;` when `$cv` holds an array (directly or through a reference),
     /// the offset is an int or string, the value is plain and the element it
@@ -1460,29 +1449,55 @@ fn assign_to_array_table(
         let Some(v) = plain_value_in(f, val) else {
             return false;
         };
-        let idx = cv as usize;
-        let slot = match f.cvs.get(idx) {
-            Some(s) => s,
-            None => return false,
-        };
-        let val_mut = unsafe { slot.get_mut_unchecked() };
-        if let Some(Value::Array(arr)) = val_mut {
-            let ok = assign_to_array_table(f, arr.make_mut(), dim, v, val);
-            if ok && f.symtab_attached {
-                f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
-            }
-            ok
-        } else if let Some(Value::Reference(r)) = val_mut {
-            let Some(mut guard) = r.try_borrow_mut() else {
+        let dim_int = dim_int_in(f, dim);
+        let dim_key = if dim_int.is_none() {
+            let Some(k) = dim_key_in(f, dim) else {
                 return false;
             };
-            let Value::Array(arr) = &mut *guard else {
-                return false;
-            };
-            assign_to_array_table(f, arr.make_mut(), dim, v, val)
+            Some(k)
         } else {
-            false
+            None
+        };
+        let idx = cv as usize;
+        let (ok, sync_arr) = {
+            let slot = match f.cvs.get(idx) {
+                Some(s) => s,
+                None => return false,
+            };
+            let val_mut = unsafe { slot.get_mut_unchecked() };
+            if let Some(Value::Array(arr)) = val_mut {
+                let ok = Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v);
+                let sync_arr = if ok && f.symtab_attached {
+                    Some(Value::Array(arr.clone()))
+                } else {
+                    None
+                };
+                (ok, sync_arr)
+            } else if let Some(Value::Reference(r)) = val_mut {
+                let Some(mut guard) = r.try_borrow_mut() else {
+                    return false;
+                };
+                let Value::Array(arr) = &mut *guard else {
+                    return false;
+                };
+                (Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v), None)
+            } else {
+                return false;
+            }
+        };
+        if !ok {
+            return false;
         }
+        if let Some(arr_val) = sync_arr {
+            f.sync_cv_to_symtab(cv, &arr_val);
+        }
+        if dim_int.is_none() {
+            release_str_tmp_in(f, dim);
+        }
+        if let Operand::Tmp(t) = val {
+            put_tmp(&mut f.tmps[t as usize], Value::Null);
+        }
+        true
     }
 
     /// [`crate::opcode::Op::AssignDimsCv`]: `$cv[d1][d2]... = val;` when
