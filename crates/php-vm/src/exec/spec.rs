@@ -46,7 +46,7 @@ mod statics;
 /// (`!Z_REFCOUNTED` in php-src, plus strings, whose release has no side
 /// effect).
 #[inline]
-fn is_plain_slot(v: Option<&Value>) -> bool {
+pub(super) fn is_plain_slot(v: Option<&Value>) -> bool {
     matches!(
         v,
         None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_))
@@ -169,7 +169,7 @@ fn num_outcome(x: Num, y: Num, identity: bool) -> u8 {
 /// the out-of-line drop call.
 #[inline(always)]
 #[allow(clippy::inline_always)] // a store and a tag test
-fn put_tmp(slot: &mut Value, v: Value) {
+pub(super) fn put_tmp(slot: &mut Value, v: Value) {
     let old = std::mem::replace(slot, v);
     if matches!(
         old,
@@ -680,7 +680,11 @@ impl Vm {
         let Some(slot) = f.tmps.get_mut(dst as usize) else {
             return false;
         };
-        put_tmp(slot, r);
+        if let (Value::Float(ref mut dst_f), Value::Float(rf)) = (&mut *slot, &r) {
+            *dst_f = *rf;
+        } else {
+            put_tmp(slot, r);
+        }
         true
     }
 
@@ -732,6 +736,15 @@ impl Vm {
         let r = num_bin(op, x, y)?;
         let idx = cv as usize;
         if let Some(slot) = f.cvs.get(idx) {
+            unsafe {
+                if let (Some(Value::Float(ref mut dst_f)), Value::Float(rf)) =
+                    (slot.get_mut_unchecked(), &r)
+                {
+                    *dst_f = *rf;
+                    f.sync_cv_to_symtab(cv, &r);
+                    return Some(true);
+                }
+            }
             if is_plain_slot(slot.get()) {
                 let old = slot.set(Some(r.clone()));
                 f.sync_cv_to_symtab(cv, &r);
@@ -740,7 +753,12 @@ impl Vm {
                 return Some(true);
             }
         }
-        put_tmp(f.tmps.get_mut(dst as usize)?, r);
+        let slot = f.tmps.get_mut(dst as usize)?;
+        if let (Value::Float(ref mut dst_f), Value::Float(rf)) = (&mut *slot, &r) {
+            *dst_f = *rf;
+        } else {
+            put_tmp(slot, r);
+        }
         Some(false)
     }
 
@@ -759,6 +777,15 @@ impl Vm {
         };
         if !is_plain_slot(slot.get()) {
             return Err(v);
+        }
+        unsafe {
+            if let (Some(Value::Float(ref mut dst_f)), Value::Float(rf)) =
+                (slot.get_mut_unchecked(), &v)
+            {
+                *dst_f = *rf;
+                f.sync_cv_to_symtab(cv, &v);
+                return Ok(());
+            }
         }
         let old = slot.set(Some(v.clone()));
         f.sync_cv_to_symtab(cv, &v);
@@ -858,12 +885,25 @@ impl Vm {
         let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
             return false;
         };
-        let old = slot.set(Some(r.clone()));
-        f.sync_cv_to_symtab(cv, &r);
-        discard_unrooted(old);
+        unsafe {
+            if let (Some(Value::Float(ref mut dst_f)), Value::Float(rf)) =
+                (slot.get_mut_unchecked(), &r)
+            {
+                *dst_f = *rf;
+                f.sync_cv_to_symtab(cv, &r);
+            } else {
+                let old = slot.set(Some(r.clone()));
+                f.sync_cv_to_symtab(cv, &r);
+                discard_unrooted(old);
+            }
+        }
         if let Some(t) = dst {
             if let Some(slot) = f.tmps.get_mut(t as usize) {
-                put_tmp(slot, r);
+                if let (Value::Float(ref mut dst_f), Value::Float(rf)) = (&mut *slot, &r) {
+                    *dst_f = *rf;
+                } else {
+                    put_tmp(slot, r);
+                }
             }
         }
         true

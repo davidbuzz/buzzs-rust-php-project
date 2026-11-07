@@ -485,7 +485,7 @@ fn assigned_cv(next: Option<&Op>, dst: u32) -> Option<u32> {
     match next? {
         Op::AssignCv {
             cv,
-            val: Operand::Tmp(t),
+            val: Operand::Tmp(t) | Operand::TmpKeep(t),
             dst: None,
         } if *t == dst => Some(*cv),
         _ => None,

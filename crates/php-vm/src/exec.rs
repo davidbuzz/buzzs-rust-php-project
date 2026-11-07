@@ -102,6 +102,34 @@ impl Vm {
         }
     }
 
+    /// Peeks a numeric operand directly as `f64` and whether it was a float,
+    /// avoiding `Num` allocation and enum matching overhead.
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
+    fn peek_num_f64(f: &Frame, op: Operand) -> Option<(f64, bool)> {
+        match op {
+            Operand::Cv(cv) => match f.cvs.get(cv as usize)?.get()? {
+                Value::Float(x) => Some((*x, true)),
+                #[allow(clippy::cast_precision_loss)]
+                Value::Int(i) => Some((*i as f64, false)),
+                _ => None,
+            },
+            Operand::Lit(i) => match f.code.literals.get(i as usize)? {
+                Value::Float(v) => Some((*v, true)),
+                #[allow(clippy::cast_precision_loss)]
+                Value::Int(v) => Some((*v as f64, false)),
+                _ => None,
+            },
+            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.tmps.get(t as usize)? {
+                Value::Float(x) => Some((*x, true)),
+                #[allow(clippy::cast_precision_loss)]
+                Value::Int(i) => Some((*i as f64, false)),
+                _ => None,
+            },
+            Operand::Unused => None,
+        }
+    }
+
     /// Sealed numeric form of [`Op::Bin`]: the handlers php-src specializes
     /// for `LONG`/`DOUBLE` operand pairs, computed without materializing
     /// `Value` temporaries. `None` when an operand is not a plain defined
@@ -144,6 +172,32 @@ impl Vm {
     }
 }
 
+/// Computes binary arithmetic on floats directly.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn float_bin_arith(op: BinKind, xf: f64, yf: f64) -> Option<f64> {
+    match op {
+        BinKind::Arith(BinaryOp::Add) => Some(xf + yf),
+        BinKind::Arith(BinaryOp::Sub) => Some(xf - yf),
+        BinKind::Arith(BinaryOp::Mul) => Some(xf * yf),
+        BinKind::Arith(BinaryOp::Div) if yf != 0.0 => Some(xf / yf),
+        _ => None,
+    }
+}
+
+/// Computes compound assignment arithmetic on floats directly.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn float_assign_arith(op: BinaryOp, xf: f64, yf: f64) -> Option<f64> {
+    match op {
+        BinaryOp::Add => Some(xf + yf),
+        BinaryOp::Sub => Some(xf - yf),
+        BinaryOp::Mul => Some(xf * yf),
+        BinaryOp::Div if yf != 0.0 => Some(xf / yf),
+        _ => None,
+    }
+}
+
 /// The arithmetic of [`Vm::bin_num_fast`] on two peeked numbers: `None`
 /// when the operator has no sealed numeric form, an int result overflows,
 /// or the generic path must throw or convert (a zero divisor, a negative
@@ -154,6 +208,19 @@ impl Vm {
 #[inline(always)]
 #[allow(clippy::inline_always)] // part of the hot numeric fast path
 fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
+    if let (Num::Float(xf), Num::Float(yf)) = (x, y) {
+        return Some(match op {
+            BinKind::Arith(BinaryOp::Add) => Value::Float(xf + yf),
+            BinKind::Arith(BinaryOp::Sub) => Value::Float(xf - yf),
+            BinKind::Arith(BinaryOp::Mul) => Value::Float(xf * yf),
+            BinKind::Arith(BinaryOp::Div) if yf != 0.0 => Value::Float(xf / yf),
+            BinKind::Equal | BinKind::Identical => Value::Bool(xf == yf),
+            BinKind::NotEqual | BinKind::NotIdentical => Value::Bool(xf != yf),
+            BinKind::Less => Value::Bool(xf < yf),
+            BinKind::LessEqual => Value::Bool(xf <= yf),
+            _ => return None,
+        });
+    }
     if let (Num::Int(x), Num::Int(y)) = (x, y) {
         return Some(match op {
             BinKind::Arith(BinaryOp::Add) => Value::Int(x.checked_add(y)?),
@@ -538,7 +605,12 @@ impl Vm {
     #[inline(always)]
     #[allow(clippy::inline_always)] // see above: the result store of most instructions
     pub(crate) fn set_tmp(&mut self, t: u32, v: Value) {
-        let old = std::mem::replace(&mut self.frame_mut().tmps[t as usize], v);
+        let slot = &mut self.frame_mut().tmps[t as usize];
+        if let (Value::Float(ref mut dst_f), Value::Float(rf)) = (&mut *slot, &v) {
+            *dst_f = *rf;
+            return;
+        }
+        let old = std::mem::replace(slot, v);
         // The slot almost always holds a scalar (or the `Null` a consuming
         // read left behind): skip the out-of-line `drop_in_place` call.
         if matches!(
@@ -1095,10 +1167,26 @@ impl Vm {
                             b,
                             dst,
                         } => {
-                            // The sealed numeric and same-type forms cannot
-                            // warn or throw; the generic path can, at this
-                            // instruction.
-                            if !self.bin_tmp_fast(*kind, *a, *b, *dst) {
+                            let mut handled = false;
+                            if let Some(f) = self.frames.last_mut() {
+                                if let Some((xf, is_fa)) = Self::peek_num_f64(f, *a) {
+                                    if let Some((yf, is_fb)) = Self::peek_num_f64(f, *b) {
+                                        if is_fa || is_fb {
+                                            if let Some(res) = float_bin_arith(*kind, xf, yf) {
+                                                if let Some(slot) = f.tmps.get_mut(*dst as usize) {
+                                                    if let Value::Float(ref mut dst_f) = slot {
+                                                        *dst_f = res;
+                                                    } else {
+                                                        spec::put_tmp(slot, Value::Float(res));
+                                                    }
+                                                    handled = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if !handled && !self.bin_tmp_fast(*kind, *a, *b, *dst) {
                                 if let Some(r) = self.equality_fast(*kind, *a, *b) {
                                     self.set_tmp(*dst, Value::Bool(r));
                                 } else {
@@ -1113,19 +1201,53 @@ impl Vm {
                             b,
                             dst,
                             cv,
-                        } => match self.bin_assign_cv_fast(*kind, *a, *b, *cv, *dst) {
-                            // Stored into the variable: the `AssignCv` after
-                            // the op is done; otherwise it runs on `dst`.
-                            Some(true) => ip += 1,
-                            Some(false) => {}
-                            None => match self.equality_fast(*kind, *a, *b) {
-                                Some(r) => match self.cv_store_plain(*cv, Value::Bool(r)) {
-                                    Ok(()) => ip += 1,
-                                    Err(r) => self.set_tmp(*dst, r),
-                                },
-                                None => break 'slow,
-                            },
-                        },
+                        } => {
+                            let mut handled = false;
+                            if let Some(f) = self.frames.last_mut() {
+                                if let Some((xf, is_fa)) = Self::peek_num_f64(f, *a) {
+                                    if let Some((yf, is_fb)) = Self::peek_num_f64(f, *b) {
+                                        if is_fa || is_fb {
+                                            if let Some(res) = float_bin_arith(*kind, xf, yf) {
+                                                let idx = *cv as usize;
+                                                if let Some(slot) = f.cvs.get(idx) {
+                                                    unsafe {
+                                                        if let Some(Value::Float(ref mut dst_f)) =
+                                                            slot.get_mut_unchecked()
+                                                        {
+                                                            *dst_f = res;
+                                                            f.sync_cv_to_symtab(*cv, &Value::Float(res));
+                                                            ip += 1;
+                                                            handled = true;
+                                                        } else if spec::is_plain_slot(slot.get()) {
+                                                            let old = slot.set(Some(Value::Float(res)));
+                                                            f.sync_cv_to_symtab(*cv, &Value::Float(res));
+                                                            discard_unrooted(old);
+                                                            ip += 1;
+                                                            handled = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if !handled {
+                                match self.bin_assign_cv_fast(*kind, *a, *b, *cv, *dst) {
+                                    // Stored into the variable: the `AssignCv` after
+                                    // the op is done; otherwise it runs on `dst`.
+                                    Some(true) => ip += 1,
+                                    Some(false) => {}
+                                    None => match self.equality_fast(*kind, *a, *b) {
+                                        Some(r) => match self.cv_store_plain(*cv, Value::Bool(r)) {
+                                            Ok(()) => ip += 1,
+                                            Err(r) => self.set_tmp(*dst, r),
+                                        },
+                                        None => break 'slow,
+                                    },
+                                }
+                            }
+                        }
                         Op::IncDecCv { cv, kind, dst, .. } => {
                             if !self.incdec_cv_fast(*cv, *kind, *dst) {
                                 break 'slow;
@@ -1157,7 +1279,38 @@ impl Vm {
                             dst,
                             ..
                         } => {
-                            if !self.assign_op_cv_fast(*cv, *kind, *val, *dst) {
+                            let mut handled = false;
+                            if let Some(f) = self.frames.last_mut() {
+                                let cv = *cv;
+                                let idx = cv as usize;
+                                if let Some(slot) = f.cvs.get(idx) {
+                                    if let Some((yf, _)) = Self::peek_num_f64(f, *val) {
+                                        if let Some(Value::Float(xf)) = slot.get() {
+                                            if let Some(res) = float_assign_arith(*kind, *xf, yf) {
+                                                unsafe {
+                                                    if let Some(Value::Float(ref mut dst_f)) =
+                                                        slot.get_mut_unchecked()
+                                                    {
+                                                        *dst_f = res;
+                                                        f.sync_cv_to_symtab(cv, &Value::Float(res));
+                                                        if let Some(t) = dst {
+                                                            if let Some(tslot) = f.tmps.get_mut(*t as usize) {
+                                                                if let Value::Float(ref mut dst_f) = tslot {
+                                                                    *dst_f = res;
+                                                                } else {
+                                                                    spec::put_tmp(tslot, Value::Float(res));
+                                                                }
+                                                            }
+                                                        }
+                                                        handled = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if !handled && !self.assign_op_cv_fast(*cv, *kind, *val, *dst) {
                                 break 'slow;
                             }
                         }
