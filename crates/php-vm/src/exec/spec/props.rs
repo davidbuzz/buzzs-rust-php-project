@@ -22,9 +22,14 @@
 //! [`Op::IssetObjPropDim`]: crate::opcode::Op::IssetObjPropDim
 
 use super::super::{Flow, Num};
+use crate::object;
 use crate::opcode::{FetchMode, IncDecKind, Operand, PlaceId};
-use crate::vm::{Vm, VmResult};
+use crate::place::propcache::{
+    accepts, scope_addr, with_base_obj, PC_DYN, PC_NO_SET, PC_READ, PC_WRITE,
+};
+use crate::vm::{FrameKind, Vm, VmResult};
 use php_runtime::{BinaryOp, Value};
+use std::rc::Rc;
 
 impl Vm {
     /// `Fetch` of `$cv->name` / `$this->name` on a property cache hit:
@@ -32,7 +37,7 @@ impl Vm {
     /// set, and returns whether `to` was written (`Some(true)`: the loop skips
     /// that op) or `dst` was (`Some(false)`). `None` on a cache miss (or
     /// `FetchMode::List`).
-    #[inline]
+    #[inline(always)]
     pub(in crate::exec) fn fetch_obj_prop_fast(
         &mut self,
         pid: PlaceId,
@@ -42,6 +47,41 @@ impl Vm {
     ) -> Option<bool> {
         if mode == FetchMode::List {
             return None;
+        }
+        let frame = self.frame();
+        if frame.kind != FrameKind::Builtin {
+            if let Ok(cache) = frame.code.prop_cache.try_borrow() {
+                if let Some(entry) = cache.get(pid as usize) {
+                    if entry.class_addr != 0 && (entry.flags & (PC_READ | PC_DYN) == PC_READ) {
+                        let scope = scope_addr(frame);
+                        if entry.scope_addr == scope {
+                            let fast_val = with_base_obj(frame, entry.base, |obj| {
+                                let data = object::data(obj);
+                                if Rc::as_ptr(&data.class) as usize == entry.class_addr
+                                    && data.lazy.borrow().is_none()
+                                {
+                                    let slot = entry.slot as usize;
+                                    if let Ok(slots) = data.slots.try_borrow() {
+                                        if let Some(Some(value)) = slots.get(slot) {
+                                            return match value {
+                                                Value::Reference(r) => {
+                                                    r.try_borrow().map(|inner| inner.clone())
+                                                }
+                                                other => Some(other.clone()),
+                                            };
+                                        }
+                                    }
+                                }
+                                None
+                            });
+                            if let Some(Some(v)) = fast_val {
+                                drop(cache);
+                                return Some(self.store_fetched(dst, to, v));
+                            }
+                        }
+                    }
+                }
+            }
         }
         let v = self.prop_cache_read(pid)?;
         Some(self.store_fetched(dst, to, v))
@@ -71,13 +111,114 @@ impl Vm {
     /// `$cv->name = val` / `$this->name = val` on a property cache hit:
     /// writes a plain value directly into the property slot. Returns `true`
     /// on hit, `false` otherwise.
-    #[inline]
+    #[inline(always)]
     pub(in crate::exec) fn assign_obj_prop_fast(
         &mut self,
         pid: PlaceId,
         val: Operand,
         dst: Option<u32>,
     ) -> bool {
+        let frame = self.frame();
+        if frame.kind != FrameKind::Builtin {
+            if let Ok(cache) = frame.code.prop_cache.try_borrow() {
+                if let Some(entry) = cache.get(pid as usize) {
+                    if entry.class_addr != 0 && (entry.flags & (PC_WRITE | PC_DYN) == PC_WRITE) {
+                        let scope = scope_addr(frame);
+                        if entry.scope_addr == scope {
+                            let (new_val, is_tmp) = match val {
+                                Operand::Tmp(t) => {
+                                    match frame.tmps.get(t as usize) {
+                                        Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), Some(t)),
+                                        _ => (None, None),
+                                    }
+                                }
+                                Operand::TmpKeep(t) => {
+                                    match frame.tmps.get(t as usize) {
+                                        Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), None),
+                                        _ => (None, None),
+                                    }
+                                }
+                                Operand::Cv(cv) => {
+                                    match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                                        Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), None),
+                                        _ => (None, None),
+                                    }
+                                }
+                                Operand::Lit(lit) => {
+                                    (frame.code.literals.get(lit as usize).cloned(), None)
+                                }
+                                Operand::Unused => (None, None),
+                            };
+
+                            if let Some(new_val) = new_val {
+                                let type_ok = entry.accept == u32::MAX
+                                    || accepts(entry.accept, &new_val)
+                                    || (entry.ok_class_addr != 0
+                                        && matches!(&new_val, Value::Object(o) if Rc::as_ptr(object::class_of(o)) as usize == entry.ok_class_addr));
+
+                                if type_ok {
+                                    let slot = entry.slot as usize;
+                                    let no_set = entry.flags & PC_NO_SET != 0;
+                                    let accept = entry.accept;
+                                    let class_addr = entry.class_addr;
+                                    let base = entry.base;
+                                    drop(cache);
+
+                                    let result = dst.map(|_| new_val.clone());
+                                    let mut to_store = Some(new_val);
+                                    let stored = with_base_obj(frame, base, |obj| {
+                                        let data = object::data(obj);
+                                        if Rc::as_ptr(&data.class) as usize == class_addr
+                                            && data.lazy.borrow().is_none()
+                                        {
+                                            if let Ok(mut slots) = data.slots.try_borrow_mut() {
+                                                if let Some(cell) = slots.get_mut(slot) {
+                                                    let val = to_store.take().unwrap();
+                                                    let mut old = None;
+                                                    let ok = match cell {
+                                                        Some(cur) => {
+                                                            if !matches!(cur, Value::Reference(_)) {
+                                                                old = Some(std::mem::replace(cur, val));
+                                                                true
+                                                            } else {
+                                                                false
+                                                            }
+                                                        }
+                                                        None => {
+                                                            if no_set || (accept != u32::MAX && !data.slot_unset(slot)) {
+                                                                *cell = Some(val);
+                                                                data.set_slot_unset(slot, false);
+                                                                true
+                                                            } else {
+                                                                false
+                                                            }
+                                                        }
+                                                    };
+                                                    drop(slots);
+                                                    drop(old);
+                                                    return ok;
+                                                }
+                                            }
+                                        }
+                                        false
+                                    });
+
+                                    if stored == Some(true) {
+                                        if let Some(t) = is_tmp {
+                                            self.set_tmp(t, Value::Null);
+                                        }
+                                        if let (Some(d), Some(r)) = (dst, result) {
+                                            self.set_tmp(d, r);
+                                        }
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let Some(v) = self.peek_plain_value(val) else {
             return false;
         };

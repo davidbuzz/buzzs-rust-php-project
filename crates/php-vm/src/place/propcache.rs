@@ -58,21 +58,21 @@ use std::rc::{Rc, Weak};
 
 /// Reads (`FETCH_OBJ_R`/`_IS`) may use the value: no native
 /// `read_property` handler.
-const PC_READ: u8 = 1 << 0;
+pub(crate) const PC_READ: u8 = 1 << 0;
 /// `isset()`/`empty()` may use the value: no native `has_property`.
-const PC_ISSET: u8 = 1 << 1;
+pub(crate) const PC_ISSET: u8 = 1 << 1;
 /// Writes may store the value directly (no readonly, set visibility or
 /// native write handler); typed properties only values in `accept`.
-const PC_WRITE: u8 = 1 << 2;
+pub(crate) const PC_WRITE: u8 = 1 << 2;
 /// The name is a dynamic property (`ZEND_DYNAMIC_PROPERTY_OFFSET`): no
 /// declared or static property of the class or scope has it.
-const PC_DYN: u8 = 1 << 3;
+pub(crate) const PC_DYN: u8 = 1 << 3;
 /// `unset()` may clear the property directly: what [`PC_WRITE`] needs,
 /// and no native `unset_property` handler.
-const PC_UNSET: u8 = 1 << 4;
+pub(crate) const PC_UNSET: u8 = 1 << 4;
 /// The class has no `__set()`: a write to an undefined declared slot is
 /// stored directly (`write_std_property` in `zend_std_write_property`).
-const PC_NO_SET: u8 = 1 << 5;
+pub(crate) const PC_NO_SET: u8 = 1 << 5;
 
 /// The result of probing a place's cache entry.
 enum Probe<T> {
@@ -146,7 +146,7 @@ impl Key {
 
 /// The address of `frame`'s class scope as entries store it (0: none).
 #[inline(always)]
-fn scope_addr(frame: &Frame) -> usize {
+pub(crate) fn scope_addr(frame: &Frame) -> usize {
     frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize)
 }
 
@@ -214,7 +214,7 @@ fn store_entry(code: &OpArray, idx: usize, len: usize, entry: PropCacheEntry) ->
 /// subset of `zend_verify_property_type` that needs no coercion, class or
 /// callable check.
 #[inline]
-fn accepts(accept: u32, value: &Value) -> bool {
+pub(crate) fn accepts(accept: u32, value: &Value) -> bool {
     if accept == u32::MAX {
         return true;
     }
@@ -289,7 +289,7 @@ fn class_accepts_slow(code: &OpArray, idx: usize, cls: &Rc<Class>, addr: usize) 
 /// also through a reference, or `$this`), without cloning the handle;
 /// `None` when it holds no object.
 #[inline(always)]
-fn with_base_obj<R>(frame: &Frame, base: u32, access: impl FnOnce(&Obj) -> R) -> Option<R> {
+pub(crate) fn with_base_obj<R>(frame: &Frame, base: u32, access: impl FnOnce(&Obj) -> R) -> Option<R> {
     if base == PROP_CACHE_THIS {
         return frame.this.as_ref().map(access);
     }
@@ -988,8 +988,43 @@ impl Vm {
     /// [`cacheable_head`]): the (dereferenced) value of an initialized
     /// declared slot or an existing dynamic property, or `None` for the
     /// generic walk.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn prop_cache_read(&self, pid: PlaceId) -> Option<Value> {
+        let frame = self.frame();
+        if frame.kind != FrameKind::Builtin {
+            if let Ok(cache) = frame.code.prop_cache.try_borrow() {
+                if let Some(entry) = cache.get(pid as usize) {
+                    if entry.class_addr != 0 && (entry.flags & (PC_READ | PC_DYN) == PC_READ) {
+                        let scope = scope_addr(frame);
+                        if entry.scope_addr == scope {
+                            let fast_val = with_base_obj(frame, entry.base, |obj| {
+                                let data = object::data(obj);
+                                if Rc::as_ptr(&data.class) as usize == entry.class_addr
+                                    && data.lazy.borrow().is_none()
+                                {
+                                    let slot = entry.slot as usize;
+                                    if let Ok(slots) = data.slots.try_borrow() {
+                                        if let Some(Some(value)) = slots.get(slot) {
+                                            return match value {
+                                                Value::Reference(r) => {
+                                                    r.try_borrow().map(|inner| inner.clone())
+                                                }
+                                                other => Some(other.clone()),
+                                            };
+                                        }
+                                    }
+                                }
+                                None
+                            });
+                            if let Some(Some(v)) = fast_val {
+                                drop(cache);
+                                return Some(v);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         self.probe_fill(pid, PC_READ, |key, _, data, code| {
             with_value(key, data, code, |value| Probe::Hit(deref_clone(value)))
         })
@@ -1160,10 +1195,75 @@ impl Vm {
     /// an undefined declared slot php-src writes without `__set()` (see
     /// [`store_value`]), and returns the assigned value, or hands `v` back
     /// (`Err`) for the generic walk.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn prop_cache_assign(&self, pid: PlaceId, v: Value) -> Result<Value, Value> {
         if matches!(v, Value::Reference(_)) {
             return Err(v);
+        }
+        let frame = self.frame();
+        if frame.kind != FrameKind::Builtin {
+            if let Ok(cache) = frame.code.prop_cache.try_borrow() {
+                if let Some(entry) = cache.get(pid as usize) {
+                    if entry.class_addr != 0 && (entry.flags & (PC_WRITE | PC_DYN) == PC_WRITE) {
+                        let scope = scope_addr(frame);
+                        if entry.scope_addr == scope {
+                            let type_ok = entry.accept == u32::MAX
+                                || accepts(entry.accept, &v)
+                                || (entry.ok_class_addr != 0
+                                    && matches!(&v, Value::Object(o) if Rc::as_ptr(object::class_of(o)) as usize == entry.ok_class_addr));
+
+                            if type_ok {
+                                let slot = entry.slot as usize;
+                                let no_set = entry.flags & PC_NO_SET != 0;
+                                let accept = entry.accept;
+                                let class_addr = entry.class_addr;
+                                let base = entry.base;
+                                drop(cache);
+
+                                let stored = with_base_obj(frame, base, |obj| {
+                                    let data = object::data(obj);
+                                    if Rc::as_ptr(&data.class) as usize == class_addr
+                                        && data.lazy.borrow().is_none()
+                                    {
+                                        if let Ok(mut slots) = data.slots.try_borrow_mut() {
+                                            if let Some(cell) = slots.get_mut(slot) {
+                                                let mut old = None;
+                                                let ok = match cell {
+                                                    Some(cur) => {
+                                                        if !matches!(cur, Value::Reference(_)) {
+                                                            old = Some(std::mem::replace(cur, v.clone()));
+                                                            true
+                                                        } else {
+                                                            false
+                                                        }
+                                                    }
+                                                    None => {
+                                                        if no_set || (accept != u32::MAX && !data.slot_unset(slot)) {
+                                                            *cell = Some(v.clone());
+                                                            data.set_slot_unset(slot, false);
+                                                            true
+                                                        } else {
+                                                            false
+                                                        }
+                                                    }
+                                                };
+                                                drop(slots);
+                                                drop(old);
+                                                return ok;
+                                            }
+                                        }
+                                    }
+                                    false
+                                });
+
+                                if stored == Some(true) {
+                                    return Ok(v);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         let old = self.probe_fill(pid, PC_WRITE, |key, _, data, code| {
             if !accepts(key.accept, &v) && !class_accepts(code, pid as usize, key, &v) {

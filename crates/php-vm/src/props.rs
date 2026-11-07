@@ -347,6 +347,7 @@ impl Vm {
         let slot = pi.slot as usize;
         match data.slots.borrow().get(slot) {
             Some(Some(value)) if !matches!(value, Value::Reference(_)) => Some(slot),
+            Some(None) if write && cls.magic.set.is_none() => Some(slot),
             _ => None,
         }
     }
