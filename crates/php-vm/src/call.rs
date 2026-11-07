@@ -25,7 +25,61 @@ thread_local! {
     });
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) enum CallTarget<'a> {
+    Func(&'a str),
+    Method(&'a Obj, &'a str),
+    Static(&'a Class, &'a str),
+}
+
 impl Vm {
+    /// Returns true if execution observers are active.
+    #[inline(always)]
+    pub(crate) fn has_observers(&self) -> bool {
+        self.observer.enabled
+    }
+
+    /// Dynamic or named function/callable initialization (`op_init_call`).
+    #[inline(always)]
+    pub(crate) fn op_init_call(&mut self, callee: Value) -> VmResult<()> {
+        self.op_init_dyn_call(callee)
+    }
+
+    /// Calls a target directly by enum, avoiding lowercase allocation if already lowercase ASCII.
+    #[inline]
+    #[allow(dead_code)]
+    pub(crate) fn op_init_call_target(&mut self, target: CallTarget<'_>) -> VmResult<()> {
+        match target {
+            CallTarget::Func(name) => {
+                let bytes = name.as_bytes();
+                let f = if !bytes.iter().any(u8::is_ascii_uppercase) {
+                    self.functions.get(bytes).cloned()
+                } else {
+                    let lc = name.to_ascii_lowercase();
+                    self.functions.get(lc.as_bytes()).cloned()
+                };
+                let Some(f) = f else {
+                    return Err(self.make_throw(
+                        "Error",
+                        &format!("Call to undefined function {name}()"),
+                    ));
+                };
+                self.push_pending(PendingCall::new(f));
+                Ok(())
+            }
+            CallTarget::Method(o, name) => {
+                let call = self.method_call(o, &ZStr::from(name))?;
+                self.push_pending(call);
+                Ok(())
+            }
+            CallTarget::Static(cls, name) => {
+                let call = self.static_method_call(cls, &ZStr::from(name), false)?;
+                self.push_pending(call);
+                Ok(())
+            }
+        }
+    }
     /// Display name of a function for messages (`A::m`, `foo`).
     pub(crate) fn func_display(&self, func: &Func, scope: Option<&Rc<Class>>) -> String {
         let name = func.name().to_string_lossy();
@@ -353,8 +407,13 @@ impl Vm {
                     return self.static_method_call(&cls, &m, false);
                 }
                 let name = s.as_bytes().strip_prefix(b"\\").unwrap_or(s.as_bytes());
-                let lc = ZStr::from(name.to_ascii_lowercase());
-                match self.functions.get(&lc).cloned() {
+                let f = if !name.iter().any(u8::is_ascii_uppercase) {
+                    self.functions.get(name).cloned()
+                } else {
+                    let lc = name.to_ascii_lowercase();
+                    self.functions.get(lc.as_slice()).cloned()
+                };
+                match f {
                     Some(f) => Ok(PendingCall::new(f)),
                     None => Err(self.make_throw(
                         "Error",
@@ -725,7 +784,11 @@ impl Vm {
 
     fn method_call_on(&mut self, o: &Obj, cls: &Rc<Class>, name: &ZStr) -> VmResult<PendingCall> {
         let scope = self.scope();
-        let lc = ZStr::from(name.to_ascii_lowercase());
+        let lc = if name.as_bytes().iter().any(u8::is_ascii_uppercase) {
+            ZStr::from(name.to_ascii_lowercase())
+        } else {
+            name.clone()
+        };
         // Only a lookup for the object's own class is cached: the private
         // method rule below depends on it.
         let cacheable = Rc::ptr_eq(cls, object::class_of(o));
@@ -910,7 +973,11 @@ impl Vm {
             .rev()
             .find(|f| f.kind != FrameKind::Builtin)
             .and_then(|f| f.called.clone());
-        let lc = ZStr::from(name.to_ascii_lowercase());
+        let lc = if name.as_bytes().iter().any(u8::is_ascii_uppercase) {
+            ZStr::from(name.to_ascii_lowercase())
+        } else {
+            name.clone()
+        };
         let found = cls.methods.get(&lc).cloned();
         let m = match found {
             Some(m) if self.can_access_method(&m, scope.as_ref()) => m,
@@ -1100,19 +1167,31 @@ impl Vm {
     #[inline]
     pub(crate) fn op_new(&mut self, class: &ClassSpec, dst: u32) -> VmResult<bool> {
         let cls = self.resolve_class_spec(class)?;
+        if cls.magic.construct.is_none() {
+            let next_is_docall = matches!(
+                self.frame().code.ops.get(self.frame().ip + 1),
+                Some(Op::DoCall { .. })
+            ) || matches!(
+                self.frame().code.ops.get(self.frame().ip),
+                Some(Op::DoCall { .. })
+            );
+            if next_is_docall {
+                let o = self.instantiate(&cls)?;
+                if let Some(hooks) = &cls.hooks {
+                    if let Some(f) = hooks.get_constructor {
+                        f(self, &o)?;
+                    }
+                }
+                self.set_tmp(dst, Value::Object(o));
+                return Ok(false);
+            }
+        }
         let o = self.instantiate(&cls)?;
         if cls.magic.construct.is_none() {
             if let Some(hooks) = &cls.hooks {
                 if let Some(f) = hooks.get_constructor {
                     f(self, &o)?;
                 }
-            }
-            if matches!(
-                self.frame().code.ops.get(self.frame().ip),
-                Some(Op::DoCall { .. })
-            ) {
-                self.set_tmp(dst, Value::Object(o));
-                return Ok(false);
             }
             // A constructor-less class still evaluates positional arguments and
             // rejects named arguments, without declaring a reflected constructor.
@@ -2082,6 +2161,78 @@ impl Vm {
             ..
         } = call;
         let Func::User(uf) = func else { unreachable!() };
+
+        let passed_argc = if args.is_empty() {
+            inline_count as usize
+        } else {
+            0
+        };
+
+        if !uf.is_generator()
+            && uf.code.num_statics == 0
+            && uf.statics.borrow().is_empty()
+            && uf.code.num_iters == 0
+            && uf.code.num_finally == 0
+            && named.is_empty()
+            && !self.has_observers()
+            && closure.is_none()
+            && magic_name.is_none()
+            && !is_ctor
+            && args.is_empty()
+            && passed_argc >= uf.required as usize
+            && passed_argc <= uf.params.len()
+            && uf.params.iter().all(|p| !p.variadic && !p.by_ref)
+            && uf.params[..passed_argc].iter().enumerate().all(|(i, p)| {
+                match &p.ty {
+                    None => true,
+                    Some(ty) => {
+                        ty.is_mixed()
+                            || inline_args[i]
+                                .as_ref()
+                                .map_or(false, |v| accepts_without_coercion(ty.mask, v))
+                    }
+                }
+            })
+        {
+            if args.capacity() > 0 {
+                self.put_arg_vec(args);
+            }
+            let idx = self.frames.push_in_place(&uf.code, FrameKind::Function);
+            let f = &mut self.frames[idx];
+            f.this = this;
+            f.scope = scope;
+            f.called = called;
+            f.ret = ret;
+            f.caller_strict = caller_strict;
+            f.called_from_internal = from_internal;
+            f.is_ctor = false;
+
+            f.args.clear();
+            f.args.resize(passed_argc, None);
+
+            for i in 0..passed_argc {
+                if let Some(slot) = f.cvs.get_mut(i) {
+                    slot.set(inline_args[i].take());
+                }
+            }
+
+            let mut first_op = 0;
+            for i in 0..passed_argc {
+                match uf.code.ops.get(first_op) {
+                    Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
+                    Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
+                        first_op = *skip as usize;
+                    }
+                    _ => break,
+                }
+            }
+            f.ip = first_op;
+            f.func = Some(Func::User(uf.clone()));
+            f.ufunc = Some(uf);
+
+            return Ok(());
+        }
+
         let is_generator = uf.is_generator();
         let idx = self
             .frames
@@ -3516,8 +3667,13 @@ impl Vm {
         args: Vec<Value>,
     ) -> VmResult<Value> {
         let cls = object::class_of(o).clone();
-        let lc = ZStr::from(name.to_ascii_lowercase());
-        let call = match cls.methods.get(&lc).cloned() {
+        let m = if !name.as_bytes().iter().any(u8::is_ascii_uppercase) {
+            cls.methods.get(name.as_bytes()).cloned()
+        } else {
+            let lc = name.to_ascii_lowercase();
+            cls.methods.get(lc.as_bytes()).cloned()
+        };
+        let call = match m {
             Some(m) => self.pending_for_method(&m, Some(o.clone()), cls),
             None => self.method_call(o, &ZStr::from(name))?,
         };
@@ -3541,8 +3697,13 @@ impl Vm {
         args: Vec<Option<Value>>,
     ) -> VmResult<Value> {
         let cls = object::class_of(o).clone();
-        let lc = ZStr::from(name.to_ascii_lowercase());
-        let mut call = match cls.methods.get(&lc).cloned() {
+        let m = if !name.as_bytes().iter().any(u8::is_ascii_uppercase) {
+            cls.methods.get(name.as_bytes()).cloned()
+        } else {
+            let lc = name.to_ascii_lowercase();
+            cls.methods.get(lc.as_bytes()).cloned()
+        };
+        let mut call = match m {
             Some(m) => self.pending_for_method(&m, Some(o.clone()), cls),
             None => self.method_call(o, &ZStr::from(name))?,
         };
@@ -3568,10 +3729,12 @@ impl Vm {
 
     /// Calls a function by name.
     pub fn call_function(&mut self, name: &str, args: Vec<Value>) -> VmResult<Value> {
-        let f = self
-            .functions
-            .get(&ZStr::from(name.to_ascii_lowercase()))
-            .cloned();
+        let f = if !name.as_bytes().iter().any(u8::is_ascii_uppercase) {
+            self.functions.get(name.as_bytes()).cloned()
+        } else {
+            let lc = name.to_ascii_lowercase();
+            self.functions.get(lc.as_bytes()).cloned()
+        };
         let Some(f) = f else {
             return Err(self.make_throw("Error", &format!("Call to undefined function {name}()")));
         };
