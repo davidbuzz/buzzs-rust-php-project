@@ -1287,10 +1287,8 @@ impl Frame {
             if let Some(idx) = idx {
                 let idx = idx as usize;
                 if idx < st.slots.len() {
-                    if let Some(val) = self.cvs.get(cv as usize).and_then(CvSlot::get) {
-                        if let Some(old) = std::mem::replace(&mut st.slots[idx], Some(val.clone())) {
-                            crate::gc::release_duplicate(old);
-                        }
+                    if let Some(old) = std::mem::replace(&mut st.slots[idx], None) {
+                        crate::gc::release_duplicate(old);
                     }
                 }
             }
