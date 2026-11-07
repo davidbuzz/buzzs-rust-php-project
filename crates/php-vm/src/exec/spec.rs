@@ -2128,6 +2128,24 @@ int(9223372036854775806)
     }
 
     #[test]
+    fn fused_compound_step_and_branch_ops() {
+        let src = r#"<?php
+$out = '';
+for ($i = 0; $i < 5; $i = $i + 1) { $out .= $i; } $out .= '|';
+for ($i = 0; $i < 6; $i += 2) { $out .= $i; } $out .= '|';
+for ($i = 1; $i <= 3; $i += 1) { $out .= $i; } $out .= '|';
+$r = 0; $ref = &$r; for (; $r < 3; $r = $r + 1) { $out .= $r; } $out .= '|';
+$x = 1; $x = $x + 2; if ($x) { $out .= 'T'; } else { $out .= 'F'; }
+$x = 1; $x = $x - 1; if ($x) { $out .= 'T'; } else { $out .= 'F'; }
+$x = 0; $x += 5; if ($x) { $out .= 'T'; } else { $out .= 'F'; }
+$x = 5; $x -= 5; if ($x) { $out .= 'T'; } else { $out .= 'F'; }
+echo $out, "\n";
+"#;
+        let expected = "01234|024|123|012|TFTF\n";
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
     fn simple_identity_and_truth_tests() {
         let src = r#"<?php
 $n = null; $f = false; $s = "abc"; $t = "abc"; $i = 1; $z = 0; $e = ""; $a = [];

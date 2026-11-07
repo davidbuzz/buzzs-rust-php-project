@@ -171,6 +171,35 @@ impl Vm {
             None
         }
     }
+
+    /// Compound assignment on a compiled variable without a used result
+    /// in the dispatch pre-match (specialised loop steps and branches).
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
+    fn assign_op_cv_step_fast(&mut self, cv: u32, kind: BinaryOp, val: Operand) -> bool {
+        let mut handled = false;
+        if let Some(f) = self.frames.last_mut() {
+            let idx = cv as usize;
+            if let Some(slot) = f.cvs.get(idx) {
+                if let Some((yf, _)) = Self::peek_num_f64(f, val) {
+                    if let Some(Value::Float(xf)) = slot.get() {
+                        if let Some(res) = float_assign_arith(kind, *xf, yf) {
+                            unsafe {
+                                if let Some(Value::Float(ref mut dst_f)) =
+                                    slot.get_mut_unchecked()
+                                {
+                                    *dst_f = res;
+                                    f.sync_cv_to_symtab(cv, &Value::Float(res));
+                                    handled = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        handled || self.assign_op_cv_fast(cv, kind, val, None)
+    }
 }
 
 /// Computes binary arithmetic on floats directly.
@@ -1336,6 +1365,83 @@ impl Vm {
                                 }
                             }
                         }
+                        Op::BinAssignCvCmpJmp {
+                            op: kind,
+                            a,
+                            b,
+                            dst,
+                            cv,
+                        } => match self.bin_assign_cv_fast(*kind, *a, *b, *cv, *dst) {
+                            Some(true) => {
+                                if let Some(Op::CmpJmp {
+                                    a: ca,
+                                    b: cb,
+                                    target,
+                                    mask,
+                                    ..
+                                }) = ops.get(ip + 1)
+                                {
+                                    match self.cmp_jmp_num(*ca, *cb, *mask) {
+                                        Some(true) => ip = *target as usize,
+                                        Some(false) => ip += 3,
+                                        None => ip += 1,
+                                    }
+                                } else {
+                                    ip += 1;
+                                }
+                            }
+                            Some(false) => {}
+                            None => break 'slow,
+                        },
+                        Op::AssignOpCvCmpJmp { cv, op: kind, val, .. } => {
+                            if !self.assign_op_cv_step_fast(*cv, *kind, *val) {
+                                break 'slow;
+                            }
+                            if let Some(Op::CmpJmp {
+                                a, b, target, mask, ..
+                            }) = ops.get(ip)
+                            {
+                                match self.cmp_jmp_num(*a, *b, *mask) {
+                                    Some(true) => ip = *target as usize,
+                                    Some(false) => ip += 2,
+                                    None => {}
+                                }
+                            }
+                        }
+                        Op::BinAssignCvJmp {
+                            op: kind,
+                            a,
+                            b,
+                            dst,
+                            cv,
+                            target,
+                            jmp_if,
+                        } => match self.bin_assign_cv_fast(*kind, *a, *b, *cv, *dst) {
+                            Some(true) => match self.peek_cv_bool(*cv) {
+                                Some(cond) if cond == *jmp_if => ip = *target as usize,
+                                Some(_) => ip += 2,
+                                None => ip += 1,
+                            },
+                            Some(false) => {}
+                            None => break 'slow,
+                        },
+                        Op::AssignOpCvJmp {
+                            cv,
+                            op: kind,
+                            val,
+                            target,
+                            jmp_if,
+                            ..
+                        } => {
+                            if !self.assign_op_cv_step_fast(*cv, *kind, *val) {
+                                break 'slow;
+                            }
+                            match self.peek_cv_bool(*cv) {
+                                Some(cond) if cond == *jmp_if => ip = *target as usize,
+                                Some(_) => ip += 1,
+                                None => {}
+                            }
+                        }
                         Op::AssignOpCv {
                             cv,
                             op: kind,
@@ -1895,6 +2001,13 @@ impl Vm {
                     // op).
                     Op::IncDecCvCmpJmp { kind, place, .. } => {
                         let r = self.place_incdec(*place, *kind)?;
+                        self.set_dst(None, r);
+                        Flow::Next
+                    }
+                    Op::AssignOpCvCmpJmp { place, op, val, .. }
+                    | Op::AssignOpCvJmp { place, op, val, .. } => {
+                        let v = self.read(*val)?;
+                        let r = self.place_assign_op(*place, *op, v)?;
                         self.set_dst(None, r);
                         Flow::Next
                     }
@@ -2641,7 +2754,10 @@ impl Vm {
                     // each one replaced (`IncDec*` and `FetchDim*` share the
                     // `IncDec` and `Fetch` arms above). The op after a
                     // `CmpJmp` or `BinAssignCv` then runs as its own op.
-                    Op::CmpJmp { op, a, b, dst, .. } | Op::BinAssignCv { op, a, b, dst, .. } => {
+                    Op::CmpJmp { op, a, b, dst, .. }
+                    | Op::BinAssignCv { op, a, b, dst, .. }
+                    | Op::BinAssignCvCmpJmp { op, a, b, dst, .. }
+                    | Op::BinAssignCvJmp { op, a, b, dst, .. } => {
                         self.bin_slow(*op, *a, *b, *dst)?;
                         Flow::Next
                     }

@@ -71,6 +71,117 @@ pub(crate) fn specialise(ops: &mut [Op], places: &[Place], literals: &[Literal])
         } = ops[i - 1]
         {
             ops[i - 1] = Op::IncDecCvCmpJmp { cv, kind, place };
+        } else if let Op::AssignOpCv {
+            cv,
+            op,
+            val,
+            dst: None,
+            place,
+        } = ops[i - 1]
+        {
+            ops[i - 1] = Op::AssignOpCvCmpJmp { cv, op, val, place };
+        } else if i >= 2 {
+            if let Op::AssignCv {
+                cv,
+                val: Operand::Tmp(t) | Operand::TmpKeep(t),
+                dst: None,
+            } = ops[i - 1]
+            {
+                if let Op::BinAssignCv {
+                    op: bop,
+                    a,
+                    b,
+                    dst: bdst,
+                    cv: bcv,
+                } = ops[i - 2]
+                {
+                    if bcv == cv && bdst == t {
+                        ops[i - 2] = Op::BinAssignCvCmpJmp {
+                            op: bop,
+                            a,
+                            b,
+                            dst: bdst,
+                            cv,
+                        };
+                    }
+                }
+            }
+        }
+    }
+    // Third pass: compound assignment or binary assignment followed by a branch
+    // testing the assigned variable ($x = $a + $b; if ($x) / $x += 1; if ($x)).
+    for i in 0..ops.len() {
+        if i + 2 < ops.len() {
+            if let Op::BinAssignCv { op, a, b, dst, cv } = ops[i] {
+                if let Op::AssignCv {
+                    cv: acv,
+                    val: Operand::Tmp(t) | Operand::TmpKeep(t),
+                    dst: None,
+                } = ops[i + 1]
+                {
+                    if acv == cv && t == dst {
+                        match ops[i + 2] {
+                            Op::JmpZ(Operand::Cv(jcv), target) if jcv == cv => {
+                                ops[i] = Op::BinAssignCvJmp {
+                                    op,
+                                    a,
+                                    b,
+                                    dst,
+                                    cv,
+                                    target,
+                                    jmp_if: false,
+                                };
+                            }
+                            Op::JmpNz(Operand::Cv(jcv), target) if jcv == cv => {
+                                ops[i] = Op::BinAssignCvJmp {
+                                    op,
+                                    a,
+                                    b,
+                                    dst,
+                                    cv,
+                                    target,
+                                    jmp_if: true,
+                                };
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        if i + 1 < ops.len() {
+            if let Op::AssignOpCv {
+                cv,
+                op,
+                val,
+                dst: None,
+                place,
+            } = ops[i]
+            {
+                match ops[i + 1] {
+                    Op::JmpZ(Operand::Cv(jcv), target) if jcv == cv => {
+                        ops[i] = Op::AssignOpCvJmp {
+                            cv,
+                            op,
+                            val,
+                            place,
+                            target,
+                            jmp_if: false,
+                        };
+                    }
+                    Op::JmpNz(Operand::Cv(jcv), target) if jcv == cv => {
+                        ops[i] = Op::AssignOpCvJmp {
+                            cv,
+                            op,
+                            val,
+                            place,
+                            target,
+                            jmp_if: true,
+                        };
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 }
@@ -438,6 +549,7 @@ fn is_smart_branch(op: BinKind) -> bool {
             | BinKind::NotIdentical
             | BinKind::Less
             | BinKind::LessEqual
+            | BinKind::Spaceship
     )
 }
 
@@ -486,8 +598,8 @@ fn bin(op: BinKind, a: Operand, b: Operand, dst: u32, next: Option<&Op>) -> Opti
         return None;
     }
     let branch = match next? {
-        Op::JmpZ(Operand::Tmp(t), target) if *t == dst => Some((*target, false)),
-        Op::JmpNz(Operand::Tmp(t), target) if *t == dst => Some((*target, true)),
+        Op::JmpZ(Operand::Tmp(t) | Operand::TmpKeep(t), target) if *t == dst => Some((*target, false)),
+        Op::JmpNz(Operand::Tmp(t) | Operand::TmpKeep(t), target) if *t == dst => Some((*target, true)),
         _ => None,
     };
     if let Some((target, jmp_if)) = branch {
@@ -1154,6 +1266,88 @@ mod tests {
                 Op::Abs {
                     dst: Some(_),
                     to: Some(_),
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn loop_steps_with_bin_assign_and_assign_op_are_fused() {
+        let ops = main_ops("<?php for ($i = 0; $i < 10; $i = $i + 1) { echo $i; }");
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::BinAssignCvCmpJmp {
+                    op: BinKind::Arith(BinaryOp::Add),
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+
+        let ops = main_ops("<?php for ($i = 0; $i < 10; $i += 2) { echo $i; }");
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::AssignOpCvCmpJmp {
+                    op: BinaryOp::Add,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn bin_assign_and_assign_op_followed_by_branch_are_fused() {
+        let ops = main_ops("<?php $x = 1; $y = 2; $x = $x + $y; if ($x) { echo 1; }");
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::BinAssignCvJmp {
+                    jmp_if: false,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+
+        let ops = main_ops("<?php $x = 1; $x += 2; if ($x) { echo 1; }");
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::AssignOpCvJmp {
+                    jmp_if: false,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn spaceship_is_fused_into_cmp_jmp() {
+        let ops = main_ops("<?php $a = 1; $b = 2; if (($a <=> $b) == 0) { echo 1; }");
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::CmpJmp {
+                    op: BinKind::Equal,
+                    ..
+                }
+            )),
+            "{ops:?}"
+        );
+
+        let ops = main_ops("<?php $a = 1; $b = 2; if ($a <=> $b) { echo 1; }");
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::CmpJmp {
+                    op: BinKind::Spaceship,
+                    jmp_if: false,
                     ..
                 }
             )),

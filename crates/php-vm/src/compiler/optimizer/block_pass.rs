@@ -46,7 +46,9 @@ pub(crate) fn find_leaders(op_array: &OpArray) -> Vec<bool> {
             | Op::Exit(_)
             | Op::FastCall { .. }
             | Op::FastRet { .. }
-            | Op::CmpJmp { .. } => {
+            | Op::CmpJmp { .. }
+            | Op::BinAssignCvJmp { .. }
+            | Op::AssignOpCvJmp { .. } => {
                 if i + 1 <= len {
                     leaders[i + 1] = true;
                 }

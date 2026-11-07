@@ -884,6 +884,58 @@ pub enum Op {
         kind: IncDecKind,
         place: PlaceId,
     },
+    /// An [`Op::BinAssignCv`] right before an [`Op::CmpJmp`] (with the kept
+    /// [`Op::AssignCv`] in between): a rotated loop's step and condition
+    /// (`for (...; $i < $n; $i = $i + 1)`). After computing the binary
+    /// operation and assigning to `cv`, the comparison of that `CmpJmp` is
+    /// decided here too when operands are plain numbers: the op jumps to the
+    /// `CmpJmp`'s target or skips the `AssignCv`, the `CmpJmp` and its kept
+    /// jump op; otherwise the `CmpJmp` runs as its own op.
+    BinAssignCvCmpJmp {
+        op: BinKind,
+        a: Operand,
+        b: Operand,
+        dst: u32,
+        cv: u32,
+    },
+    /// An [`Op::AssignOpCv`] without a used result right before an
+    /// [`Op::CmpJmp`]: a rotated loop's step and condition (`for (...; $i <
+    /// $n; $i += 1)`). After the in-place compound assignment, the comparison
+    /// of that `CmpJmp` is decided here too when operands are plain numbers:
+    /// the op jumps to the `CmpJmp`'s target or skips the `CmpJmp` and its
+    /// kept jump op; otherwise the `CmpJmp` runs as its own op.
+    AssignOpCvCmpJmp {
+        cv: u32,
+        op: BinaryOp,
+        val: Operand,
+        place: PlaceId,
+    },
+    /// An [`Op::BinAssignCv`] followed by a branch testing the assigned variable
+    /// (`$x = $a + $b; if ($x)`, `$cond = $a < $b; if ($cond)`).
+    /// After computing the binary operation and assigning to `cv`, branches
+    /// directly to `target` if the truthiness of `cv` equals `jmp_if`, skipping
+    /// the `AssignCv` and the branch op.
+    BinAssignCvJmp {
+        op: BinKind,
+        a: Operand,
+        b: Operand,
+        dst: u32,
+        cv: u32,
+        target: Label,
+        jmp_if: bool,
+    },
+    /// An [`Op::AssignOpCv`] without a used result followed by a branch
+    /// testing the variable (`$i += 1; if ($i)`). After the in-place
+    /// compound assignment, branches directly to `target` if the truthiness
+    /// of `cv` equals `jmp_if`, skipping the branch op.
+    AssignOpCvJmp {
+        cv: u32,
+        op: BinaryOp,
+        val: Operand,
+        place: PlaceId,
+        target: Label,
+        jmp_if: bool,
+    },
     /// `InitFCall("abs")` + `Send` + `DoCall` specialised into an inline operation.
     /// When `src` holds an int or float, computes its absolute value inline
     /// without call frame setup.
@@ -1030,7 +1082,8 @@ pub mod cmp_outcome {
             BinKind::NotEqual => (LESS | GREATER | UNORDERED, false),
             BinKind::Identical => (EQUAL, true),
             BinKind::NotIdentical => (LESS | GREATER | UNORDERED | MISMATCH, true),
-            BinKind::Arith(_) | BinKind::Spaceship => return None,
+            BinKind::Spaceship => (LESS | GREATER | UNORDERED, false),
+            BinKind::Arith(_) => return None,
         };
         let taken = if jmp_if { taken } else { ALL & !taken };
         Some(if identity { taken | IDENTITY } else { taken })

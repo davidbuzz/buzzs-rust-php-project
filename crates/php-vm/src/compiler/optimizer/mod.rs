@@ -313,12 +313,17 @@ pub(crate) fn for_each_operand_mut(op: &mut Op, mut f: impl FnMut(&mut Operand))
         Op::ConstDimCheck { obj } => f(obj),
         // Specialised ops
         Op::Abs { src, .. } => f(src),
-        Op::CmpJmp { a, b, .. } | Op::BinAssignCv { a, b, .. } => {
+        Op::CmpJmp { a, b, .. }
+        | Op::BinAssignCv { a, b, .. }
+        | Op::BinAssignCvCmpJmp { a, b, .. }
+        | Op::BinAssignCvJmp { a, b, .. } => {
             f(a);
             f(b);
         }
         Op::IncDecCv { .. } => {}
-        Op::AssignOpCv { val, .. } => f(val),
+        Op::AssignOpCv { val, .. }
+        | Op::AssignOpCvCmpJmp { val, .. }
+        | Op::AssignOpCvJmp { val, .. } => f(val),
         Op::AssignOpDimCv { dim, val, .. } | Op::AssignDimCv { dim, val, .. } => {
             f(dim);
             f(val);
@@ -385,7 +390,9 @@ pub(crate) fn for_each_label_mut(op: &mut Op, mut f: impl FnMut(&mut Label)) {
         | Op::FeFetch { end: t, .. }
         | Op::FeFreeOnReturn { loop_at: t, .. }
         | Op::AssertCheck { skip: t, .. }
-        | Op::CmpJmp { target: t, .. } => f(t),
+        | Op::CmpJmp { target: t, .. }
+        | Op::BinAssignCvJmp { target: t, .. }
+        | Op::AssignOpCvJmp { target: t, .. } => f(t),
         _ => {}
     }
 }
@@ -424,6 +431,8 @@ pub(crate) fn def_tmp(op: &Op) -> Option<u32> {
         | Op::ConstPropCheck { dst, .. }
         | Op::CmpJmp { dst, .. }
         | Op::BinAssignCv { dst, .. }
+        | Op::BinAssignCvCmpJmp { dst, .. }
+        | Op::BinAssignCvJmp { dst, .. }
         | Op::FetchDimCv { dst, .. }
         | Op::FetchDimsCv { dst, .. }
         | Op::IssetDimCv { dst, .. }

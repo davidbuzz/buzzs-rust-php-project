@@ -289,6 +289,10 @@ fn update_cv_state_for_op(
             }
         }
         Op::IncDecCvCmpJmp { cv, .. }
+        | Op::BinAssignCvCmpJmp { cv, .. }
+        | Op::BinAssignCvJmp { cv, .. }
+        | Op::AssignOpCvCmpJmp { cv, .. }
+        | Op::AssignOpCvJmp { cv, .. }
         | Op::FetchConstTo { to: cv, .. }
         | Op::FetchClassConstTo { to: cv, .. }
         | Op::Global { cv, .. }

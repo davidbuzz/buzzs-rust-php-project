@@ -74,6 +74,8 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
                 Op::JmpZ(_, t)
                 | Op::JmpNz(_, t)
                 | Op::CmpJmp { target: t, .. }
+                | Op::BinAssignCvJmp { target: t, .. }
+                | Op::AssignOpCvJmp { target: t, .. }
                 | Op::JmpZEx { target: t, .. }
                 | Op::JmpNzEx { target: t, .. }
                 | Op::JmpSet { target: t, .. }

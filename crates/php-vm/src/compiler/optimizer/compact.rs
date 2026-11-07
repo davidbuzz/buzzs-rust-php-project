@@ -186,6 +186,8 @@ pub(crate) fn compact_tmps(op_array: &mut OpArray) -> bool {
             | Op::ConstPropCheck { dst, .. }
             | Op::CmpJmp { dst, .. }
             | Op::BinAssignCv { dst, .. }
+            | Op::BinAssignCvCmpJmp { dst, .. }
+            | Op::BinAssignCvJmp { dst, .. }
             | Op::FetchDimCv { dst, .. }
             | Op::FetchDimsCv { dst, .. }
             | Op::IssetDimCv { dst, .. }
@@ -389,8 +391,12 @@ pub(crate) fn for_each_cv_mut(op: &mut Op, mut f: impl FnMut(&mut u32)) {
         | Op::RecvDefault { cv, .. }
         | Op::RecvVariadic { cv, .. }
         | Op::BinAssignCv { cv, .. }
+        | Op::BinAssignCvCmpJmp { cv, .. }
+        | Op::BinAssignCvJmp { cv, .. }
         | Op::IncDecCv { cv, .. }
         | Op::AssignOpCv { cv, .. }
+        | Op::AssignOpCvCmpJmp { cv, .. }
+        | Op::AssignOpCvJmp { cv, .. }
         | Op::AssignOpDimCv { cv, .. }
         | Op::IncDecDimCv { cv, .. }
         | Op::IssetDimCv { cv, .. }
@@ -533,6 +539,8 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
         match op {
             Op::IncDecCv { cv, .. }
             | Op::AssignOpCv { cv, .. }
+            | Op::AssignOpCvCmpJmp { cv, .. }
+            | Op::AssignOpCvJmp { cv, .. }
             | Op::ConcatCv { cv, .. }
             | Op::AssignOpDimCv { cv, .. }
             | Op::IncDecDimCv { cv, .. }
@@ -606,6 +614,8 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
                         | Op::AssignDimsCv { place: p, .. }
                         | Op::AssignOpDimsCv { place: p, .. }
                         | Op::IncDecCvCmpJmp { place: p, .. }
+                        | Op::AssignOpCvCmpJmp { place: p, .. }
+                        | Op::AssignOpCvJmp { place: p, .. }
                         | Op::FetchObjProp { place: p, .. }
                         | Op::FetchObjPropDim { place: p, .. }
                         | Op::AssignObjProp { place: p, .. }
