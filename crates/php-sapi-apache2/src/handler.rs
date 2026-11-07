@@ -52,6 +52,27 @@ pub fn child_init() {
     let _ = crate::config::current();
 }
 
+/// Executes the registered header callback (`header_register_callback`) before
+/// implicit header sends if not already sent.
+pub fn execute_header_callback(vm: &mut php_vm::Vm) {
+    if let Some(ctx) = crate::request::current() {
+        if !ctx.headers_sent() {
+            let cb = ctx.header_callback.borrow_mut().take();
+            if let Some(cb) = cb {
+                if let Err(t) = vm.call_value(&cb, Vec::new()) {
+                    if vm.pending_throw.is_none() {
+                        vm.pending_throw = Some(t);
+                    }
+                }
+                drop(cb);
+                if ctx.headers_sent() {
+                    ctx.resend_headers();
+                }
+            }
+        }
+    }
+}
+
 /// A factory creating the request's backend on the request thread.
 pub type BackendFactory = Box<dyn FnOnce() -> Option<Box<dyn Backend>> + Send>;
 
@@ -185,6 +206,12 @@ pub(crate) trait TimeoutSink {
     fn pending(&self) -> bool;
     /// The hard timeout: ends the process (`_exit(124)`).
     fn kill(&mut self, secs: i64, hard: i64);
+    /// Whether the client connection has aborted (`r.connection.aborted`).
+    fn is_aborted(&self) -> bool {
+        false
+    }
+    /// Requests an engine interrupt to handle the abort gracefully.
+    fn abort(&mut self) {}
 }
 
 /// The production [`TimeoutSink`]: php-vm's interrupt module.
@@ -205,6 +232,14 @@ impl TimeoutSink for EngineTimeout<'_> {
     fn kill(&mut self, secs: i64, hard: i64) {
         hard_timeout(self.r, self.capture, secs, hard);
     }
+
+    fn is_aborted(&self) -> bool {
+        self.r.int_field(IntField::Aborted) != 0
+    }
+
+    fn abort(&mut self) {
+        php_vm::interrupt::request_interrupt();
+    }
 }
 
 /// The watchdog loop: polls the request thread's CPU clock (`now`) every
@@ -221,16 +256,21 @@ pub(crate) fn watchdog(
     loop {
         match done.recv_timeout(Duration::from_millis(50)) {
             Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
-            Err(mpsc::RecvTimeoutError::Timeout) => match timer.check(now()) {
-                Expiry::None => {}
-                Expiry::Soft => sink.expired(),
-                Expiry::Hard => {
-                    if sink.pending() {
-                        sink.kill(timer.limit(), timer.hard_limit());
-                        return;
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if sink.is_aborted() {
+                    sink.abort();
+                }
+                match timer.check(now()) {
+                    Expiry::None => {}
+                    Expiry::Soft => sink.expired(),
+                    Expiry::Hard => {
+                        if sink.pending() {
+                            sink.kill(timer.limit(), timer.hard_limit());
+                            return;
+                        }
                     }
                 }
-            },
+            }
         }
     }
 }
@@ -502,6 +542,8 @@ mod tests {
         /// The hard-timeout kill, with its `(max_execution_time,
         /// hard_timeout)`.
         killed: Option<(i64, i64)>,
+        /// Abort signaled.
+        aborted: bool,
     }
 
     impl TimeoutSink for Recorder {
@@ -516,6 +558,12 @@ mod tests {
         fn kill(&mut self, secs: i64, hard: i64) {
             self.killed = Some((secs, hard));
         }
+
+        fn is_aborted(&self) -> bool {
+            self.aborted
+        }
+
+        fn abort(&mut self) {}
     }
 
     const SEC: i64 = 1_000_000_000;

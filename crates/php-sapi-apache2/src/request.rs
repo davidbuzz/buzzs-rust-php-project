@@ -197,6 +197,8 @@ pub struct RequestCtx {
     /// `PHP_OUTPUT_DISABLED` set by [`RequestCtx::write`] itself (see
     /// there).
     output_disabled: Cell<bool>,
+    /// Whether implicit flush is enabled (`implicit_flush` or `zlib.output_compression`).
+    pub implicit_flush: Cell<bool>,
     /// `PG(connection_status) & PHP_CONNECTION_ABORTED`: the client went
     /// away.
     pub aborted: Cell<bool>,
@@ -236,6 +238,17 @@ impl std::fmt::Debug for RequestCtx {
 thread_local! {
     static CURRENT: RefCell<Option<Rc<RequestCtx>>> = const { RefCell::new(None) };
     static PERSISTENT_VM: RefCell<Option<Vm>> = const { RefCell::new(None) };
+    static ACTIVE_VM: Cell<*mut Vm> = const { Cell::new(std::ptr::null_mut()) };
+}
+
+pub(crate) fn with_active_vm<R>(f: impl FnOnce(&mut Vm) -> R) -> Option<R> {
+    let ptr = ACTIVE_VM.with(Cell::get);
+    if ptr.is_null() {
+        None
+    } else {
+        // SAFETY: ACTIVE_VM is set only while the VM reference is uniquely held on the current thread in run().
+        Some(f(unsafe { &mut *ptr }))
+    }
 }
 
 /// Runs `f` with the current request context (`None` outside a request).
@@ -259,13 +272,15 @@ impl RequestCtx {
             ..HeaderFacts::default()
         };
         let headers_only = facts.method == b"HEAD";
+        let is_aborted = backend.int_field(IntField::Aborted) != 0;
         RequestCtx {
             backend,
             headers: RefCell::new(SapiHeaders::new(status)),
             facts: RefCell::new(facts),
             headers_only,
             output_disabled: Cell::new(false),
-            aborted: Cell::new(false),
+            implicit_flush: Cell::new(false),
+            aborted: Cell::new(is_aborted),
             abort_handled: Cell::new(false),
             timeouts_at_abort: Cell::new(0),
             body: RefCell::new(Body::Unread),
@@ -304,7 +319,7 @@ impl RequestCtx {
     /// The outer `sapi_send_headers()`'s own `php_apache_sapi_send_headers()`
     /// after a `header_register_callback()` callable whose output already
     /// sent the headers (see [`SapiHeaders::resend`]).
-    fn resend_headers(&self) {
+    pub(crate) fn resend_headers(&self) {
         let facts = self.facts.borrow();
         self.headers.borrow_mut().resend(&facts, &*self.backend);
     }
@@ -323,6 +338,9 @@ impl RequestCtx {
     /// is gone, plus `PHP_CONNECTION_TIMEOUT` for a timeout since the abort
     /// was last recorded (or since the request started).
     pub fn connection_status(&self) -> i64 {
+        if !self.aborted.get() && self.backend.int_field(IntField::Aborted) != 0 {
+            self.record_abort();
+        }
         let mut status = 0;
         if self.aborted.get() {
             status |= CONNECTION_ABORTED;
@@ -362,16 +380,30 @@ impl RequestCtx {
             return;
         }
         if !self.headers_sent() {
-            self.send_headers();
-            if self.headers_only {
-                self.output_disabled.set(true);
+            let allowed = with_active_vm(|vm| {
+                use php_support::output::OutputHost;
+                vm.send_headers()
+            });
+            match allowed {
+                Some(false) => {
+                    self.output_disabled.set(true);
+                }
+                None => {
+                    self.send_headers();
+                    if self.headers_only {
+                        self.output_disabled.set(true);
+                    }
+                }
+                _ => {}
             }
         }
         if self.output_disabled.get() || self.aborted.get() {
             return;
         }
-        if !self.backend.write(data) {
+        if self.backend.int_field(IntField::Aborted) != 0 || !self.backend.write(data) {
             self.note_abort();
+        } else if self.implicit_flush.get() && ACTIVE_VM.with(|p| p.get().is_null()) {
+            self.flush();
         }
     }
 
@@ -380,10 +412,11 @@ impl RequestCtx {
     /// `php_handle_aborted_connection()`).
     pub fn flush(&self) -> bool {
         self.send_headers();
-        if self.aborted.get() {
+        if self.aborted.get() || self.backend.int_field(IntField::Aborted) != 0 {
+            self.note_abort();
             return false;
         }
-        if self.backend.flush() {
+        if self.backend.flush() && self.backend.int_field(IntField::Aborted) == 0 {
             return true;
         }
         self.note_abort();
@@ -403,13 +436,22 @@ impl RequestCtx {
     /// `sapi_module.read_post()`: fills `buf` as far as possible; returns
     /// the number of bytes read (0 at the end).
     pub fn read_post(&self, buf: &mut [u8]) -> usize {
+        if self.aborted.get() || self.backend.int_field(IntField::Aborted) != 0 {
+            self.note_abort();
+            return 0;
+        }
         if !self.body_available() {
             return 0;
         }
         let mut total = 0;
         while total < buf.len() {
+            if self.backend.int_field(IntField::Aborted) != 0 {
+                self.note_abort();
+                break;
+            }
             let n = self.backend.body_read(&mut buf[total..]);
             let Ok(n) = usize::try_from(n) else {
+                self.note_abort();
                 break;
             };
             if n == 0 {
@@ -456,7 +498,22 @@ impl RequestCtx {
         let mut f = self.facts.borrow_mut();
         f.default_mimetype = vm.ini_string("default_mimetype").unwrap_or_default();
         f.default_charset = vm.ini_string("default_charset").unwrap_or_default();
+        let implicit = vm.ini_bool("implicit_flush") || is_zlib_compression_on(vm);
+        self.implicit_flush.set(implicit);
     }
+}
+
+/// Whether `zlib.output_compression` is enabled in the VM configuration.
+fn is_zlib_compression_on(vm: &Vm) -> bool {
+    if let Some(v) = vm.ini_string("zlib.output_compression") {
+        if v.eq_ignore_ascii_case(b"on") || v.eq_ignore_ascii_case(b"1") {
+            return true;
+        }
+        if let Ok(n) = std::str::from_utf8(&v).unwrap_or("").trim().parse::<i64>() {
+            return n > 0;
+        }
+    }
+    false
 }
 
 /// `php_header()` for this SAPI, installed as the VM's `send_headers_hook`
@@ -472,23 +529,7 @@ pub fn php_header(vm: &mut Vm) -> bool {
     };
     if !ctx.headers_sent() {
         ctx.add_default_content_type();
-        // `SG(send_header_fcc)` is cleared before the call: the callable
-        // runs once, and a callable it registers itself never runs.
-        let cb = ctx.header_callback.borrow_mut().take();
-        if let Some(cb) = cb {
-            if let Err(t) = vm.call_value(&cb, Vec::new()) {
-                if vm.pending_throw.is_none() {
-                    vm.pending_throw = Some(t);
-                }
-            }
-            drop(cb);
-            if ctx.headers_sent() {
-                // The callable's output sent the headers (the nested
-                // `sapi_send_headers()`); the outer one still calls
-                // `php_apache_sapi_send_headers()` again.
-                ctx.resend_headers();
-            }
-        }
+        crate::handler::execute_header_callback(vm);
         ctx.send_headers();
     }
     vm.headers_sent = true;
@@ -544,7 +585,13 @@ fn stop_for_aborted_connection(vm: &mut Vm) -> VmResult<()> {
 /// noticed — [`RequestCtx::write`] recorded the status but has no VM;
 /// php-src bails out from inside `ub_write`.
 pub fn abort_interrupt(vm: &mut Vm) -> VmResult<()> {
-    let due = with_ctx(|c| c.aborted.get() && !c.abort_handled.get()).unwrap_or(false);
+    let due = with_ctx(|c| {
+        if !c.aborted.get() && c.backend.int_field(IntField::Aborted) != 0 {
+            c.record_abort();
+        }
+        c.aborted.get() && !c.abort_handled.get()
+    })
+    .unwrap_or(false);
     if due {
         stop_for_aborted_connection(vm)
     } else {
@@ -751,6 +798,18 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
 
         apply_dir_config(vm, &ctx.backend.dir_config());
         ctx.refresh_facts(vm);
+        if ctx.implicit_flush.get() {
+            let mut sink = Vec::new();
+            vm.ini.alter(
+                "implicit_flush",
+                b"1",
+                php_support::ini::Access::SYSTEM,
+                php_support::ini::Stage::Runtime,
+                false,
+                &mut sink,
+            );
+            php_support::output::ob_implicit_flush(vm, true);
+        }
         // `zend_set_timeout(EG(timeout_seconds))` at request startup, through
         // the VM's timer hook ([`arm_timer`] → `params.timer`): it also clears
         // an engine timeout flag a previous request left unhandled.  With
@@ -792,6 +851,24 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
         install_input_hook();
         vm.shutdown_functions
             .insert(0, (Value::from(crate::functions::FATAL_CHECK), Vec::new()));
+
+        if ctx.backend.int_field(IntField::Aborted) != 0 {
+            ctx.record_abort();
+            if !vm.ini_bool("ignore_user_abort") {
+                finish(vm, &ctx);
+                vm.request_reset();
+                return;
+            }
+        }
+
+        struct VmGuard;
+        impl Drop for VmGuard {
+            fn drop(&mut self) {
+                ACTIVE_VM.with(|c| c.set(std::ptr::null_mut()));
+            }
+        }
+        ACTIVE_VM.with(|c| c.set(vm as *mut Vm));
+        let _vm_guard = VmGuard;
 
         let filename = ctx
             .backend
@@ -1047,5 +1124,33 @@ mod tests {
     #[test]
     fn quoting() {
         assert_eq!(php_single_quoted(b"a'b\\c"), b"'a\\'b\\\\c'");
+    }
+
+    #[test]
+    fn client_aborted_field_detected() {
+        let m = MockBackend::default().with_int(IntField::Aborted, 1);
+        let ctx = RequestCtx::new(Box::new(m), Arc::new(Timer::default()));
+        assert!(ctx.aborted.get());
+        assert_eq!(ctx.connection_status(), CONNECTION_ABORTED);
+        assert!(!ctx.flush());
+    }
+
+    #[test]
+    fn implicit_flush_flag_detected() {
+        let opts = VmOptions::default();
+        let mut vm = Vm::new(&opts, Box::new(ApacheOutput));
+        let ctx = RequestCtx::new(Box::new(MockBackend::default()), Arc::new(Timer::default()));
+        assert!(!ctx.implicit_flush.get());
+        let mut sink = Vec::new();
+        vm.ini.alter(
+            "implicit_flush",
+            b"1",
+            php_support::ini::Access::SYSTEM,
+            php_support::ini::Stage::Runtime,
+            false,
+            &mut sink,
+        );
+        ctx.refresh_facts(&vm);
+        assert!(ctx.implicit_flush.get());
     }
 }
