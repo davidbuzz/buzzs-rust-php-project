@@ -15,5 +15,6 @@
 - [Project name](brp-project-name.md) — provisional public name php-rust-buzz (owner, 6 Nov 2026); never make renaming edits for it
 - [No invented labels](feedback-no-invented-labels.md) — describe findings and stages in plain words, never "D1"- or "Tier 4"-style labels
 - [No foreground waits](feedback-no-foreground-wait.md) — long commands and agent waits go to the background; act on notifications, never block (6 Nov 2026)
+- [Accurate ETAs](accurate-etas.md) — accurate ETAs are important; calculate from concrete metrics and upper bounds, never lowball or guess (7 Nov 2026)
 - [Environmental failures pass](feedback-environmental-failures-pass.md) — PHPT failures that C PHP fails identically here for host reasons (libgd GD2, MariaDB JSON) count as PASS (6 Nov 2026)
 - [Status 6 Nov 2026 15:10](phprust-status-2026-11-06-ws29.md) — work stopped (tokens): master 0f5a015c validated (5.21x, 99.9%); round ws29 stopped before any commits
