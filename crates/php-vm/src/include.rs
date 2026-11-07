@@ -413,22 +413,24 @@ impl Vm {
         self.frames.push(f);
         let base = self.frames.len() - 1;
         if let Err(t) = self.declare_hoisted(&unit) {
+            let res = self.handle_top_throw(t);
             self.frames.truncate(base);
-            return self.handle_top_throw(t);
+            return res;
         }
         self.observer_begin_top();
         let r = self.execute(base);
-        if let Some(f) = self.frames.get_mut(base) {
-            f.attach_symbol_table();
-        }
-        self.frames.truncate(base);
-        match r {
+        let res = match r {
             Ok(v) => {
                 self.main_return = v;
                 Ok(())
             }
             Err(t) => self.handle_top_throw(t),
+        };
+        if let Some(f) = self.frames.get_mut(base) {
+            f.attach_symbol_table();
         }
+        self.frames.truncate(base);
+        res
     }
 
     /// Handles a throw escaping the top-level script.
@@ -693,14 +695,15 @@ impl Vm {
         self.observer_begin_top();
         let base = self.frames.len() - 1;
         let r = self.execute(base);
+        let res = match r {
+            Ok(_) => Ok(()),
+            Err(t) => self.handle_top_throw(t),
+        };
         if let Some(f) = self.frames.get_mut(base) {
             f.attach_symbol_table();
         }
         self.frames.truncate(base);
-        match r {
-            Ok(_) => Ok(()),
-            Err(t) => self.handle_top_throw(t),
-        }
+        res
     }
 }
 
