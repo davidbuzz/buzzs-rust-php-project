@@ -227,6 +227,16 @@ impl Value {
             Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
         )
     }
+
+    /// Whether the value is plain (null or scalar): null, bool, int, float, string.
+    #[inline(always)]
+    #[must_use]
+    pub fn is_plain(&self) -> bool {
+        matches!(
+            self,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+        )
+    }
 }
 
 impl fmt::Debug for Value {

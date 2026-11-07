@@ -1177,6 +1177,28 @@ impl Frame {
         }
     }
 
+    /// `$cv[i]` looked up for a 64-bit integer index on a packed array:
+    /// zero-overhead fast path avoiding `ArrayKey` conversion or hashing.
+    #[inline(always)]
+    pub(crate) fn peek_cv_dim_int(&self, cv: u32, i: i64) -> Option<Value> {
+        let idx = cv as usize;
+        let slot = self.cvs.get(idx).and_then(CvSlot::get)?;
+        let guard;
+        let arr = match slot {
+            Value::Array(a) => a,
+            Value::Reference(r) => {
+                guard = r.try_borrow()?;
+                match &*guard {
+                    Value::Array(a) => a,
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        let val = arr.get_packed(i)?;
+        Some(val.deref())
+    }
+
     /// The current line.
     pub fn line(&self) -> u32 {
         self.code.line(self.ip.saturating_sub(1))

@@ -1037,10 +1037,14 @@ impl HashTable {
         match &self.store {
             Store::Uninit => None,
             Store::Packed(v) => {
-                let i = usize::try_from(h).ok()?;
-                match v.get(i) {
-                    Some(Some(_)) => Some(to_u32(i)),
-                    _ => None,
+                if h >= 0 {
+                    let i = h as usize;
+                    match v.get(i) {
+                        Some(Some(_)) => Some(to_u32(i)),
+                        _ => None,
+                    }
+                } else {
+                    None
                 }
             }
             Store::Hash(d) => d.find_int(self.table_size, h),
@@ -1340,6 +1344,82 @@ impl HashTable {
         }
     }
 
+    /// Looks up an integer key in a packed array (`Store::Packed`).
+    /// Zero-overhead read avoiding string conversion and hashing.
+    #[inline(always)]
+    #[must_use]
+    pub fn get_packed(&self, i: i64) -> Option<&Value> {
+        if let Store::Packed(v) = &self.store {
+            if i >= 0 {
+                return v.get(i as usize)?.as_ref();
+            }
+        }
+        None
+    }
+
+    /// Looks up an existing integer key mutably in a packed array (`Store::Packed`).
+    #[inline(always)]
+    pub fn get_packed_mut(&mut self, i: i64) -> Option<&mut Value> {
+        if let Store::Packed(v) = &mut self.store {
+            if i >= 0 {
+                return v.get_mut(i as usize)?.as_mut();
+            }
+        }
+        None
+    }
+
+    /// Assigns to an integer key in a packed array, overwriting an existing
+    /// plain element or appending when at the boundary within table capacity.
+    /// Returns `Ok(Some(old))` if overwritten, `Ok(None)` if appended, or
+    /// `Err(val)` if the table is not packed, the key is outside packed range,
+    /// points to a hole, or the existing element is not plain.
+    #[inline]
+    pub fn assign_packed_int(&mut self, h: i64, val: Value) -> Result<Option<Value>, Value> {
+        let ts = self.table_size;
+        match &mut self.store {
+            Store::Packed(v) => {
+                if h >= 0 {
+                    let idx = h as usize;
+                    let len = v.len();
+                    if idx < len {
+                        if let Some(slot) = &mut v[idx] {
+                            if !slot.is_plain() {
+                                return Err(val);
+                            }
+                            return Ok(Some(std::mem::replace(slot, val)));
+                        }
+                    } else if idx == len && h < i64::from(ts) {
+                        v.push(Some(val));
+                        self.next_free = h + 1;
+                        self.num_elements += 1;
+                        return Ok(None);
+                    } else if idx == len
+                        && (h >> 1) < i64::from(ts)
+                        && (ts >> 1) < self.num_elements
+                    {
+                        self.table_size += self.table_size;
+                        self.reserve_table();
+                        if let Store::Packed(v) = &mut self.store {
+                            v.push(Some(val));
+                            self.next_free = h + 1;
+                            self.num_elements += 1;
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
+            Store::Uninit => {
+                if (0..i64::from(ts)).contains(&h) {
+                    self.real_init_packed();
+                    let _ = self.add_to_packed(h, val);
+                    return Ok(None);
+                }
+            }
+            _ => {}
+        }
+        Err(val)
+    }
+
     /// Looks up an integer key (`zend_hash_index_find`; a packed table
     /// indexes its values directly).
     #[inline]
@@ -1348,7 +1428,10 @@ impl HashTable {
         // The packed test first: one compare instead of decoding the
         // storage kind.
         if let Store::Packed(v) = &self.store {
-            return v.get(usize::try_from(i).ok()?)?.as_ref();
+            if i >= 0 {
+                return v.get(i as usize)?.as_ref();
+            }
+            return None;
         }
         let Store::Hash(d) = &self.store else {
             return None;
@@ -1364,7 +1447,13 @@ impl HashTable {
         let ts = self.table_size;
         match &mut self.store {
             Store::Uninit => None,
-            Store::Packed(v) => v.get_mut(usize::try_from(i).ok()?)?.as_mut(),
+            Store::Packed(v) => {
+                if i >= 0 {
+                    v.get_mut(i as usize)?.as_mut()
+                } else {
+                    None
+                }
+            }
             Store::Hash(d) => {
                 let idx = d.find_int(ts, i)?;
                 d.buckets.get_mut(idx as usize)?.val.as_mut()
