@@ -378,7 +378,7 @@ fn invoke_closure(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// The `Closure::__invoke` handler method (`zend_get_closure_invoke_method`
 /// of an object-less closure).
 pub(crate) fn closure_invoke_method(c: &Rc<Class>) -> Rc<Method> {
-    let s = crate::builtins::sig::parse_sig("__invoke(mixed ...$args): mixed");
+    let s = crate::builtins::sig::parse_sig_borrowed("__invoke(mixed ...$args): mixed");
     let b = crate::func::Builtin {
         name: ZStr::from("__invoke"),
         params: s.params,

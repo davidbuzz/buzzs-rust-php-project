@@ -2584,7 +2584,7 @@ impl Vm {
                 } else {
                     "get(): mixed"
                 };
-                let s = crate::builtins::sig::parse_sig(sig);
+                let s = crate::builtins::sig::parse_sig_borrowed(sig);
                 let b = crate::func::Builtin {
                     name: ZStr::from(format!("${prop}::{}", if set { "set" } else { "get" })),
                     params: s.params,

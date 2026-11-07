@@ -16,7 +16,7 @@
 //!
 //! See `crates/php-vm/EXTENSIONS.md` for a walkthrough.
 
-use crate::builtins::sig::parse_sig;
+use crate::builtins::sig::{parse_sig, parse_sig_borrowed};
 use crate::class::Class;
 use crate::func::{flags, Builtin, Func, Method};
 use crate::vm::Vm;
@@ -27,6 +27,7 @@ use php_support::ini::IniDirective;
 use std::rc::Rc;
 
 pub use crate::builtins::classbuilder::{native_method, ClassBuilder};
+pub use crate::builtins::sig::{parse_sig_borrowed as parse_signature, parse_sig_borrowed, Sig};
 pub use crate::compiler::attrs::ExtAttributeValidator;
 pub use crate::fiber::{register_zend_test_fiber, FiberState};
 pub use crate::func::{Args, BuiltinFn as NativeFn};
@@ -338,24 +339,42 @@ impl<'a> ModuleBuilder<'a> {
         self
     }
 
+    /// Registers a function from a static stub signature, borrowing `&'static str`
+    /// to avoid intermediate string clones during startup.
+    pub fn function_static(&mut self, signature: &'static str, handler: NativeFn) -> &mut Self {
+        let name = crate::builtins::reg_module(self.vm, signature, handler, self.name);
+        self.last_function = Some(name);
+        self
+    }
+
     /// Marks the function registered last as `#[\Deprecated]`
     /// (`since`/`message` may be empty): calls emit
     /// `Deprecated: Function f() is deprecated since 8.4, message` before
     /// argument parsing.
     pub fn deprecated(&mut self, since: &str, message: &str) -> &mut Self {
-        if let Some(lc) = self.last_function.clone() {
-            if let Some(crate::func::Func::Builtin(b)) = self.vm.functions.get(&lc).cloned() {
-                let mut nb = (*b).clone();
-                nb.flags |= crate::func::flags::DEPRECATED;
-                self.vm
-                    .functions
-                    .insert(lc.clone(), crate::func::Func::Builtin(Rc::new(nb)));
-                let suffix = crate::attrs::format_suffix(
-                    Some(&ZStr::from(since)),
-                    Some(&ZStr::from(message)),
-                );
-                self.vm.builtin_deprecations.insert(lc, suffix);
+        if let Some(lc) = &self.last_function {
+            if let Some(crate::func::Func::Builtin(b)) = self.vm.functions.get_mut(lc) {
+                if let Some(nb) = Rc::get_mut(b) {
+                    nb.flags |= crate::func::flags::DEPRECATED;
+                } else {
+                    let mut nb = (**b).clone();
+                    nb.flags |= crate::func::flags::DEPRECATED;
+                    *b = Rc::new(nb);
+                }
             }
+            let suffix = crate::attrs::format_suffix(
+                if since.is_empty() {
+                    None
+                } else {
+                    Some(&ZStr::from(since))
+                },
+                if message.is_empty() {
+                    None
+                } else {
+                    Some(&ZStr::from(message))
+                },
+            );
+            self.vm.builtin_deprecations.insert(lc.clone(), suffix);
         }
         self
     }
@@ -366,13 +385,15 @@ impl<'a> ModuleBuilder<'a> {
     /// `sodium_remove_param_values_from_backtrace(EG(exception))` when
     /// `zend_parse_parameters` fails.
     pub fn scrub_arg_error_trace(&mut self) -> &mut Self {
-        if let Some(lc) = self.last_function.clone() {
-            if let Some(crate::func::Func::Builtin(b)) = self.vm.functions.get(&lc).cloned() {
-                let mut nb = (*b).clone();
-                nb.flags |= crate::func::flags::SCRUB_ARG_ERROR_TRACE;
-                self.vm
-                    .functions
-                    .insert(lc, crate::func::Func::Builtin(Rc::new(nb)));
+        if let Some(lc) = &self.last_function {
+            if let Some(crate::func::Func::Builtin(b)) = self.vm.functions.get_mut(lc) {
+                if let Some(nb) = Rc::get_mut(b) {
+                    nb.flags |= crate::func::flags::SCRUB_ARG_ERROR_TRACE;
+                } else {
+                    let mut nb = (**b).clone();
+                    nb.flags |= crate::func::flags::SCRUB_ARG_ERROR_TRACE;
+                    *b = Rc::new(nb);
+                }
             }
         }
         self
@@ -699,18 +720,16 @@ impl Vm {
     /// be disabled (the SAPI reports the "Cannot disable function"
     /// warning).
     pub(crate) fn disable_functions(&mut self) {
-        let list = self
-            .ini
-            .get("disable_functions")
-            .map(<[u8]>::to_vec)
-            .unwrap_or_default();
+        let Some(list) = self.ini.get("disable_functions") else {
+            return;
+        };
         for name in list
             .split(|&c| c == b',' || c == b' ' || c == b'\t')
             // `zend_disable_function` compares case-sensitively.
             .filter(|n| !n.is_empty() && !matches!(*n, b"exit" | b"die" | b"clone"))
         {
-            self.functions
-                .remove(&ZStr::from(name.to_ascii_lowercase()));
+            let lc = name.to_ascii_lowercase();
+            self.functions.remove(lc.as_slice());
         }
     }
 
@@ -1224,6 +1243,11 @@ impl Vm {
         crate::builtins::reg(self, signature, handler);
     }
 
+    /// Registers a builtin function from a static stub signature borrowing `&'static str`.
+    pub fn register_function_static(&mut self, signature: &'static str, handler: NativeFn) {
+        crate::builtins::reg(self, signature, handler);
+    }
+
     /// The currently registered function `name`, if native.
     pub fn native_function(&self, name: &str) -> Option<Rc<Builtin>> {
         match self.functions.get(name.to_ascii_lowercase().as_bytes()) {
@@ -1311,7 +1335,14 @@ pub fn defer_handler_throw(t: Throw) {
 
 /// Parses a stub signature (exposed for tests of extensions).
 pub fn check_signature(sig: &str) -> (String, usize) {
-    let s = parse_sig(sig);
+    let s = parse_sig_borrowed(sig);
+    let _ = flags::PUBLIC;
+    (s.name.to_string(), s.params.len())
+}
+
+/// Parses a stub signature borrowing the name from `sig` without intermediate allocations.
+pub fn check_signature_borrowed(sig: &str) -> (&str, usize) {
+    let s = parse_sig_borrowed(sig);
     let _ = flags::PUBLIC;
     (s.name, s.params.len())
 }

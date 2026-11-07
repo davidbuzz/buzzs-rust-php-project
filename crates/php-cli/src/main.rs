@@ -785,9 +785,9 @@ fn new_vm(cfg: &Config) -> Vm {
         1 << 16,
         std::io::stdout(),
     ));
-    let exts = extensions::all();
-    let refs: Vec<&dyn php_vm::ext::Extension> = exts.iter().map(AsRef::as_ref).collect();
-    let mut vm = Vm::with_extensions(&opts, stdout, &refs);
+    let mut vm = extensions::with_all_extensions(|refs| {
+        Vm::with_extensions(&opts, stdout, refs)
+    });
     vm.set_configuration(cfg.configuration.values.clone());
     vm.set_native_stack_size(usize::try_from(VM_STACK).unwrap_or(usize::MAX));
     sapi::register(&mut vm, cfg);
@@ -797,7 +797,9 @@ fn new_vm(cfg: &Config) -> Vm {
 fn new_request_vm(cfg: &Config) -> Result<Vm, i32> {
     let mut vm = new_vm(cfg);
     if let Err(error) = preload::install(&mut vm) {
-        return Err(vm.shutdown(Err(error)).max(1));
+        let status = vm.shutdown(Err(error)).max(1);
+        release(vm, Release::Discard);
+        return Err(status);
     }
     Ok(vm)
 }
@@ -818,7 +820,18 @@ enum Release {
 fn release(vm: Vm, how: Release) {
     match how {
         Release::Drop => drop(vm),
-        Release::Discard => vm.discard(),
+        Release::Discard => {
+            // Clean and fast process exit: ensure all output buffers and streams
+            // are flushed, then perform bulk VM teardown via fast discard
+            // without doing massive tree-traversal drops of the entire AST,
+            // function/class hash maps, or compiler symbol tables when the OS
+            // is about to reclaim the address space upon std::process::exit(status).
+            // Matches C PHP `zend_destroy_modules` which doesn't individually walk
+            // and free static user-space tables on process exit (using std::mem::forget).
+            let _ = std::io::stdout().flush();
+            let _ = std::io::stderr().flush();
+            vm.discard();
+        }
     }
 }
 

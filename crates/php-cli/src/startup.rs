@@ -166,12 +166,33 @@ fn builtin_modules() -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect();
-    v.extend(
-        crate::extensions::all()
-            .iter()
-            .map(|e| e.name().to_string()),
-    );
+    crate::extensions::with_all_extensions(|exts| {
+        v.extend(exts.iter().map(|e| e.name().to_string()));
+    });
     v
+}
+
+/// Checks whether an extension or zend extension is compiled in,
+/// avoiding intermediate string allocations during startup.
+fn is_builtin_fast(value: &str, zend: bool) -> bool {
+    let base = value.rsplit('/').next().unwrap_or(value);
+    let base = base
+        .strip_suffix(".so")
+        .or_else(|| base.strip_suffix(".dll"))
+        .unwrap_or(base);
+    let base = base.strip_prefix("php_").unwrap_or(base);
+    if zend {
+        return base.eq_ignore_ascii_case("opcache");
+    }
+    if php_vm::LOADED_EXTENSIONS
+        .iter()
+        .any(|&m| m.eq_ignore_ascii_case(base))
+    {
+        return true;
+    }
+    crate::extensions::with_all_extensions(|exts| {
+        exts.iter().any(|e| e.name().eq_ignore_ascii_case(base))
+    })
 }
 
 /// Whether an `extension=`/`zend_extension=` value names something
@@ -198,6 +219,9 @@ fn dl_error(path: &str) -> String {
 /// exists (built for another PHP) is skipped; anything else fails like a
 /// missing shared object.
 fn load_extensions(r: &Reporter, cfg: &Config) {
+    if cfg.zend_extensions.is_empty() && cfg.extensions.is_empty() {
+        return;
+    }
     let dir = cfg
         .get("extension_dir")
         .unwrap_or(crate::config::EXTENSION_DIR)
@@ -209,9 +233,8 @@ fn load_extensions(r: &Reporter, cfg: &Config) {
             format!("{dir}/{name}")
         }
     };
-    let modules = builtin_modules();
     for z in &cfg.zend_extensions {
-        if is_builtin(&modules, z, true) {
+        if is_builtin_fast(z, true) {
             continue;
         }
         if z.starts_with('/') {
@@ -235,7 +258,7 @@ fn load_extensions(r: &Reporter, cfg: &Config) {
         );
     }
     for e in &cfg.extensions {
-        if is_builtin(&modules, e, false) {
+        if is_builtin_fast(e, false) {
             continue;
         }
         let first = if e.contains('/') { e.clone() } else { join(e) };

@@ -1345,10 +1345,10 @@ pub(crate) fn register_hook_type(vm: &mut Vm) {
         let mut methods: NameMap<Rc<Method>> = NameMap::default();
         let mut order = Vec::new();
         for (sig, fl, h) in crate::builtins::enum_methods() {
-            let s = crate::builtins::sig::parse_sig(sig);
+            let s = crate::builtins::sig::parse_sig_borrowed(sig);
             let lc = ZStr::from(s.name.to_ascii_lowercase());
             let b = Builtin {
-                name: ZStr::from(s.name.as_str()),
+                name: ZStr::from(s.name),
                 params: s.params,
                 defaults: s.defaults,
                 required: s.required,

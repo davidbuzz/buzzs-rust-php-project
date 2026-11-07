@@ -3404,7 +3404,7 @@ fn build_class(
             if i > 0 && decl.backing.is_none() {
                 break;
             }
-            let s = crate::builtins::sig::parse_sig(sig);
+            let s = crate::builtins::sig::parse_sig_borrowed(sig);
             let lc = ZStr::from(s.name.to_ascii_lowercase());
             if methods.contains_key(&lc) {
                 // `zend_enum_register_func` (the name is the known string
@@ -3415,7 +3415,7 @@ fn build_class(
                 continue;
             }
             let b = crate::func::Builtin {
-                name: ZStr::from(s.name.as_str()),
+                name: ZStr::from(s.name),
                 params: s.params,
                 defaults: s.defaults,
                 required: s.required,

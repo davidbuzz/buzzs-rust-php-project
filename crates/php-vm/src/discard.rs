@@ -64,6 +64,11 @@ impl Vm {
             output_handler_conflicts,
             output_handler_hooks,
             loaded_extensions,
+            units,
+            bound_decls,
+            call_bufs,
+            autoloaders,
+            user_opcode_handlers,
             ..
         } = self;
         // `zend_shutdown_executor_values()`: "Release static properties and
@@ -102,9 +107,7 @@ impl Vm {
         // released here, so that the objects and resources reachable only
         // from static properties, class constants, enum cases, `static`
         // variables or constants are freed as
-        // `zend_objects_store_free_object_storage()` frees them. The compiled
-        // units and the bound declarations, which also hold user functions
-        // and classes, drop with the rest of the VM below.
+        // `zend_objects_store_free_object_storage()` frees them.
         functions.retain(|_, f| !f.is_user());
         classes.retain(|_, c| c.flags & cflags::INTERNAL != 0);
         constants.retain(|_, v| !holds_payload(v));
@@ -128,6 +131,15 @@ impl Vm {
             output_handler_conflicts,
             output_handler_hooks,
             loaded_extensions,
+        ));
+        // Bulk VM teardown: compiled ASTs, symbol tables, and call buffers
+        // are reclaimed by the OS on process exit without recursive drops.
+        std::mem::forget((
+            units,
+            bound_decls,
+            call_bufs,
+            autoloaders,
+            user_opcode_handlers,
         ));
         // The thread-local registry attributing those internal entries to
         // their extensions goes with them.

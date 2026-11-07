@@ -16,7 +16,7 @@ use php_runtime::{Value, ZArray, ZStr};
 
 /// A parsed signature; [`parse_sig_borrowed`] leaves the name in the
 /// signature text (`N = &str`).
-pub(crate) struct Sig<N = String> {
+pub struct Sig<N = String> {
     pub name: N,
     pub params: Vec<ParamInfo>,
     pub defaults: Vec<Option<Value>>,
@@ -210,7 +210,20 @@ fn parse_int_literal(s: &str) -> Option<i64> {
         return None;
     }
     let v = if body.bytes().any(|c| c == b'_' || c.is_ascii_uppercase()) {
-        int_literal_body(&body.replace('_', "").to_ascii_lowercase())?
+        if body.len() <= 64 {
+            let mut buf = [0u8; 64];
+            let mut len = 0;
+            for &b in body.as_bytes() {
+                if b != b'_' {
+                    buf[len] = b.to_ascii_lowercase();
+                    len += 1;
+                }
+            }
+            let cleaned = std::str::from_utf8(&buf[..len]).ok()?;
+            int_literal_body(cleaned)?
+        } else {
+            int_literal_body(&body.replace('_', "").to_ascii_lowercase())?
+        }
     } else {
         int_literal_body(body)?
     };
@@ -457,7 +470,7 @@ fn split_param(p: &str) -> ParamParts<'_> {
 ///
 /// # Panics
 /// Panics on malformed signatures (they are compile-time constants).
-pub(crate) fn parse_sig(sig: &str) -> Sig {
+pub fn parse_sig(sig: &str) -> Sig {
     let s = parse_sig_borrowed(sig);
     Sig {
         name: s.name.to_string(),
@@ -480,7 +493,7 @@ const INLINE_PIECES: usize = 16;
 ///
 /// # Panics
 /// Panics on malformed signatures (they are compile-time constants).
-pub(crate) fn parse_sig_borrowed(sig: &str) -> Sig<&str> {
+pub fn parse_sig_borrowed(sig: &str) -> Sig<&str> {
     let open = find_byte(sig, b'(').expect("signature has (");
     let close = sig
         .as_bytes()
