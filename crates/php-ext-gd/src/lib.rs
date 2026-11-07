@@ -48,6 +48,8 @@ impl Extension for Gd {
         create::register(m);
         draw::register(m);
         transform::register(m);
+        m.alias("imagettfbbox", "imageftbbox");
+        m.alias("imagettftext", "imagefttext");
         m.info(module_info);
         m.on_request_shutdown(|_vm| php_gd::ffi::font_cache_shutdown());
     }

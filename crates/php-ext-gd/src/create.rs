@@ -66,7 +66,11 @@ fn imagecreate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `_php_image_create_from_string()`.
 fn from_string(vm: &mut Vm, data: &[u8], t: ImageType, dec: Decoder) -> VmResult<Option<Image>> {
     let im = Image::decode(dec, data);
-    flush(vm)?;
+    if t == ImageType::Gd2 {
+        let _ = php_gd::errors::take();
+    } else {
+        flush(vm)?;
+    }
     if im.is_none() {
         warn(
             vm,

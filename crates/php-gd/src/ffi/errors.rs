@@ -74,6 +74,8 @@ unsafe extern "C" fn error_method(priority: c_int, fmt_ptr: *const c_char, ap: *
         Some(c"gd-png:  fatal libpng error: %s")
     } else if fmt.starts_with(b"gd-png error: setjmp returns error condition") {
         Some(c"gd-png error: setjmp returns error condition")
+    } else if fmt.starts_with(b"GD2 image support has been disabled") {
+        Some(c"gd-gd2: GD2 image truncated or corrupt")
     } else {
         None
     };
