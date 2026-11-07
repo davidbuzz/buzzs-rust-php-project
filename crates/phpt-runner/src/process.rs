@@ -115,7 +115,8 @@ fn spawn_reader(
 
 fn kill_group(child: &mut Child) {
     if let Ok(pid) = i32::try_from(child.id()) {
-        let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+        let pgid = Pid::from_raw(pid);
+        let _ = killpg(pgid, Signal::SIGKILL);
     }
     let _ = child.kill();
 }
@@ -286,6 +287,8 @@ pub fn run(inv: &Invocation<'_>) -> std::io::Result<RunOutput> {
         let _ = child.wait();
         // Give the reader a moment to drain what was written before the kill.
         let _ = rx.recv_timeout(Duration::from_millis(500));
+        // Ensure any late-forked or lingering children in the process group are terminated:
+        kill_group(&mut child);
         let mut data = take(&sink);
         data.extend_from_slice(b"\n ** ERROR: process timed out **\n");
         return Ok(RunOutput {
@@ -293,6 +296,9 @@ pub fn run(inv: &Invocation<'_>) -> std::io::Result<RunOutput> {
             timed_out: true,
         });
     };
+
+    // Clean up any orphan background child processes remaining in the test's process group.
+    kill_group(&mut child);
 
     let mut data = take(&sink);
     if overflow.load(std::sync::atomic::Ordering::SeqCst) {
@@ -402,5 +408,17 @@ mod tests {
         );
         assert!(out.timed_out);
         assert_eq!(out.data, b"x\n\n ** ERROR: process timed out **\n");
+    }
+
+    #[test]
+    fn timeout_cleans_up_background_children() {
+        let out = sh(
+            "sleep 30 & sleep 30",
+            Capture::ALL,
+            None,
+            Duration::from_millis(300),
+        );
+        assert!(out.timed_out);
+        assert!(out.data.ends_with(b"** ERROR: process timed out **\n"));
     }
 }

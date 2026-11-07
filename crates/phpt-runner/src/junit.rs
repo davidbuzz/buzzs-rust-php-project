@@ -149,6 +149,14 @@ fn mark_test(cases: &mut String, r: &TestResult) -> Tally {
                 "<failure type='{kind}' message='{msg}'>{details}</failure>"
             );
         }
+        Status::Timeout => {
+            t.fail = 1;
+            let details = r.diff.as_deref().map_or_else(String::new, escape_details);
+            let _ = writeln!(
+                cases,
+                "<failure type='TIMEOUT' message='{msg}'>{details}</failure>"
+            );
+        }
         Status::OutOfScope => {}
     }
     cases.push_str("</testcase>\n");

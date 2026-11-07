@@ -24,6 +24,8 @@ pub enum Status {
     /// Excluded from pass rates and from the baseline.
     #[serde(rename = "OUT")]
     OutOfScope,
+    /// Test exceeded the per-process timeout limit.
+    Timeout,
 }
 
 impl Status {
@@ -37,6 +39,7 @@ impl Status {
             Status::Skip => "SKIP",
             Status::Bork => "BORK",
             Status::OutOfScope => "OUT",
+            Status::Timeout => "TIMEOUT",
         }
     }
 
@@ -47,7 +50,7 @@ impl Status {
 
     /// Counts as a failure for CI / baseline purposes.
     pub fn is_failure(self) -> bool {
-        matches!(self, Status::Fail | Status::Bork)
+        matches!(self, Status::Fail | Status::Bork | Status::Timeout)
     }
 }
 
@@ -92,5 +95,22 @@ impl TestResult {
             "{} {} [{}] {}",
             self.result, self.name, self.path, self.info
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeout_status() {
+        assert_eq!(Status::Timeout.label(), "TIMEOUT");
+        assert!(Status::Timeout.is_failure());
+        assert!(!Status::Timeout.is_pass());
+        assert_eq!(format!("{}", Status::Timeout), "TIMEOUT");
+        let ser = serde_json::to_string(&Status::Timeout).unwrap();
+        assert_eq!(ser, "\"TIMEOUT\"");
+        let de: Status = serde_json::from_str(&ser).unwrap();
+        assert_eq!(de, Status::Timeout);
     }
 }

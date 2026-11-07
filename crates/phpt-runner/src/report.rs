@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +41,7 @@ impl Counts {
                 self.warn += 1;
             }
             Status::Fail => self.fail += 1,
+            Status::Timeout => self.fail += 1,
             Status::Xfail => self.xfail += 1,
             Status::Skip => self.skip += 1,
             Status::Bork => self.bork += 1,
@@ -249,6 +251,131 @@ impl JsonReport {
     }
 }
 
+/// Determine the expectation section name (`EXPECT`, `EXPECTF`, or `EXPECTREGEX`) for a test file.
+pub fn detect_expect_section(srcdir: &Path, rel_path: &str) -> &'static str {
+    let full_path = srcdir.join(rel_path);
+    if let Ok(content) = std::fs::read(&full_path) {
+        detect_expect_section_from_bytes(&content)
+    } else {
+        "EXPECT"
+    }
+}
+
+/// Determine the expectation section name from the raw content of a test file.
+pub fn detect_expect_section_from_bytes(content: &[u8]) -> &'static str {
+    if crate::bytes::contains(content, b"--EXPECTF--")
+        || crate::bytes::contains(content, b"--EXPECTF_EXTERNAL--")
+    {
+        "EXPECTF"
+    } else if crate::bytes::contains(content, b"--EXPECTREGEX--")
+        || crate::bytes::contains(content, b"--EXPECTREGEX_EXTERNAL--")
+    {
+        "EXPECTREGEX"
+    } else {
+        "EXPECT"
+    }
+}
+
+/// Format a failure diff as a clean unified diff between `expect_section`
+/// (`EXPECT`, `EXPECTF`, or `EXPECTREGEX`) and `ACTUAL` output.
+pub fn format_failure_diff(diff: &str, expect_section: &str, color: bool) -> String {
+    let mut out = String::new();
+    let header_expect = format!("--- {expect_section}");
+    let header_actual = "+++ ACTUAL";
+
+    if color {
+        let _ = writeln!(out, "\x1b[1;31m{header_expect}\x1b[0m");
+        let _ = writeln!(out, "\x1b[1;32m{header_actual}\x1b[0m");
+    } else {
+        let _ = writeln!(out, "{header_expect}");
+        let _ = writeln!(out, "{header_actual}");
+    }
+
+    if diff.trim().is_empty() {
+        return out;
+    }
+
+    // Determine the width of the line-number / padding prefix
+    let mut pad_len = 0;
+    for line in diff.lines() {
+        if line.starts_with('#') || line == "--" {
+            continue;
+        }
+        let leading_spaces = line.chars().take_while(|c| *c == ' ').count();
+        if leading_spaces >= 3 && !line.trim().is_empty() {
+            pad_len = leading_spaces;
+            break;
+        }
+        if let Some(pos) = line.find(['+', '-']) {
+            if pos >= 3 && line[..pos].chars().all(|c| c.is_ascii_digit()) {
+                pad_len = pos + 2;
+                break;
+            }
+        }
+    }
+    if pad_len == 0 {
+        pad_len = 5;
+    }
+
+    for line in diff.lines() {
+        if line.starts_with('#') {
+            let _ = writeln!(out, "{line}");
+        } else if line == "--" {
+            let _ = writeln!(out, "@@");
+        } else if let Some(plus_idx) = line.find('+') {
+            if plus_idx < pad_len
+                && line[..plus_idx]
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == ' ')
+            {
+                let content = line
+                    .get(plus_idx + 1..)
+                    .unwrap_or("")
+                    .strip_prefix(' ')
+                    .unwrap_or(&line[plus_idx + 1..]);
+                if color {
+                    let _ = writeln!(out, "\x1b[32m+{content}\x1b[0m");
+                } else {
+                    let _ = writeln!(out, "+{content}");
+                }
+            } else {
+                let trimmed = line
+                    .strip_prefix(&" ".repeat(pad_len))
+                    .unwrap_or_else(|| line.trim_start());
+                let _ = writeln!(out, " {trimmed}");
+            }
+        } else if let Some(minus_idx) = line.find('-') {
+            if minus_idx < pad_len
+                && line[..minus_idx]
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == ' ')
+            {
+                let content = line
+                    .get(minus_idx + 1..)
+                    .unwrap_or("")
+                    .strip_prefix(' ')
+                    .unwrap_or(&line[minus_idx + 1..]);
+                if color {
+                    let _ = writeln!(out, "\x1b[31m-{content}\x1b[0m");
+                } else {
+                    let _ = writeln!(out, "-{content}");
+                }
+            } else {
+                let trimmed = line
+                    .strip_prefix(&" ".repeat(pad_len))
+                    .unwrap_or_else(|| line.trim_start());
+                let _ = writeln!(out, " {trimmed}");
+            }
+        } else {
+            let trimmed = line
+                .strip_prefix(&" ".repeat(pad_len))
+                .unwrap_or_else(|| line.trim_start());
+            let _ = writeln!(out, " {trimmed}");
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +408,41 @@ mod tests {
         let table = dir_table(&BTreeMap::from([("x".to_string(), c)]), &c);
         assert!(table.contains("TOTAL"));
         assert!(summary(&c, 1.0).contains("Tests passed    :     1"));
+    }
+
+    #[test]
+    fn format_failure_diff_clean() {
+        let raw_diff = "     a\n002- b\n002+ x\n     c\n";
+        let formatted = format_failure_diff(raw_diff, "EXPECT", false);
+        assert_eq!(
+            formatted,
+            "--- EXPECT\n+++ ACTUAL\n a\n-b\n+x\n c\n"
+        );
+    }
+
+    #[test]
+    fn format_failure_diff_with_expectf() {
+        let raw_diff = "     int(%d)\n002- foo\n002+ bar\n";
+        let formatted = format_failure_diff(raw_diff, "EXPECTF", false);
+        assert_eq!(
+            formatted,
+            "--- EXPECTF\n+++ ACTUAL\n int(%d)\n-foo\n+bar\n"
+        );
+    }
+
+    #[test]
+    fn detect_expect_sections() {
+        assert_eq!(
+            detect_expect_section_from_bytes(b"--TEST--\nt\n--FILE--\n<?\n--EXPECTF--\n%d\n"),
+            "EXPECTF"
+        );
+        assert_eq!(
+            detect_expect_section_from_bytes(b"--TEST--\nt\n--FILE--\n<?\n--EXPECTREGEX--\n.*\\n"),
+            "EXPECTREGEX"
+        );
+        assert_eq!(
+            detect_expect_section_from_bytes(b"--TEST--\nt\n--FILE--\n<?\n--EXPECT--\nhello\n"),
+            "EXPECT"
+        );
     }
 }

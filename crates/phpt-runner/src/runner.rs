@@ -663,10 +663,10 @@ impl Runner {
             "REQUEST_METHOD",
             "CONTENT_TYPE",
             "CONTENT_LENGTH",
-            "TZ",
         ] {
             set_env(&mut env, k, "");
         }
+        crate::environment::normalize_env(&mut env);
         let pwd = a.pwd();
         if a.test.section_not_empty("ENV") {
             let env_str = replace(a.test.section_or_empty("ENV"), b"{PWD}", pwd.as_bytes());
@@ -954,12 +954,16 @@ impl Runner {
             return Once::Done(a.result(status, a.tested.clone(), info));
         }
 
-        let (status, info) = match a.test.section("XFAIL") {
-            Some(reason) => (
-                Status::Xfail,
-                format!("  XFAIL REASON: {}", lossy(trim_end(reason))),
-            ),
-            None => (Status::Fail, skip_info.text),
+        let (status, info) = if timed_out {
+            (Status::Timeout, skip_info.text)
+        } else {
+            match a.test.section("XFAIL") {
+                Some(reason) => (
+                    Status::Xfail,
+                    format!("  XFAIL REASON: {}", lossy(trim_end(reason))),
+                ),
+                None => (Status::Fail, skip_info.text),
+            }
         };
         let mut diff = match kind {
             ExpectKind::Exact => generate_diff(&wanted, &output, &|e, o| e == o),
@@ -1129,5 +1133,10 @@ mod tests {
         assert!(is_flaky(&t));
         assert!(is_flaky_output(b"Connection refused by peer"));
         assert!(!is_flaky_output(b"all good"));
+    }
+
+    #[test]
+    fn timeout_marker_detected() {
+        assert!(contains(b"output\n** ERROR: process timed out **\n", TIMEOUT_MARKER));
     }
 }

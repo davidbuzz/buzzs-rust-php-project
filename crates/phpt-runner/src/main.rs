@@ -10,14 +10,16 @@ use clap::Parser;
 
 use phpt_runner::baseline::Baseline;
 use phpt_runner::discover::{collect, find_srcdir, ConflictResolver};
-use phpt_runner::environment::Environment;
+use phpt_runner::environment::{normalize_env, Environment};
 use phpt_runner::ini::{
     default_ini_overwrites, escapeshellarg, IniSettings, E_ALL, NO_EXTENSION_DIR,
 };
 use phpt_runner::junit::junit_xml;
 use phpt_runner::phpt::TestFile;
 use phpt_runner::process::Env;
-use phpt_runner::report::{by_dir, dir_table, summary, totals, JsonReport};
+use phpt_runner::report::{
+    by_dir, detect_expect_section, dir_table, format_failure_diff, summary, totals, JsonReport,
+};
 use phpt_runner::result::{Status, TestResult};
 use phpt_runner::runner::{probe_e_all, probe_loads_ini_files, Config, Extensions, Runner};
 use phpt_runner::schedule::{run_jobs, Job};
@@ -49,7 +51,7 @@ struct Cli {
     #[arg(long)]
     list: bool,
     /// Print the diff of each failing test.
-    #[arg(long)]
+    #[arg(long, alias = "diff", visible_alias = "diff")]
     show_diff: bool,
     /// Write a JSON report to this file.
     #[arg(long, value_name = "OUT")]
@@ -233,6 +235,7 @@ struct RunGuards {
 
 fn base_env(php: &Path, skip_slow: bool) -> Env {
     let mut env: Env = std::env::vars_os().collect();
+    normalize_env(&mut env);
     let mut set = |k: &str, v: OsString| {
         env.insert(OsString::from(k), v);
     };
@@ -273,13 +276,13 @@ fn colorize(status: Status, enabled: bool) -> String {
     }
     let color = match status {
         Status::Pass => "1;32",
-        Status::Fail | Status::Bork => "1;31",
+        Status::Fail | Status::Bork | Status::Timeout => "1;31",
         _ => "1;33",
     };
     format!("\x1b[{color}m{}\x1b[0m", status.label())
 }
 
-fn print_result(r: &TestResult, cli: &Cli, color: bool, show_diff: bool) {
+fn print_result(r: &TestResult, cli: &Cli, color: bool, show_diff: bool, srcdir: &Path) {
     if cli.quiet && matches!(r.result, Status::Pass | Status::Skip) {
         return;
     }
@@ -292,12 +295,20 @@ fn print_result(r: &TestResult, cli: &Cli, color: bool, show_diff: bool) {
         r.path,
         r.info
     );
-    if show_diff && r.result == Status::Fail {
+    if show_diff && r.result.is_failure() {
         if let Some(diff) = &r.diff {
+            let expect_section = detect_expect_section(srcdir, &r.path);
+            let formatted = format_failure_diff(diff, expect_section, color);
             let _ = writeln!(
                 out,
                 "\n========DIFF========\n{}\n========DONE========",
-                diff.trim_end()
+                formatted.trim_end()
+            );
+        } else if r.result == Status::Timeout {
+            let expect_section = detect_expect_section(srcdir, &r.path);
+            let _ = writeln!(
+                out,
+                "\n========DIFF========\n--- {expect_section}\n+++ ACTUAL\n** ERROR: process timed out **\n========DONE========"
             );
         }
     }
@@ -541,7 +552,7 @@ fn execute(
                         remove_failure_artifacts(&runner.config().srcdir, &r.path);
                     }
                 }
-                print_result(&r, cli, color, show_diff);
+                print_result(&r, cli, color, show_diff, &runner.config().srcdir);
                 // Diffs can be large; they were printed (and written to .diff) already. A `JUnit`
                 // report embeds them, so they are kept for it.
                 if !keep_diffs {
