@@ -135,8 +135,12 @@ pub(crate) fn run_pass1(op_array: &mut OpArray, level: u32) -> bool {
 
             Op::Count { a, dst, .. } => {
                 if let Operand::Lit(la) = a {
-                    if let Some(Value::Array(arr)) = op_array.literals.get(*la as usize) {
-                        let lit = add_or_find_literal(&mut op_array.literals, Value::Int(arr.len() as i64));
+                    let count_opt = match op_array.literals.get(*la as usize) {
+                        Some(Value::Array(arr)) => Some(arr.len() as i64),
+                        _ => None,
+                    };
+                    if let Some(count) = count_opt {
+                        let lit = add_or_find_literal(&mut op_array.literals, Value::Int(count));
                         replacement = Some(match dst {
                             Some(d) => Op::Move {
                                 src: Operand::Lit(lit),
@@ -617,7 +621,11 @@ fn evaluate_pure_builtin(name: &[u8], args: &[&Value]) -> Option<Value> {
         b"ord" => {
             if args.len() == 1 {
                 if let Value::Str(s) = args[0] {
-                    let b = if s.is_empty() { 0 } else { s.as_bytes()[0] as i64 };
+                    let b = if s.is_empty() {
+                        0
+                    } else {
+                        s.as_bytes()[0] as i64
+                    };
                     return Some(Value::Int(b));
                 }
             }
@@ -810,7 +818,11 @@ fn evaluate_pure_builtin(name: &[u8], args: &[&Value]) -> Option<Value> {
         b"ltrim" => {
             if args.len() == 1 {
                 if let Value::Str(s) = args[0] {
-                    return Some(Value::Str(ZStr::from(trim_bytes(s.as_bytes(), true, false))));
+                    return Some(Value::Str(ZStr::from(trim_bytes(
+                        s.as_bytes(),
+                        true,
+                        false,
+                    ))));
                 }
             }
             None
@@ -818,7 +830,11 @@ fn evaluate_pure_builtin(name: &[u8], args: &[&Value]) -> Option<Value> {
         b"rtrim" | b"chop" => {
             if args.len() == 1 {
                 if let Value::Str(s) = args[0] {
-                    return Some(Value::Str(ZStr::from(trim_bytes(s.as_bytes(), false, true))));
+                    return Some(Value::Str(ZStr::from(trim_bytes(
+                        s.as_bytes(),
+                        false,
+                        true,
+                    ))));
                 }
             }
             None

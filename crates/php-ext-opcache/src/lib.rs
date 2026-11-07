@@ -545,8 +545,7 @@ fn maybe_run_preload(vm: &mut Vm) {
 
     let existing_functions: std::collections::HashSet<ZStr> =
         vm.functions.keys().cloned().collect();
-    let existing_classes: std::collections::HashSet<ZStr> =
-        vm.classes.keys().cloned().collect();
+    let existing_classes: std::collections::HashSet<ZStr> = vm.classes.keys().cloned().collect();
     let existing_scripts: std::collections::HashSet<ZStr> = vm.included_set.clone();
     let existing_cached_scripts: std::collections::HashSet<String> =
         GLOBAL_CACHE.with(|c| c.borrow().scripts.keys().cloned().collect());
@@ -986,10 +985,8 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let mut scripts_arr = ZArray::new();
             if let Some(ref pstats) = cache.preload_stats {
                 let mut p = ZArray::new();
-                p.make_mut().insert(
-                    ZStr::from("full_path"),
-                    Value::Str(ZStr::from("$PRELOAD$")),
-                );
+                p.make_mut()
+                    .insert(ZStr::from("full_path"), Value::Str(ZStr::from("$PRELOAD$")));
                 p.make_mut().insert(ZStr::from("hits"), Value::Int(0));
                 p.make_mut().insert(
                     ZStr::from("memory_consumption"),
@@ -1001,10 +998,8 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 );
                 p.make_mut()
                     .insert(ZStr::from("last_used_timestamp"), Value::Int(0));
-                p.make_mut()
-                    .insert(ZStr::from("timestamp"), Value::Int(0));
-                p.make_mut()
-                    .insert(ZStr::from("revalidate"), Value::Int(0));
+                p.make_mut().insert(ZStr::from("timestamp"), Value::Int(0));
+                p.make_mut().insert(ZStr::from("revalidate"), Value::Int(0));
                 scripts_arr
                     .make_mut()
                     .insert(ZStr::from("$PRELOAD$"), Value::Array(p));

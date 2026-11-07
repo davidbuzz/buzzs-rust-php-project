@@ -2753,7 +2753,8 @@ impl Vm {
                                 // `zend_binary_assign_op_obj_dim`: read_dimension
                                 // with BP_VAR_R (the hook context outside hook
                                 // calls), operate, then write_dimension.
-                                let op_read_key = if keyopt.is_none() { Some(&key) } else { keyopt };
+                                let op_read_key =
+                                    if keyopt.is_none() { Some(&key) } else { keyopt };
                                 if let (Some(f), Some(k)) = (h.read_dimension, op_read_key) {
                                     if let Some(cur) = f(self, &obj, k)? {
                                         let nv = self.assign_op_value(*op, &cur.deref(), rhs)?;
@@ -2777,8 +2778,7 @@ impl Vm {
                             || matches!(
                                 wop,
                                 WOp::MakeRef | WOp::AssignRef(_) | WOp::FetchRw | WOp::AssignOp(..)
-                            ))
-                    {
+                            )) {
                         Some(&key)
                     } else {
                         keyopt
@@ -4147,10 +4147,7 @@ impl Vm {
         };
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];
-        if matches!(
-            place.base,
-            PlaceBase::Global(_) | PlaceBase::GlobalsArray
-        ) {
+        if matches!(place.base, PlaceBase::Global(_) | PlaceBase::GlobalsArray) {
             self.attach_globals_symbol_table();
         }
         let segs = &place.segs;
@@ -4360,19 +4357,6 @@ impl Vm {
             )?;
         }
         Ok(l)
-    }
-
-    /// Ensures that if the main frame has an unattached symbol table, its CVs
-    /// are synced to `self.globals` before any access to globals.
-    pub(crate) fn attach_globals_symbol_table(&mut self) {
-        if let Some(main) = self.frames.first_mut() {
-            if main.kind == crate::vm::FrameKind::Main {
-                if !main.symtab_attached {
-                    main.attach_symbol_table();
-                }
-                main.sync_cvs_to_symtab();
-            }
-        }
     }
 
     /// Binding a global variable: ensures the main frame's symbol table is attached

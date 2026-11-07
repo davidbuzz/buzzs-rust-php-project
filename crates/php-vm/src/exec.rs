@@ -1358,11 +1358,18 @@ impl Vm {
                                                         *dst_f = res;
                                                         f.sync_cv_to_symtab(cv, &Value::Float(res));
                                                         if let Some(t) = dst {
-                                                            if let Some(tslot) = f.tmps.get_mut(*t as usize) {
-                                                                if let Value::Float(ref mut dst_f) = tslot {
+                                                            if let Some(tslot) =
+                                                                f.tmps.get_mut(*t as usize)
+                                                            {
+                                                                if let Value::Float(ref mut dst_f) =
+                                                                    tslot
+                                                                {
                                                                     *dst_f = res;
                                                                 } else {
-                                                                    spec::put_tmp(tslot, Value::Float(res));
+                                                                    spec::put_tmp(
+                                                                        tslot,
+                                                                        Value::Float(res),
+                                                                    );
                                                                 }
                                                             }
                                                         }
@@ -2354,9 +2361,12 @@ impl Vm {
                                     None
                                 }
                             }
-                            Operand::Lit(i) => self.frame().code.literals.get(*i as usize).map(|v| {
-                                crate::opcode::type_mask::matches(*mask, v)
-                            }),
+                            Operand::Lit(i) => self
+                                .frame()
+                                .code
+                                .literals
+                                .get(*i as usize)
+                                .map(|v| crate::opcode::type_mask::matches(*mask, v)),
                             _ => None,
                         };
                         let r = match r {

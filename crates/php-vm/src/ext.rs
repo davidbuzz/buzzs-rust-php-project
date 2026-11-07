@@ -16,7 +16,7 @@
 //!
 //! See `crates/php-vm/EXTENSIONS.md` for a walkthrough.
 
-use crate::builtins::sig::{parse_sig, parse_sig_borrowed};
+use crate::builtins::sig::parse_sig;
 use crate::class::Class;
 use crate::func::{flags, Builtin, Func, Method};
 use crate::vm::Vm;
@@ -362,18 +362,9 @@ impl<'a> ModuleBuilder<'a> {
                     *b = Rc::new(nb);
                 }
             }
-            let suffix = crate::attrs::format_suffix(
-                if since.is_empty() {
-                    None
-                } else {
-                    Some(&ZStr::from(since))
-                },
-                if message.is_empty() {
-                    None
-                } else {
-                    Some(&ZStr::from(message))
-                },
-            );
+            let since_z = (!since.is_empty()).then(|| ZStr::from(since));
+            let msg_z = (!message.is_empty()).then(|| ZStr::from(message));
+            let suffix = crate::attrs::format_suffix(since_z.as_ref(), msg_z.as_ref());
             self.vm.builtin_deprecations.insert(lc.clone(), suffix);
         }
         self

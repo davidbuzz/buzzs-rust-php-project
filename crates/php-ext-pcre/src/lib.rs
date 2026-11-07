@@ -63,7 +63,9 @@ pub fn mark_captures_valid_utf8(v: &Value) {
 
 /// Checks whether a PCRE regex pattern string contains the `/u` modifier (PCRE2_UTF).
 pub fn pattern_has_u(pattern: &[u8]) -> bool {
-    let Some(&delim) = pattern.first() else { return false };
+    let Some(&delim) = pattern.first() else {
+        return false;
+    };
     if delim.is_ascii_alphanumeric() || delim == b'\\' || delim == b' ' {
         return false;
     }
@@ -137,7 +139,11 @@ fn wrapped_preg_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn wrap_pcre_functions(vm: &mut Vm) {
     let list: [(&str, &AtomicPtr<()>, BuiltinFn); 3] = [
         ("preg_match", &ORIG_PREG_MATCH, wrapped_preg_match),
-        ("preg_match_all", &ORIG_PREG_MATCH_ALL, wrapped_preg_match_all),
+        (
+            "preg_match_all",
+            &ORIG_PREG_MATCH_ALL,
+            wrapped_preg_match_all,
+        ),
         ("preg_split", &ORIG_PREG_SPLIT, wrapped_preg_split),
     ];
     for (name, slot, wrapper) in list {
@@ -146,7 +152,8 @@ fn wrap_pcre_functions(vm: &mut Vm) {
             slot.store(b.handler as *mut (), Ordering::Relaxed);
             let mut nb = (*b).clone();
             nb.handler = wrapper;
-            vm.functions.insert(key, Func::Builtin(std::rc::Rc::new(nb)));
+            vm.functions
+                .insert(key, Func::Builtin(std::rc::Rc::new(nb)));
         }
     }
 }

@@ -289,7 +289,11 @@ fn class_accepts_slow(code: &OpArray, idx: usize, cls: &Rc<Class>, addr: usize) 
 /// also through a reference, or `$this`), without cloning the handle;
 /// `None` when it holds no object.
 #[inline(always)]
-pub(crate) fn with_base_obj<R>(frame: &Frame, base: u32, access: impl FnOnce(&Obj) -> R) -> Option<R> {
+pub(crate) fn with_base_obj<R>(
+    frame: &Frame,
+    base: u32,
+    access: impl FnOnce(&Obj) -> R,
+) -> Option<R> {
     if base == PROP_CACHE_THIS {
         return frame.this.as_ref().map(access);
     }
@@ -1231,14 +1235,20 @@ impl Vm {
                                                 let ok = match cell {
                                                     Some(cur) => {
                                                         if !matches!(cur, Value::Reference(_)) {
-                                                            old = Some(std::mem::replace(cur, v.clone()));
+                                                            old = Some(std::mem::replace(
+                                                                cur,
+                                                                v.clone(),
+                                                            ));
                                                             true
                                                         } else {
                                                             false
                                                         }
                                                     }
                                                     None => {
-                                                        if no_set || (accept != u32::MAX && !data.slot_unset(slot)) {
+                                                        if no_set
+                                                            || (accept != u32::MAX
+                                                                && !data.slot_unset(slot))
+                                                        {
                                                             *cell = Some(v.clone());
                                                             data.set_slot_unset(slot, false);
                                                             true

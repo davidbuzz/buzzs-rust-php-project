@@ -151,15 +151,22 @@ impl VarStore {
 
     /// Finds a variable slot by name.
     pub fn find(&mut self, name: &[u8]) -> Option<u32> {
-        if self.names.len() < 8 {
-            return self
-                .names
+        let p = if self.names.len() < 8 {
+            self.names
                 .iter()
                 .position(|n| n.as_bytes() == name)
-                .map(|p| u32::try_from(p).unwrap_or(0));
+                .map(|p| u32::try_from(p).unwrap_or(0))
+        } else {
+            self.build_index();
+            self.index.as_ref().and_then(|m| m.get(name).copied())
+        };
+        if let Some(idx) = p {
+            if self.slots.len() <= idx as usize {
+                self.slots
+                    .resize(self.names.len().max(idx as usize + 1), None);
+            }
         }
-        self.build_index();
-        self.index.as_ref().and_then(|m| m.get(name).copied())
+        p
     }
 
     /// Finds or creates a variable slot by name.
@@ -1054,6 +1061,12 @@ impl Frame {
         self.silence_saved.clear();
         self.symtab_attached = false;
         self.code = code.clone();
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+            let vs = rc_mut.get_mut();
+            for slot in vs.slots.iter_mut() {
+                *slot = None;
+            }
+        }
     }
 
     /// Re-initializes a pooled frame for a new user function call, leaving
@@ -1189,9 +1202,9 @@ impl Frame {
         let mut st = self.vars.borrow_mut();
         if st.names.is_empty() {
             st.names.share(&self.code);
-            if st.slots.len() < self.code.cv_names.len() {
-                st.slots.resize(self.code.cv_names.len(), None);
-            }
+        }
+        if st.slots.len() < self.code.cv_names.len() {
+            st.slots.resize(self.code.cv_names.len(), None);
         }
         for (i, name) in self.code.cv_names.iter().enumerate() {
             let slot = st.find_or_add(name.as_bytes()) as usize;
@@ -1703,8 +1716,13 @@ impl Vm {
     #[inline]
     pub(crate) fn attach_globals_symbol_table(&mut self) {
         if let Some(f) = self.frames.first_mut() {
-            if !f.symtab_attached && Rc::ptr_eq(&f.vars, &self.globals) {
+            if !f.symtab_attached
+                && (f.kind == FrameKind::Main || Rc::ptr_eq(&f.vars, &self.globals))
+            {
                 f.attach_symbol_table();
+            }
+            if f.kind == FrameKind::Main || Rc::ptr_eq(&f.vars, &self.globals) {
+                f.sync_cvs_to_symtab();
             }
         }
     }

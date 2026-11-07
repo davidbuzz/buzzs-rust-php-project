@@ -512,7 +512,12 @@ fn class_handles(vm: &Vm) -> ClassHandles {
             continue;
         };
         for (i, name) in f.code.cv_names.iter().enumerate() {
-            let Some(cv_id) = f.cvs.get(i).and_then(crate::vm::CvSlot::get).and_then(identity) else {
+            let Some(cv_id) = f
+                .cvs
+                .get(i)
+                .and_then(crate::vm::CvSlot::get)
+                .and_then(identity)
+            else {
                 continue;
             };
             let Some(slot) = st.find(name.as_bytes()) else {

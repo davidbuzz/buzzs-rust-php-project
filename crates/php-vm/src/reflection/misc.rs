@@ -1360,7 +1360,7 @@ pub(crate) fn register_hook_type(vm: &mut Vm) {
             methods.insert(
                 lc,
                 Rc::new(Method {
-                    name: ZStr::from(s.name.as_str()),
+                    name: ZStr::from(s.name),
                     func: Func::Builtin(Rc::new(b)),
                     flags: fl,
                     scope: weak.clone(),

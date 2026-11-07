@@ -30,7 +30,7 @@ thread_local! {
 pub(crate) enum CallTarget<'a> {
     Func(&'a str),
     Method(&'a Obj, &'a str),
-    Static(&'a Class, &'a str),
+    Static(&'a Rc<Class>, &'a str),
 }
 
 impl Vm {
@@ -60,10 +60,9 @@ impl Vm {
                     self.functions.get(lc.as_bytes()).cloned()
                 };
                 let Some(f) = f else {
-                    return Err(self.make_throw(
-                        "Error",
-                        &format!("Call to undefined function {name}()"),
-                    ));
+                    return Err(
+                        self.make_throw("Error", &format!("Call to undefined function {name}()"))
+                    );
                 };
                 self.push_pending(PendingCall::new(f));
                 Ok(())
@@ -298,13 +297,7 @@ impl Vm {
     }
 
     #[inline]
-    fn static_site_cached(
-        &self,
-    ) -> Option<(
-        Func,
-        Option<Rc<Class>>,
-        Option<Rc<Class>>,
-    )> {
+    fn static_site_cached(&self) -> Option<(Func, Option<Rc<Class>>, Option<Rc<Class>>)> {
         let slot = self.fallback_site_slot();
         self.frame()
             .code
@@ -549,7 +542,10 @@ impl Vm {
                 cached.func.get().map(|func| {
                     (
                         func,
-                        cached.method_scope.as_ref().and_then(std::rc::Weak::upgrade),
+                        cached
+                            .method_scope
+                            .as_ref()
+                            .and_then(std::rc::Weak::upgrade),
                         cached.is_static,
                     )
                 })
@@ -649,7 +645,10 @@ impl Vm {
                     cached.func.get().map(|func| {
                         (
                             func,
-                            cached.method_scope.as_ref().and_then(std::rc::Weak::upgrade),
+                            cached
+                                .method_scope
+                                .as_ref()
+                                .and_then(std::rc::Weak::upgrade),
                             cached.is_static,
                         )
                     })
@@ -1290,9 +1289,7 @@ impl Vm {
         let frame = self.frames.last_mut().expect("active frame");
         let call = frame.calls.last_mut().expect("pending call");
         let arg_idx = call.arg_count();
-        let by_val = call.magic_name.is_none()
-            && !call.has_named
-            && !call.func.arg_by_ref(arg_idx);
+        let by_val = call.magic_name.is_none() && !call.has_named && !call.func.arg_by_ref(arg_idx);
         if by_val {
             if call.args.is_empty() && (call.inline_count as usize) < call.inline_args.len() {
                 let idx = call.inline_count as usize;
@@ -1337,11 +1334,11 @@ impl Vm {
                 let frame = self.frames.last_mut().expect("active frame");
                 let call = frame.calls.last_mut().expect("pending call");
                 let arg_idx = call.arg_count();
-                let by_val = call.magic_name.is_none()
-                    && !call.has_named
-                    && !call.func.arg_by_ref(arg_idx);
+                let by_val =
+                    call.magic_name.is_none() && !call.has_named && !call.func.arg_by_ref(arg_idx);
                 if by_val {
-                    if call.args.is_empty() && (call.inline_count as usize) < call.inline_args.len() {
+                    if call.args.is_empty() && (call.inline_count as usize) < call.inline_args.len()
+                    {
                         let idx = call.inline_count as usize;
                         match src {
                             ArgSrc::Val(Operand::Lit(i)) => {
@@ -1361,7 +1358,9 @@ impl Vm {
                             }
                             ArgSrc::Val(Operand::Cv(cv)) => {
                                 if !frame.symtab_attached {
-                                    if let Some(val) = frame.cvs.get(*cv as usize).and_then(crate::vm::CvSlot::get) {
+                                    if let Some(val) =
+                                        frame.cvs.get(*cv as usize).and_then(crate::vm::CvSlot::get)
+                                    {
                                         let v = match val {
                                             Value::Reference(r) => r.get(),
                                             v => v.clone(),
@@ -1373,14 +1372,20 @@ impl Vm {
                                 }
                             }
                             ArgSrc::Place(pid) => {
-                                if let Some(cv) = frame.code.places.get(*pid as usize).and_then(|p| {
-                                    match (&p.base, p.segs.is_empty()) {
-                                        (crate::opcode::PlaceBase::Cv(cv), true) => Some(*cv),
-                                        _ => None,
-                                    }
-                                }) {
+                                if let Some(cv) =
+                                    frame.code.places.get(*pid as usize).and_then(|p| {
+                                        match (&p.base, p.segs.is_empty()) {
+                                            (crate::opcode::PlaceBase::Cv(cv), true) => Some(*cv),
+                                            _ => None,
+                                        }
+                                    })
+                                {
                                     if !frame.symtab_attached {
-                                        if let Some(val) = frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                                        if let Some(val) = frame
+                                            .cvs
+                                            .get(cv as usize)
+                                            .and_then(crate::vm::CvSlot::get)
+                                        {
                                             let v = match val {
                                                 Value::Reference(r) => r.get(),
                                                 v => v.clone(),
@@ -1435,7 +1440,9 @@ impl Vm {
                             }
                             ArgSrc::Val(Operand::Cv(cv)) => {
                                 if !frame.symtab_attached {
-                                    if let Some(val) = frame.cvs.get(*cv as usize).and_then(crate::vm::CvSlot::get) {
+                                    if let Some(val) =
+                                        frame.cvs.get(*cv as usize).and_then(crate::vm::CvSlot::get)
+                                    {
                                         let v = match val {
                                             Value::Reference(r) => r.get(),
                                             v => v.clone(),
@@ -1446,14 +1453,20 @@ impl Vm {
                                 }
                             }
                             ArgSrc::Place(pid) => {
-                                if let Some(cv) = frame.code.places.get(*pid as usize).and_then(|p| {
-                                    match (&p.base, p.segs.is_empty()) {
-                                        (crate::opcode::PlaceBase::Cv(cv), true) => Some(*cv),
-                                        _ => None,
-                                    }
-                                }) {
+                                if let Some(cv) =
+                                    frame.code.places.get(*pid as usize).and_then(|p| {
+                                        match (&p.base, p.segs.is_empty()) {
+                                            (crate::opcode::PlaceBase::Cv(cv), true) => Some(*cv),
+                                            _ => None,
+                                        }
+                                    })
+                                {
                                     if !frame.symtab_attached {
-                                        if let Some(val) = frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                                        if let Some(val) = frame
+                                            .cvs
+                                            .get(cv as usize)
+                                            .and_then(crate::vm::CvSlot::get)
+                                        {
                                             let v = match val {
                                                 Value::Reference(r) => r.get(),
                                                 v => v.clone(),
@@ -1551,7 +1564,6 @@ fn deref_cv(s: Option<&Value>) -> Option<Value> {
 }
 
 impl Vm {
-
     /// The value the general path of [`Vm::op_send`] sends for the argument
     /// at `pos`: read by value, or as a reference for a by-reference
     /// parameter (`ZEND_SEND_REF`, `ZEND_SEND_VAR_NO_REF`,
@@ -2182,8 +2194,10 @@ impl Vm {
             && passed_argc >= uf.required as usize
             && passed_argc <= uf.params.len()
             && uf.params.iter().all(|p| !p.variadic && !p.by_ref)
-            && uf.params[..passed_argc].iter().enumerate().all(|(i, p)| {
-                match &p.ty {
+            && uf.params[..passed_argc]
+                .iter()
+                .enumerate()
+                .all(|(i, p)| match &p.ty {
                     None => true,
                     Some(ty) => {
                         ty.is_mixed()
@@ -2191,8 +2205,7 @@ impl Vm {
                                 .as_ref()
                                 .map_or(false, |v| accepts_without_coercion(ty.mask, v))
                     }
-                }
-            })
+                })
         {
             if args.capacity() > 0 {
                 self.put_arg_vec(args);
@@ -2234,9 +2247,7 @@ impl Vm {
         }
 
         let is_generator = uf.is_generator();
-        let idx = self
-            .frames
-            .push_in_place(&uf.code, FrameKind::Function);
+        let idx = self.frames.push_in_place(&uf.code, FrameKind::Function);
         let spare_args = {
             let f = &mut self.frames[idx];
             f.this = this;
@@ -2442,16 +2453,22 @@ fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
         b"is_array" => Some(Value::Bool(matches!(val, Value::Array(_)))),
         b"is_bool" => Some(Value::Bool(matches!(val, Value::Bool(_)))),
         b"is_null" => Some(Value::Bool(matches!(val, Value::Null))),
-        b"is_float" | b"is_double" | b"is_real" => Some(Value::Bool(matches!(val, Value::Float(_)))),
+        b"is_float" | b"is_double" | b"is_real" => {
+            Some(Value::Bool(matches!(val, Value::Float(_))))
+        }
         b"is_object" => Some(Value::Bool(matches!(val, Value::Object(_)))),
-        b"is_resource" => Some(Value::Bool(matches!(val, Value::Resource(r) if !r.is_closed()))),
+        b"is_resource" => Some(Value::Bool(
+            matches!(val, Value::Resource(r) if !r.is_closed()),
+        )),
         b"is_scalar" => Some(Value::Bool(matches!(
             val,
             Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Bool(_)
         ))),
         b"is_numeric" => Some(Value::Bool(match val {
             Value::Int(_) | Value::Float(_) => true,
-            Value::Str(s) => php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false).is_some(),
+            Value::Str(s) => {
+                php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false).is_some()
+            }
             _ => false,
         })),
         b"strlen" => match val {
@@ -2472,9 +2489,7 @@ fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
             _ => None,
         },
         b"chr" => match val {
-            Value::Int(c) if (0..=255).contains(c) => {
-                Some(Value::Str(ZStr::from(&[*c as u8][..])))
-            }
+            Value::Int(c) if (0..=255).contains(c) => Some(Value::Str(ZStr::from(&[*c as u8][..]))),
             _ => None,
         },
         _ => None,
@@ -2482,7 +2497,6 @@ fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
 }
 
 impl Vm {
-
     /// `zend_try_compile_special_func()`: statically named calls without
     /// named arguments that php-src compiles to dedicated opcodes, so no
     /// internal call exists for observers to see. Inside a function body,

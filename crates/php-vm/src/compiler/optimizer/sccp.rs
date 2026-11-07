@@ -12,7 +12,9 @@
 use super::pass1::{fold_bin_op, fold_cast, fold_unary_op};
 use super::{add_or_find_literal, for_each_operand_mut, for_each_place_operand_mut};
 use crate::compiler::expr::const_truthiness;
-use crate::opcode::{type_mask, ArgSrc, CastKind, IncDecKind, Op, OpArray, Operand, PlaceBase};
+use crate::opcode::{
+    type_mask, ArgSrc, BinKind, CastKind, IncDecKind, Op, OpArray, Operand, PlaceBase, UnKind,
+};
 use php_runtime::{BinaryOp, Value, ZStr};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -89,7 +91,9 @@ fn update_cv_state_for_op(
                 }
             }
         }
-        Op::Abs { to: Some(cv), src, .. } => {
+        Op::Abs {
+            to: Some(cv), src, ..
+        } => {
             let cv_idx = *cv as usize;
             if cv_idx < num_cvs {
                 let lit_src = match src {
@@ -112,7 +116,13 @@ fn update_cv_state_for_op(
                 cur_state[cv_idx] = CvLattice::Bottom;
             }
         }
-        Op::BinAssignCv { cv, op: bkind, a, b, .. } => {
+        Op::BinAssignCv {
+            cv,
+            op: bkind,
+            a,
+            b,
+            ..
+        } => {
             let cv_idx = *cv as usize;
             if cv_idx < num_cvs {
                 let lit_a = match a {
@@ -145,7 +155,8 @@ fn update_cv_state_for_op(
                 }
                 if *bkind == BinKind::Arith(BinaryOp::Concat) {
                     if let Some(la) = lit_a {
-                        if matches!(literals.get(la as usize), Some(Value::Str(s)) if s.is_empty()) {
+                        if matches!(literals.get(la as usize), Some(Value::Str(s)) if s.is_empty())
+                        {
                             if let Operand::Cv(cb) = b {
                                 if (*cb as usize) < num_cvs {
                                     cur_state[cv_idx] = cur_state[*cb as usize];
@@ -155,7 +166,8 @@ fn update_cv_state_for_op(
                         }
                     }
                     if let Some(lb) = lit_b {
-                        if matches!(literals.get(lb as usize), Some(Value::Str(s)) if s.is_empty()) {
+                        if matches!(literals.get(lb as usize), Some(Value::Str(s)) if s.is_empty())
+                        {
                             if let Operand::Cv(ca) = a {
                                 if (*ca as usize) < num_cvs {
                                     cur_state[cv_idx] = cur_state[*ca as usize];
@@ -208,8 +220,12 @@ fn update_cv_state_for_op(
                 if let CvLattice::Const(l) = cur_state[cv_idx] {
                     if let Some(Value::Int(i)) = literals.get(l as usize) {
                         let new_val = match kind {
-                            IncDecKind::PreInc | IncDecKind::PostInc => i.checked_add(1).map(Value::Int),
-                            IncDecKind::PreDec | IncDecKind::PostDec => i.checked_sub(1).map(Value::Int),
+                            IncDecKind::PreInc | IncDecKind::PostInc => {
+                                i.checked_add(1).map(Value::Int)
+                            }
+                            IncDecKind::PreDec | IncDecKind::PostDec => {
+                                i.checked_sub(1).map(Value::Int)
+                            }
                         };
                         if let Some(nv) = new_val {
                             let new_lit = add_or_find_literal(literals, nv);
@@ -221,7 +237,9 @@ fn update_cv_state_for_op(
                 cur_state[cv_idx] = CvLattice::Bottom;
             }
         }
-        Op::AssignOpCv { cv, op: bop, val, .. } => {
+        Op::AssignOpCv {
+            cv, op: bop, val, ..
+        } => {
             let cv_idx = *cv as usize;
             if cv_idx < num_cvs {
                 if let CvLattice::Const(l1) = cur_state[cv_idx] {
@@ -465,7 +483,8 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                         }
                     } else if *bkind == BinKind::Arith(BinaryOp::Concat) {
                         if let Some(la) = lit_a {
-                            if matches!(op_array.literals.get(la as usize), Some(Value::Str(s)) if s.is_empty()) {
+                            if matches!(op_array.literals.get(la as usize), Some(Value::Str(s)) if s.is_empty())
+                            {
                                 *op = Op::Cast {
                                     kind: CastKind::String,
                                     a: *b,
@@ -474,7 +493,8 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                                 changed = true;
                             }
                         } else if let Some(lb) = lit_b {
-                            if matches!(op_array.literals.get(lb as usize), Some(Value::Str(s)) if s.is_empty()) {
+                            if matches!(op_array.literals.get(lb as usize), Some(Value::Str(s)) if s.is_empty())
+                            {
                                 *op = Op::Cast {
                                     kind: CastKind::String,
                                     a: *a,
@@ -595,7 +615,8 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                     if let Some(la) = lit_a {
                         if let Some(va) = op_array.literals.get(la as usize) {
                             if let Some(len) = fold_strlen(va) {
-                                let lit = add_or_find_literal(&mut op_array.literals, Value::Int(len));
+                                let lit =
+                                    add_or_find_literal(&mut op_array.literals, Value::Int(len));
                                 if let Some(d) = dst {
                                     if (*d as usize) <= num_tmps {
                                         lit_def[*d as usize] = Some(lit);
@@ -833,7 +854,13 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                     continue;
                 }
 
-                update_cv_state_for_op(op, &op_array.places, num_cvs, &mut cur_state, &mut op_array.literals);
+                update_cv_state_for_op(
+                    op,
+                    &op_array.places,
+                    num_cvs,
+                    &mut cur_state,
+                    &mut op_array.literals,
+                );
             }
 
             out_state[b] = cur_state;
@@ -1120,7 +1147,11 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                             op_array.literals.get(*lb as usize).cloned(),
                         ) {
                             if let Some(Value::Bool(res)) = fold_bin_op(*bkind, &va, &vb) {
-                                *op = if res == *jmp_if { Op::Jmp(*target) } else { Op::Nop };
+                                *op = if res == *jmp_if {
+                                    Op::Jmp(*target)
+                                } else {
+                                    Op::Nop
+                                };
                                 changed = true;
                             }
                         }
@@ -1155,7 +1186,8 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                     } => {
                         if let Some(va) = op_array.literals.get(*la as usize) {
                             if let Some(len) = fold_strlen(va) {
-                                let lit = add_or_find_literal(&mut op_array.literals, Value::Int(len));
+                                let lit =
+                                    add_or_find_literal(&mut op_array.literals, Value::Int(len));
                                 *op = match dst {
                                     Some(d) => Op::Move {
                                         src: Operand::Lit(lit),
@@ -1229,7 +1261,13 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                 }
 
                 // Update CV state
-                update_cv_state_for_op(op, &op_array.places, num_cvs, &mut cur_state, &mut op_array.literals);
+                update_cv_state_for_op(
+                    op,
+                    &op_array.places,
+                    num_cvs,
+                    &mut cur_state,
+                    &mut op_array.literals,
+                );
             }
         }
 

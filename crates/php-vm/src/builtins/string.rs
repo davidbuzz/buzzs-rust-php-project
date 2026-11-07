@@ -340,12 +340,7 @@ fn trim_impl(vm: &mut Vm, a: &Args, mode: transform::TrimMode) -> VmResult<Value
         None
     };
     let mut n = Notices::new();
-    let r = transform::trim(
-        st.as_bytes(),
-        what,
-        mode,
-        &mut n,
-    );
+    let r = transform::trim(st.as_bytes(), what, mode, &mut n);
     vm.std_notices(n)?;
     if r.len() == st.len() {
         return Ok(Value::Str(st));

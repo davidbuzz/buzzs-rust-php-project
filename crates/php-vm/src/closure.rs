@@ -260,15 +260,13 @@ impl Vm {
         if object::class_of(o).lc_name.as_bytes() != b"closure" {
             return None;
         }
-        object::internal::<ClosureData, _>(o, |d| {
-            PendingCall {
-                this: d.this.clone(),
-                scope: d.scope.clone(),
-                called: d.called.clone(),
-                closure: if d.fake { None } else { Some(o.clone()) },
-                magic_name: d.magic_name.clone(),
-                ..PendingCall::new(d.func.clone())
-            }
+        object::internal::<ClosureData, _>(o, |d| PendingCall {
+            this: d.this.clone(),
+            scope: d.scope.clone(),
+            called: d.called.clone(),
+            closure: if d.fake { None } else { Some(o.clone()) },
+            magic_name: d.magic_name.clone(),
+            ..PendingCall::new(d.func.clone())
         })
     }
 

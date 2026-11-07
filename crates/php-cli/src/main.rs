@@ -785,9 +785,7 @@ fn new_vm(cfg: &Config) -> Vm {
         1 << 16,
         std::io::stdout(),
     ));
-    let mut vm = extensions::with_all_extensions(|refs| {
-        Vm::with_extensions(&opts, stdout, refs)
-    });
+    let mut vm = extensions::with_all_extensions(|refs| Vm::with_extensions(&opts, stdout, refs));
     vm.set_configuration(cfg.configuration.values.clone());
     vm.set_native_stack_size(usize::try_from(VM_STACK).unwrap_or(usize::MAX));
     sapi::register(&mut vm, cfg);

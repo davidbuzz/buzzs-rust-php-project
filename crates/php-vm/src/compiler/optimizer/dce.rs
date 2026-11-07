@@ -300,9 +300,7 @@ fn is_pure_op(op: &Op) -> bool {
                 | BinKind::Less
                 | BinKind::LessEqual
                 | BinKind::Spaceship => true,
-                BinKind::Arith(bop) => {
-                    !matches!(bop, BinaryOp::Div | BinaryOp::Mod)
-                }
+                BinKind::Arith(bop) => !matches!(bop, BinaryOp::Div | BinaryOp::Mod),
             }
         }
         Op::TypeCheck { a, .. } => {
@@ -315,9 +313,9 @@ fn is_pure_op(op: &Op) -> bool {
             matches!(a, Operand::Lit(_) | Operand::Tmp(_))
         }
         Op::InitArray { .. } => true,
-        Op::Rope { parts, .. } => {
-            parts.iter().all(|p| matches!(p, Operand::Lit(_) | Operand::Tmp(_)))
-        }
+        Op::Rope { parts, .. } => parts
+            .iter()
+            .all(|p| matches!(p, Operand::Lit(_) | Operand::Tmp(_))),
         Op::FetchClassName { class, .. } => {
             matches!(
                 class,

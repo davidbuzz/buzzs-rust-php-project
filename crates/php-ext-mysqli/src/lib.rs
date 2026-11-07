@@ -26,7 +26,9 @@ mod result;
 mod stmt;
 mod util;
 
-use php_mysqlnd::consts::{opt::MYSQL_OPT_COMPRESS, CLIENT_COMPRESS, MYSQL_TYPE_JSON, MYSQLI_CONSTANTS};
+use php_mysqlnd::consts::{
+    opt::MYSQL_OPT_COMPRESS, CLIENT_COMPRESS, MYSQLI_CONSTANTS, MYSQL_TYPE_JSON,
+};
 use php_mysqlnd::{Connection, OptionValue};
 use php_runtime::{Obj, Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
@@ -220,7 +222,7 @@ fn fetch_field_direct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn mysqli_real_connect(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Ok((o, base)) = util::recv(vm, a) {
         let fl = a.at(base + 6);
-        let fl = if let Value::Int(i) = fl { *i } else { 0 };
+        let fl = if let Value::Int(i) = fl { i } else { 0 };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let fl = fl as u32;
         if fl & CLIENT_COMPRESS != 0 {
@@ -750,10 +752,7 @@ impl Extension for Mysqli {
             "8.2",
             "as it is always false",
         );
-        m.constant(
-            "MYSQL_TYPE_JSON",
-            Value::Int(i64::from(MYSQL_TYPE_JSON)),
-        );
+        m.constant("MYSQL_TYPE_JSON", Value::Int(i64::from(MYSQL_TYPE_JSON)));
         register_ini(m);
         let entries = entries();
         register_classes(m, &entries);

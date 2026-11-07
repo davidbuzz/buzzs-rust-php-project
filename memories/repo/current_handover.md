@@ -1,62 +1,81 @@
----
-name: current-handover
-description: "ACTIVE handover — read first if continuing this work; master fdf4df95 is clean and validated (5.21x C PHP, PHPT 99.9%); round ws29 (perf list + opcache) was stopped before any commits and needs relaunching"
-metadata:
-  node_type: memory
-  type: project
-  originSessionId: ebaf0a84-fb28-4fd1-bc69-f1147e28a4a5
-  modified: 2026-11-06T09:05:50.652Z
----
-
-# Handover, 6 Nov 2026 ~15:30 (work stopped: token budget at ~95%)
+# CURRENT HANDOVER — read first if continuing this work
+13-file perf/cleanup diff is uncommitted on master; 2 php-vm test failures diagnosed and need fixing before PHPT/perf/commit.
 
 ## Where we are
-- Repo /home/buzz/phprust, branch `master`, no git remote configured, working tree clean. HEAD `fdf4df95` (README/FEATURE_GAP speed numbers).
-  Before it: `3670e2f3` (fix: `$o->{$p} = $undef` warns for the value before the property name, ZEND_ASSIGN_OBJ order; fixes
-  Zend/tests/gh10251.phpt), `0f5a015c` (FEATURE_GAP rows, phpt-baseline.txt with 4 entries, perf budgets from run12).
-- Release binary: `target/release/php`, built 15:16 from 3670e2f3. Debug build current. Perf gate release copy:
-  `~/.cache/phprust-perf-gate/release/php` (build of 0af145fa).
-- Latest measurements (release 3670e2f3):
-  - Perf gate geometric mean: 5.21x C PHP's user-space instructions over 82 workloads. The range is 1.43x (zend:strcat) to
-    13.3x (ops:userfunc); none is at or below 1x.
-  - Startup: 48.9M vs 18.8M instructions.
-  - Last full PHPT run (run12 of 0af145fa): 20,169 of 20,174 run pass. With 3670e2f3 that should be 20,170; not rerun.
-  - Rust tests: 4,507 pass / 5 fail. Four fail only because the bare test VM (`Vm::new`) lacks count(): coalesce_elvis_nullsafe_and_moves_on_cvs,
-    class_constants_through_objects, slot_storage_of_every_size_class, unpacking_sends_each_element_as_the_iterator_yields_it. The fifth is
-    concat_assign_on_elements_statics_and_chains_extends_in_place: nested `$a['n']['m'] .= 'x'` copies (1.001 allocations per iteration).
+- Branch `master`, no git remote. HEAD `29f444d5` (sapi-apache2 output-start/abort/upload-progress).
+- Working tree: one coherent uncommitted diff across 13 files (see "What's in flight").
+  `git status`: M in php-ext-mbstring/funcs.rs, php-ext-mysqli/lib.rs, php-vm/{builtins/array.rs, call.rs,
+  classlink.rs, compiler/optimizer/{pass1.rs,sccp.rs}, exec/spec/{props.rs,statics.rs}, ext.rs, place.rs,
+  reflection/misc.rs, vm.rs}.
 
-## What's in flight (all STOPPED, nothing committed)
-Round ws29 implemented the owner's list of "biggest wins" plus opcache.
-- Shared brief: `/tmp/claude-1000/-home-buzz-phprust/ebaf0a84-fb28-4fd1-bc69-f1147e28a4a5/scratchpad/ws20/BRIEF29.md`. It covers rules, file ownership
-  and package scopes; the scratchpad is session-specific and may be gone.
-- Worktrees `.../ws20/wt29-<pkg>`, branches `ws29/<pkg>`, all with 0 commits:
-  - frames: calls + inline CV storage.
-  - handlers: one small handler per opcode, plus safe points.
-  - propops: dedicated property opcodes; has 3 uncommitted files.
-  - opcache: script cache, API, INI and file cache. Skeleton crates crates/php-opcache and php-ext-opcache are already registered in the workspace.
-  - optimizer: Zend/Optimizer study and passes.
-  - modphp-vm: one VM per httpd worker thread instead of one per request.
-  - fixup10: test failures; its status file has the count() diagnosis.
-  - testcount: count()/sizeof() for the bare test VM; has 3 uncommitted files.
-  - envpass: an environmental-pass list `phpt-environment.txt` plus a runner status.
-- Never started: builtin-frames (slim builtin frames, after frames commits its frame API) and opcache preload (after modphp-vm).
-- Also 4 finished, merged worktrees are kept because BRIEF29 points at their status notes: wt27-perf-calls, wt27-dispatch2, wt27-props2, wt27-builtins2.
-- **Immediate next step** (if the owner wants to continue):
-  1. Check each wt29 worktree (`git -C <wt> status`).
-  2. Relaunch fresh Opus subagents on them with BRIEF29.md (edit-only; no per-branch builds).
-  3. Merge all branches.
-  4. Run ONE consolidated build/test/PHPT/perf run (`.../ws20/validate.sh <dir>`, then `finish.sh <dir> "<date>" <sha>`).
+## What's in flight
+A performance/cleanup round (continuing the 5.21x -> parity effort). The diff:
+1. **Hot-path micro-cleanups** (clippy pedantic + small perf):
+   - `exec/spec/props.rs`: `mask::FLOAT` -> `mask::DOUBLE` (FLOAT does not exist; DOUBLE = 1<<4 in
+     `types.rs`), `Some(Some(r))` double-Option closures, and the isset/empty cache path collapsed to
+     reuse the shared `plain_truth()` helper (also derefs References).
+   - `exec/spec/statics.rs`: `r.try_borrow().ok().map(...)` -> `r.try_borrow().map(...)` (same result).
+   - `builtins/array.rs` (`in_array`): `php_stdarr::ops::is_identical/is_equal` -> `php_runtime::ops::*`
+     (identical functions, right crate layer).
+   - `classlink.rs` + `reflection/misc.rs`: `ZStr::from(s.name.as_str())` -> `ZStr::from(s.name)`
+     (Sig name is already `String`, avoids one `&str` round-trip).
+   - `ext.rs`: hoist `since`/`message` `ZStr` allocation out of the `format_suffix` call (skip alloc when empty).
+   - `pass1.rs`: `Count` fold avoids a temporary `Value::Array` clone (reads len directly).
+   - `sccp.rs`: unused-import cleanup.
+   - `php-ext-mbstring/funcs.rs`: `call(vm,a,|st| Ok(st.mb_check_encoding(...)))` -> drop redundant `Ok`
+     (trait already returns `Result`).
+   - `php-ext-mysqli/lib.rs`: `*i` -> `i` (cop) in `mysqli_real_connect` flags.
+2. **`VarStore::find` (vm.rs)**: linear scan kept under 8 names, else build index once; new slot
+   bounds-check + resize so a found index is always backed by a slot. `find_or_add` consistency checked.
+3. **Frame pooling (vm.rs)**:
+   - `reinit_for_call`: NEW - resets every existing slot to `None` in place (`for slot in vs.slots.iter_mut()
+     { *slot = None; }`) instead of clear+refill when the VarStore is uniquely owned.
+   - `reinit_for_user`: slots cleared then refilled with `None` (unchanged behaviour).
+   - `init_cvs`: slot resize moved out of the `names.is_empty()` branch (resizes whenever short).
+   - `attach_globals_symbol_table` moved from `place.rs` into `vm.rs` (now also syncs CVs->symtab for Main
+     frame or globals-shared frame); `place.rs` copy deleted; `op_bind_global` and 8 call sites in
+     place.rs use the new one.
+4. `call.rs`: `CallTarget::Static(&'a Class, ..)` -> `&'a Rc<Class>`.
 
-## Recent decisions (owner, 6 Nov 2026)
-- Opcache is IN scope and scheduled now, ahead of the high/med rows. php-cgi stays OUT of scope; its 305 skipped tests stay skipped.
-- Environmental failures that C PHP fails identically here count as PASS: ext/gd createfromstring-overflow (libgd has no GD2) and
-  mysqli_fetch_field_types (MariaDB has no JSON type). See [[feedback-environmental-failures-pass]]. The runner support (envpass) is not done.
-- AVIF: no bug. This libgd has only AVIF stubs; C PHP 8.5 claims support but fails at run time.
-- The bare test VM should get a real count() (testcount design: a core constructor for with_extensions, count/sizeof only in `Vm::new`).
-- In-house app test is private (/home/buzz/phprust-apptests, never in git). REPORT.md there lists the findings. The included-file `..` path bug
-  was fixed by strings2, but the app suites were not rerun after the fix.
-- Process rules: [[phprust-one-build-rule]], [[feedback-no-foreground-wait]], [[feedback-no-invented-labels]]; use subagents for edits.
+## Verification status (7 Nov 2026, this session)
+- `cargo fmt` clean; `cargo clippy --all-targets -p php-vm -p php-ext-mbstring -p php-ext-mysqli`: only
+  pre-existing warnings (doc_markdown etc. in files the diff doesn't touch).
+- `cargo test -p php-ext-mbstring -p php-ext-mysqli`: PASS (32 + 8).
+- `cargo test -p php-vm`: **348 pass, 2 FAIL**:
+  1. `vm::tests::reinit_for_call_leaves_the_compiled_variables_to_the_caller` (vm.rs:1858) - asserts
+     `vars.slots.is_empty()` right after `reinit_for_call`. The new in-place reset (item 3) keeps the
+     slots at length ncv with `None`, so the assertion now fails. The test encodes the OLD contract
+     ("leaving the compiled variables empty for the caller to fill"); the new contract is
+     "slots present but undefined". Decide: the in-place reset looks intentional (avoids refill churn);
+     most likely fix is updating the test to expect `len()==ncv, all None` - BUT check callers of
+     `reinit_for_call` (frame reuse in `call.rs` / exec) to confirm nothing depends on slots being
+     absent (e.g. `find()` returning None vs Some(None) - in `VarStore::find`, `Some(None)` slots still
+     report the name as found; `find_or_add` treats both as found. `init_cvs` then fills them. Should be
+     safe, but verify `symtab_attached`/`sync_cvs_to_symtab` paths treat `Some(None)` and absent identically).
+  2. `discard::tests::discard_releases_the_objects_the_user_tables_hold` (discard.rs:211, "#2 before
+     discard") - objects (static prop A::$x, static var $s, global $g) still live after `vm.discard()`.
+     Likely cause: the moved/changed `attach_globals_symbol_table` (now also calls `sync_cvs_to_symtab()`,
+     copying CVs into the globals symtable on Main/globals frames) is creating new strong references in
+     `self.globals` that outlive the request, OR the `init_cvs` resize change changed which slots exist
+     for the Main frame's globals. Diagnose: statics live in class tables (should be dropped by discard
+     regardless); the global `$g` is in the Main frame's VarStore/symtable. Check what `vm.discard()`
+     walks and whether `sync_cvs_to_symtab` during shutdown (request reset path) re-roots the globals.
 
-## Pending
-- No background tasks running; no PRs.
-- Open owner questions: none. Research workflows (PHPT 99.9→100%, environmental pass) were stopped unfinished.
+## Immediate next steps
+1. Fix the 2 test failures (see above; start by reading `discard()` in `crates/php-vm/src/discard.rs`
+   and the `sync_cvs_to_symtab` interaction; `git stash` A/B to confirm each failure's cause).
+2. `cargo test -p php-vm` green, then scoped PHPT: `target/debug/phpt-runner --php target/debug/php
+   --no-artifacts modules/php-src/Zend/tests` (5665 tests) plus a fast smoke
+   (`modules/php-src/ext/json`).
+3. Perf gate: `scripts/perf_gate.sh` (release build; budgets in `perf/bench/budgets.tsv`).
+   Workloads most affected: micro:prop_*, isset_*, x_eq_Foo_cc_*, empty_loop, func/userfunc.
+4. If green: commit (`git add` the 13 files; message along the lines of
+   `perf(vm): in-place frame slot reset, VarStore find fast path, hot-path cleanups`).
+5. Update FEATURE_GAP.md perf rows only if the gate changes numbers (coordinator role, verified results).
+
+## Rules (from CLAUDE.md / copilot-instructions)
+- Oracle `/usr/bin/php` ALWAYS with `-d memory_limit=1G`.
+- One build/test at a time; cargo capped at 6 jobs; never `-j` override.
+- `modules/php-src/` read-only; never edit workspace Cargo.toml.
+- Background long runs; don't block turns.
+- clippy pedantic clean; no `unsafe` without justification; doc comments cite php-src refs.

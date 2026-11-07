@@ -509,8 +509,13 @@ fn mb_chr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = call(vm, a, |st| st.mb_chr(cp, opt_bytes(enc.as_ref()))).map(str_or_false)?;
     if let Value::Str(ref s) = r {
         let is_utf8 = match enc {
-            Some(ref e) => e.as_bytes().eq_ignore_ascii_case(b"utf-8") || e.as_bytes().eq_ignore_ascii_case(b"utf8"),
-            None => call(vm, a, |st| st.get_encoding(None, 2, "encoding")).map(|e| e.is_utf8()).unwrap_or(false),
+            Some(ref e) => {
+                e.as_bytes().eq_ignore_ascii_case(b"utf-8")
+                    || e.as_bytes().eq_ignore_ascii_case(b"utf8")
+            }
+            None => call(vm, a, |st| st.get_encoding(None, 2, "encoding"))
+                .map(|e| e.is_utf8())
+                .unwrap_or(false),
         };
         if is_utf8 {
             s.mark_valid_utf8();
@@ -547,7 +552,7 @@ pub fn mb_check_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             if encoding.is_utf8() {
                 Ok(Value::Bool(check_encoding_utf8(&s)))
             } else {
-                let valid = call(vm, a, |st| Ok(st.mb_check_encoding(s.as_bytes(), enc_arg)))?;
+                let valid = call(vm, a, |st| st.mb_check_encoding(s.as_bytes(), enc_arg))?;
                 Ok(Value::Bool(valid))
             }
         }
@@ -556,7 +561,7 @@ pub fn mb_check_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             if encoding.is_utf8() {
                 Ok(Value::Bool(check_encoding_utf8(&s)))
             } else {
-                let valid = call(vm, a, |st| Ok(st.mb_check_encoding(s.as_bytes(), enc_arg)))?;
+                let valid = call(vm, a, |st| st.mb_check_encoding(s.as_bytes(), enc_arg))?;
                 Ok(Value::Bool(valid))
             }
         }

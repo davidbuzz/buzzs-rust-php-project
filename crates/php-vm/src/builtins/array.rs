@@ -236,7 +236,9 @@ fn in_array(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value
                 }
                 _ => {
                     for v in h.values() {
-                        if php_stdarr::ops::is_identical(&n, &v.deref()).map_err(|e| vm.rt_throw(e))? {
+                        if php_runtime::ops::is_identical(&n, &v.deref())
+                            .map_err(|e| vm.rt_throw(e))?
+                        {
                             return Ok(Value::Bool(true));
                         }
                     }
@@ -245,7 +247,7 @@ fn in_array(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value
             }
         } else {
             for v in h.values() {
-                if php_stdarr::ops::is_equal(&n, v, vm).map_err(|e| vm.rt_throw(e))? {
+                if php_runtime::ops::is_equal(&n, v, vm).map_err(|e| vm.rt_throw(e))? {
                     return Ok(Value::Bool(true));
                 }
             }

@@ -22,6 +22,7 @@
 //! [`Op::IssetObjPropDim`]: crate::opcode::Op::IssetObjPropDim
 
 use super::super::{Flow, Num};
+use super::plain_truth;
 use crate::object;
 use crate::opcode::{FetchMode, IncDecKind, Operand, PlaceId};
 use crate::place::propcache::{
@@ -134,25 +135,32 @@ impl Vm {
             if frame.kind != FrameKind::Builtin {
                 if let Ok(cache) = frame.code.prop_cache.try_borrow() {
                     if let Some(entry) = cache.get(pid as usize) {
-                        if entry.class_addr != 0 && (entry.flags & (PC_WRITE | PC_DYN) == PC_WRITE) {
+                        if entry.class_addr != 0 && (entry.flags & (PC_WRITE | PC_DYN) == PC_WRITE)
+                        {
                             let scope = scope_addr(frame);
                             if entry.scope_addr == scope {
                                 let (new_val, is_tmp) = match val {
-                                    Operand::Tmp(t) => {
-                                        match frame.tmps.get(t as usize) {
-                                            Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), Some(t)),
-                                            _ => (None, None),
+                                    Operand::Tmp(t) => match frame.tmps.get(t as usize) {
+                                        Some(v) if !matches!(v, Value::Reference(_)) => {
+                                            (Some(v.clone()), Some(t))
                                         }
-                                    }
-                                    Operand::TmpKeep(t) => {
-                                        match frame.tmps.get(t as usize) {
-                                            Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), None),
-                                            _ => (None, None),
+                                        _ => (None, None),
+                                    },
+                                    Operand::TmpKeep(t) => match frame.tmps.get(t as usize) {
+                                        Some(v) if !matches!(v, Value::Reference(_)) => {
+                                            (Some(v.clone()), None)
                                         }
-                                    }
+                                        _ => (None, None),
+                                    },
                                     Operand::Cv(cv) => {
-                                        match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
-                                            Some(v) if !matches!(v, Value::Reference(_)) => (Some(v.clone()), None),
+                                        match frame
+                                            .cvs
+                                            .get(cv as usize)
+                                            .and_then(crate::vm::CvSlot::get)
+                                        {
+                                            Some(v) if !matches!(v, Value::Reference(_)) => {
+                                                (Some(v.clone()), None)
+                                            }
                                             _ => (None, None),
                                         }
                                     }
@@ -189,11 +197,20 @@ impl Vm {
                                                         let mut old = None;
                                                         let ok = match cell {
                                                             Some(cur) => {
-                                                                if !matches!(cur, Value::Reference(_)) {
-                                                                    if cur.is_plain() && val.is_plain() {
+                                                                if !matches!(
+                                                                    cur,
+                                                                    Value::Reference(_)
+                                                                ) {
+                                                                    if cur.is_plain()
+                                                                        && val.is_plain()
+                                                                    {
                                                                         *cur = val;
                                                                     } else {
-                                                                        old = Some(std::mem::replace(cur, val));
+                                                                        old = Some(
+                                                                            std::mem::replace(
+                                                                                cur, val,
+                                                                            ),
+                                                                        );
                                                                     }
                                                                     true
                                                                 } else {
@@ -201,7 +218,10 @@ impl Vm {
                                                                 }
                                                             }
                                                             None => {
-                                                                if no_set || (accept != u32::MAX && !od.slot_unset(slot)) {
+                                                                if no_set
+                                                                    || (accept != u32::MAX
+                                                                        && !od.slot_unset(slot))
+                                                                {
                                                                     *cell = Some(val);
                                                                     od.set_slot_unset(slot, false);
                                                                     true
@@ -330,77 +350,109 @@ impl Vm {
                                             && od.lazy.borrow().is_none()
                                         {
                                             if let Ok(mut slots) = od.slots.try_borrow_mut() {
-                                                if let Some(Some(ref mut cell)) = slots.get_mut(slot) {
+                                                if let Some(Some(ref mut cell)) =
+                                                    slots.get_mut(slot)
+                                                {
                                                     match cell {
-                                                        Value::Int(ref mut n) => {
-                                                            match rhs {
-                                                                Num::Int(y) => {
-                                                                    match op {
-                                                                        BinaryOp::Add => {
-                                                                            if let Some(res) = n.checked_add(y) {
-                                                                                *n = res;
-                                                                                return Some((is_tmp, Value::Int(res)));
-                                                                            } else {
-                                                                                let res = *n as f64 + y as f64;
-                                                                                if accept == u32::MAX || (accept & crate::types::mask::FLOAT != 0) {
+                                                        Value::Int(ref mut n) => match rhs {
+                                                            Num::Int(y) => match op {
+                                                                BinaryOp::Add => {
+                                                                    if let Some(res) =
+                                                                        n.checked_add(y)
+                                                                    {
+                                                                        *n = res;
+                                                                        return Some((
+                                                                            is_tmp,
+                                                                            Value::Int(res),
+                                                                        ));
+                                                                    } else {
+                                                                        let res =
+                                                                            *n as f64 + y as f64;
+                                                                        if accept == u32::MAX || (accept & crate::types::mask::DOUBLE != 0) {
                                                                                     *cell = Value::Float(res);
                                                                                     return Some((is_tmp, Value::Float(res)));
                                                                                 }
-                                                                            }
-                                                                        }
-                                                                        BinaryOp::Sub => {
-                                                                            if let Some(res) = n.checked_sub(y) {
-                                                                                *n = res;
-                                                                                return Some((is_tmp, Value::Int(res)));
-                                                                            } else {
-                                                                                let res = *n as f64 - y as f64;
-                                                                                if accept == u32::MAX || (accept & crate::types::mask::FLOAT != 0) {
-                                                                                    *cell = Value::Float(res);
-                                                                                    return Some((is_tmp, Value::Float(res)));
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        BinaryOp::Mul => {
-                                                                            if let Some(res) = n.checked_mul(y) {
-                                                                                *n = res;
-                                                                                return Some((is_tmp, Value::Int(res)));
-                                                                            } else {
-                                                                                let res = *n as f64 * y as f64;
-                                                                                if accept == u32::MAX || (accept & crate::types::mask::FLOAT != 0) {
-                                                                                    *cell = Value::Float(res);
-                                                                                    return Some((is_tmp, Value::Float(res)));
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        BinaryOp::BitAnd => {
-                                                                            *n &= y;
-                                                                            return Some((is_tmp, Value::Int(*n)));
-                                                                        }
-                                                                        BinaryOp::BitOr => {
-                                                                            *n |= y;
-                                                                            return Some((is_tmp, Value::Int(*n)));
-                                                                        }
-                                                                        BinaryOp::BitXor => {
-                                                                            *n ^= y;
-                                                                            return Some((is_tmp, Value::Int(*n)));
-                                                                        }
-                                                                        _ => {}
                                                                     }
                                                                 }
-                                                                Num::Float(y) => {
-                                                                    let res = match op {
-                                                                        BinaryOp::Add => *n as f64 + y,
-                                                                        BinaryOp::Sub => *n as f64 - y,
-                                                                        BinaryOp::Mul => *n as f64 * y,
-                                                                        _ => return None,
-                                                                    };
-                                                                    if accept == u32::MAX || (accept & crate::types::mask::FLOAT != 0) {
-                                                                        *cell = Value::Float(res);
-                                                                        return Some((is_tmp, Value::Float(res)));
+                                                                BinaryOp::Sub => {
+                                                                    if let Some(res) =
+                                                                        n.checked_sub(y)
+                                                                    {
+                                                                        *n = res;
+                                                                        return Some((
+                                                                            is_tmp,
+                                                                            Value::Int(res),
+                                                                        ));
+                                                                    } else {
+                                                                        let res =
+                                                                            *n as f64 - y as f64;
+                                                                        if accept == u32::MAX || (accept & crate::types::mask::DOUBLE != 0) {
+                                                                                    *cell = Value::Float(res);
+                                                                                    return Some((is_tmp, Value::Float(res)));
+                                                                                }
                                                                     }
+                                                                }
+                                                                BinaryOp::Mul => {
+                                                                    if let Some(res) =
+                                                                        n.checked_mul(y)
+                                                                    {
+                                                                        *n = res;
+                                                                        return Some((
+                                                                            is_tmp,
+                                                                            Value::Int(res),
+                                                                        ));
+                                                                    } else {
+                                                                        let res =
+                                                                            *n as f64 * y as f64;
+                                                                        if accept == u32::MAX || (accept & crate::types::mask::DOUBLE != 0) {
+                                                                                    *cell = Value::Float(res);
+                                                                                    return Some((is_tmp, Value::Float(res)));
+                                                                                }
+                                                                    }
+                                                                }
+                                                                BinaryOp::BitAnd => {
+                                                                    *n &= y;
+                                                                    return Some((
+                                                                        is_tmp,
+                                                                        Value::Int(*n),
+                                                                    ));
+                                                                }
+                                                                BinaryOp::BitOr => {
+                                                                    *n |= y;
+                                                                    return Some((
+                                                                        is_tmp,
+                                                                        Value::Int(*n),
+                                                                    ));
+                                                                }
+                                                                BinaryOp::BitXor => {
+                                                                    *n ^= y;
+                                                                    return Some((
+                                                                        is_tmp,
+                                                                        Value::Int(*n),
+                                                                    ));
+                                                                }
+                                                                _ => {}
+                                                            },
+                                                            Num::Float(y) => {
+                                                                let res = match op {
+                                                                    BinaryOp::Add => *n as f64 + y,
+                                                                    BinaryOp::Sub => *n as f64 - y,
+                                                                    BinaryOp::Mul => *n as f64 * y,
+                                                                    _ => return None,
+                                                                };
+                                                                if accept == u32::MAX
+                                                                    || (accept
+                                                                        & crate::types::mask::DOUBLE
+                                                                        != 0)
+                                                                {
+                                                                    *cell = Value::Float(res);
+                                                                    return Some((
+                                                                        is_tmp,
+                                                                        Value::Float(res),
+                                                                    ));
                                                                 }
                                                             }
-                                                        }
+                                                        },
                                                         Value::Float(ref mut f) => {
                                                             let y = match rhs {
                                                                 Num::Int(i) => i as f64,
@@ -409,15 +461,24 @@ impl Vm {
                                                             match op {
                                                                 BinaryOp::Add => {
                                                                     *f += y;
-                                                                    return Some((is_tmp, Value::Float(*f)));
+                                                                    return Some((
+                                                                        is_tmp,
+                                                                        Value::Float(*f),
+                                                                    ));
                                                                 }
                                                                 BinaryOp::Sub => {
                                                                     *f -= y;
-                                                                    return Some((is_tmp, Value::Float(*f)));
+                                                                    return Some((
+                                                                        is_tmp,
+                                                                        Value::Float(*f),
+                                                                    ));
                                                                 }
                                                                 BinaryOp::Mul => {
                                                                     *f *= y;
-                                                                    return Some((is_tmp, Value::Float(*f)));
+                                                                    return Some((
+                                                                        is_tmp,
+                                                                        Value::Float(*f),
+                                                                    ));
                                                                 }
                                                                 _ => {}
                                                             }
@@ -429,7 +490,7 @@ impl Vm {
                                         }
                                         None
                                     });
-                                    if let Some(r) = mutated {
+                                    if let Some(Some(r)) = mutated {
                                         done = Some(r);
                                     }
                                 }
@@ -551,11 +612,13 @@ impl Vm {
                                                     };
                                                     if let Some(new_n) = new {
                                                         *n = new_n;
-                                                        return Some(Value::Int(if kind.is_post() {
-                                                            old
-                                                        } else {
-                                                            new_n
-                                                        }));
+                                                        return Some(Value::Int(
+                                                            if kind.is_post() {
+                                                                old
+                                                            } else {
+                                                                new_n
+                                                            },
+                                                        ));
                                                     }
                                                 }
                                                 Value::Float(ref mut f) => {
@@ -579,7 +642,7 @@ impl Vm {
                                 }
                                 None
                             });
-                            if let Some(v) = fast_val {
+                            if let Some(Some(v)) = fast_val {
                                 return Some(v);
                             }
                         }
@@ -627,49 +690,28 @@ impl Vm {
                                 {
                                     if let Ok(slots) = od.slots.try_borrow() {
                                         if let Some(Some(value)) = slots.get(slot) {
-                                            return match value {
-                                                Value::Reference(r) => match r.try_borrow() {
-                                                    Ok(inner) => match &*inner {
-                                                        Value::Null => Some(empty),
-                                                        Value::Bool(b) => Some(if empty { !*b } else { true }),
-                                                        Value::Int(i) => Some(if empty { *i == 0 } else { true }),
-                                                        Value::Float(f) if !f.is_nan() => {
-                                                            Some(if empty { *f == 0.0 } else { true })
-                                                        }
-                                                        Value::Str(s) => Some(if empty {
-                                                            s.is_empty() || s.as_bytes() == b"0"
-                                                        } else {
-                                                            true
-                                                        }),
-                                                        Value::Array(a) => {
-                                                            Some(if empty { a.is_empty() } else { true })
-                                                        }
-                                                        _ => None,
-                                                    },
-                                                    Err(_) => None,
-                                                },
-                                                Value::Null => Some(empty),
-                                                Value::Bool(b) => Some(if empty { !*b } else { true }),
-                                                Value::Int(i) => Some(if empty { *i == 0 } else { true }),
-                                                Value::Float(f) if !f.is_nan() => {
-                                                    Some(if empty { *f == 0.0 } else { true })
+                                            let guard;
+                                            let v: &Value = match value {
+                                                Value::Reference(r) => {
+                                                    guard = r.try_borrow()?;
+                                                    &*guard
                                                 }
-                                                Value::Str(s) => Some(if empty {
-                                                    s.is_empty() || s.as_bytes() == b"0"
-                                                } else {
-                                                    true
-                                                }),
-                                                Value::Array(a) => {
-                                                    Some(if empty { a.is_empty() } else { true })
+                                                v => v,
+                                            };
+                                            return if empty {
+                                                plain_truth(v).map(|t| !t)
+                                            } else {
+                                                match v {
+                                                    Value::Null => Some(false),
+                                                    _ => Some(true),
                                                 }
-                                                _ => None,
                                             };
                                         }
                                     }
                                 }
                                 None
                             });
-                            if let Some(b) = fast_val {
+                            if let Some(Some(b)) = fast_val {
                                 return Some(b);
                             }
                         }

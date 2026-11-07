@@ -34,7 +34,9 @@
 //! [`Frame::peek_cv_dim`]: crate::vm::Frame::peek_cv_dim
 
 use super::{discard_unrooted, num_bin, CvOpData, Num};
-use crate::opcode::{cmp_outcome, BinKind, FetchMode, IncDecKind, Operand, PlaceBase, PlaceId, Seg};
+use crate::opcode::{
+    cmp_outcome, BinKind, FetchMode, IncDecKind, Operand, PlaceBase, PlaceId, Seg,
+};
 use crate::rtcache::GlobalSlot;
 use crate::vm::{CvSlot, Frame, FrameKind, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
@@ -1139,11 +1141,7 @@ impl Vm {
     /// (`$GLOBALS['name']`, superglobals) resolved directly from the VM's
     /// global scope or the global store, with runtime caching.
     #[inline(always)]
-    pub(crate) fn fetch_global_fast(
-        &mut self,
-        pid: PlaceId,
-        mode: FetchMode,
-    ) -> Option<Value> {
+    pub(crate) fn fetch_global_fast(&mut self, pid: PlaceId, mode: FetchMode) -> Option<Value> {
         let (name_op, code) = {
             let f = self.frame();
             let p = f.code.places.get(pid as usize)?;
@@ -1199,13 +1197,11 @@ impl Vm {
                     _ => return None,
                 }
             }
-            Operand::Tmp(t) => {
-                match self.frame().tmps.get(t as usize)? {
-                    Value::Str(s) => std::borrow::Cow::Owned(s.as_bytes().to_vec()),
-                    Value::Int(i) => std::borrow::Cow::Owned(i.to_string().into_bytes()),
-                    _ => return None,
-                }
-            }
+            Operand::Tmp(t) => match self.frame().tmps.get(t as usize)? {
+                Value::Str(s) => std::borrow::Cow::Owned(s.as_bytes().to_vec()),
+                Value::Int(i) => std::borrow::Cow::Owned(i.to_string().into_bytes()),
+                _ => return None,
+            },
             _ => return None,
         };
 

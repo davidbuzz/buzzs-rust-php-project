@@ -681,27 +681,56 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
                     }
                 }
             }
-            Op::BinAssignCv { op: bin_op, a, b, dst, cv } => {
+            Op::BinAssignCv {
+                op: bin_op,
+                a,
+                b,
+                dst,
+                cv,
+            } => {
                 if (*cv as usize) >= num_param_cvs as usize
                     && read_counts.get(*cv as usize).copied().unwrap_or(0) == 0
                 {
-                    *op = Op::Bin { op: *bin_op, a: *a, b: *b, dst: *dst };
+                    *op = Op::Bin {
+                        op: *bin_op,
+                        a: *a,
+                        b: *b,
+                        dst: *dst,
+                    };
                     changed = true;
                 }
             }
-            Op::FetchConstTo { name, fallback, dst, to } => {
+            Op::FetchConstTo {
+                name,
+                fallback,
+                dst,
+                to,
+            } => {
                 if (*to as usize) >= num_param_cvs as usize
                     && read_counts.get(*to as usize).copied().unwrap_or(0) == 0
                 {
-                    *op = Op::FetchConst { name: *name, fallback: *fallback, dst: *dst };
+                    *op = Op::FetchConst {
+                        name: *name,
+                        fallback: *fallback,
+                        dst: *dst,
+                    };
                     changed = true;
                 }
             }
-            Op::FetchClassConstTo { class, name, dst, to } => {
+            Op::FetchClassConstTo {
+                class,
+                name,
+                dst,
+                to,
+            } => {
                 if (*to as usize) >= num_param_cvs as usize
                     && read_counts.get(*to as usize).copied().unwrap_or(0) == 0
                 {
-                    *op = Op::FetchClassConst { class: class.clone(), name: Operand::Lit(*name), dst: *dst };
+                    *op = Op::FetchClassConst {
+                        class: class.clone(),
+                        name: Operand::Lit(*name),
+                        dst: *dst,
+                    };
                     changed = true;
                 }
             }

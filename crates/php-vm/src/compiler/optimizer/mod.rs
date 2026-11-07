@@ -647,7 +647,10 @@ mod tests {
 
     #[test]
     fn test_pass2_typecheck_folding() {
-        let unit = compile_src("<?php echo is_null(null) ? 'yes' : 'no';", DEFAULT_OPTIMIZATION_LEVEL);
+        let unit = compile_src(
+            "<?php echo is_null(null) ? 'yes' : 'no';",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
         let ops = &unit.main.code.ops;
         assert!(
             !ops.iter().any(|op| matches!(op, Op::TypeCheck { .. })),
@@ -667,7 +670,8 @@ mod tests {
         let unit = compile_src("<?php echo strlen('hello');", DEFAULT_OPTIMIZATION_LEVEL);
         let ops = &unit.main.code.ops;
         assert!(
-            !ops.iter().any(|op| matches!(op, Op::Strlen { .. } | Op::InitFCall { .. })),
+            !ops.iter()
+                .any(|op| matches!(op, Op::Strlen { .. } | Op::InitFCall { .. })),
             "Expected strlen call to be folded, got: {ops:?}"
         );
         if let Some(Op::Echo(Operand::Lit(l))) = ops.iter().find(|op| matches!(op, Op::Echo(_))) {
@@ -681,11 +685,16 @@ mod tests {
 
     #[test]
     fn test_pass12_13_unused_variable_removal() {
-        let unit = compile_src("<?php function f() { $unused = 123; return 42; }", DEFAULT_OPTIMIZATION_LEVEL);
+        let unit = compile_src(
+            "<?php function f() { $unused = 123; return 42; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
         let fn_code = unit.decls.functions.borrow()[0].code.clone();
         assert_eq!(
-            fn_code.cv_names.len(), 0,
-            "Expected unused CV to be removed, got: {:?}", fn_code.cv_names
+            fn_code.cv_names.len(),
+            0,
+            "Expected unused CV to be removed, got: {:?}",
+            fn_code.cv_names
         );
     }
 }

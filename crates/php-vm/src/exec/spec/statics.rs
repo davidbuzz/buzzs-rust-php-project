@@ -73,7 +73,7 @@ impl Vm {
             let slot = entry.cell.try_borrow().ok()?;
             return match &*slot {
                 Value::Null if mode != FetchMode::Is => None,
-                Value::Reference(r) => r.try_borrow().ok().map(|inner| inner.clone()),
+                Value::Reference(r) => r.try_borrow().map(|inner| inner.clone()),
                 v => Some(v.clone()),
             };
         }
@@ -81,7 +81,7 @@ impl Vm {
         let slot = cell.try_borrow().ok()?;
         match &*slot {
             Value::Null if typed && mode != FetchMode::Is => None,
-            Value::Reference(r) => r.try_borrow().ok().map(|inner| inner.clone()),
+            Value::Reference(r) => r.try_borrow().map(|inner| inner.clone()),
             v => Some(v.clone()),
         }
     }
@@ -295,7 +295,7 @@ impl Vm {
         let guard;
         let v: &Value = match &*slot {
             Value::Reference(r) => {
-                guard = r.try_borrow().ok()?;
+                guard = r.try_borrow()?;
                 &*guard
             }
             v => v,

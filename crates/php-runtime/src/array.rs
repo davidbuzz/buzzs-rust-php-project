@@ -593,9 +593,7 @@ impl HashData {
     /// The bucket after `idx` in its chain (`Z_NEXT`).
     #[inline]
     fn next_of(&self, idx: u32) -> u32 {
-        self.buckets
-            .get(idx as usize)
-            .map_or(INVALID, |b| b.next)
+        self.buckets.get(idx as usize).map_or(INVALID, |b| b.next)
     }
 
     #[inline]
@@ -2124,7 +2122,11 @@ impl HashTable {
             self.next_free = idx_key(n);
         } else {
             let mut buckets = Vec::with_capacity(cap);
-            buckets.extend(items.into_iter().map(|it| Bucket::new(it.key, it.val, INVALID)));
+            buckets.extend(
+                items
+                    .into_iter()
+                    .map(|it| Bucket::new(it.key, it.val, INVALID)),
+            );
             self.store = Store::Hash(HashData {
                 buckets,
                 index: new_index(self.table_size),
@@ -3647,16 +3649,14 @@ mod tests {
         t.insert(ArrayKey::Str(k.clone()), Value::Int(2));
         t.insert("alpha", Value::Int(1));
         assert_eq!(t.get_zstr(&k).and_then(Value::as_int), Some(2));
-        assert_eq!(
-            t.get_str_identical_val(&k).and_then(Value::as_int),
-            Some(2)
-        );
+        assert_eq!(t.get_str_identical_val(&k).and_then(Value::as_int), Some(2));
         assert_eq!(
             t.get_zstr(&ZStr::from("beta")).and_then(Value::as_int),
             Some(2)
         );
         assert_eq!(
-            t.get_str_identical_val(&ZStr::from("beta")).and_then(Value::as_int),
+            t.get_str_identical_val(&ZStr::from("beta"))
+                .and_then(Value::as_int),
             Some(2)
         );
         assert!(t.get_zstr(&ZStr::from("gamma")).is_none());
