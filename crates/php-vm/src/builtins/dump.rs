@@ -504,6 +504,33 @@ fn class_handles(vm: &Vm) -> ClassHandles {
             }
         }
     }
+    for f in vm.frames.iter() {
+        if !f.symtab_attached {
+            continue;
+        }
+        let Ok(mut st) = f.vars.try_borrow_mut() else {
+            continue;
+        };
+        for (i, name) in f.code.cv_names.iter().enumerate() {
+            let Some(cv_id) = f.cvs.get(i).and_then(crate::vm::CvSlot::get).and_then(identity) else {
+                continue;
+            };
+            let Some(slot) = st.find(name.as_bytes()) else {
+                continue;
+            };
+            let Some(sym_id) = st
+                .slots
+                .get(slot as usize)
+                .and_then(Option::as_ref)
+                .and_then(identity)
+            else {
+                continue;
+            };
+            if cv_id == sym_id {
+                *hidden.entry(cv_id).or_insert(0) += 1;
+            }
+        }
+    }
     ClassHandles { hidden, missing }
 }
 

@@ -203,6 +203,7 @@ fn pending_call(v: &mut GcVisitor<'_>, c: &PendingCall) {
     if let Some(o) = &c.this {
         v.obj(o);
     }
+    v.values(c.inline_args[..c.inline_count as usize].iter().flatten());
     v.values(c.args.iter().flatten());
     v.values(c.named.iter().map(|(_, x)| x));
     if let Some(o) = &c.closure {

@@ -6,9 +6,9 @@ use crate::func::{flags, Args, Builtin, Func, Method, UserFunction};
 use crate::object;
 use crate::opcode::{ArgSrc, ClassSpec, FetchMode, MethodCallCacheEntry, Op, Operand};
 use crate::typecheck::{given_type, TypeCtx};
-use crate::vm::{move_last_frame, Frame, FrameKind, PendingCall, RetTarget, Throw, Vm, VmResult};
+use crate::vm::{Frame, FrameKind, PendingCall, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
 thread_local! {
     /// The stand-in constructor of `new` on a constructor-less class with
@@ -76,7 +76,7 @@ impl Vm {
     /// call frames). Zero-argument calls never touch the pool, and later
     /// arguments of a call that already has a buffer leave it alone.
     #[inline]
-    fn pooled_args(&mut self) {
+    pub(crate) fn pooled_args(&mut self) {
         let Some(frame) = self.frames.last_mut() else {
             return;
         };
@@ -108,7 +108,7 @@ impl Vm {
     pub(crate) fn put_arg_vec(&mut self, mut v: Vec<Option<Value>>) {
         if v.capacity() > 0 && v.capacity() <= 256 {
             v.clear();
-            if self.call_bufs.args.len() < 128 {
+            if self.call_bufs.args.len() < 4 {
                 self.call_bufs.args.push(v);
             } else if let Some(smallest) = self
                 .call_bufs
@@ -1832,8 +1832,15 @@ impl Vm {
     pub(crate) fn op_array_key_exists(&mut self, src: &ArgSrc, dst: Option<u32>) -> VmResult<bool> {
         let key = {
             let call = self.frame().calls.last().expect("pending call");
-            match (&call.func, call.args.as_slice()) {
-                (Func::Builtin(b), [Some(Value::Float(f))])
+            let first_arg = if call.inline_count == 1 && call.args.is_empty() {
+                call.inline_args[0].as_ref()
+            } else if call.inline_count == 0 && call.args.len() == 1 {
+                call.args[0].as_ref()
+            } else {
+                None
+            };
+            match (&call.func, first_arg) {
+                (Func::Builtin(b), Some(Value::Float(f)))
                     if b.name.as_bytes() == b"array_key_exists"
                         && b.flags & (flags::DEPRECATED | flags::NODISCARD) == 0
                         && (!f.is_finite() || !php_runtime::convert::double_fits_long(*f)) =>
@@ -1858,6 +1865,10 @@ impl Vm {
         });
         if let (Some(f), Some(Value::Array(a))) = (key, array) {
             let mut call = self.frame_mut().calls.pop().expect("pending call");
+            for slot in &mut call.inline_args[..call.inline_count as usize] {
+                *slot = None;
+            }
+            call.inline_count = 0;
             self.put_arg_vec(std::mem::take(&mut call.args));
             // This snapshot is Zend's temporary addref, not a surviving owner.
             let had_owner = a.refcount() > 1;

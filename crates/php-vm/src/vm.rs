@@ -585,13 +585,8 @@ impl FrameStack {
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         if len < self.live {
-            for f in &mut self.vec[len..self.live] {
-                f.clear_for_reuse();
-            }
             self.live = len;
-            if self.vec.len() > self.live + 128 {
-                self.vec.truncate(self.live + 128);
-            }
+            self.vec.truncate(len);
         }
     }
 
@@ -635,11 +630,12 @@ impl FrameStack {
         let idx = self.live;
         if idx < self.vec.len() {
             let f = &mut self.vec[idx];
-            if Rc::ptr_eq(&f.code, code)
-                && f.cvs.len() == code.cv_names.len()
+            if f.cvs.len() == code.cv_names.len()
                 && f.tmps.len() == code.num_tmps as usize
+                && f.iters.len() == code.num_iters as usize
+                && f.fins.len() == code.num_finally as usize
             {
-                f.reinit_same_call(kind);
+                f.reinit_same_call(code, kind);
             } else {
                 f.reinit_for_call(code.clone(), kind);
             }
@@ -652,10 +648,10 @@ impl FrameStack {
 
     /// Releases the topmost frame in place (retaining it in `vec[live..]` for pool reuse).
     #[inline]
-    pub fn release_top(&mut self, _empty_code: &Rc<OpArray>) {
+    pub fn release_top(&mut self, empty_code: &Rc<OpArray>) {
         if self.live > 0 {
             let last_idx = self.live - 1;
-            self.vec[last_idx].clear_for_reuse();
+            self.vec[last_idx].clear_for_reuse(empty_code);
             self.live -= 1;
             if self.vec.len() > self.live + 128 {
                 self.vec.truncate(self.live + 128);
@@ -1002,7 +998,7 @@ impl Frame {
     /// `iters`, `fins`) retain their capacity and element counts so that calling the same
     /// function requires zero reallocation.
     #[inline]
-    pub fn clear_for_reuse(&mut self) {
+    pub fn clear_for_reuse(&mut self, empty_code: &Rc<OpArray>) {
         for t in &mut self.tmps {
             *t = Value::Null;
         }
@@ -1034,6 +1030,7 @@ impl Frame {
         self.statics = None;
         self.func = None;
         self.ufunc = None;
+        self.code = empty_code.clone();
         self.ip = 0;
         self.scope = None;
         self.called = None;
@@ -1048,14 +1045,15 @@ impl Frame {
         self.observer_hidden = false;
     }
 
-    /// Re-initializes an existing frame for the same function call.
+    /// Re-initializes an existing frame when `cvs` and `tmps` already have the right lengths.
     #[inline(always)]
-    pub(crate) fn reinit_same_call(&mut self, kind: FrameKind) {
+    pub(crate) fn reinit_same_call(&mut self, code: &Rc<OpArray>, kind: FrameKind) {
         self.kind = kind;
         self.ip = 0;
         self.calls.clear();
         self.silence_saved.clear();
         self.symtab_attached = false;
+        self.code = code.clone();
     }
 
     /// Re-initializes a pooled frame for a new user function call, leaving
@@ -1071,6 +1069,16 @@ impl Frame {
         self.silence_saved.clear();
         let ncv = code.cv_names.len();
         refill_with(&mut self.cvs, ncv, || CvSlot::new(None));
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+            let vs = rc_mut.get_mut();
+            vs.slots.clear();
+            vs.names.share(&code);
+            vs.index = None;
+        } else {
+            let mut vs = VarStore::for_code(&code);
+            vs.slots.clear();
+            self.vars = Rc::new(RefCell::new(vs));
+        }
         self.symtab_attached = false;
         self.code = code;
     }
@@ -1195,10 +1203,15 @@ impl Frame {
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
             if let Some(slot) = st.find(name.as_bytes()) {
-                if let Some(val) = st.slots.get(slot as usize).cloned().flatten() {
-                    if let Some(cv) = self.cvs.get_mut(i) {
-                        cv.set(Some(val));
+                let val = st.slots.get(slot as usize).cloned().flatten();
+                if let Some(cv) = self.cvs.get_mut(i) {
+                    if let Some(old) = cv.set(val) {
+                        crate::gc::release_duplicate(old);
                     }
+                }
+            } else if let Some(cv) = self.cvs.get_mut(i) {
+                if let Some(old) = cv.set(None) {
+                    crate::gc::release_duplicate(old);
                 }
             }
         }
@@ -1215,7 +1228,9 @@ impl Frame {
                 let slot = slot as usize;
                 if slot < st.slots.len() {
                     let val = self.cvs.get(i).and_then(CvSlot::get_clone);
-                    st.slots[slot] = val;
+                    if let Some(old) = std::mem::replace(&mut st.slots[slot], val) {
+                        crate::gc::release_duplicate(old);
+                    }
                 }
             }
         }
@@ -1238,7 +1253,9 @@ impl Frame {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
             let mut st = self.vars.borrow_mut();
             if let Some(idx) = st.find(name.as_bytes()) {
-                st.slots[idx as usize] = None;
+                if let Some(old) = st.slots[idx as usize].take() {
+                    crate::gc::release_duplicate(old);
+                }
             }
         }
     }
@@ -1258,7 +1275,9 @@ impl Frame {
                     .is_some_and(|cv_name| cv_name.as_bytes() == name.as_bytes())
                 {
                     if let Some(slot) = self.cvs.get(sym_idx) {
-                        slot.set(None);
+                        if let Some(old) = slot.set(None) {
+                            crate::gc::release_duplicate(old);
+                        }
                     }
                 } else if let Some(cv_idx) = self
                     .code
@@ -1267,7 +1286,9 @@ impl Frame {
                     .position(|cv_name| cv_name.as_bytes() == name.as_bytes())
                 {
                     if let Some(slot) = self.cvs.get(cv_idx) {
-                        slot.set(None);
+                        if let Some(old) = slot.set(None) {
+                            crate::gc::release_duplicate(old);
+                        }
                     }
                 }
             }
@@ -1288,7 +1309,9 @@ impl Frame {
         if let Some(name) = self.code.cv_names.get(cv as usize) {
             let mut st = self.vars.borrow_mut();
             if let Some(idx) = st.find(name.as_bytes()) {
-                st.slots[idx as usize] = Some(v.clone());
+                if let Some(old) = std::mem::replace(&mut st.slots[idx as usize], Some(v.clone())) {
+                    crate::gc::release_duplicate(old);
+                }
             }
         }
     }

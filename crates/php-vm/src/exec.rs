@@ -507,8 +507,8 @@ impl Vm {
         let slot = f.cvs.get_mut(idx)?;
         if matches!(
             slot.get(),
-            Some(Value::Reference(_) | Value::Object(_))
-        ) || matches!(slot.get(), Some(Value::Array(a)) if !a.is_empty()) {
+            Some(Value::Reference(_) | Value::Array(_) | Value::Object(_))
+        ) {
             return self.cv_assign_slow(cv, v);
         }
         let old = slot.set(Some(v.clone()));
@@ -524,7 +524,11 @@ impl Vm {
     fn cv_assign_slow(&mut self, cv: u32, v: Value) -> Option<(PhpRef, Value)> {
         let f = self.frame_mut();
         let idx = cv as usize;
-        let slot = f.cvs.get_mut(idx)?;
+        let slot = f.cvs.get(idx)?;
+        let is_ref = matches!(slot.get(), Some(Value::Reference(_)));
+        if !is_ref && f.symtab_attached {
+            f.unsync_cv_from_symtab(cv);
+        }
         let old = match slot.get() {
             Some(Value::Reference(r)) if crate::typed_refs::has_type_sources(r) => {
                 return Some((r.clone(), v));
@@ -532,7 +536,9 @@ impl Vm {
             Some(Value::Reference(r)) => Some(r.set(v.clone())),
             _ => slot.set(Some(v.clone())),
         };
-        f.sync_cv_to_symtab(cv, &v);
+        if !is_ref {
+            f.sync_cv_to_symtab(cv, &v);
+        }
         if let Some(old) = &old {
             crate::gc::possible_root(old);
         }
@@ -605,10 +611,7 @@ impl Vm {
         let idx = cv as usize;
         let slot = match f.cvs.get(idx) {
             Some(slot) => match slot.get() {
-                Some(Value::Reference(_) | Value::Object(_)) => {
-                    return false;
-                }
-                Some(Value::Array(a)) if !a.is_empty() => {
+                Some(Value::Reference(_) | Value::Array(_) | Value::Object(_)) => {
                     return false;
                 }
                 _ => slot,
@@ -1042,6 +1045,10 @@ impl Vm {
         // An abandoned `new` is not destructed (`zend_object_store_ctor_failed`).
         ctor_failed_unfinished(&calls);
         while let Some(mut call) = calls.pop() {
+            for slot in &mut call.inline_args[..call.inline_count as usize] {
+                *slot = None;
+            }
+            call.inline_count = 0;
             call.args.clear();
             call.named.clear();
             drop(call);

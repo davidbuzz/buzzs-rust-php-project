@@ -455,10 +455,23 @@ impl Vm {
         if self.assign_obj_prop_fast(place, val, dst) {
             return Ok(Flow::Next);
         }
-        let v = self.read_raw(val)?;
-        let r = match self.prop_cache_assign(place, v) {
-            Ok(r) => r,
-            Err(v) => self.place_assign(place, v)?,
+        let r = match val {
+            Operand::Cv(cv) => match self.read_cv_op_data(cv) {
+                super::super::CvOpData::Value(v) => match self.prop_cache_assign(place, v) {
+                    Ok(r) => r,
+                    Err(v) => self.place_assign(place, v)?,
+                },
+                super::super::CvOpData::Deferred => self.place_assign_cv_ref(place, cv)?,
+                super::super::CvOpData::Undefined => self.place_assign_undef_cv(place, cv)?,
+            },
+            other => {
+                let v = self.read(other)?;
+                let v = self.copy_on_assign(v);
+                match self.prop_cache_assign(place, v) {
+                    Ok(r) => r,
+                    Err(v) => self.place_assign(place, v)?,
+                }
+            }
         };
         self.set_dst(dst, r);
         Ok(Flow::Next)
@@ -479,17 +492,39 @@ impl Vm {
             Operand::Unused => None,
             other => self.peek_dim_key(other),
         };
-        let v = self.read_raw(val)?;
-        let r = if dim == Operand::Unused || key.is_some() {
-            match self.prop_cache_assign_elem(place, key.as_ref(), v) {
-                Ok(r) => {
-                    self.release_tmp_str(dim);
-                    r
+        let r = match val {
+            Operand::Cv(cv) => match self.read_cv_op_data(cv) {
+                super::super::CvOpData::Value(v) => {
+                    if dim == Operand::Unused || key.is_some() {
+                        match self.prop_cache_assign_elem(place, key.as_ref(), v) {
+                            Ok(r) => {
+                                self.release_tmp_str(dim);
+                                r
+                            }
+                            Err(v) => self.place_assign(place, v)?,
+                        }
+                    } else {
+                        self.place_assign(place, v)?
+                    }
                 }
-                Err(v) => self.place_assign(place, v)?,
+                super::super::CvOpData::Deferred => self.place_assign_cv_ref(place, cv)?,
+                super::super::CvOpData::Undefined => self.place_assign_undef_cv(place, cv)?,
+            },
+            other => {
+                let v = self.read(other)?;
+                let v = self.copy_on_assign(v);
+                if dim == Operand::Unused || key.is_some() {
+                    match self.prop_cache_assign_elem(place, key.as_ref(), v) {
+                        Ok(r) => {
+                            self.release_tmp_str(dim);
+                            r
+                        }
+                        Err(v) => self.place_assign(place, v)?,
+                    }
+                } else {
+                    self.place_assign(place, v)?
+                }
             }
-        } else {
-            self.place_assign(place, v)?
         };
         self.set_dst(dst, r);
         Ok(Flow::Next)
@@ -506,7 +541,7 @@ impl Vm {
         if self.assign_op_obj_prop_fast(place, op, val, dst) {
             return Ok(Flow::Next);
         }
-        let v = self.read_raw(val)?;
+        let v = self.read(val)?;
         let r = if op == BinaryOp::Concat {
             match self.prop_cache_concat(place, &v) {
                 Some(r) => r,
@@ -535,7 +570,7 @@ impl Vm {
             return Ok(Flow::Next);
         }
         let key = self.peek_dim_key(dim);
-        let v = self.read_raw(val)?;
+        let v = self.read(val)?;
         let r = if let Some(key) = key {
             match self.prop_cache_assign_op_elem(place, &key, op, &v) {
                 Some(r) => {

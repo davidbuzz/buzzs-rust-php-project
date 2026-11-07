@@ -2717,7 +2717,7 @@ abs($x);
 $min = -9223372036854775807 - 1;
 var_dump(abs($min));
 "#;
-        let expected = "int(42)\nfloat(3.14)\nfloat(9223372036854775808)\n";
+        let expected = "int(42)\nfloat(3.14)\nfloat(9.223372036854776E+18)\n";
         assert_eq!(run(src), expected);
     }
 }

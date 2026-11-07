@@ -2466,6 +2466,14 @@ impl Vm {
         idx: usize,
         wop: WOp,
     ) -> VmResult<Value> {
+        if !matches!(wop, WOp::FetchRw | WOp::AssignOp(..)) {
+            self.frame().clear_cv_for_symtab_slot(store, idx);
+            if let Some(main) = self.frames.first() {
+                if main.symtab_attached {
+                    main.clear_cv_for_symtab_slot(store, idx);
+                }
+            }
+        }
         match wop {
             WOp::Assign(v) => {
                 let mut st = store.borrow_mut();
@@ -2481,6 +2489,9 @@ impl Vm {
                     slot => slot.replace(v.clone()),
                 };
                 drop(st);
+                if let Some(old) = &old {
+                    crate::gc::possible_root(old);
+                }
                 drop(old);
                 Ok(v)
             }
@@ -2952,6 +2963,12 @@ impl Vm {
             crate::gc::release_duplicate(Value::Reference(src));
             return self.write_place(base, &segs, WOp::Assign(v));
         };
+        self.frame().clear_cv_for_symtab_slot(&store, idx);
+        if let Some(main) = self.frames.first() {
+            if main.symtab_attached {
+                main.clear_cv_for_symtab_slot(&store, idx);
+            }
+        }
         let mut wop = WOp::AssignDeref(Box::new(DeferredRead {
             src,
             hit: DeferredHit::None,
@@ -2976,6 +2993,12 @@ impl Vm {
                 Live::Over(r) => {
                     drop(wop.resolve_deferred());
                     flush_deferred_ref_assigns();
+                    self.frame_mut().sync_from_symbol_table();
+                    if let Some(main) = self.frames.first_mut() {
+                        if main.symtab_attached {
+                            main.sync_from_symbol_table();
+                        }
+                    }
                     return r;
                 }
             }
@@ -2994,6 +3017,12 @@ impl Vm {
             Err(e) => Err(e),
         };
         flush_deferred_ref_assigns();
+        self.frame_mut().sync_from_symbol_table();
+        if let Some(main) = self.frames.first_mut() {
+            if main.symtab_attached {
+                main.sync_from_symbol_table();
+            }
+        }
         r
     }
 

@@ -2140,11 +2140,17 @@ impl Vm {
         // evaluated (`ZEND_ACC_CONSTANTS_UPDATED`), they are copied straight
         // into the new object's inline slots. The `Ref` is released before
         // the slow path, which fills the cache.
-        let o = if let Some(d) = cls.defaults.borrow().as_deref() {
-            object::new_object_from_defaults(cls.clone(), d)
-        } else {
-            let slots = self.class_defaults(cls)?;
-            object::new_object(cls.clone(), slots)
+        let cached = cls
+            .defaults
+            .borrow()
+            .as_deref()
+            .map(|d| object::new_object_from_defaults(cls.clone(), d));
+        let o = match cached {
+            Some(o) => o,
+            None => {
+                let slots = self.class_defaults(cls)?;
+                object::new_object(cls.clone(), slots)
+            }
         };
         if cls.internal == InternalKind::Throwable {
             self.init_throwable(&o)?;

@@ -202,7 +202,14 @@ impl Vm {
             ct_constants: Some(self.ct_constants()),
             stack_limit: self.compile_stack_limit(),
             user_opcodes: self.user_opcodes(),
-            optimization_level: crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL,
+            optimization_level: if self.ini.get_bool("opcache.enable")
+                && (self.ini.get_bool("opcache.enable_cli")
+                    || self.ini.get_bool("opcache.file_cache_only"))
+            {
+                u32::try_from(self.ini.get_long("opcache.optimization_level")).unwrap_or(0)
+            } else {
+                0
+            },
         };
         let halt_compiler_offset = program.halt_compiler_offset;
         // A multibyte script's AST is kept for the semantic text of

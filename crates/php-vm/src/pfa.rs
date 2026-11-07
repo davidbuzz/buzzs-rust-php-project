@@ -87,6 +87,7 @@ impl Slot {
 impl Vm {
     /// `ZEND_SEND_PLACEHOLDER`.
     pub(crate) fn op_send_placeholder(&mut self, name: Option<ZStr>) -> VmResult<()> {
+        self.pooled_args();
         let pos = match &name {
             Some(n) => self.arg_position(n)?,
             None => Some(self.frame().calls.last().map_or(0, |c| c.args.len())),
