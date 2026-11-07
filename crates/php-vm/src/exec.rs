@@ -3321,7 +3321,12 @@ impl Vm {
             }
             return Ok(Flow::Reload);
         }
-        if self.frames[fidx].symtab_attached {
+        let is_main = Rc::ptr_eq(&self.frames[fidx].vars, &self.globals)
+            || self.frames[fidx].kind == crate::vm::FrameKind::Main;
+        if is_main && fidx <= base {
+            self.frames[fidx].attach_symbol_table();
+            self.frames[fidx].sync_cvs_to_symtab();
+        } else if self.frames[fidx].symtab_attached {
             self.frames[fidx].sync_cvs_to_symtab();
             if let Some(prev) = fidx.checked_sub(1) {
                 if self.frames[prev].symtab_attached {
