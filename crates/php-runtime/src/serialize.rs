@@ -14,7 +14,9 @@ use crate::numeric::{handle_numeric_str, strtod};
 use crate::string::ZStr;
 use crate::value::{PhpRef, Value};
 use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 /// How an object serializes itself (decided by the VM).
 #[derive(Debug, Clone)]
@@ -50,18 +52,115 @@ pub enum SerializedObject {
 // serialize
 // ---------------------------------------------------------------------------
 
+/// State shared across nested serialization calls within the same context.
+#[derive(Default, Debug)]
+pub struct SerContext {
+    pub n: i64,
+    /// Identity -> `n` of the first occurrence (-1: failed Serializable).
+    pub seen: HashMap<usize, i64>,
+    /// Keeps registered values alive so their addresses stay unique.
+    pub keep: Vec<Value>,
+}
+
+type SerRc = Rc<RefCell<SerContext>>;
+
+thread_local! {
+    static SER_LOCK: Cell<u32> = const { Cell::new(0) };
+    static SER_CTX: RefCell<(u32, Option<SerRc>)> = const { RefCell::new((0, None)) };
+    static ACTIVE_OBJECTS: RefCell<HashSet<usize>> = const { RefCell::new(HashSet::new()) };
+}
+
+/// Runs `f` with `BG(serialize_lock)` raised (nested user callbacks get a fresh context).
+pub fn serialize_locked<R>(f: impl FnOnce() -> R) -> R {
+    SER_LOCK.with(|l| l.set(l.get() + 1));
+    struct LockGuard;
+    impl Drop for LockGuard {
+        fn drop(&mut self) {
+            SER_LOCK.with(|l| l.set(l.get().saturating_sub(1)));
+        }
+    }
+    let _guard = LockGuard;
+    f()
+}
+
+/// Runs `f` with an isolated serializer context and lock held.
+pub fn serialize_isolated<R>(f: impl FnOnce() -> R) -> R {
+    let saved_lock = SER_LOCK.with(|l| l.replace(1));
+    let saved_ctx = SER_CTX.with(|c| c.borrow_mut().take());
+    struct IsoGuard {
+        lock: u32,
+        ctx: (u32, Option<SerRc>),
+    }
+    impl Drop for IsoGuard {
+        fn drop(&mut self) {
+            SER_LOCK.with(|l| l.set(self.lock));
+            SER_CTX.with(|c| *c.borrow_mut() = self.ctx.take());
+        }
+    }
+    let _guard = IsoGuard {
+        lock: saved_lock,
+        ctx: saved_ctx,
+    };
+    f()
+}
+
+fn is_locked() -> bool {
+    SER_LOCK.with(Cell::get) > 0
+}
+
+fn ser_ctx_init() -> (SerRc, bool) {
+    if is_locked() {
+        return (Rc::new(RefCell::new(SerContext::default())), false);
+    }
+    SER_CTX.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.0 == 0 || s.1.is_none() {
+            let d = Rc::new(RefCell::new(SerContext::default()));
+            *s = (1, Some(d.clone()));
+            (d, true)
+        } else {
+            s.0 += 1;
+            (s.1.clone().unwrap_or_default(), false)
+        }
+    })
+}
+
+fn ser_ctx_destroy(is_owner: bool) {
+    if is_locked() {
+        return;
+    }
+    SER_CTX.with(|s| {
+        let mut s = s.borrow_mut();
+        s.0 = s.0.saturating_sub(1);
+        if s.0 == 0 || is_owner {
+            s.0 = 0;
+            s.1 = None;
+        }
+    });
+}
+
 struct Serializer {
     out: Vec<u8>,
-    n: i64,
-    seen: HashMap<usize, i64>,
+    context: SerRc,
+    active_arrays: Vec<usize>,
 }
 
 /// `serialize($value)`.
 pub fn serialize(value: &Value, ctx: &mut (impl RuntimeContext + ?Sized)) -> RtResult<Vec<u8>> {
+    let (d, is_owner) = ser_ctx_init();
+    struct CtxGuard {
+        is_owner: bool,
+    }
+    impl Drop for CtxGuard {
+        fn drop(&mut self) {
+            ser_ctx_destroy(self.is_owner);
+        }
+    }
+    let _guard = CtxGuard { is_owner };
     let mut s = Serializer {
         out: Vec::new(),
-        n: 0,
-        seen: HashMap::new(),
+        context: d,
+        active_arrays: Vec::new(),
     };
     s.value(value, ctx)?;
     Ok(s.out)
@@ -82,7 +181,6 @@ fn write_key(out: &mut Vec<u8>, k: &ArrayKey) {
 
 impl Serializer {
     fn value(&mut self, v: &Value, ctx: &mut (impl RuntimeContext + ?Sized)) -> RtResult<()> {
-        self.n += 1;
         let key = match v {
             Value::Reference(r) => match &*r.borrow() {
                 Value::Object(o) => Some(o.addr()),
@@ -91,21 +189,28 @@ impl Serializer {
             Value::Object(o) => Some(o.addr()),
             _ => None,
         };
-        if let Some(key) = key {
-            if let Some(&id) = self.seen.get(&key) {
-                if v.is_reference() && id != -1 {
-                    self.n -= 1;
+        {
+            let mut c = self.context.borrow_mut();
+            c.n += 1;
+            if let Some(key) = key {
+                if let Some(&id) = c.seen.get(&key) {
+                    if v.is_reference() && id != -1 {
+                        c.n -= 1;
+                    }
+                    drop(c);
+                    if id == -1 {
+                        self.out.extend_from_slice(b"N;");
+                    } else if v.is_reference() {
+                        self.out.extend_from_slice(format!("R:{id};").as_bytes());
+                    } else {
+                        self.out.extend_from_slice(format!("r:{id};").as_bytes());
+                    }
+                    return Ok(());
                 }
-                if id == -1 {
-                    self.out.extend_from_slice(b"N;");
-                } else if v.is_reference() {
-                    self.out.extend_from_slice(format!("R:{id};").as_bytes());
-                } else {
-                    self.out.extend_from_slice(format!("r:{id};").as_bytes());
-                }
-                return Ok(());
+                let n = c.n;
+                c.seen.insert(key, n);
+                c.keep.push(v.clone());
             }
-            self.seen.insert(key, self.n);
         }
         let v = v.deref();
         match &v {
@@ -130,33 +235,50 @@ impl Serializer {
             }
             Value::Str(s) => write_string(&mut self.out, s.as_bytes()),
             Value::Array(a) => self.table(b"a", None, a, ctx)?,
-            Value::Object(o) => match ctx.serialize_object(o)? {
-                SerializedObject::Object { class, props } => {
-                    self.table(b"O", Some(&class), &props, ctx)?;
-                }
-                SerializedObject::Enum { class, case } => {
-                    self.out.extend_from_slice(
-                        format!("E:{}:\"", class.len() + 1 + case.len()).as_bytes(),
-                    );
-                    self.out.extend_from_slice(class.as_bytes());
-                    self.out.push(b':');
-                    self.out.extend_from_slice(case.as_bytes());
-                    self.out.extend_from_slice(b"\";");
-                }
-                SerializedObject::Custom { class, data } => {
-                    self.out
-                        .extend_from_slice(format!("C:{}:\"", class.len()).as_bytes());
-                    self.out.extend_from_slice(class.as_bytes());
-                    self.out
-                        .extend_from_slice(format!("\":{}:{{", data.len()).as_bytes());
-                    self.out.extend_from_slice(&data);
-                    self.out.push(b'}');
-                }
-                SerializedObject::Null => {
-                    self.seen.insert(o.addr(), -1);
+            Value::Object(o) => {
+                let is_recursive = ACTIVE_OBJECTS.with(|ao| !ao.borrow_mut().insert(o.addr()));
+                if is_recursive {
+                    self.context.borrow_mut().seen.insert(o.addr(), -1);
                     self.out.extend_from_slice(b"N;");
+                    return Ok(());
                 }
-            },
+                struct ObjGuard(usize);
+                impl Drop for ObjGuard {
+                    fn drop(&mut self) {
+                        ACTIVE_OBJECTS.with(|ao| {
+                            ao.borrow_mut().remove(&self.0);
+                        });
+                    }
+                }
+                let _guard = ObjGuard(o.addr());
+                match ctx.serialize_object(o)? {
+                    SerializedObject::Object { class, props } => {
+                        self.table(b"O", Some(&class), &props, ctx)?;
+                    }
+                    SerializedObject::Enum { class, case } => {
+                        self.out.extend_from_slice(
+                            format!("E:{}:\"", class.len() + 1 + case.len()).as_bytes(),
+                        );
+                        self.out.extend_from_slice(class.as_bytes());
+                        self.out.push(b':');
+                        self.out.extend_from_slice(case.as_bytes());
+                        self.out.extend_from_slice(b"\";");
+                    }
+                    SerializedObject::Custom { class, data } => {
+                        self.out
+                            .extend_from_slice(format!("C:{}:\"", class.len()).as_bytes());
+                        self.out.extend_from_slice(class.as_bytes());
+                        self.out
+                            .extend_from_slice(format!("\":{}:{{", data.len()).as_bytes());
+                        self.out.extend_from_slice(&data);
+                        self.out.push(b'}');
+                    }
+                    SerializedObject::Null => {
+                        self.context.borrow_mut().seen.insert(o.addr(), -1);
+                        self.out.extend_from_slice(b"N;");
+                    }
+                }
+            }
             Value::Reference(_) => unreachable!("dereferenced"),
         }
         Ok(())
@@ -183,24 +305,43 @@ impl Serializer {
         // array being serialized (`$t = &$a; $a[] = $t;`) is written as
         // `N;` (counted like any value).
         let own = (tag == b"a").then(|| std::ptr::from_ref(t) as usize);
-        let is_own = |v: &Value| matches!(v, Value::Array(e) if Some(e.addr()) == own);
+        if let Some(addr) = own {
+            self.active_arrays.push(addr);
+        }
+        let res = self.table_body(t, own, ctx);
+        if own.is_some() {
+            self.active_arrays.pop();
+        }
+        res
+    }
+
+    fn table_body(
+        &mut self,
+        t: &HashTable,
+        own: Option<usize>,
+        ctx: &mut (impl RuntimeContext + ?Sized),
+    ) -> RtResult<()> {
         for (k, v) in t {
             write_key(&mut self.out, k);
-            match v {
+            let is_own = match v {
                 Value::Reference(r) if r.refcount() == 1 => {
                     let inner = r.get();
-                    if is_own(&inner) {
-                        self.n += 1;
-                        self.out.extend_from_slice(b"N;");
-                    } else {
+                    matches!(inner, Value::Array(ref e) if Some(e.addr()) == own || self.active_arrays.contains(&e.addr()))
+                }
+                Value::Array(e) => Some(e.addr()) == own || self.active_arrays.contains(&e.addr()),
+                _ => false,
+            };
+            if is_own {
+                self.context.borrow_mut().n += 1;
+                self.out.extend_from_slice(b"N;");
+            } else {
+                match v {
+                    Value::Reference(r) if r.refcount() == 1 => {
+                        let inner = r.get();
                         self.value(&inner, ctx)?;
                     }
+                    other => self.value(other, ctx)?,
                 }
-                other if is_own(other) => {
-                    self.n += 1;
-                    self.out.extend_from_slice(b"N;");
-                }
-                other => self.value(other, ctx)?,
             }
         }
         self.out.push(b'}');
@@ -1350,6 +1491,120 @@ mod tests {
             ser(&Value::Array(b.clone())),
             "a:3:{i:0;N;i:1;i:3;i:2;R:3;}"
         );
+    }
+
+    #[test]
+    fn nested_serializable_joins_context_bug79031() {
+        // Simulates Serializable::serialize() calling serialize() on an inner value.
+        // It must share the outer seen table and slot numbering.
+        struct SerializableMockContext {
+            inner_val: Value,
+        }
+        impl RuntimeContext for SerializableMockContext {
+            fn diagnostic(&mut self, _level: ErrorLevel, _message: &str) -> RtResult<()> {
+                Ok(())
+            }
+            fn serialize_object(&mut self, _obj: &Obj) -> RtResult<SerializedObject> {
+                // Serializable::serialize() does NOT lock, so nested serialize shares context.
+                let mut inner_ctx = CollectingContext::new();
+                let inner_bytes = serialize(&self.inner_val, &mut inner_ctx)?;
+                Ok(SerializedObject::Custom {
+                    class: ZStr::from("A"),
+                    data: inner_bytes,
+                })
+            }
+        }
+
+        let shared_ref = PhpRef::new(Value::Int(42));
+        let obj = Obj::dummy("A");
+        let mut t = HashTable::new();
+        t.push(Value::Reference(shared_ref.clone())).unwrap();
+        t.push(Value::Object(obj.clone())).unwrap();
+        t.push(Value::Reference(shared_ref.clone())).unwrap();
+
+        let mut ctx = SerializableMockContext {
+            inner_val: Value::Reference(shared_ref.clone()),
+        };
+        let out = serialize(&Value::Array(t.into()), &mut ctx).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert_eq!(s, "a:3:{i:0;i:42;i:1;C:1:\"A\":5:{R:2;};i:2;R:2;}");
+    }
+
+    #[test]
+    fn nested_serialize_locked_isolates_context() {
+        // Simulates __serialize() calling serialize() inside serialize_locked.
+        // The nested serialize() has an isolated var table.
+        struct MagicSerializeMockContext {
+            inner_val: Value,
+        }
+        impl RuntimeContext for MagicSerializeMockContext {
+            fn diagnostic(&mut self, _level: ErrorLevel, _message: &str) -> RtResult<()> {
+                Ok(())
+            }
+            fn serialize_object(&mut self, _obj: &Obj) -> RtResult<SerializedObject> {
+                // __serialize() runs with serialize_locked
+                let nested_data = serialize_locked(|| {
+                    let mut inner_ctx = CollectingContext::new();
+                    serialize(&self.inner_val, &mut inner_ctx).unwrap()
+                });
+                let mut props = ZArray::new();
+                props.make_mut().insert("data", Value::Str(ZStr::from(nested_data)));
+                Ok(SerializedObject::Object {
+                    class: ZStr::from("B"),
+                    props,
+                })
+            }
+        }
+
+        let shared_ref = PhpRef::new(Value::Int(99));
+        let obj = Obj::dummy("B");
+        let mut t = HashTable::new();
+        t.push(Value::Reference(shared_ref.clone())).unwrap();
+        t.push(Value::Object(obj.clone())).unwrap();
+        t.push(Value::Reference(shared_ref.clone())).unwrap();
+
+        let mut ctx = MagicSerializeMockContext {
+            inner_val: Value::Reference(shared_ref.clone()),
+        };
+        let out = serialize(&Value::Array(t.into()), &mut ctx).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("O:1:\"B\""));
+        assert!(s.ends_with("i:2;R:2;}"));
+    }
+
+    #[test]
+    fn object_recursion_guard_emits_null() {
+        struct RecursiveMockContext;
+        impl RuntimeContext for RecursiveMockContext {
+            fn diagnostic(&mut self, _level: ErrorLevel, _message: &str) -> RtResult<()> {
+                Ok(())
+            }
+            fn serialize_object(&mut self, obj: &Obj) -> RtResult<SerializedObject> {
+                // Directly attempts to serialize the same object again (recursion)
+                let _ = serialize(&Value::Object(obj.clone()), self);
+                Ok(SerializedObject::Object {
+                    class: ZStr::from("Rec"),
+                    props: ZArray::new(),
+                })
+            }
+        }
+
+        let obj = Obj::dummy("Rec");
+        let mut ctx = RecursiveMockContext;
+        let out = serialize(&Value::Object(obj), &mut ctx).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "O:3:\"Rec\":0:{}");
+    }
+
+    #[test]
+    fn duplicate_objects_consume_slot_duplicate_references_do_not() {
+        let obj = Obj::dummy("Dummy");
+        let o_val = Value::Object(obj);
+        let mut t = HashTable::new();
+        t.push(o_val.clone()).unwrap();
+        t.push(o_val.clone()).unwrap();
+        let mut c = CollectingContext::new();
+        let out = serialize(&Value::Array(t.into()), &mut c).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "a:2:{i:0;O:5:\"Dummy\":0:{}i:1;r:2;}");
     }
 
     #[test]

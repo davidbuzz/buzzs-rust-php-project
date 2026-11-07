@@ -142,12 +142,14 @@ impl Vm {
 /// Runs `f` with `BG(serialize_lock)` raised (user callbacks get a fresh
 /// context).
 fn locked<R>(f: impl FnOnce() -> VmResult<R>) -> VmResult<R> {
-    LOCK.with(|l| l.set(l.get() + 1));
-    let r = f();
-    if !matches!(r, Err(Throw::Fatal)) {
-        LOCK.with(|l| l.set(l.get().saturating_sub(1)));
-    }
-    r
+    php_runtime::serialize::serialize_locked(|| {
+        LOCK.with(|l| l.set(l.get() + 1));
+        let r = f();
+        if !matches!(r, Err(Throw::Fatal)) {
+            LOCK.with(|l| l.set(l.get().saturating_sub(1)));
+        }
+        r
+    })
 }
 
 fn is_locked() -> bool {
@@ -597,27 +599,45 @@ impl Vm {
     /// values are taken as stored in an array (a reference nobody else
     /// holds is a plain value). Returns one payload per value.
     pub fn serialize_values(&mut self, values: &[&Value]) -> VmResult<Vec<Vec<u8>>> {
-        let d = ser_init();
-        let mut out = Vec::with_capacity(values.len());
-        for v in values {
-            let mut s = Serializer {
-                buf: Vec::new(),
-                d: &d,
-            };
-            match s.value(self, &element(v)) {
-                Ok(()) => out.push(s.buf),
-                Err(Throw::Fatal) => {
-                    ABANDONED_SER.with(|s| s.borrow_mut().push(d.clone()));
-                    return Err(Throw::Fatal);
-                }
-                Err(t) => {
-                    ser_destroy();
-                    return Err(t);
+        php_runtime::serialize::serialize_isolated(|| {
+            let saved_ser = SER.with(|s| s.borrow_mut().take());
+            let saved_lock = LOCK.with(|l| l.replace(0));
+            struct VmSerGuard {
+                ser: (u32, Option<SerRc>),
+                lock: u32,
+            }
+            impl Drop for VmSerGuard {
+                fn drop(&mut self) {
+                    SER.with(|s| *s.borrow_mut() = self.ser.take());
+                    LOCK.with(|l| l.set(self.lock));
                 }
             }
-        }
-        ser_destroy();
-        Ok(out)
+            let _guard = VmSerGuard {
+                ser: saved_ser,
+                lock: saved_lock,
+            };
+            let d = ser_init();
+            let mut out = Vec::with_capacity(values.len());
+            for v in values {
+                let mut s = Serializer {
+                    buf: Vec::new(),
+                    d: &d,
+                };
+                match s.value(self, &element(v)) {
+                    Ok(()) => out.push(s.buf),
+                    Err(Throw::Fatal) => {
+                        ABANDONED_SER.with(|s| s.borrow_mut().push(d.clone()));
+                        return Err(Throw::Fatal);
+                    }
+                    Err(t) => {
+                        ser_destroy();
+                        return Err(t);
+                    }
+                }
+            }
+            ser_destroy();
+            Ok(out)
+        })
     }
 }
 

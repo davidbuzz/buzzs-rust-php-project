@@ -327,23 +327,36 @@ pub(crate) fn clear_session_array(h: &mut dyn SessionHost) {
 
 /// `php_session_encode()`.
 pub(crate) fn encode(h: &mut dyn SessionHost) -> Option<Vec<u8>> {
+    if h.session().status != SessionStatus::Active {
+        warn(h, ErrorLevel::Warning, "Cannot encode non-existent session");
+        return None;
+    }
     let Some(vars) = session_array(h) else {
         warn(h, ErrorLevel::Warning, "Cannot encode non-existent session");
         return None;
     };
-    let ser = h.session().serializer?;
-    let mut values = |keys: Option<&[ZStr]>| {
-        let shared = h.serialize_shared(&vars, keys);
-        shared.unwrap_or_else(|| serializer::serialize_selected(&vars, keys, h))
-    };
-    let enc = serializer::encode_with(ser, &vars, &mut values);
-    for w in &enc.warnings {
-        warn(h, ErrorLevel::Warning, w);
-    }
-    if let Some(e) = enc.exception {
-        throw(h, e);
-    }
-    enc.data
+    let ser = h
+        .session()
+        .ini
+        .get("session.serialize_handler")
+        .and_then(Serializer::find)
+        .or(h.session().serializer)?;
+    h.session().serializer = Some(ser);
+
+    php_runtime::serialize::serialize_isolated(|| {
+        let mut values = |keys: Option<&[ZStr]>| {
+            let shared = h.serialize_shared(&vars, keys);
+            shared.unwrap_or_else(|| serializer::serialize_selected(&vars, keys, h))
+        };
+        let enc = serializer::encode_with(ser, &vars, &mut values);
+        for w in &enc.warnings {
+            warn(h, ErrorLevel::Warning, w);
+        }
+        if let Some(e) = enc.exception {
+            throw(h, e);
+        }
+        enc.data
+    })
 }
 
 /// `php_set_session_var()`: stores a decoded entry into `$_SESSION`
@@ -445,9 +458,16 @@ fn normalize_session_vars(h: &mut dyn SessionHost, stored: &[(ZStr, PhpRef)]) {
 
 /// `php_session_decode()`; on failure the session is destroyed.
 pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
-    let Some(ser) = h.session().serializer else {
+    let ser = h
+        .session()
+        .ini
+        .get("session.serialize_handler")
+        .and_then(Serializer::find)
+        .or(h.session().serializer);
+    let Some(ser) = ser else {
         return false;
     };
+    h.session().serializer = Some(ser);
     let rfc1867 = h.session().in_rfc1867_update;
     // PHP_VAR_UNSERIALIZE_INIT
     let opened = !rfc1867 && h.begin_unserialize();
@@ -1023,27 +1043,25 @@ pub(crate) fn start(h: &mut dyn SessionHost) -> bool {
                 }
                 h.session().module = found;
             }
-            if h.session().serializer.is_none() {
-                let v = h
-                    .session()
-                    .ini
-                    .get("session.serialize_handler")
-                    .unwrap_or_default()
-                    .to_vec();
-                let found = Serializer::find(&v);
-                if found.is_none() {
-                    warn(
-                        h,
-                        ErrorLevel::Warning,
-                        &format!(
-                            "Cannot find session serialization handler \"{}\" - session startup failed",
-                            lossy(&v)
-                        ),
-                    );
-                    return false;
-                }
-                h.session().serializer = found;
+            let v = h
+                .session()
+                .ini
+                .get("session.serialize_handler")
+                .unwrap_or_default()
+                .to_vec();
+            let found = Serializer::find(&v);
+            if found.is_none() {
+                warn(
+                    h,
+                    ErrorLevel::Warning,
+                    &format!(
+                        "Cannot find session serialization handler \"{}\" - session startup failed",
+                        lossy(&v)
+                    ),
+                );
+                return false;
             }
+            h.session().serializer = found;
             h.session().status = SessionStatus::None;
         }
         SessionStatus::None => {}
@@ -1131,14 +1149,14 @@ pub(crate) fn rinit_session(h: &mut dyn SessionHost, auto_start: bool) {
         .to_vec();
     let module = h.session().find_module(&handler);
     h.session().module = module;
-    if h.session().serializer.is_none() {
-        let v = h
-            .session()
-            .ini
-            .get("session.serialize_handler")
-            .unwrap_or_default()
-            .to_vec();
-        h.session().serializer = Serializer::find(&v);
+    let v = h
+        .session()
+        .ini
+        .get("session.serialize_handler")
+        .unwrap_or_default()
+        .to_vec();
+    if let Some(ser) = Serializer::find(&v) {
+        h.session().serializer = Some(ser);
     }
     let usable = h.session().module.is_some() && h.session().serializer.is_some();
     if !usable {
