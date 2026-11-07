@@ -67,7 +67,7 @@ type SerRc = Rc<RefCell<SerContext>>;
 thread_local! {
     static SER_LOCK: Cell<u32> = const { Cell::new(0) };
     static SER_CTX: RefCell<(u32, Option<SerRc>)> = const { RefCell::new((0, None)) };
-    static ACTIVE_OBJECTS: RefCell<HashSet<usize>> = const { RefCell::new(HashSet::new()) };
+    static ACTIVE_OBJECTS: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
 }
 
 /// Runs `f` with `BG(serialize_lock)` raised (nested user callbacks get a fresh context).
@@ -86,7 +86,7 @@ pub fn serialize_locked<R>(f: impl FnOnce() -> R) -> R {
 /// Runs `f` with an isolated serializer context and lock held.
 pub fn serialize_isolated<R>(f: impl FnOnce() -> R) -> R {
     let saved_lock = SER_LOCK.with(|l| l.replace(1));
-    let saved_ctx = SER_CTX.with(|c| c.borrow_mut().take());
+    let saved_ctx = SER_CTX.with(|c| std::mem::replace(&mut *c.borrow_mut(), (0, None)));
     struct IsoGuard {
         lock: u32,
         ctx: (u32, Option<SerRc>),
@@ -94,7 +94,7 @@ pub fn serialize_isolated<R>(f: impl FnOnce() -> R) -> R {
     impl Drop for IsoGuard {
         fn drop(&mut self) {
             SER_LOCK.with(|l| l.set(self.lock));
-            SER_CTX.with(|c| *c.borrow_mut() = self.ctx.take());
+            SER_CTX.with(|c| *c.borrow_mut() = self.ctx.clone());
         }
     }
     let _guard = IsoGuard {

@@ -600,7 +600,7 @@ impl Vm {
     /// holds is a plain value). Returns one payload per value.
     pub fn serialize_values(&mut self, values: &[&Value]) -> VmResult<Vec<Vec<u8>>> {
         php_runtime::serialize::serialize_isolated(|| {
-            let saved_ser = SER.with(|s| s.borrow_mut().take());
+            let saved_ser = SER.with(|s| std::mem::replace(&mut *s.borrow_mut(), (0, None)));
             let saved_lock = LOCK.with(|l| l.replace(0));
             struct VmSerGuard {
                 ser: (u32, Option<SerRc>),
@@ -608,7 +608,7 @@ impl Vm {
             }
             impl Drop for VmSerGuard {
                 fn drop(&mut self) {
-                    SER.with(|s| *s.borrow_mut() = self.ser.take());
+                    SER.with(|s| *s.borrow_mut() = self.ser.clone());
                     LOCK.with(|l| l.set(self.lock));
                 }
             }
