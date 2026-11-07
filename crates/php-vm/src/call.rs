@@ -1792,16 +1792,14 @@ impl Vm {
         let (pos, name) = match &k {
             Value::Str(s) => (self.arg_position(s)?, Some(s.clone())),
             Value::Int(_) => {
-                if self.frame().calls.last().expect("pending call").has_named {
+                let call = self.frame().calls.last().expect("pending call");
+                if call.has_named {
                     return Err(self.make_throw(
                         "Error",
                         "Cannot use positional argument after named argument during unpacking",
                     ));
                 }
-                (
-                    Some(self.frame().calls.last().expect("pending call").args.len()),
-                    None,
-                )
+                (Some(call.arg_count()), None)
             }
             _ => {
                 return Err(self.make_throw(
