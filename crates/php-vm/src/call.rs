@@ -3481,7 +3481,7 @@ impl Vm {
                         let fname = if call
                             .magic_name
                             .as_deref()
-                            .is_some_and(|m| m.as_bytes().eq_ignore_ascii_case(b"__invoke"))
+                            .is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
                             && call.func.is_closure()
                         {
                             "Closure::__invoke".to_string()
@@ -3504,7 +3504,7 @@ impl Vm {
                         let fname = if call
                             .magic_name
                             .as_deref()
-                            .is_some_and(|m| m.as_bytes().eq_ignore_ascii_case(b"__invoke"))
+                            .is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
                             && call.func.is_closure()
                         {
                             "Closure::__invoke".to_string()
