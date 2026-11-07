@@ -144,23 +144,25 @@ impl From<ZStr> for ArrayKey {
 /// Here the key is an [`ArrayKey`] (16 bytes: the integer, or the string,
 /// whose header caches its hash, so `h` needs no field of its own), and the
 /// collision-chain link (`Z_NEXT(p->val)`, kept in the zval's spare `u2`
-/// word in php-src) lives in the table's index next to the hash slots. A
-/// bucket is therefore a value plus 16 bytes, 32 bytes with a 16-byte value.
+/// word in php-src) lives in the bucket (`next: u32`).
 #[derive(Clone)]
 struct Bucket {
     /// The value; `None` for a deleted slot (`IS_UNDEF`).
     val: Option<Value>,
     /// The key (`Int(0)` in a deleted slot, whose key string is released).
     key: ArrayKey,
+    /// Next bucket index in the collision chain (`u32::MAX` / `INVALID` if none).
+    next: u32,
 }
 
 impl Bucket {
     /// The bucket of a live element.
     #[inline]
-    fn new(key: ArrayKey, val: Value) -> Self {
+    fn new(key: ArrayKey, val: Value, next: u32) -> Self {
         Bucket {
             val: Some(val),
             key,
+            next,
         }
     }
 }
@@ -180,8 +182,7 @@ enum Store {
 struct HashData {
     /// Buckets in insertion order, holes included (`nNumUsed` entries).
     buckets: Vec<Bucket>,
-    /// `2 * nTableSize` hash slots (chain heads, `HT_HASH`), then one chain
-    /// link per bucket position (`nTableSize` entries, `Z_NEXT`).
+    /// `nTableSize` hash slots (chain heads, `HT_HASH`).
     index: Box<[u32]>,
 }
 
@@ -309,24 +310,18 @@ fn idx_key(i: usize) -> i64 {
     i64::try_from(i).unwrap_or(i64::MAX)
 }
 
-/// A fresh index for `table_size` buckets: `2 * table_size` empty hash
-/// slots followed by `table_size` chain links.
+/// A fresh index for `table_size` buckets: `table_size` empty hash slots
+/// (`HT_INVALID_IDX` / `u32::MAX`).
 fn new_index(table_size: u32) -> Box<[u32]> {
-    vec![INVALID; table_size as usize * 3].into_boxed_slice()
+    vec![INVALID; table_size as usize].into_boxed_slice()
 }
 
 /// The hash slot of `h` (`nIndex = h | nTableMask`: `h` modulo the
-/// `2 * nTableSize` slots).
+/// `nTableSize` slots).
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
 fn hash_slot(table_size: u32, h: u64) -> usize {
-    (h as usize) & (table_size as usize * 2 - 1)
-}
-
-/// The index entry holding the chain link of the bucket at `idx`.
-#[inline]
-fn link_slot(table_size: u32, idx: u32) -> usize {
-    table_size as usize * 2 + idx as usize
+    (h as usize) & (table_size as usize - 1)
 }
 
 /// Whether two key strings have the same bytes (`zend_string_equal_content`
@@ -585,8 +580,7 @@ impl HashData {
             Some(slot) => std::mem::replace(slot, idx),
             None => INVALID,
         };
-        self.set_next(ts, idx, head);
-        self.buckets.push(Bucket::new(key, val));
+        self.buckets.push(Bucket::new(key, val, head));
         idx
     }
 
@@ -598,17 +592,16 @@ impl HashData {
 
     /// The bucket after `idx` in its chain (`Z_NEXT`).
     #[inline]
-    fn next_of(&self, ts: u32, idx: u32) -> u32 {
-        self.index
-            .get(link_slot(ts, idx))
-            .copied()
-            .unwrap_or(INVALID)
+    fn next_of(&self, idx: u32) -> u32 {
+        self.buckets
+            .get(idx as usize)
+            .map_or(INVALID, |b| b.next)
     }
 
     #[inline]
-    fn set_next(&mut self, ts: u32, idx: u32, next: u32) {
-        if let Some(n) = self.index.get_mut(link_slot(ts, idx)) {
-            *n = next;
+    fn set_next(&mut self, idx: u32, next: u32) {
+        if let Some(b) = self.buckets.get_mut(idx as usize) {
+            b.next = next;
         }
     }
 
@@ -619,25 +612,26 @@ impl HashData {
         let mut idx = self.head(ts, h as u64);
         while idx != INVALID {
             let b = self.buckets.get(idx as usize)?;
-            if matches!(b.key, ArrayKey::Int(k) if k == h) {
+            if matches!(b.key, ArrayKey::Int(k) if k == h) && b.val.is_some() {
                 return Some(idx);
             }
-            idx = self.next_of(ts, idx);
+            idx = b.next;
         }
         None
     }
 
     /// `zend_hash_str_find_bucket`: equal hash, then equal bytes.
+    #[inline]
     fn find_str(&self, ts: u32, s: &[u8], h: u64) -> Option<u32> {
         let mut idx = self.head(ts, h);
         while idx != INVALID {
             let b = self.buckets.get(idx as usize)?;
             if let ArrayKey::Str(k) = &b.key {
-                if k.hash_value() == h && same_bytes(k.as_bytes(), s) {
+                if k.hash_value() == h && same_bytes(k.as_bytes(), s) && b.val.is_some() {
                     return Some(idx);
                 }
             }
-            idx = self.next_of(ts, idx);
+            idx = b.next;
         }
         None
     }
@@ -651,36 +645,43 @@ impl HashData {
         while idx != INVALID {
             let b = self.buckets.get(idx as usize)?;
             if let ArrayKey::Str(k) = &b.key {
-                if ZStr::ptr_eq(k, key)
-                    || (k.hash_value() == h && same_bytes(k.as_bytes(), key.as_bytes()))
+                if (ZStr::ptr_eq(k, key)
+                    || (k.hash_value() == h && same_bytes(k.as_bytes(), key.as_bytes())))
+                    && b.val.is_some()
                 {
                     return Some(idx);
                 }
             }
-            idx = self.next_of(ts, idx);
+            idx = b.next;
         }
         None
+    }
+
+    /// Looks up a string key by identical pointer first, then hash and bytes.
+    #[inline]
+    fn get_str_identical_val<'a>(&'a self, ts: u32, key: &ZStr) -> Option<&'a Value> {
+        let idx = self.find_zstr(ts, key)?;
+        self.buckets.get(idx as usize)?.val.as_ref()
     }
 
     /// Rebuilds every chain over the buckets as they stand, holes kept
     /// (`zend_hash_rehash` without compaction).
     #[allow(clippy::cast_possible_truncation)]
     fn relink(&mut self, ts: u32) {
-        if self.index.len() != ts as usize * 3 {
+        if self.index.len() != ts as usize {
             self.index = new_index(ts);
+        } else {
+            self.index.fill(INVALID);
         }
-        let (heads, links) = self.index.split_at_mut(ts as usize * 2);
-        heads.fill(INVALID);
-        let mask = heads.len() - 1;
-        for (i, b) in self.buckets.iter().enumerate() {
+        let mask = ts as usize - 1;
+        for (i, b) in self.buckets.iter_mut().enumerate() {
             if b.val.is_none() {
+                b.next = INVALID;
                 continue;
             }
             let s = (b.key.hash() as usize) & mask;
-            if let Some(l) = links.get_mut(i) {
-                *l = heads[s];
-            }
-            heads[s] = to_u32(i);
+            b.next = self.index[s];
+            self.index[s] = to_u32(i);
         }
     }
 
@@ -690,22 +691,25 @@ impl HashData {
         let b = self.buckets.get(idx as usize)?;
         b.val.as_ref()?;
         let s = hash_slot(ts, b.key.hash());
-        let next = self.next_of(ts, idx);
+        let next = b.next;
         let head = self.index.get(s).copied().unwrap_or(INVALID);
         if head == idx {
             self.index[s] = next;
         } else {
             let mut p = head;
             while p != INVALID {
-                let pn = self.next_of(ts, p);
+                let pn = self.buckets.get(p as usize).map_or(INVALID, |b| b.next);
                 if pn == idx {
-                    self.set_next(ts, p, next);
+                    if let Some(prev) = self.buckets.get_mut(p as usize) {
+                        prev.next = next;
+                    }
                     break;
                 }
                 p = pn;
             }
         }
         let b = self.buckets.get_mut(idx as usize)?;
+        b.next = INVALID;
         let val = b.val.take();
         if matches!(b.key, ArrayKey::Str(_)) {
             b.key = ArrayKey::Int(0);
@@ -1010,6 +1014,7 @@ impl HashTable {
                 buckets.extend(v.into_iter().enumerate().map(|(i, val)| Bucket {
                     val,
                     key: ArrayKey::Int(idx_key(i)),
+                    next: INVALID,
                 }));
                 buckets
             }
@@ -1474,6 +1479,13 @@ impl HashTable {
         d.buckets.get(idx as usize)?.val.as_ref()
     }
 
+    /// Looks up a string key with identical pointer check first (`zend_hash_find`).
+    #[inline]
+    #[must_use]
+    pub fn get_str_identical_val(&self, key: &ZStr) -> Option<&Value> {
+        self.get_zstr(key)
+    }
+
     /// Looks up an exact string key (no numeric normalization;
     /// `zend_hash_str_find`).
     #[must_use]
@@ -1651,7 +1663,7 @@ impl HashTable {
                 Some((key, v))
             })
             .chain(buckets.iter_mut().filter_map(|b| {
-                let Bucket { val, key } = b;
+                let Bucket { val, key, .. } = b;
                 let key: &ArrayKey = key;
                 val.as_mut().map(|v| (key, v))
             }))
@@ -2112,7 +2124,7 @@ impl HashTable {
             self.next_free = idx_key(n);
         } else {
             let mut buckets = Vec::with_capacity(cap);
-            buckets.extend(items.into_iter().map(|it| Bucket::new(it.key, it.val)));
+            buckets.extend(items.into_iter().map(|it| Bucket::new(it.key, it.val, INVALID)));
             self.store = Store::Hash(HashData {
                 buckets,
                 index: new_index(self.table_size),
@@ -2195,7 +2207,7 @@ impl HashTable {
         }
         let store = std::mem::replace(&mut self.store, Store::Uninit);
         let mut buckets: Vec<Bucket> = Vec::with_capacity(self.table_size as usize);
-        buckets.extend(into_entries(store).map(|(k, v)| Bucket::new(k, v)));
+        buckets.extend(into_entries(store).map(|(k, v)| Bucket::new(k, v, INVALID)));
         let n = buckets.len();
         self.store = Store::Hash(HashData {
             buckets,
@@ -2686,10 +2698,11 @@ impl Clone for HashTable {
             Store::Hash(d) => {
                 let mut buckets = Vec::with_capacity(cap.max(d.buckets.len()));
                 buckets.extend(d.buckets.iter().map(|b| match &b.val {
-                    Some(v) => Bucket::new(b.key.clone(), dup_val(v)),
+                    Some(v) => Bucket::new(b.key.clone(), dup_val(v), INVALID),
                     None => Bucket {
                         val: None,
                         key: ArrayKey::Int(0),
+                        next: INVALID,
                     },
                 }));
                 out.store = Store::Hash(HashData {
@@ -3184,8 +3197,7 @@ mod tests {
     #[test]
     fn element_layout_matches_zend() {
         // A packed element is a bare value (`zval *arPacked`), a hash
-        // bucket a value plus a 16-byte key (`Bucket`: zval + h + key);
-        // with a 16-byte value these are php-src's 16 and 32 bytes.
+        // bucket a value plus a 16-byte key and 4-byte collision link (`Bucket`).
         assert_eq!(
             std::mem::size_of::<Option<Value>>(),
             std::mem::size_of::<Value>()
@@ -3193,8 +3205,17 @@ mod tests {
         assert_eq!(std::mem::size_of::<ArrayKey>(), 16);
         assert_eq!(
             std::mem::size_of::<Bucket>(),
-            std::mem::size_of::<Value>() + 16
+            std::mem::size_of::<Value>() + 24
         );
+    }
+
+    #[test]
+    fn hash_index_is_compacted_to_four_bytes_per_slot() {
+        let t = HashTable::with_capacity_mixed(16);
+        let Store::Hash(d) = &t.store else { panic!() };
+        assert_eq!(d.index.len(), t.table_size() as usize);
+        assert_eq!(std::mem::size_of_val(&d.index[0]), 4);
+        assert!(d.index.iter().all(|&x| x == u32::MAX));
     }
 
     #[test]
@@ -3627,7 +3648,15 @@ mod tests {
         t.insert("alpha", Value::Int(1));
         assert_eq!(t.get_zstr(&k).and_then(Value::as_int), Some(2));
         assert_eq!(
+            t.get_str_identical_val(&k).and_then(Value::as_int),
+            Some(2)
+        );
+        assert_eq!(
             t.get_zstr(&ZStr::from("beta")).and_then(Value::as_int),
+            Some(2)
+        );
+        assert_eq!(
+            t.get_str_identical_val(&ZStr::from("beta")).and_then(Value::as_int),
             Some(2)
         );
         assert!(t.get_zstr(&ZStr::from("gamma")).is_none());
