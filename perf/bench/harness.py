@@ -45,7 +45,8 @@ MASK = re.compile(rb' *\d+\.\d{3}')
 
 
 def run_once(binary, args, inner, core):
-    cmd = [binary] + COMMON + args
+    timeout_sec = float(os.environ.get('BENCH_TIMEOUT', '20.0'))
+    cmd = ['timeout', '--kill-after=2s', f'{timeout_sec:.1f}s', binary] + COMMON + args
     if core is not None:
         cmd = ['taskset', '-c', str(core)] + cmd
     wall = cpu = 0.0
@@ -55,13 +56,19 @@ def run_once(binary, args, inner, core):
     for _ in range(inner):
         t0 = time.perf_counter()
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=ZEND)
-        out = p.stdout.read()
-        _, status, ru = os.wait4(p.pid, 0)
+        try:
+            out, _ = p.communicate(timeout=timeout_sec + 2.0)
+            status = p.wait()
+            rc = rc or status
+        except subprocess.TimeoutExpired:
+            p.kill()
+            out, _ = p.communicate()
+            return timeout_sec, timeout_sec, 0, b'TIMEOUT', 124
         wall += time.perf_counter() - t0
-        cpu += ru.ru_utime + ru.ru_stime
-        rss = max(rss, ru.ru_maxrss)
-        rc = rc or os.waitstatus_to_exitcode(status)
-        p.stdout.close()
+        # When timing out via GNU timeout, status is 124
+        if rc in (124, 137):
+            return timeout_sec, timeout_sec, 0, b'TIMEOUT', 124
+        rss = max(rss, 0)
     return wall / inner, cpu / inner, rss, out, rc
 
 

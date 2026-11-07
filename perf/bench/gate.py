@@ -60,20 +60,39 @@ def backend():
 BACKEND = None
 
 
-def count(binary, args):
-    """User-space instructions of one run of `binary args`."""
+def count(binary, args, timeout=None):
+    """User-space instructions of one run of `binary args` with a hard timeout."""
+    if timeout is None:
+        timeout = float(os.environ.get('GATE_TIMEOUT', '60.0' if BACKEND == 'callgrind' else '15.0'))
     cmd = [binary] + COMMON + args
+    timeout_cmd = ['timeout', '--kill-after=2s', f'{timeout:.1f}s']
     if BACKEND == 'perf':
         full = ['sudo', '-n', 'perf', 'stat', '-x', ',', '-e', 'instructions:u', '--',
-                'setpriv', f'--reuid={os.getuid()}', f'--regid={os.getgid()}', '--init-groups'] + cmd
-        p = subprocess.run(full, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=ZEND)
+                'setpriv', f'--reuid={os.getuid()}', f'--regid={os.getgid()}', '--init-groups'] + timeout_cmd + cmd
+        try:
+            p = subprocess.run(full, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=ZEND,
+                               timeout=timeout + 5.0)
+        except subprocess.TimeoutExpired:
+            subprocess.run(['sudo', '-n', 'pkill', '-9', '-f', os.path.basename(binary)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            raise RuntimeError(f'timed out after {timeout}s (hard kill)')
+        if p.returncode in (124, 137):
+            raise RuntimeError(f'timed out after {timeout}s (exit {p.returncode})')
         for line in p.stderr.decode(errors='replace').splitlines():
             f = line.split(',')
             if len(f) > 2 and 'instructions' in f[2]:
                 return int(f[0]), p.returncode
         raise RuntimeError(f'no instruction count for {cmd}: {p.stderr[-500:]!r}')
-    full = ['valgrind', '--tool=callgrind', '--callgrind-out-file=/dev/null'] + cmd
-    p = subprocess.run(full, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=ZEND)
+    full = ['valgrind', '--tool=callgrind', '--callgrind-out-file=/dev/null'] + timeout_cmd + cmd
+    try:
+        p = subprocess.run(full, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=ZEND,
+                           timeout=timeout + 10.0)
+    except subprocess.TimeoutExpired:
+        subprocess.run(['pkill', '-9', '-f', os.path.basename(binary)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        raise RuntimeError(f'timed out after {timeout}s (hard kill)')
+    if p.returncode in (124, 137):
+        raise RuntimeError(f'timed out after {timeout}s (exit {p.returncode})')
     m = re.search(rb'Collected : (\d+)', p.stderr)
     if not m:
         raise RuntimeError(f'no Ir for {cmd}')
