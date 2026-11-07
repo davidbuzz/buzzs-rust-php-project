@@ -280,6 +280,10 @@ pub struct PendingCall {
     pub called: Option<Rc<Class>>,
     /// Arguments by position (`None` = not passed).
     pub args: Vec<Option<Value>>,
+    /// Fast inline argument buffer avoiding temporary Vec allocation.
+    pub inline_args: [Option<Value>; 6],
+    /// Count of inline arguments stored in `inline_args`.
+    pub inline_count: u8,
     /// Extra named arguments (collected by a variadic or `__call`).
     pub named: Vec<(ZStr, Value)>,
     /// The closure object being called.
@@ -356,6 +360,18 @@ impl PendingCall {
             pfa: None,
             strict: false,
             dynamic: false,
+            inline_args: [None, None, None, None, None, None],
+            inline_count: 0,
+        }
+    }
+
+    /// Total number of arguments currently stored in this pending call.
+    #[inline(always)]
+    pub fn arg_count(&self) -> usize {
+        if self.inline_count > 0 {
+            self.inline_count as usize
+        } else {
+            self.args.len()
         }
     }
 }
