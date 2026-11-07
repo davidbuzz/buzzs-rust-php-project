@@ -91,6 +91,9 @@ fn var_dump_level(
     let deref;
     let value = match value {
         Value::Reference(r) => {
+            // php-src prints the `&` marker only when a reference has `refcount > 1`
+            // (i.e. truly shared, matching `mysqli_result_references`). If `r.refcount() == 1`,
+            // format the inner value without the leading `&`.
             is_ref = r.refcount() > 1;
             deref = r.get();
             &deref
