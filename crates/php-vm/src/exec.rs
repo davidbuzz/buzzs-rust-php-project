@@ -997,6 +997,9 @@ impl Vm {
                 Ok(e) => e,
                 Err(t) => return Err(self.abandon_unwinding(t, base)),
             };
+            if fidx <= base {
+                return Err(Throw::Exception(exc));
+            }
             let popped = self.frames.pop();
             if let Some(p) = &popped {
                 // `i_free_compiled_variables`: released values may be

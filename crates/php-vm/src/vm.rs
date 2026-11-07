@@ -1230,11 +1230,10 @@ impl Frame {
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
             if let Some(slot) = st.find(name.as_bytes()) {
-                if let Some(val) = st.slots.get(slot as usize).cloned().flatten() {
-                    if let Some(cv) = self.cvs.get_mut(i) {
-                        if let Some(old) = cv.set(Some(val)) {
-                            crate::gc::release_duplicate(old);
-                        }
+                let val = st.slots.get(slot as usize).cloned().flatten();
+                if let Some(cv) = self.cvs.get_mut(i) {
+                    if let Some(old) = cv.set(val) {
+                        crate::gc::release_duplicate(old);
                     }
                 }
             }

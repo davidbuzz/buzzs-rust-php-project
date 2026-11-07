@@ -576,7 +576,8 @@ impl Vm {
             return Err(Value::Object(o));
         };
         if name.eq_ignore_ascii_case(b"__invoke") {
-            if let Some(call) = self.closure_user_call(&o) {
+            if let Some(mut call) = self.closure_user_call(&o) {
+                call.magic_name = Some(ZStr::from("__invoke"));
                 self.push_pending(call);
                 return Ok(());
             }
@@ -628,7 +629,8 @@ impl Vm {
             ));
         };
         if name.eq_ignore_ascii_case(b"__invoke") {
-            if let Some(call) = self.closure_user_call(&o) {
+            if let Some(mut call) = self.closure_user_call(&o) {
+                call.magic_name = Some(ZStr::from("__invoke"));
                 self.push_pending(call);
                 return Ok(());
             }

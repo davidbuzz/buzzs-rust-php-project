@@ -2057,6 +2057,13 @@ impl Vm {
                 }
             }
             RBase::Globals => {
+                if let Some((RSeg::Dim(k), rest)) = segs.split_first() {
+                    let k = self.to_zstr(k)?;
+                    let g = self.globals.clone();
+                    let slot = g.borrow_mut().find_or_add(k.as_bytes()) as usize;
+                    let base = RBase::Var(g, slot);
+                    return self.write_place_inner(base, rest, wop, quiet);
+                }
                 return Err(self.make_throw(
                     "Error",
                     "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
