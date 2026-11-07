@@ -1259,11 +1259,22 @@ pub struct PropCacheEntry {
     pub flags: u8,
 }
 
-/// An [`OpArray::fcall_cache`] entry. User functions are held weakly: the
-/// function's own op array may hold the entry (recursion), and a strong
-/// `Rc` would make an unfreeable cycle.
+/// An [`OpArray::fcall_cache`] entry. User functions and classes are held
+/// weakly: the function's own op array may hold the entry (recursion), and a
+/// strong `Rc` would make an unfreeable cycle.
 #[derive(Debug, Clone)]
-pub enum CachedFunc {
+pub struct CachedFunc {
+    /// The function handle.
+    pub func: CachedFuncKind,
+    /// Declaring class (for methods).
+    pub scope: Option<std::rc::Weak<crate::class::Class>>,
+    /// Called class (`static::class`).
+    pub called: Option<std::rc::Weak<crate::class::Class>>,
+}
+
+/// The cached function body.
+#[derive(Debug, Clone)]
+pub enum CachedFuncKind {
     /// A builtin.
     Builtin(Rc<crate::func::Builtin>),
     /// A user function.
@@ -1273,18 +1284,60 @@ pub enum CachedFunc {
 impl CachedFunc {
     /// The cache entry for `f`.
     pub fn new(f: &crate::func::Func) -> Self {
-        match f {
-            crate::func::Func::Builtin(b) => CachedFunc::Builtin(b.clone()),
-            crate::func::Func::User(u) => CachedFunc::User(Rc::downgrade(u)),
+        let func = match f {
+            crate::func::Func::Builtin(b) => CachedFuncKind::Builtin(b.clone()),
+            crate::func::Func::User(u) => CachedFuncKind::User(Rc::downgrade(u)),
+        };
+        CachedFunc {
+            func,
+            scope: None,
+            called: None,
+        }
+    }
+
+    /// The cache entry for a static method `f` with declaring scope and called class.
+    pub fn new_static(
+        f: &crate::func::Func,
+        scope: Option<&Rc<crate::class::Class>>,
+        called: Option<&Rc<crate::class::Class>>,
+    ) -> Self {
+        let func = match f {
+            crate::func::Func::Builtin(b) => CachedFuncKind::Builtin(b.clone()),
+            crate::func::Func::User(u) => CachedFuncKind::User(Rc::downgrade(u)),
+        };
+        CachedFunc {
+            func,
+            scope: scope.map(Rc::downgrade),
+            called: called.map(Rc::downgrade),
         }
     }
 
     /// The cached function, if it is still alive.
     pub fn get(&self) -> Option<crate::func::Func> {
-        match self {
-            CachedFunc::Builtin(b) => Some(crate::func::Func::Builtin(b.clone())),
-            CachedFunc::User(w) => w.upgrade().map(crate::func::Func::User),
+        match &self.func {
+            CachedFuncKind::Builtin(b) => Some(crate::func::Func::Builtin(b.clone())),
+            CachedFuncKind::User(w) => w.upgrade().map(crate::func::Func::User),
         }
+    }
+
+    /// The cached call target with declaring scope and called class.
+    pub fn get_call(
+        &self,
+    ) -> Option<(
+        crate::func::Func,
+        Option<Rc<crate::class::Class>>,
+        Option<Rc<crate::class::Class>>,
+    )> {
+        let f = self.get()?;
+        let scope = match &self.scope {
+            Some(w) => Some(w.upgrade()?),
+            None => None,
+        };
+        let called = match &self.called {
+            Some(w) => Some(w.upgrade()?),
+            None => None,
+        };
+        Some((f, scope, called))
     }
 }
 

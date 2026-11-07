@@ -232,6 +232,40 @@ impl Vm {
         cache[slot] = Some(crate::opcode::CachedFunc::new(func));
     }
 
+    #[inline]
+    fn static_site_cached(
+        &self,
+    ) -> Option<(
+        Func,
+        Option<Rc<Class>>,
+        Option<Rc<Class>>,
+    )> {
+        let slot = self.fallback_site_slot();
+        self.frame()
+            .code
+            .fcall_cache
+            .borrow()
+            .get(slot)
+            .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get_call))
+    }
+
+    #[cold]
+    fn cache_static_site(
+        &self,
+        func: &Func,
+        scope: Option<&Rc<Class>>,
+        called: Option<&Rc<Class>>,
+    ) {
+        let slot = self.fallback_site_slot();
+        let code = &self.frame().code;
+        let size = (code.literals.len() + code.ops.len()).max(slot + 1);
+        let mut cache = code.fcall_cache.borrow_mut();
+        if cache.len() <= slot {
+            cache.resize(size, None);
+        }
+        cache[slot] = Some(crate::opcode::CachedFunc::new_static(func, scope, called));
+    }
+
     pub(crate) fn op_init_dyn_call(&mut self, callee: Value) -> VmResult<()> {
         let callee = callee.deref();
         // `$closure()` (`zend_init_dynamic_call_object` of a closure): the
@@ -846,6 +880,16 @@ impl Vm {
     }
 
     pub(crate) fn op_init_static_call(&mut self, class: &ClassSpec, name: Operand) -> VmResult<()> {
+        let is_literal = matches!(class, ClassSpec::Named(_)) && matches!(name, Operand::Lit(_));
+        if is_literal {
+            if let Some((func, scope, called)) = self.static_site_cached() {
+                let mut call = PendingCall::new(func);
+                call.scope = scope;
+                call.called = called;
+                self.push_pending(call);
+                return Ok(());
+            }
+        }
         // The op's run-time cache slot (see `rtcache`).
         if let Some(call) = self.static_call_hit(class, name) {
             self.push_pending(call);
@@ -870,6 +914,14 @@ impl Vm {
         }
         let call = self.static_method_call(&cls, &name, forward)?;
         self.static_call_fill(class, name_op, &cls, &call);
+        if is_literal
+            && call.this.is_none()
+            && call.magic_name.is_none()
+            && !cls.is_trait()
+            && call.func.flags() & flags::VISIBILITY == flags::PUBLIC
+        {
+            self.cache_static_site(&call.func, call.scope.as_ref(), call.called.as_ref());
+        }
         if cls.is_trait() {
             // `zend_std_get_static_method()`: the resolved method (or the
             // `__callStatic` trampoline) is scoped to the trait itself.
