@@ -33,11 +33,38 @@
 use crate::class::Class;
 use crate::func::{flags, Method};
 use crate::object;
-use crate::opcode::{ClassSpec, Operand};
+use crate::opcode::{ClassSpec, Operand, PlaceBase, PlaceId};
 use crate::vm::{FrameKind, PendingCall, Vm, VmResult};
 use php_runtime::{Value, ZStr};
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
+
+/// A cached static property entry for fast-path accesses.
+#[derive(Clone, Debug)]
+pub struct StaticPropCacheEntry {
+    /// Address of calling scope (`Class`), 0 if no scope.
+    pub scope_ptr: usize,
+    /// Address of called class (`Class`), 0 if no called class.
+    pub called_ptr: usize,
+    /// Address of the resolved class holding the static property.
+    pub class_ptr: usize,
+    /// Direct storage cell of the static property.
+    pub cell: Rc<RefCell<Value>>,
+    /// Whether the property is untyped/plain (can mutate directly in place without re-checking type hints or visibility).
+    pub fast_plain: bool,
+}
+
+impl Default for StaticPropCacheEntry {
+    fn default() -> Self {
+        Self {
+            scope_ptr: 0,
+            called_ptr: 0,
+            class_ptr: 0,
+            cell: Rc::new(RefCell::new(Value::Null)),
+            fast_plain: false,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests;
@@ -60,6 +87,8 @@ pub struct RuntimeCache {
     class_consts: RefCell<Vec<Vec<MemberSlot>>>,
     /// Static property slots of `A::$name` places, by name literal.
     static_props: RefCell<Vec<Vec<MemberSlot>>>,
+    /// Fast static property entries, by place id.
+    pub static_prop_entries: RefCell<Vec<StaticPropCacheEntry>>,
     /// `InitStaticCall` method resolutions, by method-name literal.
     static_calls: RefCell<Vec<Vec<MemberSlot>>>,
     /// Global variable resolutions, by place id.
@@ -72,6 +101,7 @@ impl RuntimeCache {
         self.consts.borrow_mut().clear();
         self.class_consts.borrow_mut().clear();
         self.static_props.borrow_mut().clear();
+        self.static_prop_entries.borrow_mut().clear();
         self.static_calls.borrow_mut().clear();
         self.globals.borrow_mut().clear();
     }
@@ -130,6 +160,12 @@ enum Target {
     Value(Value),
     /// Index into the class's `consts` / `static_props`.
     Index(usize),
+    /// Direct storage cell and typed flag of a static property.
+    StaticProp {
+        cell: Rc<RefCell<Value>>,
+        typed: bool,
+        idx: usize,
+    },
     /// The resolved method of a static call (a static method, or an
     /// instance method called with a compatible `$this`).
     Method(Weak<Method>),
@@ -185,7 +221,7 @@ fn class_const_value(cls: &Class, e: &MemberSlot) -> Option<Value> {
     match &e.target {
         Target::Value(v) => Some(v.clone()),
         Target::Index(idx) => cls.consts.get(*idx)?.value.borrow().clone(),
-        Target::Method(_) => None,
+        Target::StaticProp { .. } | Target::Method(_) => None,
     }
 }
 
@@ -275,8 +311,8 @@ impl Vm {
                 }
                 self.peek_named_class(*l)?
             }
-            ClassSpec::SelfClass => self.scope()?,
-            ClassSpec::Parent => self.scope()?.parent.clone()?,
+            ClassSpec::SelfClass => self.frame().scope.clone()?,
+            ClassSpec::Parent => self.frame().scope.as_ref()?.parent.clone()?,
             ClassSpec::Static => self.rt_called()?,
             ClassSpec::Dyn(_) => return None,
         };
@@ -287,11 +323,15 @@ impl Vm {
     }
 
     /// Whether a slot's access check holds for the calling scope.
-    #[inline]
+    #[inline(always)]
     fn rt_access_ok(&self, access: &Access) -> bool {
         match access {
             Access::Public => true,
-            Access::From(w) => self.scope().is_some_and(|s| Rc::as_ptr(&s) == w.as_ptr()),
+            Access::From(w) => self
+                .frame()
+                .scope
+                .as_ref()
+                .is_some_and(|s| Rc::as_ptr(s) == w.as_ptr()),
         }
     }
 
@@ -485,7 +525,7 @@ impl Vm {
     /// The cached value of the class constant named by literal `name`
     /// for the class `spec` resolves to. `dyn_class` is `Some` for a
     /// `ClassSpec::Dyn` spec: the class [`Vm::rt_dyn_class`] found, if any.
-    #[inline]
+    #[inline(always)]
     fn class_const_hit(
         &self,
         spec: &ClassSpec,
@@ -513,6 +553,18 @@ impl Vm {
             {
                 if class.strong_count() > 0 {
                     return Some(v.clone());
+                }
+            }
+        } else if let ClassSpec::SelfClass = spec {
+            if let Some(scope) = &self.frame().scope {
+                if let Some(e) = entries
+                    .iter()
+                    .find(|e| Rc::as_ptr(scope) == e.class.as_ptr() && self.rt_access_ok(&e.access))
+                {
+                    if let Target::Value(v) = &e.target {
+                        return Some(v.clone());
+                    }
+                    return class_const_value(scope, e);
                 }
             }
         }
@@ -603,18 +655,44 @@ impl Vm {
         name: u32,
     ) -> Option<(Rc<RefCell<Value>>, bool)> {
         let cache = self.frame().code.rt_cache.static_props.borrow();
-        let (cls, e) = self.rt_find(spec, cache.get(name as usize)?)?;
-        let Target::Index(idx) = e.target else {
-            return None;
-        };
-        let sp = cls.static_props.get(idx)?;
-        let typed = !sp.ty.as_ref().is_none_or(crate::types::TypeDecl::is_mixed);
-        // What `static_prop_slot` does on every fetch of an initialised
-        // property of a class (nothing for an untyped one).
-        if typed {
-            crate::typed_refs::note_static_prop(sp);
+        let entries = cache.get(name as usize)?;
+        if let ClassSpec::Named(l) = spec {
+            if let Some(e) = entries
+                .iter()
+                .find(|e| e.class_lit == *l && matches!(e.access, Access::Public))
+            {
+                if let Target::StaticProp { cell, typed, idx } = &e.target {
+                    if *typed {
+                        if let Some(cls) = e.class.upgrade() {
+                            if let Some(sp) = cls.static_props.get(*idx) {
+                                crate::typed_refs::note_static_prop(sp);
+                            }
+                        }
+                    }
+                    return Some((cell.clone(), *typed));
+                }
+            }
         }
-        Some((sp.cell.clone(), typed))
+        let (cls, e) = self.rt_find(spec, entries)?;
+        match &e.target {
+            Target::StaticProp { cell, typed, idx } => {
+                if *typed {
+                    if let Some(sp) = cls.static_props.get(*idx) {
+                        crate::typed_refs::note_static_prop(sp);
+                    }
+                }
+                Some((cell.clone(), *typed))
+            }
+            Target::Index(idx) => {
+                let sp = cls.static_props.get(*idx)?;
+                let typed = !sp.ty.as_ref().is_none_or(crate::types::TypeDecl::is_mixed);
+                if typed {
+                    crate::typed_refs::note_static_prop(sp);
+                }
+                Some((sp.cell.clone(), typed))
+            }
+            _ => None,
+        }
     }
 
     /// Fills the slot of an `A::$name` place base that just resolved to a
@@ -648,13 +726,113 @@ impl Vm {
             ClassSpec::Named(c) => *c,
             _ => NO_CLASS_LIT,
         };
+        let typed = !sp.ty.as_ref().is_none_or(crate::types::TypeDecl::is_mixed);
         let slot = MemberSlot {
             class_lit,
             class: Rc::downgrade(&cls),
             access,
-            target: Target::Index(idx),
+            target: Target::StaticProp {
+                cell: sp.cell.clone(),
+                typed,
+                idx,
+            },
         };
         put_member(&self.frame().code.rt_cache.static_props, l as usize, slot);
+    }
+
+    /// Monomorphic probe of the static property cache for place `pid`.
+    #[inline(always)]
+    pub(crate) fn static_prop_cache_probe(&self, pid: PlaceId) -> Option<StaticPropCacheEntry> {
+        let frame = self.frame();
+        if frame.kind == FrameKind::Builtin {
+            return None;
+        }
+        let cache = frame.code.rt_cache.static_prop_entries.borrow();
+        let entry = cache.get(pid as usize)?;
+        if entry.class_ptr == 0 {
+            return None;
+        }
+        let scope_ptr = frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+        let called_ptr = frame.called.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+
+        let place = frame.code.places.get(pid as usize)?;
+        let PlaceBase::StaticProp { class, .. } = &place.base else {
+            return None;
+        };
+        let ok = match class {
+            ClassSpec::SelfClass | ClassSpec::Parent => {
+                entry.scope_ptr == scope_ptr && entry.scope_ptr != 0
+            }
+            ClassSpec::Static => entry.called_ptr == called_ptr && entry.called_ptr != 0,
+            ClassSpec::Named(l) => {
+                (entry.scope_ptr == scope_ptr || entry.scope_ptr == 0)
+                    && (frame
+                        .code
+                        .class_cache
+                        .borrow()
+                        .get(*l as usize)
+                        .map_or(0, |w| w.as_ptr() as usize)
+                        == entry.class_ptr
+                        || entry.class_ptr != 0)
+            }
+            ClassSpec::Dyn(_) => false,
+        };
+        if ok {
+            Some(entry.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Fills the fast static property cache for place `pid`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn static_prop_cache_fill(
+        &self,
+        pid: PlaceId,
+        spec: &ClassSpec,
+        _name: u32,
+        cell: &Rc<RefCell<Value>>,
+        fast_plain: bool,
+    ) {
+        let frame = self.frame();
+        if frame.kind == FrameKind::Builtin {
+            return;
+        }
+        let scope_ptr = frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+        let called_ptr = frame.called.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+        let class_ptr = match spec {
+            ClassSpec::SelfClass => scope_ptr,
+            ClassSpec::Static => called_ptr,
+            ClassSpec::Parent => frame
+                .scope
+                .as_ref()
+                .and_then(|s| s.parent.as_ref())
+                .map_or(0, |p| Rc::as_ptr(p) as usize),
+            ClassSpec::Named(l) => frame
+                .code
+                .class_cache
+                .borrow()
+                .get(*l as usize)
+                .map_or(0, |w| w.as_ptr() as usize),
+            ClassSpec::Dyn(_) => 0,
+        };
+        if class_ptr == 0 {
+            return;
+        }
+        let entry = StaticPropCacheEntry {
+            scope_ptr,
+            called_ptr,
+            class_ptr,
+            cell: cell.clone(),
+            fast_plain,
+        };
+        let mut entries = frame.code.rt_cache.static_prop_entries.borrow_mut();
+        let idx = pid as usize;
+        if entries.len() <= idx {
+            entries.resize_with(idx + 1, StaticPropCacheEntry::default);
+        }
+        entries[idx] = entry;
     }
 
     // ------------------------------------------------------------------
