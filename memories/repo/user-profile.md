@@ -14,4 +14,5 @@ David Buzz (davidbuzz@gmail.com) runs the phprust port as a hands-off director: 
 - Wants README.md and FEATURE_GAP.md kept current with *measured* pass rates, plus runnable commands.
 - Cares about machine stability (the box OOM-crashed once; see [[phprust-resource-rules]]); stops services on request and runs/permits `sudo apt install` of dev packages. Passwordless `sudo -n` works.
 - Scope decisions are theirs; see [[phprust-scope-decisions]].
+- HIGHLY sensitive to wasted time: expects tight timeouts, fail-fast execution, zero pointless waiting on dead/stalled processes, and rigorous, realistic timing estimates.
 - Agents ALWAYS work in their own worktree and branch, never in the main checkout (CLAUDE.md "Parallel work"). When they say "fix it in master" they mean "land it in master", not "edit the shared checkout": on 6 Nov 2026 I started twelve fix-up agents directly in /home/buzz/phprust and they asked "these are supposed to be in worktrees?"; I moved them. Likewise "merge all, then ONE build": no per-branch or verifier builds (see [[phprust-one-build-rule]]).
