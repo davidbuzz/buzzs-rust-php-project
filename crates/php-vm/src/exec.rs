@@ -613,11 +613,27 @@ impl Vm {
                 }
             }
         };
-        match kind {
-            FastKind::Get => Some(self.get_auto_global_get()),
-            FastKind::AutoGlobal(idx) => Some(self.get_auto_global(idx)),
-            FastKind::None => None,
+        let (idx, val) = match kind {
+            FastKind::Get => (0, self.get_auto_global_get()),
+            FastKind::AutoGlobal(idx) => (idx, self.get_auto_global(idx)),
+            FastKind::None => return None,
+        };
+        if val.is_null() {
+            if let Some(slot) = self.ext.auto_globals.cached_slots[idx] {
+                if self
+                    .globals
+                    .borrow()
+                    .slots
+                    .get(slot as usize)
+                    .map_or(true, |s| s.is_none())
+                {
+                    return None;
+                }
+            } else {
+                return None;
+            }
         }
+        Some(val)
     }
 
     /// `ZEND_ASSIGN` with a CV result operand (`$cv = val`, the

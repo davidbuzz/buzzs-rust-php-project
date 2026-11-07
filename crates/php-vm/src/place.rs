@@ -1777,12 +1777,12 @@ impl Vm {
                 let n = self.to_zstr(&n)?;
                 let bytes = n.as_bytes();
                 let g = self.globals.clone();
-                let idx = if bytes == b"_GET" {
-                    if let Some(i) = self.ext.auto_globals.cached_slots[0] {
+                let idx = if let Some(ag_idx) = crate::auto_globals::index(bytes) {
+                    if let Some(i) = self.ext.auto_globals.cached_slots[ag_idx] {
                         Some(i)
                     } else {
                         let i = g.borrow_mut().find_or_add(bytes);
-                        self.ext.auto_globals.cached_slots[0] = Some(i);
+                        self.ext.auto_globals.cached_slots[ag_idx] = Some(i);
                         Some(i)
                     }
                 } else if write || is_superglobal_name(bytes) {
@@ -3838,7 +3838,25 @@ impl Vm {
                 }
             };
             if let Some(idx) = direct_auto_global {
-                return Ok(self.get_auto_global(idx));
+                let val = self.get_auto_global(idx);
+                if val.is_null() {
+                    let is_unset = if let Some(slot) = self.ext.auto_globals.cached_slots[idx] {
+                        self.globals
+                            .borrow()
+                            .slots
+                            .get(slot as usize)
+                            .map_or(true, |s| s.is_none())
+                    } else {
+                        true
+                    };
+                    if is_unset {
+                        let name = ZStr::from(crate::auto_globals::AUTO_GLOBAL_NAMES[idx]);
+                        let msg = self.undefined_place_var_msg(pid, &name);
+                        self.warning(&msg)?;
+                        return Ok(Value::Null);
+                    }
+                }
+                return Ok(val);
             }
         }
         let head = {

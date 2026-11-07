@@ -131,10 +131,12 @@ impl Vm {
         if let Some(callback) = self.ext.auto_globals.armed[i].take() {
             callback(self, AUTO_GLOBAL_NAMES[i]);
         }
-        if i == 0 && self.ext.auto_globals.cached_slots[0].is_none() {
+        if self.ext.auto_globals.cached_slots[i].is_none() {
             let mut g = self.globals.borrow_mut();
-            let slot = g.find_or_add(name);
-            if g.slots[slot as usize].is_none() {
+            if let Some(slot) = g.find(name) {
+                self.ext.auto_globals.cached_slots[i] = Some(slot);
+            } else if i == 0 {
+                let slot = g.find_or_add(name);
                 let arr = self
                     .ext
                     .auto_globals
@@ -142,8 +144,8 @@ impl Vm {
                     .clone()
                     .unwrap_or_else(|| Value::Array(ZArray::new()));
                 g.slots[slot as usize] = Some(arr);
+                self.ext.auto_globals.cached_slots[0] = Some(slot);
             }
-            self.ext.auto_globals.cached_slots[0] = Some(slot);
         }
         true
     }
@@ -161,8 +163,11 @@ impl Vm {
     pub fn get_auto_global(&mut self, idx: usize) -> Value {
         if let Some(slot) = self.ext.auto_globals.cached_slots[idx] {
             let g = self.globals.borrow();
-            if let Some(Some(val)) = g.slots.get(slot as usize) {
-                return val.deref();
+            if let Some(slot_val) = g.slots.get(slot as usize) {
+                return match slot_val {
+                    Some(val) => val.deref(),
+                    None => Value::Null,
+                };
             }
         }
         self.init_and_get_auto_global(idx)
@@ -172,32 +177,43 @@ impl Vm {
     /// and pre-initializing an array if not yet set in globals.
     #[cold]
     pub fn init_and_get_auto_global(&mut self, idx: usize) -> Value {
+        if let Some(slot) = self.ext.auto_globals.cached_slots[idx] {
+            let g = self.globals.borrow();
+            if let Some(slot_val) = g.slots.get(slot as usize) {
+                return match slot_val {
+                    Some(val) => val.deref(),
+                    None => Value::Null,
+                };
+            }
+        }
         let name = AUTO_GLOBAL_NAMES[idx];
         if let Some(callback) = self.ext.auto_globals.armed[idx].take() {
             callback(self, name);
         }
         let mut g = self.globals.borrow_mut();
-        let slot = g.find_or_add(name);
-        let val = if let Some(v) = &g.slots[slot as usize] {
-            v.deref()
-        } else {
-            let arr = if idx == 0 {
-                self.ext
-                    .auto_globals
-                    .get_array
-                    .clone()
-                    .unwrap_or_else(|| Value::Array(ZArray::new()))
-            } else {
-                Value::Array(ZArray::new())
+        if let Some(slot) = g.find(name) {
+            self.ext.auto_globals.cached_slots[idx] = Some(slot);
+            return match &g.slots[slot as usize] {
+                Some(v) => v.deref(),
+                None => Value::Null,
             };
-            g.slots[slot as usize] = Some(arr.clone());
-            arr
+        }
+        let slot = g.find_or_add(name);
+        let arr = if idx == 0 {
+            self.ext
+                .auto_globals
+                .get_array
+                .clone()
+                .unwrap_or_else(|| Value::Array(ZArray::new()))
+        } else {
+            Value::Array(ZArray::new())
         };
+        g.slots[slot as usize] = Some(arr.clone());
         self.ext.auto_globals.cached_slots[idx] = Some(slot);
         if idx == 0 && self.ext.auto_globals.get_array.is_none() {
-            self.ext.auto_globals.get_array = Some(val.clone());
+            self.ext.auto_globals.get_array = Some(arr.clone());
         }
-        val
+        arr
     }
 
     /// Runs the armed callbacks of the auto-globals the last compilation
