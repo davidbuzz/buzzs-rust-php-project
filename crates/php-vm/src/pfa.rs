@@ -141,6 +141,7 @@ impl Vm {
         const_args: u32,
         pfa_name: ZStr,
     ) -> VmResult<Value> {
+        call.materialize_args();
         let pfa = call.pfa.take().map(|b| *b).unwrap_or_default();
         let func = call.func.clone();
         if !func.is_user()
@@ -165,6 +166,19 @@ impl Vm {
         let magic = call.magic_name.clone();
         if is_magic {
             call.scope = self.find_class(b"Closure");
+        }
+        let is_closure_invoke = call
+            .magic_name
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
+            || (matches!(&func, Func::Builtin(b) if b.name.as_bytes() == b"__invoke")
+                && call.scope.as_ref().is_some_and(|s| s.lc_name.as_bytes() == b"closure"));
+        if is_closure_invoke {
+            let target = call.closure.take().or_else(|| call.this.clone());
+            call.this = target;
+            call.scope = self.find_class(b"Closure");
+            call.called = self.find_class(b"Closure");
+            call.magic_name = Some(ZStr::from("__invoke"));
         }
         let params: Vec<ParamInfo> = if is_magic {
             vec![ParamInfo {
@@ -193,19 +207,20 @@ impl Vm {
         } else {
             func.required() as usize
         };
-        let fname = match &magic {
-            Some(m) if call.func.is_closure() && m.eq_ignore_ascii_case(b"__invoke") => {
-                "Closure::__invoke".to_string()
+        let fname = if is_closure_invoke {
+            "Closure::__invoke".to_string()
+        } else {
+            match &magic {
+                Some(m) => match &call.scope {
+                    Some(sc) => format!(
+                        "{}::{}",
+                        object::display_name(&sc.name),
+                        m.to_string_lossy()
+                    ),
+                    None => m.to_string_lossy(),
+                },
+                None => self.func_display(&func, call.scope.as_ref()),
             }
-            Some(m) => match &call.scope {
-                Some(sc) => format!(
-                    "{}::{}",
-                    object::display_name(&sc.name),
-                    m.to_string_lossy()
-                ),
-                None => m.to_string_lossy(),
-            },
-            None => self.func_display(&func, call.scope.as_ref()),
         };
 
         // `zp_args_check`.
@@ -473,12 +488,6 @@ impl Vm {
                 _ => {}
             }
         }
-        let is_closure_invoke = call
-            .magic_name
-            .as_deref()
-            .is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
-            || (matches!(&func, Func::Builtin(b) if b.name.as_bytes() == b"__invoke")
-                && call.scope.as_ref().is_some_and(|s| s.lc_name.as_bytes() == b"closure"));
         for (i, off) in defaults_needed {
             let d = self.partial_default_src(&func, &params, i, call.scope.as_ref(), is_closure_invoke)?;
             param_src[off].push_str(" = ");

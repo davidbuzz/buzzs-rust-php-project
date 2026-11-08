@@ -184,9 +184,9 @@ pub(crate) fn is_numeric_long_type_only(s: &[u8]) -> bool {
     }
 }
 
-/// C `strtol(s, &end, 10)` with 64-bit `long`: skips leading `isspace()`
-/// characters, accepts a sign, saturates on overflow.  Returns the value and
-/// the number of bytes consumed (0 when no digits were found).
+/// C `strtol(s, &end, 0)` with 64-bit `long`: skips leading `isspace()`
+/// characters, accepts a sign, hex/oct/bin prefixes (`0x`, `0o`, `0b`), and saturates on overflow.
+/// Returns the value and the number of bytes consumed (0 when no digits were found).
 pub(crate) fn strtol(s: &[u8]) -> (i64, usize) {
     let mut p = 0;
     while p < s.len() && is_ws(s[p]) {
@@ -196,13 +196,26 @@ pub(crate) fn strtol(s: &[u8]) -> (i64, usize) {
     if matches!(s.get(p), Some(b'-' | b'+')) {
         p += 1;
     }
+    let (base, prefix_len): (i128, usize) = if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'x' | b'X') {
+        (16, 2)
+    } else if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'o' | b'O') {
+        (8, 2)
+    } else if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'b' | b'B') {
+        (2, 2)
+    } else {
+        (10, 0)
+    };
+    p += prefix_len;
     let digits_start = p;
     let mut acc: i128 = 0;
     while let Some(&c) = s.get(p) {
-        if !c.is_ascii_digit() {
-            break;
-        }
-        acc = (acc * 10 + i128::from(c - b'0')).min(i128::from(u64::MAX) + 1);
+        let d = match c {
+            b'0'..=b'9' if (c - b'0') < base as u8 => i128::from(c - b'0'),
+            b'a'..=b'f' if base == 16 => i128::from(c - b'a' + 10),
+            b'A'..=b'F' if base == 16 => i128::from(c - b'A' + 10),
+            _ => break,
+        };
+        acc = (acc * base + d).min(i128::from(u64::MAX) + 1);
         p += 1;
     }
     if p == digits_start {

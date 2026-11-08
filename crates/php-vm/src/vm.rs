@@ -382,10 +382,26 @@ impl PendingCall {
         }
     }
 
+    /// Move any inline arguments into `args`.
+    pub fn materialize_args(&mut self) {
+        if self.inline_count > 0 {
+            let n = self.inline_count as usize;
+            self.args.reserve(n);
+            for i in 0..n {
+                self.args.push(self.inline_args[i].take());
+            }
+            self.inline_count = 0;
+        }
+    }
+
     /// Whether this is a magic `__call` or `__callStatic` trampoline.
     #[inline(always)]
     pub fn is_magic_trampoline(&self) -> bool {
-        self.magic_name.is_some() && !self.func.is_closure()
+        self.magic_name.is_some()
+            && !self.func.is_closure()
+            && !(self.magic_name.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
+                && (self.closure.is_some()
+                    || self.scope.as_ref().is_some_and(|s| s.lc_name.as_bytes() == b"closure")))
     }
 }
 

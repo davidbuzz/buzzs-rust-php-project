@@ -311,7 +311,10 @@ impl Vm {
             params,
             required: 0,
             return_type: None,
-            flags: flags::PUBLIC | flags::VARIADIC | (d.func.flags() & flags::RETURN_REF),
+            flags: flags::PUBLIC
+                | flags::VARIADIC
+                | flags::CLOSURE
+                | (d.func.flags() & flags::RETURN_REF),
             handler: closure_invoke,
         };
         let cls = self.find_class(b"Closure");
@@ -319,6 +322,7 @@ impl Vm {
             this: Some(o.clone()),
             scope: cls.clone(),
             called: cls,
+            closure: Some(o.clone()),
             magic_name: Some(ZStr::from("__invoke")),
             ..PendingCall::new(Func::Builtin(Rc::new(tramp)))
         })

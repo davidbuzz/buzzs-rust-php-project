@@ -2618,6 +2618,8 @@ impl Vm {
             f.this = call.this.clone();
             f.scope = call.scope.clone();
             f.called = call.called.clone();
+            f.closure = call.closure.clone();
+            f.magic_name = self.magic_call_name.clone();
             f.observer_hidden = observer_hidden;
         }
         self.observer_begin_top();
