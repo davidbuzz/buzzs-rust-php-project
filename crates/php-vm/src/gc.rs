@@ -102,6 +102,7 @@ impl std::fmt::Debug for RootProvider {
 }
 
 /// No slot (`GC_INVALID`).
+#[allow(dead_code)]
 const NO_SLOT: usize = usize::MAX;
 
 /// The object root buffer (`GC_G(buf)`), laid out like php-src's: slot `i`

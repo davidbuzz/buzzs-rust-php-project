@@ -468,6 +468,12 @@ impl Obj {
         Obj::with_type_id(object, TypeId::of::<T>())
     }
 
+    /// Creates a dummy plain object (useful for tests and serialization mock contexts).
+    #[must_use]
+    pub fn dummy(class: impl Into<ZStr>) -> Self {
+        crate::plain::PlainObject::create(class, crate::array::ZArray::new())
+    }
+
     /// Wraps a VM object whose payload `T` starts with an `F`: the payload
     /// is a member of `F`'s family, and [`Obj::downcast_ref`] and
     /// [`Obj::payload_ptr`] for `F` reach that `F` part with the one type

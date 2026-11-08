@@ -16,7 +16,6 @@
 //!
 //! See `crates/php-vm/EXTENSIONS.md` for a walkthrough.
 
-use crate::builtins::sig::parse_sig;
 use crate::class::Class;
 use crate::func::{flags, Builtin, Func, Method};
 use crate::vm::Vm;

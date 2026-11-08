@@ -496,6 +496,7 @@ fn module_info(vm: &mut Vm) -> Vec<InfoItem> {
     ]
 }
 
+#[allow(dead_code)]
 fn parse_jit_mode(s: &str) -> (i64, i64, i64) {
     match JitConfig::parse(s) {
         Ok(cfg) => {

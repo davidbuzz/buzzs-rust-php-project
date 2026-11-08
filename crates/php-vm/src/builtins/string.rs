@@ -4,7 +4,7 @@
 //! ones with full PHP semantics (md5/sha1/crc32, basename/dirname, uniqid
 //! and `lcg_value` belong to other bindings); fix behaviour there, not here.
 
-use super::util::{arr, b, i, opt, s, sv};
+use super::util::{arr, b, i, opt, s};
 use super::{alias, constant, reg};
 use crate::func::Args;
 use crate::vm::{Vm, VmResult};

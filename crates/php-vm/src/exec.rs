@@ -3,7 +3,7 @@
 use crate::func::Func;
 use crate::object;
 use crate::opcode::{
-    BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Op, Operand, PlaceId, UnKind,
+    BinKind, CastKind, FetchMode, Op, Operand, PlaceId, UnKind,
 };
 use crate::vm::{CvSlot, FinState, Frame, PendingCall, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ops, BinaryOp, ErrorLevel, PhpRef, Value, ZArray, ZStr};
@@ -997,7 +997,7 @@ impl Vm {
                 Ok(e) => e,
                 Err(t) => return Err(self.abandon_unwinding(t, base)),
             };
-            if fidx <= base {
+            if fidx <= base && self.frames[fidx].kind == crate::vm::FrameKind::Main {
                 return Err(Throw::Exception(exc));
             }
             let popped = self.frames.pop();

@@ -50,11 +50,14 @@ pub struct RefBox {
 }
 
 /// Alias for [`RefBox`] (the reference allocation, matching php-src's 32-byte `zend_reference`).
+#[allow(dead_code)]
 pub type RefInner = RefBox;
 
 /// Alias for property reference sources attached as metadata.
+#[allow(dead_code)]
 pub type PropRefSource = Rc<dyn Any>;
 
+#[allow(dead_code)]
 impl RefBox {
     /// Borrows the referenced value.
     #[inline]

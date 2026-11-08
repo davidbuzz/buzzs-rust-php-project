@@ -42,6 +42,7 @@ impl Vm {
 
     /// Dynamic or named function/callable initialization (`op_init_call`).
     #[inline(always)]
+    #[allow(dead_code)]
     pub(crate) fn op_init_call(&mut self, callee: Value) -> VmResult<()> {
         self.op_init_dyn_call(callee)
     }
@@ -93,6 +94,7 @@ impl Vm {
         }
     }
 
+    #[allow(dead_code)]
     fn frame_func_display(&self, f: &Frame) -> String {
         match &f.func {
             Some(func) => {
@@ -1293,6 +1295,7 @@ impl Vm {
     }
 
     #[inline(always)]
+    #[allow(dead_code)]
     pub(crate) fn op_send_val(&mut self, v: Value) -> VmResult<()> {
         let frame = self.frames.last_mut().expect("active frame");
         let call = frame.calls.last_mut().expect("pending call");
@@ -1563,6 +1566,7 @@ impl Vm {
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 fn deref_cv(s: Option<&Value>) -> Option<Value> {
     match s {
         Some(Value::Reference(r)) => Some(r.get()),
@@ -3070,21 +3074,27 @@ impl Vm {
             n + 1,
             given_type(v)
         );
+        let through_call_user_func = self.frames.iter().rev().nth(1).is_some_and(|caller| {
+            caller.builtin_name.is_none()
+                && caller.func.as_ref().is_some_and(|func| {
+                    let name = func.name();
+                    matches!(name.as_bytes(), b"call_user_func" | b"call_user_func_array")
+                })
+        });
         let is_closure = f.closure.is_some() || uf.is_closure();
         let is_closure_invoke = is_closure
             && (f.magic_name.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
                 || f.this.as_ref().is_some_and(|t| object::class_of(t).name.eq_ignore_ascii_case(b"closure")));
         if let Some((file, line)) = self.attribute_caller_site() {
             msg.push_str(&format!(", called in {file} on line {line}"));
-        } else if !internal && !is_closure_invoke && self.frames.len() >= 2 {
+        } else if (!internal || through_call_user_func) && !is_closure_invoke && self.frames.len() >= 2 {
             let caller = self
                 .frames
                 .iter()
                 .rev()
                 .skip(1)
-                .find(|f| f.kind != FrameKind::Builtin)
-                .expect("caller frame");
-            if caller.kind != FrameKind::Builtin {
+                .find(|f| f.kind != FrameKind::Builtin);
+            if let Some(caller) = caller {
                 msg.push_str(&format!(
                     ", called in {} on line {}",
                     caller.code.filename,
@@ -3747,6 +3757,7 @@ impl Vm {
     }
 
     /// Calls a static method by name.
+    #[allow(dead_code)]
     pub(crate) fn call_static_method(
         &mut self,
         cls: &Rc<Class>,

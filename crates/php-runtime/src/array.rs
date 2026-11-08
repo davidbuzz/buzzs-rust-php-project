@@ -592,11 +592,13 @@ impl HashData {
 
     /// The bucket after `idx` in its chain (`Z_NEXT`).
     #[inline]
+    #[allow(dead_code)]
     fn next_of(&self, idx: u32) -> u32 {
         self.buckets.get(idx as usize).map_or(INVALID, |b| b.next)
     }
 
     #[inline]
+    #[allow(dead_code)]
     fn set_next(&mut self, idx: u32, next: u32) {
         if let Some(b) = self.buckets.get_mut(idx as usize) {
             b.next = next;
@@ -657,6 +659,7 @@ impl HashData {
 
     /// Looks up a string key by identical pointer first, then hash and bytes.
     #[inline]
+    #[allow(dead_code)]
     fn get_str_identical_val<'a>(&'a self, ts: u32, key: &ZStr) -> Option<&'a Value> {
         let idx = self.find_zstr(ts, key)?;
         self.buckets.get(idx as usize)?.val.as_ref()

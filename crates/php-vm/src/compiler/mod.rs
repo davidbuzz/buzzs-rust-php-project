@@ -308,6 +308,7 @@ pub(crate) struct ClassCtx {
     pub name: ZStr,
     pub parent: Option<ZStr>,
     pub is_trait: bool,
+    #[allow(dead_code)]
     pub is_interface: bool,
     pub is_anon: bool,
 }
@@ -894,6 +895,7 @@ impl Compiler<'_> {
         ));
     }
 
+    #[allow(dead_code)]
     pub(crate) fn has_cv(&self, name: &[u8]) -> bool {
         self.fref().cv_map.contains_key(name)
     }

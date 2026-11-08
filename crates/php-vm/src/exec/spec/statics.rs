@@ -31,6 +31,7 @@ use php_runtime::{BinaryOp, Value, ZStr};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[allow(dead_code)]
 impl Vm {
     /// The cached storage cell of the static-property place `pid`
     /// (`A::$name`, literal name) and whether the property is typed.

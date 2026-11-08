@@ -583,6 +583,7 @@ fn render_default(p: &ParamInfo, f: &Func, scope: &ZStr) -> String {
 }
 
 /// `zend_get_function_declaration`.
+#[allow(dead_code)]
 pub(crate) fn declaration(f: &Func, fflags: u32, scope: &Rc<Class>) -> String {
     declaration_as(f, fflags, &display_name(&scope.name), scope)
 }

@@ -161,11 +161,12 @@ impl Vm {
         }
 
         // A `__call`/`__callStatic` trampoline: one variadic `$arguments`.
+        let is_magic = call.is_magic_trampoline();
         let magic = call.magic_name.clone();
-        if magic.is_some() {
+        if is_magic {
             call.scope = self.find_class(b"Closure");
         }
-        let params: Vec<ParamInfo> = if magic.is_some() {
+        let params: Vec<ParamInfo> = if is_magic {
             vec![ParamInfo {
                 name: ZStr::from("arguments"),
                 by_ref: false,
@@ -181,24 +182,30 @@ impl Vm {
         } else {
             func.params().to_vec()
         };
-        let fn_variadic = magic.is_some() || func.flags() & flags::VARIADIC != 0;
+        let fn_variadic = is_magic || func.flags() & flags::VARIADIC != 0;
         let num_args = if fn_variadic {
             params.len().saturating_sub(1)
         } else {
             params.len()
         };
-        let required = if magic.is_some() {
+        let required = if is_magic {
             0
         } else {
             func.required() as usize
         };
-        let fname = match (&magic, &call.scope) {
-            (Some(m), Some(sc)) => format!(
-                "{}::{}",
-                object::display_name(&sc.name),
-                m.to_string_lossy()
-            ),
-            _ => self.func_display(&func, call.scope.as_ref()),
+        let fname = match &magic {
+            Some(m) if call.func.is_closure() && m.eq_ignore_ascii_case(b"__invoke") => {
+                "Closure::__invoke".to_string()
+            }
+            Some(m) => match &call.scope {
+                Some(sc) => format!(
+                    "{}::{}",
+                    object::display_name(&sc.name),
+                    m.to_string_lossy()
+                ),
+                None => m.to_string_lossy(),
+            },
+            None => self.func_display(&func, call.scope.as_ref()),
         };
 
         // `zp_args_check`.
@@ -445,7 +452,7 @@ impl Vm {
                         s.push_str(&type_src(t));
                         s.push(' ');
                     }
-                    if magic.is_none() && func.arg_by_ref(i) {
+                    if !is_magic && func.arg_by_ref(i) {
                         s.push('&');
                     }
                     s.push('$');
@@ -457,7 +464,7 @@ impl Vm {
                 }
                 Slot::Bound(_) => {
                     let n = names.params[i].clone().unwrap_or_default();
-                    uses.push(if magic.is_none() && func.arg_by_ref(i) {
+                    uses.push(if !is_magic && func.arg_by_ref(i) {
                         format!("&${n}")
                     } else {
                         format!("${n}")
@@ -466,8 +473,14 @@ impl Vm {
                 _ => {}
             }
         }
+        let is_closure_invoke = call
+            .magic_name
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
+            || (matches!(&func, Func::Builtin(b) if b.name.as_bytes() == b"__invoke")
+                && call.scope.as_ref().is_some_and(|s| s.lc_name.as_bytes() == b"closure"));
         for (i, off) in defaults_needed {
-            let d = self.partial_default_src(&func, &params, i, call.scope.as_ref())?;
+            let d = self.partial_default_src(&func, &params, i, call.scope.as_ref(), is_closure_invoke)?;
             param_src[off].push_str(" = ");
             param_src[off].push_str(&d);
         }
@@ -491,7 +504,7 @@ impl Vm {
             s.push_str(names.variadic.as_deref().unwrap_or("args"));
             param_src.push(s);
         }
-        let ret_ty = if magic.is_some() {
+        let ret_ty = if is_magic {
             None
         } else {
             func.return_type().cloned()
@@ -554,6 +567,7 @@ impl Vm {
                             &params,
                             i,
                             call.scope.as_ref(),
+                            is_closure_invoke,
                         )?);
                     }
                     Slot::Const(v) => args.push(literal_src(vm, v)?),
@@ -627,7 +641,7 @@ impl Vm {
         code.push_str("return ");
         code.push_str(&src);
         code.push(';');
-        let fscope = if magic.is_some() && this_obj.is_none() {
+        let fscope = if is_magic && this_obj.is_none() {
             None
         } else {
             call.scope.clone()
@@ -643,7 +657,7 @@ impl Vm {
         let mut f = Frame::new(unit.main.code.clone(), FrameKind::Eval);
         f.observer_hidden = true;
         {
-            let mut set = |f: &mut Frame, name: &str, v: Value| {
+            let set = |f: &mut Frame, name: &str, v: Value| {
                 if let Some(idx) = f
                     .code
                     .cv_names
@@ -666,7 +680,7 @@ impl Vm {
             }
             for i in 0..new_argc {
                 if let Slot::Bound(v) = &slots[i] {
-                    let v = if magic.is_none() && func.arg_by_ref(i) {
+                    let v = if !is_magic && func.arg_by_ref(i) {
                         match v {
                             Value::Reference(r) => Value::Reference(r.clone()),
                             other => Value::Reference(php_runtime::PhpRef::new(other.clone())),
@@ -747,16 +761,17 @@ impl Vm {
         params: &[ParamInfo],
         i: usize,
         scope: Option<&Rc<crate::class::Class>>,
+        is_closure_invoke: bool,
     ) -> VmResult<String> {
         let Some(p) = params.get(i) else {
             return Ok("null".into());
         };
-        if matches!(func, Func::Builtin(b) if b.name.as_bytes() == b"__invoke")
-            && scope.is_some_and(|scope| scope.lc_name.as_bytes() == b"closure")
+        if is_closure_invoke
+            || (matches!(func, Func::Builtin(b) if b.name.as_bytes() == b"__invoke")
+                && scope.is_some_and(|scope| scope.lc_name.as_bytes() == b"closure"))
         {
-            let fname = self.func_display(func, scope);
             return Err(self.make_throw("ArgumentCountError", &format!(
-                "{fname}(): Argument #{} (${}) must be passed explicitly, because the default value is not known",
+                "Closure::__invoke(): Argument #{} (${}) must be passed explicitly, because the default value is not known",
                 i + 1, p.name
             )));
         }

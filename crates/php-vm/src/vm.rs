@@ -896,6 +896,7 @@ fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
 /// both copy it twice, through a temporary (measured at 227 instructions
 /// per transfer). Returns `false`, moving nothing, when `from` is empty.
 #[inline]
+#[allow(dead_code)]
 pub(crate) fn move_last_frame(from: &mut Vec<Frame>, to: &mut Vec<Frame>) -> bool {
     let Some(last) = from.len().checked_sub(1) else {
         return false;
@@ -1427,6 +1428,7 @@ impl Frame {
 #[cold]
 #[inline(never)]
 #[track_caller]
+#[allow(dead_code)]
 fn store_mutably_borrowed() -> ! {
     panic!("already mutably borrowed: BorrowError")
 }
@@ -1735,10 +1737,9 @@ impl Vm {
 
 #[cfg(test)]
 mod tests {
-    use super::{Frame, FrameKind, VarStore};
+    use super::{Frame, FrameKind};
     use crate::opcode::OpArray;
     use php_runtime::{Value, ZStr};
-    use std::cell::RefCell;
     use std::rc::Rc;
 
     fn frame_with(names: &[&str]) -> Frame {

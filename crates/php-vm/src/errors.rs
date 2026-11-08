@@ -8,6 +8,7 @@ use php_runtime::{Obj, Value, ZStr};
 use std::rc::Rc;
 
 /// `E_*` constants.
+#[allow(dead_code)]
 pub mod level {
     /// `E_ERROR`
     pub const ERROR: i64 = 1;

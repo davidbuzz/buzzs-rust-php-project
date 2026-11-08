@@ -41,6 +41,7 @@ pub fn index(name: &[u8]) -> Option<usize> {
 
 /// Returns true if `name` is an auto-global name.
 #[inline]
+#[allow(dead_code)]
 pub fn is_auto_global_name(name: &[u8]) -> bool {
     index(name).is_some()
 }

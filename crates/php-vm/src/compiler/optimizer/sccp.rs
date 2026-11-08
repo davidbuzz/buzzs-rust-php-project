@@ -13,7 +13,7 @@ use super::pass1::{fold_bin_op, fold_cast, fold_unary_op};
 use super::{add_or_find_literal, for_each_operand_mut, for_each_place_operand_mut};
 use crate::compiler::expr::const_truthiness;
 use crate::opcode::{
-    type_mask, ArgSrc, BinKind, CastKind, IncDecKind, Op, OpArray, Operand, PlaceBase, UnKind,
+    type_mask, ArgSrc, BinKind, CastKind, IncDecKind, Op, OpArray, Operand, PlaceBase,
 };
 use php_runtime::{BinaryOp, Value, ZStr};
 

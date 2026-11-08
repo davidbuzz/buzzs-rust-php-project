@@ -528,6 +528,7 @@ fn mb_chr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// Validates string UTF-8 validity using cached `s.is_valid_utf8()`, and on successful
 /// validation marks the string with `s.mark_valid_utf8()`.
 #[inline]
+#[allow(dead_code)]
 pub fn check_encoding_utf8(s: &ZStr) -> bool {
     if s.is_valid_utf8() {
         return true;
@@ -542,6 +543,7 @@ pub fn check_encoding_utf8(s: &ZStr) -> bool {
 
 /// Standalone `mb_check_encoding` implementation in `funcs.rs`: when encoding is UTF-8
 /// and check passes, calls `s.mark_valid_utf8()`.
+#[allow(dead_code)]
 pub fn mb_check_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let enc_name = opt_str(a, 1);
     let enc_arg = enc_name.as_ref().map(ZStr::as_bytes);

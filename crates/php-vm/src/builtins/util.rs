@@ -153,6 +153,7 @@ pub(crate) fn type_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> crate::v
 }
 
 /// Converts any value to a string (with `__toString`).
+#[allow(dead_code)]
 pub(crate) fn to_str(vm: &mut Vm, v: &Value) -> VmResult<ZStr> {
     vm.to_zstr(v)
 }

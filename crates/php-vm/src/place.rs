@@ -4416,6 +4416,7 @@ impl Vm {
 
     /// Binding a global variable: ensures the main frame's symbol table is attached
     /// and returns a reference to the global slot.
+    #[allow(dead_code)]
     pub(crate) fn op_bind_global(&mut self, name: &[u8]) -> PhpRef {
         self.attach_globals_symbol_table();
         self.global_ref(name)
@@ -4423,6 +4424,7 @@ impl Vm {
 
     /// Global read: ensures the main frame's symbol table is attached and fetches
     /// the global variable by key.
+    #[allow(dead_code)]
     pub(crate) fn fetch_global_read(&mut self, k: &Value, mode: FetchMode) -> VmResult<Value> {
         self.attach_globals_symbol_table();
         self.fetch_global_by_key(k, mode)

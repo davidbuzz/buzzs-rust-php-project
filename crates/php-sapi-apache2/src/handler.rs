@@ -36,6 +36,7 @@ const PHP_SOURCE_MAGIC_TYPE: &[u8] = b"application/x-httpd-php-source";
 const PHP_SCRIPT: &[u8] = b"php-script";
 
 /// Stack size of request threads.
+#[allow(dead_code)]
 const STACK_SIZE: usize = 256 << 20;
 
 static REQUEST_LOCK: Mutex<()> = Mutex::new(());

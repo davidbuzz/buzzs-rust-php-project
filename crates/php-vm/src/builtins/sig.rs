@@ -16,6 +16,7 @@ use php_runtime::{Value, ZArray, ZStr};
 
 /// A parsed signature; [`parse_sig_borrowed`] leaves the name in the
 /// signature text (`N = &str`).
+#[derive(Debug)]
 pub struct Sig<N = String> {
     pub name: N,
     pub params: Vec<ParamInfo>,
@@ -470,6 +471,7 @@ fn split_param(p: &str) -> ParamParts<'_> {
 ///
 /// # Panics
 /// Panics on malformed signatures (they are compile-time constants).
+#[allow(dead_code)]
 pub fn parse_sig(sig: &str) -> Sig {
     let s = parse_sig_borrowed(sig);
     Sig {

@@ -77,6 +77,7 @@ fn format_operand(out: &mut String, op: &Operand, op_array: &OpArray) {
     }
 }
 
+#[allow(dead_code)]
 fn format_class_spec(out: &mut String, class: &ClassSpec, op_array: &OpArray) {
     match class {
         ClassSpec::Named(l) => {

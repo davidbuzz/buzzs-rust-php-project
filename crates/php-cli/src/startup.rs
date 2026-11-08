@@ -161,6 +161,7 @@ fn cfg_long(cfg: &Config, name: &str) -> i64 {
 }
 
 /// The module names compiled into this binary.
+#[allow(dead_code)]
 fn builtin_modules() -> Vec<String> {
     let mut v: Vec<String> = php_vm::LOADED_EXTENSIONS
         .iter()
@@ -197,6 +198,7 @@ fn is_builtin_fast(value: &str, zend: bool) -> bool {
 
 /// Whether an `extension=`/`zend_extension=` value names something
 /// compiled in (`json`, `php_json.dll`, `/path/json.so`, `opcache`).
+#[allow(dead_code)]
 fn is_builtin(modules: &[String], value: &str, zend: bool) -> bool {
     let base = value.rsplit('/').next().unwrap_or(value);
     let base = base
