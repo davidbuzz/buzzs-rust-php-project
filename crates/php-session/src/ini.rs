@@ -497,7 +497,15 @@ pub(crate) fn on_modify(h: &mut dyn SessionHost, idx: usize, v: &[u8], stage: In
                 return false;
             }
             let s = h.session();
-            s.default_mod = s.module.take();
+            // ref: session.c OnUpdateSaveHandler — `default_mod` becomes the
+            // previously active *native* module only on the transition into the
+            // user module; native→native changes leave `PS(default_mod)` NULL.
+            let to_user = found
+                .as_ref()
+                .is_some_and(crate::handler::ModRef::is_user);
+            if s.default_mod.is_none() && to_user {
+                s.default_mod = s.module.take();
+            }
             s.module = found;
             true
         }

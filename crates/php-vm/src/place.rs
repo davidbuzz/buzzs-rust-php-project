@@ -197,9 +197,10 @@ pub(crate) enum Check {
     /// handler freed the new array (`GC_DELREF(ht) == 0`); an exception
     /// does not stop the fetch, only the opcodes after it.
     False,
-    /// `slow_index_convert_w`, `zend_undefined_index_write`: a freed
-    /// array (`GC_DELREF(ht) == 0`) or an exception gives it up; modifying
-    /// the index string in an error handler does not abandon the write.
+    /// `slow_index_convert_w`, `zend_undefined_index_write`: given up when
+    /// the handler freed the array (`GC_DELREF(ht) == 0`) or captured it
+    /// (any new reference: `GC_DELREF(ht) != 1`); modifying the index
+    /// string in an error handler does not abandon the write.
     Index,
     /// The assigned value's "Undefined variable" warning at the final
     /// slot: given up when the array was freed (php-src would write into
@@ -2297,9 +2298,16 @@ impl Vm {
                     check,
                 } => (seg, phase, level, msg, held, check),
             };
+            let before = held.refcount();
             let raised = self.error(level, &msg);
             let gone = match check {
-                Check::Index | Check::False | Check::Value => held.refcount() == 1,
+                // slow_index_convert_w / zend_undefined_index_write:
+                // `GC_DELREF(ht) != 1` — a freed OR a captured/shared array
+                // both abandon the write (the handler took a reference).
+                Check::Index => held.refcount() != before,
+                // zend_false_to_array_deprecated: given up only when the
+                // handler freed the array (`GC_DELREF(ht) == 0`).
+                Check::False | Check::Value => held.refcount() == 1,
             };
             drop(held);
             match raised {

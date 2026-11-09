@@ -127,25 +127,25 @@ fn builtin_display(vm: &Vm, a: &Args) -> String {
 /// Throws a `ValueError` "`func()`: Argument #n ($name) msg".
 pub(crate) fn value_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> crate::vm::Throw {
     let fname = builtin_display(vm, a);
-    let pname = a
-        .func
-        .as_ref()
-        .and_then(|f| f.params.get(n - 1).map(|p| p.name.to_string_lossy()))
-        .unwrap_or_default();
+    let pname = pname_of(a, n);
     vm.make_throw(
         "ValueError",
         &format!("{fname}(): Argument #{n} (${pname}) {msg}"),
     )
 }
 
+/// Parameter name for a 1-based argument position, if available.
+fn pname_of(a: &Args, n: usize) -> std::string::String {
+    a.func
+        .as_ref()
+        .and_then(|f| f.params.get(n.checked_sub(1)?).map(|p| p.name.to_string()))
+        .unwrap_or_default()
+}
+
 /// Throws a `TypeError` "`func()`: Argument #n ($name) msg".
 pub(crate) fn type_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> crate::vm::Throw {
     let fname = builtin_display(vm, a);
-    let pname = a
-        .func
-        .as_ref()
-        .and_then(|f| f.params.get(n - 1).map(|p| p.name.to_string_lossy()))
-        .unwrap_or_default();
+    let pname = pname_of(a, n);
     vm.make_throw(
         "TypeError",
         &format!("{fname}(): Argument #{n} (${pname}) {msg}"),
