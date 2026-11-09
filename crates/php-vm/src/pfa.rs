@@ -172,7 +172,10 @@ impl Vm {
             .as_deref()
             .is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
             || (matches!(&func, Func::Builtin(b) if b.name.as_bytes() == b"__invoke")
-                && call.scope.as_ref().is_some_and(|s| s.lc_name.as_bytes() == b"closure"));
+                && call
+                    .scope
+                    .as_ref()
+                    .is_some_and(|s| s.lc_name.as_bytes() == b"closure"));
         if is_closure_invoke {
             let target = call.closure.take().or_else(|| call.this.clone());
             call.this = target;
@@ -489,7 +492,13 @@ impl Vm {
             }
         }
         for (i, off) in defaults_needed {
-            let d = self.partial_default_src(&func, &params, i, call.scope.as_ref(), is_closure_invoke)?;
+            let d = self.partial_default_src(
+                &func,
+                &params,
+                i,
+                call.scope.as_ref(),
+                is_closure_invoke,
+            )?;
             param_src[off].push_str(" = ");
             param_src[off].push_str(&d);
         }

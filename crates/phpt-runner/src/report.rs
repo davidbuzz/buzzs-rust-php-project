@@ -414,20 +414,14 @@ mod tests {
     fn format_failure_diff_clean() {
         let raw_diff = "     a\n002- b\n002+ x\n     c\n";
         let formatted = format_failure_diff(raw_diff, "EXPECT", false);
-        assert_eq!(
-            formatted,
-            "--- EXPECT\n+++ ACTUAL\n a\n-b\n+x\n c\n"
-        );
+        assert_eq!(formatted, "--- EXPECT\n+++ ACTUAL\n a\n-b\n+x\n c\n");
     }
 
     #[test]
     fn format_failure_diff_with_expectf() {
         let raw_diff = "     int(%d)\n002- foo\n002+ bar\n";
         let formatted = format_failure_diff(raw_diff, "EXPECTF", false);
-        assert_eq!(
-            formatted,
-            "--- EXPECTF\n+++ ACTUAL\n int(%d)\n-foo\n+bar\n"
-        );
+        assert_eq!(formatted, "--- EXPECTF\n+++ ACTUAL\n int(%d)\n-foo\n+bar\n");
     }
 
     #[test]

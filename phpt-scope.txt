@@ -11,6 +11,29 @@
 ext/opcache
 ext/ffi
 
+# Engine tests under Zend/tests that depend on the opcache optimizer /
+# `opcache.preload` (opcache is out of scope; these only pass on a build with
+# the opcache optimizer, which we do not implement).
+Zend/tests/partial_application/pipe_optimization_001.phpt
+Zend/tests/partial_application/pipe_optimization_002.phpt
+Zend/tests/partial_application/pipe_optimization_003.phpt
+Zend/tests/partial_application/pipe_optimization_004.phpt
+Zend/tests/partial_application/pipe_optimization_005.phpt
+Zend/tests/partial_application/pipe_optimization_006.phpt
+Zend/tests/partial_application/pipe_optimization_007.phpt
+Zend/tests/partial_application/pipe_optimization_008.phpt
+Zend/tests/partial_application/pipe_optimization_009.phpt
+Zend/tests/partial_application/pipe_optimization_010.phpt
+Zend/tests/partial_application/pipe_optimization_011.phpt
+Zend/tests/partial_application/pipe_optimization_012.phpt
+Zend/tests/partial_application/pipe_optimization_013.phpt
+Zend/tests/partial_application/pipe_optimization_014.phpt
+Zend/tests/partial_application/pipe_optimization_015.phpt
+Zend/tests/partial_application/preloading.phpt
+Zend/tests/partial_application/constexpr_015.phpt
+Zend/tests/attributes/delayed_target_validation/opcache_validator_errors.phpt
+Zend/tests/first_class_callable/constexpr/gh22782.phpt
+
 # Server-backed database / protocol clients (mysqli stays in scope)
 ext/mysqlnd
 ext/pdo_mysql

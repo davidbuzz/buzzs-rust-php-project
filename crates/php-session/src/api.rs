@@ -818,11 +818,7 @@ pub fn session_cache_expire(h: &mut dyn SessionHost, value: Option<i64>) -> RtRe
 /// `session_encode(): string|false`.
 pub fn session_encode(h: &mut dyn SessionHost) -> RtResult<Value> {
     if h.session().status != SessionStatus::Active {
-        warn(
-            h,
-            ErrorLevel::Warning,
-            "Cannot encode non-existent session",
-        );
+        warn(h, ErrorLevel::Warning, "Cannot encode non-existent session");
         return finish(h, Value::Bool(false));
     }
     let v = match state::encode(h) {

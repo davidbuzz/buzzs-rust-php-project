@@ -554,7 +554,11 @@ impl Vm {
                 .get(i)
                 .filter(|n| n.as_bytes() == name.as_bytes())
                 .map(|_| i)
-                .or_else(|| st.names.iter().position(|n| n.as_bytes() == name.as_bytes()))?;
+                .or_else(|| {
+                    st.names
+                        .iter()
+                        .position(|n| n.as_bytes() == name.as_bytes())
+                })?;
             if f.symtab_attached {
                 Some(st.slots.get(idx).cloned().flatten().unwrap_or(Value::Null))
             } else {

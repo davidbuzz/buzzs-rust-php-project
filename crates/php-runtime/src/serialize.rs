@@ -1548,7 +1548,9 @@ mod tests {
                     serialize(&self.inner_val, &mut inner_ctx).unwrap()
                 });
                 let mut props = ZArray::new();
-                props.make_mut().insert("data", Value::Str(ZStr::from(nested_data)));
+                props
+                    .make_mut()
+                    .insert("data", Value::Str(ZStr::from(nested_data)));
                 Ok(SerializedObject::Object {
                     class: ZStr::from("B"),
                     props,
@@ -1604,7 +1606,10 @@ mod tests {
         t.push(o_val.clone()).unwrap();
         let mut c = CollectingContext::new();
         let out = serialize(&Value::Array(t.into()), &mut c).unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(), "a:2:{i:0;O:5:\"Dummy\":0:{}i:1;r:2;}");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "a:2:{i:0;O:5:\"Dummy\":0:{}i:1;r:2;}"
+        );
     }
 
     #[test]

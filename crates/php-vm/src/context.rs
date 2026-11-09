@@ -609,7 +609,8 @@ impl Vm {
             }
         }
         if let Some(m) = cls.magic.serialize.clone() {
-            let r = php_runtime::serialize::serialize_locked(|| self.call_method(obj, &m, Vec::new()))?;
+            let r =
+                php_runtime::serialize::serialize_locked(|| self.call_method(obj, &m, Vec::new()))?;
             return match r {
                 Value::Array(a) => Ok(SerializedObject::Object {
                     class: cls.name.clone(),
@@ -649,7 +650,8 @@ impl Vm {
             .props_for(obj, PropertyPurpose::Serialize)?
             .unwrap_or_default();
         if let Some(m) = cls.magic.sleep.clone() {
-            let r = php_runtime::serialize::serialize_locked(|| self.call_method(obj, &m, Vec::new()))?;
+            let r =
+                php_runtime::serialize::serialize_locked(|| self.call_method(obj, &m, Vec::new()))?;
             let Value::Array(names) = r else {
                 self.warning(&format!(
                     "serialize(): __sleep should return an array only containing the names of instance-variables to serialize"

@@ -58,7 +58,15 @@ impl Vm {
                         r
                     }
                 };
-                vars.push((u.cv, Value::Reference(r)));
+                // The parent CV now points at a reference (created by
+                // `make_ref` or the `None` arm above). If the frame has an
+                // attached symbol table (globals/include frames) that store
+                // still holds the pre-reference value; keep it in sync so a
+                // later `sync_from_symbol_table` does not clobber the shared
+                // reference back to the stale value.
+                let cv_value = Value::Reference(r.clone());
+                fr.sync_cv_to_symtab(u.parent_cv, &cv_value);
+                vars.push((u.cv, cv_value));
             } else if u.implicit {
                 if let Some(v) = self.cv_get(u.parent_cv) {
                     vars.push((u.cv, v.deref()));

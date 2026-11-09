@@ -1300,7 +1300,8 @@ impl Vm {
         let frame = self.frames.last_mut().expect("active frame");
         let call = frame.calls.last_mut().expect("pending call");
         let arg_idx = call.arg_count();
-        let by_val = !call.is_magic_trampoline() && !call.has_named && !call.func.arg_by_ref(arg_idx);
+        let by_val =
+            !call.is_magic_trampoline() && !call.has_named && !call.func.arg_by_ref(arg_idx);
         if by_val {
             if call.args.is_empty() && (call.inline_count as usize) < call.inline_args.len() {
                 let idx = call.inline_count as usize;
@@ -1345,8 +1346,9 @@ impl Vm {
                 let frame = self.frames.last_mut().expect("active frame");
                 let call = frame.calls.last_mut().expect("pending call");
                 let arg_idx = call.arg_count();
-                let by_val =
-                    !call.is_magic_trampoline() && !call.has_named && !call.func.arg_by_ref(arg_idx);
+                let by_val = !call.is_magic_trampoline()
+                    && !call.has_named
+                    && !call.func.arg_by_ref(arg_idx);
                 if by_val {
                     if call.args.is_empty() && (call.inline_count as usize) < call.inline_args.len()
                     {
@@ -3085,11 +3087,19 @@ impl Vm {
         });
         let is_closure = f.closure.is_some() || uf.is_closure();
         let is_closure_invoke = is_closure
-            && (f.magic_name.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
-                || f.this.as_ref().is_some_and(|t| object::class_of(t).name.eq_ignore_ascii_case(b"closure")));
+            && (f
+                .magic_name
+                .as_deref()
+                .is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
+                || f.this
+                    .as_ref()
+                    .is_some_and(|t| object::class_of(t).name.eq_ignore_ascii_case(b"closure")));
         if let Some((file, line)) = self.attribute_caller_site() {
             msg.push_str(&format!(", called in {file} on line {line}"));
-        } else if (!internal || through_call_user_func) && !is_closure_invoke && self.frames.len() >= 2 {
+        } else if (!internal || through_call_user_func)
+            && !is_closure_invoke
+            && self.frames.len() >= 2
+        {
             let caller = self
                 .frames
                 .iter()

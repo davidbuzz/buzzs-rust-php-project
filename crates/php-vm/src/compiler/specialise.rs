@@ -598,8 +598,12 @@ fn bin(op: BinKind, a: Operand, b: Operand, dst: u32, next: Option<&Op>) -> Opti
         return None;
     }
     let branch = match next? {
-        Op::JmpZ(Operand::Tmp(t) | Operand::TmpKeep(t), target) if *t == dst => Some((*target, false)),
-        Op::JmpNz(Operand::Tmp(t) | Operand::TmpKeep(t), target) if *t == dst => Some((*target, true)),
+        Op::JmpZ(Operand::Tmp(t) | Operand::TmpKeep(t), target) if *t == dst => {
+            Some((*target, false))
+        }
+        Op::JmpNz(Operand::Tmp(t) | Operand::TmpKeep(t), target) if *t == dst => {
+            Some((*target, true))
+        }
         _ => None,
     };
     if let Some((target, jmp_if)) = branch {
@@ -1304,25 +1308,15 @@ mod tests {
     fn bin_assign_and_assign_op_followed_by_branch_are_fused() {
         let ops = main_ops("<?php $x = 1; $y = 2; $x = $x + $y; if ($x) { echo 1; }");
         assert!(
-            ops.iter().any(|op| matches!(
-                op,
-                Op::BinAssignCvJmp {
-                    jmp_if: false,
-                    ..
-                }
-            )),
+            ops.iter()
+                .any(|op| matches!(op, Op::BinAssignCvJmp { jmp_if: false, .. })),
             "{ops:?}"
         );
 
         let ops = main_ops("<?php $x = 1; $x += 2; if ($x) { echo 1; }");
         assert!(
-            ops.iter().any(|op| matches!(
-                op,
-                Op::AssignOpCvJmp {
-                    jmp_if: false,
-                    ..
-                }
-            )),
+            ops.iter()
+                .any(|op| matches!(op, Op::AssignOpCvJmp { jmp_if: false, .. })),
             "{ops:?}"
         );
     }

@@ -2,9 +2,7 @@
 
 use crate::func::Func;
 use crate::object;
-use crate::opcode::{
-    BinKind, CastKind, FetchMode, Op, Operand, PlaceId, UnKind,
-};
+use crate::opcode::{BinKind, CastKind, FetchMode, Op, Operand, PlaceId, UnKind};
 use crate::vm::{CvSlot, FinState, Frame, PendingCall, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ops, BinaryOp, ErrorLevel, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
@@ -185,8 +183,7 @@ impl Vm {
                     if let Some(Value::Float(xf)) = slot.get() {
                         if let Some(res) = float_assign_arith(kind, *xf, yf) {
                             unsafe {
-                                if let Some(Value::Float(ref mut dst_f)) =
-                                    slot.get_mut_unchecked()
+                                if let Some(Value::Float(ref mut dst_f)) = slot.get_mut_unchecked()
                                 {
                                     *dst_f = res;
                                     f.sync_cv_to_symtab(cv, &Value::Float(res));
@@ -885,6 +882,13 @@ impl Vm {
                 }
                 Err(t) => {
                     self.observer_unwind(base, Some(&t));
+                    // Before dropping the frames being unwound, persist any
+                    // global CVs (e.g. `$fiber` in the main frame) into the
+                    // shared globals store so values it uniquely owns survive
+                    // the frame's destruction and remain visible to `register_shutdown_function`
+                    // handlers and object destructors (matching zend's
+                    // `zend_attach_symbol_table` semantics on the main frame).
+                    self.attach_globals_symbol_table();
                     self.frames.truncate(base);
                     return Err(t);
                 }
@@ -1412,7 +1416,9 @@ impl Vm {
                             Some(false) => {}
                             None => break 'slow,
                         },
-                        Op::AssignOpCvCmpJmp { cv, op: kind, val, .. } => {
+                        Op::AssignOpCvCmpJmp {
+                            cv, op: kind, val, ..
+                        } => {
                             if !self.assign_op_cv_step_fast(*cv, *kind, *val) {
                                 break 'slow;
                             }

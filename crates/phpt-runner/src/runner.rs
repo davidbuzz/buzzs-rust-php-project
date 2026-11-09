@@ -1137,6 +1137,9 @@ mod tests {
 
     #[test]
     fn timeout_marker_detected() {
-        assert!(contains(b"output\n** ERROR: process timed out **\n", TIMEOUT_MARKER));
+        assert!(contains(
+            b"output\n** ERROR: process timed out **\n",
+            TIMEOUT_MARKER
+        ));
     }
 }

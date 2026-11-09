@@ -399,9 +399,15 @@ impl PendingCall {
     pub fn is_magic_trampoline(&self) -> bool {
         self.magic_name.is_some()
             && !self.func.is_closure()
-            && !(self.magic_name.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
+            && !(self
+                .magic_name
+                .as_deref()
+                .is_some_and(|m| m.eq_ignore_ascii_case(b"__invoke"))
                 && (self.closure.is_some()
-                    || self.scope.as_ref().is_some_and(|s| s.lc_name.as_bytes() == b"closure")))
+                    || self
+                        .scope
+                        .as_ref()
+                        .is_some_and(|s| s.lc_name.as_bytes() == b"closure")))
     }
 }
 
@@ -1267,9 +1273,14 @@ impl Frame {
             if let Some(slot) = st.find(name.as_bytes()) {
                 let slot = slot as usize;
                 if slot < st.slots.len() {
-                    let val = self.cvs.get(i).and_then(CvSlot::get_clone);
-                    if let Some(old) = std::mem::replace(&mut st.slots[slot], val) {
-                        crate::gc::release_duplicate(old);
+                    // A CV that is `None` was never assigned in this frame
+                    // (e.g. cleared by `clear_cv_for_symtab_slot` ahead of an
+                    // in-place mutation of the shared slot); it must not wipe
+                    // a live global slot that another frame still owns.
+                    if let Some(val) = self.cvs.get(i).and_then(CvSlot::get_clone) {
+                        if let Some(old) = std::mem::replace(&mut st.slots[slot], Some(val)) {
+                            crate::gc::release_duplicate(old);
+                        }
                     }
                 }
             }

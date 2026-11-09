@@ -196,15 +196,16 @@ pub(crate) fn strtol(s: &[u8]) -> (i64, usize) {
     if matches!(s.get(p), Some(b'-' | b'+')) {
         p += 1;
     }
-    let (base, prefix_len): (i128, usize) = if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'x' | b'X') {
-        (16, 2)
-    } else if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'o' | b'O') {
-        (8, 2)
-    } else if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'b' | b'B') {
-        (2, 2)
-    } else {
-        (10, 0)
-    };
+    let (base, prefix_len): (i128, usize) =
+        if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'x' | b'X') {
+            (16, 2)
+        } else if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'o' | b'O') {
+            (8, 2)
+        } else if p + 2 <= s.len() && s[p] == b'0' && matches!(s[p + 1], b'b' | b'B') {
+            (2, 2)
+        } else {
+            (10, 0)
+        };
     p += prefix_len;
     let digits_start = p;
     let mut acc: i128 = 0;

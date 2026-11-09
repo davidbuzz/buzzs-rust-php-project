@@ -100,14 +100,20 @@ mod tests {
         env.insert(OsString::from("LC_ALL"), OsString::from("de_DE.UTF-8"));
         env.insert(OsString::from("LANG"), OsString::from("fr_FR.UTF-8"));
         env.insert(OsString::from("TZ"), OsString::from("Europe/Berlin"));
-        env.insert(OsString::from("PHP_CLI_SERVER_WORKERS"), OsString::from("4"));
+        env.insert(
+            OsString::from("PHP_CLI_SERVER_WORKERS"),
+            OsString::from("4"),
+        );
 
         normalize_env(&mut env);
 
         assert_eq!(env.get(&OsString::from("LC_ALL")).unwrap(), "C");
         assert_eq!(env.get(&OsString::from("LANG")).unwrap(), "C");
         assert_eq!(env.get(&OsString::from("TZ")).unwrap(), "UTC");
-        assert_eq!(env.get(&OsString::from("PHP_CLI_SERVER_WORKERS")).unwrap(), "");
+        assert_eq!(
+            env.get(&OsString::from("PHP_CLI_SERVER_WORKERS")).unwrap(),
+            ""
+        );
     }
 
     #[test]
