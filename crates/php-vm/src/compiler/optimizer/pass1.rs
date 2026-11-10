@@ -1111,3 +1111,23 @@ pub(crate) fn fold_cast(kind: CastKind, a: &Value) -> Option<Value> {
         CastKind::Array | CastKind::Object => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// GH-17733: a function removed by `disable_functions` is not in the
+    /// function table, so php-src never evaluates a call to it at compile
+    /// time (`str_repeat("ab", 3)` then throws "Call to undefined function").
+    #[test]
+    fn disabled_function_is_not_evaluated() {
+        let s = Value::Str(ZStr::from(&b"ab"[..]));
+        let n = Value::Int(3);
+        assert!(evaluate_pure_builtin(b"str_repeat", &[&s, &n]).is_some());
+        super::super::set_disabled_functions([b"str_repeat".to_vec()]);
+        assert!(evaluate_pure_builtin(b"str_repeat", &[&s, &n]).is_none());
+        assert!(evaluate_pure_builtin(b"strlen", &[&s]).is_some());
+        super::super::set_disabled_functions(std::iter::empty());
+        assert!(evaluate_pure_builtin(b"str_repeat", &[&s, &n]).is_some());
+    }
+}
