@@ -292,3 +292,101 @@ fn const_expr_callable_errors() {
         "\nFatal error: Uncaught Error: Creating a callable for the magic __callStatic() method is not supported in constant expressions in t.php:3\nStack trace:\n#0 {main}\n  thrown in t.php on line 3\n"
     );
 }
+
+/// Argument errors, by-reference warnings and deprecations name a closure
+/// after its bound scope like a method (`get_function_or_method_name`):
+/// `K::{closure:K::mk():5}`, `Closure::` for an object bound without a
+/// scope, the bare name only when unscoped (expected output from
+/// `/usr/bin/php8.5 -n`).
+#[test]
+fn scoped_closure_names_in_argument_errors() {
+    let out = run("<?php\n\
+         set_error_handler(function ($no, $str) { echo $str, \"\\n\"; return true; });\n\
+         function show($e) { echo get_class($e), ': ', $e->getMessage(), \"\\n\"; }\n\
+         class K {\n\
+             function mk() { return function (int $a, &$r = null) {}; }\n\
+             static function smk() { return static fn(int $a) => $a; }\n\
+             function dep() { return #[\\Deprecated] function () {}; }\n\
+         }\n\
+         $c = (new K)->mk();\n\
+         try { $c(); } catch (Error $e) { show($e); }\n\
+         try { $c(1, 2); } catch (Error $e) { show($e); }\n\
+         try { K::smk()(); } catch (Error $e) { show($e); }\n\
+         call_user_func($c, 1, 2);\n\
+         (new K)->dep()();\n\
+         $g = function (int $a) {};\n\
+         try { $g(); } catch (Error $e) { show($e); }\n\
+         try { $g->bindTo(new K)(); } catch (Error $e) { show($e); }\n\
+         try { Closure::bind($g, null, K::class)(); } catch (Error $e) { show($e); }\n");
+    assert_eq!(
+        out,
+        "ArgumentCountError: Too few arguments to function K::{closure:K::mk():5}(), 0 passed in t.php on line 10 and at least 1 expected\n\
+         Error: K::{closure:K::mk():5}(): Argument #2 ($r) could not be passed by reference\n\
+         ArgumentCountError: Too few arguments to function K::{closure:K::smk():6}(), 0 passed in t.php on line 12 and exactly 1 expected\n\
+         K::{closure:K::mk():5}(): Argument #2 ($r) must be passed by reference, value given\n\
+         Method K::{closure:K::dep():7}() is deprecated\n\
+         ArgumentCountError: Too few arguments to function {closure:t.php:15}(), 0 passed in t.php on line 16 and exactly 1 expected\n\
+         ArgumentCountError: Too few arguments to function Closure::{closure:t.php:15}(), 0 passed in t.php on line 17 and exactly 1 expected\n\
+         ArgumentCountError: Too few arguments to function K::{closure:t.php:15}(), 0 passed in t.php on line 18 and exactly 1 expected\n"
+    );
+}
+
+/// Closures without static variables share one empty store and leave it
+/// off their frames; closures with them keep their own, bound copies get
+/// a snapshot, fake closures use their function's, generators and loops
+/// keep per-object state (expected output from `/usr/bin/php8.5 -n`).
+#[test]
+fn closure_static_variable_stores() {
+    let out = run(r#"<?php
+$a = function () { static $n = 0; return ++$n; };
+$a(); $a();
+$b = $a->bindTo(null);
+echo $a(), $b(), $b(), $a(), "\n";
+function g() { static $c = 10; return ++$c; }
+$f = Closure::fromCallable('g'); $h = g(...);
+echo $f(), $h(), g(), "\n";
+$k = $f->bindTo(null); echo $k(), "\n";
+
+$x = 1;
+$m = function () use ($x) { return $x; };
+$m2 = $m->bindTo(null);
+echo $m(), $m2(), "\n";
+var_dump((new ReflectionFunction($m2))->getStaticVariables());
+$gen = function () { static $s = 0; yield ++$s; yield ++$s; };
+foreach ($gen() as $v) echo $v; foreach ($gen() as $v) echo $v; echo "\n";
+class C { function mk() { return function () { static $q = []; $q[] = count($q); return $q; }; } }
+$c1 = (new C)->mk(); $c1(); $c2 = $c1->bindTo(new C); $c1();
+echo implode(',', $c1()), '|', implode(',', $c2()), "\n";
+for ($i = 0; $i < 3; $i++) { $t = function () { static $z = 0; return ++$z; }; echo $t(), $t(); }
+echo "\n";
+var_dump($a);
+"#);
+    assert_eq!(
+        out,
+        r#"3344
+111213
+14
+11
+array(1) {
+  ["x"]=>
+  int(1)
+}
+1234
+0,1,2|0,1
+121212
+object(Closure)#1 (4) {
+  ["name"]=>
+  string(17) "{closure:t.php:2}"
+  ["file"]=>
+  string(5) "t.php"
+  ["line"]=>
+  int(2)
+  ["static"]=>
+  array(1) {
+    ["n"]=>
+    int(4)
+  }
+}
+"#
+    );
+}
