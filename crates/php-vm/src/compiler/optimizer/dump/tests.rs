@@ -235,3 +235,20 @@ fn dfa_rewrites_arithmetic_with_literals() {
     let out = dump("<?php\nfunction f($a) {\n    return $a * 2;\n}\n");
     assert!(out.contains("T1 = MUL CV0($a) int(2)\n"), "{out}");
 }
+
+#[test]
+fn pipes_into_method_callables_are_plain_calls() {
+    // pipe_optimizations.phpt (`zend_partial_apply` in zend_compile_pipe).
+    let out = dump(
+        "<?php\nclass O {\n    public function foo($a) { return $a; }\n    public static function bar($a) { return $a; }\n}\n$o = new O;\n$r = 5 |> $o->foo(...) |> O::bar(...);\n",
+    );
+    assert!(!out.contains("CALLABLE_CONVERT"), "{out}");
+    assert!(
+        out.contains("INIT_METHOD_CALL 1 CV0($o) string(\"foo\")\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("INIT_STATIC_METHOD_CALL 1 string(\"O\") string(\"bar\")\n"),
+        "{out}"
+    );
+}

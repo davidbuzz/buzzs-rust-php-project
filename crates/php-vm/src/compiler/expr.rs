@@ -678,6 +678,32 @@ impl Compiler<'_> {
                             }
                         }
                     }
+                    // `zend_partial_apply`: `x |> $o->m(...)` and
+                    // `x |> C::m(...)` are the plain calls `$o->m(x)` and
+                    // `C::m(x)`.
+                    ExprKind::MethodCall {
+                        object,
+                        name,
+                        args,
+                        nullsafe: false,
+                    } if args.is_first_class_callable() => {
+                        let o = self.compile_chain(object)?;
+                        let n = self.method_member_name(name, right.span.line)?;
+                        self.f().line = right.span.line;
+                        self.emit(Op::InitMethodCall { obj: o, name: n });
+                    }
+                    ExprKind::StaticCall { class, name, args }
+                        if args.is_first_class_callable()
+                            && self.parent_hook_property(class, name).is_none() =>
+                    {
+                        let spec = self.chain_class_spec(class)?;
+                        let n = self.method_member_name(name, right.span.line)?;
+                        self.f().line = right.span.line;
+                        self.emit(Op::InitStaticCall {
+                            class: spec,
+                            name: n,
+                        });
+                    }
                     _ => {
                         let c = self.compile_expr(right)?;
                         self.emit(Op::InitDynCall { callee: c });
