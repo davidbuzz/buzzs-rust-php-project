@@ -1000,6 +1000,22 @@ pub struct Frame {
     pub(crate) observer_hidden: bool,
 }
 
+/// What the shared compiled-variable names of a frame's variable store
+/// (`VarNames::shared`) are, as [`Frame::clear_for_reuse`] found them, so
+/// that the rest of the release goes back to the store only to change
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SharedNames {
+    /// Not looked at.
+    Unknown,
+    /// None.
+    None,
+    /// Those of the frame's code.
+    Code,
+    /// Those of another code.
+    Other,
+}
+
 /// Keep small call buffers allocation-free without retaining exceptional frame sizes.
 ///
 /// An empty buffer is left alone: `Vec::clear` of an empty vector still
@@ -1214,20 +1230,33 @@ impl Frame {
     /// that hold something are written ([`clear_opt`], [`release_slot`]),
     /// which keeps the `drop_in_place` calls of empty fields off the
     /// return path.
+    ///
+    /// The variable store is reached once (one `Rc::get_mut`): what its
+    /// shared names are is noted here for `clear_rest_for_reuse`, which
+    /// only goes back to the store when they must change. Nothing reads or
+    /// writes the store in between: the handles released there queue
+    /// their destructors (no user code runs), and the frame's code is
+    /// replaced only after its names are dealt with.
     #[inline]
     pub fn clear_for_reuse(&mut self, empty_code: &Rc<OpArray>) {
         self.clear_slots_for_reuse();
-        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+        let shared = if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
             clear_frame_buffer(&mut vs.slots);
             // The shared names are dropped in `clear_rest_for_reuse`, with
             // the function handles (`keeps_function`): they are the code's.
             clear_frame_buffer(&mut vs.names.owned);
             clear_opt(&mut vs.index);
+            match &vs.names.shared {
+                None => SharedNames::None,
+                Some(c) if Rc::ptr_eq(c, &self.code) => SharedNames::Code,
+                Some(_) => SharedNames::Other,
+            }
         } else {
             self.vars = Rc::new(RefCell::new(VarStore::default()));
-        }
-        self.clear_rest_for_reuse(empty_code);
+            SharedNames::None
+        };
+        self.clear_rest_for_reuse(empty_code, shared);
     }
 
     /// [`Frame::clear_for_reuse`] of a builtin frame (the one
@@ -1252,7 +1281,7 @@ impl Frame {
         } else if !Rc::ptr_eq(&self.vars, empty_vars) {
             self.vars = empty_vars.clone();
         }
-        self.clear_rest_for_reuse(empty_code);
+        self.clear_rest_for_reuse(empty_code, SharedNames::Unknown);
     }
 
     /// Readies a pooled frame (released by [`Frame::clear_for_reuse`] or
@@ -1382,9 +1411,11 @@ impl Frame {
     }
 
     /// The fields after the variable store of [`Frame::clear_for_reuse`].
+    /// `shared` is what the store's shared names are, when the caller
+    /// looked ([`SharedNames`]).
     #[inline(always)]
     #[allow(clippy::inline_always)] // part of every return
-    fn clear_rest_for_reuse(&mut self, empty_code: &Rc<OpArray>) {
+    fn clear_rest_for_reuse(&mut self, empty_code: &Rc<OpArray>, shared: SharedNames) {
         if !self.named.is_empty() || self.named.capacity() > 256 {
             clear_frame_buffer(&mut self.named);
         }
@@ -1400,20 +1431,25 @@ impl Frame {
             // The variable store's names stay shared with the kept code,
             // which the next call of the same function shares again
             // (`VarNames::share`); a different code replaces them
-            // (`reinit_same_call`, `reinit_for_call`).
-            if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
-                let names = &mut rc_mut.get_mut().names;
-                if names
-                    .shared
-                    .as_ref()
-                    .is_some_and(|c| !Rc::ptr_eq(c, &self.code))
-                {
-                    names.shared = None;
+            // (`reinit_same_call`, `reinit_for_call`). Known to be none or
+            // the code's already (the common case): the store is left alone.
+            if !matches!(shared, SharedNames::None | SharedNames::Code) {
+                if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+                    let names = &mut rc_mut.get_mut().names;
+                    if names
+                        .shared
+                        .as_ref()
+                        .is_some_and(|c| !Rc::ptr_eq(c, &self.code))
+                    {
+                        names.shared = None;
+                    }
                 }
             }
         } else {
-            if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
-                clear_opt(&mut rc_mut.get_mut().names.shared);
+            if shared != SharedNames::None {
+                if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+                    clear_opt(&mut rc_mut.get_mut().names.shared);
+                }
             }
             clear_opt(&mut self.func);
             clear_opt(&mut self.ufunc);

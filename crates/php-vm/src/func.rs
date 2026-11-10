@@ -137,8 +137,23 @@ pub struct UserFunction {
 /// whatever the arguments, and whether the arguments' types must be checked
 /// one by one. Starts unknown; every `UserFunction` literal sets
 /// `CallShape::default()`.
+///
+/// With it, for a plain declaration, the instruction a plain call with `n`
+/// passed arguments starts at (`UserFunction::plain_first_op`): the
+/// `RECV`-skip walk of the body's first ops, done once per count instead
+/// of once per call.
 #[derive(Debug, Default)]
-pub struct CallShape(Cell<u8>);
+pub struct CallShape {
+    kind: Cell<u8>,
+    /// [`first_op_after_recv`] of the code for `n` arguments, at index `n`
+    /// (`0..=6`, the pending call's inline buffer); filled with `kind`.
+    first_ops: [Cell<u32>; FIRST_OPS],
+}
+
+/// Passed-argument counts with a precomputed first op ([`CallShape`]):
+/// `0..=6`, as many as the pending call's inline argument buffer holds
+/// (the plain call takes no more).
+const FIRST_OPS: usize = 7;
 
 impl CallShape {
     /// Not worked out yet.
@@ -167,13 +182,25 @@ impl UserFunction {
     /// for were a dozen loads and a loop over the parameters.
     #[inline]
     pub fn call_shape(&self) -> u8 {
-        let s = self.call_shape.0.get();
+        let s = self.call_shape.kind.get();
         if s != CallShape::UNKNOWN {
             return s;
         }
         let s = self.compute_call_shape();
-        self.call_shape.0.set(s);
+        self.call_shape.kind.set(s);
         s
+    }
+
+    /// Where a plain call (`Vm::push_simple_ucall`) of this function with
+    /// `n` passed arguments starts: `first_op_after_recv` of its code,
+    /// read from the table [`UserFunction::call_shape`] filled for a plain
+    /// declaration (call that first), worked out for a count beyond it.
+    #[inline]
+    pub(crate) fn plain_first_op(&self, n: usize) -> usize {
+        match self.call_shape.first_ops.get(n) {
+            Some(c) if self.call_shape.kind.get() > CallShape::NOT_PLAIN => c.get() as usize,
+            _ => first_op_after_recv(&self.code, n) as usize,
+        }
     }
 
     #[cold]
@@ -188,6 +215,9 @@ impl UserFunction {
             || self.params.iter().any(|p| p.variadic || p.by_ref)
         {
             return CallShape::NOT_PLAIN;
+        }
+        for (n, slot) in self.call_shape.first_ops.iter().enumerate() {
+            slot.set(first_op_after_recv(&self.code, n));
         }
         if self
             .params
@@ -208,6 +238,26 @@ impl UserFunction {
     pub fn is_closure(&self) -> bool {
         self.flags & flags::CLOSURE != 0
     }
+}
+
+/// The instruction a call of `code` with `n` passed arguments, each bound
+/// into its compiled variable and needing no coercion, starts at: the
+/// `RECV` of an argument that was passed has nothing left to do, so the
+/// call starts after it (after a `RECV_INIT`'s default-value code, at its
+/// `skip` label), in parameter order, up to the first op that is not the
+/// next parameter's receive (`i_init_func_execute_data` skipping the
+/// `RECV`s of passed arguments).
+pub(crate) fn first_op_after_recv(code: &OpArray, n: usize) -> u32 {
+    use crate::opcode::Op;
+    let mut first_op: u32 = 0;
+    for i in 0..n {
+        match code.ops.get(first_op as usize) {
+            Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
+            Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => first_op = *skip,
+            _ => break,
+        }
+    }
+    first_op
 }
 
 /// The handler of a builtin function.

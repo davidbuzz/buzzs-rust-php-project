@@ -745,3 +745,69 @@ echo d(4), "\n";
     );
     assert_eq!(run(source), expected);
 }
+
+/// A `static` closure declared in a method or function caches its first
+/// object in its function's static-variable store
+/// (`ZEND_DECLARE_LAMBDA_FUNCTION`'s cache slot), which the plain-call path
+/// no longer turns down: calls of such closures (direct, with defaults,
+/// typed, with a static variable, extra arguments, a backtrace line,
+/// through `array_map`, recursive, with bound variables) behave as on the
+/// general path. Expected output is php-src's (`/usr/bin/php -n`, the same
+/// with `/usr/bin/php8.5 -n`).
+#[test]
+fn static_closures_with_a_cached_object_take_the_plain_call_path() {
+    let source = r#"<?php
+class K {
+    function mk() { return static function ($a, $b = 1) { return $a * $b; }; }
+    function mk2() { return static fn($a) => static::class . $a; }
+    function typed() { return static function (int $a): int { return $a + 1; }; }
+    function counter() { return static function () { static $n = 0; return ++$n; }; }
+    function args() { return static function ($a) { return implode("|", func_get_args()) . func_num_args(); }; }
+    function line() { return static function ($a) { return debug_backtrace()[0]['line'] + $a; }; }
+}
+class L extends K {}
+$k = new K; $l = new L;
+$f = $k->mk(); $g = $l->mk();
+$s = 0;
+for ($i = 0; $i < 5; $i++) { $s += $f($i) + $g($i, 2) + $k->mk()($i); }
+echo $s, "\n";
+$h = $l->mk2(); echo $h(1), " ", $h(2), " ", $k->mk2()(3), "\n";
+$t = $k->typed(); echo $t(1), $t(2), " ";
+try { $t("x"); } catch (TypeError $e) { echo get_class($e), "\n"; }
+$c = $k->counter(); echo $c(), $c(), $c(), "\n";
+$a = $k->args(); echo $a(1), " ", $a(2), " ", $a(3, 4), "\n";
+$ln = $k->line(); echo $ln(0), " ", $ln(100), "\n";
+echo array_sum(array_map($f, [1, 2, 3])), " ", implode(",", array_map($g, [1, 2], [3, 4])), "\n";
+function outer() { return static function ($x) { return $x + 1; }; }
+$o = outer(); echo $o(1), $o(2), outer()(3), "\n";
+var_dump((new ReflectionFunction($f))->getStaticVariables());
+function deep($n) { $r = static function ($m) use ($n) { return $m + $n; }; return $r($n); }
+echo deep(1), deep(2), "\n";
+function rec($n) { $r = static function ($m) { return $m <= 0 ? 0 : $m + rec($m - 1); }; return $r($n); }
+echo rec(4), "\n";
+"#;
+    let expected =
+        "40\nL1 L2 K3\n23 TypeError\n123\n11 21 3|42\n21 121\n6 3,8\n234\narray(0) {\n}\n24\n10\n";
+    assert_eq!(run(source), expected);
+}
+
+/// The first op of a plain call is read from a table worked out once per
+/// passed-argument count (`UserFunction::plain_first_op`) instead of the
+/// per-call `RECV` walk: every count from none to all six inline
+/// arguments, with defaults computed by `RECV_INIT` code, starts where the
+/// walk started. Expected output is php-src's (`/usr/bin/php -n`).
+#[test]
+fn precomputed_first_op_matches_every_argument_count() {
+    let source = r#"<?php
+function d($a = 1, $b = [2], $c = PHP_INT_SIZE, $d = "x" . "y", $e = null, $f = 6) {
+    return implode(",", [$a, json_encode($b), $c, $d, var_export($e, true), $f]);
+}
+function r($a, $b, $c = 3) { return "$a$b$c"; }
+for ($i = 0; $i < 2; $i++) {
+    echo d(), " ", d(9), " ", d(9, 8), " ", d(9, 8, 7), " ", d(9, 8, 7, 6), " ", d(9, 8, 7, 6, 5), " ", d(9, 8, 7, 6, 5, 4), "\n";
+    echo r(1, 2), r(1, 2, 0), "\n";
+}
+"#;
+    let line = "1,[2],8,xy,NULL,6 9,[2],8,xy,NULL,6 9,8,8,xy,NULL,6 9,8,7,xy,NULL,6 9,8,7,6,NULL,6 9,8,7,6,5,6 9,8,7,6,5,4\n123120\n";
+    assert_eq!(run(source), line.repeat(2));
+}
