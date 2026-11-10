@@ -526,6 +526,137 @@ impl<C: RuntimeContext + ?Sized> RuntimeContext for Quiet<'_, C> {
     }
 }
 
+/// The value of the string member `name` of an object property table.
+fn string_member(props: &ZArray, name: &str) -> Option<ZStr> {
+    match props.get_str(name.as_bytes()).map(Value::deref) {
+        Some(Value::Str(s)) => Some(s),
+        _ => None,
+    }
+}
+
+/// How `php_var_serialize()` writes an `__PHP_Incomplete_Class` object
+/// in `incomplete_classes_only` mode (`php_var_serialize_incomplete_raw()`
+/// in `ext/standard/var.c`), given its property table: a `C:` payload or
+/// an `E:` case kept by the decode is written back verbatim; any other
+/// object is written under its original class name without the
+/// `__PHP_Incomplete_Class_Name` bookkeeping member.
+#[must_use]
+pub fn serialize_incomplete_raw(props: &ZArray) -> SerializedObject {
+    use php_runtime::serialize::{
+        INCOMPLETE_CLASS, INCOMPLETE_CLASS_NAME_MEMBER, INCOMPLETE_ENUM_CASE_MEMBER,
+        INCOMPLETE_SERIALIZED_MEMBER,
+    };
+    let class = string_member(props, INCOMPLETE_CLASS_NAME_MEMBER);
+    if let Some(class) = &class {
+        if let Some(data) = string_member(props, INCOMPLETE_SERIALIZED_MEMBER) {
+            return SerializedObject::Custom {
+                class: class.clone(),
+                data: data.as_bytes().to_vec(),
+            };
+        }
+        if let Some(case) = string_member(props, INCOMPLETE_ENUM_CASE_MEMBER) {
+            return SerializedObject::Enum {
+                class: class.clone(),
+                case,
+            };
+        }
+    }
+    // The normal path for an incomplete object: the class name comes from
+    // the bookkeeping member, which is not written itself.
+    let mut props = props.clone();
+    props
+        .make_mut()
+        .remove(&ArrayKey::Str(ZStr::from(INCOMPLETE_CLASS_NAME_MEMBER)));
+    SerializedObject::Object {
+        class: class.unwrap_or_else(|| ZStr::from(INCOMPLETE_CLASS)),
+        props,
+    }
+}
+
+/// The encoder context of the upload progress update
+/// (`php_session_serialize_init()` while `PS(in_rfc1867_update)`): the
+/// session was decoded with every object kept as `__PHP_Incomplete_Class`
+/// ([`UnserializeOptions::incomplete_classes_only`]), and those objects are
+/// written back unchanged ([`serialize_incomplete_raw`]); no user code runs.
+pub(crate) struct IncompleteRaw<'a, C: RuntimeContext + ?Sized>(pub(crate) &'a mut C);
+
+impl<C: RuntimeContext + ?Sized> RuntimeContext for IncompleteRaw<'_, C> {
+    fn diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+        self.0.diagnostic(level, message)
+    }
+    fn precision(&self) -> i64 {
+        self.0.precision()
+    }
+    fn serialize_precision(&self) -> i64 {
+        self.0.serialize_precision()
+    }
+    fn cast_object(&mut self, obj: &Obj, target: CastTarget) -> RtResult<Option<Value>> {
+        self.0.cast_object(obj, target)
+    }
+    fn do_operation(&mut self, op: BinaryOp, a: &Value, b: &Value) -> RtResult<Option<Value>> {
+        self.0.do_operation(op, a, b)
+    }
+    fn compare_objects(&mut self, a: &Value, b: &Value) -> RtResult<i32> {
+        self.0.compare_objects(a, b)
+    }
+    fn object_properties(
+        &mut self,
+        obj: &Obj,
+        purpose: PropertyPurpose,
+    ) -> RtResult<Option<ZArray>> {
+        self.0.object_properties(obj, purpose)
+    }
+    fn object_dump(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<ObjectDump> {
+        self.0.object_dump(obj, purpose)
+    }
+    fn serialize_object(&mut self, obj: &Obj) -> RtResult<SerializedObject> {
+        let incomplete = obj
+            .class_name()
+            .as_bytes()
+            .eq_ignore_ascii_case(php_runtime::serialize::INCOMPLETE_CLASS.as_bytes());
+        if !incomplete {
+            return self.0.serialize_object(obj);
+        }
+        // The plain property table: an incomplete object's property
+        // handlers would refuse the reads.
+        let props = self
+            .0
+            .object_properties(obj, PropertyPurpose::ArrayCast)?
+            .unwrap_or_default();
+        Ok(serialize_incomplete_raw(&props))
+    }
+    fn unserialize_object_create(&mut self, class: &ZStr) -> RtResult<Value> {
+        self.0.unserialize_object_create(class)
+    }
+    fn unserialize_object_finish(&mut self, obj: &Value, props: ZArray) -> RtResult<()> {
+        self.0.unserialize_object_finish(obj, props)
+    }
+    fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
+        self.0.unserialize_enum(class, case)
+    }
+    fn unserialize_enum_case(&mut self, class: &ZStr, case: &ZStr) -> RtResult<EnumCaseLookup> {
+        self.0.unserialize_enum_case(class, case)
+    }
+    fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
+        self.0.unserialize_custom(class, data)
+    }
+    fn is_enum(&mut self, obj: &Obj) -> bool {
+        self.0.is_enum(obj)
+    }
+    fn count_object(&mut self, obj: &Obj) -> RtResult<Option<i64>> {
+        self.0.count_object(obj)
+    }
+    fn property_read(&mut self, obj: &Obj, name: &ZStr) -> RtResult<Option<Value>> {
+        self.0.property_read(obj, name)
+    }
+    fn property_write(&mut self, obj: &Obj, name: &ZStr, value: Value) -> RtResult<()> {
+        self.0.property_write(obj, name, value)
+    }
+    fn create_std_object(&mut self, props: ZArray) -> RtResult<Value> {
+        self.0.create_std_object(props)
+    }
+}
+
 /// Maximum nesting the scanner follows (deeper data is rejected; PHP's
 /// own default `unserialize_max_depth` is 4096).
 const MAX_SCAN_DEPTH: usize = 4096;
@@ -736,6 +867,64 @@ mod tests {
             t.make_mut().insert_str_raw(ZStr::from(k), v);
         }
         t
+    }
+
+    /// The upload progress update's decode/encode round trip
+    /// (`ext/session/tests/rfc1867_no_user_code.phpt`): with no class
+    /// resolved, `O:`, `C:` and `E:` entries (and an `r:` to the enum case)
+    /// are written back byte for byte; bookkeeping names in the data make the
+    /// decode fail (`rfc1867_incomplete_class_reserved_props.phpt`).
+    #[test]
+    fn incomplete_classes_only_round_trip() {
+        let record: &[u8] = b"w|O:1:\"W\":1:{s:1:\"a\";i:1;}\
+u|O:1:\"U\":1:{s:1:\"a\";i:2;}\
+c|C:4:\"Cust\":7:{payload}\
+e|a:2:{i:0;E:11:\"Suit:Hearts\";i:1;r:7;}\
+m|O:7:\"Missing\":1:{s:1:\"x\";i:3;}";
+        let opts = UnserializeOptions {
+            incomplete_classes_only: true,
+            ..UnserializeOptions::default()
+        };
+        let mut ctx = CollectingContext::new();
+        let Decoded::Merge { entries, ok } =
+            decode_with(Serializer::Php, record, &opts, &mut ctx).unwrap()
+        else {
+            panic!()
+        };
+        assert!(ok);
+        let vars = arr(entries
+            .iter()
+            .map(|(k, v)| (k.to_str().unwrap_or_default(), v.clone()))
+            .collect());
+        let e = encode(Serializer::Php, &vars, &mut IncompleteRaw(&mut ctx)).unwrap();
+        assert_eq!(e.data.unwrap(), record);
+
+        for bad in [
+            &b"x|O:8:\"stdClass\":1:{s:27:\"__PHP_Incomplete_Class_Name\";s:3:\"foo\";}"[..],
+            b"x|a:1:{i:0;O:8:\"stdClass\":1:{s:26:\"__PHP_Incomplete_Enum_Case\";s:3:\"foo\";}}",
+        ] {
+            let Decoded::Merge { ok, .. } =
+                decode_with(Serializer::Php, bad, &opts, &mut ctx).unwrap()
+            else {
+                panic!()
+            };
+            assert!(!ok);
+        }
+        // A mangled (private) name is not bookkeeping.
+        let mangled: &[u8] =
+            b"x|O:8:\"stdClass\":1:{s:30:\"\0A\0__PHP_Incomplete_Class_Name\";s:3:\"foo\";}";
+        let Decoded::Merge { entries, ok } =
+            decode_with(Serializer::Php, mangled, &opts, &mut ctx).unwrap()
+        else {
+            panic!()
+        };
+        assert!(ok);
+        let vars = arr(entries
+            .iter()
+            .map(|(k, v)| (k.to_str().unwrap_or_default(), v.clone()))
+            .collect());
+        let e = encode(Serializer::Php, &vars, &mut IncompleteRaw(&mut ctx)).unwrap();
+        assert_eq!(e.data.unwrap(), mangled);
     }
 
     #[test]
