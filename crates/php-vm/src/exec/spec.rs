@@ -44,6 +44,11 @@ use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 mod props;
 mod statics;
 
+pub(super) use statics::{
+    assign_static_prop_in, fetch_class_const_in, fetch_const_in, fetch_static_prop_in,
+    isset_static_prop_in,
+};
+
 /// Whether replacing `v` needs no destructor, GC root buffering or
 /// reference semantics: no value, or null, bool, int, float or string
 /// (`!Z_REFCOUNTED` in php-src, plus strings, whose release has no side

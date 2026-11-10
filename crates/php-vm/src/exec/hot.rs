@@ -29,7 +29,9 @@
 //! has each written variable copied into its `VarStore` slot, out of line
 //! ([`sync_cv_cold`]).
 
-use super::spec::{cmp_simple_in, is_plain_slot, num_outcome, plain_truth, put_tmp, slot_truth};
+use super::spec::{
+    self, cmp_simple_in, is_plain_slot, num_outcome, plain_truth, put_tmp, slot_truth,
+};
 use super::{discard_unrooted, num_bin, release_rooted, Num};
 use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Op, Operand, UnKind};
 use crate::vm::{CvSlot, Frame};
@@ -70,6 +72,21 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::BinAssignCvJmp { .. }
             | Op::AssignOpCvJmp { .. }
             | Op::AssignOpCv { .. }
+            // Run-time cache hits of constants, class constants and static
+            // properties (`exec/spec/statics.rs`).
+            | Op::FetchConst { fallback: None, .. }
+            | Op::FetchConstTo { fallback: None, .. }
+            | Op::FetchClassConst {
+                name: Operand::Lit(_),
+                ..
+            }
+            | Op::FetchClassConstTo { .. }
+            | Op::FetchThis { .. }
+            | Op::FetchStaticProp { .. }
+            | Op::AssignStaticProp { .. }
+            | Op::IssetStaticProp { .. }
+            | Op::FuncNumArgs { .. }
+            | Op::Free(Operand::Tmp(_))
     )
 }
 
@@ -357,6 +374,87 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
             if !assign_op_cv(f, lits, cv, kind, val, dst) {
                 return DECLINED;
             }
+        }
+        // `ZEND_FETCH_CONSTANT`, `ZEND_FETCH_CLASS_CONSTANT`,
+        // `ZEND_FETCH_STATIC_PROP_R`/`_IS`, `ZEND_ASSIGN_STATIC_PROP` and
+        // `ZEND_ISSET_ISEMPTY_STATIC_PROP` on a run-time cache hit; the
+        // `To` forms skip the folded `AssignCv` when they stored into its
+        // variable.
+        Op::FetchConst { name, dst, .. } => {
+            if spec::fetch_const_in(f, name, dst, None).is_none() {
+                return DECLINED;
+            }
+        }
+        Op::FetchConstTo { name, dst, to, .. } => {
+            match spec::fetch_const_in(f, name, dst, Some(to)) {
+                Some(true) => ip += 1,
+                Some(false) => {}
+                None => return DECLINED,
+            }
+        }
+        Op::FetchClassConst {
+            ref class,
+            name: Operand::Lit(name),
+            dst,
+        } => {
+            if spec::fetch_class_const_in(f, class, name, dst, None).is_none() {
+                return DECLINED;
+            }
+        }
+        Op::FetchClassConstTo {
+            ref class,
+            name,
+            dst,
+            to,
+        } => match spec::fetch_class_const_in(f, class, name, dst, Some(to)) {
+            Some(true) => ip += 1,
+            Some(false) => {}
+            None => return DECLINED,
+        },
+        // `ZEND_FETCH_THIS` in a method (without `$this`, the generic op
+        // throws).
+        Op::FetchThis { dst } => {
+            let Some(this) = f.this.clone() else {
+                return DECLINED;
+            };
+            set_tmp_in(f, dst, Value::Object(this));
+        }
+        Op::FetchStaticProp {
+            place,
+            dst,
+            to,
+            mode,
+        } => match spec::fetch_static_prop_in(f, place, dst, to, mode) {
+            Some(true) => ip += 1,
+            Some(false) => {}
+            None => return DECLINED,
+        },
+        Op::AssignStaticProp { place, val, dst } => {
+            if !spec::assign_static_prop_in(f, place, val, dst) {
+                return DECLINED;
+            }
+        }
+        Op::IssetStaticProp { place, dst, empty } => {
+            if !spec::isset_static_prop_in(f, place, dst, empty) {
+                return DECLINED;
+            }
+        }
+        // `ZEND_FUNC_NUM_ARGS`.
+        Op::FuncNumArgs { dst } => {
+            if let Some(d) = dst {
+                let n = i64::try_from(f.args.len()).unwrap_or(i64::MAX);
+                set_tmp_in(f, d, Value::Int(n));
+            }
+        }
+        // `ZEND_FREE` of a temporary whose release has no side effect.
+        Op::Free(Operand::Tmp(t)) => {
+            let Some(slot) = f.tmps.get_mut(t as usize) else {
+                return DECLINED;
+            };
+            if !is_plain_slot(Some(&*slot)) {
+                return DECLINED;
+            }
+            discard_unrooted(Some(std::mem::take(slot)));
         }
         _ => return DECLINED,
     }

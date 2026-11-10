@@ -489,3 +489,81 @@ late-ns
 "#
     );
 }
+
+/// The hot loop's cache hits (`exec/hot.rs`, `exec/spec/statics.rs`):
+/// `static::`/`self::` constants and static properties per called class
+/// and scope, a typed property holding null (the singleton test) or
+/// uninitialized, `isset`/`empty`, closures bound to other scopes (the
+/// same op array, other access), a reference to a static property and
+/// `func_num_args()` with an unused result. Expected output from
+/// `/usr/bin/php -n` (8.3).
+#[test]
+fn hot_loop_cache_hits_keep_scope_and_type_semantics() {
+    let out = run(r#"<?php
+class A {
+    public static $s = 'a';
+    private static $p = 'pa';
+    public static ?A $inst = null;
+    public static int $n;
+    const C = 'ca';
+    private const PC = 'pca';
+    static function get() { return static::C . ' ' . self::PC . ' ' . static::$s . ' ' . self::$p; }
+    static function inst() { if (self::$inst === null) { self::$inst = new static; echo "new\n"; } return self::$inst; }
+    function args() { $r = []; for ($i = 0; $i < 2; $i++) { $r[] = func_num_args(); func_num_args(); } return implode(',', $r); }
+}
+class B extends A { public static $s = 'b'; const C = 'cb'; }
+for ($i = 0; $i < 3; $i++) {
+    echo A::get(), ' | ', B::get(), "\n";
+    A::inst(); B::inst();
+    var_dump(isset(A::$n), empty(A::$n), isset(B::$inst), empty(A::$s));
+    try { $x = A::$n; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    echo (new B)->args(1, 2, 3), "\n";
+}
+$f = function () { $o = []; for ($i = 0; $i < 2; $i++) { $o[] = static::$s . self::C . static::C; } return implode(',', $o); };
+foreach (['A', 'B'] as $c) {
+    $g = Closure::bind($f, null, $c);
+    echo $g(), "\n";
+}
+$h = function () { $o = []; for ($i = 0; $i < 2; $i++) { try { $o[] = A::$p; } catch (Error $e) { $o[] = $e->getMessage(); } } return implode(',', $o); };
+echo Closure::bind($h, null, 'A')(), "\n";
+echo Closure::bind($h, null, 'B')(), "\n";
+echo $h(), "\n";
+$r = &A::$s; for ($i = 0; $i < 2; $i++) { A::$s = "w$i"; $y = A::$s; echo $r, $y, "\n"; }
+A::$n = 5; for ($i = 0; $i < 2; $i++) { $z = A::$n; A::$n = $z + 1; echo A::$n, "\n"; }
+"#);
+    assert_eq!(
+        out,
+        r#"ca pca a pa | cb pca b pa
+new
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+Typed static property A::$n must not be accessed before initialization
+3,3
+ca pca a pa | cb pca b pa
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+Typed static property A::$n must not be accessed before initialization
+3,3
+ca pca a pa | cb pca b pa
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+Typed static property A::$n must not be accessed before initialization
+3,3
+acaca,acaca
+bcbcb,bcbcb
+pa,pa
+Cannot access private property A::$p,Cannot access private property A::$p
+Cannot access private property A::$p,Cannot access private property A::$p
+w0w0
+w1w1
+6
+7
+"#
+    );
+}
