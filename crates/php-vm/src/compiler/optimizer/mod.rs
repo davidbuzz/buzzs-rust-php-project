@@ -68,8 +68,47 @@ pub const PASS_16: u32 = 1 << 15;
 /// Default `opcache.optimization_level` (matches php-src's `DEFAULT_OPTIMIZATION_LEVEL` `0x7FFEBFFF`).
 pub const DEFAULT_OPTIMIZATION_LEVEL: u32 = 0x7FFE_BFFF;
 
-/// Optimizes `op_array` in place according to `level` bitmask.
+/// What the passes must know about an op array beyond its instructions.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OptContext<'a> {
+    /// Top-level code: its CVs are the global symbol table, which other
+    /// functions reach through `global`/`$GLOBALS` (as references) and
+    /// included files share, so php-src types them all `MAY_BE_REF` and
+    /// SCCP never propagates them (`zend_ssa_inference` for a pseudo-main).
+    pub is_main: bool,
+    /// The CVs a closure's `use` clause binds before the first op, with
+    /// whether each is bound by reference: they keep their slots (pass 12)
+    /// and their assignments (pass 13), and a by-reference one may change
+    /// whenever user code runs.
+    pub closure_uses: &'a [(u32, bool)],
+}
+
+impl OptContext<'_> {
+    /// One past the highest CV bound by a closure `use` (0 when none): the
+    /// prefix of CV slots that the binding code addresses by number.
+    pub(crate) fn bound_cv_prefix(&self) -> u32 {
+        self.closure_uses
+            .iter()
+            .map(|&(cv, _)| cv.saturating_add(1))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Whether the `use` clause binds any variable by reference.
+    pub(crate) fn has_ref_use(&self) -> bool {
+        self.closure_uses.iter().any(|&(_, by_ref)| by_ref)
+    }
+}
+
+/// Optimizes `op_array` in place according to `level` bitmask (a function
+/// body that is neither top-level code nor a closure with `use` bindings).
 pub fn optimize_op_array(op_array: &mut OpArray, level: u32) {
+    optimize_op_array_with(op_array, level, &OptContext::default());
+}
+
+/// Optimizes `op_array` in place according to `level` bitmask and what
+/// `ctx` says about the op array.
+pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptContext<'_>) {
     if level == 0 || op_array.ops.is_empty() {
         return;
     }
@@ -93,7 +132,7 @@ pub fn optimize_op_array(op_array: &mut OpArray, level: u32) {
             changed |= pass3::run_pass3(op_array);
         }
         if (level & (PASS_6 | PASS_8)) != 0 {
-            changed |= sccp::run_sccp(op_array);
+            changed |= sccp::run_sccp(op_array, ctx);
         }
         if (level & PASS_5) != 0 {
             changed |= block_pass::run_block_pass(op_array);
@@ -102,7 +141,7 @@ pub fn optimize_op_array(op_array: &mut OpArray, level: u32) {
             changed |= dce::run_dce(op_array);
         }
         if (level & PASS_13) != 0 {
-            changed |= compact::remove_unused_variables(op_array);
+            changed |= compact::remove_unused_variables(op_array, ctx);
         }
 
         if !changed {
@@ -112,12 +151,12 @@ pub fn optimize_op_array(op_array: &mut OpArray, level: u32) {
 
     // Pass 13: Remove unused variables
     if (level & PASS_13) != 0 {
-        compact::remove_unused_variables(op_array);
+        compact::remove_unused_variables(op_array, ctx);
     }
 
     // Pass 12: Adjust used stack / compact CV slots
     if (level & PASS_12) != 0 {
-        compact::compact_cvs(op_array);
+        compact::compact_cvs(op_array, ctx);
     }
 
     // Pass 10: NOP removal (remaps all jump targets, try regions, and live ranges)
@@ -146,7 +185,11 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
     }
     if let Some(user_fn) = Rc::get_mut(&mut unit.main) {
         if let Some(code) = Rc::get_mut(&mut user_fn.code) {
-            optimize_op_array(code, level);
+            let ctx = OptContext {
+                is_main: true,
+                closure_uses: &[],
+            };
+            optimize_op_array_with(code, level & !PASS_13, &ctx);
         }
     }
 }
@@ -643,6 +686,225 @@ mod tests {
             _ => false,
         });
         assert!(writes_c, "the assignment to $c was removed: {:?}", code.ops);
+    }
+
+    /// The optimized code of the first function of `unit` matching `pick`
+    /// (named functions and closures alike).
+    fn find_code(
+        unit: &CompiledUnit,
+        pick: impl Fn(&crate::func::UserFunction) -> bool,
+    ) -> Rc<OpArray> {
+        unit.decls
+            .functions
+            .borrow()
+            .iter()
+            .find(|f| pick(f))
+            .map(|f| f.code.clone())
+            .expect("function")
+    }
+
+    fn named<'a>(name: &'a [u8]) -> impl Fn(&crate::func::UserFunction) -> bool + 'a {
+        move |f| f.name.as_bytes() == name
+    }
+
+    fn cv_index(code: &OpArray, name: &[u8]) -> u32 {
+        code.cv_names
+            .iter()
+            .position(|n| n.as_bytes() == name)
+            .and_then(|i| u32::try_from(i).ok())
+            .expect("CV")
+    }
+
+    /// The ops that assign `cv` as a whole (`$cv = v`).
+    fn writes_of(code: &OpArray, cv: u32) -> usize {
+        code.ops
+            .iter()
+            .filter(|op| match op {
+                Op::AssignCv { cv: c, .. } => *c == cv,
+                Op::Assign { place, .. } => code
+                    .places
+                    .get(*place as usize)
+                    .is_some_and(|p| p.base == PlaceBase::Cv(cv) && p.segs.is_empty()),
+                _ => false,
+            })
+            .count()
+    }
+
+    /// A `Catch` followed by its body's `Jmp` used to share one block, so
+    /// the CFG lost the edge to the next clause and DCE dropped the
+    /// `Rethrow`: an exception no clause matched vanished (jit/assign_055).
+    #[test]
+    fn unmatched_exception_is_still_rethrown() {
+        let unit = compile_src(
+            "<?php function f() { try { g(); } catch (Y $e) {} echo 1; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"f"));
+        assert!(
+            code.ops.iter().any(|op| matches!(op, Op::Rethrow)),
+            "Rethrow removed: {:?}",
+            code.ops
+        );
+    }
+
+    /// The exit edge of `FE_FETCH` mid-block was lost the same way, so the
+    /// code after a foreach saw only the value from before the loop
+    /// (jit/qm_assign_004, jit/loop_vm_interrupt_001, jit/gh20838).
+    #[test]
+    fn code_after_foreach_sees_assignments_in_the_loop() {
+        let unit = compile_src(
+            "<?php function g($p) { $s = 0; foreach ($p as $x) { $s += 3; } return $s; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"g"));
+        let folded = code.ops.iter().any(|op| match op {
+            Op::Return {
+                val: Operand::Lit(l),
+            } => matches!(code.literals.get(*l as usize), Some(Value::Int(0))),
+            _ => false,
+        });
+        assert!(
+            !folded,
+            "return folded to the pre-loop value: {:?}",
+            code.ops
+        );
+    }
+
+    /// Pass 9 renumbers the value and key temporaries of `FE_FETCH` with
+    /// every other use of them (gh24577, jit/gh12527).
+    #[test]
+    fn temporary_compaction_renumbers_foreach_temporaries() {
+        let unit = compile_src(
+            "<?php function foo(array $a1) { $a2 = []; foreach ($a1 as $key => $val) { \
+             if (!$val) { $a2['bad'][] = $key; } else { $a2[0][] = $key; } } \
+             foreach ($a2 as $key => $val) { var_dump($key); } }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"foo"));
+        let mut fetches = 0;
+        for op in &code.ops {
+            if let Op::FeFetch { val, key, .. } = op {
+                fetches += 1;
+                assert!(*val < code.num_tmps, "value tmp {val} out of range");
+                if let Some(k) = key {
+                    assert!(*k < code.num_tmps, "key tmp {k} out of range");
+                }
+            }
+        }
+        assert_eq!(fetches, 2);
+    }
+
+    /// Pass 13 keeps a write to a by-reference `use` variable, which the
+    /// enclosing scope sees (jit/assign_dim_op_006).
+    #[test]
+    fn by_reference_use_assignment_is_kept() {
+        let unit = compile_src(
+            "<?php $v = null; $f = function () use (&$v) { $v = 0; };",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, |f| f.uses.iter().any(|u| u.by_ref));
+        let v = cv_index(&code, b"v");
+        assert_eq!(writes_of(&code, v), 1, "write removed: {:?}", code.ops);
+    }
+
+    /// Pass 12 keeps the slots of `use` variables: the closure binds them
+    /// by number, so dropping an unread `$a` bound `$b` into `$a`'s slot.
+    #[test]
+    fn use_variable_slots_are_not_compacted() {
+        let unit = compile_src(
+            "<?php $a = 1; $b = 2; $f = function () use ($a, $b) { return $b; };",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let funcs = unit.decls.functions.borrow();
+        let closure = funcs.iter().find(|f| f.uses.len() == 2).expect("closure");
+        for u in &closure.uses {
+            let slot = closure.code.cv_names.get(u.cv as usize).expect("slot");
+            assert_eq!(slot.as_bytes(), u.name.as_bytes());
+        }
+    }
+
+    /// Top-level CVs are globals that an error handler can change (here
+    /// the "Undefined variable" warning of `$undef`), so SCCP never
+    /// replaces a read of one with a constant.
+    #[test]
+    fn top_level_variables_are_not_propagated() {
+        let unit = compile_src(
+            "<?php $x = 1; echo $undef; echo $x;",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let ops = &unit.main.code.ops;
+        let cv_echoes = ops
+            .iter()
+            .filter(|op| matches!(op, Op::Echo(Operand::Cv(_))))
+            .count();
+        assert_eq!(cv_echoes, 2, "{ops:?}");
+    }
+
+    /// No CV propagation in a function with try/finally (php-src builds no
+    /// SSA for it): the code after `finally` sees what the finally block
+    /// assigned.
+    #[test]
+    fn variables_are_not_propagated_across_finally() {
+        let unit = compile_src(
+            "<?php function f() { $x = 1; try { $x = 1; } finally { $x = 2; } echo $x; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"f"));
+        assert!(
+            code.ops
+                .iter()
+                .any(|op| matches!(op, Op::Echo(Operand::Cv(_)))),
+            "{:?}",
+            code.ops
+        );
+    }
+
+    /// `clone $a;` keeps the `FREE` that destroys the copy right away.
+    #[test]
+    fn discarded_object_is_still_freed() {
+        let unit = compile_src(
+            "<?php function f($a) { clone $a; echo 1; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"f"));
+        assert!(
+            code.ops
+                .iter()
+                .any(|op| matches!(op, Op::Free(Operand::Tmp(_)))),
+            "{:?}",
+            code.ops
+        );
+    }
+
+    /// Dropping `if ($x) {}` keeps the read of `$x`, which warns when
+    /// undefined (php-src's `CHECK_VAR`).
+    #[test]
+    fn empty_branch_still_reads_its_variable() {
+        let unit = compile_src(
+            "<?php function f() { if ($x) {} }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"f"));
+        assert!(
+            code.ops
+                .iter()
+                .any(|op| matches!(op, Op::Free(Operand::Cv(_)) | Op::JmpZ(Operand::Cv(_), _))),
+            "{:?}",
+            code.ops
+        );
+    }
+
+    /// Pass 13 keeps both writes of a variable that may hold an object: the
+    /// overwrite is where the object is destroyed.
+    #[test]
+    fn unread_variable_holding_an_object_keeps_its_writes() {
+        let unit = compile_src(
+            "<?php function f() { $a = new stdClass; echo 1; $a = 1; echo 2; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"f"));
+        let a = cv_index(&code, b"a");
+        assert_eq!(writes_of(&code, a), 2, "{:?}", code.ops);
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //!   analysis over basic blocks, propagating constants across block boundaries and joins.
 
 use super::pass1::{fold_bin_op, fold_cast, fold_unary_op};
-use super::{add_or_find_literal, for_each_operand_mut, for_each_place_operand_mut};
+use super::{add_or_find_literal, for_each_operand_mut, for_each_place_operand_mut, OptContext};
 use crate::compiler::expr::const_truthiness;
 use crate::opcode::{
     type_mask, ArgSrc, BinKind, CastKind, IncDecKind, Op, OpArray, Operand, PlaceBase,
@@ -371,14 +371,58 @@ fn simplify_constant_branches(ops: &mut [Op], literals: &[Value]) -> bool {
     changed
 }
 
+/// Whether a CV of `op_array` may be a reference (php-src infers
+/// `MAY_BE_REF` for it): a reference can change whenever user code runs,
+/// which any op that warns can do through an error handler, and assigning
+/// to a typed reference coerces the value. Such CVs are never constant.
+fn cvs_may_be_refs(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
+    if ctx.is_main || ctx.has_ref_use() {
+        return true;
+    }
+    let decls = op_array.decls.functions.borrow();
+    let ref_op = op_array.ops.iter().any(|op| match op {
+        Op::MakeRef { .. }
+        | Op::AssignRef { .. }
+        | Op::ListFetchRef { .. }
+        | Op::ArrayAddRef { .. }
+        | Op::YieldRef { .. }
+        | Op::ReturnRef { .. }
+        | Op::Include { .. }
+        | Op::Global { .. }
+        | Op::BindStatic { .. }
+        | Op::InitStatic { .. }
+        | Op::FeReset { place: Some(_), .. }
+        | Op::Send {
+            src: ArgSrc::Place(_),
+        }
+        | Op::SendNamed {
+            src: ArgSrc::Place(_),
+            ..
+        } => true,
+        // `function () use (&$v)` turns `$v` into a reference here.
+        Op::MakeClosure { idx, .. } => decls
+            .get(*idx as usize)
+            .is_none_or(|f| f.uses.iter().any(|u| u.by_ref)),
+        _ => false,
+    });
+    ref_op
+        || op_array.places.iter().any(|place| {
+            matches!(
+                place.base,
+                PlaceBase::VarVar(_) | PlaceBase::Global(_) | PlaceBase::GlobalsArray
+            )
+        })
+}
+
 /// Runs SCCP / DFA constant propagation on `op_array`. Returns `true` if any substitution was made.
-pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
+pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
     let num_tmps = op_array.num_tmps as usize;
     if num_tmps == 0 && op_array.cv_names.is_empty() {
         return false;
     }
 
     let mut changed = false;
+    let refs_possible = cvs_may_be_refs(op_array, ctx);
 
     // 1. Temporary constant discovery & SSA propagation
     if num_tmps > 0 {
@@ -401,9 +445,11 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
                             }
                             _ => {}
                         },
+                        // The result of assigning to a reference is BOT:
+                        // a typed reference coerces the value (sccp.c).
                         Op::AssignCv {
                             val, dst: Some(_), ..
-                        } => match val {
+                        } if !refs_possible => match val {
                             Operand::Lit(l) => {
                                 lit_def[t_idx] = Some(*l);
                             }
@@ -746,36 +792,12 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
     // Branch simplification for constant conditions
     changed |= simplify_constant_branches(&mut op_array.ops, &op_array.literals);
 
-    // 2. Inter-block Forward DFA for CVs
-    let mut has_hazard = false;
-    for op in &op_array.ops {
-        match op {
-            Op::MakeRef { .. }
-            | Op::AssignRef { .. }
-            | Op::ListFetchRef { .. }
-            | Op::Include { .. }
-            | Op::Global { .. } => {
-                has_hazard = true;
-                break;
-            }
-            Op::Send {
-                src: ArgSrc::Place(_),
-            } => {
-                has_hazard = true;
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    if !has_hazard {
-        for place in &op_array.places {
-            if matches!(place.base, PlaceBase::VarVar(_) | PlaceBase::Global(_)) {
-                has_hazard = true;
-                break;
-            }
-        }
-    }
+    // 2. Inter-block Forward DFA for CVs. Like php-src, which builds no SSA
+    // for a function with try/catch/finally (`zend_dfa_analyze_op_array`),
+    // skip it there: an exception leaves a block at any op, so the catch
+    // sees a CV's value from the middle of the try block, and a `finally`
+    // returns to the op after its `FastCall` with the values it assigned.
+    let has_hazard = refs_possible || !op_array.try_table.is_empty();
 
     let num_cvs = op_array.cv_names.len();
     let len = op_array.ops.len();

@@ -727,6 +727,7 @@ impl Compiler<'_> {
         let mut uses = Vec::new();
         for (name, by_ref, pcv, implicit) in &spec.uses {
             let cv = self.cv(name.as_bytes());
+            self.f().closure_uses.push((cv, *by_ref));
             uses.push(ClosureUse {
                 name: name.clone(),
                 by_ref: *by_ref,

@@ -371,6 +371,9 @@ pub(crate) struct FnCtx {
     /// ops index ([`OpArray::decls`]). `None` until the first declaration;
     /// the main op array's is the unit's table ([`Compiler::decls`]).
     pub decls: Option<Rc<DeclTable>>,
+    /// The closure body CVs its `use` clause binds before the first op,
+    /// with whether each is bound by reference (for the optimizer).
+    pub closure_uses: Vec<(u32, bool)>,
 }
 
 impl FnCtx {
@@ -416,6 +419,7 @@ impl FnCtx {
             http_response_header_assigned: false,
             in_frameless_branch: false,
             decls: None,
+            closure_uses: Vec::new(),
         }
     }
 }
@@ -1044,7 +1048,11 @@ impl Compiler<'_> {
             } else {
                 self.opts.optimization_level
             };
-            optimizer::optimize_op_array(&mut op_array, level);
+            let ctx = optimizer::OptContext {
+                is_main,
+                closure_uses: &f.closure_uses,
+            };
+            optimizer::optimize_op_array_with(&mut op_array, level, &ctx);
         }
         // Handler specialisation, last: every jump target is final. A
         // `zend_set_user_opcode_handler()` hook runs before its generic

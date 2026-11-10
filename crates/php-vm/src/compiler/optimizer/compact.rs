@@ -7,6 +7,7 @@
 
 use super::{
     def_tmp, for_each_label_mut, for_each_operand_mut, for_each_place_operand_mut, literals_equal,
+    OptContext,
 };
 use crate::opcode::{ClassSpec, Op, OpArray, Operand, Place, PlaceBase};
 use php_runtime::Value;
@@ -116,6 +117,14 @@ pub(crate) fn compact_tmps(op_array: &mut OpArray) -> bool {
         if let Some(t) = super::array_build_tmp_mut(&mut op_clone) {
             mark_tmp(*t);
         }
+        // `FE_FETCH` writes its value (and key) temporaries through raw
+        // fields that neither `def_tmp` nor `for_each_operand_mut` visit.
+        if let Op::FeFetch { val, key, .. } = op {
+            mark_tmp(*val);
+            if let Some(k) = key {
+                mark_tmp(*k);
+            }
+        }
     }
 
     for place in &op_array.places {
@@ -202,6 +211,16 @@ pub(crate) fn compact_tmps(op_array: &mut OpArray) -> bool {
             | Op::IssetStaticProp { dst, .. }
             | Op::FetchConstTo { dst, .. }
             | Op::FetchClassConstTo { dst, .. } => remap_tmp(dst),
+
+            // A foreach whose value temporary kept its old number read
+            // another slot (`null`) once lower temporaries were compacted
+            // away (gh24577).
+            Op::FeFetch { val, key, .. } => {
+                remap_tmp(val);
+                if let Some(k) = key {
+                    remap_tmp(k);
+                }
+            }
 
             Op::AssignCv { dst, .. }
             | Op::Assign { dst, .. }
@@ -493,26 +512,35 @@ fn has_dynamic_var_access(op_array: &OpArray) -> bool {
     false
 }
 
-/// Pass 13: Removes assignments to variables that are never read and never referenced (ZEND_OPTIMIZER_PASS_13).
-pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
-    let num_cvs = op_array.cv_names.len();
-    if num_cvs == 0 || has_dynamic_var_access(op_array) {
-        return false;
-    }
-
-    // Parameters cannot be removed
-    let mut num_param_cvs = 0u32;
+/// The CV slots bound before the first op: one past the highest parameter
+/// (from its `RECV`) or closure `use` binding.
+fn bound_cv_prefix(op_array: &OpArray, ctx: &OptContext<'_>) -> u32 {
+    let mut prefix = ctx.bound_cv_prefix();
     for op in &op_array.ops {
         match op {
             Op::Recv { cv, .. }
             | Op::RecvInit { cv, .. }
             | Op::RecvDefault { cv, .. }
             | Op::RecvVariadic { cv, .. } => {
-                num_param_cvs = num_param_cvs.max(*cv + 1);
+                prefix = prefix.max(cv.saturating_add(1));
             }
             _ => {}
         }
     }
+    prefix
+}
+
+/// Pass 13: Removes assignments to variables that are never read and never referenced (ZEND_OPTIMIZER_PASS_13).
+pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
+    let num_cvs = op_array.cv_names.len();
+    if num_cvs == 0 || has_dynamic_var_access(op_array) {
+        return false;
+    }
+
+    // Parameters and closure `use` bindings cannot be removed: a write to a
+    // by-reference one is seen by the caller or the enclosing scope
+    // (`use (&$v) { $v = 0; }`, jit/assign_dim_op_006).
+    let num_param_cvs = bound_cv_prefix(op_array, ctx);
 
     let mut read_counts = vec![0u32; num_cvs];
 
@@ -672,6 +700,41 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
         });
     }
 
+    // A variable that is ever assigned a non-literal value may hold an
+    // object (or an array of them): dropping the assignment of it destroys
+    // the object early, and dropping a later overwrite destroys it late
+    // (php-src's dce.c keeps an ASSIGN whose old value may have a
+    // destructor). Only variables that only ever receive literals lose
+    // their assignments.
+    let mut may_hold_object = vec![false; num_cvs];
+    for op in &op_array.ops {
+        let target = match op {
+            Op::AssignCv { cv, val, .. } => Some((*cv, *val)),
+            Op::Assign { place, val, .. } => {
+                op_array
+                    .places
+                    .get(*place as usize)
+                    .and_then(|p| match p.base {
+                        PlaceBase::Cv(cv) if p.segs.is_empty() => Some((cv, *val)),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        };
+        if let Some((cv, val)) = target {
+            if !matches!(val, Operand::Lit(_)) {
+                if let Some(m) = may_hold_object.get_mut(cv as usize) {
+                    *m = true;
+                }
+            }
+        }
+    }
+    let removable = |cv: u32| {
+        cv >= num_param_cvs
+            && read_counts.get(cv as usize).copied().unwrap_or(0) == 0
+            && !may_hold_object.get(cv as usize).copied().unwrap_or(true)
+    };
+
     let mut changed = false;
 
     // Eliminate assignments to unread variables
@@ -681,10 +744,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
             // operand), so an assignment of one is kept even when its target is
             // never read.
             Op::AssignCv { cv, val, dst } => {
-                if (*cv as usize) >= num_param_cvs as usize
-                    && !matches!(val, Operand::Cv(_))
-                    && read_counts.get(*cv as usize).copied().unwrap_or(0) == 0
-                {
+                if !matches!(val, Operand::Cv(_)) && removable(*cv) {
                     *op = match dst {
                         Some(d) => Op::Move { src: *val, dst: *d },
                         None => match val {
@@ -699,11 +759,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
                 let pid = *place as usize;
                 if let Some(p) = op_array.places.get(pid) {
                     if let PlaceBase::Cv(cv) = p.base {
-                        if p.segs.is_empty()
-                            && (cv as usize) >= num_param_cvs as usize
-                            && !matches!(val, Operand::Cv(_))
-                            && read_counts.get(cv as usize).copied().unwrap_or(0) == 0
-                        {
+                        if p.segs.is_empty() && !matches!(val, Operand::Cv(_)) && removable(cv) {
                             *op = match dst {
                                 Some(d) => Op::Move { src: *val, dst: *d },
                                 None => match val {
@@ -723,9 +779,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
                 dst,
                 cv,
             } => {
-                if (*cv as usize) >= num_param_cvs as usize
-                    && read_counts.get(*cv as usize).copied().unwrap_or(0) == 0
-                {
+                if removable(*cv) {
                     *op = Op::Bin {
                         op: *bin_op,
                         a: *a,
@@ -741,9 +795,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
                 dst,
                 to,
             } => {
-                if (*to as usize) >= num_param_cvs as usize
-                    && read_counts.get(*to as usize).copied().unwrap_or(0) == 0
-                {
+                if removable(*to) {
                     *op = Op::FetchConst {
                         name: *name,
                         fallback: *fallback,
@@ -758,9 +810,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
                 dst,
                 to,
             } => {
-                if (*to as usize) >= num_param_cvs as usize
-                    && read_counts.get(*to as usize).copied().unwrap_or(0) == 0
-                {
+                if removable(*to) {
                     *op = Op::FetchClassConst {
                         class: class.clone(),
                         name: Operand::Lit(*name),
@@ -777,7 +827,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
 }
 
 /// Pass 12: Adjusts used stack by compacting unused CV slots (ZEND_OPTIMIZER_PASS_12).
-pub(crate) fn compact_cvs(op_array: &mut OpArray) -> bool {
+pub(crate) fn compact_cvs(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
     let num_cvs = op_array.cv_names.len();
     if num_cvs == 0 || has_dynamic_var_access(op_array) {
         return false;
@@ -785,19 +835,10 @@ pub(crate) fn compact_cvs(op_array: &mut OpArray) -> bool {
 
     let mut is_referenced = vec![false; num_cvs];
 
-    // Parameters cannot be moved/removed
-    let mut num_param_cvs = 0u32;
-    for op in &op_array.ops {
-        match op {
-            Op::Recv { cv, .. }
-            | Op::RecvInit { cv, .. }
-            | Op::RecvDefault { cv, .. }
-            | Op::RecvVariadic { cv, .. } => {
-                num_param_cvs = num_param_cvs.max(*cv + 1);
-            }
-            _ => {}
-        }
-    }
+    // Parameters and closure `use` bindings cannot be moved or removed: the
+    // caller and the closure binding address their slots by number, so
+    // renumbering `use ($a, $b)` with `$a` unread bound `$b` to `$a`'s slot.
+    let num_param_cvs = bound_cv_prefix(op_array, ctx);
     for i in 0..(num_param_cvs as usize).min(num_cvs) {
         is_referenced[i] = true;
     }
