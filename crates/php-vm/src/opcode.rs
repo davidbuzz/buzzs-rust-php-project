@@ -307,6 +307,7 @@ impl MatchTable {
     }
 
     /// Every jump target: the entries' in order, then the default.
+    #[must_use]
     pub fn labels(&self) -> impl Iterator<Item = Label> + '_ {
         self.entries
             .iter()
