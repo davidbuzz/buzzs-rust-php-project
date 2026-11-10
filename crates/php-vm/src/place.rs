@@ -1762,7 +1762,39 @@ impl Vm {
 
     /// Makes a place a reference.
     pub(crate) fn place_make_ref(&mut self, pid: PlaceId) -> VmResult<PhpRef> {
+        if let Some(r) = self.cv_make_ref_fast(pid) {
+            return Ok(r);
+        }
         self.with_cv_symtab(pid, |vm| vm.place_make_ref_impl(pid))
+    }
+
+    /// `&$cv` (`ZEND_SEND_REF`, `ZEND_MAKE_REF` of a plain compiled
+    /// variable) in a frame whose symbol table is not attached: the CV slot
+    /// is the variable, so it becomes (or already is) a reference in place,
+    /// an undefined one a reference to null without a notice. This is what
+    /// the general path does after attaching the table
+    /// ([`Vm::with_cv_symtab`] and `write_var_root`'s `WOp::MakeRef`), minus
+    /// the attach/detach round trip that made every by-reference argument
+    /// (`preg_match($re, $s, $m)`) cost a copy of all the frame's variables.
+    /// `None` for any other place or frame state.
+    #[inline]
+    fn cv_make_ref_fast(&mut self, pid: PlaceId) -> Option<PhpRef> {
+        let f = self.frames.last_mut()?;
+        if f.symtab_attached
+            || !matches!(
+                f.kind,
+                crate::vm::FrameKind::Main | crate::vm::FrameKind::Function
+            )
+        {
+            return None;
+        }
+        let p = f.code.places.get(pid as usize)?;
+        let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) else {
+            return None;
+        };
+        let cv = *cv as usize;
+        let slot = f.cvs.get_mut(cv)?.as_mut();
+        Some(slot.get_or_insert(Value::Null).make_ref())
     }
 
     /// `unset(place)`.
