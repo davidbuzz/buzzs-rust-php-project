@@ -600,3 +600,21 @@ fn root_index_finds_and_forgets_every_handle() {
     drop(next);
     drop(vm);
 }
+
+/// `$this` and closures of calls returning in a loop are buffered once
+/// (`LAST_ROOT` answers the later returns), and a collection that empties
+/// the buffer makes the next return buffer the object again (php-src
+/// 8.3: 2, 0, 0, 1, 1, 2).
+#[test]
+fn returning_this_is_buffered_once_and_again_after_a_collection() {
+    let out = run("<?php class A { public $s; function m() { return 1; } }\n\
+         $a = new A; $b = new A;\n\
+         for ($i = 0; $i < 3; $i++) { $a->m(); $b->m(); }\n\
+         var_dump(gc_status()['roots']); var_dump(gc_collect_cycles());\n\
+         var_dump(gc_status()['roots']); $a->m(); var_dump(gc_status()['roots']);\n\
+         $a->s = $a; $a->m(); unset($a); var_dump(gc_collect_cycles());\n\
+         $c = function () { return 2; };\n\
+         for ($i = 0; $i < 3; $i++) { $c(); $b->m(); }\n\
+         var_dump(gc_status()['roots']);");
+    assert_eq!(out, "int(2)\nint(0)\nint(0)\nint(1)\nint(1)\nint(2)\n");
+}
