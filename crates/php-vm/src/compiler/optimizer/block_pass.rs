@@ -10,7 +10,7 @@
 
 use super::{add_or_find_literal, clear_def_tmp, def_tmp, for_each_label_mut};
 use crate::compiler::expr::const_truthiness;
-use crate::opcode::{CastKind, Label, Op, OpArray, Operand, UnKind};
+use crate::opcode::{BinKind, CastKind, Label, Op, OpArray, Operand, UnKind};
 use php_runtime::{Value, ZStr};
 
 /// Finds all basic block leaders in `op_array`.
@@ -259,6 +259,37 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
                         }
                     }
                 }
+                // A jump that provably falls through without writing its
+                // result (SCCP's infeasible edge, `sccp.c`): `JMP_SET` of a
+                // falsy literal, `COALESCE` of null, `JMP_NULL` of non-null.
+                Op::JmpSet {
+                    a: Operand::Lit(l), ..
+                } => {
+                    if op_array.literals.get(l as usize).and_then(const_truthiness) == Some(false) {
+                        op_array.ops[i] = Op::Nop;
+                        changed = true;
+                    }
+                }
+                Op::Coalesce {
+                    a: Operand::Lit(l), ..
+                } => {
+                    if matches!(op_array.literals.get(l as usize), Some(Value::Null)) {
+                        op_array.ops[i] = Op::Nop;
+                        changed = true;
+                    }
+                }
+                Op::JmpNull {
+                    a: Operand::Lit(l), ..
+                } => {
+                    if op_array
+                        .literals
+                        .get(l as usize)
+                        .is_some_and(|v| !v.is_null())
+                    {
+                        op_array.ops[i] = Op::Nop;
+                        changed = true;
+                    }
+                }
                 _ => {}
             }
         }
@@ -481,6 +512,12 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
             }
         }
 
+        // 4b. `T = BOOL/BOOL_NOT(X)` + `IS_IDENTICAL(T, true/false)`
+        changed |= fold_bool_identical(op_array, b_start, b_end, &use_counts);
+
+        // 4c. `T1 = OP ...; T2 = QM_ASSIGN T1` -> `T2 = OP ...`
+        changed |= fold_tmp_copy(op_array, b_start, b_end, &use_counts);
+
         // 5. Consecutive string literal Echo merging
         for i in b_start..b_end {
             if let Op::Echo(Operand::Lit(l1)) = op_array.ops[i] {
@@ -515,6 +552,146 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
         }
     }
 
+    changed
+}
+
+/// Folds `T = BOOL(X)`/`T = BOOL_NOT(X)` followed by `IS_IDENTICAL` of `T`
+/// with a `true`/`false` literal (either side) into one `BOOL`/`BOOL_NOT`
+/// of `X`, like php-src's block pass (`block_pass.c`: `IS_IDENTICAL(T,
+/// TRUE)` becomes `TYPE_CHECK(T, TRUE)`, which absorbs a `BOOL`/`BOOL_NOT`
+/// source). `T` is a bool, so `T === true` is `T` and `T === false` is
+/// `!T`: the fold is exact. `T` must have no other use.
+fn fold_bool_identical(
+    op_array: &mut OpArray,
+    b_start: usize,
+    b_end: usize,
+    use_counts: &[u32],
+) -> bool {
+    let mut changed = false;
+    for i in b_start..b_end {
+        let Op::Unary {
+            op: src_op @ (UnKind::Bool | UnKind::Not),
+            a: x,
+            dst: t,
+        } = op_array.ops[i]
+        else {
+            continue;
+        };
+        if use_counts.get(t as usize).copied().unwrap_or(0) > 1 {
+            continue;
+        }
+        let mut next_i = i + 1;
+        while next_i < b_end && matches!(op_array.ops[next_i], Op::Nop) {
+            next_i += 1;
+        }
+        if next_i >= b_end {
+            continue;
+        }
+        let Op::Bin {
+            op: BinKind::Identical,
+            a,
+            b,
+            dst,
+        } = op_array.ops[next_i]
+        else {
+            continue;
+        };
+        let lit = match (a, b) {
+            (Operand::Tmp(u), Operand::Lit(l)) | (Operand::Lit(l), Operand::Tmp(u)) if u == t => l,
+            _ => continue,
+        };
+        let want = match op_array.literals.get(lit as usize) {
+            Some(Value::Bool(v)) => *v,
+            _ => continue,
+        };
+        let op = if (src_op == UnKind::Bool) == want {
+            UnKind::Bool
+        } else {
+            UnKind::Not
+        };
+        op_array.ops[next_i] = Op::Unary { op, a: x, dst };
+        op_array.ops[i] = Op::Nop;
+        changed = true;
+    }
+    changed
+}
+
+/// The result slot of an op that defines its temporary exactly once and
+/// only by computing it (no jump, rope, array build, `NEW` or silence
+/// token), so the op may write another temporary instead.
+fn plain_def_dst_mut(op: &mut Op) -> Option<&mut u32> {
+    match op {
+        Op::Bin { dst, .. }
+        | Op::Unary { dst, .. }
+        | Op::Cast { dst, .. }
+        | Op::Isset { dst, .. }
+        | Op::Empty { dst, .. } => Some(dst),
+        _ => None,
+    }
+}
+
+/// Whether op `at` reads temporary `t` (an operand or one of its place's).
+fn reads_tmp(op_array: &OpArray, at: usize, t: u32) -> bool {
+    let mut hit = false;
+    let mut check = |o: &mut Operand| {
+        if matches!(o, Operand::Tmp(u) | Operand::TmpKeep(u) if *u == t) {
+            hit = true;
+        }
+    };
+    let mut op = op_array.ops[at].clone();
+    super::for_each_operand_mut(&mut op, &mut check);
+    if let Op::Isset { place, .. } | Op::Empty { place, .. } = op {
+        if let Some(p) = op_array.places.get(place as usize) {
+            super::for_each_place_operand_mut(&mut p.clone(), &mut check);
+        }
+    }
+    hit
+}
+
+/// `T1 = OP ...` directly followed by `T2 = QM_ASSIGN T1`, with `T1`
+/// defined and used nowhere else, becomes `T2 = OP ...` (php-src
+/// `block_pass.c`, `ZEND_QM_ASSIGN`: "T1 = ..., T2 = QM_ASSIGN(T1) to
+/// T2 = ..., NOP").
+fn fold_tmp_copy(op_array: &mut OpArray, b_start: usize, b_end: usize, use_counts: &[u32]) -> bool {
+    let mut changed = false;
+    for i in b_start..b_end {
+        let Some(t1) = plain_def_dst_mut(&mut op_array.ops[i]).map(|d| *d) else {
+            continue;
+        };
+        if use_counts.get(t1 as usize).copied().unwrap_or(0) != 1 {
+            continue;
+        }
+        let mut next_i = i + 1;
+        while next_i < b_end && matches!(op_array.ops[next_i], Op::Nop) {
+            next_i += 1;
+        }
+        if next_i >= b_end {
+            continue;
+        }
+        let Op::Move {
+            src: Operand::Tmp(src),
+            dst: t2,
+        } = op_array.ops[next_i]
+        else {
+            continue;
+        };
+        if src != t1 || t2 == t1 {
+            continue;
+        }
+        let defs = op_array
+            .ops
+            .iter()
+            .filter(|op| super::def_tmp(op) == Some(t1))
+            .count();
+        if defs != 1 || reads_tmp(op_array, i, t2) {
+            continue;
+        }
+        if let Some(d) = plain_def_dst_mut(&mut op_array.ops[i]) {
+            *d = t2;
+        }
+        op_array.ops[next_i] = Op::Nop;
+        changed = true;
+    }
     changed
 }
 

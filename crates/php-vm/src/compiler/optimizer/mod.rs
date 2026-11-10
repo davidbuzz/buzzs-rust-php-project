@@ -1403,4 +1403,93 @@ mod tests {
             assert!(returned_lit(&code).is_none(), "{:?}", code.ops);
         }
     }
+
+    /// `BOOL`/`BOOL_NOT` compared `===` with `true`/`false` folds into one
+    /// `BOOL`/`BOOL_NOT` (opcache `opt/block_pass_007`, `match/005`); a
+    /// non-bool operand keeps its `IS_IDENTICAL` (`2 === true` is false
+    /// although `(bool) 2` is true).
+    #[test]
+    fn block_pass_folds_bool_compared_identical_with_bool_literal() {
+        let unit = compile_src(
+            "<?php function a($f) { return !$f === true; }\n\
+             function b($f) { return !$f === false; }\n\
+             function d($f) { return !!$f === false; }\n\
+             function e($f) { return $f === true; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let has_identical = |code: &OpArray| {
+            code.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Op::Bin {
+                        op: crate::opcode::BinKind::Identical,
+                        ..
+                    }
+                )
+            })
+        };
+        let unary = |code: &OpArray| {
+            code.ops.iter().find_map(|op| match op {
+                Op::Unary { op, .. } => Some(*op),
+                _ => None,
+            })
+        };
+        for (name, want) in [
+            (&b"a"[..], crate::opcode::UnKind::Not),
+            (b"b", crate::opcode::UnKind::Bool),
+            (b"d", crate::opcode::UnKind::Not),
+        ] {
+            let code = find_code(&unit, named(name));
+            assert!(!has_identical(&*code), "{:?}", code.ops);
+            assert_eq!(unary(&*code), Some(want), "{:?}", code.ops);
+        }
+        let e = find_code(&unit, named(b"e"));
+        assert!(has_identical(&*e), "{:?}", e.ops);
+    }
+
+    /// `JMP_SET` of a falsy literal falls through without writing its
+    /// result, so the block pass drops it (opcache `opt/jmp_001`).
+    #[test]
+    fn block_pass_drops_jmp_set_of_falsy_literal() {
+        let unit = compile_src(
+            "<?php function t() { $v = null; $v = $v ?: t2(); return $v; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"t"));
+        assert!(
+            !code.ops.iter().any(|op| matches!(op, Op::JmpSet { .. })),
+            "{:?}",
+            code.ops
+        );
+    }
+
+    /// `T1 = ISSET ...; T2 = QM_ASSIGN T1` writes `T2` directly (block
+    /// pass, opcache `opt/gh18107_1`).
+    #[test]
+    fn block_pass_folds_tmp_copy_into_its_definition() {
+        let unit = compile_src(
+            "<?php function f() { if (!isset($b)) { throw new Exception('x'); } return 1; }",
+            PASS_5,
+        );
+        let code = find_code(&unit, named(b"f"));
+        let ops: Vec<&Op> = code
+            .ops
+            .iter()
+            .filter(|op| !matches!(op, Op::Nop))
+            .collect();
+        assert!(
+            !ops.windows(2).any(|w| matches!(
+                (w[0], w[1]),
+                (
+                    Op::Isset { .. },
+                    Op::Move {
+                        src: Operand::Tmp(_),
+                        ..
+                    }
+                )
+            )),
+            "{:?}",
+            code.ops
+        );
+    }
 }
