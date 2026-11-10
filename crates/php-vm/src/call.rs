@@ -2340,7 +2340,7 @@ impl Vm {
         }
         let (v, ret) = {
             let (callers, rest) = self.frames.vec.split_at_mut(fidx);
-            let caller = callers.last()?;
+            let caller = callers.last_mut()?;
             let frame = rest.first_mut()?;
             if frame.kind != FrameKind::Function
                 || frame.symtab_attached
@@ -2358,18 +2358,36 @@ impl Vm {
             // out-of-line call per return.
             let v = match val {
                 Operand::Cv(cv) => {
-                    let v = match frame
-                        .cvs
-                        .get(cv as usize)
-                        .and_then(crate::vm::CvSlot::get)?
-                    {
-                        Value::Reference(r) => r.get(),
-                        v => clone_value(v),
-                    };
-                    if !return_accepts(rt, &v) {
-                        return None;
+                    let slot = frame.cvs.get_mut(cv as usize)?.as_mut();
+                    match slot.as_ref()? {
+                        Value::Reference(r) => {
+                            let v = r.get();
+                            if !return_accepts(rt, &v) {
+                                return None;
+                            }
+                            v
+                        }
+                        v => {
+                            if !return_accepts(rt, v) {
+                                return None;
+                            }
+                            // The frame is released below and nothing else
+                            // reads its variables (no symbol table is
+                            // attached): a value that cannot be a garbage
+                            // collection root moves out of its slot instead
+                            // of being copied and then released with the
+                            // frame (a reference count up and down for a
+                            // string). Arrays and objects are copied, so
+                            // that `gc::frame_released` still buffers them
+                            // as possible roots, as `zend_leave_helper`'s
+                            // release of the variables does.
+                            if matches!(v, Value::Array(_) | Value::Object(_)) {
+                                clone_value(v)
+                            } else {
+                                slot.take()?
+                            }
+                        }
                     }
-                    v
                 }
                 Operand::Tmp(t) => {
                     let slot = frame.tmps.get_mut(t as usize)?;
@@ -2404,9 +2422,29 @@ impl Vm {
             if frame.this.is_some() || frame.closure.is_some() || cvs_may_hold_roots(&frame.cvs) {
                 crate::gc::frame_released(frame, caller.this.as_ref());
             }
-            (v, frame.ret)
+            let ret = frame.ret;
+            // `ZEND_RETURN` copies the value into the caller's result slot
+            // (`EX(return_value)`) before `zend_leave_helper` releases the
+            // frame: done here, through the caller already at hand, when
+            // the slot holds a scalar (its release has no effect). Another
+            // value in the slot is released after the frame, by `set_tmp`
+            // below, as before.
+            let v = match ret {
+                RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
+                    Some(slot) if is_scalar(slot) => {
+                        std::mem::forget(std::mem::replace(slot, v));
+                        None
+                    }
+                    _ => Some(v),
+                },
+                RetTarget::Discard => Some(v),
+            };
+            (v, ret)
         };
         self.frames.release_top(&self.empty_code);
+        let Some(v) = v else {
+            return Some(crate::exec::Flow::Reload);
+        };
         match ret {
             RetTarget::Tmp(t) => self.set_tmp(t, v),
             // An unused result (`g();`): a scalar owns nothing, so the
@@ -4527,6 +4565,16 @@ fn clone_value(v: &Value) -> Value {
         Value::Float(f) => Value::Float(*f),
         _ => v.clone(),
     }
+}
+
+/// Whether `v` is a scalar, whose release does nothing.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one tag test per return
+fn is_scalar(v: &Value) -> bool {
+    matches!(
+        v,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    )
 }
 
 /// Whether a compiled variable of a returning frame holds a value
