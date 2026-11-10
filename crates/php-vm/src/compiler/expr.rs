@@ -509,6 +509,7 @@ impl Compiler<'_> {
             }
             ExprKind::Silence(inner) => {
                 let saved = self.tmp();
+                self.user_opcode_hook("ZEND_BEGIN_SILENCE");
                 self.emit(Op::BeginSilence { dst: saved });
                 let v = self.compile_expr(inner)?;
                 let v = match v {
@@ -519,6 +520,7 @@ impl Compiler<'_> {
                     }
                     o => o,
                 };
+                self.user_opcode_hook("ZEND_END_SILENCE");
                 self.emit(Op::EndSilence {
                     saved: Operand::Tmp(saved),
                 });

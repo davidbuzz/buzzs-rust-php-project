@@ -100,3 +100,25 @@ fn user_opcode_hook_precedes_each_add() {
     let plain = first_function_ops(&compile_src(src, Vec::new()));
     assert!(!plain.iter().any(|op| matches!(op, Op::UserOpcode { .. })));
 }
+
+#[test]
+fn user_opcode_hooks_bracket_silence() {
+    let src = "<?php function f() { return @g(); }";
+    let ops = first_function_ops(&compile_src(
+        src,
+        vec!["ZEND_BEGIN_SILENCE", "ZEND_END_SILENCE"],
+    ));
+    for (i, op) in ops.iter().enumerate() {
+        if matches!(op, Op::BeginSilence { .. } | Op::EndSilence { .. }) {
+            assert!(
+                i > 0 && matches!(ops[i - 1], Op::UserOpcode { .. }),
+                "{ops:?}"
+            );
+        }
+    }
+    let hooks = ops
+        .iter()
+        .filter(|op| matches!(op, Op::UserOpcode { .. }))
+        .count();
+    assert_eq!(hooks, 2, "{ops:?}");
+}

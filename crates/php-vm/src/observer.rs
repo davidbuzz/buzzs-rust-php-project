@@ -63,8 +63,9 @@ fn zend_opcode_name(op: &Op) -> Option<&'static str> {
 pub type UserOpcodeHandler = fn(&mut Vm, &str);
 
 /// The Zend opcodes the compiler can hook (each is one instruction kind
-/// here): `ZEND_ADD` is a non-constant `+`.
-const HOOKABLE_OPCODES: &[&str] = &["ZEND_ADD"];
+/// here): `ZEND_ADD` is a non-constant `+`; the silence pair brackets
+/// an `@` expression.
+const HOOKABLE_OPCODES: &[&str] = &["ZEND_ADD", "ZEND_BEGIN_SILENCE", "ZEND_END_SILENCE"];
 
 /// A fiber context as the fiber observers see it (`zend_fiber_context`,
 /// `Zend/zend_fibers.h`).
