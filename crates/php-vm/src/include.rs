@@ -26,6 +26,11 @@ pub type CompileHookFn = fn(&mut Vm, Rc<[u8]>, &ZStr, bool) -> VmResult<CompileO
 /// runs). Returns the cached unit and its path.
 pub type CachedIncludeHookFn = fn(&mut Vm, &[u8]) -> VmResult<Option<(ZStr, Rc<CompiledUnit>)>>;
 
+/// `tsrm_realpath()` as the stream layer implements it, with
+/// `CWDG(realpath_cache)`: the real path of an existing file, `None` when
+/// it cannot be resolved.
+pub type IncludeRealpathFn = fn(&[u8]) -> Option<Vec<u8>>;
+
 /// A pass registered with `zend_optimizer_register_pass`, run on each
 /// script opcache optimizes.
 pub type OptimizerPassFn = fn(&mut Vm);
@@ -34,6 +39,7 @@ thread_local! {
     static OPTIMIZER_PASSES: std::cell::RefCell<Vec<OptimizerPassFn>> = const { std::cell::RefCell::new(Vec::new()) };
     static CACHED_INCLUDE_HOOK: std::cell::Cell<Option<CachedIncludeHookFn>> = const { std::cell::Cell::new(None) };
     static COMPILE_HOOK: std::cell::Cell<Option<CompileHookFn>> = const { std::cell::Cell::new(None) };
+    static REALPATH_HOOK: std::cell::Cell<Option<IncludeRealpathFn>> = const { std::cell::Cell::new(None) };
     /// Set while compiling a file opened through a stream wrapper other
     /// than `file://` and `phar://`: such source bypasses the compile hook
     /// (opcache's `persistent_compile_file` falls back to the original
@@ -73,6 +79,14 @@ impl Vm {
         for pass in passes {
             pass(self);
         }
+    }
+
+    /// Installs the resolver of included files' opened paths
+    /// (`tsrm_realpath()` over the realpath cache). Without one, each
+    /// include resolves its path with `realpath(3)`, a `readlink` per
+    /// path component.
+    pub fn set_include_realpath_hook(f: IncludeRealpathFn) {
+        REALPATH_HOOK.with(|h| h.set(Some(f)));
     }
 
     /// Installs the hook serving includes of unopenable files from a
@@ -237,15 +251,15 @@ impl Vm {
             closure_name: None,
             strict_types: false,
             sprintf_builtin: matches!(
-                self.functions.get(&ZStr::from("sprintf")),
+                self.functions.get(b"sprintf".as_slice()),
                 Some(crate::func::Func::Builtin(_))
             ),
             array_map_builtin: matches!(
-                self.functions.get(&ZStr::from("array_map")),
+                self.functions.get(b"array_map".as_slice()),
                 Some(crate::func::Func::Builtin(_))
             ),
             strlen_builtin: matches!(
-                self.functions.get(&ZStr::from("strlen")),
+                self.functions.get(b"strlen".as_slice()),
                 Some(crate::func::Func::Builtin(_))
             ),
             special_builtins: self.special_builtins(),
@@ -751,8 +765,7 @@ impl Vm {
         // uses `file_handle->opened_path` when there is one: `__FILE__`,
         // `__DIR__`, reflection's `getFileName()`, backtraces and messages
         // all show the resolved path, not the `..`/symlink spelling used.
-        if !self.included_set.contains(&real_z) {
-            self.included_set.insert(real_z.clone());
+        if self.included_set.insert(real_z.clone()) {
             self.included.push(real_z.clone());
         }
         let src = self.filter_source(&real_z, src)?;
@@ -781,8 +794,7 @@ impl Vm {
             self.set_tmp(dst, Value::Bool(true));
             return Ok(false);
         }
-        if !self.included_set.contains(&path) {
-            self.included_set.insert(path.clone());
+        if self.included_set.insert(path.clone()) {
             self.included.push(path);
         }
         self.declare_hoisted(unit)?;
@@ -806,8 +818,7 @@ impl Vm {
             self.set_tmp(dst, Value::Bool(true));
             return Ok(false);
         }
-        if !self.included_set.contains(&path) {
-            self.included_set.insert(path.clone());
+        if self.included_set.insert(path.clone()) {
             self.included.push(path.clone());
         }
         let src = self.filter_source(&path, src)?;
@@ -927,7 +938,20 @@ impl Vm {
 /// `_php_stream_fopen` opens it with `STREAM_ASSUME_REALPATH`, so `..`
 /// segments and symbolic links are resolved. If that fails the path is
 /// only made absolute (`expand_filepath`).
+///
+/// With a realpath hook installed (the stream layer's `tsrm_realpath`),
+/// resolution goes through `CWDG(realpath_cache)` as in php-src, so a
+/// file included again (`include_once` of an autoloaded class, a file in a
+/// directory already seen) costs a cache lookup instead of a `readlink`
+/// for every path component.
 fn opened_path(path: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    if let Some(hook) = REALPATH_HOOK.with(std::cell::Cell::get) {
+        if let Some(real) = hook(path.as_os_str().as_bytes()) {
+            return std::path::PathBuf::from(std::ffi::OsString::from_vec(real));
+        }
+        return std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    }
     std::fs::canonicalize(path)
         .or_else(|_| std::path::absolute(path))
         .unwrap_or_else(|_| path.to_path_buf())
@@ -970,7 +994,9 @@ impl CompiledUnit {
 
 #[cfg(test)]
 mod tests {
-    use super::is_uncacheable_stream_path;
+    use super::{is_uncacheable_stream_path, opened_path};
+    use crate::vm::Vm;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn stream_paths_other_than_file_and_phar_are_not_cacheable() {
@@ -983,5 +1009,27 @@ mod tests {
         assert!(!is_uncacheable_stream_path(b"/tmp/a.inc"));
         assert!(!is_uncacheable_stream_path(b"://x"));
         assert!(!is_uncacheable_stream_path(b"data:text/plain,x"));
+    }
+
+    fn fake_realpath(path: &[u8]) -> Option<Vec<u8>> {
+        path.ends_with(b"found.php")
+            .then(|| b"/real/found.php".to_vec())
+    }
+
+    // Each test runs on its own thread, so the thread-local hook set here
+    // does not leak into other tests.
+    #[test]
+    fn opened_path_goes_through_the_realpath_hook() {
+        assert_eq!(opened_path(Path::new("/")), PathBuf::from("/"));
+        Vm::set_include_realpath_hook(fake_realpath);
+        assert_eq!(
+            opened_path(Path::new("./a/../found.php")),
+            PathBuf::from("/real/found.php")
+        );
+        // An unresolvable path is only made absolute (`expand_filepath`).
+        assert_eq!(
+            opened_path(Path::new("/nowhere/missing.php")),
+            PathBuf::from("/nowhere/missing.php")
+        );
     }
 }
