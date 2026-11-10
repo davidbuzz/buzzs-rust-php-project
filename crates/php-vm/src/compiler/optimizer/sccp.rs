@@ -113,6 +113,184 @@ fn fold_fetch_dim(container: &Value, dim: &Value, mode: FetchMode) -> Option<Val
     .then_some(val)
 }
 
+/// What `isset(container[dim])` (or `empty(...)` when `empty`) gives for a
+/// known container and offset (sccp.c `ct_eval_isset_dim`). Neither ever
+/// warns: an array element is looked up (only integer and string keys
+/// fold), a string offset is range-checked (only integer offsets fold), a
+/// scalar has no elements. `None` when it does not fold.
+fn fold_isset_dim(container: &Value, dim: &Value, empty: bool) -> Option<bool> {
+    match container {
+        Value::Array(arr) => {
+            let elem = match dim {
+                Value::Int(i) => arr.get_int(*i),
+                Value::Str(s) => arr.get_sym(s.as_bytes()),
+                _ => return None,
+            };
+            match (empty, elem) {
+                (false, elem) => Some(elem.is_some_and(|v| !matches!(v, Value::Null))),
+                (true, None) => Some(true),
+                (true, Some(v)) => const_truthiness(v).map(|t| !t),
+            }
+        }
+        Value::Str(s) => {
+            let Value::Int(i) = dim else {
+                return None;
+            };
+            let len = i64::try_from(s.len()).ok()?;
+            let idx = if *i < 0 { i.checked_add(len)? } else { *i };
+            if !(0..len).contains(&idx) {
+                return Some(empty);
+            }
+            if !empty {
+                return Some(true);
+            }
+            let byte = *s.as_bytes().get(usize::try_from(idx).ok()?)?;
+            Some(byte == b'0')
+        }
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => Some(empty),
+        _ => None,
+    }
+}
+
+/// The container and offset literals of an `isset()`/`empty()` place
+/// `container[dim]`: a literal base, or a CV holding a known constant.
+fn isset_operands(place: &Place, cur_state: &[CvLattice]) -> Option<(u32, u32)> {
+    let container = match &place.base {
+        PlaceBase::Value(Operand::Lit(c)) => *c,
+        PlaceBase::Cv(cv) => match cur_state.get(*cv as usize) {
+            Some(CvLattice::Const(l)) => *l,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some((container, single_dim_lit(place)?))
+}
+
+/// Compile-time evaluation of a pure internal function on constant
+/// arguments (sccp.c `ct_eval_func_call`: functions whose stub carries
+/// `@compile-time-eval`). Only exact argument types fold, so no coercion
+/// (and no `strict_types` difference) is involved; an argument the
+/// function rejects (a `ValueError`) leaves the call alone.
+fn ct_eval_func_call(name: &[u8], args: &[&Value]) -> Option<Value> {
+    let string = |b: Vec<u8>| Some(Value::Str(ZStr::from(b)));
+    let digest = |name: &[u8], s: &ZStr| -> Vec<u8> {
+        if name == b"md5" {
+            php_hash::md5(s.as_bytes()).to_vec()
+        } else {
+            php_hash::sha1(s.as_bytes()).to_vec()
+        }
+    };
+    match (name, args) {
+        (b"md5" | b"sha1", [Value::Str(s)]) => {
+            string(php_hash::bin2hex(&digest(name, s)).into_bytes())
+        }
+        (b"md5" | b"sha1", [Value::Str(s), Value::Bool(raw)]) => {
+            let d = digest(name, s);
+            string(if *raw {
+                d
+            } else {
+                php_hash::bin2hex(&d).into_bytes()
+            })
+        }
+        (b"bin2hex", [Value::Str(s)]) => string(php_hash::bin2hex(s.as_bytes()).into_bytes()),
+        (b"str_increment", [Value::Str(s)]) => {
+            string(php_stdstr::transform::str_increment(s.as_bytes()).ok()?)
+        }
+        (b"str_decrement", [Value::Str(s)]) => {
+            string(php_stdstr::transform::str_decrement(s.as_bytes()).ok()?)
+        }
+        _ => None,
+    }
+}
+
+/// `INIT_FCALL f; SEND_VAL c...; T = DO_ICALL` of a function
+/// [`ct_eval_func_call`] evaluates becomes `T = QM_ASSIGN result`. The call
+/// must be straight-line (only `NOP`s and folded constant moves between its
+/// steps) and name a global function resolved at compile time (no
+/// namespace fallback) that is not disabled. Calls are visited innermost
+/// first, so `bin2hex(md5($s, true))` folds in one go.
+fn fold_const_func_calls(
+    op_array: &mut OpArray,
+    def_count: &[u32],
+    lit_def: &mut [Option<u32>],
+) -> bool {
+    let mut changed = false;
+    for i in (0..op_array.ops.len()).rev() {
+        let Op::InitFCall {
+            name,
+            fallback: None,
+            ..
+        } = op_array.ops[i]
+        else {
+            continue;
+        };
+        let Some(Value::Str(fname)) = op_array.literals.get(name as usize) else {
+            continue;
+        };
+        let fname = fname.as_bytes().to_ascii_lowercase();
+        if super::is_disabled_function(&fname) {
+            continue;
+        }
+        let mut args = Vec::new();
+        let mut sends = Vec::new();
+        let mut call = None;
+        for (j, op) in op_array.ops.iter().enumerate().skip(i + 1) {
+            match op {
+                Op::Nop
+                | Op::Move {
+                    src: Operand::Lit(_),
+                    ..
+                } => {}
+                Op::Send {
+                    src: ArgSrc::Val(arg) | ArgSrc::CallResult(arg),
+                } => {
+                    let Some(l) = known_lit(arg, lit_def) else {
+                        break;
+                    };
+                    args.push(l);
+                    sends.push(j);
+                }
+                Op::DoCall { dst } => {
+                    call = Some((j, *dst));
+                    break;
+                }
+                _ => break,
+            }
+        }
+        let Some((call_idx, dst)) = call else {
+            continue;
+        };
+        let vals: Option<Vec<&Value>> = args
+            .iter()
+            .map(|&l| op_array.literals.get(l as usize))
+            .collect();
+        let Some(result) = vals.and_then(|v| ct_eval_func_call(&fname, &v)) else {
+            continue;
+        };
+        let lit = add_or_find_literal(&mut op_array.literals, result);
+        op_array.ops[i] = Op::Nop;
+        for j in sends {
+            op_array.ops[j] = Op::Nop;
+        }
+        op_array.ops[call_idx] = match dst {
+            Some(d) => {
+                if def_count.get(d as usize).copied() == Some(1) {
+                    if let Some(slot) = lit_def.get_mut(d as usize) {
+                        *slot = Some(lit);
+                    }
+                }
+                Op::Move {
+                    src: Operand::Lit(lit),
+                    dst: d,
+                }
+            }
+            None => Op::Nop,
+        };
+        changed = true;
+    }
+    changed
+}
+
 /// For an in-place update of a plain CV (`$cv op= val`, `++$cv`, ...):
 /// the CV and its new constant (the literal index), or `None` for the
 /// constant when the result is not known. `None` overall when `op` is no
@@ -1079,6 +1257,30 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         changed = true;
                     }
                 }
+                // `isset("abc"[1])`, `empty("abc"[3])`.
+                Op::Isset { place, dst } | Op::Empty { place, dst }
+                    if def_count.get(*dst as usize).copied() == Some(1) =>
+                {
+                    let (place, dst) = (*place, *dst);
+                    let empty = matches!(op, Op::Empty { .. });
+                    let folded = op_array.places.get(place as usize).and_then(|p| {
+                        let (c, d) = isset_operands(p, &[])?;
+                        fold_isset_dim(
+                            op_array.literals.get(c as usize)?,
+                            op_array.literals.get(d as usize)?,
+                            empty,
+                        )
+                    });
+                    if let Some(res) = folded {
+                        let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
+                        lit_def[dst as usize] = Some(lit);
+                        *op = Op::Move {
+                            src: Operand::Lit(lit),
+                            dst,
+                        };
+                        changed = true;
+                    }
+                }
                 Op::Abs { src, dst, to } => {
                     let lit_src = match src {
                         Operand::Lit(l) => Some(*l),
@@ -1121,6 +1323,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
             }
         }
 
+        changed |= fold_const_func_calls(op_array, &def_count, &mut lit_def);
         changed |= fold_const_array_builds(op_array, &def_count, &mut lit_def);
 
         // Substitute known temporary constants: every use, including the
@@ -1600,6 +1803,27 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                             *op = Op::Move {
                                 src: Operand::Lit(lit),
                                 dst: *dst,
+                            };
+                            changed = true;
+                        }
+                    }
+                    // `isset($cv[c])` / `empty("abc"[$k])` of known values.
+                    Op::Isset { place, dst } | Op::Empty { place, dst } => {
+                        let (place, dst) = (*place, *dst);
+                        let empty = matches!(op, Op::Empty { .. });
+                        let folded = op_array.places.get(place as usize).and_then(|p| {
+                            let (c, d) = isset_operands(p, &cur_state)?;
+                            fold_isset_dim(
+                                op_array.literals.get(c as usize)?,
+                                op_array.literals.get(d as usize)?,
+                                empty,
+                            )
+                        });
+                        if let Some(res) = folded {
+                            let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
+                            *op = Op::Move {
+                                src: Operand::Lit(lit),
+                                dst,
                             };
                             changed = true;
                         }
