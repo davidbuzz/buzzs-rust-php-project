@@ -298,7 +298,7 @@ impl Parser<'_> {
                 if prec::INSTANCEOF < min {
                     break;
                 }
-                self.bump();
+                self.advance();
                 let class = self.parse_class_name_reference()?;
                 let span = self.span_from(lhs.span);
                 lhs = Expr::new(
@@ -314,7 +314,7 @@ impl Parser<'_> {
                 if prec::PIPE < min {
                     break;
                 }
-                self.bump();
+                self.advance();
                 let rhs = self.parse_expr_bp(prec::PIPE + 1)?;
                 let span = self.span_from(lhs.span);
                 lhs = Expr::new(
@@ -332,7 +332,7 @@ impl Parser<'_> {
             if level < min {
                 break;
             }
-            self.bump();
+            self.advance();
             let rhs = match assoc {
                 Assoc::Left | Assoc::Non => self.parse_expr_bp(level + 1)?,
                 Assoc::Right => self.parse_expr_bp(level)?,
@@ -358,15 +358,15 @@ impl Parser<'_> {
     }
 
     fn parse_ternary(&mut self, cond: Expr) -> PResult<Expr> {
-        self.bump(); // ?
-        let then = if self.eat(T::Colon).is_some() {
+        self.advance(); // ?
+        let then = if self.eat_kind(T::Colon) {
             None
         } else {
             let t = self.parse_expr()?;
             if self.peek() != T::Colon {
                 return Err(self.unexpected(&[]));
             }
-            self.bump();
+            self.advance();
             Some(Box::new(t))
         };
         let else_ = self.parse_expr_bp(prec::TERNARY + 1)?;
@@ -408,14 +408,14 @@ impl Parser<'_> {
         let start = self.cur_span();
         match k {
             T::Bang => {
-                self.bump();
+                self.advance();
                 self.prefix(start, prec::NOT + 1, |e| ExprKind::Unary {
                     op: UnaryOp::Not,
                     expr: e,
                 })
             }
             T::Tilde | T::Minus | T::Plus => {
-                self.bump();
+                self.advance();
                 let op = match k {
                     T::Tilde => UnaryOp::BitNot,
                     T::Minus => UnaryOp::Minus,
@@ -424,16 +424,16 @@ impl Parser<'_> {
                 self.prefix(start, prec::UNARY + 1, |e| ExprKind::Unary { op, expr: e })
             }
             T::At => {
-                self.bump();
+                self.advance();
                 self.prefix(start, prec::UNARY + 1, ExprKind::Silence)
             }
             _ if cast_kind(k).is_some() => {
-                self.bump();
+                self.advance();
                 let kind = cast_kind(k).unwrap_or(CastKind::Int);
                 self.prefix(start, prec::UNARY + 1, |e| ExprKind::Cast { kind, expr: e })
             }
             T::Inc | T::Dec => {
-                self.bump();
+                self.advance();
                 let var = self.parse_variable()?;
                 let op = if k == T::Inc {
                     IncDecOp::PreInc
@@ -450,11 +450,11 @@ impl Parser<'_> {
                 ))
             }
             T::Print => {
-                self.bump();
+                self.advance();
                 self.prefix(start, prec::PRINT + 1, ExprKind::Print)
             }
             T::Yield => {
-                self.bump();
+                self.advance();
                 self.mark_generator();
                 if !starts_expr(self.peek()) {
                     let span = self.span_from(start);
@@ -467,7 +467,7 @@ impl Parser<'_> {
                     ));
                 }
                 let first = self.parse_expr_bp(prec::YIELD + 1)?;
-                if self.eat(T::DoubleArrow).is_some() {
+                if self.eat_kind(T::DoubleArrow) {
                     let value = self.parse_expr_bp(prec::DOUBLE_ARROW + 1)?;
                     let span = self.span_from(start);
                     return Ok(Expr::new(
@@ -488,16 +488,16 @@ impl Parser<'_> {
                 ))
             }
             T::YieldFrom => {
-                self.bump();
+                self.advance();
                 self.mark_generator();
                 self.prefix(start, prec::YIELD_FROM + 1, ExprKind::YieldFrom)
             }
             T::Throw => {
-                self.bump();
+                self.advance();
                 self.prefix(start, prec::THROW + 1, ExprKind::Throw)
             }
             T::Include | T::IncludeOnce | T::Require | T::RequireOnce => {
-                self.bump();
+                self.advance();
                 let kind = match k {
                     T::Include => IncludeKind::Include,
                     T::IncludeOnce => IncludeKind::IncludeOnce,
@@ -511,10 +511,10 @@ impl Parser<'_> {
             }
             T::Clone => self.parse_clone(),
             T::List => {
-                self.bump();
-                self.expect1(T::LParen)?;
+                self.advance();
+                self.expect1_skip(T::LParen)?;
                 let items = self.parse_array_pair_list(T::RParen)?;
-                self.expect1(T::RParen)?;
+                self.expect1_skip(T::RParen)?;
                 let target = Expr::new(
                     ExprKind::Array {
                         items,
@@ -522,7 +522,7 @@ impl Parser<'_> {
                     },
                     self.span_from(start),
                 );
-                self.expect1(T::Equals)?;
+                self.expect1_skip(T::Equals)?;
                 let value = self.parse_expr_bp(prec::ASSIGN + 1)?;
                 let span = self.span_from(start);
                 Ok(Expr::new(
@@ -536,7 +536,7 @@ impl Parser<'_> {
             T::LBracket => {
                 let arr = self.parse_short_array()?;
                 if self.peek() == T::Equals {
-                    self.bump();
+                    self.advance();
                     let value = self.parse_expr_bp(prec::ASSIGN + 1)?;
                     let span = self.span_from(start);
                     return Ok(Expr::new(
@@ -552,7 +552,7 @@ impl Parser<'_> {
             }
             T::Function | T::Fn => self.parse_closure(Vec::new(), false, start),
             T::Static if matches!(self.peek_nth(1), T::Function | T::Fn) => {
-                self.bump();
+                self.advance();
                 self.parse_closure(Vec::new(), true, start)
             }
             T::Attribute => {
@@ -560,11 +560,11 @@ impl Parser<'_> {
                 match self.peek() {
                     T::Function | T::Fn => self.parse_closure(attrs, false, start),
                     T::Static if matches!(self.peek_nth(1), T::Function | T::Fn) => {
-                        self.bump();
+                        self.advance();
                         self.parse_closure(attrs, true, start)
                     }
                     T::Static => {
-                        self.bump();
+                        self.advance();
                         Err(self.unexpected(&[T::Function, T::Fn]))
                     }
                     _ => Err(self.unexpected(&[T::Function, T::Fn, T::Static, T::Attribute])),
@@ -585,14 +585,14 @@ impl Parser<'_> {
         }
         let k = self.peek();
         if let Some(op) = assign_op(k) {
-            self.bump();
+            self.advance();
             if op.is_none()
                 && matches!(
                     self.peek(),
                     T::AmpersandFollowedByVarOrVararg | T::AmpersandNotFollowedByVarOrVararg
                 )
             {
-                self.bump();
+                self.advance();
                 let value = self.parse_variable()?;
                 let span = self.span_from(e.span);
                 return Ok(Expr::new(
@@ -619,7 +619,7 @@ impl Parser<'_> {
             return Ok(Expr::new(kind, span));
         }
         if k == T::Inc || k == T::Dec {
-            self.bump();
+            self.advance();
             let op = if k == T::Inc {
                 IncDecOp::PostInc
             } else {
@@ -680,10 +680,10 @@ impl Parser<'_> {
                 ))
             }
             T::Dollar => {
-                self.bump();
+                self.advance();
                 match self.peek() {
                     T::LBrace => {
-                        self.bump();
+                        self.advance();
                         let e = self.parse_expr()?;
                         self.expect_close_brace()?;
                         let span = self.span_from(start);
@@ -707,7 +707,7 @@ impl Parser<'_> {
     /// `'}'` closing an embedded expression (generic error: operators could
     /// continue the expression).
     fn expect_close_brace(&mut self) -> PResult<()> {
-        if self.eat(T::RBrace).is_some() {
+        if self.eat_kind(T::RBrace) {
             Ok(())
         } else {
             Err(self.unexpected(&[]))
@@ -811,9 +811,9 @@ impl Parser<'_> {
                 Ok((Expr::new(ExprKind::String(s), t.span), Cat::Callable))
             }
             T::DoubleQuote => {
-                self.bump();
+                self.advance();
                 let parts = self.parse_encaps_list(T::DoubleQuote)?;
-                self.expect1(T::DoubleQuote)?;
+                self.expect1_skip(T::DoubleQuote)?;
                 let span = self.span_from(start);
                 Ok((
                     Expr::new(ExprKind::Interpolated(parts), span),
@@ -821,18 +821,18 @@ impl Parser<'_> {
                 ))
             }
             T::Backtick => {
-                self.bump();
+                self.advance();
                 let parts = if self.peek() == T::Backtick {
                     Vec::new()
                 } else {
                     self.parse_encaps_list(T::Backtick)?
                 };
-                self.expect1(T::Backtick)?;
+                self.expect1_skip(T::Backtick)?;
                 let span = self.span_from(start);
                 Ok((Expr::new(ExprKind::ShellExec(parts), span), Cat::Other))
             }
             T::StartHeredoc => {
-                self.bump();
+                self.advance();
                 let mut line = start.line;
                 let kind = match self.peek() {
                     T::EndHeredoc => ExprKind::String(Vec::new()),
@@ -849,17 +849,17 @@ impl Parser<'_> {
                     }
                     _ => ExprKind::Interpolated(self.parse_encaps_list(T::EndHeredoc)?),
                 };
-                self.expect1(T::EndHeredoc)?;
+                self.expect1_skip(T::EndHeredoc)?;
                 let mut span = self.span_from(start);
                 span.line = line;
                 Ok((Expr::new(kind, span), Cat::Other))
             }
             T::LBracket => Ok((self.parse_short_array()?, Cat::Callable)),
             T::Array => {
-                self.bump();
-                self.expect1(T::LParen)?;
+                self.advance();
+                self.expect1_skip(T::LParen)?;
                 let items = self.parse_array_pair_list(T::RParen)?;
-                self.expect1(T::RParen)?;
+                self.expect1_skip(T::RParen)?;
                 let span = self.span_from(start);
                 Ok((
                     Expr::new(
@@ -873,12 +873,12 @@ impl Parser<'_> {
                 ))
             }
             T::LParen => {
-                self.bump();
+                self.advance();
                 let e = self.parse_expr()?;
                 if self.peek() != T::RParen {
                     return Err(self.unexpected(&[]));
                 }
-                self.bump();
+                self.advance();
                 Ok((e, Cat::Paren))
             }
             T::New => self.parse_new(),
@@ -910,13 +910,13 @@ impl Parser<'_> {
                 ))
             }
             T::Isset => {
-                self.bump();
-                self.expect1(T::LParen)?;
+                self.advance();
+                self.expect1_skip(T::LParen)?;
                 let mut vars = vec![self.parse_expr()?];
                 loop {
                     match self.peek() {
                         T::Comma => {
-                            self.bump();
+                            self.advance();
                             if self.peek() == T::RParen {
                                 break;
                             }
@@ -929,18 +929,18 @@ impl Parser<'_> {
                         _ => return Err(self.unexpected(&[T::RParen])),
                     }
                 }
-                self.bump();
+                self.advance();
                 let span = self.span_from(start);
                 Ok((Expr::new(ExprKind::Isset(vars), span), Cat::Other))
             }
             T::Empty | T::Eval => {
-                self.bump();
-                self.expect1(T::LParen)?;
+                self.advance();
+                self.expect1_skip(T::LParen)?;
                 let e = self.parse_expr()?;
                 if self.peek() != T::RParen {
                     return Err(self.unexpected(&[]));
                 }
-                self.bump();
+                self.advance();
                 let span = self.span_from(start);
                 let kind = if k == T::Empty {
                     ExprKind::Empty(Box::new(e))
@@ -986,7 +986,7 @@ impl Parser<'_> {
         loop {
             match self.peek() {
                 T::LBracket if cat.is_aod() => {
-                    self.bump();
+                    self.advance();
                     let index = if self.peek() == T::RBracket {
                         None
                     } else if !starts_expr(self.peek()) {
@@ -998,7 +998,7 @@ impl Parser<'_> {
                     if self.peek() != T::RBracket {
                         return Err(self.unexpected(&[T::RBracket]));
                     }
-                    self.bump();
+                    self.advance();
                     let span = self.span_from(e.span);
                     e = Expr::new(
                         ExprKind::Dim {
@@ -1077,7 +1077,7 @@ impl Parser<'_> {
     /// `::class`.
     #[allow(clippy::too_many_lines)]
     fn parse_static_access(&mut self, class: ClassRef, start: Span) -> PResult<(Expr, Cat)> {
-        self.bump(); // ::
+        self.advance(); // ::
         let k = self.peek();
         match k {
             T::Variable | T::Dollar => {
@@ -1111,7 +1111,7 @@ impl Parser<'_> {
                 ))
             }
             T::LBrace => {
-                self.bump();
+                self.advance();
                 let name_expr = self.parse_expr()?;
                 self.expect_close_brace()?;
                 if self.peek() == T::LParen {
@@ -1190,7 +1190,7 @@ impl Parser<'_> {
                 Ok(MemberName::Ident(self.ident_checked(&t)?))
             }
             T::LBrace => {
-                self.bump();
+                self.advance();
                 let e = self.parse_expr()?;
                 self.expect_close_brace()?;
                 Ok(MemberName::Expr(Box::new(e)))
@@ -1235,12 +1235,12 @@ impl Parser<'_> {
                 Ok(ClassRef::Expr(self.parse_new_variable_tail(v)?))
             }
             T::LParen => {
-                self.bump();
+                self.advance();
                 let e = self.parse_expr()?;
                 if self.peek() != T::RParen {
                     return Err(self.unexpected(&[]));
                 }
-                self.bump();
+                self.advance();
                 Ok(ClassRef::Expr(e))
             }
             _ => Err(self.unexpected(&[])),
@@ -1248,7 +1248,7 @@ impl Parser<'_> {
     }
 
     fn parse_new_variable_static(&mut self, class: ClassRef, start: Span) -> PResult<Expr> {
-        self.bump(); // ::
+        self.advance(); // ::
         let var = self.parse_simple_variable()?;
         let span = self.span_from(start);
         Ok(Expr::new(
@@ -1266,7 +1266,7 @@ impl Parser<'_> {
         loop {
             match self.peek() {
                 T::LBracket => {
-                    self.bump();
+                    self.advance();
                     let index = if self.peek() == T::RBracket {
                         None
                     } else {
@@ -1275,7 +1275,7 @@ impl Parser<'_> {
                     if self.peek() != T::RBracket {
                         return Err(self.unexpected(&[T::RBracket]));
                     }
-                    self.bump();
+                    self.advance();
                     let span = self.span_from(e.span);
                     e = Expr::new(
                         ExprKind::Dim {
@@ -1308,7 +1308,7 @@ impl Parser<'_> {
     }
 
     fn parse_new(&mut self) -> PResult<(Expr, Cat)> {
-        let start = self.bump().span; // new
+        let start = self.bump_span(); // new
         let attrs = if self.peek() == T::Attribute {
             self.parse_attributes()?
         } else {
@@ -1409,10 +1409,10 @@ impl Parser<'_> {
                 let args = self.parse_argument_list()?;
                 return Ok(make(self, args));
             }
-            self.bump(); // (
+            self.advance(); // (
             let first = self.parse_expr()?;
             if self.peek() == T::Comma {
-                self.bump();
+                self.advance();
                 let mut args = vec![Arg {
                     span: first.span,
                     kind: ArgKind::Positional(first),
@@ -1423,7 +1423,7 @@ impl Parser<'_> {
                 if self.peek() != T::RParen {
                     return Err(self.unexpected(&[T::RParen]));
                 }
-                self.bump();
+                self.advance();
                 let args = ArgList {
                     args,
                     span: self.span_from(lp),
@@ -1433,7 +1433,7 @@ impl Parser<'_> {
             if self.peek() != T::RParen {
                 return Err(self.unexpected(&[]));
             }
-            self.bump();
+            self.advance();
             let (e, _) = self.parse_postfix(first, Cat::Paren)?;
             let span = e.span;
             let args = ArgList {
@@ -1473,7 +1473,7 @@ impl Parser<'_> {
         if self.peek() != T::RParen {
             return Err(self.unexpected(&[T::RParen]));
         }
-        self.bump();
+        self.advance();
         args.shrink_to_fit();
         Ok(ArgList {
             args,
@@ -1486,7 +1486,7 @@ impl Parser<'_> {
         loop {
             args.push(self.parse_argument()?);
             if self.peek() == T::Comma {
-                self.bump();
+                self.advance();
                 if self.peek() == T::RParen {
                     return Ok(());
                 }
@@ -1540,9 +1540,9 @@ impl Parser<'_> {
         if is_identifier_token(k) && self.peek_nth(1) == T::Colon {
             let t = self.bump();
             let name = self.ident_checked(&t)?;
-            self.bump(); // :
+            self.advance(); // :
             if self.peek() == T::Question && matches!(self.peek_nth(1), T::Comma | T::RParen) {
-                self.bump();
+                self.advance();
                 return Ok(Arg {
                     kind: ArgKind::NamedPlaceholder(name),
                     span: self.span_from(start),
@@ -1556,7 +1556,7 @@ impl Parser<'_> {
         }
         match k {
             T::Ellipsis => {
-                self.bump();
+                self.advance();
                 if starts_expr(self.peek()) {
                     let e = self.parse_expr()?;
                     return Ok(Arg {
@@ -1570,7 +1570,7 @@ impl Parser<'_> {
                 })
             }
             T::Question => {
-                self.bump();
+                self.advance();
                 Ok(Arg {
                     kind: ArgKind::Placeholder,
                     span: self.span_from(start),
@@ -1588,9 +1588,9 @@ impl Parser<'_> {
 
     /// `'[' array_pair_list ']'`
     fn parse_short_array(&mut self) -> PResult<Expr> {
-        let start = self.bump().span; // [
+        let start = self.bump_span(); // [
         let items = self.parse_array_pair_list(T::RBracket)?;
-        self.expect1(T::RBracket)?;
+        self.expect1_skip(T::RBracket)?;
         Ok(Expr::new(
             ExprKind::Array {
                 items,
@@ -1607,7 +1607,7 @@ impl Parser<'_> {
             let k = self.peek();
             if k == T::Comma {
                 items.push(None);
-                self.bump();
+                self.advance();
                 continue;
             }
             if k == close {
@@ -1626,7 +1626,7 @@ impl Parser<'_> {
             items.push(Some(self.parse_array_pair()?));
             match self.peek() {
                 T::Comma => {
-                    self.bump();
+                    self.advance();
                     if self.peek() == close {
                         // trailing comma: list was rtrimmed by one
                         break;
@@ -1648,7 +1648,7 @@ impl Parser<'_> {
         let start = self.cur_span();
         match self.peek() {
             T::AmpersandFollowedByVarOrVararg | T::AmpersandNotFollowedByVarOrVararg => {
-                self.bump();
+                self.advance();
                 let value = self.parse_variable_followed_by(&[T::Comma, T::RBracket, T::RParen])?;
                 return Ok(ArrayItem {
                     key: None,
@@ -1659,7 +1659,7 @@ impl Parser<'_> {
                 });
             }
             T::Ellipsis => {
-                self.bump();
+                self.advance();
                 let value = self.parse_expr()?;
                 return Ok(ArrayItem {
                     key: None,
@@ -1683,7 +1683,7 @@ impl Parser<'_> {
             _ => {}
         }
         let first = self.parse_expr()?;
-        if self.eat(T::DoubleArrow).is_none() {
+        if !self.eat_kind(T::DoubleArrow) {
             return Ok(ArrayItem {
                 key: None,
                 value: first,
@@ -1694,7 +1694,7 @@ impl Parser<'_> {
         }
         let (value, by_ref) = match self.peek() {
             T::AmpersandFollowedByVarOrVararg | T::AmpersandNotFollowedByVarOrVararg => {
-                self.bump();
+                self.advance();
                 (
                     self.parse_variable_followed_by(&[T::Comma, T::RBracket, T::RParen])?,
                     true,
@@ -1721,7 +1721,7 @@ impl Parser<'_> {
         if self.peek() != T::Equals {
             return Ok(target);
         }
-        self.bump();
+        self.advance();
         let value = self.parse_expr_bp(prec::ASSIGN + 1)?;
         let span = self.span_from(target.span);
         let e = Expr::new(
@@ -1736,10 +1736,10 @@ impl Parser<'_> {
 
     /// `T_LIST '(' array_pair_list ')'` (without assignment).
     pub(crate) fn parse_list_pattern(&mut self) -> PResult<Expr> {
-        let start = self.bump().span; // list
-        self.expect1(T::LParen)?;
+        let start = self.bump_span(); // list
+        self.expect1_skip(T::LParen)?;
         let items = self.parse_array_pair_list(T::RParen)?;
-        self.expect1(T::RParen)?;
+        self.expect1_skip(T::RParen)?;
         Ok(Expr::new(
             ExprKind::Array {
                 items,
@@ -1805,9 +1805,9 @@ impl Parser<'_> {
                 let var = self.parse_simple_variable()?;
                 match self.peek() {
                     T::LBracket => {
-                        self.bump();
+                        self.advance();
                         let index = self.parse_encaps_var_offset()?;
-                        self.expect1(T::RBracket)?;
+                        self.expect1_skip(T::RBracket)?;
                         let span = self.span_from(start);
                         Ok(InterpPart::Expr {
                             expr: Expr::new(
@@ -1844,20 +1844,20 @@ impl Parser<'_> {
                 }
             }
             T::DollarOpenCurlyBraces => {
-                self.bump();
+                self.advance();
                 if self.peek() == T::StringVarname {
                     let k1 = self.peek_nth(1);
                     if k1 == T::RBrace || k1 == T::LBracket {
                         let t = self.bump();
                         let name = Ident::new(t.text().to_vec(), t.span);
                         let var = Expr::new(ExprKind::Var(VarName::Name(name)), t.span);
-                        if self.eat(T::LBracket).is_some() {
+                        if self.eat_kind(T::LBracket) {
                             let idx = self.parse_expr()?;
                             if self.peek() != T::RBracket {
                                 return Err(self.unexpected(&[]));
                             }
-                            self.bump();
-                            self.expect1(T::RBrace)?;
+                            self.advance();
+                            self.expect1_skip(T::RBrace)?;
                             let span = self.span_from(start);
                             return Ok(InterpPart::Expr {
                                 expr: Expr::new(
@@ -1870,7 +1870,7 @@ impl Parser<'_> {
                                 syntax: InterpSyntax::DollarCurly,
                             });
                         }
-                        self.bump(); // }
+                        self.advance(); // }
                         let span = self.span_from(start);
                         return Ok(InterpPart::Expr {
                             expr: Expr::new(var.kind, span),
@@ -1888,9 +1888,9 @@ impl Parser<'_> {
             }
             _ => {
                 // T_CURLY_OPEN variable '}'
-                self.bump();
+                self.advance();
                 let v = self.parse_variable_followed_by(&[T::RBrace])?;
-                self.bump();
+                self.advance();
                 Ok(InterpPart::Expr {
                     expr: v,
                     syntax: InterpSyntax::Braced,
@@ -1935,14 +1935,14 @@ impl Parser<'_> {
     }
 
     fn parse_match(&mut self) -> PResult<Expr> {
-        let start = self.bump().span; // match
-        self.expect1(T::LParen)?;
+        let start = self.bump_span(); // match
+        self.expect1_skip(T::LParen)?;
         let subject = self.parse_expr()?;
         if self.peek() != T::RParen {
             return Err(self.unexpected(&[]));
         }
-        self.bump();
-        self.expect1(T::LBrace)?;
+        self.advance();
+        self.expect1_skip(T::LBrace)?;
         let mut arms = Vec::new();
         loop {
             let k = self.peek();
@@ -1953,13 +1953,13 @@ impl Parser<'_> {
                 return Err(self.unexpected(&[T::RBrace]));
             }
             let arm_start = self.cur_span();
-            let conds = if self.eat(T::Default).is_some() {
-                self.eat(T::Comma);
+            let conds = if self.eat_kind(T::Default) {
+                self.eat_kind(T::Comma);
                 None
             } else {
                 let mut conds = vec![self.parse_expr()?];
                 while self.peek() == T::Comma {
-                    self.bump();
+                    self.advance();
                     if self.peek() == T::DoubleArrow {
                         break;
                     }
@@ -1970,7 +1970,7 @@ impl Parser<'_> {
                 }
                 Some(conds)
             };
-            self.expect1(T::DoubleArrow)?;
+            self.expect1_skip(T::DoubleArrow)?;
             let body = self.parse_expr()?;
             arms.push(MatchArm {
                 conds,
@@ -1979,13 +1979,13 @@ impl Parser<'_> {
             });
             match self.peek() {
                 T::Comma => {
-                    self.bump();
+                    self.advance();
                 }
                 T::RBrace => break,
                 _ => return Err(self.unexpected(&[T::RBrace])),
             }
         }
-        self.bump();
+        self.advance();
         Ok(Expr::new(
             ExprKind::Match {
                 subject: Box::new(subject),

@@ -110,6 +110,8 @@ pub struct Lexer<'a> {
     heredoc_indentation: usize,
     heredoc_indentation_uses_spaces: bool,
     done: bool,
+    /// See [`Lexer::set_skip_trivia`].
+    skip_trivia: bool,
 }
 
 /// [`is_label_char`] (`[a-zA-Z0-9_\x80-\xff]`) as a lookup table.
@@ -235,6 +237,7 @@ impl<'a> Lexer<'a> {
             heredoc_indentation: 0,
             heredoc_indentation_uses_spaces: false,
             done: false,
+            skip_trivia: false,
         }
     }
 
@@ -361,6 +364,18 @@ impl<'a> Lexer<'a> {
         self.done = true;
     }
 
+    /// Makes [`Self::next_token`] skip whitespace, ordinary comments and
+    /// open tags ([`TokenKind::is_trivia`] except doc comments) instead of
+    /// returning them, for a parser that discards them anyway.
+    ///
+    /// Line numbers, warnings and the following token's span are exactly
+    /// what they would be had the skipped tokens been returned and
+    /// ignored. Doc comments are still returned. `token_get_all()` and
+    /// `PhpToken` must not use this: they need every token.
+    pub fn set_skip_trivia(&mut self, skip: bool) {
+        self.skip_trivia = skip;
+    }
+
     fn parser_mode(&self) -> bool {
         self.opts.mode == LexMode::Parser
     }
@@ -470,16 +485,29 @@ impl<'a> Lexer<'a> {
         if self.done {
             return None;
         }
-        if self.increment_line {
-            self.line += 1;
-            self.increment_line = false;
-        }
-        self.value = None;
-        if self.parser_mode() {
-            self.error = None;
-        }
-        let start_line = self.line;
-        let kind = self.scan();
+        let (kind, start_line) = loop {
+            if self.increment_line {
+                self.line += 1;
+                self.increment_line = false;
+            }
+            self.value = None;
+            if self.parser_mode() {
+                self.error = None;
+            }
+            if self.skip_trivia && self.state == State::InScripting {
+                self.skip_plain_trivia();
+            }
+            let start_line = self.line;
+            let kind = self.scan();
+            if !(self.skip_trivia
+                && matches!(
+                    kind,
+                    TokenKind::Whitespace | TokenKind::Comment | TokenKind::OpenTag
+                ))
+            {
+                break (kind, start_line);
+            }
+        };
         if let Some(TokenValue::Str(bytes)) = &mut self.value {
             if let Some(converted) = self.encoding.as_ref().and_then(|state| state.output(bytes)) {
                 *bytes = converted;
@@ -513,6 +541,67 @@ impl<'a> Lexer<'a> {
                 end_line: self.line,
             },
         }
+    }
+
+    /// Skips the whitespace and ordinary (non-doc, terminated) comments at
+    /// the scanner position in scripting state, counting newlines, as if
+    /// they had been scanned as tokens and discarded. Stops before anything
+    /// else, including `#[`, `/**` and unterminated comments, which the
+    /// normal rules handle (the `/**` forms that are ordinary comments then
+    /// come back as `Comment` and are skipped by [`Self::next_token`]).
+    fn skip_plain_trivia(&mut self) {
+        let src = self.src.clone();
+        let len = src.len();
+        let mut p = self.pos;
+        while p < len {
+            match src[p] {
+                b' ' | b'\t' => p += 1,
+                b'\n' => {
+                    self.line += 1;
+                    p += 1;
+                }
+                b'\r' => {
+                    // A lone `\r` is a line break (see `count_newlines`).
+                    if self.at(p + 1) != b'\n' {
+                        self.line += 1;
+                    }
+                    p += 1;
+                }
+                b'#' if self.at(p + 1) != b'[' => p = self.line_comment_end(p + 1),
+                b'/' if self.at(p + 1) == b'/' => p = self.line_comment_end(p + 2),
+                b'/' if self.at(p + 1) == b'*' && self.at(p + 2) != b'*' => {
+                    // The first `*/` after the opening `/*`.
+                    let mut q = p + 2;
+                    let mut end = None;
+                    while let Some(k) = src[q..].iter().position(|&c| c == b'*') {
+                        q += k + 1;
+                        if src.get(q) == Some(&b'/') {
+                            end = Some(q + 1);
+                            break;
+                        }
+                    }
+                    let Some(end) = end else { break };
+                    self.handle_newlines(p, end);
+                    p = end;
+                }
+                _ => break,
+            }
+        }
+        self.pos = p;
+    }
+
+    /// End of a `#`/`//` comment whose body starts at `q`: the next line
+    /// break or `?>` (neither included).
+    fn line_comment_end(&self, mut q: usize) -> usize {
+        let src: &[u8] = &self.src;
+        while q < src.len() {
+            match src[q] {
+                b'\r' | b'\n' => break,
+                b'?' if self.at(q + 1) == b'>' => break,
+                _ => q += 1,
+            }
+        }
+        q
     }
 
     fn handle_newlines(&mut self, start: usize, end: usize) {
@@ -1292,16 +1381,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_line_comment(&mut self, p: usize, prefix: usize) -> TokenKind {
-        let src = self.src.clone();
-        let mut q = p + prefix;
-        while q < src.len() {
-            match src[q] {
-                b'\r' | b'\n' => break,
-                b'?' if self.at(q + 1) == b'>' => break,
-                _ => q += 1,
-            }
-        }
-        self.pos = q;
+        self.pos = self.line_comment_end(p + prefix);
         TokenKind::Comment
     }
 
@@ -1578,6 +1658,7 @@ impl<'a> Lexer<'a> {
             heredoc_indentation: 0,
             heredoc_indentation_uses_spaces: false,
             done: false,
+            skip_trivia: false,
         };
         let mut level = 1;
         let mut first = None;
