@@ -1251,4 +1251,51 @@ mod tests {
         let code = find_code(&unit, named(b"f"));
         assert!(returned_lit(&code).is_none(), "{:?}", code.ops);
     }
+
+    /// An array built from constant keys and values folds to one literal
+    /// (opcache `opt/sccp_042`: `return [$a <=> $b, $b <=> $a]` becomes
+    /// `RETURN array(...)`), with `"1"` normalised to the integer key 1.
+    #[test]
+    fn sccp_folds_constant_array_builds() {
+        let unit = compile_src(
+            "<?php function t() { $a = 1; $b = 2; return [$a <=> $b, $b <=> $a]; }\n\
+             function u() { $a = 1; return ['1' => $a, 'x' => $a + 1]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let t = find_code(&unit, named(b"t"));
+        let Some(Value::Array(arr)) = returned_lit(&t) else {
+            panic!("{:?}", t.ops);
+        };
+        assert_eq!(arr.len(), 2);
+        assert!(matches!(arr.get_int(0), Some(Value::Int(-1))));
+        assert!(matches!(arr.get_int(1), Some(Value::Int(1))));
+        let u = find_code(&unit, named(b"u"));
+        let Some(Value::Array(arr)) = returned_lit(&u) else {
+            panic!("{:?}", u.ops);
+        };
+        assert_eq!(arr.len(), 2);
+        assert!(matches!(arr.get_int(1), Some(Value::Int(1))));
+        assert!(matches!(arr.get_sym(b"x"), Some(Value::Int(2))));
+    }
+
+    /// Keys that warn or deprecate (null, float), and an append after
+    /// `PHP_INT_MAX` ("Cannot add element to the array as the next element
+    /// is already occupied"), keep the runtime build.
+    #[test]
+    fn sccp_keeps_array_builds_that_can_warn() {
+        let unit = compile_src(
+            "<?php function n() { $k = null; return [$k => 1]; }\n\
+             function f() { $k = 1.5; return [$k => 1]; }\n\
+             function m() { return [PHP_INT_MAX => 1, 2]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        for name in [&b"n"[..], b"f", b"m"] {
+            let code = find_code(&unit, named(name));
+            assert!(
+                !matches!(returned_lit(&code), Some(Value::Array(_))),
+                "{:?}",
+                code.ops
+            );
+        }
+    }
 }
