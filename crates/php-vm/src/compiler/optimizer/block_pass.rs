@@ -22,11 +22,21 @@ pub(crate) fn find_leaders(op_array: &OpArray) -> Vec<bool> {
 
     for (i, op) in op_array.ops.iter().enumerate() {
         let mut op_clone = op.clone();
+        let mut branches = false;
         for_each_label_mut(&mut op_clone, |lbl| {
+            branches = true;
             if (*lbl as usize) <= len {
                 leaders[*lbl as usize] = true;
             }
         });
+        // Every op with a jump target ends its block (zend_build_cfg ends a
+        // block after CATCH, FE_RESET, FE_FETCH, JMP_SET, ...): the passes
+        // read a block's successors from its last op only, so a `Catch`
+        // followed by its body's `Jmp` in one block would hide the edge to
+        // the next catch clause and its `Rethrow` (jit/assign_055).
+        if branches {
+            leaders[i + 1] = true;
+        }
 
         // Instructions following terminators and conditional branches are leaders
         match op {
@@ -191,18 +201,8 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
                 op_array.ops[i] = Op::Nop;
                 changed = true;
             }
-            Op::JmpZ(cond, t) if *t as usize == next_i => {
-                op_array.ops[i] = match cond {
-                    Operand::Tmp(ft) => Op::Free(Operand::Tmp(*ft)),
-                    _ => Op::Nop,
-                };
-                changed = true;
-            }
-            Op::JmpNz(cond, t) if *t as usize == next_i => {
-                op_array.ops[i] = match cond {
-                    Operand::Tmp(ft) => Op::Free(Operand::Tmp(*ft)),
-                    _ => Op::Nop,
-                };
+            Op::JmpZ(cond, t) | Op::JmpNz(cond, t) if *t as usize == next_i => {
+                op_array.ops[i] = super::pass3::drop_condition(*cond);
                 changed = true;
             }
             _ => {}
