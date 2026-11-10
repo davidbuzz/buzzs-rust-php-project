@@ -130,6 +130,19 @@ impl Vm {
         self.frame_mut().calls.push(call);
     }
 
+    /// Pushes the pending call `make` builds, built in place in the
+    /// `calls` vector (php-src's `zend_vm_stack_push_call_frame` writes the
+    /// call into the VM stack slot directly). `Vec::push` takes a finished
+    /// `PendingCall` (216 bytes), built on the native stack and then copied
+    /// with an out-of-line `memcpy`, because the vector may grow between
+    /// the two; here the room is reserved first and the call is written
+    /// straight into it.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // the point is building in place
+    fn push_pending_with(&mut self, make: impl FnOnce() -> PendingCall) {
+        push_call_in_place(&mut self.frame_mut().calls, make);
+    }
+
     /// Installs a pooled argument buffer into the pending call before its
     /// first argument, so the SEND ops do not allocate (php-src's VM-stack
     /// call frames). Zero-argument calls never touch the pool, and later
@@ -210,7 +223,7 @@ impl Vm {
         // another site cached a later-declared `ns\foo` under the literal.
         if fallback.is_some() {
             if let Some(func) = self.fallback_site_cached() {
-                self.push_pending(PendingCall::new(func));
+                self.push_pending_with(move || PendingCall::new(func));
                 return Ok(());
             }
         }
@@ -222,9 +235,11 @@ impl Vm {
             .get(name as usize)
             .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
         if let Some(func) = cached {
-            let mut call = PendingCall::new(func);
-            call.direct = fallback.is_none();
-            frame.calls.push(call);
+            let direct = fallback.is_none();
+            push_call_in_place(&mut frame.calls, move || PendingCall {
+                direct,
+                ..PendingCall::new(func)
+            });
             return Ok(());
         }
         let lc = self.lit_str(name);
@@ -565,7 +580,7 @@ impl Vm {
         if let Some((func, scope, is_static)) = hit {
             let called = cls.clone();
             let this = if is_static { None } else { Some(o) };
-            self.push_pending(PendingCall {
+            self.push_pending_with(move || PendingCall {
                 this,
                 scope,
                 called: Some(called),
@@ -1112,10 +1127,11 @@ impl Vm {
         let is_literal = matches!(class, ClassSpec::Named(_)) && matches!(name, Operand::Lit(_));
         if is_literal {
             if let Some((func, scope, called)) = self.static_site_cached() {
-                let mut call = PendingCall::new(func);
-                call.scope = scope;
-                call.called = called;
-                self.push_pending(call);
+                self.push_pending_with(move || PendingCall {
+                    scope,
+                    called,
+                    ..PendingCall::new(func)
+                });
                 return Ok(());
             }
         }
@@ -1870,6 +1886,9 @@ impl Vm {
     /// Performs the pending call. Returns `true` when a user frame was
     /// pushed.
     pub(crate) fn op_do_call(&mut self, dst: Option<u32>) -> VmResult<bool> {
+        if self.push_simple_ucall(dst) {
+            return Ok(true);
+        }
         let frame = self.frames.last_mut().expect("active frame");
         let strict = frame.code.strict_types;
         let mut call = frame.calls.pop().expect("pending call");
@@ -1909,6 +1928,213 @@ impl Vm {
             return self.op_do_call_nodiscard(call, strict);
         }
         self.op_do_call_checked(call, dst, strict)
+    }
+
+    /// `ZEND_DO_UCALL` of a plain user function, closure or method
+    /// (`i_init_func_execute_data`'s common case), done where everything
+    /// lives: the pending call is read in place in the caller's `calls`,
+    /// the callee frame is the pooled frame just above the live ones
+    /// (php-src's VM stack slot), and the arguments move from the call
+    /// straight into the callee's compiled variables. Neither the
+    /// `PendingCall` nor the `Frame` is moved (each move is an out-of-line
+    /// `memcpy` of 216 or 328 bytes).
+    ///
+    /// The call qualifies when the general path would take the fast branch
+    /// of [`Vm::push_user_call`] anyway: a user function that is neither
+    /// deprecated, `#[\NoDiscard]`, body-less nor a generator, without
+    /// static variables, foreach or finally slots, called with positional
+    /// arguments only (all in the inline buffer, at least the required
+    /// ones, none spread or by reference, each accepted by its declared
+    /// type as it is), not a constructor nor a `__call` trampoline, with no
+    /// observer and a pooled frame ready. It then does exactly what that
+    /// branch does, in the same order; a closure's bound variables are
+    /// bound afterwards as the general path binds them. Returns `false`,
+    /// having changed nothing, otherwise.
+    #[inline]
+    fn push_simple_ucall(&mut self, dst: Option<u32>) -> bool {
+        if self.observer.enabled {
+            return false;
+        }
+        let live = self.frames.live;
+        // `push_user_call`'s stack-depth backstop is the general path's.
+        if live == 0 || live > 50_000 {
+            return false;
+        }
+        let (spare_args, closure) = {
+            let (live_frames, pool) = self.frames.vec.split_at_mut(live);
+            let (Some(caller), Some(callee)) = (live_frames.last_mut(), pool.first_mut()) else {
+                return false;
+            };
+            let caller_strict = caller.code.strict_types;
+            let Some(call) = caller.calls.last_mut() else {
+                return false;
+            };
+            let Func::User(uf) = &call.func else {
+                return false;
+            };
+            let n = call.inline_count as usize;
+            if !simple_ucall(uf, call, n) {
+                return false;
+            }
+            let uf = Rc::clone(uf);
+            let code = &uf.code;
+            // `FrameStack::push_in_place`.
+            if callee.cvs.len() == code.cv_names.len()
+                && callee.tmps.len() == code.num_tmps as usize
+                && callee.iters.is_empty()
+                && callee.fins.is_empty()
+            {
+                callee.reinit_same_call(code, FrameKind::Function);
+            } else {
+                callee.reinit_for_call(Rc::clone(code), FrameKind::Function);
+            }
+            callee.this = call.this.take();
+            callee.scope = call.scope.take();
+            callee.called = call.called.take();
+            callee.ret = dst.map_or(RetTarget::Discard, RetTarget::Tmp);
+            callee.caller_strict = caller_strict;
+            callee.called_from_internal = false;
+            callee.is_ctor = false;
+            // The passed-argument count (`ZEND_CALL_NUM_ARGS`): one empty
+            // entry per argument, each moved into its compiled variable.
+            crate::vm::refill_with(&mut callee.args, n, || None);
+            let mut first_op = 0;
+            for (i, arg) in call.inline_args[..n].iter_mut().enumerate() {
+                if let Some(slot) = callee.cvs.get_mut(i) {
+                    slot.set(arg.take());
+                }
+            }
+            // `RECV` of an argument that was passed and needs no coercion
+            // has nothing left to do: start after it (after a `RECV_INIT`'s
+            // default-value code).
+            for i in 0..n {
+                match code.ops.get(first_op) {
+                    Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
+                    Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
+                        first_op = *skip as usize;
+                    }
+                    _ => break,
+                }
+            }
+            callee.ip = first_op;
+            callee.func = Some(Func::User(Rc::clone(&uf)));
+            callee.ufunc = Some(uf);
+            call.inline_count = 0;
+            let spare = if call.args.capacity() > 0 {
+                Some(std::mem::take(&mut call.args))
+            } else {
+                None
+            };
+            let closure = call.closure.take();
+            // What is left of the call (its function handle and empty
+            // buffers) is dropped where it lies.
+            let pending = caller.calls.len();
+            caller.calls.truncate(pending - 1);
+            (spare, closure)
+        };
+        self.frames.live = live + 1;
+        if let Some(args) = spare_args {
+            self.put_arg_vec(args);
+        }
+        if let Some(c) = closure {
+            self.bind_closure_vars(live, &c);
+            self.frames.vec[live].closure = Some(c);
+        }
+        true
+    }
+
+    /// `ZEND_RETURN` from a user function frame on the common path
+    /// (`zend_leave_helper` for a plain `ZEND_CALL_TOP_FUNCTION`-less call):
+    /// the value is read and checked against the return type in place, the
+    /// frame is released as [`Vm::op_return_raw`] releases it and the value
+    /// is stored into the caller's temporary, with one lookup of the frame
+    /// instead of one per step and without the out-of-line read and
+    /// return-type calls.
+    ///
+    /// It applies to a function frame that is not the base frame of this
+    /// `run`, not the main script's, not a generator's, has no symbol table
+    /// attached and does not return by reference, with no observer, when
+    /// the operand is a defined compiled variable, a temporary not holding
+    /// a reference, or a literal, and the value is accepted by the return
+    /// type as it is (`verify_return`'s fast path). The result is then the
+    /// one `op_return` gives: the same checks, the same release order
+    /// (`gc::frame_released`, then [`FrameStack::release_top`]) and a
+    /// dereferenced value (`copy_on_assign` has nothing left to do).
+    /// Returns `None`, having changed nothing, otherwise.
+    ///
+    /// [`FrameStack::release_top`]: crate::vm::FrameStack::release_top
+    #[inline]
+    pub(crate) fn return_simple(&mut self, val: Operand, base: usize) -> Option<crate::exec::Flow> {
+        if self.observer.enabled {
+            return None;
+        }
+        let fidx = self.frames.live.checked_sub(1)?;
+        if fidx <= base {
+            return None;
+        }
+        let (v, ret) = {
+            let (callers, rest) = self.frames.vec.split_at_mut(fidx);
+            let caller = callers.last()?;
+            let frame = rest.first_mut()?;
+            if frame.kind != FrameKind::Function
+                || frame.symtab_attached
+                || frame.generator.is_some()
+                || Rc::ptr_eq(&frame.vars, &self.globals)
+            {
+                return None;
+            }
+            let uf = frame.ufunc.as_ref()?;
+            if uf.flags & (flags::RETURN_REF | flags::GENERATOR) != 0 {
+                return None;
+            }
+            let rt = uf.return_type.as_ref();
+            let accepts = |v: &Value| match rt {
+                None => true,
+                Some(rt) => {
+                    !rt.is_void()
+                        && !rt.is_never()
+                        && (rt.is_mixed() || accepts_without_coercion(rt.mask, v))
+                }
+            };
+            let v = match val {
+                Operand::Cv(cv) => {
+                    let v = match frame
+                        .cvs
+                        .get(cv as usize)
+                        .and_then(crate::vm::CvSlot::get)?
+                    {
+                        Value::Reference(r) => r.get(),
+                        v => v.clone(),
+                    };
+                    if !accepts(&v) {
+                        return None;
+                    }
+                    v
+                }
+                Operand::Tmp(t) => {
+                    let slot = frame.tmps.get_mut(t as usize)?;
+                    if matches!(slot, Value::Reference(_)) || !accepts(&*slot) {
+                        return None;
+                    }
+                    std::mem::take(slot)
+                }
+                Operand::Lit(i) => {
+                    let lit = frame.code.literals.get(i as usize)?;
+                    if matches!(lit, Value::Reference(_)) || !accepts(lit) {
+                        return None;
+                    }
+                    lit.clone()
+                }
+                _ => return None,
+            };
+            crate::gc::frame_released(frame, caller.this.as_ref());
+            (v, frame.ret)
+        };
+        self.frames.release_top(&self.empty_code);
+        if let RetTarget::Tmp(t) = ret {
+            self.set_tmp(t, v);
+        }
+        Some(crate::exec::Flow::Reload)
     }
 
     /// `ZEND_DO_FCALL` of a `#[\NoDiscard]` function whose result is
@@ -3832,6 +4058,50 @@ pub(crate) fn trampoline_name(name: &ZStr) -> ZStr {
 /// an out-of-line `drop_in_place` call on every call (a zero-capacity `Vec`
 /// of a sized element type owns no allocation and no elements).
 #[inline]
+/// Whether `call` of `uf` with `n` inline arguments takes
+/// [`Vm::push_simple_ucall`]: the conditions under which `op_do_call`
+/// hands a user function to [`Vm::push_user_call`] and that takes its fast
+/// branch (the observer and stack-depth checks are the caller's).
+#[inline]
+fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
+    uf.flags & (flags::DEPRECATED | flags::NODISCARD | flags::NO_BODY | flags::GENERATOR) == 0
+        && uf.code.num_statics == 0
+        && uf.code.num_iters == 0
+        && uf.code.num_finally == 0
+        && call.args.is_empty()
+        && call.named.is_empty()
+        && call.magic_name.is_none()
+        && !call.is_ctor
+        && n >= uf.required as usize
+        && n <= uf.params.len()
+        && n <= call.inline_args.len()
+        && uf.statics.try_borrow().is_ok_and(|s| s.is_empty())
+        && uf.params.iter().all(|p| !p.variadic && !p.by_ref)
+        && uf.params[..n]
+            .iter()
+            .zip(&call.inline_args[..n])
+            .all(|(p, arg)| match &p.ty {
+                None => true,
+                Some(ty) => {
+                    ty.is_mixed()
+                        || arg
+                            .as_ref()
+                            .is_some_and(|v| accepts_without_coercion(ty.mask, v))
+                }
+            })
+}
+
+/// Appends the pending call `make` builds to `calls`, written straight
+/// into the vector's spare slot: `extend` of a one-element trusted-length
+/// iterator reserves the room before `make` runs, so the call is not built
+/// on the native stack and copied in afterwards (as `Vec::push` of a built
+/// value is, with an out-of-line `memcpy` of the whole `PendingCall`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // the point is building in place
+fn push_call_in_place(calls: &mut Vec<PendingCall>, make: impl FnOnce() -> PendingCall) {
+    calls.extend(std::iter::once_with(make));
+}
+
 fn install_buffer<T>(slot: &mut Vec<T>, buf: Vec<T>) {
     let old = std::mem::replace(slot, buf);
     if old.capacity() == 0 {

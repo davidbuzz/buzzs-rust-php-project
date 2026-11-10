@@ -2259,13 +2259,16 @@ impl Vm {
                         }
                         Flow::Next
                     }
-                    Op::Return { val } => {
-                        let v = match val {
-                            Operand::Unused => None,
-                            o => Some(self.read(*o)?),
-                        };
-                        self.op_return(v, base)?
-                    }
+                    Op::Return { val } => match self.return_simple(*val, base) {
+                        Some(flow) => flow,
+                        None => {
+                            let v = match val {
+                                Operand::Unused => None,
+                                o => Some(self.read(*o)?),
+                            };
+                            self.op_return(v, base)?
+                        }
+                    },
                     Op::ReturnByRefValue { val } => {
                         let unused = *val == Operand::Unused;
                         let raw = if unused {
