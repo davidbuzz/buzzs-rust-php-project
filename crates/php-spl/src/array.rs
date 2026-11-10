@@ -831,10 +831,10 @@ impl ObjectIterator for ArrayIter {
                 pos
             };
             let p = ht.valid_pos(pos);
-            let k = match ht.at(p) {
-                None => return (pos, None),
-                Some((k, _)) => want_key.then(|| k.to_value()),
+            let Some((k, _)) = ht.at(p) else {
+                return (pos, None);
             };
+            let k = want_key.then(|| k.to_value());
             let v = if by_ref {
                 ht.at_mut(p).map(|slot| Value::Reference(slot.make_ref()))
             } else {
