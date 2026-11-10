@@ -101,7 +101,7 @@ fn string_offset_char(s: &ZStr, offset: i64) -> Option<Value> {
 /// destructor that may run, so it does not outlive its statement in the
 /// slot (`$weak->get() !== null`, `new D !== null`).
 #[inline]
-fn operand_simple<'a>(f: &'a Frame, op: Operand) -> Option<&'a Value> {
+pub(super) fn operand_simple<'a>(f: &'a Frame, op: Operand) -> Option<&'a Value> {
     let v = match op {
         Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
         Operand::Lit(i) => f.code.literals.get(i as usize)?,
@@ -123,7 +123,7 @@ fn operand_simple<'a>(f: &'a Frame, op: Operand) -> Option<&'a Value> {
 /// objects and resources give `None`.
 #[inline(always)]
 #[allow(clippy::inline_always)] // hot JmpZ/JmpNz truth check in the dispatch pre-match
-fn plain_truth(v: &Value) -> Option<bool> {
+pub(super) fn plain_truth(v: &Value) -> Option<bool> {
     match v {
         Value::Null => Some(false),
         Value::Bool(b) => Some(*b),
@@ -138,7 +138,7 @@ fn plain_truth(v: &Value) -> Option<bool> {
 /// [`plain_truth`] of a variable slot (`None` = undefined: generic path).
 #[inline(always)]
 #[allow(clippy::inline_always)] // hot JmpZ/JmpNz CV truth check in the dispatch pre-match
-fn slot_truth(v: Option<&Value>) -> Option<bool> {
+pub(super) fn slot_truth(v: Option<&Value>) -> Option<bool> {
     v.and_then(plain_truth)
 }
 
@@ -148,7 +148,7 @@ fn slot_truth(v: Option<&Value>) -> Option<bool> {
 /// `!==`), where they are a type mismatch; a NaN is unordered.
 #[inline(always)]
 #[allow(clippy::inline_always, clippy::float_cmp)] // the smart branch's test; PHP compares doubles exactly
-fn num_outcome(x: Num, y: Num, identity: bool) -> u8 {
+pub(super) fn num_outcome(x: Num, y: Num, identity: bool) -> u8 {
     let (xf, yf) = match (x, y) {
         // 0, 1 or 2: LESS, EQUAL or GREATER.
         (Num::Int(p), Num::Int(q)) => return 1 << (u8::from(p > q) + u8::from(p >= q)),
@@ -308,7 +308,7 @@ fn cv_dim_hit_in(f: &Frame, cv: u32, dim: Operand) -> Option<Value> {
 /// other temporaries are left in place (see [`Vm::peek_num`]).
 #[inline(always)]
 #[allow(clippy::inline_always)] // hot FREE_OP2 string-temp release in the dispatch pre-match
-fn release_str_tmp_in(f: &mut Frame, op: Operand) {
+pub(super) fn release_str_tmp_in(f: &mut Frame, op: Operand) {
     if let Operand::Tmp(t) = op {
         if let Some(slot) = f.tmps.get_mut(t as usize) {
             if matches!(slot, Value::Str(_)) {
@@ -570,6 +570,43 @@ fn isset_dim_in(f: &Frame, cv: u32, dim: Operand, empty: bool) -> Option<bool> {
     })
 }
 
+/// [`Vm::cmp_simple_fast`] on frame `f`: `==`, `!=`, `===`, `!==` without
+/// conversions on operands that are not both numbers. `None`, nothing
+/// changed, for the generic comparison.
+#[inline(never)]
+pub(super) fn cmp_simple_in(f: &mut Frame, op: BinKind, a: Operand, b: Operand) -> Option<bool> {
+    let identity = match op {
+        BinKind::Identical | BinKind::NotIdentical => true,
+        BinKind::Equal | BinKind::NotEqual => false,
+        _ => return None,
+    };
+    let negate = matches!(op, BinKind::NotIdentical | BinKind::NotEqual);
+    let same = {
+        let lhs = operand_simple(f, a)?;
+        let rhs = operand_simple(f, b)?;
+        match (lhs, rhs) {
+            (Value::Null, Value::Null) => true,
+            (Value::Bool(p), Value::Bool(q)) => p == q,
+            (Value::Str(s), Value::Str(t)) => {
+                let eq = ZStr::ptr_eq(s, t) || s.as_bytes() == t.as_bytes();
+                if !eq && !identity {
+                    return None;
+                }
+                eq
+            }
+            (lhs, rhs) => {
+                if !identity || std::mem::discriminant(lhs) == std::mem::discriminant(rhs) {
+                    return None;
+                }
+                false
+            }
+        }
+    };
+    release_str_tmp_in(f, a);
+    release_str_tmp_in(f, b);
+    Some(same != negate)
+}
+
 impl Vm {
     /// [`plain_truth`] of compiled variable `cv` in place (the type switch
     /// inlined into `ZEND_JMPZ_SPEC_CV`/`ZEND_JMPNZ_SPEC_CV`); undefined
@@ -589,39 +626,10 @@ impl Vm {
     /// only one operand is one of those and it sits in a consumed
     /// temporary, see [`operand_simple`]). A consumed temporary holding a
     /// string is released, as the generic read would (`FREE_OP1`/`FREE_OP2`).
-    #[inline(never)]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // a frame look and the out-of-line comparison
     pub(super) fn cmp_simple_fast(&mut self, op: BinKind, a: Operand, b: Operand) -> Option<bool> {
-        let identity = match op {
-            BinKind::Identical | BinKind::NotIdentical => true,
-            BinKind::Equal | BinKind::NotEqual => false,
-            _ => return None,
-        };
-        let negate = matches!(op, BinKind::NotIdentical | BinKind::NotEqual);
-        let same = {
-            let frame = self.frame();
-            let lhs = operand_simple(frame, a)?;
-            let rhs = operand_simple(frame, b)?;
-            match (lhs, rhs) {
-                (Value::Null, Value::Null) => true,
-                (Value::Bool(p), Value::Bool(q)) => p == q,
-                (Value::Str(s), Value::Str(t)) => {
-                    let eq = ZStr::ptr_eq(s, t) || s.as_bytes() == t.as_bytes();
-                    if !eq && !identity {
-                        return None;
-                    }
-                    eq
-                }
-                (lhs, rhs) => {
-                    if !identity || std::mem::discriminant(lhs) == std::mem::discriminant(rhs) {
-                        return None;
-                    }
-                    false
-                }
-            }
-        };
-        self.release_tmp_str(a);
-        self.release_tmp_str(b);
-        Some(same != negate)
+        cmp_simple_in(self.frames.last_mut()?, op, a, b)
     }
 
     /// Releases the string a consumed temporary operand holds; other
@@ -630,214 +638,6 @@ impl Vm {
     #[allow(clippy::inline_always)] // hot FREE_OP string-temp release in the dispatch pre-match
     pub(super) fn release_tmp_str(&mut self, op: Operand) {
         release_str_tmp_in(self.frame_mut(), op);
-    }
-
-    /// [`crate::opcode::Op::Move`] when its read needs no diagnostic: a
-    /// literal, a defined compiled variable (dereferenced and cloned,
-    /// `ZEND_QM_ASSIGN_SPEC_CV`), a temporary not holding a reference
-    /// (moved, or cloned when kept), into temporary `dst`. `false`,
-    /// nothing changed, otherwise (an undefined variable warns).
-    #[inline]
-    pub(super) fn move_fast(&mut self, src: Operand, dst: u32) -> bool {
-        let Some(f) = self.frames.last_mut() else {
-            return false;
-        };
-        let v = match src {
-            Operand::Lit(i) => match f.code.literals.get(i as usize) {
-                Some(v) if !matches!(v, Value::Reference(_)) => v.clone(),
-                _ => return false,
-            },
-            Operand::Cv(cv) => {
-                let v = f.peek_cv(cv, |slot| match slot {
-                    Some(Value::Reference(r)) => Some(r.get()),
-                    Some(v) => Some(v.clone()),
-                    None => None,
-                });
-                let Some(v) = v else {
-                    return false;
-                };
-                v
-            }
-            Operand::Tmp(t) => match f.tmps.get_mut(t as usize) {
-                Some(slot) if !matches!(slot, Value::Reference(_)) => std::mem::take(slot),
-                _ => return false,
-            },
-            Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
-                Some(slot) if !matches!(slot, Value::Reference(_)) => slot.clone(),
-                _ => return false,
-            },
-            Operand::Unused => Value::Null,
-        };
-        put_tmp(&mut f.tmps[dst as usize], v);
-        true
-    }
-
-    /// `??` ([`crate::opcode::Op::Coalesce`], `ZEND_COALESCE_SPEC_CV`) on
-    /// a compiled variable, which never warns: `Some(true)` when it holds a
-    /// value other than null (dereferenced, cloned into `dst`: the op
-    /// jumps), `Some(false)` when it is undefined or null (nothing read: the
-    /// op falls through). `None` for any other operand (the generic read).
-    #[inline]
-    pub(super) fn coalesce_cv_fast(&mut self, a: Operand, dst: u32) -> Option<bool> {
-        let Operand::Cv(cv) = a else {
-            return None;
-        };
-        let f = self.frames.last_mut()?;
-        let v = f.peek_cv(cv, |slot| match slot {
-            None | Some(Value::Null) => None,
-            Some(Value::Reference(r)) => {
-                let inner = r.get();
-                (!matches!(inner, Value::Null)).then_some(inner)
-            }
-            Some(v) => Some(v.clone()),
-        });
-        let Some(v) = v else {
-            return Some(false);
-        };
-        put_tmp(&mut f.tmps[dst as usize], v);
-        Some(true)
-    }
-
-    /// `?:` ([`crate::opcode::Op::JmpSet`], `ZEND_JMP_SET_SPEC_CV`) on a
-    /// defined compiled variable whose truth needs no conversion (see
-    /// [`plain_truth`]): `Some(true)` when truthy (cloned into `dst`: the op
-    /// jumps), `Some(false)` when falsy (the op falls through). `None` for an
-    /// undefined variable (warning), a reference, an object, a resource,
-    /// NaN and any other operand.
-    #[inline]
-    pub(super) fn jmp_set_cv_fast(&mut self, a: Operand, dst: u32) -> Option<bool> {
-        let Operand::Cv(cv) = a else {
-            return None;
-        };
-        let f = self.frames.last_mut()?;
-        let found = f.peek_cv(cv, |slot| {
-            let v = slot?;
-            Some(plain_truth(v)?.then(|| v.clone()))
-        })?;
-        let Some(v) = found else {
-            return Some(false);
-        };
-        put_tmp(&mut f.tmps[dst as usize], v);
-        Some(true)
-    }
-
-    /// `?->`'s null test ([`crate::opcode::Op::JmpNull`],
-    /// `ZEND_JMP_NULL_SPEC_CV`) on a defined compiled variable:
-    /// `Some(true)` when it holds null (directly or through a reference:
-    /// `dst` becomes null and the op jumps), `Some(false)` otherwise
-    /// (nothing read: the op falls through). `None` for an undefined
-    /// variable (the generic read warns) and any other operand.
-    #[inline]
-    pub(super) fn jmp_null_cv_fast(&mut self, a: Operand, dst: u32) -> Option<bool> {
-        let Operand::Cv(cv) = a else {
-            return None;
-        };
-        let f = self.frames.last_mut()?;
-        let null = f.peek_cv(cv, |slot| match slot? {
-            Value::Null => Some(true),
-            Value::Reference(r) => Some(matches!(&*r.try_borrow()?, Value::Null)),
-            _ => Some(false),
-        })?;
-        if null {
-            put_tmp(&mut f.tmps[dst as usize], Value::Null);
-        }
-        Some(null)
-    }
-
-    /// The jump decision of a smart branch ([`crate::opcode::Op::CmpJmp`])
-    /// on two plain numbers: the `IS_LONG`/`IS_DOUBLE` pairs of
-    /// `ZEND_IS_EQUAL`, `ZEND_IS_IDENTICAL`, `ZEND_IS_SMALLER` and
-    /// `ZEND_IS_SMALLER_OR_EQUAL` with `ZEND_VM_SMART_BRANCH`, as the one
-    /// [`cmp_outcome`] bit of the comparison tested against the op's mask
-    /// (mixed pairs compare as doubles; under `===` they are a type
-    /// mismatch). `None` when an operand is not a plain number.
-    #[inline(always)]
-    #[allow(clippy::inline_always, clippy::float_cmp)] // every loop's condition: no call, one frame look
-    pub(super) fn cmp_jmp_num(&self, a: Operand, b: Operand, mask: u8) -> Option<bool> {
-        let f = self.frames.last()?;
-        let x = Self::peek_num(f, a)?;
-        let y = Self::peek_num(f, b)?;
-        let identity = (mask & cmp_outcome::IDENTITY) != 0;
-        Some((mask & num_outcome(x, y, identity)) != 0)
-    }
-
-    /// [`crate::opcode::Op::Bin`] on two plain numbers ([`Vm::peek_num`],
-    /// [`num_bin`]), the result written straight into temporary `dst`
-    /// under one look at the frame. `false`, nothing changed, when an
-    /// operand is not a plain number or the operator has no numeric form
-    /// (or an int result overflows).
-    #[inline(always)]
-    #[allow(clippy::inline_always)] // the hot pre-match arm: no Value through memory
-    pub(super) fn bin_tmp_fast(&mut self, op: BinKind, a: Operand, b: Operand, dst: u32) -> bool {
-        let Some(f) = self.frames.last_mut() else {
-            return false;
-        };
-        let Some(x) = Self::peek_num(f, a) else {
-            return false;
-        };
-        let Some(y) = Self::peek_num(f, b) else {
-            return false;
-        };
-        let Some(r) = num_bin(op, x, y) else {
-            return false;
-        };
-        let Some(slot) = f.tmps.get_mut(dst as usize) else {
-            return false;
-        };
-        if let (Value::Float(ref mut dst_f), Value::Float(rf)) = (&mut *slot, &r) {
-            *dst_f = *rf;
-        } else {
-            put_tmp(slot, r);
-        }
-        true
-    }
-
-    /// [`crate::opcode::Op::BinAssignCv`] on two plain numbers: the result
-    /// goes straight into compiled variable `cv` when the variable holds no
-    /// refcounted value (`Some(true)`: the `AssignCv` after the op is
-    /// done), else into `dst` for that `AssignCv` (`Some(false)`), under
-    /// one look at the frame. `None`, nothing changed, as for
-    /// [`Vm::bin_tmp_fast`].
-    #[inline(always)]
-    #[allow(clippy::inline_always, clippy::float_cmp)] // hot BinAssignCv pre-match arm
-    pub(super) fn bin_assign_cv_fast(
-        &mut self,
-        op: BinKind,
-        a: Operand,
-        b: Operand,
-        cv: u32,
-        dst: u32,
-    ) -> Option<bool> {
-        let f = self.frames.last_mut()?;
-        let x = Self::peek_num(f, a)?;
-        let y = Self::peek_num(f, b)?;
-        let r = num_bin(op, x, y)?;
-        let idx = cv as usize;
-        if let Some(slot) = f.cvs.get(idx) {
-            unsafe {
-                if let (Some(Value::Float(ref mut dst_f)), Value::Float(rf)) =
-                    (slot.get_mut_unchecked(), &r)
-                {
-                    *dst_f = *rf;
-                    f.sync_cv_to_symtab(cv, &r);
-                    return Some(true);
-                }
-            }
-            if is_plain_slot(slot.get()) {
-                let old = slot.set(Some(r.clone()));
-                f.sync_cv_to_symtab(cv, &r);
-                // A scalar is forgotten; a string is released.
-                discard_unrooted(old);
-                return Some(true);
-            }
-        }
-        let slot = f.tmps.get_mut(dst as usize)?;
-        if let (Value::Float(ref mut dst_f), Value::Float(rf)) = (&mut *slot, &r) {
-            *dst_f = *rf;
-        } else {
-            put_tmp(slot, r);
-        }
-        Some(false)
     }
 
     /// Stores `v` (never a reference) into compiled variable `cv` when the
@@ -895,112 +695,6 @@ impl Vm {
             }),
             Num::Float(fl) => Some(Value::Float(fl.abs())),
         }
-    }
-
-    /// `++`/`--` of compiled variable `cv` holding an int that does not
-    /// overflow, or a float (`ZEND_PRE_INC_LONG_SPEC_CV` & co.,
-    /// `increment_function` on `IS_DOUBLE`), the expression's value written
-    /// to `dst` when used, under one look at the frame. `false` (nothing
-    /// changed) for the generic path.
-    #[inline(always)]
-    #[allow(clippy::inline_always)] // hot loop-counter increment in the dispatch pre-match
-    pub(super) fn incdec_cv_fast(&mut self, cv: u32, kind: IncDecKind, dst: Option<u32>) -> bool {
-        let Some(f) = self.frames.last_mut() else {
-            return false;
-        };
-        let idx = cv as usize;
-        let Some(slot) = f.cvs.get(idx) else {
-            return false;
-        };
-        let r = match slot.get() {
-            Some(Value::Int(i)) => {
-                let old = *i;
-                let next = if kind.is_inc() {
-                    old.checked_add(1)
-                } else {
-                    old.checked_sub(1)
-                };
-                let Some(new) = next else {
-                    return false;
-                };
-                slot.set(Some(Value::Int(new)));
-                f.sync_cv_to_symtab(cv, &Value::Int(new));
-                Value::Int(if kind.is_post() { old } else { new })
-            }
-            Some(Value::Float(x)) => {
-                let old = *x;
-                let new = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
-                slot.set(Some(Value::Float(new)));
-                f.sync_cv_to_symtab(cv, &Value::Float(new));
-                Value::Float(if kind.is_post() { old } else { new })
-            }
-            _ => return false,
-        };
-        if let Some(t) = dst {
-            if let Some(slot) = f.tmps.get_mut(t as usize) {
-                put_tmp(slot, r);
-            }
-        }
-        true
-    }
-
-    /// [`crate::opcode::Op::AssignOpCv`]: `$cv op= val` in place when both
-    /// hold plain numbers and the result stays in the int domain (or is a
-    /// float): `ZEND_ASSIGN_OP_SPEC_CV_*` with the `IS_LONG`/`IS_DOUBLE`
-    /// fast paths of `zend_binary_op`, under one look at the frame. Returns
-    /// `false`, having changed nothing, when the generic `AssignOp` must
-    /// run.
-    #[inline(always)]
-    #[allow(clippy::inline_always)] // hot numeric compound assignment in the dispatch pre-match
-    pub(super) fn assign_op_cv_fast(
-        &mut self,
-        cv: u32,
-        op: BinaryOp,
-        val: Operand,
-        dst: Option<u32>,
-    ) -> bool {
-        let Some(f) = self.frames.last_mut() else {
-            return false;
-        };
-        // The operand first: it may be this very variable (`$x += $x`).
-        let Some(y) = Self::peek_num(f, val) else {
-            return false;
-        };
-        let idx = cv as usize;
-        let slot = match f.cvs.get(idx) {
-            Some(s) => s,
-            None => return false,
-        };
-        let x = match slot.get() {
-            Some(Value::Int(i)) => Num::Int(*i),
-            Some(Value::Float(v)) => Num::Float(*v),
-            _ => return false,
-        };
-        let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
-            return false;
-        };
-        unsafe {
-            if let (Some(Value::Float(ref mut dst_f)), Value::Float(rf)) =
-                (slot.get_mut_unchecked(), &r)
-            {
-                *dst_f = *rf;
-                f.sync_cv_to_symtab(cv, &r);
-            } else {
-                let old = slot.set(Some(r.clone()));
-                f.sync_cv_to_symtab(cv, &r);
-                discard_unrooted(old);
-            }
-        }
-        if let Some(t) = dst {
-            if let Some(slot) = f.tmps.get_mut(t as usize) {
-                if let (Value::Float(ref mut dst_f), Value::Float(rf)) = (&mut *slot, &r) {
-                    *dst_f = *rf;
-                } else {
-                    put_tmp(slot, r);
-                }
-            }
-        }
-        true
     }
 
     /// [`crate::opcode::Op::ConcatCv`]: `$cv .= val` when the variable holds

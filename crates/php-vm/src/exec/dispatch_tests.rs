@@ -489,3 +489,233 @@ Deprecated: Implicit conversion from float 7.5 to int loses precision in t.php o
 "#
     );
 }
+
+/// The frame-local hot loop (`exec/hot.rs`): int overflow of `++`/`--` and
+/// `+`, floats, post/pre results, string (in)equality in branches, `??`,
+/// `?:`, compound assignment as a loop condition, a reference to the loop
+/// variable, variables of an attached symbol table (`global`, `$GLOBALS`,
+/// `extract()`), destructors of overwritten objects, comparison results
+/// stored into variables.
+#[test]
+fn hot_loop_fast_paths_match_the_generic_ops() {
+    let src = r#"<?php
+$i = PHP_INT_MAX - 2;
+for ($k = 0; $k < 4; $k++) { $i++; }
+var_dump($i);
+$j = PHP_INT_MIN + 1;
+$j--; $j--;
+var_dump($j);
+$f = 0.5;
+for ($k = 0; $k < 3; $k++) { $a = $f++; $b = ++$f; }
+var_dump($f, $a, $b);
+$x = 0;
+for ($i = 0; $i < 10; $i++) { $x = $x + $i * 2.5; $y = $x - 1; }
+var_dump($x, $y);
+$m = PHP_INT_MAX;
+$m = $m + 1;
+var_dump($m);
+$s = "abc";
+$n = 0;
+for ($i = 0; $i < 5; $i++) { if ($s === "abc") { $n += 2; } if ($s == "abd") { $n = -100; } }
+var_dump($n);
+$t = "1";
+for ($i = 0; $i < 3; $i++) { if ($t == 1) { $n -= 1; } if ($t == "01") { $n *= 2; } }
+var_dump($n);
+$v = null;
+$w = $v ?? "def";
+$u = $n ?: "zero";
+$z = 0 ?: "zero";
+var_dump($w, $u, $z);
+$q = 10;
+while ($q -= 3) { if ($q < 0) break; echo $q, " "; }
+echo "\n";
+$r = &$i;
+for ($i = 0; $i < 3; $i++) { $r += 1; }
+var_dump($i, $r);
+function g() { global $gi; for ($gi = 0; $gi < 5; $gi++) { $gi += 1; } return $gi; }
+var_dump(g(), $gi);
+for ($h = 0; $h < 3; $h++) { $GLOBALS['h2'] = $h * 2; }
+var_dump($h, $h2);
+extract(['e' => 5]);
+for ($e2 = 0; $e2 < $e; $e2++) { $e = $e - 1; }
+var_dump($e, $e2, compact('e', 'e2'));
+class D { function __construct(public $n) {} function __destruct() { echo "d", $this->n, " "; } }
+for ($i = 0; $i < 3; $i++) { $o = new D($i); $o = $i; }
+echo "\n";
+$c = 0;
+for ($i = 0; $i < 4; $i++) { $c = $c + ($i < 2); $c = $c + ($i <=> 2); }
+var_dump($c);
+$fl = 1.0;
+for ($i = 0; $i < 3; $i++) { $fl *= 1.5; $fl /= 0.5; }
+var_dump($fl);
+$u = 5; $u++; $p = $u--; var_dump($u, $p);
+$st = "5"; $st++; var_dump($st);
+$nn = null; $nn++; var_dump($nn);
+for ($i = 0; $i < 3; $i++) { $i = $i + 1; } var_dump($i);
+"#;
+    assert_eq!(
+        run(src),
+        r#"float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(6.5)
+float(4.5)
+float(6.5)
+float(112.5)
+float(111.5)
+float(9.223372036854776E+18)
+int(10)
+int(66)
+string(3) "def"
+int(66)
+string(4) "zero"
+7 4 1 
+int(4)
+int(4)
+int(6)
+int(6)
+int(3)
+int(4)
+int(2)
+int(3)
+array(2) {
+  ["e"]=>
+  int(2)
+  ["e2"]=>
+  int(3)
+}
+d0 d1 d2 
+int(1)
+float(27)
+int(5)
+int(6)
+int(6)
+int(1)
+int(4)
+"#
+    );
+}
+
+/// The hot loop's assignments over arrays and objects (released as
+/// possible GC roots, destructors in order, the result stored before the
+/// variable), `&&`, `||`, `!` and `(bool)`, and an attached symbol table.
+#[test]
+fn hot_loop_assignments_and_logic_match_the_generic_ops() {
+    let src = r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "d", $this->n, " "; } }
+$val = [1, 2, 3];
+$f = false;
+for ($i = 0; $i < 3; $i++) { $x = $val ?: null; $y = $f ? null : $val; $z = $f ?: $i + 1; }
+var_dump(count($x), count($y), $z);
+for ($i = 0; $i < 3; $i++) { $o = new D($i); }
+echo "| ";
+$p = new D(10);
+$q = $p;
+$p = new D(11);
+echo "| ";
+$q = $o = 5;
+echo "\n";
+$a = 3; $b = 0; $n = 0;
+for ($i = 0; $i < 6; $i++) {
+    if ($i > 1 && $i < 4) { $n += 1; }
+    if ($i == 0 || $i == 5) { $n += 10; }
+    if (!($i % 2)) { $n += 100; }
+    $t = (bool) $i;
+    $u = !$a || $b;
+    $w = $a && !$b;
+}
+var_dump($n, $t, $u, $w);
+$arr = [[1], [2]];
+for ($i = 0; $i < 2; $i++) { $e = $arr[$i]; $e2 = $e; }
+var_dump($e2);
+function attached() { $v = [1]; $GLOBALS['zz'] = 1; extract(['k' => [5]]); for ($i = 0; $i < 2; $i++) { $k = $v; $v = [$i]; } return compact('k', 'v'); }
+var_dump(attached());
+$s = "0"; $r = !$s; var_dump($r);
+"#;
+    assert_eq!(
+        run(src),
+        r#"int(3)
+int(3)
+int(3)
+d0 d1 | | d2 d10 
+int(322)
+bool(true)
+bool(false)
+bool(true)
+array(1) {
+  [0]=>
+  int(2)
+}
+array(2) {
+  ["k"]=>
+  array(1) {
+    [0]=>
+    int(0)
+  }
+  ["v"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+bool(true)
+d11 "#
+    );
+}
+
+/// Hot ops whose fast path declines inside a loop of hot ops (an
+/// undefined variable, a numeric string, a concatenation, an int overflow)
+/// run as their generic op, with the warning on their own line.
+#[test]
+fn hot_loop_declined_ops_warn_on_their_line() {
+    let src = r#"<?php
+for ($i = 0; $i < 2; $i++) {
+    $a = $i + 1;
+    $b = $undef + $a;
+    $c = $a * 2;
+}
+var_dump($b, $c);
+function f() {
+    $s = "x";
+    for ($i = 0; $i < 3; $i++) {
+        $j = $i + 1;
+        $s = $s . $j;
+        $k = $j > 1 ? $s : null;
+    }
+    $n = "5 apples";
+    $m = 0;
+    for ($i = 0; $i < 2; $i++) { $m = $m + 1; $m = $m + $n; }
+    return [$s, $k, $m];
+}
+var_dump(f());
+$x = 1;
+while ($x < 1000) { $x = $x * 7; $y = $x % 3; if ($y == 1) { $x++; } }
+var_dump($x);
+$z = PHP_INT_MAX - 1;
+for ($i = 0; $i < 3; $i++) { $z = $z + 1; }
+var_dump($z);
+"#;
+    assert_eq!(
+        run(src),
+        r#"
+Warning: Undefined variable $undef in t.php on line 4
+
+Warning: Undefined variable $undef in t.php on line 4
+int(2)
+int(4)
+
+Warning: A non-numeric value encountered in t.php on line 17
+
+Warning: A non-numeric value encountered in t.php on line 17
+array(3) {
+  [0]=>
+  string(4) "x123"
+  [1]=>
+  string(4) "x123"
+  [2]=>
+  int(12)
+}
+int(2744)
+float(9.223372036854776E+18)
+"#
+    );
+}
