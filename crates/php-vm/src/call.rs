@@ -3222,43 +3222,73 @@ fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
                 .map(|c| Value::Str(ZStr::from_byte(c))),
             _ => None,
         },
-        // `float $num` math functions (ext/standard/math.c): an int or a
-        // float passes `Z_PARAM_DOUBLE` in either typing mode (int widens),
-        // and the C library function is the whole body.
-        b"sqrt" | b"sin" | b"cos" | b"tan" | b"exp" | b"atan" => {
-            let x = float_arg(val)?;
-            Some(Value::Float(match name {
-                b"sqrt" => x.sqrt(),
-                b"sin" => x.sin(),
-                b"cos" => x.cos(),
-                b"tan" => x.tan(),
-                b"exp" => x.exp(),
-                _ => x.atan(),
-            }))
-        }
-        // `floor`/`ceil(int|float $num): float` (`Z_PARAM_NUMBER`): an int
-        // comes back as the same value as a float.
-        b"floor" | b"ceil" => match val {
-            #[allow(clippy::cast_precision_loss)]
-            Value::Int(i) => Some(Value::Float(*i as f64)),
-            Value::Float(f) if name == b"floor" => Some(Value::Float(f.floor())),
-            Value::Float(f) => Some(Value::Float(f.ceil())),
-            _ => None,
-        },
-        _ => None,
+        _ => float_builtin_eval(name, val),
     }
 }
 
-/// An int or float argument as `Z_PARAM_DOUBLE` reads it; `None` for
-/// anything that needs coercion or a type error.
+/// The one-argument math functions of `ext/standard/math.c` evaluated
+/// without their handlers, for an int or a float argument (`None` for
+/// any other name or argument): what the handler returns, computed by the
+/// same functions, for arguments with which the handler reports nothing.
+/// `Z_PARAM_DOUBLE` (`sqrt()`, `sin()`, ..., `log()` without a base,
+/// `is_nan()`) widens an int silently in either typing mode;
+/// `Z_PARAM_NUMBER` (`floor()`, `ceil()`, `round()` without places or
+/// mode) takes an int as it is. These are the functions of frameless
+/// classes `FLOAT`, `LOG` and `ROUND` (`special::frameless_flags`) called
+/// with one argument, so the frameless call needs no handler, argument
+/// buffers or signature for them.
+///
+/// The names are matched most frequent first; a name that is not one of
+/// them (an alias, say) falls back to the handler.
 #[inline]
-fn float_arg(val: &Value) -> Option<f64> {
-    match val {
-        Value::Float(f) => Some(*f),
-        #[allow(clippy::cast_precision_loss)]
-        Value::Int(i) => Some(*i as f64),
-        _ => None,
-    }
+pub(crate) fn float_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
+    use php_stdstr::math as m;
+    let x = match val {
+        Value::Float(f) => *f,
+        Value::Int(i) => {
+            // `Z_PARAM_NUMBER`: `floor()`/`ceil()`/`round()` of an int are
+            // `(double) $num` (`round()` with no places:
+            // `math::round_long(num, 0)`).
+            #[allow(clippy::cast_precision_loss)]
+            let f = *i as f64;
+            if matches!(name, b"floor" | b"ceil" | b"round") {
+                return Some(Value::Float(f));
+            }
+            f
+        }
+        _ => return None,
+    };
+    let r = match name {
+        b"sqrt" => x.sqrt(),
+        b"sin" => x.sin(),
+        b"cos" => x.cos(),
+        b"floor" => x.floor(),
+        b"ceil" => x.ceil(),
+        b"round" => php_support::fmt::php_round(x, 0, php_support::fmt::RoundingMode::HalfUp),
+        b"exp" => x.exp(),
+        b"tan" => x.tan(),
+        b"atan" => x.atan(),
+        // `log()` without a base: `log(num)`.
+        b"log" => x.ln(),
+        b"log10" => x.log10(),
+        b"asin" => x.asin(),
+        b"acos" => x.acos(),
+        b"sinh" => x.sinh(),
+        b"cosh" => x.cosh(),
+        b"tanh" => x.tanh(),
+        b"asinh" => m::asinh(x),
+        b"acosh" => m::acosh(x),
+        b"atanh" => m::atanh(x),
+        b"expm1" => x.exp_m1(),
+        b"log1p" => x.ln_1p(),
+        b"deg2rad" => m::deg2rad(x),
+        b"rad2deg" => m::rad2deg(x),
+        b"is_nan" => return Some(Value::Bool(x.is_nan())),
+        b"is_finite" => return Some(Value::Bool(x.is_finite())),
+        b"is_infinite" => return Some(Value::Bool(x.is_infinite())),
+        _ => return None,
+    };
+    Some(Value::Float(r))
 }
 
 impl Vm {
@@ -5407,12 +5437,45 @@ mod fast_builtin_tests {
         assert_eq!(float("floor", Value::Int(7)), 7.0);
         let c = float("ceil", Value::Float(-0.5));
         assert!(c == 0.0 && c.is_sign_negative());
+        assert_eq!(
+            float("asinh", Value::Float(0.044_318_560_479_840_056)),
+            0.044_304_065_350_020_95
+        );
+        assert_eq!(
+            float("deg2rad", Value::Int(90)),
+            std::f64::consts::FRAC_PI_2
+        );
+        assert_eq!(float("rad2deg", Value::Int(1)), 57.295_779_513_082_32);
+        assert_eq!(float("expm1", Value::Float(1e-10)), 1.000_000_000_05e-10);
+        assert_eq!(
+            float("log1p", Value::Float(1e-10)),
+            9.999_999_999_500_001e-11
+        );
+        assert_eq!(float("log10", Value::Int(1000)), 3.0);
+        assert_eq!(float("tanh", Value::Float(0.5)), 0.462_117_157_260_009_74);
+        assert_eq!(float("acos", Value::Float(0.5)), 1.047_197_551_196_597_9);
+        // php-src master's `round()` (no pre-rounding; `/usr/bin/php8.5`).
+        assert_eq!(float("round", Value::Float(0.499_999_999_999_999_94)), 0.0);
+        let r = float("round", Value::Float(-0.4));
+        assert!(r == 0.0 && r.is_sign_negative());
+        assert_eq!(
+            float("round", Value::Int(i64::MAX)),
+            9.223_372_036_854_776e18
+        );
+        assert!(matches!(
+            fast_builtin_eval(b"is_finite", &Value::Float(f64::INFINITY)),
+            Some(Value::Bool(false))
+        ));
+        assert!(matches!(
+            fast_builtin_eval(b"is_infinite", &Value::Float(f64::NEG_INFINITY)),
+            Some(Value::Bool(true))
+        ));
     }
 
     /// Anything needing coercion or a type error takes the full call.
     #[test]
     fn non_numbers_decline() {
-        for name in ["sqrt", "sin", "floor", "ceil"] {
+        for name in ["sqrt", "sin", "floor", "ceil", "round", "log", "is_nan"] {
             assert!(fast_builtin_eval(name.as_bytes(), &Value::Bool(true)).is_none());
             assert!(fast_builtin_eval(name.as_bytes(), &Value::Null).is_none());
             assert!(fast_builtin_eval(name.as_bytes(), &Value::Str("4".into())).is_none());

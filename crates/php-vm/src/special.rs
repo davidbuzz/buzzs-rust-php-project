@@ -625,10 +625,12 @@ impl Vm {
 /// The result of a one-argument frameless call that needs no handler:
 /// `abs()` of an int other than `PHP_INT_MIN` or of a float, `ord()` of a
 /// one-byte string, `chr()` of 0..=255 (the shared one-character string,
-/// `ZSTR_CHAR`, as the handler returns it). `arg` already has the shape
+/// `ZSTR_CHAR`, as the handler returns it), and the one-argument math
+/// functions of classes `FLOAT`, `LOG` and `ROUND` (function `name`; see
+/// [`crate::call::float_builtin_eval`]). `arg` already has the shape
 /// [`frameless_args`] accepts for `class`; `None` for every other call.
 #[inline]
-fn frameless_inline(class: u32, arg: Option<&Value>) -> Option<Value> {
+fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Value> {
     match (class, arg?) {
         (fl::ABS, Value::Int(i)) if *i != i64::MIN => Some(Value::Int(i.abs())),
         (fl::ABS, Value::Float(x)) => Some(Value::Float(x.abs())),
@@ -636,6 +638,7 @@ fn frameless_inline(class: u32, arg: Option<&Value>) -> Option<Value> {
         (fl::CHR, Value::Int(c)) => u8::try_from(*c)
             .ok()
             .map(|c| Value::Str(ZStr::from_byte(c))),
+        (fl::FLOAT | fl::LOG | fl::ROUND, v) => crate::call::float_builtin_eval(name, v),
         _ => None,
     }
 }
@@ -675,7 +678,7 @@ impl Vm {
             return None;
         }
         let quick = if n == 1 {
-            frameless_inline(class, sent[0].as_ref())
+            frameless_inline(b.name.as_bytes(), class, sent[0].as_ref())
         } else {
             None
         };
@@ -1040,28 +1043,67 @@ mod tests {
             _ => None,
         };
         assert_eq!(
-            int(frameless_inline(fl::ABS, Some(&Value::Int(-7)))),
+            int(frameless_inline(b"abs", fl::ABS, Some(&Value::Int(-7)))),
             Some(7)
         );
         assert_eq!(
-            int(frameless_inline(fl::ABS, Some(&Value::Int(7)))),
+            int(frameless_inline(b"abs", fl::ABS, Some(&Value::Int(7)))),
             Some(7)
         );
         // abs(PHP_INT_MIN) is a float: the handler's.
-        assert!(frameless_inline(fl::ABS, Some(&Value::Int(i64::MIN))).is_none());
+        assert!(frameless_inline(b"abs", fl::ABS, Some(&Value::Int(i64::MIN))).is_none());
         assert!(matches!(
-            frameless_inline(fl::ABS, Some(&Value::Float(-2.5))),
+            frameless_inline(b"abs", fl::ABS, Some(&Value::Float(-2.5))),
             Some(Value::Float(x)) if x.to_bits() == 2.5f64.to_bits()
         ));
-        assert_eq!(int(frameless_inline(fl::ORD, Some(&s("A")))), Some(65));
-        match frameless_inline(fl::CHR, Some(&Value::Int(66))) {
+        assert_eq!(
+            int(frameless_inline(b"ord", fl::ORD, Some(&s("A")))),
+            Some(65)
+        );
+        match frameless_inline(b"chr", fl::CHR, Some(&Value::Int(66))) {
             // `ZSTR_CHAR`: the shared one-character string.
             Some(Value::Str(z)) => assert!(ZStr::ptr_eq(&z, &ZStr::from_byte(b'B'))),
             other => panic!("chr(66) gave {other:?}"),
         }
-        assert!(frameless_inline(fl::CHR, Some(&Value::Int(256))).is_none());
-        assert!(frameless_inline(fl::SUBSTR, Some(&s("abc"))).is_none());
-        assert!(frameless_inline(fl::ABS, None).is_none());
+        assert!(frameless_inline(b"chr", fl::CHR, Some(&Value::Int(256))).is_none());
+        assert!(frameless_inline(b"substr", fl::SUBSTR, Some(&s("abc"))).is_none());
+        assert!(frameless_inline(b"abs", fl::ABS, None).is_none());
+    }
+
+    /// The one-argument math functions run without their handlers, with
+    /// the handlers' results (`/usr/bin/php -n`: `var_dump()` of each).
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn inline_math_results_are_the_handlers() {
+        let float = |name: &str, class: u32, v: Value| match frameless_inline(
+            name.as_bytes(),
+            class,
+            Some(&v),
+        ) {
+            Some(Value::Float(x)) => x,
+            other => panic!("{name}({v:?}) gave {other:?}"),
+        };
+        assert_eq!(
+            float("sqrt", fl::FLOAT, Value::Int(2)),
+            1.414_213_562_373_095_1
+        );
+        assert_eq!(
+            float("sin", fl::FLOAT, Value::Int(1)),
+            0.841_470_984_807_896_5
+        );
+        assert_eq!(float("log", fl::LOG, Value::Int(10)), 2.302_585_092_994_046);
+        assert_eq!(float("round", fl::ROUND, Value::Float(2.5)), 3.0);
+        assert_eq!(float("round", fl::ROUND, Value::Float(-2.5)), -3.0);
+        assert_eq!(float("round", fl::ROUND, Value::Float(1.955)), 2.0);
+        assert_eq!(float("round", fl::ROUND, Value::Int(7)), 7.0);
+        assert_eq!(float("floor", fl::FLOAT, Value::Int(-7)), -7.0);
+        assert!(float("log", fl::LOG, Value::Int(-1)).is_nan());
+        assert!(matches!(
+            frameless_inline(b"is_nan", fl::FLOAT, Some(&Value::Float(f64::NAN))),
+            Some(Value::Bool(true))
+        ));
+        // Not one of the evaluated names: the handler runs.
+        assert!(frameless_inline(b"sqrtx", fl::FLOAT, Some(&Value::Int(4))).is_none());
     }
 
     #[test]
