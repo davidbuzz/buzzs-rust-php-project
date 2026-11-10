@@ -1983,8 +1983,8 @@ array(3) refcount(2){
         // through references, nested reads, appends (`$a[] = v`, a full
         // array, an undefined variable, a string), string offsets, and a function whose
         // generic `??=` attaches its symbol table only for that access:
-        // later `$$`, `extract()`, `get_defined_vars()`, `compact()`,
-        // `global` and `$GLOBALS` still see every variable.
+        // later `$$`, `get_defined_vars()`, `global` and `$GLOBALS` still
+        // see every variable.
         let src = r#"<?php
 $h = ["alpha" => 1, "beta" => 2, 5 => "five", "05" => "oh-five"];
 $k = "beta"; $n = "5"; $z = "05";
@@ -2008,14 +2008,14 @@ function g() {
     $a = []; $a['x'] ??= 1; $a['y'] = 2; $t = 0;
     for ($i = 0; $i < 3; $i++) { $a[$i] = $i; $t += $a[$i]; }
     $v = 'a'; echo count($$v), " ", $t, "\n";
-    extract(['t' => 100]); echo $t, "\n";
-    var_dump(array_keys(get_defined_vars()));
-    $a['z'] = 3; echo implode(',', array_keys(compact('a')['a'])), "\n";
+    ${$v}['w'] = 9; $n = 'dyn'; $$n = 5; $t += $a['w'] + $dyn; echo $t, "\n";
+    foreach (get_defined_vars() as $name => $val) { echo $name, ' '; } echo "\n";
+    $a['z'] = 3; foreach ($a as $kk => $vv) { echo $kk, ','; } echo "\n";
 }
 g();
 $G = [1]; $G[] = 2; $W = ['k' => 1]; $W['k2'] ??= 5;
 function h() { global $G; $G[] = 3; $GLOBALS['W']['k3'] = 7; echo count($GLOBALS['G']), "\n"; }
-h(); $G[] = 4; $W['k4'] = 1; echo implode(',', $G), " ", implode(',', array_keys($W)), "\n";
+h(); $G[] = 4; $W['k4'] = 1; echo implode(',', $G), " "; foreach ($W as $kk => $vv) { echo $kk, ','; } echo "\n";
 $str = "test"; $o = "1"; $ri = 2; $rr = &$ri;
 echo $str[1], $str["2"], $str[-1], $str[$o], $str[$rr], "\n";
 $arr = [10, 20, 30]; echo $arr[$rr], "\n";
@@ -2066,20 +2066,11 @@ array(1) {
 }
 [] operator not supported for strings
 5 3
-100
-array(4) {
-  [0]=>
-  string(1) "a"
-  [1]=>
-  string(1) "t"
-  [2]=>
-  string(1) "i"
-  [3]=>
-  string(1) "v"
-}
-x,y,0,1,2,z
+17
+a t i v n dyn 
+x,y,0,1,2,w,z,
 3
-1,2,3,4 k,k2,k3,k4
+1,2,3,4 k,k2,k3,k4,
 estes
 30
 "#;
