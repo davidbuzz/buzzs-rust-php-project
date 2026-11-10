@@ -459,3 +459,95 @@ k=1;j=x;\n\
 int(1)\n";
     assert_eq!(run(src), expected);
 }
+
+/// `place op= $undef` (`ZEND_ASSIGN_DIM_OP`) reads `OP_DATA` once it has
+/// the slot: after the container's, the offsets' and the missing key's
+/// diagnostics; an object reads it before `offsetGet`; a scalar or string
+/// container throws without reading it (opcache/tests/jit/assign_dim_010).
+#[test]
+fn assign_dim_op_reads_undefined_value_at_the_slot() {
+    let src = r#"<?php
+set_error_handler(function ($n, $m) { echo "$m\n"; });
+class AO implements ArrayAccess { public $a = []; function offsetExists($k): bool { return true; } function offsetGet($k): mixed { echo "get $k\n"; return $this->a[$k] ?? null; } function offsetSet($k, $v): void { echo "set $k\n"; $this->a[$k] = $v; } function offsetUnset($k): void {} }
+function t() { $a = []; $a['x'] += $y; var_dump($a); }
+t();
+function u() { $a[1][2] .= $y; var_dump($a); }
+u();
+function v() { for ($i = 0; $i < 2; $i++) { $a[] &= $y; $a = null; } var_dump($a); }
+v();
+function w() { $o = new AO; $o['k'] -= $y; var_dump($o['k']); }
+w();
+function x() { $s = 5; try { $s['q'] += $y; } catch (Error $e) { echo $e->getMessage(), "\n"; } }
+x();
+function z() { $s = "ab"; try { $s[] .= $y; } catch (Error $e) { echo $e->getMessage(), "\n"; } }
+z();
+"#;
+    let expected = "Undefined array key \"x\"\n\
+Undefined variable $y\n\
+array(1) {\n\
+  [\"x\"]=>\n\
+  int(0)\n\
+}\n\
+Undefined variable $a\n\
+Undefined array key 1\n\
+Undefined array key 2\n\
+Undefined variable $y\n\
+array(1) {\n\
+  [1]=>\n\
+  array(1) {\n\
+    [2]=>\n\
+    string(0) \"\"\n\
+  }\n\
+}\n\
+Undefined variable $a\n\
+Undefined variable $y\n\
+Undefined variable $y\n\
+NULL\n\
+Undefined variable $y\n\
+get k\n\
+set k\n\
+get k\n\
+int(0)\n\
+Cannot use a scalar value as an array\n\
+[] operator not supported for strings\n\
+";
+    assert_eq!(run(src), expected);
+}
+
+/// An error handler that throws at the undefined container of a
+/// read-modify-write leaves an empty array, and an illegal offset still
+/// throws, chained after the handler's exception (opcache/tests/jit/
+/// fetch_dim_rw_004). The handler, called from user code, reports its
+/// argument errors with "called in"; called from a builtin, without.
+#[test]
+fn rw_fetch_after_a_throwing_handler_and_handler_call_site() {
+    let src = r#"<?php
+set_error_handler(function (int $n, string $m) { echo "$m\n"; if ($m[0] === 'U') throw new Exception("h"); });
+function a() { try { $y['k']++; } catch (Throwable $e) { echo get_class($e), ':', $e->getMessage(), ':', $e->getPrevious()?->getMessage(), "\n"; } var_dump($y); }
+a();
+function b() { $k = []; try { $y[$k]++; } catch (Throwable $e) { echo get_class($e), ':', $e->getMessage(), ':', $e->getPrevious()?->getMessage(), "\n"; } var_dump($y); }
+b();
+function c() { try { $y[[]] .= 'a'; } catch (Throwable $e) { echo get_class($e), ':', $e->getMessage(), ':', $e->getPrevious()?->getMessage(), "\n"; } var_dump($y); }
+c();
+set_error_handler(function (stdClass $n) {});
+function d() { try { echo $u; } catch (TypeError $e) { echo $e->getMessage(), "\n"; } }
+d();
+try { trigger_error("x"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#;
+    let expected = "Undefined variable $y\n\
+Exception:h:\n\
+array(0) {\n\
+}\n\
+Undefined variable $y\n\
+TypeError:Cannot access offset of type array on array:h\n\
+array(0) {\n\
+}\n\
+Undefined variable $y\n\
+TypeError:Cannot access offset of type array on array:h\n\
+array(0) {\n\
+}\n\
+{closure:t.php:9}(): Argument #1 ($n) must be of type stdClass, int given, called in t.php on line 10\n\
+{closure:t.php:9}(): Argument #1 ($n) must be of type stdClass, int given\n\
+";
+    assert_eq!(run(src), expected);
+}

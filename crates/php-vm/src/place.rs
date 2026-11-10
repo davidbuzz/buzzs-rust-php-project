@@ -901,6 +901,11 @@ pub(crate) fn descend(
                                 Step::Done(r)
                             }
                             _ => {
+                                // ZEND_ASSIGN_DIM_OP reads OP_DATA once it
+                                // has the new element.
+                                if matches!(wop, WOp::AssignOp(..)) && reads_pending() {
+                                    push_pending_value(segs, diags);
+                                }
                                 // The key `push_mut` uses (`nNextFreeElement`).
                                 let slot_key = t.next_index();
                                 match t.push_mut(Value::Null) {
@@ -993,6 +998,11 @@ pub(crate) fn descend(
                             _ => {
                                 if matches!(wop, WOp::Assign(Value::Null)) && reads_pending() {
                                     return value_site(arr, segs, i, &key, wop, diags);
+                                }
+                                // ZEND_ASSIGN_DIM_OP reads OP_DATA once it
+                                // has the slot.
+                                if matches!(wop, WOp::AssignOp(..)) && reads_pending() {
+                                    push_pending_value(segs, diags);
                                 }
                                 if rw && existed && diags.is_empty() {
                                     if let Some(step) = concat_in_place(slot, segs, wop) {
@@ -1767,7 +1777,32 @@ impl Vm {
         op: BinaryOp,
         v: Value,
     ) -> VmResult<Value> {
-        self.with_cv_symtab(pid, |vm| vm.place_assign_op_impl(pid, op, v))
+        self.with_cv_symtab(pid, |vm| vm.place_assign_op_impl(pid, op, v, None))
+    }
+
+    /// `place op= $cv` with `$cv` undefined and `place` ending in a
+    /// dimension: `ZEND_ASSIGN_DIM_OP` reads `OP_DATA` once it has the
+    /// slot (after the container's and the offset's diagnostics), an
+    /// object's `zend_binary_assign_op_obj_dim` before its handlers, and a
+    /// scalar or string container throws without reading it.
+    pub(crate) fn place_assign_op_undef_cv(
+        &mut self,
+        pid: PlaceId,
+        op: BinaryOp,
+        cv: u32,
+    ) -> VmResult<Value> {
+        self.with_cv_symtab(pid, |vm| {
+            vm.place_assign_op_impl(pid, op, Value::Null, Some(cv))
+        })
+    }
+
+    /// Whether `place op= v` reads `v` during the walk when `v` is an
+    /// undefined compiled variable ([`Vm::place_assign_op_undef_cv`]).
+    pub(crate) fn assign_op_reads_value_late(&self, pid: PlaceId) -> bool {
+        matches!(
+            self.frame().code.places[pid as usize].segs.last(),
+            Some(Seg::Dim(_) | Seg::Append)
+        )
     }
 
     /// Resolves a place's base and segments.
@@ -2900,6 +2935,10 @@ impl Vm {
                         self.warning(&crate::exec::undefined_var_msg(&name))?;
                     }
                 }
+                // `zend_binary_assign_op_obj_dim` reads OP_DATA next.
+                if last && matches!(wop, WOp::AssignOp(..)) {
+                    self.take_pending_value_warning(segs)?;
+                }
                 let key = match seg {
                     RSeg::Dim(k) => k.clone(),
                     _ => Value::Null,
@@ -3443,10 +3482,22 @@ impl Vm {
     }
 
     /// `place op= v`
-    fn place_assign_op_impl(&mut self, pid: PlaceId, op: BinaryOp, v: Value) -> VmResult<Value> {
+    /// `undef_value`: `v` is the undefined compiled variable read by the
+    /// walk ([`Vm::place_assign_op_undef_cv`]).
+    fn place_assign_op_impl(
+        &mut self,
+        pid: PlaceId,
+        op: BinaryOp,
+        mut v: Value,
+        undef_value: Option<u32>,
+    ) -> VmResult<Value> {
         let (single, head) = {
             let p = &self.frame().code.places[pid as usize];
-            (propcache::cacheable(p), propcache::cacheable_head(p))
+            let fast = undef_value.is_none();
+            (
+                fast && propcache::cacheable(p),
+                fast && propcache::cacheable_head(p),
+            )
         };
         // Fast paths: ASSIGN_OBJ_OP on a cached property: `.=` on a string
         // appends in place, another operator on a number operates in place.
@@ -3466,14 +3517,22 @@ impl Vm {
             }
         }
         if let Some(cv) = self.rw_undef_cv_container(pid) {
-            self.rw_undef_container_first(cv)?;
+            self.rw_undef_container_first(pid, cv)?;
         }
-        let (base, segs) = self.resolve_place(pid, true)?;
+        let (base, mut segs) = self.resolve_place(pid, true)?;
         if matches!(
             self.frame().code.places[pid as usize].base,
             PlaceBase::Global(_)
         ) {
             self.rw_undefined_global(pid, &base)?;
+        }
+        if let Some(cv) = undef_value {
+            if segs.is_empty() {
+                v = self.read_cv(cv)?;
+            } else {
+                let name = self.frame().code.cv_names[cv as usize].clone();
+                segs.add_read(VALUE, name);
+            }
         }
         if !segs.is_empty() {
             // `$this->a[$k] op= v` & co.: enter a cached declared slot.
@@ -3579,17 +3638,59 @@ impl Vm {
     /// an undefined offset variable does.
     #[cold]
     #[inline(never)]
-    fn rw_undef_container_first(&mut self, cv: u32) -> VmResult<()> {
-        self.read_cv(cv)?;
+    fn rw_undef_container_first(&mut self, pid: PlaceId, cv: u32) -> VmResult<()> {
+        let warned = self.read_cv(cv);
+        // The fetch goes on after an error handler threw at the warning
+        // (`EG(exception)` set): the undefined variable becomes an empty
+        // array, and an illegal offset still throws, chained after it.
+        let init = if warned.is_ok() {
+            Value::Null
+        } else {
+            Value::Array(ZArray::new())
+        };
         let f = self.frame_mut();
         let idx = cv as usize;
         if let Some(slot) = f.cvs.get_mut(idx) {
             if slot.is_none() {
-                slot.set(Some(Value::Null));
-                f.sync_cv_to_symtab(cv, &Value::Null);
+                slot.set(Some(init.clone()));
+                f.sync_cv_to_symtab(cv, &init);
             }
         }
-        Ok(())
+        let Err(Throw::Exception(old)) = warned else {
+            return warned.map(drop);
+        };
+        Err(self.rw_illegal_first_offset(pid, old))
+    }
+
+    /// The exception of [`Vm::rw_undef_container_first`] whose handler
+    /// threw `old`: `zend_illegal_container_offset`'s `TypeError` for a
+    /// literal, variable or temporary array or object first offset, chained after
+    /// `old` (displayed as "Next TypeError"), else `old`.
+    #[cold]
+    fn rw_illegal_first_offset(&mut self, pid: PlaceId, old: Obj) -> Throw {
+        let key = match self.frame().code.places[pid as usize].segs.first() {
+            Some(Seg::Dim(Operand::Lit(i))) => Some(self.lit(*i)),
+            Some(Seg::Dim(Operand::Cv(cv))) => self.cv_get(*cv),
+            Some(Seg::Dim(Operand::Tmp(t) | Operand::TmpKeep(t))) => {
+                self.frame().tmps.get(*t as usize).cloned()
+            }
+            _ => None,
+        };
+        let Some(key @ (Value::Array(_) | Value::Object(_))) = key.as_ref().map(Value::deref)
+        else {
+            return Throw::Exception(old);
+        };
+        let msg = format!(
+            "Cannot access offset of type {} on array",
+            crate::typecheck::given_type(&key)
+        );
+        match self.make_throw("TypeError", &msg) {
+            Throw::Exception(new) => {
+                crate::exceptions::chain_previous(&new, &old);
+                Throw::Exception(new)
+            }
+            other => other,
+        }
     }
 
     /// The read half of a read-modify-write: the current value, when the
@@ -3728,7 +3829,7 @@ impl Vm {
             }
         }
         if let Some(cv) = self.rw_undef_cv_container(pid) {
-            self.rw_undef_container_first(cv)?;
+            self.rw_undef_container_first(pid, cv)?;
         }
         let (base, segs) = self.resolve_place(pid, true)?;
         if matches!(
