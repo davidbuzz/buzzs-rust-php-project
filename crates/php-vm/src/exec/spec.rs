@@ -259,6 +259,8 @@ fn dim_ref_in(f: &Frame, dim: Operand) -> Option<DimRef<'_>> {
 #[allow(clippy::inline_always)] // hot element lookup of the array-dimension fast paths
 fn table_dim<'t>(arr: &'t HashTable, d: DimRef<'_>) -> Option<&'t Value> {
     match d {
+        // A packed table indexes its values directly (inlined here).
+        DimRef::Int(i) if arr.is_packed() => arr.get_packed(i),
         DimRef::Int(i) => arr.get_int(i),
         DimRef::Str(s) => arr.get_sym_zstr(s),
     }
@@ -269,6 +271,7 @@ fn table_dim<'t>(arr: &'t HashTable, d: DimRef<'_>) -> Option<&'t Value> {
 #[allow(clippy::inline_always)] // hot element lookup of the array-dimension fast paths
 fn table_dim_mut<'t>(arr: &'t mut HashTable, d: DimRef<'_>) -> Option<&'t mut Value> {
     match d {
+        DimRef::Int(i) if arr.is_packed() => arr.get_packed_mut(i),
         DimRef::Int(i) => arr.get_int_mut(i),
         DimRef::Str(s) => arr.get_sym_zstr_mut(s),
     }
@@ -1689,6 +1692,30 @@ impl Vm {
         true
     }
 
+    /// [`Vm::assign_to_array_table`] with the offset an int or a borrowed
+    /// string: an existing element at a string offset is found
+    /// (`zend_symtable_find`) and overwritten without building a key.
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
+    fn assign_dim_table(
+        tbl: &mut HashTable,
+        dim_int: Option<i64>,
+        dim_str: Option<&ZStr>,
+        v: Value,
+    ) -> bool {
+        let Some(s) = dim_str else {
+            return Self::assign_to_array_table(tbl, dim_int, None, v);
+        };
+        if let Some(slot) = tbl.get_sym_zstr_mut(s) {
+            if !is_plain_value(slot) {
+                return false;
+            }
+            drop(std::mem::replace(slot, v));
+            return true;
+        }
+        Self::assign_to_array_table(tbl, None, Some(ArrayKey::from_zstr(s)), v)
+    }
+
     /// `$cv[dim] = val;` when `$cv` holds an array (directly or through a reference),
     /// the offset is an int or string, the value is plain and the element it
     /// replaces (if any) is plain: the `zend_fetch_dimension_address_inner_W`
@@ -1711,11 +1738,13 @@ impl Vm {
         // next index is taken) is left to the generic op, which throws.
         let append = dim == Operand::Unused;
         let dim_int = dim_int_in(f, dim);
-        let dim_key = if dim_int.is_none() && !append {
-            let Some(k) = dim_key_in(f, dim) else {
+        // A string offset stays borrowed: an existing element needs no
+        // key of its own (only an insertion takes one).
+        let dim_str = if dim_int.is_none() && !append {
+            let Some(DimRef::Str(s)) = dim_ref_in(f, dim) else {
                 return false;
             };
-            Some(k)
+            Some(s)
         } else {
             None
         };
@@ -1733,7 +1762,7 @@ impl Vm {
                 let ok = if append {
                     arr.make_mut().push(v).is_ok()
                 } else {
-                    Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v)
+                    Self::assign_dim_table(arr.make_mut(), dim_int, dim_str, v)
                 };
                 if f.symtab_attached {
                     f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
@@ -1749,7 +1778,7 @@ impl Vm {
                 if append {
                     arr.make_mut().push(v).is_ok()
                 } else {
-                    Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v)
+                    Self::assign_dim_table(arr.make_mut(), dim_int, dim_str, v)
                 }
             } else {
                 return false;
