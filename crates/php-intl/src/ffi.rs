@@ -200,6 +200,11 @@ pub type UEnumCharNamesFn = Option<
     ) -> UBool,
 >;
 
+// libicui18n is bound lazily (see `build.rs`): the generated stubs define
+// its functions declared below and load it on the first call; libicuuc's
+// are linked normally.
+include!(concat!(env!("OUT_DIR"), "/lazy_icui18n.rs"));
+
 /// Declares versioned ICU C functions.
 macro_rules! icu {
     ($(fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty)?;)*) => {

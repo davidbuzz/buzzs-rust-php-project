@@ -3,8 +3,18 @@
 //! libxslt/libxml2 require (C-variadic functions cannot be defined in
 //! stable Rust) and accessors for libxslt structure fields, so that no
 //! libxslt structure layout has to be replicated in Rust.
+//!
+//! libxslt and libexslt are bound lazily: `build/lazy_dl.rs` (shared from
+//! php-libxml) generates stubs for the functions this crate and its glue
+//! call, which `dlopen` the libraries on first use (libexslt also pulls in
+//! libgcrypt), so they cost nothing at start-up. Each falls back to an
+//! ordinary link where the stubs are unsupported or `PHPRUST_EAGER_LINK`
+//! is set. libxml2 is always linked (through php-libxml as well).
 
 use std::process::Command;
+
+#[path = "../php-libxml/build/lazy_dl.rs"]
+mod lazy_dl;
 
 fn pkg_config(args: &[&str]) -> Option<String> {
     let out = Command::new("pkg-config").args(args).output().ok()?;
@@ -40,8 +50,27 @@ fn main() {
     }
     build.compile("php_xsl_glue");
 
+    println!("cargo:rerun-if-changed=../php-libxml/build/lazy_dl.rs");
+    let mut eager = Vec::new();
+    for (tag, pkg) in [("xslt", "libxslt"), ("exslt", "libexslt")] {
+        let lazy = lazy_dl::generate(&lazy_dl::LazyLib {
+            tag,
+            name: tag,
+            pkg: Some(pkg),
+            suffix: None,
+        });
+        if !lazy {
+            eager.push(pkg);
+        }
+    }
+    if eager.is_empty() {
+        println!("cargo:rustc-link-lib=xml2");
+        return;
+    }
+    let mut args = vec!["--libs"];
+    args.extend(&eager);
     let mut linked = false;
-    if let Some(libs) = pkg_config(&["--libs", "libxslt", "libexslt"]) {
+    if let Some(libs) = pkg_config(&args) {
         for flag in libs.split_whitespace() {
             if let Some(dir) = flag.strip_prefix("-L") {
                 println!("cargo:rustc-link-search=native={dir}");
@@ -52,8 +81,9 @@ fn main() {
         }
     }
     if !linked {
-        for lib in ["exslt", "xslt", "xml2"] {
-            println!("cargo:rustc-link-lib={lib}");
+        for pkg in eager {
+            println!("cargo:rustc-link-lib={}", &pkg[3..]);
         }
+        println!("cargo:rustc-link-lib=xml2");
     }
 }

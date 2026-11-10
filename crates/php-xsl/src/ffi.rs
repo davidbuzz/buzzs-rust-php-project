@@ -95,13 +95,44 @@ pub const XSLT_SECPREF_CREATE_DIRECTORY: c_int = 3;
 pub const XSLT_SECPREF_READ_NETWORK: c_int = 4;
 pub const XSLT_SECPREF_WRITE_NETWORK: c_int = 5;
 
-#[link(name = "xslt")]
-extern "C" {
-    pub static xsltMaxDepth: c_int;
-    pub static xsltMaxVars: c_int;
-    pub static xsltLibxsltVersion: c_int;
-    pub static xsltLibxmlVersion: c_int;
+// libxslt and libexslt are bound lazily (see `build.rs`): the generated
+// stubs define the functions below (and those `csrc/glue.c` calls) and load
+// the libraries on the first call, keeping them out of every start-up.
+include!(concat!(env!("OUT_DIR"), "/lazy_xslt.rs"));
+include!(concat!(env!("OUT_DIR"), "/lazy_exslt.rs"));
 
+/// Reads libxslt's `int` global `name` (`xsltMaxDepth`, ...), which a
+/// lazily bound library cannot export to a Rust `extern static`; loads
+/// libxslt if needed. 0 if the library lacks the symbol.
+fn xslt_int_global(name: &std::ffi::CStr) -> c_int {
+    let p = lazy_xslt_sym(name).cast::<c_int>();
+    if p.is_null() {
+        0
+    } else {
+        // SAFETY: `name` is an initialised `int` global of libxslt, which
+        // stays loaded for the life of the process.
+        unsafe { p.read() }
+    }
+}
+
+/// `xsltMaxDepth`.
+pub fn xslt_max_depth() -> c_int {
+    xslt_int_global(c"xsltMaxDepth")
+}
+/// `xsltMaxVars`.
+pub fn xslt_max_vars() -> c_int {
+    xslt_int_global(c"xsltMaxVars")
+}
+/// `xsltLibxsltVersion`.
+pub fn xslt_libxslt_version() -> c_int {
+    xslt_int_global(c"xsltLibxsltVersion")
+}
+/// `xsltLibxmlVersion`.
+pub fn xslt_libxml_version() -> c_int {
+    xslt_int_global(c"xsltLibxmlVersion")
+}
+
+extern "C" {
     pub fn xsltParseStylesheetDoc(doc: *mut xmlDoc) -> *mut xsltStylesheet;
     pub fn xsltFreeStylesheet(style: *mut xsltStylesheet);
     pub fn xsltNewTransformContext(
@@ -169,7 +200,6 @@ extern "C" {
     ) -> *mut xsltTransformContext;
 }
 
-#[link(name = "exslt")]
 extern "C" {
     pub fn exsltRegisterAll();
 }

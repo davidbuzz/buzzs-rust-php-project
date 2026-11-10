@@ -272,26 +272,22 @@ pub(crate) mod version {
 
     /// `xsltLibxsltVersion` (the loaded library).
     pub fn runtime_libxslt() -> i64 {
-        // SAFETY: reading an initialised constant global.
-        i64::from(unsafe { ffi::xsltLibxsltVersion })
+        i64::from(ffi::xslt_libxslt_version())
     }
 
     /// `xsltLibxmlVersion`.
     pub fn runtime_libxml() -> i64 {
-        // SAFETY: reading an initialised constant global.
-        i64::from(unsafe { ffi::xsltLibxmlVersion })
+        i64::from(ffi::xslt_libxml_version())
     }
 
     /// `xsltMaxDepth` (default of `$maxTemplateDepth`).
     pub fn max_depth() -> i64 {
-        // SAFETY: reading a global int nobody writes concurrently.
-        i64::from(unsafe { ffi::xsltMaxDepth })
+        i64::from(ffi::xslt_max_depth())
     }
 
     /// `xsltMaxVars` (default of `$maxTemplateVars`).
     pub fn max_vars() -> i64 {
-        // SAFETY: reading a global int nobody writes concurrently.
-        i64::from(unsafe { ffi::xsltMaxVars })
+        i64::from(ffi::xslt_max_vars())
     }
 }
 

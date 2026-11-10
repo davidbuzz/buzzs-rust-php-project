@@ -165,7 +165,11 @@ pub type curl_sshhostkey_callback =
 pub type curl_push_callback =
     extern "C" fn(*mut CURL, *mut CURL, usize, *mut curl_pushheaders, *mut c_void) -> c_int;
 
-#[link(name = "curl")]
+// libcurl is bound lazily (see `build.rs`): the generated stubs define the
+// functions below and load libcurl and its dependency tree (gnutls, libssh,
+// libldap, ...) on the first call, keeping them out of every start-up.
+include!(concat!(env!("OUT_DIR"), "/lazy_curl.rs"));
+
 extern "C" {
     pub fn curl_global_init(flags: c_long) -> CURLcode;
     pub fn curl_version_info(age: c_int) -> *const curl_version_info_data;
