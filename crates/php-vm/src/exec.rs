@@ -1172,18 +1172,44 @@ impl Vm {
                 // path does not apply has changed nothing and breaks to the
                 // big match, which runs the generic op it replaced.
                 'slow: {
-                    // The frame-local hot ops (`exec/hot.rs`) and the plain
-                    // user calls and returns among them run on the tape
-                    // (`tape::run_tape`): in its own loop, on the frame and
-                    // the instruction pointer in registers, until an op it
-                    // does not handle or whose fast path declined (that op
-                    // then runs here: a declined hot op or a call or return
-                    // it did not make as its generic op, any other through
-                    // this pre-match), or a due safe point. After a call or a
-                    // return it goes on in the callee's or the caller's frame
-                    // (`hot::SWITCHED`: reloaded here).
-                    if hot::enters_hot(op) {
-                        let (mut next, last) = tape::run_tape(self, base, code, at);
+                    // The frame-local hot ops (`exec/hot.rs`): one runs here
+                    // (`hot::step`, inline); when the op after it is hot as
+                    // well, they run in `tape::run_tape`'s own loop, on the
+                    // frame and `ip` in registers, until an op it does not
+                    // handle or whose fast path declined (that op then runs
+                    // here: a declined hot op as its generic op, any other
+                    // through this pre-match), or a due safe point. Plain
+                    // user calls and returns among them run there as well,
+                    // which then goes on in the callee's or the caller's
+                    // frame (`hot::SWITCHED`: reloaded here).
+                    if hot::is_hot(op) {
+                        // An op with a specialised instruction that is
+                        // followed by another starts on the tape; any other
+                        // hot op runs here first, and the tape takes over
+                        // when the op after it is a hot op too (a lone one
+                        // is not worth the call).
+                        let start = if tape::worth_entering(code, at) {
+                            at
+                        } else {
+                            let Some(f) = self.frames.last_mut() else {
+                                break 'slow;
+                            };
+                            let lits: &[Value] = &code.literals;
+                            let next = hot::step(f, ops, lits, at);
+                            if next == hot::DECLINED {
+                                break 'slow;
+                            }
+                            ip = next;
+                            if Self::safe_point_due() {
+                                ip = self.safe_point(ip, op)?;
+                                continue 'ops;
+                            }
+                            if !ops.get(ip).is_some_and(hot::enters_hot) {
+                                continue 'ops;
+                            }
+                            ip
+                        };
+                        let (mut next, last) = tape::run_tape(self, base, code, start);
                         if last == hot::LEFT {
                             // A call or return there, with the safe point
                             // after it due (as after the fast `DoCall` and

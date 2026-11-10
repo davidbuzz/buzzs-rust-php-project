@@ -76,6 +76,7 @@ use crate::vm::{CvSlot, Frame, Vm};
 use php_runtime::{BinaryOp, Value};
 use std::cell::OnceCell;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 /// log2 of the size of a slot (a compiled variable, a temporary, a
 /// literal): an operand's byte offset is its index shifted by this.
@@ -169,6 +170,9 @@ pub(crate) struct Inst {
     /// Fourth operand.
     #[allow(dead_code)] // for the family modules
     d: u32,
+    /// Set by [`lower`], not by the families: whether `Vm::run` enters the
+    /// tape at this instruction ([`worth_entering`]).
+    enter: bool,
     /// A pointer-sized operand (the address of something that lives as
     /// long as the op array, such as a cache entry the tape owns).
     #[allow(dead_code)] // for the family modules
@@ -185,6 +189,7 @@ impl Inst {
             b: 0,
             c: 0,
             d: 0,
+            enter: false,
             p: 0,
         }
     }
@@ -765,53 +770,69 @@ macro_rules! tape_ops {
                     )*
                     $(
                         TOp::$an => {
-                            let Some(x) = num::<{ $aka }>(st, inst.a) else {
-                                return step_out(ip);
-                            };
-                            let Some(y) = num::<{ $akb }>(st, inst.b) else {
-                                return step_out(ip);
-                            };
-                            let d = tmp_slot(st, inst.c);
-                            if !is_scalar(d) {
+                            // The result is stored where it is computed
+                            // (a tag and a payload store): merged into one
+                            // `Value` first, it travelled in pieces. The
+                            // destination is tested up front for that; it
+                            // is addressed by raw pointer because it may be
+                            // one of the operands.
+                            let d = st.tmps.add(inst.c as usize).cast::<Value>();
+                            if !is_scalar(&*d) {
                                 return step_out(ip);
                             }
-                            match (x, y) {
-                                (Num::Int(x), Num::Int(y)) => {
-                                    // An overflow is `num_bin`'s (a float).
-                                    let Some(r) = int_arith!($aop, x, y) else {
-                                        return step_out(ip);
-                                    };
-                                    std::ptr::write(d, Value::Int(r));
-                                }
-                                // Two floats, or an int and a float
-                                // (php-src's `(double)` widening).
-                                (x, y) => std::ptr::write(
-                                    d,
-                                    Value::Float(float_arith!($aop, x.as_f64(), y.as_f64())),
-                                ),
+                            // Two ints and two floats each on a path of
+                            // their own; an int with a float is widened
+                            // (php-src's `(double)`). An int overflow is
+                            // `num_bin`'s (a float).
+                            #[allow(clippy::cast_precision_loss)]
+                            match num::<{ $aka }>(st, inst.a) {
+                                Some(Num::Int(x)) => match num::<{ $akb }>(st, inst.b) {
+                                    Some(Num::Int(y)) => {
+                                        let Some(r) = int_arith!($aop, x, y) else {
+                                            return step_out(ip);
+                                        };
+                                        std::ptr::write(d, Value::Int(r));
+                                    }
+                                    Some(Num::Float(y)) => {
+                                        std::ptr::write(d, Value::Float(float_arith!($aop, x as f64, y)));
+                                    }
+                                    None => return step_out(ip),
+                                },
+                                Some(Num::Float(x)) => match num::<{ $akb }>(st, inst.b) {
+                                    Some(Num::Float(y)) => {
+                                        std::ptr::write(d, Value::Float(float_arith!($aop, x, y)));
+                                    }
+                                    Some(Num::Int(y)) => {
+                                        std::ptr::write(d, Value::Float(float_arith!($aop, x, y as f64)));
+                                    }
+                                    None => return step_out(ip),
+                                },
+                                None => return step_out(ip),
                             }
                             ip = ip.add(1);
                         }
                     )*
                     $(
                         TOp::$vn => {
-                            let Some(x) = num::<{ $vka }>(st, inst.a) else {
-                                return step_out(ip);
-                            };
-                            let Some(y) = num::<{ $vkb }>(st, inst.b) else {
-                                return step_out(ip);
-                            };
-                            let n = match (x, y) {
-                                (Num::Int(x), Num::Int(y)) => {
-                                    // An overflow is `num_bin`'s (a float).
-                                    let Some(r) = int_arith!($vop, x, y) else {
-                                        return step_out(ip);
-                                    };
-                                    Num::Int(r)
-                                }
-                                // Two floats, or an int and a float
-                                // (php-src's `(double)` widening).
-                                (x, y) => Num::Float(float_arith!($vop, x.as_f64(), y.as_f64())),
+                            // As for the temporary result above.
+                            #[allow(clippy::cast_precision_loss)]
+                            let n = match num::<{ $vka }>(st, inst.a) {
+                                Some(Num::Int(x)) => match num::<{ $vkb }>(st, inst.b) {
+                                    Some(Num::Int(y)) => {
+                                        let Some(r) = int_arith!($vop, x, y) else {
+                                            return step_out(ip);
+                                        };
+                                        Num::Int(r)
+                                    }
+                                    Some(Num::Float(y)) => Num::Float(float_arith!($vop, x as f64, y)),
+                                    None => return step_out(ip),
+                                },
+                                Some(Num::Float(x)) => match num::<{ $vkb }>(st, inst.b) {
+                                    Some(Num::Float(y)) => Num::Float(float_arith!($vop, x, y)),
+                                    Some(Num::Int(y)) => Num::Float(float_arith!($vop, x, y as f64)),
+                                    None => return step_out(ip),
+                                },
+                                None => return step_out(ip),
                             };
                             // Into the variable when it holds no array,
                             // object or reference (the `AssignCv` after the
@@ -844,8 +865,13 @@ macro_rules! tape_ops {
                                     };
                                     *i = r;
                                 }
-                                (Some(Value::Float(x)), y) => {
-                                    *x = float_arith!($oop, *x, y.as_f64());
+                                (Some(Value::Float(x)), Num::Float(y)) => {
+                                    *x = float_arith!($oop, *x, y);
+                                }
+                                (Some(Value::Float(x)), Num::Int(y)) => {
+                                    #[allow(clippy::cast_precision_loss)] // php-src's (double) widening
+                                    let y = y as f64;
+                                    *x = float_arith!($oop, *x, y);
                                 }
                                 // An int variable and a float: the variable
                                 // becomes a float (an int: nothing to
@@ -1012,15 +1038,39 @@ const fn mirrored(mask: u8) -> u8 {
     m
 }
 
+/// Whether the instructions of family `name` are switched off for this
+/// process: the environment variable `PHPRUST_TAPE_OFF` lists families
+/// (`numeric`, `scalar`, `dims`, `props`, `strs`, `calls`, or `all`),
+/// separated by commas. A debugging aid, read once: it tells which family a
+/// wrong result comes from without a rebuild (every op of a family that is
+/// off runs through `hot::step`, as it did before the family existed).
+fn switched_off(name: &str) -> bool {
+    static OFF: OnceLock<Vec<String>> = OnceLock::new();
+    OFF.get_or_init(|| {
+        std::env::var("PHPRUST_TAPE_OFF")
+            .map(|list| list.split(',').map(|n| n.trim().to_owned()).collect())
+            .unwrap_or_default()
+    })
+    .iter()
+    .any(|off| off == name || off == "all")
+}
+
 /// The specialised instruction of the op at `i`, if it has one: a numeric
 /// one of this module, else one of a family's.
 fn lower_op(code: &OpArray, i: usize) -> Option<Inst> {
-    lower_numeric(code, i)
-        .or_else(|| scalar::lower(code, i))
-        .or_else(|| dims::lower(code, i))
-        .or_else(|| props::lower(code, i))
-        .or_else(|| strs::lower(code, i))
-        .or_else(|| calls::lower(code, i))
+    let family = |name: &str, lower: fn(&OpArray, usize) -> Option<Inst>| {
+        if switched_off(name) {
+            None
+        } else {
+            lower(code, i)
+        }
+    };
+    family("numeric", lower_numeric)
+        .or_else(|| family("scalar", scalar::lower))
+        .or_else(|| family("dims", dims::lower))
+        .or_else(|| family("props", props::lower))
+        .or_else(|| family("strs", strs::lower))
+        .or_else(|| family("calls", calls::lower))
 }
 
 /// The numeric instruction ([`tape_ops!`]'s generated families) of the op
@@ -1215,7 +1265,55 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
         }));
     }
     tape.push(Inst::plain(TOp::Exit));
+    // Entering the tape costs a call, a look at the frame and the way back
+    // (about what one unspecialised hot op costs): worth it at a
+    // specialised instruction when the tape also runs what follows it.
+    for i in 0..code.ops.len() {
+        let follows = likely_next(code, i);
+        tape[i].enter = !matches!(tape[i].op, TOp::Exit | TOp::Step | TOp::Ext)
+            && tape.get(follows).is_some_and(|next| next.op != TOp::Exit);
+    }
     tape.into_boxed_slice()
+}
+
+/// The op that most likely runs after the op at `i`: the target of a
+/// backward jump (a loop goes round), the fall-through of a forward one,
+/// the op after the ops a fused op covers.
+fn likely_next(code: &OpArray, i: usize) -> usize {
+    let after = |target: u32, fall: usize| {
+        if target as usize <= i {
+            target as usize
+        } else {
+            fall
+        }
+    };
+    match code.ops.get(i) {
+        Some(&Op::Jmp(t)) => t as usize,
+        Some(&(Op::JmpZ(_, t) | Op::JmpNz(_, t))) => after(t, i + 1),
+        Some(&Op::CmpJmp { target, .. }) => after(target, i + 2),
+        Some(Op::IncDecCvCmpJmp { .. } | Op::AssignOpCvCmpJmp { .. }) => {
+            match code.ops.get(i + 1) {
+                Some(&Op::CmpJmp { target, .. }) => after(target, i + 3),
+                _ => i + 1,
+            }
+        }
+        Some(Op::BinAssignCvCmpJmp { .. }) => match code.ops.get(i + 2) {
+            Some(&Op::CmpJmp { target, .. }) => after(target, i + 4),
+            _ => i + 1,
+        },
+        Some(Op::BinAssignCv { .. }) => i + 2,
+        _ => i + 1,
+    }
+}
+
+/// Whether `Vm::run` enters the tape at the op at `at` of `code` at once
+/// (the tape is decoded on first use): it has a specialised instruction
+/// and so has the op that most likely follows it ([`lower`] works that
+/// out). Any other hot op `Vm::run` runs itself first (`hot::step`), and
+/// it enters the tape when the op after that one is a hot op too.
+#[inline]
+pub(super) fn worth_entering(code: &OpArray, at: usize) -> bool {
+    code.tape.get(code).get(at).is_some_and(|inst| inst.enter)
 }
 
 /// Whether the tape of `code` may run on frame `f`: its slots are where
