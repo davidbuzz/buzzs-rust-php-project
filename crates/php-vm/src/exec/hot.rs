@@ -29,7 +29,7 @@
 use super::spec::{cmp_simple_in, is_plain_slot, num_outcome, plain_truth, put_tmp, slot_truth};
 use super::{discard_unrooted, num_bin, release_rooted, Num};
 use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Op, Operand, UnKind};
-use crate::vm::{CvSlot, Frame, Vm};
+use crate::vm::{CvSlot, Frame};
 use php_runtime::{BinaryOp, Value};
 
 /// The second half of [`run_hot`]'s result when no safe point is due: the
@@ -70,7 +70,9 @@ pub(super) fn is_hot(op: &Op) -> bool {
     )
 }
 
-/// Runs the ops of frame `f` from `ip` while they are hot ops whose fast
+/// Runs the ops of frame `f` (its op array's `ops` and `lits`, held by
+/// the caller, so that the loop does not reload them through `f.code`)
+/// from `ip` while they are hot ops whose fast
 /// path applies. Returns `(ip, NO_SAFE_POINT)` when the op at `ip` must run
 /// in `Vm::run` (not a hot op, or its fast path declined, having changed
 /// nothing), or `(ip, at)` when the safe point after the op at `at` is
@@ -80,7 +82,7 @@ pub(super) fn is_hot(op: &Op) -> bool {
 /// out of `Vm::run`'s stack frame.
 #[inline(never)]
 #[allow(clippy::too_many_lines)] // one arm per hot op, like `Vm::run`
-pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize) {
+pub(super) fn run_hot(f: &mut Frame, ops: &[Op], lits: &[Value], mut ip: usize) -> (usize, usize) {
     loop {
         let at = ip;
         let Some(op) = ops.get(at) else {
@@ -167,7 +169,7 @@ pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize
                 mask,
                 ..
             } => {
-                let jump = match cmp_num(f, a, b, mask) {
+                let jump = match cmp_num(f, lits, a, b, mask) {
                     Some(j) => j,
                     None => match equality(f, kind, a, b) {
                         Some(r) => r == jmp_if,
@@ -186,7 +188,7 @@ pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize
                 b,
                 dst,
             } => {
-                if !bin_tmp(f, kind, a, b, dst) {
+                if !bin_tmp(f, lits, kind, a, b, dst) {
                     let Some(r) = equality(f, kind, a, b) else {
                         return (at, NO_SAFE_POINT);
                     };
@@ -204,7 +206,7 @@ pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize
                 b,
                 dst,
                 cv,
-            } => match bin_assign_cv(f, kind, a, b, cv, dst) {
+            } => match bin_assign_cv(f, lits, kind, a, b, cv, dst) {
                 Some(true) => ip += 1,
                 Some(false) => {}
                 None => {
@@ -234,7 +236,7 @@ pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize
                     a, b, target, mask, ..
                 }) = ops.get(ip)
                 {
-                    match cmp_num(f, a, b, mask) {
+                    match cmp_num(f, lits, a, b, mask) {
                         Some(true) => ip = target as usize,
                         Some(false) => ip += 2,
                         None => {}
@@ -247,7 +249,7 @@ pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize
                 b,
                 dst,
                 cv,
-            } => match bin_assign_cv(f, kind, a, b, cv, dst) {
+            } => match bin_assign_cv(f, lits, kind, a, b, cv, dst) {
                 Some(true) => {
                     if let Some(&Op::CmpJmp {
                         a: ca,
@@ -257,7 +259,7 @@ pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize
                         ..
                     }) = ops.get(ip + 1)
                     {
-                        match cmp_num(f, ca, cb, mask) {
+                        match cmp_num(f, lits, ca, cb, mask) {
                             Some(true) => ip = target as usize,
                             Some(false) => ip += 3,
                             None => ip += 1,
@@ -272,14 +274,14 @@ pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize
             Op::AssignOpCvCmpJmp {
                 cv, op: kind, val, ..
             } => {
-                if !assign_op_cv(f, cv, kind, val, None) {
+                if !assign_op_cv(f, lits, cv, kind, val, None) {
                     return (at, NO_SAFE_POINT);
                 }
                 if let Some(&Op::CmpJmp {
                     a, b, target, mask, ..
                 }) = ops.get(ip)
                 {
-                    match cmp_num(f, a, b, mask) {
+                    match cmp_num(f, lits, a, b, mask) {
                         Some(true) => ip = target as usize,
                         Some(false) => ip += 2,
                         None => {}
@@ -294,7 +296,7 @@ pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize
                 cv,
                 target,
                 jmp_if,
-            } => match bin_assign_cv(f, kind, a, b, cv, dst) {
+            } => match bin_assign_cv(f, lits, kind, a, b, cv, dst) {
                 Some(true) => match f.peek_cv(cv, slot_truth) {
                     Some(cond) if cond == jmp_if => ip = target as usize,
                     Some(_) => ip += 2,
@@ -311,7 +313,7 @@ pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize
                 jmp_if,
                 ..
             } => {
-                if !assign_op_cv(f, cv, kind, val, None) {
+                if !assign_op_cv(f, lits, cv, kind, val, None) {
                     return (at, NO_SAFE_POINT);
                 }
                 match f.peek_cv(cv, slot_truth) {
@@ -327,7 +329,7 @@ pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize
                 dst,
                 ..
             } => {
-                if !assign_op_cv(f, cv, kind, val, dst) {
+                if !assign_op_cv(f, lits, cv, kind, val, dst) {
                     return (at, NO_SAFE_POINT);
                 }
             }
@@ -426,14 +428,33 @@ fn operand_truth(f: &mut Frame, op: Operand) -> Option<bool> {
     }
 }
 
+/// The number an operand holds (`Vm::peek_num`), with the literals at
+/// hand: a compiled variable, temporary or literal holding an int or a
+/// float, read in place.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn num_of(f: &Frame, lits: &[Value], op: Operand) -> Option<Num> {
+    let v = match op {
+        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
+        Operand::Lit(i) => lits.get(i as usize)?,
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::Unused => return None,
+    };
+    match v {
+        Value::Int(i) => Some(Num::Int(*i)),
+        Value::Float(x) => Some(Num::Float(*x)),
+        _ => None,
+    }
+}
+
 /// The jump decision of a smart branch on two plain numbers
-/// (`Vm::cmp_jmp_num`): the comparison's [`cmp_outcome`] bit against the
+///: the comparison's [`cmp_outcome`] bit against the
 /// op's mask.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn cmp_num(f: &Frame, a: Operand, b: Operand, mask: u8) -> Option<bool> {
-    let x = Vm::peek_num(f, a)?;
-    let y = Vm::peek_num(f, b)?;
+fn cmp_num(f: &Frame, lits: &[Value], a: Operand, b: Operand, mask: u8) -> Option<bool> {
+    let x = num_of(f, lits, a)?;
+    let y = num_of(f, lits, b)?;
     let identity = (mask & cmp_outcome::IDENTITY) != 0;
     Some((mask & num_outcome(x, y, identity)) != 0)
 }
@@ -458,11 +479,11 @@ fn equality(f: &mut Frame, op: BinKind, a: Operand, b: Operand) -> Option<bool> 
 /// operand is not a plain number or the operator has no numeric form.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn bin_tmp(f: &mut Frame, op: BinKind, a: Operand, b: Operand, dst: u32) -> bool {
-    let Some(x) = Vm::peek_num(f, a) else {
+fn bin_tmp(f: &mut Frame, lits: &[Value], op: BinKind, a: Operand, b: Operand, dst: u32) -> bool {
+    let Some(x) = num_of(f, lits, a) else {
         return false;
     };
-    let Some(y) = Vm::peek_num(f, b) else {
+    let Some(y) = num_of(f, lits, b) else {
         return false;
     };
     let Some(r) = num_bin(op, x, y) else {
@@ -494,7 +515,7 @@ fn store_plain(f: &mut Frame, cv: u32, v: Value) -> bool {
     true
 }
 
-/// [`Op::BinAssignCv`] on two plain numbers (`Vm::bin_assign_cv_fast`):
+/// [`Op::BinAssignCv`] on two plain numbers:
 /// the result goes straight into compiled variable `cv` when that holds no
 /// refcounted value (`Some(true)`), else into `dst` for the `AssignCv`
 /// after the op (`Some(false)`). `None`, nothing changed, as for
@@ -503,14 +524,15 @@ fn store_plain(f: &mut Frame, cv: u32, v: Value) -> bool {
 #[allow(clippy::inline_always)]
 fn bin_assign_cv(
     f: &mut Frame,
+    lits: &[Value],
     op: BinKind,
     a: Operand,
     b: Operand,
     cv: u32,
     dst: u32,
 ) -> Option<bool> {
-    let x = Vm::peek_num(f, a)?;
-    let y = Vm::peek_num(f, b)?;
+    let x = num_of(f, lits, a)?;
+    let y = num_of(f, lits, b)?;
     let r = num_bin(op, x, y)?;
     if let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) {
         if is_plain_slot(slot.as_ref()) {
@@ -572,14 +594,21 @@ fn incdec_cv(f: &mut Frame, cv: u32, kind: IncDecKind, dst: Option<u32>) -> bool
 
 /// `$cv op= val` in place when both hold plain numbers and the result has
 /// a numeric form (`ZEND_ASSIGN_OP_SPEC_CV_*` with the `IS_LONG` /
-/// `IS_DOUBLE` paths of `zend_binary_op`; `Vm::assign_op_cv_fast`), the
+/// `IS_DOUBLE` paths of `zend_binary_op`), the
 /// result also written to `dst` when used. `false`, nothing changed, for
 /// the generic `AssignOp`.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn assign_op_cv(f: &mut Frame, cv: u32, op: BinaryOp, val: Operand, dst: Option<u32>) -> bool {
+fn assign_op_cv(
+    f: &mut Frame,
+    lits: &[Value],
+    cv: u32,
+    op: BinaryOp,
+    val: Operand,
+    dst: Option<u32>,
+) -> bool {
     // The operand first: it may be this very variable (`$x += $x`).
-    let Some(y) = Vm::peek_num(f, val) else {
+    let Some(y) = num_of(f, lits, val) else {
         return false;
     };
     let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
@@ -665,7 +694,7 @@ pub(super) fn assign_cv_in(f: &mut Frame, cv: u32, val: Operand, dst: Option<u32
     true
 }
 
-/// [`Op::Move`] when its read needs no diagnostic (`Vm::move_fast`): a
+/// [`Op::Move`] when its read needs no diagnostic (`ZEND_QM_ASSIGN`): a
 /// literal, a defined compiled variable (dereferenced and cloned), a
 /// temporary not holding a reference (moved, or cloned when kept).
 #[inline(always)]

@@ -1126,7 +1126,7 @@ impl Vm {
                         let Some(f) = self.frames.last_mut() else {
                             break 'slow;
                         };
-                        let (next, last) = hot::run_hot(f, ops, at);
+                        let (next, last) = hot::run_hot(f, ops, &code.literals, at);
                         if last != hot::NO_SAFE_POINT {
                             ip = self.safe_point(next, &ops[last])?;
                             continue 'ops;
