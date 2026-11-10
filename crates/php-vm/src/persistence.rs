@@ -447,6 +447,7 @@ impl Vm {
                 };
                 let lc = f.name.to_ascii_lowercase();
                 if !self.functions.contains_key(&lc) {
+                    crate::builtins::info::note_user_function(&lc);
                     self.functions.insert(lc, Func::User(f));
                 }
             }
@@ -667,7 +668,10 @@ impl Vm {
         // constructed (e.g. `enum RoundingMode`). This VM already declared
         // those; the preload request itself could not have redeclared them.
         for (name, function) in functions {
-            self.functions.entry(name).or_insert(Func::User(function));
+            if let std::collections::hash_map::Entry::Vacant(e) = self.functions.entry(name) {
+                crate::builtins::info::note_user_function(e.key());
+                e.insert(Func::User(function));
+            }
         }
         // The startup declaration order has already resolved dependencies.
         // Linking diagnostics were reported by the preload request; opcache

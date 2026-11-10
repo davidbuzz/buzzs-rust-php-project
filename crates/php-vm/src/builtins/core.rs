@@ -3,7 +3,7 @@
 use super::util::{arr, b, i, opt, s, sv, value_error};
 use super::{alias, constant, reg};
 use crate::class::Class;
-use crate::func::{flags, Args, Func};
+use crate::func::{flags, Args};
 use crate::object;
 use crate::vm::{ErrorHandler, FrameKind, PendingCall, Throw, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, PhpRef, PropertyPurpose, Value, ZArray, ZStr};
@@ -2147,14 +2147,16 @@ fn get_defined_functions(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             "get_defined_functions(): The $exclude_disabled parameter has no effect since PHP 8.0",
         )?;
     }
-    let mut internal = Vec::new();
-    let mut user = Vec::new();
-    for (k, f) in &vm.functions {
-        match f {
-            Func::Builtin(_) => internal.push(Value::Str(k.clone())),
-            Func::User(_) => user.push(Value::Str(k.clone())),
-        }
-    }
+    // `EG(function_table)` order: internal functions as registered, then
+    // user functions as declared.
+    let internal: Vec<Value> = super::info::internal_functions(vm)
+        .into_iter()
+        .map(Value::Str)
+        .collect();
+    let user: Vec<Value> = super::info::user_functions(vm)
+        .into_iter()
+        .map(Value::Str)
+        .collect();
     let mut t = HashTable::new();
     t.insert(
         ArrayKey::Str(ZStr::from("internal")),
