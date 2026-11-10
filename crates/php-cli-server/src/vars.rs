@@ -468,6 +468,8 @@ fn handle_multipart(
         tmp_dirs: tmp_dirs(vm),
     };
     let callback = vm.rfc1867_callback;
+    // mbstring's multibyte callbacks (`mbstring.encoding_translation`).
+    let mut translation = php_vm::ext::rfc1867_translation_hook().and_then(|hook| hook(vm));
     // The parse got past its early checks: MULTIPART_EVENT_START follows
     // the new SG(rfc1867_uploaded_files).
     let mut started = false;
@@ -483,6 +485,7 @@ fn handle_multipart(
             }
             callback.is_none_or(|cb| cb(vm, event, bytes))
         },
+        translation.as_deref_mut(),
     );
     if started {
         // The files of an earlier parse are no longer uploaded files.
