@@ -1530,6 +1530,7 @@ pub mod emu {
                 }),
                 supports_placeholders: 0,
                 named_rewrite_template: None,
+                bound_param_map: None,
             })
         }
         fn exec(&self, cx: &mut DriverCx<'_>, sql: &ZStr) -> Result<i64, DriverError> {

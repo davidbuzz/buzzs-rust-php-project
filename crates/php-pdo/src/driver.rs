@@ -105,6 +105,10 @@ pub struct Prepared {
     pub supports_placeholders: u8,
     /// `stmt->named_rewrite_template` (e.g. `":pdo%d"`).
     pub named_rewrite_template: Option<&'static str>,
+    /// `stmt->bound_param_map` built when the preparer rewrote named
+    /// placeholders for a positional-only driver (`pdo_parse_params()` at
+    /// prepare time, e.g. native `MySQL` prepares).
+    pub bound_param_map: Option<Vec<(php_sqlite::pdo::parser::ParamMapKey, Vec<u8>)>>,
 }
 
 impl std::fmt::Debug for Prepared {
@@ -333,6 +337,12 @@ pub struct ConnectParams {
     pub username: Option<Vec<u8>>,
     /// The password.
     pub password: Option<Vec<u8>>,
+    /// `dbh->is_persistent`.
+    pub is_persistent: bool,
+    /// `dbh->auto_commit` (`PDO::ATTR_AUTOCOMMIT` of the options, default on).
+    pub auto_commit: bool,
+    /// `dbh->stringify`.
+    pub stringify: bool,
 }
 
 /// The per-connection settings a driver factory fills in on `pdo_dbh_t`.
@@ -395,7 +405,7 @@ pub struct DriverEntry {
 
 thread_local! {
     static REGISTRY: std::cell::RefCell<Vec<DriverEntry>> =
-        std::cell::RefCell::new(vec![crate::sqlite::SQLITE_DRIVER]);
+        std::cell::RefCell::new(vec![crate::mysql::MYSQL_DRIVER, crate::sqlite::SQLITE_DRIVER]);
 }
 
 /// The registered drivers, in registration order (`pdo_driver_hash`).
@@ -452,7 +462,8 @@ mod tests {
     #[test]
     fn registry() {
         assert!(find_driver(b"sqlite").is_some());
-        assert!(find_driver(b"mysql").is_none());
+        assert!(find_driver(b"mysql").is_some());
+        assert!(find_driver(b"pgsql").is_none());
         assert_eq!(available_drivers().len(), drivers().len());
         assert_eq!(ParamEvent::ExecPre.bit(), 4);
     }

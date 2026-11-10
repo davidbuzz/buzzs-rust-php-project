@@ -330,6 +330,14 @@ impl Pdo {
             .map(|s| s.handle().clone())
     }
 
+    /// The `MySQL` driver handle, for the `Pdo\Mysql` methods.
+    pub fn mysql_warning_count(&self) -> Option<i64> {
+        let d = self.driver()?;
+        d.as_any()
+            .downcast_ref::<crate::mysql::MysqlDbh>()
+            .map(crate::mysql::MysqlDbh::warning_count)
+    }
+
     /// The name of the connected driver (`PDO::ATTR_DRIVER_NAME`).
     pub fn driver_name(&self) -> Option<&'static str> {
         self.dbh().entry.get().map(|e| e.name)
@@ -1432,6 +1440,9 @@ fn construct_driver(
             data_source: dbh.data_source.borrow().clone(),
             username,
             password,
+            is_persistent,
+            auto_commit: dbh.auto_commit.get(),
+            stringify: dbh.stringify.get(),
         };
         if let Some(conn) = (driver.factory)(cx, &params, options) {
             *dbh.driver.borrow_mut() = Some(conn.driver);

@@ -1,4 +1,5 @@
-//! The `PDO`, `PDOException` and `Pdo\Sqlite` classes and `pdo_drivers()`.
+//! The `PDO`, `PDOException`, `Pdo\Mysql` and `Pdo\Sqlite` classes and
+//! `pdo_drivers()`.
 
 use crate::host::{bind_callable, pdo_of, with_host, with_sqlite};
 use php_pdo::consts::{pdo_class_constants, ConstValue, PARAM_STR};
@@ -168,6 +169,24 @@ fn quote(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn pdo_drivers(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(Pdo::get_available_drivers()))
+}
+
+// ---------------------------------------------------------------------------
+// Pdo\Mysql
+// ---------------------------------------------------------------------------
+
+/// `Pdo\Mysql::getWarningCount()` (`PDO_CONSTRUCT_CHECK` +
+/// `mysql_warning_count()`).
+fn mysql_get_warning_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let (o, p) = this_pdo(a);
+    if let Some(n) = p.mysql_warning_count() {
+        return Ok(Value::Int(n));
+    }
+    let cls = o.class_name();
+    Err(vm.throw(
+        "Error",
+        &format!("{} object is uninitialized", cls.to_string_lossy()),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +500,10 @@ pub fn register(vm: &mut Vm) {
     for (name, v) in pdo_class_constants() {
         pdo = pdo.constant(name, const_value(v));
     }
+    for &(name, v) in php_pdo::mysql::PDO_MYSQL_CLASS_CONSTANTS {
+        let msg = format!("use Pdo\\Mysql::{name} instead");
+        pdo = pdo.deprecated_constant(&format!("MYSQL_{name}"), Value::Int(v), "8.5", &msg);
+    }
     for &(name, new, v) in php_sqlite::constants::PDO_SQLITE_DEPRECATED_ALIASES {
         let msg = format!("use Pdo\\Sqlite::{new} instead");
         pdo = pdo.deprecated_constant(name, Value::Int(v), "8.5", &msg);
@@ -541,6 +564,15 @@ pub fn register(vm: &mut Vm) {
             format!(" since 8.5, use {replacement}() instead").into_bytes(),
         );
     }
+
+    let mut my = ClassBuilder::new("Pdo\\Mysql")
+        .extends(vm, "PDO")
+        .flags(class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE);
+    for &(name, v) in php_pdo::mysql::PDO_MYSQL_CLASS_CONSTANTS {
+        my = my.constant(name, Value::Int(v));
+    }
+    my.method("getWarningCount(): int", pub_, mysql_get_warning_count)
+        .register(vm);
 
     let mut sq = ClassBuilder::new("Pdo\\Sqlite")
         .extends(vm, "PDO")

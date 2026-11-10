@@ -161,6 +161,9 @@ impl Stmt {
         *self.driver.borrow_mut() = Some(p.stmt);
         self.supports_placeholders.set(p.supports_placeholders);
         self.named_rewrite_template.set(p.named_rewrite_template);
+        if let Some(map) = p.bound_param_map {
+            *self.bound_param_map.borrow_mut() = Some(map);
+        }
     }
 
     /// `PDO_STMT_CLEAR_ERR()`.

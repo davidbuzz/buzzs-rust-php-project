@@ -118,6 +118,7 @@ impl DbhDriver for SqliteDbh {
             stmt: Rc::new(SqliteStmt { stmt }),
             supports_placeholders: PdoSqliteDbh::SUPPORTS_PLACEHOLDERS,
             named_rewrite_template: None,
+            bound_param_map: None,
         })
     }
 
