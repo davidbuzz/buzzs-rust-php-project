@@ -16,18 +16,18 @@ use std::rc::{Rc, Weak};
 /// A builder for internal (native) classes.
 #[derive(Debug)]
 pub struct ClassBuilder {
-    name: String,
+    name: ZStr,
     parent: Option<Rc<Class>>,
     interfaces: Vec<Rc<Class>>,
     flags: u32,
     consts: Vec<(ZStr, Value, u32, Vec<AttributeInfo>)>,
-    props: Vec<(String, u32, Option<&'static str>, Option<Value>)>,
-    statics: Vec<(String, u32, Value)>,
+    props: Vec<(ZStr, u32, Option<&'static str>, Option<Value>)>,
+    statics: Vec<(ZStr, u32, Value)>,
     methods: Vec<(&'static str, u32, BuiltinFn)>,
     internal: InternalKind,
     hooks: Option<Rc<crate::ext::ClassHooks>>,
     enum_backing: EnumBacking,
-    cases: Vec<(String, Option<Value>)>,
+    cases: Vec<(ZStr, Option<Value>)>,
 }
 
 /// Whether the class under construction is an enum, and of which kind.
@@ -103,7 +103,7 @@ impl ClassBuilder {
     /// Starts a class.
     pub fn new(name: &str) -> Self {
         ClassBuilder {
-            name: name.to_string(),
+            name: ZStr::from(name),
             parent: None,
             interfaces: Vec::new(),
             flags: cflags::INTERNAL,
@@ -143,7 +143,7 @@ impl ClassBuilder {
     /// Adds an enum case (`value` is the backing value of a backed enum).
     #[must_use]
     pub fn case(mut self, name: &str, value: Option<Value>) -> Self {
-        self.cases.push((name.to_string(), value));
+        self.cases.push((ZStr::from(name), value));
         self
     }
 
@@ -232,14 +232,14 @@ impl ClassBuilder {
         ty: Option<&'static str>,
         default: Option<Value>,
     ) -> Self {
-        self.props.push((name.to_string(), fl, ty, default));
+        self.props.push((ZStr::from(name), fl, ty, default));
         self
     }
 
     /// Adds a static property.
     #[must_use]
     pub fn static_prop(mut self, name: &str, fl: u32, v: Value) -> Self {
-        self.statics.push((name.to_string(), fl | flags::STATIC, v));
+        self.statics.push((ZStr::from(name), fl | flags::STATIC, v));
         self
     }
 
@@ -272,7 +272,7 @@ impl ClassBuilder {
             ifaces.append(&mut self.interfaces);
             self.interfaces = ifaces;
             let mut props = vec![(
-                "name".to_string(),
+                ZStr::from("name"),
                 flags::PUBLIC | flags::READONLY,
                 Some("string"),
                 None,
@@ -284,7 +284,7 @@ impl ClassBuilder {
                     "string"
                 };
                 props.push((
-                    "value".to_string(),
+                    ZStr::from("value"),
                     flags::PUBLIC | flags::READONLY,
                     Some(ty),
                     None,
@@ -314,7 +314,7 @@ impl ClassBuilder {
                 interfaces.push(i.clone());
             }
         }
-        let name = ZStr::from(self.name.as_str());
+        let name = self.name.clone();
         let internal = if self.internal == InternalKind::None {
             parent.as_ref().map_or(InternalKind::None, |p| p.internal)
         } else {
@@ -384,7 +384,7 @@ impl ClassBuilder {
             for (n, v) in &self.cases {
                 push_const(
                     Rc::new(ClassConst {
-                        name: ZStr::from(n.as_str()),
+                        name: n.clone(),
                         value: RefCell::new(None),
                         expr: ConstExpr::Value(v.clone().unwrap_or(Value::Null)),
                         flags: flags::PUBLIC,
@@ -420,7 +420,7 @@ impl ClassBuilder {
                 {
                     f |= flags::SET_PROTECTED;
                 }
-                let pn = ZStr::from(n.as_str());
+                let pn = n.clone();
                 let slot = match prop_map.get(&pn) {
                     Some(e) => e.slot,
                     None => u32::try_from(props.len()).unwrap_or(0),
@@ -454,7 +454,7 @@ impl ClassBuilder {
             static_map.reserve(self.statics.len());
             for (n, f, v) in &self.statics {
                 let sp = StaticProp {
-                    name: ZStr::from(n.as_str()),
+                    name: n.clone(),
                     flags: *f,
                     ty: None,
                     class: name.clone(),
@@ -503,7 +503,7 @@ impl ClassBuilder {
             }
             let magic = build_magic(&methods);
             Class {
-                lc_name: ZStr::from(self.name.to_ascii_lowercase()),
+                lc_name: name.to_ascii_lowercase(),
                 name: name.clone(),
                 flags: cflag,
                 parent: parent.clone(),
