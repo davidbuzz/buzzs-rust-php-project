@@ -5,6 +5,8 @@
 //! - Intra-block boolean negation & branch condition simplification (Not + JmpZ -> JmpNz).
 //! - Consecutive constant Echo merging (echo "a"; echo "b"; -> echo "ab";).
 //! - Redundant string cast before Echo elision.
+//! - Unused `static` variables with a constant initializer: their
+//!   `BindStatic`/`InitStatic` go (php-src's DCE drops such a `BIND_STATIC`).
 
 use super::{add_or_find_literal, clear_def_tmp, def_tmp, for_each_label_mut};
 use crate::compiler::expr::const_truthiness;
@@ -513,5 +515,115 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
         }
     }
 
+    changed
+}
+
+/// Deletes the `BindStatic`/`InitStatic` pair of a `static $v = <const>;`
+/// whose variable nothing else in the function touches, like php-src's DCE
+/// (`dce.c`, `may_have_side_effects()` on `ZEND_BIND_STATIC`): with the
+/// value in `op_array->static_variables` (op2 unused) the bind only defines
+/// the CV, so it dies with an unused CV. The declaration stays in
+/// [`OpArray::static_vars`], which reflection reads, so the variable shows
+/// its initial value, not a reference (opcache `optimize_static_002`).
+///
+/// Like php-src, which builds no SSA for such functions
+/// (`zend_dfa_analyze_op_array`), nothing is removed from code with
+/// try/catch/finally or indirect variable access (`$$`, `compact()`,
+/// `extract()`, `get_defined_vars()`, include/eval, `$GLOBALS`), nor from a
+/// variable a parameter, closure `use` binding or nested closure captures.
+pub(crate) fn remove_unused_const_statics(op_array: &mut OpArray, bound_cv_prefix: u32) -> bool {
+    if op_array.num_statics == 0
+        || !op_array.try_table.is_empty()
+        || super::compact::has_dynamic_var_access(op_array)
+    {
+        return false;
+    }
+    // (bind op, init op, cv, literal) per static slot; `None` once a slot
+    // is seen in an unexpected shape.
+    let mut slots: Vec<Option<(Option<usize>, Option<usize>, u32, Option<u32>)>> =
+        vec![Some((None, None, u32::MAX, None)); op_array.num_statics as usize];
+    for (at, op) in op_array.ops.iter().enumerate() {
+        let (cv, idx, init) = match op {
+            Op::BindStatic { cv, idx, .. } => (*cv, *idx, None),
+            Op::InitStatic { cv, idx, val } => (*cv, *idx, Some(*val)),
+            _ => continue,
+        };
+        let Some(slot) = slots.get_mut(idx as usize) else {
+            continue;
+        };
+        let ok = match slot.as_mut() {
+            None => continue,
+            Some((_, _, scv, _)) if *scv != u32::MAX && *scv != cv => false,
+            Some((bind, init_at, scv, lit)) => {
+                *scv = cv;
+                match init {
+                    None if bind.is_none() => {
+                        *bind = Some(at);
+                        true
+                    }
+                    Some(Operand::Lit(l)) if init_at.is_none() => {
+                        *init_at = Some(at);
+                        *lit = Some(l);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+        };
+        if !ok {
+            *slot = None;
+        }
+    }
+    let candidates: Vec<(u32, usize, usize, u32, u32)> = slots
+        .iter()
+        .zip(0u32..)
+        .filter_map(|(s, idx)| match s {
+            Some((Some(b), Some(i), cv, Some(l))) if *cv >= bound_cv_prefix => {
+                Some((idx, *b, *i, *cv, *l))
+            }
+            _ => None,
+        })
+        .collect();
+    if candidates.is_empty() {
+        return false;
+    }
+    // Every CV reference outside the candidates' own ops.
+    let own: std::collections::HashSet<usize> =
+        candidates.iter().flat_map(|c| [c.1, c.2]).collect();
+    let mut used = vec![false; op_array.cv_names.len()];
+    let mut mark = |cv: &mut u32| {
+        if let Some(u) = used.get_mut(*cv as usize) {
+            *u = true;
+        }
+    };
+    for (at, op) in op_array.ops.iter().enumerate() {
+        if !own.contains(&at) {
+            super::compact::for_each_cv_mut(&mut op.clone(), &mut mark);
+        }
+    }
+    for place in &op_array.places {
+        super::compact::for_each_place_cv_mut(&mut place.clone(), &mut mark);
+    }
+    for f in op_array.decls.functions.borrow().iter() {
+        for u in &f.uses {
+            mark(&mut u.parent_cv.clone());
+        }
+    }
+    let mut changed = false;
+    for (idx, bind, init, cv, lit) in candidates {
+        if used.get(cv as usize).copied().unwrap_or(true) {
+            continue;
+        }
+        let Some(v) = op_array.literals.get(lit as usize).cloned() else {
+            continue;
+        };
+        let Some(d) = op_array.static_vars.get_mut(idx as usize) else {
+            continue;
+        };
+        d.init = Some(v);
+        op_array.ops[bind] = Op::Nop;
+        op_array.ops[init] = Op::Nop;
+        changed = true;
+    }
     changed
 }

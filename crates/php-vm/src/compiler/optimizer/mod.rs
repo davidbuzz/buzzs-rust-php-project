@@ -168,6 +168,9 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
         }
         if (level & PASS_14) != 0 {
             changed |= dce::run_dce(op_array);
+            if (level & PASS_6) != 0 && !ctx.is_main {
+                changed |= block_pass::remove_unused_const_statics(op_array, ctx.bound_cv_prefix());
+            }
         }
         if (level & PASS_13) != 0 {
             changed |= compact::remove_unused_variables(op_array, ctx);

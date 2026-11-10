@@ -10,7 +10,6 @@ use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, Class};
 use crate::func::{flags, Args, Func, Method};
 use crate::object;
-use crate::opcode::{Op, Operand};
 use crate::types::TypeDecl;
 use crate::vm::{PendingCall, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
@@ -148,42 +147,17 @@ pub(crate) fn static_vars(vm: &Vm, f: &FnRef) -> Vec<(ZStr, Value)> {
             }
         }
     }
-    let mut inits: Vec<(u32, u32, Option<Value>)> = Vec::new();
-    for op in &u.code.ops {
-        match op {
-            Op::BindStatic { cv, idx, .. } => {
-                if !inits.iter().any(|(i, _, _)| i == idx) {
-                    inits.push((*idx, *cv, None));
-                }
-            }
-            Op::InitStatic { cv, idx, val } => {
-                let lit = match val {
-                    Operand::Lit(l) => u.code.literals.get(*l as usize).cloned(),
-                    _ => None,
-                };
-                if let Some(e) = inits.iter_mut().find(|(i, _, _)| i == idx) {
-                    e.2 = lit;
-                } else {
-                    inits.push((*idx, *cv, lit));
-                }
-            }
-            _ => {}
-        }
-    }
     let store = match &cdata {
         Some(d) => d.statics.borrow().clone(),
         None => u.statics.borrow().clone(),
     };
-    for (idx, cv, lit) in inits {
-        let name = u
-            .code
-            .cv_names
-            .get(cv as usize)
-            .cloned()
-            .unwrap_or_default();
-        let v = match store.get(idx as usize).cloned().flatten() {
+    for (idx, decl) in u.code.static_vars.iter().enumerate() {
+        let name = decl.name.clone();
+        let v = match store.get(idx).cloned().flatten() {
             Some(r) => Value::Reference(r),
-            None => lit
+            None => decl
+                .init
+                .clone()
                 .or_else(|| static_const_init(vm, f, u, &name))
                 .unwrap_or(Value::Null),
         };

@@ -398,6 +398,8 @@ impl Compiler<'_> {
 
     /// `static $a = <const expr>;`: `BindStatic` binds an initialized
     /// static and skips `InitStatic`, which initializes it the first time.
+    /// The declaration is also recorded in the function's static variable
+    /// table (`op_array->static_variables`, see `zend_compile_static_var`).
     fn compile_static(&mut self, vars: &[ast::StaticVar]) -> CResult<()> {
         for sv in vars {
             self.f().line = sv.span.line;
@@ -415,6 +417,14 @@ impl Compiler<'_> {
                 Some(e) => self.compile_expr(e)?,
                 None => self.lit(Value::Null),
             };
+            let init = match val {
+                Operand::Lit(l) => self.f().literals.get(l as usize).cloned(),
+                _ => None,
+            };
+            let f = self.f();
+            let name = f.cv_names.get(cv as usize).cloned().unwrap_or_default();
+            f.static_vars
+                .push(crate::opcode::StaticVarDecl { name, init });
             self.emit(Op::InitStatic { cv, idx, val });
             self.patch_here(bind);
         }

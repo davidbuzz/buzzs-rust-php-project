@@ -604,7 +604,7 @@ pub(crate) fn for_each_place_cv_mut(place: &mut Place, mut f: impl FnMut(&mut u3
 
 /// Whether the op array contains dynamic variable access constructs like
 /// `compact`, `extract`, `get_defined_vars`, variable variables, superglobals, or include/eval.
-fn has_dynamic_var_access(op_array: &OpArray) -> bool {
+pub(crate) fn has_dynamic_var_access(op_array: &OpArray) -> bool {
     for place in &op_array.places {
         if matches!(
             place.base,
