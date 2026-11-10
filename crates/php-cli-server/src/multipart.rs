@@ -150,6 +150,25 @@ fn memstr(hay: &[u8], needle: &[u8], partial: bool) -> Option<usize> {
     None
 }
 
+/// `ZEND_HAS_OOM()`: a `memory_limit` violation is pending. The parser
+/// checks it after every step that can allocate a request-sized amount
+/// and then stops (`goto fileupload_done`), so the soft limit is reported
+/// once the body is parsed instead of the hard limit being reached.
+fn oom() -> bool {
+    php_memlimit::is_pending()
+}
+
+/// Appends `extra` to `v` with a fallible reallocation (`safe_ferealloc(...,
+/// fallible)` / a smart string's growth): growth past `memory_limit` fails,
+/// leaving the violation pending, and returns `false`.
+fn try_append(v: &mut Vec<u8>, extra: &[u8]) -> bool {
+    if php_memlimit::fallible(|| v.try_reserve(extra.len())).is_err() {
+        return false;
+    }
+    v.extend_from_slice(extra);
+    true
+}
+
 /// The multipart read buffer (`multipart_buffer`).
 struct MultipartBuffer<'a> {
     buffer: Vec<u8>,
@@ -263,17 +282,25 @@ impl MultipartBuffer<'_> {
                     key = None;
                 } else {
                     key = Some(name.to_vec());
-                    let value: Vec<u8> = line[colon + 1..]
+                    let value = &line[colon + 1..];
+                    let value = &value[value
                         .iter()
-                        .copied()
-                        .skip_while(|&c| is_space(c))
-                        .collect();
-                    buf_value
-                        .get_or_insert_with(Vec::new)
-                        .extend_from_slice(&value);
+                        .position(|&c| !is_space(c))
+                        .unwrap_or(value.len())..];
+                    if !try_append(buf_value.get_or_insert_with(Vec::new), value) {
+                        return None;
+                    }
                 }
             } else if let Some(b) = buf_value.as_mut() {
-                b.extend_from_slice(line);
+                if !try_append(b, line) {
+                    return None;
+                }
+            } else {
+                continue;
+            }
+            // `goto oom`: the parse ends.
+            if oom() {
+                return None;
             }
         }
         if let (Some(k), Some(v)) = (key, buf_value) {
@@ -319,10 +346,9 @@ impl MultipartBuffer<'_> {
         let mut out = Vec::new();
         loop {
             let chunk = self.read_part(FILLUNIT, None);
-            if chunk.is_empty() {
+            if chunk.is_empty() || !try_append(&mut out, &chunk) {
                 break;
             }
-            out.extend_from_slice(&chunk);
         }
         out
     }
@@ -497,14 +523,16 @@ impl Parser {
         self.out.warnings.push(Warning { message, docref });
     }
 
-    /// `safe_php_register_variable()`.
+    /// `safe_php_register_variable()`: `false` once a `memory_limit`
+    /// violation is pending (the parse then ends).
+    #[must_use]
     fn register(
         &mut self,
         target: Target,
         name: &[u8],
         value: RegValue,
         override_protection: bool,
-    ) {
+    ) -> bool {
         let name = normalize_protected_variable(name);
         if override_protection || !self.protected.contains(&name) {
             self.out.registrations.push(Registration {
@@ -513,6 +541,7 @@ impl Parser {
                 value,
             });
         }
+        !oom()
     }
 }
 
@@ -622,13 +651,16 @@ pub fn parse_with_events(
     let mut max_file_size: i64 = 0;
 
     // A failed start event goes straight to `fileupload_done`.
-    let started = events(Rfc1867Event::Start { content_length }, mb.read_bytes);
+    let started = events(Rfc1867Event::Start { content_length }, mb.read_bytes) && !oom();
 
-    while started && !mb.eof() {
+    'parts: while started && !mb.eof() {
+        if oom() {
+            break;
+        }
         let Some(headers) = mb.headers() else {
             break;
         };
-        let Some(cd) = header_value(&headers, b"Content-Disposition").map(<[u8]>::to_vec) else {
+        let Some(cd) = header_value(&headers, b"Content-Disposition") else {
             continue;
         };
         body_parts_cnt -= 1;
@@ -646,24 +678,39 @@ pub fn parse_with_events(
         let mut filename: Option<Vec<u8>> = None;
         while !cd.is_empty() {
             let (pair, rest) = getword(cd, b';');
+            if oom() {
+                break 'parts;
+            }
             cd = &rest[rest
                 .iter()
                 .position(|&c| !is_space(c))
                 .unwrap_or(rest.len())..];
             if pair.contains(&b'=') {
                 let (key, value) = getword(&pair, b'=');
+                if oom() {
+                    break 'parts;
+                }
                 if key.eq_ignore_ascii_case(b"name") {
                     param = Some(getword_conf(value));
                 } else if key.eq_ignore_ascii_case(b"filename") {
                     filename = Some(getword_conf(value));
                 }
+                if oom() {
+                    break 'parts;
+                }
             }
+        }
+        if oom() {
+            break;
         }
 
         // A normal form variable.
         if filename.is_none() {
             if let Some(param) = param {
                 let value = mb.read_body();
+                if oom() {
+                    break;
+                }
                 count += 1;
                 if count <= settings.max_input_vars {
                     let event = Rfc1867Event::FormData {
@@ -673,7 +720,12 @@ pub fn parse_with_events(
                     if !events(event, mb.read_bytes) {
                         continue;
                     }
-                    p.register(Target::Post, &param, RegValue::Str(value.clone()), false);
+                    if oom() {
+                        break;
+                    }
+                    if !p.register(Target::Post, &param, RegValue::Str(value.clone()), false) {
+                        break;
+                    }
                 } else {
                     if count == settings.max_input_vars + 1 {
                         p.warn(
@@ -689,6 +741,9 @@ pub fn parse_with_events(
                         value: &value,
                     };
                     events(event, mb.read_bytes);
+                    if oom() {
+                        break;
+                    }
                 }
                 if normalize_protected_variable(&param).eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
                     max_file_size = crate::headers::strtol(c_str(&value));
@@ -753,6 +808,9 @@ pub fn parse_with_events(
         if !events(event, mb.read_bytes) {
             continue;
         }
+        if oom() {
+            break;
+        }
 
         let mut cancel: i64 = 0;
         let mut total: i64 = 0;
@@ -796,6 +854,9 @@ pub fn parse_with_events(
                         total += blen;
                     }
                 }
+                if oom() {
+                    break;
+                }
                 if cancel == 0 {
                     chunk = mb.read_part(FILLUNIT, Some(&mut end));
                 }
@@ -813,7 +874,7 @@ pub fn parse_with_events(
         if !events(event, mb.read_bytes) {
             cancel = upload_err::EXTENSION;
         }
-        if cancel == 0 {
+        if cancel == 0 && !oom() {
             if let Some(t) = &temp {
                 p.out.uploaded.push(t.clone());
             }
@@ -821,6 +882,9 @@ pub fn parse_with_events(
             if cancel != upload_err::NO_TMP_DIR {
                 let _ = std::fs::remove_file(t);
             }
+        }
+        if oom() {
+            break;
         }
 
         let arr = param
@@ -844,18 +908,22 @@ pub fn parse_with_events(
             }
             n
         };
-        p.register(
+        if !p.register(
             Target::Files,
             &name_of(&param, "name"),
             RegValue::Str(basename(&filename).to_vec()),
             false,
-        );
-        p.register(
+        ) {
+            break;
+        }
+        if !p.register(
             Target::Files,
             &name_of(&param, "full_path"),
             RegValue::Str(filename.clone()),
             false,
-        );
+        ) {
+            break;
+        }
         let ctype = if cancel != 0 {
             Vec::new()
         } else {
@@ -863,15 +931,20 @@ pub fn parse_with_events(
                 .map(|v| v.split(|&c| c == b';').next().unwrap_or_default().to_vec())
                 .unwrap_or_default()
         };
-        p.register(
+        if !p.register(
             Target::Files,
             &name_of(&param, "type"),
             RegValue::Str(ctype),
             false,
-        );
+        ) {
+            break;
+        }
         // add_protected_variable() normalises `param` in place.
         let nparam = normalize_protected_variable(&param);
         p.protected.insert(nparam.clone());
+        if oom() {
+            break;
+        }
         let tmp_base = if arr.is_some() { param.clone() } else { nparam };
         let tmp_name = normalize_protected_variable(&name_of(&tmp_base, "tmp_name"));
         p.protected.insert(tmp_name.clone());
@@ -879,19 +952,25 @@ pub fn parse_with_events(
             .as_ref()
             .map(|t| t.as_os_str().as_bytes().to_vec())
             .unwrap_or_default();
-        p.register(Target::Files, &tmp_name, RegValue::Str(tmp_value), true);
-        p.register(
+        if !p.register(Target::Files, &tmp_name, RegValue::Str(tmp_value), true) {
+            break;
+        }
+        if !p.register(
             Target::Files,
             &name_of(&param, "error"),
             RegValue::Long(cancel),
             false,
-        );
-        p.register(
+        ) {
+            break;
+        }
+        if !p.register(
             Target::Files,
             &name_of(&param, "size"),
             RegValue::Long(if cancel == 0 { total } else { 0 }),
             false,
-        );
+        ) {
+            break;
+        }
     }
     p.out.read_bytes = mb.read_bytes;
     if post_max_size > 0 && mb.read_bytes > post_max_size {

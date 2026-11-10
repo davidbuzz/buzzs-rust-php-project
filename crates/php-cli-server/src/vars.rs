@@ -416,13 +416,14 @@ fn handle_urlencoded(
     phase: Phase,
     post: &mut ZArray,
 ) -> VmResult<()> {
-    // `php_stream_copy_to_mem()` of the request body: the copy counts
-    // towards memory_limit, as in PHP.
-    let Some(data) = ctx.request_body().map(<[u8]>::to_vec) else {
+    // The request body buffer, read in place: `php_std_post_handler()`
+    // streams it through a buffer that only holds the variable being
+    // parsed, so the body itself does not count towards memory_limit.
+    let Some(data) = ctx.request_body() else {
         return Ok(());
     };
     if let Some(hook) = php_vm::ext::request_input_hook() {
-        if let Some(r) = hook(vm, php_vm::ext::RequestInput::Post, &data, post) {
+        if let Some(r) = hook(vm, php_vm::ext::RequestInput::Post, data, post) {
             return r;
         }
     }
@@ -432,7 +433,7 @@ fn handle_urlencoded(
     };
     query::treat_data(
         ParseKind::Post,
-        &data,
+        data,
         post,
         &settings,
         phase.func(),
@@ -489,6 +490,11 @@ fn handle_multipart(
         ctx.orphaned_uploads.borrow_mut().extend(earlier);
     }
     vm.rfc1867_uploaded_files.extend(outcome.uploaded);
+    // The parse stopped at a `memory_limit` violation: the request fails
+    // with it (`sapi_handle_post()`), registering nothing more.
+    if php_memlimit::is_pending() {
+        return Ok(());
+    }
 
     let mut pending: Option<Throw> = None;
     for w in &outcome.warnings {
@@ -518,6 +524,9 @@ fn handle_multipart(
         let registered = query::register_variable_ex(&registration.name, v, track, &opts, vm)
             .map_err(|e| vm.throw_runtime_error(e));
         pend_err(vm, &mut pending, registered)?;
+        if php_memlimit::is_pending() {
+            break;
+        }
     }
     pending.map_or(Ok(()), Err)
 }
@@ -569,6 +578,8 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
     };
     let has = |c: u8| order.iter().any(|x| x.eq_ignore_ascii_case(&c));
     let settings = input_settings(vm);
+    // `ZEND_HAS_OOM()` for the registration loops of `main/php_variables.c`.
+    query::set_oom_pending_hook(php_memlimit::is_pending);
 
     // $_POST / $_FILES are read at SAPI activation (before $_GET).
     let mut post = ZArray::new();
@@ -617,6 +628,12 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
                 }
             }
         }
+    }
+    // `sapi_handle_post()` → `zend_handle_delayed_oom()`: the soft limit
+    // was crossed while parsing the body; request startup bails out
+    // before any other superglobal is built (the caller reports it).
+    if php_memlimit::is_pending() {
+        return;
     }
 
     // $_GET, $_COOKIE

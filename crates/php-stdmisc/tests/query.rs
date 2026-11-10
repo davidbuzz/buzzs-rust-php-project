@@ -160,3 +160,44 @@ fn cookies_and_post() {
         ["Warning: PHP Request Startup: Input variables exceeded 1. To increase the limit change max_input_vars in php.ini."]
     );
 }
+
+thread_local! {
+    /// The `ZEND_HAS_OOM()` state the hook below reports, per test thread.
+    static OOM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn oom_flag() -> bool {
+    OOM.with(std::cell::Cell::get)
+}
+
+/// `main/php_variables.c`: once a `memory_limit` violation is pending,
+/// `add_post_var()` stops before registering anything and
+/// `php_register_variable_ex()` drops a variable at its first nesting level.
+#[test]
+fn a_pending_oom_stops_registration() {
+    query::set_oom_pending_hook(oom_flag);
+    let mut ctx = CollectingContext::new();
+    let settings = InputSettings::default();
+    OOM.with(|f| f.set(true));
+    let mut track = ZArray::new();
+    query::treat_data(
+        ParseKind::Post,
+        b"a=1&b=2",
+        &mut track,
+        &settings,
+        "",
+        None,
+        &mut ctx,
+    )
+    .unwrap();
+    assert_eq!(track.len(), 0);
+    let r = query::parse_str(b"a[b]=1&c=2", &settings, &mut ctx).unwrap();
+    assert_eq!(
+        show(&serialize(&Value::Array(r), &mut ctx).unwrap()),
+        r#"a:1:{s:1:"c";s:1:"2";}"#
+    );
+    OOM.with(|f| f.set(false));
+    let r = query::parse_str(b"a[b]=1&c=2", &settings, &mut ctx).unwrap();
+    assert_eq!(r.len(), 2);
+    assert!(ctx.messages().is_empty(), "{:?}", ctx.messages());
+}
