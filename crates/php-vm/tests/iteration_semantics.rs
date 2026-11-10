@@ -199,3 +199,31 @@ fn yield_from_in_by_ref_generator_is_fatal() {
         "{out}"
     );
 }
+
+/// `foreach` over generators through the one-access resume and fetch
+/// paths: plain yields, keys, `yield from` arrays and generators, return
+/// values, `break` with `finally`, exceptions and an aggregate returning a
+/// generator (expected output from php 8.3).
+#[test]
+fn generator_foreach_fast_paths_match_general_resume() {
+    let src = r#"<?php
+function g() { $x = yield 1; echo "got ", var_export($x, true), "\n"; yield 'k' => 2; yield from [10, 20]; yield from h(); return 5; }
+function h() { yield 7; yield 8; return 9; }
+$gen = g();
+foreach ($gen as $k => $v) { echo "$k=$v\n"; }
+echo $gen->getReturn(), "\n";
+$g2 = (function () { try { yield 1; yield 2; } finally { echo "fin\n"; } })();
+foreach ($g2 as $v) { echo $v, "\n"; break; }
+unset($g2);
+$g3 = (function () { yield 1; throw new Exception("boom"); })();
+try { foreach ($g3 as $v) { echo $v, "\n"; } } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+try { foreach ($g3 as $v) {} } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+$s = 0; foreach ((function () { for ($i = 0; $i < 100; $i++) yield $i; })() as $v) $s += $v; echo $s, "\n";
+class A implements IteratorAggregate { function getIterator(): Iterator { yield 'a' => 1; yield 'b' => 2; } }
+foreach (new A as $k => $v) echo "$k:$v\n";
+"#;
+    assert_eq!(
+        run(src),
+        "0=1\ngot NULL\nk=2\n0=10\n1=20\n0=7\n1=8\n5\n1\nfin\n1\nboom\nCannot traverse an already closed generator\n4950\na:1\nb:2\n"
+    );
+}

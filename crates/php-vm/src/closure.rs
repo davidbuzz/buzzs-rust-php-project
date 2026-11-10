@@ -35,8 +35,14 @@ pub struct ClosureData {
 }
 
 impl Vm {
+    /// The `Closure` class (`zend_ce_closure`), looked up by its
+    /// lowercase name without building a key.
+    fn closure_class(&self) -> Option<Rc<Class>> {
+        self.classes.get(&b"closure"[..]).cloned()
+    }
+
     fn new_closure_object(&mut self, data: ClosureData) -> Obj {
-        let cls = self.find_class(b"Closure").expect("Closure class");
+        let cls = self.closure_class().expect("Closure class");
         let o = object::new_object(cls, Vec::new());
         object::set_internal(&o, data);
         o
@@ -151,7 +157,7 @@ impl Vm {
             call.func.name().to_string_lossy().to_ascii_lowercase()
         ));
         let cls = if cacheable {
-            self.find_class(b"Closure")
+            self.closure_class()
         } else {
             None
         };
@@ -324,7 +330,7 @@ impl Vm {
             flags::PUBLIC | flags::VARIADIC | flags::CLOSURE | (d.func.flags() & flags::RETURN_REF),
             closure_invoke,
         );
-        let cls = self.find_class(b"Closure");
+        let cls = self.closure_class();
         Some(PendingCall {
             this: Some(o.clone()),
             scope: cls.clone(),
@@ -479,7 +485,7 @@ impl Vm {
         let mut this = this;
         if scope.is_none() && this.is_some() {
             // Dummy scope when binding an object without a scope.
-            scope = self.find_class(b"Closure");
+            scope = self.closure_class();
         }
         if matches!(d.func, Func::Builtin(_)) && d.scope.is_none() {
             // Free internal functions have no meaningful scope or $this.

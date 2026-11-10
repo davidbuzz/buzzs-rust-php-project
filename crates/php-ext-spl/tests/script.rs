@@ -886,3 +886,31 @@ var_dump($o->x);
 "#);
     assert_eq!(out, "int(3)\n");
 }
+
+/// `foreach` over an `IteratorAggregate` hands over to the returned
+/// `ArrayIterator`'s native iterator (`zend_user_it_get_new_iterator`),
+/// which still honours user overrides; the one-pass fetch sees writes made
+/// during the loop and iterates by reference (expected output from php
+/// 8.3).
+#[test]
+fn aggregate_and_array_iterator_foreach() {
+    let out = run(r#"<?php
+class C implements IteratorAggregate { function getIterator(): Iterator { return new ArrayIterator(['a' => 1, 'b' => 2, 3]); } }
+foreach (new C as $k => $v) echo "$k=$v\n";
+class MyIt extends ArrayIterator { function current(): mixed { return parent::current() * 10; } }
+class D implements IteratorAggregate { function getIterator(): Iterator { return new MyIt([1, 2]); } }
+foreach (new D as $k => $v) echo "$k=$v\n";
+$it = new ArrayIterator([1, 2, 3]);
+foreach ($it as $k => $v) { echo "$k=$v\n"; if ($k == 0) $it[5] = 9; }
+$ao = new ArrayObject(['x' => 1, 'y' => 2]);
+foreach ($ao as $k => $v) echo "$k=$v\n";
+$a = new ArrayIterator([1, 2]); foreach ($a as &$r) { $r *= 2; } unset($r); echo implode(',', $a->getArrayCopy()), "\n";
+class E implements IteratorAggregate { function getIterator(): Iterator { return new ArrayIterator([]); } }
+foreach (new E as $v) echo "never\n";
+echo "done\n";
+"#);
+    assert_eq!(
+        out,
+        "a=1\nb=2\n0=3\n0=10\n1=20\n0=1\n1=2\n2=3\n5=9\nx=1\ny=2\n2,4\ndone\n"
+    );
+}

@@ -258,6 +258,34 @@ pub trait ObjectIterator {
     /// `move_forward`.
     fn next(&mut self, host: &mut dyn SplHost) -> RtResult<()>;
 
+    /// Whether [`ObjectIterator::fetch`] does a whole `foreach` step in
+    /// one pass without running user code between its parts (so a caller
+    /// need not check for a pending exception after each part).
+    fn supports_fetch(&self) -> bool {
+        false
+    }
+
+    /// One `foreach` step: advances first when `advance`, then returns
+    /// `None` at the end, else the current value (as
+    /// [`ObjectIterator::current`]) and, when `want_key`, the key (as
+    /// [`ObjectIterator::key`]; `None` also when not wanted).
+    fn fetch(
+        &mut self,
+        host: &mut dyn SplHost,
+        advance: bool,
+        want_key: bool,
+    ) -> RtResult<Option<(Option<Value>, Option<Value>)>> {
+        if advance {
+            self.next(host)?;
+        }
+        if !self.valid(host)? {
+            return Ok(None);
+        }
+        let v = self.current(host)?;
+        let k = if want_key { self.key(host)? } else { None };
+        Ok(Some((v, k)))
+    }
+
     /// For `zend_user_iterator`s: the `Iterator` object whose methods this
     /// iterator calls. Callers may then call the methods directly instead
     /// of borrowing the iterator (so user code can re-enter it).
