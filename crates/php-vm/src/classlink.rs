@@ -808,6 +808,10 @@ impl Vm {
     pub(crate) fn declare_function(&mut self, f: &Rc<UserFunction>) -> VmResult<()> {
         let lc = f.name.to_ascii_lowercase();
         if let Some(existing) = self.functions.get(&lc) {
+            // `preload_remove_declares`: a preloaded declaration is gone.
+            if self.is_preloaded_function(f) {
+                return Ok(());
+            }
             let msg = match existing {
                 Func::User(u) => format!(
                     "Cannot redeclare function {}() (previously declared in {}:{})",
@@ -871,6 +875,10 @@ impl Vm {
     pub(crate) fn declare_class_stmt(&mut self, decl: &Rc<ClassDecl>) -> VmResult<()> {
         let key = Rc::as_ptr(decl) as usize;
         if self.bound_decls.remove(&key).is_none() {
+            // `preload_remove_declares`: a preloaded declaration is gone.
+            if self.is_preloaded_class(decl) {
+                return Ok(());
+            }
             self.declare_class(decl, false)?;
             self.bound_decls.remove(&key);
         }

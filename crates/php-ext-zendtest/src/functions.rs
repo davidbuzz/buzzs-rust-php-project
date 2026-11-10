@@ -24,6 +24,12 @@ fn ret_false(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(false))
 }
 
+/// `zend_test_opcache_preloading()`: `opcache_preloading()`, whether the
+/// opcache preload script is running.
+fn opcache_preloading(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Bool(Vm::is_preloading()))
+}
+
 fn ret_one(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(1))
 }
@@ -848,7 +854,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         compile_to_ast,
     );
     m.function("zend_test_gh18756(): void", none);
-    m.function("zend_test_opcache_preloading(): bool", ret_false);
+    m.function("zend_test_opcache_preloading(): bool", opcache_preloading);
     m.function("zend_test_gh19792(): void", gh19792);
     m.function("zend_new_singleton_array(): array", singleton_array);
     m.function(
