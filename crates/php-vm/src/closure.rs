@@ -651,6 +651,21 @@ fn closure_call_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if !vm.valid_closure_binding(&d, Some(&this), Some(&cls))? {
         return Ok(Value::Null);
     }
+    let args: Vec<Value> = a.values.iter().skip(1).cloned().collect();
+    // `zend_closure_call_magic`'s on-stack fake closure: a plain call
+    // allocates no object (so no object handle); it runs the closure's
+    // function with the new `$this` and scope, its bound variables and
+    // static variables. Only a generator gets a real closure object.
+    if d.func.flags() & flags::GENERATOR == 0 {
+        if let Some(mut call) = vm.closure_user_call(&c) {
+            call.this = Some(this);
+            call.scope = Some(cls.clone());
+            call.called = Some(cls);
+            let named = std::mem::take(&mut a.named);
+            let r = vm.call_resolved_named(call, args, named)?;
+            return Ok(r.deref());
+        }
+    }
     // The call shares the static variables of the closure.
     let tmp = ClosureData {
         scope: Some(cls.clone()),
@@ -659,7 +674,6 @@ fn closure_call_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         ..d
     };
     let tmp = vm.new_closure_object(tmp);
-    let args: Vec<Value> = a.values.iter().skip(1).cloned().collect();
     let named = std::mem::take(&mut a.named);
     let r = vm.call_value_named(&Value::Object(tmp), args, named)?;
     Ok(r.deref())
