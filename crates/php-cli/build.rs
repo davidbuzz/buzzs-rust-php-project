@@ -58,4 +58,47 @@ fn main() {
     // Rust refers to it, so `--as-needed` would drop it without the reference
     // `LIBSTDCXX_IS_NEEDED` in main.rs.
     println!("cargo:rustc-link-lib=dylib:+verbatim=libstdc++.so.6");
+    pack_relative_relocs();
+}
+
+/// Links the `php` binary with `-z pack-relative-relocs` (`DT_RELR`): the
+/// position-independent binary carries ~117 000 (release) to ~229 000
+/// (debug) relative relocations (vtables, string tables, static
+/// pointers), which the dynamic loader applies at every start-up. Packed,
+/// they take a bitmap walk instead of one 24-byte `RELA` record each:
+/// measured on a C program with 120 000 of them, 1.67 M -> 0.86 M user
+/// instructions, and ~1-2 MB less of the file to read. Needs GNU ld 2.38
+/// or lld 15 and glibc 2.36 at run time, so it is enabled only when a
+/// probe program linked with the flag (through `cc`, rustc's default
+/// linker driver) runs; `PHPRUST_NO_RELR` disables it.
+fn pack_relative_relocs() {
+    println!("cargo:rerun-if-env-changed=PHPRUST_NO_RELR");
+    if std::env::var_os("PHPRUST_NO_RELR").is_some()
+        || std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux")
+        || std::env::var("TARGET").ok() != std::env::var("HOST").ok()
+    {
+        return;
+    }
+    let Some(out) = std::env::var_os("OUT_DIR").map(std::path::PathBuf::from) else {
+        return;
+    };
+    let src = out.join("relr_probe.c");
+    let exe = out.join("relr_probe");
+    if std::fs::write(&src, "int main(void) { return 0; }\n").is_err() {
+        return;
+    }
+    let linked = std::process::Command::new("cc")
+        .args(["-fPIE", "-pie", "-Wl,-z,pack-relative-relocs", "-o"])
+        .arg(&exe)
+        .arg(&src)
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if linked
+        && std::process::Command::new(&exe)
+            .status()
+            .is_ok_and(|s| s.success())
+    {
+        println!("cargo:rustc-link-arg-bins=-Wl,-z,pack-relative-relocs");
+    }
 }
