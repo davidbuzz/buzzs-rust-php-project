@@ -1376,9 +1376,28 @@ impl Vm {
                             Some(r) => self.set_dst(*dst, r),
                             None => break 'slow,
                         },
+                        // `$x = isset($o->p)`: the `AssignCv` of the result
+                        // is done here when the variable holds a plain value
+                        // (as `FetchObjProp`'s `to`), and skipped.
                         Op::IssetObjProp { place, dst, empty } => {
                             match self.isset_obj_prop_fast(*place, *empty) {
-                                Some(r) => self.set_tmp(*dst, Value::Bool(r)),
+                                Some(r) => {
+                                    let folded = match ops.get(ip) {
+                                        Some(Op::AssignCv {
+                                            cv,
+                                            val: Operand::Tmp(t),
+                                            dst: None,
+                                        }) if *t == *dst => {
+                                            self.cv_store_plain(*cv, Value::Bool(r)).is_ok()
+                                        }
+                                        _ => false,
+                                    };
+                                    if folded {
+                                        ip += 1;
+                                    } else {
+                                        self.set_tmp(*dst, Value::Bool(r));
+                                    }
+                                }
                                 None => break 'slow,
                             }
                         }

@@ -680,7 +680,17 @@ fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
         crate::lazy::take_stale_slots(handle)
     };
     for slot in slots {
-        drop(slot.take());
+        let v = slot.take();
+        // A scalar owns nothing: forgetting it skips the out-of-line
+        // `drop_in_place` call (`zval_ptr_dtor` of a non-refcounted zval).
+        if matches!(
+            v,
+            None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
+        ) {
+            std::mem::forget(v);
+        } else {
+            drop(v);
+        }
     }
     drop((dynamic, internal, stale));
     // A destructor queued meanwhile runs (and frees its object) before
@@ -744,6 +754,7 @@ impl Fill<'_> {
 
     /// Writes the values into `dst`, which has room for exactly
     /// [`Fill::len`] of them.
+    #[inline]
     fn write(self, dst: &mut [MaybeUninit<Option<Value>>]) {
         debug_assert_eq!(dst.len(), self.len());
         match self {
@@ -752,9 +763,18 @@ impl Fill<'_> {
                     *d = MaybeUninit::new(v);
                 }
             }
+            // `ZVAL_COPY_OR_DUP_PROP` of each default: scalars (most
+            // defaults) are copied inline, without the out-of-line `Clone`.
             Fill::Defaults(values) => {
                 for (d, v) in dst.iter_mut().zip(values) {
-                    *d = MaybeUninit::new(v.clone());
+                    *d = MaybeUninit::new(match v {
+                        None => None,
+                        Some(Value::Null) => Some(Value::Null),
+                        Some(Value::Bool(b)) => Some(Value::Bool(*b)),
+                        Some(Value::Int(i)) => Some(Value::Int(*i)),
+                        Some(Value::Float(x)) => Some(Value::Float(*x)),
+                        Some(other) => Some(other.clone()),
+                    });
                 }
             }
         }
