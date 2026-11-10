@@ -46,21 +46,58 @@ pub struct ParseOptions {
 pub(crate) type PResult<T> = Result<T, ParseError>;
 
 /// A token with its semantic value.
+///
+/// Kept small (80 bytes rather than 104) because every token is moved into
+/// and out of the lookahead buffer: the source text is a borrowed slice, and
+/// the rare payloads (a preceding doc comment, text re-encoded by a script
+/// encoding filter) live out of line in [`TokExtra`].
 #[derive(Clone, Debug)]
 pub(crate) struct Tok<'a> {
     pub kind: TokenKind,
-    pub span: Span,
     pub end_line: u32,
+    pub span: Span,
     pub value: Option<TokenValue>,
-    text: Cow<'a, [u8]>,
+    /// The token's text when it is borrowed from the input (otherwise
+    /// empty, with the owned text in `extra`).
+    text: &'a [u8],
+    extra: Option<Box<TokExtra>>,
+}
+
+/// Rarely present parts of a [`Tok`].
+#[derive(Clone, Debug)]
+struct TokExtra {
+    /// Text that could not be borrowed from the input (filtered or
+    /// re-encoded by the script encoding).
+    text: Option<Vec<u8>>,
     /// Doc comment scanned in the trivia before this token.
     doc: Option<Vec<u8>>,
 }
 
-impl Tok<'_> {
+impl<'a> Tok<'a> {
+    /// A token without semantic value, doc comment or owned text.
+    fn plain(kind: TokenKind, span: Span, end_line: u32, text: &'a [u8]) -> Self {
+        Tok {
+            kind,
+            end_line,
+            span,
+            value: None,
+            text,
+            extra: None,
+        }
+    }
+
     /// The source text of the token.
+    #[inline]
     pub fn text(&self) -> &[u8] {
-        &self.text
+        match &self.extra {
+            Some(extra) => extra.text.as_deref().unwrap_or(self.text),
+            None => self.text,
+        }
+    }
+
+    /// Takes the doc comment scanned before this token.
+    fn take_doc(&mut self) -> Option<Vec<u8>> {
+        self.extra.as_mut().and_then(|extra| extra.doc.take())
     }
 }
 
@@ -149,14 +186,11 @@ impl<'a> Parser<'a> {
             if self.lexer_stopped {
                 let len = self.lexer.source().len();
                 let line = self.lexer.line();
-                return Tok {
-                    kind: TokenKind::End,
-                    span: Span::new(len, len, line),
-                    end_line: line,
-                    value: None,
-                    text: Cow::Borrowed(b""),
-                    doc,
-                };
+                let mut tok = Tok::plain(TokenKind::End, Span::new(len, len, line), line, b"");
+                if doc.is_some() {
+                    tok.extra = Some(Box::new(TokExtra { text: None, doc }));
+                }
+                return tok;
             }
             let t = self.lexer.next_token_or_end();
             self.collect_lexer_warnings();
@@ -171,16 +205,22 @@ impl<'a> Parser<'a> {
                 }
                 _ => {}
             }
-            let value = self.lexer.take_value();
-            let text = self.lexer.token_text(t);
-            return Tok {
-                kind: t.kind,
-                span: t.span,
-                end_line: t.end_line,
-                value,
-                text,
-                doc,
-            };
+            let mut tok = Tok::plain(t.kind, t.span, t.end_line, b"");
+            tok.value = self.lexer.take_value();
+            match self.lexer.token_text(t) {
+                Cow::Borrowed(text) if doc.is_none() => tok.text = text,
+                Cow::Borrowed(text) => {
+                    tok.text = text;
+                    tok.extra = Some(Box::new(TokExtra { text: None, doc }));
+                }
+                Cow::Owned(text) => {
+                    tok.extra = Some(Box::new(TokExtra {
+                        text: Some(text),
+                        doc,
+                    }));
+                }
+            }
+            return tok;
         }
     }
 
@@ -235,7 +275,7 @@ impl<'a> Parser<'a> {
         if !self.front_applied {
             self.front_applied = true;
             let tok = &mut self.buf[0];
-            if let Some(d) = tok.doc.take() {
+            if let Some(d) = tok.take_doc() {
                 self.doc_comment = Some(d);
             }
             if tok.kind == TokenKind::RBrace {
@@ -272,14 +312,10 @@ impl<'a> Parser<'a> {
     /// Consumes the current token.
     pub fn bump(&mut self) -> Tok<'a> {
         self.front();
-        let tok = self.buf.pop_front().unwrap_or_else(|| Tok {
-            kind: TokenKind::End,
-            span: Span::default(),
-            end_line: 0,
-            value: None,
-            text: Cow::Borrowed(b""),
-            doc: None,
-        });
+        let tok = self
+            .buf
+            .pop_front()
+            .unwrap_or_else(|| Tok::plain(TokenKind::End, Span::default(), 0, b""));
         self.front_applied = false;
         self.prev_span = tok.span;
         self.prev_end_line = tok.end_line;
@@ -467,5 +503,47 @@ fn parse_program_inner(p: &mut Parser<'_>) -> Result<Program, ParseError> {
             e.warnings = std::mem::take(&mut p.warnings);
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tok_tests {
+    use super::*;
+
+    #[test]
+    fn tok_stays_small() {
+        assert!(std::mem::size_of::<Tok<'static>>() <= 80);
+    }
+
+    #[test]
+    fn tok_text_prefers_owned_text() {
+        let span = Span::new(0, 3, 1);
+        let mut tok = Tok::plain(TokenKind::String, span, 1, b"abc");
+        assert_eq!(tok.text(), b"abc");
+        assert_eq!(tok.take_doc(), None);
+        tok.extra = Some(Box::new(TokExtra {
+            text: None,
+            doc: Some(b"/** d */".to_vec()),
+        }));
+        assert_eq!(tok.text(), b"abc");
+        assert_eq!(tok.take_doc().as_deref(), Some(&b"/** d */"[..]));
+        assert_eq!(tok.take_doc(), None);
+        tok.extra = Some(Box::new(TokExtra {
+            text: Some(b"xyz".to_vec()),
+            doc: None,
+        }));
+        assert_eq!(tok.text(), b"xyz");
+    }
+
+    #[test]
+    fn doc_comments_reach_declarations() {
+        let src = b"<?php\n/** A */\nclass A {\n/** m */\npublic function m() {}\n}\n/** f */ function f() {}";
+        let mut p = Parser::new(
+            src,
+            &ParseOptions::default(),
+            &ScriptEncodingOptions::default(),
+        );
+        assert_eq!(p.peek(), TokenKind::Class);
+        assert_eq!(p.take_doc_comment().as_deref(), Some(&b"/** A */"[..]));
     }
 }
