@@ -990,6 +990,44 @@ mod tests {
         }
     }
 
+    /// Literal compaction (pass 11) remaps the literal indices of every op,
+    /// including a `name: ?` placeholder's name and `in_array`'s haystack:
+    /// a duplicate `7` before them once left both pointing one literal too
+    /// far ("Unknown named parameter $Int(8)", `partial_application/
+    /// const_arg_opt`).
+    #[test]
+    fn literal_compaction_remaps_placeholder_names_and_in_array_sets() {
+        let unit = compile_src(
+            "<?php function h($a, $b, $c) {} function t($s) { $a = 7; $b = 7; \
+             $f = h(1, c: ?, b: ?); return [$f, $a, $b, in_array($s, ['b', 'c'])]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let funcs = unit.main.code.decls.functions.borrow();
+        let t = funcs.iter().find(|f| f.name.as_bytes() == b"t").expect("t");
+        let code = &t.code;
+        let names: Vec<&[u8]> = code
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::SendPlaceholder { name: Some(n) } => match code.literals.get(*n as usize) {
+                    Some(Value::Str(s)) => Some(s.as_bytes()),
+                    other => panic!("placeholder name literal {other:?}: {:?}", code.ops),
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, [&b"c"[..], &b"b"[..]], "{:?}", code.ops);
+        for op in &code.ops {
+            if let Op::InArray { set, .. } = op {
+                assert!(
+                    matches!(code.literals.get(*set as usize), Some(Value::Array(_))),
+                    "in_array set literal {:?}",
+                    code.literals.get(*set as usize)
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_constant_folding() {
         let unit = compile_src("<?php echo 1 + 2 * 3;", DEFAULT_OPTIMIZATION_LEVEL);

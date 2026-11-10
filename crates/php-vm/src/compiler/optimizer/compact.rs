@@ -318,60 +318,7 @@ pub(crate) fn compact_literals(op_array: &mut OpArray) -> bool {
             }
         });
 
-        match op {
-            Op::New { class, .. }
-            | Op::InitStaticCall { class, .. }
-            | Op::FetchClassConst { class, .. }
-            | Op::FetchClassName { class, .. }
-            | Op::InstanceOf { class, .. } => {
-                if let ClassSpec::Named(l) = class {
-                    remap_lit(l);
-                }
-            }
-            Op::InitFCall {
-                name,
-                fallback,
-                display,
-            } => {
-                remap_lit(name);
-                if let Some(fb) = fallback {
-                    remap_lit(fb);
-                }
-                remap_lit(display);
-            }
-            Op::SendNamed { name, .. } => remap_lit(name),
-            Op::FetchConst { name, fallback, .. } => {
-                remap_lit(name);
-                if let Some(fb) = fallback {
-                    remap_lit(fb);
-                }
-            }
-            Op::FetchClassConstTo { class, name, .. } => {
-                if let ClassSpec::Named(l) = class {
-                    remap_lit(l);
-                }
-                remap_lit(name);
-            }
-            Op::FetchConstTo { name, fallback, .. } => {
-                remap_lit(name);
-                if let Some(fb) = fallback {
-                    remap_lit(fb);
-                }
-            }
-            Op::Defined { name, .. } => remap_lit(name),
-            Op::DeclareConst { name, .. } => remap_lit(name),
-            Op::Catch { classes, .. } => {
-                for c in classes.iter_mut() {
-                    remap_lit(c);
-                }
-            }
-            Op::TypeAssertArray { msg, .. } | Op::Diag { msg, .. } => remap_lit(msg),
-            Op::UserOpcode { opcode } => remap_lit(opcode),
-            Op::InitParentHook { prop, .. } => remap_lit(prop),
-            Op::CallablePartial { name, .. } => remap_lit(name),
-            Op::Global { name, .. } => remap_lit(name),
-            _ => {}
-        }
+        for_each_literal_index_mut(op, remap_lit);
     }
 
     // Remap literals in places
@@ -390,6 +337,191 @@ pub(crate) fn compact_literals(op_array: &mut OpArray) -> bool {
 
     op_array.literals = unique_literals;
     true
+}
+
+/// Visits every raw literal index an instruction holds outside its
+/// [`Operand::Lit`] operands (which [`for_each_operand_mut`] visits): class
+/// names, function/constant names, named-argument names, diagnostics, ...
+///
+/// The match is exhaustive on purpose: a new op with a literal field must be
+/// listed here, or literal compaction (pass 11) would leave it pointing at a
+/// stale index (a `name: ?` placeholder read the wrong literal and failed
+/// with "Unknown named parameter $Int(8)").
+pub(crate) fn for_each_literal_index_mut(op: &mut Op, mut f: impl FnMut(&mut u32)) {
+    match op {
+        Op::New { class, .. }
+        | Op::InitStaticCall { class, .. }
+        | Op::FetchClassConst { class, .. }
+        | Op::FetchClassName { class, .. }
+        | Op::InstanceOf { class, .. } => {
+            if let ClassSpec::Named(l) = class {
+                f(l);
+            }
+        }
+        Op::FetchClassConstTo { class, name, .. } => {
+            if let ClassSpec::Named(l) = class {
+                f(l);
+            }
+            f(name);
+        }
+        Op::InitFCall {
+            name,
+            fallback,
+            display,
+        } => {
+            f(name);
+            if let Some(fb) = fallback {
+                f(fb);
+            }
+            f(display);
+        }
+        Op::FetchConst { name, fallback, .. } | Op::FetchConstTo { name, fallback, .. } => {
+            f(name);
+            if let Some(fb) = fallback {
+                f(fb);
+            }
+        }
+        Op::SendPlaceholder { name } => {
+            if let Some(n) = name {
+                f(n);
+            }
+        }
+        Op::SendNamed { name, .. }
+        | Op::CallablePartial { name, .. }
+        | Op::Defined { name, .. }
+        | Op::DeclareConst { name, .. }
+        | Op::Global { name, .. } => f(name),
+        Op::InArray { set, .. } => f(set),
+        Op::Catch { classes, .. } => {
+            for c in classes.iter_mut() {
+                f(c);
+            }
+        }
+        Op::TypeAssertArray { msg, .. } | Op::Diag { msg, .. } => f(msg),
+        Op::UserOpcode { opcode } => f(opcode),
+        Op::InitParentHook { prop, .. } => f(prop),
+        Op::Abs { .. }
+        | Op::ArrayAdd { .. }
+        | Op::ArrayAddRef { .. }
+        | Op::ArrayKeyExists { .. }
+        | Op::ArrayUnpack { .. }
+        | Op::AssertCheck { .. }
+        | Op::Assign { .. }
+        | Op::AssignCv { .. }
+        | Op::AssignDimCv { .. }
+        | Op::AssignDimsCv { .. }
+        | Op::AssignObjProp { .. }
+        | Op::AssignObjPropDim { .. }
+        | Op::AssignOp { .. }
+        | Op::AssignOpCv { .. }
+        | Op::AssignOpCvCmpJmp { .. }
+        | Op::AssignOpCvJmp { .. }
+        | Op::AssignOpDimCv { .. }
+        | Op::AssignOpDimsCv { .. }
+        | Op::AssignOpObjProp { .. }
+        | Op::AssignOpObjPropDim { .. }
+        | Op::AssignOpStaticProp { .. }
+        | Op::AssignRef { .. }
+        | Op::AssignStaticProp { .. }
+        | Op::BeginSilence { .. }
+        | Op::Bin { .. }
+        | Op::BinAssignCv { .. }
+        | Op::BinAssignCvCmpJmp { .. }
+        | Op::BinAssignCvJmp { .. }
+        | Op::BindStatic { .. }
+        | Op::CallableConvert { .. }
+        | Op::Cast { .. }
+        | Op::Clone { .. }
+        | Op::CmpJmp { .. }
+        | Op::Coalesce { .. }
+        | Op::ConcatCv { .. }
+        | Op::ConstArrayUnpack { .. }
+        | Op::ConstDimCheck { .. }
+        | Op::ConstPropCheck { .. }
+        | Op::Count { .. }
+        | Op::DeclareAnonClass { .. }
+        | Op::DeclareClass(..)
+        | Op::DeclareFunction(..)
+        | Op::DiscardFinally { .. }
+        | Op::DoCall { .. }
+        | Op::Echo(..)
+        | Op::Empty { .. }
+        | Op::EndSilence { .. }
+        | Op::Exit(..)
+        | Op::FastCall { .. }
+        | Op::FastRet { .. }
+        | Op::FeFetch { .. }
+        | Op::FeFree { .. }
+        | Op::FeFreeOnReturn { .. }
+        | Op::FeReset { .. }
+        | Op::Fetch { .. }
+        | Op::FetchDimCv { .. }
+        | Op::FetchDimsCv { .. }
+        | Op::FetchGlobal { .. }
+        | Op::FetchObjProp { .. }
+        | Op::FetchObjPropDim { .. }
+        | Op::FetchStaticProp { .. }
+        | Op::FetchThis { .. }
+        | Op::Free(..)
+        | Op::FuncGetArgs { .. }
+        | Op::FuncNumArgs { .. }
+        | Op::GeneratorCreate
+        | Op::GetCalledClass { .. }
+        | Op::GetClass { .. }
+        | Op::GetType { .. }
+        | Op::IncDec { .. }
+        | Op::IncDecCv { .. }
+        | Op::IncDecCvCmpJmp { .. }
+        | Op::IncDecDimCv { .. }
+        | Op::IncDecObjProp { .. }
+        | Op::IncDecObjPropDim { .. }
+        | Op::Include { .. }
+        | Op::InitArray { .. }
+        | Op::InitDynCall { .. }
+        | Op::InitMethodCall { .. }
+        | Op::InitStatic { .. }
+        | Op::Isset { .. }
+        | Op::IssetDimCv { .. }
+        | Op::IssetObjProp { .. }
+        | Op::IssetObjPropDim { .. }
+        | Op::IssetStaticProp { .. }
+        | Op::Jmp(..)
+        | Op::JmpNull { .. }
+        | Op::JmpNz(..)
+        | Op::JmpNzEx { .. }
+        | Op::JmpSet { .. }
+        | Op::JmpZ(..)
+        | Op::JmpZEx { .. }
+        | Op::KeyExists { .. }
+        | Op::ListFetchRef { .. }
+        | Op::MakeClosure { .. }
+        | Op::MakeRef { .. }
+        | Op::MatchError { .. }
+        | Op::Move { .. }
+        | Op::Nop
+        | Op::Recv { .. }
+        | Op::RecvDefault { .. }
+        | Op::RecvInit { .. }
+        | Op::RecvVariadic { .. }
+        | Op::Rethrow
+        | Op::Return { .. }
+        | Op::ReturnByRefValue { .. }
+        | Op::ReturnRef { .. }
+        | Op::Rope { .. }
+        | Op::Send { .. }
+        | Op::SendUnpack { .. }
+        | Op::Strlen { .. }
+        | Op::Throw(..)
+        | Op::Ticks(..)
+        | Op::TypeCheck { .. }
+        | Op::Unary { .. }
+        | Op::Unset { .. }
+        | Op::VerifyReturn { .. }
+        | Op::Yield { .. }
+        | Op::YieldByRefValue { .. }
+        | Op::YieldFrom { .. }
+        | Op::YieldRef { .. } => {}
+    }
 }
 
 // -----------------------------------------------------------------------------
