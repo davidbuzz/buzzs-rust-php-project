@@ -13,7 +13,8 @@ use super::pass1::{fold_bin_op, fold_cast, fold_unary_op};
 use super::{add_or_find_literal, for_each_operand_mut, for_each_place_operand_mut, OptContext};
 use crate::compiler::expr::const_truthiness;
 use crate::opcode::{
-    type_mask, ArgSrc, BinKind, CastKind, IncDecKind, Op, OpArray, Operand, PlaceBase,
+    type_mask, ArgSrc, BinKind, CastKind, FetchMode, IncDecKind, Op, OpArray, Operand, Place,
+    PlaceBase, PlaceId, Seg,
 };
 use php_runtime::{BinaryOp, Value, ZStr};
 
@@ -62,6 +63,103 @@ fn fold_strlen(val: &Value) -> Option<i64> {
     }
 }
 
+/// The CV that `place` names when it is a plain variable (`$cv`, no
+/// dimension or property).
+fn plain_cv(places: &[Place], place: PlaceId) -> Option<u32> {
+    let p = places.get(place as usize)?;
+    match p.base {
+        PlaceBase::Cv(cv) if p.segs.is_empty() => Some(cv),
+        _ => None,
+    }
+}
+
+/// The literal of the only dimension of `place` (`base[lit]`).
+fn single_dim_lit(place: &Place) -> Option<u32> {
+    match place.segs.as_slice() {
+        [Seg::Dim(Operand::Lit(l))] => Some(*l),
+        _ => None,
+    }
+}
+
+/// What reading `container[dim]` gives when that read can raise no
+/// diagnostic: an existing element of a literal array, or an in-range
+/// offset of a literal string (sccp.c `ct_eval_fetch_dim`). A `list()`
+/// fetch from a string gives `null`, so only arrays fold there.
+fn fold_fetch_dim(container: &Value, dim: &Value, mode: FetchMode) -> Option<Value> {
+    let val = match (container, dim) {
+        (Value::Array(arr), Value::Int(i)) => arr.get_int(*i).cloned()?,
+        (Value::Array(arr), Value::Str(s)) => arr.get_sym(s.as_bytes()).cloned()?,
+        (Value::Str(s), Value::Int(i)) if mode != FetchMode::List => {
+            let len = i64::try_from(s.len()).ok()?;
+            let idx = if *i < 0 { i.checked_add(len)? } else { *i };
+            if !(0..len).contains(&idx) {
+                return None;
+            }
+            let byte = *s.as_bytes().get(usize::try_from(idx).ok()?)?;
+            Value::Str(ZStr::from(vec![byte]))
+        }
+        _ => return None,
+    };
+    // Only plain values: never hand out a reference, object or resource.
+    matches!(
+        val,
+        Value::Null
+            | Value::Bool(_)
+            | Value::Int(_)
+            | Value::Float(_)
+            | Value::Str(_)
+            | Value::Array(_)
+    )
+    .then_some(val)
+}
+
+/// For an in-place update of a plain CV (`$cv op= val`, `++$cv`, ...):
+/// the CV and its new constant (the literal index), or `None` for the
+/// constant when the result is not known. `None` overall when `op` is no
+/// such update.
+fn plain_cv_update(
+    op: &Op,
+    places: &[Place],
+    cur_state: &[CvLattice],
+    literals: &mut Vec<Value>,
+) -> Option<(u32, Option<u32>)> {
+    let place = match op {
+        Op::AssignOp { place, .. } | Op::IncDec { place, .. } => *place,
+        _ => return None,
+    };
+    let cv = plain_cv(places, place)?;
+    let CvLattice::Const(cur) = *cur_state.get(cv as usize)? else {
+        return Some((cv, None));
+    };
+    let res = match op {
+        Op::AssignOp { op: bop, val, .. } => {
+            let rhs = match val {
+                Operand::Lit(l) => Some(*l),
+                Operand::Cv(c) => match cur_state.get(*c as usize) {
+                    Some(CvLattice::Const(l)) => Some(*l),
+                    _ => None,
+                },
+                _ => None,
+            };
+            rhs.and_then(|l| {
+                let a = literals.get(cur as usize)?.clone();
+                let b = literals.get(l as usize)?.clone();
+                fold_bin_op(BinKind::Arith(*bop), &a, &b)
+            })
+        }
+        Op::IncDec { kind, .. } => match literals.get(cur as usize) {
+            Some(Value::Int(i)) => match kind {
+                IncDecKind::PreInc | IncDecKind::PostInc => i.checked_add(1),
+                IncDecKind::PreDec | IncDecKind::PostDec => i.checked_sub(1),
+            }
+            .map(Value::Int),
+            _ => None,
+        },
+        _ => None,
+    };
+    Some((cv, res.map(|v| add_or_find_literal(literals, v))))
+}
+
 fn update_cv_state_for_op(
     op: &Op,
     places: &[crate::opcode::Place],
@@ -69,6 +167,12 @@ fn update_cv_state_for_op(
     cur_state: &mut [CvLattice],
     literals: &mut Vec<Value>,
 ) {
+    if let Some((cv, lit)) = plain_cv_update(op, places, cur_state, literals) {
+        if let Some(slot) = cur_state.get_mut(cv as usize) {
+            *slot = lit.map_or(CvLattice::Bottom, CvLattice::Const);
+            return;
+        }
+    }
     match op {
         Op::AssignCv { cv, val, .. } => {
             let cv_idx = *cv as usize;
@@ -708,6 +812,32 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         }
                     }
                 }
+                // `"abc"[-1]`, `[1, 2][0]`: a read of a literal container
+                // that cannot warn.
+                Op::Fetch { place, mode, dst }
+                    if def_count.get(*dst as usize).copied() == Some(1) =>
+                {
+                    let folded = op_array.places.get(*place as usize).and_then(|p| {
+                        let PlaceBase::Value(Operand::Lit(c)) = &p.base else {
+                            return None;
+                        };
+                        let d = single_dim_lit(p)?;
+                        fold_fetch_dim(
+                            op_array.literals.get(*c as usize)?,
+                            op_array.literals.get(d as usize)?,
+                            *mode,
+                        )
+                    });
+                    if let Some(val) = folded {
+                        let lit = add_or_find_literal(&mut op_array.literals, val);
+                        lit_def[*dst as usize] = Some(lit);
+                        *op = Op::Move {
+                            src: Operand::Lit(lit),
+                            dst: *dst,
+                        };
+                        changed = true;
+                    }
+                }
                 Op::Abs { src, dst, to } => {
                     let lit_src = match src {
                         Operand::Lit(l) => Some(*l),
@@ -1137,8 +1267,92 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     }
                 });
 
+                // Substitute Cv reads in the dimensions of the op's place:
+                // they are read when the op runs. Integer constants only:
+                // a literal string offset is expected in canonical form.
+                let read_place = match op {
+                    Op::Fetch { place, .. }
+                    | Op::Isset { place, .. }
+                    | Op::Empty { place, .. }
+                    | Op::Assign { place, .. }
+                    | Op::AssignOp { place, .. }
+                    | Op::IncDec { place, .. }
+                    | Op::Unset { place } => Some(*place),
+                    _ => None,
+                };
+                let place_mut = match read_place {
+                    Some(pid) => op_array.places.get_mut(pid as usize),
+                    None => None,
+                };
+                if let Some(p) = place_mut {
+                    for seg in &mut p.segs {
+                        let Seg::Dim(operand) = seg else {
+                            continue;
+                        };
+                        let Operand::Cv(cv) = *operand else {
+                            continue;
+                        };
+                        if let Some(CvLattice::Const(l)) = cur_state.get(cv as usize) {
+                            if matches!(op_array.literals.get(*l as usize), Some(Value::Int(_))) {
+                                *operand = Operand::Lit(*l);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+
+                // `$cv op= c` / `++$cv` of a constant CV: a plain
+                // assignment of the result (the CV is no reference here).
+                if let Some((cv, Some(lit))) =
+                    plain_cv_update(op, &op_array.places, &cur_state, &mut op_array.literals)
+                {
+                    let dst = match op {
+                        Op::AssignOp { dst, .. }
+                        | Op::IncDec {
+                            kind: IncDecKind::PreInc | IncDecKind::PreDec,
+                            dst,
+                            ..
+                        } => Some(*dst),
+                        Op::IncDec { dst: None, .. } => Some(None),
+                        _ => None,
+                    };
+                    if let Some(dst) = dst {
+                        *op = Op::AssignCv {
+                            cv,
+                            val: Operand::Lit(lit),
+                            dst,
+                        };
+                        changed = true;
+                    }
+                }
+
                 // Fold newly constant operations
                 match op {
+                    // `$cv[c]` of a CV holding a known array or string.
+                    Op::Fetch { place, mode, dst } => {
+                        let folded = op_array.places.get(*place as usize).and_then(|p| {
+                            let PlaceBase::Cv(c) = p.base else {
+                                return None;
+                            };
+                            let CvLattice::Const(cl) = *cur_state.get(c as usize)? else {
+                                return None;
+                            };
+                            let d = single_dim_lit(p)?;
+                            fold_fetch_dim(
+                                op_array.literals.get(cl as usize)?,
+                                op_array.literals.get(d as usize)?,
+                                *mode,
+                            )
+                        });
+                        if let Some(val) = folded {
+                            let lit = add_or_find_literal(&mut op_array.literals, val);
+                            *op = Op::Move {
+                                src: Operand::Lit(lit),
+                                dst: *dst,
+                            };
+                            changed = true;
+                        }
+                    }
                     Op::JmpZ(Operand::Lit(l), target) => {
                         if let Some(va) = op_array.literals.get(*l as usize) {
                             if let Some(truthy) = const_truthiness(va) {
