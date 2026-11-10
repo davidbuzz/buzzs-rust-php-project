@@ -2,7 +2,7 @@
 //! and php-stdarr's (`RtResult`, `RuntimeError`, closures).
 
 use php_runtime::{ArrayKey, PhpRef, RtResult, Value, ZStr};
-use php_stdarr::OwnedArgs;
+use php_stdarr::ArrayCallback;
 use php_vm::ext::{Args, VmResult};
 use php_vm::vm::PendingCall;
 use php_vm::Vm;
@@ -13,31 +13,87 @@ pub fn rt<T>(vm: &mut Vm, r: RtResult<T>) -> VmResult<T> {
 }
 
 /// A php-stdarr callback calling the PHP callable `cb`. The arguments are
-/// moved into the call (`OwnedArgs`), so the callee sees PHP's refcounts.
+/// moved into the call, so the callee sees PHP's refcounts.
 ///
-/// `"C::m"` and array callables are resolved once, in the calling scope,
-/// like `Z_PARAM_FUNC`'s `zend_is_callable_ex` (which accepts
-/// `self`/`parent`/`static` and raises their deprecations), and the cached
-/// call is reused; plain function names and closures are called directly.
-pub fn callback(cb: Value) -> OwnedArgs<impl FnMut(&mut Vm, Vec<Value>) -> RtResult<Value>> {
-    let mut resolve = needs_resolution(&cb);
-    let mut resolved: Option<PendingCall> = None;
-    OwnedArgs(move |vm: &mut Vm, args: Vec<Value>| {
-        if resolve {
-            resolve = false;
-            match vm.resolve_callable(&cb) {
-                Ok(Ok(call)) => resolved = Some(call),
+/// The callable is resolved once, at the first call, and the cached call is
+/// reused (`zend_fcall_info_cache`): `"C::m"` and array callables in the
+/// calling scope, like `Z_PARAM_FUNC`'s `zend_is_callable_ex` (which
+/// accepts `self`/`parent`/`static` and raises their deprecations), other
+/// callables like [`Vm::call_value`]. A value that does not resolve is
+/// passed to [`Vm::call_value`] on every call, which reports it.
+pub fn callback(cb: Value) -> VmCallback {
+    VmCallback {
+        cb,
+        state: CallbackState::Unresolved,
+    }
+}
+
+/// The callback [`callback`] returns.
+#[derive(Debug)]
+pub struct VmCallback {
+    /// The callable (released once a resolved call holds what it needs).
+    cb: Value,
+    /// The resolution.
+    state: CallbackState,
+}
+
+#[derive(Debug)]
+enum CallbackState {
+    /// Not called yet.
+    Unresolved,
+    /// The cached call.
+    Prepared(PendingCall),
+    /// Not resolvable ahead: each call goes through [`Vm::call_value`].
+    Dynamic,
+}
+
+impl VmCallback {
+    /// Resolves the callable at the first call.
+    fn resolve(&mut self, vm: &mut Vm) -> RtResult<()> {
+        self.state = CallbackState::Dynamic;
+        if needs_resolution(&self.cb) {
+            match vm.resolve_callable(&self.cb) {
+                Ok(Ok(call)) => self.state = CallbackState::Prepared(call),
                 // Not callable that way: the direct path reports it.
                 Ok(Err(_)) => {}
                 Err(t) => return Err(vm.runtime_error_from(t)),
             }
+        } else {
+            match vm.prepare_call_value(&self.cb) {
+                Ok(Some(call)) => {
+                    // The cached call holds the closure or object; the
+                    // callable value itself is no longer needed, so the
+                    // callee sees the same refcounts as before caching.
+                    self.cb = Value::Null;
+                    self.state = CallbackState::Prepared(call);
+                }
+                Ok(None) => {}
+                Err(t) => {
+                    // Retried (and reported) by `call_value` next time.
+                    self.state = CallbackState::Unresolved;
+                    return Err(vm.runtime_error_from(t));
+                }
+            }
         }
-        let r = match &resolved {
-            Some(call) => vm.call_resolved(call.clone(), args),
-            None => vm.call_value(&cb, args),
+        Ok(())
+    }
+}
+
+impl ArrayCallback<Vm> for VmCallback {
+    fn call(&mut self, vm: &mut Vm, mut args: Vec<Value>) -> RtResult<Value> {
+        self.call_slice(vm, &mut args)
+    }
+
+    fn call_slice(&mut self, vm: &mut Vm, args: &mut [Value]) -> RtResult<Value> {
+        if matches!(self.state, CallbackState::Unresolved) {
+            self.resolve(vm)?;
+        }
+        let r = match &self.state {
+            CallbackState::Prepared(call) => vm.call_prepared(call, args),
+            _ => vm.call_value(&self.cb, args.iter_mut().map(std::mem::take).collect()),
         };
         r.map_err(|t| vm.runtime_error_from(t))
-    })
+    }
 }
 
 /// Whether a callable names a method (`"C::m"`, `[class_or_object, m]`),
