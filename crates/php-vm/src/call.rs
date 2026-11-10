@@ -2713,7 +2713,6 @@ impl Vm {
             && uf.code.num_finally == 0
             && named.is_empty()
             && !self.has_observers()
-            && closure.is_none()
             && magic_name.is_none()
             && args.is_empty()
             && passed_argc >= uf.required as usize
@@ -2768,6 +2767,12 @@ impl Vm {
             f.func = Some(Func::User(uf.clone()));
             f.ufunc = Some(uf);
 
+            // A closure (e.g. an arrow function passed to `array_map`)
+            // binds its captured variables after the arguments, as below.
+            if let Some(c) = closure {
+                self.bind_closure_vars(idx, &c);
+                self.frames[idx].closure = Some(c);
+            }
             return Ok(());
         }
 
@@ -4167,6 +4172,82 @@ impl Vm {
         call_args.extend(args.into_iter().map(Some));
         call.args = call_args;
         self.call_pending(call)
+    }
+
+    /// Resolves `callable` once for repeated calls from an internal
+    /// function, like the `zend_fcall_info_cache` that `Z_PARAM_FUNC` fills:
+    /// the call template [`Vm::call_prepared`] reuses. `Ok(None)` when the
+    /// value does not resolve that way; [`Vm::call_value`] then reports the
+    /// error on each call, as before.
+    ///
+    /// The resolution is [`Vm::call_value`]'s: a closure's bound function,
+    /// `$this` and scope (fixed for the closure's lifetime), or the
+    /// `zend_is_callable_ex` port in the calling frame's scope.
+    pub fn prepare_call_value(&mut self, callable: &Value) -> VmResult<Option<PendingCall>> {
+        if let Value::Object(o) = callable.deref() {
+            if let Some(call) = self.closure_user_call(&o) {
+                return Ok(Some(call));
+            }
+        }
+        Ok(self.zend_is_callable(callable, true)?.ok())
+    }
+
+    /// Calls a template from [`Vm::prepare_call_value`] (or
+    /// [`Vm::resolve_callable`]) with `args`, which are moved out of the
+    /// slice (left `null`) into the callee frame: `zend_call_function` with
+    /// a prepared `zend_fcall_info_cache`.
+    ///
+    /// A user function whose parameters are all by value and that takes at
+    /// most six arguments gets them in the pending call's inline buffer, so
+    /// no argument vector is allocated and the frame is set up like a
+    /// `DO_UCALL` from user code; every other callee takes the generic
+    /// [`Vm::call_resolved`] path. Both are observably identical: by-value
+    /// arguments are dereferenced either way (`call_pending`).
+    ///
+    /// [`Vm::resolve_callable`]: crate::Vm::resolve_callable
+    pub fn call_prepared(&mut self, template: &PendingCall, args: &mut [Value]) -> VmResult<Value> {
+        let n = args.len();
+        let inline = n <= template.inline_args.len()
+            && template.args.is_empty()
+            && template.inline_count == 0
+            && template.named.is_empty()
+            && !template.has_named
+            && template.pfa.is_none()
+            && template.magic_name.is_none()
+            && match &template.func {
+                Func::User(uf) => !uf.params.iter().any(|p| p.by_ref),
+                Func::Builtin(_) => false,
+            };
+        if !inline {
+            let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
+            call_args.clear();
+            call_args.reserve(n);
+            call_args.extend(args.iter_mut().map(|a| Some(std::mem::take(a))));
+            let mut call = template.clone();
+            call.args = call_args;
+            return self.call_pending(call);
+        }
+        // `call_pending` for a by-value user callee: the interrupt check,
+        // dereferenced arguments, the deprecation, then the frame.
+        self.check_interrupt()?;
+        let mut call = template.clone();
+        for (slot, a) in call.inline_args.iter_mut().zip(args.iter_mut()) {
+            *slot = Some(match std::mem::take(a) {
+                Value::Reference(r) => r.get(),
+                v => v,
+            });
+        }
+        #[allow(clippy::cast_possible_truncation)] // n <= 6
+        let count = n as u8;
+        call.inline_count = count;
+        self.check_deprecated_call(&call)?;
+        let strict = call.strict;
+        self.push_user_call(call, RetTarget::Discard, strict, true)?;
+        let base = self.frames.len() - 1;
+        match self.execute(base) {
+            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+            r => r,
+        }
     }
 
     /// Calls a callable with named arguments too.

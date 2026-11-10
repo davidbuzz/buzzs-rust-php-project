@@ -1380,3 +1380,55 @@ fn int_sorts_compare_inline_and_stay_stable() {
     sort::asort(&mut ctx, &r, SORT_REGULAR).unwrap();
     assert_eq!(keys(&arr_of(&r.get())), key_list("6,7,3,2,0,4,1,5"));
 }
+
+/// The array functions call [`ArrayCallback::call_slice`] (no per-call
+/// argument vector) and hand the arguments over by value: an
+/// implementation can move them out, leaving `null`.
+#[test]
+fn callbacks_use_call_slice() {
+    struct SliceCb {
+        arities: Vec<usize>,
+    }
+    impl ArrayCallback<Ctx> for SliceCb {
+        fn call(&mut self, _: &mut Ctx, _: Vec<Value>) -> RtResult<Value> {
+            panic!("the array functions call call_slice");
+        }
+        fn call_slice(&mut self, _: &mut Ctx, args: &mut [Value]) -> RtResult<Value> {
+            self.arities.push(args.len());
+            let first = std::mem::take(&mut args[0]);
+            let second = args.get_mut(1).map(std::mem::take);
+            Ok(match (first, second) {
+                (Value::Int(a), Some(Value::Int(b))) => Value::Int(a - b),
+                (Value::Int(a), _) => Value::Int(a * 10),
+                (_, Some(Value::Int(b))) => Value::Int(-b),
+                _ => Value::Null,
+            })
+        }
+    }
+    let mut ctx = Ctx::new();
+    let mut cb = SliceCb {
+        arities: Vec::new(),
+    };
+    // One array: one argument per call.
+    let out = callback::array_map(&mut ctx, Some(&mut cb), &[ints(&[1, 2])]).unwrap();
+    assert_eq!(int_vals(&out), [10, 20]);
+    // Two arrays, the shorter padded with null; the reused buffer is
+    // refilled for every call.
+    let out =
+        callback::array_map(&mut ctx, Some(&mut cb), &[ints(&[5, 7, 9]), ints(&[1, 2])]).unwrap();
+    assert_eq!(int_vals(&out), [4, 5, 90]);
+    // Without a callback, the same buffer builds the zipped rows.
+    let out = callback::array_map::<Ctx>(&mut ctx, None, &[ints(&[1, 2]), ints(&[3])]).unwrap();
+    assert_eq!(out.len(), 2);
+    assert_eq!(arr_of(out.get(&ArrayKey::Int(1)).unwrap()).len(), 2);
+    // array_filter (USE_BOTH) and the user comparator take two arguments.
+    let input = arr_of(&ints(&[3, 1, 5]));
+    let kept =
+        callback::array_filter(&mut ctx, &input, Some(&mut cb), ARRAY_FILTER_USE_BOTH).unwrap();
+    assert_eq!(int_vals(&kept), [3, 5]);
+    let r = PhpRef::new(ints(&[3, 1, 2]));
+    sort::usort(&mut ctx, &r, &mut cb).unwrap();
+    assert_eq!(int_vals(&arr_of(&r.get())), [1, 2, 3]);
+    assert!(cb.arities[..2].iter().all(|&n| n == 1));
+    assert!(cb.arities[2..].iter().all(|&n| n == 2));
+}

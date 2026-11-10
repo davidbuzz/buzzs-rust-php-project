@@ -99,6 +99,15 @@ pub type Callback<'a, C> = dyn ArrayCallback<C> + 'a;
 pub trait ArrayCallback<C: ?Sized> {
     /// Calls the callback.
     fn call(&mut self, ctx: &mut C, args: Vec<Value>) -> RtResult<Value>;
+
+    /// Calls the callback with arguments the implementation may move out
+    /// of `args` (leaving `null`), with the same ownership contract as
+    /// [`ArrayCallback::call`]. The array functions call this with a stack
+    /// array, so an implementation that writes the arguments straight into
+    /// a call frame allocates nothing per call.
+    fn call_slice(&mut self, ctx: &mut C, args: &mut [Value]) -> RtResult<Value> {
+        self.call(ctx, args.iter_mut().map(std::mem::take).collect())
+    }
 }
 
 impl<C: ?Sized, F> ArrayCallback<C> for F
@@ -107,6 +116,10 @@ where
 {
     fn call(&mut self, ctx: &mut C, args: Vec<Value>) -> RtResult<Value> {
         self(ctx, &args)
+    }
+
+    fn call_slice(&mut self, ctx: &mut C, args: &mut [Value]) -> RtResult<Value> {
+        self(ctx, args)
     }
 }
 

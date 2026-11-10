@@ -72,13 +72,12 @@ fn walk_element<C: ArrayContext + ?Sized>(
     }
     // The reference is moved into the arguments: like PHP, the element slot
     // and the callee's parameter are its only holders.
-    let mut args = Vec::with_capacity(3);
-    args.push(Value::Reference(elem));
-    args.push(key.to_value());
-    if let Some(u) = userdata {
-        args.push(u.clone());
+    let elem = Value::Reference(elem);
+    match userdata {
+        Some(u) => callback.call_slice(ctx, &mut [elem, key.to_value(), u.clone()]),
+        None => callback.call_slice(ctx, &mut [elem, key.to_value()]),
     }
-    callback.call(ctx, args).map(drop)
+    .map(drop)
 }
 
 fn walk_inner<C: ArrayContext + ?Sized>(
@@ -256,13 +255,13 @@ pub fn array_map<C: RuntimeContext + ?Sized>(
         if input.is_packed() {
             for pos in 0..input.used() {
                 if let Some((_, v)) = input.at(pos) {
-                    let r = cb.call(ctx, vec![v.clone()])?;
+                    let r = cb.call_slice(ctx, &mut [v.clone()])?;
                     out.insert(i64::from(pos), r);
                 }
             }
         } else {
             for (k, v) in input.iter() {
-                let r = cb.call(ctx, vec![v.clone()])?;
+                let r = cb.call_slice(ctx, &mut [v.clone()])?;
                 let _ = out.add(k.clone(), r);
             }
         }
@@ -288,14 +287,19 @@ pub fn array_map<C: RuntimeContext + ?Sized>(
     let mut iters: Vec<_> = tables.iter().map(|t| t.values()).collect();
     let mut out = HashTable::with_capacity(maxlen);
     let mut cb = callback;
+    // One argument buffer for all the calls; the callback moves the
+    // arguments out of it.
+    let mut params: Vec<Value> = Vec::with_capacity(iters.len());
     for _ in 0..maxlen {
-        let params: Vec<Value> = iters
-            .iter_mut()
-            .map(|it| it.next().cloned().unwrap_or(Value::Null))
-            .collect();
+        params.clear();
+        params.extend(
+            iters
+                .iter_mut()
+                .map(|it| it.next().cloned().unwrap_or(Value::Null)),
+        );
         let v = match cb.as_deref_mut() {
-            None => Value::Array(ZArray::from_values(params)),
-            Some(cb) => cb.call(ctx, params)?,
+            None => Value::Array(ZArray::from_values(params.drain(..))),
+            Some(cb) => cb.call_slice(ctx, &mut params)?,
         };
         let _ = out.push(v);
     }
@@ -335,12 +339,11 @@ pub fn array_filter<C: RuntimeContext + ?Sized>(
     for (k, v) in array {
         let keep = match cb.as_deref_mut() {
             Some(cb) => {
-                let args: Vec<Value> = match mode {
-                    ARRAY_FILTER_USE_KEY => vec![k.to_value()],
-                    ARRAY_FILTER_USE_BOTH => vec![v.clone(), k.to_value()],
-                    _ => vec![v.clone()],
+                let r = match mode {
+                    ARRAY_FILTER_USE_KEY => cb.call_slice(ctx, &mut [k.to_value()])?,
+                    ARRAY_FILTER_USE_BOTH => cb.call_slice(ctx, &mut [v.clone(), k.to_value()])?,
+                    _ => cb.call_slice(ctx, &mut [v.clone()])?,
                 };
-                let r = cb.call(ctx, args)?;
                 r.to_bool(ctx)?
             }
             None => v.to_bool(ctx)?,
@@ -361,7 +364,7 @@ pub fn array_reduce<C: RuntimeContext + ?Sized>(
 ) -> RtResult<Value> {
     let mut acc = initial.cloned().unwrap_or(Value::Null);
     for v in array.values() {
-        let r = callback.call(ctx, vec![acc, v.clone()])?;
+        let r = callback.call_slice(ctx, &mut [acc, v.clone()])?;
         acc = deref(&r);
     }
     Ok(acc)
@@ -380,7 +383,7 @@ pub fn php_array_find<C: RuntimeContext + ?Sized>(
     negate: bool,
 ) -> RtResult<Option<(ArrayKey, Value)>> {
     for (k, v) in array {
-        let r = callback.call(ctx, vec![v.clone(), k.to_value()])?;
+        let r = callback.call_slice(ctx, &mut [v.clone(), k.to_value()])?;
         if r.to_bool(ctx)? ^ negate {
             return Ok(Some((k.clone(), deref(v))));
         }
