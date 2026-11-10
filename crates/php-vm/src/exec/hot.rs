@@ -102,6 +102,7 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::AssignOpObjProp { .. }
             | Op::IncDecObjProp { .. }
             | Op::IssetObjProp { .. }
+            | Op::New { .. }
             | Op::FuncNumArgs { .. }
             | Op::Strlen { .. }
             | Op::Count { .. }
@@ -519,7 +520,8 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
         | Op::AssignObjProp { .. }
         | Op::AssignOpObjProp { .. }
         | Op::IncDecObjProp { .. }
-        | Op::IssetObjProp { .. } => {
+        | Op::IssetObjProp { .. }
+        | Op::New { .. } => {
             if !spec::prop_op_in(f, op, &mut ip) {
                 return DECLINED;
             }

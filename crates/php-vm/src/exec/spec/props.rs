@@ -28,7 +28,7 @@
 use super::super::{discard_unrooted, Flow, Num};
 use super::{plain_truth, put_tmp, store_fetched_in};
 use crate::object::{self, ObjectData};
-use crate::opcode::{FetchMode, IncDecKind, Op, Operand, PlaceId, PROP_CACHE_THIS};
+use crate::opcode::{ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceId, PROP_CACHE_THIS};
 use crate::place::propcache::{
     accepts, scope_addr, PC_DYN, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
 };
@@ -646,8 +646,40 @@ pub(in crate::exec) fn prop_op_in(f: &mut Frame, op: &Op, ip: &mut usize) -> boo
                 None => false,
             }
         }
+        // `new C` without arguments of a class without a constructor
+        // (`skip` jumps over the `DoCall`).
+        Op::New {
+            class: ClassSpec::Named(lit),
+            dst,
+            skip,
+        } if skip != 0 => {
+            let Some(o) = new_in(f, lit) else {
+                return false;
+            };
+            let Some(slot) = f.tmps.get_mut(dst as usize) else {
+                return false;
+            };
+            put_tmp(slot, Value::Object(o));
+            *ip = skip as usize;
+            true
+        }
         _ => false,
     }
+}
+
+/// The object `new` of the class named by literal `lit` creates when the
+/// class is in frame `f`'s run-time cache (`CACHED_PTR`, filled by the
+/// generic op) and needs nothing from the VM ([`crate::props::new_plain`]).
+#[inline(always)]
+fn new_in(f: &Frame, lit: u32) -> Option<Obj> {
+    let cls = f
+        .code
+        .class_cache
+        .try_borrow()
+        .ok()?
+        .get(lit as usize)?
+        .upgrade()?;
+    crate::props::new_plain(&cls)
 }
 
 /// `Vm::set_dst` on frame `f`: the result of an op into its used
@@ -1440,6 +1472,76 @@ object(D)#6 (2) {
   int(1)
 }
 Cannot access private property P::$priv
+"#
+        );
+    }
+
+    /// `new` in loops, where a class without a constructor is created in
+    /// the frame-local hot loop (`new_in`): defaults evaluated on the first
+    /// `new`, handle reuse order, constructors, `Throwable`s, abstract
+    /// classes. Expected output from php 8.3.
+    #[test]
+    fn hot_loop_new_matches_php() {
+        let out = run(r#"<?php
+class K { const C = 5; public $a = [1, 2]; public $b = self::C * 2; public int $t; }
+class Ctor { public $v; function __construct() { $this->v = 1; echo "ctor\n"; } }
+abstract class Ab {}
+class E extends Exception {}
+$ids = [];
+for ($i = 0; $i < 4; $i++) {
+    $k = new K;
+    $k->a[] = $i;
+    $ids[] = spl_object_id($k);
+    $c = new Ctor;
+    $e = new E;
+}
+var_dump($k, $ids, $e->getLine());
+$keep = [];
+for ($i = 0; $i < 3; $i++) { $keep[] = new K; }
+echo count($keep), " ", spl_object_id($keep[2]), "\n";
+for ($i = 0; $i < 2; $i++) { try { $x = new Ab; } catch (Error $err) { echo $err->getMessage(), "\n"; } }
+for ($i = 0; $i < 2; $i++) { $o = new stdClass; $o->n = $i; }
+var_dump($o);
+"#);
+        assert_eq!(
+            out,
+            r#"ctor
+ctor
+ctor
+ctor
+object(K)#2 (2) {
+  ["a"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+  ["b"]=>
+  int(10)
+  ["t"]=>
+  uninitialized(int)
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(4)
+  [2]=>
+  int(3)
+  [3]=>
+  int(2)
+}
+int(12)
+3 6
+Cannot instantiate abstract class Ab
+Cannot instantiate abstract class Ab
+object(stdClass)#9 (1) {
+  ["n"]=>
+  int(1)
+}
 "#
         );
     }
