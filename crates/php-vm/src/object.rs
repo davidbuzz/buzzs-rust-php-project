@@ -753,8 +753,11 @@ impl Fill<'_> {
     }
 
     /// Writes the values into `dst`, which has room for exactly
-    /// [`Fill::len`] of them.
-    #[inline]
+    /// [`Fill::len`] of them. Inlined into each [`new_block`], where the
+    /// length is known to fit `N`: the out-of-line call cost more than
+    /// copying the one or two slots of a small object.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // once per `new`, see above
     fn write(self, dst: &mut [MaybeUninit<Option<Value>>]) {
         debug_assert_eq!(dst.len(), self.len());
         match self {

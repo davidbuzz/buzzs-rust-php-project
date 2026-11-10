@@ -986,3 +986,35 @@ n
 "#
     );
 }
+
+/// Constructors called by `new` on the user-call fast path
+/// (`Vm::push_simple_ucall`): defaults, a constructor that throws (its
+/// object is never destructed, `zend_object_store_ctor_failed`), coercion
+/// left to the general path, private constructors and nested `new`.
+#[test]
+fn constructor_calls_from_new() {
+    let src = r#"<?php
+class D { public $n; function __construct($n, $m = 2) { $this->n = $n * $m; if ($n < 0) throw new Exception("neg $n"); } function __destruct() { echo "~", $this->n, " "; } }
+class T { function __construct(public int $i) {} }
+class P { private function __construct() {} static function make() { return new P; } }
+for ($i = 1; $i <= 3; $i++) { $d = new D($i); echo $d->n, " "; }
+echo "\n";
+try { $e = new D(-1); } catch (Exception $x) { echo $x->getMessage(), " line ", $x->getLine(), "\n"; }
+$t = new T("5"); var_dump($t->i);
+var_dump(get_class(P::make()));
+try { new P; } catch (Error $x) { echo $x->getMessage(), "\n"; }
+$w = new D(new D(4) ? 5 : 0, 1); echo "\n";
+unset($d, $w); echo "end\n";
+"#;
+    assert_eq!(
+        run(src),
+        r#"2 ~2 4 ~4 6 
+neg -1 line 2
+int(5)
+string(1) "P"
+Call to private P::__construct() from global scope
+~8 
+~6 ~5 end
+"#
+    );
+}
