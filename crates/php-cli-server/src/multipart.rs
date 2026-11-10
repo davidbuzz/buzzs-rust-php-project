@@ -548,7 +548,7 @@ pub fn normalize_protected_variable(var: &[u8]) -> Vec<u8> {
 }
 
 /// Creates `<dir>/phpXXXXXX` (`php_open_temporary_fd_ex()`).
-fn open_temporary(dirs: &[PathBuf]) -> Option<(std::fs::File, PathBuf)> {
+pub(crate) fn open_temporary(dirs: &[PathBuf]) -> Option<(std::fs::File, PathBuf)> {
     use std::os::unix::io::FromRawFd;
     for dir in dirs {
         let Ok(dir) = std::fs::canonicalize(dir) else {
