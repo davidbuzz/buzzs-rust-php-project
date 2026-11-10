@@ -20,6 +20,9 @@ use crate::util::{bytes, executed, halt_defined, opt_str, run};
 struct CliHost<'a> {
     vm: &'a mut Vm,
     rewrite: Option<Value>,
+    /// The exception the rewrite callback threw (chained as the previous
+    /// exception of the PharException that follows).
+    rewrite_exc: Option<php_runtime::Obj>,
     /// `sapi_module.name` (the `PHP_SAPI` constant).
     sapi: String,
 }
@@ -75,7 +78,14 @@ impl WebHost for CliHost<'_> {
         self.server_str("REQUEST_METHOD")
     }
     fn request_uri(&self) -> Option<Vec<u8>> {
-        self.server_str("REQUEST_URI")
+        // `SG(request_info).request_uri`: php-cgi fills it from the
+        // translated `SCRIPT_NAME` (`init_request_info`), the other SAPIs
+        // from the request line.
+        if self.sapi == "cgi-fcgi" {
+            self.server_str("SCRIPT_NAME")
+        } else {
+            self.server_str("REQUEST_URI")
+        }
     }
     fn has_server(&self) -> bool {
         self.is_web() && server_array(self.vm).is_some()
@@ -135,6 +145,13 @@ impl WebHost for CliHost<'_> {
             Ok(Value::Str(s)) => Rewrite::Str(s.as_bytes().to_vec()),
             Ok(Value::Bool(_)) => Rewrite::Bool,
             Ok(_) => Rewrite::Other,
+            // `zend_call_function` succeeds with an undefined return value
+            // when the callback throws: "must return a string or false",
+            // with the callback's exception as its previous one.
+            Err(php_vm::ext::Throw::Exception(e)) => {
+                self.rewrite_exc = Some(e);
+                Rewrite::Other
+            }
             Err(t) => {
                 self.vm.pending_throw = Some(t);
                 Rewrite::Failed { exception: true }
@@ -179,13 +196,28 @@ pub fn web_phar(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let res = {
         let sapi = sapi_name(vm);
-        let mut host = CliHost { vm, rewrite, sapi };
-        php_phar::web::web_phar(&mut host, ex.as_deref(), halt, &args)
+        let mut host = CliHost {
+            vm,
+            rewrite,
+            rewrite_exc: None,
+            sapi,
+        };
+        let r = php_phar::web::web_phar(&mut host, ex.as_deref(), halt, &args);
+        (r, host.rewrite_exc)
     };
+    let (res, rewrite_exc) = res;
     if let Some(t) = vm.pending_throw.take() {
         return Err(t);
     }
-    let res = run(vm, || res)?;
+    let res = match run(vm, || res) {
+        Err(php_vm::ext::Throw::Exception(e)) => {
+            if let Some(prev) = &rewrite_exc {
+                vm.chain_exception(&e, prev);
+            }
+            return Err(php_vm::ext::Throw::Exception(e));
+        }
+        other => other?,
+    };
     if res == WebResult::Exit {
         return Err(php_vm::ext::Throw::Exit);
     }

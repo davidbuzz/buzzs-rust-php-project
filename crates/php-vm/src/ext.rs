@@ -276,6 +276,43 @@ pub type ParseBodyFn = fn(&mut Vm, &ParseBodyOptions) -> VmResult<(ZArray, ZArra
 /// A `PHP_MINFO` callback.
 pub type ModuleInfoFn = fn(&mut Vm) -> Vec<InfoItem>;
 
+/// Which request input a [`RequestInputFn`] parses (`PARSE_GET`,
+/// `PARSE_POST`, `PARSE_COOKIE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestInput {
+    /// The query string (`$_GET`).
+    Get,
+    /// An `application/x-www-form-urlencoded` body (`$_POST`).
+    Post,
+    /// The `Cookie` header (`$_COOKIE`).
+    Cookie,
+}
+
+/// `sapi_register_treat_data()` / the urlencoded POST entry of an
+/// extension (mbstring's `mbstr_treat_data` with
+/// `mbstring.encoding_translation`): parses `data` into `track`, or returns
+/// `None` to leave the input to the default parser.
+pub type RequestInputFn =
+    fn(&mut Vm, RequestInput, &[u8], &mut php_runtime::ZArray) -> Option<VmResult<()>>;
+
+thread_local! {
+    static REQUEST_INPUT_HOOK: std::cell::Cell<Option<RequestInputFn>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Installs the request input parser of an extension (see
+/// [`RequestInputFn`]).
+pub fn set_request_input_hook(f: RequestInputFn) {
+    REQUEST_INPUT_HOOK.with(|h| h.set(Some(f)));
+}
+
+/// The installed request input parser, for SAPIs that register request
+/// variables.
+#[must_use]
+pub fn request_input_hook() -> Option<RequestInputFn> {
+    REQUEST_INPUT_HOOK.with(std::cell::Cell::get)
+}
+
 /// Why an [`IniModifyFn`] runs (`ZEND_INI_STAGE_*`), read with
 /// [`Vm::ini_modify_stage`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

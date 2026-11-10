@@ -393,7 +393,16 @@ fn header_result(vm: &mut Vm, r: Result<bool, crate::headers::HeaderError>) -> V
     match r {
         Ok(ok) => Ok(ok),
         Err(e) => {
-            vm.raise(E_WARNING, e.message())?;
+            // `sapi_header_op()`: the place output started, when known.
+            let msg = match (&e, vm.output_started()) {
+                (crate::headers::HeaderError::AlreadySent, Some((f, l))) => format!(
+                    "{} by (output started at {}:{l})",
+                    e.message(),
+                    f.to_string_lossy()
+                ),
+                _ => e.message().to_string(),
+            };
+            vm.raise(E_WARNING, &msg)?;
             Ok(false)
         }
     }

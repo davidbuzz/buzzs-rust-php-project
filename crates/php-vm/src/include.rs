@@ -620,6 +620,33 @@ impl Vm {
         }
     }
 
+    /// Compiles and runs `src` as code an internal function executes
+    /// directly (`zend_compile_file()` + `zend_execute()`, as
+    /// `Phar::webPhar()` runs the requested entry): global scope, compiled
+    /// under `path` like an included file, and a throw propagates to the
+    /// calling builtin instead of being reported here. Backtraces skip the
+    /// frame and show the builtin's own (`zend_fetch_debug_backtrace`).
+    pub fn run_nested_script(&mut self, src: &[u8], path: &ZStr) -> Result<(), Throw> {
+        let src = self.filter_source(path, src.to_vec())?;
+        let unit = match self.compile_source(Rc::from(src), path, false, true)? {
+            CompileOutcome::Ok(u) => u,
+            CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
+            CompileOutcome::Fatal => return Err(Throw::Fatal),
+        };
+        self.declare_hoisted(&unit)?;
+        let globals = self.globals.clone();
+        let f = Frame::with_vars(unit.main.code.clone(), FrameKind::Include, globals, None);
+        self.frames.push(f);
+        self.observer_begin_top();
+        let base = self.frames.len() - 1;
+        let r = self.execute(base);
+        if let Some(f) = self.frames.get_mut(base) {
+            f.attach_symbol_table();
+        }
+        self.frames.truncate(base);
+        r.map(|_| ())
+    }
+
     /// Handles a throw escaping the top-level script.
     pub(crate) fn handle_top_throw(&mut self, t: Throw) -> Result<(), Throw> {
         match t {

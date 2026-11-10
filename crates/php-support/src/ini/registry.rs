@@ -104,6 +104,10 @@ pub enum ModifyHandler {
     GcEnabled,
     /// `OnUpdateMailCrLfMode` (`crlf`/`lf`/`mixed`/`os`).
     MailCrLfMode,
+    /// `OnUpdateDefaultCharset` / `OnUpdateDefaultMimeTye`: a string that
+    /// goes into the `Content-Type` header, so NUL, CR and LF are refused
+    /// (bug #81518, header injection).
+    HeaderValue,
     /// `OnUpdateAutoDetectLineEndings`: `OnUpdateBool` plus an
     /// "`auto_detect_line_endings` is deprecated" `E_DEPRECATED` for true values.
     AutoDetectLineEndings,
@@ -671,6 +675,12 @@ impl IniRegistry {
                 }
                 (IniTyped::None, None)
             }
+            ModifyHandler::HeaderValue => {
+                if v.iter().any(|&c| matches!(c, 0 | b'\r' | b'\n')) {
+                    return Err(());
+                }
+                (IniTyped::None, None)
+            }
             ModifyHandler::MailCrLfMode => {
                 if !matches!(v, b"crlf" | b"lf" | b"mixed" | b"os") {
                     return Err(());
@@ -872,8 +882,13 @@ pub fn core_directives() -> Vec<IniDirective> {
         c("auto_append_file", None, pd_sys, H::String),
         c("auto_prepend_file", None, pd_sys, H::String),
         c("doc_root", None, A::SYSTEM, H::StrNotEmpty),
-        c("default_charset", Some("UTF-8"), A::ALL, H::String),
-        c("default_mimetype", Some("text/html"), A::ALL, H::String),
+        c("default_charset", Some("UTF-8"), A::ALL, H::HeaderValue),
+        c(
+            "default_mimetype",
+            Some("text/html"),
+            A::ALL,
+            H::HeaderValue,
+        ),
         c("internal_encoding", None, A::ALL, H::String),
         c("input_encoding", None, A::ALL, H::String),
         c("output_encoding", None, A::ALL, H::String),

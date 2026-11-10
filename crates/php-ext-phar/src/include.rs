@@ -155,7 +155,9 @@ pub(crate) fn run_web_entry(vm: &mut Vm, url: &[u8]) -> bool {
     // state it records is kept.
     let script_path = vm.script_path.clone();
     let main_return = vm.main_return.clone();
-    let r = vm.run_main(&source, &path);
+    // `zend_execute()` from inside `Phar::webPhar()`: the entry's errors
+    // and exceptions surface through the builtin's frame.
+    let r = vm.run_nested_script(&source, &path);
     vm.script_path = script_path;
     vm.main_return = main_return;
     if let Err(t) = r {

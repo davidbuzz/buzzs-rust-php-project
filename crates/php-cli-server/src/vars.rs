@@ -421,6 +421,11 @@ fn handle_urlencoded(
     let Some(data) = ctx.request_body().map(<[u8]>::to_vec) else {
         return Ok(());
     };
+    if let Some(hook) = php_vm::ext::request_input_hook() {
+        if let Some(r) = hook(vm, php_vm::ext::RequestInput::Post, &data, post) {
+            return r;
+        }
+    }
     let settings = InputSettings {
         max_input_vars: limits.max_input_vars,
         ..input_settings(vm)
@@ -522,7 +527,12 @@ fn parse_get(vm: &mut Vm, req: &Request, settings: &InputSettings, enabled: bool
     let mut get = ZArray::new();
     if enabled {
         if let Some(q) = &req.query_string {
-            let _ = query::treat_data(ParseKind::Get, c_str(q), &mut get, settings, "", None, vm);
+            let hooked = php_vm::ext::request_input_hook()
+                .and_then(|h| h(vm, php_vm::ext::RequestInput::Get, c_str(q), &mut get));
+            if hooked.is_none() {
+                let _ =
+                    query::treat_data(ParseKind::Get, c_str(q), &mut get, settings, "", None, vm);
+            }
         }
     }
     get
@@ -534,7 +544,12 @@ fn parse_cookie(vm: &mut Vm, req: &Request, settings: &InputSettings, enabled: b
     if enabled {
         if let Some(c) = req.header(b"cookie") {
             let c = c_str(c).to_vec();
-            let _ = query::treat_data(ParseKind::Cookie, &c, &mut cookie, settings, "", None, vm);
+            let hooked = php_vm::ext::request_input_hook()
+                .and_then(|h| h(vm, php_vm::ext::RequestInput::Cookie, &c, &mut cookie));
+            if hooked.is_none() {
+                let _ =
+                    query::treat_data(ParseKind::Cookie, &c, &mut cookie, settings, "", None, vm);
+            }
         }
     }
     cookie

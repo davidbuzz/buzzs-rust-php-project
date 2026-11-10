@@ -4,10 +4,13 @@ use php_mbstring::convert::fast_convert;
 use php_mbstring::{encoding, Encoding, EncodingNo};
 use php_runtime::{Value, ZArray, ZStr};
 use php_stdmisc::query::{register_variable_ex, url_decode, RegisterOptions};
-use php_vm::ext::{Args, ModuleBuilder, VmResult};
+use php_vm::ext::{Args, ModuleBuilder, RequestInput, VmResult};
 use php_vm::Vm;
 
 use crate::state;
+
+/// `E_WARNING`.
+const E_WARNING: i64 = 2;
 
 /// `php_strtok_r` over a separator set: the non-empty tokens.
 fn tokens<'a>(s: &'a [u8], seps: &'a [u8]) -> impl Iterator<Item = &'a [u8]> {
@@ -21,10 +24,49 @@ fn mb_parse_str(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .as_bytes()
         .split(|&b| b == 0)
         .next()
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_vec();
     let seps = vm
         .ini_string("arg_separator.input")
         .unwrap_or_else(|| b"&".to_vec());
+    let mut track = ZArray::new();
+    let detected = if res.is_empty() {
+        None
+    } else {
+        let h = Handler {
+            separators: &seps,
+            report_errors: true,
+            cookie: false,
+            prefix: "mb_parse_str(): ",
+        };
+        encoding_handler(vm, &h, &res, &mut track)?
+    };
+    state::with(|s| s.http_input_identify = detected);
+    a.set_ref(1, Value::Array(track));
+    Ok(Value::Bool(detected.is_some()))
+}
+
+/// `php_mb_encoding_handler_info_t`: how one input is split and reported.
+struct Handler<'a> {
+    separators: &'a [u8],
+    /// "Unable to detect encoding" is reported (`mb_parse_str()` only).
+    report_errors: bool,
+    /// Cookie name mangling of `php_register_variable_ex`.
+    cookie: bool,
+    /// Warning prefix (`"mb_parse_str(): "`, `"PHP Request Startup: "`).
+    prefix: &'a str,
+}
+
+/// `_php_mb_encoding_handler_ex()`: splits `res`, url-decodes, detects the
+/// source encoding among `http_input_list`, converts to the internal
+/// encoding and registers every pair into `track`; returns the encoding
+/// used (`None` when nothing was registered).
+fn encoding_handler(
+    vm: &mut Vm,
+    h: &Handler<'_>,
+    res: &[u8],
+    track: &mut ZArray,
+) -> VmResult<Option<&'static Encoding>> {
     let max_vars = if vm.ini_string("max_input_vars").is_some() {
         vm.ini_long("max_input_vars")
     } else {
@@ -35,42 +77,89 @@ fn mb_parse_str(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     } else {
         64
     };
-    let mut track = ZArray::new();
-    let detected = if res.is_empty() {
-        None
+    // val_list + len_list of the C implementation.
+    let seps_count = res.iter().filter(|b| h.separators.contains(b)).count();
+    crate::mem::check(vm, crate::mem::zstr(res.len()), (seps_count + 1) * 2 * 16)?;
+    // Split and url-decode into (name, value) pairs.
+    let mut list: Vec<Vec<u8>> = Vec::new();
+    for var in tokens(res, h.separators) {
+        if let Some(i) = var.iter().position(|&b| b == b'=') {
+            list.push(url_decode(&var[..i], false));
+            list.push(url_decode(&var[i + 1..], false));
+        } else {
+            list.push(url_decode(var, false));
+            list.push(Vec::new());
+        }
+    }
+    if i64::try_from(list.len()).unwrap_or(i64::MAX) > max_vars.saturating_mul(2) {
+        vm.raise(
+            E_WARNING,
+            &format!(
+                "{}Input variables exceeded {max_vars}. To increase the limit change max_input_vars in php.ini.",
+                h.prefix
+            ),
+        )?;
+        return Ok(None);
+    }
+    register_all(vm, h, &list, track, nesting)
+}
+
+/// `mbstr_treat_data()` and `php_mb_post_handler()` with
+/// `mbstring.encoding_translation`: the request input converted from the
+/// detected HTTP input encoding; `None` leaves it to the default parser.
+fn treat_data(
+    vm: &mut Vm,
+    kind: RequestInput,
+    data: &[u8],
+    track: &mut ZArray,
+) -> Option<VmResult<()>> {
+    if !vm.ini_bool("mbstring.encoding_translation") {
+        return None;
+    }
+    let res = data.split(|&b| b == 0).next().unwrap_or_default();
+    if res.is_empty() {
+        return Some(Ok(()));
+    }
+    state::with(|s| match kind {
+        RequestInput::Get => s.http_input_identify_get = None,
+        RequestInput::Post => s.http_input_identify_post = None,
+        RequestInput::Cookie => s.http_input_identify_cookie = None,
+    });
+    let seps = if kind == RequestInput::Cookie {
+        b";".to_vec()
     } else {
-        // val_list + len_list of the C implementation.
-        let seps_count = res.iter().filter(|b| seps.contains(b)).count();
-        crate::mem::check(vm, crate::mem::zstr(res.len()), (seps_count + 1) * 2 * 16)?;
-        // Split and url-decode into (name, value) pairs.
-        let mut list: Vec<Vec<u8>> = Vec::new();
-        for var in tokens(res, &seps) {
-            if let Some(i) = var.iter().position(|&b| b == b'=') {
-                list.push(url_decode(&var[..i], false));
-                list.push(url_decode(&var[i + 1..], false));
-            } else {
-                list.push(url_decode(var, false));
-                list.push(Vec::new());
+        vm.ini_string("arg_separator.input")
+            .unwrap_or_else(|| b"&".to_vec())
+    };
+    state::with(|s| s.illegalchars = 0);
+    let h = Handler {
+        separators: &seps,
+        report_errors: false,
+        cookie: kind == RequestInput::Cookie,
+        prefix: "PHP Request Startup: ",
+    };
+    let detected = match encoding_handler(vm, &h, res, track) {
+        Ok(d) => d,
+        Err(t) => return Some(Err(t)),
+    };
+    state::with(|s| {
+        s.http_input_identify = detected;
+        if let Some(d) = detected {
+            match kind {
+                RequestInput::Get => s.http_input_identify_get = Some(d),
+                RequestInput::Post => s.http_input_identify_post = Some(d),
+                RequestInput::Cookie => s.http_input_identify_cookie = Some(d),
             }
         }
-        if i64::try_from(list.len()).unwrap_or(i64::MAX) > max_vars.saturating_mul(2) {
-            vm.php_warning(&format!(
-                "Input variables exceeded {max_vars}. To increase the limit change max_input_vars in php.ini."
-            ))?;
-            None
-        } else {
-            register_all(vm, &list, &mut track, nesting)?
-        }
-    };
-    state::with(|s| s.http_input_identify = detected);
-    a.set_ref(1, Value::Array(track));
-    Ok(Value::Bool(detected.is_some()))
+    });
+    Some(Ok(()))
 }
 
 /// Detects the source encoding, converts and registers every pair;
 /// returns the encoding used.
 fn register_all(
     vm: &mut Vm,
+    h: &Handler<'_>,
     list: &[Vec<u8>],
     track: &mut ZArray,
     nesting: i64,
@@ -95,7 +184,9 @@ fn register_all(
             {
                 e
             } else {
-                vm.php_warning("Unable to detect encoding")?;
+                if h.report_errors {
+                    vm.php_warning("Unable to detect encoding")?;
+                }
                 pass
             }
         }
@@ -103,8 +194,8 @@ fn register_all(
     let opts = RegisterOptions {
         max_nesting_level: nesting,
         display_errors: vm.ini_bool("display_errors"),
-        cookie: false,
-        warning_prefix: "mb_parse_str(): ",
+        cookie: h.cookie,
+        warning_prefix: h.prefix,
     };
     let convert = from_enc.no != EncodingNo::Pass && to.no != EncodingNo::Pass;
     for pair in list.chunks(2) {
@@ -128,4 +219,5 @@ fn register_all(
 /// Registers `mb_parse_str`.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     m.function_static("mb_parse_str(string $string, &$result): bool", mb_parse_str);
+    php_vm::ext::set_request_input_hook(treat_data);
 }
