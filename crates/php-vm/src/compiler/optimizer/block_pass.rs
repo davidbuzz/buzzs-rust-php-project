@@ -259,6 +259,37 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
                         }
                     }
                 }
+                // A jump that provably falls through without writing its
+                // result (SCCP's infeasible edge, `sccp.c`): `JMP_SET` of a
+                // falsy literal, `COALESCE` of null, `JMP_NULL` of non-null.
+                Op::JmpSet {
+                    a: Operand::Lit(l), ..
+                } => {
+                    if op_array.literals.get(l as usize).and_then(const_truthiness) == Some(false) {
+                        op_array.ops[i] = Op::Nop;
+                        changed = true;
+                    }
+                }
+                Op::Coalesce {
+                    a: Operand::Lit(l), ..
+                } => {
+                    if matches!(op_array.literals.get(l as usize), Some(Value::Null)) {
+                        op_array.ops[i] = Op::Nop;
+                        changed = true;
+                    }
+                }
+                Op::JmpNull {
+                    a: Operand::Lit(l), ..
+                } => {
+                    if op_array
+                        .literals
+                        .get(l as usize)
+                        .is_some_and(|v| !v.is_null())
+                    {
+                        op_array.ops[i] = Op::Nop;
+                        changed = true;
+                    }
+                }
                 _ => {}
             }
         }

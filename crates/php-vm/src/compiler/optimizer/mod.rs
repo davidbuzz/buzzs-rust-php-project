@@ -1446,4 +1446,20 @@ mod tests {
         let e = find_code(&unit, named(b"e"));
         assert!(has_identical(&*e), "{:?}", e.ops);
     }
+
+    /// `JMP_SET` of a falsy literal falls through without writing its
+    /// result, so the block pass drops it (opcache `opt/jmp_001`).
+    #[test]
+    fn block_pass_drops_jmp_set_of_falsy_literal() {
+        let unit = compile_src(
+            "<?php function t() { $v = null; $v = $v ?: t2(); return $v; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"t"));
+        assert!(
+            !code.ops.iter().any(|op| matches!(op, Op::JmpSet { .. })),
+            "{:?}",
+            code.ops
+        );
+    }
 }
