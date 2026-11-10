@@ -456,7 +456,10 @@ pub enum Op {
     },
     /// Starts a call to a callable value.
     InitDynCall { callee: Operand },
-    /// Starts a method call.
+    /// Starts a method call. `obj` [`Operand::Unused`] is the frame's
+    /// `$this` (`ZEND_INIT_METHOD_CALL` with op1 `IS_UNUSED`, compiled where
+    /// `$this` is guaranteed; elsewhere `$this` is a [`Op::FetchThis`]
+    /// temporary).
     InitMethodCall { obj: Operand, name: Operand },
     /// Starts a static method call.
     InitStaticCall { class: ClassSpec, name: Operand },

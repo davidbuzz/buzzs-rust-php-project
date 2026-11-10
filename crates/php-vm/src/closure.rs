@@ -5,7 +5,7 @@ use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, Class, InternalKind};
 use crate::func::{flags, Args, Builtin, Func, UserFunction};
 use crate::object;
-use crate::opcode::{Op, ParamInfo, PlaceBase};
+use crate::opcode::{Op, Operand, ParamInfo, PlaceBase};
 use crate::vm::{FrameKind, PendingCall, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
 use std::cell::RefCell;
@@ -597,14 +597,20 @@ fn same_class(a: Option<&Rc<Class>>, b: Option<&Rc<Class>>) -> bool {
 /// `ZEND_ACC_USES_THIS`: whether a user function reads `$this`.
 fn uses_this(f: &Func) -> bool {
     let Func::User(u) = f else { return false };
-    u.code
-        .ops
+    u.code.ops.iter().any(|op| {
+        matches!(
+            op,
+            Op::FetchThis { .. }
+                | Op::InitMethodCall {
+                    obj: Operand::Unused,
+                    ..
+                }
+        )
+    }) || u
+        .code
+        .places
         .iter()
-        .any(|op| matches!(op, Op::FetchThis { .. }))
-        || u.code
-            .places
-            .iter()
-            .any(|p| matches!(p.base, PlaceBase::This))
+        .any(|p| matches!(p.base, PlaceBase::This))
 }
 
 /// The function name of a fake closure (`__call` targets use the called

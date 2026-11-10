@@ -1826,7 +1826,7 @@ impl Vm {
                         Flow::Next
                     }
                     Op::InitMethodCall { obj, name } => {
-                        let o = self.read(*obj)?;
+                        let o = self.method_object(*obj)?;
                         self.op_init_method_call_op(o, *name)?;
                         Flow::Next
                     }

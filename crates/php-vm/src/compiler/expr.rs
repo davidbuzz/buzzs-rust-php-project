@@ -687,7 +687,11 @@ impl Compiler<'_> {
                         args,
                         nullsafe: false,
                     } if args.is_first_class_callable() => {
-                        let o = self.compile_chain(object)?;
+                        let o = if is_this_var(object) {
+                            self.method_call_this(object)?
+                        } else {
+                            self.compile_chain(object)?
+                        };
                         let n = self.method_member_name(name, right.span.line)?;
                         self.f().line = right.span.line;
                         self.emit(Op::InitMethodCall { obj: o, name: n });
@@ -1025,6 +1029,38 @@ impl Compiler<'_> {
             base: PlaceBase::Value(v),
             segs: vec![Seg::Prop(Operand::Tmp(dst))],
         })
+    }
+
+    /// The object operand of `$this->m()` (`zend_compile_method_call`):
+    /// [`Operand::Unused`] (`IS_UNUSED` op1 of `ZEND_INIT_METHOD_CALL`, the
+    /// frame's `$this` read in place) where `this_guaranteed_exists()`, a
+    /// `FETCH_THIS` temporary otherwise. `object` is the `$this` variable.
+    fn method_call_this(&mut self, object: &Expr) -> CResult<Operand> {
+        if self.this_guaranteed_exists() {
+            Ok(Operand::Unused)
+        } else {
+            self.compile_chain(object)
+        }
+    }
+
+    /// `this_guaranteed_exists()` (`Zend/zend_compile.c`): whether the
+    /// function being compiled always runs with a `$this`: a non-static
+    /// method, or a non-static closure nested only in non-static closures
+    /// up to one. A closure has no class scope at compile time there, so one
+    /// in a static method, a function or the main script is not; neither is
+    /// a static closure.
+    pub(crate) fn this_guaranteed_exists(&self) -> bool {
+        for f in self.fns.iter().rev() {
+            if f.is_static {
+                return false;
+            }
+            match f.kind {
+                FnKind::Method => return true,
+                FnKind::Closure => {}
+                FnKind::Main | FnKind::Function | FnKind::ConstExpr => return false,
+            }
+        }
+        false
     }
 
     /// A method name operand: `zend_compile_method_call` /
@@ -2142,16 +2178,21 @@ impl Compiler<'_> {
                 nullsafe,
             } => {
                 let checkpoint = self.f().sc_jumps.len();
-                let o = self.compile_chain(object)?;
-                let o = if let Operand::Cv(_) = o { o } else { o };
-                if *nullsafe {
-                    let j = self.emit(Op::JmpNull {
-                        a: Compiler::keep(o),
-                        dst: 0,
-                        target: 0,
-                    });
-                    self.f().sc_jumps.push(j);
-                }
+                let o = if is_this_var(object) {
+                    // Throws without `$this`: `?->` needs no JMP_NULL.
+                    self.method_call_this(object)?
+                } else {
+                    let o = self.compile_chain(object)?;
+                    if *nullsafe {
+                        let j = self.emit(Op::JmpNull {
+                            a: Compiler::keep(o),
+                            dst: 0,
+                            target: 0,
+                        });
+                        self.f().sc_jumps.push(j);
+                    }
+                    o
+                };
                 // zend_compile_method_call(): a callable conversion inside a
                 // short-circuiting chain.
                 if args.is_partial() && self.f().sc_jumps.len() != checkpoint {
@@ -3491,6 +3532,11 @@ fn list_from_array_values<'a>(
         }
     }
     Some(items.as_slice())
+}
+
+/// `is_this_fetch` (`Zend/zend_compile.c`): the plain variable `$this`.
+pub(crate) fn is_this_var(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Var(VarName::Name(id)) if id.name == b"this")
 }
 
 /// `zend_is_call` (`Zend/zend_compile.c`).

@@ -572,6 +572,23 @@ impl Vm {
         }
     }
 
+    /// The object operand of `ZEND_INIT_METHOD_CALL`: for op1 `IS_UNUSED`
+    /// (`$this->name()` where the compiler found `$this` guaranteed) the
+    /// frame's `$this`, otherwise the operand's value. A frame without one
+    /// (a closure nested in a closure that was unbound from its object)
+    /// throws as `ZEND_FETCH_THIS` would (PHP 8.3; master's handler assumes
+    /// an object).
+    #[inline]
+    pub(crate) fn method_object(&mut self, obj: Operand) -> VmResult<Value> {
+        if !matches!(obj, Operand::Unused) {
+            return self.read(obj);
+        }
+        match self.frame().this.clone() {
+            Some(o) => Ok(Value::Object(o)),
+            None => Err(self.make_throw("Error", "Using $this when not in object context")),
+        }
+    }
+
     /// `ZEND_INIT_METHOD_CALL` with the method name as an operand. A
     /// literal name (`$o->m()`) probes the run-time cache in place
     /// ([`Vm::init_cached_method_call`]); other names, and misses, are read
@@ -588,17 +605,18 @@ impl Vm {
         self.op_init_method_call(obj, n)
     }
 
-    /// `ZEND_INIT_METHOD_CALL` of `$cv->name()` or `$tmp->name()` (`$this`
-    /// fetched by `FetchThis`, a call result, ...) on a run-time cache hit,
-    /// from the dispatch loop's hot-instruction block (no `SAVE_OPLINE`):
-    /// the hit of [`Vm::init_cached_method_call`] without the generic
-    /// operand read. The call's `$this` is a handle of its own, as there:
-    /// a copy of the variable's object, or the temporary's, moved out of it
-    /// as the read moves it. `slot` is the instruction's index
-    /// (its cache slot). Returns `false`, having changed nothing, for an
-    /// undefined variable, a reference or a value that is not an object, a
-    /// variable of a frame with an attached symbol table, a class with a
-    /// native `get_method` handler or a cache miss.
+    /// `ZEND_INIT_METHOD_CALL` of `$cv->name()`, `$tmp->name()` (`$this`
+    /// fetched by `FetchThis`, a call result, ...) or `$this->name()` (op1
+    /// [`Operand::Unused`]) on a run-time cache hit, from the dispatch
+    /// loop's hot-instruction block (no `SAVE_OPLINE`): the hit of
+    /// [`Vm::init_cached_method_call`] without the generic operand read.
+    /// The call's `$this` is a handle of its own, as there: a copy of the
+    /// variable's object or of the frame's `$this`, or the temporary's,
+    /// moved out of it as the read moves it. `slot` is the instruction's
+    /// index (its cache slot). Returns `false`, having changed nothing, for
+    /// an undefined variable, a reference or a value that is not an object,
+    /// a variable of a frame with an attached symbol table, a frame without
+    /// `$this`, a class with a native `get_method` handler or a cache miss.
     #[inline]
     pub(crate) fn init_method_call_fast(&mut self, obj: Operand, lit: u32, slot: usize) -> bool {
         let Some(frame) = self.frames.last_mut() else {
@@ -614,6 +632,11 @@ impl Vm {
             Operand::Tmp(t) => match frame.tmps.get(t as usize) {
                 Some(Value::Object(o)) => o,
                 _ => return false,
+            },
+            // `$this->name()` (op1 `IS_UNUSED`): the frame's `$this`.
+            Operand::Unused => match frame.this.as_ref() {
+                Some(o) => o,
+                None => return false,
             },
             _ => return false,
         };
@@ -5630,6 +5653,126 @@ P p-secret k=10 calls=1
 Closure Q p-secret k=5 calls=1
 3:1,2,0
 3:1,2,1
+"###;
+        assert_eq!(run(src), expected);
+    }
+
+    /// `$this->m()` with the implicit `$this` operand (a method, closures
+    /// nested in one) and with `FETCH_THIS` (a closure in a static method,
+    /// a static closure, a static method, a top-level closure bound and
+    /// not): cache hits with arguments, by-reference arguments, a private
+    /// method, a static method, `__call`, `$this?->m()` and `$this?->m(...)`
+    /// (no `JMP_NULL`: allowed with a callable conversion), first-class
+    /// callables, generators, `Closure::bind()` refusing to unbind a
+    /// closure whose only `$this` is a method call, the error of a nested
+    /// closure that lost `$this` (PHP 8.3's; master's handler assumes an
+    /// object), and the destructor of an object whose last outside
+    /// reference goes while a `$this->m()` call holds it. Expected output
+    /// from `/usr/bin/php -n` (8.3.6) with master's warning text.
+    #[test]
+    fn implicit_this_receivers_match_fetch_this() {
+        let src = r###"<?php
+class A {
+    public $log = "";
+    public function __construct(public $id) {}
+    public function __destruct() { echo "dtor {$this->id}\n"; }
+    public function g($x = 0) { return "g{$this->id}:$x"; }
+    private function p() { return "p{$this->id}"; }
+    public static function s() { return "s:" . static::class; }
+    public function inc(&$r) { $r++; }
+    public function __call($n, $a) { return "__call $n(" . implode(",", $a) . ")"; }
+    public function run() {
+        $out = [];
+        $r = 0;
+        for ($i = 0; $i < 3; $i++) {
+            $out[] = $this->g($i) . " " . $this->p() . " " . $this->s() . " " . $this->nope($i);
+            $this->inc($r);
+        }
+        $out[] = "r=$r";
+        $out[] = $this?->g(9);
+        $f = $this?->g(...);
+        $out[] = $f(8);
+        $h = $this->p(...);
+        $out[] = $h();
+        return implode("\n", $out);
+    }
+    public function nested() {
+        return function () { return fn($y) => $this->g($y); };
+    }
+    public function direct() {
+        return function () { return $this->g(1); };
+    }
+    public static function fromStatic() {
+        return function () { return $this->g(2); };
+    }
+    public function staticClosure() {
+        return static function () { return $this->g(3); };
+    }
+    public static function sm() { return $this->g(4); }
+    public function gen() { for ($i = 0; $i < 2; $i++) { yield $this->g($i); } }
+}
+class B extends A {
+    public function callPrivate() { return $this->p(); }
+}
+$a = new A("a");
+echo $a->run(), "\n";
+echo $a->nested()()(5), "\n";
+$d = $a->direct();
+echo $d(), "\n";
+var_dump(Closure::bind($d, null, A::class));
+$n = $a->nested();
+$u = Closure::bind($n, null, A::class);
+var_dump($u === null);
+if ($u !== null) {
+    try { echo $u()(6), "\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getLine(), "\n"; }
+}
+foreach ([A::fromStatic(), $a->staticClosure()] as $c) {
+    try { echo $c(), "\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getLine(), "\n"; }
+}
+try { A::sm(); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getLine(), "\n"; }
+$top = function () { return $this->g(7); };
+echo Closure::bind($top, new A("t"), A::class)(), "\n";
+try { $top(); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getLine(), "\n"; }
+foreach ($a->gen() as $v) { echo $v, "\n"; }
+try { (new B("b"))->callPrivate(); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), " @", $e->getLine(), "\n"; }
+class D {
+    public function __destruct() { echo "dtor D\n"; }
+    public function m() { global $o; $o = null; echo "in m\n"; $this->n(); echo "after n\n"; }
+    public function n() { echo "n\n"; }
+}
+$o = new D;
+$o->m();
+echo "end\n";
+"###;
+        let expected = r###"ga:0 pa s:A __call nope(0)
+ga:1 pa s:A __call nope(1)
+ga:2 pa s:A __call nope(2)
+r=3
+ga:9
+ga:8
+pa
+ga:5
+ga:1
+
+Warning: Cannot unbind $this of closure using $this, this will be an error in PHP 9 in t.php on line 49
+NULL
+bool(false)
+Error: Using $this when not in object context @27
+Error: Using $this when not in object context @33
+Error: Using $this when not in object context @36
+Error: Using $this when not in object context @38
+dtor t
+gt:7
+Error: Using $this when not in object context @60
+ga:0
+ga:1
+dtor b
+in m
+n
+after n
+dtor D
+end
+dtor a
 "###;
         assert_eq!(run(src), expected);
     }
