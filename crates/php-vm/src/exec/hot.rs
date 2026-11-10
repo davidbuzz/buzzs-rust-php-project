@@ -447,9 +447,8 @@ fn num_of(f: &Frame, lits: &[Value], op: Operand) -> Option<Num> {
     }
 }
 
-/// The jump decision of a smart branch on two plain numbers
-///: the comparison's [`cmp_outcome`] bit against the
-/// op's mask.
+/// The jump decision of a smart branch on two plain numbers: the
+/// comparison's [`cmp_outcome`] bit against the op's mask.
 #[inline(always)]
 #[allow(clippy::inline_always)]
 fn cmp_num(f: &Frame, lits: &[Value], a: Operand, b: Operand, mask: u8) -> Option<bool> {
@@ -515,9 +514,8 @@ fn store_plain(f: &mut Frame, cv: u32, v: Value) -> bool {
     true
 }
 
-/// [`Op::BinAssignCv`] on two plain numbers:
-/// the result goes straight into compiled variable `cv` when that holds no
-/// refcounted value (`Some(true)`), else into `dst` for the `AssignCv`
+/// [`Op::BinAssignCv`] on two plain numbers: the result goes straight
+/// into compiled variable `cv` when that holds no refcounted value (`Some(true)`), else into `dst` for the `AssignCv`
 /// after the op (`Some(false)`). `None`, nothing changed, as for
 /// [`bin_tmp`].
 #[inline(always)]
@@ -558,7 +556,7 @@ fn incdec_cv(f: &mut Frame, cv: u32, kind: IncDecKind, dst: Option<u32>) -> bool
     let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
         return false;
     };
-    let r = match slot {
+    let r = match slot.as_mut() {
         Some(Value::Int(i)) => {
             let old = *i;
             let next = if kind.is_inc() {
@@ -594,8 +592,8 @@ fn incdec_cv(f: &mut Frame, cv: u32, kind: IncDecKind, dst: Option<u32>) -> bool
 
 /// `$cv op= val` in place when both hold plain numbers and the result has
 /// a numeric form (`ZEND_ASSIGN_OP_SPEC_CV_*` with the `IS_LONG` /
-/// `IS_DOUBLE` paths of `zend_binary_op`), the
-/// result also written to `dst` when used. `false`, nothing changed, for
+/// `IS_DOUBLE` paths of `zend_binary_op`), the result also written to
+/// `dst` when used. `false`, nothing changed, for
 /// the generic `AssignOp`.
 #[inline(always)]
 #[allow(clippy::inline_always)]
@@ -614,9 +612,9 @@ fn assign_op_cv(
     let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
         return false;
     };
-    let x = match slot {
-        Some(Value::Int(i)) => Num::Int(*i),
-        Some(Value::Float(v)) => Num::Float(*v),
+    let x = match *slot {
+        Some(Value::Int(i)) => Num::Int(i),
+        Some(Value::Float(v)) => Num::Float(v),
         _ => return false,
     };
     let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
