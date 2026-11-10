@@ -12,14 +12,15 @@
 //! there looked the current frame up again (the frame stack's bounds, the
 //! frame's address). [`step`] runs one such op on a frame borrowed once;
 //! `Vm::run` uses it inline for a hot op, and when the op after it is hot
-//! as well enters [`run_hot`], which stays in its own loop, with the frame,
-//! its slot vectors and `ip` in registers, until an op it does not handle,
-//! an op whose fast path does not apply (nothing changed: `Vm::run` then
-//! runs the generic op), or a due safe point (`EG(vm_interrupt)`: polled
-//! after every op, as in `Vm::run`). Only the core ops (jumps, smart
-//! branches, arithmetic, `++`/`--`, plain assignments, the fused loop ops)
-//! are inlined into that loop; the other hot ops are one call each
-//! ([`step_ext`]), so that the loop keeps its state in registers.
+//! as well enters the tape ([`super::tape::run_tape`]), which stays in its
+//! own loop until an op it does not handle, an op whose fast path does not
+//! apply (nothing changed: `Vm::run` then runs the generic op), or a due
+//! safe point (`EG(vm_interrupt)`). The tape runs the ops it has
+//! specialised instructions for itself and hands the others here: the core
+//! ops (jumps, smart branches, arithmetic, `++`/`--`, plain assignments,
+//! the fused loop ops) to [`step`], every other hot op to [`step_ext`]. A
+//! frame the tape cannot run on (one with an attached symbol table) has
+//! its hot ops run by [`run_steps`].
 //!
 //! Every fast path here completes its op without diagnostics, user code or
 //! frame changes, exactly as the `Vm::run` pre-match did before: it reads
@@ -47,16 +48,16 @@ use super::spec::{
     num_outcome, plain_truth, put_tmp, rope_in, slot_truth,
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
-use crate::opcode::{cmp_outcome, BinKind, CastKind, IncDecKind, Op, OpArray, Operand, UnKind};
-use crate::vm::{CvSlot, Frame, Vm};
+use crate::opcode::{cmp_outcome, BinKind, CastKind, IncDecKind, Op, Operand, UnKind};
+use crate::vm::{CvSlot, Frame};
 use php_runtime::{BinaryOp, Value, ZStr};
-use std::rc::Rc;
 
-/// The second half of [`run_hot`]'s result when no safe point is due: the
-/// op at the returned `ip` stopped the loop.
+/// The second half of [`super::tape::run_tape`]'s result when no safe
+/// point is due: the op at the returned `ip` stopped the loop.
 pub(super) const NO_SAFE_POINT: usize = usize::MAX;
 
-/// Whether [`run_hot`] handles `op` (its fast path may still decline).
+/// Whether `op` is a hot op: [`step`] handles it (its fast path may still
+/// decline).
 #[inline(always)]
 #[allow(clippy::inline_always)] // a discriminant test at the top of the dispatch loop
 pub(super) fn is_hot(op: &Op) -> bool {
@@ -134,13 +135,13 @@ pub(super) fn is_hot(op: &Op) -> bool {
     )
 }
 
-/// Set in the `ip` [`run_hot`] returns when a call or a return it made
+/// Set in the `ip` [`super::tape::run_tape`] returns when a call or a return it made
 /// changed the current frame: the `ip` (without this bit) is one of the
 /// new current frame's, whose op array `Vm::run` loads first (`LOAD_OPLINE`
 /// after `ZEND_VM_ENTER`/`ZEND_VM_LEAVE`). Op indexes never reach it.
 pub(super) const SWITCHED: usize = 1 << (usize::BITS - 1);
 
-/// The second half of [`run_hot`]'s result when a call or a return it made
+/// The second half of [`super::tape::run_tape`]'s result when a call or a return it made
 /// changed the current frame and the safe point after it is due: the
 /// frame's `ip` is stored in it (the callee's first op, or the caller's
 /// resume point), and `Vm::run` runs the safe point as after its own fast
@@ -148,7 +149,7 @@ pub(super) const SWITCHED: usize = 1 << (usize::BITS - 1);
 /// the frame.
 pub(super) const LEFT: usize = usize::MAX - 1;
 
-/// Whether `op` is a call or a return [`run_hot`] makes itself when its
+/// Whether `op` is a call or a return [`super::tape::run_tape`] makes itself when its
 /// fast path applies (`Vm::push_simple_ucall`, `Vm::return_simple`).
 #[inline(always)]
 #[allow(clippy::inline_always)] // a discriminant test
@@ -156,7 +157,7 @@ pub(super) fn is_frame_op(op: &Op) -> bool {
     matches!(op, Op::DoCall { .. } | Op::Return { .. })
 }
 
-/// Whether `Vm::run` enters [`run_hot`] at `op` after a hot op: a hot op
+/// Whether `Vm::run` enters [`super::tape::run_tape`] at `op` after a hot op: a hot op
 /// or a call or return it makes itself ([`is_frame_op`]).
 #[inline(always)]
 #[allow(clippy::inline_always)] // a discriminant test
@@ -164,97 +165,73 @@ pub(super) fn enters_hot(op: &Op) -> bool {
     is_hot(op) || is_frame_op(op)
 }
 
-/// Runs the ops of the current frame (its op array's `ops` and `lits`,
-/// held by the caller, so that the loop does not reload them through the
-/// frame's `code`) from `ip` while they are hot ops whose fast path
-/// applies ([`step`]), and the plain user calls and returns among them
-/// (`ZEND_DO_UCALL`, `ZEND_RETURN`: [`Vm::push_simple_ucall`],
-/// [`Vm::return_simple`]), switching to the callee's or the caller's frame
-/// and op array in place of returning to `Vm::run` to reload them.
-/// Returns:
+/// Whether [`step`] runs `op` in one of its own arms (the core ops); every
+/// other hot op goes to [`step_ext`]. The tape hands an op it has no
+/// instruction for to the one or the other by this (a wrong answer costs a
+/// call, not correctness: `step` passes on what is not its own, and
+/// `step_ext` declines it).
+pub(super) fn is_core(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Nop
+            | Op::Jmp(_)
+            | Op::JmpZ(..)
+            | Op::JmpNz(..)
+            | Op::JmpZEx { .. }
+            | Op::JmpNzEx { .. }
+            | Op::Unary {
+                op: UnKind::Not | UnKind::Bool,
+                ..
+            }
+            | Op::AssignCv { .. }
+            | Op::Move { .. }
+            | Op::Coalesce { .. }
+            | Op::JmpSet { .. }
+            | Op::JmpNull { .. }
+            | Op::CmpJmp { .. }
+            | Op::Bin { .. }
+            | Op::BinAssignCv { .. }
+            | Op::IncDecCv { .. }
+            | Op::IncDecCvCmpJmp { .. }
+            | Op::BinAssignCvCmpJmp { .. }
+            | Op::AssignOpCvCmpJmp { .. }
+            | Op::BinAssignCvJmp { .. }
+            | Op::AssignOpCvJmp { .. }
+            | Op::AssignOpCv { .. }
+    )
+}
+
+/// Runs the hot ops of frame `f` from `ip` through [`step`] while their
+/// fast paths apply. Returns `(at, NO_SAFE_POINT)` when the op at `at` is
+/// not a hot op or declined, having changed nothing, and `(ip, at)` when
+/// the safe point after the op at `at` is due, `ip` being where execution
+/// continues.
 ///
-/// * `(ip, NO_SAFE_POINT)` when the op at `ip` must run in `Vm::run` (not
-///   a hot op, or its fast path declined, having changed nothing; a
-///   `DoCall` or `Return` here was declined by its fast path);
-/// * `(ip, at)` when the safe point after the op at `at` is due, `ip`
-///   being where execution continues;
-/// * either with [`SWITCHED`] set in `ip` when the current frame changed
-///   since the call (`ip` and `at` are then the new frame's);
-/// * `(_, LEFT)` when a call or return changed the frame and the safe
-///   point after it is due ([`LEFT`]).
-///
-/// `base` is `Vm::run`'s: the frame at that index is never returned from
-/// here (`Vm::return_simple` declines it). Exactly what `Vm::run`'s fast
-/// `DoCall` and `Return` arms do, in the same order: those push or pop
-/// only plain user frames (no observer, generator, by-reference return,
-/// attached symbol table, named or spread arguments, coercion, deep
-/// recursion: anything else is declined and runs as the generic op), and
-/// run no user code; the frame's `ip` is stored as there, and a due safe
-/// point is run by `Vm::run` right after the call or return, as there.
+/// The loop of a frame the tape cannot run on (one whose symbol table is
+/// attached: `step` copies each written variable there). It stays in this
+/// one frame: a call or a return is the caller's
+/// ([`super::tape::run_tape`]), which then looks at the frame it switched
+/// to afresh, so that a callee is not kept off the tape by its caller.
 ///
 /// Never inlined: its own register allocation keeps the frame, `ops`,
-/// `lits` and `ip` out of `Vm::run`'s stack frame. `Vm::run` enters it
-/// when a hot op it ran is followed by another or by a call or return
-/// ([`enters_hot`]: a loop of hot ops and plain calls stays here); a lone
-/// hot op among others runs in `Vm::run` through [`step`], without the
-/// call. The loop inlines only `step`'s core ops; the others are one call
-/// each ([`step_ext`]), which keeps the loop small enough for its state to
-/// stay in registers.
+/// `lits` and `ip` out of the caller's stack frame. It inlines only
+/// `step`'s core ops; the others are one call each ([`step_ext`]).
 #[inline(never)]
-pub(super) fn run_hot(
-    vm: &mut Vm,
-    base: usize,
-    mut ops: &[Op],
-    mut lits: &[Value],
+pub(super) fn run_steps(
+    f: &mut Frame,
+    ops: &[Op],
+    lits: &[Value],
     mut ip: usize,
 ) -> (usize, usize) {
-    let mut switched = 0;
     loop {
-        let Some(f) = vm.frames.last_mut() else {
-            return (ip | switched, NO_SAFE_POINT);
-        };
-        let at = loop {
-            let at = ip;
-            ip = step(f, ops, lits, at);
-            if ip == DECLINED {
-                break at;
-            }
-            if crate::interrupt::safe_point_due() {
-                return (ip | switched, at);
-            }
-        };
-        // `ZEND_DO_UCALL` / `ZEND_RETURN` of a plain user function: the
-        // fast arms of `Vm::run`, which store `at + 1` as the frame's
-        // resume point (`SAVE_OPLINE`).
-        let changed = match ops.get(at) {
-            Some(&Op::DoCall { dst }) => vm.push_simple_ucall(dst, at + 1),
-            Some(&Op::Return { val }) => vm.return_simple(val, base, at + 1).is_some(),
-            _ => false,
-        };
-        if !changed {
-            return (at | switched, NO_SAFE_POINT);
+        let at = ip;
+        ip = step(f, ops, lits, at);
+        if ip == DECLINED {
+            return (at, NO_SAFE_POINT);
         }
-        // The frame's op array may be freed with it: `ops`, `lits` and
-        // the op are not read again before they are reloaded below.
-        switched = SWITCHED;
         if crate::interrupt::safe_point_due() {
-            return (0, LEFT);
+            return (ip, at);
         }
-        // `LOAD_OPLINE()` of the new current frame, as `Vm::run` does.
-        let Some(f) = vm.frames.last() else {
-            return (0, LEFT);
-        };
-        ip = f.ip;
-        // SAFETY: as in `Vm::run`: the op array is owned by `Rc`s, one of
-        // them held by the current frame, so its heap block stays where it
-        // is while that frame is current. Until the next call or return
-        // above (after which this is reloaded), only hot ops run, which
-        // neither push nor pop frames nor replace a frame's `code`; and
-        // `Vm::run`, which gets this frame's `ip` back with `SWITCHED`,
-        // reloads the op array from the frame itself.
-        let code: &OpArray = unsafe { &*Rc::as_ptr(&f.code) };
-        ops = &code.ops;
-        lits = &code.literals;
     }
 }
 
@@ -566,7 +543,7 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
 ///
 /// Never inlined, so that `step` stays small: every one of these arms
 /// inlines its fast path (`exec/spec/*.rs`, `call.rs`), and with them in
-/// [`run_hot`]'s loop that function was 48 KB, and its op list (pointer
+/// the loop of the hot ops that function was 48 KB, and its op list (pointer
 /// and length) and the next `ip` lived on the stack: 4 of the 17
 /// instructions of each op's dispatch were spill loads and stores, and the
 /// core arms reloaded the frame and its slot vectors from the stack too.
@@ -576,7 +553,7 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
 /// for its state.
 #[inline(never)]
 #[allow(clippy::too_many_lines)] // one arm per hot op, like `step`
-fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
+pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
     let Some(op) = ops.get(at) else {
         return DECLINED;
     };
@@ -854,7 +831,7 @@ fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
 
 /// [`concat_in`] (`ZEND_CONCAT` of strings and integers, for the `Bin`
 /// and `BinAssignCv` arms of [`step`]) out of line: it allocates, so a call
-/// costs it little, and inlined twice into [`run_hot`]'s core loop it would
+/// costs it little, and inlined twice into the loop of the core ops it would
 /// take registers from the numeric arms.
 #[inline(never)]
 fn concat_ext(f: &mut Frame, lits: &[Value], a: Operand, b: Operand) -> Option<ZStr> {
@@ -1343,7 +1320,7 @@ fn bin_tmp(f: &mut Frame, lits: &[Value], op: BinKind, a: Operand, b: Operand, d
 /// [`bin_tmp`] for what [`arith_num`] leaves to [`num_bin`] (other
 /// operators, mixed kinds, an int overflow), out of line: `num_bin` is two
 /// jump tables over the operator and many arms, which inline would grow
-/// [`run_hot`] and the register pressure of its loop for every op.
+/// the loop of the core ops and the register pressure of that loop for every op.
 #[inline(never)]
 fn bin_tmp_other(slot: &mut Value, op: BinKind, x: Num, y: Num) -> bool {
     let Some(r) = num_bin(op, x, y) else {
@@ -2108,7 +2085,7 @@ done
         );
     }
 
-    /// Plain user calls and returns made in `run_hot`'s loop (the callee's
+    /// Plain user calls and returns made in the tape's loop (the callee's
     /// and the caller's frames switched there): recursion, an empty body,
     /// a frame pool grown by a deep recursion.
     #[test]

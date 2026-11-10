@@ -1155,7 +1155,7 @@ impl Vm {
             // every use of `code`, `ops` and `op` below happens while
             // that frame's handle keeps the block alive.
             //
-            // `hot::run_hot` makes plain calls and returns itself: when it
+            // `tape::run_tape` makes plain calls and returns itself: when it
             // comes back in another frame (`hot::SWITCHED`), `code` and
             // `ops` are reloaded from that frame below, before any use, as
             // here (the frame it left may have been freed with its op
@@ -1174,7 +1174,7 @@ impl Vm {
                 'slow: {
                     // The frame-local hot ops (`exec/hot.rs`): one runs here
                     // (`hot::step`, inline); when the op after it is hot as
-                    // well, they run in `hot::run_hot`'s own loop, on the
+                    // well, they run in `tape::run_tape`'s own loop, on the
                     // frame and `ip` in registers, until an op it does not
                     // handle or whose fast path declined (that op then runs
                     // here: a declined hot op as its generic op, any other
@@ -1221,7 +1221,7 @@ impl Vm {
                         }
                         ip = next;
                         // A hot op whose fast path declined, or a call or
-                        // return `run_hot` did not make: the generic op.
+                        // return `run_tape` did not make: the generic op.
                         if hot::enters_hot(&ops[next]) {
                             op = &ops[next];
                             ip = next + 1;

@@ -2293,7 +2293,7 @@ impl Vm {
     /// replaced.
     ///
     /// Out of line on purpose: inlined into a dispatch loop (`Vm::run`'s
-    /// fast `DoCall` arm, or `exec::hot::run_hot`, which then goes on in
+    /// fast `DoCall` arm, or `exec::tape::run_tape`, which then goes on in
     /// the callee's frame itself), whose registers are taken by the loop's
     /// own state, every counter and pointer here lived in a stack slot (the
     /// per-argument loops cost ~13 and ~17 instructions an argument); a
@@ -2456,7 +2456,7 @@ impl Vm {
     /// having changed nothing, otherwise.
     ///
     /// Out of line for the reason [`Vm::push_simple_ucall`] is; called by
-    /// `Vm::run`'s fast `Return` arm and by `exec::hot::run_hot`.
+    /// `Vm::run`'s fast `Return` arm and by `exec::tape::run_tape`.
     ///
     /// [`FrameStack::release_top`]: crate::vm::FrameStack::release_top
     #[inline(never)]

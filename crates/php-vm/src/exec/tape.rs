@@ -33,6 +33,32 @@
 //! tape always describes the whole op array and behaviour never depends on
 //! what is specialised.
 //!
+//! # Families
+//!
+//! The numeric instructions (smart branches, `+ - *`, `++`/`--`, scalar
+//! assignments) are generated here by [`tape_ops!`] from tables of operand
+//! kinds. Every other specialised instruction belongs to a family module,
+//! which decodes its ops (`lower`) and holds their handlers; a row of the
+//! `family` table of the [`tape_ops!`] invocation gives each instruction
+//! its opcode, its handler, the number of ops it covers and how it ends:
+//!
+//! * [`scalar`]: the rest of the frame-local scalar ops (bit operations,
+//!   `%`, `/`, comparisons into a temporary, `!`, truth jumps, `??`, `?:`,
+//!   the fused assign-and-branch forms);
+//! * [`dims`]: array elements of a variable (`$a[k]` read, write, `op=`,
+//!   `++`, `isset`, `foreach`);
+//! * [`props`]: object and static properties, constants;
+//! * [`strs`]: strings and the builtin ops (`.`, `.=`, `strlen()`,
+//!   `count()`, type tests, `isset`/`empty`, casts);
+//! * [`calls`]: calls and returns of user functions.
+//!
+//! A handler has the contract of a hot op's fast path
+//! ([`super::hot`]): it completes its op without diagnostics, user code or
+//! frame changes, or it changes nothing and says so, and the op then runs
+//! through [`super::hot::step`]. A handler that may release a value or
+//! allocate ends with a poll for a safe point (a queued destructor, a
+//! delayed `memory_limit` violation), as every hot op does.
+//!
 //! # Safety
 //!
 //! Slot access is unchecked. It is sound because [`lower`] only emits a
@@ -65,7 +91,7 @@ const _: () = {
     assert!(std::mem::size_of::<Option<Value>>() == 1 << SLOT_SHIFT);
     assert!(std::mem::size_of::<CvSlot>() == 1 << SLOT_SHIFT);
     assert!(std::mem::align_of::<CvSlot>() == std::mem::align_of::<Option<Value>>());
-    assert!(std::mem::size_of::<Inst>() == 16);
+    assert!(std::mem::size_of::<Inst>() == 32);
 };
 
 /// An op array's tape ([`OpArray::tape`]), decoded when the op array first
@@ -116,21 +142,37 @@ const KI: u8 = 2;
 /// table).
 const KL: u8 = 3;
 
-/// One pre-decoded instruction (16 bytes).
+/// One pre-decoded instruction (32 bytes, the size of an [`Op`] and of a
+/// `zend_op`).
+///
+/// What the operand fields hold is the instruction's own business (its
+/// family's `lower` writes them and its handler reads them), with one
+/// rule: an instruction that jumps has its target in `c`, as a signed byte
+/// offset from itself ([`rel`]).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Inst {
     /// What to do, operand kinds included.
     op: TOp,
-    /// The comparison mask of a smart branch ([`crate::opcode::cmp_outcome`]).
+    /// The comparison mask of a smart branch
+    /// ([`crate::opcode::cmp_outcome`]); free for other instructions.
     k: u8,
+    /// A small extra operand.
+    #[allow(dead_code)] // for the family modules
+    e: u8,
     /// First operand.
     a: u32,
     /// Second operand.
     b: u32,
-    /// Result slot (byte offset), or a jump target as a signed byte offset
-    /// from this instruction.
+    /// Result slot (byte offset), or the jump target.
     c: u32,
+    /// Fourth operand.
+    #[allow(dead_code)] // for the family modules
+    d: u32,
+    /// A pointer-sized operand (the address of something that lives as
+    /// long as the op array, such as a cache entry the tape owns).
+    #[allow(dead_code)] // for the family modules
+    p: usize,
 }
 
 impl Inst {
@@ -138,9 +180,12 @@ impl Inst {
         Inst {
             op,
             k: 0,
+            e: 0,
             a: 0,
             b: 0,
             c: 0,
+            d: 0,
+            p: 0,
         }
     }
 }
@@ -154,6 +199,9 @@ struct St {
     tmps: *mut u8,
     /// The op array's literals (`[Value]`).
     lits: *const u8,
+    /// The frame itself, for what is not a slot (`$this`, the op array).
+    #[allow(dead_code)] // for the family modules
+    f: *mut Frame,
 }
 
 /// The compiled-variable slot at byte offset `off`.
@@ -272,11 +320,14 @@ macro_rules! float_arith {
 }
 
 /// Why [`run_core`] stopped: the op at `ip` is not specialised, or its
-/// operands are not plain numbers in plain slots (nothing changed): it runs
+/// operands are not what its instruction handles (nothing changed): it runs
 /// through [`hot::step`].
 const WHY_STEP: u8 = 0;
 /// Why [`run_core`] stopped: the op at `ip` is not a hot op.
 const WHY_EXIT: u8 = 1;
+/// Why [`run_core`] stopped: the op at `ip` is a hot op outside
+/// [`hot::step`]'s core arms: it runs through [`hot::step_ext`].
+const WHY_EXT: u8 = 3;
 /// Why [`run_core`] stopped: the jump at `at` was taken (to `ip`) and a safe
 /// point is due.
 const WHY_POLL: u8 = 2;
@@ -320,6 +371,75 @@ macro_rules! take_jump {
     }};
 }
 
+/// What a family handler that may jump decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Br {
+    /// Its operands are not what it handles; nothing changed.
+    Decline,
+    /// Done; execution goes on after the ops the instruction covers.
+    Fall,
+    /// Done; execution goes on at the instruction's jump target.
+    Jump,
+}
+
+/// The arm of a `family` row in [`run_core`]: `$h` is the handler, `$n`
+/// the number of ops the instruction covers, and the first argument how it
+/// ends:
+///
+/// * `plain`: `unsafe fn(St, &Inst) -> bool` (`false`: declined, nothing
+///   changed); for handlers that neither release a value nor allocate;
+/// * `poll`: the same, followed by a poll for a safe point (anything that
+///   may release a value or allocate);
+/// * `branch`: `unsafe fn(St, &Inst) -> Br`; a taken jump polls, as every
+///   jump does;
+/// * `branch_poll`: the same, polling on the fall-through path as well.
+macro_rules! fam_arm {
+    (plain, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+        if !($h)($st, $inst) {
+            return step_out($ip);
+        }
+        $ip = $ip.add($n);
+    }};
+    (poll, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+        if !($h)($st, $inst) {
+            return step_out($ip);
+        }
+        let at = $ip;
+        $ip = $ip.add($n);
+        if crate::interrupt::safe_point_due() {
+            return Out {
+                ip: $ip,
+                at,
+                why: WHY_POLL,
+            };
+        }
+    }};
+    (branch, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+        match ($h)($st, $inst) {
+            Br::Decline => return step_out($ip),
+            Br::Fall => $ip = $ip.add($n),
+            Br::Jump => take_jump!($ip, $inst),
+        }
+    }};
+    (branch_poll, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+        match ($h)($st, $inst) {
+            Br::Decline => return step_out($ip),
+            Br::Fall => {
+                let at = $ip;
+                $ip = $ip.add($n);
+                if crate::interrupt::safe_point_due() {
+                    return Out {
+                        ip: $ip,
+                        at,
+                        why: WHY_POLL,
+                    };
+                }
+            }
+            Br::Jump => take_jump!($ip, $inst),
+        }
+    }};
+}
+
 /// Defines [`TOp`], the opcode lookups [`lower`] uses and [`run_core`] from
 /// the tables of specialised instruction families.
 macro_rules! tape_ops {
@@ -329,18 +449,23 @@ macro_rules! tape_ops {
         arith_tmp { $( $an:ident = ($aop:ident, $aka:ident, $akb:ident), )* }
         arith_cv { $( $vn:ident = ($vop:ident, $vka:ident, $vkb:ident), )* }
         assign_op { $( $on:ident = ($oop:ident, $okb:ident), )* }
+        family { $( $fname:ident = ($fh:expr, $fskip:literal, $fmode:ident), )* }
     ) => {
         /// A tape opcode: the operation and the kinds of its operands
         /// (`C` compiled variable, `T` temporary, `I` small integer
         /// literal, `L` other numeric literal).
-        #[repr(u8)]
+        #[repr(u16)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         #[allow(clippy::upper_case_acronyms)]
         pub(crate) enum TOp {
             /// Not a hot op (or the end of the tape): back to `Vm::run`.
             Exit,
-            /// A hot op with no specialised form: [`hot::step`] runs it.
+            /// A core hot op with no specialised form: [`hot::step`] runs
+            /// it.
             Step,
+            /// Any other hot op with no specialised form:
+            /// [`hot::step_ext`] runs it.
+            Ext,
             /// `Op::Jmp`.
             Jmp,
             /// `Op::JmpZ` of a temporary holding a bool.
@@ -387,6 +512,11 @@ macro_rules! tape_ops {
             $(
                 /// `Op::AssignOpCv` (`$cv op= b`), result unused.
                 $on,
+            )*
+            $(
+                /// An instruction of a family module (see the `family`
+                /// table).
+                $fname,
             )*
         }
 
@@ -435,6 +565,9 @@ macro_rules! tape_ops {
                         return Out { ip, at: ip, why: WHY_EXIT };
                     }
                     TOp::Step => return step_out(ip),
+                    TOp::Ext => {
+                        return Out { ip, at: ip, why: WHY_EXT };
+                    }
                     TOp::Jmp => take_jump!(ip, inst),
                     TOp::JmpZT => {
                         let s = tmp_slot(st, inst.a);
@@ -701,6 +834,9 @@ macro_rules! tape_ops {
                             ip = ip.add(1);
                         }
                     )*
+                    $(
+                        TOp::$fname => fam_arm!($fmode, $fh, $fskip, st, inst, ip),
+                    )*
                 }
             } }
         }
@@ -738,6 +874,45 @@ tape_ops! {
         AddEqC = (Add, KC), AddEqT = (Add, KT), AddEqI = (Add, KI), AddEqL = (Add, KL),
         SubEqC = (Sub, KC), SubEqT = (Sub, KT), SubEqI = (Sub, KI), SubEqL = (Sub, KL),
         MulEqC = (Mul, KC), MulEqT = (Mul, KT), MulEqI = (Mul, KI), MulEqL = (Mul, KL),
+    }
+    // One row per instruction: `Opcode = (handler, ops covered, ending),`
+    // where the ending is `plain`, `poll`, `branch` or `branch_poll`
+    // (see `fam_arm!`). Each family adds its rows under its own heading.
+    family {
+        // ---- scalar (exec/tape/scalar.rs) ----
+        Nop = (scalar::nop, 1, plain),
+        JmpZC = (scalar::jmpz_cv, 1, branch),
+        JmpNzC = (scalar::jmpnz_cv, 1, branch),
+
+        // ---- end of scalar ----
+        //
+        //
+        //
+        // ---- dims (exec/tape/dims.rs) ----
+
+
+        // ---- end of dims ----
+        //
+        //
+        //
+        // ---- props (exec/tape/props.rs) ----
+
+
+        // ---- end of props ----
+        //
+        //
+        //
+        // ---- strs (exec/tape/strs.rs) ----
+
+
+        // ---- end of strs ----
+        //
+        //
+        //
+        // ---- calls (exec/tape/calls.rs) ----
+
+
+        // ---- end of calls ----
     }
 }
 
@@ -811,9 +986,21 @@ const fn mirrored(mask: u8) -> u8 {
     m
 }
 
-/// The specialised instruction of the op at `i`, if it has one.
-#[allow(clippy::too_many_lines, clippy::many_single_char_names)]
+/// The specialised instruction of the op at `i`, if it has one: a numeric
+/// one of this module, else one of a family's.
 fn lower_op(code: &OpArray, i: usize) -> Option<Inst> {
+    lower_numeric(code, i)
+        .or_else(|| scalar::lower(code, i))
+        .or_else(|| dims::lower(code, i))
+        .or_else(|| props::lower(code, i))
+        .or_else(|| strs::lower(code, i))
+        .or_else(|| calls::lower(code, i))
+}
+
+/// The numeric instruction ([`tape_ops!`]'s generated families) of the op
+/// at `i`, if it has one.
+#[allow(clippy::too_many_lines, clippy::many_single_char_names)]
+fn lower_numeric(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     Some(match *code.ops.get(i)? {
         Op::Jmp(t) => Inst {
@@ -992,10 +1179,12 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
     let mut tape = Vec::with_capacity(code.ops.len() + 1);
     for (i, op) in code.ops.iter().enumerate() {
         tape.push(lower_op(code, i).unwrap_or_else(|| {
-            Inst::plain(if hot::is_hot(op) {
+            Inst::plain(if !hot::is_hot(op) {
+                TOp::Exit
+            } else if hot::is_core(op) {
                 TOp::Step
             } else {
-                TOp::Exit
+                TOp::Ext
             })
         }));
     }
@@ -1007,19 +1196,44 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
 /// the tape's offsets point (see the module's safety notes), and no symbol
 /// table mirrors its compiled variables (a write would have to be copied
 /// there: `hot::step` does that).
-#[inline]
-fn usable(f: &Frame, code: &OpArray, tape: &[Inst]) -> bool {
+#[inline(always)]
+#[allow(clippy::inline_always)] // three tests on the way into the loop
+fn usable(f: &Frame, code: &OpArray) -> bool {
     !f.symtab_attached
         && f.cvs.len() >= code.cv_names.len()
         && f.tmps.len() >= code.num_tmps as usize
-        && tape.len() == code.ops.len() + 1
 }
 
-/// Runs the hot ops of the current frame from `ip` on its op array's tape,
-/// and the plain user calls and returns among them, exactly as
-/// [`hot::run_hot`] does and with its contract (see there for the result):
-/// specialised instructions in [`run_core`], every other hot op through
-/// [`hot::step`].
+/// Runs the hot ops of the current frame (the one `code` belongs to) from
+/// `ip`, and the plain user calls and returns among them
+/// (`ZEND_DO_UCALL`, `ZEND_RETURN`: [`Vm::push_simple_ucall`],
+/// [`Vm::return_simple`]), going on in the callee's or the caller's frame
+/// in place of returning to `Vm::run` to reload it. Specialised
+/// instructions run in [`run_core`]; a hot op without one, or whose
+/// instruction declined, runs through [`hot::step`] or
+/// [`hot::step_ext`]; a frame the tape cannot run on ([`usable`]) has its
+/// hot ops run by [`hot::run_steps`]. Returns:
+///
+/// * `(ip, NO_SAFE_POINT)` when the op at `ip` must run in `Vm::run` (not
+///   a hot op, or its fast path declined, having changed nothing; a
+///   `DoCall` or `Return` here was declined by its fast path);
+/// * `(ip, at)` when the safe point after the op at `at` is due, `ip`
+///   being where execution continues;
+/// * either with [`SWITCHED`] set in `ip` when the current frame changed
+///   since the call (`ip` and `at` are then the new frame's);
+/// * `(_, LEFT)` when a call or return changed the frame and the safe
+///   point after it is due ([`LEFT`]).
+///
+/// `base` is `Vm::run`'s: the frame at that index is never returned from
+/// here (`Vm::return_simple` declines it). The calls and returns are
+/// exactly what `Vm::run`'s fast `DoCall` and `Return` arms do, in the
+/// same order: those push or pop only plain user frames (no observer,
+/// generator, by-reference return, attached symbol table, named or spread
+/// arguments, coercion, deep recursion: anything else is declined and runs
+/// as the generic op), and run no user code; the frame's `ip` is stored as
+/// there, and a due safe point is run by `Vm::run` right after the call or
+/// return, as there. Every frame entered is looked at afresh: a callee
+/// runs on the tape whatever its caller ran on.
 ///
 /// Never inlined: the loop's state (instruction pointer, slot bases) lives
 /// in its own registers.
@@ -1028,81 +1242,84 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
     let mut switched = 0;
     let mut code: *const OpArray = code;
     let mut ip = ip;
-    loop {
-        // SAFETY: as in `Vm::run` and `hot::run_hot`: the op array is owned
-        // by `Rc`s, one of them held by the current frame, and it is only
-        // read here while that frame is current (it is reloaded below after
-        // every call or return).
+    'frames: loop {
+        // SAFETY: as in `Vm::run`: the op array is owned by `Rc`s, one of
+        // them held by the current frame, so its heap block stays where it
+        // is while that frame is current. Until the next call or return
+        // below (after which it is reloaded from the new current frame),
+        // only hot ops run, which neither push nor pop frames nor replace
+        // a frame's `code`; and `Vm::run`, which gets this frame's `ip`
+        // back with `SWITCHED`, reloads the op array from the frame itself.
         let c: &OpArray = unsafe { &*code };
         let ops: &[Op] = &c.ops;
         let lits: &[Value] = &c.literals;
-        let tape: &[Inst] = c.tape.get(c);
         let Some(f) = vm.frames.last_mut() else {
             return (ip | switched, NO_SAFE_POINT);
         };
-        if !usable(f, c, tape) {
-            let (next, last) = hot::run_hot(vm, base, ops, lits, ip);
-            return if last == LEFT {
-                (next, last)
-            } else {
-                (next | switched, last)
-            };
-        }
-        let tbase = tape.as_ptr();
-        // SAFETY: `ip` is an op index of this op array (`Vm::run`'s, or a
-        // frame's stored resume point), at most `ops.len()`: inside the
-        // tape, whose last element is the sentinel.
-        let mut p = unsafe { tbase.add(ip.min(ops.len())) };
-        let at = loop {
-            // SAFETY: the frame is `usable` for this tape (checked above
-            // and again after every `step`, the only thing here that can
-            // attach a symbol table; nothing in this loop resizes the
-            // frame's slot vectors), and `p` points into the tape.
-            let out = unsafe {
+        let at = if usable(f, c) {
+            let tape: &[Inst] = c.tape.get(c);
+            debug_assert_eq!(tape.len(), ops.len() + 1);
+            let tbase = tape.as_ptr();
+            // SAFETY: `ip` is an op index of this op array (`Vm::run`'s, a
+            // frame's stored resume point, or what a hot op continued at),
+            // at most `ops.len()`: inside the tape, whose last element is
+            // the sentinel.
+            let mut p = unsafe { tbase.add(ip.min(ops.len())) };
+            loop {
+                // The slot vectors are read again after every hot op run
+                // out of the core (none of them resizes one, but none is
+                // bound not to replace its buffer).
                 let st = St {
                     cvs: f.cvs.as_mut_ptr().cast(),
                     tmps: f.tmps.as_mut_ptr().cast(),
                     lits: lits.as_ptr().cast(),
+                    f: std::ptr::from_mut(f),
                 };
-                run_core(st, p)
-            };
-            // SAFETY: both point into the tape.
-            #[allow(clippy::cast_sign_loss)]
-            let at = unsafe { out.ip.offset_from(tbase) } as usize;
-            match out.why {
-                WHY_POLL => {
-                    // SAFETY: as above.
-                    #[allow(clippy::cast_sign_loss)]
-                    let last = unsafe { out.at.offset_from(tbase) } as usize;
-                    return (at | switched, last);
+                // SAFETY: the frame is `usable` for this tape (tested
+                // above; a hot op that attaches a symbol table sends the
+                // frame back through that test below), and `p` points into
+                // the tape.
+                let out = unsafe { run_core(st, p) };
+                // SAFETY: both point into the tape.
+                #[allow(clippy::cast_sign_loss)]
+                let at = unsafe { out.ip.offset_from(tbase) } as usize;
+                let next = match out.why {
+                    WHY_EXT => hot::step_ext(f, ops, lits, at),
+                    WHY_STEP => step_slow(f, ops, lits, at),
+                    WHY_POLL => {
+                        // SAFETY: as above.
+                        #[allow(clippy::cast_sign_loss)]
+                        let last = unsafe { out.at.offset_from(tbase) } as usize;
+                        return (at | switched, last);
+                    }
+                    _ => break at,
+                };
+                if next == DECLINED {
+                    break at;
                 }
-                WHY_EXIT => break at,
-                _ => {
-                    let next = step_slow(f, ops, lits, at);
-                    if next == DECLINED {
-                        break at;
-                    }
-                    if crate::interrupt::safe_point_due() {
-                        return (next | switched, at);
-                    }
-                    if !usable(f, c, tape) {
-                        // A symbol table was attached: the rest of this
-                        // frame runs in `hot::run_hot`.
-                        let (n2, last) = hot::run_hot(vm, base, ops, lits, next);
-                        return if last == LEFT {
-                            (n2, last)
-                        } else {
-                            (n2 | switched, last)
-                        };
-                    }
-                    // SAFETY: `step` returns an op index of this op array
-                    // (the next op or a jump target).
-                    p = unsafe { tbase.add(next.min(ops.len())) };
+                if crate::interrupt::safe_point_due() {
+                    return (next | switched, at);
                 }
+                if f.symtab_attached {
+                    // The op attached a symbol table: the frame leaves the
+                    // tape.
+                    ip = next;
+                    continue 'frames;
+                }
+                // SAFETY: a hot op continues at an op index of this op
+                // array (the next op or a jump target).
+                p = unsafe { tbase.add(next.min(ops.len())) };
             }
+        } else {
+            let (next, last) = hot::run_steps(f, ops, lits, ip);
+            if last != NO_SAFE_POINT {
+                return (next | switched, last);
+            }
+            next
         };
-        // `ZEND_DO_UCALL` / `ZEND_RETURN` of a plain user function, as in
-        // `hot::run_hot`.
+        // `ZEND_DO_UCALL` / `ZEND_RETURN` of a plain user function: the
+        // fast arms of `Vm::run`, which store `at + 1` as the frame's
+        // resume point (`SAVE_OPLINE`).
         let changed = match ops.get(at) {
             Some(&Op::DoCall { dst }) => vm.push_simple_ucall(dst, at + 1),
             Some(&Op::Return { val }) => vm.return_simple(val, base, at + 1).is_some(),
@@ -1111,10 +1328,13 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         if !changed {
             return (at | switched, NO_SAFE_POINT);
         }
+        // The frame's op array may be freed with it: `ops`, `lits` and
+        // the op are not read again before they are reloaded above.
         switched = SWITCHED;
         if crate::interrupt::safe_point_due() {
             return (0, LEFT);
         }
+        // `LOAD_OPLINE()` of the new current frame, as `Vm::run` does.
         let Some(f) = vm.frames.last() else {
             return (0, LEFT);
         };
@@ -1122,6 +1342,12 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         code = Rc::as_ptr(&f.code);
     }
 }
+
+mod calls;
+mod dims;
+mod props;
+mod scalar;
+mod strs;
 
 #[cfg(test)]
 mod tests;
