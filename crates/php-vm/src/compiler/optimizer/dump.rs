@@ -154,7 +154,7 @@ struct Done {
 
 fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
     let lower::Lowered {
-        lines: mut lines,
+        mut lines,
         first_z,
     } = lower::Lower::new(&e.func, e.scope.clone(), &e.dyn_defs, res).run();
     passes::resolve_labels(&mut lines, &first_z);
