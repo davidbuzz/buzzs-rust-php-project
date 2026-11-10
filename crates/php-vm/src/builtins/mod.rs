@@ -157,6 +157,7 @@ pub(crate) fn register_all(vm: &mut Vm) {
 /// php-ext-stdarr extension instead.
 pub(crate) fn register_bare(vm: &mut Vm) {
     array::register_bare_count(vm);
+    array::register_bare_array_fns(vm);
 }
 
 /// Defines a constant.

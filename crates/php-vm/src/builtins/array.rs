@@ -167,6 +167,243 @@ impl Vm {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Bare-VM array functions: `min`, `max`, `clamp`, `array_map`, `array_filter`
+// ---------------------------------------------------------------------------
+
+/// Lifts a php-stdarr result into the VM (`php-ext-stdarr`'s `rt`).
+fn rt<T>(vm: &mut Vm, r: RtResult<T>) -> crate::vm::VmResult<T> {
+    r.map_err(|e| vm.throw_runtime_error(e))
+}
+
+/// All arguments from position `from` on, dereferenced (the variadic part;
+/// the VM already rejects named variadic arguments).
+fn rest(a: &crate::func::Args, from: usize) -> Vec<Value> {
+    a.values.iter().skip(from).map(Value::deref).collect()
+}
+
+/// Integer argument `n`, or `default` when it was not passed.
+fn int_or(a: &crate::func::Args, n: usize, default: i64) -> i64 {
+    if a.has(n) {
+        a.int(n)
+    } else {
+        default
+    }
+}
+
+/// A php-stdarr callback calling the PHP callable `cb`, resolving it once at
+/// the first call and caching the call (the `zend_fcall_info_cache` that
+/// `Z_PARAM_FUNC` fills), as `php-ext-stdarr`'s bridge does. The arguments
+/// are moved into the call, so the callee sees PHP's refcounts.
+struct VmCallback {
+    /// The callable (released once a resolved call holds what it needs).
+    cb: Value,
+    /// The resolution.
+    state: CallbackState,
+}
+
+enum CallbackState {
+    /// Not called yet.
+    Unresolved,
+    /// The cached call.
+    Prepared(crate::vm::PendingCall),
+    /// Not resolvable ahead: each call goes through [`Vm::call_value`].
+    Dynamic,
+}
+
+fn callback(cb: Value) -> VmCallback {
+    VmCallback {
+        cb,
+        state: CallbackState::Unresolved,
+    }
+}
+
+impl VmCallback {
+    /// Resolves the callable at the first call.
+    fn resolve(&mut self, vm: &mut Vm) -> RtResult<()> {
+        self.state = CallbackState::Dynamic;
+        if needs_resolution(&self.cb) {
+            match vm.resolve_callable(&self.cb) {
+                Ok(Ok(call)) => self.state = CallbackState::Prepared(call),
+                // Not callable that way: the direct path reports it.
+                Ok(Err(_)) => {}
+                Err(t) => return Err(vm.runtime_error_from(t)),
+            }
+        } else {
+            match vm.prepare_call_value(&self.cb) {
+                Ok(Some(call)) => {
+                    // The cached call holds the closure or object; the
+                    // callable value itself is no longer needed, so the
+                    // callee sees the same refcounts as before caching.
+                    self.cb = Value::Null;
+                    self.state = CallbackState::Prepared(call);
+                }
+                Ok(None) => {}
+                Err(t) => {
+                    // Retried (and reported) by `call_value` next time.
+                    self.state = CallbackState::Unresolved;
+                    return Err(vm.runtime_error_from(t));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl sa::ArrayCallback<Vm> for VmCallback {
+    fn call(&mut self, vm: &mut Vm, mut args: Vec<Value>) -> RtResult<Value> {
+        self.call_slice(vm, &mut args)
+    }
+
+    fn call_slice(&mut self, vm: &mut Vm, args: &mut [Value]) -> RtResult<Value> {
+        if matches!(self.state, CallbackState::Unresolved) {
+            self.resolve(vm)?;
+        }
+        let r = match &self.state {
+            CallbackState::Prepared(call) => vm.call_prepared(call, args),
+            _ => vm.call_value(&self.cb, args.iter_mut().map(std::mem::take).collect()),
+        };
+        r.map_err(|t| vm.runtime_error_from(t))
+    }
+}
+
+/// Whether a callable names a method (`"C::m"`, `[class_or_object, m]`),
+/// whose class part depends on the calling scope.
+fn needs_resolution(cb: &Value) -> bool {
+    match cb {
+        Value::Str(s) => s.as_bytes().windows(2).any(|w| w == b"::"),
+        Value::Array(_) => true,
+        _ => false,
+    }
+}
+
+/// `HT_MIN_SIZE`.
+const HT_MIN_SIZE: u64 = 8;
+/// `ZEND_MM_MAX_LARGE_SIZE`: larger blocks are page-aligned huge blocks.
+const MAX_LARGE_SIZE: u64 = 2 * 1024 * 1024 - 4096;
+/// `sizeof(zend_array)`.
+const ARRAY_HEADER: u64 = 56;
+
+/// `zend_hash_check_size`: the table size for `n` elements.
+fn table_size(n: u64) -> u64 {
+    n.max(HT_MIN_SIZE).next_power_of_two()
+}
+
+/// What the allocator really takes for a request of `bytes`.
+fn rounded(bytes: u64) -> u64 {
+    if bytes > MAX_LARGE_SIZE {
+        bytes.div_ceil(4096) * 4096
+    } else {
+        bytes
+    }
+}
+
+/// Bytes of the element storage of a packed array of `n` elements
+/// (`HT_PACKED_SIZE_EX`).
+fn packed_data(n: u64) -> u64 {
+    rounded(table_size(n) * 16 + 8)
+}
+
+/// Reserves `bytes` against `memory_limit` (`php_memlimit::try_reserve`).
+/// On `false` the handler returns without building the array; the VM then
+/// raises "Allowed memory size of N bytes exhausted".
+fn reserve(bytes: u64) -> bool {
+    php_memlimit::try_reserve(usize::try_from(bytes).unwrap_or(usize::MAX)).is_ok()
+}
+
+/// [`reserve`] for a list of `n` arrays of `each` packed elements (plus the
+/// outer packed list), as built by `array_map(null, ...)`.
+fn reserve_nested(n: u64, each: u64) -> bool {
+    let inner = ARRAY_HEADER + packed_data(each);
+    reserve(packed_data(n).saturating_add(n.saturating_mul(inner)))
+}
+
+fn min(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value> {
+    // Two arguments (`ZEND_FRAMELESS_ICALL_2`'s form) are compared in
+    // place, without collecting them into a vector.
+    let r = if a.values.len() == 2 {
+        sa::basic::min2(vm, &a.at_ref(0), &a.at_ref(1))
+    } else {
+        sa::basic::min(vm, &rest(a, 0))
+    };
+    rt(vm, r)
+}
+
+fn max(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value> {
+    // Two arguments (`ZEND_FRAMELESS_ICALL_2`'s form) are compared in
+    // place, without collecting them into a vector.
+    let r = if a.values.len() == 2 {
+        sa::basic::max2(vm, &a.at_ref(0), &a.at_ref(1))
+    } else {
+        sa::basic::max(vm, &rest(a, 0))
+    };
+    rt(vm, r)
+}
+
+fn clamp(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value> {
+    let r = sa::basic::clamp(vm, &a.at(0), &a.at(1), &a.at(2));
+    rt(vm, r)
+}
+
+fn array_map(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value> {
+    let cbv = a.at(0);
+    let arrays = rest(a, 1);
+    if cbv.is_null() && arrays.len() > 1 {
+        let longest = arrays
+            .iter()
+            .map(|v| match v {
+                Value::Array(x) => x.len() as u64,
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0);
+        if !reserve_nested(longest, arrays.len() as u64) {
+            return Ok(Value::Null);
+        }
+    }
+    let r = if cbv.is_null() {
+        sa::callback::array_map::<Vm>(vm, None, &arrays)
+    } else {
+        let mut cb = callback(cbv);
+        sa::callback::array_map(vm, Some(&mut cb), &arrays)
+    };
+    Ok(Value::Array(rt(vm, r)?))
+}
+
+fn array_filter(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value> {
+    let h = a.array(0);
+    let cbv = a.at(1);
+    let mode = int_or(a, 2, sa::ARRAY_FILTER_USE_VALUE);
+    let r = if cbv.is_null() {
+        sa::callback::array_filter::<Vm>(vm, &h, None, mode)
+    } else {
+        let mut cb = callback(cbv);
+        sa::callback::array_filter(vm, &h, Some(&mut cb), mode)
+    };
+    Ok(Value::Array(rt(vm, r)?))
+}
+
+/// Registers `min()`, `max()`, `clamp()`, `array_map()` and `array_filter()`
+/// for the bare [`Vm::new`], attributed to `standard` as `php-ext-stdarr`
+/// attributes them. `max()` and `min()` get the frameless fusion
+/// (`special::frameless_flags`) from their registration.
+pub(crate) fn register_bare_array_fns(vm: &mut Vm) {
+    crate::reflection::record_module(vm, "standard", true);
+    let mut m = crate::ext::ModuleBuilder::new(vm, "standard");
+    m.function_static("min(mixed $value, mixed ...$values): mixed", min);
+    m.function_static("max(mixed $value, mixed ...$values): mixed", max);
+    m.function_static("clamp(mixed $value, mixed $min, mixed $max): mixed", clamp);
+    m.function_static(
+        "array_map(?callable $callback, $array, ...$arrays): array",
+        array_map,
+    );
+    m.function_static(
+        "array_filter(array $array, ?callable $callback = null, int $mode = 0): array",
+        array_filter,
+    );
+    crate::reflection::record_module(vm, "standard", false);
+}
+
 /// Registers the array functions for the bare VM.
 pub(crate) fn register(vm: &mut Vm) {
     super::reg(

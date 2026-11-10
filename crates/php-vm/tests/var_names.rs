@@ -34,10 +34,11 @@ fn run(source: &str) -> String {
 }
 
 fn code(names: &[&str]) -> Rc<OpArray> {
-    Rc::new(OpArray {
-        cv_names: names.iter().map(|n| ZStr::from(*n)).collect(),
-        ..OpArray::default()
-    })
+    // Set the field on a default: the functional-update syntax cannot name
+    // the crate-private fields (`tape` and the caches) from outside.
+    let mut code = OpArray::default();
+    code.cv_names = names.iter().map(|n| ZStr::from(*n)).collect();
+    Rc::new(code)
 }
 
 #[test]
