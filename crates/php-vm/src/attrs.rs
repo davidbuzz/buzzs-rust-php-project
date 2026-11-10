@@ -217,14 +217,21 @@ impl Vm {
         let hit = {
             let mut f = self.const_deprecation_filter.borrow_mut();
             if f.0 != total {
-                let mut hashes: Vec<u64> = self
-                    .deprecated_constants
-                    .keys()
-                    .chain(self.const_attributes.keys())
-                    .map(ZStr::hash_value)
-                    .collect();
-                hashes.sort_unstable();
-                *f = (total, hashes);
+                // php-src keeps the deprecation flag in the constant
+                // itself (`ZEND_ACC_DEPRECATED`), so this index is not
+                // request memory: building it on the first fetch must not
+                // move `memory_get_usage()` (Symfony's
+                // NativeSessionStorageTest, the first `STDERR` fetch).
+                php_memlimit::persistent(|| {
+                    let mut hashes: Vec<u64> = self
+                        .deprecated_constants
+                        .keys()
+                        .chain(self.const_attributes.keys())
+                        .map(ZStr::hash_value)
+                        .collect();
+                    hashes.sort_unstable();
+                    *f = (total, hashes);
+                });
             }
             f.1.binary_search(&h).is_ok()
         };

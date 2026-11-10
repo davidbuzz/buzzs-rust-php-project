@@ -723,6 +723,19 @@ impl FrameStack {
         }
     }
 
+    /// Frees the released frames kept in `vec[live..]` for reuse.
+    ///
+    /// php-src takes call frames from the VM stack, whose first page is
+    /// allocated at startup, so calls never show in `memory_get_usage()`;
+    /// the pooled frames' buffers do, and the pool is otherwise freed by
+    /// whichever builtin call comes next ([`FrameStack::truncate`]).
+    /// Freeing it before reading the usage makes every reading see an
+    /// empty pool, so that it does not depend on the calls made since the
+    /// last builtin (Symfony's NativeSessionStorageTest).
+    pub fn drop_pool(&mut self) {
+        self.vec.truncate(self.live);
+    }
+
     pub fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, Frame>
     where
         R: std::ops::RangeBounds<usize>,
@@ -2046,6 +2059,26 @@ mod tests {
         assert!(matches!(&v, Some(Value::Str(s)) if s.as_bytes() == b"abc"));
         // The slot still holds its value.
         assert!(f.peek_cv(0, |s| matches!(s, Some(Value::Str(_)))));
+    }
+
+    #[test]
+    fn drop_pool_frees_released_frames_and_keeps_live_ones() {
+        let empty = Rc::new(OpArray::default());
+        let mut stack = super::FrameStack::new();
+        stack.push(frame_with(&["a"]));
+        stack.push(frame_with(&["b"]));
+        stack.push(frame_with(&["c"]));
+        stack.release_top(&empty);
+        stack.release_top(&empty);
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.vec.len(), 3);
+        stack.drop_pool();
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.vec.len(), 1);
+        assert_eq!(stack.last().map(|f| f.code.cv_names.len()), Some(1));
+        // Nothing pooled: nothing to free.
+        stack.drop_pool();
+        assert_eq!(stack.vec.len(), 1);
     }
 
     #[test]
