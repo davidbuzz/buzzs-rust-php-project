@@ -1116,30 +1116,42 @@ impl Vm {
                 // path does not apply has changed nothing and breaks to the
                 // big match, which runs the generic op it replaced.
                 'slow: {
-                    // The frame-local hot ops (`exec/hot.rs`) run in their
-                    // own loop, on the frame and `ip` in registers, until an
-                    // op it does not handle or whose fast path declined
-                    // (that op then runs here: a declined hot op as its
-                    // generic op, any other through this pre-match), or a
-                    // due safe point.
+                    // The frame-local hot ops (`exec/hot.rs`): one runs here
+                    // (`hot::step`, inline); when the op after it is hot as
+                    // well, they run in `hot::run_hot`'s own loop, on the
+                    // frame and `ip` in registers, until an op it does not
+                    // handle or whose fast path declined (that op then runs
+                    // here: a declined hot op as its generic op, any other
+                    // through this pre-match), or a due safe point.
                     if hot::is_hot(op) {
                         let Some(f) = self.frames.last_mut() else {
                             break 'slow;
                         };
-                        let (next, last) = hot::run_hot(f, ops, &code.literals, at);
+                        let lits: &[Value] = &code.literals;
+                        let next = hot::step(f, ops, lits, at);
+                        if next == hot::DECLINED {
+                            break 'slow;
+                        }
+                        ip = next;
+                        if Self::safe_point_due() {
+                            ip = self.safe_point(ip, op)?;
+                            continue 'ops;
+                        }
+                        if !ops.get(ip).is_some_and(hot::is_hot) {
+                            continue 'ops;
+                        }
+                        let (next, last) = hot::run_hot(f, ops, lits, ip);
                         if last != hot::NO_SAFE_POINT {
                             ip = self.safe_point(next, &ops[last])?;
                             continue 'ops;
                         }
-                        if next != at {
-                            if !hot::is_hot(&ops[next]) {
-                                ip = next;
-                                continue 'ops;
-                            }
+                        ip = next;
+                        if hot::is_hot(&ops[next]) {
                             op = &ops[next];
                             ip = next + 1;
+                            break 'slow;
                         }
-                        break 'slow;
+                        continue 'ops;
                     }
                     match op {
                         Op::Abs { src, dst, to } => {

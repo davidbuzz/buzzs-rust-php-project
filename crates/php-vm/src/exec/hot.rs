@@ -72,273 +72,292 @@ pub(super) fn is_hot(op: &Op) -> bool {
 
 /// Runs the ops of frame `f` (its op array's `ops` and `lits`, held by
 /// the caller, so that the loop does not reload them through `f.code`)
-/// from `ip` while they are hot ops whose fast
-/// path applies. Returns `(ip, NO_SAFE_POINT)` when the op at `ip` must run
-/// in `Vm::run` (not a hot op, or its fast path declined, having changed
-/// nothing), or `(ip, at)` when the safe point after the op at `at` is
-/// due, `ip` being where execution continues.
+/// from `ip` while they are hot ops whose fast path applies ([`step`]).
+/// Returns `(ip, NO_SAFE_POINT)` when the op at `ip` must run in `Vm::run`
+/// (not a hot op, or its fast path declined, having changed nothing), or
+/// `(ip, at)` when the safe point after the op at `at` is due, `ip` being
+/// where execution continues.
 ///
-/// Never inlined: its own register allocation keeps `f`, `ops` and `ip`
-/// out of `Vm::run`'s stack frame.
+/// Never inlined: its own register allocation keeps `f`, `ops`, `lits` and
+/// `ip` out of `Vm::run`'s stack frame. `Vm::run` enters it when a hot op
+/// it ran is followed by another (a loop of hot ops stays here); a lone
+/// hot op among others runs in `Vm::run` through [`step`], without the
+/// call.
 #[inline(never)]
-#[allow(clippy::too_many_lines)] // one arm per hot op, like `Vm::run`
 pub(super) fn run_hot(f: &mut Frame, ops: &[Op], lits: &[Value], mut ip: usize) -> (usize, usize) {
     loop {
         let at = ip;
-        let Some(op) = ops.get(at) else {
+        ip = step(f, ops, lits, at);
+        if ip == DECLINED {
             return (at, NO_SAFE_POINT);
-        };
-        ip = at + 1;
-        match *op {
-            Op::Nop => {}
-            Op::Jmp(t) => ip = t as usize,
-            Op::JmpZ(a, t) => match take_bool(f, a) {
-                Some(false) => ip = t as usize,
-                Some(true) => {}
-                None => return (at, NO_SAFE_POINT),
-            },
-            Op::JmpNz(a, t) => match take_bool(f, a) {
-                Some(true) => ip = t as usize,
-                Some(false) => {}
-                None => return (at, NO_SAFE_POINT),
-            },
-            // `&&` / `||` (`ZEND_JMPZ_EX`, `ZEND_JMPNZ_EX`): the jump
-            // leaves the boolean in `dst`.
-            Op::JmpZEx { a, dst, target } => match take_bool(f, a) {
-                Some(false) => {
-                    set_tmp_in(f, dst, Value::Bool(false));
-                    ip = target as usize;
-                }
-                Some(true) => {}
-                None => return (at, NO_SAFE_POINT),
-            },
-            Op::JmpNzEx { a, dst, target } => match take_bool(f, a) {
-                Some(true) => {
-                    set_tmp_in(f, dst, Value::Bool(true));
-                    ip = target as usize;
-                }
-                Some(false) => {}
-                None => return (at, NO_SAFE_POINT),
-            },
-            // `!a` and `(bool) a` (`ZEND_BOOL_NOT`, `ZEND_BOOL`) of a
-            // value whose truth needs no conversion.
-            Op::Unary {
-                op: un @ (UnKind::Not | UnKind::Bool),
-                a,
-                dst,
-            } => {
-                let Some(b) = operand_truth(f, a) else {
-                    return (at, NO_SAFE_POINT);
-                };
-                set_tmp_in(f, dst, Value::Bool(b != (un == UnKind::Not)));
-            }
-            Op::AssignCv { cv, val, dst } => {
-                if !assign_cv_in(f, cv, val, dst) {
-                    return (at, NO_SAFE_POINT);
-                }
-            }
-            Op::Move { src, dst } => {
-                if !move_in(f, src, dst) {
-                    return (at, NO_SAFE_POINT);
-                }
-            }
-            Op::Coalesce { a, dst, target } => match coalesce_in(f, a, dst) {
-                Some(true) => ip = target as usize,
-                Some(false) => {}
-                None => return (at, NO_SAFE_POINT),
-            },
-            Op::JmpSet { a, dst, target } => match jmp_set_in(f, a, dst) {
-                Some(true) => ip = target as usize,
-                Some(false) => {}
-                None => return (at, NO_SAFE_POINT),
-            },
-            Op::JmpNull { a, dst, target } => match jmp_null_in(f, a, dst) {
-                Some(true) => ip = target as usize,
-                Some(false) => {}
-                None => return (at, NO_SAFE_POINT),
-            },
-            // Smart branch (`ZEND_IS_SMALLER_LONG_SPEC` +
-            // `ZEND_VM_SMART_BRANCH`): jumps, or skips the jump op after
-            // it.
-            Op::CmpJmp {
-                op: kind,
-                a,
-                b,
-                target,
-                jmp_if,
-                mask,
-                ..
-            } => {
-                let jump = match cmp_num(f, lits, a, b, mask) {
-                    Some(j) => j,
-                    None => match equality(f, kind, a, b) {
-                        Some(r) => r == jmp_if,
-                        None => return (at, NO_SAFE_POINT),
-                    },
-                };
-                if jump {
-                    ip = target as usize;
-                } else {
-                    ip += 1;
-                }
-            }
-            Op::Bin {
-                op: kind,
-                a,
-                b,
-                dst,
-            } => {
-                if !bin_tmp(f, lits, kind, a, b, dst) {
-                    let Some(r) = equality(f, kind, a, b) else {
-                        return (at, NO_SAFE_POINT);
-                    };
-                    let Some(slot) = f.tmps.get_mut(dst as usize) else {
-                        return (at, NO_SAFE_POINT);
-                    };
-                    put_tmp(slot, Value::Bool(r));
-                }
-            }
-            // Stored into the variable: the `AssignCv` after the op is
-            // done; otherwise it runs on `dst`.
-            Op::BinAssignCv {
-                op: kind,
-                a,
-                b,
-                dst,
-                cv,
-            } => match bin_assign_cv(f, lits, kind, a, b, cv, dst) {
-                Some(true) => ip += 1,
-                Some(false) => {}
-                None => {
-                    let Some(r) = equality(f, kind, a, b) else {
-                        return (at, NO_SAFE_POINT);
-                    };
-                    if store_plain(f, cv, Value::Bool(r)) {
-                        ip += 1;
-                    } else if let Some(slot) = f.tmps.get_mut(dst as usize) {
-                        put_tmp(slot, Value::Bool(r));
-                    }
-                }
-            },
-            Op::IncDecCv { cv, kind, dst, .. } => {
-                if !incdec_cv(f, cv, kind, dst) {
-                    return (at, NO_SAFE_POINT);
-                }
-            }
-            // A loop's step and its condition: after the `++`/`--`, the
-            // `CmpJmp` at `ip` on plain numbers jumps or skips itself and
-            // its jump op; otherwise it runs as the next op.
-            Op::IncDecCvCmpJmp { cv, kind, .. } => {
-                if !incdec_cv(f, cv, kind, None) {
-                    return (at, NO_SAFE_POINT);
-                }
-                if let Some(&Op::CmpJmp {
-                    a, b, target, mask, ..
-                }) = ops.get(ip)
-                {
-                    match cmp_num(f, lits, a, b, mask) {
-                        Some(true) => ip = target as usize,
-                        Some(false) => ip += 2,
-                        None => {}
-                    }
-                }
-            }
-            Op::BinAssignCvCmpJmp {
-                op: kind,
-                a,
-                b,
-                dst,
-                cv,
-            } => match bin_assign_cv(f, lits, kind, a, b, cv, dst) {
-                Some(true) => {
-                    if let Some(&Op::CmpJmp {
-                        a: ca,
-                        b: cb,
-                        target,
-                        mask,
-                        ..
-                    }) = ops.get(ip + 1)
-                    {
-                        match cmp_num(f, lits, ca, cb, mask) {
-                            Some(true) => ip = target as usize,
-                            Some(false) => ip += 3,
-                            None => ip += 1,
-                        }
-                    } else {
-                        ip += 1;
-                    }
-                }
-                Some(false) => {}
-                None => return (at, NO_SAFE_POINT),
-            },
-            Op::AssignOpCvCmpJmp {
-                cv, op: kind, val, ..
-            } => {
-                if !assign_op_cv(f, lits, cv, kind, val, None) {
-                    return (at, NO_SAFE_POINT);
-                }
-                if let Some(&Op::CmpJmp {
-                    a, b, target, mask, ..
-                }) = ops.get(ip)
-                {
-                    match cmp_num(f, lits, a, b, mask) {
-                        Some(true) => ip = target as usize,
-                        Some(false) => ip += 2,
-                        None => {}
-                    }
-                }
-            }
-            Op::BinAssignCvJmp {
-                op: kind,
-                a,
-                b,
-                dst,
-                cv,
-                target,
-                jmp_if,
-            } => match bin_assign_cv(f, lits, kind, a, b, cv, dst) {
-                Some(true) => match f.peek_cv(cv, slot_truth) {
-                    Some(cond) if cond == jmp_if => ip = target as usize,
-                    Some(_) => ip += 2,
-                    None => ip += 1,
-                },
-                Some(false) => {}
-                None => return (at, NO_SAFE_POINT),
-            },
-            Op::AssignOpCvJmp {
-                cv,
-                op: kind,
-                val,
-                target,
-                jmp_if,
-                ..
-            } => {
-                if !assign_op_cv(f, lits, cv, kind, val, None) {
-                    return (at, NO_SAFE_POINT);
-                }
-                match f.peek_cv(cv, slot_truth) {
-                    Some(cond) if cond == jmp_if => ip = target as usize,
-                    Some(_) => ip += 1,
-                    None => {}
-                }
-            }
-            Op::AssignOpCv {
-                cv,
-                op: kind,
-                val,
-                dst,
-                ..
-            } => {
-                if !assign_op_cv(f, lits, cv, kind, val, dst) {
-                    return (at, NO_SAFE_POINT);
-                }
-            }
-            _ => return (at, NO_SAFE_POINT),
         }
         if crate::interrupt::safe_point_due() {
             return (ip, at);
         }
     }
+}
+
+/// [`step`]'s result when the op at `at` is not a hot op or its fast path
+/// declined, having changed nothing.
+pub(super) const DECLINED: usize = usize::MAX;
+
+/// Runs the hot op at `at` of frame `f` when its fast path applies, and
+/// returns the `ip` to continue at; [`DECLINED`] otherwise. The safe point
+/// after the op is the caller's.
+#[inline(always)]
+#[allow(clippy::inline_always, clippy::too_many_lines)] // one arm per hot op, like `Vm::run`
+pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
+    let Some(op) = ops.get(at) else {
+        return DECLINED;
+    };
+    let mut ip = at + 1;
+    match *op {
+        Op::Nop => {}
+        Op::Jmp(t) => ip = t as usize,
+        Op::JmpZ(a, t) => match take_bool(f, a) {
+            Some(false) => ip = t as usize,
+            Some(true) => {}
+            None => return DECLINED,
+        },
+        Op::JmpNz(a, t) => match take_bool(f, a) {
+            Some(true) => ip = t as usize,
+            Some(false) => {}
+            None => return DECLINED,
+        },
+        // `&&` / `||` (`ZEND_JMPZ_EX`, `ZEND_JMPNZ_EX`): the jump
+        // leaves the boolean in `dst`.
+        Op::JmpZEx { a, dst, target } => match take_bool(f, a) {
+            Some(false) => {
+                set_tmp_in(f, dst, Value::Bool(false));
+                ip = target as usize;
+            }
+            Some(true) => {}
+            None => return DECLINED,
+        },
+        Op::JmpNzEx { a, dst, target } => match take_bool(f, a) {
+            Some(true) => {
+                set_tmp_in(f, dst, Value::Bool(true));
+                ip = target as usize;
+            }
+            Some(false) => {}
+            None => return DECLINED,
+        },
+        // `!a` and `(bool) a` (`ZEND_BOOL_NOT`, `ZEND_BOOL`) of a
+        // value whose truth needs no conversion.
+        Op::Unary {
+            op: un @ (UnKind::Not | UnKind::Bool),
+            a,
+            dst,
+        } => {
+            let Some(b) = operand_truth(f, a) else {
+                return DECLINED;
+            };
+            set_tmp_in(f, dst, Value::Bool(b != (un == UnKind::Not)));
+        }
+        Op::AssignCv { cv, val, dst } => {
+            if !assign_cv_in(f, cv, val, dst) {
+                return DECLINED;
+            }
+        }
+        Op::Move { src, dst } => {
+            if !move_in(f, src, dst) {
+                return DECLINED;
+            }
+        }
+        Op::Coalesce { a, dst, target } => match coalesce_in(f, a, dst) {
+            Some(true) => ip = target as usize,
+            Some(false) => {}
+            None => return DECLINED,
+        },
+        Op::JmpSet { a, dst, target } => match jmp_set_in(f, a, dst) {
+            Some(true) => ip = target as usize,
+            Some(false) => {}
+            None => return DECLINED,
+        },
+        Op::JmpNull { a, dst, target } => match jmp_null_in(f, a, dst) {
+            Some(true) => ip = target as usize,
+            Some(false) => {}
+            None => return DECLINED,
+        },
+        // Smart branch (`ZEND_IS_SMALLER_LONG_SPEC` +
+        // `ZEND_VM_SMART_BRANCH`): jumps, or skips the jump op after
+        // it.
+        Op::CmpJmp {
+            op: kind,
+            a,
+            b,
+            target,
+            jmp_if,
+            mask,
+            ..
+        } => {
+            let jump = match cmp_num(f, lits, a, b, mask) {
+                Some(j) => j,
+                None => match equality(f, kind, a, b) {
+                    Some(r) => r == jmp_if,
+                    None => return DECLINED,
+                },
+            };
+            if jump {
+                ip = target as usize;
+            } else {
+                ip += 1;
+            }
+        }
+        Op::Bin {
+            op: kind,
+            a,
+            b,
+            dst,
+        } => {
+            if !bin_tmp(f, lits, kind, a, b, dst) {
+                let Some(r) = equality(f, kind, a, b) else {
+                    return DECLINED;
+                };
+                let Some(slot) = f.tmps.get_mut(dst as usize) else {
+                    return DECLINED;
+                };
+                put_tmp(slot, Value::Bool(r));
+            }
+        }
+        // Stored into the variable: the `AssignCv` after the op is
+        // done; otherwise it runs on `dst`.
+        Op::BinAssignCv {
+            op: kind,
+            a,
+            b,
+            dst,
+            cv,
+        } => match bin_assign_cv(f, lits, kind, a, b, cv, dst) {
+            Some(true) => ip += 1,
+            Some(false) => {}
+            None => {
+                let Some(r) = equality(f, kind, a, b) else {
+                    return DECLINED;
+                };
+                if store_plain(f, cv, Value::Bool(r)) {
+                    ip += 1;
+                } else if let Some(slot) = f.tmps.get_mut(dst as usize) {
+                    put_tmp(slot, Value::Bool(r));
+                }
+            }
+        },
+        Op::IncDecCv { cv, kind, dst, .. } => {
+            if !incdec_cv(f, cv, kind, dst) {
+                return DECLINED;
+            }
+        }
+        // A loop's step and its condition: after the `++`/`--`, the
+        // `CmpJmp` at `ip` on plain numbers jumps or skips itself and
+        // its jump op; otherwise it runs as the next op.
+        Op::IncDecCvCmpJmp { cv, kind, .. } => {
+            if !incdec_cv(f, cv, kind, None) {
+                return DECLINED;
+            }
+            if let Some(&Op::CmpJmp {
+                a, b, target, mask, ..
+            }) = ops.get(ip)
+            {
+                match cmp_num(f, lits, a, b, mask) {
+                    Some(true) => ip = target as usize,
+                    Some(false) => ip += 2,
+                    None => {}
+                }
+            }
+        }
+        Op::BinAssignCvCmpJmp {
+            op: kind,
+            a,
+            b,
+            dst,
+            cv,
+        } => match bin_assign_cv(f, lits, kind, a, b, cv, dst) {
+            Some(true) => {
+                if let Some(&Op::CmpJmp {
+                    a: ca,
+                    b: cb,
+                    target,
+                    mask,
+                    ..
+                }) = ops.get(ip + 1)
+                {
+                    match cmp_num(f, lits, ca, cb, mask) {
+                        Some(true) => ip = target as usize,
+                        Some(false) => ip += 3,
+                        None => ip += 1,
+                    }
+                } else {
+                    ip += 1;
+                }
+            }
+            Some(false) => {}
+            None => return DECLINED,
+        },
+        Op::AssignOpCvCmpJmp {
+            cv, op: kind, val, ..
+        } => {
+            if !assign_op_cv(f, lits, cv, kind, val, None) {
+                return DECLINED;
+            }
+            if let Some(&Op::CmpJmp {
+                a, b, target, mask, ..
+            }) = ops.get(ip)
+            {
+                match cmp_num(f, lits, a, b, mask) {
+                    Some(true) => ip = target as usize,
+                    Some(false) => ip += 2,
+                    None => {}
+                }
+            }
+        }
+        Op::BinAssignCvJmp {
+            op: kind,
+            a,
+            b,
+            dst,
+            cv,
+            target,
+            jmp_if,
+        } => match bin_assign_cv(f, lits, kind, a, b, cv, dst) {
+            Some(true) => match f.peek_cv(cv, slot_truth) {
+                Some(cond) if cond == jmp_if => ip = target as usize,
+                Some(_) => ip += 2,
+                None => ip += 1,
+            },
+            Some(false) => {}
+            None => return DECLINED,
+        },
+        Op::AssignOpCvJmp {
+            cv,
+            op: kind,
+            val,
+            target,
+            jmp_if,
+            ..
+        } => {
+            if !assign_op_cv(f, lits, cv, kind, val, None) {
+                return DECLINED;
+            }
+            match f.peek_cv(cv, slot_truth) {
+                Some(cond) if cond == jmp_if => ip = target as usize,
+                Some(_) => ip += 1,
+                None => {}
+            }
+        }
+        Op::AssignOpCv {
+            cv,
+            op: kind,
+            val,
+            dst,
+            ..
+        } => {
+            if !assign_op_cv(f, lits, cv, kind, val, dst) {
+                return DECLINED;
+            }
+        }
+        _ => return DECLINED,
+    }
+    ip
 }
 
 /// Copies compiled variable `cv`'s new value into the attached symbol
