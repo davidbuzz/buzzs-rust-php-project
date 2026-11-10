@@ -472,7 +472,7 @@ fn num_of(f: &Frame, lits: &[Value], op: Operand) -> Option<Num> {
 /// The jump decision of a smart branch on two plain numbers: the
 /// comparison's [`cmp_outcome`] bit against the op's mask.
 #[inline(always)]
-#[allow(clippy::inline_always)]
+#[allow(clippy::inline_always, clippy::many_single_char_names)]
 fn cmp_num(f: &Frame, lits: &[Value], a: Operand, b: Operand, mask: u8) -> Option<bool> {
     let x = num_of(f, lits, a)?;
     let y = num_of(f, lits, b)?;
@@ -499,7 +499,7 @@ fn equality(f: &mut Frame, op: BinKind, a: Operand, b: Operand) -> Option<bool> 
 /// `dst` (`ZEND_ADD_LONG_SPEC` & co.). `false`, nothing changed, when an
 /// operand is not a plain number or the operator has no numeric form.
 #[inline(always)]
-#[allow(clippy::inline_always)]
+#[allow(clippy::inline_always, clippy::many_single_char_names)]
 fn bin_tmp(f: &mut Frame, lits: &[Value], op: BinKind, a: Operand, b: Operand, dst: u32) -> bool {
     let Some(x) = num_of(f, lits, a) else {
         return false;
@@ -541,7 +541,7 @@ fn store_plain(f: &mut Frame, cv: u32, v: Value) -> bool {
 /// after the op (`Some(false)`). `None`, nothing changed, as for
 /// [`bin_tmp`].
 #[inline(always)]
-#[allow(clippy::inline_always)]
+#[allow(clippy::inline_always, clippy::many_single_char_names)]
 fn bin_assign_cv(
     f: &mut Frame,
     lits: &[Value],

@@ -623,7 +623,7 @@ try { noret(); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
 function nullable_noret(): ?int { if (false) { return 1; } }
 try { var_dump(nullable_noret()); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
 "#;
-    let expected = r#"42Q
+    let expected = r"42Q
 xy xy
 12345678
 aBz
@@ -643,6 +643,6 @@ float(3)
 NULL
 NS\noret(): Return value must be of type int, none returned
 NS\nullable_noret(): Return value must be of type ?int, none returned
-"#;
+";
     assert_eq!(run(source), expected);
 }

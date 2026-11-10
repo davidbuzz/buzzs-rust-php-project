@@ -615,7 +615,7 @@ mod tests {
 
     /// Pass 13 keeps an assignment whose variable is only read through an
     /// opcode it has no explicit rule for (here the argument of a call):
-    /// `$c = $a = $b; var_dump($c);` once lost `$c` (opcache jit/assign_020).
+    /// `$c = $a = $b; var_dump($c);` once lost `$c` (opcache `jit/assign_020`).
     #[test]
     fn unused_variable_pass_keeps_variables_read_by_other_opcodes() {
         let unit = compile_src(

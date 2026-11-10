@@ -690,10 +690,10 @@ impl HashData {
     /// (`zend_hash_rehash` without compaction).
     #[allow(clippy::cast_possible_truncation)]
     fn relink(&mut self, ts: u32) {
-        if self.index.len() != index_len(ts) {
-            self.index = new_index(ts);
-        } else {
+        if self.index.len() == index_len(ts) {
             self.index.fill(INVALID);
+        } else {
+            self.index = new_index(ts);
         }
         let mask = index_len(ts) - 1;
         for (i, b) in self.buckets.iter_mut().enumerate() {

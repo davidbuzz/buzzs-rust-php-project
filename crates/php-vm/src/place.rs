@@ -3713,6 +3713,7 @@ impl Vm {
     }
 
     /// `++place` etc.
+    #[allow(clippy::too_many_lines)]
     fn place_incdec_impl(&mut self, pid: PlaceId, kind: IncDecKind) -> VmResult<Value> {
         // Fast path: `$i++` on a compiled variable holding an int (no
         // overflow), before resolving the place generically.

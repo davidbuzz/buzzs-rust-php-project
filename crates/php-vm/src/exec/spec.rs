@@ -101,7 +101,7 @@ fn string_offset_char(s: &ZStr, offset: i64) -> Option<Value> {
 /// destructor that may run, so it does not outlive its statement in the
 /// slot (`$weak->get() !== null`, `new D !== null`).
 #[inline]
-pub(super) fn operand_simple<'a>(f: &'a Frame, op: Operand) -> Option<&'a Value> {
+pub(super) fn operand_simple(f: &Frame, op: Operand) -> Option<&Value> {
     let v = match op {
         Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
         Operand::Lit(i) => f.code.literals.get(i as usize)?,
@@ -574,6 +574,7 @@ fn isset_dim_in(f: &Frame, cv: u32, dim: Operand, empty: bool) -> Option<bool> {
 /// conversions on operands that are not both numbers. `None`, nothing
 /// changed, for the generic comparison.
 #[inline(never)]
+#[allow(clippy::many_single_char_names)]
 pub(super) fn cmp_simple_in(f: &mut Frame, op: BinKind, a: Operand, b: Operand) -> Option<bool> {
     let identity = match op {
         BinKind::Identical | BinKind::NotIdentical => true,
