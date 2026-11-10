@@ -667,19 +667,24 @@ fn owns_nothing(v: &Option<Value>) -> bool {
 fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
     let handle = d.handle;
     let flags = d.flags.get();
-    // The common free: no GC buffer entry, no side tables, no dynamic
-    // properties or native state, and only slots that own nothing. Nothing
-    // is released, so no destructor can be queued meanwhile: the handle
-    // goes straight back on the free list (`zend_objects_store_del` of a
-    // plain object). The slots are left as they are: inline ones are never
-    // dropped again (`MaybeUninit`), and a separate buffer's drop releases
-    // nothing.
-    if flags & (oflags::GC_BUFFERED | oflags::STALE_PROPS) == 0
+    // The common free: no side tables, no dynamic properties or native
+    // state, and only slots that own nothing. Nothing is released, so no
+    // destructor can be queued meanwhile: the root buffer entry goes, if
+    // any (`GC_REMOVE_FROM_BUFFER`: an object that was `$this` of a
+    // constructor or of a method called on a temporary has one), and the
+    // handle goes straight back on the free list (`zend_objects_store_del`
+    // of a plain object), as on the full path below. The slots are left as
+    // they are: inline ones are never dropped again (`MaybeUninit`), and a
+    // separate buffer's drop releases nothing.
+    if flags & oflags::STALE_PROPS == 0
         && d.unset_bits.get() & UNSET_OVERFLOW_BIT == 0
         && d.dynamic.get_mut().is_none()
         && d.internal.get_mut().is_none()
         && slots.iter().all(owns_nothing)
     {
+        if flags & oflags::GC_BUFFERED != 0 {
+            crate::gc::forget_root(cell, handle);
+        }
         // A WeakMap value released by `zend_weakrefs_notify` may queue a
         // destructor: its object is freed before this handle is reusable,
         // as on the full path below.
