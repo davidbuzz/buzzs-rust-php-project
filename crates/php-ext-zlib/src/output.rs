@@ -45,6 +45,12 @@ struct VmEnv {
 impl VmEnv {
     fn new(vm: &mut Vm, negotiate: bool) -> VmResult<Self> {
         let value = if negotiate && STATE.with(|st| st.borrow().zlib.compression_coding == 0) {
+            // `php_zlib_output_encoding()`: `zend_is_auto_global("_SERVER")`
+            // creates a JIT `$_SERVER` before it is read (at request startup,
+            // `output_handler=ob_gzhandler` under php-cgi: bug55544.phpt).
+            if vm.ini_bool("auto_globals_jit") {
+                vm.is_auto_global(b"_SERVER");
+            }
             let mut g = vm.globals.borrow_mut();
             g.find(b"_SERVER").and_then(|i| {
                 match g
