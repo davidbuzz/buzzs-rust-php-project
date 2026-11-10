@@ -1433,6 +1433,28 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         }
                     }
                 }
+                // `yield from []` delegates to nothing and gives null
+                // (sccp.c `ZEND_YIELD_FROM` of an empty array; opt/sccp_032).
+                Op::YieldFrom {
+                    src: Operand::Lit(l),
+                    dst,
+                } if matches!(op_array.literals.get(*l as usize), Some(Value::Array(a)) if a.is_empty()) =>
+                {
+                    *op = match *dst {
+                        Some(d) => {
+                            let lit = add_or_find_literal(&mut op_array.literals, Value::Null);
+                            if def_count.get(d as usize).copied() == Some(1) {
+                                lit_def[d as usize] = Some(lit);
+                            }
+                            Op::Move {
+                                src: Operand::Lit(lit),
+                                dst: d,
+                            }
+                        }
+                        None => Op::Nop,
+                    };
+                    changed = true;
+                }
                 // `"abc"[-1]`, `[1, 2][0]`: a read of a literal container
                 // that cannot warn.
                 Op::Fetch { place, mode, dst }

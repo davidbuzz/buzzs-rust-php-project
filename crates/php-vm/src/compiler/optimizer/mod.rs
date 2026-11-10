@@ -1287,6 +1287,24 @@ mod tests {
         assert_eq!(fetches(&*baz), 1, "{:?}", baz.ops);
     }
 
+    /// `yield from []` (directly or through a local holding `[]`) yields
+    /// nothing and gives null, so it goes; a non-empty one stays (opcache
+    /// `opt/sccp_032`).
+    #[test]
+    fn sccp_drops_yield_from_empty_array() {
+        let unit = compile_src(
+            "<?php function t() { $r = yield from []; $a = []; yield from $a; yield $r; $a[] = 3; yield from $a; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"t"));
+        let n = code
+            .ops
+            .iter()
+            .filter(|op| matches!(op, Op::YieldFrom { .. }))
+            .count();
+        assert_eq!(n, 1, "{:?}", code.ops);
+    }
+
     #[test]
     fn test_nop_removal() {
         let unit = compile_src("<?php $a = 1; echo $a;", DEFAULT_OPTIMIZATION_LEVEL);
