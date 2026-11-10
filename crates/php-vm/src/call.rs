@@ -2162,7 +2162,14 @@ impl Vm {
     /// A pooled frame that last ran the same function still holds its
     /// handles ([`Frame::clear_for_reuse`] keeps them): they are not
     /// replaced.
-    #[inline]
+    ///
+    /// Out of line on purpose: inlined into the dispatch loop (`Vm::run`,
+    /// its only caller), whose registers are taken by the loop's own
+    /// state, every counter and pointer here lived in a stack slot (the
+    /// per-argument loops cost ~13 and ~17 instructions an argument); a
+    /// function of its own keeps them in registers for the price of one
+    /// call.
+    #[inline(never)]
     pub(crate) fn push_simple_ucall(&mut self, dst: Option<u32>, caller_ip: usize) -> bool {
         if self.observer.enabled {
             return false;
@@ -2218,10 +2225,10 @@ impl Vm {
             if !frame.args.is_empty() {
                 frame.args.clear();
             }
-            #[allow(clippy::same_item_push)] // inline, unlike `resize`
-            for _ in 0..n {
-                frame.args.push(None);
-            }
+            // One capacity check, then plain stores (a `TrustedLen`
+            // extend), where a `push` per argument rechecked it and
+            // stored the length each time.
+            frame.args.extend((0..n).map(|_| None));
             for (slot, arg) in frame.cvs.iter_mut().zip(&mut call.inline_args[..n]) {
                 // The slot is empty: nothing to release.
                 if let Some(old) = slot.set(arg.take()) {
@@ -2317,8 +2324,10 @@ impl Vm {
     /// resume point before the release (`SAVE_OPLINE`). Returns `None`,
     /// having changed nothing, otherwise.
     ///
+    /// Out of line for the reason [`Vm::push_simple_ucall`] is.
+    ///
     /// [`FrameStack::release_top`]: crate::vm::FrameStack::release_top
-    #[inline]
+    #[inline(never)]
     pub(crate) fn return_simple(
         &mut self,
         val: Operand,
@@ -2348,14 +2357,8 @@ impl Vm {
                 return None;
             }
             let rt = uf.return_type.as_ref();
-            let accepts = |v: &Value| match rt {
-                None => true,
-                Some(rt) => {
-                    !rt.is_void()
-                        && !rt.is_never()
-                        && (rt.is_mixed() || accepts_without_coercion(rt.mask, v))
-                }
-            };
+            // `return_accepts` is inline: the closure it replaces was an
+            // out-of-line call per return.
             let v = match val {
                 Operand::Cv(cv) => {
                     let v = match frame
@@ -2366,21 +2369,21 @@ impl Vm {
                         Value::Reference(r) => r.get(),
                         v => clone_value(v),
                     };
-                    if !accepts(&v) {
+                    if !return_accepts(rt, &v) {
                         return None;
                     }
                     v
                 }
                 Operand::Tmp(t) => {
                     let slot = frame.tmps.get_mut(t as usize)?;
-                    if matches!(slot, Value::Reference(_)) || !accepts(&*slot) {
+                    if matches!(slot, Value::Reference(_)) || !return_accepts(rt, slot) {
                         return None;
                     }
                     std::mem::take(slot)
                 }
                 Operand::Lit(i) => {
                     let lit = frame.code.literals.get(i as usize)?;
-                    if matches!(lit, Value::Reference(_)) || !accepts(lit) {
+                    if matches!(lit, Value::Reference(_)) || !return_accepts(rt, lit) {
                         return None;
                     }
                     clone_value(lit)
@@ -4415,6 +4418,21 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
         }
     }
     true
+}
+
+/// Whether a value is returned as it is from a function with return type
+/// `rt` (`verify_return`'s fast path, [`Vm::return_simple`]).
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per return, in three places
+fn return_accepts(rt: Option<&crate::types::TypeDecl>, v: &Value) -> bool {
+    match rt {
+        None => true,
+        Some(rt) => {
+            !rt.is_void()
+                && !rt.is_never()
+                && (rt.is_mixed() || accepts_without_coercion(rt.mask, v))
+        }
+    }
 }
 
 /// `v.clone()` with the scalar cases inline: the derived `Clone` of
