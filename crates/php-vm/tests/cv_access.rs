@@ -125,3 +125,67 @@ $a = []; if ($a) { echo "no\n"; } else { echo "empty\n"; }
         "zero\n321\nyes\nf\nstr0\nref\n\nWarning: Undefined variable $nope in t.php on line 8\nundef\nempty\n"
     );
 }
+
+/// `f($cv)` to a by-reference parameter (`ZEND_SEND_REF`) turns the CV slot
+/// into a reference in place, without the symbol table: undefined (a
+/// reference to null, no notice), already a reference, copy-on-write shared,
+/// static, in the main script (seen through `$GLOBALS`), and builtins'
+/// by-reference parameters. Expected output from the C implementation.
+#[test]
+fn by_reference_arguments_of_compiled_variables() {
+    assert_eq!(
+        run(r#"<?php
+function f(&$a) { $a[] = 1; }
+function g() {
+    f($u); var_dump($u);
+    $v = [5]; $w = &$v; f($w); var_dump(count($v));
+    $s = "x"; $t = $s; f2($s); var_dump($s, $t);
+    static $st = []; f($st); var_dump(count($st));
+    $x = [1]; f($x); var_dump(get_defined_vars()['x']);
+    $n = null; settype($n, "array"); var_dump($n);
+}
+function f2(&$a) { $a .= "y"; }
+g(); g();
+$m = 1; f2($m); var_dump($GLOBALS['m']);
+f($fresh); var_dump($GLOBALS['fresh']);
+"#),
+        r#"array(1) {
+  [0]=>
+  int(1)
+}
+int(2)
+string(2) "xy"
+string(1) "x"
+int(1)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(1)
+}
+array(0) {
+}
+array(1) {
+  [0]=>
+  int(1)
+}
+int(2)
+string(2) "xy"
+string(1) "x"
+int(2)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(1)
+}
+array(0) {
+}
+string(2) "1y"
+array(1) {
+  [0]=>
+  int(1)
+}
+"#
+    );
+}
