@@ -275,7 +275,13 @@ fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
     } else {
         passes::number_tmps(&mut lines)
     };
-    let live = passes::live_ranges(&mut lines, tmps, &|i| needs.get(i).copied().unwrap_or(true));
+    let mut live =
+        passes::live_ranges(&mut lines, tmps, &|i| needs.get(i).copied().unwrap_or(true));
+    // Without pass 7 `zend_optimize` itself dumps "after optimizer" with
+    // no `ZEND_DUMP_LIVE_RANGES` flag (`zend_optimizer.c`), so no ranges print.
+    if level & super::PASS_7 == 0 {
+        live.clear();
+    }
     let num_args = u32::try_from(e.func.params.iter().filter(|p| !p.variadic).count()).unwrap_or(0);
     Done {
         lines,
