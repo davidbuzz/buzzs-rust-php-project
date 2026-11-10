@@ -1046,7 +1046,9 @@ impl Compiler<'_> {
         };
         // Optimizer passes run when opcache.optimization_level is nonzero
         // and no user opcode handlers are hooked.
+        let mut reduced_to_literal = false;
         if self.opts.optimization_level != 0 && self.opts.user_opcodes.is_empty() {
+            let raw_literal = optimizer::dump::returns_literal(&op_array);
             // Top-level code's CVs are the global symbol table: other
             // functions reach them through `global`/`$GLOBALS` and included
             // files share them, so no assignment there is ever dead (php-src
@@ -1063,12 +1065,18 @@ impl Compiler<'_> {
             };
             optimizer::optimize_op_array_with(&mut op_array, level, &ctx);
             refresh_static_inits(&mut op_array);
+            reduced_to_literal = !raw_literal && optimizer::dump::returns_literal(&op_array);
         }
         // Handler specialisation, last: every jump target is final. A
         // `zend_set_user_opcode_handler()` hook runs before its generic
         // opcode, so hooked code keeps the generic ops.
         if self.opts.user_opcodes.is_empty() {
             specialise::specialise(&mut op_array.ops, &op_array.places, &op_array.literals);
+        }
+        // The opcache dump inlines calls of a function only if its compiled
+        // code (not the optimized one) is a literal return.
+        if reduced_to_literal {
+            optimizer::dump::note_reduced_to_literal(&op_array);
         }
         Ok(op_array)
     }

@@ -372,3 +372,146 @@ fn guaranteed_this_is_an_unused_method_call_operand() {
         "{ops:?}"
     );
 }
+
+/// The dump of op array `name`, up to the blank line that ends it.
+fn section_named<'a>(out: &'a str, name: &str) -> &'a str {
+    let head = format!("\n{name}:\n");
+    let start = out.find(&head).map_or(out.len(), |p| p + head.len());
+    let rest = &out[start..];
+    &rest[..rest.find("\n\n").unwrap_or(rest.len())]
+}
+
+#[test]
+fn class_constants_fold_where_no_child_can_override_them() {
+    // type_inference_class_consts1.phpt: `self::` folds; `static::` only
+    // when the constant is final, but a typed one still elides the return
+    // check.
+    let out = dump(
+        "<?php\nclass T {\n    public const FOO = 42;\n    public final const BAR = 42;\n    public const int BAZ = 42;\n    public function a(): int { return self::FOO; }\n    public function b(): int { return static::FOO; }\n    public function c(): int { return static::BAR; }\n    public function d(): int { return static::BAZ; }\n}\n",
+    );
+    let a = section_named(&out, "T::a");
+    assert!(a.contains("0000 RETURN int(42)"), "{out}");
+    assert!(!a.contains("FETCH_CLASS_CONSTANT"), "{out}");
+    let b = section_named(&out, "T::b");
+    assert!(
+        b.contains("0000 T0 = FETCH_CLASS_CONSTANT (static) (exception) string(\"FOO\")\n0001 VERIFY_RETURN_TYPE T0\n"),
+        "{out}"
+    );
+    assert!(
+        section_named(&out, "T::c").contains("0000 RETURN int(42)"),
+        "{out}"
+    );
+    let d = section_named(&out, "T::d");
+    assert!(
+        d.contains(
+            "0000 T0 = FETCH_CLASS_CONSTANT (static) (exception) string(\"BAZ\")\n0001 RETURN T0"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn class_constants_of_bound_classes_fold_by_name_and_parent() {
+    // type_inference_class_consts2.phpt / 3.phpt.
+    let out = dump(
+        "<?php\nclass P {\n    public const FOO = 42;\n    private const SECRET = 1;\n}\nfinal class C extends P {\n    public function a(): int { return parent::FOO; }\n    public function b(): int { return P::FOO; }\n    public function c(): int { return P::SECRET; }\n}\n",
+    );
+    assert!(
+        section_named(&out, "C::a").contains("0000 RETURN int(42)"),
+        "{out}"
+    );
+    assert!(
+        section_named(&out, "C::b").contains("0000 RETURN int(42)"),
+        "{out}"
+    );
+    // A private constant of another class is not folded.
+    assert!(
+        section_named(&out, "C::c")
+            .contains("FETCH_CLASS_CONSTANT string(\"P\") string(\"SECRET\")"),
+        "{out}"
+    );
+}
+
+#[test]
+fn class_constants_of_classes_bound_at_run_time_are_not_inherited() {
+    // type_inference_class_consts4.phpt: the class implementing the
+    // interface is linked at run time, so `self::A` is not found; the
+    // interface itself is bound at compile time.
+    let out = dump(
+        "<?php\ninterface I {\n    public const int A = 42;\n}\nclass T implements I {\n    public function a(): int { return self::A; }\n    public function b(): int { return I::A; }\n}\n",
+    );
+    let a = section_named(&out, "T::a");
+    assert!(
+        a.contains("0000 T0 = FETCH_CLASS_CONSTANT (self) (exception) string(\"A\")\n0001 VERIFY_RETURN_TYPE T0\n"),
+        "{out}"
+    );
+    assert!(
+        section_named(&out, "T::b").contains("0000 RETURN int(42)"),
+        "{out}"
+    );
+}
+
+#[test]
+fn calls_of_functions_returning_a_literal_are_inlined() {
+    // gh11245_1.phpt: `xx()` is replaced by its literal.
+    let out = dump("<?php\nfunction xx() { return \"s\"; }\necho xx();\n");
+    let main = section_named(&out, "$_main");
+    assert!(!main.contains("DO_UCALL"), "{out}");
+    assert!(!main.contains("INIT_FCALL"), "{out}");
+    assert!(main.contains("0000 ECHO string(\"s\")\n"), "{out}");
+    // type_inference_final_class.phpt: a method of a final class; the
+    // literal reaches the return check through a TMP.
+    let out = dump(
+        "<?php\nfinal class T {\n    public function getInt(): int { return 42; }\n    public function get(): int { return $this->getInt(); }\n}\n",
+    );
+    assert!(
+        section_named(&out, "T::get")
+            .contains("0000 T0 = VERIFY_RETURN_TYPE int(42)\n0001 RETURN T0"),
+        "{out}"
+    );
+    // A method a child class may override is a prototype: not inlined.
+    let out = dump(
+        "<?php\nclass T {\n    public function getInt() { return 42; }\n    public function get() { return $this->getInt(); }\n}\n",
+    );
+    assert!(section_named(&out, "T::get").contains("DO_UCALL"), "{out}");
+    // Typed parameters (`ZEND_ACC_HAS_TYPE_HINTS`) keep the call.
+    let out = dump("<?php\nfunction f(int $a) { return 1; }\necho f(2);\n");
+    assert!(section_named(&out, "$_main").contains("DO_UCALL"), "{out}");
+    // Arguments sent to an inlined call are freed.
+    let out = dump("<?php\nfunction f($a) { return 1; }\necho f($x);\n");
+    let main = section_named(&out, "$_main");
+    assert!(main.contains("CHECK_VAR CV0($x)"), "{out}");
+    // The literal echoed in place of a temporary is a string.
+    assert!(main.contains("ECHO string(\"1\")"), "{out}");
+}
+
+#[test]
+fn functions_the_vm_optimizer_reduced_to_a_literal_are_not_inlined() {
+    // sccp_042.phpt / ct_eval_md5_sha1.phpt: php-src inlines a call only
+    // when the callee's compiled code is a literal return; SCCP's result
+    // comes too late.
+    let src =
+        "<?php\nfunction t() {\n    $a = 1;\n    $b = 2;\n    return [$a <=> $b];\n}\necho t();\n";
+    let program =
+        php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    let opts = CompileOptions {
+        filename: "t.php".into(),
+        optimization_level: level,
+        ..CompileOptions::default()
+    };
+    let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    let out = String::from_utf8(dump_unit(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        "after optimizer",
+    ))
+    .expect("utf-8");
+    assert!(section_named(&out, "$_main").contains("DO_UCALL"), "{out}");
+}
