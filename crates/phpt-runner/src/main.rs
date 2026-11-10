@@ -823,3 +823,58 @@ fn main() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn php_cgi_found_beside_php() {
+        let dir =
+            std::env::temp_dir().join(format!("phpt-runner-get-binary-{}", std::process::id()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for name in ["php8.5", "php-cgi8.5", "php"] {
+            std::fs::write(bin.join(name), "").unwrap();
+        }
+        let canon = |p: PathBuf| p.canonicalize().unwrap();
+        assert_eq!(
+            get_binary(&bin.join("php8.5"), "php-cgi", "sapi/cgi/php-cgi"),
+            Some(canon(bin.join("php-cgi8.5")))
+        );
+        // `php` has no sibling `php-cgi` yet.
+        assert_eq!(
+            get_binary(&bin.join("php"), "php-cgi", "sapi/cgi/php-cgi"),
+            None
+        );
+        // A php-src build tree wins: <dir>/../../sapi/cgi/php-cgi.
+        let tree = dir.join("sapi/cli");
+        std::fs::create_dir_all(dir.join("sapi/cgi")).unwrap();
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(dir.join("sapi/cgi/php-cgi"), "").unwrap();
+        assert_eq!(
+            get_binary(&tree.join("php"), "php-cgi", "sapi/cgi/php-cgi"),
+            Some(canon(dir.join("sapi/cgi/php-cgi")))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cgi_executable_exported() {
+        let env = base_env(Path::new("/x/php"), Some(Path::new("/x/php-cgi")), false);
+        assert_eq!(
+            env[&OsString::from("TEST_PHP_CGI_EXECUTABLE")],
+            "/x/php-cgi"
+        );
+        assert_eq!(
+            env[&OsString::from("TEST_PHP_CGI_EXECUTABLE_ESCAPED")],
+            "'/x/php-cgi'"
+        );
+        let env = base_env(Path::new("/x/php"), None, false);
+        assert_eq!(env[&OsString::from("TEST_PHP_CGI_EXECUTABLE")], "");
+        assert_eq!(
+            env[&OsString::from("TEST_PHP_CGI_EXECUTABLE_ESCAPED")],
+            "''"
+        );
+    }
+}
