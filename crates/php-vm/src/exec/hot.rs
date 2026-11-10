@@ -39,12 +39,12 @@
 
 use super::spec::{
     self, assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in,
-    cmp_simple_in, concat_cv_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dims_cv_in,
-    incdec_dim_cv_in, is_plain_slot, isset_dim_cv_in, num_outcome, plain_truth, put_tmp,
-    slot_truth,
+    cast_string_in, cmp_simple_in, concat_cv_in, concat_in, fe_fetch_array_in, fetch_dim_cv_in,
+    fetch_dims_cv_in, incdec_dim_cv_in, is_plain_slot, isset_dim_cv_in, num_outcome, plain_truth,
+    put_tmp, rope_in, slot_truth,
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
-use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Op, Operand, UnKind};
+use crate::opcode::{cmp_outcome, BinKind, CastKind, IncDecKind, Op, Operand, UnKind};
 use crate::vm::{CvSlot, Frame};
 use php_runtime::{BinaryOp, Value};
 
@@ -114,6 +114,11 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::AssignOpDimsCv { .. }
             | Op::IncDecDimCv { .. }
             | Op::ConcatCv { .. }
+            | Op::Rope { .. }
+            | Op::Cast {
+                kind: CastKind::String,
+                ..
+            }
             | Op::FeFetch { .. }
     )
 }
@@ -259,6 +264,17 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
             dst,
         } => {
             if !bin_tmp(f, lits, kind, a, b, dst) {
+                // `ZEND_CONCAT` of strings and integers.
+                if kind == BinKind::Arith(BinaryOp::Concat) {
+                    if f.tmps.len() <= dst as usize {
+                        return DECLINED;
+                    }
+                    let Some(s) = concat_in(f, lits, a, b) else {
+                        return DECLINED;
+                    };
+                    set_tmp_in(f, dst, Value::Str(s));
+                    return ip;
+                }
                 let Some(r) = equality(f, kind, a, b) else {
                     return DECLINED;
                 };
@@ -279,6 +295,17 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
         } => match bin_assign_cv(f, lits, kind, a, b, cv, dst) {
             Some(true) => ip += 1,
             Some(false) => {}
+            // `ZEND_CONCAT` of strings and integers: the result goes to
+            // `dst`, and the `AssignCv` after the op stores it.
+            None if kind == BinKind::Arith(BinaryOp::Concat) => {
+                if f.tmps.len() <= dst as usize {
+                    return DECLINED;
+                }
+                let Some(s) = concat_in(f, lits, a, b) else {
+                    return DECLINED;
+                };
+                set_tmp_in(f, dst, Value::Str(s));
+            }
             None => {
                 let Some(r) = equality(f, kind, a, b) else {
                     return DECLINED;
@@ -625,6 +652,30 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
             if !concat_cv_in(f, cv, val, dst) {
                 return DECLINED;
             }
+        }
+        // `(string)` of a string or an integer.
+        Op::Cast {
+            kind: CastKind::String,
+            a,
+            dst,
+        } => {
+            if f.tmps.len() <= dst as usize {
+                return DECLINED;
+            }
+            let Some(s) = cast_string_in(f, lits, a) else {
+                return DECLINED;
+            };
+            set_tmp_in(f, dst, Value::Str(s));
+        }
+        // `ZEND_ROPE_END` of strings and integers.
+        Op::Rope { ref parts, dst } => {
+            if f.tmps.len() <= dst as usize {
+                return DECLINED;
+            }
+            let Some(s) = rope_in(f, lits, parts) else {
+                return DECLINED;
+            };
+            set_tmp_in(f, dst, Value::Str(s));
         }
         // `foreach` by value over an array: the next element, or the
         // jump out of the loop at the end.
