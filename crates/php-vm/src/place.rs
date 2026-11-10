@@ -1809,7 +1809,76 @@ impl Vm {
         op: BinaryOp,
         v: Value,
     ) -> VmResult<Value> {
+        if let Some(r) = self.assign_op_cv_scalar(pid, op, &v) {
+            return r;
+        }
         self.with_cv_symtab(pid, |vm| vm.place_assign_op_impl(pid, op, v, None))
+    }
+
+    /// `$cv op= v` (`ZEND_ASSIGN_OP` on a compiled variable) without the
+    /// symbol table and the place walk, when nothing but its result can
+    /// come of it: the variable, of a frame whose symbol table is not
+    /// attached, holds an int or a float, and `v` is null, a bool, an int,
+    /// a float or, for `+`, `-`, `*` and `/`, a numeric string without
+    /// trailing data, whose juggling reports nothing; `%`, the shifts and
+    /// the bitwise operators take ints, bools and null only (a fractional
+    /// float's implicit conversion to int is deprecated), and `**` is left
+    /// out (`0 ** -1` is deprecated). The operation is the generic path's
+    /// (`ops::binary_op`, then the result in place of the old number,
+    /// which needs no release): division or modulo by zero and a negative
+    /// shift throw with the variable unchanged. `None`, having changed
+    /// nothing, for every other case.
+    fn assign_op_cv_scalar(
+        &mut self,
+        pid: PlaceId,
+        op: BinaryOp,
+        v: &Value,
+    ) -> Option<VmResult<Value>> {
+        use BinaryOp::{Add, BitAnd, BitOr, BitXor, Div, Mod, Mul, ShiftLeft, ShiftRight, Sub};
+        let f = self.frames.last()?;
+        if f.symtab_attached {
+            return None;
+        }
+        let p = f.code.places.get(pid as usize)?;
+        let (PlaceBase::Cv(cv), []) = (&p.base, p.segs.as_slice()) else {
+            return None;
+        };
+        let cv = *cv;
+        let cur = match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
+            n @ (Value::Int(_) | Value::Float(_)) => n.clone(),
+            _ => return None,
+        };
+        let silent = match (op, v) {
+            (
+                Add | Sub | Mul | Div,
+                Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_),
+            ) => true,
+            (Add | Sub | Mul | Div, Value::Str(s)) => {
+                php_runtime::numeric::is_numeric(s.as_bytes())
+            }
+            (
+                Mod | ShiftLeft | ShiftRight | BitOr | BitAnd | BitXor,
+                Value::Null | Value::Bool(_) | Value::Int(_),
+            ) => matches!(cur, Value::Int(_)),
+            _ => false,
+        };
+        if !silent {
+            return None;
+        }
+        let nv = match ops::binary_op(op, &cur, v, self) {
+            Ok(nv) => nv,
+            Err(e) => return Some(Err(self.rt_throw(e))),
+        };
+        if let Some(slot) = self
+            .frames
+            .last_mut()
+            .and_then(|f| f.cvs.get_mut(cv as usize))
+            .map(crate::vm::CvSlot::as_mut)
+        {
+            // The old value is an int or a float: nothing to release.
+            *slot = Some(nv.clone());
+        }
+        Some(Ok(nv))
     }
 
     /// `place op= $cv` with `$cv` undefined and `place` ending in a

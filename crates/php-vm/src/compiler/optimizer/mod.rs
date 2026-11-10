@@ -396,6 +396,18 @@ pub(crate) fn for_each_operand_mut(op: &mut Op, mut f: impl FnMut(&mut Operand))
         Op::ConstDimCheck { obj } => f(obj),
         // Specialised ops
         Op::Abs { src, .. } => f(src),
+        // Formed after the optimizer (`specialise::fuse_frameless_calls`):
+        // the `Send` operands and their in-place copies.
+        Op::FramelessICall(fc) => {
+            let fc = &mut **fc;
+            let n = usize::from(fc.argc);
+            for (src, val) in fc.args.iter_mut().zip(fc.vals.iter_mut()).take(n) {
+                if let ArgSrc::Val(op) | ArgSrc::CallResult(op) = src {
+                    f(op);
+                }
+                f(val);
+            }
+        }
         Op::CmpJmp { a, b, .. }
         | Op::BinAssignCv { a, b, .. }
         | Op::BinAssignCvCmpJmp { a, b, .. }

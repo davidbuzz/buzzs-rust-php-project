@@ -219,6 +219,25 @@ pub enum ArgSrc {
     TempPlace(PlaceId),
 }
 
+/// The operands of [`Op::FramelessICall`]: the call's `InitFCall`
+/// (`name`, `display`; no namespace fallback), its arguments and its
+/// `DoCall` result.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FramelessCall {
+    /// The lower-case function name literal (the run-time cache key).
+    pub name: u32,
+    /// The display name literal.
+    pub display: u32,
+    /// The arguments' `Send` sources (`args[..argc]`).
+    pub args: [ArgSrc; 3],
+    /// The arguments as read by the in-place call: `Lit` or `Cv`.
+    pub vals: [Operand; 3],
+    /// The number of arguments (1..=3).
+    pub argc: u8,
+    /// The call's result temporary.
+    pub dst: Option<u32>,
+}
+
 /// The kind of a `foreach` loop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ForeachKind {
@@ -1054,6 +1073,14 @@ pub enum Op {
         dst: Option<u32>,
         to: Option<u32>,
     },
+    /// `InitFCall` of a builtin with a frameless class, its 1..=3
+    /// positional `Send`s of literals and variables and its `DoCall`, as
+    /// one op (php-src's `ZEND_FRAMELESS_ICALL_n`,
+    /// `zend_compile_frameless_icall`); the ops it replaced follow as
+    /// `Nop`s. The call runs in place when the arguments have the shapes
+    /// the handler takes without diagnostics; otherwise it runs as the ops
+    /// it replaced, one after the other.
+    FramelessICall(Box<FramelessCall>),
 
     // Property ops (`ZEND_FETCH_OBJ_R` & co. with a `CACHE_SLOT`): `place`
     // is `$cv->name` or `$this->name` with a literal name (the `...Dim`

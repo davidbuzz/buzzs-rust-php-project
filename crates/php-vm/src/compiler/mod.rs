@@ -1072,6 +1072,7 @@ impl Compiler<'_> {
         // opcode, so hooked code keeps the generic ops.
         if self.opts.user_opcodes.is_empty() {
             specialise::specialise(&mut op_array.ops, &op_array.places, &op_array.literals);
+            specialise::fuse_frameless_calls(&mut op_array);
         }
         // The opcache dump inlines calls of a function only if its compiled
         // code (not the optimized one) is a literal return.

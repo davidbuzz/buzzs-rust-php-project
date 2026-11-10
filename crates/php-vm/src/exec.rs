@@ -1397,6 +1397,17 @@ impl Vm {
                             }
                             None => break 'slow,
                         },
+                        // `ZEND_FRAMELESS_ICALL_n` in place
+                        // (`Vm::frameless_icall_op`), past the `Nop`s of the
+                        // call ops it replaced. Declined, the generic arm
+                        // below runs those ops.
+                        Op::FramelessICall(fc) => match self.frameless_icall_op(fc, ip) {
+                            Some(r) => {
+                                r?;
+                                ip = at + usize::from(fc.argc) + 2;
+                            }
+                            None => break 'slow,
+                        },
                         // A call site resolved before (`Vm::init_fcall_fast`).
                         Op::InitFCall { name, fallback, .. } => {
                             if !self.init_fcall_fast(*name, *fallback) {
@@ -1854,6 +1865,19 @@ impl Vm {
                         let n = self.lit_str(*name);
                         self.op_send(src, Some(n))?;
                         Flow::Next
+                    }
+                    // The call ops an `Op::FramelessICall` replaced, one
+                    // after the other (the `Nop`s after it follow).
+                    Op::FramelessICall(fc) => {
+                        self.op_init_fcall(fc.name, None, fc.display)?;
+                        for src in &fc.args[..usize::from(fc.argc).min(3)] {
+                            self.op_send(src, None)?;
+                        }
+                        if self.op_do_call(fc.dst)? {
+                            Flow::Reload
+                        } else {
+                            Flow::Next
+                        }
                     }
                     Op::SendUnpack { src } => {
                         self.op_send_unpack(*src)?;
