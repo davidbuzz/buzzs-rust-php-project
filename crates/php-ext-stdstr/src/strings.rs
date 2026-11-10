@@ -30,20 +30,20 @@ fn opt_int(a: &Args, n: usize) -> Option<i64> {
 }
 
 fn bin2hex(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::bin2hex(a.str(0).as_bytes())))
+    Ok(bytes(transform::bin2hex(a.zstr(0).as_bytes())))
 }
 
 fn hex2bin(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut n = Notices::new();
-    let r = transform::hex2bin(a.str(0).as_bytes(), &mut n);
+    let r = transform::hex2bin(a.zstr(0).as_bytes(), &mut n);
     emit(vm, n)?;
     Ok(opt_bytes(r))
 }
 
 fn strspn(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = search::strspn(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
         a.int(2),
         opt_int(a, 3),
     );
@@ -52,8 +52,8 @@ fn strspn(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn strcspn(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = search::strcspn(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
         a.int(2),
         opt_int(a, 3),
     );
@@ -63,7 +63,7 @@ fn strcspn(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn strcoll(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // LC_COLLATE is "C" unless setlocale() changed it: glibc strcoll() is
     // then strcmp(), whose result is the byte difference.
-    let r = compare::strcmp(a.str(0).as_bytes(), a.str(1).as_bytes());
+    let r = compare::strcmp(a.zstr(0).as_bytes(), a.zstr(1).as_bytes());
     Ok(Value::Int(r))
 }
 
@@ -193,9 +193,12 @@ fn implode_zstr(vm: &mut Vm, glue: &[u8], pieces: &ZArray) -> VmResult<ZStr> {
 }
 
 fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let first = a.at(0);
-    let (glue, pieces) = match a.opt(1) {
-        None => match first {
+    // Both arguments are read in place (`Z_PARAM_ARRAY_HT_OR_STR`,
+    // `Z_PARAM_ARRAY_HT_OR_NULL`): no copy of either per call.
+    let first = a.at_ref(0);
+    let second = a.opt_ref(1);
+    let (glue, pieces) = match second.as_deref() {
+        None => match &*first {
             Value::Array(p) => (ZStr::empty(), p),
             _ => {
                 let fname = a.func_name();
@@ -207,19 +210,19 @@ fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 ));
             }
         },
-        Some(Value::Array(p)) => match first {
+        Some(Value::Array(p)) => match &*first {
             Value::Array(_) => {
                 return Err(a.type_error(vm, 1, "must be of type string, array given"));
             }
-            other => (to_str(vm, &other)?, p),
+            other => (to_str(vm, other)?, p),
         },
         Some(other) => {
-            let msg = format!("must be of type ?array, {} given", crate::type_name(&other));
+            let msg = format!("must be of type ?array, {} given", crate::type_name(other));
             return Err(a.type_error(vm, 2, &msg));
         }
     };
-    let out = implode_zstr(vm, glue.as_bytes(), &pieces)?;
-    if !out.is_valid_utf8() && implode_valid_utf8(&glue, &pieces) {
+    let out = implode_zstr(vm, glue.as_bytes(), pieces)?;
+    if !out.is_valid_utf8() && implode_valid_utf8(&glue, pieces) {
         out.mark_valid_utf8();
     }
     Ok(Value::Str(out))
@@ -268,77 +271,77 @@ fn strtolower(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn str_increment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = transform::str_increment(a.str(0).as_bytes());
+    let r = transform::str_increment(a.zstr(0).as_bytes());
     Ok(bytes(check(vm, r)?))
 }
 
 fn str_decrement(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = transform::str_decrement(a.str(0).as_bytes());
+    let r = transform::str_decrement(a.zstr(0).as_bytes());
     Ok(bytes(check(vm, r)?))
 }
 
 fn strstr(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(opt_bytes(search::strstr(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
         a.bool(2),
     )))
 }
 
 fn stristr(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(opt_bytes(search::stristr(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
         a.bool(2),
     )))
 }
 
 fn strrchr(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(opt_bytes(search::strrchr(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
         a.bool(2),
     )))
 }
 
 fn strpos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = search::strpos(a.str(0).as_bytes(), a.str(1).as_bytes(), a.int(2));
+    let r = search::strpos(a.zstr(0).as_bytes(), a.zstr(1).as_bytes(), a.int(2));
     Ok(pos_result(check(vm, r)?))
 }
 
 fn stripos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = search::stripos(a.str(0).as_bytes(), a.str(1).as_bytes(), a.int(2));
+    let r = search::stripos(a.zstr(0).as_bytes(), a.zstr(1).as_bytes(), a.int(2));
     Ok(pos_result(check(vm, r)?))
 }
 
 fn strrpos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = search::strrpos(a.str(0).as_bytes(), a.str(1).as_bytes(), a.int(2));
+    let r = search::strrpos(a.zstr(0).as_bytes(), a.zstr(1).as_bytes(), a.int(2));
     Ok(pos_result(check(vm, r)?))
 }
 
 fn strripos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = search::strripos(a.str(0).as_bytes(), a.str(1).as_bytes(), a.int(2));
+    let r = search::strripos(a.zstr(0).as_bytes(), a.zstr(1).as_bytes(), a.int(2));
     Ok(pos_result(check(vm, r)?))
 }
 
 fn str_contains(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(search::str_contains(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
     )))
 }
 
 fn str_starts_with(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(search::str_starts_with(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
     )))
 }
 
 fn str_ends_with(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(search::str_ends_with(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
     )))
 }
 
@@ -491,12 +494,12 @@ fn substr_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn quotemeta(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(slashes::quotemeta(a.str(0).as_bytes())))
+    Ok(bytes(slashes::quotemeta(a.zstr(0).as_bytes())))
 }
 
 fn ord(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut n = Notices::new();
-    let r = transform::ord(a.str(0).as_bytes(), &mut n);
+    let r = transform::ord(a.zstr(0).as_bytes(), &mut n);
     emit(vm, n)?;
     Ok(Value::Int(r))
 }
@@ -509,11 +512,11 @@ fn chr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn ucfirst(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::ucfirst(a.str(0).as_bytes())))
+    Ok(bytes(transform::ucfirst(a.zstr(0).as_bytes())))
 }
 
 fn lcfirst(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::lcfirst(a.str(0).as_bytes())))
+    Ok(bytes(transform::lcfirst(a.zstr(0).as_bytes())))
 }
 
 fn ucwords(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -523,7 +526,7 @@ fn ucwords(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         ZStr::from(transform::UCWORDS_DEFAULT_DELIMITERS)
     };
     let mut n = Notices::new();
-    let r = transform::ucwords(a.str(0).as_bytes(), delims.as_bytes(), &mut n);
+    let r = transform::ucwords(a.zstr(0).as_bytes(), delims.as_bytes(), &mut n);
     emit(vm, n)?;
     Ok(bytes(r))
 }
@@ -598,11 +601,11 @@ fn strtr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn strrev(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::strrev(a.str(0).as_bytes())))
+    Ok(bytes(transform::strrev(a.zstr(0).as_bytes())))
 }
 
 fn similar_text(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (sim, pct) = analysis::similar_text(a.str(0).as_bytes(), a.str(1).as_bytes());
+    let (sim, pct) = analysis::similar_text(a.zstr(0).as_bytes(), a.zstr(1).as_bytes());
     if a.has(2) {
         a.set_ref(2, Value::Float(pct));
     }
@@ -611,21 +614,21 @@ fn similar_text(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn addcslashes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut n = Notices::new();
-    let r = slashes::addcslashes(a.str(0).as_bytes(), a.str(1).as_bytes(), &mut n);
+    let r = slashes::addcslashes(a.zstr(0).as_bytes(), a.zstr(1).as_bytes(), &mut n);
     emit(vm, n)?;
     Ok(bytes(r))
 }
 
 fn addslashes(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(slashes::addslashes(a.str(0).as_bytes())))
+    Ok(bytes(slashes::addslashes(a.zstr(0).as_bytes())))
 }
 
 fn stripcslashes(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(slashes::stripcslashes(a.str(0).as_bytes())))
+    Ok(bytes(slashes::stripcslashes(a.zstr(0).as_bytes())))
 }
 
 fn stripslashes(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(slashes::stripslashes(a.str(0).as_bytes())))
+    Ok(bytes(slashes::stripslashes(a.zstr(0).as_bytes())))
 }
 
 /// `php_str_replace_in_subject()`: applies `search`/`replace` to one
@@ -809,7 +812,7 @@ fn str_ireplace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn hebrev(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::hebrev(a.str(0).as_bytes(), a.int(1))))
+    Ok(bytes(transform::hebrev(a.zstr(0).as_bytes(), a.int(1))))
 }
 
 fn nl2br(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -844,6 +847,9 @@ fn strip_tags_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     )))
 }
 
+/// Results up to this many bytes are built on the stack by `str_repeat()`.
+const STR_REPEAT_STACK: usize = 256;
+
 fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
     let times = a.int(1);
@@ -858,6 +864,20 @@ fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .len()
             .saturating_mul(usize::try_from(times).unwrap_or(usize::MAX));
         mem::check(vm, mem::zstr(total))?;
+        // A short result is written straight into one exactly sized
+        // string (`zend_string_safe_alloc` + the copies), with no
+        // intermediate vector.
+        if total <= STR_REPEAT_STACK {
+            let mut buf = [0u8; STR_REPEAT_STACK];
+            for chunk in buf[..total].chunks_exact_mut(s.len()) {
+                chunk.copy_from_slice(s.as_bytes());
+            }
+            let out = ZStr::from(&buf[..total]);
+            if s.is_valid_utf8() {
+                out.mark_valid_utf8();
+            }
+            return Ok(Value::Str(out));
+        }
     }
     let r = transform::str_repeat(s.as_bytes(), times);
     let out = ZStr::from(check(vm, r)?);
@@ -869,7 +889,7 @@ fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn count_chars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = analysis::count_chars(a.str(0).as_bytes(), a.int(1));
+    let r = analysis::count_chars(a.zstr(0).as_bytes(), a.int(1));
     Ok(match check(vm, r)? {
         CharCounts::Array(pairs) => assoc(
             pairs
@@ -882,48 +902,48 @@ fn count_chars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn strnatcmp(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(compare::strnatcmp(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
         false,
     )))
 }
 
 fn strnatcasecmp(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(compare::strnatcmp(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
         true,
     )))
 }
 
 fn strcmp(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(compare::strcmp(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
     )))
 }
 
 fn strcasecmp(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(compare::strcasecmp(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
     )))
 }
 
 fn strncmp(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = compare::strncmp(a.str(0).as_bytes(), a.str(1).as_bytes(), a.int(2));
+    let r = compare::strncmp(a.zstr(0).as_bytes(), a.zstr(1).as_bytes(), a.int(2));
     Ok(Value::Int(check(vm, r)?))
 }
 
 fn strncasecmp(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = compare::strncasecmp(a.str(0).as_bytes(), a.str(1).as_bytes(), a.int(2));
+    let r = compare::strncasecmp(a.zstr(0).as_bytes(), a.zstr(1).as_bytes(), a.int(2));
     Ok(Value::Int(check(vm, r)?))
 }
 
 fn substr_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = search::substr_count(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
         a.int(2),
         opt_int(a, 3),
     );
@@ -948,11 +968,11 @@ fn str_pad(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn str_rot13(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::str_rot13(a.str(0).as_bytes())))
+    Ok(bytes(transform::str_rot13(a.zstr(0).as_bytes())))
 }
 
 fn str_shuffle(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let mut s = a.str(0).as_bytes().to_vec();
+    let mut s = a.zstr(0).as_bytes().to_vec();
     if s.len() <= 1 {
         return Ok(bytes(s));
     }
@@ -1024,14 +1044,14 @@ fn str_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn strpbrk(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = search::strpbrk(a.str(0).as_bytes(), a.str(1).as_bytes());
+    let r = search::strpbrk(a.zstr(0).as_bytes(), a.zstr(1).as_bytes());
     Ok(opt_bytes(check(vm, r)?))
 }
 
 fn substr_compare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = compare::substr_compare(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
+        a.zstr(0).as_bytes(),
+        a.zstr(1).as_bytes(),
         a.int(2),
         opt_int(a, 3),
         a.bool(4),
@@ -1042,11 +1062,11 @@ fn substr_compare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 const UTF8_DEPRECATION: &str = "visit the php.net documentation for various alternatives";
 
 fn utf8_encode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::utf8_encode(a.str(0).as_bytes())))
+    Ok(bytes(transform::utf8_encode(a.zstr(0).as_bytes())))
 }
 
 fn utf8_decode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::utf8_decode(a.str(0).as_bytes())))
+    Ok(bytes(transform::utf8_decode(a.zstr(0).as_bytes())))
 }
 
 fn str_getcsv(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

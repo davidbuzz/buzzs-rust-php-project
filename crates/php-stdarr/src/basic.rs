@@ -321,18 +321,39 @@ pub fn search<C: RuntimeContext + ?Sized>(
     haystack: &HashTable,
     strict: bool,
 ) -> RtResult<Option<ArrayKey>> {
+    Ok(search_key(ctx, needle, haystack, strict)?.cloned())
+}
+
+/// [`search`]'s loop, returning the matching element's key in place: the
+/// elements are compared where they are (no copy of each element, no copy
+/// of the key unless the caller needs it), with `_php_search_array`'s
+/// direct type tag checks for an integer or string needle in strict mode
+/// (`fast_is_identical_function`) and for two integers in loose mode
+/// (`fast_equal_check_long`).
+fn search_key<'a, C: RuntimeContext + ?Sized>(
+    ctx: &mut C,
+    needle: &Value,
+    haystack: &'a HashTable,
+    strict: bool,
+) -> RtResult<Option<&'a ArrayKey>> {
     for (k, v) in haystack {
-        let found = if strict {
-            match (needle, &deref(v)) {
-                (Value::Int(a), Value::Int(b)) => a == b,
-                (Value::Int(_), _) => false,
-                (_, e) => ops::is_identical(needle, e)?,
+        let found = match (needle, v) {
+            (Value::Int(a), Value::Int(b)) => a == b,
+            // `ops::is_identical`/`ops::is_equal` look through references.
+            (_, Value::Reference(_)) => {
+                if strict {
+                    ops::is_identical(needle, v)?
+                } else {
+                    ops::is_equal(needle, v, ctx)?
+                }
             }
-        } else {
-            ops::is_equal(needle, v, ctx)?
+            (Value::Str(a), Value::Str(b)) if strict => a == b,
+            (Value::Int(_) | Value::Str(_), _) if strict => false,
+            _ if strict => ops::is_identical(needle, v)?,
+            _ => ops::is_equal(needle, v, ctx)?,
         };
         if found {
-            return Ok(Some(k.clone()));
+            return Ok(Some(k));
         }
     }
     Ok(None)
@@ -345,7 +366,7 @@ pub fn in_array<C: RuntimeContext + ?Sized>(
     haystack: &HashTable,
     strict: bool,
 ) -> RtResult<bool> {
-    Ok(search(ctx, needle, haystack, strict)?.is_some())
+    Ok(search_key(ctx, needle, haystack, strict)?.is_some())
 }
 
 /// `array_search(mixed $needle, array $haystack, bool $strict = false): int|string|false`.
@@ -355,7 +376,7 @@ pub fn array_search<C: RuntimeContext + ?Sized>(
     haystack: &HashTable,
     strict: bool,
 ) -> RtResult<Value> {
-    Ok(search(ctx, needle, haystack, strict)?.map_or(Value::Bool(false), |k| k.to_value()))
+    Ok(search_key(ctx, needle, haystack, strict)?.map_or(Value::Bool(false), ArrayKey::to_value))
 }
 
 /// `array_keys(array $array, mixed $filter_value = UNKNOWN, bool $strict = false): array`.
@@ -944,4 +965,76 @@ pub fn array_product<C: RuntimeContext + ?Sized>(
         1,
         mul_op::<C>,
     )
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::{array_search, in_array};
+    use php_runtime::{CollectingContext, HashTable, PhpRef, Value, ZStr};
+
+    fn s(v: &str) -> Value {
+        Value::Str(ZStr::from(v))
+    }
+
+    /// Oracle (`php -n`): `$x = 2; $a = [1, 'k' => &$x, "2", 2.0, "a"];`
+    /// then `json_encode([in_array(2,$a,true), array_search(2,$a,true),
+    /// array_search("2",$a,true), array_search(2.0,$a,true),
+    /// array_search("1",$a), array_search("a",$a,true), array_search(3,$a),
+    /// in_array("x",[0]), in_array(0,["x"]), array_search(2,[1,"2"]),
+    /// array_search("b",["a","b"],true), array_search(1,["1"],true)])` is
+    /// `[true,"k",1,2,0,3,false,false,false,1,1,false]`.
+    #[test]
+    fn search_matches_oracle_including_references() {
+        let mut ctx = CollectingContext::new();
+        let mut a = HashTable::new();
+        a.insert(0_i64, Value::Int(1));
+        a.insert("k", Value::Reference(PhpRef::new(Value::Int(2))));
+        a.insert(1_i64, s("2"));
+        a.insert(2_i64, Value::Float(2.0));
+        a.insert(3_i64, s("a"));
+        let list = |vals: Vec<Value>| {
+            let mut h = HashTable::new();
+            for v in vals {
+                let _ = h.push(v);
+            }
+            h
+        };
+        let mut search = |n: Value, h: &HashTable, strict: bool| {
+            array_search(&mut ctx, &n, h, strict).unwrap_or(Value::Null)
+        };
+        assert!(matches!(search(Value::Int(2), &a, true), Value::Str(k) if k.as_bytes() == b"k"));
+        assert!(matches!(search(s("2"), &a, true), Value::Int(1)));
+        assert!(matches!(search(Value::Float(2.0), &a, true), Value::Int(2)));
+        assert!(matches!(search(s("1"), &a, false), Value::Int(0)));
+        assert!(matches!(search(s("a"), &a, true), Value::Int(3)));
+        assert!(matches!(
+            search(Value::Int(3), &a, false),
+            Value::Bool(false)
+        ));
+        assert!(matches!(
+            search(Value::Int(2), &list(vec![Value::Int(1), s("2")]), false),
+            Value::Int(1)
+        ));
+        assert!(matches!(
+            search(s("b"), &list(vec![s("a"), s("b")]), true),
+            Value::Int(1)
+        ));
+        assert!(matches!(
+            search(Value::Int(1), &list(vec![s("1")]), true),
+            Value::Bool(false)
+        ));
+        let mut ctx = CollectingContext::new();
+        assert_eq!(
+            in_array(&mut ctx, &Value::Int(2), &a, true).ok(),
+            Some(true)
+        );
+        assert_eq!(
+            in_array(&mut ctx, &s("x"), &list(vec![Value::Int(0)]), false).ok(),
+            Some(false)
+        );
+        assert_eq!(
+            in_array(&mut ctx, &Value::Int(0), &list(vec![s("x")]), false).ok(),
+            Some(false)
+        );
+    }
 }

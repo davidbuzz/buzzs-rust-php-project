@@ -35,6 +35,24 @@ pub fn memnstr(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     }
 }
 
+/// `php_memnistr()`: offset of the first occurrence of `needle` in
+/// `haystack` under ASCII case folding, compared in place (what
+/// [`memnstr`] over both strings lowercased finds, without the copies).
+pub fn memnistr(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    match needle.len() {
+        0 => Some(0),
+        n if n > haystack.len() => None,
+        n => {
+            let first = needle[0].to_ascii_lowercase();
+            let end = haystack.len() - n;
+            (0..=end).find(|&i| {
+                haystack[i].to_ascii_lowercase() == first
+                    && haystack[i..i + n].eq_ignore_ascii_case(needle)
+            })
+        }
+    }
+}
+
 /// `zend_memnrstr()`: offset of the last occurrence of `needle` in
 /// `haystack` (an empty needle matches at the end).
 pub fn memnrstr(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -200,9 +218,7 @@ pub fn strpos(haystack: &[u8], needle: &[u8], offset: i64) -> StdResult<Option<i
 /// Backs `stripos()`: like [`strpos`] with ASCII case folding.
 pub fn stripos(haystack: &[u8], needle: &[u8], offset: i64) -> StdResult<Option<i64>> {
     let o = forward_offset("stripos", haystack.len(), offset)?;
-    let h = haystack[o..].to_ascii_lowercase();
-    let n = needle.to_ascii_lowercase();
-    Ok(memnstr(&h, &n).map(|p| len_i64(o + p)))
+    Ok(memnistr(&haystack[o..], needle).map(|p| len_i64(o + p)))
 }
 
 /// Computes the `[p, e)` window `strrpos()`/`strripos()` search in.
@@ -295,7 +311,7 @@ pub fn strstr(haystack: &[u8], needle: &[u8], before_needle: bool) -> Option<Vec
 
 /// Backs `stristr()`: like [`strstr`] with ASCII case folding.
 pub fn stristr(haystack: &[u8], needle: &[u8], before_needle: bool) -> Option<Vec<u8>> {
-    let found = memnstr(&haystack.to_ascii_lowercase(), &needle.to_ascii_lowercase());
+    let found = memnistr(haystack, needle);
     split_at_found(haystack, found, before_needle)
 }
 
@@ -487,6 +503,26 @@ impl Strtok {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memnistr_matches_lowercased_memnstr() {
+        let hays: [&[u8]; 5] = [b"", b"A", b"Hello, World", b"aAaAb", b"x\xC4\xE4Ab"];
+        let needles: [&[u8]; 7] = [b"", b"a", b"WORLD", b"o, w", b"AAB", b"\xe4", b"zz"];
+        for h in hays {
+            for n in needles {
+                assert_eq!(
+                    memnistr(h, n),
+                    memnstr(&h.to_ascii_lowercase(), &n.to_ascii_lowercase()),
+                    "{h:?} {n:?}"
+                );
+            }
+        }
+        // Oracle: stripos("Hello, World", "WORLD") is 7, stristr("aAaAb",
+        // "AAB") is "aAb", stripos("x\xC4", "\xE4") is false (ASCII only).
+        assert_eq!(stripos(b"Hello, World", b"WORLD", 0).ok(), Some(Some(7)));
+        assert_eq!(stristr(b"aAaAb", b"AAB", false), Some(b"aAb".to_vec()));
+        assert_eq!(stripos(b"x\xC4", b"\xE4", 0).ok(), Some(None));
+    }
 
     #[test]
     fn memnstr_matches_naive_search() {

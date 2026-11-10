@@ -1321,13 +1321,20 @@ impl Args {
     /// Float argument `n` (declared `float`).
     #[inline]
     pub fn float(&self, n: usize) -> f64 {
-        crate::builtins::util::f(self, n)
+        match self.values.get(n) {
+            Some(Value::Float(f)) => *f,
+            _ => crate::builtins::util::f(self, n),
+        }
     }
 
-    /// Bool argument `n` (declared `bool`).
+    /// Bool argument `n` (declared `bool`): a direct type tag check
+    /// (`Z_PARAM_BOOL`'s fast path) before the general helper.
     #[inline]
     pub fn bool(&self, n: usize) -> bool {
-        crate::builtins::util::b(self, n)
+        match self.values.get(n) {
+            Some(Value::Bool(b)) => *b,
+            _ => crate::builtins::util::b(self, n),
+        }
     }
 
     /// Array argument `n` (declared `array`).
@@ -1336,10 +1343,52 @@ impl Args {
         crate::builtins::util::arr(self, n)
     }
 
+    /// Array argument `n` (declared `array`) borrowed in place when it is
+    /// an array value (`Z_PARAM_ARRAY_HT`: the handler reads the
+    /// argument's table without taking a reference), else
+    /// [`Args::array`]'s owned array.
+    #[inline]
+    pub fn array_ref(&self, n: usize) -> std::borrow::Cow<'_, ZArray> {
+        match self.values.get(n) {
+            Some(Value::Array(x)) => std::borrow::Cow::Borrowed(x),
+            _ => std::borrow::Cow::Owned(crate::builtins::util::arr(self, n)),
+        }
+    }
+
+    /// Argument `n` borrowed in place (`Z_PARAM_ZVAL`), or a PHP
+    /// reference's current value copied out, `Null` if missing: what
+    /// [`Args::at`] returns, without copying a plain value.
+    #[inline]
+    pub fn at_ref(&self, n: usize) -> std::borrow::Cow<'_, Value> {
+        match self.values.get(n) {
+            Some(Value::Reference(r)) => std::borrow::Cow::Owned(r.get()),
+            Some(v) => std::borrow::Cow::Borrowed(v),
+            None => std::borrow::Cow::Owned(Value::Null),
+        }
+    }
+
     /// Argument `n` if it was passed and is not `null`.
     #[inline]
     pub fn opt(&self, n: usize) -> Option<Value> {
         crate::builtins::util::opt(self, n)
+    }
+
+    /// [`Args::opt`] without copying a plain value: argument `n` borrowed
+    /// in place, or a PHP reference's current value copied out; `None`
+    /// when it was not passed or is `null`.
+    #[inline]
+    pub fn opt_ref(&self, n: usize) -> Option<std::borrow::Cow<'_, Value>> {
+        if !self.has(n) {
+            return None;
+        }
+        match self.values.get(n) {
+            Some(Value::Null) | None => None,
+            Some(Value::Reference(r)) => {
+                let v = r.get();
+                (!v.is_null()).then_some(std::borrow::Cow::Owned(v))
+            }
+            Some(v) => Some(std::borrow::Cow::Borrowed(v)),
+        }
     }
 
     /// Throws `ValueError("func(): Argument #n ($name) msg")`
