@@ -668,6 +668,32 @@ impl ZStr {
         self.forget_hash();
     }
 
+    /// Appends `other` to a buffer's unique inline string when its spare
+    /// capacity holds it (a [`ZStrBuf`] sized up front: `ROPE_END`'s
+    /// `memcpy` per part), leaving the hash (never computed for a buffer)
+    /// and `IS_STR_VALID_UTF8` as they were; `false`, nothing changed,
+    /// when the string is external or short of room.
+    #[inline]
+    fn append_in_capacity(&mut self, other: &[u8]) -> bool {
+        debug_assert!(self.is_unique_mutable());
+        let (len, meta) = {
+            let h = self.header();
+            (h.len, h.meta.get())
+        };
+        if meta & EXTERNAL != 0 || other.len() > (meta & CAP_MASK).saturating_sub(len) {
+            return false;
+        }
+        // SAFETY: unique handle (a buffer's own string); the inline area
+        // has room for `len + other.len()` bytes (checked above) and
+        // `other` cannot alias it (it would need a second handle).
+        unsafe {
+            let h = self.0.as_mut();
+            ptr::copy_nonoverlapping(other.as_ptr(), h.ptr.add(len), other.len());
+            h.len = len + other.len();
+        }
+        true
+    }
+
     /// `zend_string_forget_hash_val`: after an in-place change of a unique
     /// string, the cached hash and `IS_STR_VALID_UTF8` no longer hold.
     #[inline]
@@ -1512,8 +1538,14 @@ impl ZStrBuf {
     pub fn push_str(&mut self, s: &ZStr) {
         if !s.is_empty() {
             let props = self.0.concat_props() & s.concat_props();
-            self.0.extend_unique(s.as_bytes(), false);
-            self.0.add_props(props);
+            if self.0.append_in_capacity(s.as_bytes()) {
+                if props == 0 {
+                    self.0.forget_hash();
+                }
+            } else {
+                self.0.extend_unique(s.as_bytes(), false);
+                self.0.add_props(props);
+            }
         }
     }
 
@@ -1521,10 +1553,13 @@ impl ZStrBuf {
     /// digits are ASCII, so `IS_STR_VALID_UTF8` stays as it was.
     #[inline]
     pub fn push_long(&mut self, n: i64) {
-        let props = self.0.concat_props();
         let mut buf = [0u8; LONG_MAX_LEN];
-        self.push(format_long(n, &mut buf));
-        self.0.add_props(props);
+        let digits = format_long(n, &mut buf);
+        if !self.0.append_in_capacity(digits) {
+            let props = self.0.concat_props();
+            self.push(digits);
+            self.0.add_props(props);
+        }
     }
 
     /// Bytes appended so far.
@@ -2347,6 +2382,21 @@ mod tests {
         b.push_long(1);
         assert!(!b.finish().is_valid_utf8());
         assert!(ZStrBuf::with_capacity(0).finish().is_valid_utf8());
+
+        // Pieces copied into room reserved up front (or past it) keep the
+        // same flags.
+        let mut b = ZStrBuf::with_capacity(9);
+        b.push_long(-12);
+        b.push_str(&ZStr::from("unknown"));
+        let s = b.finish();
+        assert_eq!(s, "-12unknown");
+        assert!(!s.is_valid_utf8());
+        let mut b = ZStrBuf::with_capacity(8);
+        b.push_str(&part);
+        b.push_long(1234);
+        let s = b.finish();
+        assert_eq!(s, "part1234");
+        assert!(s.is_valid_utf8());
     }
 
     /// `zend_new_interned_string`: a new interned instance carries the

@@ -42,6 +42,7 @@ use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 mod dims;
 mod props;
 mod statics;
+mod strings;
 
 pub(super) use dims::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, concat_cv_in,
@@ -51,6 +52,7 @@ pub(super) use statics::{
     assign_static_prop_in, fetch_class_const_in, fetch_const_in, fetch_static_prop_in,
     isset_static_prop_in,
 };
+pub(super) use strings::{cast_string_in, concat_in, rope_in};
 
 /// Whether replacing `v` needs no destructor, GC root buffering or
 /// reference semantics: no value, or null, bool, int, float or string
