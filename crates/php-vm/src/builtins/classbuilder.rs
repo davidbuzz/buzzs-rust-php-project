@@ -336,6 +336,11 @@ impl ClassBuilder {
                 .map(|i| i.method_order.len())
                 .sum::<usize>()
             + self.methods.len();
+        // The parent's interfaces head `interfaces`; their constants and
+        // methods are already in the parent's tables (copied first), so
+        // only the interfaces new to this class are merged
+        // (`do_implement_interface` skips inherited ones the same way).
+        let new_ifaces = &interfaces[parent.as_ref().map_or(0, |p| p.interfaces.len())..];
         let cls = Rc::new_cyclic(|weak: &Weak<Class>| {
             // Constants.
             let mut consts: Vec<Rc<ClassConst>> = Vec::with_capacity(nconsts);
@@ -355,7 +360,7 @@ impl ClassBuilder {
                     push_const(c.clone(), &mut consts, &mut const_map);
                 }
             }
-            for i in &interfaces {
+            for i in new_ifaces {
                 for c in &i.consts {
                     if let Entry::Vacant(e) = const_map.entry(c.name.clone()) {
                         e.insert(consts.len());
@@ -491,7 +496,7 @@ impl ClassBuilder {
             }
             // Inherited methods the class does not override, in the
             // parent's and then each interface's declaration order.
-            for from in parent.iter().chain(interfaces.iter()) {
+            for from in parent.iter().chain(new_ifaces.iter()) {
                 for lc in &from.method_order {
                     if let Entry::Vacant(e) = methods.entry(lc.clone()) {
                         if let Some(m) = from.methods.get(lc) {
@@ -678,5 +683,44 @@ mod tests {
             &child.methods[b"second".as_slice()],
             &base.methods[b"second".as_slice()]
         ));
+    }
+
+    #[test]
+    fn grandchild_inherits_interface_members_through_its_parent() {
+        let mut vm = vm();
+        ClassBuilder::new("IfaceG")
+            .flags(cflags::INTERFACE | cflags::ABSTRACT)
+            .constant("K", Value::Int(1))
+            .abstract_method("iface(): void", flags::PUBLIC)
+            .register(&mut vm);
+        ClassBuilder::new("IfaceH")
+            .flags(cflags::INTERFACE | cflags::ABSTRACT)
+            .constant("L", Value::Int(2))
+            .abstract_method("other(): void", flags::PUBLIC)
+            .register(&mut vm);
+        let parent = ClassBuilder::new("ParentG")
+            .implements(&vm, &["IfaceG"])
+            .constant("P", Value::Int(3))
+            .method("own(): void", flags::PUBLIC, nop)
+            .register(&mut vm);
+        let child = ClassBuilder::new("ChildG")
+            .extends(&vm, "ParentG")
+            .implements(&vm, &["IfaceH"])
+            .method("iface(): void", flags::PUBLIC, nop)
+            .register(&mut vm);
+        let names = |c: &crate::class::Class| -> Vec<Vec<u8>> {
+            c.consts
+                .iter()
+                .map(|k| k.name.as_bytes().to_vec())
+                .collect()
+        };
+        assert_eq!(names(&parent), [b"K".to_vec(), b"P".to_vec()]);
+        assert_eq!(names(&child), [b"K".to_vec(), b"P".to_vec(), b"L".to_vec()]);
+        let order: Vec<&[u8]> = child.method_order.iter().map(ZStr::as_bytes).collect();
+        let expected: [&[u8]; 3] = [b"iface", b"own", b"other"];
+        assert_eq!(order, expected);
+        let ifaces: Vec<&[u8]> = child.interfaces.iter().map(|i| i.name.as_bytes()).collect();
+        let expected: [&[u8]; 2] = [b"IfaceG", b"IfaceH"];
+        assert_eq!(ifaces, expected);
     }
 }
