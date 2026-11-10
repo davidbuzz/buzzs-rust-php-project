@@ -605,17 +605,18 @@ impl Vm {
         self.op_init_method_call(obj, n)
     }
 
-    /// `ZEND_INIT_METHOD_CALL` of `$cv->name()` or `$tmp->name()` (`$this`
-    /// fetched by `FetchThis`, a call result, ...) on a run-time cache hit,
-    /// from the dispatch loop's hot-instruction block (no `SAVE_OPLINE`):
-    /// the hit of [`Vm::init_cached_method_call`] without the generic
-    /// operand read. The call's `$this` is a handle of its own, as there:
-    /// a copy of the variable's object, or the temporary's, moved out of it
-    /// as the read moves it. `slot` is the instruction's index
-    /// (its cache slot). Returns `false`, having changed nothing, for an
-    /// undefined variable, a reference or a value that is not an object, a
-    /// variable of a frame with an attached symbol table, a class with a
-    /// native `get_method` handler or a cache miss.
+    /// `ZEND_INIT_METHOD_CALL` of `$cv->name()`, `$tmp->name()` (`$this`
+    /// fetched by `FetchThis`, a call result, ...) or `$this->name()` (op1
+    /// [`Operand::Unused`]) on a run-time cache hit, from the dispatch
+    /// loop's hot-instruction block (no `SAVE_OPLINE`): the hit of
+    /// [`Vm::init_cached_method_call`] without the generic operand read.
+    /// The call's `$this` is a handle of its own, as there: a copy of the
+    /// variable's object or of the frame's `$this`, or the temporary's,
+    /// moved out of it as the read moves it. `slot` is the instruction's
+    /// index (its cache slot). Returns `false`, having changed nothing, for
+    /// an undefined variable, a reference or a value that is not an object,
+    /// a variable of a frame with an attached symbol table, a frame without
+    /// `$this`, a class with a native `get_method` handler or a cache miss.
     #[inline]
     pub(crate) fn init_method_call_fast(&mut self, obj: Operand, lit: u32, slot: usize) -> bool {
         let Some(frame) = self.frames.last_mut() else {
