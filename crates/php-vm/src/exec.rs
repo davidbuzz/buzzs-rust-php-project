@@ -1482,6 +1482,25 @@ impl Vm {
                                 break 'slow;
                             }
                         }
+                        // `$this` of a method frame: its object, copied
+                        // (the generic arm's fast case; no `$this` throws
+                        // there).
+                        Op::FetchThis { dst } => {
+                            let Some(this) = self.frames.last().and_then(|f| f.this.clone()) else {
+                                break 'slow;
+                            };
+                            self.set_tmp(*dst, Value::Object(this));
+                        }
+                        // `$obj->name()` on a method cache hit
+                        // (`Vm::init_method_call_fast`).
+                        Op::InitMethodCall {
+                            obj,
+                            name: Operand::Lit(lit),
+                        } => {
+                            if !self.init_method_call_fast(*obj, *lit, at) {
+                                break 'slow;
+                            }
+                        }
                         // `ZEND_DO_UCALL` of a plain user function
                         // (`Vm::push_simple_ucall`, which stores `ip` as the
                         // caller's resume point): the callee frame is

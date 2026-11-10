@@ -601,6 +601,83 @@ impl Vm {
         self.op_init_method_call(obj, n)
     }
 
+    /// `ZEND_INIT_METHOD_CALL` of `$cv->name()` or `$tmp->name()` (`$this`
+    /// fetched by `FetchThis`, a call result, ...) on a run-time cache hit,
+    /// from the dispatch loop's hot-instruction block (no `SAVE_OPLINE`):
+    /// the hit of [`Vm::init_cached_method_call`] without the generic
+    /// operand read. The call's `$this` is a handle of its own, as there:
+    /// a copy of the variable's object, or the temporary's, which is
+    /// emptied as the read empties it. `slot` is the instruction's index
+    /// (its cache slot). Returns `false`, having changed nothing, for an
+    /// undefined variable, a reference or a value that is not an object, a
+    /// variable of a frame with an attached symbol table, a class with a
+    /// native `get_method` handler or a cache miss.
+    #[inline]
+    pub(crate) fn init_method_call_fast(&mut self, obj: Operand, lit: u32, slot: usize) -> bool {
+        let Some(frame) = self.frames.last_mut() else {
+            return false;
+        };
+        let o = match obj {
+            Operand::Cv(cv) if !frame.symtab_attached => {
+                match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                    Some(Value::Object(o)) => o,
+                    _ => return false,
+                }
+            }
+            Operand::Tmp(t) => match frame.tmps.get(t as usize) {
+                Some(Value::Object(o)) => o,
+                _ => return false,
+            },
+            _ => return false,
+        };
+        let cls = object::class_of(o);
+        if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
+            return false;
+        }
+        let cls_addr = Rc::as_ptr(cls) as usize;
+        let scope_addr = frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+        let hit = match frame.code.method_cache.borrow().get(slot) {
+            Some(Some(cached))
+                if cached.class_addr == cls_addr
+                    && cached.scope_addr == scope_addr
+                    && cached.name_lit == Some(lit) =>
+            {
+                cached.func.get().map(|func| {
+                    (
+                        func,
+                        cached
+                            .method_scope
+                            .as_ref()
+                            .and_then(std::rc::Weak::upgrade),
+                        cached.is_static,
+                    )
+                })
+            }
+            _ => None,
+        };
+        let Some((func, scope, is_static)) = hit else {
+            return false;
+        };
+        let called = Rc::clone(cls);
+        let this = if is_static { None } else { Some(o.clone()) };
+        push_call_in_place(&mut frame.calls, move || PendingCall {
+            this,
+            scope,
+            called: Some(called),
+            ..PendingCall::new(func)
+        });
+        // The temporary's handle is the read's (`std::mem::take`): released
+        // here, after the call took its own (the last handle of a static
+        // method's object goes as it goes there, its destructor left to
+        // the safe point after the instruction).
+        if let Operand::Tmp(t) = obj {
+            if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                drop(std::mem::take(slot));
+            }
+        }
+        true
+    }
+
     /// The run-time cache hit of `ZEND_INIT_METHOD_CALL` for the method
     /// named by literal `lit` (`CACHED_POLYMORPHIC_PTR`): the call is pushed
     /// straight from the cached method, `$this` moved in, with the name read

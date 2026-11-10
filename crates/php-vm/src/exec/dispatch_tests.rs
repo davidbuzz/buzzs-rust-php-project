@@ -790,3 +790,50 @@ end
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// Method calls on the method cache's fast path from a variable and from
+/// temporaries (`$this`, `new`, call results) and the generic paths it
+/// declines to: the destructor of a temporary object released by the call,
+/// a static method called through an object, `__call`, overrides, a
+/// reference, an undefined variable and null.
+#[test]
+fn method_calls_on_variables_and_temporaries() {
+    let src = r#"<?php
+class D {
+    function __construct(public $n) {}
+    function __destruct() { echo "~", $this->n, " "; }
+    function m($x) { return $this->n + $x; }
+    function viaThis($x) { return $this->m($x) * 2; }
+    static function s($x) { return "s$x"; }
+    function __call($name, $args) { return "$name(" . implode(",", $args) . ")"; }
+}
+class E extends D { function m($x) { return -$x; } }
+function make($n) { return new D($n); }
+$d = new D(10);
+for ($i = 0; $i < 3; $i++) { echo $d->m($i), " ", $d->viaThis($i), " "; }
+echo "\n", (new D(1))->m(5), " after\n";
+echo make(2)->s(3), " after\n";
+echo $d->s(4), " ", $d->nope(1, 2), "\n";
+$objs = [new D(20), new E(30), new D(40)];
+foreach ($objs as $o) echo $o->m(1), " ";
+echo "\n";
+$r = &$d; echo $r->m(1), "\n";
+try { $u->m(1); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+$n = null;
+try { $n->m(1); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo "end\n";
+"#;
+    let expected = r#"10 20 11 22 12 24 
+~1 6 after
+~2 s3 after
+s4 nope(1,2)
+21 -1 41 
+11
+
+Warning: Undefined variable $u in t.php on line 21
+Error: Call to a member function m() on null
+Call to a member function m() on null
+end
+~10 ~20 ~30 ~40 "#;
+    assert_eq!(run(src), expected);
+}
