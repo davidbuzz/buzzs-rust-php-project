@@ -26,12 +26,18 @@ enum CvLattice {
     /// `PARTIAL_ARRAY`): the literal holds the known elements; any other
     /// key may or may not exist. Only reads of a known element fold.
     Partial(u32),
+    /// Not yet assigned (a local at function entry). Its read warns, so it
+    /// never folds; it only lets `$a[k] = v` build an array (writing a
+    /// dimension of an undefined variable raises nothing). Any op naming
+    /// it other than such a write makes it [`CvLattice::Bottom`].
+    Undef,
     Bottom,
 }
 
 fn meet_cv(a: CvLattice, b: CvLattice, literals: &mut Vec<Value>) -> CvLattice {
     match (a, b) {
         (CvLattice::Top, other) | (other, CvLattice::Top) => other,
+        (a, b) if a == b => a,
         (CvLattice::Const(l1), CvLattice::Const(l2))
             if l1 == l2
                 || super::literals_equal(&literals[l1 as usize], &literals[l2 as usize]) =>
@@ -453,6 +459,100 @@ fn const_assign_dim(
     Some((cv, new.map(|a| add_or_find_array_literal(literals, a))))
 }
 
+/// The CV and dimension of `$cv[k] = v` (one dimension, CV base).
+fn single_dim_store<'a>(op: &Op, places: &'a [Place]) -> Option<(u32, &'a Operand)> {
+    let Op::Assign { place, .. } = op else {
+        return None;
+    };
+    let p = places.get(*place as usize)?;
+    let PlaceBase::Cv(cv) = p.base else {
+        return None;
+    };
+    let [Seg::Dim(k)] = p.segs.as_slice() else {
+        return None;
+    };
+    Some((cv, k))
+}
+
+/// Makes overdefined every undefined CV that `op` names, other than the
+/// container of a one-dimension store, which [`partial_assign_dim`]
+/// handles: only ops this analysis understands keep a CV undefined.
+fn forget_undef_uses(op: &Op, places: &[Place], cur_state: &mut [CvLattice]) {
+    let own = single_dim_store(op, places).map(|(cv, _)| cv);
+    let mut named = Vec::new();
+    let mut op = op.clone();
+    super::compact::for_each_cv_mut(&mut op, |c| named.push(*c));
+    for c in named {
+        if Some(c) != own {
+            if let Some(slot) = cur_state.get_mut(c as usize) {
+                if *slot == CvLattice::Undef {
+                    *slot = CvLattice::Bottom;
+                }
+            }
+        }
+    }
+}
+
+/// `$cv[k] = v` with a known integer or string key on a CV that is
+/// undefined (a new array), a partial array, or an array constant
+/// receiving an unknown value: the CV's new state (sccp.c
+/// `ct_eval_assign_dim` on partial arrays). A known value becomes a known
+/// element; an unknown one makes the key unknown. Neither write can warn:
+/// the container is undefined or an array. `None` when `op` is no such
+/// write (an append, another key type, or a write
+/// [`const_assign_dim`] folds whole).
+fn partial_assign_dim(
+    op: &Op,
+    places: &[Place],
+    cur_state: &[CvLattice],
+    literals: &mut Vec<Value>,
+) -> Option<(u32, CvLattice)> {
+    let (cv, k) = single_dim_store(op, places)?;
+    let Op::Assign { val, .. } = op else {
+        return None;
+    };
+    let state = *cur_state.get(cv as usize)?;
+    let val = cv_or_lit(val, cur_state)
+        .and_then(|l| literals.get(l as usize))
+        .cloned();
+    let mut arr = match state {
+        CvLattice::Undef => ZArray::new(),
+        CvLattice::Partial(l) => match literals.get(l as usize)? {
+            Value::Array(a) => a.clone(),
+            _ => return None,
+        },
+        CvLattice::Const(l) if val.is_none() => match literals.get(l as usize)? {
+            Value::Array(a) => a.clone(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let key = match literals.get(cv_or_lit(k, cur_state)? as usize)? {
+        Value::Int(n) => ArrayKey::Int(*n),
+        Value::Str(s) => ArrayKey::from_zstr(s),
+        _ => return None,
+    };
+    let h = arr.make_mut();
+    let known = val.is_some();
+    match val {
+        Some(v) => {
+            h.insert(key, v);
+        }
+        None => {
+            h.remove(&key);
+        }
+    }
+    let lit = add_or_find_array_literal(literals, arr);
+    Some((
+        cv,
+        if known && state == CvLattice::Undef {
+            CvLattice::Const(lit)
+        } else {
+            CvLattice::Partial(lit)
+        },
+    ))
+}
+
 fn update_cv_state_for_op(
     op: &Op,
     places: &[crate::opcode::Place],
@@ -460,6 +560,15 @@ fn update_cv_state_for_op(
     cur_state: &mut [CvLattice],
     literals: &mut Vec<Value>,
 ) {
+    if cur_state.contains(&CvLattice::Undef) {
+        forget_undef_uses(op, places, cur_state);
+    }
+    if let Some((cv, state)) = partial_assign_dim(op, places, cur_state, literals) {
+        if let Some(slot) = cur_state.get_mut(cv as usize) {
+            *slot = state;
+            return;
+        }
+    }
     if let Some((cv, lit)) = plain_cv_update(op, places, cur_state, literals) {
         if let Some(slot) = cur_state.get_mut(cv as usize) {
             *slot = lit.map_or(CvLattice::Bottom, CvLattice::Const);
@@ -1502,7 +1611,32 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
         // warns "Undefined variable". Starting it at Top would let a loop
         // merge the entry path with a later assignment and fold the
         // first-iteration read into that constant (jit/assign_047).
-        let entry_state: Vec<CvLattice> = vec![CvLattice::Bottom; num_cvs];
+        let mut entry_state: Vec<CvLattice> = vec![CvLattice::Bottom; num_cvs];
+        // A local of a function body is known undefined at entry: not a
+        // parameter or closure binding, and no `$$`, `extract()`,
+        // `include`, ... (references and try blocks skip this analysis).
+        if !ctx.is_main && !super::compact::has_dynamic_var_access(op_array) {
+            let mut bound = vec![false; num_cvs];
+            for slot in bound.iter_mut().take(ctx.bound_cv_prefix() as usize) {
+                *slot = true;
+            }
+            for op in &op_array.ops {
+                if let Op::Recv { cv, .. }
+                | Op::RecvInit { cv, .. }
+                | Op::RecvDefault { cv, .. }
+                | Op::RecvVariadic { cv, .. } = op
+                {
+                    if let Some(slot) = bound.get_mut(*cv as usize) {
+                        *slot = true;
+                    }
+                }
+            }
+            for (state, bound) in entry_state.iter_mut().zip(bound) {
+                if !bound {
+                    *state = CvLattice::Undef;
+                }
+            }
+        }
 
         let mut in_state = vec![vec![CvLattice::Top; num_cvs]; num_blocks];
         let mut out_state = vec![vec![CvLattice::Top; num_cvs]; num_blocks];

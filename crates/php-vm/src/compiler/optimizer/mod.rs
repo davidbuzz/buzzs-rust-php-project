@@ -1262,6 +1262,31 @@ mod tests {
         assert!(reads_cv(&*g), "{:?}", g.ops);
     }
 
+    /// `$a[0] = $x; $a[1] = 5;` on a local that starts undefined builds a
+    /// partial array whose `$a[1]` folds until `$a->foo = 5` (opcache
+    /// `opt/sccp_022`); a local copied from a parameter is unknown.
+    #[test]
+    fn sccp_partial_array_from_dim_writes_of_undefined_local() {
+        let unit = compile_src(
+            "<?php function foo(int $x) { $a[0] = $x; $a[1] = 5; echo $a[1]; $a->foo = 5; echo $a[1]; }\n\
+             function bar($s) { $a = $s; $a[1] = 5; echo $a[1]; }\n\
+             function baz($x) { $a[0] = $x; echo $a[0]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let fetches = |code: &OpArray| {
+            code.ops
+                .iter()
+                .filter(|op| matches!(op, Op::Fetch { .. }))
+                .count()
+        };
+        let foo = find_code(&unit, named(b"foo"));
+        assert_eq!(fetches(&*foo), 1, "{:?}", foo.ops);
+        let bar = find_code(&unit, named(b"bar"));
+        assert_eq!(fetches(&*bar), 1, "{:?}", bar.ops);
+        let baz = find_code(&unit, named(b"baz"));
+        assert_eq!(fetches(&*baz), 1, "{:?}", baz.ops);
+    }
+
     #[test]
     fn test_nop_removal() {
         let unit = compile_src("<?php $a = 1; echo $a;", DEFAULT_OPTIMIZATION_LEVEL);
