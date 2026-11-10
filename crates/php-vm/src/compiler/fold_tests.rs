@@ -140,10 +140,17 @@ fn switch_compares_a_variable_subject_in_place() {
                     op: BinKind::Equal,
                     a: crate::opcode::Operand::Cv(_),
                     ..
+                } | Op::CmpJmp {
+                    op: BinKind::Equal,
+                    a: crate::opcode::Operand::Cv(_),
+                    ..
                 }
             )
         })
         .collect();
     assert_eq!(compares.len(), 2, "{ops:?}");
-    assert!(!ops.iter().any(|op| matches!(op, Op::Move { .. })), "{ops:?}");
+    assert!(
+        !ops.iter().any(|op| matches!(op, Op::Move { .. })),
+        "{ops:?}"
+    );
 }
