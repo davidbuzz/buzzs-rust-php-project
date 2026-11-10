@@ -1101,6 +1101,52 @@ for ($i = 0; $i < 3; $i++) {
         assert!(vm.call_bufs.values.iter().all(Vec::is_empty));
     }
 
+    /// Frameless calls made in place (`Vm::frameless_icall_in_place`):
+    /// handler calls with and without literal defaults, the inline
+    /// results of `abs()`, `ord()` and `chr()`, and arguments taken from
+    /// variables, literals and temporaries, which the calls release (the
+    /// variables are reused afterwards). Expected output from
+    /// `/usr/bin/php -n`.
+    #[test]
+    fn frameless_calls_in_place_match_the_handlers() {
+        use std::cell::RefCell;
+        use std::io::Write;
+        use std::rc::Rc;
+        #[derive(Clone, Default)]
+        struct Sink(Rc<RefCell<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.borrow_mut().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let sink = Sink::default();
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(sink.clone()));
+        let status = vm.run_script(
+            br#"<?php
+$s = "hello world";
+for ($i = 0; $i < 2; $i++) {
+    echo strpos($s, "o"), " ", strpos($s, "o", 5), " ", ord("A"), " ", abs(-3), " ",
+        chr(66), " ", substr($s, 6), " ", trim("  x  "), " ", round(2.5), " ",
+        in_array(2, [1, 2]) ? "y" : "n", " ", str_replace("o", "0", $s), "\n";
+}
+function f($t) { return ord($t) + strpos($t . "z", "z"); }
+echo f("a"), " ", $s, "\n";
+"#,
+            "t.php",
+        );
+        assert_eq!(status, 0);
+        drop(vm);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "4 7 65 3 B world x 3 y hell0 w0rld\n4 7 65 3 B world x 3 y hell0 w0rld\n98 hello world\n"
+        );
+    }
+
     #[test]
     fn special_builtin_bits_are_distinct_and_lowercase() {
         let mut seen = 0u32;
