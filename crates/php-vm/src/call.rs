@@ -2167,6 +2167,7 @@ impl Vm {
     /// function of its own keeps them in registers for the price of one
     /// call.
     #[inline(never)]
+    #[allow(clippy::same_item_push)] // `resize` is an out-of-line call (see the argument buffer)
     pub(crate) fn push_simple_ucall(&mut self, dst: Option<u32>, caller_ip: usize) -> bool {
         if self.observer.enabled {
             return false;
@@ -2222,10 +2223,13 @@ impl Vm {
             if !frame.args.is_empty() {
                 frame.args.clear();
             }
-            // One capacity check, then plain stores (a `TrustedLen`
-            // extend), where a `push` per argument rechecked it and
-            // stored the length each time.
-            frame.args.extend((0..n).map(|_| None));
+            // A `push` per argument (an inline capacity test and two
+            // stores; the buffer only grows on a first call this deep):
+            // `extend` of a mapped range compiled to an out-of-line
+            // `Vec::extend_trusted` call of ~30 instructions per call.
+            for _ in 0..n {
+                frame.args.push(None);
+            }
             for (slot, arg) in frame.cvs.iter_mut().zip(&mut call.inline_args[..n]) {
                 // The slot is empty: nothing to release.
                 if let Some(old) = slot.set(arg.take()) {
@@ -2277,8 +2281,14 @@ impl Vm {
             let func = unsafe { std::ptr::read(&call.func) };
             unsafe { caller.calls.set_len(pending - 1) };
             if same_func {
-                // The frame holds this function already.
-                drop(func);
+                // The frame holds this function already: the call's handle
+                // is released by an inline reference-count decrement (the
+                // frame's `ufunc` holds another, so it is never the last),
+                // where dropping the `Func` was an out-of-line
+                // `drop_in_place::<Func>` call per call.
+                if let Func::User(uf) = func {
+                    drop(uf);
+                }
             } else {
                 let ufunc = match &func {
                     Func::User(uf) => Some(Rc::clone(uf)),
@@ -4543,12 +4553,22 @@ pub(crate) fn trampoline_name(name: &ZStr) -> ZStr {
 /// [`Vm::push_simple_ucall`]: the conditions under which `op_do_call`
 /// hands a user function to [`Vm::push_user_call`] and that takes its fast
 /// branch (the observer and stack-depth checks are the caller's).
+///
+/// What depends on the declaration alone (not deprecated, `#[\NoDiscard]`,
+/// body-less nor a generator, no static variables, foreach or finally
+/// slots, no by-reference or variadic parameter, no more parameters than
+/// compiled variables) is the function's cached [`CallShape`]: one load and
+/// compare per call. The arguments' types are checked only when a
+/// parameter is typed.
+///
+/// [`CallShape`]: crate::func::CallShape
 #[inline]
 fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
-    if uf.flags & (flags::DEPRECATED | flags::NODISCARD | flags::NO_BODY | flags::GENERATOR) != 0
-        || uf.code.num_statics != 0
-        || uf.code.num_iters != 0
-        || uf.code.num_finally != 0
+    use crate::func::CallShape;
+    let shape = uf.call_shape();
+    // `n <= params.len() <= cv_names.len()` (the shape), so every argument
+    // has its compiled variable.
+    if shape == CallShape::NOT_PLAIN
         || !call.args.is_empty()
         || !call.named.is_empty()
         || call.magic_name.is_some()
@@ -4556,21 +4576,17 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
         || n < uf.required as usize
         || n > uf.params.len()
         || n > call.inline_args.len()
-        || n > uf.code.cv_names.len()
         || !uf.statics.try_borrow().is_ok_and(|s| s.is_empty())
     {
         return false;
     }
-    // Plain loops: the `Iterator::all` chains these replace were an
-    // out-of-line `try_fold` call per check.
-    for (i, p) in uf.params.iter().enumerate() {
-        if p.variadic || p.by_ref {
-            return false;
-        }
-        if i < n {
+    if shape == CallShape::TYPED {
+        // A plain loop: the `Iterator::all` chain it replaces was an
+        // out-of-line `try_fold` call per check.
+        for (p, arg) in uf.params.iter().zip(&call.inline_args[..n]) {
             if let Some(ty) = &p.ty {
                 if !ty.is_mixed()
-                    && !call.inline_args[i]
+                    && !arg
                         .as_ref()
                         .is_some_and(|v| accepts_without_coercion(ty.mask, v))
                 {

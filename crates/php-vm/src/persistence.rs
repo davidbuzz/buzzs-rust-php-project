@@ -218,6 +218,7 @@ impl ImageBuilder {
             class_name: original.class_name.clone(),
             attributes: self.attributes(&original.attributes),
             hook_prop: original.hook_prop.clone(),
+            call_shape: crate::func::CallShape::default(),
         });
         self.functions.insert(key, function.clone());
         function

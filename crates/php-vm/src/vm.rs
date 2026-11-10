@@ -768,14 +768,26 @@ impl FrameStack {
     /// released in place ([`Frame::clear_for_reuse`]) by a caller that
     /// already holds it (`Vm::return_simple`): the frame leaves the live
     /// ones and stays in the pool, which is cut back to 128 spare frames.
-    #[inline]
+    ///
+    /// Inline, with the cut out of line: as a call of its own it cost ~15
+    /// instructions per return for a decrement and a comparison.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // once per return
     pub(crate) fn pop_cleared_top(&mut self) {
         if self.live > 0 {
             self.live -= 1;
             if self.vec.len() > self.live + 128 {
-                self.vec.truncate(self.live + 128);
+                self.trim_pool();
             }
         }
+    }
+
+    /// Cuts the pool of released frames back to 128 spare frames
+    /// ([`FrameStack::pop_cleared_top`] after a deep recursion unwound).
+    #[cold]
+    #[inline(never)]
+    fn trim_pool(&mut self) {
+        self.vec.truncate(self.live + 128);
     }
 
     /// Frees the released frames kept in `vec[live..]` for reuse.
@@ -2410,6 +2422,7 @@ mod tests {
             class_name: None,
             attributes: Vec::new(),
             hook_prop: None,
+            call_shape: crate::func::CallShape::default(),
         })
     }
 

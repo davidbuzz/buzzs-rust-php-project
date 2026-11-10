@@ -702,3 +702,46 @@ echo caller(), "\n";
     let expected = "in1~11|\nin2~2|2\n|kept\n~3|replaced\n~4\n300 5\n5\n~5|\n15\n";
     assert_eq!(run(source), expected);
 }
+
+/// The plain-call test reads the function's cached declaration shape
+/// (`UserFunction::call_shape`, worked out on the first call): each kind of
+/// declaration it rules out (by-reference and variadic parameters, static
+/// variables, generators, foreach and finally slots, `#[\Deprecated]`) and
+/// typed parameters (checked per argument) behave on the second and third
+/// call as on the first. Expected output is php-src's (`/usr/bin/php8.5 -n`;
+/// `#[\Deprecated]` is PHP 8.4+).
+#[test]
+fn cached_call_shape_keeps_every_kind_of_declaration_exact() {
+    let source = r#"<?php
+function u($a, $b = 2) { return $a . "-" . $b; }
+function m(mixed $a) { return gettype($a); }
+function t(int $a, $b = null) { return var_export($a, true) . "/" . gettype($b); }
+function r(&$a) { $a++; return $a; }
+function v($a, ...$rest) { return $a + count($rest); }
+function s($a) { static $n = 0; $n += $a; return $n; }
+function g($a) { yield $a; }
+function fe($a) { $s = 0; foreach ($a as $x) { $s += $x; } return $s; }
+function fin($a) { try { return $a; } finally { echo "f$a "; } }
+#[\Deprecated]
+function d($a) { return $a * 2; }
+for ($i = 0; $i < 3; $i++) {
+    echo u($i), " ", u($i, "x"), " ", m($i), " ", m("s"), " ", t($i), " ", t("5", $i), " ";
+    $x = $i; echo r($x), $x, " ", v($i), v($i, 1, 2), " ", s($i), " ";
+    foreach (g($i) as $y) echo $y;
+    echo " ", fe([$i, 1]), " ", fin($i), " ", @d($i), "\n";
+}
+try { t("x"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { u(); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+echo d(4), "\n";
+"#;
+    let expected = concat!(
+        "0-2 0-x integer string 0/NULL 5/integer 11 02 0 0 1 f0 0 0\n",
+        "1-2 1-x integer string 1/NULL 5/integer 22 13 1 1 2 f1 1 2\n",
+        "2-2 2-x integer string 2/NULL 5/integer 33 24 3 2 3 f2 2 4\n",
+        "t(): Argument #1 ($a) must be of type int, string given, called in t.php on line 19\n",
+        "Too few arguments to function u(), 0 passed in t.php on line 20 and at least 1 expected\n",
+        "\nDeprecated: Function d() is deprecated in t.php on line 21\n",
+        "8\n",
+    );
+    assert_eq!(run(source), expected);
+}

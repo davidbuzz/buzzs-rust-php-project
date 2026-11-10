@@ -5,7 +5,7 @@ use crate::opcode::{OpArray, ParamInfo};
 use crate::types::TypeDecl;
 use crate::vm::{Vm, VmResult};
 use php_runtime::{Obj, PhpRef, Value, ZStr};
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
 
@@ -126,6 +126,31 @@ pub struct UserFunction {
     pub attributes: Vec<crate::class::AttributeInfo>,
     /// For property hooks: the property name.
     pub hook_prop: Option<ZStr>,
+    /// What the plain-call test of `Vm::push_simple_ucall` needs to know
+    /// about the declaration, worked out on the first call
+    /// ([`UserFunction::call_shape`]).
+    pub call_shape: CallShape,
+}
+
+/// [`UserFunction::call_shape`]'s answer, cached in the function: whether
+/// the declaration rules out the plain call path of `Vm::push_simple_ucall`
+/// whatever the arguments, and whether the arguments' types must be checked
+/// one by one. Starts unknown; every `UserFunction` literal sets
+/// `CallShape::default()`.
+#[derive(Debug, Default)]
+pub struct CallShape(Cell<u8>);
+
+impl CallShape {
+    /// Not worked out yet.
+    const UNKNOWN: u8 = 0;
+    /// Deprecated, `#[\NoDiscard]`, body-less or a generator, with static
+    /// variables, foreach or finally slots, a by-reference or variadic
+    /// parameter, or more parameters than compiled variables.
+    pub const NOT_PLAIN: u8 = 1;
+    /// Plain, and no parameter has a type other than `mixed`.
+    pub const UNTYPED: u8 = 2;
+    /// Plain, with a parameter whose type each argument must pass.
+    pub const TYPED: u8 = 3;
 }
 
 impl fmt::Debug for UserFunction {
@@ -135,6 +160,46 @@ impl fmt::Debug for UserFunction {
 }
 
 impl UserFunction {
+    /// The plain-call shape of the declaration ([`CallShape`]): computed
+    /// from the flags, the op array's slot counts and the parameters on the
+    /// first call and cached, as none of them changes once the function is
+    /// shared. One load and compare per call where the checks it stands
+    /// for were a dozen loads and a loop over the parameters.
+    #[inline]
+    pub fn call_shape(&self) -> u8 {
+        let s = self.call_shape.0.get();
+        if s != CallShape::UNKNOWN {
+            return s;
+        }
+        let s = self.compute_call_shape();
+        self.call_shape.0.set(s);
+        s
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn compute_call_shape(&self) -> u8 {
+        if self.flags & (flags::DEPRECATED | flags::NODISCARD | flags::NO_BODY | flags::GENERATOR)
+            != 0
+            || self.code.num_statics != 0
+            || self.code.num_iters != 0
+            || self.code.num_finally != 0
+            || self.params.len() > self.code.cv_names.len()
+            || self.params.iter().any(|p| p.variadic || p.by_ref)
+        {
+            return CallShape::NOT_PLAIN;
+        }
+        if self
+            .params
+            .iter()
+            .any(|p| p.ty.as_ref().is_some_and(|t| !t.is_mixed()))
+        {
+            CallShape::TYPED
+        } else {
+            CallShape::UNTYPED
+        }
+    }
+
     /// Whether the function is a generator.
     pub fn is_generator(&self) -> bool {
         self.flags & flags::GENERATOR != 0
@@ -326,6 +391,7 @@ impl Func {
     }
 
     /// The parameters.
+    #[inline]
     pub fn params(&self) -> &[ParamInfo] {
         match self {
             Func::User(u) => &u.params,
@@ -334,6 +400,7 @@ impl Func {
     }
 
     /// Flags.
+    #[inline]
     pub fn flags(&self) -> u32 {
         match self {
             Func::User(u) => u.flags,
@@ -358,6 +425,12 @@ impl Func {
     }
 
     /// Whether argument `n` (0-based) is passed by reference.
+    ///
+    /// Inline: `ZEND_SEND_*` asks it once per argument of every call, and
+    /// out of line it was a call of ~30 instructions per argument (the
+    /// builtin arm's lazy parameter list stays an out-of-line call on its
+    /// first use only).
+    #[inline]
     pub fn arg_by_ref(&self, n: usize) -> bool {
         let p = self.params();
         if let Some(pi) = p.get(n) {
