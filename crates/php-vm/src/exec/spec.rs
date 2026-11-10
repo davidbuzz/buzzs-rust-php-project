@@ -45,7 +45,7 @@ mod statics;
 
 pub(super) use dims::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, concat_cv_in,
-    fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, isset_dim_cv_in,
+    fe_fetch_array_in, fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, isset_dim_cv_in,
 };
 
 /// Whether replacing `v` needs no destructor, GC root buffering or
@@ -2114,6 +2114,38 @@ function f() {
 f();
 "#;
         let expected = "array(3) {\n  [0]=>\n  int(5)\n  [1]=>\n  int(8)\n  [2]=>\n  int(7)\n}\nstring(6) \"012345\"\narray(1) {\n  [\"k\"]=>\n  string(7) \"v012345\"\n}\nint(5)\nint(3)\narray(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\narray(2) {\n  [0]=>\n  array(2) {\n    [0]=>\n    int(0)\n    [1]=>\n    int(20)\n  }\n  [1]=>\n  array(2) {\n    [0]=>\n    int(13)\n    [1]=>\n    int(30)\n  }\n}\nint(20)\nstring(16) \"012345hellohello\"\narray(6) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(3)\n  [2]=>\n  int(0)\n  [3]=>\n  int(1)\n  [4]=>\n  int(2)\n  [5]=>\n  int(3)\n}\nint(7)\nint(-2)\n";
+        assert_eq!(run(src), expected);
+    }
+
+    /// `foreach` by value over arrays runs its fetch in the hot loop
+    /// (packed with holes, hash, elements held by reference, appends while
+    /// iterating the snapshot, `break`); by-reference, object and generator
+    /// iteration decline to the generic op.
+    #[test]
+    fn foreach_by_value_in_the_hot_loop() {
+        let src = r#"<?php
+$p = [10, 20, 30, 40]; unset($p[1]);
+$h = ['a' => 1, 'b' => 2.5, 'c' => 'x', 7 => null];
+$x = 5; $r = [1, &$x, 3];
+$s = '';
+foreach ($p as $k => $v) { $s .= "$k=$v,"; }
+foreach ($h as $k => $v) { $s .= $k . '=' . $v . ','; }
+foreach ($r as $v) { $s .= $v; }
+foreach ($p as $v) { $p[] = $v; if (count($p) > 9) break; }
+var_dump($s, count($p));
+foreach ($r as &$v) { $v *= 2; } unset($v);
+var_dump($r, $x);
+class O { public $a = 1; public $b = 2; }
+function g() { yield 'k' => 3; yield 4; }
+foreach (new O as $k => $v) { echo "$k:$v "; }
+foreach (g() as $k => $v) { echo "$k:$v "; }
+echo "\n";
+$sum = 0; $big = [];
+for ($i = 1; $i <= 100; $i++) { $big[] = $i; }
+foreach ($big as $i => $v) { $sum += $v * $i; }
+var_dump($sum);
+"#;
+        let expected = "string(35) \"0=10,2=30,3=40,a=1,b=2.5,c=x,7=,153\"\nint(6)\narray(3) {\n  [0]=>\n  int(2)\n  [1]=>\n  &int(10)\n  [2]=>\n  int(6)\n}\nint(10)\na:1 b:2 k:3 0:4 \nint(333300)\n";
         assert_eq!(run(src), expected);
     }
 }

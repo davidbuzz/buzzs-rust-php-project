@@ -2,12 +2,13 @@
 //! a compiled variable ([`Op::FetchDimCv`], [`Op::FetchDimsCv`],
 //! [`Op::IssetDimCv`], [`Op::AssignDimCv`], [`Op::AssignDimsCv`],
 //! [`Op::AssignOpDimCv`], [`Op::AssignOpDimsCv`], [`Op::IncDecDimCv`],
-//! [`Op::ConcatCv`]): php-src's `ZEND_FETCH_DIM_R_SPEC_CV_*`,
+//! [`Op::ConcatCv`]) and of `foreach` by value over an array
+//! ([`Op::FeFetch`]): php-src's `ZEND_FETCH_DIM_R_SPEC_CV_*`,
 //! `ZEND_ISSET_ISEMPTY_DIM_OBJ_SPEC_CV_*`,
 //! `ZEND_ASSIGN_DIM_SPEC_CV_*_OP_DATA_*`, `ZEND_ASSIGN_DIM_OP_SPEC_CV_*`,
 //! `FETCH_DIM_RW` + `PRE/POST_INC` and `ZEND_ASSIGN_OP_SPEC_CV_*` with
 //! `concat_function` on an array (or string) container and an int or
-//! string offset.
+//! string offset, and `ZEND_FE_FETCH_R` on an array.
 //!
 //! Each function works on the current frame alone (its variables,
 //! temporaries and literals; a frame whose symbol table is attached gets
@@ -28,16 +29,17 @@
 //! [`Op::AssignOpDimsCv`]: crate::opcode::Op::AssignOpDimsCv
 //! [`Op::IncDecDimCv`]: crate::opcode::Op::IncDecDimCv
 //! [`Op::ConcatCv`]: crate::opcode::Op::ConcatCv
+//! [`Op::FeFetch`]: crate::opcode::Op::FeFetch
 
 use super::super::{num_bin, Num};
 use super::{
-    assign_dims, assign_op_dims, cv_dim_hit_in, dim_int_in, dim_key_in, dim_ref_in, dims_value_in,
-    discard_plain, isset_dim_in, plain_value_in, put_tmp, release_place_str_tmps,
+    assign_dims, assign_op_dims, copy_value, cv_dim_hit_in, dim_int_in, dim_key_in, dim_ref_in,
+    dims_value_in, discard_plain, isset_dim_in, plain_value_in, put_tmp, release_place_str_tmps,
     release_str_tmp_in, store_fetched_in, string_offset_char, table_dim, table_dim_mut,
     write_keys_in, DimRef,
 };
 use crate::opcode::{BinKind, IncDecKind, Operand, PlaceId};
-use crate::vm::{CvSlot, Frame, Vm};
+use crate::vm::{CvSlot, ForeachIter, Frame, Vm};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZStr};
 
 /// [`Op::FetchDimCv`](crate::opcode::Op::FetchDimCv): `$cv[dim]` read when
@@ -678,4 +680,46 @@ pub(in crate::exec) fn concat_cv_in(
         }
     }
     true
+}
+
+/// [`Op::FeFetch`](crate::opcode::Op::FeFetch) of a by-value `foreach`
+/// over an array (`ZEND_FE_FETCH_R` on `IS_ARRAY`: the next element from
+/// the iterator's position, holes skipped, `ZVAL_COPY_DEREF` of its value
+/// into `val` and its key into `key` when used): `Some(true)` with the
+/// element fetched, `Some(false)` at the end (the loop jumps out). `None`,
+/// nothing changed, for the other iterators (by reference, objects,
+/// generators), which the generic op runs.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the hot `foreach ($a as $k => $v)` step
+pub(in crate::exec) fn fe_fetch_array_in(
+    f: &mut Frame,
+    iter: u32,
+    val: u32,
+    key: Option<u32>,
+) -> Option<bool> {
+    let Some(Some(ForeachIter::Array { arr, pos })) = f.iters.get_mut(iter as usize) else {
+        return None;
+    };
+    let Some((p, v)) = arr.fe_fetch(*pos) else {
+        return Some(false);
+    };
+    let v = match v {
+        Value::Reference(r) => r.get(),
+        v => copy_value(v),
+    };
+    let k = if key.is_some() {
+        arr.key_value_at(p)
+    } else {
+        None
+    };
+    *pos = p + 1;
+    if let Some(slot) = f.tmps.get_mut(val as usize) {
+        put_tmp(slot, v);
+    }
+    if let (Some(kt), Some(k)) = (key, k) {
+        if let Some(slot) = f.tmps.get_mut(kt as usize) {
+            put_tmp(slot, k);
+        }
+    }
+    Some(true)
 }

@@ -39,8 +39,8 @@
 
 use super::spec::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, cmp_simple_in,
-    concat_cv_in, fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, is_plain_slot,
-    isset_dim_cv_in, num_outcome, plain_truth, put_tmp, slot_truth,
+    concat_cv_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in,
+    is_plain_slot, isset_dim_cv_in, num_outcome, plain_truth, put_tmp, slot_truth,
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
 use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Op, Operand, UnKind};
@@ -91,6 +91,7 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::AssignOpDimsCv { .. }
             | Op::IncDecDimCv { .. }
             | Op::ConcatCv { .. }
+            | Op::FeFetch { .. }
     )
 }
 
@@ -455,6 +456,18 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
                 return DECLINED;
             }
         }
+        // `foreach` by value over an array: the next element, or the
+        // jump out of the loop at the end.
+        Op::FeFetch {
+            iter,
+            end,
+            val,
+            key,
+        } => match fe_fetch_array_in(f, iter, val, key) {
+            Some(true) => {}
+            Some(false) => ip = end as usize,
+            None => return DECLINED,
+        },
         _ => return DECLINED,
     }
     ip
