@@ -1,10 +1,24 @@
 //! Links the system libmagic, located through `pkg-config` when available.
+//! It is bound lazily (`build/lazy_dl.rs`, shared from php-libxml: stubs
+//! that `dlopen` it on first use), falling back to an ordinary link.
 
 use std::process::Command;
+
+#[path = "../php-libxml/build/lazy_dl.rs"]
+mod lazy_dl;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    println!("cargo:rerun-if-changed=../php-libxml/build/lazy_dl.rs");
+    if lazy_dl::generate(&lazy_dl::LazyLib {
+        tag: "magic",
+        name: "magic",
+        pkg: Some("libmagic"),
+        suffix: None,
+    }) {
+        return;
+    }
     let output = Command::new("pkg-config")
         .args(["--libs", "libmagic"])
         .output();
