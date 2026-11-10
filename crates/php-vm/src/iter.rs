@@ -533,12 +533,9 @@ impl Vm {
             }
             ForeachIter::Generator { obj, started, .. } => {
                 let obj = obj.clone();
-                if *started {
-                    self.gen_next(&obj)?;
-                }
+                let advance = *started;
                 *started = true;
-                if self.gen_valid(&obj)? {
-                    let (k, v) = self.gen_current(&obj)?;
+                if let Some((k, v)) = self.gen_fetch(&obj, advance)? {
                     self.set_tmp(val, v);
                     if let Some(kt) = key {
                         self.set_tmp(kt, k);

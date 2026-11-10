@@ -297,15 +297,27 @@ impl Vm {
                 self.observer_end_frame(fidx, value.as_ref(), None);
             }
         }
-        let mut frame = self.frames.pop().expect("generator frame");
-        if let Some(g) = frame.generator.take() {
-            with(&g, move |d| {
-                if let Some(u) = update {
-                    u(d);
+        // The frame moves straight from the stack into the generator (one
+        // copy, no intermediate moves through closures).
+        let g = self.frames.last_mut().and_then(|f| f.generator.take());
+        match g {
+            Some(g) => {
+                let frames = &mut self.frames;
+                let stored = with(&g, move |d| {
+                    if let Some(u) = update {
+                        u(d);
+                    }
+                    d.frame = frames.pop().map(Box::new);
+                    d.state = GenState::Suspended;
+                })
+                .is_some();
+                if !stored {
+                    self.frames.pop();
                 }
-                d.frame = Some(Box::new(frame));
-                d.state = GenState::Suspended;
-            });
+            }
+            None => {
+                self.frames.pop();
+            }
         }
         if fidx <= base {
             Flow::Done(Value::Null)
@@ -680,6 +692,32 @@ impl Vm {
 
     /// `zend_generator_resume`.
     fn gen_resume(&mut self, orig: &Obj) -> VmResult<()> {
+        // The common case in one state access: an undelegated generator
+        // suspended at a plain `yield`, with nothing to initialise, no
+        // delegated values and no exception to throw in. The general loop
+        // below would take exactly these steps (its current generator is
+        // `orig` itself and the lent chain is empty).
+        let simple = with(orig, |d| {
+            let ok = d.parent.is_none()
+                && d.state == GenState::Suspended
+                && !d.do_init
+                && d.values.is_none()
+                && d.pending_exc.is_none()
+                && d.frame.is_some();
+            if ok {
+                d.at_first_yield = false;
+            }
+            ok
+        })
+        .unwrap_or(false);
+        if simple {
+            self.gen_run(orig)?;
+            if finished(orig) || with(orig, |d| d.yield_from.is_none()).unwrap_or(true) {
+                return Ok(());
+            }
+            // Suspended at a `yield from`: carry on as the general loop
+            // does after its first run.
+        }
         let mut gen = self.gen_get_current(orig)?;
         if finished(&gen) {
             return Ok(());
@@ -886,6 +924,38 @@ impl Vm {
             .flatten()
             .unwrap_or_default()
             .deref())
+    }
+
+    /// One `foreach` step over a generator: `next()` when `advance`, then
+    /// the current key and value (as [`Vm::gen_current`]), or `None` once
+    /// it is no longer valid (as [`Vm::gen_valid`]).
+    pub(crate) fn gen_fetch(&mut self, g: &Obj, advance: bool) -> VmResult<Option<(Value, Value)>> {
+        if advance {
+            self.gen_next(g)?;
+        }
+        // Without a delegation parent and with a current value (or
+        // finished), `gen_valid` and `gen_current` neither initialise nor
+        // switch to another generator: read the state directly.
+        let fast = with(g, |d| {
+            if d.parent.is_some() || (d.value.is_none() && d.state != GenState::Finished) {
+                return None;
+            }
+            Some(if d.state == GenState::Finished {
+                None
+            } else {
+                Some((
+                    d.key.clone().unwrap_or_default().deref(),
+                    d.value.clone().unwrap_or_default(),
+                ))
+            })
+        });
+        if let Some(Some(r)) = fast {
+            return Ok(r);
+        }
+        if !self.gen_valid(g)? {
+            return Ok(None);
+        }
+        self.gen_current(g).map(Some)
     }
 
     /// Whether a generator has a current element (starting it if needed).
