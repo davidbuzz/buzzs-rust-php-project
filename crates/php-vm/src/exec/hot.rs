@@ -342,23 +342,8 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
                 a, b, target, mask, ..
             }) = ops.get(ip)
             {
-                let known = Operand::Cv(cv);
-                let x = if a == known {
-                    Some(new)
-                } else {
-                    num_of(f, lits, a)
-                };
-                let y = if b == known {
-                    Some(new)
-                } else {
-                    num_of(f, lits, b)
-                };
-                if let (Some(x), Some(y)) = (x, y) {
-                    if jump_of(x, y, mask) {
-                        ip = target as usize;
-                    } else {
-                        ip += 2;
-                    }
+                if let Some(jump) = step_cond(f, lits, cv, new, a, b, mask) {
+                    ip = if jump { target as usize } else { ip + 2 };
                 }
             }
         }
@@ -959,6 +944,113 @@ fn num_of(f: &Frame, lits: &[Value], op: Operand) -> Option<Num> {
     }
 }
 
+/// The int an operand holds when it is a compiled variable or a literal
+/// holding an int, read in place; `None` for anything else (the caller's
+/// general [`num_of`] path).
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn int_of(f: &Frame, lits: &[Value], op: Operand) -> Option<i64> {
+    let v = if let Operand::Cv(cv) = op {
+        f.cvs.get(cv as usize).and_then(CvSlot::get)?
+    } else if let Operand::Lit(i) = op {
+        lits.get(i as usize)?
+    } else {
+        return None;
+    };
+    if let Value::Int(i) = *v {
+        Some(i)
+    } else {
+        None
+    }
+}
+
+/// The [`cmp_outcome`] bit of comparing two ints (`LESS`, `EQUAL` or
+/// `GREATER`; the identity flag makes no difference between two ints), as
+/// [`num_outcome`] computes it.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn int_outcome(x: i64, y: i64) -> u8 {
+    1 << (u8::from(x > y) + u8::from(x >= y))
+}
+
+/// The jump decision of the [`Op::CmpJmp`] (operands `a`, `b`, `mask`)
+/// right after an [`Op::IncDecCvCmpJmp`] that left `new` in compiled
+/// variable `cv`; `None` when an operand is not a plain number (the
+/// `CmpJmp` then runs as its own op). The usual loop condition (`$i < $n`,
+/// `$i <= 100`: the variable on the left, ints on both sides) is decided
+/// by one integer comparison, without [`Num`]'s kind dispatch; anything
+/// else as [`jump_of`] decides it. `b` naming `cv` itself reads the slot,
+/// which already holds `new`.
+#[inline(always)]
+#[allow(clippy::inline_always, clippy::many_single_char_names)]
+fn step_cond(
+    f: &Frame,
+    lits: &[Value],
+    cv: u32,
+    new: Num,
+    a: Operand,
+    b: Operand,
+    mask: u8,
+) -> Option<bool> {
+    let known = Operand::Cv(cv);
+    if let Num::Int(x) = new {
+        if a == known {
+            if let Some(y) = int_of(f, lits, b) {
+                return Some((mask & int_outcome(x, y)) != 0);
+            }
+        }
+    }
+    let x = if a == known { new } else { num_of(f, lits, a)? };
+    let y = if b == known { new } else { num_of(f, lits, b)? };
+    Some(jump_of(x, y, mask))
+}
+
+/// `+`, `-` and `*` of two floats, or of two ints whose result does not
+/// overflow: the operators of nearly all numeric loops, chosen by direct
+/// tests of the operator instead of [`num_bin`]'s two-level dispatch over
+/// [`BinKind`] and [`BinaryOp`]. The same results as `num_bin`; `None` for
+/// every other case (mixed kinds, an overflow, other operators), which
+/// `num_bin` then decides.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn arith_fast(op: BinKind, x: Num, y: Num) -> Option<Value> {
+    match (x, y) {
+        (Num::Float(p), Num::Float(q)) => {
+            if matches!(op, BinKind::Arith(BinaryOp::Mul)) {
+                Some(Value::Float(p * q))
+            } else if matches!(op, BinKind::Arith(BinaryOp::Add)) {
+                Some(Value::Float(p + q))
+            } else if matches!(op, BinKind::Arith(BinaryOp::Sub)) {
+                Some(Value::Float(p - q))
+            } else {
+                None
+            }
+        }
+        (Num::Int(p), Num::Int(q)) => {
+            if matches!(op, BinKind::Arith(BinaryOp::Add)) {
+                p.checked_add(q).map(Value::Int)
+            } else if matches!(op, BinKind::Arith(BinaryOp::Sub)) {
+                p.checked_sub(q).map(Value::Int)
+            } else if matches!(op, BinKind::Arith(BinaryOp::Mul)) {
+                p.checked_mul(q).map(Value::Int)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// [`num_bin`] with [`arith_fast`] tried first.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn num_bin_fast(op: BinKind, x: Num, y: Num) -> Option<Value> {
+    match arith_fast(op, x, y) {
+        Some(r) => Some(r),
+        None => num_bin(op, x, y),
+    }
+}
+
 /// The jump decision of a smart branch on two plain numbers: the
 /// comparison's [`cmp_outcome`] bit against the op's mask.
 #[inline(always)]
@@ -1005,7 +1097,7 @@ fn bin_tmp(f: &mut Frame, lits: &[Value], op: BinKind, a: Operand, b: Operand, d
     let Some(y) = num_of(f, lits, b) else {
         return false;
     };
-    let Some(r) = num_bin(op, x, y) else {
+    let Some(r) = num_bin_fast(op, x, y) else {
         return false;
     };
     let Some(slot) = f.tmps.get_mut(dst as usize) else {
@@ -1051,7 +1143,7 @@ fn bin_assign_cv(
 ) -> Option<bool> {
     let x = num_of(f, lits, a)?;
     let y = num_of(f, lits, b)?;
-    let r = num_bin(op, x, y)?;
+    let r = num_bin_fast(op, x, y)?;
     if let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) {
         if is_plain_slot(slot.as_ref()) {
             discard_unrooted(slot.replace(r));
@@ -1153,7 +1245,7 @@ fn assign_op_cv(
         Some(Value::Float(v)) => Num::Float(v),
         _ => return false,
     };
-    let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
+    let Some(r) = num_bin_fast(BinKind::Arith(op), x, y) else {
         return false;
     };
     let keep = dst.map(|_| scalar_copy(&r));
@@ -1332,9 +1424,90 @@ fn jmp_null_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{jump_of, num_value, Num};
+    use super::{
+        arith_fast, int_outcome, jump_of, num_bin, num_bin_fast, num_outcome, num_value, Num,
+    };
     use crate::opcode::{cmp_outcome, BinKind};
-    use php_runtime::Value;
+    use php_runtime::{BinaryOp, Value};
+
+    /// The tag and bits of a numeric result, for exact comparisons (a
+    /// float's sign and NaN included).
+    fn bits(v: Option<Value>) -> Option<(u8, u64)> {
+        match v? {
+            Value::Int(i) => Some((0, u64::from_ne_bytes(i.to_ne_bytes()))),
+            Value::Float(x) => Some((1, x.to_bits())),
+            Value::Bool(b) => Some((2, u64::from(b))),
+            _ => Some((3, 0)),
+        }
+    }
+
+    // php -r 'var_dump(PHP_INT_MAX + 1, 3 * 4, 0.1 + 0.2, -0.0 * 1.0, 2 - 5);'
+    #[test]
+    fn arith_fast_matches_num_bin() {
+        let nums = [
+            Num::Int(0),
+            Num::Int(3),
+            Num::Int(-5),
+            Num::Int(i64::MAX),
+            Num::Int(i64::MIN),
+            Num::Float(0.1),
+            Num::Float(-0.0),
+            Num::Float(f64::NAN),
+            Num::Float(f64::INFINITY),
+        ];
+        let ops = [
+            BinaryOp::Add,
+            BinaryOp::Sub,
+            BinaryOp::Mul,
+            BinaryOp::Div,
+            BinaryOp::Mod,
+            BinaryOp::BitOr,
+        ];
+        for x in nums {
+            for y in nums {
+                for op in ops {
+                    let kind = BinKind::Arith(op);
+                    let slow = bits(num_bin(kind, x, y));
+                    assert_eq!(bits(num_bin_fast(kind, x, y)), slow);
+                    // The fast path answers only where num_bin does, and the
+                    // same.
+                    if let Some(r) = arith_fast(kind, x, y) {
+                        assert_eq!(bits(Some(r)), slow);
+                    }
+                }
+                for kind in [BinKind::Less, BinKind::Equal, BinKind::Identical] {
+                    assert!(arith_fast(kind, x, y).is_none());
+                    assert_eq!(bits(num_bin_fast(kind, x, y)), bits(num_bin(kind, x, y)));
+                }
+            }
+        }
+        // `PHP_INT_MAX + 1` overflows: the generic op makes it a float.
+        assert!(arith_fast(
+            BinKind::Arith(BinaryOp::Add),
+            Num::Int(i64::MAX),
+            Num::Int(1)
+        )
+        .is_none());
+        assert!(matches!(
+            arith_fast(BinKind::Arith(BinaryOp::Mul), Num::Int(3), Num::Int(4)),
+            Some(Value::Int(12))
+        ));
+    }
+
+    #[test]
+    fn int_outcome_matches_num_outcome() {
+        let ints = [i64::MIN, -1, 0, 1, 2, i64::MAX];
+        for x in ints {
+            for y in ints {
+                for identity in [false, true] {
+                    assert_eq!(
+                        int_outcome(x, y),
+                        num_outcome(Num::Int(x), Num::Int(y), identity)
+                    );
+                }
+            }
+        }
+    }
 
     fn mask(op: BinKind, jmp_if: bool) -> u8 {
         cmp_outcome::for_branch(op, jmp_if).expect("a smart-branch comparison")
