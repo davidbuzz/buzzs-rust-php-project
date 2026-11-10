@@ -77,6 +77,104 @@ impl Extension for Opcache {
     }
 }
 
+/// `zend_accel_error(ACCEL_LOG_WARNING, ...)` (`zend_accelerator_debug.c`):
+/// written when `opcache.log_verbosity_level` admits warnings, to
+/// `opcache.error_log` (stderr when unset or "stderr"), as
+/// "<asctime> (<pid>): Warning <message>" plus a newline. The messages
+/// passed here end in their own newline, as php-src's do.
+fn accel_log_warning(vm: &Vm, message: &str) {
+    use std::io::Write as _;
+    if vm.ini_long("opcache.log_verbosity_level") < 2 {
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let line = format!(
+        "{} ({}): Warning {message}\n",
+        format_ctime(now),
+        std::process::id()
+    );
+    let target = get_ini_string(vm, "opcache.error_log");
+    if !target.is_empty() && target != "stderr" {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&target)
+        {
+            let _ = f.write_all(line.as_bytes());
+            return;
+        }
+    }
+    let _ = std::io::stderr().write_all(line.as_bytes());
+}
+
+/// The startup-stage checks of opcache's INI handlers
+/// (`OnUpdateMemoryConsumption`, `OnUpdateInternedStringsBuffer`,
+/// `OnUpdateMaxAcceleratedFiles`, `OnUpdateMaxWastedPercentage`): a value
+/// out of range is logged and the directive keeps its default. Runs once,
+/// before the first request.
+fn check_startup_ini(vm: &mut Vm) {
+    thread_local! {
+        static CHECKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if CHECKED.with(|c| c.replace(true)) {
+        return;
+    }
+    /// `MAX_INTERNED_STRINGS_BUFFER_SIZE` on 64-bit builds.
+    const MAX_INTERNED_STRINGS_BUFFER_SIZE: i64 = 32767;
+    /// `MIN_ACCEL_FILES` / `MAX_ACCEL_FILES`.
+    const MIN_ACCEL_FILES: i64 = 200;
+    const MAX_ACCEL_FILES: i64 = 1_000_000;
+    if vm.ini_long("opcache.memory_consumption") < 8 {
+        accel_log_warning(
+            vm,
+            "opcache.memory_consumption is set below the required 8MB.\n",
+        );
+        vm.ini.reset_to_default("opcache.memory_consumption");
+    }
+    let size = vm.ini_long("opcache.interned_strings_buffer");
+    if size < 0 {
+        accel_log_warning(
+            vm,
+            &format!("opcache.interned_strings_buffer must be greater than or equal to 0, {size} given.\n"),
+        );
+    } else if size > MAX_INTERNED_STRINGS_BUFFER_SIZE {
+        accel_log_warning(
+            vm,
+            &format!(
+                "opcache.interned_strings_buffer must be less than or equal to {MAX_INTERNED_STRINGS_BUFFER_SIZE}, {size} given.\n"
+            ),
+        );
+    }
+    if !(0..=MAX_INTERNED_STRINGS_BUFFER_SIZE).contains(&size) {
+        vm.ini.reset_to_default("opcache.interned_strings_buffer");
+    }
+    let files = vm.ini_long("opcache.max_accelerated_files");
+    if files < MIN_ACCEL_FILES {
+        accel_log_warning(
+            vm,
+            &format!("opcache.max_accelerated_files is set below the required minimum ({MIN_ACCEL_FILES}).\n"),
+        );
+    } else if files > MAX_ACCEL_FILES {
+        accel_log_warning(
+            vm,
+            &format!("opcache.max_accelerated_files is set above the limit ({MAX_ACCEL_FILES}).\n"),
+        );
+    }
+    if !(MIN_ACCEL_FILES..=MAX_ACCEL_FILES).contains(&files) {
+        vm.ini.reset_to_default("opcache.max_accelerated_files");
+    }
+    let wasted = vm.ini_long("opcache.max_wasted_percentage");
+    if wasted <= 0 || wasted > 50 {
+        accel_log_warning(
+            vm,
+            "opcache.max_wasted_percentage must be set between 1 and 50.\n",
+        );
+        vm.ini.reset_to_default("opcache.max_wasted_percentage");
+    }
+}
+
 /// `OnEnable` (`zend_accelerator_module.c`): at run time opcache may only be
 /// disabled; enabling it again warns and is rejected, unless it is already
 /// on (a no-op).
@@ -101,6 +199,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     };
 
     m.ini_on_modify("opcache.enable", on_update_enable);
+    m.on_request_startup(check_startup_ini);
     m.ini(d(
         "opcache.enable",
         Some("1"),

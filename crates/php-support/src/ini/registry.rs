@@ -296,6 +296,18 @@ impl IniRegistry {
         true
     }
 
+    /// A startup `on_modify` handler rejected the configured value of `name`
+    /// (`FAILURE` at `ZEND_INI_STAGE_STARTUP`): the directive keeps its
+    /// built-in default. Returns `false` for an unknown directive.
+    pub fn reset_to_default(&mut self, name: &str) -> bool {
+        let Some(e) = self.entries.get_mut(name) else {
+            return false;
+        };
+        e.value.clone_from(&e.def.default);
+        e.typed = IniTyped::None;
+        true
+    }
+
     /// Whether a directive is registered.
     pub fn contains(&self, name: &str) -> bool {
         self.entries.contains_key(name)
