@@ -673,17 +673,16 @@ impl Vm {
         // Linking diagnostics were reported by the preload request; opcache
         // installs the linked classes without repeating them.
         let error_reporting = std::mem::replace(&mut self.error_reporting, 0);
-        let mut linked = Ok(());
-        for class in &classes {
-            if self.classes.contains_key(&class.name.to_ascii_lowercase()) {
-                continue;
+        let linked = self.without_declared_observer(|vm| -> VmResult<()> {
+            for class in &classes {
+                if vm.classes.contains_key(&class.name.to_ascii_lowercase()) {
+                    continue;
+                }
+                let anonymous = class.flags & crate::class::cflags::ANON != 0;
+                vm.declare_class(class, anonymous)?;
             }
-            let anonymous = class.flags & crate::class::cflags::ANON != 0;
-            if let Err(error) = self.declare_class(class, anonymous) {
-                linked = Err(error);
-                break;
-            }
-        }
+            Ok(())
+        });
         self.error_reporting = error_reporting;
         linked?;
         for (alias, name) in &persistent.aliases {

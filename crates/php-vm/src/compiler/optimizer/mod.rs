@@ -68,6 +68,33 @@ pub const PASS_16: u32 = 1 << 15;
 /// Default `opcache.optimization_level` (matches php-src's `DEFAULT_OPTIMIZATION_LEVEL` `0x7FFEBFFF`).
 pub const DEFAULT_OPTIMIZATION_LEVEL: u32 = 0x7FFE_BFFF;
 
+thread_local! {
+    /// Lowercase names removed by `disable_functions`: they are no longer
+    /// in the function table, so `zend_optimizer_eval_special_func_call`
+    /// and friends (which look the function up first) never evaluate a
+    /// call to one at compile time (GH-17733).
+    static DISABLED_FUNCTIONS: std::cell::RefCell<std::collections::HashSet<Vec<u8>>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Records the functions `disable_functions` removed (lowercase names),
+/// replacing any earlier list.
+pub fn set_disabled_functions(names: impl IntoIterator<Item = Vec<u8>>) {
+    DISABLED_FUNCTIONS.with(|d| {
+        let mut d = d.borrow_mut();
+        d.clear();
+        d.extend(names);
+    });
+}
+
+/// Whether the internal function `lcname` was removed by `disable_functions`.
+pub(crate) fn is_disabled_function(lcname: &[u8]) -> bool {
+    DISABLED_FUNCTIONS.with(|d| {
+        let d = d.borrow();
+        !d.is_empty() && d.contains(lcname)
+    })
+}
+
 /// What the passes must know about an op array beyond its instructions.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OptContext<'a> {

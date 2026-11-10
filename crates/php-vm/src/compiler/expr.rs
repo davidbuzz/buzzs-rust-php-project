@@ -1493,8 +1493,10 @@ impl Compiler<'_> {
                 if let Some(v) = self.fold_lit_binary(op, l, r) {
                     return Ok(self.lit(v));
                 }
+                // The operator (and a cast of a constant array operand)
+                // takes `CG(zend_lineno)` as the operands left it: the line
+                // of the last compiled operand (`zend_compile_expr_inner`).
                 let (l, r) = if op == AB::Concat {
-                    self.f().line = left.span.line;
                     let l = self.concat_cast_array_literal(l);
                     (l, self.concat_cast_array_literal(r))
                 } else {
@@ -1526,7 +1528,6 @@ impl Compiler<'_> {
                         r,
                     ),
                 };
-                self.f().line = left.span.line;
                 if matches!(kind, BinKind::Arith(BinaryOp::Add)) {
                     self.user_opcode_hook("ZEND_ADD");
                 }

@@ -399,6 +399,17 @@ impl Vm {
         }
     }
 
+    /// Runs `f` with the declaration observers silenced: opcache installs
+    /// preloaded classes into the class table without linking them again,
+    /// so `zend_observer_class_linked_notify` never fires for them in a
+    /// request (observer_preload.phpt).
+    pub(crate) fn without_declared_observer<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let enabled = std::mem::replace(&mut self.observer.enabled, false);
+        let r = f(self);
+        self.observer.enabled = enabled;
+        r
+    }
+
     /// `zend_observer_function_declared_notify` (`class == false`) /
     /// `zend_observer_class_linked_notify`. Free without observers.
     #[inline]

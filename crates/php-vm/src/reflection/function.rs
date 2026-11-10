@@ -791,17 +791,24 @@ fn rm_get_modifiers(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rm_has_prototype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
-    Ok(Value::Bool(
-        f.method
-            .as_ref()
-            .and_then(super::order::prototype)
-            .is_some(),
-    ))
+    Ok(Value::Bool(method_prototype(&f).is_some()))
+}
+
+/// `common.prototype` of the reflected method as seen from the reflected
+/// class: a method inherited from a parent that satisfies an interface the
+/// child implements is copied into the child with that interface method as
+/// its prototype (`do_inheritance_check_on_method`).
+fn method_prototype(f: &FnRef) -> Option<Rc<Method>> {
+    let m = f.method.as_ref()?;
+    match &f.class {
+        Some(c) => super::order::prototype_in(m, c),
+        None => super::order::prototype(m),
+    }
 }
 
 fn rm_get_prototype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
-    match f.method.as_ref().and_then(super::order::prototype) {
+    match method_prototype(&f) {
         Some(p) => {
             let s = p.scope();
             method_value(vm, &p, &s)

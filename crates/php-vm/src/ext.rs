@@ -711,16 +711,21 @@ impl Vm {
     /// warning).
     pub(crate) fn disable_functions(&mut self) {
         let Some(list) = self.ini.get("disable_functions") else {
+            crate::compiler::optimizer::set_disabled_functions(std::iter::empty());
             return;
         };
+        let mut removed = Vec::new();
         for name in list
             .split(|&c| c == b',' || c == b' ' || c == b'\t')
             // `zend_disable_function` compares case-sensitively.
             .filter(|n| !n.is_empty() && !matches!(*n, b"exit" | b"die" | b"clone"))
         {
             let lc = name.to_ascii_lowercase();
-            self.functions.remove(lc.as_slice());
+            if self.functions.remove(lc.as_slice()).is_some() {
+                removed.push(lc);
+            }
         }
+        crate::compiler::optimizer::set_disabled_functions(removed);
     }
 
     /// Throws an exception of class `class` (any registered `Throwable`)

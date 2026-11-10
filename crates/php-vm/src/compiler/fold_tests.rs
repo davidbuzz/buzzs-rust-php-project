@@ -181,3 +181,27 @@ fn array_map_with_a_dynamic_callable_compiles_to_a_loop() {
     let reset = ops.iter().position(|op| matches!(op, Op::FeReset { .. }));
     assert!(first_move < reset, "{ops:?}");
 }
+
+/// `zend_compile_expr_inner` leaves `CG(zend_lineno)` at the last compiled
+/// operand, so a binary operator spanning lines takes the line of its right
+/// operand (C PHP: `$r = $a +\n $a;` warns on the second line).
+#[test]
+fn multiline_binary_op_takes_the_line_of_its_last_operand() {
+    let unit = compile_src(
+        "<?php function foo($a) {\n$r = $a +\n  $a;\n}",
+        // A hooked `ZEND_ADD` keeps the generic op (no specialisation).
+        vec!["ZEND_ADD"],
+    );
+    let f = unit.decls.functions.borrow()[0].clone();
+    let lines: Vec<(BinKind, u32)> = f
+        .code
+        .ops
+        .iter()
+        .zip(&f.code.lines)
+        .filter_map(|(op, &line)| match op {
+            Op::Bin { op, .. } => Some((*op, line)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines, vec![(BinKind::Arith(BinaryOp::Add), 3)]);
+}
