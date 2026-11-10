@@ -806,6 +806,43 @@ impl ObjectIterator for ArrayIter {
     fn next(&mut self, host: &mut dyn SplHost) -> RtResult<()> {
         next(host, &self.obj, &self.st).map(|_| ())
     }
+    fn supports_fetch(&self) -> bool {
+        true
+    }
+    /// `next`, `valid`, `current` and `key` in one storage access (one
+    /// `spl_array_get_hash_table` resolution instead of four).
+    fn fetch(
+        &mut self,
+        host: &mut dyn SplHost,
+        advance: bool,
+        want_key: bool,
+    ) -> RtResult<Option<(Option<Value>, Option<Value>)>> {
+        let (tgt, is_obj) = target(host, &self.obj, &self.st)?;
+        let by_ref = self.by_ref;
+        with_pos(host, &self.st, &tgt, is_obj, |ht, pos| {
+            let pos = if advance {
+                let np = ht.pos_forward(pos);
+                if is_obj {
+                    skip_protected(ht, np)
+                } else {
+                    np
+                }
+            } else {
+                pos
+            };
+            let p = ht.valid_pos(pos);
+            let k = match ht.at(p) {
+                None => return (pos, None),
+                Some((k, _)) => want_key.then(|| k.to_value()),
+            };
+            let v = if by_ref {
+                ht.at_mut(p).map(|slot| Value::Reference(slot.make_ref()))
+            } else {
+                ht.at(p).map(|(_, v)| v.clone())
+            };
+            (pos, Some((v, k)))
+        })
+    }
 }
 
 fn rewind(host: &mut dyn SplHost, this: &Obj, st: &Rc<SplObject>) -> RtResult<()> {

@@ -555,6 +555,26 @@ pub trait NativeIterator {
             Ok(Value::Null)
         }
     }
+    /// One `FE_FETCH` step: advances first when `advance`, then returns
+    /// `None` at the end, else the current value and, when `want_key`,
+    /// the current key. The default runs `next`, `valid`, `current` and
+    /// `key` in turn; iterators that can do it in one pass override it.
+    fn fetch(
+        &mut self,
+        vm: &mut Vm,
+        advance: bool,
+        want_key: bool,
+    ) -> VmResult<Option<(Value, Option<Value>)>> {
+        if advance {
+            self.next(vm)?;
+        }
+        if !self.valid(vm)? {
+            return Ok(None);
+        }
+        let v = self.current(vm)?;
+        let k = if want_key { Some(self.key(vm)?) } else { None };
+        Ok(Some((v, k)))
+    }
     /// The `dtor` handler, run when the `InternalIterator` wrapping the
     /// iterator is destroyed.
     fn dtor(&mut self, _vm: &mut Vm) -> VmResult<()> {

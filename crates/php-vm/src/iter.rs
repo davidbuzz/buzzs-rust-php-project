@@ -284,8 +284,15 @@ impl Vm {
             ));
         }
         let it = self.get_iterator(&o)?;
-        if object::has_internal::<crate::generator::GenData>(&it) {
-            return self.generator_foreach(it, false);
+        // `zend_user_it_get_new_iterator` hands over to the returned
+        // object's own `ce->get_iterator`: a generator, or a native
+        // iterator (`ArrayIterator`'s `spl_array_get_iterator`) that walks
+        // its storage without a method call per element.
+        if object::has_internal::<crate::generator::GenData>(&it)
+            || (!Obj::ptr_eq(&it, &o)
+                && crate::ext::hooks_of(&it).is_some_and(|h| h.get_iterator.is_some()))
+        {
+            return self.object_iter(it, false);
         }
         let fe = ForeachIter::Iterator {
             obj: it,
@@ -542,20 +549,17 @@ impl Vm {
                 }
             }
             ForeachIter::Native(it, started, _) => {
-                if *started {
-                    it.0.next(self)?;
-                }
+                let advance = *started;
                 *started = true;
-                if it.0.valid(self)? {
-                    let v = it.0.current(self)?;
-                    self.set_tmp(val, v);
-                    if let Some(kt) = key {
-                        let k = it.0.key(self)?;
-                        self.set_tmp(kt, k);
+                match it.0.fetch(self, advance, key.is_some())? {
+                    Some((v, k)) => {
+                        self.set_tmp(val, v);
+                        if let (Some(kt), Some(k)) = (key, k) {
+                            self.set_tmp(kt, k);
+                        }
+                        Ok(true)
                     }
-                    Ok(true)
-                } else {
-                    Ok(false)
+                    None => Ok(false),
                 }
             }
             ForeachIter::Empty => Ok(false),

@@ -76,6 +76,34 @@ impl NativeIterator for SplNativeIter {
         self.index += 1;
         with_host(vm, |h| self.it.next(h))
     }
+    fn fetch(
+        &mut self,
+        vm: &mut Vm,
+        advance: bool,
+        want_key: bool,
+    ) -> VmResult<Option<(Value, Option<Value>)>> {
+        if !self.it.supports_fetch() {
+            // Separate steps, each checked for a pending exception.
+            if advance {
+                self.next(vm)?;
+            }
+            if !self.valid(vm)? {
+                return Ok(None);
+            }
+            let v = self.current(vm)?;
+            let k = if want_key { Some(self.key(vm)?) } else { None };
+            return Ok(Some((v, k)));
+        }
+        if advance {
+            self.index += 1;
+        }
+        let index = self.index;
+        let r = with_host(vm, |h| self.it.fetch(h, advance, want_key))?;
+        Ok(r.map(|(v, k)| {
+            let k = want_key.then(|| k.unwrap_or(Value::Int(index)));
+            (v.unwrap_or_default(), k)
+        }))
+    }
 }
 
 /// The state of an `InternalIterator` object.
