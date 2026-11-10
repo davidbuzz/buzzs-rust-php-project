@@ -115,7 +115,7 @@ fn collect(unit: &CompiledUnit) -> Vec<Entry> {
             if m.flags & flags::ABSTRACT != 0 || m.func.flags & flags::NO_BODY != 0 {
                 continue;
             }
-            let mut n = c.name.as_bytes().to_vec();
+            let mut n = printable(c.name.as_bytes()).to_vec();
             n.extend_from_slice(b"::");
             n.extend_from_slice(m.name.as_bytes());
             add_entry(&mut out, n, m.func.clone(), false, Some(lc.clone()));
@@ -127,7 +127,7 @@ fn collect(unit: &CompiledUnit) -> Vec<Entry> {
                 if f.flags & (flags::ABSTRACT | flags::NO_BODY) != 0 {
                     continue;
                 }
-                let mut n = c.name.as_bytes().to_vec();
+                let mut n = printable(c.name.as_bytes()).to_vec();
                 n.extend_from_slice(b"::$");
                 n.extend_from_slice(p.name.as_bytes());
                 n.extend_from_slice(b"::");
@@ -137,6 +137,14 @@ fn collect(unit: &CompiledUnit) -> Vec<Entry> {
         }
     }
     out
+}
+
+/// A class name as `%s` prints it: an anonymous class's name ends at its
+/// NUL byte (`zend_dump_op_array_name`).
+fn printable(name: &[u8]) -> &[u8] {
+    name.iter()
+        .position(|&b| b == 0)
+        .map_or(name, |end| &name[..end])
 }
 
 /// One lowered and finished op array.
