@@ -618,3 +618,24 @@ fn returning_this_is_buffered_once_and_again_after_a_collection() {
          var_dump(gc_status()['roots']);");
     assert_eq!(out, "int(2)\nint(0)\nint(0)\nint(1)\nint(1)\nint(2)\n");
 }
+
+/// The last root is recognised by its address alone: once it is freed (its
+/// buffer entry removed), an object allocated in its place is buffered
+/// when a shared handle of it is released (php-src 8.3 and 8.5: 1, 0, 1,
+/// 1, 2, 2, 0, 0, 2).
+#[test]
+fn a_freed_last_root_does_not_hide_an_object_at_its_address() {
+    let out = run("<?php class A { public $s; function m() { return 1; } }\n\
+         $a = new A; $a->m(); $x = $a; $a->m(); var_dump(gc_status()['roots']);\n\
+         unset($a, $x); var_dump(gc_status()['roots']);\n\
+         $b = new A; $b->m(); var_dump(gc_status()['roots']);\n\
+         $y = $b; unset($y); var_dump(gc_status()['roots']);\n\
+         $c = new A; $d = $c; unset($d); var_dump(gc_status()['roots']);\n\
+         $c->m(); $c->m(); var_dump(gc_status()['roots']);\n\
+         var_dump(gc_collect_cycles(), gc_status()['roots']);\n\
+         $c->m(); $b->m(); var_dump(gc_status()['roots']);");
+    assert_eq!(
+        out,
+        "int(1)\nint(0)\nint(1)\nint(1)\nint(2)\nint(2)\nint(0)\nint(0)\nint(2)\n"
+    );
+}
