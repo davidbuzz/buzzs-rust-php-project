@@ -123,19 +123,25 @@ impl<const N: usize> GcvtOut for StackBuf<N> {
 /// Parses Rust's `{:e}` output (`d.ddde±x`) into significant digits with
 /// trailing zeros removed and `decpt`.
 fn parse_exp_format(s: &[u8]) -> Option<SmallDigits> {
-    let e = s.iter().position(|&c| c == b'e')?;
-    let (mantissa, exp) = (&s[..e], &s[e + 1..]);
     let mut out = SmallDigits {
         buf: [0; 24],
         len: 0,
         decpt: 0,
     };
-    for &c in mantissa {
+    // One pass over the mantissa (`d` or `d.ddd`), up to the `e`.
+    let mut rest = s;
+    loop {
+        let (&c, tail) = rest.split_first()?;
+        rest = tail;
+        if c == b'e' {
+            break;
+        }
         if c.is_ascii_digit() {
             *out.buf.get_mut(out.len)? = c;
             out.len += 1;
         }
     }
+    let exp = rest;
     while out.len > 1 && out.buf[out.len - 1] == b'0' {
         out.len -= 1;
     }
@@ -216,11 +222,66 @@ fn dtoa_small(abs: f64, shortest: bool, ndigits: i32) -> Option<SmallDigits> {
         if shortest || d.len <= max_count {
             return Some(d);
         }
+        if let Some(r) = round_shortest(&d, max_count) {
+            return Some(r);
+        }
         w.len = 0;
     }
     let prec = max_count - 1;
     write!(w, "{abs:.prec$e}").ok()?;
     parse_exp_format(w.as_bytes())
+}
+
+/// Rounds the shortest round-trip digits `d` (more than `n` of them, `n`
+/// at most 15, value normal) to `n` digits when that provably equals the
+/// value's own correct rounding; `None` when the dropped digits lie too
+/// close to a half (the exact formatter decides then).
+///
+/// `d` lies within half an ulp of the value `v`: `|v - d| <= 2^-53 v <
+/// 1.12e-16 * 10^decpt`, which is less than 0.112 units of the `n`-th
+/// digit (`10^(decpt-n)`) for `n <= 15`. With the dropped part of `d` at
+/// `t` units (`0 <= t < 1`), `t < 0.38` puts `v` within
+/// `(-0.112, 0.492)` units of the truncation and `t >= 0.62` within
+/// `(0.508, 1.112)`: the nearest `n`-digit number is the same for `v`
+/// and `d`, and no tie (half-even) can arise.
+fn round_shortest(d: &SmallDigits, n: usize) -> Option<SmallDigits> {
+    debug_assert!(n <= 15 && d.len > n);
+    let t0 = d.buf[n] - b'0';
+    let t1 = if d.len > n + 1 {
+        d.buf[n + 1] - b'0'
+    } else {
+        0
+    };
+    let tt = t0 * 10 + t1;
+    let mut out = *d;
+    out.len = n;
+    if tt >= 62 {
+        // Round up, carrying through trailing nines.
+        let mut i = n;
+        loop {
+            if i == 0 {
+                // All nines: 0.999.. x 10^decpt becomes 0.1 x 10^(decpt+1).
+                out.buf[0] = b'1';
+                out.len = 1;
+                out.decpt += 1;
+                return Some(out);
+            }
+            i -= 1;
+            if out.buf[i] == b'9' {
+                out.len = i;
+            } else {
+                out.buf[i] += 1;
+                out.len = i + 1;
+                return Some(out);
+            }
+        }
+    } else if tt > 37 {
+        return None;
+    }
+    while out.len > 1 && out.buf[out.len - 1] == b'0' {
+        out.len -= 1;
+    }
+    Some(out)
 }
 
 /// The general (heap) digit generation behind [`zend_dtoa`], for any
@@ -689,5 +750,72 @@ mod tests {
         assert_eq!((d.digits.as_str(), d.decpt, d.negative), ("15", 1, false));
         let d = zend_dtoa(-0.1, 0, 0);
         assert_eq!((d.digits.as_str(), d.decpt, d.negative), ("1", 0, true));
+    }
+
+    /// `(string)` at `precision=14` and `5` where the shortest digits are
+    /// longer than the precision (rounded from them, or by the exact
+    /// formatter near a half). Expectations from `/usr/bin/php -n`.
+    #[test]
+    fn precision_rounding_of_long_shortest_digits() {
+        let cases: [(f64, &str, &str); 9] = [
+            (1.0 / 3.0, "0.33333333333333", "0.33333"),
+            (2.0 / 3.0, "0.66666666666667", "0.66667"),
+            (-2.0 / 3.0, "-0.66666666666667", "-0.66667"),
+            (0.1 + 0.2, "0.3", "0.3"),
+            (1e15 / 7.0, "1.4285714285714E+14", "1.4286E+14"),
+            (99_999_999_999_999.95, "1.0E+14", "1.0E+14"),
+            (123_456.789_012_345_67, "123456.78901235", "1.2346E+5"),
+            (1.000_000_000_000_000_2, "1", "1"),
+            (3.000_000_000_000_000_5e-6, "3.0E-6", "3.0E-6"),
+        ];
+        for (v, p14, p5) in cases {
+            assert_eq!(double_to_string(v, 14), p14, "{v:e} at 14");
+            assert_eq!(double_to_string(v, 5), p5, "{v:e} at 5");
+        }
+    }
+
+    /// The rounding of the shortest digits agrees with the exact
+    /// formatter for every precision up to 15 over a spread of values.
+    #[test]
+    fn rounded_shortest_digits_match_the_exact_formatter() {
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut checked = 0;
+        for i in 0..20_000u32 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let v = match i % 4 {
+                0 => f64::from_bits((x >> 2) | 0x3000_0000_0000_0000),
+                1 => f64::from(i) * 0.1 + 1.37,
+                2 => f64::from(i) / 7.0,
+                _ => 1.0 / f64::from(i + 1),
+            };
+            if !v.is_normal() {
+                continue;
+            }
+            let abs = v.abs();
+            let short = format!("{abs:e}");
+            let Some(d) = parse_exp_format(short.as_bytes()) else {
+                continue;
+            };
+            for n in 1..=15usize {
+                if d.len <= n {
+                    continue;
+                }
+                let Some(r) = round_shortest(&d, n) else {
+                    continue;
+                };
+                let prec = n - 1;
+                let exact = format!("{abs:.prec$e}");
+                let e = parse_exp_format(exact.as_bytes()).unwrap();
+                assert_eq!(
+                    (r.digits(), r.decpt),
+                    (e.digits(), e.decpt),
+                    "{abs:e} to {n} digits"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 50_000);
     }
 }
