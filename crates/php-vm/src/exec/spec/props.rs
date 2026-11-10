@@ -1124,4 +1124,23 @@ for ($i = 0; $i < 3; $i++) { $d->c += 2; $d->c++; $r[] = $d->c; }
 echo implode(',', $r), "\n";"#);
         assert_eq!(out, "9223372036854775807,9.223372036854776E+18,2.5,2.5,2.5,2.5,xy,xyy,9223372036854775807,Cannot increment property N::$n of type int past its maximal value,TypeError: Cannot assign float to property N::$n of type int,3,6,9\n");
     }
+
+    /// `$x = isset($o->p)` / `$x = empty($o->p)` with the assignment folded
+    /// into the hit: variables holding scalars, a string, an array, and a
+    /// reference (left to the assignment).
+    #[test]
+    fn folded_isset_assignment_matches_php() {
+        let out = run(r#"<?php
+class T { public $p = 1; public $q; function run() { $r = []; for ($i = 0; $i < 2; $i++) { $a = isset($this->p); $b = empty($this->q); $r[] = var_export($a, true) . '/' . var_export($b, true); } return $r; } }
+$t = new T; $r = $t->run();
+$s = 'str'; $z = [1];
+for ($i = 0; $i < 2; $i++) { $s = isset($t->p); $z = empty($t->p); $r[] = var_export($s, true) . '/' . var_export($z, true); }
+$v = 5; $w = &$v;
+for ($i = 0; $i < 2; $i++) { $w = isset($t->q); $r[] = var_export($v, true); }
+echo implode(',', $r), "\n";"#);
+        assert_eq!(
+            out,
+            "true/true,true/true,true/false,true/false,false,false\n"
+        );
+    }
 }
