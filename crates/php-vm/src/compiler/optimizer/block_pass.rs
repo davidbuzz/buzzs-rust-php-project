@@ -211,6 +211,8 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
         }
     }
 
+    changed |= jmp_to_return(op_array, &block_starts, &inst_to_block);
+
     // Compute temporary use counts across the entire op array
     let mut use_counts = vec![0u32; op_array.num_tmps as usize + 1];
     super::count_tmp_uses(op_array, &mut use_counts);
@@ -624,6 +626,70 @@ pub(crate) fn remove_unused_const_statics(op_array: &mut OpArray, bound_cv_prefi
         op_array.ops[bind] = Op::Nop;
         op_array.ops[init] = Op::Nop;
         changed = true;
+    }
+    changed
+}
+
+/// `zend_jmp_optimization`'s "JMP L, L: RETURN to immediate RETURN": a
+/// `Jmp` to a block that holds only a `Return` becomes a copy of that
+/// return (not in a function with a `finally`, whose returns run it); a
+/// `Move` of a literal into the temporary the copied (or any) `Return`
+/// returns right after it is folded into the return (the block pass's
+/// `QM_ASSIGN` of a constant replaced in its use).
+fn jmp_to_return(op_array: &mut OpArray, block_starts: &[usize], inst_to_block: &[usize]) -> bool {
+    if op_array.try_table.iter().any(|e| e.finally.is_some()) {
+        return false;
+    }
+    let len = op_array.ops.len();
+    let mut changed = false;
+    for i in 0..len {
+        let Op::Jmp(t) = op_array.ops[i] else {
+            continue;
+        };
+        let t = t as usize;
+        let Some(&b) = inst_to_block.get(t) else {
+            continue;
+        };
+        let (Some(&start), Some(&end)) = (block_starts.get(b), block_starts.get(b + 1)) else {
+            continue;
+        };
+        let mut live = (start..end).filter(|&k| !matches!(op_array.ops[k], Op::Nop));
+        if let (Some(k), None) = (live.next(), live.next()) {
+            if matches!(op_array.ops[k], Op::Return { .. }) {
+                op_array.ops[i] = op_array.ops[k].clone();
+                changed = true;
+            }
+        }
+    }
+    for i in 0..len {
+        let Op::Return {
+            val: Operand::Tmp(t),
+        } = op_array.ops[i]
+        else {
+            continue;
+        };
+        // The op before it in its block, skipping NOPs.
+        let Some(&b) = inst_to_block.get(i) else {
+            continue;
+        };
+        let start = block_starts.get(b).copied().unwrap_or(i);
+        let Some(p) = (start..i)
+            .rev()
+            .find(|&k| !matches!(op_array.ops[k], Op::Nop))
+        else {
+            continue;
+        };
+        if let Op::Move {
+            src: src @ Operand::Lit(_),
+            dst,
+        } = op_array.ops[p]
+        {
+            if dst == t {
+                op_array.ops[p] = Op::Nop;
+                op_array.ops[i] = Op::Return { val: src };
+                changed = true;
+            }
+        }
     }
     changed
 }

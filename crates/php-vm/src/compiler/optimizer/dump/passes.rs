@@ -106,6 +106,7 @@ fn ends_flow(op: &str) -> bool {
             | "THROW"
             | "EXIT"
             | "MATCH_ERROR"
+            | "MATCH"
             | "FAST_RET"
     )
 }
@@ -910,10 +911,8 @@ pub(crate) fn resolve_labels(lines: &mut [ZLine], first_z: &[u32]) {
         }
     };
     for l in lines.iter_mut() {
-        map(&mut l.op1);
-        map(&mut l.op2);
-        if let Some(j) = l.ext_jmp.as_mut() {
-            map(j);
+        for z in l.label_slots_mut() {
+            map(z);
         }
     }
 }
@@ -938,10 +937,8 @@ pub(crate) fn remove_nops(lines: Vec<ZLine>) -> (Vec<ZLine>, Vec<u32>) {
     };
     let mut out: Vec<ZLine> = lines.into_iter().filter(|l| !l.is_nop()).collect();
     for l in &mut out {
-        map(&mut l.op1);
-        map(&mut l.op2);
-        if let Some(j) = l.ext_jmp.as_mut() {
-            map(j);
+        for z in l.label_slots_mut() {
+            map(z);
         }
     }
     (out, new_idx)

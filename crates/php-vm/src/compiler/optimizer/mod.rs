@@ -378,7 +378,7 @@ pub(crate) fn for_each_operand_mut(op: &mut Op, mut f: impl FnMut(&mut Operand))
         Op::Include { a, .. } => f(a),
         Op::FeReset { subject, .. } => f(subject),
         Op::FeFetch { .. } | Op::FeFree { .. } | Op::FeFreeOnReturn { .. } => {}
-        Op::MatchError { subject } => f(subject),
+        Op::MatchError { subject } | Op::Match { subject, .. } => f(subject),
         Op::TypeAssertArray { val, .. } => f(val),
         Op::Ticks(_) | Op::Diag { .. } | Op::UserOpcode { .. } | Op::AssertCheck { .. } => {}
         Op::ConstPropCheck { obj, name, .. } => {
@@ -469,6 +469,11 @@ pub(crate) fn for_each_label_mut(op: &mut Op, mut f: impl FnMut(&mut Label)) {
         | Op::AssignOpCvJmp { target: t, .. } => f(t),
         Op::New { skip: t, .. } => {
             if *t != 0 {
+                f(t);
+            }
+        }
+        Op::Match { table, .. } => {
+            for t in table.labels_mut() {
                 f(t);
             }
         }

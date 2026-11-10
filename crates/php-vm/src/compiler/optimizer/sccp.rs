@@ -1411,6 +1411,14 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                             successors.push(b + 1);
                         }
                     }
+                    Op::Match { table, .. } => {
+                        // No fall-through: every table target and the default.
+                        for t in table.labels() {
+                            if (t as usize) < len {
+                                successors.push(inst_to_block[t as usize]);
+                            }
+                        }
+                    }
                     Op::New { skip: t, .. } => {
                         if *t != 0 && (*t as usize) < len {
                             successors.push(inst_to_block[*t as usize]);
@@ -1593,6 +1601,17 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                                 src: Operand::Lit(lit),
                                 dst: *dst,
                             };
+                            changed = true;
+                        }
+                    }
+                    // `ZEND_MATCH` of a known value: `JMP` to its arm.
+                    Op::Match {
+                        subject: Operand::Lit(l),
+                        table,
+                    } => {
+                        if let Some(va) = op_array.literals.get(*l as usize) {
+                            let t = table.target(va);
+                            *op = Op::Jmp(t);
                             changed = true;
                         }
                     }

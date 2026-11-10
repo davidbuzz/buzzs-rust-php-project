@@ -228,6 +228,101 @@ pub enum ForeachKind {
     Ref,
 }
 
+/// A key of a [`MatchTable`] (`zend_compile_match` builds the jump table
+/// from integer and string literals only).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum MatchKey {
+    /// An integer arm condition (an index key of the table).
+    Int(i64),
+    /// A string arm condition, never converted to an integer key
+    /// (`zend_hash_add`, not the symtable variant).
+    Str(Box<[u8]>),
+}
+
+/// The jump table of [`Op::Match`].
+#[derive(Clone, Debug)]
+pub struct MatchTable {
+    /// Keys and targets in insertion order (the dump prints them in this
+    /// order); a repeated key keeps its first target (`zend_hash_add`).
+    pub entries: Vec<(MatchKey, Label)>,
+    /// Where an unlisted value or a subject that is neither an int nor a
+    /// string jumps: the default arm or the `MatchError`.
+    pub default: Label,
+    /// Integer key -> index into `entries`.
+    ints: std::collections::HashMap<i64, usize>,
+    /// String key -> index into `entries`.
+    strs: std::collections::HashMap<Box<[u8]>, usize>,
+}
+
+impl MatchTable {
+    /// An empty table jumping to `default`.
+    #[must_use]
+    pub fn new(default: Label) -> Self {
+        MatchTable {
+            entries: Vec::new(),
+            default,
+            ints: std::collections::HashMap::new(),
+            strs: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Adds `key -> target` unless `key` is already present (the first arm
+    /// listing a value wins, as with a chain of `===` tests). Returns
+    /// whether it was added.
+    pub fn insert(&mut self, key: MatchKey, target: Label) -> bool {
+        let at = self.entries.len();
+        let added = match &key {
+            MatchKey::Int(i) => match self.ints.entry(*i) {
+                std::collections::hash_map::Entry::Occupied(_) => false,
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    v.insert(at);
+                    true
+                }
+            },
+            MatchKey::Str(s) => {
+                if self.strs.contains_key(s) {
+                    false
+                } else {
+                    self.strs.insert(s.clone(), at);
+                    true
+                }
+            }
+        };
+        if added {
+            self.entries.push((key, target));
+        }
+        added
+    }
+
+    /// The jump target for a (dereferenced) subject value.
+    #[must_use]
+    pub fn target(&self, v: &Value) -> Label {
+        let at = match v {
+            Value::Int(i) => self.ints.get(i),
+            Value::Str(s) => self.strs.get(s.as_bytes()),
+            _ => None,
+        };
+        at.and_then(|&k| self.entries.get(k))
+            .map_or(self.default, |&(_, l)| l)
+    }
+
+    /// Every jump target: the entries' in order, then the default.
+    pub fn labels(&self) -> impl Iterator<Item = Label> + '_ {
+        self.entries
+            .iter()
+            .map(|&(_, l)| l)
+            .chain(std::iter::once(self.default))
+    }
+
+    /// Every jump target (the entries' and the default), mutably.
+    pub fn labels_mut(&mut self) -> impl Iterator<Item = &mut Label> {
+        self.entries
+            .iter_mut()
+            .map(|(_, l)| l)
+            .chain(std::iter::once(&mut self.default))
+    }
+}
+
 /// An instruction.
 #[derive(Clone, Debug)]
 pub enum Op {
@@ -611,6 +706,16 @@ pub enum Op {
     FeFreeOnReturn { iter: u32, loop_at: u32 },
     /// Throws `UnhandledMatchError` for the subject.
     MatchError { subject: Operand },
+    /// `ZEND_MATCH`: a match whose conditions are all integer and string
+    /// literals jumps through a table keyed by the subject (identity: an
+    /// int never finds a string key nor the reverse); any other subject,
+    /// or one not in the table, jumps to the table's default. Never falls
+    /// through. The subject is not consumed (a temporary is freed after
+    /// the match, as `ZEND_FREE_SWITCH`).
+    Match {
+        subject: Operand,
+        table: Box<MatchTable>,
+    },
     /// `ZEND_TYPE_ASSERT` of an inlined internal call: throws a `TypeError`
     /// "`msg`, X given" unless `val` is an array.
     TypeAssertArray { val: Operand, msg: u32 },
@@ -1463,5 +1568,36 @@ impl OpArray {
         self.rt_cache.clear();
         self.prop_cache.borrow_mut().clear();
         self.method_cache.borrow_mut().clear();
+    }
+}
+
+#[cfg(test)]
+mod match_table_tests {
+    use super::{MatchKey, MatchTable};
+    use php_runtime::{Value, ZStr};
+
+    #[test]
+    fn lookup_is_by_identity_and_the_first_key_wins() {
+        let mut t = MatchTable::new(9);
+        assert!(t.insert(MatchKey::Int(1), 3));
+        assert!(t.insert(MatchKey::Str(b"1".as_slice().into()), 4));
+        assert!(!t.insert(MatchKey::Int(1), 5));
+        assert!(t.insert(MatchKey::Str(b"a".as_slice().into()), 6));
+        assert_eq!(t.entries.len(), 3);
+        assert_eq!(t.target(&Value::Int(1)), 3);
+        assert_eq!(t.target(&Value::Str(ZStr::from("1"))), 4);
+        assert_eq!(t.target(&Value::Str(ZStr::from("a"))), 6);
+        // Floats, bools, null and unlisted values take the default.
+        assert_eq!(t.target(&Value::Float(1.0)), 9);
+        assert_eq!(t.target(&Value::Bool(true)), 9);
+        assert_eq!(t.target(&Value::Null), 9);
+        assert_eq!(t.target(&Value::Int(2)), 9);
+        assert_eq!(t.target(&Value::Str(ZStr::from("01"))), 9);
+        assert_eq!(t.labels().collect::<Vec<_>>(), vec![3, 4, 6, 9]);
+        for l in t.labels_mut() {
+            *l += 1;
+        }
+        assert_eq!(t.target(&Value::Int(1)), 4);
+        assert_eq!(t.default, 10);
     }
 }

@@ -496,6 +496,7 @@ pub(crate) fn for_each_literal_index_mut(op: &mut Op, mut f: impl FnMut(&mut u32
         | Op::ListFetchRef { .. }
         | Op::MakeClosure { .. }
         | Op::MakeRef { .. }
+        | Op::Match { .. }
         | Op::MatchError { .. }
         | Op::Move { .. }
         | Op::Nop

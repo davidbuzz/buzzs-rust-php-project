@@ -93,6 +93,9 @@ pub(crate) struct ZLine {
     pub op2_var: bool,
     /// A `ZEND_VM_EXT_JMP_ADDR` target.
     pub ext_jmp: Option<Z>,
+    /// The jump table of `MATCH` (`SWITCH_*`): keys with their targets,
+    /// printed after `op1` and followed by ` default:` and `ext_jmp`.
+    pub jt: Option<Vec<(Value, Z)>>,
     /// `ZEND_FREE_ON_RETURN`.
     pub free_on_return: bool,
     /// `INIT_FCALL`'s stack size, filled in when printing.
@@ -117,6 +120,7 @@ impl ZLine {
             op1_var: false,
             op2_var: false,
             ext_jmp: None,
+            jt: None,
             free_on_return: false,
             stack: None,
             ret: None,
@@ -182,9 +186,26 @@ impl ZLine {
 
     /// The jump targets of this opline (`Label`/`ZLabel` operands).
     pub(crate) fn targets(&self) -> impl Iterator<Item = &Z> {
-        [Some(&self.op1), Some(&self.op2), self.ext_jmp.as_ref()]
-            .into_iter()
+        self.jt
+            .iter()
             .flatten()
+            .map(|(_, z)| z)
+            .chain(
+                [Some(&self.op1), Some(&self.op2), self.ext_jmp.as_ref()]
+                    .into_iter()
+                    .flatten(),
+            )
             .filter(|z| matches!(z, Z::Label(_) | Z::ZLabel(_)))
+    }
+
+    /// Every operand that may hold a jump target, mutably (the table's,
+    /// `op1`, `op2`, `ext_jmp`).
+    pub(crate) fn label_slots_mut(&mut self) -> impl Iterator<Item = &mut Z> {
+        self.jt
+            .iter_mut()
+            .flatten()
+            .map(|(_, z)| z)
+            .chain([&mut self.op1, &mut self.op2])
+            .chain(self.ext_jmp.as_mut())
     }
 }

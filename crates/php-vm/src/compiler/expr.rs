@@ -9,8 +9,8 @@ use crate::ast::{
 };
 use crate::func::flags;
 use crate::opcode::{
-    type_mask, ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Op,
-    Operand, Place, PlaceBase, Seg, UnKind,
+    type_mask, ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, IncludeKind, Label,
+    MatchKey, MatchTable, Op, Operand, Place, PlaceBase, Seg, UnKind,
 };
 use php_runtime::{BinaryOp, CollectingContext, Value, ZArray, ZStr};
 
@@ -664,7 +664,7 @@ impl Compiler<'_> {
             }
             ExprKind::Closure(c) => self.compile_closure(c)?,
             ExprKind::ArrowFn(a) => self.compile_arrow_fn(a)?,
-            ExprKind::Match { subject, arms } => self.compile_match(subject, arms, line)?,
+            ExprKind::Match { subject, arms } => self.compile_match(subject, arms)?,
             ExprKind::Pipe { left, right } => {
                 let l = self.compile_expr(left)?;
                 // `x |> f(...)`: call the callable with x.
@@ -1952,57 +1952,78 @@ impl Compiler<'_> {
         Ok(dst.map(Operand::Tmp))
     }
 
-    fn compile_match(
-        &mut self,
-        subject: &Expr,
-        arms: &[ast::MatchArm],
-        line: u32,
-    ) -> CResult<Operand> {
+    /// `zend_compile_match`: the subject is compiled once and read by
+    /// every test without a copy (a CV is re-read, so a condition that
+    /// assigns to it is seen by the later tests). When every condition is
+    /// an integer or string literal and there are at least two, one
+    /// [`Op::Match`] jumps through a table; otherwise each condition is
+    /// tested with `===` in order. Without a default arm the
+    /// [`Op::MatchError`] comes before the arm bodies.
+    fn compile_match(&mut self, subject: &Expr, arms: &[ast::MatchArm]) -> CResult<Operand> {
         let s = self.compile_expr(subject)?;
-        let s = match s {
-            Operand::Cv(_) => {
-                let t = self.tmp();
-                self.emit(Op::Move { src: s, dst: t });
-                Operand::Tmp(t)
-            }
-            o => o,
-        };
         let sk = Compiler::keep(s);
         let result = self.tmp();
-        let mut arm_jumps: Vec<(usize, usize)> = Vec::new();
         let mut default_arm = None;
         for (i, arm) in arms.iter().enumerate() {
-            match &arm.conds {
-                Some(conds) => {
-                    for c in conds {
-                        self.f().line = c.span.line;
-                        let v = self.compile_expr(c)?;
-                        let t = self.tmp();
-                        self.emit(Op::Bin {
-                            op: BinKind::Identical,
-                            a: sk,
-                            b: v,
-                            dst: t,
-                        });
-                        arm_jumps.push((i, self.emit(Op::JmpNz(Operand::Tmp(t), 0))));
-                    }
+            if arm.conds.is_none() {
+                if default_arm.is_some() {
+                    return self.err(
+                        "Match expressions may only contain one default arm",
+                        arm.span.line,
+                    );
                 }
-                None => {
-                    if default_arm.is_some() {
-                        return self.err(
-                            "Match expressions may only contain one default arm",
-                            arm.span.line,
-                        );
-                    }
-                    default_arm = Some(i);
-                }
+                default_arm = Some(i);
             }
         }
-        let no_match = self.emit(Op::Jmp(0));
+        let keys = match_jumptable_keys(self, arms);
+        // Ops take `CG(zend_lineno)`: `MATCH` and its `MATCH_ERROR` the
+        // subject's line, a `MATCH_ERROR` after `===` tests the line the
+        // last condition left.
+        let mut table = None;
+        let mut arm_jumps: Vec<(usize, usize)> = Vec::new();
+        let mut no_match = None;
+        if keys.is_some() {
+            self.f().line = subject.span.line;
+            table = Some(self.emit(Op::Match {
+                subject: sk,
+                table: Box::new(MatchTable::new(0)),
+            }));
+        } else {
+            for (i, arm) in arms.iter().enumerate() {
+                for c in arm.conds.iter().flatten() {
+                    self.f().line = c.span.line;
+                    let v = self.compile_expr(c)?;
+                    let t = self.tmp();
+                    self.emit(Op::Bin {
+                        op: BinKind::Identical,
+                        a: sk,
+                        b: v,
+                        dst: t,
+                    });
+                    arm_jumps.push((i, self.emit(Op::JmpNz(Operand::Tmp(t), 0))));
+                }
+            }
+            no_match = Some(self.emit(Op::Jmp(0)));
+        }
+        if default_arm.is_none() {
+            let here = self.here();
+            if let Some(j) = no_match {
+                self.patch(j, here);
+            }
+            self.set_match_default(table, here);
+            self.emit(Op::MatchError { subject: sk });
+        }
         let mut starts = Vec::new();
         let mut ends = Vec::new();
-        for arm in arms {
-            starts.push(self.here());
+        for (i, arm) in arms.iter().enumerate() {
+            let here = self.here();
+            starts.push(here);
+            if default_arm == Some(i) {
+                if let Some(j) = no_match {
+                    self.patch(j, here);
+                }
+                self.set_match_default(table, here);
+            }
             self.f().line = arm.body.span.line;
             let v = self.compile_expr(&arm.body)?;
             self.emit(Op::Move {
@@ -2014,18 +2035,27 @@ impl Compiler<'_> {
         for (i, j) in arm_jumps {
             self.patch(j, starts[i]);
         }
-        if let Some(d) = default_arm {
-            self.patch(no_match, starts[d]);
-        } else {
-            self.patch_here(no_match);
-            self.f().line = line;
-            self.emit(Op::MatchError { subject: sk });
+        if let (Some(at), Some(keys)) = (table, keys) {
+            if let Op::Match { table, .. } = &mut self.f().ops[at] {
+                for (arm, key) in keys {
+                    table.insert(key, starts[arm]);
+                }
+            }
         }
         for j in ends {
             self.patch_here(j);
         }
         self.free(s);
         Ok(Operand::Tmp(result))
+    }
+
+    /// Sets the default target of the [`Op::Match`] at `at`, if any.
+    fn set_match_default(&mut self, at: Option<usize>, target: Label) {
+        if let Some(at) = at {
+            if let Op::Match { table, .. } = &mut self.f().ops[at] {
+                table.default = target;
+            }
+        }
     }
 
     pub(crate) fn emit_init_fcall(&mut self, n: &ast::Name) {
@@ -3529,5 +3559,169 @@ fn reads_append(e: &Expr) -> bool {
             ExprKind::Prop { object, .. } => cur = &**object,
             _ => return false,
         }
+    }
+}
+
+/// `can_match_use_jumptable` and the `num_conds >= 2` test of
+/// `zend_compile_match`: the (arm index, key) of every condition when all
+/// of them fold to integer or string literals and there are at least two;
+/// `None` when the match tests its conditions one by one.
+fn match_jumptable_keys(
+    c: &Compiler<'_>,
+    arms: &[ast::MatchArm],
+) -> Option<Vec<(usize, MatchKey)>> {
+    let mut keys = Vec::new();
+    for (i, arm) in arms.iter().enumerate() {
+        for cond in arm.conds.iter().flatten() {
+            let key = match c.try_fold(cond)? {
+                Value::Int(n) => MatchKey::Int(n),
+                Value::Str(s) => MatchKey::Str(s.as_bytes().into()),
+                _ => return None,
+            };
+            keys.push((i, key));
+        }
+    }
+    (keys.len() >= 2).then_some(keys)
+}
+
+#[cfg(test)]
+mod match_tests {
+    //! `zend_compile_match`: jump-table selection and layout, and what the
+    //! optimizer makes of it.
+    use crate::compiler::{compile, optimizer, CompileOptions};
+    use crate::opcode::{BinKind, MatchKey, Op, OpArray, Operand};
+    use std::rc::Rc;
+
+    /// The first declared function's code, optimized at `level`.
+    fn function_code(src: &str, level: u32) -> Rc<OpArray> {
+        let program =
+            php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+        let opts = CompileOptions {
+            filename: "t.php".into(),
+            optimization_level: level,
+            ..CompileOptions::default()
+        };
+        let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+        let code = unit.decls.functions.borrow()[0].code.clone();
+        code
+    }
+
+    fn match_op(code: &OpArray) -> Option<(Operand, Vec<(MatchKey, u32)>, u32)> {
+        code.ops.iter().find_map(|op| match op {
+            Op::Match { subject, table } => Some((*subject, table.entries.clone(), table.default)),
+            _ => None,
+        })
+    }
+
+    /// Whether `op` is a `===` test of the subject CV 0 (plain or fused
+    /// with its jump by the handler specialisation).
+    fn identical_on_cv0(op: &Op) -> bool {
+        matches!(
+            op,
+            Op::Bin {
+                op: BinKind::Identical,
+                a: Operand::Cv(0),
+                ..
+            } | Op::CmpJmp {
+                op: BinKind::Identical,
+                a: Operand::Cv(0),
+                ..
+            }
+        )
+    }
+
+    #[test]
+    fn string_literals_use_a_jump_table_with_match_error_first() {
+        let code = function_code(
+            "<?php function t($c) { return match ($c) { 'a' => 1, 'b', 'c' => 2 }; }",
+            0,
+        );
+        let (subject, entries, default) = match_op(&code).expect("MATCH");
+        assert_eq!(subject, Operand::Cv(0));
+        // MATCH_ERROR right after MATCH, then the arms.
+        assert!(matches!(
+            code.ops[default as usize],
+            Op::MatchError {
+                subject: Operand::Cv(0)
+            }
+        ));
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].0, MatchKey::Str(b"a".as_slice().into()));
+        assert_eq!(entries[1].1, entries[2].1);
+        assert_eq!(entries[0].1, default + 1);
+        // No copy of the subject and no `===` chain.
+        assert!(!code.ops.iter().any(identical_on_cv0));
+        assert!(!code.ops.iter().any(|op| matches!(op, Op::Free(_))));
+    }
+
+    #[test]
+    fn ints_and_numeric_strings_are_distinct_keys_and_duplicates_keep_the_first() {
+        let code = function_code(
+            "<?php function t($v) { return match ($v) { 1 => 'i', '1' => 's', 1 => 'x', default => 'd' }; }",
+            0,
+        );
+        let (_, entries, default) = match_op(&code).expect("MATCH");
+        assert_eq!(
+            entries.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(),
+            vec![MatchKey::Int(1), MatchKey::Str(b"1".as_slice().into())]
+        );
+        // The default arm is the last arm, no MATCH_ERROR.
+        assert!(default > entries[1].1);
+        assert!(!code
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::MatchError { .. })));
+    }
+
+    #[test]
+    fn a_single_condition_or_a_non_literal_one_tests_with_identical() {
+        for src in [
+            "<?php function t($v) { return match ($v) { 1 => 'a', default => 'b' }; }",
+            "<?php function t($v) { return match ($v) { 1 => 'a', 2.5 => 'b' }; }",
+            "<?php function t($v) { return match ($v) { 1 => 'a', f() => 'b' }; }",
+        ] {
+            let code = function_code(src, 0);
+            assert!(match_op(&code).is_none(), "{src}");
+            assert!(
+                code.ops.iter().any(identical_on_cv0),
+                "{src}: {:?}",
+                code.ops
+            );
+        }
+    }
+
+    #[test]
+    fn optimizer_turns_arms_into_returns_and_folds_a_known_subject() {
+        let code = function_code(
+            "<?php function t($c) { return match ($c) { 1 => 'a', 2, 3 => 'b', default => 'c' }; }",
+            optimizer::DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let live: Vec<&Op> = code
+            .ops
+            .iter()
+            .filter(|op| !matches!(op, Op::Nop))
+            .collect();
+        assert_eq!(live.len(), 5, "{live:?}");
+        assert!(matches!(live[1], Op::Match { .. }));
+        for op in &live[2..] {
+            assert!(
+                matches!(
+                    op,
+                    Op::Return {
+                        val: Operand::Lit(_)
+                    }
+                ),
+                "{live:?}"
+            );
+        }
+        let (_, entries, default) = match_op(&code).expect("MATCH");
+        assert_eq!(entries[1].1, entries[2].1);
+        assert_eq!(default, 4);
+
+        let code = function_code(
+            "<?php function t() { $x = '2'; return match ($x) { 1, 2 => 'a', default => 'b' }; }",
+            optimizer::DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        assert!(match_op(&code).is_none(), "{:?}", code.ops);
     }
 }
