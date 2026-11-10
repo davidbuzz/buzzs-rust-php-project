@@ -154,6 +154,12 @@ struct Root {
     handle: u32,
 }
 
+/// Clears [`LAST_ROOT`]: a root may have left [`GcState::roots`].
+#[inline]
+fn forget_last_root() {
+    let _ = LAST_ROOT.try_with(|c| c.set((0, 0)));
+}
+
 /// `v.push(x)`, growing `v` outside the counted heap (see [`RootBuffer`]).
 #[inline]
 fn push_persistent<T>(v: &mut Vec<T>, x: T) {
@@ -165,6 +171,7 @@ fn push_persistent<T>(v: &mut Vec<T>, x: T) {
 
 impl Drop for RootBuffer {
     fn drop(&mut self) {
+        forget_last_root();
         // The weak handles go first, as ordinary memory: the last one of a
         // freed object releases its block.
         self.slots.clear();
@@ -284,6 +291,7 @@ impl RootBuffer {
             return;
         };
         let handle = r.handle;
+        forget_last_root();
         self.clear_index(handle, i);
         self.slots[i] = None;
         push_persistent(&mut self.unused, i);
@@ -304,6 +312,7 @@ impl RootBuffer {
         let Some(i) = self.slot_of(handle, addr) else {
             return false;
         };
+        forget_last_root();
         self.by_handle[handle as usize] = 0;
         self.slots[i] = None;
         push_persistent(&mut self.unused, i);
@@ -329,6 +338,7 @@ impl RootBuffer {
     /// the first hole gets the last entry) until the used slots are
     /// `0..num_roots`; empties the unused list.
     fn compact(&mut self) {
+        forget_last_root();
         let len = self.slots.len();
         if self.num_roots == len {
             return;
@@ -493,6 +503,17 @@ impl Default for GcState {
 
 thread_local! {
     static STATE: RefCell<GcState> = RefCell::new(GcState::default());
+    /// The address and handle of the last object [`buffer_obj_data`] found
+    /// or put in [`GcState::roots`] (`(0, 0)`: none). It stays in the
+    /// buffer until something takes a root out of it (a slot released or
+    /// removed, the buffer compacted, set aside, swapped or reset), and
+    /// each of those clears this ([`forget_last_root`]). While it is set,
+    /// buffering that object again would change nothing, so
+    /// [`root_shared_obj`] answers from it without borrowing the state:
+    /// php-src's `gc_check_possible_root` only tests `GC_INFO` on the
+    /// object (the `$this` or closure of every method or closure call
+    /// returning in a loop).
+    static LAST_ROOT: Cell<(usize, u32)> = const { Cell::new((0, 0)) };
     /// Set when an automatic run is due; setting it also raises the
     /// executor's safe-point flag (`crate::interrupt::raise_safe_point`).
     static WANT_RUN: Cell<bool> = const { Cell::new(false) };
@@ -740,6 +761,15 @@ fn root_obj(o: &Obj) {
 #[inline(never)]
 fn root_shared_obj(o: &Obj) {
     if let Some(d) = o.downcast_ref::<ObjectData>() {
+        // Buffered already, and still (see `LAST_ROOT`): nothing to do,
+        // as `buffer_obj_data` would find.
+        if d.flags.get() & crate::object::oflags::GC_BUFFERED != 0
+            && LAST_ROOT
+                .try_with(Cell::get)
+                .is_ok_and(|last| last == (o.addr(), d.handle))
+        {
+            return;
+        }
         with_state(|s| buffer_obj_data(s, o, d));
     }
 }
@@ -764,6 +794,7 @@ fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
     if d.flags.get() & crate::object::oflags::GC_BUFFERED != 0
         && s.roots.contains(d.handle, o.addr())
     {
+        remember_root(o, d.handle);
         return None;
     }
     if !s.roots.has_unused() {
@@ -774,7 +805,15 @@ fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
     let i = s.roots.insert_new(o, d.handle);
     d.flags
         .set(d.flags.get() | crate::object::oflags::GC_BUFFERED);
+    remember_root(o, d.handle);
     Some(i)
+}
+
+/// Records `o` (with `handle`, never 0 for a live object) as in
+/// [`GcState::roots`] now ([`LAST_ROOT`]).
+#[inline]
+fn remember_root(o: &Obj, handle: u32) {
+    let _ = LAST_ROOT.try_with(|c| c.set((o.addr(), handle)));
 }
 
 /// `a` was made to contain itself by value (`$t = &$a; $a[] = $t;`,
@@ -898,6 +937,7 @@ fn note_new_slot(s: &mut GcState) {
 fn freeze(s: &mut GcState) {
     // Roots still frozen for a run that did not happen stay the oldest.
     thaw(s);
+    forget_last_root();
     let objs = std::mem::take(&mut s.roots);
     let refs = php_runtime::ref_roots::stash();
     s.frozen = Some(Frozen { objs, refs });
@@ -907,6 +947,7 @@ fn freeze(s: &mut GcState) {
 /// Puts frozen roots back into the buffers (ahead of the newer ones).
 fn thaw(s: &mut GcState) {
     if let Some(f) = s.frozen.take() {
+        forget_last_root();
         let later = std::mem::replace(&mut s.roots, f.objs);
         s.roots.append(later);
         php_runtime::ref_roots::unstash(f.refs);
@@ -974,6 +1015,7 @@ pub fn wants_run() -> bool {
 pub(crate) fn request_startup(enable: bool) {
     with_state(|s| {
         let providers = std::mem::take(&mut s.providers);
+        forget_last_root();
         *s = GcState {
             providers,
             ..GcState::default()
@@ -1074,6 +1116,7 @@ impl Vm {
             let Some(f) = s.frozen.take() else {
                 return Some(Frozen::default());
             };
+            forget_last_root();
             let late = Frozen {
                 objs: std::mem::replace(&mut s.roots, f.objs),
                 refs: php_runtime::ref_roots::stash(),
