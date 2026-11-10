@@ -17,7 +17,11 @@ use std::ffi::{c_char, c_int};
 /// `unsigned long long`.
 pub type ull = u64;
 
-#[link(name = "sodium")]
+// libsodium is bound lazily (see `build.rs`): the generated stubs define the
+// functions below and load the library on the first call, keeping it out of every
+// start-up.
+include!(concat!(env!("OUT_DIR"), "/lazy_sodium.rs"));
+
 unsafe extern "C" {
     // core / version / utils
     pub fn sodium_init() -> c_int;

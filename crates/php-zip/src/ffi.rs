@@ -116,7 +116,11 @@ pub type zip_cancel_callback = unsafe extern "C" fn(*mut zip_t, *mut c_void) -> 
 /// State destructor of the `*_with_state` callback registrations.
 pub type zip_state_free = unsafe extern "C" fn(*mut c_void);
 
-#[link(name = "zip")]
+// libzip is bound lazily (see `build.rs`): the generated stubs define the
+// functions below and load the library on the first call, keeping it out of every
+// start-up.
+include!(concat!(env!("OUT_DIR"), "/lazy_zip.rs"));
+
 extern "C" {
     pub fn zip_libzip_version() -> *const c_char;
 

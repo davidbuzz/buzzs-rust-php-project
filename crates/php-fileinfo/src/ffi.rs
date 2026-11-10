@@ -15,7 +15,11 @@ pub struct magic_set {
 /// `magic_t`.
 pub type magic_t = *mut magic_set;
 
-#[link(name = "magic")]
+// libmagic is bound lazily (see `build.rs`): the generated stubs define the
+// functions below and load the library on the first call, keeping it out of every
+// start-up.
+include!(concat!(env!("OUT_DIR"), "/lazy_magic.rs"));
+
 unsafe extern "C" {
     pub fn magic_open(flags: c_int) -> magic_t;
     pub fn magic_close(ms: magic_t);

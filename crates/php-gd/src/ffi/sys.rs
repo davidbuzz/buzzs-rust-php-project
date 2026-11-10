@@ -116,7 +116,12 @@ pub const GD_FTEX_LINESPACE: c_int = 1;
 /// [`super::errors`]).
 pub type gdErrorMethod = unsafe extern "C" fn(c_int, *const c_char, *mut c_void);
 
-#[link(name = "gd")]
+// libgd is bound lazily (see `build.rs`): the generated stubs define the
+// functions below and load libgd and its image-format libraries (libheif,
+// libtiff, libwebp, fontconfig, ...) on the first call, keeping them out of
+// every start-up.
+include!(concat!(env!("OUT_DIR"), "/lazy_gd.rs"));
+
 extern "C" {
     pub fn gdSetErrorMethod(m: gdErrorMethod);
     pub fn gdFree(m: *mut c_void);
