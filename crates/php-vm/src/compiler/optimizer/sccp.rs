@@ -1995,5 +1995,9 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
         changed |= simplify_constant_branches(&mut op_array.ops, &op_array.literals);
     }
 
+    // 3. A literal store that propagation left unread (php-src's DCE
+    // removes it with the dead SSA variable it defines).
+    changed |= super::dce::remove_dead_entry_stores(op_array, ctx, refs_possible);
+
     changed
 }

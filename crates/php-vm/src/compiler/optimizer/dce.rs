@@ -220,10 +220,31 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
         count_non_free_uses(op_array, &mut non_free_uses);
         let mut defs = vec![0u32; num_tmps + 1];
         count_defs(op_array, &mut defs);
+        let mut frees = vec![0u32; num_tmps + 1];
+        for op in &op_array.ops {
+            if let Op::Free(Operand::Tmp(t)) = op {
+                if let Some(c) = frees.get_mut(*t as usize) {
+                    *c += 1;
+                }
+            }
+        }
 
         for op in &mut op_array.ops {
             if let Some(t) = def_tmp(op) {
                 let uses = non_free_uses.get(t as usize).copied().unwrap_or(0);
+                // A side-effecting op's result that several `FREE`s release
+                // (a `switch` subject freed on each way out) stays, FREEs
+                // included, unless it is never refcounted: php-src drops a
+                // result only with its single `FREE` (block_pass.c), and
+                // dce.c keeps the FREE of a live refcounted value
+                // (opt/gh11245_2: `switch (++X::$prop)`).
+                if uses == 0
+                    && !is_pure_op(op)
+                    && frees.get(t as usize).copied().unwrap_or(0) > 1
+                    && !result_never_refcounted(op)
+                {
+                    continue;
+                }
                 if uses == 0 {
                     let rest = if is_pure_op(op) {
                         leftover_of(op)
@@ -268,6 +289,143 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
     }
 
     changed
+}
+
+/// Removes the store of a literal into a variable that holds nothing yet
+/// and is overwritten before anything reads it (`$v = null; $v = f();`,
+/// opt/jmp_001): php-src's dce.c drops an `ASSIGN` whose defined SSA
+/// variable is dead. Kept narrow, as this IR has no SSA: the store must be
+/// the first op of the function to mention the variable, with no jump
+/// target up to it (so the old value is undefined: no destructor is
+/// delayed), and the next mention of the variable, in the same straight
+/// line of code, must be a whole assignment that does not read it. Not in
+/// top-level code, nor with references, dynamic variable access
+/// (`compact()`, `extract()`, `get_defined_vars()`, `include`), a
+/// try/catch/finally (a handler sees the variable), or for a variable that
+/// is bound (parameter, closure `use`), captured by a closure or named by
+/// any place.
+pub(crate) fn remove_dead_entry_stores(
+    op_array: &mut OpArray,
+    ctx: &super::OptContext<'_>,
+    refs_possible: bool,
+) -> bool {
+    let num_cvs = op_array.cv_names.len();
+    if ctx.is_main
+        || refs_possible
+        || num_cvs == 0
+        || !op_array.try_table.is_empty()
+        || super::compact::has_dynamic_var_access(op_array)
+    {
+        return false;
+    }
+    // Variables that may not lose a store.
+    let mut pinned = vec![false; num_cvs];
+    for slot in pinned.iter_mut().take(ctx.bound_cv_prefix() as usize) {
+        *slot = true;
+    }
+    for f in op_array.decls.functions.borrow().iter() {
+        for u in &f.uses {
+            if let Some(slot) = pinned.get_mut(u.parent_cv as usize) {
+                *slot = true;
+            }
+        }
+    }
+    for place in &op_array.places {
+        let mut place = place.clone();
+        super::compact::for_each_place_cv_mut(&mut place, |c| {
+            if let Some(slot) = pinned.get_mut(*c as usize) {
+                *slot = true;
+            }
+        });
+    }
+    let len = op_array.ops.len();
+    let mut is_target = vec![false; len + 1];
+    for op in &op_array.ops {
+        let mut op = op.clone();
+        super::for_each_label_mut(&mut op, |l| {
+            if let Some(slot) = is_target.get_mut(*l as usize) {
+                *slot = true;
+            }
+        });
+    }
+    let mentions = |op: &Op| {
+        let mut cvs = Vec::new();
+        let mut op = op.clone();
+        super::compact::for_each_cv_mut(&mut op, |c| cvs.push(*c));
+        cvs
+    };
+
+    let mut changed = false;
+    let mut seen = vec![false; num_cvs];
+    let mut straight = true;
+    for s in 0..len {
+        straight &= !is_target[s];
+        let cvs = mentions(&op_array.ops[s]);
+        if straight {
+            if let Op::AssignCv {
+                cv,
+                val: Operand::Lit(_),
+                dst: None,
+            } = op_array.ops[s]
+            {
+                let c = cv as usize;
+                if c < num_cvs
+                    && !seen[c]
+                    && !pinned[c]
+                    && overwritten_before_read(op_array, s + 1, cv, &is_target, &mentions)
+                {
+                    op_array.ops[s] = Op::Nop;
+                    changed = true;
+                    continue;
+                }
+            }
+        }
+        for c in cvs {
+            if let Some(slot) = seen.get_mut(c as usize) {
+                *slot = true;
+            }
+        }
+    }
+    changed
+}
+
+/// Whether, from op `from` on, the next op mentioning `cv` assigns it a
+/// value that does not read it, with no jump target, branch or exit
+/// before (see [`remove_dead_entry_stores`]).
+fn overwritten_before_read(
+    op_array: &OpArray,
+    from: usize,
+    cv: u32,
+    is_target: &[bool],
+    mentions: &impl Fn(&Op) -> Vec<u32>,
+) -> bool {
+    for (j, op) in op_array.ops.iter().enumerate().skip(from) {
+        if is_target.get(j).copied().unwrap_or(true) {
+            return false;
+        }
+        if mentions(op).contains(&cv) {
+            return matches!(op, Op::AssignCv { cv: c, val, .. }
+                if *c == cv && *val != Operand::Cv(cv));
+        }
+        let mut has_label = false;
+        let mut op = op.clone();
+        super::for_each_label_mut(&mut op, |_| has_label = true);
+        if has_label
+            || matches!(
+                op,
+                Op::Return { .. }
+                    | Op::ReturnRef { .. }
+                    | Op::ReturnByRefValue { .. }
+                    | Op::Throw(_)
+                    | Op::Rethrow
+                    | Op::Exit(_)
+                    | Op::FastRet { .. }
+            )
+        {
+            return false;
+        }
+    }
+    false
 }
 
 /// What replaces a removed side-effect-free op: the `FREE` of the temporary
@@ -374,6 +532,22 @@ fn is_pure_op(op: &Op) -> bool {
         Op::FetchClassName { class, .. } => matches!(class, ClassSpec::Named(_)),
         _ => false,
     }
+}
+
+/// Whether `op`'s result is always an int or a bool, so releasing it does
+/// nothing (php-src's `may_be_refcounted()` is false for it).
+fn result_never_refcounted(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Strlen { .. }
+            | Op::Count { .. }
+            | Op::TypeCheck { .. }
+            | Op::Defined { .. }
+            | Op::InArray { .. }
+            | Op::KeyExists { .. }
+            | Op::ArrayKeyExists { .. }
+            | Op::FuncNumArgs { .. }
+    )
 }
 
 /// Ops without a result that can be dropped (see [`is_pure_op`]).

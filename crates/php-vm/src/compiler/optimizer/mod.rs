@@ -1481,6 +1481,61 @@ mod tests {
         );
     }
 
+    /// A literal store into a variable that holds nothing yet goes when
+    /// the next mention of the variable overwrites it (opcache
+    /// `opt/jmp_001`); one that is read first, or follows a loop head,
+    /// stays.
+    #[test]
+    fn dead_entry_store_is_removed() {
+        let unit = compile_src(
+            "<?php function f() { $v = null; $v = $v ?: g(); return $v; }\n\
+             function h() { $v = 1; var_dump($v); $v = g(); return $v; }\n\
+             function k($n) { while ($n--) { $v = 1; $v = g(); } return 0; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let lit_stores = |code: &OpArray| {
+            code.ops
+                .iter()
+                .filter(|op| {
+                    matches!(op, Op::AssignCv { cv, val: Operand::Lit(_), .. }
+                        if *cv == cv_index(code, b"v"))
+                })
+                .count()
+        };
+        let f = find_code(&unit, named(b"f"));
+        assert_eq!(lit_stores(&f), 0, "{:?}", f.ops);
+        let h = find_code(&unit, named(b"h"));
+        assert_eq!(lit_stores(&h), 1, "{:?}", h.ops);
+        let k = find_code(&unit, named(b"k"));
+        assert_eq!(lit_stores(&k), 1, "{:?}", k.ops);
+    }
+
+    /// The result of a side-effecting op that a `switch` frees on each way
+    /// out keeps its `FREE`s (opcache `opt/gh11245_2`).
+    #[test]
+    fn switch_subject_frees_are_kept() {
+        let unit = compile_src(
+            "<?php class X { static $p = \"aa\"; }\n\
+             function f() { switch (++X::$p) { default: if (empty($xx)) { return; } } }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let f = find_code(&unit, named(b"f"));
+        let freed: Vec<u32> = f
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Free(Operand::Tmp(t)) => Some(*t),
+                _ => None,
+            })
+            .collect();
+        assert!(freed.len() >= 2, "{:?}", f.ops);
+        assert!(
+            f.ops.iter().any(|op| def_tmp(op) == freed.first().copied()),
+            "{:?}",
+            f.ops
+        );
+    }
+
     /// `BOOL`/`BOOL_NOT` compared `===` with `true`/`false` folds into one
     /// `BOOL`/`BOOL_NOT` (opcache `opt/block_pass_007`, `match/005`); a
     /// non-bool operand keeps its `IS_IDENTICAL` (`2 === true` is false
