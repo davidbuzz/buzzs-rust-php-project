@@ -1261,3 +1261,53 @@ fn jmp_null_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
     }
     Some(null)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{jump_of, num_value, Num};
+    use crate::opcode::{cmp_outcome, BinKind};
+    use php_runtime::Value;
+
+    fn mask(op: BinKind, jmp_if: bool) -> u8 {
+        cmp_outcome::for_branch(op, jmp_if).expect("a smart-branch comparison")
+    }
+
+    // `for ($i = 0; $i < 3; $i++)`: php -r 'var_dump(2 < 3, 3 < 3, 1.5 < 2, NAN < 1);'
+    #[test]
+    fn smart_branch_on_numbers() {
+        let less = mask(BinKind::Less, true);
+        assert!(jump_of(Num::Int(2), Num::Int(3), less));
+        assert!(!jump_of(Num::Int(3), Num::Int(3), less));
+        assert!(jump_of(Num::Float(1.5), Num::Int(2), less));
+        assert!(!jump_of(Num::Float(f64::NAN), Num::Int(1), less));
+        // `!=` jumps on a NaN; `1 !== 1.0` is true (a type mismatch).
+        assert!(jump_of(
+            Num::Float(f64::NAN),
+            Num::Int(1),
+            mask(BinKind::NotEqual, true)
+        ));
+        assert!(jump_of(
+            Num::Int(1),
+            Num::Float(1.0),
+            mask(BinKind::NotIdentical, true)
+        ));
+        assert!(!jump_of(
+            Num::Int(1),
+            Num::Float(1.0),
+            mask(BinKind::Identical, true)
+        ));
+        assert!(jump_of(
+            Num::Int(1),
+            Num::Float(1.0),
+            mask(BinKind::Equal, true)
+        ));
+    }
+
+    #[test]
+    fn number_values() {
+        assert!(matches!(num_value(Num::Int(-4)), Value::Int(-4)));
+        assert!(
+            matches!(num_value(Num::Float(0.5)), Value::Float(x) if x.to_bits() == 0.5_f64.to_bits())
+        );
+    }
+}
