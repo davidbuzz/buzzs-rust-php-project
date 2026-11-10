@@ -55,6 +55,23 @@ fn info(_vm: &mut Vm) -> Vec<InfoItem> {
     ]
 }
 
+/// `PHP_MINIT(zend_test)`: with `zend_test.register_passes`, two optimizer
+/// passes that announce themselves.
+fn register_optimizer_passes(vm: &mut Vm) {
+    if vm.ini_bool("zend_test.register_passes") {
+        Vm::register_optimizer_pass(pass1);
+        Vm::register_optimizer_pass(pass2);
+    }
+}
+
+fn pass1(vm: &mut Vm) {
+    vm.output(b"pass1\n");
+}
+
+fn pass2(vm: &mut Vm) {
+    vm.output(b"pass2\n");
+}
+
 impl Extension for ZendTest {
     fn name(&self) -> &'static str {
         "zend_test"
@@ -74,6 +91,7 @@ impl Extension for ZendTest {
         #[cfg(feature = "observer")]
         observer::register(m);
         m.info(info);
+        m.on_module_startup(register_optimizer_passes);
         m.on_request_startup(state::request_startup);
         m.on_request_shutdown(state::request_shutdown);
     }

@@ -26,7 +26,12 @@ pub type CompileHookFn = fn(&mut Vm, Rc<[u8]>, &ZStr, bool) -> VmResult<CompileO
 /// runs). Returns the cached unit and its path.
 pub type CachedIncludeHookFn = fn(&mut Vm, &[u8]) -> VmResult<Option<(ZStr, Rc<CompiledUnit>)>>;
 
+/// A pass registered with `zend_optimizer_register_pass`, run on each
+/// script opcache optimizes.
+pub type OptimizerPassFn = fn(&mut Vm);
+
 thread_local! {
+    static OPTIMIZER_PASSES: std::cell::RefCell<Vec<OptimizerPassFn>> = const { std::cell::RefCell::new(Vec::new()) };
     static CACHED_INCLUDE_HOOK: std::cell::Cell<Option<CachedIncludeHookFn>> = const { std::cell::Cell::new(None) };
     static COMPILE_HOOK: std::cell::Cell<Option<CompileHookFn>> = const { std::cell::Cell::new(None) };
     /// Set while compiling a file opened through a stream wrapper other
@@ -53,6 +58,21 @@ impl Vm {
     /// Installs a compile hook (`zend_compile_file` override point) for files.
     pub fn set_compile_hook(f: CompileHookFn) {
         COMPILE_HOOK.with(|h| h.set(Some(f)));
+    }
+
+    /// `zend_optimizer_register_pass`: `pass` runs after opcache's
+    /// optimizer on each script it compiles.
+    pub fn register_optimizer_pass(pass: OptimizerPassFn) {
+        OPTIMIZER_PASSES.with(|p| p.borrow_mut().push(pass));
+    }
+
+    /// `zend_optimizer_call_registered_passes`, at the end of
+    /// `zend_optimize_script`.
+    pub fn call_registered_optimizer_passes(&mut self) {
+        let passes = OPTIMIZER_PASSES.with(|p| p.borrow().clone());
+        for pass in passes {
+            pass(self);
+        }
     }
 
     /// Installs the hook serving includes of unopenable files from a

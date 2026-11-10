@@ -1009,6 +1009,8 @@ fn opcache_compile_hook(
     // 3. Cache Miss: compile source
     let res = vm.compile_source_default(src.clone(), filename, false, skip_shebang)?;
     if let CompileOutcome::Ok(ref unit) = res {
+        // `zend_accel_script_optimize` -> `zend_optimize_script`.
+        vm.call_registered_optimizer_passes();
         if !file_cache_only {
             GLOBAL_CACHE.with(|c| {
                 c.borrow_mut()
