@@ -822,6 +822,7 @@ impl Vm {
             return Err(self.fatal_at(&msg, f.line_start));
         }
         self.observer_declared(&lc, false);
+        crate::builtins::info::note_user_function(&lc);
         self.functions.insert(lc, Func::User(f.clone()));
         Ok(())
     }

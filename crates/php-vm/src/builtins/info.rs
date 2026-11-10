@@ -24,7 +24,7 @@
 // `ZStr` caches its hash in a `Cell`; `Hash`/`Eq` only use the bytes.
 #![allow(clippy::mutable_key_type)]
 
-use super::fasthash::FastMap;
+use super::fasthash::{FastMap, FxHasher};
 use super::reg;
 use super::util::{b, s};
 use crate::func::{Args, Func};
@@ -33,6 +33,10 @@ use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashSet;
+use std::hash::BuildHasherDefault;
+
+/// A `HashSet` with [`FxHasher`].
+type FastSet<K> = HashSet<K, BuildHasherDefault<FxHasher>>;
 
 /// `Zend/zend_builtin_functions.stub.php`.
 const CORE_FUNCTIONS: &[&str] = &[
@@ -186,8 +190,12 @@ struct Registry {
     constants: Attributed,
     /// Lower-case class name → the extension whose `register` inserted it.
     classes: FastMap<ZStr, &'static str>,
-    /// The VM's own builtin functions (snapshot at registration).
-    builtin_functions: HashSet<ZStr>,
+    /// The VM's own builtin functions, in registration order: what the
+    /// builtin groups insert as new keys before any extension registers
+    /// (closed by [`register`], which runs last among them).
+    builtin_functions: Vec<ZStr>,
+    /// Whether [`register`] has closed [`Registry::builtin_functions`].
+    builtins_closed: bool,
     /// The extension whose `register` is running.
     current: Option<&'static str>,
 }
@@ -259,6 +267,8 @@ pub(crate) fn note_new_function(lc_name: &ZStr) {
         let r = &mut *r.borrow_mut();
         if let Some(current) = r.current {
             r.functions.note_origin(lc_name, current);
+        } else if !r.builtins_closed {
+            r.builtin_functions.push(lc_name.clone());
         }
     });
 }
@@ -346,6 +356,254 @@ fn canonical_module(vm: &Vm, lc: &str) -> Option<String> {
         .find(|e| e.eq_ignore_ascii_case(lc))
 }
 
+/// The engine's own constants in the order php-src registers them:
+/// `Zend/zend_constants.stub.php`, `main/main.stub.php`, then the CLI SAPI
+/// (`sapi/cli/php_cli.c`). Engine constants missing here follow by name.
+const CORE_CONSTANTS: &[&str] = &[
+    "E_ERROR",
+    "E_WARNING",
+    "E_PARSE",
+    "E_NOTICE",
+    "E_CORE_ERROR",
+    "E_CORE_WARNING",
+    "E_COMPILE_ERROR",
+    "E_COMPILE_WARNING",
+    "E_USER_ERROR",
+    "E_USER_WARNING",
+    "E_USER_NOTICE",
+    "E_STRICT",
+    "E_RECOVERABLE_ERROR",
+    "E_DEPRECATED",
+    "E_USER_DEPRECATED",
+    "E_ALL",
+    "DEBUG_BACKTRACE_PROVIDE_OBJECT",
+    "DEBUG_BACKTRACE_IGNORE_ARGS",
+    "ZEND_THREAD_SAFE",
+    "ZEND_DEBUG_BUILD",
+    "ZEND_VM_KIND",
+    "TRUE",
+    "FALSE",
+    "NULL",
+    "PHP_VERSION",
+    "PHP_MAJOR_VERSION",
+    "PHP_MINOR_VERSION",
+    "PHP_RELEASE_VERSION",
+    "PHP_EXTRA_VERSION",
+    "PHP_VERSION_ID",
+    "PHP_BUILD_DATE",
+    "PHP_BUILD_PROVIDER",
+    "PHP_ZTS",
+    "PHP_DEBUG",
+    "PHP_OS",
+    "PHP_OS_FAMILY",
+    "DEFAULT_INCLUDE_PATH",
+    "PEAR_INSTALL_DIR",
+    "PEAR_EXTENSION_DIR",
+    "PHP_EXTENSION_DIR",
+    "PHP_PREFIX",
+    "PHP_BINDIR",
+    "PHP_SBINDIR",
+    "PHP_MANDIR",
+    "PHP_LIBDIR",
+    "PHP_DATADIR",
+    "PHP_SYSCONFDIR",
+    "PHP_LOCALSTATEDIR",
+    "PHP_CONFIG_FILE_PATH",
+    "PHP_CONFIG_FILE_SCAN_DIR",
+    "PHP_SHLIB_SUFFIX",
+    "PHP_EOL",
+    "PHP_MAXPATHLEN",
+    "PHP_INT_MAX",
+    "PHP_INT_MIN",
+    "PHP_INT_SIZE",
+    "PHP_FD_SETSIZE",
+    "PHP_FLOAT_DIG",
+    "PHP_FLOAT_EPSILON",
+    "PHP_FLOAT_MAX",
+    "PHP_FLOAT_MIN",
+    "PHP_OUTPUT_HANDLER_START",
+    "PHP_OUTPUT_HANDLER_WRITE",
+    "PHP_OUTPUT_HANDLER_FLUSH",
+    "PHP_OUTPUT_HANDLER_CLEAN",
+    "PHP_OUTPUT_HANDLER_FINAL",
+    "PHP_OUTPUT_HANDLER_CONT",
+    "PHP_OUTPUT_HANDLER_END",
+    "PHP_OUTPUT_HANDLER_CLEANABLE",
+    "PHP_OUTPUT_HANDLER_FLUSHABLE",
+    "PHP_OUTPUT_HANDLER_REMOVABLE",
+    "PHP_OUTPUT_HANDLER_STDFLAGS",
+    "PHP_OUTPUT_HANDLER_STARTED",
+    "PHP_OUTPUT_HANDLER_DISABLED",
+    "PHP_OUTPUT_HANDLER_PROCESSED",
+    "UPLOAD_ERR_OK",
+    "UPLOAD_ERR_INI_SIZE",
+    "UPLOAD_ERR_FORM_SIZE",
+    "UPLOAD_ERR_PARTIAL",
+    "UPLOAD_ERR_NO_FILE",
+    "UPLOAD_ERR_NO_TMP_DIR",
+    "UPLOAD_ERR_CANT_WRITE",
+    "UPLOAD_ERR_EXTENSION",
+    "ZEND_VERIFY_TYPE_INFERENCE",
+    "PHP_SAPI",
+    "PHP_BINARY",
+    "PHP_CLI_PROCESS_TITLE",
+    "STDIN",
+    "STDOUT",
+    "STDERR",
+];
+
+/// The modules in `get_loaded_extensions()` order (`Core` first), which is
+/// the order php-src starts them up and so registers their functions and
+/// constants in.
+fn module_order(vm: &Vm) -> Vec<&str> {
+    let mut names: Vec<&str> = crate::LOADED_EXTENSIONS.to_vec();
+    for e in &vm.loaded_extensions {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(e)) {
+            names.push(e.as_str());
+        }
+    }
+    names
+}
+
+/// `module`'s place in [`module_order`]; modules not listed sort after
+/// the listed ones.
+fn module_rank(order: &[&str], module: &str) -> usize {
+    order
+        .iter()
+        .position(|m| m.eq_ignore_ascii_case(module))
+        .unwrap_or(order.len())
+}
+
+/// The internal functions in `EG(function_table)` order: `Core`'s
+/// (`zend_builtin_functions.stub.php`), then each module's in start-up
+/// order, each in registration order; functions the engine inserted
+/// outside the extension API (aliases) close their extension's group, and
+/// any left over follow by name.
+pub(crate) fn internal_functions(vm: &Vm) -> Vec<ZStr> {
+    let order = module_order(vm);
+    let standard = module_rank(&order, "standard");
+    let is_builtin = |n: &[u8]| matches!(vm.functions.get(n), Some(Func::Builtin(_)));
+    // (module rank, place in the module, name)
+    let mut keyed: Vec<(usize, usize, ZStr)> = Vec::with_capacity(vm.functions.len());
+    let mut seen: FastSet<ZStr> = FastSet::default();
+    seen.reserve(vm.functions.len());
+    let mut take =
+        |keyed: &mut Vec<(usize, usize, ZStr)>, rank: usize, place: usize, name: &ZStr| {
+            if is_builtin(name.as_bytes()) && seen.insert(name.clone()) {
+                keyed.push((rank, place, name.clone()));
+            }
+        };
+    REGISTRY.with(|r| {
+        let r = r.borrow();
+        for (i, name) in CORE_FUNCTIONS.iter().enumerate() {
+            if let Some((k, _)) = vm.functions.get_key_value(name.as_bytes()) {
+                take(&mut keyed, 0, i, k);
+            }
+        }
+        let base = CORE_FUNCTIONS.len();
+        // The VM's own builtins are `standard`'s unless an extension
+        // registered the name again (then they are that module's).
+        for (i, name) in r.builtin_functions.iter().enumerate() {
+            let module_noted = r
+                .functions
+                .index
+                .get(name)
+                .is_some_and(|slot| slot.pos.is_some());
+            if !module_noted {
+                take(&mut keyed, standard, base + i, name);
+            }
+        }
+        let base = base + r.builtin_functions.len();
+        for (i, (name, module)) in r.functions.list.iter().enumerate() {
+            take(&mut keyed, module_rank(&order, module), base + i, name);
+        }
+    });
+    let mut rest: Vec<(usize, usize, ZStr)> = vm
+        .functions
+        .iter()
+        .filter(|(k, f)| matches!(f, Func::Builtin(_)) && !seen.contains(*k))
+        .map(|(k, _)| {
+            let rank =
+                function_origin(k.as_bytes()).map_or(order.len(), |m| module_rank(&order, m));
+            (rank, usize::MAX, k.clone())
+        })
+        .collect();
+    keyed.append(&mut rest);
+    keyed.sort_by(|a, b| {
+        (a.0, a.1)
+            .cmp(&(b.0, b.1))
+            .then_with(|| a.2.as_bytes().cmp(b.2.as_bytes()))
+    });
+    keyed.into_iter().map(|(_, _, n)| n).collect()
+}
+
+/// User function names (lower case) in the order they were declared,
+/// possibly with stale or repeated entries: the last entry of a name is
+/// its current declaration.
+#[derive(Default)]
+struct DeclarationLog {
+    names: Vec<ZStr>,
+    /// Length at which the log is compacted next.
+    compact_at: usize,
+}
+
+impl DeclarationLog {
+    /// The smallest length that triggers a compaction.
+    const MIN_COMPACT: usize = 1024;
+
+    fn push(&mut self, name: &ZStr) {
+        self.names.push(name.clone());
+        if self.names.len() >= self.compact_at.max(Self::MIN_COMPACT) {
+            self.names = self.last_entries();
+            self.compact_at = self.names.len() * 2;
+        }
+    }
+
+    /// Each name once, at its last entry, in log order.
+    fn last_entries(&self) -> Vec<ZStr> {
+        let mut seen: FastSet<&ZStr> = FastSet::default();
+        let mut out: Vec<ZStr> = self
+            .names
+            .iter()
+            .rev()
+            .filter(|n| seen.insert(*n))
+            .cloned()
+            .collect();
+        out.reverse();
+        out
+    }
+}
+
+thread_local! {
+    static DECLARED: RefCell<DeclarationLog> = RefCell::new(DeclarationLog::default());
+}
+
+/// Records that the user function `lc_name` was just inserted into the
+/// function table (`do_bind_function()` / early binding), so
+/// `get_defined_functions()` lists it in declaration order. Stale entries
+/// (functions of an earlier request or VM) are filtered when listing, and
+/// the log is compacted as it grows, so nothing needs resetting.
+pub(crate) fn note_user_function(lc_name: &ZStr) {
+    DECLARED.with(|d| d.borrow_mut().push(lc_name));
+}
+
+/// The user functions in declaration order; any declared through a path
+/// that did not note it follow by name.
+pub(crate) fn user_functions(vm: &Vm) -> Vec<ZStr> {
+    let mut out: Vec<ZStr> = DECLARED.with(|d| d.borrow().last_entries());
+    out.retain(|n| matches!(vm.functions.get(n), Some(Func::User(_))));
+    let listed: FastSet<&ZStr> = out.iter().collect();
+    let mut rest: Vec<ZStr> = vm
+        .functions
+        .iter()
+        .filter(|(k, f)| matches!(f, Func::User(_)) && !listed.contains(k))
+        .map(|(k, _)| k.clone())
+        .collect();
+    rest.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    out.append(&mut rest);
+    out
+}
+
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn get_extension_funcs(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = s(a, 0).to_string_lossy();
@@ -415,8 +673,17 @@ fn get_defined_constants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .keys()
         .filter(|n| !noted.contains(*n) && !user.contains(n))
         .collect();
+    // Core's in php-src's registration order (others by name after them),
+    // then the rest by name.
+    let core_place = |n: &ZStr| {
+        CORE_CONSTANTS
+            .iter()
+            .position(|c| c.as_bytes() == n.as_bytes())
+            .unwrap_or(CORE_CONSTANTS.len())
+    };
     rest.sort();
-    let mut engine: Vec<(ZStr, String)> = rest
+    rest.sort_by_cached_key(|n| (!is_core_constant(n.as_bytes()), core_place(n)));
+    let mut all: Vec<(ZStr, String)> = rest
         .into_iter()
         .map(|n| {
             let m = if is_core_constant(n.as_bytes()) {
@@ -427,12 +694,11 @@ fn get_defined_constants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             (n.clone(), m.to_string())
         })
         .collect();
-    // Core first, like the module registry.
-    engine.sort_by_key(|(_, m)| m != "Core");
-    let core_count = engine.iter().take_while(|(_, m)| m == "Core").count();
-    let mut all: Vec<(ZStr, String)> = engine.drain(..core_count).collect();
-    all.append(&mut engine);
     all.append(&mut internal);
+    // Grouped by module in start-up order (`Core` first), keeping the
+    // order within each module: the order php-src registers them in.
+    let order = module_order(vm);
+    all.sort_by_cached_key(|(_, m)| module_rank(&order, m));
     for n in &vm.user_constants {
         all.push((n.clone(), "user".to_string()));
     }
@@ -472,7 +738,8 @@ fn get_defined_constants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// Registers the introspection functions; must run after the other builtin
-/// groups (it snapshots their functions as `Core`/`standard`).
+/// groups (it closes the list of their functions, the `Core`/`standard`
+/// ones).
 pub(crate) fn register(vm: &mut Vm) {
     reg(
         vm,
@@ -484,19 +751,127 @@ pub(crate) fn register(vm: &mut Vm) {
         "get_defined_constants(bool $categorize = false): array",
         get_defined_constants,
     );
-    let names: HashSet<ZStr> = vm
-        .functions
-        .iter()
-        .filter(|(_, f)| matches!(f, Func::Builtin(_)))
-        .map(|(k, _)| k.clone())
-        .collect();
-    REGISTRY.with(|r| r.borrow_mut().builtin_functions = names);
+    REGISTRY.with(|r| {
+        let r = &mut *r.borrow_mut();
+        // Later insertions with no extension registering (functions a
+        // test or SAPI adds, `dl()`) are not the VM's builtins.
+        r.builtins_closed = true;
+    });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_core_constant, Attributed, Slot};
+    use super::{is_core_constant, module_rank, Attributed, DeclarationLog, Slot};
+    use crate::{Vm, VmOptions};
     use php_runtime::ZStr;
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn run(src: &str) -> String {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(src.as_bytes(), "t.php");
+        drop(vm);
+        let out = sink.0.borrow().clone();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Expected output from `php -n` 8.3 / master.
+    #[test]
+    fn user_functions_are_listed_in_declaration_order() {
+        let out = run(r#"<?php
+function zeta() {} function alpha() {} function mid() {}
+if (true) { function cond1() {} }
+if (!function_exists('later')) { function later() {} }
+function_exists('nope');
+eval('function evald() {}');
+echo implode(',', get_defined_functions()['user']), "\n";
+"#);
+        assert_eq!(out, "zeta,alpha,mid,cond1,later,evald\n");
+    }
+
+    /// `zend_builtin_functions.stub.php` order starts the internal list.
+    #[test]
+    fn internal_functions_start_with_core_in_stub_order() {
+        let out =
+            run("<?php echo implode(',', array_slice(get_defined_functions()['internal'], 0, 6));");
+        assert_eq!(
+            out,
+            "zend_version,func_num_args,func_get_arg,func_get_args,strlen,strcmp"
+        );
+    }
+
+    /// `zend_constants.stub.php` order starts `Core`; user constants come
+    /// last, in definition order.
+    #[test]
+    fn constants_follow_registration_order() {
+        let out = run(r#"<?php
+define('ZZ', 1); define('AA', 2);
+$groups = [];
+foreach (get_defined_constants(true) as $module => $names) {
+    $first = [];
+    foreach ($names as $name => $_) {
+        if (count($first) < 4) { $first[] = $name; }
+    }
+    $groups[] = $module . ':' . implode(',', $first);
+}
+echo $groups[0], "\n", $groups[count($groups) - 1], "\n";
+$flat = [];
+foreach (get_defined_constants() as $name => $_) { $flat[] = $name; }
+echo $flat[0], ',', implode(',', array_slice($flat, -2)), "\n";
+"#);
+        assert_eq!(
+            out,
+            "Core:E_ERROR,E_WARNING,E_PARSE,E_NOTICE\nuser:ZZ,AA\nE_ERROR,ZZ,AA\n"
+        );
+    }
+
+    #[test]
+    fn modules_rank_in_start_up_order() {
+        let order = ["Core", "date", "standard"];
+        assert_eq!(module_rank(&order, "core"), 0);
+        assert_eq!(module_rank(&order, "standard"), 2);
+        assert_eq!(module_rank(&order, "unknown"), 3);
+    }
+
+    #[test]
+    fn the_declaration_log_keeps_each_names_last_entry() {
+        let mut log = DeclarationLog::default();
+        for n in ["a", "b", "a", "c"] {
+            log.push(&ZStr::from(n));
+        }
+        let names: Vec<String> = log
+            .last_entries()
+            .iter()
+            .map(ZStr::to_string_lossy)
+            .collect();
+        assert_eq!(names, ["b", "a", "c"]);
+        // Compaction bounds the log by the distinct names.
+        for i in 0..5000 {
+            log.push(&ZStr::from(if i % 2 == 0 { "x" } else { "y" }));
+        }
+        assert!(log.names.len() < DeclarationLog::MIN_COMPACT);
+        let names: Vec<String> = log
+            .last_entries()
+            .iter()
+            .map(ZStr::to_string_lossy)
+            .collect();
+        assert_eq!(names, ["b", "a", "c", "x", "y"]);
+    }
 
     #[test]
     fn core_constants() {

@@ -84,6 +84,38 @@ pub const LOADED_EXTENSIONS: &[&str] = &[
     "hash",
 ];
 
+/// Room to reserve in the function, class and constant tables before
+/// start-up registers into them ([`Vm::new_core`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SymbolRoom {
+    pub(crate) functions: usize,
+    pub(crate) classes: usize,
+    pub(crate) constants: usize,
+}
+
+impl SymbolRoom {
+    /// What the VM's own builtin groups register (about 600 functions,
+    /// 60 classes and 460 constants).
+    pub(crate) const BUILTINS: SymbolRoom = SymbolRoom {
+        functions: 640,
+        classes: 64,
+        constants: 480,
+    };
+
+    /// The builtins plus `n` extensions: the bundled ones average about
+    /// 26 functions, 6 classes and 43 constants each (all 54 together
+    /// end with 1 970 functions, 380 classes and 2 788 constants, which
+    /// this reserves 4 096, 512 and 4 096 buckets for).
+    pub(crate) fn with_extensions(n: usize) -> SymbolRoom {
+        let b = SymbolRoom::BUILTINS;
+        SymbolRoom {
+            functions: b.functions + n * 28,
+            classes: b.classes + n * 6,
+            constants: b.constants + n * 44,
+        }
+    }
+}
+
 /// Options for creating a VM.
 #[derive(Debug, Default, Clone)]
 pub struct VmOptions {
@@ -130,7 +162,7 @@ impl Vm {
     /// register these: there `count()` and `sizeof()` come only from the
     /// extension (php-ext-stdarr) that provides them.
     pub fn new(opts: &VmOptions, stdout: Box<dyn Write>) -> Vm {
-        let mut vm = Vm::new_core(opts, stdout);
+        let mut vm = Vm::new_core(opts, stdout, SymbolRoom::BUILTINS);
         builtins::register_bare(&mut vm);
         vm
     }
@@ -138,7 +170,9 @@ impl Vm {
     /// The VM before any extension registers (what [`Vm::with_extensions`]
     /// starts from): PHP's CLI defaults and the given ini settings, and
     /// the VM's own builtins.
-    pub(crate) fn new_core(opts: &VmOptions, stdout: Box<dyn Write>) -> Vm {
+    /// The symbol tables start with `room` for what start-up registers, so
+    /// registration never rehashes them.
+    pub(crate) fn new_core(opts: &VmOptions, stdout: Box<dyn Write>, room: SymbolRoom) -> Vm {
         let mut config: Vec<(String, Vec<u8>)> = php_support::ini::CLI_OVERRIDES
             .iter()
             .map(|(k, v)| ((*k).to_string(), v.as_bytes().to_vec()))
@@ -155,6 +189,10 @@ impl Vm {
         // of an earlier request on this thread disabled destructors.
         object::set_destructors_enabled(true);
         let mut vm = Vm::with_ini(ini, stdout);
+        vm.functions.reserve(room.functions);
+        vm.classes.reserve(room.classes);
+        vm.class_order.reserve(room.classes);
+        vm.constants.reserve(room.constants);
         for n in ["error_reporting", "precision", "serialize_precision"] {
             vm.sync_ini(n);
         }
