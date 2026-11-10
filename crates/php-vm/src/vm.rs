@@ -2248,6 +2248,7 @@ mod tests {
     use super::{Frame, FrameKind};
     use crate::opcode::OpArray;
     use php_runtime::{Value, ZStr};
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     fn frame_with(names: &[&str]) -> Frame {
