@@ -760,6 +760,17 @@ impl FrameStack {
         if self.live > 0 {
             let last_idx = self.live - 1;
             self.vec[last_idx].clear_for_reuse(empty_code);
+            self.pop_cleared_top();
+        }
+    }
+
+    /// The rest of [`FrameStack::release_top`] once the top frame has been
+    /// released in place ([`Frame::clear_for_reuse`]) by a caller that
+    /// already holds it (`Vm::return_simple`): the frame leaves the live
+    /// ones and stays in the pool, which is cut back to 128 spare frames.
+    #[inline]
+    pub(crate) fn pop_cleared_top(&mut self) {
+        if self.live > 0 {
             self.live -= 1;
             if self.vec.len() > self.live + 128 {
                 self.vec.truncate(self.live + 128);

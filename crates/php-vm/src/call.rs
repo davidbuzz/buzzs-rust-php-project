@@ -2439,9 +2439,14 @@ impl Vm {
                 },
                 RetTarget::Discard => Some(v),
             };
+            // `FrameStack::release_top` of the frame at hand: released in
+            // place, without the out-of-line call and the second lookup of
+            // the top frame; the stack is popped just below. Same release,
+            // same order (the frame's values, then the result's slot).
+            frame.clear_for_reuse(&self.empty_code);
             (v, ret)
         };
-        self.frames.release_top(&self.empty_code);
+        self.frames.pop_cleared_top();
         let Some(v) = v else {
             return Some(crate::exec::Flow::Reload);
         };
