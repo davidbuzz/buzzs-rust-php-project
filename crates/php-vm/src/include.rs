@@ -206,7 +206,9 @@ impl Vm {
                 && (self.ini.get_bool("opcache.enable_cli")
                     || self.ini.get_bool("opcache.file_cache_only"))
             {
-                u32::try_from(self.ini.get_long("opcache.optimization_level")).unwrap_or(0)
+                // A zend_long whose low 32 bits are the passes: `-1` is all.
+                u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
+                    .unwrap_or(0)
             } else {
                 0
             },
