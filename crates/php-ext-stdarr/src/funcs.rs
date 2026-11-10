@@ -240,19 +240,23 @@ pub fn array_product(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn min(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let vals = rest(a, 0);
-    let r = match vals.as_slice() {
-        [x, y] => sa::basic::min2(vm, x, y),
-        _ => sa::basic::min(vm, &vals),
+    // Two arguments (`ZEND_FRAMELESS_ICALL_2`'s form) are compared in
+    // place, without collecting them into a vector.
+    let r = if a.values.len() == 2 {
+        sa::basic::min2(vm, &a.at_ref(0), &a.at_ref(1))
+    } else {
+        sa::basic::min(vm, &rest(a, 0))
     };
     rt(vm, r)
 }
 
 pub fn max(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let vals = rest(a, 0);
-    let r = match vals.as_slice() {
-        [x, y] => sa::basic::max2(vm, x, y),
-        _ => sa::basic::max(vm, &vals),
+    // Two arguments (`ZEND_FRAMELESS_ICALL_2`'s form) are compared in
+    // place, without collecting them into a vector.
+    let r = if a.values.len() == 2 {
+        sa::basic::max2(vm, &a.at_ref(0), &a.at_ref(1))
+    } else {
+        sa::basic::max(vm, &rest(a, 0))
     };
     rt(vm, r)
 }
