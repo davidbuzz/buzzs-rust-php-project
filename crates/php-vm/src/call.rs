@@ -387,19 +387,18 @@ impl Vm {
     /// closure, and in a frame with an attached symbol table.
     #[inline]
     pub(crate) fn init_closure_call_fast(&mut self, cv: u32) -> bool {
-        let o = {
-            let Some(frame) = self.frames.last() else {
-                return false;
-            };
-            if frame.symtab_attached {
-                return false;
-            }
-            match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
-                Some(Value::Object(o)) => o.clone(),
-                _ => return false,
-            }
+        let Some(frame) = self.frames.last_mut() else {
+            return false;
         };
-        self.push_closure_user_call(&o)
+        if frame.symtab_attached {
+            return false;
+        }
+        // The variable's object is borrowed, not copied: the call takes
+        // its own handle (`closure`) from it.
+        match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+            Some(Value::Object(o)) => push_closure_user_call_in(&mut frame.calls, o),
+            _ => false,
+        }
     }
 
     /// [`Vm::closure_user_call`] as a dynamic call (`$closure()`), the call
@@ -410,36 +409,7 @@ impl Vm {
     /// is not a closure of a user function.
     #[inline]
     fn push_closure_user_call(&mut self, o: &Obj) -> bool {
-        if object::class_of(o).lc_name.as_bytes() != b"closure" {
-            return false;
-        }
-        let parts = object::internal::<crate::closure::ClosureData, _>(o, |d| {
-            if !matches!(&d.func, Func::User(_)) {
-                return None;
-            }
-            Some((
-                d.this.clone(),
-                d.scope.clone(),
-                d.called.clone(),
-                if d.fake { None } else { Some(o.clone()) },
-                d.magic_name.clone(),
-                d.func.clone(),
-            ))
-        })
-        .flatten();
-        let Some((this, scope, called, closure, magic_name, func)) = parts else {
-            return false;
-        };
-        self.push_pending_with(move || PendingCall {
-            this,
-            scope,
-            called,
-            closure,
-            magic_name,
-            dynamic: true,
-            ..PendingCall::new(func)
-        });
-        true
+        push_closure_user_call_in(&mut self.frame_mut().calls, o)
     }
 
     /// `zend_init_dynamic_call_string` / `_array`: like
@@ -623,8 +593,8 @@ impl Vm {
     /// from the dispatch loop's hot-instruction block (no `SAVE_OPLINE`):
     /// the hit of [`Vm::init_cached_method_call`] without the generic
     /// operand read. The call's `$this` is a handle of its own, as there:
-    /// a copy of the variable's object, or the temporary's, which is
-    /// emptied as the read empties it. `slot` is the instruction's index
+    /// a copy of the variable's object, or the temporary's, moved out of it
+    /// as the read moves it. `slot` is the instruction's index
     /// (its cache slot). Returns `false`, having changed nothing, for an
     /// undefined variable, a reference or a value that is not an object, a
     /// variable of a frame with an attached symbol table, a class with a
@@ -676,22 +646,29 @@ impl Vm {
             return false;
         };
         let called = Rc::clone(cls);
-        let this = if is_static { None } else { Some(o.clone()) };
+        // The call's `$this`: a copy of the variable's object, or the
+        // temporary's handle itself, moved out as the read's
+        // `std::mem::take` moves it (`ZEND_CALL_RELEASE_THIS` without an
+        // `addref`/`release` pair: the call owns the operand's reference).
+        // A static method's call takes none: the temporary's handle is
+        // released after the push (the last handle of the object goes as
+        // it goes there, its destructor left to the safe point after the
+        // instruction).
+        let (this, released) = match obj {
+            Operand::Tmp(t) => match frame.tmps.get_mut(t as usize).map(std::mem::take) {
+                Some(Value::Object(held)) if !is_static => (Some(held), None),
+                other => (None, other),
+            },
+            _ if is_static => (None, None),
+            _ => (Some(o.clone()), None),
+        };
         push_call_in_place(&mut frame.calls, move || PendingCall {
             this,
             scope,
             called: Some(called),
             ..PendingCall::new(func)
         });
-        // The temporary's handle is the read's (`std::mem::take`): released
-        // here, after the call took its own (the last handle of a static
-        // method's object goes as it goes there, its destructor left to
-        // the safe point after the instruction).
-        if let Operand::Tmp(t) = obj {
-            if let Some(slot) = frame.tmps.get_mut(t as usize) {
-                drop(std::mem::take(slot));
-            }
-        }
+        drop(released);
         true
     }
 
@@ -1285,6 +1262,126 @@ impl Vm {
         )
     }
 
+    /// `ZEND_INIT_STATIC_METHOD_CALL` of `self::name()`, `parent::name()`
+    /// or `static::name()` on a hit in the op's own monomorphic slot
+    /// (php-src's `CACHED_PTR(opline->result.num) == ce`, then `fbc` from
+    /// the next slot): the op's [`OpArray::method_cache`] entry remembers
+    /// the class the spec resolved to, the calling scope and the method
+    /// [`Vm::static_call_hit`] found for that pair
+    /// ([`Vm::cache_relative_static_site`]), so a hit is two address
+    /// compares where the member cache searched its entries, checked the
+    /// access and upgraded the method. The call is then set up as that hit
+    /// sets it up: a static method gets the frame's called scope when that
+    /// is a subclass of the resolved class (`self::`, `parent::` and
+    /// `static::` forward it), else the class; an instance method the
+    /// frame's `$this` when its class is one. Returns `false`, having
+    /// pushed nothing, on a miss, a released method, and an instance
+    /// method without such a `$this` (the generic path raises the error).
+    ///
+    /// [`OpArray::method_cache`]: crate::opcode::OpArray::method_cache
+    #[inline]
+    fn init_relative_static_call_cached(&mut self, spec: &ClassSpec, lit: u32) -> bool {
+        let Some(f) = self.frames.last_mut() else {
+            return false;
+        };
+        if f.kind == FrameKind::Builtin {
+            return false;
+        }
+        let Some(cls) = relative_spec_class(f, spec) else {
+            return false;
+        };
+        let scope_addr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+        let slot = f.ip.wrapping_sub(1);
+        let hit = match f.code.method_cache.borrow().get(slot) {
+            Some(Some(e))
+                if e.class_addr == Rc::as_ptr(cls) as usize
+                    && e.scope_addr == scope_addr
+                    && e.name_lit == Some(lit) =>
+            {
+                match (
+                    e.func.get(),
+                    e.method_scope.as_ref().and_then(std::rc::Weak::upgrade),
+                ) {
+                    (Some(func), Some(scope)) => Some((func, scope, e.is_static)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some((func, scope, is_static)) = hit else {
+            return false;
+        };
+        let (this, called) = if is_static {
+            let called = match f.called.as_ref() {
+                Some(c) if c.is_subclass_of(cls) => Rc::clone(c),
+                _ => Rc::clone(cls),
+            };
+            (None, called)
+        } else {
+            let Some(this) = f.this.as_ref() else {
+                return false;
+            };
+            let called = object::class_of(this);
+            if !called.is_subclass_of(cls) {
+                return false;
+            }
+            (Some(this.clone()), Rc::clone(called))
+        };
+        push_call_in_place(&mut f.calls, move || PendingCall {
+            this,
+            scope: Some(scope),
+            called: Some(called),
+            ..PendingCall::new(func)
+        });
+        true
+    }
+
+    /// Fills the monomorphic slot of the running `self::name()` /
+    /// `parent::name()` / `static::name()` op
+    /// ([`Vm::init_relative_static_call_cached`]) from `hit`, the member
+    /// cache's hit for the class the spec resolves to and the calling
+    /// scope: only a pair the member cache already resolved (an accessible,
+    /// non-abstract method found by name in a class that is not a trait,
+    /// `Vm::static_call_fill`), which the same pair resolves to for good.
+    #[cold]
+    #[inline(never)]
+    fn cache_relative_static_site(
+        &self,
+        spec: &ClassSpec,
+        lit: u32,
+        hit: &crate::rtcache::StaticCallHit,
+    ) {
+        let f = self.frame();
+        let (Some(cls), Some(Value::Str(name))) = (
+            relative_spec_class(f, spec),
+            f.code.literals.get(lit as usize),
+        ) else {
+            return;
+        };
+        let slot = f.ip.wrapping_sub(1);
+        if slot >= f.code.ops.len() {
+            return;
+        }
+        let entry = MethodCallCacheEntry {
+            class_addr: Rc::as_ptr(cls) as usize,
+            scope_addr: f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize),
+            class: Rc::downgrade(cls),
+            method_scope: Some(Rc::downgrade(&hit.scope)),
+            func: crate::opcode::CachedFunc::new(&hit.func),
+            is_static: hit.this.is_none(),
+            name_lit: Some(lit),
+            name: name.clone(),
+        };
+        let Ok(mut cache) = f.code.method_cache.try_borrow_mut() else {
+            return;
+        };
+        if cache.len() <= slot {
+            let size = f.code.ops.len();
+            crate::rtcache::grow_slots(&mut cache, size, || None);
+        }
+        cache[slot] = Some(entry);
+    }
+
     pub(crate) fn op_init_static_call(&mut self, class: &ClassSpec, name: Operand) -> VmResult<()> {
         let is_literal = matches!(class, ClassSpec::Named(_)) && matches!(name, Operand::Lit(_));
         if is_literal {
@@ -1297,8 +1394,20 @@ impl Vm {
                 return Ok(());
             }
         }
+        let relative = match (class, name) {
+            (ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static, Operand::Lit(lit)) => {
+                if self.init_relative_static_call_cached(class, lit) {
+                    return Ok(());
+                }
+                Some(lit)
+            }
+            _ => None,
+        };
         // The op's run-time cache slot (see `rtcache`).
         if let Some(hit) = self.static_call_hit(class, name) {
+            if let Some(lit) = relative {
+                self.cache_relative_static_site(class, lit, &hit);
+            }
             let crate::rtcache::StaticCallHit {
                 func,
                 this,
@@ -4649,6 +4758,56 @@ fn set_opt<T>(slot: &mut Option<T>, v: Option<T>) {
     }
 }
 
+/// [`Vm::push_closure_user_call`] into the pending calls `calls` of the
+/// running frame: the call is built in place straight from a shared borrow
+/// of the closure's data (one look at the object's header and one type
+/// check of its internal state, where `object::internal` looked the object
+/// up again and borrowed the state mutably). Returns `false`, having pushed
+/// nothing, when `o` is not a closure of a user function.
+#[inline]
+fn push_closure_user_call_in(calls: &mut Vec<PendingCall>, o: &Obj) -> bool {
+    let data = object::data(o);
+    if data.class.lc_name.as_bytes() != b"closure" {
+        return false;
+    }
+    let Ok(internal) = data.internal.try_borrow() else {
+        return false;
+    };
+    let Some(d) = internal
+        .as_ref()
+        .and_then(|x| x.downcast_ref::<crate::closure::ClosureData>())
+    else {
+        return false;
+    };
+    if !matches!(&d.func, Func::User(_)) {
+        return false;
+    }
+    push_call_in_place(calls, || PendingCall {
+        this: d.this.clone(),
+        scope: d.scope.clone(),
+        called: d.called.clone(),
+        closure: if d.fake { None } else { Some(o.clone()) },
+        magic_name: d.magic_name.clone(),
+        dynamic: true,
+        ..PendingCall::new(d.func.clone())
+    });
+    true
+}
+
+/// The class a `self`/`parent`/`static` spec names in the running user
+/// frame `f` (`static` is its called scope, as `rtcache`'s `spec_class_in`
+/// resolves it); `None` for any other spec, or when the frame has no such
+/// class.
+#[inline]
+fn relative_spec_class<'a>(f: &'a Frame, spec: &ClassSpec) -> Option<&'a Rc<Class>> {
+    match spec {
+        ClassSpec::SelfClass => f.scope.as_ref(),
+        ClassSpec::Parent => f.scope.as_ref()?.parent.as_ref(),
+        ClassSpec::Static => f.called.as_ref(),
+        _ => None,
+    }
+}
+
 /// Appends the pending call `make` builds to `calls`, written straight
 /// into the vector's spare slot: `extend` of a one-element trusted-length
 /// iterator reserves the room before `make` runs, so the call is not built
@@ -5164,5 +5323,258 @@ mod fast_builtin_tests {
             assert!(fast_builtin_eval(name.as_bytes(), &Value::Null).is_none());
             assert!(fast_builtin_eval(name.as_bytes(), &Value::Str("4".into())).is_none());
         }
+    }
+}
+
+/// Call-site caches of `INIT_METHOD_CALL`, `INIT_STATIC_METHOD_CALL` with
+/// `self`/`parent`/`static`, and closure calls: scripts whose sites run
+/// several times (fill, then hit). Expected output from `/usr/bin/php -n`
+/// (PHP 8.3.6).
+#[cfg(test)]
+#[allow(clippy::needless_raw_string_hashes)]
+mod method_site_cache_tests {
+    use crate::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn run(src: &str) -> String {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(src.as_bytes(), "t.php");
+        drop(vm);
+        let out = sink.0.borrow().clone();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Each `self::`/`parent::`/`static::` site runs several times, so later
+    /// runs take the monomorphic slot: late static binding (the forwarded
+    /// called scope), private access, `parent::` with `$this`, a trait
+    /// method run for two using classes and a closure rebound to several
+    /// scopes (the slot's class and scope keys), and the error of an instance
+    /// method without `$this`.
+    #[test]
+    fn relative_static_calls_keep_late_static_binding_and_scope() {
+        let src = r###"<?php
+class A {
+    public static function who() { return static::class; }
+    private static function priv() { return "A::priv"; }
+    public static function viaSelf() { return self::who() . "/" . self::priv(); }
+    public static function viaStatic() { return static::who(); }
+    public function inst() { return "inst:" . static::class . ":" . get_class($this); }
+    public static function callInst() { return self::inst(); }
+}
+class B extends A {
+    public static function who() { return "B!" . static::class; }
+    public static function viaParent() { return parent::who(); }
+    public function pinst() { return parent::inst(); }
+}
+class C extends B {}
+trait T {
+    public static function t() { return static::class; }
+    public static function call() { return self::t() . "," . static::t(); }
+}
+class U1 { use T; }
+class U2 { use T; }
+for ($i = 0; $i < 3; $i++) {
+    echo A::viaSelf(), " ", B::viaSelf(), " ", C::viaSelf(), "\n";
+    echo A::viaStatic(), " ", B::viaStatic(), " ", C::viaStatic(), "\n";
+    echo B::viaParent(), " ", C::viaParent(), "\n";
+    echo (new B)->pinst(), " ", (new C)->pinst(), "\n";
+    echo U1::call(), " ", U2::call(), "\n";
+}
+$f = function () { return self::who(); };
+foreach ([A::class, B::class, C::class, A::class] as $cls) {
+    echo Closure::bind($f, null, $cls)(), "\n";
+}
+for ($i = 0; $i < 3; $i++) {
+    try {
+        echo A::callInst(), "\n";
+    } catch (Error $e) {
+        echo get_class($e), ": ", $e->getMessage(), "\n";
+    }
+}
+"###;
+        let expected = r###"A/A::priv B/A::priv C/A::priv
+A B!B B!C
+B C
+inst:B:B inst:C:C
+U1,U1 U2,U2
+A/A::priv B/A::priv C/A::priv
+A B!B B!C
+B C
+inst:B:B inst:C:C
+U1,U1 U2,U2
+A/A::priv B/A::priv C/A::priv
+A B!B B!C
+B C
+inst:B:B inst:C:C
+U1,U1 U2,U2
+A
+B!B
+B!C
+A
+Error: Non-static method A::inst() cannot be called statically
+Error: Non-static method A::inst() cannot be called statically
+Error: Non-static method A::inst() cannot be called statically
+"###;
+        assert_eq!(run(src), expected);
+    }
+
+    /// A cached `self::inst()` site whose `$this` changes class, then is
+    /// missing or unrelated (the generic path raises the error); `$tmp->m()`
+    /// and `$tmp->s()` on the last handle of an object (its destructor after
+    /// the call, or before a static method's call), chains, and `$this->m()`
+    /// in a loop.
+    #[test]
+    fn relative_instance_calls_and_temporary_receivers() {
+        let src = r###"<?php
+class D {
+    public $n = "d";
+    public function inst() { return "D::inst " . get_class($this) . " " . static::class; }
+}
+class E extends D {}
+class X {}
+$g = function () { return self::inst(); };
+foreach ([new D, new E, new E, new D] as $o) {
+    echo Closure::bind($g, $o, D::class)(), "\n";
+}
+foreach ([null, new X] as $o) {
+    try {
+        echo Closure::bind($g, $o, D::class)(), "\n";
+    } catch (Error $e) {
+        echo get_class($e), ": ", $e->getMessage(), "\n";
+    }
+}
+class K {
+    public function __construct(public $id) {}
+    public function __destruct() { echo "dtor {$this->id}\n"; }
+    public function m() { echo "m {$this->id}\n"; return $this; }
+    public static function s() { echo "s\n"; }
+    public function loop() {
+        for ($i = 0; $i < 3; $i++) { $this->m(); $this->s(); }
+    }
+}
+function mk($id) { return new K($id); }
+for ($i = 0; $i < 3; $i++) {
+    mk($i)->m();
+    echo "after m\n";
+    mk("s$i")->s();
+    echo "after s\n";
+    mk("c$i")->m()->m();
+    echo "after chain\n";
+}
+(new K("loop"))->loop();
+echo "end\n";
+"###;
+        let expected = r###"D::inst D D
+D::inst E E
+D::inst E E
+D::inst D D
+Error: Non-static method D::inst() cannot be called statically
+Error: Non-static method D::inst() cannot be called statically
+m 0
+dtor 0
+after m
+dtor s0
+s
+after s
+m c0
+m c0
+dtor c0
+after chain
+m 1
+dtor 1
+after m
+dtor s1
+s
+after s
+m c1
+m c1
+dtor c1
+after chain
+m 2
+dtor 2
+after m
+dtor s2
+s
+after s
+m c2
+m c2
+dtor c2
+after chain
+m loop
+s
+m loop
+s
+m loop
+s
+dtor loop
+end
+"###;
+        assert_eq!(run(src), expected);
+    }
+
+    /// `$closure()` through the fast path: bound `$this` and scope, a
+    /// by-reference `use`, static variables per closure object, recursion
+    /// through a captured reference, static arrow functions, first-class
+    /// callables of a builtin and of a method, and `func_get_args()`.
+    #[test]
+    fn closure_calls_bind_this_scope_uses_and_statics() {
+        let src = r###"<?php
+class P {
+    private $secret = "p-secret";
+    public function make() {
+        $k = 0;
+        return function ($x) use (&$k) {
+            static $calls = 0;
+            $calls++;
+            $k += $x;
+            return static::class . " " . $this->secret . " k=$k calls=$calls";
+        };
+    }
+}
+class Q extends P {}
+$c = (new Q)->make();
+for ($i = 1; $i <= 3; $i++) { echo $c($i), "\n"; }
+$d = (new P)->make();
+echo $d(10), "\n";
+$fact = function ($n) use (&$fact) { return $n <= 1 ? 1 : $n * $fact($n - 1); };
+echo $fact(6), "\n";
+$s = static fn($v) => $v * 2;
+for ($i = 0; $i < 3; $i++) { echo $s($i); }
+echo "\n";
+$fc = strlen(...);
+echo $fc("abcd"), "\n";
+$m = (new Q)->make(...);
+echo get_class($m), " ", $m()(5), "\n";
+$h = function () { return func_num_args() . ":" . implode(",", func_get_args()); };
+for ($i = 0; $i < 2; $i++) { echo $h(1, 2, $i), "\n"; }
+"###;
+        let expected = r###"Q p-secret k=1 calls=1
+Q p-secret k=3 calls=2
+Q p-secret k=6 calls=3
+P p-secret k=10 calls=1
+720
+024
+4
+Closure Q p-secret k=5 calls=1
+3:1,2,0
+3:1,2,1
+"###;
+        assert_eq!(run(src), expected);
     }
 }

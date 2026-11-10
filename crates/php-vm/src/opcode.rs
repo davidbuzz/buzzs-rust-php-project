@@ -1492,6 +1492,7 @@ impl CachedFunc {
     }
 
     /// The cached function, if it is still alive.
+    #[inline]
     pub fn get(&self) -> Option<crate::func::Func> {
         match &self.func {
             CachedFuncKind::Builtin(b) => Some(crate::func::Func::Builtin(b.clone())),
@@ -1500,6 +1501,7 @@ impl CachedFunc {
     }
 
     /// The cached call target with declaring scope and called class.
+    #[inline]
     pub fn get_call(
         &self,
     ) -> Option<(
