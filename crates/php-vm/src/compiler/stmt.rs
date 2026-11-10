@@ -458,15 +458,10 @@ impl Compiler<'_> {
                     None => 0,
                 };
                 self.ticks = u32::try_from(n.max(0)).unwrap_or(u32::MAX);
-            } else if d.name.eq_ignore_case("encoding") {
-                // Encoding is ignored (no zend.multibyte).
-            } else {
-                self.warnings.push((
-                    128,
-                    format!("Unsupported declare '{}'", d.name.as_str_lossy()),
-                    d.span.line,
-                ));
             }
+            // `encoding` is ignored (no zend.multibyte); php-parser's
+            // validation pass already reported "Unsupported declare" for
+            // any other directive.
         }
         if let Some(b) = body {
             let r = self.compile_stmt(b);
