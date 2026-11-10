@@ -30,9 +30,39 @@ fn with_progress(f: impl FnOnce(&mut UploadProgress) -> bool) -> bool {
     ok
 }
 
+/// Whether an upload progress record is in flight.
+fn has_progress() -> bool {
+    PROGRESS.with(|c| c.borrow().is_some())
+}
+
+/// For an in-flight record that is not tracked, what a data event
+/// returns: not cancelled.
+fn untracked_verdict() -> Option<bool> {
+    PROGRESS.with(|c| {
+        c.borrow()
+            .as_ref()
+            .filter(|p| !p.tracking())
+            .map(|p| !p.cancelled())
+    })
+}
+
 /// `php_session_rfc1867_callback()`: `false` is `FAILURE` (the upload was
 /// cancelled through `$_SESSION[...]['cancel_upload']`).
 pub(crate) fn callback(vm: &mut Vm, event: Rfc1867Event<'_>, post_bytes_processed: i64) -> bool {
+    // Without an in-flight record (upload progress disabled, or not
+    // tracked for this request) every event but the start is a no-op:
+    // skip the host set-up and INI synchronisation, which would otherwise
+    // run once per 5 KiB chunk of an uploaded file.
+    if !matches!(event, Rfc1867Event::Start { .. }) && !has_progress() {
+        return true;
+    }
+    // An untracked upload's data event changes nothing either
+    // (`rfc1867::file_data` returns before touching the session).
+    if matches!(event, Rfc1867Event::FileData { .. }) {
+        if let Some(ok) = untracked_verdict() {
+            return ok;
+        }
+    }
     // The parser runs during request startup, before `RINIT`.
     set_phase(Phase::RequestStartup);
     let ok = with_host(vm, |h| {

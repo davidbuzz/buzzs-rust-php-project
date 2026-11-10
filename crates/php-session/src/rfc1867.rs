@@ -77,8 +77,17 @@ impl UploadProgress {
         d
     }
 
-    fn tracking(&self) -> bool {
+    /// Whether this upload is tracked (`progress->sid` and `progress->key`
+    /// are set): only then do the data events touch the session.
+    #[must_use]
+    pub fn tracking(&self) -> bool {
         self.sid.is_some() && self.key.is_some()
+    }
+
+    /// Whether the upload was cancelled through the session.
+    #[must_use]
+    pub fn cancelled(&self) -> bool {
+        self.cancel_upload
     }
 }
 
@@ -317,4 +326,27 @@ fn cleanup(h: &mut dyn SessionHost, p: &UploadProgress) {
     }
     state::flush(h, true);
     h.session().in_rfc1867_update = false;
+}
+
+#[cfg(test)]
+mod tracking_tests {
+    use super::UploadProgress;
+
+    #[test]
+    fn a_fresh_record_is_untracked_and_not_cancelled() {
+        let p = UploadProgress::default();
+        assert!(!p.tracking());
+        assert!(!p.cancelled());
+    }
+
+    #[test]
+    fn tracking_needs_both_the_session_id_and_the_key() {
+        let mut p = UploadProgress {
+            key: Some(b"upload_progress_x".to_vec()),
+            ..UploadProgress::default()
+        };
+        assert!(!p.tracking());
+        p.sid = Some(php_runtime::ZStr::from("abc"));
+        assert!(p.tracking());
+    }
 }
