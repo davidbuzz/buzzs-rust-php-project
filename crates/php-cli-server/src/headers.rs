@@ -304,7 +304,7 @@ impl SapiHeaders {
             if h.is_empty() {
                 continue;
             }
-            if is_status(h) {
+            if is_status(h.as_slice()) {
                 if !ignore_status {
                     ignore_status = true;
                     out.extend_from_slice(h);
@@ -327,7 +327,7 @@ impl SapiHeaders {
     /// The `Status: <code> <reason>` line, unless a `Status:` header was
     /// set (then `true`).
     fn default_status(&self, buf: &mut Vec<u8>, is_status: impl Fn(&[u8]) -> bool) -> bool {
-        if self.headers.iter().any(|h| is_status(h)) {
+        if self.headers.iter().any(|h| is_status(h.as_slice())) {
             return true;
         }
         let code = self.response_code;

@@ -1103,7 +1103,10 @@ fn run_cgi_script(vm: &mut Vm, ctx: &RequestCtx, cgi: &CgiInfo) {
         (src.clone(), b"Standard input code".to_vec())
     } else {
         let p = std::path::Path::new(std::ffi::OsStr::from_bytes(&path));
-        match std::fs::read(p).ok().filter(|_| !path.is_empty() && p.is_file()) {
+        match std::fs::read(p)
+            .ok()
+            .filter(|_| !path.is_empty() && p.is_file())
+        {
             Some(src) => {
                 if !cgi.no_chdir {
                     if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
@@ -1113,13 +1116,13 @@ fn run_cgi_script(vm: &mut Vm, ctx: &RequestCtx, cgi: &CgiInfo) {
                 (src, path.clone())
             }
             None => {
-                let denied = std::fs::File::open(p).is_err_and(|e| {
-                    e.kind() == std::io::ErrorKind::PermissionDenied
-                }) && !path.is_empty();
+                let denied = std::fs::File::open(p)
+                    .is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied)
+                    && !path.is_empty();
                 let (code, msg): (i32, &[u8]) = if denied {
-                    (403, b"Access denied.\n")
+                    (403, &b"Access denied.\n"[..])
                 } else {
-                    (404, b"No input file specified.\n")
+                    (404, &b"No input file specified.\n"[..])
                 };
                 let _ = ctx.header_op(HeaderOp::SetStatus(code));
                 vm.output(msg);
