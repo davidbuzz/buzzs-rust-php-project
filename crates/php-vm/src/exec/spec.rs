@@ -15,7 +15,7 @@
 //! must run (which then sees exactly the state the generic op would have
 //! seen). See `compiler/specialise.rs` for when the compiler selects these
 //! ops. Variable slots are read in place through [`Frame::peek_cv`] /
-//! [`Frame::peek_cv_dim`] where one slot is inspected, through a shared
+//! [`Frame::peek_cv_dim_int`] where one slot is inspected, through a shared
 //! borrow of the store where two slots or a chain of containers are
 //! compared, and written through the store's `try_borrow_mut`, like the
 //! `AssignCv` fast path (`Vm::assign_cv_fast`).
@@ -31,7 +31,7 @@
 //! [`Op::AssignOpDimCv`]: crate::opcode::Op::AssignOpDimCv
 //! [`Op::IncDecDimCv`]: crate::opcode::Op::IncDecDimCv
 //! [`Frame::peek_cv`]: crate::vm::Frame::peek_cv
-//! [`Frame::peek_cv_dim`]: crate::vm::Frame::peek_cv_dim
+//! [`Frame::peek_cv_dim_int`]: crate::vm::Frame::peek_cv_dim_int
 
 use super::{discard_unrooted, num_bin, CvOpData, Num};
 use crate::opcode::{
@@ -1179,25 +1179,24 @@ impl Vm {
             release_str_tmp_in(f, dim);
             return Some(store_fetched_in(f, dst, to, v));
         }
-        if let Some(i) = dim_int_in(f, dim) {
-            if let Some(v) = f.peek_cv_dim_int(cv, i) {
-                return Some(store_fetched_in(f, dst, to, v));
-            }
+        // `zend_fetch_dimension_str`: an int (or canonical integer string)
+        // offset inside a string.
+        if let Some(Value::Str(s)) = f.cvs.get(cv as usize).and_then(CvSlot::get) {
+            let offset = match dim_ref_in(f, dim)? {
+                DimRef::Int(i) => i,
+                DimRef::Str(k) => match ArrayKey::from_zstr(k) {
+                    ArrayKey::Int(i) => i,
+                    ArrayKey::Str(_) => return None,
+                },
+            };
+            let v = string_offset_char(s, offset)?;
+            release_str_tmp_in(f, dim);
+            return Some(store_fetched_in(f, dst, to, v));
         }
-        let key = dim_key_in(f, dim)?;
-        let v = match f.peek_cv_dim(cv, &key) {
-            Some(v) => v,
-            None => {
-                let ArrayKey::Int(offset) = key else {
-                    return None;
-                };
-                match f.cvs.get(cv as usize).and_then(CvSlot::get) {
-                    Some(Value::Str(s)) => string_offset_char(s, offset)?,
-                    _ => return None,
-                }
-            }
-        };
-        release_str_tmp_in(f, dim);
+        // An int offset held by reference (which `dim_ref_in` does not
+        // look through) on an array hit.
+        let i = dim_int_in(f, dim)?;
+        let v = f.peek_cv_dim_int(cv, i)?;
         Some(store_fetched_in(f, dst, to, v))
     }
 
@@ -1939,7 +1938,7 @@ mod tests {
         // String and numeric-string offsets looked up in place, compound
         // assignments and increments on unshared and shared arrays and
         // through references, nested reads, appends (`$a[] = v`, a full
-        // array, an undefined variable, a string), and a function whose
+        // array, an undefined variable, a string), string offsets, and a function whose
         // generic `??=` attaches its symbol table only for that access:
         // later `$$`, `extract()`, `get_defined_vars()`, `compact()`,
         // `global` and `$GLOBALS` still see every variable.
@@ -1974,6 +1973,9 @@ g();
 $G = [1]; $G[] = 2; $W = ['k' => 1]; $W['k2'] ??= 5;
 function h() { global $G; $G[] = 3; $GLOBALS['W']['k3'] = 7; echo count($GLOBALS['G']), "\n"; }
 h(); $G[] = 4; $W['k4'] = 1; echo implode(',', $G), " ", implode(',', array_keys($W)), "\n";
+$str = "test"; $o = "1"; $ri = 2; $rr = &$ri;
+echo $str[1], $str["2"], $str[-1], $str[$o], $str[$rr], "\n";
+$arr = [10, 20, 30]; echo $arr[$rr], "\n";
 "#;
         let expected = r#"22fiveoh-fivefive
 bool(true)
@@ -2035,6 +2037,8 @@ array(4) {
 x,y,0,1,2,z
 3
 1,2,3,4 k,k2,k3,k4
+estes
+30
 "#;
         assert_eq!(run(src), expected);
     }

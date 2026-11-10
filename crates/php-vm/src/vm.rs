@@ -4,7 +4,7 @@ use crate::class::{Class, NameMap};
 use crate::compiler::CompiledUnit;
 use crate::func::{Func, UserFunction};
 use crate::opcode::OpArray;
-use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZStr};
+use php_runtime::{HashTable, Obj, PhpRef, Value, ZStr};
 use php_support::ini::IniRegistry;
 use php_support::output::OutputStack;
 use std::cell::RefCell;
@@ -1460,23 +1460,6 @@ impl Frame {
     pub(crate) fn peek_cv<R>(&self, cv: u32, read: fn(Option<&Value>) -> R) -> R {
         let idx = cv as usize;
         read(self.cvs.get(idx).and_then(CvSlot::get))
-    }
-
-    /// `$cv[key]` looked up in place: the element of the array compiled
-    /// variable `cv` holds (directly or through a reference), dereferenced
-    /// and cloned; `None` when the variable is undefined, holds no array or
-    /// the array has no such key.
-    #[inline]
-    pub(crate) fn peek_cv_dim(&self, cv: u32, key: &ArrayKey) -> Option<Value> {
-        let idx = cv as usize;
-        match self.cvs.get(idx).and_then(CvSlot::get)? {
-            Value::Array(a) => a.get(key).map(Value::deref),
-            Value::Reference(r) => match &*r.try_borrow()? {
-                Value::Array(a) => a.get(key).map(Value::deref),
-                _ => None,
-            },
-            _ => None,
-        }
     }
 
     /// `$cv[i]` looked up for a 64-bit integer index on a packed array:
