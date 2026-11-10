@@ -10,6 +10,40 @@ use php_vm::Vm;
 use std::cell::RefCell;
 use std::os::unix::ffi::OsStrExt;
 
+/// `sapi_cli_ub_write()`: `write(2)` straight to file descriptor 1.
+///
+/// `std::io::stdout()` adds a re-entrant lock and a line buffer
+/// (a `memrchr` per write) under the VM's own buffer; under the CLI's
+/// `implicit_flush=1` every `echo` paid for both layers. Writing to the
+/// descriptor itself (not a duplicate) keeps C's behaviour after
+/// `fclose(STDOUT)`: later output fails silently.
+pub struct RawStdout;
+
+impl std::io::Write for RawStdout {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // SAFETY: `buf` is a live slice of `buf.len()` initialised bytes;
+        // write(2) only reads it.
+        let n = unsafe { libc::write(libc::STDOUT_FILENO, buf.as_ptr().cast(), buf.len()) };
+        match usize::try_from(n) {
+            Ok(n) => Ok(n),
+            Err(_) => {
+                let e = std::io::Error::last_os_error();
+                // Like `std::io::stdout()`: a closed descriptor swallows
+                // the output.
+                if e.raw_os_error() == Some(libc::EBADF) {
+                    Ok(buf.len())
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// `php_ini_opened_path` and `php_ini_scanned_files`.
 type IniFiles = (Option<Vec<u8>>, Option<Vec<u8>>);
 

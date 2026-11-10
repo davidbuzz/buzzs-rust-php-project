@@ -831,6 +831,15 @@ fn stack_apply_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Conte
 
 /// `php_output_op()`: passes data through the handler stack to the SAPI.
 fn output_op<H: OutputHost + ?Sized>(host: &mut H, op: i32, data: &[u8]) {
+    // No active handler (the common `echo` case): `php_output_op()` points
+    // the context at the caller's data and hands it straight to the SAPI.
+    // `php_output_lock_error()` needs an active handler, so it cannot fire.
+    if host.output().active.is_none() {
+        if !data.is_empty() {
+            sapi_out(host, data);
+        }
+        return;
+    }
     if lock_error(host, op) {
         return;
     }
@@ -869,14 +878,21 @@ fn output_op<H: OutputHost + ?Sized>(host: &mut H, op: i32, data: &[u8]) {
         ctx.output = Some(data.to_vec());
     }
     if let Some(out) = ctx.output.filter(|o| !o.is_empty()) {
-        output_header(host);
-        if host.output().flags & status::DISABLED == 0 {
-            host.sapi_write(&out);
-            if host.output().flags & status::IMPLICITFLUSH != 0 {
-                host.sapi_flush();
-            }
-            host.output().flags |= status::SENT;
+        sapi_out(host, &out);
+    }
+}
+
+/// The tail of `php_output_op()`: headers, then `sapi_module.ub_write()`
+/// and the implicit flush.
+#[inline]
+fn sapi_out<H: OutputHost + ?Sized>(host: &mut H, out: &[u8]) {
+    output_header(host);
+    if host.output().flags & status::DISABLED == 0 {
+        host.sapi_write(out);
+        if host.output().flags & status::IMPLICITFLUSH != 0 {
+            host.sapi_flush();
         }
+        host.output().flags |= status::SENT;
     }
 }
 

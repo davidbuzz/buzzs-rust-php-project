@@ -3078,6 +3078,41 @@ fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
                 .map(|c| Value::Str(ZStr::from_byte(c))),
             _ => None,
         },
+        // `float $num` math functions (ext/standard/math.c): an int or a
+        // float passes `Z_PARAM_DOUBLE` in either typing mode (int widens),
+        // and the C library function is the whole body.
+        b"sqrt" | b"sin" | b"cos" | b"tan" | b"exp" | b"atan" => {
+            let x = float_arg(val)?;
+            Some(Value::Float(match name {
+                b"sqrt" => x.sqrt(),
+                b"sin" => x.sin(),
+                b"cos" => x.cos(),
+                b"tan" => x.tan(),
+                b"exp" => x.exp(),
+                _ => x.atan(),
+            }))
+        }
+        // `floor`/`ceil(int|float $num): float` (`Z_PARAM_NUMBER`): an int
+        // comes back as the same value as a float.
+        b"floor" | b"ceil" => match val {
+            #[allow(clippy::cast_precision_loss)]
+            Value::Int(i) => Some(Value::Float(*i as f64)),
+            Value::Float(f) if name == b"floor" => Some(Value::Float(f.floor())),
+            Value::Float(f) => Some(Value::Float(f.ceil())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// An int or float argument as `Z_PARAM_DOUBLE` reads it; `None` for
+/// anything that needs coercion or a type error.
+#[inline]
+fn float_arg(val: &Value) -> Option<f64> {
+    match val {
+        Value::Float(f) => Some(*f),
+        #[allow(clippy::cast_precision_loss)]
+        Value::Int(i) => Some(*i as f64),
         _ => None,
     }
 }
@@ -5077,5 +5112,48 @@ restore_error_handler();
         assert_eq!(args.capacity(), capacity);
         assert_eq!(held.refcount(), 1);
         assert!(matches!(args.as_slice(), [Some(Value::Int(123))]));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod fast_builtin_tests {
+    use super::fast_builtin_eval;
+    use php_runtime::Value;
+
+    fn float(name: &str, v: Value) -> f64 {
+        match fast_builtin_eval(name.as_bytes(), &v) {
+            Some(Value::Float(f)) => f,
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    /// Expectations from `/usr/bin/php -n` (`var_dump` of each call).
+    #[test]
+    fn float_math_matches_the_handlers() {
+        assert_eq!(float("sqrt", Value::Int(2)), 1.414_213_562_373_095_1);
+        assert!(float("sqrt", Value::Int(-1)).is_nan());
+        let z = float("sqrt", Value::Float(-0.0));
+        assert!(z == 0.0 && z.is_sign_negative());
+        assert_eq!(float("sin", Value::Int(1)), 0.841_470_984_807_896_5);
+        assert_eq!(float("cos", Value::Int(3)), -0.989_992_496_600_445_4);
+        assert_eq!(float("tan", Value::Float(0.5)), 0.546_302_489_843_790_5);
+        assert_eq!(float("exp", Value::Int(1)), std::f64::consts::E);
+        assert_eq!(float("atan", Value::Int(1)), std::f64::consts::FRAC_PI_4);
+        assert_eq!(float("floor", Value::Float(-2.5)), -3.0);
+        assert_eq!(float("ceil", Value::Float(-2.5)), -2.0);
+        assert_eq!(float("floor", Value::Int(7)), 7.0);
+        let c = float("ceil", Value::Float(-0.5));
+        assert!(c == 0.0 && c.is_sign_negative());
+    }
+
+    /// Anything needing coercion or a type error takes the full call.
+    #[test]
+    fn non_numbers_decline() {
+        for name in ["sqrt", "sin", "floor", "ceil"] {
+            assert!(fast_builtin_eval(name.as_bytes(), &Value::Bool(true)).is_none());
+            assert!(fast_builtin_eval(name.as_bytes(), &Value::Null).is_none());
+            assert!(fast_builtin_eval(name.as_bytes(), &Value::Str("4".into())).is_none());
+        }
     }
 }
