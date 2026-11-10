@@ -265,6 +265,11 @@ impl Vm {
             let f = unit.decls.functions.borrow()[i as usize].clone();
             let lc = ZStr::from(f.name.to_ascii_lowercase());
             if let Some(existing) = self.functions.get(&lc) {
+                // A preloaded script included again: its preloaded
+                // functions are not declared again.
+                if self.is_preloaded_function(&f) {
+                    continue;
+                }
                 let msg = match existing {
                     crate::func::Func::User(u) => format!(
                         "Cannot redeclare function {}() (previously declared in {}:{})",
