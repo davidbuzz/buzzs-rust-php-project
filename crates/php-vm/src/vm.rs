@@ -714,6 +714,46 @@ impl FrameStack {
         idx
     }
 
+    /// Pushes the frame of a builtin call (`zend_execute_internal`'s small
+    /// call frame on the VM stack) and returns it, for the caller to set
+    /// the call's parts: the function, arguments, `$this`, scopes and names.
+    ///
+    /// A pooled frame at this depth is readied in place
+    /// ([`Frame::reinit_for_builtin`]): its buffers stay with it for the
+    /// next user call made at this depth, and no `Frame` is built and
+    /// copied. Otherwise an empty frame for `empty_code` sharing
+    /// `empty_vars` is appended. Every field the caller does not set is
+    /// in its released state (that of [`Frame::clear_for_reuse`]).
+    #[inline]
+    pub(crate) fn push_builtin(
+        &mut self,
+        empty_code: &Rc<OpArray>,
+        empty_vars: &Rc<RefCell<VarStore>>,
+    ) -> &mut Frame {
+        let idx = self.live;
+        if idx < self.vec.len() {
+            self.vec[idx].reinit_for_builtin(empty_code);
+        } else {
+            self.vec.push(Frame::empty_builtin(empty_code, empty_vars));
+        }
+        self.live = idx + 1;
+        &mut self.vec[idx]
+    }
+
+    /// Releases the builtin frame on top of the stack in place
+    /// ([`Frame::clear_builtin_for_reuse`]), keeping it in the pool.
+    #[inline]
+    pub(crate) fn release_builtin_top(
+        &mut self,
+        empty_code: &Rc<OpArray>,
+        empty_vars: &Rc<RefCell<VarStore>>,
+    ) {
+        if self.live > 0 {
+            self.live -= 1;
+            self.vec[self.live].clear_builtin_for_reuse(empty_code, empty_vars);
+        }
+    }
+
     /// Releases the topmost frame in place (retaining it in `vec[live..]` for pool reuse).
     #[inline]
     pub fn release_top(&mut self, empty_code: &Rc<OpArray>) {
@@ -731,13 +771,22 @@ impl FrameStack {
     ///
     /// php-src takes call frames from the VM stack, whose first page is
     /// allocated at startup, so calls never show in `memory_get_usage()`;
-    /// the pooled frames' buffers do, and the pool is otherwise freed by
-    /// whichever builtin call comes next ([`FrameStack::truncate`]).
-    /// Freeing it before reading the usage makes every reading see an
-    /// empty pool, so that it does not depend on the calls made since the
-    /// last builtin (Symfony's NativeSessionStorageTest).
-    pub fn drop_pool(&mut self) {
+    /// the pooled frames' buffers do. Freeing the pool before reading the
+    /// usage makes every reading see an empty pool, so that it does not
+    /// depend on the calls made before (Symfony's
+    /// NativeSessionStorageTest).
+    ///
+    /// The live builtin frames, which may sit in pooled frames that kept
+    /// the buffers of an earlier user call ([`FrameStack::push_builtin`]),
+    /// give those back too and share `empty_vars` again: they own what a
+    /// builtin frame built afresh owns, and nothing more.
+    pub fn drop_pool(&mut self, empty_vars: &Rc<RefCell<VarStore>>) {
         self.vec.truncate(self.live);
+        for f in &mut self.vec {
+            if f.kind == FrameKind::Builtin {
+                f.shrink_builtin(empty_vars);
+            }
+        }
     }
 
     pub fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, Frame>
@@ -1144,6 +1193,143 @@ impl Frame {
     /// return path.
     #[inline]
     pub fn clear_for_reuse(&mut self, empty_code: &Rc<OpArray>) {
+        self.clear_slots_for_reuse();
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+            let vs = rc_mut.get_mut();
+            clear_frame_buffer(&mut vs.slots);
+            // The shared names are dropped in `clear_rest_for_reuse`, with
+            // the function handles (`keeps_function`): they are the code's.
+            clear_frame_buffer(&mut vs.names.owned);
+            clear_opt(&mut vs.index);
+        } else {
+            self.vars = Rc::new(RefCell::new(VarStore::default()));
+        }
+        self.clear_rest_for_reuse(empty_code);
+    }
+
+    /// [`Frame::clear_for_reuse`] of a builtin frame (the one
+    /// [`FrameStack::push_builtin`] readied), whose variable store is
+    /// either its own (kept from a pooled user frame, and emptied here) or
+    /// the shared `empty_vars`, which is kept as it is: a frame left
+    /// sharing it gets its own store from the next user call made in it
+    /// ([`Frame::reinit_same_call`], [`Frame::reinit_for_call`]).
+    #[inline]
+    pub(crate) fn clear_builtin_for_reuse(
+        &mut self,
+        empty_code: &Rc<OpArray>,
+        empty_vars: &Rc<RefCell<VarStore>>,
+    ) {
+        // Empty unless the handler used them: nothing to loop over.
+        self.clear_slots_for_reuse();
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+            let vs = rc_mut.get_mut();
+            clear_frame_buffer(&mut vs.slots);
+            vs.names.clear();
+            clear_opt(&mut vs.index);
+        } else if !Rc::ptr_eq(&self.vars, empty_vars) {
+            self.vars = empty_vars.clone();
+        }
+        self.clear_rest_for_reuse(empty_code);
+    }
+
+    /// Readies a pooled frame (released by [`Frame::clear_for_reuse`] or
+    /// [`Frame::clear_builtin_for_reuse`]) for a builtin call: the empty op
+    /// array and no compiled variables, temporaries, iterators or finally
+    /// slots (their buffers keep their capacity; the released slots own
+    /// nothing). The variable store is kept: it is empty, either the
+    /// frame's own or the shared `empty_vars`.
+    #[inline]
+    pub(crate) fn reinit_for_builtin(&mut self, empty_code: &Rc<OpArray>) {
+        self.kind = FrameKind::Builtin;
+        if !self.tmps.is_empty() {
+            self.tmps.clear();
+        }
+        if !self.iters.is_empty() {
+            self.iters.clear();
+        }
+        if !self.fins.is_empty() {
+            self.fins.clear();
+        }
+        if !self.cvs.is_empty() {
+            self.cvs.clear();
+        }
+        // Kept by `keeps_function` for a user function.
+        clear_opt(&mut self.ufunc);
+        if !Rc::ptr_eq(&self.code, empty_code) {
+            self.code = empty_code.clone();
+        }
+    }
+
+    /// The frame [`FrameStack::push_builtin`] appends when no pooled frame
+    /// is left: the frame `Frame::with_vars` makes for the empty op array,
+    /// built without allocating.
+    fn empty_builtin(empty_code: &Rc<OpArray>, empty_vars: &Rc<RefCell<VarStore>>) -> Self {
+        Frame {
+            tmps: Vec::new(),
+            iters: Vec::new(),
+            fins: Vec::new(),
+            calls: Vec::new(),
+            cvs: Vec::new(),
+            symtab_attached: false,
+            vars: empty_vars.clone(),
+            named: Vec::new(),
+            args: Vec::new(),
+            this: None,
+            closure: None,
+            generator: None,
+            pending_exc: None,
+            statics: None,
+            func: None,
+            ufunc: None,
+            code: empty_code.clone(),
+            ip: 0,
+            scope: None,
+            called: None,
+            ret: RetTarget::Discard,
+            kind: FrameKind::Builtin,
+            is_ctor: false,
+            silence_saved: Vec::new(),
+            builtin_name: None,
+            magic_name: None,
+            caller_strict: false,
+            called_from_internal: false,
+            observed: false,
+            observer_hidden: false,
+        }
+    }
+
+    /// Gives back the buffers a live builtin frame kept from the pooled
+    /// frame it was readied in, and makes it share `empty_vars` again
+    /// ([`FrameStack::drop_pool`]).
+    fn shrink_builtin(&mut self, empty_vars: &Rc<RefCell<VarStore>>) {
+        fn shrink<T>(v: &mut Vec<T>) {
+            if v.is_empty() && v.capacity() > 0 {
+                *v = Vec::new();
+            }
+        }
+        shrink(&mut self.tmps);
+        shrink(&mut self.iters);
+        shrink(&mut self.fins);
+        shrink(&mut self.calls);
+        shrink(&mut self.cvs);
+        shrink(&mut self.named);
+        shrink(&mut self.silence_saved);
+        // Only a store of its own that holds nothing (one kept from a
+        // pooled frame) is given back.
+        let own_and_empty = Rc::get_mut(&mut self.vars).is_some_and(|rc_mut| {
+            let vs = rc_mut.get_mut();
+            vs.slots.is_empty() && vs.names.is_empty()
+        });
+        if own_and_empty {
+            self.vars = empty_vars.clone();
+        }
+    }
+
+    /// The compiled variables, temporaries, iterators, finally states and
+    /// pending calls of [`Frame::clear_for_reuse`].
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every return
+    fn clear_slots_for_reuse(&mut self) {
         for t in &mut self.tmps {
             release_slot(std::mem::take(t));
         }
@@ -1161,16 +1347,12 @@ impl Frame {
             }
         }
         self.symtab_attached = false;
-        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
-            let vs = rc_mut.get_mut();
-            clear_frame_buffer(&mut vs.slots);
-            // The shared names are dropped below, with the function
-            // handles (`keeps_function`): they are the code's.
-            clear_frame_buffer(&mut vs.names.owned);
-            clear_opt(&mut vs.index);
-        } else {
-            self.vars = Rc::new(RefCell::new(VarStore::default()));
-        }
+    }
+
+    /// The fields after the variable store of [`Frame::clear_for_reuse`].
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every return
+    fn clear_rest_for_reuse(&mut self, empty_code: &Rc<OpArray>) {
         if !self.named.is_empty() || self.named.capacity() > 256 {
             clear_frame_buffer(&mut self.named);
         }
@@ -1311,6 +1493,12 @@ impl Frame {
             if !same_code {
                 clear_opt(&mut vs.names.shared);
             }
+        } else {
+            // A pooled frame last used by a builtin may still share the
+            // VM's `empty_vars` (`Frame::clear_builtin_for_reuse`): a
+            // function without compiled variables passes the size checks
+            // and must not write into that store.
+            self.vars = Rc::new(RefCell::new(VarStore::default()));
         }
     }
 
@@ -2149,12 +2337,13 @@ mod tests {
         stack.release_top(&empty);
         assert_eq!(stack.len(), 1);
         assert_eq!(stack.vec.len(), 3);
-        stack.drop_pool();
+        let empty_vars = Rc::new(RefCell::new(super::VarStore::default()));
+        stack.drop_pool(&empty_vars);
         assert_eq!(stack.len(), 1);
         assert_eq!(stack.vec.len(), 1);
         assert_eq!(stack.last().map(|f| f.code.cv_names.len()), Some(1));
         // Nothing pooled: nothing to free.
-        stack.drop_pool();
+        stack.drop_pool(&empty_vars);
         assert_eq!(stack.vec.len(), 1);
     }
 
@@ -2295,6 +2484,85 @@ mod tests {
         let idx1 = stack.push_in_place(&code, FrameKind::Function);
         assert_eq!(idx1, 0);
         assert_eq!(stack.len(), 1);
+    }
+
+    #[test]
+    fn builtin_frames_reuse_pooled_frames_and_keep_the_pool_above() {
+        let empty = Rc::new(OpArray::default());
+        let empty_vars = Rc::new(RefCell::new(super::VarStore::default()));
+        let code = Rc::new(OpArray {
+            cv_names: vec![ZStr::from("a"), ZStr::from("b")],
+            num_tmps: 3,
+            ..OpArray::default()
+        });
+        let mut stack = super::FrameStack::new();
+        stack.push_in_place(&code, FrameKind::Function);
+        stack.push_in_place(&code, FrameKind::Function);
+        stack.release_top(&empty);
+        stack.release_top(&empty);
+        assert_eq!(stack.vec.len(), 2);
+        let held = ZStr::from("this");
+        {
+            let f = stack.push_builtin(&empty, &empty_vars);
+            assert_eq!(f.kind, FrameKind::Builtin);
+            assert!(f.cvs.is_empty() && f.tmps.is_empty());
+            assert!(Rc::ptr_eq(&f.code, &empty));
+            assert!(f.ufunc.is_none());
+            f.args.push(Some(Value::Str(held.clone())));
+        }
+        assert_eq!(stack.len(), 1);
+        stack.release_builtin_top(&empty, &empty_vars);
+        assert_eq!(stack.len(), 0);
+        assert_eq!(held.refcount(), 1);
+        // The pooled frame above the builtin's is still there.
+        assert_eq!(stack.vec.len(), 2);
+        assert_eq!(stack.vec[1].cvs.len(), 2);
+        // A user call in the builtin's frame gets the right slots back.
+        let idx = stack.push_in_place(&code, FrameKind::Function);
+        assert_eq!(idx, 0);
+        assert_eq!(stack.vec[0].cvs.len(), 2);
+        assert_eq!(stack.vec[0].tmps.len(), 3);
+    }
+
+    #[test]
+    fn a_frame_released_by_a_builtin_gets_its_own_variable_store() {
+        let empty = Rc::new(OpArray::default());
+        let empty_vars = Rc::new(RefCell::new(super::VarStore::default()));
+        let mut stack = super::FrameStack::new();
+        // A fresh builtin frame shares `empty_vars`.
+        assert!(Rc::ptr_eq(
+            &stack.push_builtin(&empty, &empty_vars).vars,
+            &empty_vars
+        ));
+        stack.release_builtin_top(&empty, &empty_vars);
+        assert!(Rc::ptr_eq(&stack.vec[0].vars, &empty_vars));
+        // A function without variables or temporaries passes the size
+        // checks of `push_in_place` and must not write into the shared store.
+        let code = Rc::new(OpArray::default());
+        stack.push_in_place(&code, FrameKind::Function);
+        assert!(!Rc::ptr_eq(&stack.vec[0].vars, &empty_vars));
+        assert_eq!(Rc::strong_count(&stack.vec[0].vars), 1);
+    }
+
+    #[test]
+    fn drop_pool_gives_back_what_a_live_builtin_frame_kept() {
+        let empty = Rc::new(OpArray::default());
+        let empty_vars = Rc::new(RefCell::new(super::VarStore::default()));
+        let code = Rc::new(OpArray {
+            cv_names: vec![ZStr::from("a")],
+            num_tmps: 2,
+            ..OpArray::default()
+        });
+        let mut stack = super::FrameStack::new();
+        stack.push_in_place(&code, FrameKind::Function);
+        stack.release_top(&empty);
+        stack.push_builtin(&empty, &empty_vars);
+        assert!(stack.vec[0].tmps.capacity() > 0);
+        stack.drop_pool(&empty_vars);
+        let f = &stack.vec[0];
+        assert_eq!(f.tmps.capacity(), 0);
+        assert_eq!(f.cvs.capacity(), 0);
+        assert!(Rc::ptr_eq(&f.vars, &empty_vars));
     }
 
     #[test]

@@ -3134,48 +3134,30 @@ impl Vm {
         // (php-src's arguments stay in the call frame on the VM stack); the
         // handler gets copies.
         let pushed_args = std::mem::take(&mut call.args);
-        // The frame `Frame::with_vars` makes for the empty op array, built
-        // with the call's parts in place and without allocating: no
-        // compiled variables, temporaries or pending calls (a handler that
-        // starts a call grows `calls` then), and the argument buffer is
-        // the call's own. Only the named arguments, `$this` and scopes the
-        // call has are copied.
-        self.frames.push(Frame {
-            tmps: Vec::new(),
-            iters: Vec::new(),
-            fins: Vec::new(),
-            calls: Vec::new(),
-            cvs: Vec::new(),
-            symtab_attached: false,
-            vars: self.empty_vars.clone(),
-            named: if call.named.is_empty() {
-                Vec::new()
-            } else {
-                call.named.clone()
-            },
-            args: pushed_args,
-            this: call.this.clone(),
-            closure: call.closure.clone(),
-            generator: None,
-            pending_exc: None,
-            statics: None,
-            func: Some(call.func.clone()),
-            ufunc: None,
-            code: self.empty_code.clone(),
-            ip: 0,
-            scope: call.scope.clone(),
-            called: call.called.clone(),
-            ret: RetTarget::Discard,
-            kind: FrameKind::Builtin,
-            is_ctor: false,
-            silence_saved: Vec::new(),
-            builtin_name,
-            magic_name: self.magic_call_name.clone(),
-            caller_strict: false,
-            called_from_internal: false,
-            observed: false,
-            observer_hidden,
-        });
+        // The builtin frame, readied in place in the frame pool (a pooled
+        // frame keeps its buffers for the next user call at this depth)
+        // and without allocating: no compiled variables, temporaries or
+        // pending calls (a handler that starts a call grows `calls` then),
+        // and the argument buffer is the call's own. Only the named
+        // arguments, `$this` and scopes the call has are copied; every
+        // other field is in its released state.
+        let magic_name = self.magic_call_name.clone();
+        let frame = self.frames.push_builtin(&self.empty_code, &self.empty_vars);
+        if !call.named.is_empty() {
+            frame.named = call.named.clone();
+        }
+        let spare_args = std::mem::replace(&mut frame.args, pushed_args);
+        set_opt(&mut frame.this, call.this.clone());
+        set_opt(&mut frame.closure, call.closure.clone());
+        set_opt(&mut frame.func, Some(call.func.clone()));
+        set_opt(&mut frame.scope, call.scope.clone());
+        set_opt(&mut frame.called, call.called.clone());
+        set_opt(&mut frame.builtin_name, builtin_name);
+        set_opt(&mut frame.magic_name, magic_name);
+        frame.observer_hidden = observer_hidden;
+        if spare_args.capacity() > 0 {
+            self.put_arg_vec(spare_args);
+        }
         let depth = self.frames.len();
         self.observer_begin_top();
         // `zend_execute_internal` wraps the handler, which parses its own
@@ -3522,7 +3504,15 @@ impl Vm {
         }
         if self.frames.len() >= depth {
             let args = std::mem::take(&mut self.frames[depth - 1].args);
-            self.frames.truncate(depth - 1);
+            // Frames left above the builtin's (none, normally) go; the
+            // builtin frame itself is released into the pool, as php-src
+            // pops its call frame off the VM stack without touching the
+            // stack above.
+            if self.frames.len() > depth {
+                self.frames.truncate(depth);
+            }
+            self.frames
+                .release_builtin_top(&self.empty_code, &self.empty_vars);
             self.put_arg_vec(args);
         }
     }

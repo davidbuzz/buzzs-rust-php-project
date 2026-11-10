@@ -153,10 +153,8 @@ struct Done {
 }
 
 fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
-    let lower::Lowered {
-        mut lines,
-        first_z,
-    } = lower::Lower::new(&e.func, e.scope.clone(), &e.dyn_defs, res).run();
+    let lower::Lowered { mut lines, first_z } =
+        lower::Lower::new(&e.func, e.scope.clone(), &e.dyn_defs, res).run();
     passes::resolve_labels(&mut lines, &first_z);
     let oa = &e.func.code;
     let shape = passes::FuncShape {
