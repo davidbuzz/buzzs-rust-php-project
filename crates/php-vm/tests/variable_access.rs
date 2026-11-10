@@ -241,6 +241,27 @@ $later = 1;
     );
 }
 
+/// The global scope's compiled variables are one zval with their symbol
+/// table slots in php-src (`IS_INDIRECT`): a reference that only the
+/// variable holds is copied as its value by a `$GLOBALS` read also from
+/// inside a function or into an array, while one bound elsewhere (`&`,
+/// `global`) stays shared.
+#[test]
+fn globals_read_copies_a_variable_held_only_by_the_global_scope() {
+    assert_eq!(
+        run(r#"<?php
+$b = 1; $r = &$b; unset($r); $x = $GLOBALS; $b = 2; var_dump($x['b']);
+function f() { $h = $GLOBALS; $GLOBALS['b'] = 3; var_dump($h['b']); }
+f();
+$d = 1; $r = &$d; unset($r); $arr = [$GLOBALS]; $d = 9; var_dump($arr[0]['d']);
+$e = 1; $r = &$e; $y = $GLOBALS; $e = 4; var_dump($y['e']);
+function k() { global $e; $z = $GLOBALS; $e = 6; var_dump($z['e']); }
+k();
+"#),
+        "int(1)\nint(2)\nint(1)\nint(4)\nint(6)\n"
+    );
+}
+
 /// `zend_delayed_compile_dim`: `$GLOBALS[]` in any write context is a
 /// compile error (`restrict_globals/invalid_append`).
 #[test]
