@@ -10,7 +10,7 @@
 
 use super::{add_or_find_literal, clear_def_tmp, def_tmp, for_each_label_mut};
 use crate::compiler::expr::const_truthiness;
-use crate::opcode::{CastKind, Label, Op, OpArray, Operand, UnKind};
+use crate::opcode::{BinKind, CastKind, Label, Op, OpArray, Operand, UnKind};
 use php_runtime::{Value, ZStr};
 
 /// Finds all basic block leaders in `op_array`.
@@ -481,6 +481,9 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
             }
         }
 
+        // 4b. `T = BOOL/BOOL_NOT(X)` + `IS_IDENTICAL(T, true/false)`
+        changed |= fold_bool_identical(op_array, b_start, b_end, &use_counts);
+
         // 5. Consecutive string literal Echo merging
         for i in b_start..b_end {
             if let Op::Echo(Operand::Lit(l1)) = op_array.ops[i] {
@@ -515,6 +518,67 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
         }
     }
 
+    changed
+}
+
+/// Folds `T = BOOL(X)`/`T = BOOL_NOT(X)` followed by `IS_IDENTICAL` of `T`
+/// with a `true`/`false` literal (either side) into one `BOOL`/`BOOL_NOT`
+/// of `X`, like php-src's block pass (`block_pass.c`: `IS_IDENTICAL(T,
+/// TRUE)` becomes `TYPE_CHECK(T, TRUE)`, which absorbs a `BOOL`/`BOOL_NOT`
+/// source). `T` is a bool, so `T === true` is `T` and `T === false` is
+/// `!T`: the fold is exact. `T` must have no other use.
+fn fold_bool_identical(
+    op_array: &mut OpArray,
+    b_start: usize,
+    b_end: usize,
+    use_counts: &[u32],
+) -> bool {
+    let mut changed = false;
+    for i in b_start..b_end {
+        let Op::Unary {
+            op: src_op @ (UnKind::Bool | UnKind::Not),
+            a: x,
+            dst: t,
+        } = op_array.ops[i]
+        else {
+            continue;
+        };
+        if use_counts.get(t as usize).copied().unwrap_or(0) > 1 {
+            continue;
+        }
+        let mut next_i = i + 1;
+        while next_i < b_end && matches!(op_array.ops[next_i], Op::Nop) {
+            next_i += 1;
+        }
+        if next_i >= b_end {
+            continue;
+        }
+        let Op::Bin {
+            op: BinKind::Identical,
+            a,
+            b,
+            dst,
+        } = op_array.ops[next_i]
+        else {
+            continue;
+        };
+        let lit = match (a, b) {
+            (Operand::Tmp(u), Operand::Lit(l)) | (Operand::Lit(l), Operand::Tmp(u)) if u == t => l,
+            _ => continue,
+        };
+        let want = match op_array.literals.get(lit as usize) {
+            Some(Value::Bool(v)) => *v,
+            _ => continue,
+        };
+        let op = if (src_op == UnKind::Bool) == want {
+            UnKind::Bool
+        } else {
+            UnKind::Not
+        };
+        op_array.ops[next_i] = Op::Unary { op, a: x, dst };
+        op_array.ops[i] = Op::Nop;
+        changed = true;
+    }
     changed
 }
 
