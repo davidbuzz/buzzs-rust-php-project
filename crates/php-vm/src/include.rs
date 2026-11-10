@@ -212,6 +212,17 @@ impl Vm {
             },
         };
         let halt_compiler_offset = program.halt_compiler_offset;
+        // `opcache.opt_debug_level` & `ZEND_DUMP_AFTER_OPTIMIZER`: opcache
+        // dumps each script it compiles (`zend_optimize_script`); eval'd
+        // code is not cached.
+        let dump_src = (!is_eval
+            && self.ini.get_bool("opcache.enable")
+            && (self.ini.get_bool("opcache.enable_cli")
+                || self.ini.get_bool("opcache.file_cache_only"))
+            && self.ini.get_long("opcache.opt_debug_level")
+                & compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER
+                != 0)
+            .then(|| src.clone());
         // A multibyte script's AST is kept for the semantic text of
         // diagnostics; any other is released statement by statement while
         // it compiles. The compiler sees the function table as it stands
@@ -246,6 +257,14 @@ impl Vm {
         }
         for (level, msg, line) in &unit.warnings {
             self.error_at(*level, msg, filename, *line)?;
+        }
+        if let Some(src) = dump_src {
+            let functions = &self.functions;
+            let table = |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of);
+            let end = compiler::optimizer::dump::main_line_end(&src, halt_compiler_offset);
+            let out = compiler::optimizer::dump::dump_unit(&unit, &table, end, "after optimizer");
+            self.flush_stdout();
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), &out);
         }
         if let Some(program) = kept {
             self.parsed_sources
