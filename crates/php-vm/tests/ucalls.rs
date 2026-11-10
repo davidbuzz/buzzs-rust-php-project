@@ -22,6 +22,11 @@ impl Write for Sink {
 }
 
 fn run(source: &str) -> String {
+    // A new request's object store (`zend_objects_store_init`), as each
+    // script gets in its own `php` process: the store is per thread, and a
+    // test running several scripts would otherwise reuse the handles the
+    // previous one freed, in the order it freed them.
+    php_vm::object::reset_store();
     let sink = Sink::default();
     let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
     let status = vm.run_script(source.as_bytes(), "t.php");

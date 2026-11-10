@@ -353,8 +353,10 @@ echo $f(1), "\n";
     drop(vm);
     let output = String::from_utf8(sink.0.borrow().clone()).expect("UTF-8 output");
     assert_eq!(status, 0, "{output}");
-    // Coerced arguments and dynamic calls push the builtin frame.
-    assert_eq!(output, "FFBB\nFB\nF:falseF:trueB:false\nB\n");
+    // Coerced arguments and dynamic calls push the builtin frame. `abs()`
+    // of an int or a float is answered without the handler (and without a
+    // frame: `frameless_inline`), so it shows its real result, not "F".
+    assert_eq!(output, "12.5BB\n1B\nF:falseF:trueB:false\nB\n");
 }
 
 #[test]

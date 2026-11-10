@@ -1522,12 +1522,28 @@ mod tests {
         t.push(Value::Object(obj.clone())).unwrap();
         t.push(Value::Reference(shared_ref.clone())).unwrap();
 
+        let outer = Value::Array(t.into());
+        // The nested call finds the reference as the outer #2. A
+        // `C:` payload is `<length>:{<data>}` with no `;` after it
+        // (`php_var_serialize_class_name` + the `Serializable` branch of
+        // `php_var_serialize_intern`): "R:2;" is 4 bytes.
         let mut ctx = SerializableMockContext {
             inner_val: Value::Reference(shared_ref.clone()),
         };
-        let out = serialize(&Value::Array(t.into()), &mut ctx).unwrap();
+        let out = serialize(&outer, &mut ctx).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert_eq!(s, "a:3:{i:0;i:42;i:1;C:1:\"A\":5:{R:2;};i:2;R:2;}");
+        assert_eq!(s, "a:3:{i:0;i:42;i:1;C:1:\"A\":4:{R:2;}i:2;R:2;}");
+        // What PHP code can pass (`serialize([&$x])` inside `serialize()`
+        // of `$arr = [&$x, new A, &$x]`), as `/usr/bin/php -n` prints it.
+        let mut ctx = SerializableMockContext {
+            inner_val: Value::Array(ZArray::from_values([Value::Reference(shared_ref.clone())])),
+        };
+        let out = serialize(&outer, &mut ctx).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert_eq!(
+            s,
+            "a:3:{i:0;i:42;i:1;C:1:\"A\":14:{a:1:{i:0;R:2;}}i:2;R:2;}"
+        );
     }
 
     #[test]

@@ -2522,6 +2522,54 @@ impl Vm {
         }
     }
 
+    /// The array a `$GLOBALS` read yields (`ZEND_FETCH_GLOBALS` ->
+    /// `zend_proptable_to_symtable(&EG(symbol_table), 1)`), as
+    /// [`VarStore::to_array`] builds it, except that a reference counts as
+    /// held by the table alone (refcount 1 in php-src, so it is copied as
+    /// its value) also while compiled variables of frames on the global
+    /// scope hold handles of it: such a variable and the table's slot of
+    /// the same name are one zval in php-src, reached from the table
+    /// through `IS_INDIRECT` ([`Vm::global_ref_mirrors`]).
+    fn globals_array(&self) -> Value {
+        let st = self.globals.borrow();
+        let mut t = php_runtime::HashTable::new();
+        for (n, v) in st.names.iter().zip(&st.slots) {
+            let Some(v) = v else { continue };
+            let v = match v {
+                Value::Reference(r)
+                    if r.refcount() == 1 || r.refcount() == 1 + self.global_ref_mirrors(n, r) =>
+                {
+                    r.get()
+                }
+                other => other.clone(),
+            };
+            t.insert(ArrayKey::from_zstr(n), v);
+        }
+        Value::Array(ZArray::from_table(t))
+    }
+
+    /// The handles of reference `r`, the global symbol table's value of
+    /// variable `name`, that are the same variable's: the compiled variable
+    /// `name` of each frame running on the global scope (attached CVs keep
+    /// a second handle of their table slot's value, see
+    /// [`Frame::attach_symbol_table`](crate::vm::Frame::attach_symbol_table)).
+    #[cold]
+    fn global_ref_mirrors(&self, name: &ZStr, r: &PhpRef) -> usize {
+        self.frames
+            .iter()
+            .filter(|f| Rc::ptr_eq(&f.vars, &self.globals))
+            .filter(|f| {
+                f.code
+                    .cv_names
+                    .iter()
+                    .position(|n| n.as_bytes() == name.as_bytes())
+                    .and_then(|i| f.cvs.get(i))
+                    .and_then(crate::vm::CvSlot::get)
+                    .is_some_and(|v| matches!(v, Value::Reference(c) if PhpRef::ptr_eq(c, r)))
+            })
+            .count()
+    }
+
     /// The duplicate handles of `arr` that the VM's two copies of a
     /// variable make: a compiled variable of a frame with an attached
     /// symbol table and that table's slot of the same name both holding
@@ -4354,7 +4402,7 @@ impl Vm {
                 }
                 Value::Null
             }
-            RBase::Globals => Value::Array(ZArray::from_table(self.globals.borrow().to_array())),
+            RBase::Globals => self.globals_array(),
         })
     }
 
@@ -4538,9 +4586,7 @@ impl Vm {
                 }
                 RBase::Value(v) => Some(v.deref()),
                 RBase::Undef(_) => None,
-                RBase::Globals => Some(Value::Array(ZArray::from_table(
-                    self.globals.borrow().to_array(),
-                ))),
+                RBase::Globals => Some(self.globals_array()),
             };
             (cur, 0)
         };
