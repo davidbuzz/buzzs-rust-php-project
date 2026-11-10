@@ -109,6 +109,9 @@ pub const PDO_MYSQL_CLASS_CONSTANTS: &[(&str, i64)] = &[
     ("ATTR_LOCAL_INFILE_DIRECTORY", ATTR_LOCAL_INFILE_DIRECTORY),
 ];
 
+/// `mysql_get_client_info()` of mysqlnd (`phpinfo()`, `ATTR_CLIENT_VERSION`).
+pub use php_mysqlnd::CLIENT_INFO;
+
 /// `PDO_MYSQL_UNIX_ADDR`: the compiled-in default of
 /// `pdo_mysql.default_socket` (Debian/Ubuntu layout, as `/usr/bin/php`).
 pub const DEFAULT_SOCKET: &str = "/var/run/mysqld/mysqld.sock";
