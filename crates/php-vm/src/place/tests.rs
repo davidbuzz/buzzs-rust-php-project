@@ -424,3 +424,38 @@ array(1) {
 "#;
     assert_eq!(run(src), expected);
 }
+
+/// bug79793: an error handler that attaches or syncs the globals symbol
+/// table (`global $x`, `$GLOBALS` writes, a by-reference capture of a
+/// global) during the "Undefined array key" warning of a global-scope
+/// read-modify-write neither drops the write nor overwrites the array with
+/// the frame's stale copy; a handler that really frees or captures the
+/// array still abandons it.
+#[test]
+fn symtab_sync_in_handler_keeps_global_rw_write() {
+    let src = r#"<?php
+$key = "foo";
+$key .= "bar";
+set_error_handler(function ($_, $m) use (&$key) { echo "$m\n"; $key .= "baz"; });
+$ary = [];
+$ary[$key]++;
+$ary[$key] += 1;
+foreach ($ary as $k => $v) { echo "$k=$v;"; } echo "\n";
+set_error_handler(function () { global $z; $z = 1; });
+$a = []; $a["k"]++; $a["j"] .= "x";
+foreach ($a as $k => $v) { echo "$k=$v;"; } echo "\n";
+set_error_handler(function () { $GLOBALS['b'] = $GLOBALS['a']; });
+$a = []; $a["k"]++;
+foreach ([$a, $b] as $v) { echo "[", isset($v["k"]) ? "k" : "", "]"; } echo "\n";
+set_error_handler(function () { global $a; $a = 1; });
+$a = []; $a["k"]++;
+var_dump($a);
+"#;
+    let expected = "Undefined array key \"foobar\"\n\
+Undefined array key \"foobarbaz\"\n\
+foobar=1;foobarbaz=1;\n\
+k=1;j=x;\n\
+[][]\n\
+int(1)\n";
+    assert_eq!(run(src), expected);
+}

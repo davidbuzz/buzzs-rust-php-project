@@ -1958,6 +1958,16 @@ impl Vm {
                 }
                 if live {
                     drop(st);
+                    // As below: the walk mutates the shared slot in place,
+                    // so the frame's copy must not be written back over it
+                    // when the error handler attaches or syncs the symbol
+                    // table (`global $x` / `$GLOBALS` writes; bug79793).
+                    self.frame().clear_cv_for_symtab_slot(&store, idx);
+                    if let Some(main) = self.frames.first() {
+                        if main.symtab_attached {
+                            main.clear_cv_for_symtab_slot(&store, idx);
+                        }
+                    }
                     let mut walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
                         let mut st = store.borrow_mut();
                         let step = match st.slots.get_mut(idx) {
@@ -2298,13 +2308,17 @@ impl Vm {
                     check,
                 } => (seg, phase, level, msg, held, check),
             };
-            let before = held.refcount();
+            let owners = |vm: &Self| held.refcount() - vm.symtab_mirrors(&held);
+            let before = owners(self);
             let raised = self.error(level, &msg);
             let gone = match check {
                 // slow_index_convert_w / zend_undefined_index_write:
                 // `GC_DELREF(ht) != 1` — a freed OR a captured/shared array
                 // both abandon the write (the handler took a reference).
-                Check::Index => held.refcount() != before,
+                // A variable mirrored in both a frame's CV and its attached
+                // symbol table counts once (php-src's table holds an
+                // `IS_INDIRECT` slot; bug79793).
+                Check::Index => owners(self) != before,
                 // zend_false_to_array_deprecated: given up only when the
                 // handler freed the array (`GC_DELREF(ht) == 0`).
                 Check::False | Check::Value => held.refcount() == 1,
@@ -2321,6 +2335,32 @@ impl Vm {
                 Ok(()) => (seg, phase) = (at, ph),
             }
         }
+    }
+
+    /// The duplicate handles of `arr` that the VM's two copies of a
+    /// variable make: a compiled variable of a frame with an attached
+    /// symbol table and that table's slot of the same name both holding
+    /// `arr` are one owner in php-src, whose table slot is `IS_INDIRECT`.
+    #[cold]
+    fn symtab_mirrors(&self, arr: &ZArray) -> usize {
+        let holds =
+            |v: Option<&Value>| matches!(v, Some(Value::Array(a)) if ZArray::ptr_eq(a, arr));
+        let mut n = 0;
+        for f in self.frames.iter().filter(|f| f.symtab_attached) {
+            let Ok(mut st) = f.vars.try_borrow_mut() else {
+                continue;
+            };
+            for (i, name) in f.code.cv_names.iter().enumerate() {
+                if !holds(f.cvs.get(i).and_then(crate::vm::CvSlot::get)) {
+                    continue;
+                }
+                let slot = st.find(name.as_bytes()).map(|s| s as usize);
+                if slot.is_some_and(|s| holds(st.slots.get(s).and_then(Option::as_ref))) {
+                    n += 1;
+                }
+            }
+        }
+        n
     }
 
     /// The fetch of segment `seg` was given up after a diagnostic (the
