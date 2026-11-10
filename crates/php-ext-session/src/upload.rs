@@ -49,8 +49,8 @@ fn untracked_verdict() -> Option<bool> {
 /// `php_session_rfc1867_callback()`: `false` is `FAILURE` (the upload was
 /// cancelled through `$_SESSION[...]['cancel_upload']`).
 pub(crate) fn callback(vm: &mut Vm, event: Rfc1867Event<'_>, post_bytes_processed: i64) -> bool {
-    // Without an in-flight record (upload progress disabled, or not
-    // tracked for this request) every event but the start is a no-op:
+    // Without an in-flight record (upload progress disabled) every event
+    // but the start is a no-op:
     // skip the host set-up and INI synchronisation, which would otherwise
     // run once per 5 KiB chunk of an uploaded file.
     if !matches!(event, Rfc1867Event::Start { .. }) && !has_progress() {
