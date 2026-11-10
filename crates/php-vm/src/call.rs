@@ -2292,9 +2292,10 @@ impl Vm {
     /// handles ([`Frame::clear_for_reuse`] keeps them): they are not
     /// replaced.
     ///
-    /// Out of line on purpose: inlined into the dispatch loop (`Vm::run`,
-    /// its only caller), whose registers are taken by the loop's own
-    /// state, every counter and pointer here lived in a stack slot (the
+    /// Out of line on purpose: inlined into a dispatch loop (`Vm::run`'s
+    /// fast `DoCall` arm, or `exec::hot::run_hot`, which then goes on in
+    /// the callee's frame itself), whose registers are taken by the loop's
+    /// own state, every counter and pointer here lived in a stack slot (the
     /// per-argument loops cost ~13 and ~17 instructions an argument); a
     /// function of its own keeps them in registers for the price of one
     /// call.
@@ -2454,7 +2455,8 @@ impl Vm {
     /// resume point before the release (`SAVE_OPLINE`). Returns `None`,
     /// having changed nothing, otherwise.
     ///
-    /// Out of line for the reason [`Vm::push_simple_ucall`] is.
+    /// Out of line for the reason [`Vm::push_simple_ucall`] is; called by
+    /// `Vm::run`'s fast `Return` arm and by `exec::hot::run_hot`.
     ///
     /// [`FrameStack::release_top`]: crate::vm::FrameStack::release_top
     #[inline(never)]
