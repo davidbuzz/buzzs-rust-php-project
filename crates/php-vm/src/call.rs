@@ -518,8 +518,18 @@ impl Vm {
                 };
                 let target = target.deref();
                 let method = method.deref();
+                // `zend_init_dynamic_call_array`: the target is checked
+                // before the method name.
+                if !matches!(target, Value::Object(_) | Value::Str(_)) {
+                    return Err(self.make_throw(
+                        "Error",
+                        "First array member is not a valid class name or object",
+                    ));
+                }
                 let Value::Str(m) = method else {
-                    return Err(self.make_throw("Error", "Method name must be a string"));
+                    return Err(
+                        self.make_throw("Error", "Second array member is not a valid method")
+                    );
                 };
                 match target {
                     Value::Object(o) => {
