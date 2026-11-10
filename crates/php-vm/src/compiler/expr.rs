@@ -1989,9 +1989,24 @@ impl Compiler<'_> {
                 table: Box::new(MatchTable::new(0)),
             }));
         } else {
+            // `can_match_use_jumptable` folded the conditions up to the
+            // first one that is not an int or string literal; a folded
+            // condition that was not a literal already became a literal
+            // of the line then current (the subject's), which its `===`
+            // test gets (an undefined subject warns on that line).
+            let mut prefolded = match_prefolded_conds(self, arms);
             for (i, arm) in arms.iter().enumerate() {
                 for c in arm.conds.iter().flatten() {
-                    self.f().line = c.span.line;
+                    let is_literal = matches!(
+                        c.kind,
+                        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::String(_)
+                    );
+                    self.f().line = if prefolded > 0 && !is_literal {
+                        subject.span.line
+                    } else {
+                        c.span.line
+                    };
+                    prefolded = prefolded.saturating_sub(1);
                     let v = self.compile_expr(c)?;
                     let t = self.tmp();
                     self.emit(Op::Bin {
@@ -3560,6 +3575,22 @@ fn reads_append(e: &Expr) -> bool {
             _ => return false,
         }
     }
+}
+
+/// How many conditions (in order) `can_match_use_jumptable` runs
+/// `zend_eval_const_expr` on and turns into literals: up to and including
+/// the first that folds to something other than an int or a string, or up
+/// to (not including) the first that does not fold.
+fn match_prefolded_conds(c: &Compiler<'_>, arms: &[ast::MatchArm]) -> usize {
+    let mut n = 0;
+    for cond in arms.iter().filter_map(|a| a.conds.as_ref()).flatten() {
+        match c.try_fold(cond) {
+            None => break,
+            Some(Value::Int(_) | Value::Str(_)) => n += 1,
+            Some(_) => return n + 1,
+        }
+    }
+    n
 }
 
 /// `can_match_use_jumptable` and the `num_conds >= 2` test of

@@ -262,6 +262,7 @@ fn reads_only(op: &str) -> bool {
             | "CHECK_VAR"
             | "THROW"
             | "MATCH_ERROR"
+            | "MATCH"
             | "TYPE_ASSERT"
             | "EXIT"
             | "YIELD"
