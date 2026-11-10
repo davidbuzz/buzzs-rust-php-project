@@ -1338,9 +1338,8 @@ impl Frame {
         }
         // Only a store of its own that holds nothing (one kept from a
         // pooled frame, its slots cleared) is given back.
-        let own_and_empty = Rc::get_mut(&mut self.vars).is_some_and(|rc_mut| {
-            rc_mut.get_mut().slots.iter().all(Option::is_none)
-        });
+        let own_and_empty = Rc::get_mut(&mut self.vars)
+            .is_some_and(|rc_mut| rc_mut.get_mut().slots.iter().all(Option::is_none));
         if own_and_empty {
             self.vars = empty_vars.clone();
         }
