@@ -742,6 +742,7 @@ impl<'f> Compiler<'f> {
             class_name: None,
             attributes: Vec::new(),
             hook_prop: None,
+            call_shape: crate::func::CallShape::default(),
         });
         Ok(CompiledUnit {
             main,

@@ -2168,6 +2168,7 @@ fn trait_method_copy(f: &Func, name: &ZStr) -> Func {
             class_name: u.class_name.clone(),
             attributes: u.attributes.clone(),
             hook_prop: u.hook_prop.clone(),
+            call_shape: crate::func::CallShape::default(),
         })),
         Func::Builtin(_) => f.clone(),
     }

@@ -535,6 +535,7 @@ impl Compiler<'_> {
             class_name: self.current_class().map(|c| c.name.clone()),
             attributes,
             hook_prop: None,
+            call_shape: crate::func::CallShape::default(),
         })
     }
 

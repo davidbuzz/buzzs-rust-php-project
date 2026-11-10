@@ -762,6 +762,7 @@ impl Vm {
                                 class_name: function.class_name.clone(),
                                 attributes,
                                 hook_prop: function.hook_prop.clone(),
+                                call_shape: crate::func::CallShape::default(),
                             }));
                         }
                     }
