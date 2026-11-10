@@ -750,7 +750,10 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
             }
         }
 
-        // Substitute known temporary constants
+        // Substitute known temporary constants: every use, including the
+        // ones that keep the temporary alive (`JMP_NULL`, `FETCH_LIST_R`,
+        // switch subjects), since the defining `QM_ASSIGN` goes below
+        // (zend_optimizer_replace_by_const; opt/block_pass_003, 004).
         if lit_def.iter().any(|d| d.is_some()) {
             for op in &mut op_array.ops {
                 for_each_operand_mut(op, |operand| {

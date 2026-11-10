@@ -1106,4 +1106,60 @@ mod tests {
             fn_code.cv_names
         );
     }
+
+    /// The temporaries that `code` reads (from ops and places) but that no op
+    /// writes.
+    fn undefined_tmp_reads(code: &OpArray) -> Vec<u32> {
+        let mut defined = std::collections::HashSet::new();
+        for op in &code.ops {
+            if let Some(t) = def_tmp(op) {
+                defined.insert(t);
+            }
+            if let Op::FeFetch { val, key, .. } = op {
+                defined.insert(*val);
+                if let Some(k) = key {
+                    defined.insert(*k);
+                }
+            }
+        }
+        let mut read = Vec::new();
+        let mut note = |operand: &mut Operand| {
+            if let Operand::Tmp(t) | Operand::TmpKeep(t) = operand {
+                read.push(*t);
+            }
+        };
+        for op in &code.ops {
+            let mut op = op.clone();
+            for_each_operand_mut(&mut op, &mut note);
+        }
+        for place in &code.places {
+            let mut place = place.clone();
+            for_each_place_operand_mut(&mut place, &mut note);
+        }
+        read.retain(|t| !defined.contains(t));
+        read
+    }
+
+    /// SCCP replaces a constant temporary in the uses that keep it alive
+    /// (`JMP_NULL`, `FETCH_LIST_R`) too before dropping its `QM_ASSIGN`: they
+    /// once read a temporary nothing wrote, losing the "Cannot use int as
+    /// array" and "Attempt to read property" warnings (opcache
+    /// `opt/block_pass_003`, `opt/block_pass_004`).
+    #[test]
+    fn sccp_substitutes_kept_temporaries() {
+        let unit = compile_src(
+            "<?php function a() { (1?4:y)?->y; }\n\
+             function b() { for ($i = 0; $i < 10; $i++) { list($a, $b) = 1 ? 1 : 2; } }",
+            u32::MAX >> 1,
+        );
+        for name in [&b"a"[..], b"b"] {
+            let code = find_code(&unit, named(name));
+            let bad = undefined_tmp_reads(&code);
+            assert!(
+                bad.is_empty(),
+                "undefined tmps {bad:?} read in {:?}",
+                code.ops
+            );
+        }
+    }
 }
