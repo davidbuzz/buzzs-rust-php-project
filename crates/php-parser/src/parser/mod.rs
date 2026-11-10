@@ -185,6 +185,9 @@ impl<'a> Parser<'a> {
     }
 
     fn collect_lexer_warnings(&mut self) {
+        if self.lexer.warnings().is_empty() {
+            return;
+        }
         for w in self.lexer.take_warnings() {
             self.warnings.push(Diagnostic {
                 level: match w.kind {
@@ -197,7 +200,15 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[inline]
     fn fill(&mut self, n: usize) {
+        if self.buf.len() <= n {
+            self.fill_slow(n);
+        }
+    }
+
+    #[inline(never)]
+    fn fill_slow(&mut self, n: usize) {
         while self.buf.len() <= n {
             let t = self.lex_one();
             self.buf.push_back(t);

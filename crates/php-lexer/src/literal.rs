@@ -37,14 +37,19 @@ pub const fn is_label_char(c: u8) -> bool {
 /// Counts newlines the way `HANDLE_NEWLINES` does: every `\n`, and every `\r`
 /// that is not followed by `\n` (looking past the end of `range` into `src`).
 pub fn count_newlines(src: &[u8], start: usize, end: usize) -> u32 {
-    let mut n = 0u32;
-    let mut i = start;
-    while i < end {
-        let c = src[i];
-        if c == b'\n' || (c == b'\r' && src.get(i + 1) != Some(&b'\n')) {
-            n += 1;
+    let s = &src[start..end];
+    // Counting `\n` bytes is a branch-free (vectorisable) pass; only a
+    // run with a `\r` needs the per-byte rule for a lone `\r`.
+    let lf = s.iter().filter(|&&c| c == b'\n').count();
+    let mut n = u32::try_from(lf).unwrap_or(u32::MAX);
+    if s.contains(&b'\r') {
+        for (k, &c) in s.iter().enumerate() {
+            // A `\r` not followed by `\n` (looking past `end`, into the
+            // rest of `src`) is a line break of its own.
+            if c == b'\r' && src.get(start + k + 1) != Some(&b'\n') {
+                n = n.saturating_add(1);
+            }
         }
-        i += 1;
     }
     n
 }
@@ -181,22 +186,26 @@ pub fn parse_prefixed_int(text: &[u8], radix: u32) -> TokenValue {
 pub fn unescape_single_quoted(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(body.len());
     let mut i = 0;
-    while i < body.len() {
-        let c = body[i];
-        if c == b'\\' && i + 1 < body.len() {
-            let n = body[i + 1];
-            if n == b'\\' || n == b'\'' {
+    // Copy each run up to the next backslash in one piece.
+    while let Some(k) = body[i..].iter().position(|&c| c == b'\\') {
+        let bs = i + k;
+        out.extend_from_slice(&body[i..bs]);
+        match body.get(bs + 1) {
+            Some(&n) => {
+                if n != b'\\' && n != b'\'' {
+                    out.push(b'\\');
+                }
                 out.push(n);
-            } else {
-                out.push(b'\\');
-                out.push(n);
+                i = bs + 2;
             }
-            i += 2;
-        } else {
-            out.push(c);
-            i += 1;
+            None => {
+                // A trailing lone backslash is kept.
+                out.push(b'\\');
+                return out;
+            }
         }
     }
+    out.extend_from_slice(&body[i..]);
     out
 }
 
@@ -582,5 +591,31 @@ mod tests {
         );
         assert!(strip_indentation(b"  a\n b", 2, true, true, true).is_err());
         assert!(strip_indentation(b" a\n", 1, true, true, false).is_err());
+    }
+}
+
+#[cfg(test)]
+mod scan_helper_tests {
+    use super::{count_newlines, unescape_single_quoted};
+
+    #[test]
+    fn single_quoted_escapes() {
+        assert_eq!(unescape_single_quoted(b"plain"), b"plain");
+        assert_eq!(unescape_single_quoted(b""), b"");
+        assert_eq!(unescape_single_quoted(br"a\'b\\c\nd"), br"a'b\c\nd");
+        assert_eq!(unescape_single_quoted(br"end\"), br"end\");
+        assert_eq!(unescape_single_quoted(br"\\\\"), br"\\");
+        assert_eq!(unescape_single_quoted(br"\x"), br"\x");
+    }
+
+    #[test]
+    fn newline_counting() {
+        assert_eq!(count_newlines(b"a\nb\nc", 0, 5), 2);
+        assert_eq!(count_newlines(b"a\r\nb\rc", 0, 6), 2);
+        // A `\r` at the end of the range followed by `\n` past it is not
+        // a break of its own.
+        assert_eq!(count_newlines(b"a\r\n", 0, 2), 0);
+        assert_eq!(count_newlines(b"a\r", 0, 2), 1);
+        assert_eq!(count_newlines(b"\n\n", 1, 2), 1);
     }
 }

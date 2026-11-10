@@ -1294,10 +1294,13 @@ impl<'a> Lexer<'a> {
             && matches!(self.at(p + 3), b' ' | b'\n' | b'\r' | b'\t');
         let mut q = if is_doc { p + 4 } else { p + 2 };
         let mut terminated = false;
-        while q < src.len() {
-            let c = src[q];
-            q += 1;
-            if c == b'*' && self.at(q) == b'/' && q < src.len() {
+        // The first `*/` at or after `q`: jump from `*` to `*`.
+        while let Some(k) = src
+            .get(q..)
+            .and_then(|rest| rest.iter().position(|&c| c == b'*'))
+        {
+            q += k + 1;
+            if src.get(q) == Some(&b'/') {
                 terminated = true;
                 break;
             }
@@ -1326,14 +1329,18 @@ impl<'a> Lexer<'a> {
         let src = self.src.clone();
         let mut q = p + bprefix + 1;
         loop {
-            if q < src.len() {
-                if src[q] == b'\'' {
-                    q += 1;
-                    break;
-                }
+            // Skip to the next quote or backslash in one scan.
+            if let Some(k) = src
+                .get(q..)
+                .and_then(|rest| rest.iter().position(|&c| c == b'\'' || c == b'\\'))
+            {
+                q += k;
                 let c = src[q];
                 q += 1;
-                if c == b'\\' && q < src.len() {
+                if c == b'\'' {
+                    break;
+                }
+                if q < src.len() {
                     q += 1;
                 }
             } else {
