@@ -4317,7 +4317,22 @@ impl Vm {
         // `call_pending` for a by-value user callee: the interrupt check,
         // dereferenced arguments, the deprecation, then the frame.
         self.check_interrupt()?;
-        let mut call = template.clone();
+        // The template's handles only (`zend_fcall_info_cache`): its
+        // argument buffers, named arguments, `__call` name and placeholders
+        // are empty here (tested above), so a derived `clone` would copy
+        // six empty inline slots and two empty vectors per call.
+        debug_assert!(template.inline_args.iter().all(Option::is_none));
+        let mut call = PendingCall {
+            this: template.this.clone(),
+            scope: template.scope.clone(),
+            called: template.called.clone(),
+            closure: template.closure.clone(),
+            direct: template.direct,
+            is_ctor: template.is_ctor,
+            strict: template.strict,
+            dynamic: template.dynamic,
+            ..PendingCall::new(template.func.clone())
+        };
         for (slot, a) in call.inline_args.iter_mut().zip(args.iter_mut()) {
             *slot = Some(match std::mem::take(a) {
                 Value::Reference(r) => r.get(),

@@ -356,7 +356,7 @@ $gen = function () { static $s = 0; yield ++$s; yield ++$s; };
 foreach ($gen() as $v) echo $v; foreach ($gen() as $v) echo $v; echo "\n";
 class C { function mk() { return function () { static $q = []; $q[] = count($q); return $q; }; } }
 $c1 = (new C)->mk(); $c1(); $c2 = $c1->bindTo(new C); $c1();
-echo json_encode([$c1(), $c2()]), "\n";
+echo implode(',', $c1()), '|', implode(',', $c2()), "\n";
 for ($i = 0; $i < 3; $i++) { $t = function () { static $z = 0; return ++$z; }; echo $t(), $t(); }
 echo "\n";
 var_dump($a);
@@ -372,7 +372,7 @@ array(1) {
   int(1)
 }
 1234
-[[0,1,2],[0,1]]
+0,1,2|0,1
 121212
 object(Closure)#1 (4) {
   ["name"]=>
