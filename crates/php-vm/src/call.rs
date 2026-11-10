@@ -2347,18 +2347,9 @@ impl Vm {
             }
             // `RECV` of an argument that was passed and needs no coercion
             // has nothing left to do: start after it (after a `RECV_INIT`'s
-            // default-value code).
-            let mut first_op = 0;
-            for i in 0..n {
-                match code.ops.get(first_op) {
-                    Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
-                    Some(Op::RecvInit { n, skip, .. }) if *n as usize == i => {
-                        first_op = *skip as usize;
-                    }
-                    _ => break,
-                }
-            }
-            frame.ip = first_op;
+            // default-value code). Worked out once per argument count with
+            // the call shape (`simple_ucall` read it), not walked per call.
+            frame.ip = uf.plain_first_op(n);
             call.inline_count = 0;
             let spare = if call.args.capacity() > 0 {
                 Some(std::mem::take(&mut call.args))
@@ -2868,9 +2859,11 @@ impl Vm {
             0
         };
 
+        // `uf.statics` is not looked at (see `simple_ucall`): without
+        // static variables the call never reads it, and a cached `static`
+        // closure object sits in it.
         if !uf.is_generator()
             && uf.code.num_statics == 0
-            && uf.statics.borrow().is_empty()
             && uf.code.num_iters == 0
             && uf.code.num_finally == 0
             && named.is_empty()
@@ -4670,6 +4663,15 @@ pub(crate) fn trampoline_name(name: &ZStr) -> ZStr {
 /// compare per call. The arguments' types are checked only when a
 /// parameter is typed.
 ///
+/// The function's static-variable store (`UserFunction::statics`) is not
+/// looked at: without static variables (`num_statics == 0`, the shape) no
+/// op of the body reads it (`Vm::static_slot`, `Vm::static_init`), and
+/// what a call does never depends on it. It is not empty for a `static`
+/// closure declared in a function or method, whose first object is cached
+/// in slot 0 (`ZEND_DECLARE_LAMBDA_FUNCTION`'s cache slot,
+/// `Vm::make_closure`): testing it sent every call of such a closure down
+/// the general path (~425 instructions more per call).
+///
 /// [`CallShape`]: crate::func::CallShape
 #[inline]
 fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
@@ -4685,7 +4687,6 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
         || n < uf.required as usize
         || n > uf.params.len()
         || n > call.inline_args.len()
-        || !uf.statics.try_borrow().is_ok_and(|s| s.is_empty())
     {
         return false;
     }
