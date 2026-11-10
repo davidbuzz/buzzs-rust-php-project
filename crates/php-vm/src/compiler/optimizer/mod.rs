@@ -1462,4 +1462,34 @@ mod tests {
             code.ops
         );
     }
+
+    /// `T1 = ISSET ...; T2 = QM_ASSIGN T1` writes `T2` directly (block
+    /// pass, opcache `opt/gh18107_1`).
+    #[test]
+    fn block_pass_folds_tmp_copy_into_its_definition() {
+        let unit = compile_src(
+            "<?php function f() { if (!isset($b)) { throw new Exception('x'); } return 1; }",
+            PASS_5,
+        );
+        let code = find_code(&unit, named(b"f"));
+        let ops: Vec<&Op> = code
+            .ops
+            .iter()
+            .filter(|op| !matches!(op, Op::Nop))
+            .collect();
+        assert!(
+            !ops.windows(2).any(|w| matches!(
+                (w[0], w[1]),
+                (
+                    Op::Isset { .. },
+                    Op::Move {
+                        src: Operand::Tmp(_),
+                        ..
+                    }
+                )
+            )),
+            "{:?}",
+            code.ops
+        );
+    }
 }
