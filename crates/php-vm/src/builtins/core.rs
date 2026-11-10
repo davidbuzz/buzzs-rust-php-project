@@ -1206,10 +1206,31 @@ fn error_clear_last(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn ini_get(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = s(a, 0);
     let name = n.to_string_lossy();
-    Ok(match vm.ini.ini_get(&name) {
-        Some(v) => sv(v),
+    Ok(match vm.ini.get(&name) {
+        Some(v) => ini_value_str(v),
         None => Value::Bool(false),
     })
+}
+
+/// Longest INI value [`ini_get`] hands out as a shared interned string.
+const INI_SHARED_MAX: usize = 4096;
+
+/// `ZVAL_SET_INI_STR`: php-src's `ini_get()` never allocates. It returns
+/// the entry's own string: an interned one for a startup value (and for
+/// one set from a literal), else a refcounted copy of the string
+/// `zend_alter_ini_entry` stored, which was counted when it was set. The
+/// registry here keeps the bytes (counted when set), so the string handed
+/// out is a permanent interned copy made outside the counted heap: reading
+/// a directive twice, or dropping a value read before it changed, moves
+/// `memory_get_usage()` by nothing (Symfony's
+/// `testCreatingManyInstancesDoesNotLeakMemory` keeps
+/// `ini_get('session.save_handler')`, "files" then "user"). Very long
+/// values get an ordinary string, so that the permanent table stays small.
+fn ini_value_str(v: &[u8]) -> Value {
+    if v.len() > INI_SHARED_MAX {
+        return sv(v.to_vec());
+    }
+    Value::Str(php_memlimit::persistent(|| ZStr::intern_permanent(v)))
 }
 
 fn ini_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -3057,4 +3078,28 @@ pub(crate) fn register(vm: &mut Vm) {
     constant(vm, "PHP_OUTPUT_HANDLER_DISABLED", Value::Int(8192));
     constant(vm, "PHP_OUTPUT_HANDLER_PROCESSED", Value::Int(16384));
     let _ = (Throw::Fatal,);
+}
+
+#[cfg(test)]
+mod ini_get_tests {
+    use super::{ini_value_str, INI_SHARED_MAX};
+    use php_runtime::Value;
+
+    /// `ini_get()` shares one interned string per value, as php-src's
+    /// `ZVAL_SET_INI_STR` (`debug_zval_dump(ini_get('precision'))` prints
+    /// `string(2) "14" interned` under `/usr/bin/php8.5 -n`).
+    #[test]
+    fn ini_get_values_are_shared_interned_strings() {
+        let (Value::Str(a), Value::Str(b)) = (ini_value_str(b"files"), ini_value_str(b"files"))
+        else {
+            panic!("ini_get value is not a string");
+        };
+        assert!(a.is_interned());
+        assert!(php_runtime::ZStr::ptr_eq(&a, &b));
+        let Value::Str(long) = ini_value_str(&vec![b'x'; INI_SHARED_MAX + 1]) else {
+            panic!("ini_get value is not a string");
+        };
+        assert!(!long.is_interned());
+        assert_eq!(long.len(), INI_SHARED_MAX + 1);
+    }
 }
