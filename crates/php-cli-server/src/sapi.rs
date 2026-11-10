@@ -1047,6 +1047,13 @@ fn run_request_inner(
     }
     install_input_hook(ctx);
     vm.script_path = ZStr::from("Unknown");
+    // `sapi_handle_post()`: a `memory_limit` violation recorded while the
+    // body was parsed is reported right away ("in Unknown on line 0"),
+    // and the request startup fails: no script runs.
+    if php_memlimit::is_pending() {
+        finish(vm, ctx, Ok(()));
+        return Outcome::Done;
+    }
 
     let mut r = Ok(());
     if let Some(router) = &cfg.router {
