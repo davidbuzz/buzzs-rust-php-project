@@ -1934,6 +1934,49 @@ mod tests {
     // Expected outputs below are from `/usr/bin/php -n` (8.3).
 
     #[test]
+    fn detached_symbol_table_leaves_no_duplicate_handle() {
+        // After a generic `??=` (which attaches the table for that access
+        // only), the array is owned by its variable alone: the refcount
+        // php-src shows, and an append that does not separate a copy.
+        let src = r#"<?php
+function k() { $a = [1, 2]; $a['x'] ??= 3; $a[] = 4; debug_zval_dump($a); $b = $a; $a[] = 5; debug_zval_dump($b); echo count($a), "\n"; }
+k();
+$m = [1]; $m['y'] ??= 2; $m[] = 3; debug_zval_dump($m);
+"#;
+        let expected = r#"array(4) refcount(2){
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  ["x"]=>
+  int(3)
+  [2]=>
+  int(4)
+}
+array(4) refcount(2){
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  ["x"]=>
+  int(3)
+  [2]=>
+  int(4)
+}
+5
+array(3) refcount(2){
+  [0]=>
+  int(1)
+  ["y"]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
     fn dimension_fast_paths_and_symbol_table_detach() {
         // String and numeric-string offsets looked up in place, compound
         // assignments and increments on unshared and shared arrays and
