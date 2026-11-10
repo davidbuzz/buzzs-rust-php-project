@@ -1209,6 +1209,17 @@ pub struct ParamInfo {
     pub attributes: Vec<crate::class::AttributeInfo>,
 }
 
+/// One `static $name = init;` declaration ([`OpArray::static_vars`]).
+#[derive(Clone, Debug, Default)]
+pub struct StaticVarDecl {
+    /// Variable name without `$`.
+    pub name: ZStr,
+    /// The initial value when the initializer is a constant (a literal
+    /// operand; `null` without initializer), else `None` (computed when
+    /// the declaration first runs).
+    pub init: Option<Value>,
+}
+
 /// A compiled function body (also used for files and `eval`).
 #[derive(Debug, Default)]
 pub struct OpArray {
@@ -1230,6 +1241,11 @@ pub struct OpArray {
     pub num_finally: u32,
     /// Number of `static` variables.
     pub num_statics: u32,
+    /// The `static` variable declarations, indexed by slot (php-src's
+    /// `op_array->static_variables`): reflection and closures read this
+    /// table, so the optimizer may delete the `BindStatic`/`InitStatic` of
+    /// an unused static without losing the variable.
+    pub static_vars: Vec<StaticVarDecl>,
     /// Try regions, innermost first.
     pub try_table: Vec<TryEntry>,
     /// Live ranges of temporaries released on exceptions.

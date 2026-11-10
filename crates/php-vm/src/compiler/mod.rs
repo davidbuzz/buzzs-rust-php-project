@@ -15,6 +15,8 @@ mod loop_layout_tests;
 pub mod optimizer;
 mod specialise;
 mod stack;
+#[cfg(test)]
+mod static_vars_tests;
 mod stmt;
 
 pub use stack::CompileStackLimit;
@@ -330,6 +332,8 @@ pub(crate) struct FnCtx {
     pub num_iters: u32,
     pub num_finally: u32,
     pub num_statics: u32,
+    /// See [`OpArray::static_vars`].
+    pub static_vars: Vec<crate::opcode::StaticVarDecl>,
     pub try_table: Vec<(TryEntry, Label)>,
     pub loops: Vec<LoopInfo>,
     pub finally_stack: Vec<u32>,
@@ -396,6 +400,7 @@ impl FnCtx {
             num_iters: 0,
             num_finally: 0,
             num_statics: 0,
+            static_vars: Vec::new(),
             try_table: Vec::new(),
             loops: Vec::new(),
             finally_stack: Vec::new(),
@@ -1026,6 +1031,7 @@ impl Compiler<'_> {
             num_iters: f.num_iters,
             num_finally: f.num_finally,
             num_statics: f.num_statics,
+            static_vars: f.static_vars,
             try_table: try_table.into_iter().map(|(e, _)| e).collect(),
             live_tmps: f.live_tmps,
             filename: self.filename.clone(),
@@ -1054,6 +1060,7 @@ impl Compiler<'_> {
                 bound_cvs: &f.bound_cvs,
             };
             optimizer::optimize_op_array_with(&mut op_array, level, &ctx);
+            refresh_static_inits(&mut op_array);
         }
         // Handler specialisation, last: every jump target is final. A
         // `zend_set_user_opcode_handler()` hook runs before its generic
@@ -1415,6 +1422,27 @@ fn intern_array_strings(a: &mut php_runtime::ZArray) {
             Value::Str(s) if s.len() <= 1 && !s.is_interned() => *s = s.interned(),
             Value::Array(inner) => intern_array_strings(inner),
             _ => {}
+        }
+    }
+}
+
+/// Records in [`OpArray::static_vars`] the constant initializers that the
+/// optimizer folded into a literal `InitStatic` operand, so reflection shows
+/// the value the declaration will assign.
+fn refresh_static_inits(op_array: &mut OpArray) {
+    for op in &op_array.ops {
+        if let Op::InitStatic {
+            idx,
+            val: Operand::Lit(l),
+            ..
+        } = op
+        {
+            if let (Some(d), Some(v)) = (
+                op_array.static_vars.get_mut(*idx as usize),
+                op_array.literals.get(*l as usize),
+            ) {
+                d.init = Some(v.clone());
+            }
         }
     }
 }

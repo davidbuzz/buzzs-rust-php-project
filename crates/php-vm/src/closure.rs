@@ -5,7 +5,7 @@ use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, Class, InternalKind};
 use crate::func::{flags, Args, Builtin, Func, UserFunction};
 use crate::object;
-use crate::opcode::{Op, Operand, ParamInfo, PlaceBase};
+use crate::opcode::{Op, ParamInfo, PlaceBase};
 use crate::vm::{FrameKind, PendingCall, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
 use std::cell::RefCell;
@@ -856,40 +856,16 @@ fn closure_debug_table(d: &ClosureData) -> HashTable {
 }
 
 /// `static $x` declarations of a function: (slot, name, value before the
-/// declaration runs) in slot order. Literal initializers are known at
+/// declaration runs) in slot order, from the function's static variable
+/// table (`op_array->static_variables`). Constant initializers are known at
 /// compile time; others start as `null`.
 fn static_var_names(u: &UserFunction) -> Vec<(u32, ZStr, Value)> {
-    let mut out: Vec<(u32, ZStr, Value)> = Vec::new();
-    for op in &u.code.ops {
-        let (cv, idx, init) = match op {
-            Op::BindStatic { cv, idx, .. } => (cv, idx, None),
-            Op::InitStatic { cv, idx, val } => (
-                cv,
-                idx,
-                match val {
-                    Operand::Lit(n) => u.code.literals.get(*n as usize).cloned(),
-                    _ => None,
-                },
-            ),
-            _ => continue,
-        };
-        let name = u
-            .code
-            .cv_names
-            .get(*cv as usize)
-            .cloned()
-            .unwrap_or_default();
-        match out.iter_mut().find(|(i, _, _)| i == idx) {
-            Some(e) => {
-                if let Some(v) = init {
-                    e.2 = v;
-                }
-            }
-            None => out.push((*idx, name, init.unwrap_or_default())),
-        }
-    }
-    out.sort_by_key(|(i, _, _)| *i);
-    out
+    u.code
+        .static_vars
+        .iter()
+        .zip(0u32..)
+        .map(|(d, idx)| (idx, d.name.clone(), d.init.clone().unwrap_or_default()))
+        .collect()
 }
 
 /// Registers the `Closure` class.
