@@ -178,3 +178,29 @@ fn unserialize_arrays_are_mixed_and_short_strings_interned() {
     assert!(out.contains("string(0) \"\" interned\n"), "{out}");
     assert!(out.contains("string(2) \"ab\" refcount("), "{out}");
 }
+
+/// `ZEND_CONCAT` of two strings: an empty operand that is not a literal
+/// yields the other operand itself (an interned string stays interned),
+/// while an empty literal does not short-cut, so `$row['label'] . ''`
+/// makes a new string (ext/mysqli/tests/mysqli_result_references.phpt).
+/// Expected output from php 8.3.
+#[test]
+fn concat_with_empty_operand_shares_only_for_non_literals() {
+    assert_eq!(
+        run(r#"<?php
+$r = ['l' => 'a', 'm' => 'abc'];
+$x = $r['l'] . ''; debug_zval_dump($x);
+$x = '' . $r['l']; debug_zval_dump($x);
+$x = $r['m'] . ''; debug_zval_dump($x);
+$e = ''; $x = $r['l'] . $e; debug_zval_dump($x);
+$x = $e . $r['l']; debug_zval_dump($x);
+$c = 'a'; $x = $c . ''; debug_zval_dump($x);
+$x = '' . $c; debug_zval_dump($x);
+$x = $c . $e; debug_zval_dump($x);
+"#),
+        "string(1) \"a\" refcount(2)\nstring(1) \"a\" refcount(2)\n\
+         string(3) \"abc\" refcount(2)\nstring(1) \"a\" interned\n\
+         string(1) \"a\" interned\nstring(1) \"a\" refcount(2)\n\
+         string(1) \"a\" refcount(2)\nstring(1) \"a\" interned\n"
+    );
+}

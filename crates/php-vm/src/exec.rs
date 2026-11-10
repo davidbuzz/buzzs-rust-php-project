@@ -233,6 +233,26 @@ fn num_bin(op: BinKind, x: Num, y: Num) -> Option<Value> {
     })
 }
 
+/// `ZEND_CONCAT`'s string fast path: an empty operand that is not a
+/// literal yields the other operand itself (`ZVAL_STR_COPY`, so an interned
+/// string stays interned); an empty *literal* does not, and the result is a
+/// new string even when it equals the other operand
+/// (`$row['label'] . ''` separates; ext/mysqli/tests/mysqli_result_references).
+/// With a TMP left operand, a string nothing else holds is extended in
+/// place (`zend_string_extend`), not copied.
+fn concat_strings(a: Operand, b: Operand, s: ZStr, t: ZStr) -> ZStr {
+    if s.is_empty() && !matches!(a, Operand::Lit(_)) {
+        return t;
+    }
+    if t.is_empty() && !matches!(b, Operand::Lit(_)) {
+        return s;
+    }
+    if matches!(a, Operand::Tmp(_)) && !t.is_empty() {
+        return s.concat_owned_str(&t);
+    }
+    ZStr::concat_str(&s, &t)
+}
+
 impl Vm {
     /// Generic [`Op::Bin`] evaluation, out of line so the dispatch loop
     /// stays small (the sealed numeric forms handle the hot cases).
@@ -241,10 +261,9 @@ impl Vm {
         let lhs = self.read(a)?;
         let rhs = self.read(b)?;
         let result = match (op, a, lhs, rhs) {
-            // `ZEND_CONCAT` with a TMP op1: a string nothing else holds is
-            // extended in place (`zend_string_extend`), not copied.
-            (BinKind::Arith(BinaryOp::Concat), Operand::Tmp(_), Value::Str(s), Value::Str(t)) => {
-                Value::Str(s.concat_owned_str(&t))
+            // `ZEND_CONCAT` of two strings (see [`concat_strings`]).
+            (BinKind::Arith(BinaryOp::Concat), _, Value::Str(s), Value::Str(t)) => {
+                Value::Str(concat_strings(a, b, s, t))
             }
             // The same with an integer right operand (`"k" . $i . ...`
             // chains): its digits are appended straight from a stack

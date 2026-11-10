@@ -526,6 +526,42 @@ impl<A> CountingAlloc<A> {
         self.update_thresholds();
     }
 
+    /// Runs `f` with the bytes it allocates or frees, net, left out of
+    /// reported usage, the peak and the limits: the
+    /// [baseline](Self::set_baseline) moves by the change of raw usage `f`
+    /// causes, so [`usage`](Self::usage) reads the same before and after.
+    ///
+    /// This models php-src's *persistent* allocations (`pemalloc`), which
+    /// never reach the Zend heap and so never show in
+    /// `memory_get_usage()`, and the startup-sized tables a request carves
+    /// from without allocating (the GC root buffer, run-time caches in the
+    /// compiler arena): the VM wraps the growth *and* the release of such
+    /// buffers in it, so that their size never shows. Only the buffer
+    /// operation itself belongs inside `f`: anything else it allocates or
+    /// frees (dropping a value that frees an object) would be hidden too.
+    /// Bytes allocated here and freed outside it (or the reverse) do show,
+    /// as that change.
+    pub fn persistent<R>(&self, f: impl FnOnce() -> R) -> R {
+        let before = self.raw_usage();
+        let peak = self.peak.load(Relaxed);
+        let r = f();
+        let after = self.raw_usage();
+        if after != before {
+            let base = self.baseline.load(Relaxed);
+            let (base, peak) = if after > before {
+                let d = after - before;
+                (base.saturating_add(d), peak.saturating_add(d).max(after))
+            } else {
+                let d = before - after;
+                (base.saturating_sub(d), peak.saturating_sub(d).max(after))
+            };
+            self.baseline.store(base, Relaxed);
+            self.peak.store(peak, Relaxed);
+            self.update_thresholds();
+        }
+        r
+    }
+
     // ---- limits -----------------------------------------------------
 
     /// The soft limit in bytes, `None` when unlimited.

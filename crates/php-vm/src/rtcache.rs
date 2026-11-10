@@ -180,11 +180,21 @@ enum Access {
     From(Weak<Class>),
 }
 
+/// Grows the run-time cache `v` to `len` slots filled by `fill` (which
+/// must not allocate), outside the counted heap: php-src carves
+/// `run_time_cache` out of the compiler arena (`init_func_run_time_cache`),
+/// so filling a cache slot never moves `memory_get_usage()`.
+pub(crate) fn grow_slots<T>(v: &mut Vec<T>, len: usize, fill: impl FnMut() -> T) {
+    if v.len() < len {
+        php_memlimit::persistent(|| v.resize_with(len, fill));
+    }
+}
+
 /// Stores `x` at `i`, growing the slot vector as needed.
 fn put<T: Default>(slots: &RefCell<Vec<T>>, i: usize, x: T) {
     let mut v = slots.borrow_mut();
     if v.len() <= i {
-        v.resize_with(i + 1, T::default);
+        grow_slots(&mut v, i + 1, T::default);
     }
     v[i] = x;
 }
@@ -195,12 +205,15 @@ fn put<T: Default>(slots: &RefCell<Vec<T>>, i: usize, x: T) {
 fn put_member(slots: &RefCell<Vec<Vec<MemberSlot>>>, i: usize, x: MemberSlot) {
     let mut v = slots.borrow_mut();
     if v.len() <= i {
-        v.resize_with(i + 1, Vec::new);
+        grow_slots(&mut v, i + 1, Vec::new);
     }
     let entries = &mut v[i];
     entries.retain(|e| e.class.as_ptr() != x.class.as_ptr());
     if entries.len() >= POLY_ENTRIES {
         entries.remove(0);
+    }
+    if entries.len() == entries.capacity() {
+        php_memlimit::persistent(|| entries.reserve(1));
     }
     entries.push(x);
 }
@@ -513,7 +526,8 @@ fn static_prop_cache_fill_in(
     };
     let idx = pid as usize;
     if entries.len() <= idx {
-        entries.resize_with(idx + 1, StaticPropCacheEntry::default);
+        // Outside the counted heap, as php-src's run-time cache (`grow_slots`).
+        grow_slots(&mut entries, idx + 1, StaticPropCacheEntry::default);
     }
     entries[idx] = entry;
 }
@@ -598,7 +612,7 @@ impl Vm {
         let mut cache = code.class_cache.borrow_mut();
         let slot = lit as usize;
         if cache.len() <= slot {
-            cache.resize(slot + 1, Weak::new());
+            grow_slots(&mut cache, slot + 1, Weak::new);
         }
         cache[slot] = Rc::downgrade(cls);
     }

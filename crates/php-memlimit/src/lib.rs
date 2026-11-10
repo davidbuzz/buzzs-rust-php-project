@@ -191,6 +191,14 @@ pub fn set_baseline() {
     GLOBAL.set_baseline();
 }
 
+/// [`CountingAlloc::persistent`] on [`GLOBAL`]: runs `f` with the bytes it
+/// allocates or frees (net) left out of `memory_get_usage()`, like
+/// php-src's persistent (`pemalloc`) tables. Wrap only the buffer
+/// operation (a `Vec`'s growth or release) in it.
+pub fn persistent<R>(f: impl FnOnce() -> R) -> R {
+    GLOBAL.persistent(f)
+}
+
 /// The current soft limit of [`GLOBAL`] (`None` = unlimited).
 pub fn limit() -> Option<usize> {
     GLOBAL.limit()

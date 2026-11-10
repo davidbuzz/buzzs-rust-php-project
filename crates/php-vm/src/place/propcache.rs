@@ -196,7 +196,7 @@ fn store_entry(code: &OpArray, idx: usize, len: usize, entry: PropCacheEntry) ->
         return false;
     };
     if cache.len() < len {
-        cache.resize(len, PropCacheEntry::default());
+        crate::rtcache::grow_slots(&mut cache, len, PropCacheEntry::default);
     }
     let stored = match cache.get_mut(idx) {
         Some(slot) => {

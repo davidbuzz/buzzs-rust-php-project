@@ -127,6 +127,15 @@ const NO_SLOT: usize = usize::MAX;
 /// (same handle and address; a weak handle keeps the address from being
 /// reused while it is buffered), so an entry left behind by a freed object
 /// whose handle was reused is ignored.
+///
+/// php-src allocates the root buffer persistently (`pemalloc` in
+/// `gc_init`/`gc_grow_root_buffer`), outside the Zend heap, so buffering
+/// roots never shows in `memory_get_usage()`. The three vectors' capacity
+/// changes (growth here, release in `Drop`) are made in
+/// [`php_memlimit::persistent`] scopes for the same effect: otherwise the
+/// first objects a script releases would move `memory_get_usage()` once
+/// (ext/openssl/tests/bug79881.phpt, Symfony's
+/// `NativeSessionStorageTest::testCreatingManyInstancesDoesNotLeakMemory`).
 #[derive(Default)]
 struct RootBuffer {
     slots: Vec<Option<Root>>,
@@ -143,6 +152,29 @@ struct Root {
     weak: Weak<dyn PhpObject>,
     /// Its handle (0 for a garbage placeholder: handles start at 1).
     handle: u32,
+}
+
+/// `v.push(x)`, growing `v` outside the counted heap (see [`RootBuffer`]).
+#[inline]
+fn push_persistent<T>(v: &mut Vec<T>, x: T) {
+    if v.len() == v.capacity() {
+        php_memlimit::persistent(|| v.reserve(1));
+    }
+    v.push(x);
+}
+
+impl Drop for RootBuffer {
+    fn drop(&mut self) {
+        // The weak handles go first, as ordinary memory: the last one of a
+        // freed object releases its block.
+        self.slots.clear();
+        let bufs = (
+            std::mem::take(&mut self.slots),
+            std::mem::take(&mut self.unused),
+            std::mem::take(&mut self.by_handle),
+        );
+        php_memlimit::persistent(|| drop(bufs));
+    }
 }
 
 /// The address of a buffered weak handle ([`Obj::addr`]).
@@ -181,7 +213,8 @@ impl RootBuffer {
     fn set_index(&mut self, handle: u32, i: usize) {
         let h = handle as usize;
         if self.by_handle.len() <= h {
-            self.by_handle.resize(h + 1, 0);
+            let by_handle = &mut self.by_handle;
+            php_memlimit::persistent(|| by_handle.resize(h + 1, 0));
         }
         // `MAX_BUF_SIZE` keeps slot numbers far below `u32::MAX`.
         self.by_handle[h] = u32::try_from(i + 1).unwrap_or(0);
@@ -203,7 +236,7 @@ impl RootBuffer {
                 return i;
             }
         }
-        self.slots.push(None);
+        push_persistent(&mut self.slots, None);
         self.slots.len() - 1
     }
 
@@ -253,7 +286,7 @@ impl RootBuffer {
         let handle = r.handle;
         self.clear_index(handle, i);
         self.slots[i] = None;
-        self.unused.push(i);
+        push_persistent(&mut self.unused, i);
         self.num_roots = self.num_roots.saturating_sub(1);
     }
 
@@ -273,7 +306,7 @@ impl RootBuffer {
         };
         self.by_handle[handle as usize] = 0;
         self.slots[i] = None;
-        self.unused.push(i);
+        push_persistent(&mut self.unused, i);
         self.num_roots = self.num_roots.saturating_sub(1);
         true
     }
@@ -350,8 +383,8 @@ impl RootBuffer {
 
     /// Buffers `later`'s roots after these (roots buffered while a due run
     /// waited for its safe point: php-src buffers them after the run).
-    fn append(&mut self, later: RootBuffer) {
-        for r in later.slots.into_iter().flatten() {
+    fn append(&mut self, mut later: RootBuffer) {
+        for r in later.slots.drain(..).flatten() {
             if r.weak.strong_count() == 0 {
                 continue;
             }

@@ -1284,11 +1284,19 @@ impl Frame {
     ) -> Self {
         let ncv = code.cv_names.len();
         let symtab_attached = matches!(kind, FrameKind::Include | FrameKind::Eval);
+        // The main script's compiled variables get their symbol-table
+        // entries now, as `zend_attach_symbol_table` adds them to
+        // `EG(symbol_table)` when the script starts (php-src's
+        // `i_init_code_execute_data`): adding them on the first generic
+        // access instead would grow the global table mid-script, which
+        // `memory_get_usage()` sees (ext/openssl/tests/bug79881.phpt) and
+        // which would order them after variables created before that.
+        let add_names = symtab_attached || matches!(kind, FrameKind::Main);
         let mut cvs = Vec::with_capacity(ncv);
         {
             let mut st = vars.borrow_mut();
             for name in &code.cv_names {
-                let val = if symtab_attached {
+                let val = if add_names {
                     let slot = st.find_or_add(name.as_bytes()) as usize;
                     st.slots.get(slot).cloned().flatten()
                 } else {
