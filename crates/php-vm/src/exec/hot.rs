@@ -77,6 +77,7 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::Empty { .. }
             | Op::InitFCall { fallback: None, .. }
             | Op::Send { .. }
+            | Op::Free(Operand::Tmp(_))
     )
 }
 
@@ -415,6 +416,14 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
             if !crate::call::send_in(f, src) {
                 return DECLINED;
             }
+        }
+        // `ZEND_FREE` of an unused result: released as the generic op
+        // releases it (a destructor it queues runs at the safe point).
+        Op::Free(Operand::Tmp(t)) => {
+            let Some(slot) = f.tmps.get_mut(t as usize) else {
+                return DECLINED;
+            };
+            discard_unrooted(Some(std::mem::take(slot)));
         }
         _ => return DECLINED,
     }
