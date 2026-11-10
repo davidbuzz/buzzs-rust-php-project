@@ -562,7 +562,6 @@ pub(crate) fn clear_def_tmp(op: &mut Op) -> bool {
         | Op::AssignRef { dst, .. }
         | Op::ListFetchRef { dst, .. }
         | Op::ArrayKeyExists { dst, .. }
-        | Op::DoCall { dst }
         | Op::Yield { dst, .. }
         | Op::YieldRef { dst, .. }
         | Op::YieldByRefValue { dst, .. }
@@ -592,6 +591,10 @@ pub(crate) fn clear_def_tmp(op: &mut Op) -> bool {
                 false
             }
         }
+        // Not `DoCall`: a call keeps its result: `DoCall { dst: Some }` + `FREE` is how
+        // `(void)f()` marks the value as used (`ZEND_FREE_VOID_CAST`, which
+        // php-src's block_pass.c and dce.c keep), while `dst: None` makes a
+        // `#[\NoDiscard]` function warn.
         _ => false,
     }
 }
@@ -988,6 +991,71 @@ mod tests {
                 }
             });
         }
+    }
+
+    /// Literal compaction (pass 11) remaps the literal indices of every op,
+    /// including a `name: ?` placeholder's name and `in_array`'s haystack:
+    /// a duplicate `7` before them once left both pointing one literal too
+    /// far ("Unknown named parameter $Int(8)", `partial_application/
+    /// const_arg_opt`).
+    #[test]
+    fn literal_compaction_remaps_placeholder_names_and_in_array_sets() {
+        let unit = compile_src(
+            "<?php function h($a, $b, $c) {} function t($s) { $a = 7; $b = 7; \
+             $f = h(1, c: ?, b: ?); return [$f, $a, $b, in_array($s, ['b', 'c'])]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let funcs = unit.main.code.decls.functions.borrow();
+        let t = funcs.iter().find(|f| f.name.as_bytes() == b"t").expect("t");
+        let code = &t.code;
+        let names: Vec<&[u8]> = code
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::SendPlaceholder { name: Some(n) } => match code.literals.get(*n as usize) {
+                    Some(Value::Str(s)) => Some(s.as_bytes()),
+                    other => panic!("placeholder name literal {other:?}: {:?}", code.ops),
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, [&b"c"[..], &b"b"[..]], "{:?}", code.ops);
+        for op in &code.ops {
+            if let Op::InArray { set, .. } = op {
+                assert!(
+                    matches!(code.literals.get(*set as usize), Some(Value::Array(_))),
+                    "in_array set literal {:?}",
+                    code.literals.get(*set as usize)
+                );
+            }
+        }
+    }
+
+    /// `(void)f()` compiles to a call with a result plus its `FREE`; the
+    /// optimizer must keep both, since a call without a result makes a
+    /// `#[\NoDiscard]` function warn (opcache `nodiscard_001`).
+    #[test]
+    fn void_cast_keeps_call_result() {
+        let unit = compile_src(
+            "<?php function t() { return 1; } function u() { (void)t(); }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let funcs = unit.main.code.decls.functions.borrow();
+        let u = funcs.iter().find(|f| f.name.as_bytes() == b"u").expect("u");
+        let ops = &u.code.ops;
+        let call = ops
+            .iter()
+            .find_map(|op| match op {
+                Op::DoCall { dst } => Some(*dst),
+                _ => None,
+            })
+            .expect("DoCall");
+        let t = call.unwrap_or_else(|| panic!("call result dropped: {ops:?}"));
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::Free(Operand::Tmp(f)) if *f == t)),
+            "FREE of the call result dropped: {ops:?}"
+        );
     }
 
     #[test]
