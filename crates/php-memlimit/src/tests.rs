@@ -1464,3 +1464,51 @@ fn gc_mem_caches_while_observed_collects_and_reports() {
     a.unbind_current_thread();
     assert_eq!(a.stats().current, 0);
 }
+
+#[test]
+fn persistent_growth_and_release_leave_usage_and_peak_alone() {
+    let a = CountingAlloc::new(System);
+    a.set_baseline();
+    let _warm = alloc(&a, 64);
+    let start = a.usage();
+    let peak = a.peak();
+    // Growth inside the scope does not show.
+    let mut b = a.persistent(|| alloc(&a, 4096));
+    assert_eq!(a.usage(), start);
+    assert_eq!(a.peak(), peak);
+    // Neither does a reallocation...
+    a.persistent(|| grow(&mut b, 8192));
+    assert_eq!(a.usage(), start);
+    // ...nor the release.
+    a.persistent(|| drop(b));
+    assert_eq!(a.usage(), start);
+    assert_eq!(a.peak(), peak);
+    // Ordinary blocks still count.
+    let c = alloc(&a, 100);
+    assert_eq!(a.usage(), start + 100);
+    drop(c);
+    assert_eq!(a.usage(), start);
+}
+
+#[test]
+fn persistent_block_freed_outside_the_scope_shows_as_a_release() {
+    let a = CountingAlloc::new(System);
+    a.set_baseline();
+    let start = a.usage();
+    let b = a.persistent(|| alloc(&a, 1000));
+    assert_eq!(a.usage(), start);
+    drop(b);
+    assert_eq!(a.usage(), start - 1000);
+}
+
+#[test]
+fn persistent_scope_moves_the_limit_threshold_with_the_baseline() {
+    let a = CountingAlloc::new(System);
+    a.set_baseline();
+    a.set_tracked(true);
+    a.set_limit(Some(PHP_BASELINE + 10_000)).expect("limit");
+    let _p = a.persistent(|| alloc(&a, 8_000));
+    // 8,000 persistent bytes do not count: 9,000 more still fit.
+    let _b = alloc(&a, 9_000);
+    assert!(a.check().is_none());
+}
