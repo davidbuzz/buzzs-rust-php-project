@@ -1853,11 +1853,19 @@ impl Vm {
     /// which share it) after a write to it, as php-src's `IS_INDIRECT` slots
     /// would show the new value. Those frames form the bottom of the stack,
     /// so the walk stops at the first frame that is not one of them.
+    ///
+    /// The running frame is skipped: its compiled variables are live (a
+    /// `foreach` value or a fast-path assignment writes them without
+    /// mirroring the table), and callers that wrote the table refresh it
+    /// themselves. Refreshing it here let `global $x` in an included file
+    /// replace the loop variable with the table's stale copy.
     pub(crate) fn sync_global_frames(&mut self) {
         let globals = self.globals.clone();
+        let running = self.frames.len().saturating_sub(1);
         for f in self
             .frames
             .iter_mut()
+            .take(running)
             .take_while(|f| f.kind == FrameKind::Main || Rc::ptr_eq(&f.vars, &globals))
         {
             if f.symtab_attached {
