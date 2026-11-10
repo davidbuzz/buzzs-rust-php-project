@@ -497,6 +497,56 @@ impl Obj {
         Obj::with_type_id(object, TypeId::of::<F>())
     }
 
+    /// [`Obj::new_in_family`] with the payload built in place: `init` gets
+    /// a pointer to the (uninitialized) payload inside the new allocation
+    /// and writes it there, so a large payload (an object with its inline
+    /// property slots) is not first assembled on the stack and then copied
+    /// into the heap (`zend_objects_new` initializes the `zend_object` it
+    /// allocated). The pointer carries the provenance of the whole
+    /// allocation, as [`Obj::payload_ptr`]'s does, and may be kept (the
+    /// payload's address never changes).
+    ///
+    /// # Safety
+    /// As for [`Obj::new_in_family`]; in addition `init` must leave a valid
+    /// `T` at the pointer when it returns. If it panics instead, the
+    /// allocation is freed without dropping anything in it.
+    #[inline]
+    #[must_use]
+    pub unsafe fn new_in_family_with<T: PhpObject, F: 'static>(
+        init: impl FnOnce(NonNull<T>),
+    ) -> Self {
+        const {
+            assert!(payload_offset::<T>() == payload_offset::<F>());
+            assert!(std::mem::size_of::<T>() >= std::mem::size_of::<F>());
+        }
+        let uninit: Rc<MaybeUninit<ObjCell<T>>> = Rc::new_uninit();
+        // `Rc::as_ptr` derives the pointer without creating a reference:
+        // it keeps the provenance of the `Rc`'s own pointer (the whole
+        // allocation), which `assume_init` and `into_raw` below keep too,
+        // so pointers handed to `init` stay valid for the object's life.
+        let cell = Rc::as_ptr(&uninit).cast_mut().cast::<ObjCell<T>>();
+        // SAFETY: the allocation is fresh and unshared (no reference to it
+        // exists); `cell` points at its `ObjCell<T>`, the field
+        // projections stay inside it, and `addr_of_mut!` makes no
+        // reference. `init` writes the payload (caller contract), so the
+        // whole cell is initialized for `assume_init` (`this` is
+        // `MaybeUninit` and written below, as in `with_type_id`).
+        unsafe {
+            ptr::addr_of_mut!((*cell).header).write(ObjHeader {
+                this: UnsafeCell::new(MaybeUninit::uninit()),
+                type_id: TypeId::of::<F>(),
+            });
+            init(NonNull::new_unchecked(ptr::addr_of_mut!((*cell).value)));
+            let rc: Rc<dyn PhpObject> = uninit.assume_init();
+            let raw = Rc::into_raw(rc);
+            let header = Obj::header_of(raw);
+            (*(*header).this.get())
+                .as_mut_ptr()
+                .write(Rc::from_raw(raw));
+            Obj::from_header(header)
+        }
+    }
+
     /// [`Obj::new`] with the type the header records for
     /// [`Obj::downcast_ref`] (`T`'s own, or its family's).
     fn with_type_id<T: PhpObject>(object: T, type_id: TypeId) -> Self {
@@ -611,7 +661,8 @@ impl Obj {
 
     /// Downcasts to the VM's concrete object type (or to the family type of
     /// an object made by [`Obj::new_in_family`]).
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // one `TypeId` compare on every property access
     #[must_use]
     pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
         if self.header().type_id == TypeId::of::<T>() {
@@ -622,8 +673,18 @@ impl Obj {
             // made.
             Some(unsafe { &(*self.ptr.as_ptr().cast::<ObjCell<T>>()).value })
         } else {
-            self.rc().as_any().downcast_ref::<T>()
+            self.downcast_slow::<T>()
         }
+    }
+
+    /// [`Obj::downcast_ref`] of a payload whose header records another
+    /// type: through [`PhpObject::as_any`] (two virtual calls). Out of
+    /// line, so that the header check inlines into every caller (the VM's
+    /// `object::data` on each property access).
+    #[cold]
+    #[inline(never)]
+    fn downcast_slow<T: 'static>(&self) -> Option<&T> {
+        self.rc().as_any().downcast_ref::<T>()
     }
 
     /// The payload, as a raw pointer to its `F` part, if its type or
@@ -1357,6 +1418,49 @@ mod tests {
         drop(o);
         assert!(w.upgrade().is_none());
         assert_eq!(seen.get(), 1 + 20 + 3);
+    }
+
+    #[test]
+    fn family_members_can_be_built_in_place() {
+        let seen = Rc::new(Cell::new(0));
+        let mut kept: Option<NonNull<Tailed<2>>> = None;
+        // SAFETY: `Tailed` is `repr(C)` with its `Head` first; the closure
+        // writes both fields.
+        let o = unsafe {
+            Obj::new_in_family_with::<Tailed<2>, Head>(|p| {
+                kept = Some(p);
+                let t = p.as_ptr();
+                ptr::addr_of_mut!((*t).head).write(Head {
+                    id: 9,
+                    seen: seen.clone(),
+                });
+                ptr::addr_of_mut!((*t).tail).write(UnsafeCell::new([4, 5]));
+            })
+        };
+        assert_eq!(o.downcast_ref::<Head>().map(|h| h.id), Some(9));
+        assert_eq!(o.handle(), 9);
+        assert_eq!(o.refcount(), 1);
+        // The pointer handed to `init` is the payload's for good.
+        let p = kept.expect("init ran");
+        assert_eq!(
+            o.payload_ptr::<Head>().map(|h| h.as_ptr() as usize),
+            Some(p.as_ptr() as usize)
+        );
+        // SAFETY: the payload is a live `Tailed<2>`; its tail is in an
+        // `UnsafeCell`.
+        unsafe {
+            ptr::addr_of_mut!((*p.as_ptr()).tail)
+                .cast::<u64>()
+                .write(40);
+        }
+        let back = Obj::from_rc(o.rc().clone());
+        assert!(Obj::ptr_eq(&o, &back));
+        assert_eq!(o.refcount(), 2);
+        drop(back);
+        let w = o.downgrade();
+        drop(o);
+        assert!(w.upgrade().is_none());
+        assert_eq!(seen.get(), 40 + 5);
     }
 
     #[test]

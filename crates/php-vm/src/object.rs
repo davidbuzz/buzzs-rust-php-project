@@ -210,8 +210,8 @@ pub struct Slots {
     /// `RefCell`'s borrow state: 0 unused, `n > 0` shared borrows, -1 the
     /// exclusive one.
     borrow: Cell<isize>,
-    /// The first slot. Written once, right after the allocation (the
-    /// inline storage's address is known only then); the pointer carries
+    /// The first slot (inside the allocation, written while the block is
+    /// built in place by [`Obj::new_in_family_with`]); the pointer carries
     /// the provenance of the whole allocation (or of the separate buffer),
     /// which a reference to the fixed part does not.
     first: Cell<NonNull<Option<Value>>>,
@@ -220,7 +220,7 @@ pub struct Slots {
 }
 
 impl Slots {
-    /// `len` slots at `first` (dangling until the storage is known).
+    /// `len` slots at `first`.
     fn new(first: NonNull<Option<Value>>, len: usize) -> Self {
         Slots {
             borrow: Cell::new(0),
@@ -646,6 +646,18 @@ fn queue_destructor(d: &ObjectData, this: &Obj) {
     });
 }
 
+/// Whether a slot value owns nothing (undefined, or a scalar: php-src's
+/// non-refcounted zvals), so copying it is a bitwise copy and releasing it
+/// a no-op.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a tag test in the per-slot loops
+fn owns_nothing(v: &Option<Value>) -> bool {
+    matches!(
+        v,
+        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
+    )
+}
+
 /// The free: `zend_object_std_dtor` and the tail of
 /// `zend_objects_store_del`, once the last handle is gone for good (no
 /// destructor left to run), from the payload's `Drop`. `slots` are the
@@ -655,6 +667,23 @@ fn queue_destructor(d: &ObjectData, this: &Obj) {
 fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
     let handle = d.handle;
     let flags = d.flags.get();
+    // The common free: no GC buffer entry, no side tables, no dynamic
+    // properties or native state, and only slots that own nothing. Nothing
+    // is released, so no destructor can be queued meanwhile: the handle
+    // goes straight back on the free list (`zend_objects_store_del` of a
+    // plain object). The slots are left as they are: inline ones are never
+    // dropped again (`MaybeUninit`), and a separate buffer's drop releases
+    // nothing.
+    if flags & (oflags::GC_BUFFERED | oflags::STALE_PROPS) == 0
+        && d.unset_bits.get() & UNSET_OVERFLOW_BIT == 0
+        && d.dynamic.get_mut().is_none()
+        && d.internal.get_mut().is_none()
+        && slots.iter().all(owns_nothing)
+    {
+        crate::weakref::object_freed(handle);
+        release_store_slot(handle, None);
+        return;
+    }
     if flags & oflags::GC_BUFFERED != 0 {
         // `GC_REMOVE_FROM_BUFFER`.
         crate::gc::forget_root(cell, handle);
@@ -683,10 +712,7 @@ fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
         let v = slot.take();
         // A scalar owns nothing: forgetting it skips the out-of-line
         // `drop_in_place` call (`zval_ptr_dtor` of a non-refcounted zval).
-        if matches!(
-            v,
-            None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
-        ) {
+        if owns_nothing(&v) {
             std::mem::forget(v);
         } else {
             drop(v);
@@ -701,6 +727,14 @@ fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
     } else {
         last_pending_handle()
     };
+    release_store_slot(handle, anchor);
+}
+
+/// The tail of `zend_objects_store_del`: the store slot of `handle` is
+/// cleared and the handle goes on the free list (or waits behind
+/// `anchor`, see [`ObjectStore::release_handle`]).
+#[inline]
+fn release_store_slot(handle: u32, anchor: Option<u32>) {
     // `try_with`: the store may already be gone during thread teardown.
     let _ = STORE.try_with(|s| {
         if let Ok(mut s) = s.try_borrow_mut() {
@@ -756,28 +790,40 @@ impl Fill<'_> {
     /// [`Fill::len`] of them. Inlined into each [`new_block`], where the
     /// length is known to fit `N`: the out-of-line call cost more than
     /// copying the one or two slots of a small object.
+    ///
+    /// Both sources are copied bitwise in one block move (php-src's
+    /// `object_properties_init` loop of `ZVAL_COPY_VALUE_PROP`); a copied
+    /// default that owns something (a string, an array, ...) is then
+    /// overwritten with a real clone (`ZVAL_COPY_OR_DUP_PROP`'s refcount
+    /// increment). Should a clone panic, `dst` keeps bitwise copies, which
+    /// are never dropped (`MaybeUninit`).
     #[inline(always)]
     #[allow(clippy::inline_always)] // once per `new`, see above
     fn write(self, dst: &mut [MaybeUninit<Option<Value>>]) {
         debug_assert_eq!(dst.len(), self.len());
+        let len = dst.len().min(self.len());
+        let out = dst.as_mut_ptr().cast::<Option<Value>>();
         match self {
-            Fill::Values(values) => {
-                for (d, v) in dst.iter_mut().zip(values) {
-                    *d = MaybeUninit::new(v);
+            Fill::Values(mut values) => {
+                // SAFETY: `values` holds `len` initialized values and
+                // `dst` room for them (separate allocations); the values
+                // move into `dst`: the vector forgets them (`set_len(0)`)
+                // before it is dropped.
+                unsafe {
+                    ptr::copy_nonoverlapping(values.as_ptr(), out, len);
+                    values.set_len(0);
                 }
             }
-            // `ZVAL_COPY_OR_DUP_PROP` of each default: scalars (most
-            // defaults) are copied inline, without the out-of-line `Clone`.
             Fill::Defaults(values) => {
+                // SAFETY: as above; the copies of the values that own
+                // nothing are complete, the others are replaced below
+                // before anything reads them.
+                unsafe { ptr::copy_nonoverlapping(values.as_ptr(), out, len) };
                 for (d, v) in dst.iter_mut().zip(values) {
-                    *d = MaybeUninit::new(match v {
-                        None => None,
-                        Some(Value::Null) => Some(Value::Null),
-                        Some(Value::Bool(b)) => Some(Value::Bool(*b)),
-                        Some(Value::Int(i)) => Some(Value::Int(*i)),
-                        Some(Value::Float(x)) => Some(Value::Float(*x)),
-                        Some(other) => Some(other.clone()),
-                    });
+                    if !owns_nothing(v) {
+                        // No drop of the bitwise copy: `MaybeUninit`.
+                        *d = MaybeUninit::new(v.clone());
+                    }
                 }
             }
         }
@@ -819,57 +865,59 @@ fn create(class: Rc<Class>, fill: Fill<'_>) -> Obj {
     }
 }
 
-/// [`create`] in a block with room for `N` slots: the values are written
-/// into the block before it is allocated (so no object ever has
-/// uninitialized slots), then the slots are pointed at their place inside
-/// the allocation.
+/// [`create`] in a block with room for `N` slots (`zend_objects_new` plus
+/// `object_properties_init`): the block is allocated first and built in
+/// place, the values written straight into its inline slots, so nothing is
+/// assembled on the stack and copied into the heap.
 #[inline(never)]
 fn new_block<const N: usize>(class: Rc<Class>, fill: Fill<'_>) -> Obj {
     let len = fill.len();
-    let mut inline = [const { MaybeUninit::<Option<Value>>::uninit() }; N];
-    let buf = if len <= N {
-        fill.write(&mut inline[..len]);
-        None
+    let (buf, fill) = if len <= N {
+        (None, Some(fill))
     } else {
         let raw = Box::into_raw(fill.into_boxed());
         // SAFETY: `Box::into_raw` never returns null.
-        Some(unsafe { NonNull::new_unchecked(raw.cast::<Option<Value>>()) })
+        (
+            Some(unsafe { NonNull::new_unchecked(raw.cast::<Option<Value>>()) }),
+            None,
+        )
     };
     STORE.with(|s| {
         let mut s = s.borrow_mut();
         let handle = s.take_handle();
-        let block = ObjectBlock {
-            data: ObjectData {
-                handle,
-                class,
-                // Inline slots get their address once the block has one.
-                slots: Slots::new(buf.unwrap_or(NonNull::dangling()), len),
-                dynamic: RefCell::new(None),
-                internal: RefCell::new(None),
-                flags: Cell::new(0),
-                unset_bits: Cell::new(0),
-                lazy: RefCell::new(None),
-            },
-            inline: UnsafeCell::new(inline),
-        };
         // SAFETY: `ObjectBlock` is `repr(C)` with its `ObjectData` first,
-        // and aligned like it (the inline slots are 8-aligned values).
-        let o = unsafe { Obj::new_in_family::<ObjectBlock<N>, ObjectData>(block) };
-        if buf.is_none() && len > 0 {
-            let p = o
-                .payload_ptr::<ObjectData>()
-                .expect("an object block is in the ObjectData family");
-            // SAFETY: the payload is this `ObjectBlock<N>` and `p` keeps the
-            // provenance of the whole allocation, so the projection to the
-            // inline storage stays in bounds (`addr_of_mut!` makes no
-            // reference; `UnsafeCell` is transparent); the fixed part is
-            // initialized, and only shared references to it exist.
-            unsafe {
-                let block = p.as_ptr().cast::<ObjectBlock<N>>();
-                let first = ptr::addr_of_mut!((*block).inline).cast::<Option<Value>>();
-                p.as_ref().slots.first.set(NonNull::new_unchecked(first));
-            }
-        }
+        // and aligned like it (the inline slots are 8-aligned values). The
+        // closure initializes the whole block: the first `len` inline
+        // slots (the rest stay `MaybeUninit`) and the fixed part.
+        let o = unsafe {
+            Obj::new_in_family_with::<ObjectBlock<N>, ObjectData>(|p| {
+                let block = p.as_ptr();
+                // `UnsafeCell` and arrays are laid out as their contents;
+                // `p` reaches the whole allocation, so the slot pointer
+                // keeps that provenance (see `Slots::first`).
+                let inline =
+                    ptr::addr_of_mut!((*block).inline).cast::<MaybeUninit<Option<Value>>>();
+                let first = match (buf, fill) {
+                    (Some(buf), _) => buf,
+                    (None, fill) => {
+                        if let Some(fill) = fill {
+                            fill.write(std::slice::from_raw_parts_mut(inline, len));
+                        }
+                        NonNull::new_unchecked(inline.cast::<Option<Value>>())
+                    }
+                };
+                ptr::addr_of_mut!((*block).data).write(ObjectData {
+                    handle,
+                    class,
+                    slots: Slots::new(first, len),
+                    dynamic: RefCell::new(None),
+                    internal: RefCell::new(None),
+                    flags: Cell::new(0),
+                    unset_bits: Cell::new(0),
+                    lazy: RefCell::new(None),
+                });
+            })
+        };
         s.objects[handle as usize - 1] = Some(o.downgrade());
         o
     })
@@ -938,7 +986,17 @@ impl fmt::Debug for HandleGuard {
 /// Panics if the object was not created by this VM.
 #[inline]
 pub fn data(o: &Obj) -> &ObjectData {
-    o.downcast_ref::<ObjectData>().expect("phprust object")
+    match o.downcast_ref::<ObjectData>() {
+        Some(d) => d,
+        None => not_a_vm_object(),
+    }
+}
+
+/// [`data`] of an object this VM did not create.
+#[cold]
+#[inline(never)]
+fn not_a_vm_object() -> ! {
+    panic!("phprust object")
 }
 
 /// Returns the class of an object.
@@ -1519,6 +1577,37 @@ mod tests {
             drop(copy);
             assert_eq!(shared.refcount(), 1);
         }
+        drop(vm);
+    }
+
+    /// Objects whose slots own nothing take the short free; either way the
+    /// freed handles are reused last-freed first (Zend's free list), and
+    /// defaults that own something are real copies.
+    #[test]
+    fn freed_handles_are_reused_last_freed_first() {
+        let vm = crate::Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        let cls = vm.find_class(b"stdClass").expect("stdClass");
+        let shared = php_runtime::ZArray::from_values([Value::Int(1)]);
+        let plain = [None, Some(Value::Int(3)), Some(Value::Float(0.5))];
+        let owning = [Some(Value::Bool(true)), Some(Value::Array(shared.clone()))];
+        let a = new_object_from_defaults(cls.clone(), &plain);
+        let b = new_object_from_defaults(cls.clone(), &owning);
+        assert_eq!(shared.refcount(), 3);
+        assert!(matches!(data(&a).slots.borrow()[1], Some(Value::Int(3))));
+        assert!(matches!(
+            data(&b).slots.borrow()[0],
+            Some(Value::Bool(true))
+        ));
+        let (ha, hb) = (a.handle(), b.handle());
+        assert_ne!(ha, hb);
+        drop(a);
+        drop(b);
+        assert_eq!(shared.refcount(), 2);
+        let c = new_object_from_defaults(cls.clone(), &plain);
+        let d = new_object(cls.clone(), Vec::new());
+        assert_eq!((c.handle(), d.handle()), (hb, ha));
+        drop((c, d, owning));
+        assert_eq!(shared.refcount(), 1);
         drop(vm);
     }
 
