@@ -9,20 +9,23 @@
 //! `ZEND_ADD_DOUBLE_SPEC_CV_CONST`, `ZEND_ASSIGN_SPEC_CV_CONST_RETVAL_UNUSED`,
 //! `ZEND_JMPZ_SPEC_CV`, ...) touch nothing else. `Vm::run` is one large
 //! function whose `ip` and frame live on the stack, and every fast path
-//! there looks the current frame up again (the frame stack's bounds, the
-//! frame's address). [`run_hot`] is entered by `Vm::run` at the first such
-//! op and stays here, with the frame, its slot vectors and `ip` in
-//! registers, until an op it does not handle, an op whose fast path does
-//! not apply (nothing changed: `Vm::run` then runs the generic op), or a
-//! due safe point (`EG(vm_interrupt)`: polled after every op, as in
-//! `Vm::run`).
+//! there looked the current frame up again (the frame stack's bounds, the
+//! frame's address). [`step`] runs one such op on a frame borrowed once;
+//! `Vm::run` uses it inline for a hot op, and when the op after it is hot
+//! as well enters [`run_hot`], which stays in its own loop, with the frame,
+//! its slot vectors and `ip` in registers, until an op it does not handle,
+//! an op whose fast path does not apply (nothing changed: `Vm::run` then
+//! runs the generic op), or a due safe point (`EG(vm_interrupt)`: polled
+//! after every op, as in `Vm::run`).
 //!
 //! Every fast path here completes its op without diagnostics, user code or
 //! frame changes, exactly as the `Vm::run` pre-match did before: it reads
 //! only plain values (no references, no undefined variables), and it
 //! overwrites only variable slots that hold no refcounted value other than
 //! a string (`is_plain_slot`), so releasing the old value has no side
-//! effect. A frame whose symbol table is attached (`Frame::symtab_attached`)
+//! effect; `AssignCv` also replaces an array or object, released as
+//! `Vm::cv_assign` does (a destructor it queues runs at the safe point
+//! after the op, as there). A frame whose symbol table is attached (`Frame::symtab_attached`)
 //! has each written variable copied into its `VarStore` slot, out of line
 //! ([`sync_cv_cold`]).
 
