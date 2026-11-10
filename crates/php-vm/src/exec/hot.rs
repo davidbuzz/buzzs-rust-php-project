@@ -16,7 +16,10 @@
 //! its slot vectors and `ip` in registers, until an op it does not handle,
 //! an op whose fast path does not apply (nothing changed: `Vm::run` then
 //! runs the generic op), or a due safe point (`EG(vm_interrupt)`: polled
-//! after every op, as in `Vm::run`).
+//! after every op, as in `Vm::run`). Only the core ops (jumps, smart
+//! branches, arithmetic, `++`/`--`, plain assignments, the fused loop ops)
+//! are inlined into that loop; the other hot ops are one call each
+//! ([`step_ext`]), so that the loop keeps its state in registers.
 //!
 //! Every fast path here completes its op without diagnostics, user code or
 //! frame changes, exactly as the `Vm::run` pre-match did before: it reads
@@ -46,7 +49,7 @@ use super::spec::{
 use super::{discard_unrooted, num_bin, release_rooted, Num};
 use crate::opcode::{cmp_outcome, BinKind, CastKind, IncDecKind, Op, Operand, UnKind};
 use crate::vm::{CvSlot, Frame};
-use php_runtime::{BinaryOp, Value};
+use php_runtime::{BinaryOp, Value, ZStr};
 
 /// The second half of [`run_hot`]'s result when no safe point is due: the
 /// op at the returned `ip` stopped the loop.
@@ -142,7 +145,9 @@ pub(super) fn is_hot(op: &Op) -> bool {
 /// `ip` out of `Vm::run`'s stack frame. `Vm::run` enters it when a hot op
 /// it ran is followed by another (a loop of hot ops stays here); a lone
 /// hot op among others runs in `Vm::run` through [`step`], without the
-/// call.
+/// call. The loop inlines only `step`'s core ops; the others are one call
+/// each ([`step_ext`]), which keeps the loop small enough for its state to
+/// stay in registers.
 #[inline(never)]
 pub(super) fn run_hot(f: &mut Frame, ops: &[Op], lits: &[Value], mut ip: usize) -> (usize, usize) {
     loop {
@@ -164,6 +169,11 @@ pub(super) const DECLINED: usize = usize::MAX;
 /// Runs the hot op at `at` of frame `f` when its fast path applies, and
 /// returns the `ip` to continue at; [`DECLINED`] otherwise. The safe point
 /// after the op is the caller's.
+///
+/// The core ops (jumps, smart branches, arithmetic, `++`/`--`, plain
+/// assignments and the fused loop ops) run inline; every other hot op
+/// ([`is_hot`]) through [`step_ext`], out of line. A new hot op's arm goes
+/// into `step_ext` unless it is as small and as frequent as these.
 #[inline(always)]
 #[allow(clippy::inline_always, clippy::too_many_lines)] // one arm per hot op, like `Vm::run`
 pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
@@ -276,7 +286,7 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
                     if f.tmps.len() <= dst as usize {
                         return DECLINED;
                     }
-                    let Some(s) = concat_in(f, lits, a, b) else {
+                    let Some(s) = concat_ext(f, lits, a, b) else {
                         return DECLINED;
                     };
                     set_tmp_in(f, dst, Value::Str(s));
@@ -308,7 +318,7 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
                 if f.tmps.len() <= dst as usize {
                     return DECLINED;
                 }
-                let Some(s) = concat_in(f, lits, a, b) else {
+                let Some(s) = concat_ext(f, lits, a, b) else {
                     return DECLINED;
                 };
                 set_tmp_in(f, dst, Value::Str(s));
@@ -437,6 +447,45 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
                 return DECLINED;
             }
         }
+        // Every other hot op runs out of line ([`step_ext`]); any other
+        // op (and a core op whose nested pattern above did not match,
+        // such as `Unary` of `-`) is not a hot op.
+        _ => {
+            return if is_hot(op) {
+                step_ext(f, ops, lits, at)
+            } else {
+                DECLINED
+            };
+        }
+    }
+    ip
+}
+
+/// [`step`] for the hot ops outside its core: the constant, class-constant,
+/// static- and object-property cache hits, `new`, the builtin ops
+/// (`strlen()`, `count()`, `is_*()`, `isset`/`empty`, `func_num_args()`),
+/// `INIT_FCALL`/`SEND`, `FREE`, the array-dimension ops of a variable,
+/// `.=`, ropes, `(string)` and `foreach`. Same contract as `step`: the
+/// `ip` to continue at, or [`DECLINED`] having changed nothing.
+///
+/// Never inlined, so that `step` stays small: every one of these arms
+/// inlines its fast path (`exec/spec/*.rs`, `call.rs`), and with them in
+/// [`run_hot`]'s loop that function was 48 KB, and its op list (pointer
+/// and length) and the next `ip` lived on the stack: 4 of the 17
+/// instructions of each op's dispatch were spill loads and stores, and the
+/// core arms reloaded the frame and its slot vectors from the stack too.
+/// These ops pay a call instead (their fast paths are each several times
+/// its cost), and the loop of the core ops (jumps, smart branches,
+/// arithmetic, `++`/`--`, assignments and the fused ops) has the registers
+/// for its state.
+#[inline(never)]
+#[allow(clippy::too_many_lines)] // one arm per hot op, like `step`
+fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
+    let Some(op) = ops.get(at) else {
+        return DECLINED;
+    };
+    let mut ip = at + 1;
+    match *op {
         // `ZEND_FETCH_CONSTANT`, `ZEND_FETCH_CLASS_CONSTANT`,
         // `ZEND_FETCH_STATIC_PROP_R`/`_IS`, `ZEND_ASSIGN_STATIC_PROP` and
         // `ZEND_ISSET_ISEMPTY_STATIC_PROP` on a run-time cache hit; the
@@ -705,6 +754,15 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
         _ => return DECLINED,
     }
     ip
+}
+
+/// [`concat_in`] (`ZEND_CONCAT` of strings and integers, for the `Bin`
+/// and `BinAssignCv` arms of [`step`]) out of line: it allocates, so a call
+/// costs it little, and inlined twice into [`run_hot`]'s core loop it would
+/// take registers from the numeric arms.
+#[inline(never)]
+fn concat_ext(f: &mut Frame, lits: &[Value], a: Operand, b: Operand) -> Option<ZStr> {
+    concat_in(f, lits, a, b)
 }
 
 /// Stores the scalar result `v` of an op into its result temporary when
@@ -1741,6 +1799,212 @@ mod tests {
         assert!(matches!(num_value(Num::Int(-4)), Value::Int(-4)));
         assert!(
             matches!(num_value(Num::Float(0.5)), Value::Float(x) if x.to_bits() == 0.5_f64.to_bits())
+        );
+    }
+}
+
+/// Scripts through both routes of [`step`]: its inline core ops and the
+/// hot ops it hands to [`step_ext`], in the same loops, and ops whose fast
+/// path declines on either route. Expected output from
+/// `/usr/bin/php -n` (PHP 8.3), paths normalised to `t.php`.
+#[cfg(test)]
+mod route_tests {
+    #![allow(clippy::needless_raw_string_hashes)]
+
+    use crate::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn run(src: &str) -> String {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(src.as_bytes(), "t.php");
+        drop(vm);
+        let out = sink.0.borrow().clone();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Jumps, smart branches, arithmetic (an overflow to float included), `&&`/`||`,
+    /// `??`, `?:`, `!`, `(bool)`, `.` and `++`/`--`: the inline core arms.
+    #[test]
+    fn core_ops_inline_in_the_loop() {
+        let src = r#"<?php
+$s = 0; $f = 0.5; $t = "";
+for ($i = 0; $i < 6; $i++) {
+    $s = $s + $i * 3 - 1;
+    $f *= 1.5;
+    $b = !($i % 2) && $i > 1 || $i == 5;
+    $c = (bool) $i;
+    $n = $i > 3 ? null : $i;
+    $d = $n ?? -1;
+    $e = $n ?: 'z';
+    $t = $t . $i . ",";
+    $u = "a" . $i;
+    if ($b) { $s += 100; } else { $s -= 1; }
+    $j = $i;
+    $j--;
+    ++$j;
+    while ($j > 4) { $j -= 2; }
+    echo $s, " ", $f, " ", var_export($b, true), " ", var_export($c, true), " ", $d, " ", $e, " ", $u, " ", $j, "\n";
+}
+echo $t, "\n";
+$k = PHP_INT_MAX - 2;
+for ($m = 0; $m < 4; $m++) { $k = $k + 1; }
+var_dump($k);
+$x = 10;
+do { $x = $x - 3; } while ($x > 0);
+var_dump($x, $x === -2, $x != -2.0, 1.5 <= $x);
+"#;
+        assert_eq!(
+            run(src),
+            r#"-2 0.75 false false 0 z a0 0
+-1 1.125 false true 1 1 a1 1
+104 1.6875 true true 2 2 a2 2
+111 2.53125 false true 3 3 a3 3
+222 3.796875 true true -1 z a4 4
+336 5.6953125 true true -1 z a5 3
+0,1,2,3,4,5,
+float(9.223372036854776E+18)
+int(-2)
+bool(true)
+bool(false)
+bool(false)
+"#
+        );
+    }
+
+    /// Constants, class constants, static and object properties, `new`, calls
+    /// and their arguments, `strlen()`, `count()`, `is_int()`, `isset`/`empty`,
+    /// array dimensions, `.=`, ropes, `(string)` and `foreach` (`step_ext`),
+    /// interleaved with the core ops of their loops.
+    #[test]
+    fn out_of_line_hot_ops_between_core_ops() {
+        let src = r#"<?php
+const LIMIT = 3;
+class P {
+    const STEP = 2;
+    public static $count = 0;
+    public $v = 1;
+    public $items = [];
+    function run() {
+        for ($i = 0; $i < LIMIT; $i++) {
+            $this->v += self::STEP;
+            $this->v++;
+            self::$count += $this->v;
+            $this->items[] = $i;
+            if (isset($this->v)) { echo "set "; }
+        }
+        return $this->v . "/" . self::$count . "/" . count($this->items) . "/" . func_num_args();
+    }
+}
+function add($a, $b) { return $a + $b; }
+$p = new P;
+echo $p->run(), "\n";
+$arr = [];
+$str = "";
+for ($i = 0; $i < 5; $i++) {
+    $arr[$i] = add($i, 10);
+    $arr[$i] += 1;
+    $arr[$i]++;
+    $m[$i % 2][$i] = $i;
+    $str .= "x";
+    $len = strlen($str);
+    $cnt = count($arr);
+    $isI = is_int($arr[$i]);
+    $has = isset($arr[$i + 1]);
+    $emp = empty($arr[$i]);
+    $q = isset($zz);
+    $r = empty($str);
+    $cast = (string) $i;
+    echo "{$arr[$i]}:$len:$cnt:", var_export($isI, true), ":", var_export($has, true),
+        ":", var_export($emp, true), ":", var_export($q, true), ":", var_export($r, true), ":$cast\n";
+    add($i, $i);
+}
+$sum = 0;
+foreach ($arr as $k => $v) { $sum += $k * $v; }
+foreach ($m as $row) { foreach ($row as $v) { echo $v; } }
+echo "\n", $sum, " ", P::$count, " ", P::STEP, " ", LIMIT, "\n";
+"#;
+        assert_eq!(
+            run(src),
+            r#"set set set 10/21/3/0
+12:1:1:true:false:false:false:false:0
+13:2:2:true:false:false:false:false:1
+14:3:3:true:false:false:false:false:2
+15:4:4:true:false:false:false:false:3
+16:5:5:true:false:false:false:false:4
+02413
+150 21 2 3
+"#
+        );
+    }
+
+    /// Fast paths that decline on both routes (an undefined variable, a
+    /// numeric string, `strlen()` of an int, a missing property): the generic
+    /// op runs, with its warning on its own line.
+    #[test]
+    fn declined_ops_on_both_routes_warn_on_their_line() {
+        let src = r#"<?php
+for ($i = 0; $i < 3; $i++) {
+    $x = $i + $undef1;
+    $y = $arr2[$i] ?? 'd';
+    $z = strlen($i);
+    $w = $nope[$i];
+    echo $x, $y, $z, "\n";
+}
+$a = "5";
+for ($i = 0; $i < 2; $i++) { $a = $a + 1; $a .= "1"; }
+var_dump($a);
+$o = new stdClass;
+for ($i = 0; $i < 2; $i++) { $o->p = $i; echo $o->p, $o->missing ?? "-", "\n"; }
+echo $o->absent;
+echo "\ndone\n";
+"#;
+        assert_eq!(
+            run(src),
+            r#"
+Warning: Undefined variable $undef1 in t.php on line 3
+
+Warning: Undefined variable $nope in t.php on line 6
+
+Warning: Trying to access array offset on null in t.php on line 6
+0d1
+
+Warning: Undefined variable $undef1 in t.php on line 3
+
+Warning: Undefined variable $nope in t.php on line 6
+
+Warning: Trying to access array offset on null in t.php on line 6
+1d1
+
+Warning: Undefined variable $undef1 in t.php on line 3
+
+Warning: Undefined variable $nope in t.php on line 6
+
+Warning: Trying to access array offset on null in t.php on line 6
+2d1
+string(3) "621"
+0-
+1-
+
+Warning: Undefined property: stdClass::$absent in t.php on line 14
+
+done
+"#
         );
     }
 }
