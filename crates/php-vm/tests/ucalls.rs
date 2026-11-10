@@ -490,11 +490,15 @@ try {{ $objs[1]->q($objs[2]); }} catch (Error $e) {{ echo $e->getMessage(), "\n"
 /// Expected output is php-src's (`/usr/bin/php -n`).
 #[test]
 fn in_place_calls_and_returns_match_the_general_path() {
+    // The bare test VM has no ext/standard or ext/json: `lst()` builds
+    // json_encode()'s output for int lists, and loops replace
+    // array_sum()/array_map()/count() (kept on existing lines so the
+    // expected line numbers still hold).
     let source = r#"<?php
 function id($x) { return $x; }
 function add(int $a, int $b = 10): int { return $a + $b; }
 function lit() { return 5; }
-function cnt($a, $b = 2) { return func_num_args() . ':' . json_encode(func_get_args()); }
+function lst($a) { $s = '['; $sep = ''; foreach ($a as $v) { $s .= $sep . $v; $sep = ','; } return $s . ']'; } function cnt($a, $b = 2) { return func_num_args() . ':' . lst(func_get_args()); }
 function fib($n) { return $n < 2 ? $n : fib($n - 1) + fib($n - 2); }
 function &refret(array &$a) { return $a[0]; }
 function f2(?string $s): string { return $s ?? 'null'; }
@@ -534,11 +538,11 @@ function keep() { $x = new Obj; $x->v = 3; return 1; }
 echo keep(), "\n";
 function deep($n) { return $n ? deep($n - 1) : 'bottom'; }
 echo deep(100), "\n";
-echo array_sum(array_map(fn($x) => id($x) * 2, [1, 2, 3])), "\n";
+$sum = 0; $dbl = fn($x) => id($x) * 2; foreach ([1, 2, 3] as $x) { $sum += $dbl($x); } echo $sum, "\n";
 function nested($a) { return id(id($a)); }
 echo nested(8), "\n";
 function strict_arr(array $a): array { return $a; }
-echo count(strict_arr([1,2])), "\n";
+$n = 0; foreach (strict_arr([1,2]) as $_) { $n++; } echo $n, "\n";
 echo "end\n";
 "#;
     let expected = r#"1s1.5

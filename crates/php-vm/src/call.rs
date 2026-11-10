@@ -4220,14 +4220,6 @@ pub(crate) fn trampoline_name(name: &ZStr) -> ZStr {
     }
 }
 
-/// The called scope of a static call to `cls`: `self::`/`parent::`/
-/// `static::` (`forward`) keep the caller's called scope when it is a
-/// subclass of `cls`.
-/// Stores `buf` in `slot`. The replaced buffer is usually a fresh,
-/// unallocated `Vec`; it is then forgotten instead of dropped, which skips
-/// an out-of-line `drop_in_place` call on every call (a zero-capacity `Vec`
-/// of a sized element type owns no allocation and no elements).
-#[inline]
 /// Whether `call` of `uf` with `n` inline arguments takes
 /// [`Vm::push_simple_ucall`]: the conditions under which `op_do_call`
 /// hands a user function to [`Vm::push_user_call`] and that takes its fast

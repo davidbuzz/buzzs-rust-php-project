@@ -1026,11 +1026,13 @@ mod tests {
             )),
             "{ops:?}"
         );
+        // `$a[] = 3` is an `AssignDimCv` with no offset too, so no generic
+        // `Assign` is left.
         assert_eq!(
             ops.iter()
                 .filter(|op| matches!(op, Op::Assign { .. }))
                 .count(),
-            1,
+            0,
             "{ops:?}"
         );
         assert!(
