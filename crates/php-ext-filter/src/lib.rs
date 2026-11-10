@@ -12,11 +12,11 @@
 //!
 //! # Request inputs
 //!
-//! The CLI has no GET/POST/COOKIE input, so those storages are
-//! uninitialised (`filter_input()` returns `null`). `INPUT_SERVER` and
-//! `INPUT_ENV` read the raw `$_SERVER` / `$_ENV` snapshotted at request
-//! startup, before `filter.default` is applied to those superglobals (a
-//! JIT `$_ENV` is snapshotted when it is first created).
+//! The storages are the raw superglobals snapshotted at request startup,
+//! before `filter.default` is applied to them. The CLI has no GET/POST/
+//! COOKIE input, so those storages are uninitialised there (`filter_input()`
+//! returns `null`); php-cgi and `php -S` register them first (a JIT `$_ENV`
+//! is snapshotted when it is first created).
 //!
 //! Known gap: `parse_str()` (php-ext-stdmisc) does not apply
 //! `filter.default` (use [`php_filter::apply_default_filter`]).
@@ -74,28 +74,43 @@ fn filter_superglobal(vm: &mut Vm, name: &[u8], filter: i64, flags: i64) -> VmRe
     let Some(arr) = superglobal(vm, name) else {
         return Ok(());
     };
+    let out = filter_array(vm, &arr, filter, flags)?;
+    set_superglobal(vm, name, out);
+    Ok(())
+}
+
+/// `filter.default` over the string leaves of `arr` (`php_sapi_filter`
+/// runs on every registered value, nested ones included).
+fn filter_array(vm: &mut Vm, arr: &ZArray, filter: i64, flags: i64) -> VmResult<ZArray> {
     let mut out = ZArray::new();
     for (k, v) in arr.iter() {
         let v = match v.deref() {
             Value::Str(raw) => run(vm, |h| {
                 php_filter::apply_default_filter(h, raw.as_bytes(), filter, flags)
             })?,
+            Value::Array(inner) => Value::Array(filter_array(vm, &inner, filter, flags)?),
             other => other,
         };
         out.make_mut().insert(k.clone(), v);
     }
-    set_superglobal(vm, name, out);
-    Ok(())
+    Ok(out)
 }
 
-/// `RINIT`: snapshots the raw `INPUT_SERVER`/`INPUT_ENV` storages and
-/// applies `filter.default` to the registered superglobals (the CLI
-/// registers `$_SERVER` and `$_ENV`; GET/POST/COOKIE stay uninitialised).
+/// A request input registered by the SAPI (`IF_G(get_array)` and kin are
+/// only initialised once a variable was registered from that source).
+fn registered(vm: &Vm, name: &[u8]) -> Option<ZArray> {
+    superglobal(vm, name).filter(|a| !a.is_empty())
+}
+
+/// `RINIT`: snapshots the raw request input storages and applies
+/// `filter.default` to the registered superglobals. The SAPI registers the
+/// request variables first (php-cgi, `php -S`); under the CLI GET, POST and
+/// COOKIE are empty and their storages stay uninitialised.
 fn request_startup(vm: &mut Vm) {
     let raw = FilterInputs {
-        post: None,
-        get: None,
-        cookie: None,
+        post: registered(vm, b"_POST"),
+        get: registered(vm, b"_GET"),
+        cookie: registered(vm, b"_COOKIE"),
         env: superglobal(vm, b"_ENV"),
         server: superglobal(vm, b"_SERVER"),
     };
@@ -119,7 +134,16 @@ fn request_startup(vm: &mut Vm) {
     }
     let flags =
         php_filter::parse_default_flags_ini(vm.ini_string("filter.default_flags").as_deref());
-    for name in [b"_SERVER".as_slice(), b"_ENV"] {
+    // `$_REQUEST` is built from the filtered GET/POST/COOKIE values;
+    // filtering its raw copies gives the same strings.
+    for name in [
+        b"_GET".as_slice(),
+        b"_POST",
+        b"_COOKIE",
+        b"_REQUEST",
+        b"_SERVER",
+        b"_ENV",
+    ] {
         if filter_superglobal(vm, name, filter, flags).is_err() {
             break;
         }

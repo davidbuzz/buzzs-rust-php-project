@@ -26,6 +26,8 @@ mod extensions;
 #[path = "../getopt.rs"]
 mod getopt;
 #[allow(dead_code)]
+#[path = "../memcap.rs"]
+mod memcap;
 #[path = "../startup.rs"]
 mod startup;
 
@@ -279,8 +281,31 @@ fn parse_command_line(argv: &[Vec<u8>]) -> CommandLine {
     cl
 }
 
+php_memlimit::install_global_allocator!();
+
+/// An allocation crossed the hard ceiling above `memory_limit`: PHP's
+/// message on stderr, then exit 137 without unwinding (as the `php` binary).
+fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
+    let _ = std::io::stderr().write_all(format!("{e} in Unknown on line 0\n").as_bytes());
+    // SAFETY: `_exit` terminates the process immediately; nothing here
+    // relies on destructors or atexit handlers (PHP does the same).
+    unsafe { libc::_exit(137) }
+}
+
 fn main() {
     let argv: Vec<Vec<u8>> = std::env::args_os().map(OsStringExt::into_vec).collect();
+    // The request heap: `memory_limit` accounting and the address-space
+    // cap, as in the `php` binary.
+    memcap::limit_memory();
+    php_memlimit::set_hard_limit_handler(hard_limit);
+    php_memlimit::set_tracked(php_memlimit::tracked_from_env(
+        std::env::var_os("USE_ZEND_ALLOC")
+            .as_deref()
+            .map(std::os::unix::ffi::OsStrExt::as_bytes),
+        std::env::var_os("USE_TRACKED_ALLOC")
+            .as_deref()
+            .map(std::os::unix::ffi::OsStrExt::as_bytes),
+    ));
     // SAFETY: ignoring SIGPIPE like cgi_main.c, so writes to a closed pipe
     // fail with EPIPE instead of killing the process.
     unsafe {
