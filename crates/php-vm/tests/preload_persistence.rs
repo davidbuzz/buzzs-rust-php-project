@@ -230,7 +230,7 @@ class B extends Missing {}
 interface K { function m(); }
 class L implements K { function m($x) {} }
 class M extends A implements K { function m() { return 1; } }
-if (true) { class N extends Nope {} }
+if ($never) { class N extends Nope {} }
 ",
             r"<?php
 var_dump(class_exists('A', false), class_exists('B', false), class_exists('L', false), (new M)->m());
