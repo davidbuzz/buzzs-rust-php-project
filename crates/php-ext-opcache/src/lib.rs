@@ -18,6 +18,9 @@ use std::rc::Rc;
 thread_local! {
     static GLOBAL_CACHE: RefCell<ScriptCache<Rc<CompiledUnit>>> = RefCell::new(ScriptCache::new(10000));
     static IS_PRELOADING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `JIT_G(enabled)`: decided at startup, cleared by a run-time
+    /// `opcache.jit=disable`.
+    static JIT_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 /// The `opcache` extension.
@@ -189,6 +192,39 @@ fn check_startup_ini(vm: &mut Vm) {
         vm.ini.reset_to_default("opcache.max_wasted_percentage");
     }
     check_startup_shm(vm);
+    JIT_ENABLED.with(|c| c.set(jit_enabled_at_startup(vm)));
+}
+
+/// `JIT_G(enabled)` after start-up: `zend_jit_config` on the configured
+/// `opcache.jit`, then `accel_post_startup` turns it off without a JIT
+/// buffer or in file-cache-only mode (when opcache starts at all).
+fn jit_enabled_at_startup(vm: &Vm) -> bool {
+    let configured = JitConfig::parse(&get_ini_string(vm, "opcache.jit")).is_ok_and(|c| c.enabled);
+    if !configured || !is_opcache_enabled(vm) {
+        return configured;
+    }
+    let raw_buf = vm.ini_string("opcache.jit_buffer_size").unwrap_or_default();
+    let (buffer_size, _) = php_support::ini::parse_quantity(&raw_buf);
+    buffer_size > 0 && !vm.ini_bool("opcache.file_cache_only")
+}
+
+/// `OnUpdateJit` (`zend_jit_config`): at run time the JIT mode can change
+/// only while the JIT is enabled.
+fn on_update_jit(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
+    if vm.ini_modify_stage() == php_vm::ext::IniStage::Restore {
+        return Ok(true);
+    }
+    if !JIT_ENABLED.with(std::cell::Cell::get) {
+        vm.raise(
+            2,
+            "Cannot change opcache.jit setting at run-time (JIT is disabled)",
+        )?;
+        return Ok(false);
+    }
+    if let Ok(cfg) = JitConfig::parse(&String::from_utf8_lossy(value)) {
+        JIT_ENABLED.with(|c| c.set(cfg.enabled));
+    }
+    Ok(true)
 }
 
 /// The shared-memory set-up of `accel_post_startup` /
@@ -254,6 +290,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     };
 
     m.ini_on_modify("opcache.enable", on_update_enable);
+    m.ini_on_modify("opcache.jit", on_update_jit);
     m.on_request_startup(check_startup_ini);
     m.ini(d(
         "opcache.enable",
@@ -1733,7 +1770,11 @@ fn opcache_get_configuration(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     );
     dirs.make_mut().insert(
         ZStr::from("opcache.jit_prof_threshold"),
-        Value::Float(0.005),
+        Value::Float(
+            vm.ini_string("opcache.jit_prof_threshold")
+                .and_then(|v| std::str::from_utf8(&v).ok()?.trim().parse::<f64>().ok())
+                .unwrap_or(0.005),
+        ),
     );
     dirs.make_mut().insert(
         ZStr::from("opcache.jit_max_trace_length"),
