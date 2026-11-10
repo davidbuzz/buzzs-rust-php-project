@@ -1117,13 +1117,31 @@ impl Vm {
     fn run(&mut self, base: usize) -> VmResult<Value> {
         'frames: loop {
             // `LOAD_OPLINE()`: one lookup of the current frame, its `ip`
-            // read before the op array's count is bumped (a store the
-            // compiler cannot tell apart from the frame, so a second
-            // `self.frame()` would be a second lookup). The op array is
-            // held so that `ops` outlives a frame popped by `Return`.
+            // and its op array (`EX(func)->op_array`), borrowed without a
+            // reference count: two calls re-enter here twice each (call
+            // and return), and an `Rc` clone and drop on each was a
+            // measurable part of a call.
             let top = self.frame();
             let mut ip = top.ip;
-            let code = top.code.clone();
+            // SAFETY: the op array is owned by `Rc`s, one of them held by
+            // the current frame, so its heap block does not move when the
+            // frame does (the frame stack's vector growing, a fiber or a
+            // generator moving its frames out and back). The block is
+            // only released when the last `Rc` is dropped, which for the
+            // current frame's handle happens only when the frame is popped
+            // or recycled (`FrameStack::release_top`, a generator or fiber
+            // dropping its frames) - the instructions that do that return
+            // `Flow::Reload` or `Flow::Done`, or are the fast `DoCall` and
+            // `Return` arms, which all leave this iteration of `'frames`
+            // without reading `code`, `ops` or `op` again (their safe
+            // point gets no instruction: `safe_point_after_leave`), or
+            // throw, which returns from `run`. Within one instruction
+            // that returns `Flow::Next` the current frame stays on the
+            // stack with the same op array (nested `run`s for callbacks
+            // and destructors push and pop frames above it only), so
+            // every use of `code`, `ops` and `op` below happens while
+            // that frame's handle keeps the block alive.
+            let code: &crate::opcode::OpArray = unsafe { &*Rc::as_ptr(&top.code) };
             let ops: &[Op] = &code.ops;
             'ops: loop {
                 let at = ip;
@@ -1418,7 +1436,7 @@ impl Vm {
                                 break 'slow;
                             }
                             if Self::safe_point_due() {
-                                self.safe_point_work(op)?;
+                                self.safe_point_after_leave()?;
                             }
                             continue 'frames;
                         }
@@ -1431,8 +1449,9 @@ impl Vm {
                             if self.return_simple(*val, base, ip).is_none() {
                                 break 'slow;
                             }
+                            // `op` may be freed with the frame's op array.
                             if Self::safe_point_due() {
-                                self.safe_point_work(op)?;
+                                self.safe_point_after_leave()?;
                             }
                             continue 'frames;
                         }
@@ -2548,15 +2567,17 @@ impl Vm {
                     }
                     // The frame stack changed: the safe point runs on the
                     // new top frame, whose `ip` is its own.
+                    // The frame stack changed: `op` may be freed with a
+                    // popped frame's op array (see `LOAD_OPLINE` above).
                     Flow::Reload => {
                         if Self::safe_point_due() {
-                            self.safe_point_work(op)?;
+                            self.safe_point_after_leave()?;
                         }
                         continue 'frames;
                     }
                     Flow::Done(v) => {
                         if Self::safe_point_due() {
-                            self.safe_point_work(op)?;
+                            self.safe_point_after_leave()?;
                         }
                         return Ok(v);
                     }
@@ -2601,13 +2622,28 @@ impl Vm {
     #[cold]
     #[inline(never)]
     fn safe_point_work(&mut self, op: &Op) -> VmResult<()> {
-        let r = self.safe_point_checks(op);
+        let r = self.safe_point_checks(defers_oom(op));
         crate::interrupt::resync_safe_point();
         r
     }
 
-    /// The four checks of [`Vm::safe_point_work`].
-    fn safe_point_checks(&mut self, op: &Op) -> VmResult<()> {
+    /// [`Vm::safe_point_work`] after an instruction that pushed or popped
+    /// a frame (`Flow::Reload`, `Flow::Done`, the fast `DoCall` and
+    /// `Return`), which may have freed the instruction with its op array.
+    /// None of those instructions [defers](defers_oom) a pending OOM
+    /// (`ZEND_VM_ENTER`/`ZEND_VM_LEAVE` are interrupt points), so the
+    /// instruction itself is not needed.
+    #[cold]
+    #[inline(never)]
+    fn safe_point_after_leave(&mut self) -> VmResult<()> {
+        let r = self.safe_point_checks(false);
+        crate::interrupt::resync_safe_point();
+        r
+    }
+
+    /// The four checks of [`Vm::safe_point_work`]; `defers` is whether
+    /// the instruction just run [defers](defers_oom) a pending OOM.
+    fn safe_point_checks(&mut self, defers: bool) -> VmResult<()> {
         if object::has_pending_destructors() {
             self.run_pending_destructors()?;
         }
@@ -2617,7 +2653,7 @@ impl Vm {
         }
         // Delayed memory_limit violation (`zend_mm_delayed_error`).
         if php_memlimit::is_pending() {
-            self.poll_pending_oom(op)?;
+            self.poll_pending_oom(defers)?;
         }
         self.check_interrupt()
     }
@@ -3368,12 +3404,12 @@ fn defers_oom(op: &Op) -> bool {
 
 impl Vm {
     /// The per-instruction check of a pending `memory_limit` violation:
-    /// raises it unless `op` [defers](defers_oom) it, in which case only
+    /// raises it unless the instruction just run [defers](defers_oom) it (`defers`), in which case only
     /// the location is remembered.
     #[cold]
     #[inline(never)]
-    fn poll_pending_oom(&mut self, op: &Op) -> VmResult<()> {
-        if defers_oom(op) {
+    fn poll_pending_oom(&mut self, defers: bool) -> VmResult<()> {
+        if defers {
             if OOM_SITE.with(|s| s.borrow().is_none()) {
                 let site = self.current_location();
                 OOM_SITE.with(|s| *s.borrow_mut() = Some(site));
@@ -3528,5 +3564,47 @@ impl Vm {
         let accepts_null = crate::call::accepts_without_coercion(rt.mask, &Value::Null);
         let v = self.read(Operand::Cv(cv))?;
         Ok((!accepts_null).then_some(v))
+    }
+}
+
+#[cfg(test)]
+mod leave_tests {
+    use super::defers_oom;
+    use crate::opcode::{Op, Operand};
+
+    /// The instructions that push or pop a frame (`Flow::Reload`,
+    /// `Flow::Done`, the fast `DoCall`/`Return` arms) run their safe point
+    /// as `Vm::safe_point_after_leave`, which assumes none of them defers
+    /// a pending OOM.
+    #[test]
+    fn frame_changing_instructions_do_not_defer_oom() {
+        let ops = [
+            Op::DoCall { dst: None },
+            Op::DoCall { dst: Some(0) },
+            Op::Return {
+                val: Operand::Unused,
+            },
+            Op::Return {
+                val: Operand::Tmp(0),
+            },
+            Op::ReturnByRefValue {
+                val: Operand::Cv(0),
+            },
+            Op::GeneratorCreate,
+            Op::Yield {
+                key: None,
+                val: None,
+                dst: None,
+            },
+            Op::YieldFrom {
+                src: Operand::Tmp(0),
+                dst: None,
+            },
+        ];
+        for op in &ops {
+            assert!(!defers_oom(op), "{op:?}");
+        }
+        // Plain data instructions do defer it (`oom_after_main_script.phpt`).
+        assert!(defers_oom(&Op::Nop));
     }
 }
