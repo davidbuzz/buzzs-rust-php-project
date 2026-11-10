@@ -626,6 +626,12 @@ impl SplHost for VmHost<'_> {
         spl_state_of(obj)
     }
 
+    fn serialize_values(&mut self, values: &[Value]) -> Option<RtResult<Vec<Vec<u8>>>> {
+        let refs: Vec<&Value> = values.iter().collect();
+        let r = self.vm.serialize_values(&refs);
+        Some(self.vm_rt(r))
+    }
+
     fn unserialize_options(&mut self) -> php_runtime::serialize::UnserializeOptions {
         self.vm.unserialize_options_in_effect()
     }

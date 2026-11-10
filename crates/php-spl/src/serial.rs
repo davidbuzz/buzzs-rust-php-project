@@ -235,6 +235,9 @@ fn copy_adjusting(buf: &[u8], p: usize, delta: i64, out: &mut Vec<u8>) -> Option
 /// back-reference table (like consecutive calls with one `var_hash`), and
 /// returns each value's serialization.
 pub fn serialize_seq(host: &mut dyn SplHost, values: &[Value]) -> RtResult<Vec<Vec<u8>>> {
+    if let Some(r) = host.serialize_values(values) {
+        return r;
+    }
     let all = php_runtime::serialize::serialize(
         &Value::Array(ZArray::from_values(values.iter().cloned())),
         host,

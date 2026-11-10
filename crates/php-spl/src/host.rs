@@ -35,6 +35,15 @@ pub struct ClassInfo {
 /// [`php_runtime::RuntimeContext`]; `count()` on objects and enum checks
 /// from [`ArrayContext`].
 pub trait SplHost: ArrayContext {
+    /// `php_var_serialize()` of each of `values` with one shared `var_hash`
+    /// (`PHP_VAR_SERIALIZE_INIT` / `DESTROY` around the calls, as the legacy
+    /// `Serializable::serialize()` methods do), one payload per value.
+    /// `None` (the default) makes SPL use php-runtime's serializer.
+    fn serialize_values(&mut self, values: &[Value]) -> Option<RtResult<Vec<Vec<u8>>>> {
+        let _ = values;
+        None
+    }
+
     /// The SPL internal state of an object, created by
     /// [`crate::object::create_state`] when the object was instantiated
     /// (`None` for objects that are not instances of an SPL class).
