@@ -37,6 +37,19 @@ const HT_MAX_SIZE: u32 = 0x4000_0000;
 /// `HT_INVALID_IDX`.
 const INVALID: u32 = u32::MAX;
 
+/// The integer key string key `s` stands for in a symbol table
+/// (`ZEND_HANDLE_NUMERIC_STR`): the first byte, tested inline, rules out
+/// most strings before [`handle_numeric_str`] parses digits
+/// (`_zend_handle_numeric_str` makes the same test first).
+#[inline(always)]
+#[allow(clippy::inline_always)] // one-byte test on every string-key lookup
+fn numeric_key(s: &[u8]) -> Option<i64> {
+    match s.first() {
+        Some(c) if c.is_ascii_digit() || *c == b'-' => handle_numeric_str(s),
+        _ => None,
+    }
+}
+
 /// An array key: an integer or a (non-canonical-integer) string.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ArrayKey {
@@ -62,7 +75,7 @@ impl ArrayKey {
     #[inline]
     #[must_use]
     pub fn from_zstr(s: &ZStr) -> Self {
-        match handle_numeric_str(s.as_bytes()) {
+        match numeric_key(s.as_bytes()) {
             Some(i) => ArrayKey::Int(i),
             None => ArrayKey::Str(s.clone()),
         }
@@ -1478,6 +1491,32 @@ impl HashTable {
         };
         let idx = d.find_zstr(self.table_size, s)?;
         d.buckets.get(idx as usize)?.val.as_ref()
+    }
+
+    /// Looks up a string offset with symbol-table semantics
+    /// (`zend_symtable_find`: a canonical integer string finds the integer
+    /// key), as `get(&ArrayKey::from_zstr(s))` without building the key.
+    #[inline]
+    #[must_use]
+    pub fn get_sym_zstr(&self, s: &ZStr) -> Option<&Value> {
+        match numeric_key(s.as_bytes()) {
+            Some(i) => self.get_int(i),
+            None => self.get_zstr(s),
+        }
+    }
+
+    /// Mutable [`HashTable::get_sym_zstr`].
+    #[inline]
+    pub fn get_sym_zstr_mut(&mut self, s: &ZStr) -> Option<&mut Value> {
+        if let Some(i) = numeric_key(s.as_bytes()) {
+            return self.get_int_mut(i);
+        }
+        let ts = self.table_size;
+        let Store::Hash(d) = &mut self.store else {
+            return None;
+        };
+        let idx = d.find_zstr(ts, s)?;
+        d.buckets.get_mut(idx as usize)?.val.as_mut()
     }
 
     /// Looks up a string key with identical pointer check first (`zend_hash_find`).
@@ -2958,6 +2997,14 @@ impl ZArray {
         Rc::make_mut(&mut self.0)
     }
 
+    /// The table for writing in place when this handle is its only one
+    /// (no other handle and no weak one), so [`ZArray::make_mut`] would
+    /// neither copy nor move it; `None` when a write must separate first.
+    #[inline]
+    pub fn get_mut_unshared(&mut self) -> Option<&mut HashTable> {
+        Rc::get_mut(&mut self.0)
+    }
+
     /// Whether two handles share the same table.
     #[must_use]
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
@@ -3168,6 +3215,52 @@ impl FromIterator<Value> for ZArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sym_zstr_lookups_match_the_built_key() {
+        let mut t = HashTable::new();
+        t.insert(ArrayKey::Int(12), Value::Int(1));
+        t.insert(ArrayKey::Int(-3), Value::Int(2));
+        t.insert(ArrayKey::from_bytes(b"012"), Value::Int(3));
+        t.insert(ArrayKey::from_bytes(b"beta"), Value::Int(4));
+        for k in ["12", "-3", "012", "beta", "", "-", "-0", "7", "gamma"] {
+            let z = ZStr::from(k);
+            let want = t.get(&ArrayKey::from_zstr(&z)).cloned();
+            let got = t.get_sym_zstr(&z).cloned();
+            assert_eq!(format!("{want:?}"), format!("{got:?}"), "{k}");
+        }
+        if let Some(v) = t.get_sym_zstr_mut(&ZStr::from("12")) {
+            *v = Value::Int(10);
+        }
+        if let Some(v) = t.get_sym_zstr_mut(&ZStr::from("beta")) {
+            *v = Value::Int(40);
+        }
+        assert!(t.get_sym_zstr_mut(&ZStr::from("nope")).is_none());
+        assert!(matches!(t.get_int(12), Some(Value::Int(10))));
+        assert!(matches!(t.get_str(b"beta"), Some(Value::Int(40))));
+        // A packed table has no string keys.
+        let mut p = HashTable::new();
+        assert!(p.push(Value::Int(5)).is_ok());
+        assert!(matches!(
+            p.get_sym_zstr(&ZStr::from("0")),
+            Some(Value::Int(5))
+        ));
+        assert!(p.get_sym_zstr(&ZStr::from("x")).is_none());
+        assert!(p.get_sym_zstr_mut(&ZStr::from("x")).is_none());
+    }
+
+    #[test]
+    fn get_mut_unshared_only_for_a_sole_handle() {
+        let mut a = ZArray::from_values([Value::Int(1)]);
+        assert!(a.get_mut_unshared().is_some());
+        let b = a.clone();
+        assert!(a.get_mut_unshared().is_none());
+        drop(b);
+        let w = a.downgrade();
+        assert!(a.get_mut_unshared().is_none());
+        drop(w);
+        assert!(a.get_mut_unshared().is_some());
+    }
 
     fn keys(t: &HashTable) -> Vec<String> {
         t.keys()

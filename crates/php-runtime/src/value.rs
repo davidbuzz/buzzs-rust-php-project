@@ -138,6 +138,7 @@ impl Value {
 
     /// Returns the dereferenced value (a cheap clone of the referenced value
     /// for references, a clone of `self` otherwise).
+    #[inline]
     #[must_use]
     pub fn deref(&self) -> Value {
         match self {
