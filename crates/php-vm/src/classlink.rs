@@ -1289,8 +1289,17 @@ impl Vm {
         Ok(())
     }
 
+    /// A link-time fatal at `line` of the class being linked: like php-src
+    /// (`CG(compiled_filename)` / the class's `info.user.filename`), the file
+    /// is the declaring file, not the running frame's, which differs when
+    /// the class is bound while its includer is still executing (a relative
+    /// `require_once`).
     fn fatal_at(&mut self, msg: &str, line: u32) -> Throw {
-        let (file, _) = self.current_location();
+        let linking = LINK_STATE.with(|st| st.borrow().linking.last().map(|d| d.filename.clone()));
+        let file = match linking {
+            Some(f) if !f.is_empty() => f,
+            _ => self.current_location().0,
+        };
         self.report_fatal(msg, &file, line);
         Throw::Fatal
     }
