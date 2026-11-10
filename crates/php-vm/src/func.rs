@@ -5,7 +5,7 @@ use crate::opcode::{OpArray, ParamInfo};
 use crate::types::TypeDecl;
 use crate::vm::{Vm, VmResult};
 use php_runtime::{Obj, PhpRef, Value, ZStr};
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
 
@@ -148,11 +148,9 @@ impl UserFunction {
 /// The handler of a builtin function.
 pub type BuiltinFn = fn(&mut Vm, &mut Args) -> VmResult<Value>;
 
-/// A builtin (internal) function or method.
-#[derive(Clone)]
-pub struct Builtin {
-    /// Name as declared.
-    pub name: ZStr,
+/// The parsed part of a builtin's stub signature (`zend_internal_arg_info`).
+#[derive(Clone, Debug, Default)]
+pub struct Signature {
     /// Parameters (from the stub signature).
     pub params: Vec<ParamInfo>,
     /// Default values of optional parameters (`None` when not a simple
@@ -162,10 +160,145 @@ pub struct Builtin {
     pub required: u32,
     /// Return type.
     pub return_type: Option<TypeDecl>,
+}
+
+impl<N> From<crate::builtins::sig::Sig<N>> for Signature {
+    fn from(s: crate::builtins::sig::Sig<N>) -> Self {
+        Signature {
+            params: s.params,
+            defaults: s.defaults,
+            required: s.required,
+            return_type: s.ret,
+        }
+    }
+}
+
+/// The stub text a builtin's [`Signature`] is parsed from on first use.
+#[derive(Clone)]
+enum StubText {
+    /// Built already (no text to parse).
+    None,
+    /// A signature from the binary's read-only data.
+    Static(&'static str),
+    /// A signature built at run time.
+    Owned(Box<str>),
+}
+
+/// A builtin (internal) function or method.
+///
+/// Its [`Signature`] (parameters, defaults, required count, return type) is
+/// parsed from the stub text on first use: php-src has these tables
+/// compiled in, and parsing all ~10,000 stubs at start-up cost about 14 M
+/// instructions a process, while a script uses a handful. The signature's
+/// fields read through `Deref` (`b.params`, `b.required`, ...) as when
+/// they were plain fields.
+#[derive(Clone)]
+pub struct Builtin {
+    /// Name as declared.
+    pub name: ZStr,
     /// Flags (visibility/static for methods, `VARIADIC`, `RETURN_REF`).
     pub flags: u32,
     /// The handler.
     pub handler: BuiltinFn,
+    /// The parsed signature, once parsed.
+    sig: OnceCell<Signature>,
+    /// The stub text `sig` is parsed from.
+    text: StubText,
+}
+
+impl Builtin {
+    /// A builtin with an already built signature.
+    pub fn new(name: ZStr, sig: Signature, flags: u32, handler: BuiltinFn) -> Self {
+        Builtin {
+            name,
+            flags,
+            handler,
+            sig: OnceCell::from(sig),
+            text: StubText::None,
+        }
+    }
+
+    /// A builtin whose signature is parsed from the static stub `text` on
+    /// first use (`name` and `flags` come from the caller's scan of it).
+    pub(crate) fn from_static_stub(
+        name: ZStr,
+        text: &'static str,
+        flags: u32,
+        handler: BuiltinFn,
+    ) -> Self {
+        Builtin {
+            name,
+            flags,
+            handler,
+            sig: OnceCell::new(),
+            text: StubText::Static(text),
+        }
+    }
+
+    /// [`Self::from_static_stub`] for a stub built at run time.
+    pub(crate) fn from_stub(name: ZStr, text: &str, flags: u32, handler: BuiltinFn) -> Self {
+        Builtin {
+            name,
+            flags,
+            handler,
+            sig: OnceCell::new(),
+            text: StubText::Owned(text.into()),
+        }
+    }
+
+    /// This builtin under another name (`alias`), sharing the stub.
+    pub(crate) fn renamed(&self, name: ZStr) -> Self {
+        Builtin {
+            name,
+            ..self.clone()
+        }
+    }
+
+    /// The signature, parsed from the stub on the first call.
+    #[inline]
+    pub fn signature(&self) -> &Signature {
+        self.sig.get_or_init(|| self.parse_stub())
+    }
+
+    /// Parses the stub text. The tables are persistent in php-src
+    /// (`zend_internal_arg_info`), so parsing them mid-request does not show
+    /// in `memory_get_usage()`.
+    #[cold]
+    #[inline(never)]
+    fn parse_stub(&self) -> Signature {
+        let text: &str = match &self.text {
+            StubText::None => return Signature::default(),
+            StubText::Static(t) => t,
+            StubText::Owned(t) => t,
+        };
+        php_memlimit::persistent(|| {
+            let s = crate::builtins::sig::parse_sig_borrowed(text);
+            debug_assert_eq!(
+                s.variadic,
+                crate::builtins::sig::sig_head(text).variadic,
+                "variadic scan of {text}"
+            );
+            Signature::from(s)
+        })
+    }
+}
+
+impl std::ops::Deref for Builtin {
+    type Target = Signature;
+
+    #[inline]
+    fn deref(&self) -> &Signature {
+        self.signature()
+    }
+}
+
+impl std::ops::DerefMut for Builtin {
+    /// Parses the stub first if needed (`zend_test` edits the arginfo of
+    /// some of its functions after registration).
+    fn deref_mut(&mut self) -> &mut Signature {
+        self.signature();
+        self.sig.get_mut().expect("signature initialised above")
+    }
 }
 
 impl fmt::Debug for Builtin {

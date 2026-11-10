@@ -3431,20 +3431,13 @@ fn build_class(
                 }
                 continue;
             }
-            let b = crate::func::Builtin {
-                name: ZStr::from(s.name),
-                params: s.params,
-                defaults: s.defaults,
-                required: s.required,
-                return_type: s.ret,
-                flags: fl,
-                handler: h,
-            };
+            let name = s.name;
+            let b = crate::func::Builtin::new(ZStr::from(name), s.into(), fl, h);
             method_order.push(lc.clone());
             methods.insert(
                 lc,
                 Rc::new(Method {
-                    name: ZStr::from(s.name),
+                    name: ZStr::from(name),
                     func: Func::Builtin(Rc::new(b)),
                     flags: fl,
                     scope: weak.clone(),

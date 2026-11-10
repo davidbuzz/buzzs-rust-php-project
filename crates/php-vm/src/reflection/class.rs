@@ -379,15 +379,17 @@ fn invoke_closure(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// of an object-less closure).
 pub(crate) fn closure_invoke_method(c: &Rc<Class>) -> Rc<Method> {
     let s = crate::builtins::sig::parse_sig_borrowed("__invoke(mixed ...$args): mixed");
-    let b = crate::func::Builtin {
-        name: ZStr::from("__invoke"),
-        params: s.params,
-        defaults: s.defaults,
-        required: 0,
-        return_type: None,
-        flags: flags::PUBLIC | flags::VARIADIC,
-        handler: invoke_closure,
-    };
+    let b = crate::func::Builtin::new(
+        ZStr::from("__invoke"),
+        crate::func::Signature {
+            params: s.params,
+            defaults: s.defaults,
+            required: 0,
+            return_type: None,
+        },
+        flags::PUBLIC | flags::VARIADIC,
+        invoke_closure,
+    );
     Rc::new(Method {
         name: ZStr::from("__invoke"),
         func: Func::Builtin(Rc::new(b)),

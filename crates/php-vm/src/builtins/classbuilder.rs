@@ -1,6 +1,6 @@
 //! Construction of internal (builtin) classes.
 
-use super::sig::{parse_sig_borrowed, parse_type};
+use super::sig::{parse_type, sig_head};
 use crate::class::{
     cflags, name_map_with_capacity, AttributeInfo, Class, ClassConst, ConstExpr, InternalKind,
     NameMap, PropInfo, StaticProp,
@@ -61,8 +61,11 @@ fn abstract_stub(
 
 /// The native method of stub signature `sig` with flags `fl` (public
 /// when no visibility is given; `VARIADIC`/`RETURN_REF` from the stub).
-fn builtin_method(sig: &str, fl: u32, h: BuiltinFn) -> Builtin {
-    let s = parse_sig_borrowed(sig);
+/// Only the name and flags are scanned now; the signature is parsed on
+/// first use (from `sig`, or from `owned` when the text is not static).
+fn builtin_method(sig: &'static str, owned: Option<&str>, fl: u32, h: BuiltinFn) -> Builtin {
+    let text = owned.unwrap_or(sig);
+    let s = sig_head(text);
     let mut bfl = fl;
     if s.variadic {
         bfl |= flags::VARIADIC;
@@ -73,14 +76,10 @@ fn builtin_method(sig: &str, fl: u32, h: BuiltinFn) -> Builtin {
     if bfl & flags::VISIBILITY == 0 {
         bfl |= flags::PUBLIC;
     }
-    Builtin {
-        name: ZStr::from(s.name),
-        params: s.params,
-        defaults: s.defaults,
-        required: s.required,
-        return_type: s.ret,
-        flags: bfl,
-        handler: h,
+    let name = ZStr::from(s.name);
+    match owned {
+        Some(t) => Builtin::from_stub(name, t, bfl, h),
+        None => Builtin::from_static_stub(name, sig, bfl, h),
     }
 }
 
@@ -90,7 +89,7 @@ fn builtin_method(sig: &str, fl: u32, h: BuiltinFn) -> Builtin {
 /// `zend_function_entry` list with `func.scope = pdo_dbh_ce`). Served
 /// through [`crate::ext::ClassHooks::extra_method`].
 pub fn native_method(scope: &Rc<Class>, sig: &str, fl: u32, h: BuiltinFn) -> Rc<Method> {
-    let b = builtin_method(sig, fl, h);
+    let b = builtin_method("", Some(sig), fl, h);
     Rc::new(Method {
         name: b.name.clone(),
         flags: b.flags,
@@ -471,7 +470,7 @@ impl ClassBuilder {
             let mut methods: NameMap<Rc<Method>> = name_map_with_capacity(nmethods);
             let mut order: Vec<ZStr> = Vec::with_capacity(nmethods);
             for (sig, f, h) in &self.methods {
-                let b = builtin_method(sig, *f, *h);
+                let b = builtin_method(*sig, None, *f, *h);
                 let bfl = b.flags;
                 let lc = b.name.to_ascii_lowercase();
                 let proto = parent

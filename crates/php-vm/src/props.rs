@@ -2589,19 +2589,21 @@ impl Vm {
                     "get(): mixed"
                 };
                 let s = crate::builtins::sig::parse_sig_borrowed(sig);
-                let b = crate::func::Builtin {
-                    name: ZStr::from(format!("${prop}::{}", if set { "set" } else { "get" })),
-                    params: s.params,
-                    defaults: s.defaults,
-                    required: s.required,
-                    return_type: None,
-                    flags: 0,
-                    handler: if set {
+                let b = crate::func::Builtin::new(
+                    ZStr::from(format!("${prop}::{}", if set { "set" } else { "get" })),
+                    crate::func::Signature {
+                        params: s.params,
+                        defaults: s.defaults,
+                        required: s.required,
+                        return_type: None,
+                    },
+                    0,
+                    if set {
                         parent_backing_set
                     } else {
                         parent_backing_get
                     },
-                };
+                );
                 // `zend_get_property_hook_trampoline`: scoped to the
                 // declaring class of the parent property.
                 let decl = self.class_by_name(&pi.class).unwrap_or(parent);

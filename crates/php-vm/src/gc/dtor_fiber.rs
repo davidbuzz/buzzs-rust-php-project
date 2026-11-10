@@ -113,7 +113,11 @@ impl Vm {
             });
             QUEUE.with(|q| q.borrow_mut().owner = generation);
             // The function is reachable only through this fiber.
-            let lc = crate::builtins::reg(self, &format!("{FN_NAME}(): void"), gc_destructor_fiber);
+            let lc = crate::builtins::reg_dynamic(
+                self,
+                &format!("{FN_NAME}(): void"),
+                gc_destructor_fiber,
+            );
             let fiber = self.new_object_with_args(&cls, vec![Value::string(FN_NAME)]);
             self.functions.remove(&lc);
             let fiber = fiber?;

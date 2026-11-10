@@ -102,8 +102,8 @@ impl Vm {
         // fills (2 700 internal constants rehashed eleven times before), and
         // the few user-defined and deprecated names are removed afterwards
         // instead of being looked up once per constant.
-        let mut table: std::collections::HashMap<ZStr, Value> =
-            std::collections::HashMap::with_capacity(self.constants.len());
+        let mut table: crate::class::NameMap<Value> =
+            crate::class::name_map_with_capacity(self.constants.len());
         table.extend(
             self.constants
                 .iter()

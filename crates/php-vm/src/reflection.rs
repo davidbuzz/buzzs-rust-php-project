@@ -135,28 +135,30 @@ impl FnRef {
     /// method, with `zend_call_trampoline_arginfo` (`mixed ...$arguments`).
     pub fn of_closure(c: &Obj, d: &crate::closure::ClosureData) -> Self {
         let func = match &d.magic_name {
-            Some(name) => Func::Builtin(Rc::new(Builtin {
-                name: name.clone(),
-                params: vec![ParamInfo {
-                    name: ZStr::from("arguments"),
-                    by_ref: false,
-                    variadic: true,
-                    ty: Some(TypeDecl::mixed()),
-                    has_default: false,
-                    default_text: None,
-                    promote: 0,
-                    sensitive: false,
-                    default_expr: None,
-                    attributes: Vec::new(),
-                }],
-                defaults: Vec::new(),
-                required: 0,
-                return_type: None,
-                flags: flags::PUBLIC
+            Some(name) => Func::Builtin(Rc::new(Builtin::new(
+                name.clone(),
+                crate::func::Signature {
+                    params: vec![ParamInfo {
+                        name: ZStr::from("arguments"),
+                        by_ref: false,
+                        variadic: true,
+                        ty: Some(TypeDecl::mixed()),
+                        has_default: false,
+                        default_text: None,
+                        promote: 0,
+                        sensitive: false,
+                        default_expr: None,
+                        attributes: Vec::new(),
+                    }],
+                    defaults: Vec::new(),
+                    required: 0,
+                    return_type: None,
+                },
+                flags::PUBLIC
                     | flags::VARIADIC
                     | (d.func.flags() & (flags::STATIC | flags::RETURN_REF | flags::DEPRECATED)),
-                handler: reflected_trampoline,
-            })),
+                reflected_trampoline,
+            ))),
             None => d.func.clone(),
         };
         FnRef {

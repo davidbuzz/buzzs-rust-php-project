@@ -39,8 +39,17 @@ pub struct ExtState {
 }
 
 /// Registers a builtin function from a stub signature.
-pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
-    let (lc, is_new) = insert_builtin(vm, sig, f);
+pub(crate) fn reg(vm: &mut Vm, sig: &'static str, f: BuiltinFn) -> ZStr {
+    let (lc, is_new) = insert_builtin(vm, sig, None, f);
+    if is_new {
+        info::note_new_function(&lc);
+    }
+    lc
+}
+
+/// [`reg`] for a signature built at run time.
+pub(crate) fn reg_dynamic(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
+    let (lc, is_new) = insert_builtin(vm, sig, Some(sig), f);
     if is_new {
         info::note_new_function(&lc);
     }
@@ -49,16 +58,41 @@ pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
 
 /// [`reg`] for the extension API: attributes the function to `module` in
 /// the same registry update that records the new key for Reflection.
-pub(crate) fn reg_module(vm: &mut Vm, sig: &str, f: BuiltinFn, module: &'static str) -> ZStr {
-    let (lc, is_new) = insert_builtin(vm, sig, f);
+pub(crate) fn reg_module(
+    vm: &mut Vm,
+    sig: &'static str,
+    f: BuiltinFn,
+    module: &'static str,
+) -> ZStr {
+    let (lc, is_new) = insert_builtin(vm, sig, None, f);
+    info::note_function(&lc, module, is_new);
+    lc
+}
+
+/// [`reg_module`] for a signature built at run time.
+pub(crate) fn reg_module_dynamic(
+    vm: &mut Vm,
+    sig: &str,
+    f: BuiltinFn,
+    module: &'static str,
+) -> ZStr {
+    let (lc, is_new) = insert_builtin(vm, sig, Some(sig), f);
     info::note_function(&lc, module, is_new);
     lc
 }
 
 /// Inserts the builtin function of stub signature `sig`; returns its
-/// lower-case name (the table key) and whether the name was new.
-fn insert_builtin(vm: &mut Vm, sig: &str, f: BuiltinFn) -> (ZStr, bool) {
-    let s = sig::parse_sig_borrowed(sig);
+/// lower-case name (the table key) and whether the name was new. Only the
+/// name and flags are scanned now; the rest of the signature is parsed on
+/// first use (from `sig`, or from `owned` when the text is not static).
+fn insert_builtin(
+    vm: &mut Vm,
+    sig: &'static str,
+    owned: Option<&str>,
+    f: BuiltinFn,
+) -> (ZStr, bool) {
+    let text = owned.unwrap_or(sig);
+    let s = sig::sig_head(text);
     let mut fl = 0;
     if s.variadic {
         fl |= flags::VARIADIC;
@@ -71,14 +105,9 @@ fn insert_builtin(vm: &mut Vm, sig: &str, f: BuiltinFn) -> (ZStr, bool) {
     // names do (`ClassBuilder::register`).
     let lc = name.to_ascii_lowercase();
     fl |= crate::special::frameless_flags(lc.as_bytes());
-    let b = Builtin {
-        name,
-        params: s.params,
-        defaults: s.defaults,
-        required: s.required,
-        return_type: s.ret,
-        flags: fl,
-        handler: f,
+    let b = match owned {
+        Some(t) => Builtin::from_stub(name, t, fl, f),
+        None => Builtin::from_static_stub(name, sig, fl, f),
     };
     let is_new = vm
         .functions
@@ -90,15 +119,7 @@ fn insert_builtin(vm: &mut Vm, sig: &str, f: BuiltinFn) -> (ZStr, bool) {
 /// Registers an alias for an existing function.
 pub(crate) fn alias(vm: &mut Vm, alias: &str, target: &str) {
     if let Some(Func::Builtin(b)) = vm.functions.get(&ZStr::from(target)).cloned() {
-        let nb = Builtin {
-            name: ZStr::from(alias),
-            params: b.params.clone(),
-            defaults: b.defaults.clone(),
-            required: b.required,
-            return_type: b.return_type.clone(),
-            flags: b.flags,
-            handler: b.handler,
-        };
+        let nb = b.renamed(ZStr::from(alias));
         let lc = ZStr::from(alias.to_ascii_lowercase());
         if vm
             .functions
