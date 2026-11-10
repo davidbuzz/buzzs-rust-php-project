@@ -271,7 +271,8 @@ fn resolver<'a>(
             }
         }
     }
-    let mut classes = HashMap::new();
+    let mut classes: HashMap<Vec<u8>, _> = HashMap::new();
+    let mut ambiguous = Vec::new();
     for c in unit.decls.classes.borrow().iter() {
         let mut methods = HashMap::new();
         for m in &c.methods {
@@ -279,16 +280,22 @@ fn resolver<'a>(
                 methods.insert(m.name.as_bytes().to_ascii_lowercase(), pos);
             }
         }
-        classes
-            .entry(c.name.as_bytes().to_ascii_lowercase())
-            .or_insert_with(|| (c.clone(), methods));
+        let lc = c.name.as_bytes().to_ascii_lowercase();
+        if classes.contains_key(&lc) {
+            ambiguous.push(lc.clone());
+        }
+        classes.entry(lc).or_insert_with(|| (c.clone(), methods));
     }
+    // As the after-optimizer dump builds it (`dump::dump_unit`).
     Resolver {
         table: functions,
         functions: fn_index,
         classes,
         internal,
         level,
+        bound: super::lower::early_bound_classes(&unit.main),
+        ambiguous,
+        funcs: entries.iter().map(|e| e.func.clone()).collect(),
     }
 }
 
