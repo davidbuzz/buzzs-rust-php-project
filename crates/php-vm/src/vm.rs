@@ -937,7 +937,7 @@ fn clear_arg_buffer(buffer: &mut Vec<Option<Value>>) {
         *buffer = Vec::new();
         return;
     }
-    for arg in buffer.iter_mut() {
+    for arg in &mut *buffer {
         if let Some(v) = arg.take() {
             release_slot(v);
         }
