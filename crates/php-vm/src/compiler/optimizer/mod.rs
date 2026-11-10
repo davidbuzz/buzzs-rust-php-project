@@ -594,6 +594,38 @@ mod tests {
         compile(&program, Rc::from(src.as_bytes()), opts).expect("compile")
     }
 
+    /// Pass 13 keeps an assignment whose variable is only read through an
+    /// opcode it has no explicit rule for (here the argument of a call):
+    /// `$c = $a = $b; var_dump($c);` once lost `$c` (opcache jit/assign_020).
+    #[test]
+    fn unused_variable_pass_keeps_variables_read_by_other_opcodes() {
+        let unit = compile_src(
+            "<?php function foo() { $c = array(); $a = 1; $b = 2; $c = $a = $b; var_dump($c); }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let funcs = unit.main.code.decls.functions.borrow();
+        let foo = funcs
+            .iter()
+            .find(|f| f.name.as_bytes() == b"foo")
+            .expect("foo");
+        let code = &foo.code;
+        let c = code
+            .cv_names
+            .iter()
+            .position(|n| n.as_bytes() == b"c")
+            .and_then(|i| u32::try_from(i).ok())
+            .expect("$c is a CV");
+        let writes_c = code.ops.iter().any(|op| match op {
+            Op::AssignCv { cv, .. } => *cv == c,
+            Op::Assign { place, .. } => code
+                .places
+                .get(*place as usize)
+                .is_some_and(|p| p.base == PlaceBase::Cv(c) && p.segs.is_empty()),
+            _ => false,
+        });
+        assert!(writes_c, "the assignment to $c was removed: {:?}", code.ops);
+    }
+
     #[test]
     fn test_constant_folding() {
         let unit = compile_src("<?php echo 1 + 2 * 3;", DEFAULT_OPTIMIZATION_LEVEL);

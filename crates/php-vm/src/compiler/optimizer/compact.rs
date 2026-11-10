@@ -567,10 +567,24 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
         }
     }
 
+    // The places that plain assignments (`$cv = v`) write. The compiler makes
+    // one place per use site, so a bare-CV place that no plain assignment owns
+    // is used some other way (passed to a call, returned, echoed, iterated...)
+    // and counts as a read: only writes are listed, so an opcode missing from
+    // the list below can never make a live variable look unused.
+    let plain_assign_places: std::collections::HashSet<u32> = op_array
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Assign { place, .. } => Some(*place),
+            _ => None,
+        })
+        .collect();
+
     // Count reads from places
     for (pid, place) in op_array.places.iter().enumerate() {
         let pid_u32 = pid as u32;
-        let mut used_in_non_plain_assign = false;
+        let mut used_in_non_plain_assign = !plain_assign_places.contains(&pid_u32);
 
         if let PlaceBase::Cv(cv) = place.base {
             if !place.segs.is_empty() {
