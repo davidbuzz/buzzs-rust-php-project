@@ -68,6 +68,7 @@ pub(crate) fn decl_type(t: Option<&crate::types::TypeDecl>) -> u32 {
         (m::CALLABLE, ty::STRING | ty::ARRAY | ty::OBJECT),
         (m::ITERABLE, ty::ARRAY | ty::OBJECT),
         (m::STATIC, ty::OBJECT),
+        (m::VOID, ty::NULL),
     ] {
         if t.mask & bit != 0 {
             r |= out;
@@ -422,7 +423,7 @@ fn result_type(
             t
         }
         "FRAMELESS_ICALL_1" | "FRAMELESS_ICALL_2" | "FRAMELESS_ICALL_3" | "DO_ICALL"
-        | "DO_UCALL" | "DO_FCALL" | "DO_FCALL_BY_NAME" => ty::ANY,
+        | "DO_UCALL" | "DO_FCALL" | "DO_FCALL_BY_NAME" => l.ret.unwrap_or(ty::ANY),
         "FETCH_DIM_W"
         | "FETCH_DIM_RW"
         | "FETCH_OBJ_W"

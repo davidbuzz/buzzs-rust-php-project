@@ -266,15 +266,15 @@ impl Vm {
                     .unwrap_or(0);
             let functions = &self.functions;
             let table = |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of);
-            let flags = |lc: &[u8]| match functions.get(lc) {
-                Some(crate::func::Func::Builtin(b)) => b.flags,
-                _ => 0,
+            let internal = |lc: &[u8]| match functions.get(lc) {
+                Some(crate::func::Func::Builtin(b)) => (b.flags, b.return_type.clone()),
+                _ => (0, None),
             };
             let end = compiler::optimizer::dump::main_line_end(&src, halt_compiler_offset);
             let out = compiler::optimizer::dump::dump_unit(
                 &unit,
                 &table,
-                &flags,
+                &internal,
                 level,
                 end,
                 "after optimizer",

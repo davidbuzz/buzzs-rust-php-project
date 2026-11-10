@@ -18,6 +18,7 @@ use crate::opcode::{
     ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, ForeachKind, IncDecKind, IncludeKind, Op,
     OpArray, Operand, Place, PlaceBase, Seg, UnKind,
 };
+use crate::types::TypeDecl;
 use php_runtime::{BinaryOp, Value, ZStr};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -32,6 +33,8 @@ pub(crate) struct Known {
     pub user: Option<usize>,
     /// `ZEND_ACC_DEPRECATED` / `ZEND_ACC_NODISCARD` ([`crate::func::flags`]).
     pub flags: u32,
+    /// The type bits of the result.
+    pub ret: u32,
 }
 
 /// What the lowering knows about the script being dumped.
@@ -45,8 +48,9 @@ pub(crate) struct Resolver<'a> {
     /// The script's top-level classes by lower-case name, with the dumped
     /// index of each method by lower-case method name.
     pub classes: HashMap<Vec<u8>, (Rc<ClassDecl>, HashMap<Vec<u8>, usize>)>,
-    /// The flags of an internal function by lower-case name.
-    pub internal_flags: &'a dyn Fn(&[u8]) -> u32,
+    /// The flags and return type of an internal function by lower-case
+    /// name.
+    pub internal: &'a dyn Fn(&[u8]) -> (u32, Option<TypeDecl>),
     /// `opcache.optimization_level`.
     pub level: u32,
 }
@@ -60,6 +64,16 @@ impl Resolver<'_> {
         )
     }
 
+    /// The result type of a call of user function `f`.
+    fn user_ret(f: &UserFunction) -> u32 {
+        let t = super::passes::decl_type(f.return_type.as_ref());
+        if f.flags & crate::func::flags::RETURN_REF != 0 || f.is_generator() {
+            super::passes::ty::ANY | super::passes::ty::REF
+        } else {
+            t
+        }
+    }
+
     /// A function called by lower-case name on line `line`: the script's
     /// functions are found by `zend_compile_call` once declared, and by
     /// pass 4 (`optimize_func_calls`) anywhere.
@@ -70,18 +84,20 @@ impl Resolver<'_> {
                     info: Self::user_info(f),
                     user: Some(*idx),
                     flags: f.flags,
+                    ret: Self::user_ret(f),
                 });
             }
             return None;
         }
-        self.table
-            .find(lc)
-            .filter(|i| i.internal)
-            .map(|info| Known {
+        self.table.find(lc).filter(|i| i.internal).map(|info| {
+            let (flags, ret) = (self.internal)(lc);
+            Known {
                 info,
                 user: None,
-                flags: (self.internal_flags)(lc),
-            })
+                flags,
+                ret: super::passes::decl_type(ret.as_ref()),
+            }
+        })
     }
 
     /// A method of a script class.
@@ -96,6 +112,7 @@ impl Resolver<'_> {
                 info: Self::user_info(&m.func),
                 user: idx.get(method_lc).copied(),
                 flags: m.func.flags,
+                ret: Self::user_ret(&m.func),
             },
             m.flags,
             decl.flags,
@@ -1926,6 +1943,7 @@ impl Lower<'_> {
             let b = args.next().unwrap_or(Z::Unused);
             let mut l = ZLine::new(op).ot(dst).a(a).b(b);
             l.suffix = format!("({})", String::from_utf8_lossy(&name));
+            l.ret = call.known.map(|k| k.ret);
             self.push(l);
             if n == 3 {
                 let c = args.next().unwrap_or(Z::Unused);
@@ -1954,7 +1972,11 @@ impl Lower<'_> {
             (CallKind::Method | CallKind::Static, Some(k)) if k.user.is_some() => "DO_UCALL",
             _ => "DO_FCALL",
         };
-        self.push(ZLine::new(op).ot(dst));
+        let mut l = ZLine::new(op).ot(dst);
+        if call.kind != CallKind::New {
+            l.ret = call.known.map(|k| k.ret);
+        }
+        self.push(l);
     }
 
     fn lower_fe_fetch(&mut self, i: usize, iter: u32, end: u32, val: u32, key: Option<u32>) {

@@ -30,7 +30,7 @@ fn dump(src: &str) -> String {
         })
     };
     let end = main_line_end(src.as_bytes(), None);
-    let flags = |_: &[u8]| 0;
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
     let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
     String::from_utf8(dump_unit(
         &unit,

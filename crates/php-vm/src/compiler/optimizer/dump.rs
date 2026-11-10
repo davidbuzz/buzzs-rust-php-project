@@ -474,15 +474,15 @@ fn write_entry(out: &mut Vec<u8>, e: &Entry, d: &Done, done: &[Done], msg: &str,
 
 /// Dumps every op array of `unit` as `zend_dump_op_array` with the
 /// message `msg` (`"after optimizer"`). `functions` is the function table
-/// the unit was compiled against and `internal_flags` gives the
-/// [`flags`] of its internal functions; `level` is
+/// the unit was compiled against and `internal` gives the [`flags`] and
+/// return type of its internal functions; `level` is
 /// `opcache.optimization_level`; `main_line_end` the last line of the
 /// file (`op_array->line_end` of the main code).
 #[must_use]
 pub fn dump_unit(
     unit: &CompiledUnit,
     functions: &dyn FunctionTable,
-    internal_flags: &dyn Fn(&[u8]) -> u32,
+    internal: &dyn Fn(&[u8]) -> (u32, Option<crate::types::TypeDecl>),
     level: u32,
     main_line_end: u32,
     msg: &str,
@@ -515,7 +515,7 @@ pub fn dump_unit(
         table: functions,
         functions: fn_index,
         classes,
-        internal_flags,
+        internal,
         level,
     };
     let done: Vec<Done> = entries.iter().map(|e| finish(e, &res)).collect();

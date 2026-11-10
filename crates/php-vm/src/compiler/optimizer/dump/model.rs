@@ -97,6 +97,9 @@ pub(crate) struct ZLine {
     pub free_on_return: bool,
     /// `INIT_FCALL`'s stack size, filled in when printing.
     pub stack: Option<StackOf>,
+    /// The type bits of a call's result when the callee is known
+    /// (`zend_func_info` / its declared return type).
+    pub ret: Option<u32>,
 }
 
 impl ZLine {
@@ -116,6 +119,7 @@ impl ZLine {
             ext_jmp: None,
             free_on_return: false,
             stack: None,
+            ret: None,
         }
     }
 
