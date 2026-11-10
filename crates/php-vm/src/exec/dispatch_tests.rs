@@ -661,3 +661,61 @@ bool(true)
 d11 "#
     );
 }
+
+/// Hot ops whose fast path declines inside a loop of hot ops (an
+/// undefined variable, a numeric string, a concatenation, an int overflow)
+/// run as their generic op, with the warning on their own line.
+#[test]
+fn hot_loop_declined_ops_warn_on_their_line() {
+    let src = r#"<?php
+for ($i = 0; $i < 2; $i++) {
+    $a = $i + 1;
+    $b = $undef + $a;
+    $c = $a * 2;
+}
+var_dump($b, $c);
+function f() {
+    $s = "x";
+    for ($i = 0; $i < 3; $i++) {
+        $j = $i + 1;
+        $s = $s . $j;
+        $k = $j > 1 ? $s : null;
+    }
+    $n = "5 apples";
+    $m = 0;
+    for ($i = 0; $i < 2; $i++) { $m = $m + 1; $m = $m + $n; }
+    return [$s, $k, $m];
+}
+var_dump(f());
+$x = 1;
+while ($x < 1000) { $x = $x * 7; $y = $x % 3; if ($y == 1) { $x++; } }
+var_dump($x);
+$z = PHP_INT_MAX - 1;
+for ($i = 0; $i < 3; $i++) { $z = $z + 1; }
+var_dump($z);
+"#;
+    assert_eq!(
+        run(src),
+        r#"
+Warning: Undefined variable $undef in t.php on line 4
+
+Warning: Undefined variable $undef in t.php on line 4
+int(2)
+int(4)
+
+Warning: A non-numeric value encountered in t.php on line 17
+
+Warning: A non-numeric value encountered in t.php on line 17
+array(3) {
+  [0]=>
+  string(4) "x123"
+  [1]=>
+  string(4) "x123"
+  [2]=>
+  int(12)
+}
+int(2744)
+float(9.223372036854776E+18)
+"#
+    );
+}
