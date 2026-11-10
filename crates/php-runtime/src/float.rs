@@ -8,9 +8,11 @@
 //!   correctly rounded (half-even on exact ties) to `n` significant digits with
 //!   trailing zeros removed.
 //!
-//! Both are obtained here from Rust's float formatting, which implements the
-//! same correctly rounded algorithms (Grisu/Ryu-style shortest and exact
-//! Dragon4-style fixed precision).
+//! Mode 0 digits come from a Ryu digit generator ([`ryu_shortest`], the
+//! closest shortest candidate with ties to even, like `zend_dtoa`), which
+//! yields an integer and an exponent without text formatting. Mode 2
+//! digits are rounded from those when that is provably exact, and come
+//! from Rust's correctly rounded fixed-precision formatter otherwise.
 //!
 //! Like php-src (`zend_gcvt` writes into a caller's stack buffer, then
 //! `zend_double_to_str` makes one exactly sized `zend_string`), the common
@@ -21,6 +23,10 @@
 
 use crate::string::ZStr;
 use std::fmt::{self, Write as _};
+
+mod ryu_tables;
+
+use ryu_tables::{POW5_INV_SPLIT, POW5_SPLIT};
 
 /// Decimal digits of a float as produced by `zend_dtoa`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +124,13 @@ impl<const N: usize> GcvtOut for StackBuf<N> {
             self.len += 1;
         }
     }
+    fn put_all(&mut self, bytes: &[u8]) {
+        debug_assert!(self.len + bytes.len() <= N, "float output buffer overflow");
+        let end = (self.len + bytes.len()).min(N);
+        let take = end - self.len;
+        self.buf[self.len..end].copy_from_slice(&bytes[..take]);
+        self.len = end;
+    }
 }
 
 /// Parses Rust's `{:e}` output (`d.ddde±x`) into significant digits with
@@ -167,6 +180,221 @@ fn parse_exp_format(s: &[u8]) -> Option<SmallDigits> {
     Some(out)
 }
 
+/// Shortest round-trip decimal digits of a finite, positive, non-zero
+/// float (Ryu, Ulf Adams 2018): `(output, exp10)` with the value's
+/// shortest representation `output × 10^exp10`. The candidate closest to
+/// the value wins, ties resolved to an even last digit; the interval
+/// bounds count as round-tripping when the mantissa is even, as in
+/// `zend_dtoa` mode 0.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::similar_names,
+    clippy::many_single_char_names,
+    clippy::too_many_lines
+)]
+fn ryu_shortest(abs: f64) -> (u64, i32) {
+    const MANTISSA_BITS: u32 = 52;
+    const BIAS: i32 = 1023;
+    const POW5_INV_BITCOUNT: i32 = 125;
+    const POW5_BITCOUNT: i32 = 125;
+
+    /// `ceil(log2(5^e))` (1 for `e == 0`), for `0 <= e <= 3528`.
+    fn pow5bits(e: i32) -> i32 {
+        (((e as u32) * 1_217_359) >> 19) as i32 + 1
+    }
+    /// `floor(log10(2^e))` for `0 <= e <= 1650`.
+    fn log10_pow2(e: i32) -> i32 {
+        (((e as u32) * 78_913) >> 18) as i32
+    }
+    /// `floor(log10(5^e))` for `0 <= e <= 2620`.
+    fn log10_pow5(e: i32) -> i32 {
+        (((e as u32) * 732_923) >> 20) as i32
+    }
+    fn pow5_factor(mut v: u64) -> u32 {
+        let mut count = 0;
+        while v % 5 == 0 {
+            v /= 5;
+            count += 1;
+        }
+        count
+    }
+    fn multiple_of_pow5(v: u64, p: i32) -> bool {
+        i64::from(pow5_factor(v)) >= i64::from(p)
+    }
+    /// `(m × mul) >> j` for a 128-bit `mul` and `j >= 64`.
+    fn mul_shift(m: u64, mul: (u64, u64), j: i32) -> u64 {
+        let b0 = u128::from(m) * u128::from(mul.0);
+        let b2 = u128::from(m) * u128::from(mul.1);
+        (((b0 >> 64) + b2) >> (j - 64)) as u64
+    }
+
+    let bits = abs.to_bits();
+    let ieee_mantissa = bits & ((1u64 << MANTISSA_BITS) - 1);
+    let ieee_exponent = ((bits >> MANTISSA_BITS) & 0x7ff) as i32;
+    let (e2, m2) = if ieee_exponent == 0 {
+        (1 - BIAS - MANTISSA_BITS as i32 - 2, ieee_mantissa)
+    } else {
+        (
+            ieee_exponent - BIAS - MANTISSA_BITS as i32 - 2,
+            (1u64 << MANTISSA_BITS) | ieee_mantissa,
+        )
+    };
+    let accept_bounds = m2 & 1 == 0;
+    // The value and its interval's bounds, scaled by 4: [mm, mp].
+    let mv = 4 * m2;
+    let mm_shift = u64::from(ieee_mantissa != 0 || ieee_exponent <= 1);
+    let mp_in = mv + 2;
+    let mm_in = mv - 1 - mm_shift;
+
+    let mut vm_trailing_zeros = false;
+    let mut vr_trailing_zeros = false;
+    let (e10, mut vr, mut vp, mut vm);
+    if e2 >= 0 {
+        let q = log10_pow2(e2) - i32::from(e2 > 3);
+        e10 = q;
+        let k = POW5_INV_BITCOUNT + pow5bits(q) - 1;
+        let i = -e2 + q + k;
+        let mul = POW5_INV_SPLIT[q as usize];
+        vr = mul_shift(mv, mul, i);
+        vp = mul_shift(mp_in, mul, i);
+        vm = mul_shift(mm_in, mul, i);
+        if q <= 21 {
+            if mv % 5 == 0 {
+                vr_trailing_zeros = multiple_of_pow5(mv, q);
+            } else if accept_bounds {
+                vm_trailing_zeros = multiple_of_pow5(mm_in, q);
+            } else {
+                vp -= u64::from(multiple_of_pow5(mp_in, q));
+            }
+        }
+    } else {
+        let q = log10_pow5(-e2) - i32::from(-e2 > 1);
+        e10 = q + e2;
+        let i = -e2 - q;
+        let k = pow5bits(i) - POW5_BITCOUNT;
+        let j = q - k;
+        let mul = POW5_SPLIT[i as usize];
+        vr = mul_shift(mv, mul, j);
+        vp = mul_shift(mp_in, mul, j);
+        vm = mul_shift(mm_in, mul, j);
+        if q <= 1 {
+            // mv has at least q trailing zero bits.
+            vr_trailing_zeros = true;
+            if accept_bounds {
+                vm_trailing_zeros = mm_shift == 1;
+            } else {
+                vp -= 1;
+            }
+        } else if q < 63 {
+            vr_trailing_zeros = mv & ((1u64 << q) - 1) == 0;
+        }
+    }
+
+    let mut removed = 0i32;
+    let output = if vm_trailing_zeros || vr_trailing_zeros {
+        let mut last_removed = 0u64;
+        while vp / 10 > vm / 10 {
+            vm_trailing_zeros &= vm % 10 == 0;
+            vr_trailing_zeros &= last_removed == 0;
+            last_removed = vr % 10;
+            vr /= 10;
+            vp /= 10;
+            vm /= 10;
+            removed += 1;
+        }
+        if vm_trailing_zeros {
+            while vm % 10 == 0 {
+                vr_trailing_zeros &= last_removed == 0;
+                last_removed = vr % 10;
+                vr /= 10;
+                vm /= 10;
+                removed += 1;
+            }
+        }
+        if vr_trailing_zeros && last_removed == 5 && vr % 2 == 0 {
+            // Exactly halfway: round to even.
+            last_removed = 4;
+        }
+        vr + u64::from((vr == vm && (!accept_bounds || !vm_trailing_zeros)) || last_removed >= 5)
+    } else {
+        let mut round_up = false;
+        if vp / 100 > vm / 100 {
+            round_up = vr % 100 >= 50;
+            vr /= 100;
+            vp /= 100;
+            vm /= 100;
+            removed += 2;
+        }
+        while vp / 10 > vm / 10 {
+            round_up = vr % 10 >= 5;
+            vr /= 10;
+            vp /= 10;
+            vm /= 10;
+            removed += 1;
+        }
+        vr + u64::from(vr == vm || round_up)
+    };
+    (output, e10 + removed)
+}
+
+/// Ten to the power `k` for `k <= 19`.
+const POW10: [u64; 20] = {
+    let mut t = [1u64; 20];
+    let mut i = 1;
+    while i < 20 {
+        t[i] = t[i - 1] * 10;
+        i += 1;
+    }
+    t
+};
+
+/// `"00"` to `"99"`: two decimal digits per lookup.
+const DIGIT_PAIRS: &[u8; 200] = b"\
+0001020304050607080910111213141516171819\
+2021222324252627282930313233343536373839\
+4041424344454647484950515253545556575859\
+6061626364656667686970717273747576777879\
+8081828384858687888990919293949596979899";
+
+/// The shortest round-trip digits of a finite, positive, non-zero float
+/// (`zend_dtoa` mode 0), trailing zeros removed.
+fn shortest_digits(abs: f64) -> SmallDigits {
+    let (mut output, mut exp) = ryu_shortest(abs);
+    while output >= 10 && output % 10 == 0 {
+        output /= 10;
+        exp += 1;
+    }
+    // Ryu's output has at most 17 digits.
+    let len = POW10[1..18].iter().take_while(|&&p| output >= p).count() + 1;
+    let mut out = SmallDigits {
+        buf: [0; 24],
+        len,
+        // `len <= 17`: the cast cannot truncate.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        decpt: len as i32 + exp,
+    };
+    let mut pos = len;
+    while output >= 100 {
+        // `output % 100 < 100`: the cast cannot truncate.
+        #[allow(clippy::cast_possible_truncation)]
+        let pair = 2 * (output % 100) as usize;
+        output /= 100;
+        out.buf[pos - 2..pos].copy_from_slice(&DIGIT_PAIRS[pair..pair + 2]);
+        pos -= 2;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let rest = output as u8;
+    if rest >= 10 {
+        let pair = 2 * usize::from(rest);
+        out.buf[pos - 2..pos].copy_from_slice(&DIGIT_PAIRS[pair..pair + 2]);
+    } else {
+        out.buf[pos - 1] = b'0' + rest;
+    }
+    out
+}
+
 /// `zend_dtoa` digits of a finite, positive, non-zero `abs` without heap
 /// allocation: the shortest round-trip digits (`shortest`, mode 0) or the
 /// value correctly rounded to `max(ndigits, 1)` digits (mode 2). `None`
@@ -181,6 +409,9 @@ fn parse_exp_format(s: &[u8]) -> Option<SmallDigits> {
 ///   the 15th digit (>= 5e-16 relative), so they are the unique nearest
 ///   `n`-digit number. This avoids the exact formatter's bignum fallback
 ///   for short values such as `1.5` at `precision=14`.
+/// * otherwise (normal value, `n <= 15`) the shortest digits rounded to
+///   `n` digits are the answer unless they lie too close to a half (see
+///   [`round_shortest`]); only then does the exact formatter run.
 fn dtoa_small(abs: f64, shortest: bool, ndigits: i32) -> Option<SmallDigits> {
     debug_assert!(abs.is_finite() && abs > 0.0);
     let n = if shortest { 17 } else { ndigits.max(1) };
@@ -215,47 +446,51 @@ fn dtoa_small(abs: f64, shortest: bool, ndigits: i32) -> Option<SmallDigits> {
             return Some(out);
         }
     }
-    let mut w = StackBuf::<32>::new();
-    if shortest || (n <= 15 && abs >= f64::MIN_POSITIVE) {
-        write!(w, "{abs:e}").ok()?;
-        let d = parse_exp_format(w.as_bytes())?;
-        if shortest || d.len <= max_count {
+    if shortest {
+        return Some(shortest_digits(abs));
+    }
+    if n <= 15 && abs >= f64::MIN_POSITIVE {
+        let d = shortest_digits(abs);
+        if d.len <= max_count {
             return Some(d);
-        }
-        if let Some(r) = round_shortest(&d, max_count) {
+        } else if let Some(r) = round_shortest(&d, max_count) {
             return Some(r);
         }
-        w.len = 0;
     }
+    let mut w = StackBuf::<32>::new();
     let prec = max_count - 1;
     write!(w, "{abs:.prec$e}").ok()?;
     parse_exp_format(w.as_bytes())
 }
 
-/// Rounds the shortest round-trip digits `d` (more than `n` of them, `n`
-/// at most 15, value normal) to `n` digits when that provably equals the
-/// value's own correct rounding; `None` when the dropped digits lie too
-/// close to a half (the exact formatter decides then).
+/// Rounds the shortest round-trip digits `d` of a normal value `v` (more
+/// than `n` of them) to `n` digits when that provably equals `v`'s own
+/// correct rounding; `None` when the dropped digits lie too close to a
+/// half (the exact formatter decides then).
 ///
-/// `d` lies within half an ulp of the value `v`: `|v - d| <= 2^-53 v <
-/// 1.12e-16 * 10^decpt`, which is less than 0.112 units of the `n`-th
-/// digit (`10^(decpt-n)`) for `n <= 15`. With the dropped part of `d` at
-/// `t` units (`0 <= t < 1`), `t < 0.38` puts `v` within
-/// `(-0.112, 0.492)` units of the truncation and `t >= 0.62` within
-/// `(0.508, 1.112)`: the nearest `n`-digit number is the same for `v`
-/// and `d`, and no tie (half-even) can arise.
+/// `d` lies within half an ulp of `v`: `|v - d| <= 2^-53 v < 1.1103e-16 *
+/// 10^decpt`, i.e. less than `1.1103e-16 * 10^len` units of `d`'s last
+/// digit: under 12 units for 17 digits, 2 for 16 and 1 for fewer. With
+/// the `k` dropped digits forming `D` and that error bound `M`, `2(D + M)
+/// < 10^k` puts `v` strictly below the half between the two `n`-digit
+/// neighbours and `2(D - M) > 10^k` strictly above it (and `M < 10^k / 2`
+/// keeps `v` within half a unit of them), so the nearest `n`-digit number
+/// is the same for `v` and `d` and no tie (half-even) can arise.
 fn round_shortest(d: &SmallDigits, n: usize) -> Option<SmallDigits> {
-    debug_assert!(n <= 15 && d.len > n);
-    let t0 = d.buf[n] - b'0';
-    let t1 = if d.len > n + 1 {
-        d.buf[n + 1] - b'0'
-    } else {
-        0
+    debug_assert!(d.len > n && d.len <= 17);
+    let k = d.len - n;
+    let dropped = d.buf[n..d.len]
+        .iter()
+        .fold(0u64, |acc, &c| acc * 10 + u64::from(c - b'0'));
+    let pow = POW10[k];
+    let margin: u64 = match d.len {
+        17.. => 12,
+        16 => 2,
+        _ => 1,
     };
-    let tt = t0 * 10 + t1;
     let mut out = *d;
     out.len = n;
-    if tt >= 62 {
+    if dropped > margin && 2 * (dropped - margin) > pow {
         // Round up, carrying through trailing nines.
         let mut i = n;
         loop {
@@ -275,7 +510,8 @@ fn round_shortest(d: &SmallDigits, n: usize) -> Option<SmallDigits> {
                 return Some(out);
             }
         }
-    } else if tt > 37 {
+    }
+    if 2 * (dropped + margin) >= pow {
         return None;
     }
     while out.len > 1 && out.buf[out.len - 1] == b'0' {
@@ -287,12 +523,12 @@ fn round_shortest(d: &SmallDigits, n: usize) -> Option<SmallDigits> {
 /// The general (heap) digit generation behind [`zend_dtoa`], for any
 /// number of digits.
 fn dtoa_slow(abs: f64, shortest: bool, ndigits: i32) -> (String, i32) {
-    let formatted = if shortest {
-        format!("{abs:e}")
-    } else {
-        let prec = usize::try_from(ndigits.max(1) - 1).unwrap_or(0);
-        format!("{abs:.prec$e}")
-    };
+    if shortest {
+        let d = shortest_digits(abs);
+        return (d.digits().iter().map(|&c| char::from(c)).collect(), d.decpt);
+    }
+    let prec = usize::try_from(ndigits.max(1) - 1).unwrap_or(0);
+    let formatted = format!("{abs:.prec$e}");
     let (mantissa, exp) = formatted.split_once('e').unwrap_or((&formatted, "0"));
     let exp: i32 = exp.parse().unwrap_or(0);
     let mut digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
@@ -775,34 +1011,35 @@ mod tests {
     }
 
     /// The rounding of the shortest digits agrees with the exact
-    /// formatter for every precision up to 15 over a spread of values.
+    /// formatter for every precision up to 16 over a spread of values.
     #[test]
+    #[allow(clippy::many_single_char_names)]
     fn rounded_shortest_digits_match_the_exact_formatter() {
         let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
         let mut checked = 0;
-        for i in 0..20_000u32 {
+        let mut declined = 0;
+        for i in 0..40_000u32 {
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;
-            let v = match i % 4 {
+            let v = match i % 5 {
                 0 => f64::from_bits((x >> 2) | 0x3000_0000_0000_0000),
                 1 => f64::from(i) * 0.1 + 1.37,
                 2 => f64::from(i) / 7.0,
+                3 => f64::from_bits(x),
                 _ => 1.0 / f64::from(i + 1),
             };
             if !v.is_normal() {
                 continue;
             }
             let abs = v.abs();
-            let short = format!("{abs:e}");
-            let Some(d) = parse_exp_format(short.as_bytes()) else {
-                continue;
-            };
-            for n in 1..=15usize {
+            let d = shortest_digits(abs);
+            for n in 1..=16usize {
                 if d.len <= n {
                     continue;
                 }
                 let Some(r) = round_shortest(&d, n) else {
+                    declined += 1;
                     continue;
                 };
                 let prec = n - 1;
@@ -816,6 +1053,90 @@ mod tests {
                 checked += 1;
             }
         }
-        assert!(checked > 50_000);
+        assert!(checked > 200_000, "{checked}");
+        assert!(declined < checked / 10, "{declined} of {checked}");
+    }
+
+    /// The previous shortest-digit path: Rust's `{:e}` text, re-parsed.
+    /// It differs from `zend_dtoa` mode 0 only on exact ties between two
+    /// shortest candidates, which Rust rounds up and PHP (and Ryu) to even.
+    fn std_shortest(abs: f64) -> SmallDigits {
+        parse_exp_format(format!("{abs:e}").as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn ryu_digits_match_the_std_formatter() {
+        let mut vals = sample_values();
+        for e in 0..2047u64 {
+            for m in [0u64, 1, 2, 3, 0x000F_FFFF_FFFF_FFFF, 0x0008_0000_0000_0000] {
+                vals.push(f64::from_bits((e << 52) | m));
+            }
+        }
+        for i in 1..50_000u32 {
+            vals.push(f64::from(i) / 1000.0);
+            vals.push(1.0 / f64::from(i));
+        }
+        let mut x: u64 = 0x0123_4567_89AB_CDEF;
+        for _ in 0..200_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            vals.push(f64::from_bits(x));
+        }
+        for v in vals {
+            let abs = v.abs();
+            if !abs.is_finite() || abs == 0.0 {
+                continue;
+            }
+            let ours = shortest_digits(abs);
+            let theirs = std_shortest(abs);
+            if (ours.digits(), ours.decpt) == (theirs.digits(), theirs.decpt) {
+                continue;
+            }
+            // A tie: same length and position, ours even, and the exact
+            // value halfway between the two.
+            let len = ours.len;
+            assert_eq!((len, ours.decpt), (theirs.len, theirs.decpt), "{abs:e}");
+            assert_eq!((ours.buf[len - 1] - b'0') % 2, 0, "{abs:e}");
+            let exact = format!("{abs:.60e}");
+            let mantissa: String = exact
+                .split('e')
+                .next()
+                .unwrap()
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect();
+            let tail = &mantissa[len..];
+            assert!(
+                tail.starts_with('5') && tail[1..].bytes().all(|c| c == b'0'),
+                "{abs:e}: {exact}"
+            );
+        }
+    }
+
+    /// Shortest-digit ties round to even like `zend_dtoa` mode 0.
+    /// Expectations from `/usr/bin/php -n`.
+    #[test]
+    #[allow(clippy::excessive_precision)]
+    fn shortest_ties_round_to_even() {
+        assert_eq!(format_double_h(2f64.powi(-25), -1), "2.9802322387695312E-8");
+        assert_eq!(
+            format_double_h(562_949_953_421_312.25, -1),
+            "562949953421312.2"
+        );
+        assert_eq!(
+            format_double_h(1_125_899_906_842_624.2, -1),
+            "1125899906842624.2"
+        );
+        assert_eq!(
+            format_double(981_446_413_237_567.25, -1, true),
+            "981446413237567.2"
+        );
+        assert_eq!(
+            double_to_string(562_949_953_421_312.25, 17),
+            "562949953421312.25"
+        );
+        assert_eq!(format_double_h(2f64.powi(-26), -1), "1.4901161193847656E-8");
+        assert_eq!(format_double_h(2f64.powi(-60), -1), "8.673617379884035E-19");
     }
 }
