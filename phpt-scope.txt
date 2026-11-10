@@ -1,6 +1,7 @@
 # Out-of-scope php-src test directories (paths relative to modules/php-src).
 # Project decision of 3 Nov 2026, recorded in FEATURE_GAP.md (Pri = `out`):
-# non-CLI SAPIs except apache2handler, server-backed DB/protocol clients except mysqli, ffi,
+# non-CLI SAPIs except apache2handler and php-cgi, server-backed DB/protocol clients except
+# mysqli and pdo_mysql (sqlite3/pdo_sqlite are in scope too), ffi,
 # readline, tidy/enchant/com_dotnet/imap, and php-src's internal test-helper extensions.
 # NOTE: opcache IS in scope (previously out of scope; the optimizer/JIT parts are tracked
 # via the baseline instead).
@@ -35,9 +36,8 @@ Zend/tests/partial_application/constexpr_015.phpt
 Zend/tests/attributes/delayed_target_validation/opcache_validator_errors.phpt
 Zend/tests/first_class_callable/constexpr/gh22782.phpt
 
-# Server-backed database / protocol clients (mysqli stays in scope)
+# Server-backed database / protocol clients (mysqli, pdo_mysql and sqlite are IN scope)
 ext/mysqlnd
-ext/pdo_mysql
 ext/pgsql
 ext/pdo_pgsql
 ext/odbc
@@ -60,10 +60,9 @@ ext/dl_test
 ext/skeleton
 ext/lexbor
 
-# Non-CLI SAPIs (apache2handler stays in scope)
+# Non-CLI SAPIs (apache2handler and php-cgi are IN scope)
 sapi/fpm
 sapi/phpdbg
-sapi/cgi
 sapi/embed
 sapi/litespeed
 sapi/fuzzer
