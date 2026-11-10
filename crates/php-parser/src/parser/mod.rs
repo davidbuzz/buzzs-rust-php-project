@@ -200,7 +200,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn fill(&mut self, n: usize) {
         if self.buf.len() <= n {
             self.fill_slow(n);
@@ -217,7 +217,20 @@ impl<'a> Parser<'a> {
 
     /// Makes sure the current token is scanned and its doc-comment effects
     /// (`CG(doc_comment)` updates) are applied.
+    ///
+    /// Called for every `peek`/`eat`, so the common case (front token
+    /// already scanned and applied) is an inlined flag test; the rest lives
+    /// in [`Self::front_slow`].
+    #[inline(always)]
     fn front(&mut self) -> &Tok<'a> {
+        if !self.front_applied || self.buf.is_empty() {
+            self.front_slow();
+        }
+        &self.buf[0]
+    }
+
+    #[inline(never)]
+    fn front_slow(&mut self) {
         self.fill(0);
         if !self.front_applied {
             self.front_applied = true;
@@ -229,20 +242,22 @@ impl<'a> Parser<'a> {
                 self.doc_comment = None;
             }
         }
-        &self.buf[0]
     }
 
     /// The kind of the current token.
+    #[inline]
     pub fn peek(&mut self) -> TokenKind {
         self.front().kind
     }
 
     /// The current token.
+    #[inline]
     pub fn cur(&mut self) -> &Tok<'a> {
         self.front()
     }
 
     /// The span of the current token.
+    #[inline]
     pub fn cur_span(&mut self) -> Span {
         self.front().span
     }

@@ -282,7 +282,16 @@ impl<'a> Lexer<'a> {
     /// and inline HTML. Lexical prefixes (`$`, `\`, `namespace\`) are retained
     /// unconverted so a parser can strip them before storing the semantic name.
     /// Use [`Token::text`] with [`Self::source`] for raw text.
+    #[inline]
     pub fn token_text(&self, token: Token) -> Cow<'a, [u8]> {
+        // Common case: no script encoding filter, unfiltered input.
+        if let (None, Input::Borrowed(src)) = (&self.encoding, &self.src) {
+            return Cow::Borrowed(token.text(*src));
+        }
+        self.token_text_filtered(token)
+    }
+
+    fn token_text_filtered(&self, token: Token) -> Cow<'a, [u8]> {
         let text = token.text(self.source());
         let prefix = match token.kind {
             TokenKind::Variable | TokenKind::NameFullyQualified => 1,
