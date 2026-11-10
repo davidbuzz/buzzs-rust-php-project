@@ -1243,17 +1243,99 @@ fn re_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Str(ZStr::from(out)))
 }
 
-fn rze_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let n = str_arg(a, 0);
-    Err(rexc(
-        vm,
-        &format!("Zend Extension \"{}\" does not exist", n.to_string_lossy()),
-    ))
+/// A loaded Zend extension (`zend_extension` in `zend_extensions.h`).
+pub(crate) struct ZendExtension {
+    pub(crate) name: &'static str,
+    author: &'static str,
+    url: &'static str,
+    copyright: &'static str,
 }
 
-fn rze_empty(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let _ = this_ext(vm, a)?;
-    Ok(zs(""))
+/// opcache's `zend_extension_entry` (`ext/opcache/ZendAccelerator.c`);
+/// its version is `PHP_VERSION`.
+const OPCACHE_ZEND_EXTENSION: ZendExtension = ZendExtension {
+    name: "Zend OPcache",
+    author: "Zend by Perforce",
+    url: "https://www.zend.com/",
+    copyright: "Copyright \u{a9}",
+};
+
+/// The loaded Zend extensions (`zend_extensions`), in load order: opcache
+/// when its module is loaded.
+pub(crate) fn zend_extensions(vm: &Vm) -> Vec<&'static ZendExtension> {
+    let mut out = Vec::new();
+    if vm
+        .loaded_extensions
+        .iter()
+        .any(|e| e.eq_ignore_ascii_case(OPCACHE_ZEND_EXTENSION.name))
+    {
+        out.push(&OPCACHE_ZEND_EXTENSION);
+    }
+    out
+}
+
+fn zend_extension_named(vm: &Vm, name: &str) -> Option<&'static ZendExtension> {
+    zend_extensions(vm)
+        .into_iter()
+        .find(|z| z.name.eq_ignore_ascii_case(name))
+}
+
+/// `ReflectionZendExtension::__construct` (`zend_get_extension`).
+fn rze_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let o = this(a);
+    let n = str_arg(a, 0).to_string_lossy();
+    let Some(z) = zend_extension_named(vm, &n) else {
+        return Err(rexc(vm, &format!("Zend Extension \"{n}\" does not exist")));
+    };
+    let name = ZStr::from(z.name);
+    set_name_props(&o, Some(&name), None);
+    object::set_internal(&o, Refl::Extension(name));
+    Ok(Value::Null)
+}
+
+fn this_zend_ext(vm: &mut Vm, a: &Args) -> VmResult<&'static ZendExtension> {
+    let n = this_ext(vm, a)?;
+    match zend_extension_named(vm, &n) {
+        Some(z) => Ok(z),
+        None => Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )),
+    }
+}
+
+fn rze_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(zs(this_zend_ext(vm, a)?.name))
+}
+
+fn rze_get_version(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let _ = this_zend_ext(vm, a)?;
+    Ok(zs(crate::PHP_VERSION))
+}
+
+fn rze_get_author(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(zs(this_zend_ext(vm, a)?.author))
+}
+
+fn rze_get_url(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(zs(this_zend_ext(vm, a)?.url))
+}
+
+fn rze_get_copyright(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(zs(this_zend_ext(vm, a)?.copyright))
+}
+
+/// `_zend_extension_string`.
+fn rze_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let z = this_zend_ext(vm, a)?;
+    Ok(zs(&format!(
+        "Zend Extension [ {} {} {} by {} <{}> ]\n",
+        z.name,
+        crate::PHP_VERSION,
+        z.copyright,
+        z.author,
+        z.url
+    )))
 }
 
 /// Registers `ReflectionExtension` and `ReflectionZendExtension`.
@@ -1285,12 +1367,12 @@ pub(crate) fn register_extension(vm: &mut Vm) {
         .prop("name", RO, Some("string"), None)
         .method("__clone(): void", PRIV, clone_error)
         .method("__construct(string $name)", PUB, rze_construct)
-        .method("__toString(): string", PUB, rze_empty)
-        .method("getName(): string", PUB, rze_empty)
-        .method("getVersion(): string", PUB, rze_empty)
-        .method("getAuthor(): string", PUB, rze_empty)
-        .method("getURL(): string", PUB, rze_empty)
-        .method("getCopyright(): string", PUB, rze_empty)
+        .method("__toString(): string", PUB, rze_to_string)
+        .method("getName(): string", PUB, rze_get_name)
+        .method("getVersion(): string", PUB, rze_get_version)
+        .method("getAuthor(): string", PUB, rze_get_author)
+        .method("getURL(): string", PUB, rze_get_url)
+        .method("getCopyright(): string", PUB, rze_get_copyright)
         .register(vm);
 }
 

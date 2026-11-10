@@ -1641,7 +1641,15 @@ fn extension_loaded(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     ))
 }
 
-fn get_loaded_extensions(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+fn get_loaded_extensions(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    // `$zend_extensions = true`: the Zend extensions instead of the modules.
+    if a.has(0) && a.bool(0) {
+        return Ok(Value::Array(ZArray::from_values(
+            crate::reflection::misc::zend_extensions(vm)
+                .into_iter()
+                .map(|z| sv(z.name)),
+        )));
+    }
     let mut names: Vec<&str> = crate::LOADED_EXTENSIONS.to_vec();
     for e in &vm.loaded_extensions {
         if !names.iter().any(|n| n.eq_ignore_ascii_case(e)) {

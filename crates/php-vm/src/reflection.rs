@@ -41,7 +41,7 @@ mod constant;
 mod export;
 mod function;
 pub(crate) mod lazy;
-mod misc;
+pub(crate) mod misc;
 mod order;
 mod param;
 mod property;
