@@ -677,3 +677,28 @@ var_dump(s(1) === "1!");
     let expected = "a!b!c!\nk3\n1256\nrx\ntu\nfloat(1.5)\n0!1!2!\nabc!\nbool(true)\n";
     assert_eq!(run(source), expected);
 }
+
+/// `return_simple` releasing the returning frame in place (the frame's
+/// variables, then the caller's result slot): destructor timing of a
+/// local object, of a returned object kept and replaced, deep recursion
+/// that grows and trims the frame pool, and nested calls as arguments.
+/// Expected output is php-src's (`/usr/bin/php -n`).
+#[test]
+fn frames_released_in_place_on_return_keep_destructor_order() {
+    let source = r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "~", $this->n; } }
+function local($n) { $d = new D($n); echo "in$n"; return $n; }
+function give($n) { $d = new D($n); return $d; }
+function depth($n) { return $n === 0 ? 0 : 1 + depth($n - 1); }
+function m($a) { return $a; }
+echo local(1), "|\n";
+$r = local(2); echo "|", $r, "\n";
+$o = give(3); echo "|kept\n"; $o = give(4); echo "|replaced\n"; unset($o);
+echo "\n", depth(300), " ", depth(5), "\n";
+$t = new D(5); echo m($t)->n, "\n"; $t = null; echo "|\n";
+function caller() { return m(m(7)) + m(8); }
+echo caller(), "\n";
+"#;
+    let expected = "in1~11|\nin2~2|2\n|kept\n~3|replaced\n~4\n300 5\n5\n~5|\n15\n";
+    assert_eq!(run(source), expected);
+}
