@@ -104,7 +104,9 @@ fn wrapped_preg_match(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let handler: BuiltinFn = unsafe { std::mem::transmute(ptr) };
     let res = handler(vm, a)?;
-    if a.has(2) && is_pattern_utf(vm, a) {
+    // `false` means the pattern failed (or matching errored): recompiling it
+    // for the UTF-8 check would repeat its compilation warning.
+    if a.has(2) && !matches!(res, Value::Bool(false)) && is_pattern_utf(vm, a) {
         mark_captures_valid_utf8(&a.at(2));
     }
     Ok(res)
@@ -117,7 +119,9 @@ fn wrapped_preg_match_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let handler: BuiltinFn = unsafe { std::mem::transmute(ptr) };
     let res = handler(vm, a)?;
-    if a.has(2) && is_pattern_utf(vm, a) {
+    // `false` means the pattern failed (or matching errored): recompiling it
+    // for the UTF-8 check would repeat its compilation warning.
+    if a.has(2) && !matches!(res, Value::Bool(false)) && is_pattern_utf(vm, a) {
         mark_captures_valid_utf8(&a.at(2));
     }
     Ok(res)
@@ -130,7 +134,7 @@ fn wrapped_preg_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let handler: BuiltinFn = unsafe { std::mem::transmute(ptr) };
     let res = handler(vm, a)?;
-    if is_pattern_utf(vm, a) {
+    if !matches!(res, Value::Bool(false)) && is_pattern_utf(vm, a) {
         mark_captures_valid_utf8(&res);
     }
     Ok(res)
