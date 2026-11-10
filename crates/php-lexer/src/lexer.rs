@@ -112,6 +112,17 @@ pub struct Lexer<'a> {
     done: bool,
 }
 
+/// [`is_label_char`] (`[a-zA-Z0-9_\x80-\xff]`) as a lookup table.
+static LABEL_CHAR: [bool; 256] = {
+    let mut t = [false; 256];
+    let mut i = 0;
+    while i < 256 {
+        t[i] = matches!(i, 0x30..=0x39 | 0x41..=0x5a | 0x5f | 0x61..=0x7a | 0x80..);
+        i += 1;
+    }
+    t
+};
+
 /// Case-insensitive keyword table for labels in scripting state.
 fn keyword(label: &[u8]) -> Option<TokenKind> {
     use TokenKind as T;
@@ -661,12 +672,18 @@ impl<'a> Lexer<'a> {
 
     // ---- shared helpers ----------------------------------------------------
 
+    #[inline]
     fn scan_label_end(&self, from: usize) -> usize {
-        let mut p = from;
-        while is_label_char(self.at(p)) && p < self.src.len() {
-            p += 1;
+        let src: &[u8] = &self.src;
+        match src.get(from..) {
+            Some(rest) => {
+                from + rest
+                    .iter()
+                    .position(|&c| !LABEL_CHAR[usize::from(c)])
+                    .unwrap_or(rest.len())
+            }
+            None => from,
         }
-        p
     }
 
     /// Matches `{WHITESPACE_OR_COMMENTS}` (one or more) starting at `p`,
@@ -1068,8 +1085,15 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        // namespaced names
-        let qual_end = self.scan_qualified_end(p);
+        // namespaced names (`scan_qualified_end(p)`, resuming after the
+        // first segment that was just scanned)
+        let mut qual_end = label_end;
+        while self.at(qual_end) == b'\\'
+            && is_label_start(self.at(qual_end + 1))
+            && qual_end + 1 < src.len()
+        {
+            qual_end = self.scan_label_end(qual_end + 1);
+        }
         if qual_end > label_end {
             self.pos = qual_end;
             return if label.eq_ignore_ascii_case(b"namespace") {
@@ -2121,5 +2145,27 @@ impl Iterator for Lexer<'_> {
 
     fn next(&mut self) -> Option<Token> {
         self.next_token()
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+
+    #[test]
+    fn label_char_table_matches_predicate() {
+        for c in 0..=255u8 {
+            assert_eq!(LABEL_CHAR[usize::from(c)], is_label_char(c), "{c:#x}");
+        }
+    }
+
+    #[test]
+    fn label_ends() {
+        let lx = Lexer::new(b"ab_9\xe9x-y");
+        assert_eq!(lx.scan_label_end(0), 6);
+        assert_eq!(lx.scan_label_end(6), 6);
+        assert_eq!(lx.scan_label_end(7), 8);
+        assert_eq!(lx.scan_label_end(8), 8);
+        assert_eq!(lx.scan_label_end(9), 9);
     }
 }
