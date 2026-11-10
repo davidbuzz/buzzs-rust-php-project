@@ -32,6 +32,9 @@ thread_local! {
     /// The contexts of the running (nested) operations.
     static OP_CONTEXTS: RefCell<Vec<Option<php_streams::context::ContextRef>>> =
         const { RefCell::new(Vec::new()) };
+    /// The INI generation and the library settings last derived from it
+    /// by [`sync_settings`].
+    static SYNCED: RefCell<Option<(u64, state::Settings)>> = const { RefCell::new(None) };
 }
 
 /// Restores the previous VM pointer when a scope ends (also on unwind).
@@ -223,36 +226,67 @@ pub fn deferring_flush<R>(f: impl FnOnce() -> R) -> R {
 
 /// Copies the INI settings consulted by the streams layer.
 fn sync_settings(vm: &Vm) {
-    let get = |n: &str| vm.ini_string(n).unwrap_or_default();
-    let include_path = get("include_path");
-    let open_basedir = crate::ini::effective_open_basedir(get("open_basedir"));
-    let sys_temp_dir = get("sys_temp_dir");
-    let upload_tmp_dir = get("upload_tmp_dir");
-    let allow_url_fopen = vm.ini_bool("allow_url_fopen");
-    let allow_url_include = vm.ini_bool("allow_url_include");
-    let auto_detect_line_endings = vm.ini_bool("auto_detect_line_endings");
-    let default_socket_timeout = vm.ini_long("default_socket_timeout");
-    let html_errors = vm.ini_bool("html_errors");
-    let user_agent = vm.ini_string("user_agent").filter(|v| !v.is_empty());
-    let from_address = vm.ini_string("from").filter(|v| !v.is_empty());
-    let realpath_cache_size_limit = vm.ini_long("realpath_cache_size");
-    let realpath_cache_ttl = vm.ini_long("realpath_cache_ttl");
-    state::update_settings(|s| {
-        s.include_path = include_path;
-        s.open_basedir = open_basedir;
-        s.sys_temp_dir = sys_temp_dir;
-        s.upload_tmp_dir = upload_tmp_dir;
-        s.allow_url_fopen = allow_url_fopen;
-        s.allow_url_include = allow_url_include;
-        s.auto_detect_line_endings = auto_detect_line_endings;
-        s.default_socket_timeout = default_socket_timeout;
-        s.html_errors = html_errors;
-        s.sapi_is_cli = true;
-        s.user_agent = user_agent;
-        s.from_address = from_address;
-        s.realpath_cache_size_limit = realpath_cache_size_limit;
-        s.realpath_cache_ttl = realpath_cache_ttl;
+    // Re-reading 13 directives costs thousands of instructions per stream
+    // call; the registry generation tells whether any value can have
+    // changed. The cached settings are still written back on every call,
+    // because other code (open_basedir checks in session/PDO, SAPIs) may
+    // have overwritten the library's copy in between.
+    let generation = vm.ini.generation();
+    let hit = SYNCED.with(|c| match &*c.borrow() {
+        Some((g, snap)) if *g == generation => {
+            state::update_settings(|s| apply_settings(s, snap));
+            true
+        }
+        _ => false,
     });
+    if hit {
+        return;
+    }
+    let get = |n: &str| vm.ini_string(n).unwrap_or_default();
+    let snap = state::Settings {
+        include_path: get("include_path"),
+        open_basedir: crate::ini::effective_open_basedir(get("open_basedir")),
+        sys_temp_dir: get("sys_temp_dir"),
+        upload_tmp_dir: get("upload_tmp_dir"),
+        allow_url_fopen: vm.ini_bool("allow_url_fopen"),
+        allow_url_include: vm.ini_bool("allow_url_include"),
+        auto_detect_line_endings: vm.ini_bool("auto_detect_line_endings"),
+        default_socket_timeout: vm.ini_long("default_socket_timeout"),
+        html_errors: vm.ini_bool("html_errors"),
+        sapi_is_cli: true,
+        user_agent: vm.ini_string("user_agent").filter(|v| !v.is_empty()),
+        from_address: vm.ini_string("from").filter(|v| !v.is_empty()),
+        realpath_cache_size_limit: vm.ini_long("realpath_cache_size"),
+        realpath_cache_ttl: vm.ini_long("realpath_cache_ttl"),
+    };
+    state::update_settings(|s| apply_settings(s, &snap));
+    SYNCED.with(|c| *c.borrow_mut() = Some((generation, snap)));
+}
+
+/// Copies every INI-derived field of `snap` into the library settings
+/// (`clone_from` reuses the existing buffers).
+fn apply_settings(s: &mut state::Settings, snap: &state::Settings) {
+    s.include_path.clone_from(&snap.include_path);
+    s.open_basedir.clone_from(&snap.open_basedir);
+    s.sys_temp_dir.clone_from(&snap.sys_temp_dir);
+    s.upload_tmp_dir.clone_from(&snap.upload_tmp_dir);
+    s.allow_url_fopen = snap.allow_url_fopen;
+    s.allow_url_include = snap.allow_url_include;
+    s.auto_detect_line_endings = snap.auto_detect_line_endings;
+    s.default_socket_timeout = snap.default_socket_timeout;
+    s.html_errors = snap.html_errors;
+    s.sapi_is_cli = snap.sapi_is_cli;
+    s.user_agent.clone_from(&snap.user_agent);
+    s.from_address.clone_from(&snap.from_address);
+    s.realpath_cache_size_limit = snap.realpath_cache_size_limit;
+    s.realpath_cache_ttl = snap.realpath_cache_ttl;
+}
+
+/// Forces the next [`sync_settings`] to re-read the INI values (state they
+/// derive from changed outside the INI registry, e.g. the expanded
+/// `open_basedir`).
+pub(crate) fn invalidate_settings() {
+    SYNCED.with(|c| *c.borrow_mut() = None);
 }
 
 /// Installs the library hooks (output, executing file name).

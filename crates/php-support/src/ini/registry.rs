@@ -4,6 +4,7 @@
 //! PHP's core directives.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::quantity::{escape, parse_bool, parse_quantity, parse_uquantity, quantity_warning};
 use crate::diag::{Diagnostic, DiagnosticSink, ErrorLevel};
@@ -180,6 +181,16 @@ pub struct IniRegistry {
     /// Current memory usage reported by `memory_limit` failures
     /// (`zend_memory_usage(true)`; PHP's heap starts with one 2 MiB chunk).
     pub memory_usage: u64,
+    /// Changes whenever a directive's value may have changed (see
+    /// [`IniRegistry::generation`]).
+    generation: u64,
+}
+
+/// Source of process-unique registry generations.
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
 impl Default for IniRegistry {
@@ -205,7 +216,17 @@ impl IniRegistry {
             modified: Vec::new(),
             modules: Vec::new(),
             memory_usage: 2 * 1024 * 1024,
+            generation: next_generation(),
         }
+    }
+
+    /// A process-unique stamp of the current directive values: it changes
+    /// on every operation that may change a value (registration, `alter`,
+    /// restore, deactivation), and two distinct registries never share one
+    /// unless one is an unmodified clone of the other. Callers that mirror
+    /// INI values elsewhere re-read them only when it changes.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// A registry with PHP's core directives registered, applying
@@ -260,6 +281,7 @@ impl IniRegistry {
         if self.entries.contains_key(&def.name) {
             return false;
         }
+        self.generation = next_generation();
         self.register_module(&def.module);
         let name = def.name.clone();
         let mut entry = Entry {
@@ -303,6 +325,7 @@ impl IniRegistry {
         let Some(e) = self.entries.get_mut(name) else {
             return false;
         };
+        self.generation = next_generation();
         e.value.clone_from(&e.def.default);
         e.typed = IniTyped::None;
         true
@@ -367,6 +390,7 @@ impl IniRegistry {
             return false;
         };
         let modifiable = entry.modifiable;
+        self.generation = next_generation();
         let modified = entry.modified;
         let mut entry = entry.clone();
         if stage == Stage::Activate && modify_type == Access::SYSTEM {
@@ -425,6 +449,7 @@ impl IniRegistry {
         if !entry.modified {
             return true;
         }
+        self.generation = next_generation();
         let result = self.on_modify(&entry, entry.orig_value.as_deref(), stage, diag);
         if stage == Stage::Runtime && result.is_err() {
             return false;
@@ -459,6 +484,7 @@ impl IniRegistry {
     /// `zend_ini_deactivate()`: restores every modified directive at the
     /// end of the request.
     pub fn deactivate(&mut self, diag: &mut dyn DiagnosticSink) {
+        self.generation = next_generation();
         for name in std::mem::take(&mut self.modified) {
             if let Some(e) = self.entries.get(&name) {
                 let mut e = e.clone();
@@ -999,6 +1025,29 @@ mod tests {
         assert_eq!(r.get_long("error_reporting"), 30719);
         assert_eq!(r.get("nonexistent"), None);
         assert_eq!(r.get("output_handler"), Some(&b""[..]));
+    }
+
+    #[test]
+    fn generation_changes_with_values() {
+        let mut r = core();
+        let mut d: Vec<Diagnostic> = Vec::new();
+        let g0 = r.generation();
+        assert_eq!(r.get("precision"), Some(&b"14"[..]));
+        assert_eq!(r.generation(), g0, "reads keep the generation");
+        assert_ne!(core().generation(), g0, "distinct registries differ");
+        assert_eq!(r.clone().generation(), g0);
+        r.ini_set("precision", b"6", &mut d);
+        let g1 = r.generation();
+        assert_ne!(g1, g0);
+        r.ini_restore("precision", &mut d);
+        let g2 = r.generation();
+        assert_ne!(g2, g1);
+        r.ini_set("include_path", b"/x", &mut d);
+        assert_ne!(r.generation(), g2);
+        let g3 = r.generation();
+        r.deactivate(&mut d);
+        assert_ne!(r.generation(), g3);
+        assert_eq!(r.get("include_path"), Some(&b".:/usr/share/php"[..]));
     }
 
     #[test]
