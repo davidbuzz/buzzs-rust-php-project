@@ -639,3 +639,43 @@ fn a_freed_last_root_does_not_hide_an_object_at_its_address() {
         "int(1)\nint(0)\nint(1)\nint(1)\nint(2)\nint(2)\nint(0)\nint(0)\nint(2)\n"
     );
 }
+
+/// Freeing a buffered object forgets `LAST_ROOT` only when it records that
+/// object: `$o = new C; $o->m();` in a loop frees the previous object
+/// between buffering the new one (its constructor's return) and the
+/// method's return, which then finds the new one recorded. The counts are
+/// php-src 8.3's.
+#[test]
+fn freeing_another_root_keeps_the_last_root() {
+    let out = run(
+        "<?php class C { public $self; function __construct() {} function m() { return 1; } }\n\
+         for ($i = 0; $i < 3; $i++) { $o = new C; $o->m(); }\n\
+         var_dump(gc_status()['roots']);\n\
+         $o->self = $o; $o->m(); unset($o);\n\
+         var_dump(gc_collect_cycles()); var_dump(gc_status()['roots']);\n\
+         $p = new C; $p->m(); var_dump(gc_status()['roots']);\n\
+         $q = new C; $p->m(); $q->m(); unset($p); $q->m(); var_dump(gc_status()['roots']);",
+    );
+    assert_eq!(out, "int(1)\nint(1)\nint(0)\nint(1)\nint(1)\n");
+
+    let sink = Sink::default();
+    let vm = Vm::new(&VmOptions::default(), Box::new(sink));
+    let std_class = vm.find_class(b"stdClass").expect("stdClass");
+    let a = crate::object::new_object(std_class.clone(), Vec::new());
+    let b = crate::object::new_object(std_class, Vec::new());
+    let handle = |o: &php_runtime::Obj| crate::object::data(o).handle;
+    let mut buf = super::RootBuffer::default();
+    assert_eq!(buf.push(&a), Some(0));
+    assert_eq!(buf.push(&b), Some(1));
+    super::remember_root(&b);
+    assert!(buf.remove(a.addr(), handle(&a)));
+    assert!(super::is_last_root(&b));
+    // The freed slot is the next one taken.
+    assert_eq!(buf.push(&a), Some(0));
+    assert!(buf.remove(b.addr(), handle(&b)));
+    assert!(!super::is_last_root(&b));
+    assert_eq!((buf.num_roots, buf.unused.as_slice()), (1, &[1][..]));
+    drop(buf);
+    drop((a, b));
+    drop(vm);
+}
