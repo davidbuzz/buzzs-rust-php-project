@@ -340,9 +340,11 @@ impl<'a> VmHost<'a> {
 
 impl Drop for VmHost<'_> {
     fn drop(&mut self) {
-        EH_THROW_PENDING.with(|p| p.borrow_mut().take());
+        // `try_with`: a host dropped while the thread-locals are being
+        // destroyed (process exit) must not panic
+        let _ = EH_THROW_PENDING.try_with(|p| p.borrow_mut().take());
         if let Some(p) = self.persistent.take() {
-            PERSISTENT.with(|s| {
+            let _ = PERSISTENT.try_with(|s| {
                 let mut s = s.borrow_mut();
                 if s.is_none() {
                     *s = Some(p);
@@ -672,7 +674,10 @@ impl PdoHost for VmHost<'_> {
 
     fn persistent_list(&mut self) -> &mut PersistentList {
         if self.persistent.is_none() {
-            let p = PERSISTENT.with(|s| s.borrow_mut().take());
+            let p = PERSISTENT
+                .try_with(|s| s.borrow_mut().take())
+                .ok()
+                .flatten();
             self.persistent = Some(p.unwrap_or_default());
         }
         self.persistent.get_or_insert_with(PersistentList::new)
