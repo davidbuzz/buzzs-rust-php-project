@@ -931,10 +931,16 @@ impl Vm {
             (op, f.code.clone())
         };
 
+        // Only a literal name can be cached per instruction: `$GLOBALS[$k]`
+        // names a different variable whenever `$k` changes.
+        let cacheable = matches!(name_op, Operand::Lit(_));
+
         // Fast path: check runtime cache first.
-        let cached = {
+        let cached = if cacheable {
             let cache = code.rt_cache.globals.borrow();
             cache.get(pid as usize).copied()
+        } else {
+            None
         };
 
         if let Some(slot) = cached {
@@ -998,11 +1004,13 @@ impl Vm {
                     .position(|n| n.as_bytes() == &name_bytes[..])
                 {
                     let cv = cv as u32;
-                    let mut cache = code.rt_cache.globals.borrow_mut();
-                    if cache.len() <= pid as usize {
-                        cache.resize(pid as usize + 1, GlobalSlot::Empty);
+                    if cacheable {
+                        let mut cache = code.rt_cache.globals.borrow_mut();
+                        if cache.len() <= pid as usize {
+                            cache.resize(pid as usize + 1, GlobalSlot::Empty);
+                        }
+                        cache[pid as usize] = GlobalSlot::GlobalCv(cv);
                     }
-                    cache[pid as usize] = GlobalSlot::GlobalCv(cv);
 
                     if let Some(slot) = main_frame.cvs.get(cv as usize) {
                         if let Some(v) = slot.get() {
@@ -1022,11 +1030,13 @@ impl Vm {
         self.attach_globals_symbol_table();
         let idx = self.globals.borrow_mut().find(&name_bytes);
         if let Some(idx) = idx {
-            let mut cache = code.rt_cache.globals.borrow_mut();
-            if cache.len() <= pid as usize {
-                cache.resize(pid as usize + 1, GlobalSlot::Empty);
+            if cacheable {
+                let mut cache = code.rt_cache.globals.borrow_mut();
+                if cache.len() <= pid as usize {
+                    cache.resize(pid as usize + 1, GlobalSlot::Empty);
+                }
+                cache[pid as usize] = GlobalSlot::GlobalStore(idx);
             }
-            cache[pid as usize] = GlobalSlot::GlobalStore(idx);
             let g = self.globals.borrow();
             return match g.slots.get(idx as usize).and_then(Option::as_ref) {
                 Some(v) => Some(v.deref()),
@@ -1627,6 +1637,21 @@ mod tests {
     }
 
     // Expected outputs below are from `/usr/bin/php -n` (8.3).
+
+    /// `$GLOBALS[$k]` with a changing key reads the variable `$k` names
+    /// each time: only literal names are cached per instruction (the
+    /// user-stream wrapper of ext/standard/tests/file/userstreams.phpt).
+    #[test]
+    fn globals_with_a_variable_key_is_not_cached() {
+        let out = run(r#"<?php
+$a = "A"; $b = "B";
+function g($k) { return $GLOBALS[$k]; }
+echo g("a"), g("b"), g("a"), "\n";
+foreach (["a", "b"] as $k) { echo $GLOBALS[$k]; }
+echo "\n";
+"#);
+        assert_eq!(out, "ABA\nAB\n");
+    }
 
     #[test]
     fn detached_symbol_table_leaves_no_duplicate_handle() {
