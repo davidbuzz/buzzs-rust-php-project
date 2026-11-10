@@ -38,7 +38,7 @@ use super::{
     release_str_tmp_in, store_fetched_in, string_offset_char, table_dim, table_dim_mut,
     write_keys_in, DimRef,
 };
-use crate::opcode::{BinKind, IncDecKind, Operand, PlaceId};
+use crate::opcode::{BinKind, IncDecKind, Op, Operand, PlaceId};
 use crate::vm::{CvSlot, ForeachIter, Frame, Vm};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZStr};
 
@@ -700,17 +700,22 @@ pub(in crate::exec) fn fe_fetch_array_in(
     let Some(Some(ForeachIter::Array { arr, pos })) = f.iters.get_mut(iter as usize) else {
         return None;
     };
-    let Some((p, v)) = arr.fe_fetch(*pos) else {
-        return Some(false);
+    // One pass over the slots for the value and, when the loop has a key
+    // variable, its key.
+    let (p, v, k) = if key.is_some() {
+        let Some((p, v, k)) = arr.fe_fetch_with_key(*pos) else {
+            return Some(false);
+        };
+        (p, v, Some(k))
+    } else {
+        let Some((p, v)) = arr.fe_fetch(*pos) else {
+            return Some(false);
+        };
+        (p, v, None)
     };
     let v = match v {
         Value::Reference(r) => r.get(),
         v => copy_value(v),
-    };
-    let k = if key.is_some() {
-        arr.key_value_at(p)
-    } else {
-        None
     };
     *pos = p + 1;
     if let Some(slot) = f.tmps.get_mut(val as usize) {
@@ -722,4 +727,124 @@ pub(in crate::exec) fn fe_fetch_array_in(
         }
     }
     Some(true)
+}
+
+/// The assignment of a fetched `foreach` element to its loop variable,
+/// run right after [`fe_fetch_array_in`] without a dispatch of its own:
+/// when the op at `ip` is the `AssignCv` of temporary `t` (`$v` or `$k` of
+/// `foreach ($a as $k => $v)`, `ZEND_ASSIGN_SPEC_CV_TMP` after
+/// `ZEND_FE_FETCH_R`) and the variable is undefined or holds a scalar or
+/// string, [`assign_cv_in`](super::super::hot::assign_cv_in) runs it here
+/// and the `ip` after it is returned; otherwise `ip` itself, nothing
+/// changed, and the op runs as usual. Releasing a scalar or a string runs
+/// no destructor and buffers no GC root, so no safe point falls due
+/// between the two ops (none is pending either: checked first), exactly
+/// as when the dispatch loop polls between them.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the hot `foreach ($a as $k => $v)` step
+pub(in crate::exec) fn fe_assign_in(f: &mut Frame, ops: &[Op], ip: usize, t: u32) -> usize {
+    let Some(&Op::AssignCv {
+        cv,
+        val: Operand::Tmp(src),
+        dst: None,
+    }) = ops.get(ip)
+    else {
+        return ip;
+    };
+    if src != t {
+        return ip;
+    }
+    let plain = match f.cvs.get(cv as usize).map(CvSlot::get) {
+        Some(None) => true,
+        Some(Some(v)) => !matches!(v, Value::Array(_) | Value::Object(_) | Value::Reference(_)),
+        None => false,
+    };
+    if plain
+        && !crate::interrupt::safe_point_due()
+        && super::super::hot::assign_cv_in(f, cv, Operand::Tmp(t), None)
+    {
+        ip + 1
+    } else {
+        ip
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! `foreach` by value over arrays with the fused value/key assignments
+    //! ([`fe_assign_in`]) and their fallbacks. Expected output from
+    //! `/usr/bin/php -n` (PHP 8.3).
+
+    use crate::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn run(src: &str) -> String {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(src.as_bytes(), "t.php");
+        drop(vm);
+        let out = sink.0.borrow().clone();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Normalised keys, packed holes, a variable holding an object (its
+    /// destructor runs at the assignment, value before key), one bound by
+    /// reference, an attached symbol table.
+    #[test]
+    fn foreach_assignments_match_the_generic_ops() {
+        let src = r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "~", $this->n, " "; } }
+function f() {
+    $h = ["a" => 1, "08" => 2, "8" => 3, "-0" => 4, -5 => 5];
+    unset($h["a"]);
+    $sum = [];
+    foreach ($h as $k => $v) { $sum[$k] = ($sum[$k] ?? 0) + $v; var_dump($k); }
+    foreach ($sum as $k => $s) { echo "$k=$s,"; }
+    echo "\n";
+    $v = new D(1); $k = new D(2);
+    foreach ([10, 20] as $k => $v) { echo "[$k=$v] "; }
+    echo "\n";
+    $x = 0; $v = &$x;
+    foreach ([7, 8] as $v) { echo $x, " "; }
+    echo "\n";
+    $p = [1, 2, 3]; unset($p[1]);
+    foreach ($p as $i => $e) { echo "$i:$e "; }
+    foreach ($p as $e) { echo "$e "; }
+    echo "\n";
+    foreach (["s" => "x", "t" => [1]] as $k => $v) { echo $k, $v === [1] ? "a" : $v, " "; }
+    echo "\n";
+    $name = "v";
+    foreach ([1, 2] as $k => $v) { echo $$name, " "; }
+    echo $k, $v, "\n";
+}
+f();
+"#;
+        let expected = r#"string(2) "08"
+int(8)
+string(2) "-0"
+int(-5)
+08=2,8=3,-0=4,-5=5,
+~1 ~2 [0=10] [1=20] 
+7 8 
+0:1 2:3 1 3 
+sx ta 
+1 2 12
+"#;
+        assert_eq!(run(src), expected);
+    }
 }
