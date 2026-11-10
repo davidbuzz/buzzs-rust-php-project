@@ -22,6 +22,24 @@ pub type CompileHookFn = fn(&mut Vm, Rc<[u8]>, &ZStr, bool) -> VmResult<CompileO
 
 thread_local! {
     static COMPILE_HOOK: std::cell::Cell<Option<CompileHookFn>> = const { std::cell::Cell::new(None) };
+    /// Set while compiling a file opened through a stream wrapper other
+    /// than `file://` and `phar://`: such source bypasses the compile hook
+    /// (opcache's `persistent_compile_file` falls back to the original
+    /// `compile_file` for it, bug #64482).
+    static UNCACHEABLE_STREAM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `is_stream_path() && !is_cacheable_stream_path()` (ZendAccelerator.c):
+/// a `scheme://` name whose wrapper is neither `file` nor `phar`.
+fn is_uncacheable_stream_path(name: &[u8]) -> bool {
+    let scheme = name
+        .iter()
+        .take_while(|&&c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
+        .count();
+    scheme > 0
+        && name[scheme..].starts_with(b"://")
+        && !name.starts_with(b"file://")
+        && !name.starts_with(b"phar://")
 }
 
 impl Vm {
@@ -123,7 +141,7 @@ impl Vm {
         is_eval: bool,
         skip_shebang: bool,
     ) -> VmResult<CompileOutcome> {
-        if !is_eval {
+        if !is_eval && !UNCACHEABLE_STREAM.with(|c| c.replace(false)) {
             if let Some(hook) = COMPILE_HOOK.with(|h| h.get()) {
                 return hook(self, src, filename, skip_shebang);
             }
@@ -599,7 +617,15 @@ impl Vm {
                     source,
                     opened_path,
                 } => {
-                    return self.include_source(kind, kind_name, source, opened_path, dst);
+                    let uncacheable = is_uncacheable_stream_path(name);
+                    return self.include_source(
+                        kind,
+                        kind_name,
+                        source,
+                        opened_path,
+                        dst,
+                        uncacheable,
+                    );
                 }
                 crate::ext::IncludeOpen::Failed => {
                     return self.include_failed(kind, kind_name, &s, dst);
@@ -665,6 +691,7 @@ impl Vm {
         src: Vec<u8>,
         path: ZStr,
         dst: u32,
+        uncacheable: bool,
     ) -> VmResult<bool> {
         if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
             && self.included_set.contains(&path)
@@ -677,7 +704,11 @@ impl Vm {
             self.included.push(path.clone());
         }
         let src = self.filter_source(&path, src)?;
-        let unit = match self.compile_source(Rc::from(src), &path, false, true)? {
+        // The flag is read once, when `compile_source` chooses the hook.
+        let saved = UNCACHEABLE_STREAM.with(|c| c.replace(uncacheable));
+        let compiled = self.compile_source(Rc::from(src), &path, false, true);
+        UNCACHEABLE_STREAM.with(|c| c.set(saved));
+        let unit = match compiled? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),
@@ -827,5 +858,23 @@ impl CompiledUnit {
                 m.func.statics.borrow_mut().clear();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_uncacheable_stream_path;
+
+    #[test]
+    fn stream_paths_other_than_file_and_phar_are_not_cacheable() {
+        assert!(is_uncacheable_stream_path(
+            b"php://filter/read=string.toupper/resource=a.inc"
+        ));
+        assert!(is_uncacheable_stream_path(b"data://text/plain,x"));
+        assert!(!is_uncacheable_stream_path(b"file:///tmp/a.inc"));
+        assert!(!is_uncacheable_stream_path(b"phar:///tmp/a.phar/b.php"));
+        assert!(!is_uncacheable_stream_path(b"/tmp/a.inc"));
+        assert!(!is_uncacheable_stream_path(b"://x"));
+        assert!(!is_uncacheable_stream_path(b"data:text/plain,x"));
     }
 }
