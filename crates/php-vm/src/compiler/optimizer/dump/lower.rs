@@ -1044,7 +1044,11 @@ impl<'a> Lower<'a> {
             }
             Op::Free(a) => match self.z(a) {
                 Z::Cv(c) => self.push(ZLine::new("CHECK_VAR").a(Z::Cv(c))),
-                z @ Z::Tmp(_) => self.push(ZLine::new("FREE").a(z)),
+                z @ Z::Tmp(_) => {
+                    let mut l = ZLine::new("FREE").a(z);
+                    l.free_on_return = self.before_return(i);
+                    self.push(l);
+                }
                 _ => {}
             },
             Op::Throw(a) => {
@@ -1107,11 +1111,18 @@ impl<'a> Lower<'a> {
             } => {
                 let t = self.tmp();
                 self.iters.insert(*iter, t);
-                let (name, s) = match (kind, place) {
-                    (ForeachKind::Ref, Some(p)) => ("FE_RESET_RW", self.place_ref(*p)),
-                    _ => ("FE_RESET_R", self.z(subject)),
+                // `zend_compile_foreach` gives a by-value iterator a TMP;
+                // the loop of `zend_compile_func_array_map` (after its
+                // `TYPE_ASSERT` and `INIT_ARRAY`) keeps a VAR.
+                let array_map = i >= 2
+                    && matches!(self.op_at(i - 1), Some(Op::InitArray { .. }))
+                    && matches!(self.op_at(i - 2), Some(Op::TypeAssertArray { .. }));
+                let (name, s, var) = match (kind, place) {
+                    (ForeachKind::Ref, Some(p)) => ("FE_RESET_RW", self.place_ref(*p), true),
+                    _ => ("FE_RESET_R", self.z(subject), array_map),
                 };
-                self.push(ZLine::new(name).v(t).a(s).b(Z::Label(*end)));
+                let l = ZLine::new(name).a(s).b(Z::Label(*end));
+                self.push(if var { l.v(t) } else { l.t(t) });
             }
             Op::FeFetch {
                 iter,
@@ -1186,6 +1197,21 @@ impl<'a> Lower<'a> {
             // Every specialised form was mapped back by `generic`.
             _ => {}
         }
+    }
+
+    /// Whether the frees after op `i` lead to a return: a `FREE` there is
+    /// `zend_handle_loops_and_finally`'s `ZEND_FREE_ON_RETURN`.
+    fn before_return(&self, i: usize) -> bool {
+        for op in self.oa.ops.iter().skip(i + 1).map(generic) {
+            match op {
+                Op::Free(_) | Op::FeFreeOnReturn { .. } | Op::VerifyReturn { .. } => {}
+                Op::Return { .. } | Op::ReturnRef { .. } | Op::ReturnByRefValue { .. } => {
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// `zend_compile_short_circuiting`: `JMPZ_EX`/`JMPNZ_EX` of a TMP

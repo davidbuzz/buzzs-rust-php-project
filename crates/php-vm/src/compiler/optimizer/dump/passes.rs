@@ -303,7 +303,32 @@ fn z_type(z: &Z, cv: &[u32], tmp: &HashMap<u32, u32>) -> u32 {
     }
 }
 
-fn result_type(l: &ZLine, cv: &[u32], tmp: &HashMap<u32, u32>, shape: &FuncShape) -> u32 {
+/// The key types of iterators over literal arrays (`FE_RESET_R` of a
+/// constant), by iterator temporary.
+fn literal_iter_keys(lines: &[ZLine]) -> HashMap<u32, u32> {
+    let mut m = HashMap::new();
+    for l in lines {
+        if let (Some(t), Z::Const(Value::Array(a))) = (l.res.tmp(), &l.op1) {
+            let mut k = 0;
+            for (key, _) in a.iter() {
+                k |= match key {
+                    php_runtime::ArrayKey::Int(_) => ty::LONG,
+                    php_runtime::ArrayKey::Str(_) => ty::STRING,
+                };
+            }
+            m.insert(t, k | ty::NULL);
+        }
+    }
+    m
+}
+
+fn result_type(
+    l: &ZLine,
+    cv: &[u32],
+    tmp: &HashMap<u32, u32>,
+    shape: &FuncShape,
+    iter_keys: &HashMap<u32, u32>,
+) -> u32 {
     let t1 = z_type(&l.op1, cv, tmp);
     let t2 = z_type(&l.op2, cv, tmp);
     match l.op {
@@ -368,7 +393,11 @@ fn result_type(l: &ZLine, cv: &[u32], tmp: &HashMap<u32, u32>, shape: &FuncShape
         | "CALLABLE_CONVERT"
         | "CALLABLE_CONVERT_PARTIAL"
         | "CATCH" => ty::OBJECT,
-        "FE_FETCH_R" | "FE_FETCH_RW" => ty::LONG | ty::STRING | ty::NULL,
+        "FE_FETCH_R" | "FE_FETCH_RW" => l
+            .op1
+            .tmp()
+            .and_then(|t| iter_keys.get(&t).copied())
+            .unwrap_or(ty::LONG | ty::STRING | ty::NULL),
         "RECV" | "RECV_INIT" => {
             let n = match l.op1 {
                 Z::Num(n) => n as usize,
@@ -418,9 +447,15 @@ fn get_cv(cv: &[u32], c: u32) -> u32 {
 }
 
 /// Applies opline `l` to the CV types; records the type of a TMP result.
-fn transfer(l: &ZLine, cv: &mut [u32], tmp: &mut HashMap<u32, u32>, shape: &FuncShape) -> bool {
+fn transfer(
+    l: &ZLine,
+    cv: &mut [u32],
+    tmp: &mut HashMap<u32, u32>,
+    shape: &FuncShape,
+    iter_keys: &HashMap<u32, u32>,
+) -> bool {
     let mut changed = false;
-    let rt = result_type(l, cv, tmp, shape);
+    let rt = result_type(l, cv, tmp, shape, iter_keys);
     match &l.res {
         Z::Tmp(t) => {
             let e = tmp.entry(*t).or_insert(0);
@@ -502,6 +537,7 @@ pub(crate) fn infer(lines: &[ZLine], shape: &FuncShape) -> Types {
         set_cv(&mut entry, c, if r { ty::ANY | ty::REF } else { ty::ANY });
     }
     let mut cv_in: Vec<Vec<u32>> = vec![vec![0; shape.ncv]; n];
+    let iter_keys = literal_iter_keys(lines);
     let mut tmp: HashMap<u32, u32> = HashMap::new();
     if n == 0 {
         return Types { cv_in, tmp };
@@ -517,7 +553,7 @@ pub(crate) fn infer(lines: &[ZLine], shape: &FuncShape) -> Types {
                 continue;
             }
             let mut st = cv_in[i].clone();
-            changed |= transfer(&lines[i], &mut st, &mut tmp, shape);
+            changed |= transfer(&lines[i], &mut st, &mut tmp, shape, &iter_keys);
             for s in succs(lines, i) {
                 if s >= n {
                     continue;

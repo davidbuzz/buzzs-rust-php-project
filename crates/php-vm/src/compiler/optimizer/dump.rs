@@ -178,6 +178,12 @@ fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
         if let Some(t) = l.res.tmp() {
             is_var.insert(t, l.res_var);
         }
+        // `FE_FETCH_RW` writes a VAR value operand.
+        if l.op == "FE_FETCH_RW" {
+            if let Some(t) = l.op2.tmp() {
+                is_var.insert(t, true);
+            }
+        }
     }
     let needs: Vec<bool> = lines
         .iter()
