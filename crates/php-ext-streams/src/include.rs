@@ -23,6 +23,9 @@ thread_local! {
 pub fn install(vm: &mut Vm) {
     PREV.with(|p| p.set(vm.include_opener));
     vm.set_include_opener(opener);
+    // `php_resolve_path()` resolves plain included files with
+    // `tsrm_realpath()`, through the realpath cache.
+    Vm::set_include_realpath_hook(php_streams::vcwd::tsrm_realpath);
 }
 
 /// Whether `p` names a URL (`scheme://...` or `data:`).
