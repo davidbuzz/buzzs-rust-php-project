@@ -734,13 +734,6 @@ impl<'a> Lower<'a> {
         }
     }
 
-    /// Whether op `i` is a statement of the file's top-level statement
-    /// list (`toplevel` in `zend_compile_top_stmt`): in the main code and
-    /// not crossed by any jump (the jump around or back over a block).
-    fn top_level(&self, i: usize) -> bool {
-        is_top_level(self.func, i)
-    }
-
     /// The op at `i` if it exists.
     fn op_at(&self, i: usize) -> Option<Op> {
         self.oa.ops.get(i).map(generic)
