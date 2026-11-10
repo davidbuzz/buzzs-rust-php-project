@@ -633,7 +633,9 @@ fn connect(
                     throw_connect_error(cx, &server);
                     return None;
                 }
-                local_infile_directory = Some(dir);
+                // mysqlnd stores an empty directory as NULL
+                // (`MYSQL_OPT_LOAD_DATA_LOCAL_DIR`), which getAttribute() reads
+                local_infile_directory = Some(dir).filter(|d| !d.is_empty());
             }
         }
         if let Some(cmd) = attr_strval(cx, options, ATTR_INIT_COMMAND) {

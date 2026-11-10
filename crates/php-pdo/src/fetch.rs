@@ -784,10 +784,7 @@ impl PdoStatement {
                     Some(i)
                 } else {
                     if !cx.has_exception() {
-                        cx.throw(
-                            STMT_FETCH_OBJECT
-                                .type_error(1, "must be a valid class name or null, string given"),
-                        );
+                        cx.throw(STMT_FETCH_OBJECT.type_error(1, &unknown_class_message(name)));
                     }
                     return Value::Null;
                 }
@@ -1080,6 +1077,18 @@ impl PdoStatement {
     }
 }
 
+/// `zend_wrong_parameter_type_error(Z_EXPECTED_CLASS_NAME_OR_NULL)` for a
+/// string naming no class (`Z_PARAM_CLASS_OR_NULL`): the name is quoted up
+/// to its first NUL byte (`Z_STRVAL`).
+fn unknown_class_message(name: &ZStr) -> String {
+    let b = name.as_bytes();
+    let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+    format!(
+        "must be a valid class name or null, \"{}\" given",
+        String::from_utf8_lossy(&b[..end])
+    )
+}
+
 /// The ctor args a `fetchAll(PDO::FETCH_CLASS)` keeps when none are given
 /// (the `cls.ctor_args` slot of the union).
 fn old_ctor_args(old: &FetchUnion) -> Option<ZArray> {
@@ -1139,5 +1148,22 @@ impl StmtIterator {
     /// The statement iterated over.
     pub fn statement(&self) -> &PdoStatement {
         &self.stmt
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_class_message_quotes_the_name() {
+        assert_eq!(
+            unknown_class_message(&ZStr::from("class_does_not_exist")),
+            "must be a valid class name or null, \"class_does_not_exist\" given"
+        );
+        assert_eq!(
+            unknown_class_message(&ZStr::from("a\0b")),
+            "must be a valid class name or null, \"a\" given"
+        );
     }
 }
