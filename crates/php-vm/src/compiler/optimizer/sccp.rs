@@ -1132,11 +1132,22 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
         let mut first_lit: Vec<Option<u32>> = vec![None; num_tmps + 1];
 
         for op in &op_array.ops {
+            // Writes `def_tmp` does not report: a foreach value or key,
+            // and an element added to an array being built.
             if let Op::FeFetch { val, key, .. } = op {
                 for t in std::iter::once(*val).chain(*key) {
                     if let Some(slot) = same_lit.get_mut(t as usize) {
                         *slot = false;
                     }
+                }
+            }
+            if let Op::ArrayAdd { arr, .. }
+            | Op::ArrayAddRef { arr, .. }
+            | Op::ArrayUnpack { arr, .. }
+            | Op::ConstArrayUnpack { arr, .. } = op
+            {
+                if let Some(slot) = same_lit.get_mut(*arr as usize) {
+                    *slot = false;
                 }
             }
             if let Some(t) = super::def_tmp(op) {
