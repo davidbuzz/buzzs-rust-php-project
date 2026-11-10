@@ -3509,6 +3509,11 @@ impl Vm {
             if op == BinaryOp::Concat {
                 if let Value::Str(add) = &v {
                     self.frame().clear_cv_for_symtab_slot(store, *idx);
+                    if let Some(main) = self.frames.first() {
+                        if main.symtab_attached {
+                            main.clear_cv_for_symtab_slot(store, *idx);
+                        }
+                    }
                     let mut st = store.borrow_mut();
                     if let Some(Value::Str(s)) = st.slots.get_mut(*idx).and_then(Option::as_mut) {
                         if !ZStr::ptr_eq(s, add) {
@@ -3516,6 +3521,7 @@ impl Vm {
                             let res = Value::Str(s.clone());
                             drop(st);
                             self.frame_mut().sync_from_symbol_table();
+                            self.sync_global_frames();
                             return Ok(res);
                         }
                         // `$s .= $s`: php-src extends the one string in
@@ -3532,10 +3538,12 @@ impl Vm {
                         let res = Value::Str(s.clone());
                         drop(st);
                         self.frame_mut().sync_from_symbol_table();
+                        self.sync_global_frames();
                         return Ok(res);
                     }
                     drop(st);
                     self.frame_mut().sync_from_symbol_table();
+                    self.sync_global_frames();
                 }
             }
         }
