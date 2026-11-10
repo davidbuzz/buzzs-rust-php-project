@@ -437,8 +437,14 @@ fn result_type(
             }
             t
         }
-        "FRAMELESS_ICALL_1" | "FRAMELESS_ICALL_2" | "FRAMELESS_ICALL_3" | "DO_ICALL"
-        | "DO_UCALL" | "DO_FCALL" | "DO_FCALL_BY_NAME" => l.ret.unwrap_or(ty::ANY),
+        "FRAMELESS_ICALL_1"
+        | "FRAMELESS_ICALL_2"
+        | "FRAMELESS_ICALL_3"
+        | "DO_ICALL"
+        | "DO_UCALL"
+        | "DO_FCALL"
+        | "DO_FCALL_BY_NAME"
+        | "FETCH_CLASS_CONSTANT" => l.ret.unwrap_or(ty::ANY),
         "FETCH_DIM_W"
         | "FETCH_DIM_RW"
         | "FETCH_OBJ_W"
@@ -1204,7 +1210,7 @@ fn keeps_op1_alive(op: &str) -> bool {
     )
 }
 
-fn is_init_call(op: &str) -> bool {
+pub(crate) fn is_init_call(op: &str) -> bool {
     matches!(
         op,
         "INIT_FCALL"
@@ -1219,7 +1225,7 @@ fn is_init_call(op: &str) -> bool {
     )
 }
 
-fn is_do_call(op: &str) -> bool {
+pub(crate) fn is_do_call(op: &str) -> bool {
     matches!(
         op,
         "DO_FCALL" | "DO_FCALL_BY_NAME" | "DO_ICALL" | "DO_UCALL"

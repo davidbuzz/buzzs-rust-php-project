@@ -31,6 +31,50 @@ pub const DUMP_BEFORE_OPTIMIZER: i64 = 1 << 16;
 /// `ZEND_DUMP_AFTER_OPTIMIZER`.
 pub const DUMP_AFTER_OPTIMIZER: i64 = 1 << 17;
 
+thread_local! {
+    /// The instruction buffers (`ops.as_ptr()`) of the op arrays that the
+    /// VM's optimizer reduced to `return <literal>;` although their
+    /// compiled code did more: php-src inlines a call only when the
+    /// callee's code is that literal return before its own optimization
+    /// (`zend_try_inline_call` sees the code of `zend_compile`, or of
+    /// passes 1 to 5), never after SCCP.
+    static REDUCED_TO_LITERAL: std::cell::RefCell<std::collections::HashSet<usize>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Whether `code` does nothing but return a literal (or nothing) after
+/// receiving its arguments: the shape `zend_try_inline_call` inlines.
+pub(crate) fn returns_literal(code: &OpArray) -> bool {
+    let mut body = code.ops.iter().map(lower::generic).filter(|op| {
+        !matches!(
+            op,
+            Op::Nop | Op::Recv { .. } | Op::RecvInit { .. } | Op::RecvDefault { .. }
+        )
+    });
+    matches!(
+        body.next(),
+        Some(Op::Return {
+            val: Operand::Lit(_) | Operand::Unused
+        })
+    )
+}
+
+/// Records that the optimizer reduced `code` to a literal return that
+/// its compiled code was not ([`returns_literal`]).
+pub(crate) fn note_reduced_to_literal(code: &OpArray) {
+    let key = code.ops.as_ptr().addr();
+    REDUCED_TO_LITERAL.with(|s| {
+        s.borrow_mut().insert(key);
+    });
+}
+
+/// Whether `code` was reduced to a literal return by the VM's optimizer
+/// ([`note_reduced_to_literal`]).
+fn reduced_to_literal(code: &OpArray) -> bool {
+    let key = code.ops.as_ptr().addr();
+    REDUCED_TO_LITERAL.with(|s| s.borrow().contains(&key))
+}
+
 /// One op array to dump.
 struct Entry {
     /// `zend_dump_op_array_name`.
@@ -542,6 +586,7 @@ pub fn dump_unit(
         }
     }
     let mut classes = HashMap::new();
+    let mut ambiguous = Vec::new();
     for c in unit.decls.classes.borrow().iter() {
         let mut methods = HashMap::new();
         for m in &c.methods {
@@ -549,9 +594,11 @@ pub fn dump_unit(
                 methods.insert(m.name.as_bytes().to_ascii_lowercase(), pos);
             }
         }
-        classes
-            .entry(c.name.as_bytes().to_ascii_lowercase())
-            .or_insert_with(|| (c.clone(), methods));
+        let lc = c.name.as_bytes().to_ascii_lowercase();
+        if classes.contains_key(&lc) {
+            ambiguous.push(lc.clone());
+        }
+        classes.entry(lc).or_insert_with(|| (c.clone(), methods));
     }
     let res = lower::Resolver {
         table: functions,
@@ -559,6 +606,9 @@ pub fn dump_unit(
         classes,
         internal,
         level,
+        bound: lower::early_bound_classes(&unit.main),
+        ambiguous,
+        funcs: entries.iter().map(|e| e.func.clone()).collect(),
     };
     let done: Vec<Done> = entries.iter().map(|e| finish(e, &res)).collect();
     let mut out = Vec::new();
