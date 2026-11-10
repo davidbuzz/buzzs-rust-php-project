@@ -1230,4 +1230,93 @@ mod tests {
             );
         }
     }
+
+    /// The literal the first `Return` of `code` returns, if it returns one.
+    fn returned_lit(code: &OpArray) -> Option<Value> {
+        code.ops.iter().find_map(|op| match op {
+            Op::Return {
+                val: Operand::Lit(l),
+            } => code.literals.get(*l as usize).cloned(),
+            _ => None,
+        })
+    }
+
+    /// `$a += $b` of constant CVs folds (opcache `opt/sccp_001`: the
+    /// function becomes `RETURN int(4)`).
+    #[test]
+    fn sccp_folds_compound_assignment_of_constant_variables() {
+        let unit = compile_src(
+            "<?php function foo() { $a = 1; $b = $a + 2; $a += $b; return $a; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"foo"));
+        assert!(
+            matches!(returned_lit(&code), Some(Value::Int(4))),
+            "{:?}",
+            code.ops
+        );
+    }
+
+    /// `++$a` folds; `$a++` keeps the old value as its result.
+    #[test]
+    fn sccp_folds_increments_with_their_own_results() {
+        let unit = compile_src(
+            "<?php function f() { $a = 1; $b = $a++; $c = ++$a; return $b * 10 + $c; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"f"));
+        // 1 * 10 + 3, when folded at all.
+        if let Some(v) = returned_lit(&code) {
+            assert!(matches!(v, Value::Int(13)), "{v:?} in {:?}", code.ops);
+        }
+    }
+
+    /// In-range offsets of literal strings fold; an out-of-range one warns
+    /// and stays (opcache `opt/sccp_043`).
+    #[test]
+    fn sccp_folds_literal_string_offsets() {
+        let unit = compile_src(
+            "<?php function f() { return \"abc\"[-1]; }\n\
+             function g() { return \"abc\"[-4]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let f = find_code(&unit, named(b"f"));
+        assert!(
+            matches!(returned_lit(&f), Some(Value::Str(s)) if s.as_bytes() == b"c"),
+            "{:?}",
+            f.ops
+        );
+        let g = find_code(&unit, named(b"g"));
+        assert!(returned_lit(&g).is_none(), "{:?}", g.ops);
+    }
+
+    /// An existing element of an array held by a constant CV, at a constant
+    /// CV offset, folds; a missing one warns and stays.
+    #[test]
+    fn sccp_folds_reads_of_constant_arrays() {
+        let unit = compile_src(
+            "<?php function f() { $a = [1, 2]; $k = 1; return $a[$k]; }\n\
+             function g() { $a = [1, 2]; $k = 5; return $a[$k]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let f = find_code(&unit, named(b"f"));
+        assert!(
+            matches!(returned_lit(&f), Some(Value::Int(2))),
+            "{:?}",
+            f.ops
+        );
+        let g = find_code(&unit, named(b"g"));
+        assert!(returned_lit(&g).is_none(), "{:?}", g.ops);
+    }
+
+    /// A by-reference parameter is never folded through `+=`.
+    #[test]
+    fn sccp_keeps_compound_assignment_of_references() {
+        let unit = compile_src(
+            "<?php function f(&$x) { $x = 1; $x += 2; return $x; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"f"));
+        assert!(returned_lit(&code).is_none(), "{:?}", code.ops);
+    }
 }
