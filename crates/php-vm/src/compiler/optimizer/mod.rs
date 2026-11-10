@@ -110,6 +110,10 @@ pub struct OptContext<'a> {
     /// and a by-reference one may change whenever user code runs or coerce
     /// what is assigned to it (a typed reference).
     pub bound_cvs: &'a [(u32, bool)],
+    /// The function's returns check a declared return type (php-src
+    /// emits `VERIFY_RETURN_TYPE` before each `RETURN`; the VM's `Return`
+    /// does the check itself).
+    pub verifies_return: bool,
 }
 
 impl OptContext<'_> {
@@ -165,6 +169,9 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
         }
         if (level & PASS_5) != 0 {
             changed |= block_pass::run_block_pass(op_array);
+            if !ctx.verifies_return {
+                changed |= block_pass::jmp_to_return(op_array);
+            }
         }
         if (level & PASS_14) != 0 {
             changed |= dce::run_dce(op_array);
@@ -220,6 +227,7 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
             let ctx = OptContext {
                 is_main: true,
                 bound_cvs: &[],
+                verifies_return: false,
             };
             optimize_op_array_with(code, level & !PASS_13, &ctx);
         }
