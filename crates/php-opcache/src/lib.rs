@@ -229,8 +229,10 @@ impl JitTraceTracker {
     }
 
     /// Returns whether a new root trace can be admitted.
+    /// `ZEND_JIT_TRACE_NUM < JIT_G(max_root_traces)`: php-src compares the
+    /// number of all traces, root and side, with the limit.
     pub fn can_add_root_trace(&self) -> bool {
-        self.root_trace_count < self.max_root_traces
+        self.root_trace_count + self.side_trace_count < self.max_root_traces
     }
 
     /// Returns whether a side trace can be added to the given root trace ID.
