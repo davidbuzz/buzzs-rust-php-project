@@ -592,7 +592,7 @@ pub fn dump_unit(
             }
         }
     }
-    let mut classes = HashMap::new();
+    let mut classes: HashMap<Vec<u8>, _> = HashMap::new();
     let mut ambiguous = Vec::new();
     for c in unit.decls.classes.borrow().iter() {
         let mut methods = HashMap::new();
