@@ -154,3 +154,30 @@ fn switch_compares_a_variable_subject_in_place() {
         "{ops:?}"
     );
 }
+
+#[test]
+fn array_map_with_a_dynamic_callable_compiles_to_a_loop() {
+    // `zend_compile_func_array_map`: `$f(...)` is evaluated once, before
+    // the array, and called per element; no closure, no array_map() call.
+    let src = "<?php function f($f, $a) { return array_map($f(...), $a); }";
+    let program =
+        php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+    let opts = CompileOptions {
+        filename: "t.php".into(),
+        array_map_builtin: true,
+        ..CompileOptions::default()
+    };
+    let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+    let ops = first_function_ops(&unit);
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::InitDynCall { .. })),
+        "{ops:?}"
+    );
+    assert!(
+        !ops.iter().any(|op| matches!(op, Op::InitFCall { .. })),
+        "{ops:?}"
+    );
+    let first_move = ops.iter().position(|op| matches!(op, Op::Move { .. }));
+    let reset = ops.iter().position(|op| matches!(op, Op::FeReset { .. }));
+    assert!(first_move < reset, "{ops:?}");
+}

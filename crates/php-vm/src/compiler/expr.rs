@@ -2494,32 +2494,60 @@ impl Compiler<'_> {
     ) -> CResult<Option<Operand>> {
         enum Target<'e> {
             Func(&'e ast::Name),
+            /// A function name computed before the array (`$f(...)`).
+            DynFunc(Operand),
             Static(ClassSpec, ZStr),
         }
+        // Cheap shape checks first: nothing is emitted for a callback the
+        // optimisation does not cover.
+        match &callback.kind {
+            ExprKind::Call { args, .. } if args.is_first_class_callable() => {}
+            ExprKind::StaticCall {
+                name: MemberName::Ident(_),
+                args,
+                ..
+            } if args.is_first_class_callable() => {}
+            _ => return Ok(None),
+        }
+        let mark = self.fref().ops.len();
+        let num_tmps = self.fref().num_tmps;
+        // The class, then the function name, are evaluated once, before
+        // the array, into temporaries the loop reuses and frees afterwards.
+        let mut owned_tmps: Vec<u32> = Vec::new();
         let target = match &callback.kind {
-            ExprKind::Call { callee, args } if args.is_first_class_callable() => match &**callee {
+            ExprKind::Call { callee, .. } => match &**callee {
                 Callee::Name(n) => Target::Func(n),
-                Callee::Expr(_) => return Ok(None),
+                Callee::Expr(ex) => {
+                    let c = self.compile_expr(ex)?;
+                    Target::DynFunc(self.array_map_operand(c, &mut owned_tmps))
+                }
             },
             ExprKind::StaticCall {
                 class,
                 name: MemberName::Ident(id),
-                args,
-            } if args.is_first_class_callable() => match &**class {
-                ast::ClassRef::Name(cn) => {
-                    Target::Static(self.class_spec_name(cn)?, ZStr::from(id.name.as_slice()))
-                }
-                ast::ClassRef::Expr(_) => return Ok(None),
-            },
+                ..
+            } => {
+                let spec = match &**class {
+                    ast::ClassRef::Name(cn) => self.class_spec_name(cn)?,
+                    ast::ClassRef::Expr(e) => {
+                        if !matches!(self.try_fold(e), None | Some(Value::Str(_))) {
+                            return self.err("Illegal class name", e.span.line);
+                        }
+                        let c = self.compile_expr(e)?;
+                        ClassSpec::Dyn(self.array_map_operand(c, &mut owned_tmps))
+                    }
+                };
+                Target::Static(spec, ZStr::from(id.name.as_slice()))
+            }
             _ => return Ok(None),
         };
-        let mark = self.fref().ops.len();
         let arr = self.compile_expr(array)?;
         if let Operand::Lit(i) = arr {
             if !matches!(self.fref().literals.get(i as usize), Some(Value::Array(_))) {
                 let f = self.f();
                 f.ops.truncate(mark);
                 f.lines.truncate(mark);
+                f.num_tmps = num_tmps;
                 return Ok(None);
             }
         }
@@ -2556,6 +2584,9 @@ impl Compiler<'_> {
         });
         match target {
             Target::Func(n) => self.emit_init_fcall(n),
+            Target::DynFunc(callee) => {
+                self.emit(Op::InitDynCall { callee });
+            }
             Target::Static(class, m) => {
                 let name = self.lit(Value::Str(m));
                 self.emit(Op::InitStaticCall { class, name });
@@ -2575,7 +2606,28 @@ impl Compiler<'_> {
         self.patch_here(reset);
         self.patch_here(fetch);
         self.emit(Op::FeFree { iter });
+        // `ZEND_FREE` of the function name, then of the class.
+        for t in owned_tmps.into_iter().rev() {
+            self.emit(Op::Free(Operand::Tmp(t)));
+        }
         Ok(Some(Operand::Tmp(result)))
+    }
+
+    /// An operand of [`Self::compile_array_map_foreach`]'s loop: a literal
+    /// as is; anything else in a temporary (`ZEND_QM_ASSIGN` of a
+    /// variable) that every iteration reads without consuming.
+    fn array_map_operand(&mut self, op: Operand, owned: &mut Vec<u32>) -> Operand {
+        let t = match op {
+            Operand::Lit(_) => return op,
+            Operand::Tmp(t) => t,
+            other => {
+                let t = self.tmp();
+                self.emit(Op::Move { src: other, dst: t });
+                t
+            }
+        };
+        owned.push(t);
+        Operand::TmpKeep(t)
     }
 
     /// Compile-time special functions. Returns `None` when `n` is not one.
