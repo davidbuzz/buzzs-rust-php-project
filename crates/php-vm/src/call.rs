@@ -395,6 +395,29 @@ impl Vm {
         Ok(())
     }
 
+    /// `ZEND_INIT_DYNAMIC_CALL` of `$cv()` for a variable holding a closure
+    /// of a user function, from the dispatch loop's hot-instruction block
+    /// (no `SAVE_OPLINE`): [`Vm::op_init_dyn_call`]'s first case without
+    /// the generic operand read. Returns `false`, having changed nothing,
+    /// for an undefined variable, a reference or anything but such a
+    /// closure, and in a frame with an attached symbol table.
+    #[inline]
+    pub(crate) fn init_closure_call_fast(&mut self, cv: u32) -> bool {
+        let o = {
+            let Some(frame) = self.frames.last() else {
+                return false;
+            };
+            if frame.symtab_attached {
+                return false;
+            }
+            match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                Some(Value::Object(o)) => o.clone(),
+                _ => return false,
+            }
+        };
+        self.push_closure_user_call(&o)
+    }
+
     /// [`Vm::closure_user_call`] as a dynamic call (`$closure()`), the call
     /// built in place in `calls` ([`Vm::push_pending_with`]): only the
     /// handles the call takes from the closure are carried out of its
@@ -2332,11 +2355,18 @@ impl Vm {
     /// one `op_return` gives: the same checks, the same release order
     /// (`gc::frame_released`, then [`FrameStack::release_top`]) and a
     /// dereferenced value (`copy_on_assign` has nothing left to do).
-    /// Returns `None`, having changed nothing, otherwise.
+    /// `ip` is the instruction after the `RETURN`, stored as the frame's
+    /// resume point before the release (`SAVE_OPLINE`). Returns `None`,
+    /// having changed nothing, otherwise.
     ///
     /// [`FrameStack::release_top`]: crate::vm::FrameStack::release_top
     #[inline]
-    pub(crate) fn return_simple(&mut self, val: Operand, base: usize) -> Option<crate::exec::Flow> {
+    pub(crate) fn return_simple(
+        &mut self,
+        val: Operand,
+        base: usize,
+        ip: usize,
+    ) -> Option<crate::exec::Flow> {
         if self.observer.enabled {
             return None;
         }
@@ -2408,6 +2438,8 @@ impl Vm {
                 }
                 Operand::TmpKeep(_) => return None,
             };
+            // `SAVE_OPLINE()`: the release below may report this line.
+            frame.ip = ip;
             // `gc::frame_released` has nothing to record for a frame
             // without `$this`, a closure or a compiled variable holding an
             // array, object or reference (no symbol table is attached).

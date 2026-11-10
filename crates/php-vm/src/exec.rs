@@ -1491,6 +1491,14 @@ impl Vm {
                             };
                             self.set_tmp(*dst, Value::Object(this));
                         }
+                        // `$closure()` (`Vm::init_closure_call_fast`).
+                        Op::InitDynCall {
+                            callee: Operand::Cv(cv),
+                        } => {
+                            if !self.init_closure_call_fast(*cv) {
+                                break 'slow;
+                            }
+                        }
                         // `$obj->name()` on a method cache hit
                         // (`Vm::init_method_call_fast`).
                         Op::InitMethodCall {
@@ -1522,7 +1530,7 @@ impl Vm {
                         // `Flow::Reload`. Declined, the generic `Return`
                         // below runs (`Vm::op_return`).
                         Op::Return { val } => {
-                            if self.return_simple(*val, base).is_none() {
+                            if self.return_simple(*val, base, ip).is_none() {
                                 break 'slow;
                             }
                             if Self::safe_point_due() {

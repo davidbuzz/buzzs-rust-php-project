@@ -925,6 +925,29 @@ fn clear_frame_buffer<T>(buffer: &mut Vec<T>) {
     }
 }
 
+/// [`clear_frame_buffer`] of the passed-argument buffer of a recycled
+/// frame, without the out-of-line slice drop glue of `Vec::clear`: a call
+/// with arguments leaves one entry per argument, `None` once moved into its
+/// compiled variable (`ZEND_CALL_NUM_ARGS`), so the buffer is usually
+/// non-empty but owns nothing. The values left in it (extra arguments) are
+/// released front to back, as `clear` releases them.
+#[inline]
+fn clear_arg_buffer(buffer: &mut Vec<Option<Value>>) {
+    if buffer.capacity() > 256 {
+        *buffer = Vec::new();
+        return;
+    }
+    for arg in buffer.iter_mut() {
+        if let Some(v) = arg.take() {
+            release_slot(v);
+        }
+    }
+    // SAFETY: every element is `None` now, which owns nothing, so cutting
+    // the length to zero forgets no value (the elements are initialised
+    // and `0 <= capacity`).
+    unsafe { buffer.set_len(0) };
+}
+
 /// Empties an `Option` field of a frame being recycled. Only a set field is
 /// written: storing `None` over an unknown value calls the payload's
 /// out-of-line `drop_in_place` (an object handle's) even when it was
@@ -1129,7 +1152,7 @@ impl Frame {
             self.vars = Rc::new(RefCell::new(VarStore::default()));
         }
         clear_frame_buffer(&mut self.named);
-        clear_frame_buffer(&mut self.args);
+        clear_arg_buffer(&mut self.args);
         clear_opt(&mut self.this);
         clear_opt(&mut self.closure);
         clear_opt(&mut self.generator);
@@ -2085,6 +2108,26 @@ mod tests {
         assert!(f.func.is_none() && f.ufunc.is_none());
         assert!(Rc::ptr_eq(&f.code, &empty));
         assert_eq!(Rc::strong_count(&code), 1);
+    }
+
+    #[test]
+    fn clear_arg_buffer_releases_extra_arguments_and_keeps_the_capacity() {
+        let s = ZStr::from("an extra argument");
+        let mut args = Vec::with_capacity(8);
+        args.push(None);
+        args.push(Some(Value::Str(s.clone())));
+        args.push(Some(Value::Int(4)));
+        assert_eq!(s.refcount(), 2);
+        super::clear_arg_buffer(&mut args);
+        assert!(args.is_empty());
+        assert_eq!(args.capacity(), 8);
+        assert_eq!(s.refcount(), 1);
+        // An oversized buffer is let go.
+        let mut big: Vec<Option<Value>> = Vec::with_capacity(512);
+        big.push(None);
+        super::clear_arg_buffer(&mut big);
+        assert!(big.is_empty());
+        assert_eq!(big.capacity(), 0);
     }
 
     #[test]

@@ -837,3 +837,34 @@ end
 ~10 ~20 ~30 ~40 "#;
     assert_eq!(run(src), expected);
 }
+
+/// Dynamic calls of closures held by variables on the INIT fast path and
+/// the generic ones it declines to: recursion through a by-reference
+/// `use`, a bound `$this`, static closures, a reference to a closure,
+/// invokable objects, strings, arrays, first-class callables, an undefined
+/// variable and static variables.
+#[test]
+fn closure_and_dynamic_calls() {
+    let src = r#"<?php
+class Inv { public $k = 2; function __invoke($x) { return $x * $this->k; } function get() { return function($x) { return $x + $this->k; }; } }
+$f = function($x) use (&$f) { return $x <= 0 ? 0 : $x + $f($x - 1); };
+echo $f(4), " ";
+$inv = new Inv; echo $inv(5), " ";
+$s = 'strtoupper'; echo $s('ab'), " ";
+$b = $inv->get(); echo $b(1), " ";
+$st = static fn($x) => $x . "!"; echo $st('a'), " ";
+$ref = &$st; echo $ref('b'), " ";
+$m = [$inv, 'get']; echo $m()(3), " ";
+$fc = strlen(...); echo $fc('abcd'), "\n";
+try { $undef(1); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$counter = function() { static $n = 0; return ++$n; };
+$counter(); echo $counter(), "\n";
+"#;
+    let expected = r#"10 10 AB 3 a! b! 5 4
+
+Warning: Undefined variable $undef in t.php on line 12
+Value of type null is not callable
+2
+"#;
+    assert_eq!(run(src), expected);
+}
