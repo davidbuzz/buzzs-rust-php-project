@@ -170,11 +170,17 @@ fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
             .collect(),
         by_ref: e.func.params.iter().map(|p| p.by_ref).collect(),
         bound: e.func.uses.iter().map(|u| (u.cv, u.by_ref)).collect(),
+        ret: e
+            .func
+            .return_type
+            .as_ref()
+            .filter(|_| e.func.flags & flags::RETURN_REF == 0)
+            .map(passes::pure_type),
     };
     let level = res.level;
     let types = passes::infer(&lines, &shape);
     if level & super::PASS_6 != 0 && !e.is_main && passes::dfa_allowed(&lines) {
-        passes::dfa(&mut lines, &types);
+        passes::dfa(&mut lines, &types, &shape);
     }
     let (mut lines, new_idx) = passes::remove_nops(lines);
     // `try_catch_array`: try, catch, finally and finally-end oplines.

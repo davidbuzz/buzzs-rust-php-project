@@ -84,6 +84,17 @@ pub(crate) fn decl_type(t: Option<&crate::types::TypeDecl>) -> u32 {
     }
 }
 
+/// `ZEND_TYPE_PURE_MASK` of a declared type: its builtin types only.
+pub(crate) fn pure_type(t: &crate::types::TypeDecl) -> u32 {
+    let classes = !t.classes.is_empty() || !t.intersections.is_empty();
+    let all = decl_type(Some(t));
+    if classes && t.mask & crate::types::mask::OBJECT == 0 {
+        all & !ty::OBJECT
+    } else {
+        all
+    }
+}
+
 /// Opcodes after which control does not fall through.
 fn ends_flow(op: &str) -> bool {
     matches!(
@@ -293,6 +304,8 @@ pub(crate) struct FuncShape {
     pub by_ref: Vec<bool>,
     /// CVs bound at entry (closure `use`), and whether by reference.
     pub bound: Vec<(u32, bool)>,
+    /// `ZEND_TYPE_PURE_MASK` of the declared return type, if any.
+    pub ret: Option<u32>,
 }
 
 fn z_type(z: &Z, cv: &[u32], tmp: &HashMap<u32, u32>) -> u32 {
@@ -704,10 +717,41 @@ fn try_contract(lines: &mut [ZLine], types: &Types, i: usize, c: u32, t: u32) ->
 }
 
 /// The CV-assignment rewrites of `zend_dfa_optimize_op_array`.
-pub(crate) fn dfa(lines: &mut [ZLine], types: &Types) {
+pub(crate) fn dfa(lines: &mut [ZLine], types: &Types, shape: &FuncShape) {
     for i in 0..lines.len() {
         let l = lines[i].clone();
         match l.op {
+            // `can_elide_return_type_check`: the returned value already
+            // has one of the declared builtin types.
+            "VERIFY_RETURN_TYPE" if matches!(l.res, Z::Unused) => {
+                let Some(allowed) = shape.ret else { continue };
+                let t = match &l.op1 {
+                    Z::Tmp(t) => types.tmp.get(t).copied().unwrap_or(0),
+                    Z::Cv(c) => get_cv(&types.cv_in[i], *c),
+                    _ => continue,
+                };
+                if t == 0 || t & ty::REF != 0 {
+                    continue;
+                }
+                let t = if t & ty::UNDEF != 0 {
+                    (t & !ty::UNDEF) | ty::NULL
+                } else {
+                    t
+                };
+                let returned = lines[i + 1..]
+                    .iter()
+                    .find(|n| !n.is_nop())
+                    .is_some_and(|n| {
+                        n.op == "RETURN"
+                            && match (&n.op1, &l.op1) {
+                                (Z::Tmp(a), Z::Tmp(b)) | (Z::Cv(a), Z::Cv(b)) => a == b,
+                                _ => false,
+                            }
+                    });
+                if returned && t & !allowed == 0 {
+                    lines[i] = ZLine::new("NOP");
+                }
+            }
             "QM_ASSIGN" => {
                 if let (Z::Cv(c), Z::Tmp(t)) = (&l.res, &l.op1) {
                     let new = types.tmp.get(t).copied().unwrap_or(ty::ANY);
