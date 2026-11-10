@@ -62,9 +62,16 @@ pub(crate) fn returns_literal(code: &OpArray) -> bool {
 /// Records that the optimizer reduced `code` to a literal return that
 /// its compiled code was not ([`returns_literal`]).
 pub(crate) fn note_reduced_to_literal(code: &OpArray) {
+    // Bounded: a long-running process forgets old entries (which only
+    // makes the dump of an old function's callers less exact).
+    const MAX_ENTRIES: usize = 1 << 16;
     let key = code.ops.as_ptr().addr();
     REDUCED_TO_LITERAL.with(|s| {
-        s.borrow_mut().insert(key);
+        let mut s = s.borrow_mut();
+        if s.len() >= MAX_ENTRIES {
+            s.clear();
+        }
+        s.insert(key);
     });
 }
 
