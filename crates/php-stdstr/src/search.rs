@@ -364,6 +364,16 @@ pub fn strcspn(s: &[u8], chars: &[u8], offset: i64, length: Option<i64>) -> i64 
 /// Backs `explode(string $separator, string $string, int $limit =
 /// PHP_INT_MAX): array`.
 pub fn explode(delim: &[u8], s: &[u8], limit: i64) -> StdResult<Vec<Vec<u8>>> {
+    Ok(explode_slices(delim, s, limit)?
+        .into_iter()
+        .map(<[u8]>::to_vec)
+        .collect())
+}
+
+/// [`explode`] as borrowed pieces of `s` (`php_explode()` /
+/// `php_explode_negative_limit()`), so the caller can build each element
+/// without an intermediate copy: a piece that is all of `s` is `s` itself.
+pub fn explode_slices<'a>(delim: &[u8], s: &'a [u8], limit: i64) -> StdResult<Vec<&'a [u8]>> {
     if delim.is_empty() {
         return Err(StdError::arg_value(
             "explode",
@@ -373,46 +383,32 @@ pub fn explode(delim: &[u8], s: &[u8], limit: i64) -> StdResult<Vec<Vec<u8>>> {
         ));
     }
     if s.is_empty() {
-        return Ok(if limit >= 0 {
-            vec![Vec::new()]
-        } else {
-            Vec::new()
-        });
+        return Ok(if limit >= 0 { vec![s] } else { Vec::new() });
+    }
+    if limit == 0 || limit == 1 {
+        return Ok(vec![s]);
     }
     let mut pieces: Vec<&[u8]> = Vec::new();
     let mut p = 0;
     while let Some(r) = memnstr(&s[p..], delim) {
+        // With a positive limit the last element holds the unsplit
+        // remainder.
+        if limit > 1 && len_i64(pieces.len()) == limit - 1 {
+            break;
+        }
         pieces.push(&s[p..p + r]);
         p += r + delim.len();
     }
     pieces.push(&s[p..]);
-    let n = pieces.len();
-    if limit > 1 {
-        let lim = to_usize(limit);
-        if n > lim {
-            // The last element holds the unsplit remainder.
-            let consumed: usize = pieces[..lim - 1]
-                .iter()
-                .map(|x| x.len() + delim.len())
-                .sum();
-            let mut out: Vec<Vec<u8>> = pieces[..lim - 1].iter().map(|x| x.to_vec()).collect();
-            out.push(s[consumed..].to_vec());
-            return Ok(out);
-        }
-        Ok(pieces.into_iter().map(<[u8]>::to_vec).collect())
-    } else if limit < 0 {
+    if limit < 0 {
+        let n = pieces.len();
         if n == 1 {
             return Ok(Vec::new());
         }
         let keep = len_i64(n) + limit;
-        Ok(pieces
-            .into_iter()
-            .take(to_usize(keep))
-            .map(<[u8]>::to_vec)
-            .collect())
-    } else {
-        Ok(vec![s.to_vec()])
+        pieces.truncate(if keep > 0 { to_usize(keep) } else { 0 });
     }
+    Ok(pieces)
 }
 
 /// The per-request state behind `strtok()` (`BG(strtok_string)` /
@@ -496,6 +492,25 @@ mod tests {
         assert_eq!(e(-1), vec![b"a".to_vec(), b"b".to_vec()]);
         assert_eq!(e(0), vec![b"a,b,c".to_vec()]);
         assert_eq!(e(-5), Vec::<Vec<u8>>::new());
+    }
+
+    #[test]
+    fn explode_slices_match_php() {
+        // Oracle: PHP 8.3 json_encode(explode(...)).
+        let e = |d: &[u8], s: &'static [u8], l| explode_slices(d, s, l).unwrap_or_default();
+        let none: Vec<&[u8]> = Vec::new();
+        assert_eq!(e(b",", b"a,b,c", 3), vec![&b"a"[..], b"b", b"c"]);
+        assert_eq!(e(b",", b"a,b,c", 4), vec![&b"a"[..], b"b", b"c"]);
+        assert_eq!(e(b",", b",a,", -1), vec![&b""[..], b"a"]);
+        assert_eq!(e(b",", b"", -1), none);
+        assert_eq!(e(b",", b"", 0), vec![&b""[..]]);
+        assert_eq!(e(b",", b"abc", -1), none);
+        assert_eq!(e(b",,", b"a,,,b,,", 2), vec![&b"a"[..], b",b,,"]);
+        assert_eq!(e(b",", b"a,b,c", -2), vec![&b"a"[..]]);
+        assert!(explode_slices(b"", b"a", 1).is_err());
+        // A piece that is the whole input is the input itself.
+        let s: &[u8] = b"abc";
+        assert!(std::ptr::eq(e(b",", s, i64::MAX)[0], s));
     }
 
     #[test]

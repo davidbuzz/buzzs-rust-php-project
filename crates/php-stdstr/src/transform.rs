@@ -112,14 +112,20 @@ pub fn trim<'a>(
     mode: TrimMode,
     notices: &mut Notices,
 ) -> &'a [u8] {
-    let mask: Box<dyn Fn(u8) -> bool> = match what {
-        None => Box::new(is_trim_whitespace),
-        Some(&[c]) => Box::new(move |x| x == c),
+    // Monomorphised per mask kind: no boxed closure per call.
+    match what {
+        None => trim_by(s, mode, is_trim_whitespace),
+        Some(&[c]) => trim_by(s, mode, |x| x == c),
         Some(w) => {
             let m = charmask(w, mode.func_name(), notices);
-            Box::new(move |x| m[usize::from(x)])
+            trim_by(s, mode, |x| m[usize::from(x)])
         }
-    };
+    }
+}
+
+/// The trimming loops of [`trim`] for one character mask.
+#[inline]
+fn trim_by(s: &[u8], mode: TrimMode, mask: impl Fn(u8) -> bool) -> &[u8] {
     let mut start = 0;
     let mut end = s.len();
     if mode != TrimMode::Right {

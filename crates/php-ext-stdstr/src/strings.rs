@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 
+use php_runtime::string::{format_long, ZStrBuf, LONG_MAX_LEN};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_stdstr::analysis::{self, CharCounts, WordCount};
 use php_stdstr::error::Notices;
@@ -67,18 +68,28 @@ fn strcoll(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn trim_impl(vm: &mut Vm, a: &Args, mode: TrimMode) -> VmResult<Value> {
-    let s = a.str(0);
-    let what = a.has(1).then(|| a.str(1));
+    let s = a.zstr(0);
+    let what = a.has(1).then(|| a.zstr(1));
     let mut n = Notices::new();
     let r = transform::trim(
         s.as_bytes(),
-        what.as_ref().map(ZStr::as_bytes),
+        what.as_deref().map(ZStr::as_bytes),
         mode,
         &mut n,
-    )
-    .to_vec();
-    emit(vm, n)?;
-    Ok(bytes(r))
+    );
+    // `php_trim_int()`: the string itself when nothing was trimmed, the
+    // shared empty string when everything was, else a copy.
+    let out = if r.len() == s.len() {
+        ZStr::clone(&s)
+    } else if r.is_empty() {
+        ZStr::empty()
+    } else {
+        ZStr::from(r)
+    };
+    if !n.is_empty() {
+        emit(vm, n)?;
+    }
+    Ok(Value::Str(out))
 }
 
 fn trim(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -117,56 +128,83 @@ fn wordwrap(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn explode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let limit = if a.has(2) { a.int(2) } else { i64::MAX };
-    let s = a.str(1);
-    let sep = a.str(0);
+    let s = a.zstr(1);
+    let sep = a.zstr(0);
     let pieces = mem::occurrences(s.as_bytes(), sep.as_bytes(), false) + 1;
     mem::check(
         vm,
         pieces.saturating_mul(mem::elem(0)).saturating_add(s.len()),
     )?;
-    let r = search::explode(sep.as_bytes(), s.as_bytes(), limit);
+    let r = search::explode_slices(sep.as_bytes(), s.as_bytes(), limit);
     let parts = check(vm, r)?;
-    Ok(str_list(parts))
+    // `php_explode()`: the input itself when it is not split
+    // (`ZVAL_STR_COPY`), else `zend_string_init_fast` of each piece.
+    Ok(Value::Array(ZArray::from_values(parts.into_iter().map(
+        |p| {
+            Value::Str(if p.len() == s.len() {
+                ZStr::clone(&s)
+            } else {
+                ZStr::init_fast(p)
+            })
+        },
+    ))))
 }
 
-/// `php_implode()`.
-pub(crate) fn implode_array(vm: &mut Vm, glue: &[u8], pieces: &ZArray) -> VmResult<Vec<u8>> {
+/// `php_implode()`: the pieces joined straight into the result string
+/// (one exactly sized allocation for string and integer pieces), with its
+/// single-element case: the element's own string (`zval_get_string`, no
+/// copy for a string).
+fn implode_zstr(vm: &mut Vm, glue: &[u8], pieces: &ZArray) -> VmResult<ZStr> {
+    if pieces.is_empty() {
+        return Ok(ZStr::empty());
+    }
+    if pieces.len() == 1 {
+        if let Some((_, v)) = pieces.iter().next() {
+            if let Value::Str(s) = v.deref() {
+                return Ok(s);
+            }
+        }
+    }
     let known: usize = pieces
         .iter()
         .map(|(_, v)| match v.deref() {
             Value::Str(s) => s.len(),
+            Value::Int(n) => php_runtime::string::long_str_len(n),
             _ => 0,
         })
         .sum();
     let total = known.saturating_add(glue.len().saturating_mul(pieces.len().saturating_sub(1)));
     mem::check(vm, mem::zstr(total))?;
-    let mut out = Vec::with_capacity(total);
+    let mut out = ZStrBuf::with_capacity(total);
     for (i, (_, v)) in pieces.iter().enumerate() {
         if i > 0 {
-            out.extend_from_slice(glue);
+            out.push(glue);
         }
         match v.deref() {
-            Value::Str(s) => out.extend_from_slice(s.as_bytes()),
-            Value::Int(n) => out.extend_from_slice(n.to_string().as_bytes()),
-            other => out.extend_from_slice(to_str(vm, &other)?.as_bytes()),
+            Value::Str(s) => out.push(s.as_bytes()),
+            Value::Int(n) => {
+                let mut buf = [0u8; LONG_MAX_LEN];
+                out.push(format_long(n, &mut buf));
+            }
+            other => out.push(to_str(vm, &other)?.as_bytes()),
         }
     }
-    Ok(out)
+    Ok(out.finish())
 }
 
 fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let first = a.at(0);
-    let fname = a.func_name();
     let (glue, pieces) = match a.opt(1) {
         None => match first {
             Value::Array(p) => (ZStr::empty(), p),
             _ => {
+                let fname = a.func_name();
                 return Err(vm.throw(
                     "TypeError",
                     &format!(
                         "{fname}(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given"
                     ),
-                ))
+                ));
             }
         },
         Some(Value::Array(p)) => match first {
@@ -180,8 +218,8 @@ fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Err(a.type_error(vm, 2, &msg));
         }
     };
-    let out = ZStr::from(implode_array(vm, glue.as_bytes(), &pieces)?);
-    if implode_valid_utf8(&glue, &pieces) {
+    let out = implode_zstr(vm, glue.as_bytes(), &pieces)?;
+    if !out.is_valid_utf8() && implode_valid_utf8(&glue, &pieces) {
         out.mark_valid_utf8();
     }
     Ok(Value::Str(out))
@@ -219,12 +257,14 @@ fn strtok(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(opt_bytes(r))
 }
 
+// `zend_string_toupper()` / `zend_string_tolower()`: the string itself
+// when no byte changes, else one new string converted in place.
 fn strtoupper(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::strtoupper(a.str(0).as_bytes())))
+    Ok(Value::Str(a.zstr(0).to_ascii_uppercase()))
 }
 
 fn strtolower(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::strtolower(a.str(0).as_bytes())))
+    Ok(Value::Str(a.zstr(0).to_ascii_lowercase()))
 }
 
 fn str_increment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -320,8 +360,15 @@ fn chunk_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn substr(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let s = a.str(0);
-    Ok(bytes(search::substr(s.as_bytes(), a.int(1), opt_int(a, 2))))
+    let s = a.zstr(0);
+    let r = search::substr(s.as_bytes(), a.int(1), a.opt_int(2));
+    // `RETURN_STR_COPY(str)` for the whole string, else
+    // `RETURN_STRINGL_FAST` (shared empty / one-character strings).
+    Ok(Value::Str(if r.len() == s.len() {
+        ZStr::clone(&s)
+    } else {
+        ZStr::init_fast(r)
+    }))
 }
 
 /// Walks the values of an `array|int` argument of `substr_replace()` in

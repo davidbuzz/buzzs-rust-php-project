@@ -1256,7 +1256,36 @@ impl Args {
     /// String argument `n` (declared `string`; already coerced).
     #[inline]
     pub fn str(&self, n: usize) -> ZStr {
-        crate::builtins::util::s(self, n)
+        match self.values.get(n) {
+            Some(Value::Str(s)) => s.clone(),
+            _ => crate::builtins::util::s(self, n),
+        }
+    }
+
+    /// String argument `n` borrowed in place when it is a string value
+    /// (`Z_PARAM_STR`: the handler reads the argument's `zend_string`
+    /// without taking a reference), else [`Args::str`]'s owned string.
+    #[inline]
+    pub fn zstr(&self, n: usize) -> std::borrow::Cow<'_, ZStr> {
+        match self.values.get(n) {
+            Some(Value::Str(s)) => std::borrow::Cow::Borrowed(s),
+            _ => std::borrow::Cow::Owned(crate::builtins::util::s(self, n)),
+        }
+    }
+
+    /// Optional nullable integer argument `n` (`Z_PARAM_LONG_OR_NULL`
+    /// after `Z_PARAM_OPTIONAL`): `None` when it was not passed or is
+    /// `null`, else [`Args::int`] — without copying the value.
+    #[inline]
+    pub fn opt_int(&self, n: usize) -> Option<i64> {
+        if !self.has(n) {
+            return None;
+        }
+        match self.values.get(n) {
+            Some(Value::Int(i)) => Some(*i),
+            Some(Value::Null) | None => None,
+            Some(_) => self.opt(n).map(|_| self.int(n)),
+        }
     }
 
     /// Borrowed string bytes of argument `n` if it is a string without reference.
@@ -1268,7 +1297,10 @@ impl Args {
     /// Integer argument `n` (declared `int`).
     #[inline]
     pub fn int(&self, n: usize) -> i64 {
-        crate::builtins::util::i(self, n)
+        match self.values.get(n) {
+            Some(Value::Int(i)) => *i,
+            _ => crate::builtins::util::i(self, n),
+        }
     }
 
     /// Float argument `n` (declared `float`).

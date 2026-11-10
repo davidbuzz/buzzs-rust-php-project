@@ -1358,10 +1358,10 @@ impl ZStr {
     /// of `self` if nothing changes.
     #[must_use]
     pub fn to_ascii_lowercase(&self) -> Self {
-        if self.as_bytes().iter().any(u8::is_ascii_uppercase) {
-            ZStr::new(self.as_bytes().to_ascii_lowercase())
-        } else {
-            self.clone()
+        let bytes = self.as_bytes();
+        match bytes.iter().position(u8::is_ascii_uppercase) {
+            Some(first) => Self::from_slice_mapped(bytes, |b| b[first..].make_ascii_lowercase()),
+            None => self.clone(),
         }
     }
 
@@ -1369,10 +1369,56 @@ impl ZStr {
     /// of `self` if nothing changes.
     #[must_use]
     pub fn to_ascii_uppercase(&self) -> Self {
-        if self.as_bytes().iter().any(u8::is_ascii_lowercase) {
-            ZStr::new(self.as_bytes().to_ascii_uppercase())
-        } else {
-            self.clone()
+        let bytes = self.as_bytes();
+        match bytes.iter().position(u8::is_ascii_lowercase) {
+            Some(first) => Self::from_slice_mapped(bytes, |b| b[first..].make_ascii_uppercase()),
+            None => self.clone(),
+        }
+    }
+
+    /// A new string holding a copy of `bytes` that `map` rewrites in place
+    /// before anything else can see it: one exactly sized allocation and
+    /// no intermediate vector (`zend_string_init` + in-place loop, as
+    /// `zend_string_tolower` and `php_strtr` build their results).
+    #[must_use]
+    pub fn from_slice_mapped(bytes: &[u8], map: impl FnOnce(&mut [u8])) -> Self {
+        let s = Self::from_slice(bytes);
+        let h = s.header();
+        // SAFETY: `s` was just allocated and is its block's only handle, not
+        // interned and not yet shared; `ptr` is valid for `len` initialised
+        // bytes of that block, and no other reference to them exists while
+        // `map` runs (the header borrow only reads `ptr` and `len`).
+        let data = unsafe { std::slice::from_raw_parts_mut(h.ptr, h.len) };
+        map(data);
+        s
+    }
+
+    /// The substring `bytes[start..start + len]` of this string as a string
+    /// the way php-src returns substrings: the string itself (a new handle,
+    /// `zend_string_copy`) when the range covers all of it, the shared
+    /// empty or one-character string for zero or one byte
+    /// (`RETURN_STRINGL_FAST` / `zend_string_init_fast`), a copy otherwise.
+    ///
+    /// # Panics
+    /// When the range is outside the string.
+    #[must_use]
+    pub fn substring(&self, start: usize, len: usize) -> Self {
+        let bytes = self.as_bytes();
+        if start == 0 && len == bytes.len() {
+            return self.clone();
+        }
+        Self::init_fast(&bytes[start..start + len])
+    }
+
+    /// `zend_string_init_fast`: the shared empty or one-character string for
+    /// zero or one byte, a new copy of `bytes` otherwise.
+    #[inline]
+    #[must_use]
+    pub fn init_fast(bytes: &[u8]) -> Self {
+        match bytes {
+            [] => Self::empty(),
+            [c] => Self::from_byte(*c),
+            _ => Self::from_slice(bytes),
         }
     }
 
@@ -1702,6 +1748,33 @@ impl fmt::Display for ZStr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn case_mapping_reuses_unchanged_strings() {
+        let s = ZStr::from("abc-1");
+        assert!(ZStr::ptr_eq(&s.to_ascii_lowercase(), &s));
+        let up = s.to_ascii_uppercase();
+        assert_eq!(up.as_bytes(), b"ABC-1");
+        assert!(!ZStr::ptr_eq(&up, &s));
+        assert_eq!(up.refcount(), 1);
+        let mixed = ZStr::from(&b"xY\xffZ"[..]);
+        assert_eq!(mixed.to_ascii_lowercase().as_bytes(), b"xy\xffz");
+        assert_eq!(mixed.to_ascii_uppercase().as_bytes(), b"XY\xffZ");
+        assert_eq!(mixed.as_bytes(), b"xY\xffZ");
+        let mapped = ZStr::from_slice_mapped(b"", |b| b.reverse());
+        assert!(mapped.is_empty());
+    }
+
+    #[test]
+    fn substrings_share_whole_and_single_byte_strings() {
+        let s = ZStr::from("hello");
+        assert!(ZStr::ptr_eq(&s.substring(0, 5), &s));
+        assert!(ZStr::ptr_eq(&s.substring(1, 1), &ZStr::from_byte(b'e')));
+        assert!(ZStr::ptr_eq(&s.substring(5, 0), &ZStr::empty()));
+        assert_eq!(s.substring(1, 3).as_bytes(), b"ell");
+        assert!(ZStr::ptr_eq(&ZStr::init_fast(b"q"), &ZStr::from_byte(b'q')));
+        assert_eq!(ZStr::init_fast(b"qq").as_bytes(), b"qq");
+    }
 
     #[test]
     fn basic_properties() {
