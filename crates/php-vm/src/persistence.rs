@@ -455,13 +455,18 @@ impl Vm {
         let mut seen: HashSet<usize> = HashSet::new();
         for unit in &units {
             let top = top_level_classes(&unit.main.code);
+            let mut found: Vec<Rc<ClassDecl>> = Vec::new();
             for (i, decl) in unit.decls.classes.borrow().iter().enumerate() {
                 let anonymous = decl.flags & cflags::ANON != 0;
                 let top_level = u32::try_from(i).is_ok_and(|i| top.contains(&i));
                 if (anonymous || top_level) && seen.insert(Rc::as_ptr(decl) as usize) {
-                    candidates.push(decl.clone());
+                    found.push(decl.clone());
                 }
             }
+            // The class table holds a file's classes in compile (source)
+            // order; the declaration table lists the main op array's first.
+            found.sort_by_key(|d| d.line_start);
+            candidates.extend(found);
         }
         let is_linked = |vm: &Vm, decl: &Rc<ClassDecl>| {
             if decl.flags & cflags::ANON != 0 {
