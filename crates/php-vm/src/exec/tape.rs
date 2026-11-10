@@ -5,8 +5,8 @@
 //! combination (`ZEND_ADD_SPEC_TMPVARCV_CONST`, the smart-branch variants
 //! `ZEND_IS_SMALLER_SPEC_TMPVARCV_TMPVARCV_JMPNZ` ...), an operand is a byte
 //! offset from the frame (`EX_VAR`), and an instruction costs a handful of
-//! machine instructions before its real work (ref: Zend/zend_vm_def.h,
-//! Zend/zend_vm_execute.h, Zend/zend_execute.h).
+//! machine instructions before its real work (ref: `Zend/zend_vm_def.h`,
+//! `Zend/zend_vm_execute.h`, `Zend/zend_execute.h`).
 //!
 //! [`Op`] is the opposite: one generic instruction per operation, whose
 //! operand kinds ([`Operand`]), sub-operation (`++` or `--`, which
@@ -209,7 +209,7 @@ struct St {
 /// # Safety
 /// `off` is a slot offset [`lower`] validated for the frame `st` is of.
 #[inline(always)]
-#[allow(clippy::inline_always)]
+#[allow(clippy::inline_always, clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
 unsafe fn cv_slot<'a>(st: St, off: u32) -> &'a mut Option<Value> {
     // SAFETY: the caller's contract; a `CvSlot` is a transparent
     // `Option<Value>`.
@@ -221,7 +221,7 @@ unsafe fn cv_slot<'a>(st: St, off: u32) -> &'a mut Option<Value> {
 /// # Safety
 /// As [`cv_slot`].
 #[inline(always)]
-#[allow(clippy::inline_always)]
+#[allow(clippy::inline_always, clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
 unsafe fn tmp_slot<'a>(st: St, off: u32) -> &'a mut Value {
     // SAFETY: the caller's contract.
     unsafe { &mut *st.tmps.add(off as usize).cast::<Value>() }
@@ -233,7 +233,11 @@ unsafe fn tmp_slot<'a>(st: St, off: u32) -> &'a mut Value {
 /// # Safety
 /// As [`cv_slot`]; for [`KL`], `x` is a validated literal offset.
 #[inline(always)]
-#[allow(clippy::inline_always, clippy::cast_possible_wrap)]
+#[allow(
+    clippy::inline_always,
+    clippy::cast_possible_wrap,
+    clippy::cast_ptr_alignment // a slot offset from a slot vector's base
+)]
 unsafe fn num<const K: u8>(st: St, x: u32) -> Option<Num> {
     // SAFETY: the caller's contract: `x` is a validated offset of the kind
     // `K` names.
@@ -267,8 +271,10 @@ fn is_scalar(v: &Value) -> bool {
 }
 
 /// The scalar `v` holds, copied; `None` for anything reference-counted.
+/// (Where the value is known to be a scalar, copying its 16 bytes with
+/// `std::ptr::read` is cheaper: this rebuilds it variant by variant.)
 #[inline(always)]
-#[allow(clippy::inline_always)]
+#[allow(clippy::inline_always, dead_code)] // for the family modules
 fn scalar_of(v: &Value) -> Option<Value> {
     match v {
         Value::Null => Some(Value::Null),
@@ -550,7 +556,16 @@ macro_rules! tape_ops {
         /// `ip` points into a tape [`lower`] built for the op array the
         /// frame of `st` runs, and that frame is [`usable`].
         #[inline(always)]
-        #[allow(clippy::inline_always, clippy::too_many_lines, clippy::float_arithmetic)]
+        #[allow(
+            clippy::inline_always,
+            clippy::too_many_lines,
+            clippy::float_arithmetic,
+            // `x = x op y` comes out of `float_arith!` for every operator.
+            clippy::assign_op_pattern,
+            // Slot offsets are multiples of the 16-byte slot size from the
+            // bases of `Vec<Value>` and `Vec<CvSlot>` buffers.
+            clippy::cast_ptr_alignment
+        )]
         unsafe fn run_core(st: St, mut ip: *const Inst) -> Out {
             // SAFETY (the whole loop): `ip` stays inside the tape (every
             // instruction advances it by what `lower` validated: the next
@@ -650,35 +665,36 @@ macro_rules! tape_ops {
                         }
                         ip = ip.add(1);
                     }
+                    // The scalar assignments copy the 16 bytes of the value
+                    // (a scalar owns nothing, so its bits are its copy);
+                    // rebuilding it variant by variant made the compiler
+                    // shuffle it through the stack in pieces.
                     TOp::AssignC => {
-                        let v = match &*st.cvs.add(inst.b as usize).cast::<Option<Value>>() {
-                            Some(v) => scalar_of(v),
-                            None => None,
-                        };
-                        let Some(v) = v else {
-                            return step_out(ip);
-                        };
-                        let d = cv_slot(st, inst.a);
-                        if !matches!(d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))) {
+                        let s = st.cvs.add(inst.b as usize).cast::<Option<Value>>();
+                        let d = st.cvs.add(inst.a as usize).cast::<Option<Value>>();
+                        if !matches!(&*s, Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
+                            || !matches!(&*d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
+                        {
                             return step_out(ip);
                         }
-                        // Undefined or a scalar: nothing to release.
-                        std::ptr::write(d, Some(v));
+                        // The destination is undefined or a scalar: nothing
+                        // to release. `copy`, not `copy_nonoverlapping`:
+                        // `$x = $x` names one slot.
+                        std::ptr::copy(s, d, 1);
                         ip = ip.add(1);
                     }
                     TOp::AssignT => {
-                        let s = tmp_slot(st, inst.b);
-                        let Some(v) = scalar_of(s) else {
-                            return step_out(ip);
-                        };
-                        let d = cv_slot(st, inst.a);
-                        if !matches!(d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))) {
+                        let s = st.tmps.add(inst.b as usize).cast::<Value>();
+                        let d = st.cvs.add(inst.a as usize).cast::<Option<Value>>();
+                        if !is_scalar(&*s)
+                            || !matches!(&*d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
+                        {
                             return step_out(ip);
                         }
+                        std::ptr::write(d, Some(std::ptr::read(s)));
                         // The temporary is consumed (`std::mem::take` in
                         // `hot::assign_cv_in`).
                         std::ptr::write(s, Value::Null);
-                        std::ptr::write(d, Some(v));
                         ip = ip.add(1);
                     }
                     TOp::AssignI => {
@@ -691,14 +707,15 @@ macro_rules! tape_ops {
                         ip = ip.add(1);
                     }
                     TOp::AssignL => {
-                        let Some(v) = scalar_of(&*st.lits.add(inst.b as usize).cast::<Value>()) else {
-                            return step_out(ip);
-                        };
+                        // A scalar literal (`lower` emits this for nothing
+                        // else).
+                        let s = st.lits.add(inst.b as usize).cast::<Value>();
+                        debug_assert!(is_scalar(&*s));
                         let d = cv_slot(st, inst.a);
                         if !matches!(d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))) {
                             return step_out(ip);
                         }
-                        std::ptr::write(d, Some(v));
+                        std::ptr::write(d, Some(std::ptr::read(s)));
                         ip = ip.add(1);
                     }
                     $(
@@ -748,54 +765,53 @@ macro_rules! tape_ops {
                     )*
                     $(
                         TOp::$an => {
-                            match num::<{ $aka }>(st, inst.a) {
-                                Some(Num::Int(x)) => {
-                                    let Some(Num::Int(y)) = num::<{ $akb }>(st, inst.b) else {
-                                        return step_out(ip);
-                                    };
+                            let Some(x) = num::<{ $aka }>(st, inst.a) else {
+                                return step_out(ip);
+                            };
+                            let Some(y) = num::<{ $akb }>(st, inst.b) else {
+                                return step_out(ip);
+                            };
+                            let d = tmp_slot(st, inst.c);
+                            if !is_scalar(d) {
+                                return step_out(ip);
+                            }
+                            match (x, y) {
+                                (Num::Int(x), Num::Int(y)) => {
+                                    // An overflow is `num_bin`'s (a float).
                                     let Some(r) = int_arith!($aop, x, y) else {
                                         return step_out(ip);
                                     };
-                                    let d = tmp_slot(st, inst.c);
-                                    if !is_scalar(d) {
-                                        return step_out(ip);
-                                    }
                                     std::ptr::write(d, Value::Int(r));
                                 }
-                                Some(Num::Float(x)) => {
-                                    let Some(Num::Float(y)) = num::<{ $akb }>(st, inst.b) else {
-                                        return step_out(ip);
-                                    };
-                                    let d = tmp_slot(st, inst.c);
-                                    if !is_scalar(d) {
-                                        return step_out(ip);
-                                    }
-                                    std::ptr::write(d, Value::Float(float_arith!($aop, x, y)));
-                                }
-                                None => return step_out(ip),
+                                // Two floats, or an int and a float
+                                // (php-src's `(double)` widening).
+                                (x, y) => std::ptr::write(
+                                    d,
+                                    Value::Float(float_arith!($aop, x.as_f64(), y.as_f64())),
+                                ),
                             }
                             ip = ip.add(1);
                         }
                     )*
                     $(
                         TOp::$vn => {
-                            let n = match num::<{ $vka }>(st, inst.a) {
-                                Some(Num::Int(x)) => {
-                                    let Some(Num::Int(y)) = num::<{ $vkb }>(st, inst.b) else {
-                                        return step_out(ip);
-                                    };
+                            let Some(x) = num::<{ $vka }>(st, inst.a) else {
+                                return step_out(ip);
+                            };
+                            let Some(y) = num::<{ $vkb }>(st, inst.b) else {
+                                return step_out(ip);
+                            };
+                            let n = match (x, y) {
+                                (Num::Int(x), Num::Int(y)) => {
+                                    // An overflow is `num_bin`'s (a float).
                                     let Some(r) = int_arith!($vop, x, y) else {
                                         return step_out(ip);
                                     };
                                     Num::Int(r)
                                 }
-                                Some(Num::Float(x)) => {
-                                    let Some(Num::Float(y)) = num::<{ $vkb }>(st, inst.b) else {
-                                        return step_out(ip);
-                                    };
-                                    Num::Float(float_arith!($vop, x, y))
-                                }
-                                None => return step_out(ip),
+                                // Two floats, or an int and a float
+                                // (php-src's `(double)` widening).
+                                (x, y) => Num::Float(float_arith!($vop, x.as_f64(), y.as_f64())),
                             };
                             // Into the variable when it holds no array,
                             // object or reference (the `AssignCv` after the
@@ -819,15 +835,25 @@ macro_rules! tape_ops {
                             let Some(y) = num::<{ $okb }>(st, inst.b) else {
                                 return step_out(ip);
                             };
-                            match (cv_slot(st, inst.a), y) {
+                            let slot = cv_slot(st, inst.a);
+                            match (&mut *slot, y) {
                                 (Some(Value::Int(i)), Num::Int(y)) => {
+                                    // An overflow is `num_bin`'s (a float).
                                     let Some(r) = int_arith!($oop, *i, y) else {
                                         return step_out(ip);
                                     };
                                     *i = r;
                                 }
-                                (Some(Value::Float(x)), Num::Float(y)) => {
-                                    *x = float_arith!($oop, *x, y);
+                                (Some(Value::Float(x)), y) => {
+                                    *x = float_arith!($oop, *x, y.as_f64());
+                                }
+                                // An int variable and a float: the variable
+                                // becomes a float (an int: nothing to
+                                // release).
+                                (Some(Value::Int(i)), Num::Float(y)) => {
+                                    #[allow(clippy::cast_precision_loss)] // php-src's (double) widening
+                                    let r = float_arith!($oop, *i as f64, y);
+                                    std::ptr::write(slot, Some(Value::Float(r)));
                                 }
                                 _ => return step_out(ip),
                             }
@@ -937,7 +963,7 @@ fn src(code: &OpArray, o: Operand) -> Option<(u8, u32)> {
             Value::Float(_) => Some((KL, lit_off(l)?)),
             _ => None,
         },
-        _ => None,
+        Operand::Unused => None,
     }
 }
 
