@@ -1745,6 +1745,35 @@ impl std::fmt::Debug for Vm {
 }
 
 impl Vm {
+    /// `zend_rebuild_symbol_table()` for native code that reads or writes
+    /// the variables of frame `idx` by name (`extract()`, `compact()`,
+    /// `$http_response_header`, `zend_set_local_var()`): attaches the
+    /// frame's symbol table and copies its compiled variables into it.
+    /// After writing, call [`Vm::sync_symbol_table_writes`].
+    pub fn rebuild_symbol_table(&mut self, idx: usize) -> Option<Rc<RefCell<VarStore>>> {
+        let f = self.frames.get_mut(idx)?;
+        f.attach_symbol_table();
+        f.sync_cvs_to_symtab();
+        Some(f.vars.clone())
+    }
+
+    /// [`Vm::rebuild_symbol_table`] for the global symbol table (`&EG(symbol_table)`).
+    pub fn rebuild_global_symbol_table(&mut self) -> Rc<RefCell<VarStore>> {
+        self.attach_globals_symbol_table();
+        self.globals.clone()
+    }
+
+    /// Makes writes that native code made to the symbol table `vars`
+    /// visible to the compiled variables of every frame attached to it
+    /// (php-src's attached tables hold `IS_INDIRECT` slots into the CVs).
+    pub fn sync_symbol_table_writes(&mut self, vars: &Rc<RefCell<VarStore>>) {
+        for f in &mut self.frames {
+            if f.symtab_attached && Rc::ptr_eq(&f.vars, vars) {
+                f.sync_from_symbol_table();
+            }
+        }
+    }
+
     /// Attaches the symbol table of the main frame if it is unattached,
     /// syncing its CV slots to `self.globals`.
     #[inline]

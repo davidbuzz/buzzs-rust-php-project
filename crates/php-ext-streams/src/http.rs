@@ -42,26 +42,30 @@ fn header_list(headers: &[Vec<u8>]) -> Value {
 /// `zend_set_local_var_str(name, value, force = 0)`: assigns in the
 /// nearest PHP frame — always in a scope with a symbol table (main
 /// script, include, eval), in a function only when it uses the variable.
-fn set_local_var(vm: &Vm, name: &[u8], value: Value) {
-    let Some(frame) = vm
+fn set_local_var(vm: &mut Vm, name: &[u8], value: Value) {
+    let Some(idx) = vm
         .frames
         .iter()
-        .rev()
-        .find(|f| !matches!(f.kind, FrameKind::Builtin | FrameKind::ConstExpr))
+        .rposition(|f| !matches!(f.kind, FrameKind::Builtin | FrameKind::ConstExpr))
     else {
         return;
     };
-    let mut vars = frame.vars.borrow_mut();
-    let slot = if frame.kind == FrameKind::Function {
-        vars.find(name)
-    } else {
-        Some(vars.find_or_add(name))
+    let is_function = vm.frames[idx].kind == FrameKind::Function;
+    let Some(table) = vm.rebuild_symbol_table(idx) else {
+        return;
     };
-    if let Some(i) = slot {
-        if let Some(s) = vars.slots.get_mut(i as usize) {
-            *s = Some(value);
-        }
-    }
+    let old = {
+        let mut vars = table.borrow_mut();
+        let slot = if is_function {
+            vars.find(name)
+        } else {
+            Some(vars.find_or_add(name))
+        };
+        slot.and_then(|i| vars.slots.get_mut(i as usize))
+            .and_then(|s| s.replace(value))
+    };
+    vm.sync_symbol_table_writes(&table);
+    drop(old);
 }
 
 /// The [`HttpEnv`] backed by the running VM.

@@ -596,9 +596,10 @@ fn set_local_var(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     else {
         return Ok(Value::Bool(false));
     };
-    let frame = &vm.frames[idx];
-    let vars = frame.vars.clone();
-    let has_table = frame.kind != FrameKind::Function;
+    let has_table = vm.frames[idx].kind != FrameKind::Function;
+    let Some(vars) = vm.rebuild_symbol_table(idx) else {
+        return Ok(Value::Bool(false));
+    };
     let old = {
         let mut st = vars.borrow_mut();
         let slot = match st.find(name.as_bytes()) {
@@ -620,6 +621,7 @@ fn set_local_var(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
         }
     };
+    vm.sync_symbol_table_writes(&vars);
     drop(old);
     vm.run_released_destructors()?;
     Ok(Value::Bool(true))

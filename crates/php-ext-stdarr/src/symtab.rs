@@ -18,15 +18,31 @@ pub struct CallerSymbols {
 impl CallerSymbols {
     /// The caller's symbol table; `None` when the caller is not PHP code
     /// (a dynamic call through `call_user_func()` and friends).
-    pub fn of_caller(vm: &Vm) -> Option<Self> {
-        let n = vm.frames.len();
-        let caller = vm.frames.get(n.checked_sub(2)?)?;
-        if caller.kind == FrameKind::Builtin {
+    /// The caller's compiled variables are copied into its (attached)
+    /// symbol table first; after writing through it, call
+    /// [`CallerSymbols::finish`].
+    pub fn of_caller(vm: &mut Vm) -> Option<Self> {
+        let idx = vm.frames.len().checked_sub(2)?;
+        if vm.frames.get(idx)?.kind == FrameKind::Builtin {
             return None;
         }
-        Some(CallerSymbols {
-            vars: caller.vars.clone(),
-        })
+        let vars = vm.rebuild_symbol_table(idx)?;
+        Some(CallerSymbols { vars })
+    }
+
+    /// Makes the writes made through this table visible to the caller's
+    /// compiled variables.
+    pub fn finish(&self, vm: &mut Vm) {
+        vm.sync_symbol_table_writes(&self.vars);
+    }
+
+    /// A second handle on the same table, to [`CallerSymbols::finish`]
+    /// after [`CallerSymbols::checked`] consumed this one.
+    #[must_use]
+    pub fn handle(&self) -> Self {
+        CallerSymbols {
+            vars: self.vars.clone(),
+        }
     }
 
     /// Assignments made by `extract()` must honor typed-reference sources.

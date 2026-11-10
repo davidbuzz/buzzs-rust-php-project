@@ -34,6 +34,9 @@ pub const AUTO_GLOBAL_NAMES: [&[u8]; 8] = [
     b"_SESSION",
 ];
 
+/// The index of `$_SESSION` in [`AUTO_GLOBAL_NAMES`].
+const SESSION: usize = 7;
+
 /// The index of an auto-global name in [`AUTO_GLOBAL_NAMES`].
 pub fn index(name: &[u8]) -> Option<usize> {
     AUTO_GLOBAL_NAMES.iter().position(|n| *n == name)
@@ -200,6 +203,13 @@ impl Vm {
             };
         }
         let slot = g.find_or_add(name);
+        if idx == SESSION {
+            // ext/session registers `$_SESSION` without creating it
+            // (`zend_register_auto_global(..., 0, NULL)`): it exists only
+            // once a session starts, and reads before that are undefined.
+            self.ext.auto_globals.cached_slots[idx] = Some(slot);
+            return Value::Null;
+        }
         let arr = if idx == 0 {
             self.ext
                 .auto_globals

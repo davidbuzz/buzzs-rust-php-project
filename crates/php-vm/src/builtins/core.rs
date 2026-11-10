@@ -6,7 +6,7 @@ use crate::class::Class;
 use crate::func::{flags, Args, Func};
 use crate::object;
 use crate::vm::{ErrorHandler, FrameKind, PendingCall, Throw, Vm, VmResult};
-use php_runtime::{ArrayKey, HashTable, PropertyPurpose, Value, ZArray, ZStr};
+use php_runtime::{ArrayKey, HashTable, PhpRef, PropertyPurpose, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 fn caller_idx(vm: &Vm) -> Option<usize> {
@@ -1892,13 +1892,30 @@ fn get_defined_vars(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Array(ZArray::new()));
     };
     vm.frames[idx].attach_symbol_table();
-    let vars = vm.frames[idx].vars.borrow();
+    vm.frames[idx].sync_cvs_to_symtab();
+    let frame = &vm.frames[idx];
+    let vars = frame.vars.borrow();
     // `zend_array_dup`: check ownership before copying the symbol-table slots.
+    // The frame's CV of the same name mirrors its slot (php-src's slot is
+    // `IS_INDIRECT`), so a reference held by both counts once.
     let mut out = HashTable::new();
     for (name, slot) in vars.names.iter().zip(&vars.slots) {
         let Some(v) = slot else { continue };
         let v = match v {
-            Value::Reference(r) if r.refcount() == 1 => r.get(),
+            Value::Reference(r) => {
+                let mirrored = frame
+                    .code
+                    .cv_names
+                    .iter()
+                    .position(|n| n.as_bytes() == name.as_bytes())
+                    .and_then(|i| frame.cvs.get(i).and_then(crate::vm::CvSlot::get))
+                    .is_some_and(|cv| matches!(cv, Value::Reference(c) if PhpRef::ptr_eq(c, r)));
+                if r.refcount() <= 1 + usize::from(mirrored) {
+                    r.get()
+                } else {
+                    v.clone()
+                }
+            }
             other => other.clone(),
         };
         out.insert(php_runtime::ArrayKey::Str(name.clone()), v);

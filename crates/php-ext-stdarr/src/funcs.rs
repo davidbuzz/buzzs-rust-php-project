@@ -727,6 +727,7 @@ fn forbid_dynamic_call(vm: &mut Vm, a: &Args) -> VmResult<CallerSymbols> {
 
 pub fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let sym = forbid_dynamic_call(vm, a)?;
+    let table = sym.handle();
     let arr = a.values.first().cloned().unwrap_or_default();
     let prefix = a.get(2).map(|_| a.str(2));
     let r = sa::symbols::extract(
@@ -735,6 +736,7 @@ pub fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         int_or(a, 1, sa::EXTR_OVERWRITE),
         prefix.as_ref(),
     );
+    table.finish(vm);
     Ok(Value::Int(rt(vm, r)?))
 }
 
