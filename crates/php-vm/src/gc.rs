@@ -157,7 +157,7 @@ struct Root {
 /// Clears [`LAST_ROOT`]: a root may have left [`GcState::roots`].
 #[inline]
 fn forget_last_root() {
-    let _ = LAST_ROOT.try_with(|c| c.set((0, 0)));
+    let _ = LAST_ROOT.try_with(|c| c.set(0));
 }
 
 /// `v.push(x)`, growing `v` outside the counted heap (see [`RootBuffer`]).
@@ -503,17 +503,17 @@ impl Default for GcState {
 
 thread_local! {
     static STATE: RefCell<GcState> = RefCell::new(GcState::default());
-    /// The address and handle of the last object [`buffer_obj_data`] found
-    /// or put in [`GcState::roots`] (`(0, 0)`: none). It stays in the
+    /// The address ([`Obj::addr`]) of the last object [`buffer_obj_data`]
+    /// found or put in [`GcState::roots`] (0: none). It stays in the
     /// buffer until something takes a root out of it (a slot released or
     /// removed, the buffer compacted, set aside, swapped or reset), and
     /// each of those clears this ([`forget_last_root`]). While it is set,
     /// buffering that object again would change nothing, so
-    /// [`root_shared_obj`] answers from it without borrowing the state:
+    /// [`root_obj`] answers from it without borrowing the state:
     /// php-src's `gc_check_possible_root` only tests `GC_INFO` on the
     /// object (the `$this` or closure of every method or closure call
     /// returning in a loop).
-    static LAST_ROOT: Cell<(usize, u32)> = const { Cell::new((0, 0)) };
+    static LAST_ROOT: Cell<usize> = const { Cell::new(0) };
     /// Set when an automatic run is due; setting it also raises the
     /// executor's safe-point flag (`crate::interrupt::raise_safe_point`).
     static WANT_RUN: Cell<bool> = const { Cell::new(false) };
@@ -749,27 +749,34 @@ pub(crate) fn root_live_obj(o: &Obj) {
 /// Buffers `o`, one handle of which is about to be released.
 #[inline]
 fn root_obj(o: &Obj) {
-    // A count of 1 drops to zero: the object is freed, not a root.
-    if o.refcount() >= 2 {
+    // A count of 1 drops to zero: the object is freed, not a root. The
+    // object found in or put in the buffer last (the `$this` or closure of
+    // a method or closure called again and again) is still there: nothing
+    // to do, as `buffer_obj_data` would find (php-src's
+    // `gc_check_possible_root` tests `GC_INFO` on the object alone).
+    if o.refcount() >= 2 && !is_last_root(o) {
         root_shared_obj(o);
     }
 }
 
-/// [`root_obj`] for an object that stays referenced (`$this` or the
-/// closure of every method or closure call returning, among others): the
-/// object's data is looked up once for the check and the buffering.
+/// Whether `o` is the object [`LAST_ROOT`] records as buffered. The
+/// address alone tells: the root buffer holds a weak handle of each
+/// buffered object, which keeps its allocation (so its address) from being
+/// reused while it is buffered, and [`LAST_ROOT`] is cleared whenever a
+/// root may leave the buffer.
+#[inline]
+fn is_last_root(o: &Obj) -> bool {
+    LAST_ROOT
+        .try_with(Cell::get)
+        .is_ok_and(|last| last == o.addr())
+}
+
+/// [`root_obj`] for an object that stays referenced and is not the last
+/// root recorded: the object's data is looked up once for the check and
+/// the buffering.
 #[inline(never)]
 fn root_shared_obj(o: &Obj) {
     if let Some(d) = o.downcast_ref::<ObjectData>() {
-        // Buffered already, and still (see `LAST_ROOT`): nothing to do,
-        // as `buffer_obj_data` would find.
-        if d.flags.get() & crate::object::oflags::GC_BUFFERED != 0
-            && LAST_ROOT
-                .try_with(Cell::get)
-                .is_ok_and(|last| last == (o.addr(), d.handle))
-        {
-            return;
-        }
         with_state(|s| buffer_obj_data(s, o, d));
     }
 }
@@ -794,7 +801,7 @@ fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
     if d.flags.get() & crate::object::oflags::GC_BUFFERED != 0
         && s.roots.contains(d.handle, o.addr())
     {
-        remember_root(o, d.handle);
+        remember_root(o);
         return None;
     }
     if !s.roots.has_unused() {
@@ -805,15 +812,14 @@ fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
     let i = s.roots.insert_new(o, d.handle);
     d.flags
         .set(d.flags.get() | crate::object::oflags::GC_BUFFERED);
-    remember_root(o, d.handle);
+    remember_root(o);
     Some(i)
 }
 
-/// Records `o` (with `handle`, never 0 for a live object) as in
-/// [`GcState::roots`] now ([`LAST_ROOT`]).
+/// Records `o` as in [`GcState::roots`] now ([`LAST_ROOT`]).
 #[inline]
-fn remember_root(o: &Obj, handle: u32) {
-    let _ = LAST_ROOT.try_with(|c| c.set((o.addr(), handle)));
+fn remember_root(o: &Obj) {
+    let _ = LAST_ROOT.try_with(|c| c.set(o.addr()));
 }
 
 /// `a` was made to contain itself by value (`$t = &$a; $a[] = $t;`,
