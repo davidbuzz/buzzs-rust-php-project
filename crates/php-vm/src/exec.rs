@@ -448,6 +448,18 @@ impl Vm {
         })
     }
 
+    /// The undefined compiled variable `val` of `place op= val` when the
+    /// walk reads it: `place` ends in a dimension
+    /// ([`Vm::place_assign_op_undef_cv`]).
+    pub(crate) fn assign_op_undef_dim_cv(&self, place: PlaceId, val: Operand) -> Option<u32> {
+        let Operand::Cv(cv) = val else {
+            return None;
+        };
+        (self.frame().peek_cv(cv, |s: Option<&Value>| s.is_none())
+            && self.assign_op_reads_value_late(place))
+        .then_some(cv)
+    }
+
     /// Reads a compiled variable without warning (`None` if undefined).
     #[inline]
     pub(crate) fn cv_get(&self, cv: u32) -> Option<Value> {
@@ -1638,7 +1650,10 @@ impl Vm {
                         dst,
                     } => {
                         let concat = *op == BinaryOp::Concat;
-                        if !(concat
+                        if let Some(cv) = self.assign_op_undef_dim_cv(*place, *val) {
+                            let r = self.place_assign_op_undef_cv(*place, *op, cv)?;
+                            self.set_dst(*dst, r);
+                        } else if !(concat
                             && (self.concat_assign_cv_lit(*place, *val, *dst)
                                 || (dst.is_none() && self.concat_dims_cv_fast(*place, *val))))
                         {
@@ -2449,8 +2464,12 @@ impl Vm {
                     }
                     Op::AssignOpDimCv { op, val, place, .. }
                     | Op::AssignOpDimsCv { op, val, place, .. } => {
-                        let v = self.read(*val)?;
-                        self.place_assign_op(*place, *op, v)?;
+                        if let Some(cv) = self.assign_op_undef_dim_cv(*place, *val) {
+                            self.place_assign_op_undef_cv(*place, *op, cv)?;
+                        } else {
+                            let v = self.read(*val)?;
+                            self.place_assign_op(*place, *op, v)?;
+                        }
                         Flow::Next
                     }
                     Op::IssetDimCv {

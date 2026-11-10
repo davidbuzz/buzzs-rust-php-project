@@ -543,7 +543,10 @@ impl Vm {
             return Ok(Flow::Next);
         }
         let concat = op == BinaryOp::Concat;
-        if !(concat
+        if let Some(cv) = self.assign_op_undef_dim_cv(place, val) {
+            let r = self.place_assign_op_undef_cv(place, op, cv)?;
+            self.set_dst(dst, r);
+        } else if !(concat
             && (self.concat_assign_cv_lit(place, val, dst)
                 || (dst.is_none() && self.concat_dims_cv_fast(place, val))))
         {

@@ -304,7 +304,7 @@ impl Vm {
                     if let Some(top) = self.error_handlers.last_mut() {
                         top.callback = Value::Null;
                     }
-                    let r = self.call_user_function(&h.callback, args);
+                    let r = self.call_error_handler(&h.callback, args);
                     match self.error_handlers.last_mut() {
                         Some(top) if top.callback.is_null() => top.callback = h.callback,
                         Some(_) => {}
@@ -667,6 +667,24 @@ impl Vm {
         call.dynamic = true;
         call.args = args.into_iter().map(Some).collect();
         self.call_pending(call)
+    }
+
+    /// `zend_error` calling the user error handler: the call is made from
+    /// `EG(current_execute_data)`, so when a user frame is running (not a
+    /// builtin, whose own frame is the caller) the handler counts as called
+    /// from user code: its argument errors say "called in ... on line N".
+    fn call_error_handler(&mut self, cb: &Value, args: Vec<Value>) -> VmResult<Value> {
+        let from_internal = !self
+            .frames
+            .last()
+            .is_some_and(|f| f.kind != FrameKind::Builtin);
+        let mut call = match self.zend_is_callable(cb, false)? {
+            Ok(call) => call,
+            Err(reason) => return Err(self.invalid_callback(cb, &reason)),
+        };
+        call.dynamic = true;
+        call.args = args.into_iter().map(Some).collect();
+        self.call_pending_ex(call, from_internal)
     }
 
     /// `zend_throw_error(NULL, "Invalid callback %s, %s", ...)` from

@@ -4033,7 +4033,19 @@ impl Vm {
     // ------------------------------------------------------------------
 
     /// Runs a prepared call to completion.
-    pub(crate) fn call_pending(&mut self, mut call: PendingCall) -> VmResult<Value> {
+    pub(crate) fn call_pending(&mut self, call: PendingCall) -> VmResult<Value> {
+        self.call_pending_ex(call, true)
+    }
+
+    /// [`Vm::call_pending`]; `from_internal` is false for a call made
+    /// straight from the user code running (`zend_error` calling the user
+    /// error handler with `EG(current_execute_data)` a user frame), whose
+    /// argument errors say "called in ... on line N".
+    pub(crate) fn call_pending_ex(
+        &mut self,
+        mut call: PendingCall,
+        from_internal: bool,
+    ) -> VmResult<Value> {
         // `zend_call_function` services pending interrupts (async signals)
         // before entering user code from internal code.
         self.check_interrupt()?;
@@ -4100,7 +4112,7 @@ impl Vm {
             Func::User(_) => {
                 self.check_deprecated_call(&call)?;
                 let strict = call.strict;
-                self.push_user_call(call, RetTarget::Discard, strict, true)?;
+                self.push_user_call(call, RetTarget::Discard, strict, from_internal)?;
                 let base = self.frames.len() - 1;
                 self.execute(base)
             }
