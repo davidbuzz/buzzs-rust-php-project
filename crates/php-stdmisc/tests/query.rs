@@ -201,3 +201,29 @@ fn a_pending_oom_stops_registration() {
     assert_eq!(r.len(), 2);
     assert!(ctx.messages().is_empty(), "{:?}", ctx.messages());
 }
+
+#[test]
+fn cookie_duplicates_are_skipped_only_at_the_top_level() {
+    // ghsa-wpj3-hf5j-x4v4.phpt (php-cgi): `.[Host-test[]` and
+    // `_[Host-test[]` both land in $_COOKIE['_']['Host-test['], where the
+    // later value wins; `__Host-test[]` keeps its legitimate entry while the
+    // mangled `..Host-test` / `._Host-test[]` variants are dropped.
+    let mut ctx = CollectingContext::new();
+    let settings = InputSettings::default();
+    let mut track = ZArray::new();
+    query::treat_data(
+        ParseKind::Cookie,
+        b"..Host-test=ignore_1; .[Host-test[]=ignore_12; ._Host-test[]=ignore_11; \
+          __Host-test[]=legitimate_14; _[Host-test[]=legitimate_15; a=1; a=2",
+        &mut track,
+        &settings,
+        "",
+        None,
+        &mut ctx,
+    )
+    .unwrap();
+    assert_eq!(
+        show(&serialize(&Value::Array(track), &mut ctx).unwrap()),
+        r#"a:3:{s:1:"_";a:1:{s:10:"Host-test[";s:13:"legitimate_15";}s:11:"__Host-test";a:1:{i:0;s:13:"legitimate_14";}s:1:"a";s:1:"1";}"#
+    );
+}

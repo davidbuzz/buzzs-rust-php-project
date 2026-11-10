@@ -446,7 +446,8 @@ pub fn web_phar(
         }
     }
 
-    let phar_now = reg::find_by_fname(fname);
+    // `phar_fname_map`, then the `phar.cache_list` cache.
+    let phar_now = reg::find_by_fname(fname).or_else(|| reg::cached(fname));
     let mut ru: Option<Vec<u8>> = None;
     if !entry.is_empty() {
         if let Some(p) = &phar_now {

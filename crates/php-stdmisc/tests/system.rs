@@ -5,7 +5,9 @@ mod common;
 
 use common::export;
 use php_runtime::{CollectingContext, Value, ZArray};
-use php_stdmisc::info::{print_info, InfoPrinter, InfoSource, INFO_ENVIRONMENT, INFO_VARIABLES};
+use php_stdmisc::info::{
+    html_head, print_info, InfoPrinter, InfoSource, INFO_ENVIRONMENT, INFO_LICENSE, INFO_VARIABLES,
+};
 use php_stdmisc::system::{self, EnvState};
 
 #[test]
@@ -70,6 +72,47 @@ fn phpinfo_variables_section() {
     let env_only = print_info(INFO_ENVIRONMENT, &src, true, &mut ctx).unwrap();
     assert!(String::from_utf8_lossy(&env_only)
         .starts_with("phpinfo()\n\nEnvironment\n\nVariable => Value\n"));
+}
+
+#[test]
+fn phpinfo_html_page() {
+    // php-cgi -n -q: <?php phpinfo(INFO_LICENSE); (license text of php-src master)
+    let mut ctx = CollectingContext::new();
+    let src = InfoSource {
+        php_version: "8.5.0-dev",
+        uname: b"",
+        build_date: "",
+        build_rows: &[],
+        server_api: Some("CGI/FastCGI"),
+        config_file_path: "",
+        loaded_ini: None,
+        scan_dir: None,
+        scanned_files: None,
+        engine_rows: &[],
+        stream_wrappers: &[],
+        stream_transports: &[],
+        stream_filters: &[],
+        zend_version: "",
+        core_ini: &[],
+        modules: &[],
+        php_vars: &[],
+        gpcse: &[],
+    };
+    let out = String::from_utf8(print_info(INFO_LICENSE, &src, false, &mut ctx).unwrap()).unwrap();
+    let head = String::from_utf8(html_head("8.5.0-dev", "phpinfo()")).unwrap();
+    assert!(head.starts_with(
+        "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"DTD/xhtml1-transitional.dtd\">\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head>\n<style type=\"text/css\">\nbody {background-color: #fff; color: #222; font-family: sans-serif;}\n"
+    ));
+    assert!(head.ends_with(
+        "  hr {background-color: #505153}\n}\n</style>\n<title>PHP 8.5.0-dev - phpinfo()</title><meta name=\"ROBOTS\" content=\"NOINDEX,NOFOLLOW,NOARCHIVE\" /></head>\n<body><div class=\"center\">\n"
+    ));
+    let body = out.strip_prefix(head.as_str()).unwrap();
+    assert!(body.starts_with(
+        "<h2>License</h2>\n<table>\n<tr class=\"v\"><td>\n<p>\nPHP is free software."
+    ));
+    assert!(body.ends_with(
+        "POSSIBILITY OF SUCH DAMAGE.\n</p>\n</td></tr>\n</table>\n</div></body></html>"
+    ));
 }
 
 #[test]

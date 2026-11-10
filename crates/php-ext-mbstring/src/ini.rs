@@ -148,6 +148,15 @@ fn on_modify(vm: &mut Vm, name: &str, value: &[u8]) -> VmResult<bool> {
         IniStage::Runtime => Some(value.to_vec()),
         IniStage::Restore => raw(vm, name),
     };
+    // OnUpdateDefaultCharset (main/main.c) rejects a header-breaking value
+    // before php_internal_encoding_changed() runs (bug81518b.phpt).
+    if name == "default_charset"
+        && value
+            .as_deref()
+            .is_some_and(|v| v.iter().any(|&c| matches!(c, 0 | b'\r' | b'\n')))
+    {
+        return Ok(false);
+    }
     let ok = state::with(|s| s.ini_set(name, value.as_deref(), true));
     state::flush_diagnostics(vm)?;
     Ok(ok)

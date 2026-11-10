@@ -219,6 +219,25 @@ fn update_handler(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
 fn request_startup(vm: &mut Vm) {
     STATE.with(|st| *st.borrow_mut() = State::default());
     let result = (|| {
+        // php_request_startup(): `output_handler=ob_gzhandler` starts the
+        // alias (php_output_start_user() -> php_zlib_output_handler_init())
+        // before RINIT, which then sees `handler_registered` (bug55544.phpt).
+        // The VM does not interpret `output_handler` itself.
+        if vm.ini.raw("output_handler") == Some(b"ob_gzhandler".as_slice()) {
+            init_handler(vm, 0, flags::STDFLAGS)?;
+            output::start(
+                vm,
+                StartHandler::Alias {
+                    name: b"ob_gzhandler".to_vec(),
+                    callback: Value::from("ob_gzhandler"),
+                },
+                0,
+                flags::STDFLAGS,
+            );
+            if let Some(t) = vm.pending_throw.take() {
+                return Err(t);
+            }
+        }
         let compression = vm.ini_string("zlib.output_compression").unwrap_or_default();
         let handler = vm.ini_string("zlib.output_handler").unwrap_or_default();
         let value = parse_compression(vm, &compression)?;

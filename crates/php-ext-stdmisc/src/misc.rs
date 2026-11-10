@@ -334,8 +334,23 @@ fn print_items(p: &mut InfoPrinter, items: &[InfoItem], ini: &[(Vec<u8>, Vec<u8>
     }
 }
 
+/// `sapi_module.phpinfo_as_text` and `sapi_module.pretty_name` of the
+/// SAPI that registered `PHP_SAPI`: the CLI (and phpdbg/embed) print
+/// text, the web SAPIs print an HTML page.
+fn sapi_info_mode(vm: &Vm) -> (bool, Option<&'static str>) {
+    match constant_str(vm, "PHP_SAPI", "cli").as_str() {
+        "cgi-fcgi" => (false, Some("CGI/FastCGI")),
+        "cli-server" => (false, Some("Built-in HTTP server")),
+        "apache2handler" => (false, Some("Apache 2.0 Handler")),
+        "fpm-fcgi" => (true, Some("FPM/FastCGI")),
+        "phpdbg" => (true, Some("phpdbg")),
+        "embed" => (true, Some("PHP Embedded Library")),
+        _ => (true, Some("Command Line Interface")),
+    }
+}
+
 /// `display_ini_entries()` rows for an extension.
-fn ini_rows(vm: &Vm, module: &str) -> Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+fn ini_rows(vm: &Vm, module: &str, as_text: bool) -> Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let Ok(mut entries) = vm.ini.ini_get_all(Some(module)) else {
         return Vec::new();
     };
@@ -345,8 +360,8 @@ fn ini_rows(vm: &Vm, module: &str) -> Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> {
         .map(|e| {
             (
                 e.name.into_bytes(),
-                info::ini_display(e.local_value.as_deref(), true),
-                info::ini_display(e.global_value.as_deref(), true),
+                info::ini_display(e.local_value.as_deref(), as_text),
+                info::ini_display(e.global_value.as_deref(), as_text),
             )
         })
         .collect()
@@ -461,11 +476,12 @@ fn phpinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     }
     let version = constant_str(vm, "PHP_VERSION", "8.5.0-dev");
+    let (as_text, server_api) = sapi_info_mode(vm);
     let uname = system::php_uname(b"a").vm(vm)?;
     let wrappers = string_list(vm, "stream_get_wrappers", DEFAULT_WRAPPERS);
     let transports = string_list(vm, "stream_get_transports", DEFAULT_TRANSPORTS);
     let filters = string_list(vm, "stream_get_filters", DEFAULT_FILTERS);
-    let core_ini = ini_rows(vm, "Core");
+    let core_ini = ini_rows(vm, "Core", as_text);
     let mut names: Vec<String> = php_vm::LOADED_EXTENSIONS
         .iter()
         .map(|s| (*s).to_string())
@@ -483,7 +499,7 @@ fn phpinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let modules: Vec<Module> = names
         .into_iter()
         .map(|name| {
-            let ini = ini_rows(vm, &name);
+            let ini = ini_rows(vm, &name, as_text);
             let info = vm.module_info(&name);
             Module { name, ini, info }
         })
@@ -499,7 +515,7 @@ fn phpinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         uname: uname.as_bytes(),
         build_date: "Jan  1 2026 00:00:00",
         build_rows: &[("Configure Command", " './configure' ")],
-        server_api: Some("Command Line Interface"),
+        server_api,
         config_file_path: "/usr/local/lib",
         loaded_ini: None,
         scan_dir: None,
@@ -519,33 +535,69 @@ fn phpinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut out = info::print_info(
         flag & !(info::INFO_CREDITS | info::INFO_LICENSE),
         &src,
-        true,
+        as_text,
         vm,
     )
     .vm(vm)?;
+    // Without the credits and license, print_info closed the HTML page.
+    if !as_text {
+        let tail = PAGE_END.len();
+        if out.ends_with(PAGE_END) {
+            out.truncate(out.len() - tail);
+        }
+    }
     if flag & info::INFO_CREDITS != 0 {
-        let mut p = InfoPrinter::new(true);
+        let mut p = InfoPrinter::new(as_text);
         p.hr();
         out.extend_from_slice(&p.out);
-        out.extend_from_slice(&credits_text(CREDITS_ALL & !CREDITS_FULLPAGE));
+        out.extend_from_slice(&credits_text(
+            CREDITS_ALL & !CREDITS_FULLPAGE,
+            as_text,
+            &version,
+        ));
     }
     if flag & info::INFO_LICENSE != 0 {
-        let lic = info::print_info(info::INFO_LICENSE, &src, true, vm).vm(vm)?;
-        out.extend_from_slice(lic.strip_prefix(b"phpinfo()\n".as_slice()).unwrap_or(&lic));
+        let lic = info::print_info(info::INFO_LICENSE, &src, as_text, vm).vm(vm)?;
+        // Keep only the license section of that second rendering.
+        let start = if as_text {
+            b"phpinfo()\n".len()
+        } else {
+            info::html_head(&version, "phpinfo()").len()
+        };
+        let lic = lic.get(start..).unwrap_or(&lic);
+        let lic = if as_text {
+            lic
+        } else {
+            lic.strip_suffix(PAGE_END).unwrap_or(lic)
+        };
+        out.extend_from_slice(lic);
+    }
+    if !as_text {
+        out.extend_from_slice(PAGE_END);
     }
     vm.output(&out);
     Ok(Value::Bool(true))
 }
+
+/// The end of the HTML `phpinfo()` page.
+const PAGE_END: &[u8] = b"</div></body></html>";
 
 /// `PHP_CREDITS_ALL`.
 const CREDITS_ALL: i64 = 0xFFFF_FFFF;
 /// `PHP_CREDITS_FULLPAGE`.
 const CREDITS_FULLPAGE: i64 = 32;
 
-/// `php_print_credits()` in text mode.
-fn credits_text(flag: i64) -> Vec<u8> {
-    let mut p = InfoPrinter::new(true);
-    p.print("PHP Credits\n");
+/// `php_print_credits()` in text mode or (`as_text` false) as HTML.
+fn credits_text(flag: i64, as_text: bool, php_version: &str) -> Vec<u8> {
+    let mut p = InfoPrinter::new(as_text);
+    if !as_text && flag & CREDITS_FULLPAGE != 0 {
+        p.print(info::html_head(php_version, "phpcredits()"));
+    }
+    p.print(if as_text {
+        "PHP Credits\n"
+    } else {
+        "<h1>PHP Credits</h1>\n"
+    });
     if flag & 1 != 0 {
         p.table_start();
         p.colspan_header(1, "PHP Group");
@@ -554,7 +606,14 @@ fn credits_text(flag: i64) -> Vec<u8> {
     }
     if flag & 2 != 0 {
         p.table_start();
-        p.colspan_header(1, "Language Design & Concept");
+        p.colspan_header(
+            1,
+            if as_text {
+                "Language Design & Concept"
+            } else {
+                "Language Design &amp; Concept"
+            },
+        );
         p.table_row(&[b"Andi Gutmans, Rasmus Lerdorf, Zeev Suraski, Marcus Boerger"]);
         p.table_end();
         p.table_start();
@@ -601,13 +660,18 @@ fn credits_text(flag: i64) -> Vec<u8> {
         }
         p.table_end();
     }
+    if !as_text && flag & CREDITS_FULLPAGE != 0 {
+        p.print("</div></body></html>\n");
+    }
     p.out
 }
 
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn phpcredits(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let flag = if a.has(0) { a.int(0) } else { CREDITS_ALL };
-    vm.output(&credits_text(flag));
+    let (as_text, _) = sapi_info_mode(vm);
+    let version = constant_str(vm, "PHP_VERSION", "8.5.0-dev");
+    vm.output(&credits_text(flag, as_text, &version));
     Ok(Value::Bool(true))
 }
 

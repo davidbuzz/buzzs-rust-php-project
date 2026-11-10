@@ -301,14 +301,25 @@ fn ob_iconv_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         start: status & OUTPUT_START != 0,
         clean: status & OUTPUT_CLEAN != 0,
         final_: status & OUTPUT_FINAL != 0,
-        output_sent: false,
+        // `php_output_get_status() & PHP_OUTPUT_SENT`.
+        output_sent: vm.output.status() & php_support::output::status::SENT != 0,
     };
+    // `SG(sapi_headers).mimetype` / `send_default_content_type` /
+    // `SG(default_mimetype)`.
     let sapi = SapiMime {
-        mimetype: None,
-        send_default_content_type: false,
-        default_mimetype: vm.ini_string("default_mimetype"),
+        mimetype: vm.response_mimetype(),
+        send_default_content_type: vm.sends_default_content_type(),
+        default_mimetype: vm.ini_string("default_mimetype").filter(|m| !m.is_empty()),
     };
     let r = st.ob_handler(data.as_bytes(), op, &sapi);
+    // `sapi_add_header(content_type, len, 0)`: on success the default
+    // Content-Type is dropped and the handler becomes immutable.
+    if let Some(h) = &r.header {
+        if vm.add_response_header(h, true)? {
+            vm.clear_default_content_type();
+            vm.output.set_running_immutable();
+        }
+    }
     if let Some(d) = r.diagnostic {
         raise(vm, a, d)?;
     }

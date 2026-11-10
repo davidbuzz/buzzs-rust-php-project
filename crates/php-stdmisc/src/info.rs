@@ -4,6 +4,8 @@
 
 use php_runtime::{RtResult, RuntimeContext, Value, ZArray};
 
+mod logos;
+
 /// `INFO_*` constants.
 pub const INFO_CONSTANTS: &[(&str, i64)] = &[
     ("INFO_GENERAL", INFO_GENERAL),
@@ -446,9 +448,96 @@ impl std::fmt::Debug for InfoSource<'_> {
 
 const LICENSE_TEXT: &str = "\nLicense\n\nPHP is free software. You may redistribute it and/or modify it under the\nterms of the Modified BSD License (SPDX-License-Identifier: BSD-3-Clause).\n\nCopyright \u{a9} The PHP Group and Contributors.\nCopyright \u{a9} Zend Technologies Ltd., a subsidiary company of\n    Perforce Software, Inc.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are met:\n\n1. Redistributions of source code must retain the above copyright notice, this\n   list of conditions and the following disclaimer.\n\n2. Redistributions in binary form must reproduce the above copyright notice,\n   this list of conditions and the following disclaimer in the documentation\n   and/or other materials provided with the distribution.\n\n3. Neither the name of the copyright holder nor the names of its\n   contributors may be used to endorse or promote products derived from\n   this software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\"\nAND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE\nIMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE\nDISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE\nFOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL\nDAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR\nSERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER\nCAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,\nOR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE\nOF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n";
 
-/// `php_print_info($flag)` in text mode (the CLI's `phpinfo_as_text`).
-/// HTML mode is supported for the sections but omits the inline logo
-/// images and stylesheet.
+/// `php_info_print_css()` (`ext/standard/css.c`).
+pub const INFO_CSS: &str = concat!(
+    "body {background-color: #fff; color: #222; font-family: sans-serif;}\n",
+    "pre {margin: 0; font-family: monospace;}\n",
+    "a {color: inherit;}\n",
+    "a:hover {text-decoration: none;}\n",
+    "table {border-collapse: collapse; border: 0; width: 934px; box-shadow: 1px 2px 3px rgba(0, 0, 0, 0.2);}\n",
+    ".center {text-align: center;}\n",
+    ".center table {margin: 1em auto; text-align: left;}\n",
+    ".center th {text-align: center !important;}\n",
+    "td, th {border: 1px solid #666; font-size: 75%; vertical-align: baseline; padding: 4px 5px;}\n",
+    "th {position: sticky; top: 0; background: inherit;}\n",
+    "h1 {font-size: 150%;}\n",
+    "h2 {font-size: 125%;}\n",
+    "h2 > a {text-decoration: none;}\n",
+    "h2 > a:hover {text-decoration: underline;}\n",
+    ".p {text-align: left;}\n",
+    ".e {background-color: #ccf; width: 300px; font-weight: bold;}\n",
+    ".h {background-color: #99c; font-weight: bold;}\n",
+    ".v {background-color: #ddd; max-width: 300px; overflow-x: auto; word-wrap: break-word;}\n",
+    ".v i {color: #999;}\n",
+    "img {float: right; border: 0;}\n",
+    "hr {width: 934px; background-color: #ccc; border: 0; height: 1px;}\n",
+    ":root {--php-dark-grey: #333; --php-dark-blue: #4F5B93; --php-medium-blue: #8892BF; --php-light-blue: #E2E4EF; --php-accent-purple: #793862}",
+    "@media (prefers-color-scheme: dark) {\n",
+    "  body {background: var(--php-dark-grey); color: var(--php-light-blue)}\n",
+    "  .h td, td.e, th {border-color: #606A90}\n",
+    "  td {border-color: #505153}\n",
+    "  .e {background-color: #404A77}\n",
+    "  .h {background-color: var(--php-dark-blue)}\n",
+    "  .v {background-color: var(--php-dark-grey)}\n",
+    "  hr {background-color: #505153}\n",
+    "}\n",
+);
+
+/// `php_print_info_htmlhead(title)`: the HTML page head shared by
+/// `phpinfo()` and `phpcredits(CREDITS_FULLPAGE)`.
+#[must_use]
+pub fn html_head(php_version: &str, title: &str) -> Vec<u8> {
+    format!(
+        "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"DTD/xhtml1-transitional.dtd\">\n\
+         <html xmlns=\"http://www.w3.org/1999/xhtml\"><head>\n\
+         <style type=\"text/css\">\n{INFO_CSS}</style>\n\
+         <title>PHP {php_version} - {title}</title>\
+         <meta name=\"ROBOTS\" content=\"NOINDEX,NOFOLLOW,NOARCHIVE\" /></head>\n\
+         <body><div class=\"center\">\n"
+    )
+    .into_bytes()
+}
+
+/// The HTML license box of `phpinfo(INFO_LICENSE)`.
+const LICENSE_HTML: &str = concat!(
+    "<p>\n",
+    "PHP is free software. You may redistribute it and/or modify it under the ",
+    "terms of the Modified BSD License (SPDX-License-Identifier: BSD-3-Clause).\n",
+    "</p>\n",
+    "<p>\n",
+    "Copyright &copy; The PHP Group and Contributors.<br>\n",
+    "Copyright &copy; Zend Technologies Ltd., a subsidiary company of Perforce Software, Inc.\n",
+    "</p>\n",
+    "<p>\n",
+    "Redistribution and use in source and binary forms, with or without ",
+    "modification, are permitted provided that the following conditions are met:\n",
+    "</p>\n",
+    "<ol>\n",
+    "<li>Redistributions of source code must retain the above copyright notice, this ",
+    "list of conditions and the following disclaimer.</li>\n",
+    "<li>Redistributions in binary form must reproduce the above copyright notice, ",
+    "this list of conditions and the following disclaimer in the documentation ",
+    "and/or other materials provided with the distribution.</li>\n",
+    "<li>Neither the name of the copyright holder nor the names of its ",
+    "contributors may be used to endorse or promote products derived from ",
+    "this software without specific prior written permission.</li>\n",
+    "</ol>\n",
+    "<p>\n",
+    "THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" ",
+    "AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE ",
+    "IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE ",
+    "DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE ",
+    "FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL ",
+    "DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR ",
+    "SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER ",
+    "CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, ",
+    "OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE ",
+    "OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n",
+    "</p>\n",
+);
+
+/// `php_print_info($flag)` in text mode (the CLI's `phpinfo_as_text`) or
+/// as an HTML page (CGI, the built-in web server, Apache).
 #[allow(clippy::too_many_lines)]
 pub fn print_info(
     flag: i64,
@@ -460,17 +549,21 @@ pub fn print_info(
     if as_text {
         p.print("phpinfo()\n");
     } else {
-        p.print("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"DTD/xhtml1-transitional.dtd\">\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head>\n");
-        p.print(format!(
-            "<title>PHP {} - phpinfo()</title><meta name=\"ROBOTS\" content=\"NOINDEX,NOFOLLOW,NOARCHIVE\" /></head>\n<body><div class=\"center\">\n",
-            src.php_version
-        ));
+        p.print(html_head(src.php_version, "phpinfo()"));
     }
     if flag & INFO_GENERAL != 0 {
         if as_text {
             p.table_row(&[b"PHP Version", src.php_version.as_bytes()]);
         } else {
             p.box_start(true);
+            let egg = crate::sys::local_month_day() == Some((3, 1));
+            p.print("<a href=\"https://www.php.net/\"><img src=\"");
+            p.print(if egg {
+                logos::PHP_EGG_LOGO_DATA_URI
+            } else {
+                logos::PHP_LOGO_DATA_URI
+            });
+            p.print("\" alt=\"PHP logo\" /></a>");
             p.print(format!(
                 "<h1 class=\"p\">PHP Version {}</h1>\n",
                 src.php_version
@@ -511,6 +604,11 @@ pub fn print_info(
         p.stream_hash("Stream Filters", Some(src.stream_filters));
         p.table_end();
         p.box_start(false);
+        if !as_text {
+            p.print("<a href=\"https://www.zend.com/\"><img src=\"");
+            p.print(logos::ZEND_LOGO_DATA_URI);
+            p.print("\" alt=\"Zend logo\" /></a>\n");
+        }
         p.print("This program makes use of the Zend Scripting Language Engine:");
         p.print(if as_text { "\n" } else { "<br />" });
         if as_text {
@@ -586,7 +684,7 @@ pub fn print_info(
         } else {
             p.section("License");
             p.box_start(false);
-            p.print("<p>\nPHP is free software. You may redistribute it and/or modify it under the terms of the Modified BSD License (SPDX-License-Identifier: BSD-3-Clause).\n</p>\n");
+            p.print(LICENSE_HTML);
             p.box_end();
         }
     }

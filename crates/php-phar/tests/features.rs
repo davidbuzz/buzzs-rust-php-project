@@ -548,6 +548,27 @@ fn web_phar_front_controller() {
 }
 
 #[test]
+fn web_phar_extra_path_info_in_a_cached_archive() {
+    // cache_list/frontcontroller25.phpt: phar_postprocess_ru_web() also
+    // finds the archive in the phar.cache_list cache.
+    writable();
+    let d = workdir("webcache");
+    let p = webphar_archive(&d);
+    registry::reset_request();
+    assert!(registry::load_cache_list(&p));
+    let mut h = Host {
+        uri: b"/web.phar/a.jpg/extra/stuff".to_vec(),
+        script: b"/web.phar".to_vec(),
+        path_info: Some(b"/a.jpg/extra/stuff".to_vec()),
+        ..Host::default()
+    };
+    assert_eq!(web(&p, &mut h, &WebPharArgs::default()), WebResult::Exit);
+    assert_eq!(h.codes, Vec::<u16>::new());
+    assert_eq!(h.out, b"hio2");
+    registry::reset_request();
+}
+
+#[test]
 fn web_phar_outside_web_returns() {
     struct Cli;
     impl WebHost for Cli {
