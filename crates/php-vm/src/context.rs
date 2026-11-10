@@ -886,7 +886,12 @@ impl OutputHost for Vm {
         let _ = self.stdout.write_all(data);
     }
 
+    #[inline]
     fn send_headers(&mut self) -> bool {
+        // Every write after the first: `SG(headers_sent)` is already set.
+        if self.headers_sent {
+            return true;
+        }
         crate::builtins::headers::send_headers(self)
     }
 

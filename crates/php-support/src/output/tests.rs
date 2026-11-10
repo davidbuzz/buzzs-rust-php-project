@@ -1224,3 +1224,37 @@ fn simple_output_host() {
     );
     assert!(format!("{o:?}").contains("SimpleOutput"));
 }
+
+/// The no-buffer `echo` path writes straight through: empty writes send
+/// nothing (no SENT flag, no flush), implicit flush flushes per write,
+/// a refused header send disables output, and a buffer started later
+/// captures as before.
+#[test]
+fn unbuffered_writes_go_straight_to_the_sapi() {
+    let mut h = TestHost::default();
+    h.stack.set_implicit_flush(true);
+    assert_eq!(write(&mut h, b""), 0);
+    assert_eq!(h.stack.flags & status::SENT, 0);
+    assert_eq!(h.sapi_flushes, 0);
+    h.echo("abc\n");
+    h.echo("1");
+    assert_eq!(h.out, b"abc\n1");
+    assert_eq!(h.sapi_flushes, 2);
+    assert_ne!(h.stack.flags & status::SENT, 0);
+    assert!(h.ob_start());
+    h.echo("held");
+    assert_eq!(h.out, b"abc\n1");
+    assert!(h.end_clean());
+    h.echo("2");
+    assert_eq!(h.out, b"abc\n12");
+
+    let mut refused = TestHost {
+        headers_ok: Some(false),
+        ..TestHost::default()
+    };
+    refused.echo("x");
+    assert!(refused.out.is_empty());
+    assert_ne!(refused.stack.flags & status::DISABLED, 0);
+    assert_eq!(write(&mut refused, b"y"), 1);
+    assert!(refused.out.is_empty());
+}
