@@ -258,20 +258,20 @@ impl Extension for Json {
         for (name, value) in php_json::flags::CONSTANTS {
             m.constant(name, Value::Int(*value));
         }
-        m.function(
+        m.function_static(
             "json_encode(mixed $value, int $flags = 0, int $depth = 512): string|false",
             json_encode,
         )
-        .function(
+        .function_static(
             "json_decode(string $json, ?bool $associative = null, int $depth = 512, int $flags = 0): mixed",
             json_decode,
         )
-        .function(
+        .function_static(
             "json_validate(string $json, int $depth = 512, int $flags = 0): bool",
             json_validate,
         )
-        .function("json_last_error(): int", json_last_error)
-        .function("json_last_error_msg(): string", json_last_error_msg);
+        .function_static("json_last_error(): int", json_last_error)
+        .function_static("json_last_error_msg(): string", json_last_error_msg);
 
         let vm = m.vm();
         if vm.find_class(b"jsonserializable").is_none() {

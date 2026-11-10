@@ -99,11 +99,11 @@ fn get_html_translation_table(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the `html.c` functions and constants.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("htmlspecialchars(string $string, int $flags = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401, ?string $encoding = null, bool $double_encode = true): string", htmlspecialchars)
-        .function("htmlspecialchars_decode(string $string, int $flags = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401): string", htmlspecialchars_decode)
-        .function("html_entity_decode(string $string, int $flags = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401, ?string $encoding = null): string", html_entity_decode)
-        .function("htmlentities(string $string, int $flags = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401, ?string $encoding = null, bool $double_encode = true): string", htmlentities)
-        .function("get_html_translation_table(int $table = HTML_SPECIALCHARS, int $flags = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401, string $encoding = \"UTF-8\"): array", get_html_translation_table);
+    m.function_static("htmlspecialchars(string $string, int $flags = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401, ?string $encoding = null, bool $double_encode = true): string", htmlspecialchars)
+        .function_static("htmlspecialchars_decode(string $string, int $flags = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401): string", htmlspecialchars_decode)
+        .function_static("html_entity_decode(string $string, int $flags = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401, ?string $encoding = null): string", html_entity_decode)
+        .function_static("htmlentities(string $string, int $flags = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401, ?string $encoding = null, bool $double_encode = true): string", htmlentities)
+        .function_static("get_html_translation_table(int $table = HTML_SPECIALCHARS, int $flags = ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401, string $encoding = \"UTF-8\"): array", get_html_translation_table);
     for (name, v) in [
         ("HTML_SPECIALCHARS", html::HTML_SPECIALCHARS),
         ("HTML_ENTITIES", html::HTML_ENTITIES),

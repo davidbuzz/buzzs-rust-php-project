@@ -143,25 +143,25 @@ fn read_plain_file(path: &[u8]) -> Option<(Vec<u8>, usize)> {
 
 /// Registers the ext/standard image functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "image_type_to_mime_type(int $image_type): string",
         image_type_to_mime_type,
     )
-    .function(
+    .function_static(
         "image_type_to_extension(int $image_type, bool $include_dot = true): string|false",
         image_type_to_extension,
     )
-    .function(
+    .function_static(
         "getimagesize(string $filename, &$image_info = null): array|false",
         getimagesize,
     )
-    .function(
+    .function_static(
         "getimagesizefromstring(string $string, &$image_info = null): array|false",
         getimagesizefromstring,
     )
-    .function(
+    .function_static(
         "iptcembed(string $iptc_data, string $filename, int $spool = 0): string|bool",
         iptcembed,
     )
-    .function("iptcparse(string $iptc_block): array|false", iptcparse);
+    .function_static("iptcparse(string $iptc_block): array|false", iptcparse);
 }

@@ -448,7 +448,7 @@ impl Extension for PropertyTables {
     }
 
     fn register(&self, module: &mut ModuleBuilder<'_>) {
-        module.function("json_table(object $o): array", |vm, args| {
+        module.function_static("json_table(object $o): array", |vm, args| {
             let Value::Object(o) = args.at(0) else {
                 panic!("object argument")
             };
@@ -456,7 +456,7 @@ impl Extension for PropertyTables {
                 .map(|table| Value::Array(table.expect("property table")))
                 .map_err(|e| vm.throw_runtime_error(e))
         });
-        module.function("export_table(object $o): array", |vm, args| {
+        module.function_static("export_table(object $o): array", |vm, args| {
             let Value::Object(o) = args.at(0) else {
                 panic!("object argument")
             };
@@ -464,7 +464,7 @@ impl Extension for PropertyTables {
                 .map(|table| Value::Array(table.expect("property table")))
                 .map_err(|e| vm.throw_runtime_error(e))
         });
-        module.function(
+        module.function_static(
             "prepare_untyped_table(object $o, string $key, mixed &$v): bool",
             |vm, args| {
                 let Value::Object(o) = args.at(0) else {
@@ -479,7 +479,7 @@ impl Extension for PropertyTables {
                 Ok(Value::Bool(true))
             },
         );
-        module.function(
+        module.function_static(
             "bind_table(object $o, mixed $key, mixed &$v): bool",
             |vm, args| {
                 let Value::Object(o) = args.at(0) else {

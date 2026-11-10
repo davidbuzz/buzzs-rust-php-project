@@ -63,11 +63,11 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, hook) in DIRECTIVES.into_iter().zip(HOOKS) {
         m.ini_on_modify(name, hook);
     }
-    m.function(
+    m.function_static(
         "output_add_rewrite_var(string $name, string $value): bool",
         output_add_rewrite_var,
     )
-    .function(
+    .function_static(
         "output_reset_rewrite_vars(): bool",
         output_reset_rewrite_vars,
     );

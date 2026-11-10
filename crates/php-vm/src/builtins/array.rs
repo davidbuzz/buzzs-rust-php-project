@@ -312,19 +312,19 @@ fn array_slice(_vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<V
 pub(crate) fn register_bare_count(vm: &mut Vm) {
     crate::reflection::record_module(vm, "standard", true);
     let mut m = crate::ext::ModuleBuilder::new(vm, "standard");
-    m.function(
+    m.function_static(
         "count(Countable|array $value, int $mode = COUNT_NORMAL): int",
         count,
     );
-    m.function(
+    m.function_static(
         "sizeof(Countable|array $value, int $mode = COUNT_NORMAL): int",
         count,
     );
-    m.function(
+    m.function_static(
         "in_array(mixed $needle, array $haystack, bool $strict = false): bool",
         in_array,
     );
-    m.function(
+    m.function_static(
         "array_slice(array $array, int $offset, ?int $length = null, bool $preserve_keys = false): array",
         array_slice,
     );

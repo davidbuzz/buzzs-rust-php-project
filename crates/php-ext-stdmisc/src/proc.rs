@@ -218,13 +218,13 @@ fn proc_terminate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "proc_open(array|string $command, array $descriptor_spec, &$pipes, ?string $cwd = null, ?array $env_vars = null, ?array $options = null)",
         proc_open,
     )
-    .function("proc_close($process): int", proc_close)
-    .function("proc_terminate($process, int $signal = 15): bool", proc_terminate)
-    .function("proc_get_status($process): array", proc_get_status);
+    .function_static("proc_close($process): int", proc_close)
+    .function_static("proc_terminate($process, int $signal = 15): bool", proc_terminate)
+    .function_static("proc_get_status($process): array", proc_get_status);
 }
 
 #[cfg(test)]

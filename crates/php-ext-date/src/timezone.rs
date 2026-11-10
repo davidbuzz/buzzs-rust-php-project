@@ -248,15 +248,15 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         })
         .register(vm);
 
-    m.function("timezone_open(string $timezone): DateTimeZone|false", timezone_open)
-        .function("timezone_name_get(DateTimeZone $object): string", get_name)
-        .function(
+    m.function_static("timezone_open(string $timezone): DateTimeZone|false", timezone_open)
+        .function_static("timezone_name_get(DateTimeZone $object): string", get_name)
+        .function_static(
             "timezone_offset_get(DateTimeZone $object, DateTimeInterface $datetime): int",
             get_offset,
         )
-        .function(
+        .function_static(
             "timezone_transitions_get(DateTimeZone $object, int $timestampBegin = PHP_INT_MIN, int $timestampEnd = 2147483647): array|false",
             get_transitions,
         )
-        .function("timezone_location_get(DateTimeZone $object): array|false", get_location);
+        .function_static("timezone_location_get(DateTimeZone $object): array|false", get_location);
 }

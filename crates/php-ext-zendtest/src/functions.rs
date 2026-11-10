@@ -729,163 +729,163 @@ fn register_stub_metadata(vm: &mut Vm) {
 }
 
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("zend_trigger_bailout(): never", trigger_bailout);
-    m.function(
+    m.function_static("zend_trigger_bailout(): never", trigger_bailout);
+    m.function_static(
         "zend_test_serialization_bailout(bool $unserialize, bool $locked): never",
         serialization_bailout,
     );
-    m.function(
+    m.function_static(
         "zend_test_serialization_state(): array",
         serialization_state,
     );
-    m.function("zend_test_array_return(): array", array_return);
-    m.function("zend_test_nullable_array_return(): ?array", none);
-    m.function("zend_test_void_return(): void", none);
-    m.function(
+    m.function_static("zend_test_array_return(): array", array_return);
+    m.function_static("zend_test_nullable_array_return(): ?array", none);
+    m.function_static("zend_test_void_return(): void", none);
+    m.function_static(
         "&zend_test_forward_reference(mixed &$value): mixed",
         forward_reference,
     );
-    m.function(
+    m.function_static(
         "zend_test_compile_string(string $source_string, string $filename, int $position): void",
         crate::compile::compile_string,
     );
-    m.function("zend_test_deprecated(mixed $arg = null): void", none);
-    m.function("zend_test_deprecated_attr(): void", none);
-    m.function("zend_test_nodiscard(): int", ret_one);
-    m.function("zend_test_deprecated_nodiscard(): int", ret_one);
-    m.function("zend_test_aliased(): void", none);
-    m.function("zend_test_deprecated_aliased(): void", none);
-    m.function(
+    m.function_static("zend_test_deprecated(mixed $arg = null): void", none);
+    m.function_static("zend_test_deprecated_attr(): void", none);
+    m.function_static("zend_test_nodiscard(): int", ret_one);
+    m.function_static("zend_test_deprecated_nodiscard(): int", ret_one);
+    m.function_static("zend_test_aliased(): void", none);
+    m.function_static("zend_test_deprecated_aliased(): void", none);
+    m.function_static(
         "zend_create_unterminated_string(string $str): string",
         create_unterminated_string,
     );
-    m.function("zend_terminate_string(string &$str): void", none);
-    m.function("zend_leak_variable(mixed $variable): void", leak_variable);
-    m.function(
+    m.function_static("zend_terminate_string(string &$str): void", none);
+    m.function_static("zend_leak_variable(mixed $variable): void", leak_variable);
+    m.function_static(
         "zend_test_handle_post_data(mixed $stream, string $content_type, int $content_length): void",
         crate::post::handle_post_data,
     );
-    m.function("zend_leak_bytes(int $bytes = 3): void", none);
-    m.function("zend_delref(mixed $variable): void", none);
-    m.function(
+    m.function_static("zend_leak_bytes(int $bytes = 3): void", none);
+    m.function_static("zend_delref(mixed $variable): void", none);
+    m.function_static(
         "zend_test_erealloc_block_size(int $old_size, int $new_size): array",
         erealloc_block_size,
     );
-    m.function("zend_test_emalloc(int $size): void", crate::stack::emalloc);
-    m.function(
+    m.function_static("zend_test_emalloc(int $size): void", crate::stack::emalloc);
+    m.function_static(
         "zend_test_callback(callable $callback): void",
         test_callback,
     );
-    m.function(
+    m.function_static(
         "zend_iterable(iterable $arg1, ?iterable $arg2 = null): void",
         none,
     );
-    m.function(
+    m.function_static(
         "zend_weakmap_attach(object $object, mixed $value): bool",
         weakmap_attach,
     );
-    m.function("zend_weakmap_remove(object $object): bool", weakmap_remove);
-    m.function("zend_weakmap_dump(): array", weakmap_dump);
-    m.function("zend_get_unit_enum(): ZendTestUnitEnum", get_unit_enum);
-    m.function(
+    m.function_static("zend_weakmap_remove(object $object): bool", weakmap_remove);
+    m.function_static("zend_weakmap_dump(): array", weakmap_dump);
+    m.function_static("zend_get_unit_enum(): ZendTestUnitEnum", get_unit_enum);
+    m.function_static(
         "zend_test_parameter_with_attribute(string $parameter): int",
         ret_one,
     );
-    m.function("zend_test_attribute_with_named_argument(): void", none);
-    m.function("zend_get_current_func_name(): string", current_func_name);
-    m.function(
+    m.function_static("zend_test_attribute_with_named_argument(): void", none);
+    m.function_static("zend_get_current_func_name(): string", current_func_name);
+    m.function_static(
         "zend_call_method($obj_or_class, string $method, mixed $arg1 = UNKNOWN, mixed $arg2 = UNKNOWN): mixed",
         call_method,
     );
-    m.function(
+    m.function_static(
         "zend_object_init_with_constructor($class, mixed ...$args): mixed",
         object_init_with_constructor,
     );
-    m.function(
+    m.function_static(
         "zend_call_method_if_exists(object $obj, string $method, mixed ...$args): mixed",
         call_method_if_exists,
     );
-    m.function(
+    m.function_static(
         "zend_test_call_with_consumed_args(callable $cb, array $args, int $consumed_args): array",
         call_with_consumed_args,
     );
-    m.function("zend_test_refcount(mixed $value): int", refcount);
-    m.function(
+    m.function_static("zend_test_refcount(mixed $value): int", refcount);
+    m.function_static(
         "zend_test_zend_ini_parse_quantity(string $str): int",
         ini_parse_quantity,
     );
-    m.function(
+    m.function_static(
         "zend_test_zend_ini_parse_uquantity(string $str): int",
         ini_parse_uquantity,
     );
-    m.function("zend_test_zend_ini_str(): string", ini_str);
-    m.function("zend_test_zstr_init_literal(): string", zstr_init_literal);
-    m.function("zend_test_zend_call_stack_get(): ?array", call_stack_get);
-    m.function(
+    m.function_static("zend_test_zend_ini_str(): string", ini_str);
+    m.function_static("zend_test_zstr_init_literal(): string", zstr_init_literal);
+    m.function_static("zend_test_zend_call_stack_get(): ?array", call_stack_get);
+    m.function_static(
         "zend_test_zend_call_stack_use_all(): int",
         call_stack_use_all,
     );
-    m.function(
+    m.function_static(
         "zend_test_is_string_marked_as_valid_utf8(string $string): bool",
         is_valid_utf8,
     );
-    m.function("zend_get_map_ptr_last(): int", map_ptr_last);
-    m.function("zend_test_crash(?string $message = null): void", crash);
-    m.function(
+    m.function_static("zend_get_map_ptr_last(): int", map_ptr_last);
+    m.function_static("zend_test_crash(?string $message = null): void", crash);
+    m.function_static(
         "zend_test_raise_and_throw(int $signal): void",
         raise_and_throw,
     );
-    m.function(
+    m.function_static(
         "zend_test_fill_packed_array(array &$array): void",
         fill_packed_array,
     );
-    m.function(
+    m.function_static(
         "zend_test_create_throwing_resource()",
         create_throwing_resource,
     );
-    m.function("get_open_basedir(): ?string", open_basedir);
-    m.function("zend_test_override_libxml_global_state(): void", none);
-    m.function("zend_test_is_pcre_bundled(): bool", ret_false);
-    m.function("zend_test_cast_fread($stream): void", cast_fread);
-    m.function("zend_test_is_zend_ptr(int $addr): bool", ret_false);
-    m.function("zend_test_log_err_debug(string $str): void", log_err_debug);
-    m.function(
+    m.function_static("get_open_basedir(): ?string", open_basedir);
+    m.function_static("zend_test_override_libxml_global_state(): void", none);
+    m.function_static("zend_test_is_pcre_bundled(): bool", ret_false);
+    m.function_static("zend_test_cast_fread($stream): void", cast_fread);
+    m.function_static("zend_test_is_zend_ptr(int $addr): bool", ret_false);
+    m.function_static("zend_test_log_err_debug(string $str): void", log_err_debug);
+    m.function_static(
         "zend_test_compile_to_ast(string $str): string",
         compile_to_ast,
     );
-    m.function("zend_test_gh18756(): void", none);
-    m.function("zend_test_opcache_preloading(): bool", opcache_preloading);
-    m.function("zend_test_gh19792(): void", gh19792);
-    m.function("zend_new_singleton_array(): array", singleton_array);
-    m.function(
+    m.function_static("zend_test_gh18756(): void", none);
+    m.function_static("zend_test_opcache_preloading(): bool", opcache_preloading);
+    m.function_static("zend_test_gh19792(): void", gh19792);
+    m.function_static("zend_new_singleton_array(): array", singleton_array);
+    m.function_static(
         "zend_test_set_local_var(string $name, mixed $value): bool",
         set_local_var,
     );
-    m.function("ZendTestNS2\\namespaced_func(): bool", ret_true);
-    m.function("ZendTestNS2\\namespaced_deprecated_func(): void", none);
-    m.function("ZendTestNS2\\namespaced_aliased_func(): void", none);
-    m.function(
+    m.function_static("ZendTestNS2\\namespaced_func(): bool", ret_true);
+    m.function_static("ZendTestNS2\\namespaced_deprecated_func(): void", none);
+    m.function_static("ZendTestNS2\\namespaced_aliased_func(): void", none);
+    m.function_static(
         "ZendTestNS2\\namespaced_deprecated_aliased_func(): void",
         none,
     );
-    m.function("ZendTestNS2\\ZendSubNS\\namespaced_func(): bool", ret_true);
-    m.function(
+    m.function_static("ZendTestNS2\\ZendSubNS\\namespaced_func(): bool", ret_true);
+    m.function_static(
         "ZendTestNS2\\ZendSubNS\\namespaced_deprecated_func(): void",
         none,
     );
-    m.function(
+    m.function_static(
         "ZendTestNS2\\ZendSubNS\\namespaced_aliased_func(): void",
         none,
     );
-    m.function(
+    m.function_static(
         "ZendTestNS2\\ZendSubNS\\namespaced_deprecated_aliased_func(): void",
         none,
     );
-    m.function(
+    m.function_static(
         "zend_test_internal_dnf_arguments(Iterator|(Traversable&Countable) $arg): Iterator|(Traversable&Countable)",
         internal_dnf_arguments,
     );
-    m.function(
+    m.function_static(
         "zend_iterable_legacy(iterable $arg1, ?iterable $arg2 = null): iterable",
         iterable_legacy,
     );

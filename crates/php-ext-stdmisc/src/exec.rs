@@ -105,22 +105,22 @@ fn proc_nice(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("escapeshellarg(string $arg): string", escapeshellarg)
-        .function("escapeshellcmd(string $command): string", escapeshellcmd)
-        .function(
+    m.function_static("escapeshellarg(string $arg): string", escapeshellarg)
+        .function_static("escapeshellcmd(string $command): string", escapeshellcmd)
+        .function_static(
             "exec(string $command, &$output = null, &$result_code = null): string|false",
             exec_fn,
         )
-        .function(
+        .function_static(
             "system(string $command, &$result_code = null): string|false",
             system,
         )
-        .function(
+        .function_static(
             "passthru(string $command, &$result_code = null): false|null",
             passthru,
         )
-        .function("shell_exec(string $command): string|false|null", shell_exec)
-        .function("proc_nice(int $priority): bool", proc_nice);
+        .function_static("shell_exec(string $command): string|false|null", shell_exec)
+        .function_static("proc_nice(int $priority): bool", proc_nice);
 }
 
 #[cfg(test)]

@@ -196,6 +196,6 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
             .collect()
     });
     for sig in sigs {
-        m.function(sig, call);
+        m.function_static(sig.as_str(), call);
     }
 }

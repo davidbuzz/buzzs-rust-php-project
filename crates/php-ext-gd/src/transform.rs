@@ -715,6 +715,6 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         ),
     ];
     for &(sig, f) in fns {
-        m.function(sig, f);
+        m.function_static(sig, f);
     }
 }

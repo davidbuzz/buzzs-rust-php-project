@@ -323,19 +323,19 @@ fn prime_realpath_cache(vm: &mut Vm) {
 
 /// Registers the functions, constants and the `Directory` class.
 pub fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("opendir(string $directory, $context = null)", opendir)
-        .function("dir(string $directory, $context = null): Directory|false", dir)
-        .function("closedir($dir_handle = null): void", closedir)
-        .function("rewinddir($dir_handle = null): void", rewinddir)
-        .function("readdir($dir_handle = null): string|false", readdir)
-        .function(
+    m.function_static("opendir(string $directory, $context = null)", opendir)
+        .function_static("dir(string $directory, $context = null): Directory|false", dir)
+        .function_static("closedir($dir_handle = null): void", closedir)
+        .function_static("rewinddir($dir_handle = null): void", rewinddir)
+        .function_static("readdir($dir_handle = null): string|false", readdir)
+        .function_static(
             "scandir(string $directory, int $sorting_order = SCANDIR_SORT_ASCENDING, $context = null): array|false",
             scandir,
         )
-        .function("glob(string $pattern, int $flags = 0): array|false", glob_fn)
-        .function("chdir(string $directory): bool", chdir)
-        .function("realpath_cache_get(): array", realpath_cache_get)
-        .function("realpath_cache_size(): int", realpath_cache_size)
+        .function_static("glob(string $pattern, int $flags = 0): array|false", glob_fn)
+        .function_static("chdir(string $directory): bool", chdir)
+        .function_static("realpath_cache_get(): array", realpath_cache_get)
+        .function_static("realpath_cache_size(): int", realpath_cache_size)
         .on_request_startup(prime_realpath_cache);
     for (name, v) in [
         ("GLOB_BRACE", glob::GLOB_BRACE),

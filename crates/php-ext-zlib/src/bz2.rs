@@ -148,16 +148,16 @@ fn bzerror(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     php_streams::wrapper::register_global(b"compress.bzip2", Rc::new(Bz2Wrapper));
     php_streams::wrapper::register_filter_global("bzip2.*", Rc::new(Bz2FilterFactory));
-    m.function("bzopen($file, string $mode)", bzopen)
-        .function("bzread($bz, int $length = 1024): string|false", bzread)
-        .function("bzerrno($bz): int", bzerrno)
-        .function("bzerrstr($bz): string", bzerrstr)
-        .function("bzerror($bz): array", bzerror)
-        .function(
+    m.function_static("bzopen($file, string $mode)", bzopen)
+        .function_static("bzread($bz, int $length = 1024): string|false", bzread)
+        .function_static("bzerrno($bz): int", bzerrno)
+        .function_static("bzerrstr($bz): string", bzerrstr)
+        .function_static("bzerror($bz): array", bzerror)
+        .function_static(
             "bzcompress(string $data, int $block_size = 4, int $work_factor = 0): string|int",
             bzcompress,
         )
-        .function(
+        .function_static(
             "bzdecompress(string $data, bool $use_less_memory = false): string|int|false",
             bzdecompress,
         );

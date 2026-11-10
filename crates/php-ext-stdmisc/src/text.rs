@@ -497,28 +497,28 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     }
     m.constant("PHP_QUERY_RFC1738", Value::Int(query::PHP_QUERY_RFC1738))
         .constant("PHP_QUERY_RFC3986", Value::Int(query::PHP_QUERY_RFC3986));
-    m.function(
+    m.function_static(
         "highlight_string(string $string, bool $return = false): string|true",
         highlight_string,
     )
-    .function(
+    .function_static(
         "highlight_file(string $filename, bool $return = false): string|bool",
         highlight_file,
     )
-    .function(
+    .function_static(
         "show_source(string $filename, bool $return = false): string|bool",
         highlight_file,
     )
-    .function("php_strip_whitespace(string $filename): string", php_strip_whitespace)
-    .function(
+    .function_static("php_strip_whitespace(string $filename): string", php_strip_whitespace)
+    .function_static(
         "http_build_query(array|object $data, string $numeric_prefix = \"\", ?string $arg_separator = null, int $encoding_type = PHP_QUERY_RFC1738): string",
         http_build_query,
     )
-    .function("parse_str(string $string, &$result): void", parse_str)
-    .function("request_parse_body(?array $options = null): array", request_parse_body)
-    .function("setlocale(int $category, $locales, ...$rest): string|false", setlocale)
-    .function("localeconv(): array", localeconv)
-    .function("nl_langinfo(int $item): string|false", nl_langinfo)
+    .function_static("parse_str(string $string, &$result): void", parse_str)
+    .function_static("request_parse_body(?array $options = null): array", request_parse_body)
+    .function_static("setlocale(int $category, $locales, ...$rest): string|false", setlocale)
+    .function_static("localeconv(): array", localeconv)
+    .function_static("nl_langinfo(int $item): string|false", nl_langinfo)
     .on_request_shutdown(|_| {
         LOCALE.with(|l| l.borrow_mut().request_shutdown());
         sync_decimal_point();

@@ -340,47 +340,47 @@ impl Extension for IconvExt {
         ini::register(m);
         filter::register();
         m.on_request_startup(request_startup);
-        m.function(
+        m.function_static(
             "iconv_strlen(string $string, ?string $encoding = null): int|false",
             iconv_strlen,
         )
-        .function(
+        .function_static(
             "iconv_substr(string $string, int $offset, ?int $length = null, ?string $encoding = null): string|false",
             iconv_substr,
         )
-        .function(
+        .function_static(
             "iconv_strpos(string $haystack, string $needle, int $offset = 0, ?string $encoding = null): int|false",
             iconv_strpos,
         )
-        .function(
+        .function_static(
             "iconv_strrpos(string $haystack, string $needle, ?string $encoding = null): int|false",
             iconv_strrpos,
         )
-        .function(
+        .function_static(
             "iconv_mime_encode(string $field_name, string $field_value, array $options = []): string|false",
             iconv_mime_encode,
         )
-        .function(
+        .function_static(
             "iconv_mime_decode(string $string, int $mode = 0, ?string $encoding = null): string|false",
             iconv_mime_decode,
         )
-        .function(
+        .function_static(
             "iconv_mime_decode_headers(string $headers, int $mode = 0, ?string $encoding = null): array|false",
             iconv_mime_decode_headers,
         )
-        .function(
+        .function_static(
             "iconv(string $from_encoding, string $to_encoding, string $string): string|false",
             iconv_fn,
         )
-        .function(
+        .function_static(
             "iconv_set_encoding(string $type, string $encoding): bool",
             iconv_set_encoding,
         )
-        .function(
+        .function_static(
             "iconv_get_encoding(string $type = \"all\"): array|string|false",
             iconv_get_encoding,
         )
-        .function(
+        .function_static(
             "ob_iconv_handler(string $contents, int $status): string|false",
             ob_iconv_handler,
         );

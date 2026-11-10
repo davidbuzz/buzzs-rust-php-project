@@ -178,47 +178,47 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, v) in dns::CONSTANTS.iter().chain(net::SYSLOG_CONSTANTS) {
         m.constant(name, Value::Int(*v));
     }
-    m.function("inet_ntop(string $ip): string|false", inet_ntop)
-        .function("inet_pton(string $ip): string|false", inet_pton)
-        .function("ip2long(string $ip): int|false", ip2long)
-        .function("long2ip(int $ip): string", long2ip)
-        .function("gethostname(): string|false", gethostname)
-        .function("gethostbyname(string $hostname): string", gethostbyname)
-        .function("gethostbynamel(string $hostname): array|false", gethostbynamel)
-        .function("gethostbyaddr(string $ip): string|false", gethostbyaddr)
-        .function(
+    m.function_static("inet_ntop(string $ip): string|false", inet_ntop)
+        .function_static("inet_pton(string $ip): string|false", inet_pton)
+        .function_static("ip2long(string $ip): int|false", ip2long)
+        .function_static("long2ip(int $ip): string", long2ip)
+        .function_static("gethostname(): string|false", gethostname)
+        .function_static("gethostbyname(string $hostname): string", gethostbyname)
+        .function_static("gethostbynamel(string $hostname): array|false", gethostbynamel)
+        .function_static("gethostbyaddr(string $ip): string|false", gethostbyaddr)
+        .function_static(
             "getservbyname(string $service, string $protocol): int|false",
             getservbyname,
         )
-        .function(
+        .function_static(
             "getservbyport(int $port, string $protocol): string|false",
             getservbyport,
         )
-        .function("getprotobyname(string $protocol): int|false", getprotobyname)
-        .function("getprotobynumber(int $protocol): string|false", getprotobynumber)
-        .function("net_get_interfaces(): array|false", net_get_interfaces)
-        .function(
+        .function_static("getprotobyname(string $protocol): int|false", getprotobyname)
+        .function_static("getprotobynumber(int $protocol): string|false", getprotobynumber)
+        .function_static("net_get_interfaces(): array|false", net_get_interfaces)
+        .function_static(
             "dns_check_record(string $hostname, string $type = \"MX\"): bool",
             dns_check_record,
         )
-        .function(
+        .function_static(
             "checkdnsrr(string $hostname, string $type = \"MX\"): bool",
             dns_check_record,
         )
-        .function(
+        .function_static(
             "dns_get_record(string $hostname, int $type = DNS_ANY, &$authoritative_name_servers = null, &$additional_records = null, bool $raw = false): array|false",
             dns_get_record,
         )
-        .function(
+        .function_static(
             "dns_get_mx(string $hostname, &$hosts, &$weights = null): bool",
             dns_get_mx,
         )
-        .function(
+        .function_static(
             "getmxrr(string $hostname, &$hosts, &$weights = null): bool",
             dns_get_mx,
         )
-        .function("openlog(string $prefix, int $flags, int $facility): true", openlog)
-        .function("closelog(): true", closelog)
-        .function("syslog(int $priority, string $message): true", syslog)
+        .function_static("openlog(string $prefix, int $flags, int $facility): true", openlog)
+        .function_static("closelog(): true", closelog)
+        .function_static("syslog(int $priority, string $message): true", syslog)
         .on_request_shutdown(|_| SYSLOG.with(|s| s.borrow_mut().request_shutdown()));
 }

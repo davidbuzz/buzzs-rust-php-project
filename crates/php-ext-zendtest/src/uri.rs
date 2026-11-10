@@ -20,7 +20,7 @@ fn zend_test_uri_parser(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "zend_test_uri_parser(string $uri, string $parser): array",
         zend_test_uri_parser,
     );

@@ -148,7 +148,7 @@ fn get_browser(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers `get_browser()`.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "get_browser(?string $user_agent = null, bool $return_array = false): object|array|false",
         get_browser,
     );

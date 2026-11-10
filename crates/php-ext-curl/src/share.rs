@@ -182,25 +182,25 @@ fn curl_share_init_persistent(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the share functions.
 pub(crate) fn register_functions(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "curl_share_close(CurlShareHandle $share_handle): void",
         curl_share_close,
     )
     .deprecated("8.5", "as it has no effect since PHP 8.0")
-    .function(
+    .function_static(
         "curl_share_errno(CurlShareHandle $share_handle): int",
         curl_share_errno,
     )
-    .function("curl_share_init(): CurlShareHandle", curl_share_init)
-    .function(
+    .function_static("curl_share_init(): CurlShareHandle", curl_share_init)
+    .function_static(
         "curl_share_setopt(CurlShareHandle $share_handle, int $option, mixed $value): bool",
         curl_share_setopt,
     )
-    .function(
+    .function_static(
         "curl_share_strerror(int $error_code): ?string",
         curl_share_strerror,
     )
-    .function(
+    .function_static(
         "curl_share_init_persistent(array $share_options): CurlSharePersistentHandle",
         curl_share_init_persistent,
     );

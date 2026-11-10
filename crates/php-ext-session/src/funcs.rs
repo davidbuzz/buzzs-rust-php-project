@@ -10,65 +10,65 @@ use crate::host::{with_host, VmHost};
 
 /// Registers the 23 functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "session_name(?string $name = null): string|false",
         session_name,
     )
-    .function(
+    .function_static(
         "session_module_name(?string $module = null): string|false",
         session_module_name,
     )
-    .function(
+    .function_static(
         "session_save_path(?string $path = null): string|false",
         session_save_path,
     )
-    .function("session_id(?string $id = null): string|false", session_id)
-    .function(
+    .function_static("session_id(?string $id = null): string|false", session_id)
+    .function_static(
         "session_create_id(string $prefix = \"\"): string|false",
         session_create_id,
     )
-    .function(
+    .function_static(
         "session_regenerate_id(bool $delete_old_session = false): bool",
         session_regenerate_id,
     )
-    .function("session_decode(string $data): bool", session_decode)
-    .function("session_encode(): string|false", session_encode)
-    .function("session_destroy(): bool", session_destroy)
-    .function("session_unset(): bool", session_unset)
-    .function("session_gc(): int|false", session_gc)
-    .function(
+    .function_static("session_decode(string $data): bool", session_decode)
+    .function_static("session_encode(): string|false", session_encode)
+    .function_static("session_destroy(): bool", session_destroy)
+    .function_static("session_unset(): bool", session_unset)
+    .function_static("session_gc(): int|false", session_gc)
+    .function_static(
         "session_get_cookie_params(): array",
         session_get_cookie_params,
     )
-    .function("session_write_close(): bool", session_write_close)
-    .function("session_abort(): bool", session_abort)
-    .function("session_reset(): bool", session_reset)
-    .function("session_status(): int", session_status)
-    .function(
+    .function_static("session_write_close(): bool", session_write_close)
+    .function_static("session_abort(): bool", session_abort)
+    .function_static("session_reset(): bool", session_reset)
+    .function_static("session_status(): int", session_status)
+    .function_static(
         "session_register_shutdown(): void",
         session_register_shutdown,
     )
-    .function("session_commit(): bool", session_commit)
-    .function(
+    .function_static("session_commit(): bool", session_commit)
+    .function_static(
         "session_set_save_handler($open, $close = UNKNOWN, $read = UNKNOWN, \
              $write = UNKNOWN, $destroy = UNKNOWN, $gc = UNKNOWN, $create_sid = UNKNOWN, \
              $validate_sid = UNKNOWN, $update_timestamp = UNKNOWN): bool",
         session_set_save_handler,
     )
-    .function(
+    .function_static(
         "session_cache_limiter(?string $value = null): string|false",
         session_cache_limiter,
     )
-    .function(
+    .function_static(
         "session_cache_expire(?int $value = null): int|false",
         session_cache_expire,
     )
-    .function(
+    .function_static(
         "session_set_cookie_params(array|int $lifetime_or_options, ?string $path = null, \
              ?string $domain = null, ?bool $secure = null, ?bool $httponly = null): bool",
         session_set_cookie_params,
     )
-    .function("session_start(array $options = []): bool", session_start);
+    .function_static("session_start(array $options = []): bool", session_start);
 }
 
 /// A `?string` argument (absent or `null` → `None`).

@@ -237,60 +237,60 @@ impl Extension for Calendar {
         for (name, value) in cal::CONSTANTS {
             m.constant(name, Value::Int(value));
         }
-        m.function(
+        m.function_static(
             "cal_days_in_month(int $calendar, int $month, int $year): int",
             cal_days_in_month,
         )
-        .function(
+        .function_static(
             "cal_from_jd(int $julian_day, int $calendar): array",
             cal_from_jd,
         )
-        .function("cal_info(int $calendar = -1): array", cal_info)
-        .function(
+        .function_static("cal_info(int $calendar = -1): array", cal_info)
+        .function_static(
             "cal_to_jd(int $calendar, int $month, int $day, int $year): int",
             cal_to_jd,
         )
-        .function(
+        .function_static(
             "easter_date(?int $year = null, int $mode = CAL_EASTER_DEFAULT): int",
             easter_date,
         )
-        .function(
+        .function_static(
             "easter_days(?int $year = null, int $mode = CAL_EASTER_DEFAULT): int",
             easter_days,
         )
-        .function(
+        .function_static(
             "frenchtojd(int $month, int $day, int $year): int",
             frenchtojd,
         )
-        .function(
+        .function_static(
             "gregoriantojd(int $month, int $day, int $year): int",
             gregoriantojd,
         )
-        .function(
+        .function_static(
             "jddayofweek(int $julian_day, int $mode = CAL_DOW_DAYNO): int|string",
             jddayofweek,
         )
-        .function(
+        .function_static(
             "jdmonthname(int $julian_day, int $mode): string",
             jdmonthname,
         )
-        .function("jdtofrench(int $julian_day): string", jdtofrench)
-        .function("jdtogregorian(int $julian_day): string", jdtogregorian)
-        .function(
+        .function_static("jdtofrench(int $julian_day): string", jdtofrench)
+        .function_static("jdtogregorian(int $julian_day): string", jdtogregorian)
+        .function_static(
             "jdtojewish(int $julian_day, bool $hebrew = false, int $flags = 0): string",
             jdtojewish,
         )
-        .function("jdtojulian(int $julian_day): string", jdtojulian)
-        .function("jdtounix(int $julian_day): int", jdtounix)
-        .function(
+        .function_static("jdtojulian(int $julian_day): string", jdtojulian)
+        .function_static("jdtounix(int $julian_day): int", jdtounix)
+        .function_static(
             "jewishtojd(int $month, int $day, int $year): int",
             jewishtojd,
         )
-        .function(
+        .function_static(
             "juliantojd(int $month, int $day, int $year): int",
             juliantojd,
         )
-        .function("unixtojd(?int $timestamp = null): int|false", unixtojd);
+        .function_static("unixtojd(?int $timestamp = null): int|false", unixtojd);
     }
 }
 

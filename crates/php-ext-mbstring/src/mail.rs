@@ -479,7 +479,7 @@ fn mb_send_mail(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers `mb_send_mail`.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "mb_send_mail(string $to, string $subject, string $message, array|string $additional_headers = [], ?string $additional_params = null): bool",
         mb_send_mail,
     );

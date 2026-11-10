@@ -596,45 +596,45 @@ fn curl_version(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// Registers the easy-handle functions.
 pub(crate) fn register_functions(m: &mut ModuleBuilder<'_>) {
-    m.function("curl_close(CurlHandle $handle): void", curl_close)
+    m.function_static("curl_close(CurlHandle $handle): void", curl_close)
         .deprecated("8.5", "as it has no effect since PHP 8.0")
-        .function(
+        .function_static(
             "curl_copy_handle(CurlHandle $handle): CurlHandle|false",
             curl_copy_handle,
         )
-        .function("curl_errno(CurlHandle $handle): int", curl_errno)
-        .function("curl_error(CurlHandle $handle): string", curl_error)
-        .function(
+        .function_static("curl_errno(CurlHandle $handle): int", curl_errno)
+        .function_static("curl_error(CurlHandle $handle): string", curl_error)
+        .function_static(
             "curl_escape(CurlHandle $handle, string $string): string|false",
             curl_escape,
         )
-        .function(
+        .function_static(
             "curl_unescape(CurlHandle $handle, string $string): string|false",
             curl_unescape,
         )
-        .function("curl_exec(CurlHandle $handle): string|bool", curl_exec)
-        .function(
+        .function_static("curl_exec(CurlHandle $handle): string|bool", curl_exec)
+        .function_static(
             "curl_getinfo(CurlHandle $handle, ?int $option = null): mixed",
             curl_getinfo,
         )
-        .function(
+        .function_static(
             "curl_init(?string $url = null): CurlHandle|false",
             curl_init,
         )
-        .function("curl_upkeep(CurlHandle $handle): bool", curl_upkeep)
-        .function(
+        .function_static("curl_upkeep(CurlHandle $handle): bool", curl_upkeep)
+        .function_static(
             "curl_pause(CurlHandle $handle, int $flags): int",
             curl_pause,
         )
-        .function("curl_reset(CurlHandle $handle): void", curl_reset)
-        .function(
+        .function_static("curl_reset(CurlHandle $handle): void", curl_reset)
+        .function_static(
             "curl_setopt_array(CurlHandle $handle, array $options): bool",
             curl_setopt_array,
         )
-        .function(
+        .function_static(
             "curl_setopt(CurlHandle $handle, int $option, mixed $value): bool",
             curl_setopt,
         )
-        .function("curl_strerror(int $error_code): ?string", curl_strerror)
-        .function("curl_version(): array|false", curl_version);
+        .function_static("curl_strerror(int $error_code): ?string", curl_strerror)
+        .function_static("curl_version(): array|false", curl_version);
 }

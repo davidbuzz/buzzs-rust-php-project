@@ -125,31 +125,31 @@ impl Extension for Gettext {
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         m.info(module_info);
-        m.function("textdomain(?string $domain = null): string", textdomain)
-            .function("gettext(string $message): string", gettext)
-            .function("_(string $message): string", gettext)
-            .function("dgettext(string $domain, string $message): string", dgettext)
-            .function(
+        m.function_static("textdomain(?string $domain = null): string", textdomain)
+            .function_static("gettext(string $message): string", gettext)
+            .function_static("_(string $message): string", gettext)
+            .function_static("dgettext(string $domain, string $message): string", dgettext)
+            .function_static(
                 "dcgettext(string $domain, string $message, int $category): string",
                 dcgettext,
             )
-            .function(
+            .function_static(
                 "bindtextdomain(string $domain, ?string $directory = null): string|false",
                 bindtextdomain,
             )
-            .function(
+            .function_static(
                 "ngettext(string $singular, string $plural, int $count): string",
                 ngettext,
             )
-            .function(
+            .function_static(
                 "dngettext(string $domain, string $singular, string $plural, int $count): string",
                 dngettext,
             )
-            .function(
+            .function_static(
                 "dcngettext(string $domain, string $singular, string $plural, int $count, int $category): string",
                 dcngettext,
             )
-            .function(
+            .function_static(
                 "bind_textdomain_codeset(string $domain, ?string $codeset = null): string|false",
                 bind_textdomain_codeset,
             );

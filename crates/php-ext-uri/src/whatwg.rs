@@ -567,7 +567,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .method("__debugInfo(): array", pb, debug_info)
         .register(m.vm());
 
-    m.function(
+    m.function_static(
         "Uri\\WhatWg\\url_percent_encode(string $input, Uri\\WhatWg\\UrlPercentEncodingMode $mode): string",
         url_percent_encode,
     );

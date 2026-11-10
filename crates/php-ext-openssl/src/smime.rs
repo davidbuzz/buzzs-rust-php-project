@@ -360,25 +360,25 @@ fn pkcs12_read(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the S/MIME and PKCS#12 functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("openssl_pkcs7_verify(string $input_filename, int $flags, ?string $signers_certificates_filename = null, array $ca_info = [], ?string $untrusted_certificates_filename = null, ?string $content = null, ?string $output_filename = null): bool|int", pkcs7_verify);
-    m.function("openssl_pkcs7_encrypt(string $input_filename, string $output_filename, $certificate, ?array $headers, int $flags = 0, int $cipher_algo = OPENSSL_CIPHER_AES_128_CBC): bool", pkcs7_encrypt);
-    m.function("openssl_pkcs7_sign(string $input_filename, string $output_filename, OpenSSLCertificate|string $certificate, $private_key, ?array $headers, int $flags = PKCS7_DETACHED, ?string $untrusted_certificates_filename = null): bool", pkcs7_sign);
-    m.function("openssl_pkcs7_decrypt(string $input_filename, string $output_filename, $certificate, $private_key = null): bool", pkcs7_decrypt);
-    m.function(
+    m.function_static("openssl_pkcs7_verify(string $input_filename, int $flags, ?string $signers_certificates_filename = null, array $ca_info = [], ?string $untrusted_certificates_filename = null, ?string $content = null, ?string $output_filename = null): bool|int", pkcs7_verify);
+    m.function_static("openssl_pkcs7_encrypt(string $input_filename, string $output_filename, $certificate, ?array $headers, int $flags = 0, int $cipher_algo = OPENSSL_CIPHER_AES_128_CBC): bool", pkcs7_encrypt);
+    m.function_static("openssl_pkcs7_sign(string $input_filename, string $output_filename, OpenSSLCertificate|string $certificate, $private_key, ?array $headers, int $flags = PKCS7_DETACHED, ?string $untrusted_certificates_filename = null): bool", pkcs7_sign);
+    m.function_static("openssl_pkcs7_decrypt(string $input_filename, string $output_filename, $certificate, $private_key = null): bool", pkcs7_decrypt);
+    m.function_static(
         "openssl_pkcs7_read(string $data, &$certificates): bool",
         pkcs7_read,
     );
-    m.function("openssl_cms_verify(string $input_filename, int $flags = 0, ?string $certificates = null, array $ca_info = [], ?string $untrusted_certificates_filename = null, ?string $content = null, ?string $pk7 = null, ?string $sigfile = null, int $encoding = OPENSSL_ENCODING_SMIME): bool", cms_verify);
-    m.function("openssl_cms_encrypt(string $input_filename, string $output_filename, $certificate, ?array $headers, int $flags = 0, int $encoding = OPENSSL_ENCODING_SMIME, string|int $cipher_algo = OPENSSL_CIPHER_AES_128_CBC): bool", cms_encrypt);
-    m.function("openssl_cms_sign(string $input_filename, string $output_filename, OpenSSLCertificate|string $certificate, $private_key, ?array $headers, int $flags = 0, int $encoding = OPENSSL_ENCODING_SMIME, ?string $untrusted_certificates_filename = null): bool", cms_sign);
-    m.function("openssl_cms_decrypt(string $input_filename, string $output_filename, $certificate, $private_key = null, int $encoding = OPENSSL_ENCODING_SMIME): bool", cms_decrypt);
-    m.function(
+    m.function_static("openssl_cms_verify(string $input_filename, int $flags = 0, ?string $certificates = null, array $ca_info = [], ?string $untrusted_certificates_filename = null, ?string $content = null, ?string $pk7 = null, ?string $sigfile = null, int $encoding = OPENSSL_ENCODING_SMIME): bool", cms_verify);
+    m.function_static("openssl_cms_encrypt(string $input_filename, string $output_filename, $certificate, ?array $headers, int $flags = 0, int $encoding = OPENSSL_ENCODING_SMIME, string|int $cipher_algo = OPENSSL_CIPHER_AES_128_CBC): bool", cms_encrypt);
+    m.function_static("openssl_cms_sign(string $input_filename, string $output_filename, OpenSSLCertificate|string $certificate, $private_key, ?array $headers, int $flags = 0, int $encoding = OPENSSL_ENCODING_SMIME, ?string $untrusted_certificates_filename = null): bool", cms_sign);
+    m.function_static("openssl_cms_decrypt(string $input_filename, string $output_filename, $certificate, $private_key = null, int $encoding = OPENSSL_ENCODING_SMIME): bool", cms_decrypt);
+    m.function_static(
         "openssl_cms_read(string $input_filename, &$certificates): bool",
         cms_read,
     );
-    m.function("openssl_pkcs12_export_to_file(OpenSSLCertificate|string $certificate, string $output_filename, $private_key, string $passphrase, array $options = []): bool", pkcs12_export_to_file);
-    m.function("openssl_pkcs12_export(OpenSSLCertificate|string $certificate, &$output, $private_key, string $passphrase, array $options = []): bool", pkcs12_export);
-    m.function(
+    m.function_static("openssl_pkcs12_export_to_file(OpenSSLCertificate|string $certificate, string $output_filename, $private_key, string $passphrase, array $options = []): bool", pkcs12_export_to_file);
+    m.function_static("openssl_pkcs12_export(OpenSSLCertificate|string $certificate, &$output, $private_key, string $passphrase, array $options = []): bool", pkcs12_export);
+    m.function_static(
         "openssl_pkcs12_read(string $pkcs12, &$certificates, string $passphrase): bool",
         pkcs12_read,
     );

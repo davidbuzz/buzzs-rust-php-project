@@ -653,60 +653,60 @@ impl Extension for Apache2Handler {
             }
         }
         m.constant("PHP_SAPI", str_value("apache2handler"))
-            .function("header(string $header, bool $replace = true, int $response_code = 0): void", header)
-            .function("header_remove(?string $name = null): void", header_remove)
-            .function("headers_sent(&$filename = null, &$line = null): bool", headers_sent)
-            .function("headers_list(): array", headers_list)
-            .function("http_response_code(int $response_code = 0): int|bool", http_response_code)
-            .function("header_register_callback(callable $callback): true", header_register_callback)
-            .function(
+            .function_static("header(string $header, bool $replace = true, int $response_code = 0): void", header)
+            .function_static("header_remove(?string $name = null): void", header_remove)
+            .function_static("headers_sent(&$filename = null, &$line = null): bool", headers_sent)
+            .function_static("headers_list(): array", headers_list)
+            .function_static("http_response_code(int $response_code = 0): int|bool", http_response_code)
+            .function_static("header_register_callback(callable $callback): true", header_register_callback)
+            .function_static(
                 "setcookie(string $name, string $value = \"\", array|int $expires_or_options = 0, string $path = \"\", string $domain = \"\", bool $secure = false, bool $httponly = false): bool",
                 setcookie,
             )
-            .function(
+            .function_static(
                 "setrawcookie(string $name, string $value = \"\", array|int $expires_or_options = 0, string $path = \"\", string $domain = \"\", bool $secure = false, bool $httponly = false): bool",
                 setrawcookie,
             )
-            .function("flush(): void", flush)
-            .function("php_sapi_name(): string|false", php_sapi_name)
-            .function("connection_aborted(): bool", connection_aborted)
-            .function("connection_status(): int", connection_status)
-            .function("ignore_user_abort(?bool $enable = null): bool", ignore_user_abort)
-            .function("set_time_limit(int $seconds): bool", set_time_limit)
-            .function(
+            .function_static("flush(): void", flush)
+            .function_static("php_sapi_name(): string|false", php_sapi_name)
+            .function_static("connection_aborted(): bool", connection_aborted)
+            .function_static("connection_status(): int", connection_status)
+            .function_static("ignore_user_abort(?bool $enable = null): bool", ignore_user_abort)
+            .function_static("set_time_limit(int $seconds): bool", set_time_limit)
+            .function_static(
                 "error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool",
                 error_log,
             )
-            .function(
+            .function_static(
                 "ini_set(string $option, string|int|float|bool|null $value): string|false",
                 ini_set,
             )
-            .function(
+            .function_static(
                 "ini_alter(string $option, string|int|float|bool|null $value): string|false",
                 ini_set,
             )
-            .function("ini_restore(string $option): void", ini_restore)
-            .function("php_ini_loaded_file(): string|false", php_ini_loaded_file)
-            .function("php_ini_scanned_files(): string|false", php_ini_scanned_files)
-            .function("apache_lookup_uri(string $filename): object|false", apache_lookup_uri)
-            .function("virtual(string $uri): bool", virtual_)
-            .function("apache_request_headers(): array", apache_request_headers)
-            .function("getallheaders(): array", apache_request_headers)
-            .function("apache_response_headers(): array", apache_response_headers)
-            .function(
+            .function_static("ini_restore(string $option): void", ini_restore)
+            .function_static("php_ini_loaded_file(): string|false", php_ini_loaded_file)
+            .function_static("php_ini_scanned_files(): string|false", php_ini_scanned_files)
+            .function_static("apache_lookup_uri(string $filename): object|false", apache_lookup_uri)
+            .function_static("virtual(string $uri): bool", virtual_)
+            .function_static("apache_request_headers(): array", apache_request_headers)
+            .function_static("getallheaders(): array", apache_request_headers)
+            .function_static("apache_response_headers(): array", apache_response_headers)
+            .function_static(
                 "apache_note(string $note_name, ?string $note_value = null): string|false",
                 apache_note,
             )
-            .function(
+            .function_static(
                 "apache_setenv(string $variable, string $value, bool $walk_to_top = false): bool",
                 apache_setenv,
             )
-            .function(
+            .function_static(
                 "apache_getenv(string $variable, bool $walk_to_top = false): string|false",
                 apache_getenv,
             )
-            .function("apache_get_version(): string|false", apache_get_version)
-            .function("apache_get_modules(): array", apache_get_modules)
+            .function_static("apache_get_version(): string|false", apache_get_version)
+            .function_static("apache_get_modules(): array", apache_get_modules)
             .function(&format!("{FATAL_CHECK}(): void"), fatal_status)
             .on_request_shutdown(shutdown_hook);
     }

@@ -684,16 +684,16 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     .on_request_startup(assert_startup)
     // `PHP_RSHUTDOWN_FUNCTION(assert)`.
     .on_request_shutdown(|vm| vm.ext.assert_callback = None);
-    m.function(
+    m.function_static(
         "mail(string $to, string $subject, string $message, array|string $additional_headers = [], string $additional_params = \"\"): bool",
         mail_fn,
     )
-    .function(
+    .function_static(
         "error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool",
         error_log,
     )
-    .function("assert_options(int $option, mixed $value = UNKNOWN): mixed", assert_options)
-    .function("phpinfo(int $flags = INFO_ALL): true", phpinfo)
-    .function("phpcredits(int $flags = CREDITS_ALL): true", phpcredits)
-    .function("dl(string $extension_filename): bool", dl);
+    .function_static("assert_options(int $option, mixed $value = UNKNOWN): mixed", assert_options)
+    .function_static("phpinfo(int $flags = INFO_ALL): true", phpinfo)
+    .function_static("phpcredits(int $flags = CREDITS_ALL): true", phpcredits)
+    .function_static("dl(string $extension_filename): bool", dl);
 }

@@ -179,27 +179,27 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             })
             .register(m.vm());
     }
-    m.function(
+    m.function_static(
         "deflate_init(int $encoding, array|object $options = []): DeflateContext|false",
         deflate_init,
     )
-    .function(
+    .function_static(
         "deflate_add(DeflateContext $context, string $data, int $flush_mode = ZLIB_SYNC_FLUSH): string|false",
         deflate_add,
     )
-    .function(
+    .function_static(
         "inflate_init(int $encoding, array|object $options = []): InflateContext|false",
         inflate_init,
     )
-    .function(
+    .function_static(
         "inflate_add(InflateContext $context, string $data, int $flush_mode = ZLIB_SYNC_FLUSH): string|false",
         inflate_add,
     )
-    .function(
+    .function_static(
         "inflate_get_status(InflateContext $context): int",
         inflate_get_status,
     )
-    .function(
+    .function_static(
         "inflate_get_read_len(InflateContext $context): int",
         inflate_get_read_len,
     );

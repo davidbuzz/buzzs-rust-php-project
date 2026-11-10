@@ -141,23 +141,23 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, value) in CONSTANTS {
         m.constant(name, Value::Int(value));
     }
-    m.function(
+    m.function_static(
         "msg_get_queue(int $key, int $permissions = 438): SysvMessageQueue|false",
         msg_get_queue,
     )
-    .function(
+    .function_static(
         "msg_send(SysvMessageQueue $queue, int $message_type, $message, bool $serialize = true, bool $blocking = true, &$error_code = null): bool",
         msg_send,
     )
-    .function(
+    .function_static(
         "msg_receive(SysvMessageQueue $queue, int $desired_message_type, &$received_message_type, int $max_message_size, mixed &$message, bool $unserialize = true, int $flags = 0, &$error_code = null): bool",
         msg_receive,
     )
-    .function("msg_remove_queue(SysvMessageQueue $queue): bool", msg_remove_queue)
-    .function("msg_stat_queue(SysvMessageQueue $queue): array|false", msg_stat_queue)
-    .function(
+    .function_static("msg_remove_queue(SysvMessageQueue $queue): bool", msg_remove_queue)
+    .function_static("msg_stat_queue(SysvMessageQueue $queue): array|false", msg_stat_queue)
+    .function_static(
         "msg_set_queue(SysvMessageQueue $queue, array $data): bool",
         msg_set_queue,
     )
-    .function("msg_queue_exists(int $key): bool", msg_queue_exists);
+    .function_static("msg_queue_exists(int $key): bool", msg_queue_exists);
 }

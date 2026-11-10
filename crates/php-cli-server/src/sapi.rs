@@ -688,32 +688,32 @@ impl Extension for CliServerModule {
             m.constant(name, Value::Int(*v));
         }
         m.constant("PHP_SAPI", str_value("cli-server"))
-            .function("header(string $header, bool $replace = true, int $response_code = 0): void", header)
-            .function("header_remove(?string $name = null): void", header_remove)
-            .function("headers_sent(&$filename = null, &$line = null): bool", headers_sent)
-            .function("headers_list(): array", headers_list)
-            .function("http_response_code(int $response_code = 0): int|bool", http_response_code)
-            .function("header_register_callback(callable $callback): true", header_register_callback)
-            .function(
+            .function_static("header(string $header, bool $replace = true, int $response_code = 0): void", header)
+            .function_static("header_remove(?string $name = null): void", header_remove)
+            .function_static("headers_sent(&$filename = null, &$line = null): bool", headers_sent)
+            .function_static("headers_list(): array", headers_list)
+            .function_static("http_response_code(int $response_code = 0): int|bool", http_response_code)
+            .function_static("header_register_callback(callable $callback): true", header_register_callback)
+            .function_static(
                 "setcookie(string $name, string $value = \"\", array|int $expires_or_options = 0, string $path = \"\", string $domain = \"\", bool $secure = false, bool $httponly = false): bool",
                 setcookie,
             )
-            .function(
+            .function_static(
                 "setrawcookie(string $name, string $value = \"\", array|int $expires_or_options = 0, string $path = \"\", string $domain = \"\", bool $secure = false, bool $httponly = false): bool",
                 setrawcookie,
             )
-            .function("flush(): void", flush)
-            .function("php_sapi_name(): string|false", php_sapi_name)
-            .function("getmypid(): int|false", getmypid)
-            .function("connection_aborted(): bool", connection_aborted)
-            .function("connection_status(): int", connection_status)
-            .function(
+            .function_static("flush(): void", flush)
+            .function_static("php_sapi_name(): string|false", php_sapi_name)
+            .function_static("getmypid(): int|false", getmypid)
+            .function_static("connection_aborted(): bool", connection_aborted)
+            .function_static("connection_status(): int", connection_status)
+            .function_static(
                 "error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool",
                 error_log,
             )
-            .function("apache_request_headers(): array", apache_request_headers)
-            .function("getallheaders(): array", apache_request_headers)
-            .function("apache_response_headers(): array", apache_response_headers)
+            .function_static("apache_request_headers(): array", apache_request_headers)
+            .function_static("getallheaders(): array", apache_request_headers)
+            .function_static("apache_response_headers(): array", apache_response_headers)
             .function(
                 &format!("{}(mixed $value): mixed", crate::router::RETURN_HOOK),
                 router_return,

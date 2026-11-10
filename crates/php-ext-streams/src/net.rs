@@ -867,42 +867,42 @@ fn parse_network_address(addr: &[u8]) -> Option<std::net::SocketAddr> {
 
 /// Registers the functions and `STREAM_*` socket constants.
 pub fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "fsockopen(string $hostname, int $port = -1, &$error_code = null, &$error_message = null, ?float $timeout = null)",
         fsockopen,
     )
-    .function(
+    .function_static(
         "pfsockopen(string $hostname, int $port = -1, &$error_code = null, &$error_message = null, ?float $timeout = null)",
         pfsockopen,
     )
-    .function(
+    .function_static(
         "stream_socket_client(string $address, &$error_code = null, &$error_message = null, ?float $timeout = null, int $flags = STREAM_CLIENT_CONNECT, $context = null)",
         stream_socket_client,
     )
-    .function(
+    .function_static(
         "stream_socket_server(string $address, &$error_code = null, &$error_message = null, int $flags = STREAM_SERVER_BIND | STREAM_SERVER_LISTEN, $context = null)",
         stream_socket_server,
     )
-    .function(
+    .function_static(
         "stream_socket_accept($socket, ?float $timeout = null, &$peer_name = null)",
         stream_socket_accept,
     )
-    .function("stream_socket_get_name($socket, bool $remote): string|false", stream_socket_get_name)
-    .function(
+    .function_static("stream_socket_get_name($socket, bool $remote): string|false", stream_socket_get_name)
+    .function_static(
         "stream_socket_enable_crypto($stream, bool $enable, ?int $crypto_method = null, $session_stream = null): int|bool",
         stream_socket_enable_crypto,
     )
-    .function("stream_socket_get_crypto_status($stream): int", stream_socket_get_crypto_status)
-    .function("stream_socket_shutdown($stream, int $mode): bool", stream_socket_shutdown)
-    .function(
+    .function_static("stream_socket_get_crypto_status($stream): int", stream_socket_get_crypto_status)
+    .function_static("stream_socket_shutdown($stream, int $mode): bool", stream_socket_shutdown)
+    .function_static(
         "stream_socket_pair(int $domain, int $type, int $protocol, $context = null): array|false",
         stream_socket_pair,
     )
-    .function(
+    .function_static(
         "stream_socket_recvfrom($socket, int $length, int $flags = 0, &$address = null): string|false",
         stream_socket_recvfrom,
     )
-    .function(
+    .function_static(
         "stream_socket_sendto($socket, string $data, int $flags = 0, string $address = \"\"): int|false",
         stream_socket_sendto,
     );

@@ -647,60 +647,60 @@ fn get_resources(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions of this module.
 pub fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("get_resources(?string $type = null): array", get_resources);
-    m.function(
+    m.function_static("get_resources(?string $type = null): array", get_resources);
+    m.function_static(
         "stream_get_contents($stream, ?int $length = null, int $offset = -1): string|false",
         stream_get_contents,
     )
-    .function(
+    .function_static(
         "stream_get_line($stream, int $length, string $ending = \"\"): string|false",
         stream_get_line,
     )
-    .function(
+    .function_static(
         "stream_copy_to_stream($from, $to, ?int $length = null, int $offset = 0, $context = null): int|false",
         stream_copy_to_stream,
     )
-    .function("stream_get_meta_data($stream): array", stream_get_meta_data)
-    .function("socket_get_status($stream): array", stream_get_meta_data)
-    .function("stream_set_blocking($stream, bool $enable): bool", stream_set_blocking)
-    .function("socket_set_blocking($stream, bool $enable): bool", stream_set_blocking)
-    .function(
+    .function_static("stream_get_meta_data($stream): array", stream_get_meta_data)
+    .function_static("socket_get_status($stream): array", stream_get_meta_data)
+    .function_static("stream_set_blocking($stream, bool $enable): bool", stream_set_blocking)
+    .function_static("socket_set_blocking($stream, bool $enable): bool", stream_set_blocking)
+    .function_static(
         "stream_set_timeout($stream, int $seconds, int $microseconds = 0): bool",
         stream_set_timeout,
     )
-    .function(
+    .function_static(
         "socket_set_timeout($stream, int $seconds, int $microseconds = 0): bool",
         stream_set_timeout,
     )
-    .function("stream_set_write_buffer($stream, int $size): int", stream_set_write_buffer)
-    .function("set_file_buffer($stream, int $size): int", stream_set_write_buffer)
-    .function("stream_set_read_buffer($stream, int $size): int", stream_set_read_buffer)
-    .function("stream_set_chunk_size($stream, int $size): int", stream_set_chunk_size)
-    .function("stream_is_local($stream, $context = null): bool", stream_is_local)
-    .function("stream_isatty($stream): bool", stream_isatty)
-    .function("stream_supports_lock($stream): bool", stream_supports_lock)
-    .function(
+    .function_static("stream_set_write_buffer($stream, int $size): int", stream_set_write_buffer)
+    .function_static("set_file_buffer($stream, int $size): int", stream_set_write_buffer)
+    .function_static("stream_set_read_buffer($stream, int $size): int", stream_set_read_buffer)
+    .function_static("stream_set_chunk_size($stream, int $size): int", stream_set_chunk_size)
+    .function_static("stream_is_local($stream, $context = null): bool", stream_is_local)
+    .function_static("stream_isatty($stream): bool", stream_isatty)
+    .function_static("stream_supports_lock($stream): bool", stream_supports_lock)
+    .function_static(
         "stream_resolve_include_path(string $filename): string|false",
         stream_resolve_include_path,
     )
-    .function("stream_get_wrappers(): array", stream_get_wrappers)
-    .function("stream_get_transports(): array", stream_get_transports)
-    .function(
+    .function_static("stream_get_wrappers(): array", stream_get_wrappers)
+    .function_static("stream_get_transports(): array", stream_get_transports)
+    .function_static(
         "stream_select(?array &$read, ?array &$write, ?array &$except, ?int $seconds, ?int $microseconds = null, $context = null): int|false",
         stream_select,
     )
-    .function(
+    .function_static(
         "stream_context_create(?array $options = null, ?array $params = null)",
         stream_context_create,
     )
-    .function("stream_context_set_params($context, array $params): true", stream_context_set_params)
-    .function("stream_context_get_params($context): array", stream_context_get_params)
-    .function(
+    .function_static("stream_context_set_params($context, array $params): true", stream_context_set_params)
+    .function_static("stream_context_get_params($context): array", stream_context_get_params)
+    .function_static(
         "stream_context_set_option($context, array|string $wrapper_or_options, ?string $option_name = null, mixed $value = UNKNOWN): true",
         stream_context_set_option,
     )
-    .function("stream_context_set_options($context, array $options): true", stream_context_set_options)
-    .function("stream_context_get_options($stream_or_context): array", stream_context_get_options)
-    .function("stream_context_get_default(?array $options = null)", stream_context_get_default)
-    .function("stream_context_set_default(array $options)", stream_context_set_default);
+    .function_static("stream_context_set_options($context, array $options): true", stream_context_set_options)
+    .function_static("stream_context_get_options($stream_or_context): array", stream_context_get_options)
+    .function_static("stream_context_get_default(?array $options = null)", stream_context_get_default)
+    .function_static("stream_context_set_default(array $options)", stream_context_set_default);
 }

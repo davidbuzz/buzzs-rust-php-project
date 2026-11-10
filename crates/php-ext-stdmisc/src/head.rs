@@ -290,11 +290,11 @@ fn setrawcookie(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "setcookie(string $name, string $value = \"\", array|int $expires_or_options = 0, string $path = \"\", string $domain = \"\", bool $secure = false, bool $httponly = false): bool",
         setcookie,
     )
-    .function(
+    .function_static(
         "setrawcookie(string $name, string $value = \"\", array|int $expires_or_options = 0, string $path = \"\", string $domain = \"\", bool $secure = false, bool $httponly = false): bool",
         setrawcookie,
     );

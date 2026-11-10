@@ -223,37 +223,37 @@ fn spki_export_challenge(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the X.509, CSR and SPKI functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("openssl_x509_export_to_file(OpenSSLCertificate|string $certificate, string $output_filename, bool $no_text = true): bool", x509_export_to_file);
-    m.function("openssl_x509_export(OpenSSLCertificate|string $certificate, &$output, bool $no_text = true): bool", x509_export);
-    m.function("openssl_x509_fingerprint(OpenSSLCertificate|string $certificate, string $digest_algo = \"sha1\", bool $binary = false): string|false", x509_fingerprint);
-    m.function("openssl_x509_check_private_key(OpenSSLCertificate|string $certificate, $private_key): bool", x509_check_private_key);
-    m.function(
+    m.function_static("openssl_x509_export_to_file(OpenSSLCertificate|string $certificate, string $output_filename, bool $no_text = true): bool", x509_export_to_file);
+    m.function_static("openssl_x509_export(OpenSSLCertificate|string $certificate, &$output, bool $no_text = true): bool", x509_export);
+    m.function_static("openssl_x509_fingerprint(OpenSSLCertificate|string $certificate, string $digest_algo = \"sha1\", bool $binary = false): string|false", x509_fingerprint);
+    m.function_static("openssl_x509_check_private_key(OpenSSLCertificate|string $certificate, $private_key): bool", x509_check_private_key);
+    m.function_static(
         "openssl_x509_verify(OpenSSLCertificate|string $certificate, $public_key): int",
         x509_verify,
     );
-    m.function("openssl_x509_parse(OpenSSLCertificate|string $certificate, bool $short_names = true): array|false", x509_parse);
-    m.function("openssl_x509_checkpurpose(OpenSSLCertificate|string $certificate, int $purpose, array $ca_info = [], ?string $untrusted_certificates_file = null): bool|int", x509_checkpurpose);
-    m.function(
+    m.function_static("openssl_x509_parse(OpenSSLCertificate|string $certificate, bool $short_names = true): array|false", x509_parse);
+    m.function_static("openssl_x509_checkpurpose(OpenSSLCertificate|string $certificate, int $purpose, array $ca_info = [], ?string $untrusted_certificates_file = null): bool|int", x509_checkpurpose);
+    m.function_static(
         "openssl_x509_read(OpenSSLCertificate|string $certificate): OpenSSLCertificate|false",
         x509_read,
     );
-    m.function(
+    m.function_static(
         "openssl_x509_free(OpenSSLCertificate $certificate): void",
         x509_free,
     );
-    m.function("openssl_csr_export_to_file(OpenSSLCertificateSigningRequest|string $csr, string $output_filename, bool $no_text = true): bool", csr_export_to_file);
-    m.function("openssl_csr_export(OpenSSLCertificateSigningRequest|string $csr, &$output, bool $no_text = true): bool", csr_export);
-    m.function("openssl_csr_sign(OpenSSLCertificateSigningRequest|string $csr, OpenSSLCertificate|string|null $ca_certificate, $private_key, int $days, ?array $options = null, int $serial = 0, ?string $serial_hex = null): OpenSSLCertificate|false", csr_sign);
-    m.function("openssl_csr_new(array $distinguished_names, &$private_key, ?array $options = null, ?array $extra_attributes = null): OpenSSLCertificateSigningRequest|bool", csr_new);
-    m.function("openssl_csr_get_subject(OpenSSLCertificateSigningRequest|string $csr, bool $short_names = true): array|false", csr_get_subject);
-    m.function("openssl_csr_get_public_key(OpenSSLCertificateSigningRequest|string $csr, bool $short_names = true): OpenSSLAsymmetricKey|false", csr_get_public_key);
-    m.function("openssl_spki_new(OpenSSLAsymmetricKey $private_key, string $challenge, int $digest_algo = OPENSSL_ALGO_MD5): string|false", spki_new);
-    m.function("openssl_spki_verify(string $spki): bool", spki_verify);
-    m.function(
+    m.function_static("openssl_csr_export_to_file(OpenSSLCertificateSigningRequest|string $csr, string $output_filename, bool $no_text = true): bool", csr_export_to_file);
+    m.function_static("openssl_csr_export(OpenSSLCertificateSigningRequest|string $csr, &$output, bool $no_text = true): bool", csr_export);
+    m.function_static("openssl_csr_sign(OpenSSLCertificateSigningRequest|string $csr, OpenSSLCertificate|string|null $ca_certificate, $private_key, int $days, ?array $options = null, int $serial = 0, ?string $serial_hex = null): OpenSSLCertificate|false", csr_sign);
+    m.function_static("openssl_csr_new(array $distinguished_names, &$private_key, ?array $options = null, ?array $extra_attributes = null): OpenSSLCertificateSigningRequest|bool", csr_new);
+    m.function_static("openssl_csr_get_subject(OpenSSLCertificateSigningRequest|string $csr, bool $short_names = true): array|false", csr_get_subject);
+    m.function_static("openssl_csr_get_public_key(OpenSSLCertificateSigningRequest|string $csr, bool $short_names = true): OpenSSLAsymmetricKey|false", csr_get_public_key);
+    m.function_static("openssl_spki_new(OpenSSLAsymmetricKey $private_key, string $challenge, int $digest_algo = OPENSSL_ALGO_MD5): string|false", spki_new);
+    m.function_static("openssl_spki_verify(string $spki): bool", spki_verify);
+    m.function_static(
         "openssl_spki_export(string $spki): string|false",
         spki_export,
     );
-    m.function(
+    m.function_static(
         "openssl_spki_export_challenge(string $spki): string|false",
         spki_export_challenge,
     );

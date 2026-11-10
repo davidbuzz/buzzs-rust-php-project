@@ -922,84 +922,84 @@ fn get_meta_tags(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions of this module.
 pub fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "fopen(string $filename, string $mode, bool $use_include_path = false, $context = null)",
         fopen,
     )
-    .function("fclose($stream): bool", fclose)
-    .function("fread($stream, int $length): string|false", fread)
-    .function("fwrite($stream, string $data, ?int $length = null): int|false", fwrite)
-    .function("fputs($stream, string $data, ?int $length = null): int|false", fwrite)
-    .function("fgets($stream, ?int $length = null): string|false", fgets)
-    .function("fgetc($stream): string|false", fgetc)
-    .function("feof($stream): bool", feof)
-    .function("fflush($stream): bool", fflush)
-    .function("ftell($stream): int|false", ftell)
-    .function("fseek($stream, int $offset, int $whence = SEEK_SET): int", fseek)
-    .function("rewind($stream): bool", rewind)
-    .function("ftruncate($stream, int $size): bool", ftruncate)
-    .function("flock($stream, int $operation, &$would_block = null): bool", flock)
-    .function("fstat($stream): array|false", fstat)
-    .function("fsync($stream): bool", fsync)
-    .function("fdatasync($stream): bool", fdatasync)
-    .function("fpassthru($stream): int", fpassthru)
-    .function(
+    .function_static("fclose($stream): bool", fclose)
+    .function_static("fread($stream, int $length): string|false", fread)
+    .function_static("fwrite($stream, string $data, ?int $length = null): int|false", fwrite)
+    .function_static("fputs($stream, string $data, ?int $length = null): int|false", fwrite)
+    .function_static("fgets($stream, ?int $length = null): string|false", fgets)
+    .function_static("fgetc($stream): string|false", fgetc)
+    .function_static("feof($stream): bool", feof)
+    .function_static("fflush($stream): bool", fflush)
+    .function_static("ftell($stream): int|false", ftell)
+    .function_static("fseek($stream, int $offset, int $whence = SEEK_SET): int", fseek)
+    .function_static("rewind($stream): bool", rewind)
+    .function_static("ftruncate($stream, int $size): bool", ftruncate)
+    .function_static("flock($stream, int $operation, &$would_block = null): bool", flock)
+    .function_static("fstat($stream): array|false", fstat)
+    .function_static("fsync($stream): bool", fsync)
+    .function_static("fdatasync($stream): bool", fdatasync)
+    .function_static("fpassthru($stream): int", fpassthru)
+    .function_static(
         "readfile(string $filename, bool $use_include_path = false, $context = null): int|false",
         readfile,
     )
-    .function(
+    .function_static(
         "file_get_contents(string $filename, bool $use_include_path = false, $context = null, int $offset = 0, ?int $length = null): string|false",
         file_get_contents,
     )
-    .function(
+    .function_static(
         "file_put_contents(string $filename, mixed $data, int $flags = 0, $context = null): int|false",
         file_put_contents,
     )
-    .function("file(string $filename, int $flags = 0, $context = null): array|false", file)
-    .function("tempnam(string $directory, string $prefix): string|false", tempnam)
-    .function("tmpfile()", tmpfile)
-    .function("sys_get_temp_dir(): string", sys_get_temp_dir)
-    .function("umask(?int $mask = null): int", umask)
-    .function("unlink(string $filename, $context = null): bool", unlink)
-    .function("rename(string $from, string $to, $context = null): bool", rename)
-    .function("copy(string $from, string $to, $context = null): bool", copy)
-    .function("is_uploaded_file(string $filename): bool", is_uploaded_file)
-    .function(
+    .function_static("file(string $filename, int $flags = 0, $context = null): array|false", file)
+    .function_static("tempnam(string $directory, string $prefix): string|false", tempnam)
+    .function_static("tmpfile()", tmpfile)
+    .function_static("sys_get_temp_dir(): string", sys_get_temp_dir)
+    .function_static("umask(?int $mask = null): int", umask)
+    .function_static("unlink(string $filename, $context = null): bool", unlink)
+    .function_static("rename(string $from, string $to, $context = null): bool", rename)
+    .function_static("copy(string $from, string $to, $context = null): bool", copy)
+    .function_static("is_uploaded_file(string $filename): bool", is_uploaded_file)
+    .function_static(
         "move_uploaded_file(string $from, string $to): bool",
         move_uploaded_file,
     )
-    .function(
+    .function_static(
         "mkdir(string $directory, int $permissions = 511, bool $recursive = false, $context = null): bool",
         mkdir,
     )
-    .function("rmdir(string $directory, $context = null): bool", rmdir)
-    .function("realpath(string $path): string|false", realpath)
-    .function("readlink(string $path): string|false", readlink)
-    .function("linkinfo(string $path): int|false", linkinfo)
-    .function("symlink(string $target, string $link): bool", symlink)
-    .function("link(string $target, string $link): bool", link)
-    .function("fnmatch(string $pattern, string $filename, int $flags = 0): bool", fnmatch)
-    .function("basename(string $path, string $suffix = \"\"): string", basename)
-    .function("dirname(string $path, int $levels = 1): string", dirname)
-    .function("pathinfo(string $path, int $flags = PATHINFO_ALL): array|string", pathinfo)
-    .function(
+    .function_static("rmdir(string $directory, $context = null): bool", rmdir)
+    .function_static("realpath(string $path): string|false", realpath)
+    .function_static("readlink(string $path): string|false", readlink)
+    .function_static("linkinfo(string $path): int|false", linkinfo)
+    .function_static("symlink(string $target, string $link): bool", symlink)
+    .function_static("link(string $target, string $link): bool", link)
+    .function_static("fnmatch(string $pattern, string $filename, int $flags = 0): bool", fnmatch)
+    .function_static("basename(string $path, string $suffix = \"\"): string", basename)
+    .function_static("dirname(string $path, int $levels = 1): string", dirname)
+    .function_static("pathinfo(string $path, int $flags = PATHINFO_ALL): array|string", pathinfo)
+    .function_static(
         "fgetcsv($stream, ?int $length = null, string $separator = UNKNOWN, string $enclosure = UNKNOWN, string $escape = UNKNOWN): array|false",
         fgetcsv,
     )
-    .function(
+    .function_static(
         "fputcsv($stream, array $fields, string $separator = UNKNOWN, string $enclosure = UNKNOWN, string $escape = UNKNOWN, string $eol = UNKNOWN): int|false",
         fputcsv,
     )
-    .function(
+    .function_static(
         "fscanf($stream, string $format, mixed &...$vars): array|int|false|null",
         fscanf,
     )
-    .function(
+    .function_static(
         "get_meta_tags(string $filename, bool $use_include_path = false): array|false",
         get_meta_tags,
     )
-    .function("fprintf($stream, string $format, mixed ...$values): int", fprintf)
-    .function("vfprintf($stream, string $format, array $values): int", vfprintf);
+    .function_static("fprintf($stream, string $format, mixed ...$values): int", fprintf)
+    .function_static("vfprintf($stream, string $format, array $values): int", vfprintf);
 }
 
 #[cfg(test)]

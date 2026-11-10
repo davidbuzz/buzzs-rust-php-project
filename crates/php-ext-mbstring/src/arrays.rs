@@ -527,15 +527,15 @@ fn mb_convert_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the array-walking functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "mb_convert_encoding(array|string $string, string $to_encoding, array|string|null $from_encoding = null): array|string|false",
         mb_convert_encoding,
     )
-    .function(
+    .function_static(
         "mb_check_encoding(array|string|null $value = null, ?string $encoding = null): bool",
         mb_check_encoding,
     )
-    .function(
+    .function_static(
         "mb_convert_variables(string $to_encoding, array|string $from_encoding, mixed &$var, mixed &...$vars): string|false",
         mb_convert_variables,
     );

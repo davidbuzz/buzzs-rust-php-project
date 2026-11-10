@@ -269,45 +269,45 @@ fn open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the key functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "openssl_pkey_new(?array $options = null): OpenSSLAsymmetricKey|false",
         pkey_new,
     );
-    m.function("openssl_pkey_export_to_file($key, string $output_filename, ?string $passphrase = null, ?array $options = null): bool", pkey_export_to_file);
-    m.function("openssl_pkey_export($key, &$output, ?string $passphrase = null, ?array $options = null): bool", pkey_export);
-    m.function(
+    m.function_static("openssl_pkey_export_to_file($key, string $output_filename, ?string $passphrase = null, ?array $options = null): bool", pkey_export_to_file);
+    m.function_static("openssl_pkey_export($key, &$output, ?string $passphrase = null, ?array $options = null): bool", pkey_export);
+    m.function_static(
         "openssl_pkey_get_public($public_key): OpenSSLAsymmetricKey|false",
         pkey_get_public,
     );
-    m.function(
+    m.function_static(
         "openssl_get_publickey($public_key): OpenSSLAsymmetricKey|false",
         pkey_get_public,
     );
-    m.function(
+    m.function_static(
         "openssl_pkey_free(OpenSSLAsymmetricKey $key): void",
         pkey_free,
     );
-    m.function(
+    m.function_static(
         "openssl_free_key(OpenSSLAsymmetricKey $key): void",
         pkey_free,
     );
-    m.function("openssl_pkey_get_private($private_key, ?string $passphrase = null): OpenSSLAsymmetricKey|false", pkey_get_private);
-    m.function("openssl_get_privatekey($private_key, ?string $passphrase = null): OpenSSLAsymmetricKey|false", pkey_get_private);
-    m.function(
+    m.function_static("openssl_pkey_get_private($private_key, ?string $passphrase = null): OpenSSLAsymmetricKey|false", pkey_get_private);
+    m.function_static("openssl_get_privatekey($private_key, ?string $passphrase = null): OpenSSLAsymmetricKey|false", pkey_get_private);
+    m.function_static(
         "openssl_pkey_get_details(OpenSSLAsymmetricKey $key): array|false",
         pkey_get_details,
     );
-    m.function("openssl_dh_compute_key(string $public_key, OpenSSLAsymmetricKey $private_key): string|false", dh_compute_key);
-    m.function(
+    m.function_static("openssl_dh_compute_key(string $public_key, OpenSSLAsymmetricKey $private_key): string|false", dh_compute_key);
+    m.function_static(
         "openssl_pkey_derive($public_key, $private_key, int $key_length = 0): string|false",
         pkey_derive,
     );
-    m.function("openssl_private_encrypt(string $data, &$encrypted_data, $private_key, int $padding = OPENSSL_PKCS1_PADDING): bool", private_encrypt);
-    m.function("openssl_private_decrypt(string $data, &$decrypted_data, $private_key, int $padding = OPENSSL_PKCS1_PADDING, ?string $digest_algo = null): bool", private_decrypt);
-    m.function("openssl_public_encrypt(string $data, &$encrypted_data, $public_key, int $padding = OPENSSL_PKCS1_PADDING, ?string $digest_algo = null): bool", public_encrypt);
-    m.function("openssl_public_decrypt(string $data, &$decrypted_data, $public_key, int $padding = OPENSSL_PKCS1_PADDING): bool", public_decrypt);
-    m.function("openssl_sign(string $data, &$signature, $private_key, string|int $algorithm = OPENSSL_ALGO_SHA1, int $padding = 0, int $salt_length = OPENSSL_RSA_PSS_SALTLEN_AUTO): bool", sign);
-    m.function("openssl_verify(string $data, string $signature, $public_key, string|int $algorithm = OPENSSL_ALGO_SHA1, int $padding = 0, int $salt_length = OPENSSL_RSA_PSS_SALTLEN_AUTO): int|false", verify);
-    m.function("openssl_seal(string $data, &$sealed_data, &$encrypted_keys, array $public_key, string $cipher_algo, &$iv = null): int|false", seal);
-    m.function("openssl_open(string $data, &$output, string $encrypted_key, $private_key, string $cipher_algo, ?string $iv = null): bool", open);
+    m.function_static("openssl_private_encrypt(string $data, &$encrypted_data, $private_key, int $padding = OPENSSL_PKCS1_PADDING): bool", private_encrypt);
+    m.function_static("openssl_private_decrypt(string $data, &$decrypted_data, $private_key, int $padding = OPENSSL_PKCS1_PADDING, ?string $digest_algo = null): bool", private_decrypt);
+    m.function_static("openssl_public_encrypt(string $data, &$encrypted_data, $public_key, int $padding = OPENSSL_PKCS1_PADDING, ?string $digest_algo = null): bool", public_encrypt);
+    m.function_static("openssl_public_decrypt(string $data, &$decrypted_data, $public_key, int $padding = OPENSSL_PKCS1_PADDING): bool", public_decrypt);
+    m.function_static("openssl_sign(string $data, &$signature, $private_key, string|int $algorithm = OPENSSL_ALGO_SHA1, int $padding = 0, int $salt_length = OPENSSL_RSA_PSS_SALTLEN_AUTO): bool", sign);
+    m.function_static("openssl_verify(string $data, string $signature, $public_key, string|int $algorithm = OPENSSL_ALGO_SHA1, int $padding = 0, int $salt_length = OPENSSL_RSA_PSS_SALTLEN_AUTO): int|false", verify);
+    m.function_static("openssl_seal(string $data, &$sealed_data, &$encrypted_keys, array $public_key, string $cipher_algo, &$iv = null): int|false", seal);
+    m.function_static("openssl_open(string $data, &$output, string $encrypted_key, $private_key, string $cipher_algo, ?string $iv = null): bool", open);
 }

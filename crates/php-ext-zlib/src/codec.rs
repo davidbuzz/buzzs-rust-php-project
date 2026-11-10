@@ -83,35 +83,35 @@ fn zlib_encode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the codec functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "zlib_encode(string $data, int $encoding, int $level = -1): string|false",
         zlib_encode,
     )
-    .function(
+    .function_static(
         "zlib_decode(string $data, int $max_length = 0): string|false",
         zlib_decode,
     )
-    .function(
+    .function_static(
         "gzdeflate(string $data, int $level = -1, int $encoding = ZLIB_ENCODING_RAW): string|false",
         gzdeflate,
     )
-    .function(
+    .function_static(
         "gzencode(string $data, int $level = -1, int $encoding = ZLIB_ENCODING_GZIP): string|false",
         gzencode,
     )
-    .function(
+    .function_static(
         "gzcompress(string $data, int $level = -1, int $encoding = ZLIB_ENCODING_DEFLATE): string|false",
         gzcompress,
     )
-    .function(
+    .function_static(
         "gzinflate(string $data, int $max_length = 0): string|false",
         gzinflate,
     )
-    .function(
+    .function_static(
         "gzdecode(string $data, int $max_length = 0): string|false",
         gzdecode,
     )
-    .function(
+    .function_static(
         "gzuncompress(string $data, int $max_length = 0): string|false",
         gzuncompress,
     );

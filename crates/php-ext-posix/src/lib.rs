@@ -383,80 +383,80 @@ impl Extension for PosixExt {
             m.constant(name, Value::Int(value));
         }
         m.on_request_startup(request_startup);
-        m.function("posix_kill(int $process_id, int $signal): bool", posix_kill)
-            .function("posix_getpid(): int", posix_getpid)
-            .function("posix_getppid(): int", posix_getppid)
-            .function("posix_getuid(): int", posix_getuid)
-            .function("posix_setuid(int $user_id): bool", posix_setuid)
-            .function("posix_geteuid(): int", posix_geteuid)
-            .function("posix_seteuid(int $user_id): bool", posix_seteuid)
-            .function("posix_getgid(): int", posix_getgid)
-            .function("posix_setgid(int $group_id): bool", posix_setgid)
-            .function("posix_getegid(): int", posix_getegid)
-            .function("posix_setegid(int $group_id): bool", posix_setegid)
-            .function("posix_getgroups(): array|false", posix_getgroups)
-            .function("posix_getlogin(): string|false", posix_getlogin)
-            .function("posix_getpgrp(): int", posix_getpgrp)
-            .function("posix_setsid(): int", posix_setsid)
-            .function(
+        m.function_static("posix_kill(int $process_id, int $signal): bool", posix_kill)
+            .function_static("posix_getpid(): int", posix_getpid)
+            .function_static("posix_getppid(): int", posix_getppid)
+            .function_static("posix_getuid(): int", posix_getuid)
+            .function_static("posix_setuid(int $user_id): bool", posix_setuid)
+            .function_static("posix_geteuid(): int", posix_geteuid)
+            .function_static("posix_seteuid(int $user_id): bool", posix_seteuid)
+            .function_static("posix_getgid(): int", posix_getgid)
+            .function_static("posix_setgid(int $group_id): bool", posix_setgid)
+            .function_static("posix_getegid(): int", posix_getegid)
+            .function_static("posix_setegid(int $group_id): bool", posix_setegid)
+            .function_static("posix_getgroups(): array|false", posix_getgroups)
+            .function_static("posix_getlogin(): string|false", posix_getlogin)
+            .function_static("posix_getpgrp(): int", posix_getpgrp)
+            .function_static("posix_setsid(): int", posix_setsid)
+            .function_static(
                 "posix_setpgid(int $process_id, int $process_group_id): bool",
                 posix_setpgid,
             )
-            .function("posix_getpgid(int $process_id): int|false", posix_getpgid)
-            .function("posix_getsid(int $process_id): int|false", posix_getsid)
-            .function("posix_uname(): array|false", posix_uname)
-            .function("posix_times(): array|false", posix_times)
-            .function("posix_ctermid(): string|false", posix_ctermid)
-            .function(
+            .function_static("posix_getpgid(int $process_id): int|false", posix_getpgid)
+            .function_static("posix_getsid(int $process_id): int|false", posix_getsid)
+            .function_static("posix_uname(): array|false", posix_uname)
+            .function_static("posix_times(): array|false", posix_times)
+            .function_static("posix_ctermid(): string|false", posix_ctermid)
+            .function_static(
                 "posix_ttyname($file_descriptor): string|false",
                 posix_ttyname,
             )
-            .function("posix_isatty($file_descriptor): bool", posix_isatty)
-            .function("posix_getcwd(): string|false", posix_getcwd)
-            .function(
+            .function_static("posix_isatty($file_descriptor): bool", posix_isatty)
+            .function_static("posix_getcwd(): string|false", posix_getcwd)
+            .function_static(
                 "posix_mkfifo(string $filename, int $permissions): bool",
                 posix_mkfifo,
             )
-            .function(
+            .function_static(
                 "posix_mknod(string $filename, int $flags, int $major = 0, int $minor = 0): bool",
                 posix_mknod,
             )
-            .function(
+            .function_static(
                 "posix_access(string $filename, int $flags = 0): bool",
                 posix_access,
             )
-            .function(
+            .function_static(
                 "posix_eaccess(string $filename, int $flags = 0): bool",
                 posix_eaccess,
             )
-            .function("posix_getgrnam(string $name): array|false", posix_getgrnam)
-            .function("posix_getgrgid(int $group_id): array|false", posix_getgrgid)
-            .function(
+            .function_static("posix_getgrnam(string $name): array|false", posix_getgrnam)
+            .function_static("posix_getgrgid(int $group_id): array|false", posix_getgrgid)
+            .function_static(
                 "posix_getpwnam(string $username): array|false",
                 posix_getpwnam,
             )
-            .function("posix_getpwuid(int $user_id): array|false", posix_getpwuid)
-            .function(
+            .function_static("posix_getpwuid(int $user_id): array|false", posix_getpwuid)
+            .function_static(
                 "posix_getrlimit(?int $resource = null): array|false",
                 posix_getrlimit,
             )
-            .function(
+            .function_static(
                 "posix_setrlimit(int $resource, int $soft_limit, int $hard_limit): bool",
                 posix_setrlimit,
             )
-            .function("posix_get_last_error(): int", posix_get_last_error)
-            .function("posix_errno(): int", posix_get_last_error)
-            .function("posix_strerror(int $error_code): string", posix_strerror)
-            .function(
+            .function_static("posix_get_last_error(): int", posix_get_last_error)
+            .function_static("posix_errno(): int", posix_get_last_error)
+            .function_static("posix_strerror(int $error_code): string", posix_strerror)
+            .function_static(
                 "posix_initgroups(string $username, int $group_id): bool",
                 posix_initgroups,
             )
-            .function("posix_sysconf(int $conf_id): int", posix_sysconf)
-            .function(
+            .function_static("posix_sysconf(int $conf_id): int", posix_sysconf)
+            .function_static(
                 "posix_pathconf(string $path, int $name): int|false",
                 posix_pathconf,
             )
-            .function(
+            .function_static(
                 "posix_fpathconf($file_descriptor, int $name): int|false",
                 posix_fpathconf,
             );

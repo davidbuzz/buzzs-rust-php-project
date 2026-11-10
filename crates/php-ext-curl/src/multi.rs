@@ -269,28 +269,28 @@ fn curl_multi_setopt(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the multi functions.
 pub(crate) fn register_functions(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "curl_multi_setopt(CurlMultiHandle $multi_handle, int $option, mixed $value): bool",
         curl_multi_setopt,
     )
-    .function(
+    .function_static(
         "curl_multi_add_handle(CurlMultiHandle $multi_handle, CurlHandle $handle): int",
         curl_multi_add_handle,
     )
-    .function("curl_multi_get_handles(CurlMultiHandle $multi_handle): array", curl_multi_get_handles)
-    .function("curl_multi_close(CurlMultiHandle $multi_handle): void", curl_multi_close)
-    .function("curl_multi_errno(CurlMultiHandle $multi_handle): int", curl_multi_errno)
-    .function("curl_multi_exec(CurlMultiHandle $multi_handle, &$still_running): int", curl_multi_exec)
-    .function("curl_multi_getcontent(CurlHandle $handle): ?string", curl_multi_getcontent)
-    .function(
+    .function_static("curl_multi_get_handles(CurlMultiHandle $multi_handle): array", curl_multi_get_handles)
+    .function_static("curl_multi_close(CurlMultiHandle $multi_handle): void", curl_multi_close)
+    .function_static("curl_multi_errno(CurlMultiHandle $multi_handle): int", curl_multi_errno)
+    .function_static("curl_multi_exec(CurlMultiHandle $multi_handle, &$still_running): int", curl_multi_exec)
+    .function_static("curl_multi_getcontent(CurlHandle $handle): ?string", curl_multi_getcontent)
+    .function_static(
         "curl_multi_info_read(CurlMultiHandle $multi_handle, &$queued_messages = null): array|false",
         curl_multi_info_read,
     )
-    .function("curl_multi_init(): CurlMultiHandle", curl_multi_init)
-    .function(
+    .function_static("curl_multi_init(): CurlMultiHandle", curl_multi_init)
+    .function_static(
         "curl_multi_remove_handle(CurlMultiHandle $multi_handle, CurlHandle $handle): int",
         curl_multi_remove_handle,
     )
-    .function("curl_multi_select(CurlMultiHandle $multi_handle, float $timeout = 1.0): int", curl_multi_select)
-    .function("curl_multi_strerror(int $error_code): ?string", curl_multi_strerror);
+    .function_static("curl_multi_select(CurlMultiHandle $multi_handle, float $timeout = 1.0): int", curl_multi_select)
+    .function_static("curl_multi_strerror(int $error_code): ?string", curl_multi_strerror);
 }

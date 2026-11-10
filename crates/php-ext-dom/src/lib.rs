@@ -284,11 +284,11 @@ impl Extension for Dom {
         for (name, v) in php_dom::constants::DOM_NS_CONSTANTS {
             m.constant(name, Value::Int(*v));
         }
-        m.function(
+        m.function_static(
             "dom_import_simplexml(object $node): DOMAttr|DOMElement",
             import_simplexml,
         );
-        m.function(
+        m.function_static(
             "Dom\\import_simplexml(object $node): Dom\\Attr|Dom\\Element",
             import_simplexml,
         );

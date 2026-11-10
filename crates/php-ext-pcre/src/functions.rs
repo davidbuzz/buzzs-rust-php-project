@@ -12,44 +12,44 @@ use crate::state;
 
 /// Registers the functions of the extension.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "preg_match(string $pattern, string $subject, &$matches = null, int $flags = 0, int $offset = 0): int|false",
         preg_match,
     )
-    .function(
+    .function_static(
         "preg_match_all(string $pattern, string $subject, &$matches = null, int $flags = 0, int $offset = 0): int|false",
         preg_match_all,
     )
-    .function(
+    .function_static(
         "preg_replace(string|array $pattern, string|array $replacement, string|array $subject, int $limit = -1, &$count = null): string|array|null",
         preg_replace,
     )
-    .function(
+    .function_static(
         "preg_filter(string|array $pattern, string|array $replacement, string|array $subject, int $limit = -1, &$count = null): string|array|null",
         preg_filter,
     )
-    .function(
+    .function_static(
         "preg_replace_callback(string|array $pattern, callable $callback, string|array $subject, int $limit = -1, &$count = null, int $flags = 0): string|array|null",
         preg_replace_callback,
     )
-    .function(
+    .function_static(
         "preg_replace_callback_array(array $pattern, string|array $subject, int $limit = -1, &$count = null, int $flags = 0): string|array|null",
         preg_replace_callback_array,
     )
-    .function(
+    .function_static(
         "preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false",
         preg_split,
     )
-    .function(
+    .function_static(
         "preg_quote(string $str, ?string $delimiter = null): string",
         preg_quote,
     )
-    .function(
+    .function_static(
         "preg_grep(string $pattern, array $array, int $flags = 0): array|false",
         preg_grep,
     )
-    .function("preg_last_error(): int", preg_last_error)
-    .function("preg_last_error_msg(): string", preg_last_error_msg);
+    .function_static("preg_last_error(): int", preg_last_error)
+    .function_static("preg_last_error_msg(): string", preg_last_error_msg);
 }
 
 /// The configuration the last [`state::compile`] synchronised.

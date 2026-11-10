@@ -622,20 +622,20 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
         .prop("dataLength", acc::PUBLIC, Some("int"), None)
         .register(m.vm());
     BUCKET_CLASS.with(|c| *c.borrow_mut() = Some(bucket));
-    m.function("stream_bucket_make_writeable($brigade): ?StreamBucket", stream_bucket_make_writeable)
-        .function("stream_bucket_prepend($brigade, StreamBucket $bucket): void", stream_bucket_prepend)
-        .function("stream_bucket_append($brigade, StreamBucket $bucket): void", stream_bucket_append)
-        .function("stream_bucket_new($stream, string $buffer): StreamBucket", stream_bucket_new)
-        .function("stream_get_filters(): array", stream_get_filters)
-        .function("stream_filter_register(string $filter_name, string $class): bool", stream_filter_register)
-        .function(
+    m.function_static("stream_bucket_make_writeable($brigade): ?StreamBucket", stream_bucket_make_writeable)
+        .function_static("stream_bucket_prepend($brigade, StreamBucket $bucket): void", stream_bucket_prepend)
+        .function_static("stream_bucket_append($brigade, StreamBucket $bucket): void", stream_bucket_append)
+        .function_static("stream_bucket_new($stream, string $buffer): StreamBucket", stream_bucket_new)
+        .function_static("stream_get_filters(): array", stream_get_filters)
+        .function_static("stream_filter_register(string $filter_name, string $class): bool", stream_filter_register)
+        .function_static(
             "stream_filter_prepend($stream, string $filter_name, int $mode = 0, mixed $params = UNKNOWN)",
             stream_filter_prepend,
         )
-        .function(
+        .function_static(
             "stream_filter_append($stream, string $filter_name, int $mode = 0, mixed $params = UNKNOWN)",
             stream_filter_append,
         )
-        .function("stream_filter_remove($stream_filter): bool", stream_filter_remove);
+        .function_static("stream_filter_remove($stream_filter): bool", stream_filter_remove);
     let _ = VecDeque::<u8>::new;
 }

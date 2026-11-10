@@ -168,14 +168,14 @@ fn exif_tagname(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the exif functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("exif_tagname(int $index): string|false", exif_tagname)
-        .function(
+    m.function_static("exif_tagname(int $index): string|false", exif_tagname)
+        .function_static(
             "exif_read_data($file, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): array|false",
             exif_read_data,
         )
-        .function(
+        .function_static(
             "exif_thumbnail($file, &$width = null, &$height = null, &$image_type = null): string|false",
             exif_thumbnail,
         )
-        .function("exif_imagetype(string $filename): int|false", exif_imagetype);
+        .function_static("exif_imagetype(string $filename): int|false", exif_imagetype);
 }

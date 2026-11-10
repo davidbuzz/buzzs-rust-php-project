@@ -92,6 +92,6 @@ pub fn reap(stream_id: u64) {
 
 /// Registers the functions of this module.
 pub fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("popen(string $command, string $mode)", popen)
-        .function("pclose($handle): int", pclose);
+    m.function_static("popen(string $command, string $mode)", popen)
+        .function_static("pclose($handle): int", pclose);
 }

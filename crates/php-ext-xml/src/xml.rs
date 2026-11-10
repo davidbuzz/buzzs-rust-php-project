@@ -976,15 +976,15 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .method("__construct()", acc::PUBLIC, xml_parser_construct)
         .register(m.vm());
     let handler_sig = |name: &str| format!("{name}(XMLParser $parser, $handler): true");
-    m.function(
+    m.function_static(
         "xml_parser_create(?string $encoding = null): XMLParser",
         xml_parser_create,
     )
-    .function(
+    .function_static(
         "xml_parser_create_ns(?string $encoding = null, string $separator = \":\"): XMLParser",
         xml_parser_create_ns,
     )
-    .function(
+    .function_static(
         "xml_set_object(XMLParser $parser, object $object): true",
         xml_set_object,
     )
@@ -992,7 +992,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         "8.4",
         "provide a proper method callable to xml_set_*_handler() functions",
     )
-    .function(
+    .function_static(
         "xml_set_element_handler(XMLParser $parser, $start_handler, $end_handler): true",
         xml_set_element_handler,
     );
@@ -1030,35 +1030,35 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, f) in singles {
         m.function(&handler_sig(name), f);
     }
-    m.function(
+    m.function_static(
         "xml_parse(XMLParser $parser, string $data, bool $is_final = false): int",
         xml_parse,
     )
-    .function(
+    .function_static(
         "xml_parse_into_struct(XMLParser $parser, string $data, &$values, &$index = null): int|false",
         xml_parse_into_struct,
     )
-    .function("xml_get_error_code(XMLParser $parser): int", xml_get_error_code)
-    .function("xml_error_string(int $error_code): ?string", xml_error_string_fn)
-    .function(
+    .function_static("xml_get_error_code(XMLParser $parser): int", xml_get_error_code)
+    .function_static("xml_error_string(int $error_code): ?string", xml_error_string_fn)
+    .function_static(
         "xml_get_current_line_number(XMLParser $parser): int",
         xml_get_current_line_number,
     )
-    .function(
+    .function_static(
         "xml_get_current_column_number(XMLParser $parser): int",
         xml_get_current_column_number,
     )
-    .function(
+    .function_static(
         "xml_get_current_byte_index(XMLParser $parser): int",
         xml_get_current_byte_index,
     )
-    .function("xml_parser_free(XMLParser $parser): bool", xml_parser_free)
+    .function_static("xml_parser_free(XMLParser $parser): bool", xml_parser_free)
     .deprecated("8.5", "as it has no effect since PHP 8.0")
-    .function(
+    .function_static(
         "xml_parser_set_option(XMLParser $parser, int $option, $value): bool",
         xml_parser_set_option,
     )
-    .function(
+    .function_static(
         "xml_parser_get_option(XMLParser $parser, int $option): string|int|bool",
         xml_parser_get_option,
     );

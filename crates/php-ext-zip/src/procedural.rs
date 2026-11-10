@@ -145,37 +145,37 @@ fn zip_entry_compressionmethod(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// attributes.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     const STAT: &str = "use ZipArchive::statIndex() instead";
-    m.function("zip_open(string $filename)", zip_open)
+    m.function_static("zip_open(string $filename)", zip_open)
         .deprecated("8.0", "use ZipArchive::open() instead")
-        .function("zip_close($zip): void", zip_close)
+        .function_static("zip_close($zip): void", zip_close)
         .deprecated("8.0", "use ZipArchive::close() instead")
-        .function("zip_read($zip)", zip_read)
+        .function_static("zip_read($zip)", zip_read)
         .deprecated("8.0", STAT)
-        .function(
+        .function_static(
             "zip_entry_open($zip_dp, $zip_entry, string $mode = \"rb\"): bool",
             zip_entry_open,
         )
         .deprecated("8.0", "")
-        .function("zip_entry_close($zip_entry): true", zip_entry_close)
+        .function_static("zip_entry_close($zip_entry): true", zip_entry_close)
         .deprecated("8.0", "")
-        .function(
+        .function_static(
             "zip_entry_read($zip_entry, int $len = 1024): string|false",
             zip_entry_read,
         )
         .deprecated("8.0", "use ZipArchive::getFromIndex() instead")
-        .function("zip_entry_name($zip_entry): string|false", zip_entry_name)
+        .function_static("zip_entry_name($zip_entry): string|false", zip_entry_name)
         .deprecated("8.0", STAT)
-        .function(
+        .function_static(
             "zip_entry_compressedsize($zip_entry): int|false",
             zip_entry_compressedsize,
         )
         .deprecated("8.0", STAT)
-        .function(
+        .function_static(
             "zip_entry_filesize($zip_entry): int|false",
             zip_entry_filesize,
         )
         .deprecated("8.0", STAT)
-        .function(
+        .function_static(
             "zip_entry_compressionmethod($zip_entry): string|false",
             zip_entry_compressionmethod,
         )

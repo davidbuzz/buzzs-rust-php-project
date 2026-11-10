@@ -510,22 +510,22 @@ impl Extension for Fileinfo {
             )
             .method("set_flags(int $flags): true", acc::PUBLIC, set_flags)
             .register(m.vm());
-        m.function(
+        m.function_static(
             "finfo_open(int $flags = FILEINFO_NONE, ?string $magic_database = null): finfo|false",
             finfo_open,
         )
-        .function("finfo_close(finfo $finfo): true", finfo_close)
+        .function_static("finfo_close(finfo $finfo): true", finfo_close)
         .deprecated("8.5", "as finfo objects are freed automatically")
-        .function("finfo_set_flags(finfo $finfo, int $flags): true", set_flags)
-        .function(
+        .function_static("finfo_set_flags(finfo $finfo, int $flags): true", set_flags)
+        .function_static(
             "finfo_file(finfo $finfo, string $filename, int $flags = FILEINFO_NONE, $context = null): string|false",
             file,
         )
-        .function(
+        .function_static(
             "finfo_buffer(finfo $finfo, string $string, int $flags = FILEINFO_NONE, $context = null): string|false",
             buffer,
         )
-        .function("mime_content_type($filename): string|false", mime_content_type)
+        .function_static("mime_content_type($filename): string|false", mime_content_type)
         .info(info);
     }
 }

@@ -831,49 +831,49 @@ pub(crate) fn simple_match(pattern: &[u8], subject: &[u8], caseless: bool) -> bo
 
 /// Registers the `mb_ereg*` functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("mb_regex_encoding(?string $encoding = null): string|bool", mb_regex_encoding)
+    m.function_static("mb_regex_encoding(?string $encoding = null): string|bool", mb_regex_encoding)
         .deprecated(SINCE, WHY)
-        .function("mb_ereg(string $pattern, string $string, &$matches = null): bool", mb_ereg)
+        .function_static("mb_ereg(string $pattern, string $string, &$matches = null): bool", mb_ereg)
         .deprecated(SINCE, WHY)
-        .function("mb_eregi(string $pattern, string $string, &$matches = null): bool", mb_eregi)
+        .function_static("mb_eregi(string $pattern, string $string, &$matches = null): bool", mb_eregi)
         .deprecated(SINCE, WHY)
-        .function(
+        .function_static(
             "mb_ereg_replace(string $pattern, string $replacement, string $string, ?string $options = null): string|false|null",
             mb_ereg_replace,
         )
         .deprecated(SINCE, WHY)
-        .function(
+        .function_static(
             "mb_eregi_replace(string $pattern, string $replacement, string $string, ?string $options = null): string|false|null",
             mb_eregi_replace,
         )
         .deprecated(SINCE, WHY)
-        .function(
+        .function_static(
             "mb_ereg_replace_callback(string $pattern, callable $callback, string $string, ?string $options = null): string|false|null",
             mb_ereg_replace_callback,
         )
         .deprecated(SINCE, WHY)
-        .function("mb_split(string $pattern, string $string, int $limit = -1): array|false", mb_split)
+        .function_static("mb_split(string $pattern, string $string, int $limit = -1): array|false", mb_split)
         .deprecated(SINCE, WHY)
-        .function("mb_ereg_match(string $pattern, string $string, ?string $options = null): bool", mb_ereg_match)
+        .function_static("mb_ereg_match(string $pattern, string $string, ?string $options = null): bool", mb_ereg_match)
         .deprecated(SINCE, WHY)
-        .function("mb_ereg_search(?string $pattern = null, ?string $options = null): bool", mb_ereg_search)
+        .function_static("mb_ereg_search(?string $pattern = null, ?string $options = null): bool", mb_ereg_search)
         .deprecated(SINCE, WHY)
-        .function("mb_ereg_search_pos(?string $pattern = null, ?string $options = null): array|false", mb_ereg_search_pos)
+        .function_static("mb_ereg_search_pos(?string $pattern = null, ?string $options = null): array|false", mb_ereg_search_pos)
         .deprecated(SINCE, WHY)
-        .function("mb_ereg_search_regs(?string $pattern = null, ?string $options = null): array|false", mb_ereg_search_regs)
+        .function_static("mb_ereg_search_regs(?string $pattern = null, ?string $options = null): array|false", mb_ereg_search_regs)
         .deprecated(SINCE, WHY)
-        .function(
+        .function_static(
             "mb_ereg_search_init(string $string, ?string $pattern = null, ?string $options = null): bool",
             mb_ereg_search_init,
         )
         .deprecated(SINCE, WHY)
-        .function("mb_ereg_search_getregs(): array|false", mb_ereg_search_getregs)
+        .function_static("mb_ereg_search_getregs(): array|false", mb_ereg_search_getregs)
         .deprecated(SINCE, WHY)
-        .function("mb_ereg_search_getpos(): int", mb_ereg_search_getpos)
+        .function_static("mb_ereg_search_getpos(): int", mb_ereg_search_getpos)
         .deprecated(SINCE, WHY)
-        .function("mb_ereg_search_setpos(int $offset): bool", mb_ereg_search_setpos)
+        .function_static("mb_ereg_search_setpos(int $offset): bool", mb_ereg_search_setpos)
         .deprecated(SINCE, WHY)
-        .function("mb_regex_set_options(?string $options = null): string", mb_regex_set_options)
+        .function_static("mb_regex_set_options(?string $options = null): string", mb_regex_set_options)
         .deprecated(SINCE, WHY);
 }
 

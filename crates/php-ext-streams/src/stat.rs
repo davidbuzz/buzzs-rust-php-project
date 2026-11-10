@@ -133,28 +133,28 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
     ] {
         m.function(&format!("{name}(string $filename): {ret}"), f);
     }
-    m.function("chown(string $filename, string|int $user): bool", chown)
-        .function("chgrp(string $filename, string|int $group): bool", chgrp)
-        .function("lchown(string $filename, string|int $user): bool", lchown)
-        .function("lchgrp(string $filename, string|int $group): bool", lchgrp)
-        .function("chmod(string $filename, int $permissions): bool", chmod)
-        .function(
+    m.function_static("chown(string $filename, string|int $user): bool", chown)
+        .function_static("chgrp(string $filename, string|int $group): bool", chgrp)
+        .function_static("lchown(string $filename, string|int $user): bool", lchown)
+        .function_static("lchgrp(string $filename, string|int $group): bool", lchgrp)
+        .function_static("chmod(string $filename, int $permissions): bool", chmod)
+        .function_static(
             "touch(string $filename, ?int $mtime = null, ?int $atime = null): bool",
             touch,
         )
-        .function(
+        .function_static(
             "clearstatcache(bool $clear_realpath_cache = false, string $filename = \"\"): void",
             clearstatcache,
         )
-        .function(
+        .function_static(
             "disk_total_space(string $directory): float|false",
             disk_total_space,
         )
-        .function(
+        .function_static(
             "disk_free_space(string $directory): float|false",
             disk_free_space,
         )
-        .function(
+        .function_static(
             "diskfreespace(string $directory): float|false",
             disk_free_space,
         );
