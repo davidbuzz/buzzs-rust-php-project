@@ -646,40 +646,59 @@ pub(in crate::exec) fn prop_op_in(f: &mut Frame, op: &Op, ip: &mut usize) -> boo
                 None => false,
             }
         }
-        // `new C` without arguments of a class without a constructor
-        // (`skip` jumps over the `DoCall`).
         Op::New {
             class: ClassSpec::Named(lit),
             dst,
             skip,
-        } if skip != 0 => {
-            let Some(o) = new_in(f, lit) else {
+        } => {
+            if dst as usize >= f.tmps.len() {
+                return false;
+            }
+            let Some(cls) = cached_class(f, lit) else {
                 return false;
             };
-            let Some(slot) = f.tmps.get_mut(dst as usize) else {
-                return false;
+            let o = if cls.magic.construct.is_none() {
+                // `new C` without arguments of a class without a
+                // constructor (`skip` jumps over the `DoCall`). With
+                // arguments, the generic op starts the placeholder call
+                // that evaluates them.
+                if skip == 0 {
+                    return false;
+                }
+                let Some(o) = crate::props::new_plain(&cls) else {
+                    return false;
+                };
+                *ip = skip as usize;
+                o
+            } else {
+                // `new C(...)` of a class with a constructor: the object
+                // and the constructor call on it (`DoCall` runs it).
+                let Some(o) = crate::props::new_with_ctor(cls, &mut f.calls) else {
+                    return false;
+                };
+                o
             };
-            put_tmp(slot, Value::Object(o));
-            *ip = skip as usize;
+            if let Some(slot) = f.tmps.get_mut(dst as usize) {
+                put_tmp(slot, Value::Object(o));
+            }
             true
         }
         _ => false,
     }
 }
 
-/// The object `new` of the class named by literal `lit` creates when the
-/// class is in frame `f`'s run-time cache (`CACHED_PTR`, filled by the
-/// generic op) and needs nothing from the VM ([`crate::props::new_plain`]).
+/// The class named by literal `lit` when it is in frame `f`'s run-time
+/// cache (`CACHED_PTR`, filled by the generic op's
+/// `Vm::resolve_class_spec`, which returns the cached class without
+/// further effects).
 #[inline(always)]
-fn new_in(f: &Frame, lit: u32) -> Option<Obj> {
-    let cls = f
-        .code
+fn cached_class(f: &Frame, lit: u32) -> Option<Rc<crate::class::Class>> {
+    f.code
         .class_cache
         .try_borrow()
         .ok()?
         .get(lit as usize)?
-        .upgrade()?;
-    crate::props::new_plain(&cls)
+        .upgrade()
 }
 
 /// `Vm::set_dst` on frame `f`: the result of an op into its used
@@ -1542,6 +1561,98 @@ object(stdClass)#9 (1) {
   ["n"]=>
   int(1)
 }
+"#
+        );
+    }
+
+    /// `new C(...)` of a class with a constructor on the dispatch loop's
+    /// hot path (`crate::props::new_with_ctor`): handle reuse, inherited
+    /// constructor scope, promoted and readonly properties, destructor
+    /// order, a private constructor, an argument that throws
+    /// (`ZEND_LIVE_NEW`), WeakMap keys and GC roots. Expected
+    /// output from `/usr/bin/php -n` (8.3).
+    #[test]
+    fn new_with_constructor_matches_php() {
+        let out = run(r#"<?php
+class P { public $x; public $y;
+    function __construct($x, $y) { $this->x = $x; $this->y = $y; } }
+class Base { private $secret; protected $n;
+    function __construct($n) { $this->secret = "s$n"; $this->n = $n; }
+    function secret() { return $this->secret; } }
+class Child extends Base {}
+class D { function __construct(public int $v, public readonly string $tag = "t") {}
+    function __destruct() { echo "~D{$this->v} "; } }
+class Priv { private function __construct() { echo "priv\n"; }
+    static function make() { return new Priv; } }
+class E { function __construct($a) { echo "ctor\n"; } function __destruct() { echo "dtor E\n"; } }
+function boom() { throw new Exception("boom"); }
+$ids = [];
+for ($i = 0; $i < 4; $i++) { $p = new P($i, $i + 1); $ids[] = spl_object_id($p); }
+echo implode(",", $ids), " ", $p->x + $p->y, "\n";
+$c = new Child(7);
+echo $c->secret(), "\n";
+var_dump($c);
+for ($i = 0; $i < 3; $i++) { $d = new D($i); }
+echo "\n";
+unset($d);
+echo "\n";
+$d = new D(9, "z");
+var_dump($d);
+$d = null;
+echo "\n";
+try { $x = new Priv; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+$q = Priv::make();
+try { $e1 = new E(boom()); } catch (Exception $e) { echo "caught ", $e->getMessage(), "\n"; }
+$e2 = new E(1);
+$e2 = null;
+$wm = new WeakMap;
+for ($i = 0; $i < 3; $i++) { $k = new P($i, 0); $wm[$k] = new D(100 + $i); echo spl_object_id($k), " "; }
+echo count($wm), "\n";
+unset($k);
+echo count($wm), "\n";
+$objs = [];
+for ($i = 0; $i < 5; $i++) { $objs[] = new P($i, $i); }
+$objs = null;
+$s = gc_status();
+echo $s['roots'], "\n";
+$a = new P(1, 2); $b = new P(3, 4);
+echo spl_object_id($a), spl_object_id($b), "\n";
+$a = null;
+$z = new P(5, 6);
+echo spl_object_id($z), "\n";
+for ($i = 0; $i < 100; $i++) { $t = new P($i, "s$i"); }
+echo spl_object_id($t), " ", $t->y, "\n";
+"#);
+        assert_eq!(
+            out,
+            r#"1,2,1,2 7
+s7
+object(Child)#1 (2) {
+  ["secret":"Base":private]=>
+  string(2) "s7"
+  ["n":protected]=>
+  int(7)
+}
+~D0 ~D1 
+~D2 
+object(D)#3 (2) {
+  ["v"]=>
+  int(9)
+  ["tag"]=>
+  string(1) "z"
+}
+~D9 
+Error: Call to private Priv::__construct() from global scope
+priv
+caught boom
+ctor
+dtor E
+5 ~D100 8 ~D101 7 1
+~D102 0
+4
+109
+10
+8 s99
 "#
         );
     }

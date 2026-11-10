@@ -59,6 +59,53 @@ pub(crate) fn new_plain(cls: &Rc<Class>) -> Option<Obj> {
     Some(o)
 }
 
+/// `ZEND_NEW` of `cls` with a constructor, when the object needs nothing
+/// from the VM (as for [`new_plain`]) and the constructor is public (no
+/// scope check) and not static: the new object, its slots copied from
+/// `default_properties_table`, with the constructor call on it pushed onto
+/// `calls` (`zend_vm_stack_push_call_frame` with `ZEND_CALL_RELEASE_THIS`),
+/// built in place. That is the pending call `Vm::op_new` pushes for such a
+/// class, with nothing else done in between that could be observed (the
+/// class has no `get_constructor` hook to run on the object first).
+/// `None`, having done nothing, otherwise (the generic op then runs).
+#[inline]
+pub(crate) fn new_with_ctor(
+    cls: Rc<Class>,
+    calls: &mut Vec<crate::vm::PendingCall>,
+) -> Option<Obj> {
+    if cls.flags & NOT_INSTANTIABLE != 0
+        || cls.hooks.is_some()
+        || cls.internal == InternalKind::Throwable
+        || (cls.lc_name.len() == 9 && cls.lc_name.as_bytes() == b"generator")
+    {
+        return None;
+    }
+    let ctor = cls.magic.construct.as_ref()?;
+    if ctor.visibility() != flags::PUBLIC || ctor.is_static() {
+        return None;
+    }
+    // The declaring class (`Vm::op_new`'s `scope`), found before anything
+    // is created: a constructor inherited from a parent is scoped to it.
+    let scope = if std::rc::Weak::as_ptr(&ctor.scope) == Rc::as_ptr(&cls) {
+        cls.clone()
+    } else {
+        ctor.scope.upgrade()?
+    };
+    let defaults = cls.defaults.try_borrow().ok()?;
+    let o = object::new_object_from_defaults(cls.clone(), defaults.as_deref()?);
+    drop(defaults);
+    let func = ctor.func.clone();
+    let this = o.clone();
+    calls.extend(std::iter::once_with(move || crate::vm::PendingCall {
+        this: Some(this),
+        scope: Some(scope),
+        called: Some(cls),
+        is_ctor: true,
+        ..crate::vm::PendingCall::new(func)
+    }));
+    Some(o)
+}
+
 impl Vm {
     /// Whether an object is an instance of the (lower-case) class name.
     pub(crate) fn instance_of(&self, o: &Obj, lc: &[u8]) -> bool {
