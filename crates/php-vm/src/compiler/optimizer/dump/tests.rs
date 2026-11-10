@@ -219,3 +219,19 @@ fn typed_returns_get_verify_return_type() {
     );
     assert!(!out.contains("VERIFY_RETURN_TYPE"), "{out}");
 }
+
+#[test]
+fn dfa_rewrites_arithmetic_with_literals() {
+    // pipe_optimizations.phpt: `MUL x, 2` of a number is `ADD x, x`.
+    let out = dump("<?php\nfunction f(int $a) {\n    return $a * 2;\n}\n");
+    assert!(out.contains("T1 = ADD CV0($a) CV0($a)\n"), "{out}");
+    // A long literal against a double becomes a double literal.
+    let out = dump("<?php\nfunction f(float $a) {\n    return $a + 1;\n}\n");
+    assert!(out.contains("T1 = ADD CV0($a) float(1)\n"), "{out}");
+    // Adding zero to a long is a copy.
+    let out = dump("<?php\nfunction f(int $a) {\n    return $a + 0;\n}\n");
+    assert!(!out.contains(" ADD "), "{out}");
+    // Untyped operands are left alone.
+    let out = dump("<?php\nfunction f($a) {\n    return $a * 2;\n}\n");
+    assert!(out.contains("T1 = MUL CV0($a) int(2)\n"), "{out}");
+}

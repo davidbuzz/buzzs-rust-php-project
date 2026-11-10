@@ -760,6 +760,17 @@ pub(crate) fn dfa(lines: &mut [ZLine], types: &Types, shape: &FuncShape) {
                     }
                 }
             }
+            "ADD"
+            | "SUB"
+            | "MUL"
+            | "IS_EQUAL"
+            | "IS_NOT_EQUAL"
+            | "IS_SMALLER"
+            | "IS_SMALLER_OR_EQUAL"
+                if !matches!(l.res, Z::Unused) =>
+            {
+                arith_identity(&mut lines[i], types, i);
+            }
             "ASSIGN" if matches!(l.res, Z::Unused) => {
                 let Z::Cv(c) = l.op1 else { continue };
                 let orig = get_cv(&types.cv_in[i], c);
@@ -822,6 +833,67 @@ pub(crate) fn dfa(lines: &mut [ZLine], types: &Types, shape: &FuncShape) {
             }
             _ => {}
         }
+    }
+}
+
+/// `zend_dfa_optimize_op_array`'s arithmetic rewrites of one operand
+/// against a literal: `ADD x, 0` (and `SUB x, 0`, `ADD 0, x`) of a value
+/// that is only a long (or only a double, against `0.0`) becomes
+/// `QM_ASSIGN x`, and `MUL x, 2` of a number becomes `ADD x, x`. A long
+/// literal against a value that is only a double (also of the
+/// comparisons) is made a double literal first.
+#[allow(clippy::float_cmp, clippy::cast_precision_loss)]
+fn arith_identity(l: &mut ZLine, types: &Types, i: usize) {
+    const NOT_NUM: u32 = (ty::ANY | ty::UNDEF) & !(ty::LONG | ty::DOUBLE);
+    let cv = &types.cv_in[i];
+    let (x, lit, lit_first) = match (&l.op1, &l.op2) {
+        (Z::Const(_), Z::Const(_)) => return,
+        (Z::Const(c), x) => (x.clone(), c.clone(), true),
+        (x, Z::Const(c)) => (x.clone(), c.clone(), false),
+        _ => return,
+    };
+    if !matches!(x, Z::Cv(_) | Z::Tmp(_)) {
+        return;
+    }
+    let t = z_type(&x, cv, &types.tmp);
+    if t == 0 {
+        return;
+    }
+    let exact = t & (ty::ANY | ty::UNDEF);
+    // `ADD long, x [double]`: the literal is converted to a double first.
+    let lit = match lit {
+        Value::Int(n) if t & ty::ANY == ty::DOUBLE => {
+            let d = Value::Float(n as f64);
+            if lit_first {
+                l.op1 = Z::Const(d.clone());
+            } else {
+                l.op2 = Z::Const(d.clone());
+            }
+            d
+        }
+        v => v,
+    };
+    let zero = match lit {
+        Value::Int(0) => exact == ty::LONG,
+        Value::Float(f) => f == 0.0 && exact == ty::DOUBLE,
+        _ => false,
+    };
+    let add_like = l.op == "ADD" || (l.op == "SUB" && !lit_first);
+    if add_like && zero {
+        l.op = "QM_ASSIGN";
+        l.op1 = x;
+        l.op2 = Z::Unused;
+        return;
+    }
+    let two = match lit {
+        Value::Int(2) => true,
+        Value::Float(f) => f == 2.0 && t & ty::LONG == 0,
+        _ => false,
+    };
+    if l.op == "MUL" && t & NOT_NUM == 0 && two {
+        l.op = "ADD";
+        l.op1 = x.clone();
+        l.op2 = x;
     }
 }
 
