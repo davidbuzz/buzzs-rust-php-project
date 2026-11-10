@@ -260,6 +260,90 @@ impl SapiHeaders {
     }
 }
 
+impl SapiHeaders {
+    /// `sapi_cgi_send_headers()`: a `Status:` line unless the status is
+    /// 200 (or `cgi.nph`), the header lines, then the blank line.
+    pub fn render_cgi(&self, rfc2616_headers: bool, nph: bool) -> Vec<u8> {
+        const MAX_HEADER_LENGTH: usize = 1024;
+        let is_status = |h: &[u8]| h.len() > 7 && h[..7].eq_ignore_ascii_case(b"Status:");
+        let mut out = Vec::new();
+        let mut ignore_status = false;
+        let mut response_status = self.response_code;
+        if nph || self.response_code != 200 {
+            let mut has_status = false;
+            let mut buf: Vec<u8> = Vec::new();
+            let space = self
+                .status_line
+                .as_ref()
+                .and_then(|l| l.iter().position(|&c| c == b' '));
+            if let (true, Some(line)) = (rfc2616_headers, &self.status_line) {
+                buf.clone_from(line);
+                buf.truncate(MAX_HEADER_LENGTH);
+                if let Some(sp) = space {
+                    response_status = clamp_code(atoi(&line[sp + 1..]));
+                }
+            } else if let (Some(line), Some(sp)) = (&self.status_line, space) {
+                if sp >= 5 && line[..5].eq_ignore_ascii_case(b"HTTP/") {
+                    buf.extend_from_slice(b"Status:");
+                    buf.extend_from_slice(&line[sp..]);
+                    buf.truncate(MAX_HEADER_LENGTH - 1);
+                    response_status = clamp_code(atoi(&line[sp + 1..]));
+                } else {
+                    has_status = self.default_status(&mut buf, is_status);
+                }
+            } else {
+                has_status = self.default_status(&mut buf, is_status);
+            }
+            if !has_status {
+                out.extend_from_slice(&buf);
+                out.extend_from_slice(b"\r\n");
+                ignore_status = true;
+            }
+        }
+        for h in &self.headers {
+            if h.is_empty() {
+                continue;
+            }
+            if is_status(h.as_slice()) {
+                if !ignore_status {
+                    ignore_status = true;
+                    out.extend_from_slice(h);
+                    out.extend_from_slice(b"\r\n");
+                }
+            } else if response_status == 304
+                && h.len() > 13
+                && h[..13].eq_ignore_ascii_case(b"Content-Type:")
+            {
+                continue;
+            } else {
+                out.extend_from_slice(h);
+                out.extend_from_slice(b"\r\n");
+            }
+        }
+        out.extend_from_slice(b"\r\n");
+        out
+    }
+
+    /// The `Status: <code> <reason>` line, unless a `Status:` header was
+    /// set (then `true`).
+    fn default_status(&self, buf: &mut Vec<u8>, is_status: impl Fn(&[u8]) -> bool) -> bool {
+        if self.headers.iter().any(|h| is_status(h.as_slice())) {
+            return true;
+        }
+        let code = self.response_code;
+        *buf = match crate::status::status_reason(code) {
+            Some(r) => format!("Status: {code} {r}").into_bytes(),
+            None => format!("Status: {code}").into_bytes(),
+        };
+        false
+    }
+}
+
+/// C `atoi()`.
+fn atoi(s: &[u8]) -> i64 {
+    strtol(s)
+}
+
 /// C `isspace()`.
 fn is_c_space(c: u8) -> bool {
     matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
@@ -359,6 +443,44 @@ mod tests {
 
     fn op(h: &mut SapiHeaders, o: HeaderOp<'_>) -> Result<bool, HeaderError> {
         h.op(o, &HeaderFacts::default())
+    }
+
+    /// `sapi_cgi_send_headers()` output, as `php-cgi` 8.5 prints it.
+    #[test]
+    fn cgi_head() {
+        let facts = HeaderFacts::default();
+        let mut h = SapiHeaders::new();
+        op(&mut h, HeaderOp::Replace(b"X-Powered-By: PHP/8.5.0", 0)).unwrap();
+        assert!(h.finalize(&facts));
+        assert_eq!(
+            h.render_cgi(false, false),
+            b"X-Powered-By: PHP/8.5.0\r\nContent-type: text/html; charset=UTF-8\r\n\r\n"
+        );
+
+        let mut h = SapiHeaders::new();
+        op(&mut h, HeaderOp::Replace(b"HTTP/1.1 404 Not Found", 0)).unwrap();
+        op(&mut h, HeaderOp::Replace(b"Location: /x", 0)).unwrap();
+        let out = h.render_cgi(false, false);
+        assert!(out.starts_with(b"Status: 404 Not Found\r\n"), "{out:?}");
+
+        let mut h = SapiHeaders::new();
+        h.update_response_code(299);
+        assert_eq!(h.render_cgi(false, false), b"Status: 299\r\n\r\n");
+
+        // An explicit Status header replaces the generated one.
+        let mut h = SapiHeaders::new();
+        h.update_response_code(500);
+        h.add_op(false, b"Status: 501 Nope".to_vec());
+        assert_eq!(h.render_cgi(false, false), b"Status: 501 Nope\r\n\r\n");
+
+        // 304 drops Content-Type.
+        let mut h = SapiHeaders::new();
+        h.update_response_code(304);
+        h.add_op(false, b"Content-Type: text/plain".to_vec());
+        assert_eq!(
+            h.render_cgi(false, false),
+            b"Status: 304 Not Modified\r\n\r\n"
+        );
     }
 
     #[test]

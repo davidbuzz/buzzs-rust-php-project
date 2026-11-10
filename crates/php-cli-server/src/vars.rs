@@ -616,8 +616,23 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
 
     // $_SERVER
     let mut server = ZArray::new();
+    if let (true, Some(cgi)) = (has(b'S'), &ctx.cgi) {
+        // sapi_cgi_register_variables(): the environment, then PHP_SELF.
+        use std::os::unix::ffi::OsStrExt;
+        for (k, v) in std::env::vars_os() {
+            let v = Value::Str(ZStr::from(v.as_bytes()));
+            register(vm, k.as_bytes(), v, &mut server, false);
+        }
+        let self_ = Value::Str(ZStr::from(cgi.php_self.as_slice()));
+        register(vm, b"PHP_SELF", self_, &mut server, false);
+    }
     if has(b'S') {
-        for (k, v, kind) in server_entries(req, facts) {
+        let entries = if ctx.cgi.is_some() {
+            Vec::new()
+        } else {
+            server_entries(req, facts)
+        };
+        for (k, v, kind) in entries {
             let v = Value::Str(ZStr::from(v));
             match kind {
                 VarKind::Known => {

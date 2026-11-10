@@ -62,6 +62,9 @@ pub struct Options {
     pub defines: Vec<(String, String)>,
     /// `PG(php_binary)`.
     pub binary: Option<PathBuf>,
+    /// The CGI SAPI (`php-cgi`): `php-cgi.ini`, no `sapi_cli_ini_defaults`
+    /// and no `HARDCODED_INI`.
+    pub cgi: bool,
 }
 
 impl Config {
@@ -88,14 +91,14 @@ impl Config {
 
     #[allow(clippy::too_many_lines)]
     fn load_from_environment(opts: &Options, phprc: Option<&[u8]>, scan: &[u8]) -> Config {
-        let mut cfg = Config {
-            entries: vec![("display_errors".into(), "1".into())],
-            ..Config::default()
-        };
-        cfg.configuration.values.insert(
-            IniKey::Str(b"display_errors".to_vec()),
-            IniValue::Scalar(IniScalar::Str(b"1".to_vec())),
-        );
+        let mut cfg = Config::default();
+        if !opts.cgi {
+            cfg.entries.push(("display_errors".into(), "1".into()));
+            cfg.configuration.values.insert(
+                IniKey::Str(b"display_errors".to_vec()),
+                IniValue::Scalar(IniScalar::Str(b"1".to_vec())),
+            );
+        }
         let mut file_name: Option<Vec<u8>> = None;
         let mut search: Vec<Vec<u8>> = Vec::new();
         if let Some(p) = &opts.path_override {
@@ -122,7 +125,12 @@ impl Config {
                     found = absolute(p);
                 }
             }
-            for name in ["php-cli.ini", "php.ini"] {
+            let sapi_ini = if opts.cgi {
+                "php-cgi.ini"
+            } else {
+                "php-cli.ini"
+            };
+            for name in [sapi_ini, "php.ini"] {
                 if found.is_some() {
                     break;
                 }
@@ -198,7 +206,8 @@ impl Config {
             }
             cfg.scanned_path = Some(scan.to_vec());
         }
-        for (k, v) in HARDCODED_INI {
+        let hardcoded = if opts.cgi { &[][..] } else { HARDCODED_INI };
+        for (k, v) in hardcoded {
             cfg.entries.push(((*k).to_string(), (*v).to_string()));
             cfg.configuration.values.insert(
                 IniKey::Str(k.as_bytes().to_vec()),

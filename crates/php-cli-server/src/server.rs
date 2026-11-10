@@ -599,7 +599,9 @@ fn run_php_forked(
                 std::mem::forget(vm);
                 if outcome == Outcome::Done {
                     // The response is complete: let the client see EOF now.
-                    let _ = ctx.stream.shutdown(std::net::Shutdown::Write);
+                    if let Some(stream) = &ctx.stream {
+                        let _ = stream.shutdown(std::net::Shutdown::Write);
+                    }
                 }
                 std::mem::forget(ctx);
                 match outcome {

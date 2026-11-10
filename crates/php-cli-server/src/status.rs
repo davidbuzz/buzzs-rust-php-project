@@ -61,6 +61,14 @@ pub fn status_string(code: i32) -> &'static str {
         .map_or("Unknown Status Code", |i| STATUS_MAP[i].1)
 }
 
+/// The reason phrase of `code` in `http_status_map`, if listed.
+pub fn status_reason(code: i32) -> Option<&'static str> {
+    STATUS_MAP
+        .binary_search_by_key(&code, |&(c, _)| c)
+        .ok()
+        .map(|i| STATUS_MAP[i].1)
+}
+
 /// `append_http_status_line()`.
 pub fn status_line(protocol_version: i32, code: i32) -> Vec<u8> {
     let code = if code == 0 { 200 } else { code };

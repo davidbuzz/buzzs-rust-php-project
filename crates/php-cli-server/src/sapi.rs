@@ -79,8 +79,9 @@ pub enum Body {
 pub struct RequestCtx {
     /// The parsed request.
     pub request: Request,
-    /// The client connection (blocking while the script runs).
-    pub stream: TcpStream,
+    /// The client connection (blocking while the script runs); `None`
+    /// for a CGI request, which writes to standard output.
+    pub stream: Option<TcpStream>,
     /// `ip:port` of the client.
     pub client_addr: String,
     /// `SG(sapi_headers)`.
@@ -106,6 +107,29 @@ pub struct RequestCtx {
     pub header_callback: RefCell<Option<Value>>,
     /// The router returned `false` (set by the return hook).
     pub router_declined: Cell<bool>,
+    /// Set when the request runs under the CGI SAPI (`php-cgi`).
+    pub cgi: Option<CgiInfo>,
+    /// The exit status of the request's `Vm::shutdown`.
+    pub exit_status: Cell<i32>,
+}
+
+/// What the CGI SAPI (`sapi/cgi/cgi_main.c`, used by `php-cgi`) changes in
+/// a request: standard output instead of a socket, `Status:` headers, the
+/// environment as `$_SERVER`, and the command-line switches.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CgiInfo {
+    /// `SG(request_info).no_headers` (`-q`, `-f`, `-l`).
+    pub no_headers: bool,
+    /// `SAPI_OPTION_NO_CHDIR` (`-C`).
+    pub no_chdir: bool,
+    /// `$_SERVER['PHP_SELF']` (`sapi_cgi_register_variables`).
+    pub php_self: Vec<u8>,
+    /// Code to run instead of reading `path_translated` (`-i`, `-m`).
+    pub source: Option<Vec<u8>>,
+    /// `cgi.rfc2616_headers`.
+    pub rfc2616_headers: Cell<bool>,
+    /// `cgi.nph`.
+    pub nph: Cell<bool>,
 }
 
 thread_local! {
@@ -135,7 +159,7 @@ impl RequestCtx {
         };
         RequestCtx {
             request,
-            stream,
+            stream: Some(stream),
             client_addr,
             headers: RefCell::new(SapiHeaders::new()),
             facts: RefCell::new(facts),
@@ -147,6 +171,35 @@ impl RequestCtx {
             orphaned_uploads: RefCell::new(Vec::new()),
             header_callback: RefCell::new(None),
             router_declined: Cell::new(false),
+            cgi: None,
+            exit_status: Cell::new(0),
+        }
+    }
+
+    /// A context for a CGI request: output goes to standard output.
+    pub fn new_cgi(request: Request, cgi: CgiInfo) -> Self {
+        let facts = HeaderFacts {
+            method: request.method.as_str().as_bytes().to_vec(),
+            // `init_request_info()`: `SG(request_info).proto_num = 1000`.
+            proto_num: 1000,
+            ..HeaderFacts::default()
+        };
+        RequestCtx {
+            request,
+            stream: None,
+            client_addr: String::new(),
+            headers: RefCell::new(SapiHeaders::new()),
+            facts: RefCell::new(facts),
+            aborted: Cell::new(false),
+            headers_written: Cell::new(false),
+            discard_headers: Cell::new(false),
+            body: RefCell::new(Body::Unread),
+            post_read_offset: Cell::new(0),
+            orphaned_uploads: RefCell::new(Vec::new()),
+            header_callback: RefCell::new(None),
+            router_declined: Cell::new(false),
+            cgi: Some(cgi),
+            exit_status: Cell::new(0),
         }
     }
 
@@ -166,7 +219,15 @@ impl RequestCtx {
         if self.aborted.get() {
             return;
         }
-        if (&self.stream).write_all(data).is_err() {
+        let ok = match &self.stream {
+            Some(stream) => {
+                let mut s: &TcpStream = stream;
+                s.write_all(data).is_ok()
+            }
+            // `sapi_cgi_ub_write()`.
+            None => std::io::stdout().write_all(data).is_ok(),
+        };
+        if !ok {
             self.aborted.set(true);
         }
     }
@@ -184,7 +245,12 @@ impl RequestCtx {
                 return;
             }
             self.headers_written.set(true);
-            h.render(self.request.protocol_version, crate::status::now())
+            match &self.cgi {
+                // `SG(request_info).no_headers`.
+                Some(cgi) if cgi.no_headers => return,
+                Some(cgi) => h.render_cgi(cgi.rfc2616_headers.get(), cgi.nph.get()),
+                None => h.render(self.request.protocol_version, crate::status::now()),
+            }
         };
         self.send_through(&head);
         if self.aborted.get() {
@@ -247,6 +313,10 @@ impl RequestCtx {
         let mut f = self.facts.borrow_mut();
         f.default_mimetype = vm.ini_string("default_mimetype").unwrap_or_default();
         f.default_charset = vm.ini_string("default_charset").unwrap_or_default();
+        if let Some(cgi) = &self.cgi {
+            cgi.rfc2616_headers.set(vm.ini_bool("cgi.rfc2616_headers"));
+            cgi.nph.set(vm.ini_bool("cgi.nph"));
+        }
     }
 }
 
@@ -550,6 +620,27 @@ fn php_sapi_name(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 #[allow(clippy::unnecessary_wraps)]
+fn php_sapi_name_cgi(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(str_value(CGI_SAPI_NAME))
+}
+
+/// `sapi_cgi_log_message()`: the message and a newline on stderr.
+fn error_log_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let ty = if a.has(1) { a.int(1) } else { 0 };
+    if ty == 0 && vm.ini_string("error_log").is_none_or(|v| v.is_empty()) {
+        vm.flush_stdout();
+        let mut line = a.str(0).as_bytes().to_vec();
+        line.push(b'\n');
+        let _ = std::io::stderr().write_all(&line);
+        return Ok(Value::Bool(true));
+    }
+    match ORIG_ERROR_LOG.with(Cell::get) {
+        Some(orig) => orig(vm, a),
+        None => Ok(Value::Bool(false)),
+    }
+}
+
+#[allow(clippy::unnecessary_wraps)]
 fn connection_aborted(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(ctx_or(false, |c| c.aborted.get())))
 }
@@ -650,26 +741,67 @@ impl Extension for Rfc1867Constants {
     }
 }
 
-/// The `cli_server` module plus the SAPI-provided functions.
+/// `cgi_sapi_module.name`.
+pub const CGI_SAPI_NAME: &str = "cgi-fcgi";
+
+/// The `cgi` module's INI entries (`PHP_INI_BEGIN` of `cgi_main.c`):
+/// name, default, whether `PHP_INI_ALL` (else `PHP_INI_SYSTEM`), boolean.
+const CGI_INI: &[(&str, Option<&str>, bool, bool)] = &[
+    ("cgi.rfc2616_headers", Some("0"), true, true),
+    ("cgi.nph", Some("0"), true, true),
+    ("cgi.check_shebang_line", Some("1"), false, true),
+    ("cgi.force_redirect", Some("1"), false, true),
+    ("cgi.redirect_status_env", None, false, false),
+    ("cgi.fix_pathinfo", Some("1"), false, true),
+    ("cgi.discard_path", Some("0"), false, true),
+    ("fastcgi.logging", Some("1"), false, true),
+];
+
+/// The `cli_server` module plus the SAPI-provided functions; with `cgi`,
+/// the `cgi-fcgi` module of `php-cgi` instead, which provides the same
+/// functions over standard output (`sapi/cgi/cgi_main.c`).
 #[derive(Debug, Clone, Copy, Default)]
-pub struct CliServerModule;
+pub struct CliServerModule {
+    /// Register as the CGI SAPI.
+    pub cgi: bool,
+}
 
 impl Extension for CliServerModule {
     fn name(&self) -> &'static str {
-        "cli_server"
+        if self.cgi {
+            CGI_SAPI_NAME
+        } else {
+            "cli_server"
+        }
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         use php_support::ini::{Access, IniDirective, ModifyHandler};
         m.vm().response_header_hook = Some(add_response_header);
         m.vm().parse_body_hook = Some(crate::vars::parse_body);
-        m.ini(IniDirective::new(
-            "cli_server.color",
-            Some("0"),
-            Access::ALL,
-            ModifyHandler::Bool,
-            "cli_server",
-        ));
+        if self.cgi {
+            for &(name, default, all, boolean) in CGI_INI {
+                m.ini(IniDirective::new(
+                    name,
+                    default,
+                    if all { Access::ALL } else { Access::SYSTEM },
+                    if boolean {
+                        ModifyHandler::Bool
+                    } else {
+                        ModifyHandler::String
+                    },
+                    CGI_SAPI_NAME,
+                ));
+            }
+        } else {
+            m.ini(IniDirective::new(
+                "cli_server.color",
+                Some("0"),
+                Access::ALL,
+                ModifyHandler::Bool,
+                "cli_server",
+            ));
+        }
         {
             let vm = m.vm();
             // cli-server has no STDIN/STDOUT/STDERR constants.  The stream
@@ -687,7 +819,12 @@ impl Extension for CliServerModule {
         for (name, v) in UPLOAD_ERR {
             m.constant(name, Value::Int(*v));
         }
-        m.constant("PHP_SAPI", str_value("cli-server"))
+        let (sapi, sapi_name, log): (&str, NativeFn, NativeFn) = if self.cgi {
+            (CGI_SAPI_NAME, php_sapi_name_cgi, error_log_cgi)
+        } else {
+            ("cli-server", php_sapi_name, error_log)
+        };
+        m.constant("PHP_SAPI", str_value(sapi))
             .function_static("header(string $header, bool $replace = true, int $response_code = 0): void", header)
             .function_static("header_remove(?string $name = null): void", header_remove)
             .function_static("headers_sent(&$filename = null, &$line = null): bool", headers_sent)
@@ -703,21 +840,23 @@ impl Extension for CliServerModule {
                 setrawcookie,
             )
             .function_static("flush(): void", flush)
-            .function_static("php_sapi_name(): string|false", php_sapi_name)
+            .function_static("php_sapi_name(): string|false", sapi_name)
             .function_static("getmypid(): int|false", getmypid)
             .function_static("connection_aborted(): bool", connection_aborted)
             .function_static("connection_status(): int", connection_status)
             .function_static(
                 "error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool",
-                error_log,
+                log,
             )
             .function_static("apache_request_headers(): array", apache_request_headers)
             .function_static("getallheaders(): array", apache_request_headers)
-            .function_static("apache_response_headers(): array", apache_response_headers)
-            .function(
+            .function_static("apache_response_headers(): array", apache_response_headers);
+        if !self.cgi {
+            m.function(
                 &format!("{}(mixed $value): mixed", crate::router::RETURN_HOOK),
                 router_return,
             );
+        }
     }
 }
 
@@ -794,7 +933,7 @@ pub fn log_response(
 /// the headers (if no output was produced) and upload cleanup.
 fn finish(vm: &mut Vm, ctx: &RequestCtx, r: Result<(), Throw>) {
     apply_fatal_status(vm, ctx);
-    vm.shutdown(r);
+    ctx.exit_status.set(vm.shutdown(r));
     call_header_callback(vm, ctx);
     ctx.send_headers();
     cleanup_uploads(vm, ctx);
@@ -810,8 +949,10 @@ fn cleanup_uploads(vm: &mut Vm, ctx: &RequestCtx) {
 /// A VM created ahead of its request (module startup is the expensive
 /// part of a request, so the server prepares the next VM while idle).
 pub struct PreparedVm {
-    vm: Vm,
-    slot: Rc<RefCell<Option<Rc<RequestCtx>>>>,
+    /// The VM.
+    pub vm: Vm,
+    /// The request its [`ServerOutput`] writes to.
+    pub slot: Rc<RefCell<Option<Rc<RequestCtx>>>>,
 }
 
 impl std::fmt::Debug for PreparedVm {
@@ -827,7 +968,7 @@ pub fn prepare_vm(cfg: &ServerConfig) -> PreparedVm {
         ini: cfg.ini.clone(),
     };
     let mut exts = (cfg.extensions)();
-    exts.push(Box::new(CliServerModule));
+    exts.push(Box::new(CliServerModule::default()));
     let refs: Vec<&dyn Extension> = exts.iter().map(AsRef::as_ref).collect();
     let slot = Rc::new(RefCell::new(None));
     let vm = Vm::with_extensions(&opts, Box::new(ServerOutput(slot.clone())), &refs);
@@ -846,10 +987,16 @@ pub fn run_request(
 ) -> (Outcome, Vm) {
     CURRENT.with(|c| *c.borrow_mut() = Some(ctx.clone()));
     *vm.slot.borrow_mut() = Some(ctx.clone());
-    crate::capture::start();
+    // The CGI SAPI logs to its own stderr (`sapi_cgi_log_message`).
+    let capture = ctx.cgi.is_none();
+    if capture {
+        crate::capture::start();
+    }
     let mut machine = vm.vm;
     let outcome = run_request_inner(&mut machine, ctx, cfg, is_static);
-    crate::capture::stop();
+    if capture {
+        crate::capture::stop();
+    }
     *vm.slot.borrow_mut() = None;
     CURRENT.with(|c| *c.borrow_mut() = None);
     (outcome, machine)
@@ -904,6 +1051,11 @@ fn run_request_inner(
         }
     }
 
+    if let Some(cgi) = &ctx.cgi {
+        run_cgi_script(vm, ctx, cgi);
+        return Outcome::Done;
+    }
+
     if !is_static {
         let path = ctx.request.path_translated.clone().unwrap_or_default();
         let p = std::path::Path::new(std::ffi::OsStr::from_bytes(&path));
@@ -939,6 +1091,49 @@ fn run_request_inner(
     ctx.send_headers();
     cleanup_uploads(vm, ctx);
     Outcome::ServeStatic
+}
+
+/// The script part of `main()` in `cgi_main.c`: `php_fopen_primary_script()`
+/// (a 404 "No input file specified." or 403 "Access denied." page when it
+/// fails), the change to the script's directory (`php_execute_script`,
+/// unless `-C`), then the script and request shutdown.
+fn run_cgi_script(vm: &mut Vm, ctx: &RequestCtx, cgi: &CgiInfo) {
+    let path = ctx.request.path_translated.clone().unwrap_or_default();
+    let (src, shown) = if let Some(src) = &cgi.source {
+        (src.clone(), b"Standard input code".to_vec())
+    } else {
+        let p = std::path::Path::new(std::ffi::OsStr::from_bytes(&path));
+        match std::fs::read(p)
+            .ok()
+            .filter(|_| !path.is_empty() && p.is_file())
+        {
+            Some(src) => {
+                if !cgi.no_chdir {
+                    if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+                        let _ = std::env::set_current_dir(dir);
+                    }
+                }
+                (src, path.clone())
+            }
+            None => {
+                let denied = std::fs::File::open(p)
+                    .is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied)
+                    && !path.is_empty();
+                let (code, msg): (i32, &[u8]) = if denied {
+                    (403, &b"Access denied.\n"[..])
+                } else {
+                    (404, &b"No input file specified.\n"[..])
+                };
+                let _ = ctx.header_op(HeaderOp::SetStatus(code));
+                vm.output(msg);
+                finish(vm, ctx, Ok(()));
+                ctx.exit_status.set(255);
+                return;
+            }
+        }
+    };
+    let r = execute_script(vm, &src, &shown);
+    finish(vm, ctx, r);
 }
 
 #[cfg(test)]

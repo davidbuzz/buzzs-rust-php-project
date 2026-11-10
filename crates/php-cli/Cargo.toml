@@ -9,6 +9,10 @@ rust-version.workspace = true
 name = "php"
 path = "src/main.rs"
 
+[[bin]]
+name = "php-cgi"
+path = "src/cgi/main.rs"
+
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-parser = { path = "../php-parser" }
