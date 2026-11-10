@@ -371,9 +371,10 @@ pub(crate) struct FnCtx {
     /// ops index ([`OpArray::decls`]). `None` until the first declaration;
     /// the main op array's is the unit's table ([`Compiler::decls`]).
     pub decls: Option<Rc<DeclTable>>,
-    /// The closure body CVs its `use` clause binds before the first op,
-    /// with whether each is bound by reference (for the optimizer).
-    pub closure_uses: Vec<(u32, bool)>,
+    /// The CVs bound before the first op (parameters, then closure `use`
+    /// variables), with whether each is bound by reference (for the
+    /// optimizer).
+    pub bound_cvs: Vec<(u32, bool)>,
 }
 
 impl FnCtx {
@@ -419,7 +420,7 @@ impl FnCtx {
             http_response_header_assigned: false,
             in_frameless_branch: false,
             decls: None,
-            closure_uses: Vec::new(),
+            bound_cvs: Vec::new(),
         }
     }
 }
@@ -1050,7 +1051,7 @@ impl Compiler<'_> {
             };
             let ctx = optimizer::OptContext {
                 is_main,
-                closure_uses: &f.closure_uses,
+                bound_cvs: &f.bound_cvs,
             };
             optimizer::optimize_op_array_with(&mut op_array, level, &ctx);
         }

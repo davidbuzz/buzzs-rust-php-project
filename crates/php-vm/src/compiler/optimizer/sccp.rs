@@ -376,7 +376,7 @@ fn simplify_constant_branches(ops: &mut [Op], literals: &[Value]) -> bool {
 /// which any op that warns can do through an error handler, and assigning
 /// to a typed reference coerces the value. Such CVs are never constant.
 fn cvs_may_be_refs(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
-    if ctx.is_main || ctx.has_ref_use() {
+    if ctx.is_main || ctx.has_ref_binding() {
         return true;
     }
     let decls = op_array.decls.functions.borrow();

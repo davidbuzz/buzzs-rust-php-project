@@ -76,32 +76,34 @@ pub struct OptContext<'a> {
     /// included files share, so php-src types them all `MAY_BE_REF` and
     /// SCCP never propagates them (`zend_ssa_inference` for a pseudo-main).
     pub is_main: bool,
-    /// The CVs a closure's `use` clause binds before the first op, with
-    /// whether each is bound by reference: they keep their slots (pass 12)
-    /// and their assignments (pass 13), and a by-reference one may change
-    /// whenever user code runs.
-    pub closure_uses: &'a [(u32, bool)],
+    /// The CVs bound before the first op: parameters, then the variables a
+    /// closure's `use` clause binds, with whether each is bound by
+    /// reference. They keep their slots (the call and the closure binding
+    /// address them by number, pass 12) and their assignments (pass 13),
+    /// and a by-reference one may change whenever user code runs or coerce
+    /// what is assigned to it (a typed reference).
+    pub bound_cvs: &'a [(u32, bool)],
 }
 
 impl OptContext<'_> {
-    /// One past the highest CV bound by a closure `use` (0 when none): the
-    /// prefix of CV slots that the binding code addresses by number.
+    /// One past the highest bound CV (0 when none): the prefix of CV slots
+    /// that the call and the closure binding address by number.
     pub(crate) fn bound_cv_prefix(&self) -> u32 {
-        self.closure_uses
+        self.bound_cvs
             .iter()
             .map(|&(cv, _)| cv.saturating_add(1))
             .max()
             .unwrap_or(0)
     }
 
-    /// Whether the `use` clause binds any variable by reference.
-    pub(crate) fn has_ref_use(&self) -> bool {
-        self.closure_uses.iter().any(|&(_, by_ref)| by_ref)
+    /// Whether any CV is bound by reference.
+    pub(crate) fn has_ref_binding(&self) -> bool {
+        self.bound_cvs.iter().any(|&(_, by_ref)| by_ref)
     }
 }
 
 /// Optimizes `op_array` in place according to `level` bitmask (a function
-/// body that is neither top-level code nor a closure with `use` bindings).
+/// body with nothing bound by reference that is not top-level code).
 pub fn optimize_op_array(op_array: &mut OpArray, level: u32) {
     optimize_op_array_with(op_array, level, &OptContext::default());
 }
@@ -187,7 +189,7 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
         if let Some(code) = Rc::get_mut(&mut user_fn.code) {
             let ctx = OptContext {
                 is_main: true,
-                closure_uses: &[],
+                bound_cvs: &[],
             };
             optimize_op_array_with(code, level & !PASS_13, &ctx);
         }
@@ -838,6 +840,25 @@ mod tests {
             .filter(|op| matches!(op, Op::Echo(Operand::Cv(_))))
             .count();
         assert_eq!(cv_echoes, 2, "{ops:?}");
+    }
+
+    /// A by-reference parameter may be a typed reference (assigning `"5"`
+    /// to one bound to an `int` property stores 5) or change when user code
+    /// runs, so its reads are never replaced with a constant.
+    #[test]
+    fn by_reference_parameter_is_not_propagated() {
+        let unit = compile_src(
+            "<?php function f(&$x) { $x = '5'; echo $x; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"f"));
+        assert!(
+            code.ops
+                .iter()
+                .any(|op| matches!(op, Op::Echo(Operand::Cv(_)))),
+            "{:?}",
+            code.ops
+        );
     }
 
     /// No CV propagation in a function with try/finally (php-src builds no

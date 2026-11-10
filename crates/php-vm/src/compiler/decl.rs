@@ -575,7 +575,8 @@ impl Compiler<'_> {
                     p.span.line,
                 );
             }
-            self.cv(&p.name.name);
+            let param_cv = self.cv(&p.name.name);
+            self.f().bound_cvs.push((param_cv, p.by_ref));
             self.note_cv_write(&p.name.name);
             let mut ty = match &p.ty {
                 Some(t) => Some(self.resolve_type(t)?),
@@ -727,7 +728,7 @@ impl Compiler<'_> {
         let mut uses = Vec::new();
         for (name, by_ref, pcv, implicit) in &spec.uses {
             let cv = self.cv(name.as_bytes());
-            self.f().closure_uses.push((cv, *by_ref));
+            self.f().bound_cvs.push((cv, *by_ref));
             uses.push(ClosureUse {
                 name: name.clone(),
                 by_ref: *by_ref,
