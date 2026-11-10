@@ -1333,7 +1333,13 @@ mod tests {
 
     #[test]
     fn multibyte_basename() {
-        let two = |c: u8| if c == 0x81 { 2 } else { 1 };
+        let two = |c: u8| -> usize {
+            if c == 0x81 {
+                2
+            } else {
+                1
+            }
+        };
         // The backslash is the trail byte of a two-byte character.
         assert_eq!(basename(b"x\x81\\y", &two), b"x\x81\\y");
         assert_eq!(basename(b"x\x81\\y", &single_byte), b"y");
