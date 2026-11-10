@@ -1322,4 +1322,85 @@ mod tests {
         let code = find_code(&unit, named(b"f"));
         assert!(returned_lit(&code).is_none(), "{:?}", code.ops);
     }
+
+    /// An array built from constant keys and values folds to one literal
+    /// (opcache `opt/sccp_042`: `return [$a <=> $b, $b <=> $a]` becomes
+    /// `RETURN array(...)`), with `"1"` normalised to the integer key 1.
+    #[test]
+    fn sccp_folds_constant_array_builds() {
+        let unit = compile_src(
+            "<?php function t() { $a = 1; $b = 2; return [$a <=> $b, $b <=> $a]; }\n\
+             function u() { $a = 1; return ['1' => $a, 'x' => $a + 1]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let t = find_code(&unit, named(b"t"));
+        let Some(Value::Array(arr)) = returned_lit(&t) else {
+            panic!("{:?}", t.ops);
+        };
+        assert_eq!(arr.len(), 2);
+        assert!(matches!(arr.get_int(0), Some(Value::Int(-1))));
+        assert!(matches!(arr.get_int(1), Some(Value::Int(1))));
+        let u = find_code(&unit, named(b"u"));
+        let Some(Value::Array(arr)) = returned_lit(&u) else {
+            panic!("{:?}", u.ops);
+        };
+        assert_eq!(arr.len(), 2);
+        assert!(matches!(arr.get_int(1), Some(Value::Int(1))));
+        assert!(matches!(arr.get_sym(b"x"), Some(Value::Int(2))));
+    }
+
+    /// Keys that warn or deprecate (null, float), and an append after
+    /// `PHP_INT_MAX` ("Cannot add element to the array as the next element
+    /// is already occupied"), keep the runtime build.
+    #[test]
+    fn sccp_keeps_array_builds_that_can_warn() {
+        let unit = compile_src(
+            "<?php function n() { $k = null; return [$k => 1]; }\n\
+             function f() { $k = 1.5; return [$k => 1]; }\n\
+             function m() { return [PHP_INT_MAX => 1, 2]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        for name in [&b"n"[..], b"f", b"m"] {
+            let code = find_code(&unit, named(name));
+            assert!(
+                !matches!(returned_lit(&code), Some(Value::Array(_))),
+                "{:?}",
+                code.ops
+            );
+        }
+    }
+
+    /// `$cv[k] = v` and `$cv[] = v` on a CV holding a constant array keep it
+    /// constant (opcache `opt/sccp_003`), so later reads fold.
+    #[test]
+    fn sccp_tracks_constant_arrays_through_dim_writes() {
+        let unit = compile_src(
+            "<?php function f() { $a = [1, 2, 3]; $k = '1'; $a[$k] = 5; $a[] = 7; \
+             return $a[1] + $a[3]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let f = find_code(&unit, named(b"f"));
+        assert!(
+            matches!(returned_lit(&f), Some(Value::Int(12))),
+            "{:?}",
+            f.ops
+        );
+    }
+
+    /// A write with a float key (deprecated when it loses precision), an
+    /// append past `PHP_INT_MAX` (a warning), and different arrays meeting
+    /// at a join leave the CV unknown.
+    #[test]
+    fn sccp_drops_constant_arrays_on_unsafe_dim_writes() {
+        let unit = compile_src(
+            "<?php function f() { $a = [1]; $a[1.5] = 2; return $a[1]; }\n\
+             function g() { $a = [PHP_INT_MAX => 1]; $a[] = 2; return $a[PHP_INT_MAX]; }\n\
+             function h($n) { $a = [1]; if ($n) { $a[0] = 2; } return $a[0]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        for name in [&b"f"[..], b"g", b"h"] {
+            let code = find_code(&unit, named(name));
+            assert!(returned_lit(&code).is_none(), "{:?}", code.ops);
+        }
+    }
 }

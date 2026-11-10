@@ -16,7 +16,7 @@ use crate::opcode::{
     type_mask, ArgSrc, BinKind, CastKind, FetchMode, IncDecKind, Op, OpArray, Operand, Place,
     PlaceBase, PlaceId, Seg,
 };
-use php_runtime::{BinaryOp, Value, ZStr};
+use php_runtime::{ArrayKey, BinaryOp, Value, ZArray, ZStr};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum CvLattice {
@@ -160,6 +160,94 @@ fn plain_cv_update(
     Some((cv, res.map(|v| add_or_find_literal(literals, v))))
 }
 
+/// The literal of `operand` when it is a literal or a CV with a known
+/// constant.
+fn cv_or_lit(operand: &Operand, cur_state: &[CvLattice]) -> Option<u32> {
+    match operand {
+        Operand::Lit(l) => Some(*l),
+        Operand::Cv(c) => match cur_state.get(*c as usize) {
+            Some(CvLattice::Const(l)) => Some(*l),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The literal index of an array equal (`===`) to `arr`, adding it when
+/// there is none, so the dataflow sees the same constant on every visit
+/// (a fresh index for an identical array would meet as overdefined).
+fn add_or_find_array_literal(literals: &mut Vec<Value>, arr: ZArray) -> u32 {
+    let val = Value::Array(arr);
+    if let Some(i) = literals.iter().position(|l| {
+        matches!(l, Value::Array(_)) && php_runtime::ops::is_identical(l, &val).unwrap_or(false)
+    }) {
+        return u32::try_from(i).unwrap_or(u32::MAX);
+    }
+    add_or_find_literal(literals, val)
+}
+
+/// The array `container` becomes after `container[seg] = val`, when that
+/// write is a known constant that cannot warn (see [`const_assign_dim`]).
+fn assign_dim_result(
+    container: &Value,
+    seg: &Seg,
+    val: &Operand,
+    cur_state: &[CvLattice],
+    literals: &[Value],
+) -> Option<ZArray> {
+    let Value::Array(arr) = container else {
+        return None;
+    };
+    let v = literals.get(cv_or_lit(val, cur_state)? as usize)?.clone();
+    let mut arr = arr.clone();
+    let h = arr.make_mut();
+    match seg {
+        Seg::Append => {
+            h.push(v).ok()?;
+        }
+        Seg::Dim(k) => match literals.get(cv_or_lit(k, cur_state)? as usize)? {
+            Value::Int(n) => {
+                h.insert(*n, v);
+            }
+            Value::Str(s) => {
+                h.insert(ArrayKey::from_zstr(s), v);
+            }
+            _ => return None,
+        },
+        Seg::Prop(_) => return None,
+    }
+    Some(arr)
+}
+
+/// For `$cv[k] = v` / `$cv[] = v` of a CV holding a constant array: the CV
+/// and its new constant, or `None` for the constant when the result is not
+/// known (sccp.c `ct_eval_assign_dim`). Only integer and string keys fold:
+/// a null, bool or float key may deprecate, and an append past
+/// `PHP_INT_MAX` warns. Writing a scalar element of an array runs no user
+/// code and raises nothing. `None` overall when `op` is no such write.
+fn const_assign_dim(
+    op: &Op,
+    places: &[Place],
+    cur_state: &[CvLattice],
+    literals: &mut Vec<Value>,
+) -> Option<(u32, Option<u32>)> {
+    let Op::Assign { place, val, .. } = op else {
+        return None;
+    };
+    let p = places.get(*place as usize)?;
+    let PlaceBase::Cv(cv) = p.base else {
+        return None;
+    };
+    let [seg] = p.segs.as_slice() else {
+        return None;
+    };
+    let CvLattice::Const(cur) = *cur_state.get(cv as usize)? else {
+        return Some((cv, None));
+    };
+    let new = assign_dim_result(literals.get(cur as usize)?, seg, val, cur_state, literals);
+    Some((cv, new.map(|a| add_or_find_array_literal(literals, a))))
+}
+
 fn update_cv_state_for_op(
     op: &Op,
     places: &[crate::opcode::Place],
@@ -168,6 +256,12 @@ fn update_cv_state_for_op(
     literals: &mut Vec<Value>,
 ) {
     if let Some((cv, lit)) = plain_cv_update(op, places, cur_state, literals) {
+        if let Some(slot) = cur_state.get_mut(cv as usize) {
+            *slot = lit.map_or(CvLattice::Bottom, CvLattice::Const);
+            return;
+        }
+    }
+    if let Some((cv, lit)) = const_assign_dim(op, places, cur_state, literals) {
         if let Some(slot) = cur_state.get_mut(cv as usize) {
             *slot = lit.map_or(CvLattice::Bottom, CvLattice::Const);
             return;
@@ -516,6 +610,153 @@ fn cvs_may_be_refs(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
                 PlaceBase::VarVar(_) | PlaceBase::Global(_) | PlaceBase::GlobalsArray
             )
         })
+}
+
+/// A build-step operand's literal: a literal, or a temporary known to
+/// hold one.
+fn known_lit(operand: &Operand, lit_def: &[Option<u32>]) -> Option<u32> {
+    match operand {
+        Operand::Lit(l) => Some(*l),
+        Operand::Tmp(t) => lit_def.get(*t as usize).copied().flatten(),
+        _ => None,
+    }
+}
+
+/// `INIT_ARRAY` followed by `ADD_ARRAY_ELEMENT`s whose keys and values are
+/// all known constants becomes one array literal (sccp.c
+/// `ct_eval_add_array_elem` / `ct_eval_add_array_unpack` for the
+/// `ZEND_INIT_ARRAY` / `ZEND_ADD_ARRAY_ELEMENT` chain). The build must be
+/// straight-line: only folded constant moves and `Nop`s may sit between its
+/// steps, and no jump may land inside it. Keys fold only when they cannot
+/// warn or deprecate: integers and strings (`"1"` becomes `1`, as
+/// `ZEND_HANDLE_NUMERIC_STR`); a null, bool, float or array key, a
+/// reference element, an unpack, or an append past `PHP_INT_MAX` leaves the
+/// build alone.
+fn fold_const_array_builds(
+    op_array: &mut OpArray,
+    def_count: &[u32],
+    lit_def: &mut [Option<u32>],
+) -> bool {
+    let mut jump_targets: Option<Vec<bool>> = None;
+    let mut changed = false;
+    let mut i = 0;
+    while i < op_array.ops.len() {
+        let Op::InitArray { dst: t } = op_array.ops[i] else {
+            i += 1;
+            continue;
+        };
+        if def_count.get(t as usize).copied() != Some(1) {
+            i += 1;
+            continue;
+        }
+        // The steps of the build, and where it ends (the last step).
+        let mut steps = Vec::new();
+        let mut end = None;
+        for (j, op) in op_array.ops.iter().enumerate().skip(i + 1) {
+            match op {
+                Op::ArrayAdd { arr, key, val } if *arr == t => {
+                    let Some(v) = known_lit(val, lit_def) else {
+                        break;
+                    };
+                    let k = match key {
+                        None => None,
+                        Some(k) => match known_lit(k, lit_def) {
+                            Some(k) => Some(k),
+                            None => break,
+                        },
+                    };
+                    steps.push((j, k, v));
+                }
+                Op::Nop => {}
+                Op::Move {
+                    src: Operand::Lit(_),
+                    dst,
+                } if *dst != t => {}
+                _ => {
+                    end = Some(j);
+                    break;
+                }
+            }
+        }
+        // A build that stops at a step whose operands are not constant is
+        // not foldable (nor one running off the end of the op array).
+        let Some(end) = end else {
+            i += 1;
+            continue;
+        };
+        // The build must be complete: nothing after it adds to the array.
+        if op_array.ops[end..].iter().any(|op| {
+            matches!(op, Op::ArrayAdd { arr, .. } | Op::ArrayAddRef { arr, .. }
+                | Op::ArrayUnpack { arr, .. } | Op::ConstArrayUnpack { arr, .. } if *arr == t)
+        }) {
+            i += 1;
+            continue;
+        }
+        let targets = jump_targets.get_or_insert_with(|| {
+            let mut v = vec![false; op_array.ops.len() + 1];
+            for op in &op_array.ops {
+                let mut op = op.clone();
+                super::for_each_label_mut(&mut op, |l| {
+                    if let Some(slot) = v.get_mut(*l as usize) {
+                        *slot = true;
+                    }
+                });
+            }
+            v
+        });
+        if targets[i + 1..end].iter().any(|&b| b) {
+            i += 1;
+            continue;
+        }
+        let mut arr = ZArray::new();
+        let mut ok = true;
+        for &(_, k, v) in &steps {
+            let (Some(val), key) = (
+                op_array.literals.get(v as usize).cloned(),
+                k.and_then(|k| op_array.literals.get(k as usize)),
+            ) else {
+                ok = false;
+                break;
+            };
+            let h = arr.make_mut();
+            match (k, key) {
+                (None, _) => {
+                    if h.push(val).is_err() {
+                        ok = false;
+                        break;
+                    }
+                }
+                (Some(_), Some(Value::Int(n))) => {
+                    h.insert(*n, val);
+                }
+                (Some(_), Some(Value::Str(s))) => {
+                    h.insert(ArrayKey::from_zstr(s), val);
+                }
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok {
+            i += 1;
+            continue;
+        }
+        let lit = add_or_find_literal(&mut op_array.literals, Value::Array(arr));
+        op_array.ops[i] = Op::Move {
+            src: Operand::Lit(lit),
+            dst: t,
+        };
+        for &(j, _, _) in &steps {
+            op_array.ops[j] = Op::Nop;
+        }
+        if let Some(slot) = lit_def.get_mut(t as usize) {
+            *slot = Some(lit);
+        }
+        changed = true;
+        i = end;
+    }
+    changed
 }
 
 /// Runs SCCP / DFA constant propagation on `op_array`. Returns `true` if any substitution was made.
@@ -879,6 +1120,8 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                 _ => {}
             }
         }
+
+        changed |= fold_const_array_builds(op_array, &def_count, &mut lit_def);
 
         // Substitute known temporary constants: every use, including the
         // ones that keep the temporary alive (`JMP_NULL`, `FETCH_LIST_R`,
