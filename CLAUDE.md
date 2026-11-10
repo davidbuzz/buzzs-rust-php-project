@@ -29,7 +29,8 @@ env -u LANGUAGE target/debug/phpt-runner --php target/debug/php -j 12 -q --no-ar
 - Runner flags worth knowing: `--show-diff` (expected vs actual), `--filter <substr>` (repeatable), `--list`, `-d NAME=VALUE`, `--env KEY=VALUE`, `--resume <file.jsonl>` for long runs. The runner snapshots the binary before running, so rebuilding mid-run is safe.
 - `env -u LANGUAGE` matters if the shell exports `LANGUAGE`: it overrides `LC_ALL` in gettext and fails ext/gettext tests under any PHP.
 - `phpt-baseline.txt` lists known failures; `--baseline phpt-baseline.txt` fails only on regressions, `--update-baseline` refreshes it.
-- `phpt-scope.txt` lists out-of-scope path prefixes (opcache, FPM, pgsql, ffi, …). The runner reads it by default; those tests report `OUT` and are excluded from pass rates and the baseline. `--no-scope` runs everything.
+- `phpt-scope.txt` lists out-of-scope path prefixes (FPM, php-cgi, pgsql, ffi, readline, …). The runner reads it by default; those tests report `OUT` and are excluded from pass rates and the baseline. `--no-scope` runs everything. opcache is in scope; its optimizer/JIT-dependent failures are tracked in the baseline.
+- `phpt-environment.txt` lists tests that fail only for host reasons, identically under C PHP (Ubuntu libgd without GD2, MariaDB lacking a native JSON type). The runner reports them as PASS; `--no-environment` shows raw failures. Do not add them to the baseline.
 - `--json report.json` then `scripts/update_feature_gap.py report.json` rewrites FEATURE_GAP.md's `%` column from a run.
 - Use dev builds for correctness and scoped PHPT runs. Reserve `--release` (thin LTO, one codegen unit, slow to rebuild) for performance measurement. Avoid `cargo clean` in edit/test loops.
 - When behaviour is unclear, run a small script through the oracle (`/usr/bin/php -d memory_limit=1G x.php`) rather than guessing.
@@ -51,6 +52,7 @@ Every crate's doc comments cite the php-src file(s) it ports (e.g. `ref: Zend/ze
 
 ### Crates and the php-src code each one ports
 - `crates/php-lexer`   — tokenizer (ref: Zend/zend_language_scanner.l)
+- `crates/php-ext-tokenizer` — token_get_all/PhpToken over php-lexer and php-parser (ref: ext/tokenizer)
 - `crates/php-parser`  — AST + parser (ref: Zend/zend_language_parser.y, zend_ast.c)
 - `crates/php-runtime` — values, strings, ordered hash table, operators/type juggling (ref: zend_types.h, zend_hash.c, zend_operators.c)
 - `crates/php-vm`      — compiler + executor, classes, exceptions, output (ref: zend_compile.c, zend_execute.c)
@@ -106,6 +108,7 @@ Every crate's doc comments cite the php-src file(s) it ports (e.g. `ref: Zend/ze
 - `crates/php-soap`     — SOAP core: WSDL/XSD parser, SOAP 1.1/1.2 encoding of values, packet build/parse, HTTP transport glue (ref: ext/soap)
 - `crates/php-gd`       — libgd binding with ext/gd semantics (system libgd 2.3.3; GD_BUNDLED is false) (ref: ext/gd)
 - `crates/php-ext-zendtest` — ext/zend_test: the engine test extension gating `--EXTENSIONS-- zend_test` tests (ref: ext/zend_test)
+- `crates/php-opcache` + `crates/php-ext-opcache` — compiled-script cache, file cache, invalidation, status, JIT config (ref: ext/opcache)
 
 ## Rules
 - Idiomatic, best-practice Rust: clippy pedantic clean, no `unsafe` unless justified in a comment (in practice only in FFI modules), no `unwrap()` in library code paths that can fail, thorough unit tests in every crate.
@@ -125,7 +128,7 @@ When coordinating subagents on a large task:
 - Workers edit and review in parallel but do not build or test. The coordinator integrates all worker commits, then runs one consolidated build plus the affected crate, PHPT and perf checks.
 - Only the coordinator updates FEATURE_GAP.md and `phpt-baseline.txt`, from verified results after integration.
 - Remove a worktree only once its changes are integrated and it is clean. Never force-remove uncommitted work.
-- Run long builds, test suites and phpt runs in the background instead of blocking on them.
+- Run long builds, test suites and phpt runs in the background instead of blocking on them. Never foreground-wait on builds, suites or agents; act on completion notifications and use the wait for reviews, docs and commits.
 
 ## Resource limits (the box has OOM-crashed once)
 - `.cargo/config.toml` caps `cargo` at 6 jobs; never override it with `-j`.
