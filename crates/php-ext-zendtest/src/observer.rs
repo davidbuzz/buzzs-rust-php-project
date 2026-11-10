@@ -254,18 +254,19 @@ fn retval_info(vm: &Vm, retval: Option<&Value>) -> String {
 /// `observer_end`.
 fn end(vm: &mut Vm, f: &ObservedFrame, retval: Option<&Value>) {
     let shown = PRINTED.with(|p| p.borrow_mut().pop()).unwrap_or(false);
-    if ini(vm, "set_vm_interrupt_on_end") && vm.current_exception().is_none() && wants(vm, f) {
+    if ini(vm, "set_vm_interrupt_on_end") && vm.current_exception_class().is_none() && wants(vm, f)
+    {
         THROW_ON_INTERRUPT.with(|t| t.set(true));
         php_vm::interrupt::request_interrupt();
     }
     if !shown {
         return;
     }
-    if let Some(e) = vm.current_exception() {
+    if let Some(class) = vm.current_exception_class() {
         let line = format!(
             "{}<!-- Exception: {} -->\n",
             indent(0),
-            e.class_name().to_string_lossy()
+            class.to_string_lossy()
         );
         out(vm, &line);
     }
@@ -368,11 +369,11 @@ fn internal_leave(vm: &mut Vm, f: &ObservedFrame, retval: Option<&Value>) {
     let Some(n) = display(f) else {
         return;
     };
-    if let Some(e) = vm.current_exception() {
+    if let Some(class) = vm.current_exception_class() {
         let line = format!(
             "{}<!-- Exception: {} -->\n",
             indent(0),
-            e.class_name().to_string_lossy()
+            class.to_string_lossy()
         );
         out(vm, &line);
     }

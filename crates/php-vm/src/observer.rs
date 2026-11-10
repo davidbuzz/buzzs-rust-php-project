@@ -141,6 +141,8 @@ pub(crate) struct ObserverState {
     pub(crate) quiet_builtin: bool,
     initialized: HashMap<(u8, usize), (Identity, bool)>,
     exception: Option<Obj>,
+    /// `exit()` is unwinding: `EG(exception)` is the `UnwindExit` object.
+    unwind_exit: bool,
 }
 
 impl ObservedFrame {
@@ -211,6 +213,15 @@ impl Vm {
     /// Exception currently being reported to an end/leave observer.
     pub fn current_exception(&self) -> Option<Obj> {
         self.observer.exception.clone()
+    }
+
+    /// The class of `EG(exception)` while an end/leave observer runs:
+    /// the exception's, or `UnwindExit` while `exit()` unwinds.
+    pub fn current_exception_class(&self) -> Option<ZStr> {
+        match &self.observer.exception {
+            Some(e) => Some(e.class_name()),
+            None => self.observer.unwind_exit.then(|| ZStr::from("UnwindExit")),
+        }
     }
 
     /// Begin notification for the frame just pushed. Free without observers.
@@ -297,10 +308,15 @@ impl Vm {
             Some(Throw::Exception(e)) => Some(e.clone()),
             _ => None,
         };
+        let saved_exit = std::mem::replace(
+            &mut self.observer.unwind_exit,
+            matches!(thrown, Some(Throw::Exit)),
+        );
         let in_hook = std::mem::replace(&mut self.observer.in_hook, true);
         end(self, &info, retval);
         self.observer.in_hook = in_hook;
         self.observer.exception = saved;
+        self.observer.unwind_exit = saved_exit;
     }
 
     /// End notifications for every frame above `base` (outermost last).
@@ -341,6 +357,10 @@ impl Vm {
             Some(Err(Throw::Exception(e))) => Some(e.clone()),
             _ => None,
         };
+        let saved_exit = std::mem::replace(
+            &mut self.observer.unwind_exit,
+            matches!(result, Some(Err(Throw::Exit))),
+        );
         self.observer.in_hook = true;
         match result {
             None => {
@@ -356,6 +376,7 @@ impl Vm {
         }
         self.observer.in_hook = false;
         self.observer.exception = saved;
+        self.observer.unwind_exit = saved_exit;
     }
 
     /// `zend_observer_fiber_init_notify` / `zend_observer_fiber_destroy_notify`
