@@ -106,23 +106,36 @@ fn check_and_mark_utf8(s: &ZStr) -> bool {
     }
 }
 
+/// How deep [`check_value_utf8`] looks. The pass only pre-marks strings as
+/// valid UTF-8 for the encoder; anything deeper is checked by the encoder
+/// itself, so stopping early changes nothing but speed.
+const UTF8_PREPASS_MAX_DEPTH: usize = 64;
+
 /// Recursively fast-paths and marks valid UTF-8 on string values and keys before
-/// encoding.
-fn check_value_utf8(v: &Value) {
+/// encoding. `open` holds the arrays being walked: an array reached again
+/// through a reference (`$a[] = &$a`) is a cycle the encoder reports as
+/// "Recursion detected", so it is not walked twice.
+fn check_value_utf8(v: &Value, open: &mut Vec<usize>) {
     match v {
         Value::Str(s) => {
             check_and_mark_utf8(s);
         }
         Value::Array(arr) => {
+            let addr = arr.addr();
+            if open.len() >= UTF8_PREPASS_MAX_DEPTH || open.contains(&addr) {
+                return;
+            }
+            open.push(addr);
             for (key, entry) in arr.iter() {
                 if let ArrayKey::Str(k) = key {
                     check_and_mark_utf8(k);
                 }
-                check_value_utf8(entry);
+                check_value_utf8(entry, open);
             }
+            open.pop();
         }
         Value::Reference(r) => {
-            check_value_utf8(&r.get());
+            check_value_utf8(&r.get(), open);
         }
         _ => {}
     }
@@ -162,7 +175,7 @@ fn mark_decoded_utf8(vm: &mut Vm, v: &Value) {
 
 fn json_encode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let value = a.at(0);
-    check_value_utf8(&value);
+    check_value_utf8(&value, &mut Vec::new());
     let flags = if a.has(1) { a.int(1) } else { 0 };
     let depth = if a.has(2) {
         a.int(2)
@@ -279,6 +292,21 @@ impl Extension for Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `$a = []; $a[] = &$a;`: the UTF-8 pre-pass stops at the cycle
+    /// instead of recursing until the stack overflows (json/tests/003).
+    #[test]
+    fn utf8_prepass_stops_at_reference_cycles() {
+        let r = php_runtime::PhpRef::new(Value::empty_array());
+        let mut arr = php_runtime::ZArray::new();
+        assert!(arr.make_mut().push(Value::Reference(r.clone())).is_ok());
+        r.set(Value::Array(arr.clone()));
+        let mut open = Vec::new();
+        check_value_utf8(&Value::Array(arr), &mut open);
+        assert!(open.is_empty());
+        // Break the cycle so the test does not leak it.
+        r.set(Value::Null);
+    }
 
     #[test]
     fn state_round_trip() {
