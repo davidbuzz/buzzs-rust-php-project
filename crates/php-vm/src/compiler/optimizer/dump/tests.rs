@@ -167,3 +167,26 @@ fn assignments_to_scalar_cvs_become_qm_assign() {
         "{out}"
     );
 }
+
+#[test]
+fn top_level_classes_are_bound_at_compile_time() {
+    // dce_006.phpt / type_inference_class_consts2.phpt: no DECLARE_CLASS
+    // for a top-level class without interfaces or traits whose parent is
+    // already bound.
+    let out = dump("<?php\nclass A {}\nclass B extends A {}\n");
+    assert!(!out.contains("DECLARE_CLASS"), "{out}");
+    // type_inference_class_consts4.phpt: a class implementing an
+    // interface is still declared at run time.
+    let out = dump("<?php\ninterface I {}\nclass T implements I {}\n");
+    assert!(out.contains("0000 DECLARE_CLASS string(\"t\")\n"), "{out}");
+    // Inside a conditional block it is not top-level.
+    let out = dump("<?php\nif ($x) {\n    class C {}\n}\n");
+    assert!(out.contains("DECLARE_CLASS string(\"c\")"), "{out}");
+}
+
+#[test]
+fn anonymous_class_methods_are_named_up_to_the_nul() {
+    let out = dump("<?php\n$o = new class {\n    public function m() {}\n};\n");
+    assert!(out.contains("\nclass@anonymous::m:\n"), "{out}");
+    assert!(!out.contains("FETCH_CLASS"), "{out}");
+}

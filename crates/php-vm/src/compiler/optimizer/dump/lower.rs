@@ -282,6 +282,11 @@ pub(crate) struct Lower<'a> {
     pending_init: HashMap<usize, (u32, String, Option<Operand>, Operand)>,
     /// Temporaries that are another one in php-src's code.
     rename: HashMap<u32, u32>,
+    /// Lower-case names of the classes bound at compile time so far
+    /// (early binding in `zend_compile_class_decl`).
+    early_bound: Vec<Vec<u8>>,
+    /// The results of `DECLARE_ANON_CLASS` (a class operand as it is).
+    anon: Vec<u32>,
 }
 
 impl<'a> Lower<'a> {
@@ -307,6 +312,8 @@ impl<'a> Lower<'a> {
             skip: vec![false; oa.ops.len()],
             pending_init: HashMap::new(),
             rename: HashMap::new(),
+            early_bound: Vec::new(),
+            anon: Vec::new(),
         }
     }
 
@@ -346,6 +353,20 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// An operand a call consumes: a temporary that stays alive for later
+    /// reads ([`Operand::TmpKeep`], the callback of an `array_map()`
+    /// foreach) is copied first (`ZEND_COPY_TMP` in
+    /// `zend_compile_func_array_map`).
+    fn copy_kept(&mut self, o: &Operand) -> Z {
+        let z = self.z(o);
+        if matches!(o, Operand::TmpKeep(_)) && matches!(z, Z::Tmp(_)) {
+            let t = self.tmp();
+            self.push(ZLine::new("COPY_TMP").t(t).a(z));
+            return Z::Tmp(t);
+        }
+        z
+    }
+
     fn zs(&self, s: &[u8]) -> Z {
         Z::Const(Value::Str(ZStr::from(s)))
     }
@@ -356,8 +377,8 @@ impl<'a> Lower<'a> {
         match c {
             ClassSpec::Named(l) => Z::Const(self.lit(*l)),
             ClassSpec::Dyn(op) => {
-                let z = self.z(op);
-                if z.is_const() {
+                let z = self.copy_kept(op);
+                if z.is_const() || matches!(z, Z::Tmp(t) if self.anon.contains(&t)) {
                     return z;
                 }
                 let t = self.tmp();
@@ -431,6 +452,26 @@ impl<'a> Lower<'a> {
             lines: self.lines,
             first_z,
         }
+    }
+
+    /// Whether op `i` is a statement of the file's top-level statement
+    /// list (`toplevel` in `zend_compile_top_stmt`): in the main code and
+    /// not crossed by any jump (the jump around or back over a block).
+    fn top_level(&self, i: usize) -> bool {
+        if !self.func.name.is_empty() {
+            return false;
+        }
+        !self.oa.ops.iter().enumerate().any(|(at, op)| {
+            let mut op = op.clone();
+            let mut crossed = false;
+            crate::compiler::optimizer::for_each_label_mut(&mut op, |t| {
+                let t = *t as usize;
+                if at.min(t) < i && i < at.max(t) {
+                    crossed = true;
+                }
+            });
+            crossed
+        })
     }
 
     /// The op at `i` if it exists.
@@ -678,7 +719,7 @@ impl<'a> Lower<'a> {
                 display,
             } => self.lower_init_fcall(i, *name, *fallback, *display),
             Op::InitDynCall { callee } => {
-                let c = self.z(callee);
+                let c = self.copy_kept(callee);
                 let (n, _) = self.scan_call(i);
                 self.push(ZLine::new("INIT_DYNAMIC_CALL").x(format!(" {n}")).b(c));
                 self.calls.push(Call {
@@ -918,13 +959,23 @@ impl<'a> Lower<'a> {
                 self.push(ZLine::new("DECLARE_FUNCTION").a(z).b(Z::Num(n)));
             }
             Op::DeclareClass(idx) => {
-                let d = self.oa.decls.classes.borrow().get(*idx as usize).cloned();
-                let (name, parent) = d.map_or((Vec::new(), None), |d| {
-                    (
-                        d.name.as_bytes().to_ascii_lowercase(),
-                        d.parent.as_ref().map(|p| p.as_bytes().to_vec()),
-                    )
-                });
+                let Some(d) = self.oa.decls.classes.borrow().get(*idx as usize).cloned() else {
+                    return;
+                };
+                let name = d.name.as_bytes().to_ascii_lowercase();
+                let parent = d.parent.as_ref().map(|p| p.as_bytes().to_ascii_lowercase());
+                // `zend_compile_class_decl`: a top-level class without
+                // interfaces or traits whose parent (if any) is already
+                // linked is bound at compile time and emits nothing.
+                if self.top_level(i)
+                    && d.kind != crate::class::ClassKind::Enum
+                    && d.interfaces.is_empty()
+                    && d.traits.is_empty()
+                    && parent.as_ref().is_none_or(|p| self.early_bound.contains(p))
+                {
+                    self.early_bound.push(name);
+                    return;
+                }
                 let z = self.zs(&name);
                 let p = parent.map_or(Z::Unused, |p| self.zs(&p));
                 self.push(ZLine::new("DECLARE_CLASS").a(z).b(p));
@@ -935,6 +986,7 @@ impl<'a> Lower<'a> {
                     .map(|d| d.name.as_bytes().to_ascii_lowercase())
                     .unwrap_or_default();
                 let z = self.zs(&name);
+                self.anon.push(*dst);
                 self.push(ZLine::new("DECLARE_ANON_CLASS").v(*dst).a(z));
             }
             Op::MakeClosure { idx, dst } => {
@@ -1510,6 +1562,10 @@ impl Lower<'_> {
                 let mut l = ZLine::new(fetch_name(b'O', mode));
                 if mode == Mode::W && matches!(next, Some(Seg::Dim(_) | Seg::Append)) {
                     l = l.x(" (dim write)");
+                } else if mode == Mode::FuncArg && next.is_none() {
+                    // `zend_compile_var(..., by_ref)` of an argument sets
+                    // `ZEND_FETCH_REF` on the property fetch.
+                    l = l.x(" (ref)");
                 }
                 l
             }
@@ -1889,6 +1945,17 @@ impl Lower<'_> {
                 match by_ref {
                     Some(true) => {
                         let z = self.place_ref(*p);
+                        // The by-reference fetch of the argument
+                        // (`ZEND_FETCH_REF`).
+                        if let Some(l) = self.lines.last_mut() {
+                            if matches!(l.op, "FETCH_OBJ_W" | "FETCH_STATIC_PROP_W")
+                                && l.ext.is_empty()
+                                && l.res.tmp().is_some()
+                                && l.res.tmp() == z.tmp()
+                            {
+                                l.ext = " (ref)".into();
+                            }
+                        }
                         self.push(ZLine::new("SEND_REF").a(z).b(pos));
                     }
                     Some(false) => {
@@ -1901,6 +1968,11 @@ impl Lower<'_> {
                         let t = self.tmp();
                         if pl.segs.is_empty() {
                             let _ = self.base_fetch(&pl.base, Mode::FuncArg, Some(t), false);
+                            if let Some(l) = self.lines.last_mut() {
+                                if l.op == "FETCH_STATIC_PROP_FUNC_ARG" {
+                                    l.ext = " (ref)".into();
+                                }
+                            }
                         } else {
                             let last = pl.segs.len() - 1;
                             let c = self.container(&pl, last, Mode::FuncArg);
