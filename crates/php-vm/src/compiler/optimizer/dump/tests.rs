@@ -190,3 +190,32 @@ fn anonymous_class_methods_are_named_up_to_the_nul() {
     assert!(out.contains("\nclass@anonymous::m:\n"), "{out}");
     assert!(!out.contains("FETCH_CLASS"), "{out}");
 }
+
+#[test]
+fn typed_returns_get_verify_return_type() {
+    // pipe_optimizations.phpt: `int + 1` may overflow to a float, so the
+    // check stays.
+    let out = dump("<?php\nfunction f(int $a): int {\n    return $a + 1;\n}\n");
+    assert!(
+        out.contains("0001 T1 = ADD CV0($a) int(1)\n0002 VERIFY_RETURN_TYPE T1\n0003 RETURN T1\n"),
+        "{out}"
+    );
+    // A parameter of the declared type needs no check
+    // (`can_elide_return_type_check`).
+    let out = dump("<?php\nfunction f(int $a): int {\n    return $a;\n}\n");
+    assert!(!out.contains("VERIFY_RETURN_TYPE"), "{out}");
+    // A literal of the declared type needs no check; another literal is
+    // checked into a TMP (type_inference_final_class.phpt).
+    let out = dump("<?php\nfunction f(): int {\n    return 42;\n}\n");
+    assert!(!out.contains("VERIFY_RETURN_TYPE"), "{out}");
+    let out = dump("<?php\nfunction f(): float {\n    return 1;\n}\n");
+    assert!(
+        out.contains("0000 T0 = VERIFY_RETURN_TYPE int(1)\n0001 RETURN T0\n"),
+        "{out}"
+    );
+    // `void` and `mixed` are not checked.
+    let out = dump(
+        "<?php\nfunction f(): void {\n    return;\n}\nfunction g($x): mixed {\n    return $x;\n}\n",
+    );
+    assert!(!out.contains("VERIFY_RETURN_TYPE"), "{out}");
+}

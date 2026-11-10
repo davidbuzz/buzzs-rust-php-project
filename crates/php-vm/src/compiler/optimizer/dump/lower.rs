@@ -287,6 +287,9 @@ pub(crate) struct Lower<'a> {
     early_bound: Vec<Vec<u8>>,
     /// The results of `DECLARE_ANON_CLASS` (a class operand as it is).
     anon: Vec<u32>,
+    /// A `VERIFY_RETURN_TYPE` was lowered for the next return (the VM's
+    /// explicit check before finally blocks).
+    verified: bool,
 }
 
 impl<'a> Lower<'a> {
@@ -314,6 +317,7 @@ impl<'a> Lower<'a> {
             rename: HashMap::new(),
             early_bound: Vec::new(),
             anon: Vec::new(),
+            verified: false,
         }
     }
 
@@ -887,6 +891,7 @@ impl<'a> Lower<'a> {
                 self.push(ZLine::new("RECV_VARIADIC").r(Z::Cv(*cv)).a(Z::Num(n + 1)));
             }
             Op::VerifyReturn { val } => {
+                self.verified = true;
                 let v = self.z(val);
                 if v.is_const() {
                     // `zend_emit_return_type_check` gives a literal a TMP
@@ -907,10 +912,15 @@ impl<'a> Lower<'a> {
                 }
             }
             Op::Return { val } => {
-                let v = match self.z(val) {
+                let mut v = match self.z(val) {
                     Z::Unused => Z::Const(Value::Null),
                     z => z,
                 };
+                if !std::mem::take(&mut self.verified) {
+                    if let Some(t) = self.return_type_check(val) {
+                        v = t;
+                    }
+                }
                 let name = if self.func.is_generator() {
                     "GENERATOR_RETURN"
                 } else {
@@ -1284,6 +1294,59 @@ impl<'a> Lower<'a> {
             }
         }
         false
+    }
+
+    /// `zend_emit_return_type_check` (and `zend_emit_final_return` for the
+    /// implicit return, an unused `val`): the `VERIFY_RETURN_TYPE` the VM
+    /// folds into its return. Returns the operand the `RETURN` then reads
+    /// when the check copied a literal to a TMP.
+    fn return_type_check(&mut self, val: &Operand) -> Option<Z> {
+        use crate::types::mask as m;
+        if self.func.is_generator() {
+            return None;
+        }
+        let rt = self.func.return_type.as_ref()?;
+        if rt.mask & m::VOID != 0 {
+            return None;
+        }
+        if matches!(val, Operand::Unused) {
+            if rt.mask & m::NEVER != 0 {
+                self.push(ZLine::new("VERIFY_NEVER_TYPE"));
+            } else {
+                self.push(ZLine::new("VERIFY_RETURN_TYPE"));
+            }
+            return None;
+        }
+        let v = self.z(val);
+        // `mixed`: no run-time check.
+        let mixed =
+            rt.classes.is_empty() && rt.intersections.is_empty() && rt.mask & m::ANY == m::ANY;
+        if mixed {
+            return None;
+        }
+        if let Z::Const(c) = &v {
+            let bit = match c {
+                Value::Null => m::NULL,
+                Value::Bool(false) => m::FALSE,
+                Value::Bool(true) => m::TRUE,
+                Value::Int(_) => m::LONG,
+                Value::Float(_) => m::DOUBLE,
+                Value::Str(_) => m::STRING,
+                Value::Array(_) => m::ARRAY,
+                _ => 0,
+            };
+            // `ZEND_TYPE_CONTAINS_CODE`: `bool` contains both `true` and
+            // `false`; `callable` and `iterable` are not builtin codes of
+            // a literal.
+            if bit != 0 && rt.mask & bit != 0 {
+                return None;
+            }
+            let t = self.tmp();
+            self.push(ZLine::new("VERIFY_RETURN_TYPE").t(t).a(v));
+            return Some(Z::Tmp(t));
+        }
+        self.push(ZLine::new("VERIFY_RETURN_TYPE").a(v));
+        None
     }
 
     /// `zend_compile_short_circuiting`: `JMPZ_EX`/`JMPNZ_EX` of a TMP
