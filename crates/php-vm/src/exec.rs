@@ -11,6 +11,7 @@ use std::rc::Rc;
 mod dispatch_tests;
 mod hot;
 mod spec;
+pub(crate) mod tape;
 
 /// Upper bound on nested `execute()` runs (internal-to-user callbacks,
 /// destructors, `__clone`, magic methods); each one uses native stack.
@@ -1198,7 +1199,7 @@ impl Vm {
                         if !ops.get(ip).is_some_and(hot::enters_hot) {
                             continue 'ops;
                         }
-                        let (mut next, last) = hot::run_hot(self, base, ops, lits, ip);
+                        let (mut next, last) = tape::run_tape(self, base, code, ip);
                         if last == hot::LEFT {
                             // A call or return there, with the safe point
                             // after it due (as after the fast `DoCall` and

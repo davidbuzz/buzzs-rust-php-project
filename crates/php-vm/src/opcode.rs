@@ -1421,6 +1421,10 @@ pub struct OpArray {
     /// Monomorphic call-site cache of method calls (`InitMethodCall`),
     /// indexed by instruction pointer (op index).
     pub method_cache: RefCell<Vec<Option<MethodCallCacheEntry>>>,
+    /// The instructions pre-decoded for the frame-local loop, built when
+    /// the op array first runs there (`exec/tape.rs`). `ops` must not
+    /// change once it exists.
+    pub(crate) tape: crate::exec::tape::Tape,
 }
 
 /// [`PropCacheEntry::base`] of a `$this->name` place.

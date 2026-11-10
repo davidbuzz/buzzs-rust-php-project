@@ -193,6 +193,7 @@ impl ImageBuilder {
             rt_cache: crate::rtcache::RuntimeCache::default(),
             prop_cache: RefCell::new(Vec::new()),
             method_cache: RefCell::new(Vec::new()),
+            tape: crate::exec::tape::Tape::default(),
         });
         self.code.insert(key, code.clone());
         code

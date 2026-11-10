@@ -1294,7 +1294,7 @@ fn cmp_num(f: &Frame, lits: &[Value], a: Operand, b: Operand, mask: u8) -> Optio
 /// `y`.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn jump_of(x: Num, y: Num, mask: u8) -> bool {
+pub(super) fn jump_of(x: Num, y: Num, mask: u8) -> bool {
     let identity = (mask & cmp_outcome::IDENTITY) != 0;
     (mask & num_outcome(x, y, identity)) != 0
 }
