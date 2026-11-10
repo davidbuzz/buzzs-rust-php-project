@@ -521,6 +521,20 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     ));
 }
 
+/// `zend_finalize_system_id` for the file cache, from the internal
+/// function table as it stands after `disable_functions` (GH-17733).
+fn ensure_system_id(vm: &Vm) {
+    if file_cache::system_id_is_final() {
+        return;
+    }
+    let names = vm
+        .functions
+        .iter()
+        .filter(|(_, f)| matches!(f, php_vm::func::Func::Builtin(_)))
+        .map(|(name, _)| name.as_bytes());
+    file_cache::set_system_id(file_cache::compute_system_id(names));
+}
+
 fn is_opcache_enabled(vm: &Vm) -> bool {
     let enable = vm.ini_bool("opcache.enable");
     let enable_cli = vm.ini_bool("opcache.enable_cli");
@@ -809,6 +823,7 @@ fn opcache_compile_hook(
     let enable_cli = vm.ini_bool("opcache.enable_cli");
     let file_cache_only = vm.ini_bool("opcache.file_cache_only");
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
+    ensure_system_id(vm);
 
     if !enable || (!enable_cli && !file_cache_only) {
         return vm.compile_source_default(src, filename, false, skip_shebang);
@@ -893,9 +908,8 @@ fn opcache_compile_hook(
                 return Ok(res);
             }
             Err(corrupted_msg) => {
-                if vm.ini_long("opcache.log_verbosity_level") >= 2 {
-                    let _ = vm.error(2, &corrupted_msg);
-                }
+                // zend_accel_error(ACCEL_LOG_WARNING, "...\n").
+                accel_log_warning(vm, &format!("{corrupted_msg}\n"));
             }
             Ok(None) => {}
         }
@@ -915,9 +929,7 @@ fn opcache_compile_hook(
             if let Err((msg, _)) =
                 file_cache::write_file_cache(cache_dir, &realpath, mtime_sec, &src)
             {
-                if vm.ini_long("opcache.log_verbosity_level") >= 2 {
-                    let _ = vm.error(2, &msg);
-                }
+                accel_log_warning(vm, &format!("{msg}\n"));
             }
         }
     }
@@ -1396,6 +1408,7 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 });
             }
             let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
+            ensure_system_id(vm);
             if !file_cache_dir.is_empty() {
                 let cache_dir = std::path::Path::new(&file_cache_dir);
                 let _ = file_cache::write_file_cache(cache_dir, &realpath, mtime_sec, &src);
@@ -1424,6 +1437,8 @@ fn opcache_invalidate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let real_str = realpath.to_string_lossy().into_owned();
 
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
+
+    ensure_system_id(vm);
     if !file_cache_dir.is_empty() {
         let cache_dir = std::path::Path::new(&file_cache_dir);
         file_cache::invalidate_file_cache(cache_dir, &realpath);
@@ -1718,6 +1733,7 @@ fn opcache_is_script_cached_in_file_cache(vm: &mut Vm, a: &mut Args) -> VmResult
     let enabled = vm.ini_bool("opcache.enable")
         && (vm.ini_bool("opcache.enable_cli") || vm.ini_bool("opcache.file_cache_only"));
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
+    ensure_system_id(vm);
     if !enabled || file_cache_dir.is_empty() {
         return Ok(Value::Bool(false));
     }
