@@ -213,6 +213,7 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
     }
 
     changed |= drop_empty_foreach(op_array);
+    changed |= drop_param_check_vars(op_array);
 
     // 2. Dead jump-to-next elimination
     for i in 0..len {
@@ -352,6 +353,59 @@ fn drop_empty_foreach(op_array: &mut OpArray) -> bool {
             }
         }
         changed = true;
+    }
+    changed
+}
+
+/// Drops the `CHECK_VAR` (here `Free` of a CV) of a parameter after its
+/// `RECV`: it cannot be undefined, so the check warns about nothing
+/// (dce.c drops a `CHECK_VAR` whose operand is not `MAY_BE_UNDEF`;
+/// opt/sccp_007). Not when the function unsets the parameter, nor with
+/// dynamic variable access (`$$`, `extract()`, `include`, ...).
+fn drop_param_check_vars(op_array: &mut OpArray) -> bool {
+    if !op_array
+        .ops
+        .iter()
+        .any(|op| matches!(op, Op::Free(Operand::Cv(_))))
+        || super::compact::has_dynamic_var_access(op_array)
+    {
+        return false;
+    }
+    // The op after which each parameter is bound.
+    let mut bound_at = vec![None; op_array.cv_names.len()];
+    for (i, op) in op_array.ops.iter().enumerate() {
+        if let Op::Recv { cv, .. } | Op::RecvInit { cv, .. } | Op::RecvVariadic { cv, .. } = op {
+            if let Some(slot) = bound_at.get_mut(*cv as usize) {
+                slot.get_or_insert(i);
+            }
+        }
+    }
+    for op in &op_array.ops {
+        if let Op::Unset { place } = op {
+            if let Some(p) = op_array.places.get(*place as usize) {
+                if let crate::opcode::PlaceBase::Cv(c) = p.base {
+                    if p.segs.is_empty() {
+                        if let Some(slot) = bound_at.get_mut(c as usize) {
+                            *slot = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut changed = false;
+    for (i, op) in op_array.ops.iter_mut().enumerate() {
+        if let Op::Free(Operand::Cv(c)) = *op {
+            if bound_at
+                .get(c as usize)
+                .copied()
+                .flatten()
+                .is_some_and(|at| at < i)
+            {
+                *op = Op::Nop;
+                changed = true;
+            }
+        }
     }
     changed
 }

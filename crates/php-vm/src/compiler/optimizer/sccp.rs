@@ -13,8 +13,8 @@ use super::pass1::{fold_bin_op, fold_cast, fold_unary_op};
 use super::{add_or_find_literal, for_each_operand_mut, for_each_place_operand_mut, OptContext};
 use crate::compiler::expr::const_truthiness;
 use crate::opcode::{
-    type_mask, ArgSrc, BinKind, CastKind, FetchMode, IncDecKind, Op, OpArray, Operand, Place,
-    PlaceBase, PlaceId, Seg,
+    type_mask, ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, IncDecKind, Op, OpArray, Operand,
+    Place, PlaceBase, PlaceId, Seg,
 };
 use php_runtime::{ArrayKey, BinaryOp, Value, ZArray, ZStr};
 
@@ -22,22 +22,49 @@ use php_runtime::{ArrayKey, BinaryOp, Value, ZArray, ZStr};
 enum CvLattice {
     Top,
     Const(u32),
+    /// An array of which only some elements are known (sccp.c
+    /// `PARTIAL_ARRAY`): the literal holds the known elements; any other
+    /// key may or may not exist. Only reads of a known element fold.
+    Partial(u32),
     Bottom,
 }
 
-fn meet_cv(a: CvLattice, b: CvLattice, literals: &[Value]) -> CvLattice {
+fn meet_cv(a: CvLattice, b: CvLattice, literals: &mut Vec<Value>) -> CvLattice {
     match (a, b) {
-        (CvLattice::Top, other) => other,
-        (other, CvLattice::Top) => other,
-        (CvLattice::Const(l1), CvLattice::Const(l2)) => {
-            if l1 == l2 || super::literals_equal(&literals[l1 as usize], &literals[l2 as usize]) {
-                CvLattice::Const(l1)
-            } else {
-                CvLattice::Bottom
-            }
+        (CvLattice::Top, other) | (other, CvLattice::Top) => other,
+        (CvLattice::Const(l1), CvLattice::Const(l2))
+            if l1 == l2
+                || super::literals_equal(&literals[l1 as usize], &literals[l2 as usize]) =>
+        {
+            CvLattice::Const(l1)
         }
+        (
+            CvLattice::Const(l1) | CvLattice::Partial(l1),
+            CvLattice::Const(l2) | CvLattice::Partial(l2),
+        ) => common_elements(literals, l1, l2).map_or(CvLattice::Bottom, CvLattice::Partial),
         _ => CvLattice::Bottom,
     }
+}
+
+/// The elements two array literals share, key and identical value
+/// (sccp.c `join_partial_arrays`), as an array literal; `None` unless both
+/// are arrays.
+fn common_elements(literals: &mut Vec<Value>, l1: u32, l2: u32) -> Option<u32> {
+    let (Some(Value::Array(a)), Some(Value::Array(b))) =
+        (literals.get(l1 as usize), literals.get(l2 as usize))
+    else {
+        return None;
+    };
+    let mut common = ZArray::new();
+    let h = common.make_mut();
+    for (k, v) in a.iter() {
+        if b.get(k)
+            .is_some_and(|w| php_runtime::ops::is_identical(v, w).unwrap_or(false))
+        {
+            h.insert(k.clone(), v.clone());
+        }
+    }
+    Some(add_or_find_array_literal(literals, common))
 }
 
 fn fold_abs(val: &Value) -> Option<Value> {
@@ -534,9 +561,12 @@ fn update_cv_state_for_op(
                         if matches!(literals.get(la as usize), Some(Value::Str(s)) if s.is_empty())
                         {
                             if let Operand::Cv(cb) = b {
-                                if (*cb as usize) < num_cvs {
-                                    cur_state[cv_idx] = cur_state[*cb as usize];
-                                    return;
+                                // `"" . $s` is `$s` only for a string.
+                                if let Some(&CvLattice::Const(l)) = cur_state.get(*cb as usize) {
+                                    if matches!(literals.get(l as usize), Some(Value::Str(_))) {
+                                        cur_state[cv_idx] = CvLattice::Const(l);
+                                        return;
+                                    }
                                 }
                             }
                         }
@@ -545,9 +575,12 @@ fn update_cv_state_for_op(
                         if matches!(literals.get(lb as usize), Some(Value::Str(s)) if s.is_empty())
                         {
                             if let Operand::Cv(ca) = a {
-                                if (*ca as usize) < num_cvs {
-                                    cur_state[cv_idx] = cur_state[*ca as usize];
-                                    return;
+                                // `"" . $s` is `$s` only for a string.
+                                if let Some(&CvLattice::Const(l)) = cur_state.get(*ca as usize) {
+                                    if matches!(literals.get(l as usize), Some(Value::Str(_))) {
+                                        cur_state[cv_idx] = CvLattice::Const(l);
+                                        return;
+                                    }
                                 }
                             }
                         }
@@ -790,8 +823,26 @@ fn cvs_may_be_refs(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
         })
 }
 
-/// A build-step operand's literal: a literal, or a temporary known to
-/// hold one.
+/// The CV an op names as a dynamic class (`$o instanceof $c`, `new $c`,
+/// `$c::f()`, `$c::K`, `$c::class`). php-src puts only a string constant
+/// there (`REQUIRES_STRING` in `zend_optimizer_update_op1_const` /
+/// `update_op2_const`), so the CV of any other constant stays
+/// (opt/sccp_024).
+fn dyn_class_cv(op: &Op) -> Option<u32> {
+    let class = match op {
+        Op::InitStaticCall { class, .. }
+        | Op::New { class, .. }
+        | Op::FetchClassConst { class, .. }
+        | Op::FetchClassName { class, .. }
+        | Op::InstanceOf { class, .. } => class,
+        _ => return None,
+    };
+    match class {
+        ClassSpec::Dyn(Operand::Cv(c)) => Some(*c),
+        _ => None,
+    }
+}
+
 /// Whether literals `a` and `b` are the same constant (same type and
 /// value; a float compares bitwise, so `0.0` and `-0.0` differ).
 fn same_literal(literals: &[Value], a: u32, b: u32) -> bool {
@@ -802,6 +853,8 @@ fn same_literal(literals: &[Value], a: u32, b: u32) -> bool {
         )
 }
 
+/// A build-step operand's literal: a literal, or a temporary known to
+/// hold one.
 fn known_lit(operand: &Operand, lit_def: &[Option<u32>]) -> Option<u32> {
     match operand {
         Operand::Lit(l) => Some(*l),
@@ -1712,7 +1765,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     let merged = if is_first {
                         out_val
                     } else {
-                        meet_cv(in_val, out_val, &op_array.literals)
+                        meet_cv(in_val, out_val, &mut op_array.literals)
                     };
                     if merged != in_val {
                         in_state[succ][cv] = merged;
@@ -1751,9 +1804,17 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     continue;
                 }
 
-                // Substitute Cv reads with known constants
+                // Substitute Cv reads with known constants; a dynamic class
+                // takes only a string one.
+                let keep = dyn_class_cv(op).filter(|c| {
+                    matches!(cur_state.get(*c as usize), Some(CvLattice::Const(l))
+                        if !matches!(op_array.literals.get(*l as usize), Some(Value::Str(_))))
+                });
                 for_each_operand_mut(op, |operand| {
                     if let Operand::Cv(cv) = operand {
+                        if Some(*cv) == keep {
+                            return;
+                        }
                         if let Some(CvLattice::Const(l)) = cur_state.get(*cv as usize) {
                             *operand = Operand::Lit(*l);
                             changed = true;
@@ -1828,7 +1889,12 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                             let PlaceBase::Cv(c) = p.base else {
                                 return None;
                             };
-                            let CvLattice::Const(cl) = *cur_state.get(c as usize)? else {
+                            // A known element of a partial array reads as
+                            // well: `fold_fetch_dim` folds only an existing
+                            // element.
+                            let (CvLattice::Const(cl) | CvLattice::Partial(cl)) =
+                                *cur_state.get(c as usize)?
+                            else {
                                 return None;
                             };
                             let d = single_dim_lit(p)?;

@@ -1186,6 +1186,82 @@ mod tests {
         assert!(!has(|op| matches!(op, Op::FeFetch { .. })), "{:?}", b.ops);
     }
 
+    /// `$c = 1; $o instanceof $c` keeps `$c`: php-src substitutes only a
+    /// string constant for a dynamic class (opcache `opt/sccp_024`).
+    #[test]
+    fn sccp_keeps_non_string_constant_out_of_dynamic_class() {
+        let unit = compile_src(
+            "<?php function t($o) { $a = 'A'; $c = 1; echo $o instanceof $a; echo $o instanceof $c; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"t"));
+        let classes: Vec<&ClassSpec> = code
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::InstanceOf { class, .. } => Some(class),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(classes.len(), 2, "{:?}", code.ops);
+        assert!(
+            !matches!(classes[0], ClassSpec::Dyn(Operand::Cv(_))),
+            "{:?}",
+            code.ops
+        );
+        assert!(
+            matches!(classes[1], ClassSpec::Dyn(Operand::Cv(_))),
+            "{:?}",
+            code.ops
+        );
+    }
+
+    /// Two arrays meeting after a branch keep the elements they share
+    /// (sccp.c partial arrays, opcache `opt/sccp_007`): `$a[0]` folds,
+    /// `$a[1]` does not.
+    #[test]
+    fn sccp_partial_array_join_folds_shared_element() {
+        let unit = compile_src(
+            "<?php function f(int $x) { if ($x) { $a = [0, 1]; } else { $a = [0, 2]; } echo $a[0]; }\n\
+             function g(int $x) { if ($x) { $a = [0, 1]; } else { $a = [0, 2]; } echo $a[1]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let f = find_code(&unit, named(b"f"));
+        assert!(
+            !f.ops
+                .iter()
+                .any(|op| matches!(op, Op::Fetch { .. } | Op::Free(Operand::Cv(_)))),
+            "{:?}",
+            f.ops
+        );
+        let g = find_code(&unit, named(b"g"));
+        assert!(
+            g.ops.iter().any(|op| matches!(op, Op::Fetch { .. })),
+            "{:?}",
+            g.ops
+        );
+    }
+
+    /// A parameter is never undefined after its `RECV`, so the check of an
+    /// emptied `if ($x) {}` goes; an unset parameter keeps it.
+    #[test]
+    fn dce_drops_check_var_of_parameter() {
+        let unit = compile_src(
+            "<?php function f($x) { if ($x) {} return 1; }\n\
+             function g($x) { unset($x); if ($x) {} return 1; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let reads_cv = |code: &OpArray| {
+            code.ops
+                .iter()
+                .any(|op| matches!(op, Op::Free(Operand::Cv(_)) | Op::JmpZ(Operand::Cv(_), _)))
+        };
+        let f = find_code(&unit, named(b"f"));
+        assert!(!reads_cv(&*f), "{:?}", f.ops);
+        let g = find_code(&unit, named(b"g"));
+        assert!(reads_cv(&*g), "{:?}", g.ops);
+    }
+
     #[test]
     fn test_nop_removal() {
         let unit = compile_src("<?php $a = 1; echo $a;", DEFAULT_OPTIMIZATION_LEVEL);
