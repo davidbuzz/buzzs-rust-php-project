@@ -418,13 +418,16 @@ impl Vm {
         true
     }
 
-    /// `++`/`--` of static property `pid` on a cache hit.
+    /// `++`/`--` of static property `pid` on a cache hit
+    /// (`ZEND_PRE_INC_STATIC_PROP` / `ZEND_POST_INC_STATIC_PROP` with
+    /// `CACHED_PTR`): an untyped property holding an int (no overflow) or a
+    /// float directly is updated in its cell. The result is the new value
+    /// (pre) or the old one (post). Typed properties (the result must be
+    /// checked against the type), references (possibly typed), overflow
+    /// (int to float), other types (conversions, warnings) and misses give
+    /// `None` with nothing changed; the generic place walk then runs.
     #[inline(always)]
-    pub(in crate::exec) fn inc_dec_static_prop_fast(
-        &self,
-        pid: PlaceId,
-        kind: IncDecKind,
-    ) -> Option<Value> {
+    pub(crate) fn inc_dec_static_prop_fast(&self, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
         let (cell, typed) = self.static_place_cell(pid)?;
         if typed {
             return None;
@@ -751,5 +754,42 @@ for ($i = 0; $i < 3; $i++) {
             out,
             "1:item_0\n2:item_01\n3:item_012\n4:item_0123\n5:item_01234\n15\n25\n35\n"
         );
+    }
+
+    #[test]
+    fn static_property_increments_and_decrements() {
+        // `++`/`--` on cached static properties: pre/post, int and float,
+        // overflow to float, null, typed (overflow error), private,
+        // `parent::`/`static::`, and a property bound to a reference, each
+        // after the cache was filled.
+        let src = r#"<?php
+class A {
+    public static $n = 0;
+    public static $f = 1.5;
+    public static $big = PHP_INT_MAX - 1;
+    public static $nul = null;
+    public static int $t = PHP_INT_MAX - 1;
+    private static $p = 10;
+    static function run() {
+        for ($i = 0; $i < 3; $i++) {
+            $a = self::$n++; $b = ++self::$n; $c = self::$n--; $d = --self::$f; $e = self::$f++;
+            echo $a, ' ', $b, ' ', $c, ' ', $d, ' ', $e, ' ', self::$n, ' ', self::$f, "\n";
+            var_dump(self::$big++); var_dump(self::$p--, static::$p);
+            self::$nul++; var_dump(self::$nul); self::$nul = null;
+            try { self::$t++; var_dump(self::$t); } catch (Error $x) { echo get_class($x), ': ', $x->getMessage(), "\n"; }
+        }
+    }
+}
+class B extends A {
+    static function go() { for ($i = 0; $i < 2; $i++) { parent::$n++; static::$n++; echo A::$n, "\n"; } }
+}
+A::run();
+B::go();
+$r = &A::$n;
+for ($i = 0; $i < 2; $i++) { A::$n++; echo $r, "\n"; }
+for ($i = 0; $i < 2; $i++) { try { A::$p++; } catch (Error $x) { echo $x->getMessage(), "\n"; } }
+"#;
+        let expected = "0 2 2 0.5 0.5 1 1.5\nint(9223372036854775806)\nint(10)\nint(9)\nint(1)\nint(9223372036854775807)\n1 3 3 0.5 0.5 2 1.5\nint(9223372036854775807)\nint(9)\nint(8)\nint(1)\nTypeError: Cannot increment property A::$t of type int past its maximal value\n2 4 4 0.5 0.5 3 1.5\nfloat(9.223372036854776E+18)\nint(8)\nint(7)\nint(1)\nTypeError: Cannot increment property A::$t of type int past its maximal value\n5\n7\n8\n9\nCannot access private property A::$p\nCannot access private property A::$p\n";
+        assert_eq!(run(src), expected);
     }
 }
