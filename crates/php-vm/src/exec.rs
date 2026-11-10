@@ -1243,21 +1243,6 @@ impl Vm {
                                 break 'slow;
                             }
                         }
-                        // Static properties on a run-time cache hit
-                        // (`exec/spec/statics.rs`).
-                        Op::FetchStaticProp {
-                            place,
-                            dst,
-                            to,
-                            mode,
-                        } => match self.fetch_static_prop_fast(*place, *mode) {
-                            Some(v) => {
-                                if self.store_fetched(*dst, *to, v) {
-                                    ip += 1;
-                                }
-                            }
-                            None => break 'slow,
-                        },
                         Op::Fetch { place, mode, dst } => {
                             if *mode == FetchMode::Read {
                                 if let Some(v) = self.fetch_place_fast(*place) {
@@ -1282,11 +1267,6 @@ impl Vm {
                             }
                             None => break 'slow,
                         },
-                        Op::AssignStaticProp { place, val, dst } => {
-                            if !self.assign_static_prop_fast(*place, *val, *dst) {
-                                break 'slow;
-                            }
-                        }
                         Op::AssignOpStaticProp {
                             place,
                             op: kind,
@@ -1295,12 +1275,6 @@ impl Vm {
                         } => {
                             if !self.assign_op_static_prop_fast(*place, *kind, *val, *dst) {
                                 break 'slow;
-                            }
-                        }
-                        Op::IssetStaticProp { place, dst, empty } => {
-                            match self.isset_static_prop_fast(*place, *empty) {
-                                Some(r) => self.set_tmp(*dst, Value::Bool(r)),
-                                None => break 'slow,
                             }
                         }
                         // Object properties on a cache hit (`exec/spec/props.rs`).
@@ -1415,72 +1389,25 @@ impl Vm {
                                 break 'slow;
                             }
                         }
+                        // A constant fetch with a namespace fallback (its
+                        // cached global needs the constant table's size; the
+                        // others are hot ops, `exec/hot.rs`).
                         Op::FetchConst {
                             name,
                             fallback,
                             dst,
                         } => match self.const_hit(*name, *fallback) {
-                            Some(v) => {
-                                if matches!(
-                                    v,
-                                    Value::Int(_)
-                                        | Value::Float(_)
-                                        | Value::Bool(_)
-                                        | Value::Null
-                                        | Value::Str(_)
-                                ) {
-                                    self.set_tmp(*dst, v);
-                                } else {
-                                    break 'slow;
-                                }
-                            }
+                            Some(v) => self.set_tmp(*dst, v),
                             None => break 'slow,
                         },
-                        Op::FetchClassConst { class, name, dst } => {
-                            let name_lit = match name {
-                                Operand::Lit(l) => *l,
-                                _ => break 'slow,
-                            };
-                            match self.class_const_cached(class, name_lit) {
-                                Some(v) => {
-                                    if matches!(
-                                        v,
-                                        Value::Int(_)
-                                            | Value::Float(_)
-                                            | Value::Bool(_)
-                                            | Value::Null
-                                            | Value::Str(_)
-                                    ) {
-                                        self.set_tmp(*dst, v);
-                                    } else {
-                                        break 'slow;
-                                    }
-                                }
-                                None => break 'slow,
-                            }
-                        }
-                        // Cached constants with the `AssignCv` after them
-                        // folded in (`Some(true)` from `store_fetched`: skip
-                        // it).
+                        // With the `AssignCv` after it folded in
+                        // (`Some(true)` from `store_fetched`: skip it).
                         Op::FetchConstTo {
                             name,
                             fallback,
                             dst,
                             to,
                         } => match self.const_hit(*name, *fallback) {
-                            Some(v) => {
-                                if self.store_fetched(*dst, Some(*to), v) {
-                                    ip += 1;
-                                }
-                            }
-                            None => break 'slow,
-                        },
-                        Op::FetchClassConstTo {
-                            class,
-                            name,
-                            dst,
-                            to,
-                        } => match self.class_const_cached(class, *name) {
                             Some(v) => {
                                 if self.store_fetched(*dst, Some(*to), v) {
                                     ip += 1;

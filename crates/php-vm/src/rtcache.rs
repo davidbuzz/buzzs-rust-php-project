@@ -34,7 +34,7 @@ use crate::class::Class;
 use crate::func::{flags, Method};
 use crate::object;
 use crate::opcode::{ClassSpec, Operand, PlaceBase, PlaceId};
-use crate::vm::{FrameKind, PendingCall, Vm, VmResult};
+use crate::vm::{Frame, FrameKind, PendingCall, Vm, VmResult};
 use php_runtime::{Value, ZStr};
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -222,6 +222,343 @@ fn class_const_value(cls: &Class, e: &MemberSlot) -> Option<Value> {
         Target::Value(v) => Some(v.clone()),
         Target::Index(idx) => cls.consts.get(*idx)?.value.borrow().clone(),
         Target::StaticProp { .. } | Target::Method(_) => None,
+    }
+}
+
+/// A copy of a cached value: a scalar inline, anything else through
+/// `Value::clone` (out of line).
+#[inline(always)]
+#[allow(clippy::inline_always)] // the value copy of every cache hit
+fn cached_copy(v: &Value) -> Value {
+    match v {
+        Value::Int(i) => Value::Int(*i),
+        Value::Float(x) => Value::Float(*x),
+        Value::Bool(b) => Value::Bool(*b),
+        Value::Null => Value::Null,
+        other => other.clone(),
+    }
+}
+
+/// Whether a member entry's access check holds for the calling scope
+/// `scope` (the running frame's `self`).
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn access_ok_in(scope: Option<&Rc<Class>>, access: &Access) -> bool {
+    match access {
+        Access::Public => true,
+        Access::From(w) => scope.is_some_and(|s| Rc::as_ptr(s) == w.as_ptr()),
+    }
+}
+
+/// The class a `self`/`parent`/`static` spec names in the running user
+/// frame `f` (`static` is the frame's called scope: the running frame is
+/// the innermost non-builtin one), or the class a named spec's literal
+/// already resolved to in `f`'s op array. `None` for a dynamic spec or an
+/// unresolved name.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn spec_class_in(f: &Frame, spec: &ClassSpec) -> Option<Rc<Class>> {
+    match spec {
+        ClassSpec::Named(l) => f.code.class_cache.borrow().get(*l as usize)?.upgrade(),
+        ClassSpec::SelfClass => f.scope.clone(),
+        ClassSpec::Parent => f.scope.as_ref()?.parent.clone(),
+        ClassSpec::Static => f.called.clone(),
+        ClassSpec::Dyn(_) => None,
+    }
+}
+
+/// `ZEND_FETCH_CONSTANT`'s `CACHED_PTR` hit on the running frame `f`: the
+/// value of the constant named by literal `name` itself, if its slot
+/// holds one (a cached namespace fallback needs the constant table's
+/// size, so it is left to [`Vm::fetch_constant_cached`]). No lookup, no
+/// diagnostic.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(crate) fn const_hit_in(f: &Frame, name: u32) -> Option<Value> {
+    let cache = f.code.rt_cache.consts.try_borrow().ok()?;
+    match cache.get(name as usize)? {
+        ConstSlot::Direct(v) => Some(cached_copy(v)),
+        _ => None,
+    }
+}
+
+/// `ZEND_FETCH_CLASS_CONSTANT`'s `CACHED_PTR` hit on the running user
+/// frame `f`: the cached value of `spec::NAME` (`name` the constant-name
+/// literal) for a class named, `self`, `parent` or `static`, if the op's
+/// slot holds an entry for that class valid in `f`'s scope. No lookup, no
+/// diagnostic, nothing consumed. A dynamic class gives `None`.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(crate) fn class_const_hit_in(f: &Frame, spec: &ClassSpec, name: u32) -> Option<Value> {
+    let cache = f.code.rt_cache.class_consts.try_borrow().ok()?;
+    let entries = cache.get(name as usize)?;
+    // `A::X` of a public scalar constant: the class itself is not needed,
+    // only alive.
+    if let ClassSpec::Named(l) = spec {
+        if let Some(MemberSlot {
+            class,
+            access: Access::Public,
+            target: Target::Value(v),
+            ..
+        }) = entries.iter().find(|e| e.class_lit == *l)
+        {
+            if class.strong_count() > 0 {
+                return Some(cached_copy(v));
+            }
+        }
+    }
+    if let ClassSpec::Named(_) = spec {
+        let (cls, e) = rt_find_in(f, spec, entries)?;
+        return match &e.target {
+            Target::Value(v) => Some(cached_copy(v)),
+            _ => class_const_value(&cls, e),
+        };
+    }
+    // `self::X`, `parent::X`, `static::X`: the class is borrowed from the
+    // frame, not cloned.
+    let cls = match spec {
+        ClassSpec::SelfClass => f.scope.as_ref()?,
+        ClassSpec::Parent => f.scope.as_ref()?.parent.as_ref()?,
+        ClassSpec::Static => f.called.as_ref()?,
+        ClassSpec::Named(_) | ClassSpec::Dyn(_) => return None,
+    };
+    let scope = f.scope.as_ref();
+    let e = entries
+        .iter()
+        .find(|e| Rc::as_ptr(cls) == e.class.as_ptr() && access_ok_in(scope, &e.access))?;
+    match &e.target {
+        Target::Value(v) => Some(cached_copy(v)),
+        _ => class_const_value(cls, e),
+    }
+}
+
+/// [`class_const_hit_in`] of `$obj::NAME` (`ZEND_FETCH_CLASS_CONSTANT`
+/// with a TMP/CV class operand, `CACHED_PTR(...) == ce`): the cached value
+/// for the class of the object the operand `op` holds directly. A
+/// temporary operand must hold one of several handles to the object, so
+/// that the caller's release of it (`FREE_OP1`) only drops a count. No
+/// lookup, no diagnostic, nothing consumed.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(crate) fn class_const_hit_dyn_in(f: &Frame, op: Operand, name: u32) -> Option<Value> {
+    let obj = match op {
+        Operand::Tmp(t) => match f.tmps.get(t as usize)? {
+            Value::Object(o) if o.refcount() > 1 => o,
+            _ => return None,
+        },
+        Operand::TmpKeep(t) => match f.tmps.get(t as usize)? {
+            Value::Object(o) => o,
+            _ => return None,
+        },
+        Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get)? {
+            Value::Object(o) => o,
+            _ => return None,
+        },
+        Operand::Lit(_) | Operand::Unused => return None,
+    };
+    let cls = object::class_of(obj);
+    let cache = f.code.rt_cache.class_consts.try_borrow().ok()?;
+    let entries = cache.get(name as usize)?;
+    let scope = f.scope.as_ref();
+    let e = entries
+        .iter()
+        .find(|e| Rc::as_ptr(cls) == e.class.as_ptr() && access_ok_in(scope, &e.access))?;
+    match &e.target {
+        Target::Value(v) => Some(cached_copy(v)),
+        _ => class_const_value(cls, e),
+    }
+}
+
+/// [`Vm::rt_find`] on the running user frame `f`: the entry of a member
+/// slot filled for the class `spec` resolves to and valid in `f`'s scope,
+/// with that class.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn rt_find_in<'a>(
+    f: &Frame,
+    spec: &ClassSpec,
+    entries: &'a [MemberSlot],
+) -> Option<(Rc<Class>, &'a MemberSlot)> {
+    let scope = f.scope.as_ref();
+    if let ClassSpec::Named(l) = spec {
+        if let Some(e) = entries.iter().find(|e| e.class_lit == *l) {
+            let c = e.class.upgrade()?;
+            return access_ok_in(scope, &e.access).then_some((c, e));
+        }
+    }
+    let c = spec_class_in(f, spec)?;
+    let e = entries
+        .iter()
+        .find(|e| Rc::as_ptr(&c) == e.class.as_ptr() && access_ok_in(scope, &e.access))?;
+    Some((c, e))
+}
+
+/// [`Vm::static_prop_cached`] on the running user frame `f`: the storage
+/// cell of `spec::$name` (`name` the property-name literal) from the op
+/// array's member cache, and whether the property is typed.
+fn static_prop_cached_in(
+    f: &Frame,
+    spec: &ClassSpec,
+    name: u32,
+) -> Option<(Rc<RefCell<Value>>, bool)> {
+    let cache = f.code.rt_cache.static_props.try_borrow().ok()?;
+    let entries = cache.get(name as usize)?;
+    if let ClassSpec::Named(l) = spec {
+        if let Some(e) = entries
+            .iter()
+            .find(|e| e.class_lit == *l && matches!(e.access, Access::Public))
+        {
+            if let Target::StaticProp { cell, typed, idx } = &e.target {
+                if *typed {
+                    if let Some(cls) = e.class.upgrade() {
+                        if let Some(sp) = cls.static_props.get(*idx) {
+                            crate::typed_refs::note_static_prop(sp);
+                        }
+                    }
+                }
+                return Some((cell.clone(), *typed));
+            }
+        }
+    }
+    let (cls, e) = rt_find_in(f, spec, entries)?;
+    match &e.target {
+        Target::StaticProp { cell, typed, idx } => {
+            if *typed {
+                if let Some(sp) = cls.static_props.get(*idx) {
+                    crate::typed_refs::note_static_prop(sp);
+                }
+            }
+            Some((cell.clone(), *typed))
+        }
+        Target::Index(idx) => {
+            let sp = cls.static_props.get(*idx)?;
+            let typed = !sp.ty.as_ref().is_none_or(crate::types::TypeDecl::is_mixed);
+            if typed {
+                crate::typed_refs::note_static_prop(sp);
+            }
+            Some((sp.cell.clone(), typed))
+        }
+        _ => None,
+    }
+}
+
+/// The storage cell of the static-property place `pid` (`A::$name`,
+/// literal name) of the running user frame `f`, and whether the property
+/// is typed: the place's fast entry, else the member cache, which then
+/// fills the fast entry. `None` when neither holds it (the generic op
+/// resolves the property and fills the member cache).
+#[cold]
+#[inline(never)]
+pub(crate) fn static_place_cell_in(f: &Frame, pid: PlaceId) -> Option<(Rc<RefCell<Value>>, bool)> {
+    if let Some(hit) = static_prop_entry_in(f, pid, |e| Some((e.cell.clone(), !e.fast_plain))) {
+        return Some(hit);
+    }
+    if f.kind == FrameKind::Builtin {
+        return None;
+    }
+    let PlaceBase::StaticProp {
+        class,
+        name: Operand::Lit(name),
+    } = &f.code.places.get(pid as usize)?.base
+    else {
+        return None;
+    };
+    let (cell, typed) = static_prop_cached_in(f, class, *name)?;
+    static_prop_cache_fill_in(f, pid, class, &cell, !typed);
+    Some((cell, typed))
+}
+
+/// Fills the fast static property entry of place `pid` of frame `f`
+/// (the class `spec` names in `f`, the cell, whether it is plain).
+fn static_prop_cache_fill_in(
+    f: &Frame,
+    pid: PlaceId,
+    spec: &ClassSpec,
+    cell: &Rc<RefCell<Value>>,
+    fast_plain: bool,
+) {
+    if f.kind == FrameKind::Builtin {
+        return;
+    }
+    let scope_ptr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    let called_ptr = f.called.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+    let class_ptr = match spec {
+        ClassSpec::SelfClass => scope_ptr,
+        ClassSpec::Static => called_ptr,
+        ClassSpec::Parent => f
+            .scope
+            .as_ref()
+            .and_then(|s| s.parent.as_ref())
+            .map_or(0, |p| Rc::as_ptr(p) as usize),
+        ClassSpec::Named(l) => f
+            .code
+            .class_cache
+            .borrow()
+            .get(*l as usize)
+            .map_or(0, |w| w.as_ptr() as usize),
+        ClassSpec::Dyn(_) => 0,
+    };
+    if class_ptr == 0 {
+        return;
+    }
+    let entry = StaticPropCacheEntry {
+        scope_ptr,
+        called_ptr,
+        class_ptr,
+        cell: cell.clone(),
+        fast_plain,
+    };
+    let Ok(mut entries) = f.code.rt_cache.static_prop_entries.try_borrow_mut() else {
+        return;
+    };
+    let idx = pid as usize;
+    if entries.len() <= idx {
+        entries.resize_with(idx + 1, StaticPropCacheEntry::default);
+    }
+    entries[idx] = entry;
+}
+
+/// The fast static property entry of place `pid` of the running user
+/// frame `f`, if it was filled for the class the place's spec names in
+/// `f` (`ZEND_FETCH_STATIC_PROP_*`'s `CACHED_PTR` check), passed to `k`
+/// without cloning it.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(crate) fn static_prop_entry_in<R>(
+    f: &Frame,
+    pid: PlaceId,
+    k: impl FnOnce(&StaticPropCacheEntry) -> Option<R>,
+) -> Option<R> {
+    if f.kind == FrameKind::Builtin {
+        return None;
+    }
+    let cache = f.code.rt_cache.static_prop_entries.try_borrow().ok()?;
+    let entry = cache.get(pid as usize)?;
+    if entry.class_ptr == 0 {
+        return None;
+    }
+    let scope_ptr = f.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+    let PlaceBase::StaticProp { class, .. } = &f.code.places.get(pid as usize)?.base else {
+        return None;
+    };
+    let ok = match class {
+        ClassSpec::SelfClass | ClassSpec::Parent => entry.scope_ptr == scope_ptr && scope_ptr != 0,
+        // The called class picks the property; the scope its access.
+        ClassSpec::Static => {
+            entry.scope_ptr == scope_ptr
+                && f.called
+                    .as_ref()
+                    .is_some_and(|c| Rc::as_ptr(c) as usize == entry.called_ptr)
+        }
+        // The literal always names the class the entry was filled for (the
+        // op array's class cache); a property found from no scope is public.
+        ClassSpec::Named(_) => entry.scope_ptr == scope_ptr || entry.scope_ptr == 0,
+        ClassSpec::Dyn(_) => false,
+    };
+    if ok {
+        k(entry)
+    } else {
+        None
     }
 }
 
@@ -492,19 +829,6 @@ impl Vm {
         Ok(v)
     }
 
-    /// The cached value of `A::NAME` (`name` the constant-name literal) for
-    /// a class named or `self`/`parent`/`static`, if the op's slot holds
-    /// one valid for the calling scope: no lookup, no diagnostic, nothing
-    /// consumed (the hot pre-match of `Vm::run`). A dynamic class (its
-    /// operand is consumed on a hit) gives `None`.
-    #[inline]
-    pub(crate) fn class_const_cached(&self, spec: &ClassSpec, name: u32) -> Option<Value> {
-        if matches!(spec, ClassSpec::Dyn(_)) {
-            return None;
-        }
-        self.class_const_hit(spec, name, None)
-    }
-
     /// The class of the object a dynamic class operand (`$obj::X`) holds,
     /// looked at without reading the operand: a temporary or a compiled
     /// variable holding the object directly. A class name string, a
@@ -753,99 +1077,15 @@ impl Vm {
         put_member(&self.frame().code.rt_cache.static_props, l as usize, slot);
     }
 
-    /// Monomorphic probe of the static property cache for place `pid`.
+    /// Monomorphic probe of the static property cache for place `pid`
+    /// ([`static_prop_entry_in`] on the running frame): the property's
+    /// storage cell and whether it is plain (untyped).
     #[inline(always)]
-    pub(crate) fn static_prop_cache_probe(&self, pid: PlaceId) -> Option<StaticPropCacheEntry> {
-        let frame = self.frame();
-        if frame.kind == FrameKind::Builtin {
-            return None;
-        }
-        let cache = frame.code.rt_cache.static_prop_entries.borrow();
-        let entry = cache.get(pid as usize)?;
-        if entry.class_ptr == 0 {
-            return None;
-        }
-        let scope_ptr = frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
-        let called_ptr = frame.called.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-
-        let place = frame.code.places.get(pid as usize)?;
-        let PlaceBase::StaticProp { class, .. } = &place.base else {
-            return None;
-        };
-        let ok = match class {
-            ClassSpec::SelfClass | ClassSpec::Parent => {
-                entry.scope_ptr == scope_ptr && entry.scope_ptr != 0
-            }
-            ClassSpec::Static => entry.called_ptr == called_ptr && entry.called_ptr != 0,
-            ClassSpec::Named(l) => {
-                (entry.scope_ptr == scope_ptr || entry.scope_ptr == 0)
-                    && (frame
-                        .code
-                        .class_cache
-                        .borrow()
-                        .get(*l as usize)
-                        .map_or(0, |w| w.as_ptr() as usize)
-                        == entry.class_ptr
-                        || entry.class_ptr != 0)
-            }
-            ClassSpec::Dyn(_) => false,
-        };
-        if ok {
-            Some(entry.clone())
-        } else {
-            None
-        }
-    }
-
-    /// Fills the fast static property cache for place `pid`.
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn static_prop_cache_fill(
+    pub(crate) fn static_prop_cache_probe(
         &self,
         pid: PlaceId,
-        spec: &ClassSpec,
-        _name: u32,
-        cell: &Rc<RefCell<Value>>,
-        fast_plain: bool,
-    ) {
-        let frame = self.frame();
-        if frame.kind == FrameKind::Builtin {
-            return;
-        }
-        let scope_ptr = frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
-        let called_ptr = frame.called.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-        let class_ptr = match spec {
-            ClassSpec::SelfClass => scope_ptr,
-            ClassSpec::Static => called_ptr,
-            ClassSpec::Parent => frame
-                .scope
-                .as_ref()
-                .and_then(|s| s.parent.as_ref())
-                .map_or(0, |p| Rc::as_ptr(p) as usize),
-            ClassSpec::Named(l) => frame
-                .code
-                .class_cache
-                .borrow()
-                .get(*l as usize)
-                .map_or(0, |w| w.as_ptr() as usize),
-            ClassSpec::Dyn(_) => 0,
-        };
-        if class_ptr == 0 {
-            return;
-        }
-        let entry = StaticPropCacheEntry {
-            scope_ptr,
-            called_ptr,
-            class_ptr,
-            cell: cell.clone(),
-            fast_plain,
-        };
-        let mut entries = frame.code.rt_cache.static_prop_entries.borrow_mut();
-        let idx = pid as usize;
-        if entries.len() <= idx {
-            entries.resize_with(idx + 1, StaticPropCacheEntry::default);
-        }
-        entries[idx] = entry;
+    ) -> Option<(Rc<RefCell<Value>>, bool)> {
+        static_prop_entry_in(self.frame(), pid, |e| Some((e.cell.clone(), e.fast_plain)))
     }
 
     // ------------------------------------------------------------------
@@ -862,31 +1102,48 @@ impl Vm {
         let Operand::Lit(l) = name else {
             return None;
         };
-        let cache = self.frame().code.rt_cache.static_calls.borrow();
-        let (cls, e) = self.rt_find(spec, cache.get(l as usize)?)?;
+        // The calling frame: the running user frame, whose scope checks
+        // the access and whose `$this` / called scope the call takes.
+        let f = self.frame();
+        if f.kind == FrameKind::Builtin {
+            return None;
+        }
+        let cache = f.code.rt_cache.static_calls.try_borrow().ok()?;
+        let entries = cache.get(l as usize)?;
+        let owned;
+        let (cls, e) = match spec {
+            ClassSpec::Named(_) => {
+                let (c, e) = rt_find_in(f, spec, entries)?;
+                owned = c;
+                (&owned, e)
+            }
+            ClassSpec::Dyn(_) => return None,
+            // `self::`, `parent::`, `static::`: the class is borrowed from
+            // the frame, not cloned.
+            ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static => {
+                let c = match spec {
+                    ClassSpec::SelfClass => f.scope.as_ref()?,
+                    ClassSpec::Parent => f.scope.as_ref()?.parent.as_ref()?,
+                    _ => f.called.as_ref()?,
+                };
+                let scope = f.scope.as_ref();
+                let e = entries.iter().find(|e| {
+                    Rc::as_ptr(c) == e.class.as_ptr() && access_ok_in(scope, &e.access)
+                })?;
+                (c, e)
+            }
+        };
         let Target::Method(m) = &e.target else {
             return None;
         };
         let m = m.upgrade()?;
-        let caller_frame = self
-            .frames
-            .iter()
-            .rev()
-            .find(|f| f.kind != FrameKind::Builtin);
         if m.is_static() {
             // `forwarded_called` (call.rs): `self::`/`parent::`/`static::`
             // forward the called scope when it is a subclass.
-            let forward = matches!(
-                spec,
-                ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
-            );
-            let called = if forward {
-                caller_frame
-                    .and_then(|f| f.called.clone())
-                    .filter(|c| c.is_subclass_of(&cls))
-                    .unwrap_or(cls)
-            } else {
-                cls
+            let forward = !matches!(spec, ClassSpec::Named(_));
+            let called = match f.called.as_ref() {
+                Some(c) if forward && c.is_subclass_of(cls) => c.clone(),
+                _ => cls.clone(),
             };
             return Some(StaticCallHit {
                 func: m.func.clone(),
@@ -895,9 +1152,9 @@ impl Vm {
                 called,
             });
         }
-        let this = caller_frame.and_then(|f| f.this.clone())?;
+        let this = f.this.clone()?;
         let called = object::class_of(&this).clone();
-        if !called.is_subclass_of(&cls) {
+        if !called.is_subclass_of(cls) {
             return None;
         }
         Some(StaticCallHit {

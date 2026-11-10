@@ -23,13 +23,221 @@
 //! [`Op::IssetStaticProp`]: crate::opcode::Op::IssetStaticProp
 
 use super::super::{num_bin, CvOpData, Flow, Num};
-use super::{is_plain_value, plain_truth};
-use crate::opcode::{BinKind, FetchMode, IncDecKind, Operand, PlaceBase, PlaceId};
-use crate::rtcache::StaticPropCacheEntry;
-use crate::vm::{Vm, VmResult};
+use super::{is_plain_value, plain_truth, plain_value_in, put_tmp, store_fetched_in};
+use crate::opcode::{BinKind, ClassSpec, FetchMode, IncDecKind, Operand, PlaceId};
+use crate::rtcache::{
+    class_const_hit_dyn_in, class_const_hit_in, const_hit_in, static_place_cell_in,
+    static_prop_entry_in,
+};
+use crate::vm::{Frame, Vm, VmResult};
 use php_runtime::{BinaryOp, Value, ZStr};
 use std::cell::RefCell;
 use std::rc::Rc;
+
+/// The value (dereferenced, copied) a cached static property cell holds
+/// for a read in `mode` (`plain`: the property is untyped): `None` when
+/// the cell or its reference is borrowed, and for a typed property holding
+/// null in `Read` mode, which may be uninitialized (the generic read
+/// throws "must not be accessed before initialization").
+#[inline(always)]
+#[allow(clippy::inline_always)] // the read of every static property cache hit
+fn static_cell_value(cell: &RefCell<Value>, plain: bool, mode: FetchMode) -> Option<Value> {
+    let slot = cell.try_borrow().ok()?;
+    match &*slot {
+        Value::Int(i) => Some(Value::Int(*i)),
+        Value::Null if !plain && mode != FetchMode::Is => None,
+        Value::Reference(r) => r.try_borrow().map(|inner| inner.clone()),
+        v => Some(v.clone()),
+    }
+}
+
+/// [`Op::FetchConstTo`] / [`Op::FetchConst`] (`to: None`) on a cache hit,
+/// on the running frame `f` alone (the frame-local hot loop,
+/// `exec/hot.rs`): the cached value of the constant named by literal
+/// `name` is stored like `Vm::store_fetched` does. `Some(true)`: stored
+/// into `to` (skip the `AssignCv` after the op); `Some(false)`: written to
+/// `dst`; `None`: a miss, nothing changed.
+///
+/// [`Op::FetchConstTo`]: crate::opcode::Op::FetchConstTo
+/// [`Op::FetchConst`]: crate::opcode::Op::FetchConst
+#[inline(always)]
+#[allow(clippy::inline_always)] // one arm of the hot loop
+pub(in crate::exec) fn fetch_const_in(
+    f: &mut Frame,
+    name: u32,
+    dst: u32,
+    to: Option<u32>,
+) -> Option<bool> {
+    let v = const_hit_in(f, name)?;
+    Some(store_fetched_in(f, dst, to, v))
+}
+
+/// [`Op::FetchClassConstTo`] / [`Op::FetchClassConst`] (`to: None`) of a
+/// class named, `self`, `parent`, `static` or held as an object by a
+/// temporary or variable (`$this::X`, `$obj::X`) on a cache hit, on the
+/// running frame `f` alone, as [`fetch_const_in`].
+///
+/// [`Op::FetchClassConstTo`]: crate::opcode::Op::FetchClassConstTo
+/// [`Op::FetchClassConst`]: crate::opcode::Op::FetchClassConst
+#[inline(always)]
+#[allow(clippy::inline_always)] // one arm of the hot loop
+pub(in crate::exec) fn fetch_class_const_in(
+    f: &mut Frame,
+    class: &ClassSpec,
+    name: u32,
+    dst: u32,
+    to: Option<u32>,
+) -> Option<bool> {
+    let v = if let ClassSpec::Dyn(op) = *class {
+        let v = class_const_hit_dyn_in(f, op, name)?;
+        // The class operand is consumed (`FREE_OP1`): one of several
+        // handles to the object, so only a count drops.
+        if let Operand::Tmp(t) = op {
+            if let Some(slot) = f.tmps.get_mut(t as usize) {
+                drop(std::mem::take(slot));
+            }
+        }
+        v
+    } else {
+        class_const_hit_in(f, class, name)?
+    };
+    Some(store_fetched_in(f, dst, to, v))
+}
+
+/// [`Op::FetchStaticProp`] on a hit of the place's fast entry, on the
+/// running frame `f` alone, as [`fetch_const_in`] (see
+/// [`static_cell_value`] for what declines).
+///
+/// [`Op::FetchStaticProp`]: crate::opcode::Op::FetchStaticProp
+#[inline(always)]
+#[allow(clippy::inline_always)] // one arm of the hot loop
+pub(in crate::exec) fn fetch_static_prop_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    dst: u32,
+    to: Option<u32>,
+    mode: FetchMode,
+) -> Option<bool> {
+    // `Some(None)`: a hit whose value takes the generic read.
+    let v = match static_prop_entry_in(f, pid, |e| {
+        Some(static_cell_value(&e.cell, e.fast_plain, mode))
+    }) {
+        Some(v) => v?,
+        None => {
+            // The fast entry is filled from the member cache (the generic
+            // op only fills that one).
+            let (cell, typed) = static_place_cell_in(f, pid)?;
+            static_cell_value(&cell, !typed, mode)?
+        }
+    };
+    Some(store_fetched_in(f, dst, to, v))
+}
+
+/// [`Op::IssetStaticProp`] on a hit of the place's fast entry, on the
+/// running frame `f` alone: `Vm::isset_static_prop_fast`'s answer written
+/// to `dst`. `false`, nothing changed, on a miss or when the answer needs
+/// the generic path.
+///
+/// [`Op::IssetStaticProp`]: crate::opcode::Op::IssetStaticProp
+#[inline(always)]
+#[allow(clippy::inline_always)] // one arm of the hot loop
+pub(in crate::exec) fn isset_static_prop_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    dst: u32,
+    empty: bool,
+) -> bool {
+    let r = match static_prop_entry_in(f, pid, |e| Some(static_cell_isset(&e.cell, empty))) {
+        Some(Some(r)) => r,
+        Some(None) => return false,
+        None => {
+            match static_place_cell_in(f, pid).and_then(|(c, _)| static_cell_isset(&c, empty)) {
+                Some(r) => r,
+                None => return false,
+            }
+        }
+    };
+    let Some(slot) = f.tmps.get_mut(dst as usize) else {
+        return false;
+    };
+    put_tmp(slot, Value::Bool(r));
+    true
+}
+
+/// `isset()` / `empty()` of the value a static property cell holds
+/// (dereferenced): not null, or, for `empty`, the negated truth value when
+/// that needs no conversion ([`plain_truth`]). A typed property holding
+/// null gives the answer an uninitialized one gives (`isset` false,
+/// `empty` true). `None` when a borrow fails or a conversion is needed.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn static_cell_isset(cell: &RefCell<Value>, empty: bool) -> Option<bool> {
+    let slot = cell.try_borrow().ok()?;
+    let guard;
+    let v: &Value = match &*slot {
+        Value::Reference(r) => {
+            guard = r.try_borrow()?;
+            &*guard
+        }
+        v => v,
+    };
+    if empty {
+        plain_truth(v).map(|t| !t)
+    } else {
+        Some(!matches!(v, Value::Null))
+    }
+}
+
+/// [`Op::AssignStaticProp`] on a hit of the place's fast entry, on the
+/// running frame `f` alone: `Vm::assign_static_prop_fast` (an untyped
+/// property holding a scalar or string gets a scalar or string value; the
+/// old value's release has no side effect). `false`, nothing changed,
+/// otherwise.
+///
+/// [`Op::AssignStaticProp`]: crate::opcode::Op::AssignStaticProp
+#[inline(always)]
+#[allow(clippy::inline_always)] // one arm of the hot loop
+pub(in crate::exec) fn assign_static_prop_in(
+    f: &mut Frame,
+    pid: PlaceId,
+    val: Operand,
+    dst: Option<u32>,
+) -> bool {
+    let cell = match static_prop_entry_in(f, pid, |e| Some(e.fast_plain.then(|| e.cell.clone()))) {
+        Some(Some(cell)) => cell,
+        // A typed property: the write needs the type check.
+        Some(None) => return false,
+        None => match static_place_cell_in(f, pid) {
+            Some((cell, false)) => cell,
+            _ => return false,
+        },
+    };
+    let Some(v) = plain_value_in(f, val) else {
+        return false;
+    };
+    let Ok(mut slot) = cell.try_borrow_mut() else {
+        return false;
+    };
+    if !is_plain_value(&slot) {
+        return false;
+    }
+    let keep = dst.map(|_| v.clone());
+    let old = std::mem::replace(&mut *slot, v);
+    drop(slot);
+    drop(old);
+    // The OP_DATA temporary is consumed.
+    if let Operand::Tmp(t) = val {
+        if let Some(s) = f.tmps.get_mut(t as usize) {
+            drop(std::mem::take(s));
+        }
+    }
+    if let (Some(d), Some(k)) = (dst, keep) {
+        if let Some(s) = f.tmps.get_mut(d as usize) {
+            put_tmp(s, k);
+        }
+    }
+    true
+}
 
 #[allow(dead_code)]
 impl Vm {
@@ -37,20 +245,10 @@ impl Vm {
     /// (`A::$name`, literal name) and whether the property is typed.
     #[inline]
     fn static_place_cell(&self, pid: PlaceId) -> Option<(Rc<RefCell<Value>>, bool)> {
-        if let Some(entry) = self.static_prop_cache_probe(pid) {
-            return Some((entry.cell, !entry.fast_plain));
+        if let Some((cell, plain)) = self.static_prop_cache_probe(pid) {
+            return Some((cell, !plain));
         }
-        let place = self.frame().code.places.get(pid as usize)?;
-        let PlaceBase::StaticProp {
-            class,
-            name: Operand::Lit(name),
-        } = &place.base
-        else {
-            return None;
-        };
-        let (cell, typed) = self.static_prop_cached(class, *name)?;
-        self.static_prop_cache_fill(pid, class, *name, &cell, !typed);
-        Some((cell, typed))
+        static_place_cell_in(self.frame(), pid)
     }
 
     /// `A::$name` read (`Read` or `Is` mode) on a cache hit: the value
@@ -63,20 +261,10 @@ impl Vm {
         pid: PlaceId,
         mode: FetchMode,
     ) -> Option<Value> {
-        if let Some(entry) = self.static_prop_cache_probe(pid) {
-            if entry.fast_plain {
-                let slot = entry.cell.borrow();
-                return Some(match &*slot {
-                    Value::Reference(r) => r.borrow().clone(),
-                    v => v.clone(),
-                });
-            }
-            let slot = entry.cell.try_borrow().ok()?;
-            return match &*slot {
-                Value::Null if mode != FetchMode::Is => None,
-                Value::Reference(r) => r.try_borrow().map(|inner| inner.clone()),
-                v => Some(v.clone()),
-            };
+        if let Some(v) = static_prop_entry_in(self.frame(), pid, |e| {
+            static_cell_value(&e.cell, e.fast_plain, mode)
+        }) {
+            return Some(v);
         }
         let (cell, typed) = self.static_place_cell(pid)?;
         let slot = cell.try_borrow().ok()?;
@@ -101,11 +289,11 @@ impl Vm {
         let Some(v) = self.peek_plain_value(val) else {
             return false;
         };
-        let cell = if let Some(entry) = self.static_prop_cache_probe(pid) {
-            if !entry.fast_plain {
+        let cell = if let Some((cell, plain)) = self.static_prop_cache_probe(pid) {
+            if !plain {
                 return false;
             }
-            entry.cell
+            cell
         } else {
             let Some((cell, false)) = self.static_place_cell(pid) else {
                 return false;
@@ -152,11 +340,11 @@ impl Vm {
         let Some(y) = Self::peek_num(self.frame(), val) else {
             return false;
         };
-        let cell = if let Some(entry) = self.static_prop_cache_probe(pid) {
-            if !entry.fast_plain {
+        let cell = if let Some((cell, plain)) = self.static_prop_cache_probe(pid) {
+            if !plain {
                 return false;
             }
-            entry.cell
+            cell
         } else {
             let Some((cell, false)) = self.static_place_cell(pid) else {
                 return false;
@@ -198,8 +386,8 @@ impl Vm {
             Some(v @ (Value::Str(_) | Value::Int(_))) => v,
             _ => return false,
         };
-        let cell = if let Some(entry) = self.static_prop_cache_probe(pid) {
-            entry.cell
+        let cell = if let Some((cell, _)) = self.static_prop_cache_probe(pid) {
+            cell
         } else {
             let Some((cell, _)) = self.static_place_cell(pid) else {
                 return false;
@@ -237,22 +425,11 @@ impl Vm {
         pid: PlaceId,
         kind: IncDecKind,
     ) -> Option<Value> {
-        let entry = if let Some(entry) = self.static_prop_cache_probe(pid) {
-            entry
-        } else {
-            let (cell, typed) = self.static_place_cell(pid)?;
-            StaticPropCacheEntry {
-                scope_ptr: 0,
-                called_ptr: 0,
-                class_ptr: 0,
-                cell,
-                fast_plain: !typed,
-            }
-        };
-        if !entry.fast_plain {
+        let (cell, typed) = self.static_place_cell(pid)?;
+        if typed {
             return None;
         }
-        let mut slot = entry.cell.try_borrow_mut().ok()?;
+        let mut slot = cell.try_borrow_mut().ok()?;
         match &mut *slot {
             Value::Int(cur) => {
                 let old = *cur;
@@ -286,8 +463,8 @@ impl Vm {
         pid: PlaceId,
         empty: bool,
     ) -> Option<bool> {
-        let cell = if let Some(entry) = self.static_prop_cache_probe(pid) {
-            entry.cell
+        let cell = if let Some((cell, _)) = self.static_prop_cache_probe(pid) {
+            cell
         } else {
             let (cell, _) = self.static_place_cell(pid)?;
             cell
@@ -317,20 +494,6 @@ impl Vm {
         mode: FetchMode,
         ip: &mut usize,
     ) -> VmResult<Flow> {
-        if let Some(entry) = self.static_prop_cache_probe(place) {
-            if entry.fast_plain {
-                let slot = entry.cell.borrow();
-                let v = match &*slot {
-                    Value::Reference(r) => r.borrow().clone(),
-                    v => v.clone(),
-                };
-                drop(slot);
-                if self.store_fetched(dst, to, v) {
-                    *ip += 1;
-                }
-                return Ok(Flow::Next);
-            }
-        }
         if let Some(v) = self.fetch_static_prop_fast(place, mode) {
             if self.store_fetched(dst, to, v) {
                 *ip += 1;
