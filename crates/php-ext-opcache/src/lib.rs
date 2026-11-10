@@ -190,8 +190,13 @@ fn vm_accel_log(vm: &mut Vm, kind: AccelLog, message: &str) {
 /// `zend_accel_error_noreturn(ACCEL_LOG_FATAL, ...)`: logged when
 /// `opcache.log_verbosity_level` admits fatal errors, and the process
 /// exits with status 254 (-2) whether logged or not.
-fn accel_fatal(vm: &mut Vm, message: &str) -> ! {
-    vm_accel_log(vm, AccelLog::Fatal, message);
+fn accel_fatal(vm: &Vm, message: &str) -> ! {
+    accel_log(
+        vm.ini_long("opcache.log_verbosity_level"),
+        &get_ini_string(vm, "opcache.error_log"),
+        AccelLog::Fatal,
+        message,
+    );
     std::process::exit(254);
 }
 
