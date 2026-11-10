@@ -489,3 +489,108 @@ Deprecated: Implicit conversion from float 7.5 to int loses precision in t.php o
 "#
     );
 }
+
+/// The frame-local hot loop (`exec/hot.rs`): int overflow of `++`/`--` and
+/// `+`, floats, post/pre results, string (in)equality in branches, `??`,
+/// `?:`, compound assignment as a loop condition, a reference to the loop
+/// variable, variables of an attached symbol table (`global`, `$GLOBALS`,
+/// `extract()`), destructors of overwritten objects, comparison results
+/// stored into variables.
+#[test]
+fn hot_loop_fast_paths_match_the_generic_ops() {
+    let src = r#"<?php
+$i = PHP_INT_MAX - 2;
+for ($k = 0; $k < 4; $k++) { $i++; }
+var_dump($i);
+$j = PHP_INT_MIN + 1;
+$j--; $j--;
+var_dump($j);
+$f = 0.5;
+for ($k = 0; $k < 3; $k++) { $a = $f++; $b = ++$f; }
+var_dump($f, $a, $b);
+$x = 0;
+for ($i = 0; $i < 10; $i++) { $x = $x + $i * 2.5; $y = $x - 1; }
+var_dump($x, $y);
+$m = PHP_INT_MAX;
+$m = $m + 1;
+var_dump($m);
+$s = "abc";
+$n = 0;
+for ($i = 0; $i < 5; $i++) { if ($s === "abc") { $n += 2; } if ($s == "abd") { $n = -100; } }
+var_dump($n);
+$t = "1";
+for ($i = 0; $i < 3; $i++) { if ($t == 1) { $n -= 1; } if ($t == "01") { $n *= 2; } }
+var_dump($n);
+$v = null;
+$w = $v ?? "def";
+$u = $n ?: "zero";
+$z = 0 ?: "zero";
+var_dump($w, $u, $z);
+$q = 10;
+while ($q -= 3) { if ($q < 0) break; echo $q, " "; }
+echo "\n";
+$r = &$i;
+for ($i = 0; $i < 3; $i++) { $r += 1; }
+var_dump($i, $r);
+function g() { global $gi; for ($gi = 0; $gi < 5; $gi++) { $gi += 1; } return $gi; }
+var_dump(g(), $gi);
+for ($h = 0; $h < 3; $h++) { $GLOBALS['h2'] = $h * 2; }
+var_dump($h, $h2);
+extract(['e' => 5]);
+for ($e2 = 0; $e2 < $e; $e2++) { $e = $e - 1; }
+var_dump($e, $e2, compact('e', 'e2'));
+class D { function __construct(public $n) {} function __destruct() { echo "d", $this->n, " "; } }
+for ($i = 0; $i < 3; $i++) { $o = new D($i); $o = $i; }
+echo "\n";
+$c = 0;
+for ($i = 0; $i < 4; $i++) { $c = $c + ($i < 2); $c = $c + ($i <=> 2); }
+var_dump($c);
+$fl = 1.0;
+for ($i = 0; $i < 3; $i++) { $fl *= 1.5; $fl /= 0.5; }
+var_dump($fl);
+$u = 5; $u++; $p = $u--; var_dump($u, $p);
+$st = "5"; $st++; var_dump($st);
+$nn = null; $nn++; var_dump($nn);
+for ($i = 0; $i < 3; $i++) { $i = $i + 1; } var_dump($i);
+"#;
+    assert_eq!(
+        run(src),
+        r#"float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(6.5)
+float(4.5)
+float(6.5)
+float(112.5)
+float(111.5)
+float(9.223372036854776E+18)
+int(10)
+int(66)
+string(3) "def"
+int(66)
+string(4) "zero"
+7 4 1 
+int(4)
+int(4)
+int(6)
+int(6)
+int(3)
+int(4)
+int(2)
+int(3)
+array(2) {
+  ["e"]=>
+  int(2)
+  ["e2"]=>
+  int(3)
+}
+d0 d1 d2 
+int(1)
+float(27)
+int(5)
+int(6)
+int(6)
+int(1)
+int(4)
+"#
+    );
+}

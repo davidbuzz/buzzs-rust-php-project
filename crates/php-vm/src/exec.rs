@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 #[cfg(test)]
 mod dispatch_tests;
+mod hot;
 mod spec;
 
 /// Upper bound on nested `execute()` runs (internal-to-user callbacks,
@@ -101,34 +102,6 @@ impl Vm {
         }
     }
 
-    /// Peeks a numeric operand directly as `f64` and whether it was a float,
-    /// avoiding `Num` allocation and enum matching overhead.
-    #[inline(always)]
-    #[allow(clippy::inline_always)]
-    fn peek_num_f64(f: &Frame, op: Operand) -> Option<(f64, bool)> {
-        match op {
-            Operand::Cv(cv) => match f.cvs.get(cv as usize)?.get()? {
-                Value::Float(x) => Some((*x, true)),
-                #[allow(clippy::cast_precision_loss)]
-                Value::Int(i) => Some((*i as f64, false)),
-                _ => None,
-            },
-            Operand::Lit(i) => match f.code.literals.get(i as usize)? {
-                Value::Float(v) => Some((*v, true)),
-                #[allow(clippy::cast_precision_loss)]
-                Value::Int(v) => Some((*v as f64, false)),
-                _ => None,
-            },
-            Operand::Tmp(t) | Operand::TmpKeep(t) => match f.tmps.get(t as usize)? {
-                Value::Float(x) => Some((*x, true)),
-                #[allow(clippy::cast_precision_loss)]
-                Value::Int(i) => Some((*i as f64, false)),
-                _ => None,
-            },
-            Operand::Unused => None,
-        }
-    }
-
     /// Sealed numeric form of [`Op::Bin`]: the handlers php-src specializes
     /// for `LONG`/`DOUBLE` operand pairs, computed without materializing
     /// `Value` temporaries. `None` when an operand is not a plain defined
@@ -168,60 +141,6 @@ impl Vm {
         } else {
             None
         }
-    }
-
-    /// Compound assignment on a compiled variable without a used result
-    /// in the dispatch pre-match (specialised loop steps and branches).
-    #[inline(always)]
-    #[allow(clippy::inline_always)]
-    fn assign_op_cv_step_fast(&mut self, cv: u32, kind: BinaryOp, val: Operand) -> bool {
-        let mut handled = false;
-        if let Some(f) = self.frames.last_mut() {
-            let idx = cv as usize;
-            if let Some(slot) = f.cvs.get(idx) {
-                if let Some((yf, _)) = Self::peek_num_f64(f, val) {
-                    if let Some(Value::Float(xf)) = slot.get() {
-                        if let Some(res) = float_assign_arith(kind, *xf, yf) {
-                            unsafe {
-                                if let Some(Value::Float(ref mut dst_f)) = slot.get_mut_unchecked()
-                                {
-                                    *dst_f = res;
-                                    f.sync_cv_to_symtab(cv, &Value::Float(res));
-                                    handled = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        handled || self.assign_op_cv_fast(cv, kind, val, None)
-    }
-}
-
-/// Computes binary arithmetic on floats directly.
-#[inline(always)]
-#[allow(dead_code, clippy::inline_always)]
-fn float_bin_arith(op: BinKind, xf: f64, yf: f64) -> Option<f64> {
-    match op {
-        BinKind::Arith(BinaryOp::Add) => Some(xf + yf),
-        BinKind::Arith(BinaryOp::Sub) => Some(xf - yf),
-        BinKind::Arith(BinaryOp::Mul) => Some(xf * yf),
-        BinKind::Arith(BinaryOp::Div) if yf != 0.0 => Some(xf / yf),
-        _ => None,
-    }
-}
-
-/// Computes compound assignment arithmetic on floats directly.
-#[inline(always)]
-#[allow(clippy::inline_always)]
-fn float_assign_arith(op: BinaryOp, xf: f64, yf: f64) -> Option<f64> {
-    match op {
-        BinaryOp::Add => Some(xf + yf),
-        BinaryOp::Sub => Some(xf - yf),
-        BinaryOp::Mul => Some(xf * yf),
-        BinaryOp::Div if yf != 0.0 => Some(xf / yf),
-        _ => None,
     }
 }
 
@@ -634,8 +553,8 @@ impl Vm {
     }
 
     /// `ZEND_ASSIGN` with a CV result operand (`$cv = val`, the
-    /// [`Op::AssignCv`] instruction, `zend_assign_to_variable`) in place,
-    /// in the hot pre-match of [`Vm::run`]: php-src's
+    /// [`Op::AssignCv`] instruction, `zend_assign_to_variable`) in place
+    /// on the current frame (`hot::assign_cv_in`): php-src's
     /// `ZEND_ASSIGN_SPEC_CV_{CONST,TMP,CV}` fast case: the source is a
     /// literal, a temporary or a defined compiled variable whose value
     /// needs no dereferencing work with side effects, and the target slot
@@ -647,51 +566,9 @@ impl Vm {
     #[inline(always)]
     #[allow(clippy::inline_always)] // the point is to avoid the call and the Value moves through memory
     fn assign_cv_fast(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
-        let Some(f) = self.frames.last_mut() else {
-            return false;
-        };
-        let idx = cv as usize;
-        let slot = match f.cvs.get(idx) {
-            Some(slot) => match slot.get() {
-                Some(Value::Reference(_) | Value::Array(_) | Value::Object(_)) => {
-                    return false;
-                }
-                _ => slot,
-            },
-            None => return false,
-        };
-        let v = match val {
-            // Consumed, as `read` does; a reference held by the temporary
-            // is left to the generic path (it derefs and releases it).
-            Operand::Tmp(t) => match f.tmps.get_mut(t as usize) {
-                Some(s) if !matches!(s, Value::Reference(_)) => std::mem::take(s),
-                _ => return false,
-            },
-            Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
-                Some(s) if !matches!(s, Value::Reference(_)) => s.clone(),
-                _ => return false,
-            },
-            Operand::Lit(i) => match f.code.literals.get(i as usize) {
-                Some(l) if !matches!(l, Value::Reference(_)) => l.clone(),
-                _ => return false,
-            },
-            // `ZVAL_COPY_DEREF` of a defined variable (an undefined one
-            // warns: generic path).
-            Operand::Cv(src) => match f.cvs.get(src as usize).and_then(CvSlot::get) {
-                Some(Value::Reference(r)) => r.get(),
-                Some(s) => s.clone(),
-                None => return false,
-            },
-            Operand::Unused => return false,
-        };
-        let keep = dst.map(|_| v.clone());
-        let old = slot.set(Some(v.clone()));
-        f.sync_cv_to_symtab(cv, &v);
-        discard_unrooted(old);
-        if let (Some(d), Some(k)) = (dst, keep) {
-            self.set_tmp(d, k);
-        }
-        true
+        self.frames
+            .last_mut()
+            .is_some_and(|f| hot::assign_cv_in(f, cv, val, dst))
     }
 
     /// The generic `AssignCv` (reads that warn, references on either side,
@@ -1231,7 +1108,7 @@ impl Vm {
             let ops: &[Op] = &code.ops;
             'ops: loop {
                 let at = ip;
-                let op = &ops[at];
+                let mut op = &ops[at];
                 ip = at + 1;
                 // Hot instructions on the local `ip` (no frame store): their
                 // fast paths cannot warn, throw, run user code or change the
@@ -1239,107 +1116,32 @@ impl Vm {
                 // path does not apply has changed nothing and breaks to the
                 // big match, which runs the generic op it replaced.
                 'slow: {
+                    // The frame-local hot ops (`exec/hot.rs`) run in their
+                    // own loop, on the frame and `ip` in registers, until an
+                    // op it does not handle or whose fast path declined
+                    // (that op then runs here: a declined hot op as its
+                    // generic op, any other through this pre-match), or a
+                    // due safe point.
+                    if hot::is_hot(op) {
+                        let Some(f) = self.frames.last_mut() else {
+                            break 'slow;
+                        };
+                        let (next, last) = hot::run_hot(f, ops, at);
+                        if last != hot::NO_SAFE_POINT {
+                            ip = self.safe_point(next, &ops[last])?;
+                            continue 'ops;
+                        }
+                        if next != at {
+                            if !hot::is_hot(&ops[next]) {
+                                ip = next;
+                                continue 'ops;
+                            }
+                            op = &ops[next];
+                            ip = next + 1;
+                        }
+                        break 'slow;
+                    }
                     match op {
-                        Op::Nop => {}
-                        Op::Jmp(t) => ip = *t as usize,
-                        Op::JmpZ(a, t) => match self.take_tmp_bool(*a) {
-                            Some(false) => ip = *t as usize,
-                            Some(true) => {}
-                            None => break 'slow,
-                        },
-                        Op::JmpNz(a, t) => match self.take_tmp_bool(*a) {
-                            Some(true) => ip = *t as usize,
-                            Some(false) => {}
-                            None => break 'slow,
-                        },
-                        // `$cv = val` in place (`assign_cv_fast`).
-                        Op::AssignCv { cv, val, dst } => {
-                            if !self.assign_cv_fast(*cv, *val, *dst) {
-                                break 'slow;
-                            }
-                        }
-                        Op::Move { src, dst } => {
-                            if !self.move_fast(*src, *dst) {
-                                break 'slow;
-                            }
-                        }
-                        // `??`, `?:` and `?->` on a compiled variable,
-                        // tested in place (`exec/spec.rs`): `Some(true)`
-                        // jumps.
-                        Op::Coalesce { a, dst, target } => match self.coalesce_cv_fast(*a, *dst) {
-                            Some(true) => ip = *target as usize,
-                            Some(false) => {}
-                            None => break 'slow,
-                        },
-                        Op::JmpSet { a, dst, target } => match self.jmp_set_cv_fast(*a, *dst) {
-                            Some(true) => ip = *target as usize,
-                            Some(false) => {}
-                            None => break 'slow,
-                        },
-                        Op::JmpNull { a, dst, target } => match self.jmp_null_cv_fast(*a, *dst) {
-                            Some(true) => ip = *target as usize,
-                            Some(false) => {}
-                            None => break 'slow,
-                        },
-                        // Smart branch (`ZEND_IS_SMALLER_LONG_SPEC` +
-                        // `ZEND_VM_SMART_BRANCH`): a comparison decided
-                        // without conversions jumps, or skips the jump op
-                        // after it, directly.
-                        Op::CmpJmp {
-                            op: kind,
-                            a,
-                            b,
-                            target,
-                            jmp_if,
-                            mask,
-                            ..
-                        } => {
-                            // Numbers: one outcome bit against the mask; the
-                            // same-type identity forms: the comparison's
-                            // result against the jump's sense.
-                            let jump = self.cmp_jmp_num(*a, *b, *mask).or_else(|| {
-                                self.equality_fast(*kind, *a, *b).map(|r| r == *jmp_if)
-                            });
-                            match jump {
-                                Some(true) => ip = *target as usize,
-                                Some(false) => ip += 1,
-                                None => break 'slow,
-                            }
-                        }
-                        Op::Bin {
-                            op: kind,
-                            a,
-                            b,
-                            dst,
-                        } => {
-                            if !self.bin_tmp_fast(*kind, *a, *b, *dst) {
-                                if let Some(r) = self.equality_fast(*kind, *a, *b) {
-                                    self.set_tmp(*dst, Value::Bool(r));
-                                } else {
-                                    self.frame_mut().ip = ip;
-                                    self.bin_slow(*kind, *a, *b, *dst)?;
-                                }
-                            }
-                        }
-                        Op::BinAssignCv {
-                            op: kind,
-                            a,
-                            b,
-                            dst,
-                            cv,
-                        } => match self.bin_assign_cv_fast(*kind, *a, *b, *cv, *dst) {
-                            // Stored into the variable: the `AssignCv` after
-                            // the op is done; otherwise it runs on `dst`.
-                            Some(true) => ip += 1,
-                            Some(false) => {}
-                            None => match self.equality_fast(*kind, *a, *b) {
-                                Some(r) => match self.cv_store_plain(*cv, Value::Bool(r)) {
-                                    Ok(()) => ip += 1,
-                                    Err(r) => self.set_tmp(*dst, r),
-                                },
-                                None => break 'slow,
-                            },
-                        },
                         Op::Abs { src, dst, to } => {
                             if let Some(val) = self.abs_fast(*src) {
                                 if let Some(cv) = *to {
@@ -1361,158 +1163,6 @@ impl Vm {
                                     ip += 2;
                                 }
                             } else {
-                                break 'slow;
-                            }
-                        }
-                        Op::IncDecCv { cv, kind, dst, .. } => {
-                            if !self.incdec_cv_fast(*cv, *kind, *dst) {
-                                break 'slow;
-                            }
-                        }
-                        // A loop's step and its condition: after the
-                        // `++`/`--`, the `CmpJmp` at `ip` on plain numbers
-                        // jumps or skips itself and its jump op here;
-                        // otherwise it runs as the next op.
-                        Op::IncDecCvCmpJmp { cv, kind, .. } => {
-                            if !self.incdec_cv_fast(*cv, *kind, None) {
-                                break 'slow;
-                            }
-                            if let Some(Op::CmpJmp {
-                                a, b, target, mask, ..
-                            }) = ops.get(ip)
-                            {
-                                match self.cmp_jmp_num(*a, *b, *mask) {
-                                    Some(true) => ip = *target as usize,
-                                    Some(false) => ip += 2,
-                                    None => {}
-                                }
-                            }
-                        }
-                        Op::BinAssignCvCmpJmp {
-                            op: kind,
-                            a,
-                            b,
-                            dst,
-                            cv,
-                        } => match self.bin_assign_cv_fast(*kind, *a, *b, *cv, *dst) {
-                            Some(true) => {
-                                if let Some(Op::CmpJmp {
-                                    a: ca,
-                                    b: cb,
-                                    target,
-                                    mask,
-                                    ..
-                                }) = ops.get(ip + 1)
-                                {
-                                    match self.cmp_jmp_num(*ca, *cb, *mask) {
-                                        Some(true) => ip = *target as usize,
-                                        Some(false) => ip += 3,
-                                        None => ip += 1,
-                                    }
-                                } else {
-                                    ip += 1;
-                                }
-                            }
-                            Some(false) => {}
-                            None => break 'slow,
-                        },
-                        Op::AssignOpCvCmpJmp {
-                            cv, op: kind, val, ..
-                        } => {
-                            if !self.assign_op_cv_step_fast(*cv, *kind, *val) {
-                                break 'slow;
-                            }
-                            if let Some(Op::CmpJmp {
-                                a, b, target, mask, ..
-                            }) = ops.get(ip)
-                            {
-                                match self.cmp_jmp_num(*a, *b, *mask) {
-                                    Some(true) => ip = *target as usize,
-                                    Some(false) => ip += 2,
-                                    None => {}
-                                }
-                            }
-                        }
-                        Op::BinAssignCvJmp {
-                            op: kind,
-                            a,
-                            b,
-                            dst,
-                            cv,
-                            target,
-                            jmp_if,
-                        } => match self.bin_assign_cv_fast(*kind, *a, *b, *cv, *dst) {
-                            Some(true) => match self.peek_cv_bool(*cv) {
-                                Some(cond) if cond == *jmp_if => ip = *target as usize,
-                                Some(_) => ip += 2,
-                                None => ip += 1,
-                            },
-                            Some(false) => {}
-                            None => break 'slow,
-                        },
-                        Op::AssignOpCvJmp {
-                            cv,
-                            op: kind,
-                            val,
-                            target,
-                            jmp_if,
-                            ..
-                        } => {
-                            if !self.assign_op_cv_step_fast(*cv, *kind, *val) {
-                                break 'slow;
-                            }
-                            match self.peek_cv_bool(*cv) {
-                                Some(cond) if cond == *jmp_if => ip = *target as usize,
-                                Some(_) => ip += 1,
-                                None => {}
-                            }
-                        }
-                        Op::AssignOpCv {
-                            cv,
-                            op: kind,
-                            val,
-                            dst,
-                            ..
-                        } => {
-                            let mut handled = false;
-                            if let Some(f) = self.frames.last_mut() {
-                                let cv = *cv;
-                                let idx = cv as usize;
-                                if let Some(slot) = f.cvs.get(idx) {
-                                    if let Some((yf, _)) = Self::peek_num_f64(f, *val) {
-                                        if let Some(Value::Float(xf)) = slot.get() {
-                                            if let Some(res) = float_assign_arith(*kind, *xf, yf) {
-                                                unsafe {
-                                                    if let Some(Value::Float(ref mut dst_f)) =
-                                                        slot.get_mut_unchecked()
-                                                    {
-                                                        *dst_f = res;
-                                                        f.sync_cv_to_symtab(cv, &Value::Float(res));
-                                                        if let Some(t) = dst {
-                                                            if let Some(tslot) =
-                                                                f.tmps.get_mut(*t as usize)
-                                                            {
-                                                                if let Value::Float(ref mut dst_f) =
-                                                                    tslot
-                                                                {
-                                                                    *dst_f = res;
-                                                                } else {
-                                                                    spec::put_tmp(
-                                                                        tslot,
-                                                                        Value::Float(res),
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                        handled = true;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if !handled && !self.assign_op_cv_fast(*cv, *kind, *val, *dst) {
                                 break 'slow;
                             }
                         }
