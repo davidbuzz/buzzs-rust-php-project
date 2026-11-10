@@ -1605,6 +1605,12 @@ fn ret_null(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 fn memory_get_usage(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     vm.frames.drop_pool(&vm.empty_vars);
+    // The call protocol's buffer pools, like the frame pool: a buffer that
+    // moved into a long-lived frame is replaced by a fresh one on the next
+    // call, so a reading must not depend on which calls came before.
+    vm.call_bufs.args.clear();
+    vm.call_bufs.values.clear();
+    vm.call_bufs.passed.clear();
     let real = a.has(0) && a.bool(0);
     Ok(Value::Int(
         i64::try_from(php_memlimit::memory_get_usage(real)).unwrap_or(i64::MAX),

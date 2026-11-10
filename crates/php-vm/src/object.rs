@@ -680,8 +680,17 @@ fn free_object(d: &mut ObjectData, slots: &mut [Option<Value>], cell: usize) {
         && d.internal.get_mut().is_none()
         && slots.iter().all(owns_nothing)
     {
+        // A WeakMap value released by `zend_weakrefs_notify` may queue a
+        // destructor: its object is freed before this handle is reusable,
+        // as on the full path below.
+        let seq = PENDING_SEQ.try_with(Cell::get).unwrap_or(0);
         crate::weakref::object_freed(handle);
-        release_store_slot(handle, None);
+        let anchor = if PENDING_SEQ.try_with(Cell::get).unwrap_or(0) == seq {
+            None
+        } else {
+            last_pending_handle()
+        };
+        release_store_slot(handle, anchor);
         return;
     }
     if flags & oflags::GC_BUFFERED != 0 {

@@ -3000,6 +3000,10 @@ impl Vm {
             || call.is_ctor
             || call.magic_name.is_some()
             || call.dynamic
+            // The names are global functions': a method of the same name
+            // (`BcMath\Number::sqrt`) is not one of them.
+            || call.scope.is_some()
+            || call.this.is_some()
         {
             return None;
         }

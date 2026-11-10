@@ -1177,6 +1177,7 @@ dependencies = [
 name = "php-pdo"
 version = "0.1.0"
 dependencies = [
+ "php-mysqlnd",
  "php-runtime",
  "php-sqlite",
 ]

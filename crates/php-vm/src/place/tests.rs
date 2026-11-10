@@ -485,19 +485,19 @@ z();
     let expected = "Undefined array key \"x\"\n\
 Undefined variable $y\n\
 array(1) {\n\
-  [\"x\"]=>\n\
-  int(0)\n\
+\x20\x20[\"x\"]=>\n\
+\x20\x20int(0)\n\
 }\n\
 Undefined variable $a\n\
 Undefined array key 1\n\
 Undefined array key 2\n\
 Undefined variable $y\n\
 array(1) {\n\
-  [1]=>\n\
-  array(1) {\n\
-    [2]=>\n\
-    string(0) \"\"\n\
-  }\n\
+\x20\x20[1]=>\n\
+\x20\x20array(1) {\n\
+\x20\x20\x20\x20[2]=>\n\
+\x20\x20\x20\x20string(0) \"\"\n\
+\x20\x20}\n\
 }\n\
 Undefined variable $a\n\
 Undefined variable $y\n\

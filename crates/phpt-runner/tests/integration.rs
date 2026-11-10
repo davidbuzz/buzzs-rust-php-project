@@ -201,6 +201,8 @@ fn fixtures_against_reference_php() {
     for (name, status) in &got {
         let expected = match name.split('_').next().unwrap() {
             "pass" => Status::Pass,
+            // A test killed at its time limit reports TIMEOUT (a failure).
+            "fail" if name.starts_with("fail_timeout") => Status::Timeout,
             "fail" => Status::Fail,
             "skip" => Status::Skip,
             "xfail" => Status::Xfail,
@@ -674,6 +676,8 @@ fn repeat_mode_against_reference_php() {
         }
         let expected = match name.split('_').next().unwrap() {
             "pass" => Status::Pass,
+            // A test killed at its time limit reports TIMEOUT (a failure).
+            "fail" if name.starts_with("fail_timeout") => Status::Timeout,
             "fail" => Status::Fail,
             "skip" => Status::Skip,
             "xfail" => Status::Xfail,

@@ -1318,18 +1318,28 @@ impl Frame {
                 *v = Vec::new();
             }
         }
-        shrink(&mut self.tmps);
+        // A pooled frame keeps its cleared slots at their length for the
+        // next call of the same function; a builtin frame uses none, and
+        // the call paths resize them when the lengths do not match.
+        if self.tmps.iter().all(|v| matches!(v, Value::Null)) {
+            self.tmps = Vec::new();
+        }
         shrink(&mut self.iters);
         shrink(&mut self.fins);
         shrink(&mut self.calls);
-        shrink(&mut self.cvs);
+        if self.cvs.iter().all(CvSlot::is_none) {
+            self.cvs = Vec::new();
+        }
         shrink(&mut self.named);
         shrink(&mut self.silence_saved);
+        // The passed-argument buffer an earlier user call left behind.
+        if self.args.iter().all(Option::is_none) {
+            self.args = Vec::new();
+        }
         // Only a store of its own that holds nothing (one kept from a
-        // pooled frame) is given back.
+        // pooled frame, its slots cleared) is given back.
         let own_and_empty = Rc::get_mut(&mut self.vars).is_some_and(|rc_mut| {
-            let vs = rc_mut.get_mut();
-            vs.slots.is_empty() && vs.names.is_empty()
+            rc_mut.get_mut().slots.iter().all(Option::is_none)
         });
         if own_and_empty {
             self.vars = empty_vars.clone();

@@ -461,7 +461,9 @@ mod tests {
         op(&mut h, HeaderOp::Replace(b"HTTP/1.1 404 Not Found", 0)).unwrap();
         op(&mut h, HeaderOp::Replace(b"Location: /x", 0)).unwrap();
         let out = h.render_cgi(false, false);
-        assert!(out.starts_with(b"Status: 404 Not Found\r\n"), "{out:?}");
+        // `Location:` turns a non-3xx, non-201 status into 302, as
+        // php-cgi 8.5 prints for this pair.
+        assert!(out.starts_with(b"Status: 302 Found\r\n"), "{out:?}");
 
         let mut h = SapiHeaders::new();
         h.update_response_code(299);

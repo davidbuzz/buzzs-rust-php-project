@@ -202,12 +202,14 @@ fn typed_returns_get_verify_return_type() {
     );
     // A parameter of the declared type needs no check
     // (`can_elide_return_type_check`).
+    // (The unit-test dump runs without unreachable-code removal, so the
+    // implicit return's operand-less check may still be printed.)
     let out = dump("<?php\nfunction f(int $a): int {\n    return $a;\n}\n");
-    assert!(!out.contains("VERIFY_RETURN_TYPE"), "{out}");
+    assert!(!out.contains("VERIFY_RETURN_TYPE CV0"), "{out}");
     // A literal of the declared type needs no check; another literal is
     // checked into a TMP (type_inference_final_class.phpt).
     let out = dump("<?php\nfunction f(): int {\n    return 42;\n}\n");
-    assert!(!out.contains("VERIFY_RETURN_TYPE"), "{out}");
+    assert!(!out.contains("VERIFY_RETURN_TYPE int"), "{out}");
     let out = dump("<?php\nfunction f(): float {\n    return 1;\n}\n");
     assert!(
         out.contains("0000 T0 = VERIFY_RETURN_TYPE int(1)\n0001 RETURN T0\n"),
@@ -217,7 +219,7 @@ fn typed_returns_get_verify_return_type() {
     let out = dump(
         "<?php\nfunction f(): void {\n    return;\n}\nfunction g($x): mixed {\n    return $x;\n}\n",
     );
-    assert!(!out.contains("VERIFY_RETURN_TYPE"), "{out}");
+    assert!(!out.contains("VERIFY_RETURN_TYPE CV0"), "{out}");
 }
 
 #[test]

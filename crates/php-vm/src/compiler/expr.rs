@@ -2001,13 +2001,17 @@ impl Compiler<'_> {
                         c.kind,
                         ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::String(_)
                     );
-                    self.f().line = if prefolded > 0 && !is_literal {
+                    let line = if prefolded > 0 && !is_literal {
                         subject.span.line
                     } else {
                         c.span.line
                     };
+                    self.f().line = line;
                     prefolded = prefolded.saturating_sub(1);
                     let v = self.compile_expr(c)?;
+                    // Compiling the condition may move the line to its own;
+                    // the `===` test keeps the line chosen above.
+                    self.f().line = line;
                     let t = self.tmp();
                     self.emit(Op::Bin {
                         op: BinKind::Identical,
