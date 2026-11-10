@@ -30,7 +30,8 @@
 //!   `<?=` as [`TokenKind::Echo`];
 //! * whitespace, comments and open tags are still returned (they are
 //!   [`TokenKind::is_trivia`]) so that a parser can track doc comments; a
-//!   parser should skip them;
+//!   parser should skip them, or call [`Lexer::set_skip_trivia`] to have
+//!   the lexer skip all but doc comments without building tokens;
 //! * after each token, [`Lexer::take_value`] yields the semantic value of
 //!   number and string tokens: integers that overflow become floats, escape
 //!   sequences are resolved and heredoc/nowdoc indentation is removed;
