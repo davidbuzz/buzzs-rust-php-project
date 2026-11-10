@@ -49,7 +49,7 @@ pub(crate) fn reg(vm: &mut Vm, sig: &'static str, f: BuiltinFn) -> ZStr {
 
 /// [`reg`] for a signature built at run time.
 pub(crate) fn reg_dynamic(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
-    let (lc, is_new) = insert_builtin(vm, sig, Some(sig), f);
+    let (lc, is_new) = insert_builtin(vm, "", Some(sig), f);
     if is_new {
         info::note_new_function(&lc);
     }
@@ -76,7 +76,7 @@ pub(crate) fn reg_module_dynamic(
     f: BuiltinFn,
     module: &'static str,
 ) -> ZStr {
-    let (lc, is_new) = insert_builtin(vm, sig, Some(sig), f);
+    let (lc, is_new) = insert_builtin(vm, "", Some(sig), f);
     info::note_function(&lc, module, is_new);
     lc
 }
