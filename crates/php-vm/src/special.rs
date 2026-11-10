@@ -446,7 +446,10 @@ pub(crate) fn frameless_call(b: &Builtin, call: &PendingCall) -> bool {
 
 /// A call by name with positional arguments only and nothing bound to it:
 /// what `ZEND_INIT_FCALL` and the `SEND` ops make of `f($a, $b)`.
-#[inline]
+/// Always inline: a few field tests, made out of line (~30 instructions
+/// a frameless call) when merely `#[inline]`.
+#[inline(always)]
+#[allow(clippy::inline_always)]
 fn plain_call(call: &PendingCall) -> bool {
     !call.has_named
         && !call.dynamic
@@ -676,7 +679,6 @@ impl Vm {
         } else {
             None
         };
-        let b = Rc::clone(b);
         let (mut values, mut passed) = if quick.is_none() {
             let nparams = b.params.len();
             let mut values = self.call_bufs.values.pop().unwrap_or_default();
@@ -691,13 +693,65 @@ impl Vm {
         } else {
             (Vec::new(), Vec::new())
         };
-        call.inline_count = 0;
-        let spare = (call.args.capacity() > 0).then(|| std::mem::take(&mut call.args));
-        // What is left of the call (its function handle, empty buffers and,
-        // for an inline result, the argument) is dropped where it lies.
-        let pending = frame.calls.len();
-        frame.calls.truncate(pending - 1);
+        // An inline result's argument (the others moved into `values`):
+        // every inline slot is empty from here on.
+        let held = if quick.is_some() {
+            call.inline_args[0].take()
+        } else {
+            None
+        };
+        // The call is popped and taken apart field by field rather than
+        // dropped where it lies (`truncate`), whose drop glue made an
+        // out-of-line `drop_in_place` call per field (~140 instructions a
+        // call) for fields that hold nothing: a [`plain_call`] has no
+        // `$this`, scopes, closure, `__call` name, partial application or
+        // named arguments, and its inline arguments were all taken above.
+        // What it owns is its function handle (moved into the handler's
+        // `Args`, where the clone of it was) and its argument buffer
+        // (empty: back to the pool). Nothing is leaked: the forgotten
+        // fields are `None` or unallocated.
+        let PendingCall {
+            func,
+            args: spare,
+            named,
+            inline_args,
+            this,
+            scope,
+            called,
+            closure,
+            magic_name,
+            pfa,
+            ..
+        } = frame.calls.pop().expect("pending call");
+        debug_assert!(
+            this.is_none()
+                && scope.is_none()
+                && called.is_none()
+                && closure.is_none()
+                && magic_name.is_none()
+                && pfa.is_none()
+                && named.is_empty()
+                && spare.is_empty()
+                && inline_args.iter().all(Option::is_none)
+        );
+        std::mem::forget((this, scope, called, closure, magic_name, pfa, inline_args));
+        forget_unallocated(named);
+        let spare = if spare.capacity() > 0 {
+            Some(spare)
+        } else {
+            std::mem::forget(spare);
+            None
+        };
+        let b = match func {
+            Func::Builtin(b) => b,
+            // The pending call's function was matched as a builtin above.
+            Func::User(_) => unreachable!("frameless call of a user function"),
+        };
         if let Some(v) = quick {
+            // What the old in-place drop released: the function handle and
+            // the argument (a scalar or a string: no side effect).
+            drop(b);
+            drop(held);
             // `fast_builtin_call`'s order: the interrupt check, then the
             // argument buffer back to its pool.
             let r = self.check_interrupt().map(|()| v);
@@ -711,11 +765,21 @@ impl Vm {
             self.magic_call_name = None;
         }
         // The declared defaults of omitted trailing parameters, as for a
-        // framed call.
-        while values.len() < b.params.len() {
+        // framed call ([`Vm::builtin_default`]); a literal default, the
+        // common case, is copied here without the out-of-line call. The
+        // signature is read once (each `b.field` goes through its
+        // `OnceCell`).
+        let sig = b.signature();
+        let (nparams, required) = (sig.params.len(), sig.required as usize);
+        while values.len() < nparams {
             let i = values.len();
+            if let (true, Some(Some(d))) = (i >= required, sig.defaults.get(i)) {
+                values.push(crate::call::clone_value(d));
+                passed.push(false);
+                continue;
+            }
             match self.builtin_default(&b, i) {
-                Some(d) if i >= b.required as usize => {
+                Some(d) if i >= required => {
                     values.push(d);
                     passed.push(false);
                 }
@@ -1035,6 +1099,52 @@ for ($i = 0; $i < 3; $i++) {
         assert_eq!(pools(&vm), before);
         assert!(vm.call_bufs.args.iter().all(Vec::is_empty));
         assert!(vm.call_bufs.values.iter().all(Vec::is_empty));
+    }
+
+    /// Frameless calls made in place (`Vm::frameless_icall_in_place`):
+    /// handler calls with and without literal defaults, the inline
+    /// results of `abs()`, `ord()` and `chr()`, and arguments taken from
+    /// variables, literals and temporaries, which the calls release (the
+    /// variables are reused afterwards). Expected output from
+    /// `/usr/bin/php -n`.
+    #[test]
+    fn frameless_calls_in_place_match_the_handlers() {
+        use std::cell::RefCell;
+        use std::io::Write;
+        use std::rc::Rc;
+        #[derive(Clone, Default)]
+        struct Sink(Rc<RefCell<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.borrow_mut().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let sink = Sink::default();
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(sink.clone()));
+        let status = vm.run_script(
+            br#"<?php
+$s = "hello world";
+for ($i = 0; $i < 2; $i++) {
+    echo strpos($s, "o"), " ", strpos($s, "o", 5), " ", ord("A"), " ", abs(-3), " ",
+        chr(66), " ", substr($s, 6), " ", trim("  x  "), " ", round(2.5), " ",
+        in_array(2, [1, 2]) ? "y" : "n", " ", str_replace("o", "0", $s), "\n";
+}
+function f($t) { return ord($t) + strpos($t . "z", "z"); }
+echo f("a"), " ", $s, "\n";
+"#,
+            "t.php",
+        );
+        assert_eq!(status, 0);
+        drop(vm);
+        let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+        assert_eq!(
+            out,
+            "4 7 65 3 B world x 3 y hell0 w0rld\n4 7 65 3 B world x 3 y hell0 w0rld\n98 hello world\n"
+        );
     }
 
     #[test]

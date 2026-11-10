@@ -4617,7 +4617,7 @@ fn return_accepts(rt: Option<&crate::types::TypeDecl>, v: &Value) -> bool {
 /// [`Value`] is an out-of-line call even for an integer.
 #[inline(always)]
 #[allow(clippy::inline_always)] // an argument or result per call
-fn clone_value(v: &Value) -> Value {
+pub(crate) fn clone_value(v: &Value) -> Value {
     match v {
         Value::Null => Value::Null,
         Value::Bool(b) => Value::Bool(*b),
@@ -4717,7 +4717,7 @@ pub(crate) fn send_in(frame: &mut Frame, src: &ArgSrc) -> bool {
         || !call.args.is_empty()
         || call.has_named
         || call.magic_name.is_some()
-        || call.func.arg_by_ref(idx)
+        || sends_by_ref(&call.func, idx)
     {
         return false;
     }
@@ -4763,6 +4763,24 @@ pub(crate) fn send_in(frame: &mut Frame, src: &ArgSrc) -> bool {
     call.inline_args[idx] = Some(v);
     call.inline_count += 1;
     true
+}
+
+/// [`Func::arg_by_ref`] made inline for [`send_in`] (`ZEND_SEND_VAL`'s
+/// `ARG_MUST_BE_SENT_BY_REF` test, once per argument of every call): the
+/// out-of-line call cost ~26 instructions an argument. Same answer: the
+/// parameter's by-reference flag, and past the declared parameters that
+/// of a by-reference variadic.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one test per SEND
+fn sends_by_ref(func: &Func, n: usize) -> bool {
+    let params: &[crate::opcode::ParamInfo] = match func {
+        Func::User(u) => &u.params,
+        Func::Builtin(b) => &b.params,
+    };
+    match params.get(n) {
+        Some(p) => p.by_ref,
+        None => params.last().is_some_and(|l| l.variadic && l.by_ref),
+    }
 }
 
 fn install_buffer<T>(slot: &mut Vec<T>, buf: Vec<T>) {
@@ -5102,6 +5120,27 @@ restore_error_handler();
         assert_eq!(capacities(&vm), before);
         assert_eq!(arg.refcount(), 1);
         assert_eq!(tmp.refcount(), 1);
+    }
+
+    /// `send_in`'s inline by-reference test answers as
+    /// [`Func::arg_by_ref`] for every registered function and position,
+    /// past the declared parameters too (variadics).
+    #[test]
+    fn sends_by_ref_matches_arg_by_ref() {
+        let vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+        let mut by_ref = 0;
+        for f in vm.functions.values() {
+            for n in 0..f.params().len() + 2 {
+                assert_eq!(sends_by_ref(f, n), f.arg_by_ref(n), "{} #{n}", f.name());
+                by_ref += usize::from(sends_by_ref(f, n));
+            }
+        }
+        assert!(by_ref > 0);
+        let Some(f) = vm.functions.get(&ZStr::from("str_replace")) else {
+            panic!("str_replace is a core builtin");
+        };
+        assert!(!sends_by_ref(f, 2));
+        assert!(sends_by_ref(f, 3));
     }
 
     #[test]
