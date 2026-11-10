@@ -298,18 +298,33 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
         // A loop's step and its condition: after the `++`/`--`, the
         // `CmpJmp` at `ip` on plain numbers jumps or skips itself and
         // its jump op; otherwise it runs as the next op.
+        // The variable's new value is at hand: an operand naming it is not
+        // read back from its slot (which now holds that number).
         Op::IncDecCvCmpJmp { cv, kind, .. } => {
-            if !incdec_cv(f, cv, kind, None) {
+            let Some((_, new)) = incdec_cv_num(f, cv, kind) else {
                 return DECLINED;
-            }
+            };
             if let Some(&Op::CmpJmp {
                 a, b, target, mask, ..
             }) = ops.get(ip)
             {
-                match cmp_num(f, lits, a, b, mask) {
-                    Some(true) => ip = target as usize,
-                    Some(false) => ip += 2,
-                    None => {}
+                let known = Operand::Cv(cv);
+                let x = if a == known {
+                    Some(new)
+                } else {
+                    num_of(f, lits, a)
+                };
+                let y = if b == known {
+                    Some(new)
+                } else {
+                    num_of(f, lits, b)
+                };
+                if let (Some(x), Some(y)) = (x, y) {
+                    if jump_of(x, y, mask) {
+                        ip = target as usize;
+                    } else {
+                        ip += 2;
+                    }
                 }
             }
         }
@@ -857,11 +872,17 @@ fn operand_truth(f: &mut Frame, op: Operand) -> Option<bool> {
 #[inline(always)]
 #[allow(clippy::inline_always)]
 fn num_of(f: &Frame, lits: &[Value], op: Operand) -> Option<Num> {
-    let v = match op {
-        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
-        Operand::Lit(i) => lits.get(i as usize)?,
-        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
-        Operand::Unused => return None,
+    // A variable or a literal (nearly every numeric operand) by tag tests
+    // and predicted branches, not through the operand kind's jump table.
+    let v = if let Operand::Cv(cv) = op {
+        f.cvs.get(cv as usize).and_then(CvSlot::get)?
+    } else if let Operand::Lit(i) = op {
+        lits.get(i as usize)?
+    } else {
+        match op {
+            Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+            Operand::Cv(_) | Operand::Lit(_) | Operand::Unused => return None,
+        }
     };
     match v {
         Value::Int(i) => Some(Num::Int(*i)),
@@ -877,8 +898,16 @@ fn num_of(f: &Frame, lits: &[Value], op: Operand) -> Option<Num> {
 fn cmp_num(f: &Frame, lits: &[Value], a: Operand, b: Operand, mask: u8) -> Option<bool> {
     let x = num_of(f, lits, a)?;
     let y = num_of(f, lits, b)?;
+    Some(jump_of(x, y, mask))
+}
+
+/// Whether a smart branch with `mask` jumps on the comparison of `x` with
+/// `y`.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn jump_of(x: Num, y: Num, mask: u8) -> bool {
     let identity = (mask & cmp_outcome::IDENTITY) != 0;
-    Some((mask & num_outcome(x, y, identity)) != 0)
+    (mask & num_outcome(x, y, identity)) != 0
 }
 
 /// `Vm::equality_fast` on frame `f`: `==`, `!=`, `===`, `!==` decided
@@ -976,41 +1005,57 @@ fn bin_assign_cv(
 #[inline(always)]
 #[allow(clippy::inline_always)]
 fn incdec_cv(f: &mut Frame, cv: u32, kind: IncDecKind, dst: Option<u32>) -> bool {
-    let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
+    let Some((old, new)) = incdec_cv_num(f, cv, kind) else {
         return false;
     };
+    // An unused result is never built (an int or a float: nothing to drop).
+    if let Some(t) = dst {
+        set_tmp_in(f, t, num_value(if kind.is_post() { old } else { new }));
+    }
+    true
+}
+
+/// The in-place `++`/`--` of [`incdec_cv`] without its result store:
+/// `(old, new)` values of compiled variable `cv` (written back, and
+/// copied into an attached symbol table). `None`, nothing changed, when
+/// `cv` holds anything but an int that does not overflow or a float.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn incdec_cv_num(f: &mut Frame, cv: u32, kind: IncDecKind) -> Option<(Num, Num)> {
+    let slot = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut)?;
     let r = match slot.as_mut() {
         Some(Value::Int(i)) => {
             let old = *i;
-            let next = if kind.is_inc() {
+            let new = if kind.is_inc() {
                 old.checked_add(1)
             } else {
                 old.checked_sub(1)
-            };
-            let Some(new) = next else {
-                return false;
-            };
+            }?;
             *i = new;
-            Value::Int(if kind.is_post() { old } else { new })
+            (Num::Int(old), Num::Int(new))
         }
         Some(Value::Float(x)) => {
             let old = *x;
             let new = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
             *x = new;
-            Value::Float(if kind.is_post() { old } else { new })
+            (Num::Float(old), Num::Float(new))
         }
-        _ => return false,
+        _ => return None,
     };
     if f.symtab_attached {
         sync_cv_cold(f, cv);
     }
-    if let Some(t) = dst {
-        set_tmp_in(f, t, r);
-    } else {
-        // An int or a float: nothing to drop.
-        std::mem::forget(r);
+    Some(r)
+}
+
+/// The value of number `n`.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn num_value(n: Num) -> Value {
+    match n {
+        Num::Int(i) => Value::Int(i),
+        Num::Float(x) => Value::Float(x),
     }
-    true
 }
 
 /// `$cv op= val` in place when both hold plain numbers and the result has
