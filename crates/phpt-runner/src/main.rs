@@ -282,19 +282,39 @@ fn colorize(status: Status, enabled: bool) -> String {
     format!("\x1b[{color}m{}\x1b[0m", status.label())
 }
 
-fn print_result(r: &TestResult, cli: &Cli, color: bool, show_diff: bool, srcdir: &Path) {
+/// Prints one result line. On a terminal (`live`) a PASS or SKIP line ends
+/// in `\r` instead of `\n`, so they overwrite each other as a progress line and
+/// only other results stay on screen; every line first clears the one it
+/// overwrites. Piped or redirected output keeps one line per result, so
+/// filters like `grep -v PASS` still see each result.
+fn print_result(
+    r: &TestResult,
+    cli: &Cli,
+    color: bool,
+    live: bool,
+    show_diff: bool,
+    srcdir: &Path,
+) {
     if cli.quiet && matches!(r.result, Status::Pass | Status::Skip) {
         return;
     }
     let mut out = std::io::stdout().lock();
-    let _ = writeln!(
-        out,
+    if live {
+        let _ = write!(out, "\r\x1b[2K");
+    }
+    let text = format!(
         "{} {} [{}] {}",
         colorize(r.result, color),
         r.name,
         r.path,
         r.info
     );
+    if live && matches!(r.result, Status::Pass | Status::Skip) {
+        let _ = write!(out, "{text}\r");
+        let _ = out.flush();
+        return;
+    }
+    let _ = writeln!(out, "{text}");
     if show_diff && r.result.is_failure() {
         if let Some(diff) = &r.diff {
             let expect_section = detect_expect_section(srcdir, &r.path);
@@ -528,8 +548,8 @@ fn execute(
     let workers = cli.jobs.unwrap_or_else(|| {
         std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
     });
-    let color =
-        !cli.no_color && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal();
+    let live = std::io::stdout().is_terminal();
+    let color = !cli.no_color && std::env::var_os("NO_COLOR").is_none() && live;
     let show_diff = cli.show_diff || tests.len() == 1;
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     println!(
@@ -552,7 +572,7 @@ fn execute(
                         remove_failure_artifacts(&runner.config().srcdir, &r.path);
                     }
                 }
-                print_result(&r, cli, color, show_diff, &runner.config().srcdir);
+                print_result(&r, cli, color, live, show_diff, &runner.config().srcdir);
                 // Diffs can be large; they were printed (and written to .diff) already. A `JUnit`
                 // report embeds them, so they are kept for it.
                 if !keep_diffs {
@@ -567,6 +587,11 @@ fn execute(
             }
         },
     );
+    if live {
+        // Clear the last PASS/SKIP progress line before the summary.
+        print!("\r\x1b[2K");
+        let _ = std::io::stdout().flush();
+    }
     results
 }
 

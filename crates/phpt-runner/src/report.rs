@@ -59,14 +59,17 @@ impl Counts {
         self.in_scope() - self.skip - self.bork
     }
 
-    /// Pass percentage of the tests that ran.
+    /// Pass percentage of the tests that ran. Expected failures (`--XFAIL--`
+    /// tests that fail as php-src itself does) are left out: like
+    /// run-tests.php, they are neither passes nor failures.
     pub fn pass_rate(&self) -> f64 {
-        percent(self.pass, self.ran())
+        percent(self.pass, self.ran() - self.xfail)
     }
 
-    /// Pass percentage of all in-scope tests (skips count against).
+    /// Pass percentage of all in-scope tests (skips count against;
+    /// expected failures are left out, as in [`Counts::pass_rate`]).
     pub fn pass_rate_all(&self) -> f64 {
-        percent(self.pass, self.in_scope())
+        percent(self.pass, self.in_scope() - self.xfail)
     }
 }
 
@@ -385,6 +388,21 @@ mod tests {
         assert_eq!(dir_key("Zend/tests/foo/a.phpt", None), "Zend/tests/foo");
         assert_eq!(dir_key("Zend/tests/foo/a.phpt", Some(2)), "Zend/tests");
         assert_eq!(dir_key("a.phpt", None), "");
+    }
+
+    #[test]
+    fn expected_failures_are_left_out_of_the_rates() {
+        let mut c = Counts::default();
+        for s in [Status::Pass, Status::Pass, Status::Xfail, Status::Skip] {
+            c.add(s);
+        }
+        assert!((c.pass_rate() - 100.0).abs() < f64::EPSILON);
+        assert!((c.pass_rate_all() - 66.666).abs() < 0.01);
+        c.add(Status::Fail);
+        assert!((c.pass_rate() - 66.666).abs() < 0.01);
+        let mut only = Counts::default();
+        only.add(Status::Xfail);
+        assert!(only.pass_rate().abs() < f64::EPSILON);
     }
 
     #[test]
