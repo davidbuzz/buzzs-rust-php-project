@@ -22,6 +22,11 @@ impl Write for Sink {
 }
 
 fn run(source: &str) -> String {
+    // A new request's object store (`zend_objects_store_init`), as each
+    // script gets in its own `php` process: the store is per thread, and a
+    // test running several scripts would otherwise reuse the handles the
+    // previous one freed, in the order it freed them.
+    php_vm::object::reset_store();
     let sink = Sink::default();
     let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
     let status = vm.run_script(source.as_bytes(), "t.php");
@@ -364,11 +369,6 @@ echo "end\n";
     // The handles: the generator #1, the iterator's #2, the yielded #3;
     // freed in the order #2, #1, #3, so the next object takes #3.
     let handles = "object(stdClass)#3 (0) {\n}\nobject(stdClass)#3 (0) {\n}\n";
-    // A new request's object store (`zend_objects_store_init`), as the
-    // script gets in its own `php` process: the store is per thread, and
-    // the handles the script above freed would otherwise be reused first,
-    // in the order it freed them (the next object then took #4).
-    php_vm::object::reset_store();
     assert_eq!(
         run(r#"<?php
 function o() { yield new stdClass; throw new Exception("x"); }
