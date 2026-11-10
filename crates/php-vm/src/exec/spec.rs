@@ -34,19 +34,22 @@
 //! [`Frame::peek_cv_dim_int`]: crate::vm::Frame::peek_cv_dim_int
 
 use super::{discard_unrooted, num_bin, CvOpData, Num};
-use crate::opcode::{
-    cmp_outcome, BinKind, FetchMode, IncDecKind, Operand, PlaceBase, PlaceId, Seg,
-};
+use crate::opcode::{cmp_outcome, BinKind, FetchMode, Operand, PlaceBase, PlaceId, Seg};
 use crate::rtcache::GlobalSlot;
 use crate::vm::{CvSlot, Frame, FrameKind, Vm, VmResult};
 use php_runtime::{ArrayKey, BinaryOp, HashTable, Value, ZArray, ZStr};
 
+mod dims;
 mod props;
 mod statics;
 
 pub(super) use statics::{
     assign_static_prop_in, fetch_class_const_in, fetch_const_in, fetch_static_prop_in,
     isset_static_prop_in,
+};
+pub(super) use dims::{
+    assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, concat_cv_in,
+    fe_fetch_array_in, fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, isset_dim_cv_in,
 };
 
 /// Whether replacing `v` needs no destructor, GC root buffering or
@@ -66,6 +69,37 @@ pub(super) fn is_plain_slot(v: Option<&Value>) -> bool {
 #[inline(always)]
 fn is_plain_value(v: &Value) -> bool {
     v.is_plain()
+}
+
+/// A copy of `v` (`ZVAL_COPY`): scalars are copied inline, without the
+/// out-of-line `Clone` call the other kinds (a refcount increment) take.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a tag test and a copy on the hot element reads
+fn copy_value(v: &Value) -> Value {
+    match *v {
+        Value::Null => Value::Null,
+        Value::Bool(b) => Value::Bool(b),
+        Value::Int(i) => Value::Int(i),
+        Value::Float(x) => Value::Float(x),
+        _ => v.clone(),
+    }
+}
+
+/// Releases a value taken out of an array element or variable slot that
+/// held a plain value (or any value no longer referenced elsewhere):
+/// scalars own nothing and are forgotten, skipping the out-of-line
+/// `drop_in_place` call; anything else is dropped.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a tag test on the hot element writes
+fn discard_plain(old: Value) {
+    if matches!(
+        old,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    ) {
+        std::mem::forget(old);
+    } else {
+        drop(old);
+    }
 }
 
 /// The array key an int or string value converts to without diagnostics
@@ -305,7 +339,7 @@ fn cv_dim_hit_in(f: &Frame, cv: u32, dim: Operand) -> Option<Value> {
     };
     Some(match table_dim(arr, d)? {
         Value::Reference(r) => r.get(),
-        v => v.clone(),
+        v => copy_value(v),
     })
 }
 
@@ -390,14 +424,14 @@ fn plain_value_in(f: &Frame, op: Operand) -> Option<Value> {
     match op {
         Operand::Tmp(t) | Operand::TmpKeep(t) => {
             let v = f.tmps.get(t as usize)?;
-            is_plain_value(v).then(|| v.clone())
+            is_plain_value(v).then(|| copy_value(v))
         }
         Operand::Lit(i) => {
             let v = f.code.literals.get(i as usize)?;
-            is_plain_value(v).then(|| v.clone())
+            is_plain_value(v).then(|| copy_value(v))
         }
         Operand::Cv(cv) => f.peek_cv(cv, |s| match s {
-            Some(v) if is_plain_value(v) => Some(v.clone()),
+            Some(v) if is_plain_value(v) => Some(copy_value(v)),
             _ => None,
         }),
         Operand::Unused => None,
@@ -703,221 +737,12 @@ impl Vm {
         }
     }
 
-    /// [`crate::opcode::Op::ConcatCv`]: `$cv .= val` when the variable holds
-    /// a string directly (not a reference) and `val` is a string or an int
-    /// (a literal, a defined variable holding one directly, a temporary):
-    /// `concat_function` with `result == op1`, so the string is extended in
-    /// place when nothing else holds it (`zend_string_extend`) and copied
-    /// once otherwise; an int's digits go straight into it. A consumed
-    /// temporary operand is released and the result written to `dst` when
-    /// used, under one look at the frame. Returns `false`, having changed
-    /// nothing, otherwise: an undefined variable (warning), references and
-    /// other types (conversions may warn or call `__toString()`).
-    #[inline(always)]
-    #[allow(clippy::inline_always)] // hot string append in the dispatch pre-match
-    pub(super) fn concat_cv_fast(&mut self, cv: u32, val: Operand, dst: Option<u32>) -> bool {
-        let Some(f) = self.frames.last_mut() else {
-            return false;
-        };
-        let idx = cv as usize;
-        let Some(slot) = f.cvs.get(idx) else {
-            return false;
-        };
-        let Some(Value::Str(s)) = (unsafe { slot.get_mut_unchecked() }) else {
-            return false;
-        };
-        match val {
-            Operand::Lit(i) => {
-                let Some(lit) = f.code.literals.get(i as usize) else {
-                    return false;
-                };
-                match lit {
-                    Value::Str(t) => {
-                        if f.symtab_attached {
-                            f.unsync_cv_from_symtab(cv);
-                        }
-                        if ZStr::ptr_eq(s, t) {
-                            s.append_self();
-                        } else {
-                            s.append_str(t);
-                        }
-                    }
-                    Value::Int(n) => {
-                        if f.symtab_attached {
-                            f.unsync_cv_from_symtab(cv);
-                        }
-                        s.append_long(*n);
-                    }
-                    _ => return false,
-                }
-            }
-            Operand::Cv(src) => {
-                if src == cv {
-                    if f.symtab_attached {
-                        f.unsync_cv_from_symtab(cv);
-                    }
-                    s.append_self();
-                } else {
-                    let Some(rhs) = f.cvs.get(src as usize).and_then(CvSlot::get) else {
-                        return false;
-                    };
-                    match rhs {
-                        Value::Str(t) => {
-                            if f.symtab_attached {
-                                f.unsync_cv_from_symtab(cv);
-                            }
-                            if ZStr::ptr_eq(s, t) {
-                                s.append_self();
-                            } else {
-                                s.append_str(t);
-                            }
-                        }
-                        Value::Int(n) => {
-                            let n = *n;
-                            if f.symtab_attached {
-                                f.unsync_cv_from_symtab(cv);
-                            }
-                            s.append_long(n);
-                        }
-                        _ => return false,
-                    }
-                }
-            }
-            Operand::Tmp(t) => {
-                let Some(rhs) = f.tmps.get_mut(t as usize) else {
-                    return false;
-                };
-                match rhs {
-                    Value::Str(_) => {
-                        let Value::Str(add) = std::mem::replace(rhs, Value::Null) else {
-                            unreachable!()
-                        };
-                        if f.symtab_attached {
-                            f.unsync_cv_from_symtab(cv);
-                        }
-                        s.append_str(&add);
-                    }
-                    Value::Int(n) => {
-                        let n = *n;
-                        *rhs = Value::Null;
-                        if f.symtab_attached {
-                            f.unsync_cv_from_symtab(cv);
-                        }
-                        s.append_long(n);
-                    }
-                    _ => return false,
-                }
-            }
-            Operand::TmpKeep(t) => {
-                let Some(rhs) = f.tmps.get(t as usize) else {
-                    return false;
-                };
-                match rhs {
-                    Value::Str(add) => {
-                        if f.symtab_attached {
-                            f.unsync_cv_from_symtab(cv);
-                        }
-                        if ZStr::ptr_eq(s, add) {
-                            s.append_self();
-                        } else {
-                            s.append_str(add);
-                        }
-                    }
-                    Value::Int(n) => {
-                        let n = *n;
-                        if f.symtab_attached {
-                            f.unsync_cv_from_symtab(cv);
-                        }
-                        s.append_long(n);
-                    }
-                    _ => return false,
-                }
-            }
-            Operand::Unused => return false,
-        }
-        if f.symtab_attached {
-            f.sync_cv_to_symtab(cv, &Value::Str(s.clone()));
-        }
-        if let Some(d) = dst {
-            let r = Value::Str(s.clone());
-            if let Some(slot) = f.tmps.get_mut(d as usize) {
-                put_tmp(slot, r);
-            }
-        }
-        true
-    }
-
     /// The array key an offset operand converts to without diagnostics
     /// ([`dim_key_in`] of the current frame).
     #[inline(always)]
     #[allow(clippy::inline_always)] // hot dimension-key extraction in the dispatch pre-match
     pub(super) fn peek_dim_key(&self, dim: Operand) -> Option<ArrayKey> {
         dim_key_in(self.frame(), dim)
-    }
-
-    /// [`crate::opcode::Op::FetchDimCv`]: `$cv[dim]` read when `$cv` holds
-    /// an array (directly or through a reference) that has the key:
-    /// `zend_fetch_dimension_address_inner` with `BP_VAR_R` on a hit; or a
-    /// string and the offset is an int inside it: `zend_fetch_dimension_str`'s
-    /// one-byte result (`ZSTR_CHAR`). The value goes to the folded
-    /// `AssignCv`'s variable `to` (`Some(true)`: the loop skips that op) or
-    /// to `dst` (`Some(false)`), and a consumed string offset is released,
-    /// under one look at the frame. `None` (a miss, an offset that needs
-    /// converting or lies outside the string, another container) leaves
-    /// everything to the generic fetch, nothing consumed.
-    #[inline(always)]
-    #[allow(clippy::inline_always)] // hot array-dimension read in the dispatch pre-match
-    pub(super) fn fetch_dim_cv(
-        &mut self,
-        cv: u32,
-        dim: Operand,
-        dst: u32,
-        to: Option<u32>,
-    ) -> Option<bool> {
-        let f = self.frames.last_mut()?;
-        if let Some(v) = cv_dim_hit_in(f, cv, dim) {
-            release_str_tmp_in(f, dim);
-            return Some(store_fetched_in(f, dst, to, v));
-        }
-        // `zend_fetch_dimension_str`: an int (or canonical integer string)
-        // offset inside a string.
-        if let Some(Value::Str(s)) = f.cvs.get(cv as usize).and_then(CvSlot::get) {
-            let offset = match dim_ref_in(f, dim)? {
-                DimRef::Int(i) => i,
-                DimRef::Str(k) => match ArrayKey::from_zstr(k) {
-                    ArrayKey::Int(i) => i,
-                    ArrayKey::Str(_) => return None,
-                },
-            };
-            let v = string_offset_char(s, offset)?;
-            release_str_tmp_in(f, dim);
-            return Some(store_fetched_in(f, dst, to, v));
-        }
-        // An int offset held by reference (which `dim_ref_in` does not
-        // look through) on an array hit.
-        let i = dim_int_in(f, dim)?;
-        let v = f.peek_cv_dim_int(cv, i)?;
-        Some(store_fetched_in(f, dst, to, v))
-    }
-
-    /// [`crate::opcode::Op::FetchDimsCv`]: `$cv[d1][d2]...` read when every
-    /// container on the way is an array (the variable itself possibly
-    /// through a reference) holding the offset, and every offset peeks as
-    /// an int or string: the chain of `ZEND_FETCH_DIM_R` hits. Stored and
-    /// released as in [`Vm::fetch_dim_cv`]; `None` (nothing consumed)
-    /// leaves all of it to the generic fetch.
-    #[inline]
-    pub(super) fn fetch_dims_cv(
-        &mut self,
-        cv: u32,
-        place: PlaceId,
-        dst: u32,
-        to: Option<u32>,
-    ) -> Option<bool> {
-        let f = self.frames.last_mut()?;
-        let v = dims_value_in(f, cv, place)?;
-        release_place_str_tmps(f, place);
-        Some(store_fetched_in(f, dst, to, v))
     }
 
     /// The run-time cache hit of [`Vm::fetch_global_fast`]: `Some(result)`
@@ -1095,174 +920,6 @@ impl Vm {
         }
     }
 
-    /// [`crate::opcode::Op::IssetDimCv`]: `isset($cv[dim])` /
-    /// `empty($cv[dim])` when `$cv` holds an array (directly or through a
-    /// reference) and the offset is an int or string (the array fast path
-    /// of `ZEND_ISSET_ISEMPTY_DIM_OBJ`; `zend_isset_dim_slow` is never
-    /// reached), the result written to `dst` and a consumed string offset
-    /// released. `false`, nothing changed, leaves it to the generic
-    /// `place_isset`.
-    #[inline(always)]
-    #[allow(clippy::inline_always)] // hot isset/empty array-dimension check in the dispatch pre-match
-    pub(super) fn isset_dim_cv(&mut self, cv: u32, dim: Operand, dst: u32, empty: bool) -> bool {
-        let Some(f) = self.frames.last_mut() else {
-            return false;
-        };
-        let Some(r) = isset_dim_in(f, cv, dim, empty) else {
-            return false;
-        };
-        release_str_tmp_in(f, dim);
-        put_tmp(&mut f.tmps[dst as usize], Value::Bool(r));
-        true
-    }
-
-    /// `$cv[dim] op= val` when `$cv` holds a non-reference array whose
-    /// element at the (int or string) offset is a plain number and `val`
-    /// peeks as a plain number: `ZEND_ASSIGN_DIM_OP` with the
-    /// `IS_LONG`/`IS_DOUBLE` fast path of `zend_binary_op` on the fetched
-    /// slot, after `SEPARATE_ARRAY`; `.=` is [`Vm::concat_dim_cv_fast`].
-    /// Returns `false`, having changed nothing, otherwise (a missing key
-    /// warns and inserts on the generic path).
-    #[inline(always)]
-    #[allow(clippy::inline_always)] // hot array-element compound assignment in the dispatch pre-match
-    pub(super) fn assign_op_dim_cv_fast(
-        &mut self,
-        cv: u32,
-        dim: Operand,
-        op: BinaryOp,
-        val: Operand,
-    ) -> bool {
-        if op == BinaryOp::Concat {
-            return self.concat_dim_cv_fast(cv, dim, val);
-        }
-        let f = self.frame();
-        let Some(key) = dim_ref_in(f, dim) else {
-            return false;
-        };
-        let Some(y) = Self::peek_num(f, val) else {
-            return false;
-        };
-        let idx = cv as usize;
-        let slot = match f.cvs.get(idx) {
-            Some(s) => s,
-            None => return false,
-        };
-        // SAFETY: the CV slot is not otherwise borrowed: `key` is an int or
-        // a string held by another operand (an array-holding `$cv` itself
-        // is no int or string offset), and `y` is a copied number.
-        let val_mut = unsafe { slot.get_mut_unchecked() };
-        let Some(Value::Array(arr)) = val_mut else {
-            return false;
-        };
-        // The variable's own table (no other handle, no symbol-table
-        // mirror): `SEPARATE_ARRAY` is a no-op, so the element is looked up
-        // once and updated in place.
-        if !f.symtab_attached {
-            if let Some(tbl) = arr.get_mut_unshared() {
-                let Some(el) = table_dim_mut(tbl, key) else {
-                    return false;
-                };
-                let x = match el {
-                    Value::Int(i) => Num::Int(*i),
-                    Value::Float(x) => Num::Float(*x),
-                    _ => return false,
-                };
-                let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
-                    return false;
-                };
-                // A number replaces a number: no drop glue to run.
-                std::mem::forget(std::mem::replace(el, r));
-                self.release_tmp_str(dim);
-                return true;
-            }
-        }
-        let x = match table_dim(arr, key) {
-            Some(Value::Int(i)) => Num::Int(*i),
-            Some(Value::Float(x)) => Num::Float(*x),
-            _ => return false,
-        };
-        let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
-            return false;
-        };
-        if f.symtab_attached {
-            f.unsync_cv_from_symtab(cv);
-        }
-        let Some(slot) = table_dim_mut(arr.make_mut(), key) else {
-            if f.symtab_attached {
-                f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
-            }
-            return false;
-        };
-        // A number replaces a number: no drop glue to run.
-        std::mem::forget(std::mem::replace(slot, r));
-        if f.symtab_attached {
-            f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
-        }
-        self.release_tmp_str(dim);
-        true
-    }
-
-    /// `$cv[dim] .= val` when `$cv` holds a non-reference array whose
-    /// element at the (int or string) offset is a string and `val` peeks
-    /// as a string or an int: `ZEND_ASSIGN_DIM_OP` runs `concat_function`
-    /// on the fetched slot (`result == op1`, after `SEPARATE_ARRAY`), so the
-    /// string is extended in place when nothing else holds it
-    /// (`zend_string_extend`) and copied once otherwise (a shared array's
-    /// element after the separation, `$a[$k] .= $a[$k]`); the digits of an
-    /// int go straight into it. Returns `false`, having changed nothing,
-    /// otherwise: a missing key (warning, then insert), an element of
-    /// another type or held by reference, and a right-hand side of another
-    /// type (its conversion may warn or call `__toString()`) take the
-    /// generic path.
-    #[inline]
-    fn concat_dim_cv_fast(&mut self, cv: u32, dim: Operand, val: Operand) -> bool {
-        let Some(key) = self.peek_dim_key(dim) else {
-            return false;
-        };
-        let add = match self.peek_plain_value(val) {
-            Some(v @ (Value::Str(_) | Value::Int(_))) => v,
-            _ => return false,
-        };
-        let f = self.frame();
-        let idx = cv as usize;
-        let slot = match f.cvs.get(idx) {
-            Some(s) => s,
-            None => return false,
-        };
-        let val_mut = unsafe { slot.get_mut_unchecked() };
-        let Some(Value::Array(arr)) = val_mut else {
-            return false;
-        };
-        if !matches!(arr.get(&key), Some(Value::Str(_))) {
-            return false;
-        }
-        if f.symtab_attached {
-            f.unsync_cv_from_symtab(cv);
-        }
-        let Some(Value::Str(s)) = arr.make_mut().get_mut(&key) else {
-            if f.symtab_attached {
-                f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
-            }
-            return false;
-        };
-        match &add {
-            Value::Str(t) => s.append_str(t),
-            Value::Int(i) => s.append_long(*i),
-            // `add` is a string or an int (checked above).
-            _ => {}
-        }
-        if f.symtab_attached {
-            f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
-        }
-        drop(add);
-        // The offset and OP_DATA temporaries are consumed.
-        self.release_tmp_str(dim);
-        if let Operand::Tmp(t) = val {
-            self.set_tmp(t, Value::Null);
-        }
-        true
-    }
-
     /// `$cv[d1][d2]... .= val;` when `$cv` holds an array (not a reference),
     /// every offset is an int or a string, the target element exists and is a
     /// string, and `val` peeks as a string or an int: extends the nested string
@@ -1319,316 +976,12 @@ impl Vm {
         true
     }
 
-    /// `$cv[dim]++` & co. when `$cv` holds a non-reference array whose
-    /// element at the (int or string) offset is an int that does not
-    /// overflow, or a float (`FETCH_DIM_RW` + the `IS_LONG`/`IS_DOUBLE`
-    /// fast path of `PRE/POST_INC/DEC`): the expression's value, or `None`
-    /// (nothing changed) for the generic path.
-    #[inline(always)]
-    #[allow(clippy::inline_always)] // hot array-element increment/decrement in the dispatch pre-match
-    pub(super) fn incdec_dim_cv_fast(
-        &mut self,
-        cv: u32,
-        dim: Operand,
-        kind: IncDecKind,
-    ) -> Option<Value> {
-        let f = self.frame();
-        let key = dim_ref_in(f, dim)?;
-        let idx = cv as usize;
-        let slot = f.cvs.get(idx)?;
-        // SAFETY: as in `assign_op_dim_cv_fast`, the offset `key` borrows
-        // another operand, never this CV slot.
-        let val_mut = unsafe { slot.get_mut_unchecked() };
-        let Some(Value::Array(arr)) = val_mut else {
-            return None;
-        };
-        let step = |v: &Value| -> Option<(Value, Value)> {
-            Some(match v {
-                Value::Int(i) => {
-                    let i = *i;
-                    let n = if kind.is_inc() {
-                        i.checked_add(1)?
-                    } else {
-                        i.checked_sub(1)?
-                    };
-                    (Value::Int(i), Value::Int(n))
-                }
-                Value::Float(x) => {
-                    let x = *x;
-                    let n = if kind.is_inc() { x + 1.0 } else { x - 1.0 };
-                    (Value::Float(x), Value::Float(n))
-                }
-                _ => return None,
-            })
-        };
-        // The variable's own table: one lookup, updated in place (see
-        // `assign_op_dim_cv_fast`).
-        if !f.symtab_attached {
-            if let Some(tbl) = arr.get_mut_unshared() {
-                let el = table_dim_mut(tbl, key)?;
-                let (old, new) = step(&*el)?;
-                // A number replaces a number: no drop glue to run.
-                std::mem::forget(std::mem::replace(el, new.clone()));
-                self.release_tmp_str(dim);
-                return Some(if kind.is_post() { old } else { new });
-            }
-        }
-        let (old, new) = step(table_dim(arr, key)?)?;
-        if f.symtab_attached {
-            f.unsync_cv_from_symtab(cv);
-        }
-        let Some(slot) = table_dim_mut(arr.make_mut(), key) else {
-            if f.symtab_attached {
-                f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
-            }
-            return None;
-        };
-        // A number replaces a number: no drop glue to run.
-        std::mem::forget(std::mem::replace(slot, new.clone()));
-        if f.symtab_attached {
-            f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
-        }
-        self.release_tmp_str(dim);
-        Some(if kind.is_post() { old } else { new })
-    }
-
     /// A plain value (see [`is_plain_value`]) an `OP_DATA` operand holds,
     /// without consuming it ([`plain_value_in`] of the current frame).
     #[inline(always)]
     #[allow(clippy::inline_always)] // hot OP_DATA operand read in the dispatch pre-match
     pub(super) fn peek_plain_value(&self, op: Operand) -> Option<Value> {
         plain_value_in(self.frame(), op)
-    }
-
-    #[inline(always)]
-    #[allow(clippy::inline_always)]
-    fn assign_to_array_table(
-        tbl: &mut HashTable,
-        dim_int: Option<i64>,
-        dim_key: Option<ArrayKey>,
-        v: Value,
-    ) -> bool {
-        if let Some(i) = dim_int {
-            match tbl.assign_packed_int(i, v) {
-                Ok(old) => {
-                    if let Some(old) = old {
-                        drop(old);
-                    }
-                    return true;
-                }
-                Err(ret_v) => {
-                    let (slot, added) = tbl.lookup_ex(ArrayKey::Int(i));
-                    if !added && !is_plain_value(slot) {
-                        return false;
-                    }
-                    let old = std::mem::replace(slot, ret_v);
-                    drop(old);
-                    return true;
-                }
-            }
-        }
-        let Some(key) = dim_key else {
-            return false;
-        };
-        let (slot, added) = tbl.lookup_ex(key);
-        if !added && !is_plain_value(slot) {
-            return false;
-        }
-        let old = std::mem::replace(slot, v);
-        drop(old);
-        true
-    }
-
-    /// [`Vm::assign_to_array_table`] with the offset an int or a borrowed
-    /// string: an existing element at a string offset is found
-    /// (`zend_symtable_find`) and overwritten without building a key.
-    #[inline(always)]
-    #[allow(clippy::inline_always)]
-    fn assign_dim_table(
-        tbl: &mut HashTable,
-        dim_int: Option<i64>,
-        dim_str: Option<&ZStr>,
-        v: Value,
-    ) -> bool {
-        let Some(s) = dim_str else {
-            return Self::assign_to_array_table(tbl, dim_int, None, v);
-        };
-        if let Some(slot) = tbl.get_sym_zstr_mut(s) {
-            if !is_plain_value(slot) {
-                return false;
-            }
-            drop(std::mem::replace(slot, v));
-            return true;
-        }
-        Self::assign_to_array_table(tbl, None, Some(ArrayKey::from_zstr(s)), v)
-    }
-
-    /// `$cv[dim] = val;` when `$cv` holds an array (directly or through a reference),
-    /// the offset is an int or string, the value is plain and the element it
-    /// replaces (if any) is plain: the `zend_fetch_dimension_address_inner_W`
-    /// and `zend_assign_to_variable` path of `ZEND_ASSIGN_DIM` on an array,
-    /// separating a shared array first (`SEPARATE_ARRAY`): an existing
-    /// element is overwritten where it is, a missing key added (as null,
-    /// then overwritten, like the generic walk's `descend`), under one look
-    /// at the frame. Returns `false` otherwise, having changed nothing but
-    /// possibly the separation the generic write repeats as a no-op.
-    #[inline(always)]
-    #[allow(clippy::inline_always)] // hot array-dimension write in the dispatch pre-match
-    pub(super) fn assign_dim_cv_fast(&mut self, cv: u32, dim: Operand, val: Operand) -> bool {
-        let Some(f) = self.frames.last_mut() else {
-            return false;
-        };
-        let Some(v) = plain_value_in(f, val) else {
-            return false;
-        };
-        // `$cv[] = val`: `zend_hash_next_index_insert`; a full array (the
-        // next index is taken) is left to the generic op, which throws.
-        let append = dim == Operand::Unused;
-        let dim_int = dim_int_in(f, dim);
-        // A string offset stays borrowed: an existing element needs no
-        // key of its own (only an insertion takes one).
-        let dim_str = if dim_int.is_none() && !append {
-            let Some(DimRef::Str(s)) = dim_ref_in(f, dim) else {
-                return false;
-            };
-            Some(s)
-        } else {
-            None
-        };
-        let idx = cv as usize;
-        let ok = {
-            let slot = match f.cvs.get(idx) {
-                Some(s) => s,
-                None => return false,
-            };
-            let val_mut = unsafe { slot.get_mut_unchecked() };
-            if let Some(Value::Array(arr)) = val_mut {
-                if f.symtab_attached {
-                    f.unsync_cv_from_symtab(cv);
-                }
-                let ok = if append {
-                    arr.make_mut().push(v).is_ok()
-                } else {
-                    Self::assign_dim_table(arr.make_mut(), dim_int, dim_str, v)
-                };
-                if f.symtab_attached {
-                    f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
-                }
-                ok
-            } else if let Some(Value::Reference(r)) = val_mut {
-                let Some(mut guard) = r.try_borrow_mut() else {
-                    return false;
-                };
-                let Value::Array(arr) = &mut *guard else {
-                    return false;
-                };
-                if append {
-                    arr.make_mut().push(v).is_ok()
-                } else {
-                    Self::assign_dim_table(arr.make_mut(), dim_int, dim_str, v)
-                }
-            } else {
-                return false;
-            }
-        };
-        if !ok {
-            return false;
-        }
-        if dim_int.is_none() {
-            release_str_tmp_in(f, dim);
-        }
-        if let Operand::Tmp(t) = val {
-            put_tmp(&mut f.tmps[t as usize], Value::Null);
-        }
-        true
-    }
-
-    /// [`crate::opcode::Op::AssignDimsCv`]: `$cv[d1][d2]... = val;` when
-    /// `$cv` holds an array (not a reference), every offset is an int or a
-    /// string and the value is plain ([`assign_dims`]); the offset and
-    /// `OP_DATA` temporaries are consumed. Returns `false` otherwise, having
-    /// changed nothing but possibly separations the generic write repeats.
-    #[inline]
-    pub(super) fn assign_dims_cv_fast(&mut self, cv: u32, place: PlaceId, val: Operand) -> bool {
-        let Some(f) = self.frames.last_mut() else {
-            return false;
-        };
-        let Some((keys, n)) = write_keys_in(f, place) else {
-            return false;
-        };
-        let Some(v) = plain_value_in(f, val) else {
-            return false;
-        };
-        let idx = cv as usize;
-        let slot = match f.cvs.get(idx) {
-            Some(s) => s,
-            None => return false,
-        };
-        let val_mut = unsafe { slot.get_mut_unchecked() };
-        let Some(Value::Array(arr)) = val_mut else {
-            return false;
-        };
-        if f.symtab_attached {
-            f.unsync_cv_from_symtab(cv);
-        }
-        let res = assign_dims(arr.make_mut(), &keys[..n], v);
-        if f.symtab_attached {
-            f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
-        }
-        let Ok(old) = res else {
-            return false;
-        };
-        drop(old);
-        release_place_str_tmps(f, place);
-        if let Operand::Tmp(t) = val {
-            put_tmp(&mut f.tmps[t as usize], Value::Null);
-        }
-        true
-    }
-
-    /// [`crate::opcode::Op::AssignOpDimsCv`]: `$cv[d1][d2]... op= val;` when
-    /// `$cv` holds an array (not a reference), every offset is an int or a
-    /// string, `val` is a plain number and [`assign_op_dims`] applies; the
-    /// offset temporaries are consumed. Returns `false` otherwise, having
-    /// changed nothing but possibly separations the generic op repeats.
-    #[inline]
-    pub(super) fn assign_op_dims_cv_fast(
-        &mut self,
-        cv: u32,
-        op: BinaryOp,
-        place: PlaceId,
-        val: Operand,
-    ) -> bool {
-        let Some(f) = self.frames.last_mut() else {
-            return false;
-        };
-        let Some((keys, n)) = write_keys_in(f, place) else {
-            return false;
-        };
-        let Some(y) = Self::peek_num(f, val) else {
-            return false;
-        };
-        let idx = cv as usize;
-        let slot = match f.cvs.get(idx) {
-            Some(s) => s,
-            None => return false,
-        };
-        let val_mut = unsafe { slot.get_mut_unchecked() };
-        let Some(Value::Array(arr)) = val_mut else {
-            return false;
-        };
-        if f.symtab_attached {
-            f.unsync_cv_from_symtab(cv);
-        }
-        let ok = assign_op_dims(arr.make_mut(), &keys[..n], op, y);
-        if f.symtab_attached {
-            f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
-        }
-        if !ok {
-            return false;
-        }
-        release_place_str_tmps(f, place);
-        true
     }
 
     /// The generic `Op::Assign { place, val, dst: None }`, the op
@@ -2785,6 +2138,79 @@ $min = -9223372036854775807 - 1;
 var_dump(abs($min));
 "#;
         let expected = "int(42)\nfloat(3.14)\nfloat(9.223372036854776E+18)\n";
+        assert_eq!(run(src), expected);
+    }
+
+    /// The dimension ops and `.=` in a loop run in the frame-local hot loop
+    /// (`exec/spec/dims.rs`): reads, writes, compound assignments,
+    /// increments, `isset`, nested chains, string offsets, a container held
+    /// by reference and copy-on-write, in a frame whose symbol table is
+    /// attached (`$$name`), so every write is mirrored for
+    /// `get_defined_vars()`.
+    #[test]
+    fn dimension_ops_in_the_hot_loop() {
+        let src = r#"<?php
+function f() {
+    $a = [1, 2, 3]; $s = ''; $h = ['k' => 'v']; $n = 0;
+    $name = 'a';
+    $alias = $$name;
+    for ($i = 0; $i < 6; $i++) {
+        $a[$i % 3] = $i;
+        $x = $a[$i % 3];
+        $a[$i % 3] += 2;
+        $a[1]++;
+        $h['k'] .= $i;
+        $s .= $i;
+        if (isset($a[$i])) { $n++; }
+    }
+    $vars = get_defined_vars();
+    var_dump($vars['a'], $vars['s'], $vars['h'], $vars['x'], $n, $alias);
+    $m = [[1, 2], [3, 4]];
+    for ($i = 0; $i < 4; $i++) { $m[$i & 1][$i >> 1] = $i * 10; $m[1][0] += 1; $y = $m[0][1]; }
+    var_dump($m, $y);
+    $str = 'hello';
+    for ($i = -5; $i < 5; $i++) { $s .= $str[$i]; }
+    var_dump($s);
+    $r = [0, 0]; $ref = &$r;
+    for ($i = 0; $i < 4; $i++) { $r[$i & 1] = $i; $ref[] = $i; }
+    var_dump($r);
+    $copy = $a; for ($i = 0; $i < 3; $i++) { $a[$i] = -$i; } var_dump($copy[2], $a[2]);
+}
+f();
+"#;
+        let expected = "array(3) {\n  [0]=>\n  int(5)\n  [1]=>\n  int(8)\n  [2]=>\n  int(7)\n}\nstring(6) \"012345\"\narray(1) {\n  [\"k\"]=>\n  string(7) \"v012345\"\n}\nint(5)\nint(3)\narray(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\narray(2) {\n  [0]=>\n  array(2) {\n    [0]=>\n    int(0)\n    [1]=>\n    int(20)\n  }\n  [1]=>\n  array(2) {\n    [0]=>\n    int(13)\n    [1]=>\n    int(30)\n  }\n}\nint(20)\nstring(16) \"012345hellohello\"\narray(6) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(3)\n  [2]=>\n  int(0)\n  [3]=>\n  int(1)\n  [4]=>\n  int(2)\n  [5]=>\n  int(3)\n}\nint(7)\nint(-2)\n";
+        assert_eq!(run(src), expected);
+    }
+
+    /// `foreach` by value over arrays runs its fetch in the hot loop
+    /// (packed with holes, hash, elements held by reference, appends while
+    /// iterating the snapshot, `break`); by-reference, object and generator
+    /// iteration decline to the generic op.
+    #[test]
+    fn foreach_by_value_in_the_hot_loop() {
+        let src = r#"<?php
+$p = [10, 20, 30, 40]; unset($p[1]);
+$h = ['a' => 1, 'b' => 2.5, 'c' => 'x', 7 => null];
+$x = 5; $r = [1, &$x, 3];
+$s = '';
+foreach ($p as $k => $v) { $s .= "$k=$v,"; }
+foreach ($h as $k => $v) { $s .= $k . '=' . $v . ','; }
+foreach ($r as $v) { $s .= $v; }
+foreach ($p as $v) { $p[] = $v; if (count($p) > 9) break; }
+var_dump($s, count($p));
+foreach ($r as &$v) { $v *= 2; } unset($v);
+var_dump($r, $x);
+class O { public $a = 1; public $b = 2; }
+function g() { yield 'k' => 3; yield 4; }
+foreach (new O as $k => $v) { echo "$k:$v "; }
+foreach (g() as $k => $v) { echo "$k:$v "; }
+echo "\n";
+$sum = 0; $big = [];
+for ($i = 1; $i <= 100; $i++) { $big[] = $i; }
+foreach ($big as $i => $v) { $sum += $v * $i; }
+var_dump($sum);
+"#;
+        let expected = "string(35) \"0=10,2=30,3=40,a=1,b=2.5,c=x,7=,153\"\nint(6)\narray(3) {\n  [0]=>\n  int(2)\n  [1]=>\n  &int(10)\n  [2]=>\n  int(6)\n}\nint(10)\na:1 b:2 k:3 0:4 \nint(333300)\n";
         assert_eq!(run(src), expected);
     }
 }

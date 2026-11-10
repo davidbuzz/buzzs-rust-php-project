@@ -30,8 +30,18 @@ pub fn sort_table<C: ArrayContext + ?Sized>(
     renumber: bool,
 ) -> RtResult<()> {
     let mut slot = ErrSlot::default();
+    let regular_values = !by_key && kind == SortKind::Regular;
     ht.sort_by(
         |ka, va, kb, vb| {
+            // `zend_compare`'s `TYPE_PAIR(IS_LONG, IS_LONG)` case inline:
+            // what `compare_data_by` returns for two ints, without its
+            // calls (no comparison runs once one has failed).
+            if regular_values && !slot.failed() {
+                if let (Value::Int(x), Value::Int(y)) = (va, vb) {
+                    let r = i32::from(x > y) - i32::from(x < y);
+                    return if reverse { r.wrapping_neg() } else { r };
+                }
+            }
             slot.run(|| {
                 if by_key {
                     compare_keys_by(ctx, kind, reverse, ka, kb)
