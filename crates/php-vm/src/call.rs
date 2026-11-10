@@ -2118,7 +2118,8 @@ impl Vm {
             }
             if b.flags & flags::NODISCARD == 0 && !call.is_ctor {
                 self.pending_call_dst = dst;
-                let v = self.call_builtin(&b, call, strict)?;
+                // `fast_builtin_call` was tried just above.
+                let v = self.call_builtin_framed(&b, call, strict)?;
                 if let Some(d) = dst {
                     self.set_tmp(d, v);
                 }
@@ -2880,6 +2881,20 @@ impl Vm {
             if let Some(r) = self.fast_builtin_call(b, &mut call) {
                 return r;
             }
+        }
+        self.call_builtin_framed(b, call, strict)
+    }
+
+    /// [`Vm::call_builtin`] after its [`Vm::fast_builtin_call`] attempt
+    /// (which `op_do_call` has just made itself).
+    #[inline]
+    fn call_builtin_framed(
+        &mut self,
+        b: &Rc<Builtin>,
+        mut call: PendingCall,
+        strict: bool,
+    ) -> VmResult<Value> {
+        if !self.observer.enabled {
             if call.inline_count > 0 {
                 let n = call.inline_count as usize;
                 if let Some(buf) = self.call_bufs.args.pop() {
