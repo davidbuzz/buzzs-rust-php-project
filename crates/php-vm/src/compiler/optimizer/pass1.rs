@@ -607,6 +607,21 @@ fn evaluate_pure_builtin(name: &[u8], args: &[&Value]) -> Option<Value> {
             }
             None
         }
+        // `@compile-time-eval` in `zend_builtin_functions.stub.php`.
+        b"zend_version" => args
+            .is_empty()
+            .then(|| Value::Str(ZStr::from(crate::ZEND_VERSION.as_bytes()))),
+        // sccp.c `can_ct_eval_func_call` evaluates `dirname` on POSIX; a
+        // level below 1 throws, which discards the evaluation.
+        b"dirname" => match args {
+            [Value::Str(p)] => Some(Value::Str(ZStr::from(
+                php_stdstr::transform::dirname(p.as_bytes(), 1).ok()?,
+            ))),
+            [Value::Str(p), Value::Int(levels)] if *levels >= 1 => Some(Value::Str(ZStr::from(
+                php_stdstr::transform::dirname(p.as_bytes(), *levels).ok()?,
+            ))),
+            _ => None,
+        },
         b"chr" => {
             if args.len() == 1 {
                 if let Value::Int(n) = args[0] {
@@ -1129,5 +1144,31 @@ mod tests {
         assert!(evaluate_pure_builtin(b"strlen", &[&s]).is_some());
         super::super::set_disabled_functions(std::iter::empty());
         assert!(evaluate_pure_builtin(b"str_repeat", &[&s, &n]).is_some());
+    }
+
+    /// `zend_version()` and `dirname()` are evaluated at compile time
+    /// (ext/opcache/tests/zend_version.phpt, ct_eval_frameless_001.phpt);
+    /// expectations from `/usr/bin/php`.
+    #[test]
+    fn zend_version_and_dirname_are_evaluated() {
+        assert!(matches!(
+            evaluate_pure_builtin(b"zend_version", &[]),
+            Some(Value::Str(s)) if s.as_bytes() == crate::ZEND_VERSION.as_bytes()
+        ));
+        let p = Value::Str(ZStr::from(&b"/a/b/c/"[..]));
+        let dir = |args: &[&Value]| match evaluate_pure_builtin(b"dirname", args) {
+            Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
+            _ => None,
+        };
+        assert_eq!(dir(&[&p]), Some(b"/a/b".to_vec()));
+        assert_eq!(dir(&[&p, &Value::Int(2)]), Some(b"/a".to_vec()));
+        assert_eq!(dir(&[&p, &Value::Int(9)]), Some(b"/".to_vec()));
+        assert_eq!(
+            dir(&[&Value::Str(ZStr::from(&b"abc"[..]))]),
+            Some(b".".to_vec())
+        );
+        // `dirname($p, 0)` throws a ValueError at run time.
+        assert_eq!(dir(&[&p, &Value::Int(0)]), None);
+        assert_eq!(dir(&[&Value::Int(1)]), None);
     }
 }

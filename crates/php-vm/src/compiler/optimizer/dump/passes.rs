@@ -1105,16 +1105,56 @@ pub(crate) fn compact_tmps(lines: &mut [ZLine], has_finally: bool) -> u32 {
     u32::try_from(max + 1).unwrap_or(0)
 }
 
-/// Without pass 9 the temporaries keep their numbers, made dense in order
-/// of definition; returns `op_array->T`.
+/// Whether `zend_compile` gives `op` a result temporary that `zend_do_free`
+/// drops when the result is unused (`zend_op_may_elide_result`, plus
+/// `ASSIGN_REF`'s `IS_VAR` result): the number stays allocated.
+fn elided_result(op: &str) -> bool {
+    matches!(
+        op,
+        "ASSIGN"
+            | "ASSIGN_DIM"
+            | "ASSIGN_OBJ"
+            | "ASSIGN_STATIC_PROP"
+            | "ASSIGN_OP"
+            | "ASSIGN_DIM_OP"
+            | "ASSIGN_OBJ_OP"
+            | "ASSIGN_STATIC_PROP_OP"
+            | "ASSIGN_REF"
+            | "ASSIGN_OBJ_REF"
+            | "ASSIGN_STATIC_PROP_REF"
+            | "PRE_INC_STATIC_PROP"
+            | "PRE_DEC_STATIC_PROP"
+            | "PRE_INC_OBJ"
+            | "PRE_DEC_OBJ"
+            | "PRE_INC"
+            | "PRE_DEC"
+            | "DO_FCALL"
+            | "DO_ICALL"
+            | "DO_UCALL"
+            | "DO_FCALL_BY_NAME"
+            | "YIELD"
+            | "YIELD_FROM"
+            | "INCLUDE_OR_EVAL"
+    )
+}
+
+/// Without pass 9 the temporaries keep the numbers `zend_compile` gave
+/// them, in order of definition, including the results it allocated and
+/// then dropped as unused (`zend_do_free`); returns `op_array->T`.
 pub(crate) fn number_tmps(lines: &mut [ZLine]) -> u32 {
     let mut map: HashMap<u32, u32> = HashMap::new();
+    let mut next: u32 = 0;
     for l in lines.iter() {
         for z in [&l.res, &l.op1, &l.op2] {
             if let Some(t) = z.tmp() {
-                let n = u32::try_from(map.len()).unwrap_or(0);
-                map.entry(t).or_insert(n);
+                map.entry(t).or_insert_with(|| {
+                    next += 1;
+                    next - 1
+                });
             }
+        }
+        if matches!(l.res, Z::Unused) && elided_result(l.op) {
+            next += 1;
         }
     }
     let fix = |z: &mut Z| {
@@ -1129,7 +1169,7 @@ pub(crate) fn number_tmps(lines: &mut [ZLine]) -> u32 {
         fix(&mut l.op1);
         fix(&mut l.op2);
     }
-    u32::try_from(map.len()).unwrap_or(0)
+    next
 }
 
 /// One `zend_live_range`.
