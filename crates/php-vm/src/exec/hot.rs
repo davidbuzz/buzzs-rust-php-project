@@ -96,6 +96,13 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::FetchStaticProp { .. }
             | Op::AssignStaticProp { .. }
             | Op::IssetStaticProp { .. }
+            // Object property cache hits (`exec/spec/props.rs`).
+            | Op::FetchObjProp { .. }
+            | Op::AssignObjProp { .. }
+            | Op::AssignOpObjProp { .. }
+            | Op::IncDecObjProp { .. }
+            | Op::IssetObjProp { .. }
+            | Op::New { .. }
             | Op::FuncNumArgs { .. }
             | Op::Strlen { .. }
             | Op::Count { .. }
@@ -506,6 +513,16 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
         }
         Op::IssetStaticProp { place, dst, empty } => {
             if !spec::isset_static_prop_in(f, place, dst, empty) {
+                return DECLINED;
+            }
+        }
+        Op::FetchObjProp { .. }
+        | Op::AssignObjProp { .. }
+        | Op::AssignOpObjProp { .. }
+        | Op::IncDecObjProp { .. }
+        | Op::IssetObjProp { .. }
+        | Op::New { .. } => {
+            if !spec::prop_op_in(f, op, &mut ip) {
                 return DECLINED;
             }
         }

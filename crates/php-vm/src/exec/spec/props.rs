@@ -28,7 +28,7 @@
 use super::super::{discard_unrooted, Flow, Num};
 use super::{plain_truth, put_tmp, store_fetched_in};
 use crate::object::{self, ObjectData};
-use crate::opcode::{FetchMode, IncDecKind, Operand, PlaceId, PROP_CACHE_THIS};
+use crate::opcode::{ClassSpec, FetchMode, IncDecKind, Op, Operand, PlaceId, PROP_CACHE_THIS};
 use crate::place::propcache::{
     accepts, scope_addr, PC_DYN, PC_ISSET, PC_NO_SET, PC_READ, PC_WRITE,
 };
@@ -167,6 +167,66 @@ fn dyn_name<'a>(f: &'a Frame, hit: &Hit) -> Option<&'a ZStr> {
     }
 }
 
+/// The data of the object the base of `hit` holds directly in frame `f`
+/// (`$this`, or a compiled variable holding the object itself, not a
+/// reference) when it is of the entry's class and not lazy: the hit's
+/// `Z_OBJ_P(container)` and `EXPECTED(zobj->ce == CACHED_PTR(cache_slot))`
+/// without a closure, so that the access after it is inlined into the
+/// dispatch loop. `None` otherwise (a variable holding a reference is
+/// then tried through [`with_hit_obj`]).
+#[inline(always)]
+fn hit_data<'a>(f: &'a Frame, hit: &Hit) -> Option<&'a ObjectData> {
+    let obj: &Obj = if hit.base == PROP_CACHE_THIS {
+        f.this.as_ref()?
+    } else {
+        match f.cvs.get(hit.base as usize)?.get()? {
+            Value::Object(o) => o,
+            _ => return None,
+        }
+    };
+    let od = object::data(obj);
+    if Rc::as_ptr(&od.class) as usize != hit.class
+        || !od.lazy.try_borrow().is_ok_and(|l| l.is_none())
+    {
+        return None;
+    }
+    Some(od)
+}
+
+/// Whether the base of `hit` in frame `f` is a compiled variable holding
+/// a reference (the only base [`with_hit_obj`] accepts that [`hit_data`]
+/// does not).
+#[inline(always)]
+fn base_is_ref(f: &Frame, hit: &Hit) -> bool {
+    hit.base != PROP_CACHE_THIS
+        && matches!(
+            f.cvs.get(hit.base as usize).and_then(CvSlot::get),
+            Some(Value::Reference(_))
+        )
+}
+
+/// The (dereferenced) value of the property `hit` describes in `od`,
+/// copied: an initialized declared slot, or the existing dynamic property
+/// `dyn_prop`.
+#[inline(always)]
+fn read_in(od: &ObjectData, slot: usize, dyn_prop: Option<&ZStr>) -> Option<Value> {
+    if let Some(name) = dyn_prop {
+        let table = od.dynamic.try_borrow().ok()?;
+        let v = match table.as_deref()?.get_zstr(name)? {
+            Value::Reference(r) => r.try_borrow().map(|inner| copy_value(&inner)),
+            v => Some(copy_value(v)),
+        };
+        return v;
+    }
+    let slots = od.slots.try_borrow().ok()?;
+    let v = match slots.get(slot)? {
+        Some(Value::Reference(r)) => r.try_borrow().map(|inner| copy_value(&inner)),
+        Some(v) => Some(copy_value(v)),
+        None => None,
+    };
+    v
+}
+
 /// `ZEND_FETCH_OBJ_R` on a cache hit: the (dereferenced) value of an
 /// initialized declared property or of an existing dynamic property
 /// (`ZEND_DYNAMIC_PROPERTY_OFFSET`: `zend_hash_find` in
@@ -179,23 +239,13 @@ fn read_hit(f: &Frame, pid: PlaceId) -> Option<Value> {
         return None;
     }
     let slot = hit.slot;
-    with_hit_obj(f, &hit, |od| {
-        if let Some(name) = dyn_prop {
-            let table = od.dynamic.try_borrow().ok()?;
-            let v = match table.as_deref()?.get_zstr(name)? {
-                Value::Reference(r) => r.try_borrow().map(|inner| copy_value(&inner)),
-                v => Some(copy_value(v)),
-            };
-            return v;
-        }
-        let slots = od.slots.try_borrow().ok()?;
-        let v = match slots.get(slot)? {
-            Some(Value::Reference(r)) => r.try_borrow().map(|inner| copy_value(&inner)),
-            Some(v) => Some(copy_value(v)),
-            None => None,
-        };
-        v
-    })
+    if let Some(od) = hit_data(f, &hit) {
+        return read_in(od, slot, dyn_prop);
+    }
+    if !base_is_ref(f, &hit) {
+        return None;
+    }
+    with_hit_obj(f, &hit, |od| read_in(od, slot, dyn_prop))
 }
 
 /// `isset()` (or, with `empty`, `empty()`) of a plain value.
@@ -220,6 +270,24 @@ fn isset_deref(v: &Value, empty: bool) -> Option<bool> {
     }
 }
 
+/// `isset()`/`empty()` of the property `hit` describes in `od` when it is
+/// an initialized declared slot or the existing dynamic property
+/// `dyn_prop`.
+#[inline(always)]
+fn isset_in(od: &ObjectData, slot: usize, dyn_prop: Option<&ZStr>, empty: bool) -> Option<bool> {
+    if let Some(name) = dyn_prop {
+        let table = od.dynamic.try_borrow().ok()?;
+        let r = isset_deref(table.as_deref()?.get_zstr(name)?, empty);
+        return r;
+    }
+    let slots = od.slots.try_borrow().ok()?;
+    let r = match slots.get(slot)? {
+        Some(v) => isset_deref(v, empty),
+        None => None,
+    };
+    r
+}
+
 /// `ZEND_ISSET_ISEMPTY_PROP_OBJ` on a cache hit: an initialized declared
 /// property or an existing dynamic property (`zend_std_has_property`
 /// returns without `__isset()`).
@@ -231,19 +299,55 @@ fn isset_hit(f: &Frame, pid: PlaceId, empty: bool) -> Option<bool> {
         return None;
     }
     let slot = hit.slot;
-    with_hit_obj(f, &hit, |od| {
-        if let Some(name) = dyn_prop {
-            let table = od.dynamic.try_borrow().ok()?;
-            let r = isset_deref(table.as_deref()?.get_zstr(name)?, empty);
-            return r;
+    if let Some(od) = hit_data(f, &hit) {
+        return isset_in(od, slot, dyn_prop, empty);
+    }
+    if !base_is_ref(f, &hit) {
+        return None;
+    }
+    with_hit_obj(f, &hit, |od| isset_in(od, slot, dyn_prop, empty))
+}
+
+/// Stores `new_val` into the property `hit` describes in `od` (the
+/// dynamic property `dyn_key` when set): replaces the value (not a
+/// reference) of an initialized declared slot or of an existing dynamic
+/// property, or fills an undefined declared slot that `__set()` cannot
+/// claim. Returns the replaced value (`Some(None)` for a filled slot), or
+/// `None`, having changed nothing.
+#[inline(always)]
+fn store_in(
+    od: &ObjectData,
+    hit: &Hit,
+    dyn_key: Option<ArrayKey>,
+    new_val: Value,
+) -> Option<Option<Value>> {
+    if let Some(key) = dyn_key {
+        let mut table = od.dynamic.try_borrow_mut().ok()?;
+        let cur = table.as_deref_mut()?.get_mut(&key)?;
+        if matches!(cur, Value::Reference(_)) {
+            return None;
         }
-        let slots = od.slots.try_borrow().ok()?;
-        let r = match slots.get(slot)? {
-            Some(v) => isset_deref(v, empty),
-            None => None,
-        };
-        r
-    })
+        return Some(Some(std::mem::replace(cur, new_val)));
+    }
+    let slot = hit.slot;
+    let mut slots = od.slots.try_borrow_mut().ok()?;
+    let cell = slots.get_mut(slot)?;
+    match cell {
+        Some(Value::Reference(_)) => None,
+        Some(cur) => Some(Some(std::mem::replace(cur, new_val))),
+        None => {
+            // `write_std_property` stores into an undefined declared
+            // slot without `__set()` when the class has none, or when
+            // the typed slot is uninitialized rather than unset.
+            if hit.flags & PC_NO_SET != 0 || (hit.accept != u32::MAX && !od.slot_unset(slot)) {
+                *cell = Some(new_val);
+                od.set_slot_unset(slot, false);
+                Some(None)
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// `ZEND_ASSIGN_OBJ` with a plain `OP_DATA` on a cache hit, under one look
@@ -277,43 +381,16 @@ fn assign_hit(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bo
     }
     let new_val = copy_value(src);
     let result = dst.map(|_| copy_value(&new_val));
-    let slot = hit.slot;
-    let mut old = None;
-    let stored = with_hit_obj(f, &hit, |od| {
-        if let Some(key) = dyn_key {
-            let mut table = od.dynamic.try_borrow_mut().ok()?;
-            let cur = table.as_deref_mut()?.get_mut(&key)?;
-            if matches!(cur, Value::Reference(_)) {
-                return None;
-            }
-            old = Some(std::mem::replace(cur, new_val));
-            return Some(());
-        }
-        let mut slots = od.slots.try_borrow_mut().ok()?;
-        let cell = slots.get_mut(slot)?;
-        match cell {
-            Some(Value::Reference(_)) => None,
-            Some(cur) => {
-                old = Some(std::mem::replace(cur, new_val));
-                Some(())
-            }
-            None => {
-                // `write_std_property` stores into an undefined declared
-                // slot without `__set()` when the class has none, or when
-                // the typed slot is uninitialized rather than unset.
-                if hit.flags & PC_NO_SET != 0 || (hit.accept != u32::MAX && !od.slot_unset(slot)) {
-                    *cell = Some(new_val);
-                    od.set_slot_unset(slot, false);
-                    Some(())
-                } else {
-                    None
-                }
-            }
-        }
-    });
-    if stored.is_none() {
+    let old = if let Some(od) = hit_data(f, &hit) {
+        store_in(od, &hit, dyn_key, new_val)
+    } else if base_is_ref(f, &hit) {
+        with_hit_obj(f, &hit, |od| store_in(od, &hit, dyn_key, new_val))
+    } else {
+        None
+    };
+    let Some(old) = old else {
         return false;
-    }
+    };
     // The old value is released once nothing is borrowed (a scalar is
     // forgotten).
     discard_unrooted(old);
@@ -328,6 +405,293 @@ fn assign_hit(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bo
         }
     }
     true
+}
+
+/// `ZEND_ASSIGN_OBJ_OP` of a number on the initialized declared slot
+/// `slot` of `od` holding a number: `+`, `-`, `*` (an int result that
+/// overflows becomes a float only where the property's type, `accept`,
+/// allows one) and the bitwise ops of two ints. Returns the new value, or
+/// `None`, having changed nothing.
+#[inline(always)]
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)] // PHP's int-to-float overflow
+fn assign_op_in(
+    od: &ObjectData,
+    slot: usize,
+    accept: u32,
+    op: BinaryOp,
+    rhs: Num,
+) -> Option<Value> {
+    if let Ok(mut slots) = od.slots.try_borrow_mut() {
+        if let Some(Some(ref mut cell)) = slots.get_mut(slot) {
+            match cell {
+                Value::Int(ref mut n) => match rhs {
+                    Num::Int(y) => match op {
+                        BinaryOp::Add => {
+                            if let Some(res) = n.checked_add(y) {
+                                *n = res;
+                                return Some(Value::Int(res));
+                            } else {
+                                let res = *n as f64 + y as f64;
+                                if accept == u32::MAX || (accept & crate::types::mask::DOUBLE != 0)
+                                {
+                                    *cell = Value::Float(res);
+                                    return Some(Value::Float(res));
+                                }
+                            }
+                        }
+                        BinaryOp::Sub => {
+                            if let Some(res) = n.checked_sub(y) {
+                                *n = res;
+                                return Some(Value::Int(res));
+                            } else {
+                                let res = *n as f64 - y as f64;
+                                if accept == u32::MAX || (accept & crate::types::mask::DOUBLE != 0)
+                                {
+                                    *cell = Value::Float(res);
+                                    return Some(Value::Float(res));
+                                }
+                            }
+                        }
+                        BinaryOp::Mul => {
+                            if let Some(res) = n.checked_mul(y) {
+                                *n = res;
+                                return Some(Value::Int(res));
+                            } else {
+                                let res = *n as f64 * y as f64;
+                                if accept == u32::MAX || (accept & crate::types::mask::DOUBLE != 0)
+                                {
+                                    *cell = Value::Float(res);
+                                    return Some(Value::Float(res));
+                                }
+                            }
+                        }
+                        BinaryOp::BitAnd => {
+                            *n &= y;
+                            return Some(Value::Int(*n));
+                        }
+                        BinaryOp::BitOr => {
+                            *n |= y;
+                            return Some(Value::Int(*n));
+                        }
+                        BinaryOp::BitXor => {
+                            *n ^= y;
+                            return Some(Value::Int(*n));
+                        }
+                        _ => {}
+                    },
+                    Num::Float(y) => {
+                        let res = match op {
+                            BinaryOp::Add => *n as f64 + y,
+                            BinaryOp::Sub => *n as f64 - y,
+                            BinaryOp::Mul => *n as f64 * y,
+                            _ => return None,
+                        };
+                        if accept == u32::MAX || (accept & crate::types::mask::DOUBLE != 0) {
+                            *cell = Value::Float(res);
+                            return Some(Value::Float(res));
+                        }
+                    }
+                },
+                Value::Float(ref mut f) => {
+                    let y = match rhs {
+                        Num::Int(i) => i as f64,
+                        Num::Float(fl) => fl,
+                    };
+                    match op {
+                        BinaryOp::Add => {
+                            *f += y;
+                            return Some(Value::Float(*f));
+                        }
+                        BinaryOp::Sub => {
+                            *f -= y;
+                            return Some(Value::Float(*f));
+                        }
+                        BinaryOp::Mul => {
+                            *f *= y;
+                            return Some(Value::Float(*f));
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// [`assign_op_in`] on a cache hit of place `pid` in frame `f`: the new
+/// value; a consumed temporary operand (a number) is left as it is.
+#[inline(always)]
+fn assign_op_hit(f: &Frame, pid: PlaceId, op: BinaryOp, val: Operand) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN)?;
+    let rhs = Vm::peek_num(f, val)?;
+    if let Some(od) = hit_data(f, &hit) {
+        return assign_op_in(od, hit.slot, hit.accept, op, rhs);
+    }
+    if !base_is_ref(f, &hit) {
+        return None;
+    }
+    with_hit_obj(f, &hit, |od| {
+        assign_op_in(od, hit.slot, hit.accept, op, rhs)
+    })
+}
+
+/// `ZEND_PRE_INC_OBJ` & co. on a number in the initialized declared slot
+/// `slot` of `od` (an int that would overflow takes the generic path): the
+/// op's result.
+#[inline(always)]
+fn incdec_in(od: &ObjectData, slot: usize, kind: IncDecKind) -> Option<Value> {
+    let mut slots = od.slots.try_borrow_mut().ok()?;
+    let Some(Some(cell)) = slots.get_mut(slot) else {
+        return None;
+    };
+    match cell {
+        Value::Int(n) => {
+            let old = *n;
+            let new = if kind.is_inc() {
+                old.checked_add(1)
+            } else {
+                old.checked_sub(1)
+            };
+            new.map(|new_n| {
+                *n = new_n;
+                Value::Int(if kind.is_post() { old } else { new_n })
+            })
+        }
+        Value::Float(x) => {
+            let old = *x;
+            let new_x = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
+            *x = new_x;
+            Some(Value::Float(if kind.is_post() { old } else { new_x }))
+        }
+        _ => None,
+    }
+}
+
+/// [`incdec_in`] on a cache hit of place `pid` in frame `f`.
+#[inline(always)]
+fn incdec_hit(f: &Frame, pid: PlaceId, kind: IncDecKind) -> Option<Value> {
+    let hit = hit_key(f, pid, PC_READ | PC_WRITE, PC_DYN)?;
+    if let Some(od) = hit_data(f, &hit) {
+        return incdec_in(od, hit.slot, kind);
+    }
+    if !base_is_ref(f, &hit) {
+        return None;
+    }
+    with_hit_obj(f, &hit, |od| incdec_in(od, hit.slot, kind))
+}
+
+/// The frame-local fast paths of the property ops (`exec/hot.rs`, which
+/// runs them in its own loop like the other run-time cache hits): `$o->p`
+/// read, `=`, `op=` of a number, `++`/`--` and `isset()`/`empty()` on a
+/// property cache hit, exactly as the [`Vm`] fast paths below do on a hit.
+/// Returns `false`, having changed nothing, when the hit path does not
+/// apply (the op then runs as its generic op, whose fast path also fills
+/// the cache); `ip` is advanced past a folded `AssignCv`.
+#[inline(always)]
+pub(in crate::exec) fn prop_op_in(f: &mut Frame, op: &Op, ip: &mut usize) -> bool {
+    match *op {
+        Op::FetchObjProp {
+            place,
+            dst,
+            to,
+            mode,
+        } => {
+            if mode == FetchMode::List {
+                return false;
+            }
+            let Some(v) = read_hit(f, place) else {
+                return false;
+            };
+            if store_fetched_in(f, dst, to, v) {
+                *ip += 1;
+            }
+            true
+        }
+        Op::AssignObjProp { place, val, dst } => assign_hit(f, place, val, dst),
+        Op::AssignOpObjProp {
+            place,
+            op: kind,
+            val,
+            dst,
+        } => {
+            let Some(res) = assign_op_hit(f, place, kind, val) else {
+                return false;
+            };
+            if let Operand::Tmp(t) = val {
+                if let Some(slot) = f.tmps.get_mut(t as usize) {
+                    put_tmp(slot, Value::Null);
+                }
+            }
+            put_dst(f, dst, res);
+            true
+        }
+        Op::IncDecObjProp { place, kind, dst } => {
+            let Some(res) = incdec_hit(f, place, kind) else {
+                return false;
+            };
+            put_dst(f, dst, res);
+            true
+        }
+        Op::IssetObjProp { place, dst, empty } => {
+            let Some(r) = isset_hit(f, place, empty) else {
+                return false;
+            };
+            match f.tmps.get_mut(dst as usize) {
+                Some(slot) => {
+                    put_tmp(slot, Value::Bool(r));
+                    true
+                }
+                None => false,
+            }
+        }
+        // `new C` without arguments of a class without a constructor
+        // (`skip` jumps over the `DoCall`).
+        Op::New {
+            class: ClassSpec::Named(lit),
+            dst,
+            skip,
+        } if skip != 0 => {
+            let Some(o) = new_in(f, lit) else {
+                return false;
+            };
+            let Some(slot) = f.tmps.get_mut(dst as usize) else {
+                return false;
+            };
+            put_tmp(slot, Value::Object(o));
+            *ip = skip as usize;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The object `new` of the class named by literal `lit` creates when the
+/// class is in frame `f`'s run-time cache (`CACHED_PTR`, filled by the
+/// generic op) and needs nothing from the VM ([`crate::props::new_plain`]).
+#[inline(always)]
+fn new_in(f: &Frame, lit: u32) -> Option<Obj> {
+    let cls = f
+        .code
+        .class_cache
+        .try_borrow()
+        .ok()?
+        .get(lit as usize)?
+        .upgrade()?;
+    crate::props::new_plain(&cls)
+}
+
+/// `Vm::set_dst` on frame `f`: the result of an op into its used
+/// temporary; an unused scalar result is forgotten (no out-of-line
+/// `drop_in_place`).
+#[inline(always)]
+fn put_dst(f: &mut Frame, dst: Option<u32>, v: Value) {
+    if let Some(slot) = dst.and_then(|d| f.tmps.get_mut(d as usize)) {
+        put_tmp(slot, v);
+    } else {
+        discard_unrooted(Some(v));
+    }
 }
 
 impl Vm {
@@ -456,122 +820,12 @@ impl Vm {
         val: Operand,
         dst: Option<u32>,
     ) -> bool {
-        let fast_done = self.frames.last().and_then(|frame| {
-            let hit = hit_key(frame, pid, PC_READ | PC_WRITE, PC_DYN)?;
-            let rhs = Self::peek_num(frame, val)?;
-            let slot = hit.slot;
-            let accept = hit.accept;
-            let is_tmp = match val {
-                Operand::Tmp(t) => Some(t),
-                _ => None,
-            };
-            with_hit_obj(frame, &hit, |od| {
-                if let Ok(mut slots) = od.slots.try_borrow_mut() {
-                    if let Some(Some(ref mut cell)) = slots.get_mut(slot) {
-                        match cell {
-                            Value::Int(ref mut n) => match rhs {
-                                Num::Int(y) => match op {
-                                    BinaryOp::Add => {
-                                        if let Some(res) = n.checked_add(y) {
-                                            *n = res;
-                                            return Some((is_tmp, Value::Int(res)));
-                                        } else {
-                                            let res = *n as f64 + y as f64;
-                                            if accept == u32::MAX
-                                                || (accept & crate::types::mask::DOUBLE != 0)
-                                            {
-                                                *cell = Value::Float(res);
-                                                return Some((is_tmp, Value::Float(res)));
-                                            }
-                                        }
-                                    }
-                                    BinaryOp::Sub => {
-                                        if let Some(res) = n.checked_sub(y) {
-                                            *n = res;
-                                            return Some((is_tmp, Value::Int(res)));
-                                        } else {
-                                            let res = *n as f64 - y as f64;
-                                            if accept == u32::MAX
-                                                || (accept & crate::types::mask::DOUBLE != 0)
-                                            {
-                                                *cell = Value::Float(res);
-                                                return Some((is_tmp, Value::Float(res)));
-                                            }
-                                        }
-                                    }
-                                    BinaryOp::Mul => {
-                                        if let Some(res) = n.checked_mul(y) {
-                                            *n = res;
-                                            return Some((is_tmp, Value::Int(res)));
-                                        } else {
-                                            let res = *n as f64 * y as f64;
-                                            if accept == u32::MAX
-                                                || (accept & crate::types::mask::DOUBLE != 0)
-                                            {
-                                                *cell = Value::Float(res);
-                                                return Some((is_tmp, Value::Float(res)));
-                                            }
-                                        }
-                                    }
-                                    BinaryOp::BitAnd => {
-                                        *n &= y;
-                                        return Some((is_tmp, Value::Int(*n)));
-                                    }
-                                    BinaryOp::BitOr => {
-                                        *n |= y;
-                                        return Some((is_tmp, Value::Int(*n)));
-                                    }
-                                    BinaryOp::BitXor => {
-                                        *n ^= y;
-                                        return Some((is_tmp, Value::Int(*n)));
-                                    }
-                                    _ => {}
-                                },
-                                Num::Float(y) => {
-                                    let res = match op {
-                                        BinaryOp::Add => *n as f64 + y,
-                                        BinaryOp::Sub => *n as f64 - y,
-                                        BinaryOp::Mul => *n as f64 * y,
-                                        _ => return None,
-                                    };
-                                    if accept == u32::MAX
-                                        || (accept & crate::types::mask::DOUBLE != 0)
-                                    {
-                                        *cell = Value::Float(res);
-                                        return Some((is_tmp, Value::Float(res)));
-                                    }
-                                }
-                            },
-                            Value::Float(ref mut f) => {
-                                let y = match rhs {
-                                    Num::Int(i) => i as f64,
-                                    Num::Float(fl) => fl,
-                                };
-                                match op {
-                                    BinaryOp::Add => {
-                                        *f += y;
-                                        return Some((is_tmp, Value::Float(*f)));
-                                    }
-                                    BinaryOp::Sub => {
-                                        *f -= y;
-                                        return Some((is_tmp, Value::Float(*f)));
-                                    }
-                                    BinaryOp::Mul => {
-                                        *f *= y;
-                                        return Some((is_tmp, Value::Float(*f)));
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                None
-            })
-        });
-        if let Some((is_tmp, res)) = fast_done {
-            if let Some(t) = is_tmp {
+        if let Some(res) = self
+            .frames
+            .last()
+            .and_then(|f| assign_op_hit(f, pid, op, val))
+        {
+            if let Operand::Tmp(t) = val {
                 self.set_tmp(t, Value::Null);
             }
             if let Some(d) = dst {
@@ -650,39 +904,7 @@ impl Vm {
         pid: PlaceId,
         kind: IncDecKind,
     ) -> Option<Value> {
-        // `ZEND_PRE_INC_OBJ` & co. on a number in an initialized declared
-        // slot (an int that would overflow takes the generic path).
-        let fast_val = self.frames.last().and_then(|frame| {
-            let hit = hit_key(frame, pid, PC_READ | PC_WRITE, PC_DYN)?;
-            let slot = hit.slot;
-            with_hit_obj(frame, &hit, |od| {
-                let mut slots = od.slots.try_borrow_mut().ok()?;
-                let Some(Some(cell)) = slots.get_mut(slot) else {
-                    return None;
-                };
-                match cell {
-                    Value::Int(n) => {
-                        let old = *n;
-                        let new = if kind.is_inc() {
-                            old.checked_add(1)
-                        } else {
-                            old.checked_sub(1)
-                        };
-                        new.map(|new_n| {
-                            *n = new_n;
-                            Value::Int(if kind.is_post() { old } else { new_n })
-                        })
-                    }
-                    Value::Float(x) => {
-                        let old = *x;
-                        let new_x = if kind.is_inc() { old + 1.0 } else { old - 1.0 };
-                        *x = new_x;
-                        Some(Value::Float(if kind.is_post() { old } else { new_x }))
-                    }
-                    _ => None,
-                }
-            })
-        });
+        let fast_val = self.frames.last().and_then(|f| incdec_hit(f, pid, kind));
         if let Some(v) = fast_val {
             return Some(v);
         }
@@ -1141,6 +1363,186 @@ echo implode(',', $r), "\n";"#);
         assert_eq!(
             out,
             "true/true,true/true,true/false,true/false,false,false\n"
+        );
+    }
+
+    /// The property ops in loops, where they run in the frame-local hot
+    /// loop (`prop_op_in`): hits on `$this` and on a variable held by
+    /// reference, and every fallback (typed overflow, readonly, coercion,
+    /// uninitialized, magic methods, unset slots, dynamic properties,
+    /// visibility). Expected output from php 8.3.
+    #[test]
+    fn hot_loop_property_ops_match_php() {
+        let out = run(r#"<?php
+class A {
+    public int $n = 0;
+    public $u = 1;
+    public ?A $next = null;
+    public int $big = PHP_INT_MAX - 2;
+    public float $fl = 0.5;
+    public readonly int $ro;
+    public int $un;
+    function __construct() { $this->ro = 7; }
+    function loop() {
+        $s = 0;
+        for ($i = 0; $i < 5; $i++) {
+            $this->n += 2;
+            $this->u = $this->n * 3;
+            $this->u++;
+            ++$this->n;
+            $this->fl *= 2;
+            $s += $this->u;
+            $x = isset($this->next);
+            $y = empty($this->u);
+            try { $this->big++; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+        }
+        var_dump($s, $this->n, $this->u, $this->fl, $x, $y, $this->big);
+    }
+}
+$a = new A; $a->loop();
+$b = new A; $r = &$b;
+for ($i = 0; $i < 3; $i++) { $r->u = $i; $r->n += $i; $v = $r->u; }
+var_dump($v, $b->n);
+try { for ($i = 0; $i < 2; $i++) { $b->ro = 1; } } catch (Error $e) { echo $e->getMessage(), "\n"; }
+for ($i = 0; $i < 2; $i++) { echo isset($b->un) ? "set" : "unset", "\n"; }
+try { for ($i = 0; $i < 2; $i++) { echo $b->un; } } catch (Error $e) { echo $e->getMessage(), "\n"; }
+for ($i = 0; $i < 3; $i++) { try { $b->n = $i == 2 ? "x" : "5"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; } var_dump($b->n); }
+class M { private $data = []; public $real = 1;
+  function __get($k) { echo "get $k\n"; return 3; }
+  function __set($k, $v) { echo "set $k\n"; }
+  function __isset($k) { echo "isset $k\n"; return true; } }
+$m = new M;
+for ($i = 0; $i < 2; $i++) { $z = $m->virt; $m->virt = 1; $q = isset($m->virt); $m->real += $z; }
+var_dump($m->real);
+unset($m->real);
+for ($i = 0; $i < 2; $i++) { $z = $m->real; }
+$o = new stdClass; $o->d = 1;
+for ($i = 0; $i < 3; $i++) { $o->d += $i; $o->d++; $w = $o->d; $o->e = $w; }
+var_dump($o);
+#[AllowDynamicProperties]
+class D { public $p = 1; }
+$d = new D;
+for ($i = 0; $i < 2; $i++) { $d->dyn = $i; }
+var_dump($d);
+class P { private $priv = 1; }
+$p = new P;
+try { for ($i = 0; $i < 2; $i++) { echo $p->priv; } } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#);
+        assert_eq!(
+            out,
+            r#"TypeError: Cannot increment property A::$big of type int past its maximal value
+TypeError: Cannot increment property A::$big of type int past its maximal value
+TypeError: Cannot increment property A::$big of type int past its maximal value
+int(125)
+int(15)
+int(43)
+float(16)
+bool(false)
+bool(false)
+int(9223372036854775807)
+int(2)
+int(3)
+Cannot modify readonly property A::$ro
+unset
+unset
+Typed property A::$un must not be accessed before initialization
+int(5)
+int(5)
+Cannot assign string to property A::$n of type int
+int(5)
+get virt
+set virt
+isset virt
+get virt
+set virt
+isset virt
+int(7)
+get real
+get real
+object(stdClass)#5 (2) {
+  ["d"]=>
+  int(7)
+  ["e"]=>
+  int(7)
+}
+object(D)#6 (2) {
+  ["p"]=>
+  int(1)
+  ["dyn"]=>
+  int(1)
+}
+Cannot access private property P::$priv
+"#
+        );
+    }
+
+    /// `new` in loops, where a class without a constructor is created in
+    /// the frame-local hot loop (`new_in`): defaults evaluated on the first
+    /// `new`, handle reuse order, constructors, `Throwable`s, abstract
+    /// classes. Expected output from php 8.3.
+    #[test]
+    fn hot_loop_new_matches_php() {
+        let out = run(r#"<?php
+class K { const C = 5; public $a = [1, 2]; public $b = self::C * 2; public int $t; }
+class Ctor { public $v; function __construct() { $this->v = 1; echo "ctor\n"; } }
+abstract class Ab {}
+class E extends Exception {}
+$ids = [];
+for ($i = 0; $i < 4; $i++) {
+    $k = new K;
+    $k->a[] = $i;
+    $ids[] = spl_object_id($k);
+    $c = new Ctor;
+    $e = new E;
+}
+var_dump($k, $ids, $e->getLine());
+$keep = [];
+for ($i = 0; $i < 3; $i++) { $keep[] = new K; }
+echo count($keep), " ", spl_object_id($keep[2]), "\n";
+for ($i = 0; $i < 2; $i++) { try { $x = new Ab; } catch (Error $err) { echo $err->getMessage(), "\n"; } }
+for ($i = 0; $i < 2; $i++) { $o = new stdClass; $o->n = $i; }
+var_dump($o);
+"#);
+        assert_eq!(
+            out,
+            r#"ctor
+ctor
+ctor
+ctor
+object(K)#2 (2) {
+  ["a"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+  ["b"]=>
+  int(10)
+  ["t"]=>
+  uninitialized(int)
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(4)
+  [2]=>
+  int(3)
+  [3]=>
+  int(2)
+}
+int(12)
+3 6
+Cannot instantiate abstract class Ab
+Cannot instantiate abstract class Ab
+object(stdClass)#9 (1) {
+  ["n"]=>
+  int(1)
+}
+"#
         );
     }
 }

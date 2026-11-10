@@ -36,6 +36,29 @@ const G_UNSET: u8 = 3;
 /// cloned that was already re-initialized (`IS_PROP_REINITABLE` cleared).
 const G_REINIT: u8 = 4;
 
+/// `ZEND_NEW` of `cls` when it needs nothing from the VM: an
+/// instantiable class (not `Generator`) with no constructor, no internal
+/// hooks (`create_object`, `get_constructor`), not a `Throwable` (whose
+/// file and line are recorded) and whose default properties are already
+/// evaluated (`ZEND_ACC_CONSTANTS_UPDATED`): the new object, its slots
+/// copied from `default_properties_table` (`object_properties_init`).
+/// `None`, having done nothing, otherwise ([`Vm::instantiate`] and the
+/// constructor call then run).
+#[inline]
+pub(crate) fn new_plain(cls: &Rc<Class>) -> Option<Obj> {
+    if cls.flags & NOT_INSTANTIABLE != 0
+        || cls.magic.construct.is_some()
+        || cls.hooks.is_some()
+        || cls.internal == InternalKind::Throwable
+        || (cls.lc_name.len() == 9 && cls.lc_name.as_bytes() == b"generator")
+    {
+        return None;
+    }
+    let defaults = cls.defaults.try_borrow().ok()?;
+    let o = object::new_object_from_defaults(cls.clone(), defaults.as_deref()?);
+    Some(o)
+}
+
 impl Vm {
     /// Whether an object is an instance of the (lower-case) class name.
     pub(crate) fn instance_of(&self, o: &Obj, lc: &[u8]) -> bool {
