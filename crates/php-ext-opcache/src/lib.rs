@@ -72,6 +72,7 @@ impl Extension for Opcache {
 
         // Install additive compile hook
         Vm::set_compile_hook(opcache_compile_hook);
+        Vm::set_cached_include_hook(opcache_cached_include);
 
         maybe_run_preload(module.vm());
     }
@@ -921,6 +922,59 @@ fn opcache_compile_hook(
         }
     }
     Ok(res)
+}
+
+/// An include of a file that cannot be opened: `persistent_compile_file`
+/// looks the script up by its key before opening the file, so with
+/// `opcache.validate_timestamps=0` a cached script runs even after its file
+/// was deleted (until `opcache_invalidate()`).
+fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc<CompiledUnit>)>> {
+    use std::os::unix::ffi::OsStrExt;
+    if !is_opcache_enabled(vm)
+        || vm.ini_bool("opcache.file_cache_only")
+        || vm.ini_bool("opcache.validate_timestamps")
+    {
+        return Ok(None);
+    }
+    let path = std::path::Path::new(std::ffi::OsStr::from_bytes(name));
+    let full = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(path),
+            Err(_) => return Ok(None),
+        }
+    };
+    // The file is gone: resolve its directory.
+    let key = match (full.parent(), full.file_name()) {
+        (Some(dir), Some(base)) => {
+            std::fs::canonicalize(dir).map_or(full.clone(), |d| d.join(base))
+        }
+        _ => full,
+    };
+    let key = key.to_string_lossy().into_owned();
+    let now_sec = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let hit = GLOBAL_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if !cache.is_cached(&key) {
+            return None;
+        }
+        match cache.get(&key, 0, false, 0, now_sec) {
+            CacheLookup::Hit(unit) => Some(unit.clone()),
+            _ => None,
+        }
+    });
+    let Some(unit) = hit else {
+        return Ok(None);
+    };
+    unit.clear_runtime_caches();
+    let filename = ZStr::from(key.as_bytes());
+    if vm.ini_bool("opcache.record_warnings") {
+        vm.emit_compile_warnings(&unit, &filename)?;
+    }
+    Ok(Some((filename, unit)))
 }
 
 fn opcache_reset(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {

@@ -20,7 +20,14 @@ pub enum CompileOutcome {
 /// A hook called when compiling file source (`zend_compile_file` override point).
 pub type CompileHookFn = fn(&mut Vm, Rc<[u8]>, &ZStr, bool) -> VmResult<CompileOutcome>;
 
+/// A hook that serves an `include` whose file cannot be opened from a
+/// script cache (opcache finds a script by its key before opening the
+/// file, so with `opcache.validate_timestamps=0` a deleted file still
+/// runs). Returns the cached unit and its path.
+pub type CachedIncludeHookFn = fn(&mut Vm, &[u8]) -> VmResult<Option<(ZStr, Rc<CompiledUnit>)>>;
+
 thread_local! {
+    static CACHED_INCLUDE_HOOK: std::cell::Cell<Option<CachedIncludeHookFn>> = const { std::cell::Cell::new(None) };
     static COMPILE_HOOK: std::cell::Cell<Option<CompileHookFn>> = const { std::cell::Cell::new(None) };
     /// Set while compiling a file opened through a stream wrapper other
     /// than `file://` and `phar://`: such source bypasses the compile hook
@@ -46,6 +53,12 @@ impl Vm {
     /// Installs a compile hook (`zend_compile_file` override point) for files.
     pub fn set_compile_hook(f: CompileHookFn) {
         COMPILE_HOOK.with(|h| h.set(Some(f)));
+    }
+
+    /// Installs the hook serving includes of unopenable files from a
+    /// script cache.
+    pub fn set_cached_include_hook(f: CachedIncludeHookFn) {
+        CACHED_INCLUDE_HOOK.with(|h| h.set(Some(f)));
     }
 
     /// The constants the compiler may substitute (`zend_try_ct_eval_const`,
@@ -635,6 +648,13 @@ impl Vm {
         }
         let resolved = self.resolve_include_path(name);
         let Some(path) = resolved else {
+            if !name.is_empty() {
+                if let Some(hook) = CACHED_INCLUDE_HOOK.with(std::cell::Cell::get) {
+                    if let Some((path, unit)) = hook(self, name)? {
+                        return self.include_cached(kind, kind_name, &unit, path, dst);
+                    }
+                }
+            }
             if name.is_empty() {
                 self.warning(&format!("{kind_name}(): Filename cannot be empty"))?;
             } else {
@@ -680,6 +700,30 @@ impl Vm {
         };
         self.declare_hoisted(&unit)?;
         self.push_include_frame(&unit, FrameKind::Include, dst, Some(kind_name));
+        Ok(true)
+    }
+
+    /// Runs a unit a script cache served for `path`.
+    fn include_cached(
+        &mut self,
+        kind: IncludeKind,
+        kind_name: &str,
+        unit: &Rc<CompiledUnit>,
+        path: ZStr,
+        dst: u32,
+    ) -> VmResult<bool> {
+        if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
+            && self.included_set.contains(&path)
+        {
+            self.set_tmp(dst, Value::Bool(true));
+            return Ok(false);
+        }
+        if !self.included_set.contains(&path) {
+            self.included_set.insert(path.clone());
+            self.included.push(path);
+        }
+        self.declare_hoisted(unit)?;
+        self.push_include_frame(unit, FrameKind::Include, dst, Some(kind_name));
         Ok(true)
     }
 
