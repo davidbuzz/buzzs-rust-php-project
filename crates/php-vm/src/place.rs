@@ -1711,7 +1711,14 @@ impl Vm {
         };
         let r = op(self);
         if let Some(f) = self.frames.get_mut(fidx) {
-            if std::ptr::eq(Rc::as_ptr(&f.vars), vars) {
+            // The same frame (a fiber switch inside the access could have
+            // moved the stack): otherwise the table just stays attached.
+            if std::ptr::eq(Rc::as_ptr(&f.vars), vars)
+                && matches!(
+                    f.kind,
+                    crate::vm::FrameKind::Main | crate::vm::FrameKind::Function
+                )
+            {
                 f.detach_symbol_table();
             }
         }
