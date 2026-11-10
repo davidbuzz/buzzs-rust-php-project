@@ -333,6 +333,10 @@ pub struct Stream {
     /// `stream->wrapperdata` set by a built-in wrapper (the `http://`
     /// response headers); user-space wrapper objects are VM-side.
     pub wrapper_data: Option<Value>,
+    /// `wrapper->wops->stream_closer`, run once after the stream's own
+    /// close (the `ftp://` wrapper reads the transfer result from its
+    /// control connection and sends `QUIT`).
+    closer: Option<Box<dyn FnOnce()>>,
 }
 
 impl fmt::Debug for Stream {
@@ -388,12 +392,19 @@ impl Stream {
             lock_flag: 0,
             is_include: false,
             wrapper_data: None,
+            closer: None,
         }
     }
 
     /// The stream id (used for `Value::Stream`, user filter `$this->stream`).
     pub fn id(&self) -> u64 {
         self.state.id
+    }
+
+    /// Installs the wrapper's `stream_closer`, run after the stream's own
+    /// close (`php_stream_free()` calls it once the ops are closed).
+    pub fn set_wrapper_closer(&mut self, closer: Box<dyn FnOnce()>) {
+        self.closer = Some(closer);
     }
 
     /// Sets the wrapper the stream was opened with.
@@ -1555,6 +1566,9 @@ impl Stream {
         self.readbuf = Vec::new();
         self.readpos = 0;
         self.writepos = 0;
+        if let Some(closer) = self.closer.take() {
+            closer();
+        }
         ret
     }
 }

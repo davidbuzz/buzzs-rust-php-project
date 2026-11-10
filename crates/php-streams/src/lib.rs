@@ -25,7 +25,7 @@
 //!   (`php://`), [`memory`] (memory/temp streams and `data:`),
 //!   [`glob_wrapper`] (`glob://`), [`user`] (`stream_wrapper_register`),
 //!   [`transports`] (`stream_socket_client` for tcp/udp/unix),
-//!   [`http`] (`http://` / `https://`).
+//!   [`http`] (`http://` / `https://`), [`ftp`] (`ftp://` / `ftps://`).
 //! * [`filter`] — filter framework, bundled filters and `php_user_filter`.
 //! * [`file`](mod@file) / [`filestat`] — the PHP functions' core logic (argument
 //!   `ValueError`s are returned as [`file::ArgError`]).
@@ -42,6 +42,7 @@ pub mod file;
 pub mod filestat;
 pub mod filter;
 pub mod fnmatch;
+pub mod ftp;
 pub mod glob;
 pub mod glob_wrapper;
 pub mod http;
