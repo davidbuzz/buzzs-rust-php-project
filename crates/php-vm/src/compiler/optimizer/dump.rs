@@ -148,12 +148,16 @@ struct Done {
     tmps: u32,
     live: Vec<passes::LiveRange>,
     num_args: u32,
+    /// The exception table.
+    exc: Vec<[Option<u32>; 4]>,
 }
 
 fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
-    let lowered = lower::Lower::new(&e.func, e.scope.clone(), &e.dyn_defs, res).run();
-    let mut lines = lowered.lines;
-    passes::resolve_labels(&mut lines, &lowered.first_z);
+    let lower::Lowered {
+        lines: mut lines,
+        first_z,
+    } = lower::Lower::new(&e.func, e.scope.clone(), &e.dyn_defs, res).run();
+    passes::resolve_labels(&mut lines, &first_z);
     let oa = &e.func.code;
     let shape = passes::FuncShape {
         is_main: e.is_main,
@@ -171,7 +175,45 @@ fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
     if !e.is_main && passes::dfa_allowed(&lines) {
         passes::dfa(&mut lines, &types);
     }
-    let mut lines = passes::remove_nops(lines);
+    let (mut lines, new_idx) = passes::remove_nops(lines);
+    // `try_catch_array`: try, catch, finally and finally-end oplines.
+    let at = |l: u32| -> u32 {
+        let z = first_z
+            .get(l as usize)
+            .or_else(|| first_z.last())
+            .copied()
+            .unwrap_or(0) as usize;
+        new_idx
+            .get(z)
+            .or_else(|| new_idx.last())
+            .copied()
+            .unwrap_or(0)
+    };
+    let mut exc: Vec<[Option<u32>; 4]> = oa
+        .try_table
+        .iter()
+        .rev()
+        .map(|t| {
+            let (fin, fin_end) = match t.finally {
+                Some((_, start, end)) => {
+                    let mut e = at(end);
+                    // `finally_end` is the `FAST_RET`.
+                    if e > 0
+                        && lines.get(e as usize).is_none_or(|l| l.op != "FAST_RET")
+                        && lines
+                            .get(e as usize - 1)
+                            .is_some_and(|l| l.op == "FAST_RET")
+                    {
+                        e -= 1;
+                    }
+                    (Some(at(start)), Some(e))
+                }
+                None => (None, None),
+            };
+            [Some(at(t.try_start)), t.catch_start.map(at), fin, fin_end]
+        })
+        .collect();
+    exc.sort_by_key(|e| e[0]);
     let kept = passes::compact_cvs(&mut lines, oa.cv_names.len());
     let mut is_var: HashMap<u32, bool> = HashMap::new();
     for l in &lines {
@@ -215,6 +257,7 @@ fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
         tmps,
         live,
         num_args,
+        exc,
     }
 }
 
@@ -401,6 +444,15 @@ fn write_entry(out: &mut Vec<u8>, e: &Entry, d: &Done, done: &[Done], msg: &str,
                     r.kind
                 )
                 .as_bytes(),
+            );
+        }
+    }
+    if !d.exc.is_empty() {
+        out.extend_from_slice(b"EXCEPTION TABLE:\n");
+        for e in &d.exc {
+            let f = |x: Option<u32>| x.map_or_else(|| "-".to_string(), |v| format!("{v:04}"));
+            out.extend_from_slice(
+                format!("     {}, {}, {}, {}\n", f(e[0]), f(e[1]), f(e[2]), f(e[3])).as_bytes(),
             );
         }
     }

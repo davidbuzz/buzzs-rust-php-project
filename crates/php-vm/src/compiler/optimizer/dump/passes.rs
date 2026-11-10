@@ -801,8 +801,9 @@ pub(crate) fn resolve_labels(lines: &mut [ZLine], first_z: &[u32]) {
     }
 }
 
-/// Removes NOPs, retargeting jumps to the next remaining opline.
-pub(crate) fn remove_nops(lines: Vec<ZLine>) -> Vec<ZLine> {
+/// Removes NOPs, retargeting jumps to the next remaining opline; also
+/// returns the new index of each old one.
+pub(crate) fn remove_nops(lines: Vec<ZLine>) -> (Vec<ZLine>, Vec<u32>) {
     let n = lines.len();
     let mut new_idx = vec![0u32; n + 1];
     let mut k = 0u32;
@@ -826,7 +827,7 @@ pub(crate) fn remove_nops(lines: Vec<ZLine>) -> Vec<ZLine> {
             map(j);
         }
     }
-    out
+    (out, new_idx)
 }
 
 /// `zend_optimizer_compact_vars`: the CVs still used, renumbered in order.
