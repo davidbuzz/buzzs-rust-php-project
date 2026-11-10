@@ -58,7 +58,11 @@ impl VarNames {
     /// Makes the names those of `code`'s compiled variables again, keeping
     /// a small owned buffer for the next run-time copy.
     fn share(&mut self, code: &Rc<OpArray>) {
-        self.shared = Some(code.clone());
+        // A recycled frame of the same function still shares them
+        // (`Frame::clear_for_reuse`): no reference count to move.
+        if !self.shared.as_ref().is_some_and(|c| Rc::ptr_eq(c, code)) {
+            self.shared = Some(code.clone());
+        }
         self.owned.clear();
     }
 
@@ -1143,13 +1147,14 @@ impl Frame {
         for t in &mut self.tmps {
             release_slot(std::mem::take(t));
         }
-        for it in &mut self.iters {
-            clear_opt(it);
+        // Foreach iterators, finally states and pending calls: absent from
+        // most functions (`num_iters`/`num_finally` are zero) and empty
+        // after a return.
+        if !(self.iters.is_empty() && self.fins.is_empty() && self.calls.is_empty())
+            || self.calls.capacity() > 256
+        {
+            self.clear_loop_state();
         }
-        for fin in &mut self.fins {
-            *fin = FinState::None;
-        }
-        clear_frame_buffer(&mut self.calls);
         for slot in &mut self.cvs {
             if let Some(old) = slot.as_mut().take() {
                 release_slot(old);
@@ -1159,19 +1164,43 @@ impl Frame {
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
             clear_frame_buffer(&mut vs.slots);
-            vs.names.clear();
+            // The shared names are dropped below, with the function
+            // handles (`keeps_function`): they are the code's.
+            clear_frame_buffer(&mut vs.names.owned);
             clear_opt(&mut vs.index);
         } else {
             self.vars = Rc::new(RefCell::new(VarStore::default()));
         }
-        clear_frame_buffer(&mut self.named);
+        if !self.named.is_empty() || self.named.capacity() > 256 {
+            clear_frame_buffer(&mut self.named);
+        }
         clear_arg_buffer(&mut self.args);
         clear_opt(&mut self.this);
         clear_opt(&mut self.closure);
-        clear_opt(&mut self.generator);
-        clear_opt(&mut self.pending_exc);
-        clear_opt(&mut self.statics);
-        if !self.keeps_function() {
+        // Generator, caught exception and static variables: one test for
+        // the three fields a plain call leaves empty.
+        if self.generator.is_some() || self.pending_exc.is_some() || self.statics.is_some() {
+            self.clear_rare_handles();
+        }
+        if self.keeps_function() {
+            // The variable store's names stay shared with the kept code,
+            // which the next call of the same function shares again
+            // (`VarNames::share`); a different code replaces them
+            // (`reinit_same_call`, `reinit_for_call`).
+            if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+                let names = &mut rc_mut.get_mut().names;
+                if names
+                    .shared
+                    .as_ref()
+                    .is_some_and(|c| !Rc::ptr_eq(c, &self.code))
+                {
+                    names.shared = None;
+                }
+            }
+        } else {
+            if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+                clear_opt(&mut rc_mut.get_mut().names.shared);
+            }
             clear_opt(&mut self.func);
             clear_opt(&mut self.ufunc);
             if !Rc::ptr_eq(&self.code, empty_code) {
@@ -1183,13 +1212,54 @@ impl Frame {
         clear_opt(&mut self.called);
         self.ret = RetTarget::Discard;
         self.is_ctor = false;
-        clear_frame_buffer(&mut self.silence_saved);
-        clear_opt(&mut self.builtin_name);
-        clear_opt(&mut self.magic_name);
+        // `@` masks, builtin and `__call` names: one test for the three.
+        if !self.silence_saved.is_empty()
+            || self.builtin_name.is_some()
+            || self.magic_name.is_some()
+            || self.silence_saved.capacity() > 256
+        {
+            self.clear_rare_names();
+        }
         self.caller_strict = false;
         self.called_from_internal = false;
         self.observed = false;
         self.observer_hidden = false;
+    }
+
+    /// The foreach iterators, finally states and pending calls of
+    /// [`Frame::clear_for_reuse`], in that order.
+    #[cold]
+    #[inline(never)]
+    fn clear_loop_state(&mut self) {
+        for it in &mut self.iters {
+            clear_opt(it);
+        }
+        for fin in &mut self.fins {
+            if !matches!(fin, FinState::None) {
+                *fin = FinState::None;
+            }
+        }
+        clear_frame_buffer(&mut self.calls);
+    }
+
+    /// The generator, caught exception and static variables of
+    /// [`Frame::clear_for_reuse`], in that order.
+    #[cold]
+    #[inline(never)]
+    fn clear_rare_handles(&mut self) {
+        clear_opt(&mut self.generator);
+        clear_opt(&mut self.pending_exc);
+        clear_opt(&mut self.statics);
+    }
+
+    /// The `@` masks, builtin name and `__call` name of
+    /// [`Frame::clear_for_reuse`], in that order.
+    #[cold]
+    #[inline(never)]
+    fn clear_rare_names(&mut self) {
+        clear_frame_buffer(&mut self.silence_saved);
+        clear_opt(&mut self.builtin_name);
+        clear_opt(&mut self.magic_name);
     }
 
     /// Whether a frame being recycled keeps its function handles (`func`,
@@ -1226,13 +1296,20 @@ impl Frame {
         self.silence_saved.clear();
         self.symtab_attached = false;
         // A recycled frame may still hold this code (`keeps_function`).
-        if !Rc::ptr_eq(&self.code, code) {
+        let same_code = Rc::ptr_eq(&self.code, code);
+        if !same_code {
             self.code = code.clone();
         }
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
             for slot in vs.slots.iter_mut() {
                 *slot = None;
+            }
+            // Names kept shared with the previous code
+            // (`clear_for_reuse`) are not this code's:
+            // `attach_symbol_table` shares the new ones.
+            if !same_code {
+                clear_opt(&mut vs.names.shared);
             }
         }
     }
@@ -2149,6 +2226,41 @@ mod tests {
         assert!(f.func.is_none() && f.ufunc.is_none());
         assert!(Rc::ptr_eq(&f.code, &empty));
         assert_eq!(Rc::strong_count(&code), 1);
+    }
+
+    #[test]
+    fn a_kept_function_keeps_its_shared_names_and_another_code_replaces_them() {
+        let empty = Rc::new(OpArray::default());
+        let named = |n: &str| {
+            Rc::new(OpArray {
+                cv_names: vec![ZStr::from(n)],
+                ..OpArray::default()
+            })
+        };
+        let code = named("a");
+        let uf = user_function(code.clone());
+        let mut f = Frame::new_pooled(empty.clone());
+        f.reinit_for_call(code.clone(), FrameKind::Function);
+        f.func = Some(crate::func::Func::User(uf.clone()));
+        f.ufunc = Some(uf.clone());
+        // `code`, `uf.code`, `f.code` and the shared names.
+        assert_eq!(Rc::strong_count(&code), 4);
+        f.clear_for_reuse(&empty);
+        assert_eq!(Rc::strong_count(&code), 4);
+        // The same function again: nothing to share anew.
+        f.reinit_for_call(code.clone(), FrameKind::Function);
+        assert_eq!(Rc::strong_count(&code), 4);
+        f.clear_for_reuse(&empty);
+        // Another function of the same shape: its own names.
+        let other = named("b");
+        f.reinit_same_call(&other, FrameKind::Function);
+        f.cvs[0].set(Some(Value::Int(7)));
+        f.attach_symbol_table();
+        assert_eq!(
+            f.vars.borrow().names.first().map(ZStr::as_bytes),
+            Some(&b"b"[..])
+        );
+        assert_eq!(Rc::strong_count(&code), 2);
     }
 
     #[test]
