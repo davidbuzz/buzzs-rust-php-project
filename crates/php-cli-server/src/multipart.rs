@@ -8,7 +8,7 @@
 //! the warnings PHP would raise.  Registering the variables is left to the
 //! caller (it needs the VM for `php_register_variable_ex`).
 
-use php_vm::ext::Rfc1867Event;
+use php_vm::ext::{Rfc1867Event, Rfc1867Translation};
 use std::collections::HashSet;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -252,8 +252,12 @@ impl MultipartBuffer<'_> {
     }
 
     /// `multipart_buffer_headers()`: the saved part headers, or `None` when
-    /// no further boundary was found.
-    fn headers(&mut self) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
+    /// no further boundary was found. With encoding translation every
+    /// header line sets the input encoding (`mbuff->input_encoding`).
+    fn headers(
+        &mut self,
+        mut tr: Option<&mut (dyn Rfc1867Translation + '_)>,
+    ) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
         if !self.find_boundary() {
             return None;
         }
@@ -264,6 +268,9 @@ impl MultipartBuffer<'_> {
             let line = c_str(&raw);
             if line.is_empty() {
                 break;
+            }
+            if let Some(t) = tr.as_deref_mut() {
+                t.detect(line);
             }
             let colon = if is_space(line[0]) {
                 None
@@ -367,9 +374,39 @@ fn header_value<'a>(headers: &'a [(Vec<u8>, Vec<u8>)], key: &[u8]) -> Option<&'a
         .map(|(_, v)| v.as_slice())
 }
 
-/// `php_ap_getword()`: the word up to `stop` (respecting quotes) and the
-/// rest after any run of `stop` characters.
-fn getword(line: &[u8], stop: u8) -> (Vec<u8>, &[u8]) {
+/// The byte length of a character by its first byte
+/// (`php_mb_mbchar_bytes()`); [`single_byte`] without encoding
+/// translation, where the `php_ap_*` helpers step one byte at a time.
+type CharLen<'a> = &'a dyn Fn(u8) -> usize;
+
+/// [`CharLen`] of the plain (`php_ap_*`) helpers.
+fn single_byte(_: u8) -> usize {
+    1
+}
+
+/// The input encoding's [`CharLen`] of an optional translation.
+fn input_char_len(tr: Option<&dyn Rfc1867Translation>, lead: u8) -> usize {
+    tr.map_or(1, |t| t.input_char_len(lead).max(1))
+}
+
+/// The internal encoding's [`CharLen`] of an optional translation.
+fn internal_char_len(tr: Option<&dyn Rfc1867Translation>, lead: u8) -> usize {
+    tr.map_or(1, |t| t.internal_char_len(lead).max(1))
+}
+
+/// `zend_multibyte_encoding_converter()` of a field or file name from the
+/// input encoding (if one was detected); the result is used as a C string.
+fn translate_name(tr: Option<&mut (dyn Rfc1867Translation + '_)>, name: Vec<u8>) -> Vec<u8> {
+    match tr.and_then(|t| t.convert(&name)) {
+        Some(converted) => c_str(&converted).to_vec(),
+        None => name,
+    }
+}
+
+/// `php_ap_getword()` / `php_mb_rfc1867_getword()`: the word up to `stop`
+/// (respecting quotes, stepping over whole characters) and the rest after
+/// any run of `stop` characters.
+fn getword<'a>(line: &'a [u8], stop: u8, clen: CharLen<'_>) -> (Vec<u8>, &'a [u8]) {
     let mut pos = 0;
     while pos < line.len() && line[pos] != stop {
         let q = line[pos];
@@ -386,7 +423,7 @@ fn getword(line: &[u8], stop: u8) -> (Vec<u8>, &[u8]) {
                 pos += 1;
             }
         } else {
-            pos += 1;
+            pos = (pos + clen(q)).min(line.len());
         }
     }
     if pos >= line.len() {
@@ -394,13 +431,15 @@ fn getword(line: &[u8], stop: u8) -> (Vec<u8>, &[u8]) {
     }
     let word = line[..pos].to_vec();
     while pos < line.len() && line[pos] == stop {
-        pos += 1;
+        pos = (pos + clen(stop)).min(line.len());
     }
     (word, &line[pos..])
 }
 
-/// `substring_conf()`: unescapes `\\` and `\<quote>`.
-fn substring_conf(s: &[u8], quote: u8) -> Vec<u8> {
+/// `substring_conf()` / `php_mb_rfc1867_substring_conf()`: unescapes `\\`
+/// and `\<quote>`, copying other characters whole (a multibyte character
+/// whose last byte is a backslash escapes nothing).
+fn substring_conf(s: &[u8], quote: u8, clen: CharLen<'_>) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() && (quote == 0 || s[i] != quote) {
@@ -408,31 +447,53 @@ fn substring_conf(s: &[u8], quote: u8) -> Vec<u8> {
             && (s.get(i + 1) == Some(&b'\\') || (quote != 0 && s.get(i + 1) == Some(&quote)))
         {
             i += 1;
+            out.push(s[i]);
+            i += 1;
+        } else {
+            let end = (i + clen(s[i])).min(s.len());
+            out.extend_from_slice(&s[i..end]);
+            i = end;
         }
-        out.push(s[i]);
-        i += 1;
     }
     out
 }
 
-/// `php_ap_getword_conf()`.
-fn getword_conf(s: &[u8]) -> Vec<u8> {
+/// `php_ap_getword_conf()` / `php_mb_rfc1867_getword_conf()`.
+fn getword_conf(s: &[u8], clen: CharLen<'_>) -> Vec<u8> {
     let start = s.iter().position(|&c| !is_space(c)).unwrap_or(s.len());
     let s = &s[start..];
     match s.first() {
         None => Vec::new(),
-        Some(&q) if q == b'"' || q == b'\'' => substring_conf(&s[1..], q),
+        Some(&q) if q == b'"' || q == b'\'' => substring_conf(&s[1..], q, clen),
         Some(_) => {
             let end = s.iter().position(|&c| is_space(c)).unwrap_or(s.len());
-            substring_conf(&s[..end], 0)
+            substring_conf(&s[..end], 0, clen)
         }
     }
 }
 
-/// `php_ap_basename()`.
-fn basename(path: &[u8]) -> &[u8] {
-    let bs = path.iter().rposition(|&c| c == b'\\');
-    let fs = path.iter().rposition(|&c| c == b'/');
+/// `php_mb_safe_strrchr()`: the last `c` that starts a character; `None`
+/// as well when the last character is cut off.
+fn safe_strrchr(s: &[u8], c: u8, clen: CharLen<'_>) -> Option<usize> {
+    let mut last = None;
+    let mut p = 0;
+    while p < s.len() {
+        if s[p] == c {
+            last = Some(p);
+        }
+        let n = clen(s[p]);
+        if s.len() - p < n {
+            return None;
+        }
+        p += n;
+    }
+    last
+}
+
+/// `php_ap_basename()` / `php_mb_rfc1867_basename()`.
+fn basename<'a>(path: &'a [u8], clen: CharLen<'_>) -> &'a [u8] {
+    let bs = safe_strrchr(path, b'\\', clen);
+    let fs = safe_strrchr(path, b'/', clen);
     match (bs, fs) {
         (Some(a), Some(b)) => &path[a.max(b) + 1..],
         (Some(a), None) | (None, Some(a)) => &path[a + 1..],
@@ -487,7 +548,7 @@ pub fn normalize_protected_variable(var: &[u8]) -> Vec<u8> {
 }
 
 /// Creates `<dir>/phpXXXXXX` (`php_open_temporary_fd_ex()`).
-fn open_temporary(dirs: &[PathBuf]) -> Option<(std::fs::File, PathBuf)> {
+pub(crate) fn open_temporary(dirs: &[PathBuf]) -> Option<(std::fs::File, PathBuf)> {
     use std::os::unix::io::FromRawFd;
     for dir in dirs {
         let Ok(dir) = std::fs::canonicalize(dir) else {
@@ -579,22 +640,32 @@ pub fn parse(
     settings: &UploadSettings,
     read: &mut dyn FnMut(&mut [u8]) -> usize,
 ) -> Outcome {
-    parse_with_events(content_type, content_length, settings, read, &mut |_, _| {
-        true
-    })
+    parse_with_events(
+        content_type,
+        content_length,
+        settings,
+        read,
+        &mut |_, _| true,
+        None,
+    )
 }
 
 /// [`parse`] reporting its progress to `events` (`php_rfc1867_callback`),
 /// which also receives `SG(read_post_bytes)`; an event returning `false`
 /// skips the field or cancels the upload, as `FAILURE` does in PHP.
-#[allow(clippy::too_many_lines)]
+/// `translation` is mbstring's multibyte callbacks
+/// (`mbstring.encoding_translation`): names, file names and values are
+/// converted from the input encoding detected on the part headers.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub fn parse_with_events(
     content_type: &[u8],
     content_length: i64,
     settings: &UploadSettings,
     read: &mut dyn FnMut(&mut [u8]) -> usize,
     events: &mut dyn FnMut(Rfc1867Event<'_>, i64) -> bool,
+    translation: Option<&mut (dyn Rfc1867Translation + '_)>,
 ) -> Outcome {
+    let mut tr = translation;
     let mut p = Parser {
         out: Outcome::default(),
         protected: HashSet::new(),
@@ -657,7 +728,7 @@ pub fn parse_with_events(
         if oom() {
             break;
         }
-        let Some(headers) = mb.headers() else {
+        let Some(headers) = mb.headers(tr.as_deref_mut()) else {
             break;
         };
         let Some(cd) = header_value(&headers, b"Content-Disposition") else {
@@ -677,7 +748,7 @@ pub fn parse_with_events(
         let mut param: Option<Vec<u8>> = None;
         let mut filename: Option<Vec<u8>> = None;
         while !cd.is_empty() {
-            let (pair, rest) = getword(cd, b';');
+            let (pair, rest) = getword(cd, b';', &|c| input_char_len(tr.as_deref(), c));
             if oom() {
                 break 'parts;
             }
@@ -686,14 +757,16 @@ pub fn parse_with_events(
                 .position(|&c| !is_space(c))
                 .unwrap_or(rest.len())..];
             if pair.contains(&b'=') {
-                let (key, value) = getword(&pair, b'=');
+                let (key, value) = getword(&pair, b'=', &|c| input_char_len(tr.as_deref(), c));
                 if oom() {
                     break 'parts;
                 }
                 if key.eq_ignore_ascii_case(b"name") {
-                    param = Some(getword_conf(value));
+                    let word = getword_conf(value, &|c| input_char_len(tr.as_deref(), c));
+                    param = Some(translate_name(tr.as_deref_mut(), word));
                 } else if key.eq_ignore_ascii_case(b"filename") {
-                    filename = Some(getword_conf(value));
+                    let word = getword_conf(value, &|c| input_char_len(tr.as_deref(), c));
+                    filename = Some(translate_name(tr.as_deref_mut(), word));
                 }
                 if oom() {
                     break 'parts;
@@ -707,12 +780,18 @@ pub fn parse_with_events(
         // A normal form variable.
         if filename.is_none() {
             if let Some(param) = param {
-                let value = mb.read_body();
+                let mut value = mb.read_body();
                 if oom() {
                     break;
                 }
+                if let Some(converted) = tr.as_deref_mut().and_then(|t| t.convert(&value)) {
+                    value = converted;
+                }
                 count += 1;
                 if count <= settings.max_input_vars {
+                    if oom() {
+                        break;
+                    }
                     let event = Rfc1867Event::FormData {
                         name: &param,
                         value: &value,
@@ -911,7 +990,7 @@ pub fn parse_with_events(
         if !p.register(
             Target::Files,
             &name_of(&param, "name"),
-            RegValue::Str(basename(&filename).to_vec()),
+            RegValue::Str(basename(&filename, &|c| internal_char_len(tr.as_deref(), c)).to_vec()),
             false,
         ) {
             break;
@@ -1169,15 +1248,108 @@ mod tests {
         assert_eq!(normalize_protected_variable(b" a.b[ x ][y"), b"a_b[x ][y");
         assert_eq!(normalize_protected_variable(b"a[ b][ c]"), b"a[b][c]");
         assert_eq!(normalize_protected_variable(b"plain"), b"plain");
-        assert_eq!(basename(b"a/b\\c"), b"c");
-        assert_eq!(basename(b"a\\b/c"), b"c");
-        assert_eq!(getword_conf(b" \"a\\\"b\" "), b"a\"b");
-        assert_eq!(getword_conf(b"plain rest"), b"plain");
-        let (w, rest) = getword(b"name=\"a;b\"; filename=x", b';');
+        assert_eq!(basename(b"a/b\\c", &single_byte), b"c");
+        assert_eq!(basename(b"a\\b/c", &single_byte), b"c");
+        assert_eq!(getword_conf(b" \"a\\\"b\" ", &single_byte), b"a\"b");
+        assert_eq!(getword_conf(b"plain rest", &single_byte), b"plain");
+        let (w, rest) = getword(b"name=\"a;b\"; filename=x", b';', &single_byte);
         assert_eq!(w, b"name=\"a;b\"");
         assert_eq!(rest, b" filename=x");
         assert_eq!(memstr(b"abc\n--X", b"\n--XY", true), Some(3));
         assert_eq!(memstr(b"abc\n--X", b"\n--XY", false), None);
+    }
+
+    /// A Shift_JIS-like translation: 0x81..=0x9F lead two-byte characters
+    /// once a header line was seen; conversion brackets the bytes.
+    struct FakeSjis {
+        detected: bool,
+        converted: usize,
+    }
+
+    impl Rfc1867Translation for FakeSjis {
+        fn detect(&mut self, _line: &[u8]) {
+            self.detected = true;
+        }
+        fn input_char_len(&self, lead: u8) -> usize {
+            if self.detected && (0x81..=0x9f).contains(&lead) {
+                2
+            } else {
+                1
+            }
+        }
+        fn internal_char_len(&self, _lead: u8) -> usize {
+            1
+        }
+        fn convert(&mut self, s: &[u8]) -> Option<Vec<u8>> {
+            self.converted += 1;
+            self.detected.then(|| [&b"<"[..], s, b">"].concat())
+        }
+    }
+
+    /// tests/basic/029.phpt: with translation, a two-byte character whose
+    /// trail byte is a backslash does not escape the closing quote, and the
+    /// name, file name and value are converted.
+    #[test]
+    fn translated_names_and_values() {
+        let body =
+            b"--XyZ\r\nContent-Disposition: form-data; name=\"\x97\\\x8e\\\x94\\\"\r\n\r\nv\r\n\
+--XyZ\r\nContent-Disposition: form-data; name=\"f\"; filename=\"d/x.txt\"\r\n\r\n1\r\n--XyZ--\r\n";
+        let mut pos = 0;
+        let mut read = |buf: &mut [u8]| {
+            let n = buf.len().min(body.len() - pos);
+            buf[..n].copy_from_slice(&body[pos..pos + n]);
+            pos += n;
+            n
+        };
+        let mut tr = FakeSjis {
+            detected: false,
+            converted: 0,
+        };
+        let o = parse_with_events(
+            CT.as_bytes(),
+            i64::try_from(body.len()).unwrap(),
+            &tmp_settings(),
+            &mut read,
+            &mut |_, _| true,
+            Some(&mut tr),
+        );
+        assert_eq!(o.registrations[0].name, b"<\x97\\\x8e\\\x94\\>");
+        assert_eq!(o.registrations[0].value, RegValue::Str(b"<v>".to_vec()));
+        assert_eq!(o.registrations[1].name, b"<f>[name]");
+        assert_eq!(o.registrations[1].value, RegValue::Str(b"x.txt>".to_vec()));
+        assert_eq!(
+            o.registrations[2].value,
+            RegValue::Str(b"<d/x.txt>".to_vec())
+        );
+        // name, value, then the file part's name and file name.
+        assert_eq!(tr.converted, 4);
+        cleanup(&o.uploaded);
+
+        // Without translation the trail byte escapes the quote.
+        let o = run(CT, body, &tmp_settings());
+        assert_eq!(o.registrations[0].name, b"\x97\\\x8e\\\x94\"");
+        cleanup(&o.uploaded);
+    }
+
+    #[test]
+    fn multibyte_basename() {
+        let two = |c: u8| -> usize {
+            if c == 0x81 {
+                2
+            } else {
+                1
+            }
+        };
+        // The backslash is the trail byte of a two-byte character.
+        assert_eq!(basename(b"x\x81\\y", &two), b"x\x81\\y");
+        assert_eq!(basename(b"x\x81\\y", &single_byte), b"y");
+        // A cut-off last character hides every separator.
+        assert_eq!(basename(b"a/\x81", &two), b"a/\x81");
+        assert_eq!(basename(b"a/b\x81\x81", &two), b"b\x81\x81");
+        let (w, rest) = getword(b"\x81;x;;y", b';', &two);
+        assert_eq!(w, b"\x81;x");
+        assert_eq!(rest, b"y");
+        assert_eq!(substring_conf(b"\x81\\\"z", b'"', &two), b"\x81\\");
     }
 
     /// Runs [`parse_with_events`], logging the events; `verdict` decides
@@ -1224,6 +1396,7 @@ mod tests {
                 log.push(entry);
                 verdict(&e)
             },
+            None,
         );
         (o, log)
     }

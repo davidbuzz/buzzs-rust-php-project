@@ -341,8 +341,18 @@ pub(crate) fn encode(h: &mut dyn SessionHost) -> Option<Vec<u8>> {
         .or(h.session().serializer)?;
     h.session().serializer = Some(ser);
 
+    // `php_session_serialize_init()`: the upload progress update writes
+    // the objects it decoded as `__PHP_Incomplete_Class` back unchanged.
+    let rfc1867 = h.session().in_rfc1867_update;
     php_runtime::serialize::serialize_isolated(|| {
         let mut values = |keys: Option<&[ZStr]>| {
+            if rfc1867 {
+                return serializer::serialize_selected(
+                    &vars,
+                    keys,
+                    &mut serializer::IncompleteRaw(&mut *h),
+                );
+            }
             let shared = h.serialize_shared(&vars, keys);
             shared.unwrap_or_else(|| serializer::serialize_selected(&vars, keys, h))
         };
@@ -482,7 +492,11 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
     let decoded = match shared {
         Some(r) => r,
         None => {
-            let opts = h.unserialize_options();
+            let mut opts = h.unserialize_options();
+            // `php_session_unserialize_init()`: during the upload progress
+            // update (request startup, no user code may run) no class is
+            // resolved; every object is kept as `__PHP_Incomplete_Class`.
+            opts.incomplete_classes_only = rfc1867;
             serializer::decode_with(ser, data, &opts, h)
         }
     };

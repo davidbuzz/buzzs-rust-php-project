@@ -313,6 +313,49 @@ pub fn request_input_hook() -> Option<RequestInputFn> {
     REQUEST_INPUT_HOOK.with(std::cell::Cell::get)
 }
 
+/// The multibyte callbacks of the `multipart/form-data` parser
+/// (`php_rfc1867_set_multibyte_callbacks()`): mbstring's, for one request
+/// with `mbstring.encoding_translation`. The parser then splits header
+/// words a character at a time and converts field names, file names and
+/// values from the detected input encoding to the internal encoding.
+pub trait Rfc1867Translation {
+    /// `zend_multibyte_encoding_detector()` over one part header line with
+    /// the HTTP input encodings as the detect order: the result becomes the
+    /// input encoding (`mbuff->input_encoding`), none included.
+    fn detect(&mut self, line: &[u8]);
+    /// `php_mb_mbchar_bytes()` in the input encoding: the byte length of
+    /// the character starting with `lead` (1 without an input encoding).
+    fn input_char_len(&self, lead: u8) -> usize;
+    /// `php_mb_mbchar_bytes()` in the internal encoding (the file name's
+    /// basename is taken after the conversion).
+    fn internal_char_len(&self, lead: u8) -> usize;
+    /// `zend_multibyte_encoding_converter()` from the input encoding to the
+    /// internal encoding; `None` without an input encoding (the bytes stay).
+    fn convert(&mut self, s: &[u8]) -> Option<Vec<u8>>;
+}
+
+/// Creates the request's [`Rfc1867Translation`], or `None` when encoding
+/// translation is off (`php_rfc1867_encoding_translation()`).
+pub type Rfc1867TranslationFn = fn(&mut Vm) -> Option<Box<dyn Rfc1867Translation>>;
+
+thread_local! {
+    static RFC1867_TRANSLATION_HOOK: std::cell::Cell<Option<Rfc1867TranslationFn>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Installs the multipart parser's multibyte callbacks of an extension
+/// (see [`Rfc1867Translation`]).
+pub fn set_rfc1867_translation_hook(f: Rfc1867TranslationFn) {
+    RFC1867_TRANSLATION_HOOK.with(|h| h.set(Some(f)));
+}
+
+/// The installed multipart translation, for SAPIs that parse
+/// `multipart/form-data` bodies.
+#[must_use]
+pub fn rfc1867_translation_hook() -> Option<Rfc1867TranslationFn> {
+    RFC1867_TRANSLATION_HOOK.with(std::cell::Cell::get)
+}
+
 /// Why an [`IniModifyFn`] runs (`ZEND_INI_STAGE_*`), read with
 /// [`Vm::ini_modify_stage`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

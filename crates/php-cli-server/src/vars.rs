@@ -403,7 +403,72 @@ fn read_standard_form_data(
         );
     }
     ctx.buffer_body();
+    let buffered = ctx.request_body().map_or(0, <[u8]>::len);
+    if buffered >= SAPI_POST_BLOCK_SIZE && !body_spill_possible(vm, phase)? {
+        // php_stream_temp_write() failed: the stream is truncated.
+        let len = ctx.request.content.as_ref().map_or(0, Vec::len);
+        *ctx.body.borrow_mut() = crate::sapi::Body::Buffered(len);
+        warn(
+            vm,
+            phase,
+            "Unable to create temporary file, Check permissions in temporary files directory.",
+            true,
+        )?;
+        warn(
+            vm,
+            phase,
+            "POST data can't be buffered; all data discarded",
+            true,
+        )?;
+    }
     Ok(())
+}
+
+/// `SAPI_POST_BLOCK_SIZE`: the request body buffer
+/// (`php_stream_temp_create_ex(TEMP_STREAM_DEFAULT, SAPI_POST_BLOCK_SIZE,
+/// PG(upload_tmp_dir))`) moves to a temporary file once it holds this many
+/// bytes.
+const SAPI_POST_BLOCK_SIZE: usize = 0x4000;
+
+/// Creates and removes a `php*` file in `dir` (`php_do_open_temporary_file()`).
+fn temp_file_possible(dir: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = PathBuf::from(std::ffi::OsStr::from_bytes(dir));
+    match multipart::open_temporary(std::slice::from_ref(&dir)) {
+        Some((file, path)) => {
+            drop(file);
+            let _ = std::fs::remove_file(path);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Whether the request body buffer can move to a temporary file
+/// (`php_stream_fopen_temporary_file(PG(upload_tmp_dir), "php")` in
+/// `php_stream_temp_write()`): `upload_tmp_dir`, else (with a notice when
+/// it was set) the system's temporary directory (`sys_temp_dir`, `TMPDIR`,
+/// `/tmp`). The body itself stays in memory.
+fn body_spill_possible(vm: &mut Vm, phase: Phase) -> VmResult<bool> {
+    let upload_dir = ini_bytes(vm, "upload_tmp_dir");
+    if !upload_dir.is_empty() {
+        if temp_file_possible(&upload_dir) {
+            return Ok(true);
+        }
+        // php_open_temporary_fd_ex(): "Use default temporary directory."
+        let msg = format!(
+            "{}file created in the system's temporary directory",
+            phase.docref_prefix()
+        );
+        vm.raise(8, &msg)?;
+    }
+    let mut dir = ini_bytes(vm, "sys_temp_dir");
+    if dir.is_empty() {
+        dir = std::env::var_os("TMPDIR")
+            .filter(|t| !t.is_empty())
+            .map_or_else(|| b"/tmp".to_vec(), std::ffi::OsString::into_encoded_bytes);
+    }
+    Ok(temp_file_possible(&dir))
 }
 
 /// `php_std_post_handler()`: the `application/x-www-form-urlencoded`
@@ -468,6 +533,8 @@ fn handle_multipart(
         tmp_dirs: tmp_dirs(vm),
     };
     let callback = vm.rfc1867_callback;
+    // mbstring's multibyte callbacks (`mbstring.encoding_translation`).
+    let mut translation = php_vm::ext::rfc1867_translation_hook().and_then(|hook| hook(vm));
     // The parse got past its early checks: MULTIPART_EVENT_START follows
     // the new SG(rfc1867_uploaded_files).
     let mut started = false;
@@ -483,6 +550,7 @@ fn handle_multipart(
             }
             callback.is_none_or(|cb| cb(vm, event, bytes))
         },
+        translation.as_deref_mut(),
     );
     if started {
         // The files of an earlier parse are no longer uploaded files.
@@ -984,5 +1052,15 @@ mod tests {
         assert_eq!(Phase::Startup.docref_prefix(), STARTUP);
         assert_eq!(Phase::ParseBody.func(), "request_parse_body");
         assert_eq!(Phase::ParseBody.docref_prefix(), "request_parse_body(): ");
+    }
+
+    /// sapi/cgi/tests/bug69487.phpt: the body buffer cannot spill into a
+    /// directory that does not exist.
+    #[test]
+    fn temporary_files_for_the_body_buffer() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = std::env::temp_dir();
+        assert!(temp_file_possible(dir.as_os_str().as_bytes()));
+        assert!(!temp_file_possible(b"/not-supposed-to-exist"));
     }
 }
