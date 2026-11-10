@@ -13,7 +13,11 @@
 //! [`super::lower`] and never changes executed code. The inference covers
 //! the opcodes the `ext/opcache/tests/opt` dumps show; any other result is
 //! "anything", and ranges are not widened in loops.
-#![allow(clippy::too_many_lines, clippy::too_many_arguments)]
+#![allow(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::many_single_char_names
+)]
 
 use super::lower::{Lower, Lowered, Resolver};
 use super::model::{ZLine, Z};
@@ -1249,7 +1253,7 @@ fn const_type(v: &Value) -> u32 {
         Value::Array(a) => {
             // `zend_array_type_info`.
             let mut r = t::ARRAY;
-            if a.len() == 0 {
+            if a.is_empty() {
                 return r | t::EMPTY;
             }
             let packed = a.is_packed();
@@ -2496,10 +2500,10 @@ fn write_block_header(
             .join(", ")
     };
     if !block.preds.is_empty() {
-        let _ = writeln!(s, "     ; from=({})", list(&block.preds));
+        let _ = writeln!(s, "     ; from=({})", list(&block.preds[..]));
     }
     if !block.succ.is_empty() {
-        let _ = writeln!(s, "     ; to=({})", list(&block.succ));
+        let _ = writeln!(s, "     ; to=({})", list(&block.succ[..]));
     }
     if let Some(d) = block.idom {
         let _ = writeln!(s, "     ; idom=BB{d}");
@@ -2508,7 +2512,7 @@ fn write_block_header(
         let _ = writeln!(s, "     ; level={l}");
     }
     if !block.children.is_empty() {
-        let _ = writeln!(s, "     ; children=({})", list(&block.children));
+        let _ = writeln!(s, "     ; children=({})", list(&block.children[..]));
     }
     out.extend_from_slice(s.as_bytes());
     for p in ssa.phis.get(b).into_iter().flatten() {

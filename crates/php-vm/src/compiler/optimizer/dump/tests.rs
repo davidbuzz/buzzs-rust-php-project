@@ -279,3 +279,72 @@ fn unoptimized_temporaries_count_dropped_results() {
     assert_eq!(lines[5].res.tmp(), Some(5));
     assert_eq!(lines[6].op1.tmp(), Some(5));
 }
+
+/// `spaceship_range`: the SSA dump after the DFA pass (`opt_debug_level`
+/// `0x400000`): RECV of untyped parameters, the `SPACESHIP` range and the
+/// `ADD` range and type derived from it, the unused initial CVs (`NOVAL`)
+/// and the function's return info.
+#[test]
+fn ssa_dump_after_dfa_pass_infers_ranges() {
+    let src = "<?php\nfunction test($a, $b) {\n    return ($a <=> $b) + 1;\n}\n";
+    let unit = compile_src(src);
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let out = super::dump_unit_dfa(
+        &unit,
+        &table,
+        &flags,
+        crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL,
+        main_line_end(src.as_bytes(), None),
+        super::DUMP_AFTER_DFA_PASS,
+    );
+    let expected = "
+$_main:
+     ; (lines=1, args=0, vars=0, tmps=0, ssa_vars=0, no_loops)
+     ; (after dfa pass)
+     ; t.php:1-5
+     ; return  [long] RANGE[1..1]
+BB0:
+     ; start exit lines=[0-0]
+     ; level=0
+0000 RETURN int(1)
+
+test:
+     ; (lines=5, args=2, vars=2, tmps=2, ssa_vars=6, no_loops)
+     ; (after dfa pass)
+     ; t.php:2-4
+     ; return  [long] RANGE[0..2]
+     ; #0.CV0($a) NOVAL [undef]
+     ; #1.CV1($b) NOVAL [undef]
+BB0:
+     ; start exit lines=[0-4]
+     ; level=0
+0000 #2.CV0($a) [any] = RECV 1
+0001 #3.CV1($b) [any] = RECV 2
+0002 #4.T2 [long] RANGE[-1..1] = SPACESHIP #2.CV0($a) [any] #3.CV1($b) [any]
+0003 #5.T3 [long] RANGE[0..2] = ADD #4.T2 [long] RANGE[-1..1] int(1)
+0004 RETURN #5.T3 [long] RANGE[0..2]
+";
+    assert_eq!(String::from_utf8(out).expect("utf-8"), expected);
+}
+
+/// Without the DFA bits, or without passes 6 and 7, nothing is dumped.
+#[test]
+fn ssa_dump_needs_the_dfa_pass() {
+    let src = "<?php\nfunction f($a) { return $a; }\n";
+    let unit = compile_src(src);
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    assert!(super::dump_unit_dfa(&unit, &table, &flags, level, end, 0x2_0000).is_empty());
+    assert!(super::dump_unit_dfa(
+        &unit,
+        &table,
+        &flags,
+        crate::compiler::optimizer::PASS_6,
+        end,
+        super::DUMP_BEFORE_DFA_PASS
+    )
+    .is_empty());
+}
