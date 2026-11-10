@@ -261,6 +261,9 @@ fn type_mask_text(mask: u8) -> String {
 /// The lowering of one op array.
 pub(crate) struct Lower<'a> {
     oa: &'a OpArray,
+    /// `oa`'s ops as compiled: each `FramelessICall` expanded back into
+    /// its call ops (`specialise::unfuse_frameless_calls`).
+    ops: std::borrow::Cow<'a, [Op]>,
     func: &'a UserFunction,
     res: &'a Resolver<'a>,
     /// Lower-case name of the class whose method this is.
@@ -303,6 +306,7 @@ impl<'a> Lower<'a> {
         let oa: &'a OpArray = &func.code;
         Lower {
             oa,
+            ops: crate::compiler::specialise::unfuse_frameless_calls(&oa.ops),
             func,
             res,
             scope,
@@ -400,7 +404,7 @@ impl<'a> Lower<'a> {
 
     /// Lowers the whole op array.
     pub(crate) fn run(mut self) -> Lowered {
-        let n = self.oa.ops.len();
+        let n = self.ops.len();
         let mut first_z = Vec::with_capacity(n + 1);
         let mut bound = self.func.uses.is_empty();
         for i in 0..n {
@@ -414,7 +418,7 @@ impl<'a> Lower<'a> {
                 self.push(ZLine::new("INIT_ARRAY").t(arr).x(size).a(v).b(k));
                 continue;
             }
-            let op = generic(&self.oa.ops[i]);
+            let op = generic(&self.ops[i]);
             if !bound
                 && !matches!(
                     op,
@@ -465,7 +469,7 @@ impl<'a> Lower<'a> {
         if !self.func.name.is_empty() {
             return false;
         }
-        !self.oa.ops.iter().enumerate().any(|(at, op)| {
+        !self.ops.iter().enumerate().any(|(at, op)| {
             let mut op = op.clone();
             let mut crossed = false;
             crate::compiler::optimizer::for_each_label_mut(&mut op, |t| {
@@ -480,7 +484,7 @@ impl<'a> Lower<'a> {
 
     /// The op at `i` if it exists.
     fn op_at(&self, i: usize) -> Option<Op> {
-        self.oa.ops.get(i).map(generic)
+        self.ops.get(i).map(generic)
     }
 
     /// Whether op `i` reads temporary `t` (through any operand).
@@ -502,7 +506,7 @@ impl<'a> Lower<'a> {
         let mut depth = 0u32;
         let mut n = 0u32;
         let mut simple = true;
-        for op in self.oa.ops.iter().skip(i + 1) {
+        for op in self.ops.iter().skip(i + 1) {
             match generic(op) {
                 Op::InitFCall { .. }
                 | Op::InitDynCall { .. }
@@ -704,7 +708,6 @@ impl<'a> Lower<'a> {
             }
             Op::FetchThis { dst } => {
                 let later = self
-                    .oa
                     .ops
                     .iter()
                     .skip(i + 1)
@@ -870,7 +873,7 @@ impl<'a> Lower<'a> {
             Op::RecvInit { n, cv, skip } => {
                 // The default's code up to `skip` is php-src's
                 // `CONSTANT_AST` literal of `RECV_INIT`.
-                let end = (*skip as usize).clamp(i + 1, self.oa.ops.len());
+                let end = (*skip as usize).clamp(i + 1, self.ops.len());
                 let default = match self.op_at(i + 1) {
                     Some(Op::RecvDefault {
                         val: v @ Operand::Lit(_),
@@ -1302,7 +1305,7 @@ impl<'a> Lower<'a> {
     /// Whether the frees after op `i` lead to a return: a `FREE` there is
     /// `zend_handle_loops_and_finally`'s `ZEND_FREE_ON_RETURN`.
     fn before_return(&self, i: usize) -> bool {
-        for op in self.oa.ops.iter().skip(i + 1).map(generic) {
+        for op in self.ops.iter().skip(i + 1).map(generic) {
             match op {
                 Op::Free(_) | Op::FeFreeOnReturn { .. } | Op::VerifyReturn { .. } => {}
                 Op::Return { .. } | Op::ReturnRef { .. } | Op::ReturnByRefValue { .. } => {
@@ -1467,7 +1470,7 @@ impl<'a> Lower<'a> {
         let mut packed = true;
         let mut first: Option<usize> = None;
         let mut used_before_first = false;
-        for (j, op) in self.oa.ops.iter().enumerate().skip(i + 1) {
+        for (j, op) in self.ops.iter().enumerate().skip(i + 1) {
             match generic(op) {
                 Op::ArrayAdd { arr, key, .. } | Op::ArrayAddRef { arr, key, .. } if arr == dst => {
                     count += 1;
@@ -2128,8 +2131,7 @@ impl Lower<'_> {
     fn lower_fe_fetch(&mut self, i: usize, iter: u32, end: u32, val: u32, key: Option<u32>) {
         let it = self.iter_tmp(iter);
         let rw = matches!(
-            self.oa
-                .ops
+            self.ops
                 .iter()
                 .take(i)
                 .rev()

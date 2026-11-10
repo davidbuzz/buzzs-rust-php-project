@@ -24,8 +24,8 @@
 //! (`strlen`, `count`) are fast-pathed at call execution in [`crate::call`].
 
 use crate::opcode::{
-    cmp_outcome, ArgSrc, BinKind, ClassSpec, FetchMode, IncDecKind, Literal, Op, Operand, Place,
-    PlaceBase, PlaceId, Seg,
+    cmp_outcome, ArgSrc, BinKind, ClassSpec, FetchMode, FramelessCall, IncDecKind, Literal, Op,
+    OpArray, Operand, Place, PlaceBase, PlaceId, Seg,
 };
 use php_runtime::{BinaryOp, Value};
 
@@ -646,6 +646,119 @@ fn assigned_cv(next: Option<&Op>, dst: u32) -> Option<u32> {
     }
 }
 
+/// php-src's `ZEND_FRAMELESS_ICALL_n` (`zend_compile_frameless_icall`),
+/// after [`specialise`]: the call of a builtin with a frameless class
+/// ([`crate::special::frameless_flags`]) by a name without a namespace
+/// fallback, whose 1..=3 positional arguments are literals or plain
+/// compiled variables sent right after its `InitFCall`, all on one line,
+/// becomes one [`Op::FramelessICall`]; its `Send`s and `DoCall` become
+/// `Nop`s (the op count, jump targets and lines stay). A namespaced
+/// unqualified name keeps its call ops (php-src's `ZEND_JMP_FRAMELESS`
+/// branch). The op runs the call in place when it can, and the ops it
+/// replaced otherwise, at the same line; the opcache dump expands it back
+/// ([`unfuse_frameless_calls`]).
+pub(crate) fn fuse_frameless_calls(oa: &mut OpArray) {
+    let mut i = 0;
+    while i < oa.ops.len() {
+        match frameless_call_at(oa, i) {
+            Some((fc, end)) => {
+                oa.ops[i] = Op::FramelessICall(Box::new(fc));
+                for op in &mut oa.ops[i + 1..=end] {
+                    *op = Op::Nop;
+                }
+                i = end + 1;
+            }
+            None => i += 1,
+        }
+    }
+}
+
+/// The [`Op::FramelessICall`] of the call starting at `ops[i]` and the
+/// index of its `DoCall` ([`fuse_frameless_calls`]).
+fn frameless_call_at(oa: &OpArray, i: usize) -> Option<(FramelessCall, usize)> {
+    let Op::InitFCall {
+        name,
+        fallback: None,
+        display,
+    } = oa.ops[i]
+    else {
+        return None;
+    };
+    let Some(Value::Str(lc)) = oa.literals.get(name as usize) else {
+        return None;
+    };
+    if crate::special::frameless_flags(lc.as_bytes()) == 0 {
+        return None;
+    }
+    let line = oa.lines.get(i).copied()?;
+    let unused = || ArgSrc::Val(Operand::Unused);
+    let mut args = [unused(), unused(), unused()];
+    let mut vals = [Operand::Unused; 3];
+    let mut argc = 0usize;
+    let mut j = i + 1;
+    loop {
+        if oa.lines.get(j).copied() != Some(line) {
+            return None;
+        }
+        match oa.ops.get(j)? {
+            Op::Send { src } if argc < 3 => {
+                vals[argc] = match src {
+                    ArgSrc::Val(Operand::Lit(l)) => Operand::Lit(*l),
+                    ArgSrc::Val(Operand::Cv(cv)) => Operand::Cv(*cv),
+                    ArgSrc::Place(pid) => Operand::Cv(plain_cv(&oa.places, *pid)?),
+                    _ => return None,
+                };
+                args[argc] = src.clone();
+                argc += 1;
+            }
+            Op::DoCall { dst } if argc > 0 => {
+                let fc = FramelessCall {
+                    name,
+                    display,
+                    args,
+                    vals,
+                    argc: u8::try_from(argc).ok()?,
+                    dst: *dst,
+                };
+                return Some((fc, j));
+            }
+            _ => return None,
+        }
+        j += 1;
+    }
+}
+
+/// `ops` with each [`Op::FramelessICall`] expanded back into the
+/// `InitFCall`, `Send`s and `DoCall` it replaced (in the `Nop`s after
+/// it): the ops as compiled, for the opcache dump, which prints
+/// php-src's `FRAMELESS_ICALL_n` (or the call ops) from them. Borrowed
+/// when there is nothing to expand.
+pub(crate) fn unfuse_frameless_calls(ops: &[Op]) -> std::borrow::Cow<'_, [Op]> {
+    if !ops.iter().any(|op| matches!(op, Op::FramelessICall(_))) {
+        return std::borrow::Cow::Borrowed(ops);
+    }
+    let mut out = ops.to_vec();
+    for (i, op) in ops.iter().enumerate() {
+        let Op::FramelessICall(fc) = op else {
+            continue;
+        };
+        let n = usize::from(fc.argc);
+        if i + n + 1 >= out.len() {
+            continue;
+        }
+        out[i] = Op::InitFCall {
+            name: fc.name,
+            fallback: None,
+            display: fc.display,
+        };
+        for (k, src) in fc.args[..n].iter().enumerate() {
+            out[i + 1 + k] = Op::Send { src: src.clone() };
+        }
+        out[i + 1 + n] = Op::DoCall { dst: fc.dst };
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// The CV of a place that is a plain compiled variable (`$cv`).
 fn plain_cv(places: &[Place], pid: PlaceId) -> Option<u32> {
     let p = places.get(pid as usize)?;
@@ -761,6 +874,72 @@ mod tests {
             .code
             .ops
             .clone()
+    }
+
+    /// `ZEND_FRAMELESS_ICALL_n`: a call of a builtin with a frameless
+    /// class by a global name, with literal and variable arguments on its
+    /// line, is one op followed by the `Nop`s of its `Send`s and `DoCall`;
+    /// other calls keep their ops, and the dump's expansion gives the
+    /// call ops back.
+    #[test]
+    fn frameless_calls_are_fused_into_one_op() {
+        let ops = main_ops("<?php $s = 'abc'; $p = strpos($s, 'b'); echo substr($s, 1, 1);");
+        let fused: Vec<usize> = ops
+            .iter()
+            .enumerate()
+            .filter(|(_, op)| matches!(op, Op::FramelessICall(_)))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(fused.len(), 2, "{ops:?}");
+        for &i in &fused {
+            let Op::FramelessICall(fc) = &ops[i] else {
+                unreachable!()
+            };
+            let n = usize::from(fc.argc);
+            assert!(ops[i + 1..=i + n + 1]
+                .iter()
+                .all(|op| matches!(op, Op::Nop)));
+        }
+        let Op::FramelessICall(fc) = &ops[fused[0]] else {
+            unreachable!()
+        };
+        assert_eq!(fc.argc, 2);
+        assert!(matches!(fc.vals[0], Operand::Cv(_)));
+        assert!(matches!(fc.vals[1], Operand::Lit(_)));
+        assert!(fc.dst.is_some());
+        let Op::FramelessICall(fc) = &ops[fused[1]] else {
+            unreachable!()
+        };
+        assert_eq!(fc.argc, 3);
+        let back = super::unfuse_frameless_calls(&ops);
+        assert!(!back.iter().any(|op| matches!(op, Op::FramelessICall(_))));
+        let i = fused[0];
+        assert!(matches!(back[i], Op::InitFCall { fallback: None, .. }));
+        assert!(matches!(back[i + 1], Op::Send { .. }));
+        assert!(matches!(back[i + 2], Op::Send { .. }));
+        assert!(matches!(back[i + 3], Op::DoCall { dst: Some(_) }));
+        assert_eq!(back.len(), ops.len());
+        for src in [
+            // A namespaced unqualified name (`ZEND_JMP_FRAMELESS` in php-src).
+            "<?php namespace N; $s = 'a'; strpos($s, 'a');",
+            // An argument computed after `INIT_FCALL`.
+            "<?php $s = 'a'; strpos($s . 'b', 'a');",
+            // Arguments on other lines.
+            "<?php $s = 'a'; strpos(\n$s,\n'a');",
+            // Not a frameless function, a named argument, no argument.
+            "<?php $s = 'a'; str_repeat($s, 2); strpos(haystack: $s, needle: 'a'); pi();",
+            // A dimension.
+            "<?php $a = ['x']; strpos($a[0], 'x');",
+        ] {
+            let ops = main_ops(src);
+            assert!(
+                !ops.iter().any(|op| matches!(op, Op::FramelessICall(_))),
+                "{src}: {ops:?}"
+            );
+        }
+        // Hooked opcodes keep the generic ops.
+        let ops = hooked_ops("<?php $s = 'a'; strpos($s, 'a');");
+        assert!(!ops.iter().any(|op| matches!(op, Op::FramelessICall(_))));
     }
 
     #[test]

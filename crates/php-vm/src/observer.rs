@@ -28,7 +28,7 @@ pub struct ObservedFrame {
 /// the ones that begin or end an op array).
 fn zend_opcode_name(op: &Op) -> Option<&'static str> {
     Some(match op {
-        Op::InitFCall { .. } => "ZEND_INIT_FCALL",
+        Op::InitFCall { .. } | Op::FramelessICall(_) => "ZEND_INIT_FCALL",
         Op::InitDynCall { .. } => "ZEND_INIT_DYNAMIC_CALL",
         Op::InitMethodCall { .. } => "ZEND_INIT_METHOD_CALL",
         Op::InitStaticCall { .. } => "ZEND_INIT_STATIC_METHOD_CALL",

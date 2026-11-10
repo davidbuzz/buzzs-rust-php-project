@@ -19,7 +19,7 @@ use crate::call::forget_unallocated;
 use crate::compiler::SPECIAL_BUILTINS;
 use crate::func::{flags, Args, Builtin, Func};
 use crate::object;
-use crate::opcode::Operand;
+use crate::opcode::{FramelessCall, Operand};
 use crate::typecheck::given_type;
 use crate::vm::{PendingCall, Vm, VmResult};
 use php_runtime::{Value, ZArray, ZStr};
@@ -818,6 +818,152 @@ impl Vm {
     }
 }
 
+impl Vm {
+    /// [`Op::FramelessICall`](crate::opcode::Op::FramelessICall) in
+    /// place (`ZEND_FRAMELESS_ICALL_n`): when the call site resolved to a
+    /// builtin with a frameless class (its run-time cache entry, filled by
+    /// the first, generic run of the op) and the arguments (literals, and
+    /// defined variables of a frame without an attached symbol table) have
+    /// shapes [`frameless_args`] accepts, the handler runs on the caller's
+    /// frame with the arguments read straight from their operands: no
+    /// pending call, no `SEND`s, no `DO_ICALL`. Each step is the one
+    /// [`Vm::frameless_icall_in_place`] takes for the same call, in the
+    /// same order: the inline result or the handler with the declared
+    /// defaults of omitted parameters, the interrupt check, the buffers
+    /// back to their pools, the result stored in `dst`. `ip` (the op after
+    /// this one) is saved first, as `SAVE_OPLINE()`.
+    ///
+    /// Returns `None`, having changed nothing, for any other call and
+    /// while observers are enabled: the op then runs the call's ops
+    /// (`INIT_FCALL`, `SEND`s, `DO_ICALL`) one after the other.
+    #[inline]
+    pub(crate) fn frameless_icall_op(
+        &mut self,
+        fc: &FramelessCall,
+        ip: usize,
+    ) -> Option<VmResult<()>> {
+        if self.observer.enabled {
+            return None;
+        }
+        let frame = self.frames.last_mut()?;
+        if frame.symtab_attached {
+            return None;
+        }
+        let cached = frame
+            .code
+            .fcall_cache
+            .borrow()
+            .get(fc.name as usize)
+            .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
+        let Some(Func::Builtin(b)) = cached else {
+            return None;
+        };
+        let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
+        if class == 0 || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
+            return None;
+        }
+        let n = usize::from(fc.argc).min(3);
+        // What `SEND_VAL` / `SEND_VAR` would put in the call (`send_in`):
+        // a literal's copy, a variable's value (a reference's target).
+        let mut sent: [Option<Value>; 3] = [None, None, None];
+        for (slot, operand) in sent.iter_mut().zip(&fc.vals[..n]) {
+            *slot = Some(match *operand {
+                Operand::Lit(l) => crate::call::clone_value(frame.code.literals.get(l as usize)?),
+                Operand::Cv(cv) => match frame
+                    .cvs
+                    .get(cv as usize)
+                    .and_then(crate::vm::CvSlot::get)?
+                {
+                    Value::Reference(r) => r.get(),
+                    v => crate::call::clone_value(v),
+                },
+                _ => return None,
+            });
+        }
+        if !frameless_args(class, &sent[..n]) {
+            return None;
+        }
+        frame.ip = ip;
+        let quick = if n == 1 {
+            frameless_inline(class, sent[0].as_ref())
+        } else {
+            None
+        };
+        if let Some(v) = quick {
+            drop(b);
+            drop(sent);
+            if let Err(e) = self.check_interrupt() {
+                return Some(Err(e));
+            }
+            if let Some(d) = fc.dst {
+                self.set_tmp(d, v);
+            }
+            return Some(Ok(()));
+        }
+        self.pending_call_dst = fc.dst;
+        if self.magic_call_name.is_some() {
+            self.magic_call_name = None;
+        }
+        // The declared defaults of omitted trailing parameters, read as
+        // in [`Vm::frameless_icall_in_place`].
+        let sig = b.signature();
+        let (nparams, required) = (sig.params.len(), sig.required as usize);
+        let mut values = self.call_bufs.values.pop().unwrap_or_default();
+        values.reserve(nparams.max(n));
+        let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+        passed.reserve(nparams.max(n));
+        for arg in sent.iter_mut().take(n) {
+            values.push(arg.take().unwrap_or_default());
+            passed.push(true);
+        }
+        while values.len() < nparams {
+            let i = values.len();
+            if let (true, Some(Some(d))) = (i >= required, sig.defaults.get(i)) {
+                values.push(crate::call::clone_value(d));
+                passed.push(false);
+                continue;
+            }
+            match self.builtin_default(&b, i) {
+                Some(d) if i >= required => {
+                    values.push(d);
+                    passed.push(false);
+                }
+                _ => break,
+            }
+        }
+        let handler = b.handler;
+        let mut args = Args {
+            values,
+            passed,
+            named: Vec::new(),
+            this: None,
+            called: None,
+            func: Some(b),
+        };
+        let mut r = handler(self, &mut args);
+        // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
+        if r.is_ok() {
+            if let Err(e) = self.check_interrupt() {
+                r = Err(e);
+            }
+        }
+        let Args {
+            values,
+            passed,
+            named,
+            ..
+        } = args;
+        forget_unallocated(named);
+        self.put_val_vec(values);
+        self.put_bool_vec(passed);
+        Some(r.map(|v| {
+            if let Some(d) = fc.dst {
+                self.set_tmp(d, v);
+            }
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{fl, frameless_args, frameless_call, frameless_flags, frameless_inline};
@@ -1144,6 +1290,82 @@ echo f("a"), " ", $s, "\n";
         assert_eq!(
             out,
             "4 7 65 3 B world x 3 y hell0 w0rld\n4 7 65 3 B world x 3 y hell0 w0rld\n98 hello world\n"
+        );
+    }
+
+    /// `Op::FramelessICall` (`Vm::frameless_icall_op`): calls run in
+    /// place, and declined ones (a reference, a coerced or invalid
+    /// argument, an undefined variable, a `ValueError`) run as the call
+    /// ops they replaced, with the builtin's frame in the trace. Expected
+    /// output from `/usr/bin/php -n`.
+    #[test]
+    fn fused_frameless_calls_match_the_call_ops() {
+        use std::cell::RefCell;
+        use std::io::Write;
+        use std::rc::Rc;
+        #[derive(Clone, Default)]
+        struct Sink(Rc<RefCell<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.borrow_mut().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let run = |src: &str| {
+            let sink = Sink::default();
+            let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(sink.clone()));
+            let status = vm.run_script(src.as_bytes(), "t.php");
+            assert_eq!(status, 0);
+            drop(vm);
+            let bytes = sink.0.borrow().clone();
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        let out = run(r#"<?php
+function t($s, $n) {
+    $r = [];
+    $r[] = strpos($s, "o");
+    $r[] = strpos($s, "o", 5);
+    $r[] = substr($s, 6);
+    $r[] = substr($s, 1, 3);
+    $r[] = str_contains($s, "wor") ? "y" : "n";
+    $r[] = trim("  x  ");
+    $r[] = strtoupper($s);
+    $r[] = in_array($n, [1, 2, 3]) ? "y" : "n";
+    $r[] = max($n, 2);
+    $r[] = str_replace("o", "0", $s);
+    $ref = &$s;
+    $r[] = strpos($s, "w");
+    $r[] = strpos($n, "2");
+    $r[] = var_export(@strpos($undef, "x"), true);
+    echo implode(",", $r), "\n";
+}
+t("hello world", 2);
+t("hello world", 2);
+try { strpos([], "x"); } catch (TypeError $e) { echo $e->getMessage(), " ", $e->getLine(), "\n", $e->getTraceAsString(), "\n"; }
+try { substr("abc", "x"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { strpos("abc", "c", 9); } catch (ValueError $e) { echo $e->getMessage(), " ", $e->getLine(), "\n"; }
+"#);
+        assert_eq!(
+            out,
+            "4,7,world,ell,y,x,HELLO WORLD,y,2,hell0 w0rld,6,0,false\n\
+             4,7,world,ell,y,x,HELLO WORLD,y,2,hell0 w0rld,6,0,false\n\
+             strpos(): Argument #1 ($haystack) must be of type string, array given 22\n\
+             #0 t.php(22): strpos(Array, 'x')\n\
+             #1 {main}\n\
+             substr(): Argument #2 ($offset) must be of type int, string given\n\
+             strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack) 24\n"
+        );
+        let out = run(r#"<?php declare(strict_types=1);
+$s = "abc"; $n = 5;
+echo strpos($s, "b"), "\n";
+try { strpos($n, "5"); } catch (TypeError $e) { echo $e->getMessage(), " ", $e->getLine(), "\n"; }
+"#);
+        assert_eq!(
+            out,
+            "1\nstrpos(): Argument #1 ($haystack) must be of type string, int given 4\n"
         );
     }
 
