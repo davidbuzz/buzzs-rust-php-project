@@ -702,6 +702,9 @@ impl<'a> Lower<'a> {
             Op::BindStatic { cv, .. } => {
                 self.push(ZLine::new("BIND_STATIC").x(" (ref)").a(Z::Cv(*cv)));
             }
+            // `zend_compile_method_call` fetches a `$this` that may be
+            // missing (a closure, a static context) as a VAR; a guaranteed
+            // one is the `THIS` operand of `INIT_METHOD_CALL` itself.
             Op::FetchThis { dst } => {
                 let later = self
                     .oa
@@ -712,7 +715,7 @@ impl<'a> Lower<'a> {
                     .find(|o| Self::reads_tmp(o, *dst));
                 if matches!(later, Some(Op::InitMethodCall { obj: Operand::Tmp(t), .. }) if t == *dst)
                 {
-                    self.alias.insert(*dst, Z::Text("THIS".into()));
+                    self.push(ZLine::new("FETCH_THIS").v(*dst));
                 } else {
                     self.push(ZLine::new("FETCH_THIS").t(*dst));
                 }
@@ -735,11 +738,17 @@ impl<'a> Lower<'a> {
                 });
             }
             Op::InitMethodCall { obj, name } => {
-                let o = self.z(obj);
+                let o = match obj {
+                    Operand::Unused => Z::Text("THIS".into()),
+                    _ => self.z(obj),
+                };
                 let nm = self.z(name);
                 let (n, _) = self.scan_call(i);
+                // `zend_optimizer_get_called_func`: a closure's op array has
+                // no scope there.
+                let closure = self.func.flags & crate::func::flags::CLOSURE != 0;
                 let known = match (&o, &nm, &self.scope) {
-                    (Z::Text(t), Z::Const(Value::Str(m)), Some(cls)) if t == "THIS" => {
+                    (Z::Text(t), Z::Const(Value::Str(m)), Some(cls)) if t == "THIS" && !closure => {
                         let mlc = m.as_bytes().to_ascii_lowercase();
                         self.res.method(cls, &mlc).map(|(k, _, _)| k)
                     }

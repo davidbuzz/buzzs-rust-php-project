@@ -279,3 +279,96 @@ fn unoptimized_temporaries_count_dropped_results() {
     assert_eq!(lines[5].res.tmp(), Some(5));
     assert_eq!(lines[6].op1.tmp(), Some(5));
 }
+
+/// The op array printed for the function whose header starts with `prefix`.
+fn section<'a>(out: &'a str, prefix: &str) -> &'a str {
+    out.split("\n\n")
+        .map(|s| s.trim_start_matches('\n'))
+        .find(|s| s.starts_with(prefix))
+        .unwrap_or_else(|| panic!("no {prefix} in {out}"))
+}
+
+const THIS_CALLS: &str = "<?php\nclass A {\n    public function g() { return 1; }\n    public function m() { return $this->g(); }\n    public function n() { return $this?->g(); }\n    public function k() { return function () { return fn() => $this->g(); }; }\n    public static function s() { return function () { return $this->g(); }; }\n    public static function t() { return $this->g(); }\n}\n";
+
+/// `zend_compile_method_call` with master's `this_guaranteed_exists()`
+/// (`php8.5 -d opcache.opt_debug_level=0x20000`): `$this` of a non-static
+/// method and of closures nested in one is the `THIS` (`IS_UNUSED`)
+/// operand of `INIT_METHOD_CALL`, with no `JMP_NULL` for `?->`; a closure
+/// in a static method (and a static method) fetches it into a VAR first.
+/// A closure's op array has no scope for the called-function lookup.
+#[test]
+fn this_method_calls_use_the_this_operand_where_this_is_guaranteed() {
+    let out = dump(THIS_CALLS);
+    for f in ["A::m:", "A::n:"] {
+        let s = section(&out, f);
+        assert!(
+            s.contains("0000 INIT_METHOD_CALL 0 THIS string(\"g\")\n"),
+            "{s}"
+        );
+        assert!(s.contains("DO_UCALL"), "{s}");
+        assert!(!s.contains("FETCH_THIS") && !s.contains("JMP_NULL"), "{s}");
+    }
+    let s = section(&out, "{closure:{closure:A::k()");
+    assert!(
+        s.contains("0000 INIT_METHOD_CALL 0 THIS string(\"g\")\n"),
+        "{s}"
+    );
+    assert!(s.contains("DO_FCALL") && !s.contains("DO_UCALL"), "{s}");
+    for f in ["{closure:A::s()", "A::t:"] {
+        let s = section(&out, f);
+        assert!(
+            s.contains("0000 V0 = FETCH_THIS\n0001 INIT_METHOD_CALL 0 V0 string(\"g\")\n"),
+            "{s}"
+        );
+    }
+}
+
+/// The compiled ops behind the dump: no `FetchThis` temporary for a
+/// guaranteed `$this`.
+#[test]
+fn guaranteed_this_is_an_unused_method_call_operand() {
+    use crate::opcode::{Op, Operand};
+    let unit = compile_src(THIS_CALLS);
+    let classes = unit.decls.classes.borrow();
+    let ops_of = |name: &str| {
+        classes[0]
+            .methods
+            .iter()
+            .find(|m| m.name.as_bytes() == name.as_bytes())
+            .map(|m| m.func.code.ops.clone())
+            .expect("method")
+    };
+    for name in ["m", "n"] {
+        let ops = ops_of(name);
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::InitMethodCall {
+                    obj: Operand::Unused,
+                    ..
+                }
+            )),
+            "{name}: {ops:?}"
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, Op::FetchThis { .. } | Op::JmpNull { .. })),
+            "{name}: {ops:?}"
+        );
+    }
+    let ops = ops_of("t");
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::FetchThis { .. })),
+        "{ops:?}"
+    );
+    assert!(
+        !ops.iter().any(|op| matches!(
+            op,
+            Op::InitMethodCall {
+                obj: Operand::Unused,
+                ..
+            }
+        )),
+        "{ops:?}"
+    );
+}
