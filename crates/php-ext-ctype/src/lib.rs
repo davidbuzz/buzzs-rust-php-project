@@ -40,16 +40,16 @@ impl Extension for Ctype {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
-        m.function("ctype_alnum(mixed $text): bool", alnum)
-            .function("ctype_alpha(mixed $text): bool", alpha)
-            .function("ctype_cntrl(mixed $text): bool", cntrl)
-            .function("ctype_digit(mixed $text): bool", digit)
-            .function("ctype_graph(mixed $text): bool", graph)
-            .function("ctype_lower(mixed $text): bool", lower)
-            .function("ctype_print(mixed $text): bool", print)
-            .function("ctype_punct(mixed $text): bool", punct)
-            .function("ctype_space(mixed $text): bool", space)
-            .function("ctype_upper(mixed $text): bool", upper)
-            .function("ctype_xdigit(mixed $text): bool", xdigit);
+        m.function_static("ctype_alnum(mixed $text): bool", alnum)
+            .function_static("ctype_alpha(mixed $text): bool", alpha)
+            .function_static("ctype_cntrl(mixed $text): bool", cntrl)
+            .function_static("ctype_digit(mixed $text): bool", digit)
+            .function_static("ctype_graph(mixed $text): bool", graph)
+            .function_static("ctype_lower(mixed $text): bool", lower)
+            .function_static("ctype_print(mixed $text): bool", print)
+            .function_static("ctype_punct(mixed $text): bool", punct)
+            .function_static("ctype_space(mixed $text): bool", space)
+            .function_static("ctype_upper(mixed $text): bool", upper)
+            .function_static("ctype_xdigit(mixed $text): bool", xdigit);
     }
 }

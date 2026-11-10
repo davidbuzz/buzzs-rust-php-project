@@ -253,47 +253,47 @@ impl Extension for Bcmath {
             ModifyHandler::LongGEZero,
             "bcmath",
         ));
-        m.function(
+        m.function_static(
             "bcadd(string $num1, string $num2, ?int $scale = null): string",
             bcadd,
         )
-        .function(
+        .function_static(
             "bcsub(string $num1, string $num2, ?int $scale = null): string",
             bcsub,
         )
-        .function(
+        .function_static(
             "bcmul(string $num1, string $num2, ?int $scale = null): string",
             bcmul,
         )
-        .function(
+        .function_static(
             "bcdiv(string $num1, string $num2, ?int $scale = null): string",
             bcdiv,
         )
-        .function(
+        .function_static(
             "bcmod(string $num1, string $num2, ?int $scale = null): string",
             bcmod,
         )
-        .function(
+        .function_static(
             "bcdivmod(string $num1, string $num2, ?int $scale = null): array",
             bcdivmod,
         )
-        .function(
+        .function_static(
             "bcpowmod(string $num, string $exponent, string $modulus, ?int $scale = null): string",
             bcpowmod,
         )
-        .function(
+        .function_static(
             "bcpow(string $num, string $exponent, ?int $scale = null): string",
             bcpow,
         )
-        .function("bcsqrt(string $num, ?int $scale = null): string", bcsqrt)
-        .function(
+        .function_static("bcsqrt(string $num, ?int $scale = null): string", bcsqrt)
+        .function_static(
             "bccomp(string $num1, string $num2, ?int $scale = null): int",
             bccomp,
         )
-        .function("bcscale(?int $scale = null): int", bcscale)
-        .function("bcfloor(string $num): string", bcfloor)
-        .function("bcceil(string $num): string", bcceil)
-        .function(
+        .function_static("bcscale(?int $scale = null): int", bcscale)
+        .function_static("bcfloor(string $num): string", bcfloor)
+        .function_static("bcceil(string $num): string", bcceil)
+        .function_static(
             "bcround(string $num, int $precision = 0, RoundingMode $mode = RoundingMode::HalfAwayFromZero): string",
             bcround,
         );

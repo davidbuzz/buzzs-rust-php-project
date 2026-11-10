@@ -105,7 +105,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             string_file_ctor,
         )
         .register(m.vm());
-    m.function(
+    m.function_static(
         "curl_file_create(string $filename, ?string $mime_type = null, ?string $posted_filename = null): CURLFile",
         curl_file_create,
     );

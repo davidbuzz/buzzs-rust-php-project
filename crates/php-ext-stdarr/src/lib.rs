@@ -168,7 +168,7 @@ impl Extension for StdArray {
             }
         }
         for &(sig, handler) in FUNCTIONS {
-            m.function(sig, handler);
+            m.function_static(sig, handler);
         }
         for &(name, value) in CONSTANTS {
             if name == "SORT_LOCALE_STRING" {

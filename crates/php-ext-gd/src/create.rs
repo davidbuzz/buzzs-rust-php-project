@@ -488,57 +488,57 @@ fn imageloadfont(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions of this module.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("gd_info(): array", gd_info)
-        .function("imageloadfont(string $filename): GdFont|false", imageloadfont)
-        .function(
+    m.function_static("gd_info(): array", gd_info)
+        .function_static("imageloadfont(string $filename): GdFont|false", imageloadfont)
+        .function_static(
             "imagecreatetruecolor(int $width, int $height): GdImage|false",
             imagecreatetruecolor,
         )
-        .function("imagecreate(int $width, int $height): GdImage|false", imagecreate)
-        .function("imagetypes(): int", imagetypes)
-        .function(
+        .function_static("imagecreate(int $width, int $height): GdImage|false", imagecreate)
+        .function_static("imagetypes(): int", imagetypes)
+        .function_static(
             "imagecreatefromstring(string $data): GdImage|false",
             imagecreatefromstring,
         )
-        .function("imagecreatefromgif(string $filename): GdImage|false", imagecreatefromgif)
-        .function("imagecreatefromjpeg(string $filename): GdImage|false", imagecreatefromjpeg)
-        .function("imagecreatefrompng(string $filename): GdImage|false", imagecreatefrompng)
-        .function("imagecreatefromwebp(string $filename): GdImage|false", imagecreatefromwebp)
-        .function("imagecreatefromxbm(string $filename): GdImage|false", imagecreatefromxbm)
-        .function("imagecreatefromxpm(string $filename): GdImage|false", imagecreatefromxpm)
-        .function("imagecreatefromwbmp(string $filename): GdImage|false", imagecreatefromwbmp)
-        .function("imagecreatefromgd(string $filename): GdImage|false", imagecreatefromgd)
-        .function("imagecreatefromgd2(string $filename): GdImage|false", imagecreatefromgd2)
-        .function(
+        .function_static("imagecreatefromgif(string $filename): GdImage|false", imagecreatefromgif)
+        .function_static("imagecreatefromjpeg(string $filename): GdImage|false", imagecreatefromjpeg)
+        .function_static("imagecreatefrompng(string $filename): GdImage|false", imagecreatefrompng)
+        .function_static("imagecreatefromwebp(string $filename): GdImage|false", imagecreatefromwebp)
+        .function_static("imagecreatefromxbm(string $filename): GdImage|false", imagecreatefromxbm)
+        .function_static("imagecreatefromxpm(string $filename): GdImage|false", imagecreatefromxpm)
+        .function_static("imagecreatefromwbmp(string $filename): GdImage|false", imagecreatefromwbmp)
+        .function_static("imagecreatefromgd(string $filename): GdImage|false", imagecreatefromgd)
+        .function_static("imagecreatefromgd2(string $filename): GdImage|false", imagecreatefromgd2)
+        .function_static(
             "imagecreatefromgd2part(string $filename, int $x, int $y, int $width, int $height): GdImage|false",
             imagecreatefromgd2part,
         )
-        .function("imagecreatefrombmp(string $filename): GdImage|false", imagecreatefrombmp)
-        .function("imagecreatefromtga(string $filename): GdImage|false", imagecreatefromtga)
-        .function(
+        .function_static("imagecreatefrombmp(string $filename): GdImage|false", imagecreatefrombmp)
+        .function_static("imagecreatefromtga(string $filename): GdImage|false", imagecreatefromtga)
+        .function_static(
             "imagexbm(GdImage $image, ?string $filename, ?int $foreground_color = null): bool",
             imagexbm,
         )
-        .function("imagegif(GdImage $image, $file = null): bool", imagegif)
-        .function(
+        .function_static("imagegif(GdImage $image, $file = null): bool", imagegif)
+        .function_static(
             "imagepng(GdImage $image, $file = null, int $quality = -1, int $filters = -1): bool",
             imagepng,
         )
-        .function("imagewebp(GdImage $image, $file = null, int $quality = -1): bool", imagewebp)
-        .function("imagejpeg(GdImage $image, $file = null, int $quality = -1): bool", imagejpeg)
-        .function(
+        .function_static("imagewebp(GdImage $image, $file = null, int $quality = -1): bool", imagewebp)
+        .function_static("imagejpeg(GdImage $image, $file = null, int $quality = -1): bool", imagejpeg)
+        .function_static(
             "imagewbmp(GdImage $image, $file = null, ?int $foreground_color = null): bool",
             imagewbmp,
         )
-        .function("imagegd(GdImage $image, ?string $file = null): bool", imagegd)
-        .function(
+        .function_static("imagegd(GdImage $image, ?string $file = null): bool", imagegd)
+        .function_static(
             "imagegd2(GdImage $image, ?string $file = null, int $chunk_size = 128, int $mode = IMG_GD2_RAW): bool",
             imagegd2,
         )
-        .function(
+        .function_static(
             "imagebmp(GdImage $image, $file = null, bool $compressed = true): bool",
             imagebmp,
         )
-        .function("imagedestroy(GdImage $image): true", imagedestroy)
+        .function_static("imagedestroy(GdImage $image): true", imagedestroy)
         .deprecated("8.5", "as it has no effect since PHP 8.0");
 }

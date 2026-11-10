@@ -602,75 +602,75 @@ impl Extension for PcntlExt {
             .on_request_shutdown(request_shutdown);
         m.vm().register_interrupt_handler(on_interrupt);
         m.vm().register_tick_handler(on_tick);
-        m.function("pcntl_fork(): int", pcntl_fork)
-            .function(
+        m.function_static("pcntl_fork(): int", pcntl_fork)
+            .function_static(
                 "pcntl_waitpid(int $process_id, &$status, int $flags = 0, &$resource_usage = []): int",
                 pcntl_waitpid,
             )
-            .function(
+            .function_static(
                 "pcntl_waitid(int $idtype = P_ALL, ?int $id = null, &$info = [], int $flags = WEXITED, &$resource_usage = []): bool",
                 pcntl_waitid,
             )
-            .function(
+            .function_static(
                 "pcntl_wait(&$status, int $flags = 0, &$resource_usage = []): int",
                 pcntl_wait,
             )
-            .function(
+            .function_static(
                 "pcntl_signal(int $signal, $handler, ?bool $restart_syscalls = null): bool",
                 pcntl_signal,
             )
-            .function("pcntl_signal_get_handler(int $signal)", pcntl_signal_get_handler)
-            .function("pcntl_signal_dispatch(): bool", pcntl_signal_dispatch)
-            .function(
+            .function_static("pcntl_signal_get_handler(int $signal)", pcntl_signal_get_handler)
+            .function_static("pcntl_signal_dispatch(): bool", pcntl_signal_dispatch)
+            .function_static(
                 "pcntl_sigprocmask(int $mode, array $signals, &$old_signals = null): bool",
                 pcntl_sigprocmask,
             )
-            .function(
+            .function_static(
                 "pcntl_sigwaitinfo(array $signals, &$info = []): int|false",
                 pcntl_sigwaitinfo,
             )
-            .function(
+            .function_static(
                 "pcntl_sigtimedwait(array $signals, &$info = [], int $seconds = 0, int $nanoseconds = 0): int|false",
                 pcntl_sigtimedwait,
             )
-            .function("pcntl_wifexited(int $status): bool", pcntl_wifexited)
-            .function("pcntl_wifstopped(int $status): bool", pcntl_wifstopped)
-            .function("pcntl_wifcontinued(int $status): bool", pcntl_wifcontinued)
-            .function("pcntl_wifsignaled(int $status): bool", pcntl_wifsignaled)
-            .function("pcntl_wexitstatus(int $status): int|false", pcntl_wexitstatus)
-            .function("pcntl_wtermsig(int $status): int|false", pcntl_wtermsig)
-            .function("pcntl_wstopsig(int $status): int|false", pcntl_wstopsig)
-            .function(
+            .function_static("pcntl_wifexited(int $status): bool", pcntl_wifexited)
+            .function_static("pcntl_wifstopped(int $status): bool", pcntl_wifstopped)
+            .function_static("pcntl_wifcontinued(int $status): bool", pcntl_wifcontinued)
+            .function_static("pcntl_wifsignaled(int $status): bool", pcntl_wifsignaled)
+            .function_static("pcntl_wexitstatus(int $status): int|false", pcntl_wexitstatus)
+            .function_static("pcntl_wtermsig(int $status): int|false", pcntl_wtermsig)
+            .function_static("pcntl_wstopsig(int $status): int|false", pcntl_wstopsig)
+            .function_static(
                 "pcntl_exec(string $path, array $args = [], array $env_vars = []): false",
                 pcntl_exec,
             )
-            .function("pcntl_alarm(int $seconds): int", pcntl_alarm)
-            .function("pcntl_get_last_error(): int", pcntl_get_last_error)
-            .function("pcntl_errno(): int", pcntl_get_last_error)
-            .function(
+            .function_static("pcntl_alarm(int $seconds): int", pcntl_alarm)
+            .function_static("pcntl_get_last_error(): int", pcntl_get_last_error)
+            .function_static("pcntl_errno(): int", pcntl_get_last_error)
+            .function_static(
                 "pcntl_getpriority(?int $process_id = null, int $mode = PRIO_PROCESS): int|false",
                 pcntl_getpriority,
             )
-            .function(
+            .function_static(
                 "pcntl_setpriority(int $priority, ?int $process_id = null, int $mode = PRIO_PROCESS): bool",
                 pcntl_setpriority,
             )
-            .function("pcntl_strerror(int $error_code): string", pcntl_strerror)
-            .function("pcntl_async_signals(?bool $enable = null): bool", pcntl_async_signals)
-            .function("pcntl_unshare(int $flags): bool", pcntl_unshare)
-            .function(
+            .function_static("pcntl_strerror(int $error_code): string", pcntl_strerror)
+            .function_static("pcntl_async_signals(?bool $enable = null): bool", pcntl_async_signals)
+            .function_static("pcntl_unshare(int $flags): bool", pcntl_unshare)
+            .function_static(
                 "pcntl_setns(?int $process_id = null, int $nstype = CLONE_NEWNET): bool",
                 pcntl_setns,
             )
-            .function(
+            .function_static(
                 "pcntl_getcpuaffinity(?int $process_id = null): array|false",
                 pcntl_getcpuaffinity,
             )
-            .function(
+            .function_static(
                 "pcntl_setcpuaffinity(?int $process_id = null, array $cpu_ids = []): bool",
                 pcntl_setcpuaffinity,
             )
-            .function("pcntl_getcpu(): int", pcntl_getcpu);
+            .function_static("pcntl_getcpu(): int", pcntl_getcpu);
     }
 }
 

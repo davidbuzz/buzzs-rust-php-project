@@ -236,19 +236,19 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .constant("INI_PERDIR", Value::Int(2))
         .constant("INI_SYSTEM", Value::Int(4))
         .constant("INI_ALL", Value::Int(7));
-    m.function(
+    m.function_static(
         "ini_get_all(?string $extension = null, bool $details = true): array|false",
         ini_get_all,
     )
-    .function(
+    .function_static(
         "parse_ini_string(string $ini_string, bool $process_sections = false, int $scanner_mode = INI_SCANNER_NORMAL): array|false",
         parse_ini_string,
     )
-    .function(
+    .function_static(
         "parse_ini_file(string $filename, bool $process_sections = false, int $scanner_mode = INI_SCANNER_NORMAL): array|false",
         parse_ini_file,
     )
-    .function("ini_parse_quantity(string $shorthand): int", ini_parse_quantity)
-    .function("get_included_files(): array", get_included_files)
-    .function("get_required_files(): array", get_included_files);
+    .function_static("ini_parse_quantity(string $shorthand): int", ini_parse_quantity)
+    .function_static("get_included_files(): array", get_included_files)
+    .function_static("get_required_files(): array", get_included_files);
 }

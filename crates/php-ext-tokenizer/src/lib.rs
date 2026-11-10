@@ -334,11 +334,11 @@ impl Extension for Tokenizer {
             Value::Int(TokenKind::PaamayimNekudotayim.id()),
         );
         m.constant("TOKEN_PARSE", Value::Int(TOKEN_PARSE));
-        m.function(
+        m.function_static(
             "token_get_all(string $code, int $flags = 0): array",
             token_get_all,
         )
-        .function("token_name(int $id): string", token_name);
+        .function_static("token_name(int $id): string", token_name);
 
         let vm = m.vm();
         php_vm::ext::ClassBuilder::new("PhpToken")

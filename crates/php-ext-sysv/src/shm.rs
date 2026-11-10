@@ -89,25 +89,25 @@ fn shm_get_var(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// Registers the class and functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     register_class(m, CLASS);
-    m.function(
+    m.function_static(
         "shm_attach(int $key, ?int $size = null, int $permissions = 438): SysvSharedMemory|false",
         shm_attach,
     )
-    .function("shm_detach(SysvSharedMemory $shm): true", shm_detach)
-    .function(
+    .function_static("shm_detach(SysvSharedMemory $shm): true", shm_detach)
+    .function_static(
         "shm_has_var(SysvSharedMemory $shm, int $key): bool",
         shm_has_var,
     )
-    .function("shm_remove(SysvSharedMemory $shm): bool", shm_remove)
-    .function(
+    .function_static("shm_remove(SysvSharedMemory $shm): bool", shm_remove)
+    .function_static(
         "shm_put_var(SysvSharedMemory $shm, int $key, mixed $value): bool",
         shm_put_var,
     )
-    .function(
+    .function_static(
         "shm_get_var(SysvSharedMemory $shm, int $key): mixed",
         shm_get_var,
     )
-    .function(
+    .function_static(
         "shm_remove_var(SysvSharedMemory $shm, int $key): bool",
         shm_remove_var,
     );

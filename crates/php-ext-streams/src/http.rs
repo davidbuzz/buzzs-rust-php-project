@@ -274,15 +274,15 @@ pub fn shutdown() {
 /// Registers the functions.
 pub fn register(m: &mut ModuleBuilder<'_>) {
     install();
-    m.function(
+    m.function_static(
         "get_headers(string $url, bool $associative = false, $context = null): array|false",
         get_headers,
     )
-    .function(
+    .function_static(
         "http_get_last_response_headers(): ?array",
         http_get_last_response_headers,
     )
-    .function(
+    .function_static(
         "http_clear_last_response_headers(): void",
         http_clear_last_response_headers,
     );

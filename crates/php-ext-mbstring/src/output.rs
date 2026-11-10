@@ -99,7 +99,7 @@ fn mb_output_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers `mb_output_handler`.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "mb_output_handler(string $string, int $status): string",
         mb_output_handler,
     );

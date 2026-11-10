@@ -757,7 +757,7 @@ impl Extension for Mysqli {
         let entries = entries();
         register_classes(m, &entries);
         for en in &entries {
-            m.function(en.func, en.handler);
+            m.function_static(en.func, en.handler);
             if let Some((since, msg)) = en.fn_dep {
                 m.deprecated(since, msg);
             }

@@ -286,7 +286,7 @@ impl Extension for Defaults {
         module.constant("RD_A", Value::Int(1));
         module.constant("RD_B", Value::Int(4));
         module.constant_deprecated("RD_OLD", Value::Int(2), "8.4", "use RD_A");
-        module.function(
+        module.function_static(
             "rd_flags(int $flags = RD_A|RD_B, int $old = RD_OLD): int",
             |_vm, _args| Ok(Value::Int(0)),
         );
@@ -373,7 +373,7 @@ impl Extension for ArrayMapStub {
     }
 
     fn register(&self, module: &mut ModuleBuilder<'_>) {
-        module.function(
+        module.function_static(
             "array_map(?callable $callback, $array, ...$arrays): array",
             |_vm, _args| Ok(Value::Int(42)),
         );

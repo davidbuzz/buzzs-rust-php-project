@@ -207,16 +207,16 @@ fn levenshtein(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions of this module.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("pack(string $format, mixed ...$values): string", pack_fn)
-        .function("unpack(string $format, string $string, int $offset = 0): array|false", unpack_fn)
-        .function("sscanf(string $string, string $format, mixed &...$vars): array|int|null", sscanf)
-        .function("convert_uuencode(string $string): string", convert_uuencode)
-        .function("convert_uudecode(string $string): string|false", convert_uudecode)
-        .function("quoted_printable_decode(string $string): string", quoted_printable_decode)
-        .function("quoted_printable_encode(string $string): string", quoted_printable_encode)
-        .function("version_compare(string $version1, string $version2, ?string $operator = null): int|bool", version_compare)
-        .function("soundex(string $string): string", soundex)
-        .function("metaphone(string $string, int $max_phonemes = 0): string", metaphone)
+    m.function_static("pack(string $format, mixed ...$values): string", pack_fn)
+        .function_static("unpack(string $format, string $string, int $offset = 0): array|false", unpack_fn)
+        .function_static("sscanf(string $string, string $format, mixed &...$vars): array|int|null", sscanf)
+        .function_static("convert_uuencode(string $string): string", convert_uuencode)
+        .function_static("convert_uudecode(string $string): string|false", convert_uudecode)
+        .function_static("quoted_printable_decode(string $string): string", quoted_printable_decode)
+        .function_static("quoted_printable_encode(string $string): string", quoted_printable_encode)
+        .function_static("version_compare(string $version1, string $version2, ?string $operator = null): int|bool", version_compare)
+        .function_static("soundex(string $string): string", soundex)
+        .function_static("metaphone(string $string, int $max_phonemes = 0): string", metaphone)
         .deprecated("8.6", "use a userland phonetic matching library instead")
-        .function("levenshtein(string $string1, string $string2, int $insertion_cost = 1, int $replacement_cost = 1, int $deletion_cost = 1): int", levenshtein);
+        .function_static("levenshtein(string $string1, string $string2, int $insertion_cost = 1, int $replacement_cost = 1, int $deletion_cost = 1): int", levenshtein);
 }

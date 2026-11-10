@@ -431,8 +431,8 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
         .method("getErrors(): array", acc::PUBLIC, get_errors)
         .register(m.vm());
     CLASSES.with(|c| *c.borrow_mut() = vec![error, exception]);
-    m.function("stream_last_errors(): array", stream_last_errors)
-        .function("stream_clear_errors(): void", stream_clear_errors);
+    m.function_static("stream_last_errors(): array", stream_last_errors)
+        .function_static("stream_clear_errors(): void", stream_clear_errors);
 }
 
 #[cfg(test)]

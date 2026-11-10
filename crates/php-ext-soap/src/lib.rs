@@ -89,11 +89,11 @@ impl Extension for Soap {
         }
 
         // Functions.
-        m.function(
+        m.function_static(
             "use_soap_error_handler(bool $enable = true): bool",
             methods::use_soap_error_handler,
         )
-        .function("is_soap_fault(mixed $object): bool", methods::is_soap_fault);
+        .function_static("is_soap_fault(mixed $object): bool", methods::is_soap_fault);
 
         m.on_request_startup(|_| php_soap::globals::request_init());
 

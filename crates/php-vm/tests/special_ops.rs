@@ -315,10 +315,10 @@ impl Extension for FramelessProbe {
     }
 
     fn register(&self, module: &mut ModuleBuilder<'_>) {
-        module.function("abs(int|float $num): int|float", |vm, _args| {
+        module.function_static("abs(int|float $num): int|float", |vm, _args| {
             Ok(Value::Str(ZStr::from(frame_mark(vm))))
         });
-        module.function(
+        module.function_static(
             "substr(string $string, int $offset, ?int $length = null): string",
             |vm, args| {
                 Ok(Value::Str(ZStr::from(format!(

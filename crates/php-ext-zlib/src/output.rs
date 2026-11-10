@@ -331,11 +331,11 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         ModifyHandler::String,
         "zlib",
     ));
-    m.function(
+    m.function_static(
         "ob_gzhandler(string $data, int $flags): string|false",
         ob_gzhandler,
     )
-    .function("zlib_get_coding_type(): string|false", zlib_get_coding_type);
+    .function_static("zlib_get_coding_type(): string|false", zlib_get_coding_type);
     m.output_handler_with_init("ob_gzhandler", native_handler, Some(init_handler))
         .output_handler_conflict("ob_gzhandler", conflict_check)
         .output_handler_conflict(OUTPUT_HANDLER_NAME, conflict_check);

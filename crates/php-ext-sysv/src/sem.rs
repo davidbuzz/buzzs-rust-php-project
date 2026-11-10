@@ -51,14 +51,14 @@ fn sem_remove(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// Registers the class and functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     register_class(m, CLASS);
-    m.function(
+    m.function_static(
         "sem_get(int $key, int $max_acquire = 1, int $permissions = 438, bool $auto_release = true): SysvSemaphore|false",
         sem_get,
     )
-    .function(
+    .function_static(
         "sem_acquire(SysvSemaphore $semaphore, bool $non_blocking = false): bool",
         sem_acquire,
     )
-    .function("sem_release(SysvSemaphore $semaphore): bool", sem_release)
-    .function("sem_remove(SysvSemaphore $semaphore): bool", sem_remove);
+    .function_static("sem_release(SysvSemaphore $semaphore): bool", sem_release)
+    .function_static("sem_remove(SysvSemaphore $semaphore): bool", sem_remove);
 }

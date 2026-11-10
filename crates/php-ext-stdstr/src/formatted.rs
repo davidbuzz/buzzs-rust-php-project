@@ -286,8 +286,8 @@ fn vprintf(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// Registers the `formatted_print.c` functions (`fprintf`/`vfprintf`
 /// belong to the stream binding).
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("sprintf(string $format, mixed ...$values): string", sprintf)
-        .function("printf(string $format, mixed ...$values): int", printf)
-        .function("vprintf(string $format, array $values): int", vprintf)
-        .function("vsprintf(string $format, array $values): string", vsprintf);
+    m.function_static("sprintf(string $format, mixed ...$values): string", sprintf)
+        .function_static("printf(string $format, mixed ...$values): int", printf)
+        .function_static("vprintf(string $format, array $values): int", vprintf)
+        .function_static("vsprintf(string $format, array $values): string", vsprintf);
 }

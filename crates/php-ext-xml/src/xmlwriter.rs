@@ -395,13 +395,13 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         class = class.method(sig, acc::PUBLIC, *meth);
     }
     class.register(m.vm());
-    m.function(
+    m.function_static(
         "xmlwriter_open_uri(string $uri): XMLWriter|false",
         f_open_uri,
     )
-    .function("xmlwriter_open_memory(): XMLWriter|false", f_open_memory);
-    for (sig, _, func, _) in PAIRS {
-        m.function(sig, *func);
+    .function_static("xmlwriter_open_memory(): XMLWriter|false", f_open_memory);
+    for &(sig, _, func, _) in PAIRS {
+        m.function_static(sig, func);
     }
 }
 

@@ -703,7 +703,7 @@ impl Extension for Sodium {
             })
             .register(m.vm());
         for &(sig, f) in FUNCTIONS {
-            m.function(sig, f);
+            m.function_static(sig, f);
             if scrubs_arg_errors(sig) {
                 m.scrub_arg_error_trace();
             }

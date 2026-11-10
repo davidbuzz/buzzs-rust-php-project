@@ -340,8 +340,8 @@ const PROBES: &[(&str, php_vm::ext::NativeFn)] = &[
 ];
 
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    for (sig, f) in PROBES {
-        m.function(sig, *f);
+    for &(sig, f) in PROBES {
+        m.function_static(sig, f);
     }
 }
 

@@ -1019,50 +1019,50 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
 
 /// Registers the procedural `date_*()` functions over date objects.
 pub(crate) fn register_functions(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "date_create(string $datetime = \"now\", ?DateTimeZone $timezone = null): DateTime|false",
         date_create,
     )
-    .function(
+    .function_static(
         "date_create_immutable(string $datetime = \"now\", ?DateTimeZone $timezone = null): DateTimeImmutable|false",
         date_create_immutable,
     )
-    .function(
+    .function_static(
         "date_create_from_format(string $format, string $datetime, ?DateTimeZone $timezone = null): DateTime|false",
         date_create_from_format,
     )
-    .function(
+    .function_static(
         "date_create_immutable_from_format(string $format, string $datetime, ?DateTimeZone $timezone = null): DateTimeImmutable|false",
         date_create_immutable_from_format,
     )
-    .function("date_format(DateTimeInterface $object, string $format): string", format)
-    .function("date_modify(DateTime $object, string $modifier): DateTime|false", date_modify)
-    .function("date_add(DateTime $object, DateInterval $interval): DateTime", date_add)
-    .function("date_sub(DateTime $object, DateInterval $interval): DateTime", date_sub)
-    .function("date_timezone_get(DateTimeInterface $object): DateTimeZone|false", get_timezone)
-    .function(
+    .function_static("date_format(DateTimeInterface $object, string $format): string", format)
+    .function_static("date_modify(DateTime $object, string $modifier): DateTime|false", date_modify)
+    .function_static("date_add(DateTime $object, DateInterval $interval): DateTime", date_add)
+    .function_static("date_sub(DateTime $object, DateInterval $interval): DateTime", date_sub)
+    .function_static("date_timezone_get(DateTimeInterface $object): DateTimeZone|false", get_timezone)
+    .function_static(
         "date_timezone_set(DateTime $object, DateTimeZone $timezone): DateTime",
         date_timezone_set,
     )
-    .function("date_offset_get(DateTimeInterface $object): int", get_offset)
-    .function(
+    .function_static("date_offset_get(DateTimeInterface $object): int", get_offset)
+    .function_static(
         "date_diff(DateTimeInterface $baseObject, DateTimeInterface $targetObject, bool $absolute = false): DateInterval",
         diff,
     )
-    .function(
+    .function_static(
         "date_time_set(DateTime $object, int $hour, int $minute, int $second = 0, int $microsecond = 0): DateTime",
         date_time_set,
     )
-    .function(
+    .function_static(
         "date_date_set(DateTime $object, int $year, int $month, int $day): DateTime",
         date_date_set,
     )
-    .function(
+    .function_static(
         "date_isodate_set(DateTime $object, int $year, int $week, int $dayOfWeek = 1): DateTime",
         date_isodate_set,
     )
-    .function("date_timestamp_set(DateTime $object, int $timestamp): DateTime", date_timestamp_set)
-    .function("date_timestamp_get(DateTimeInterface $object): int", get_timestamp);
+    .function_static("date_timestamp_set(DateTime $object, int $timestamp): DateTime", date_timestamp_set)
+    .function_static("date_timestamp_get(DateTimeInterface $object): int", get_timestamp);
 }
 
 #[cfg(test)]

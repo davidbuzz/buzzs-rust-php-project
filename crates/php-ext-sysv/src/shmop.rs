@@ -64,20 +64,20 @@ fn shmop_delete(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// Registers the class and functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     register_class(m, CLASS);
-    m.function(
+    m.function_static(
         "shmop_open(int $key, string $mode, int $permissions, int $size): Shmop|false",
         shmop_open,
     )
-    .function(
+    .function_static(
         "shmop_read(Shmop $shmop, int $offset, int $size): string",
         shmop_read,
     )
-    .function("shmop_close(Shmop $shmop): void", shmop_close)
+    .function_static("shmop_close(Shmop $shmop): void", shmop_close)
     .deprecated("8.0", "as Shmop objects are freed automatically")
-    .function("shmop_size(Shmop $shmop): int", shmop_size)
-    .function(
+    .function_static("shmop_size(Shmop $shmop): int", shmop_size)
+    .function_static(
         "shmop_write(Shmop $shmop, string $data, int $offset): int",
         shmop_write,
     )
-    .function("shmop_delete(Shmop $shmop): bool", shmop_delete);
+    .function_static("shmop_delete(Shmop $shmop): bool", shmop_delete);
 }

@@ -236,48 +236,48 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, v) in system::CONNECTION_CONSTANTS {
         m.constant(name, Value::Int(*v));
     }
-    m.function(
+    m.function_static(
         "getenv(?string $name = null, bool $local_only = false): string|array|false",
         getenv,
     )
-    .function("putenv(string $assignment): bool", putenv)
-    .function("php_uname(string $mode = \"a\"): string", php_uname)
-    .function("sys_getloadavg(): array|false", sys_getloadavg)
-    .function("getrusage(int $mode = 0): array|false", getrusage)
-    .function("getmypid(): int|false", getmypid)
-    .function("getmyuid(): int|false", getmyuid)
-    .function("get_current_user(): string", get_current_user)
-    .function("getmygid(): int|false", getmygid)
-    .function("getmyinode(): int|false", getmyinode)
-    .function("getlastmod(): int|false", getlastmod)
-    .function("ftok(string $filename, string $project_id): int", ftok)
-    .function("microtime(bool $as_float = false): string|float", microtime)
-    .function(
+    .function_static("putenv(string $assignment): bool", putenv)
+    .function_static("php_uname(string $mode = \"a\"): string", php_uname)
+    .function_static("sys_getloadavg(): array|false", sys_getloadavg)
+    .function_static("getrusage(int $mode = 0): array|false", getrusage)
+    .function_static("getmypid(): int|false", getmypid)
+    .function_static("getmyuid(): int|false", getmyuid)
+    .function_static("get_current_user(): string", get_current_user)
+    .function_static("getmygid(): int|false", getmygid)
+    .function_static("getmyinode(): int|false", getmyinode)
+    .function_static("getlastmod(): int|false", getlastmod)
+    .function_static("ftok(string $filename, string $project_id): int", ftok)
+    .function_static("microtime(bool $as_float = false): string|float", microtime)
+    .function_static(
         "gettimeofday(bool $as_float = false): array|float",
         gettimeofday,
     )
-    .function(
+    .function_static(
         "hrtime(bool $as_number = false): array|int|float|false",
         hrtime,
     )
-    .function("sleep(int $seconds): int", sleep)
-    .function("usleep(int $microseconds): void", usleep)
-    .function(
+    .function_static("sleep(int $seconds): int", sleep)
+    .function_static("usleep(int $microseconds): void", usleep)
+    .function_static(
         "time_nanosleep(int $seconds, int $nanoseconds): array|bool",
         time_nanosleep,
     )
-    .function("time_sleep_until(float $timestamp): bool", time_sleep_until)
-    .function("connection_aborted(): bool", connection_aborted)
-    .function("connection_status(): int", connection_status)
-    .function(
+    .function_static("time_sleep_until(float $timestamp): bool", time_sleep_until)
+    .function_static("connection_aborted(): bool", connection_aborted)
+    .function_static("connection_status(): int", connection_status)
+    .function_static(
         "ignore_user_abort(?bool $enable = null): bool",
         ignore_user_abort,
     )
-    .function(
+    .function_static(
         "getopt(string $short_options, array $long_options = [], &$rest_index = null): array|false",
         getopt,
     )
-    .function(
+    .function_static(
         "get_cfg_var(string $option): string|array|false",
         get_cfg_var,
     )

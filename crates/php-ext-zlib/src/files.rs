@@ -144,20 +144,20 @@ fn gzgets(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     php_streams::wrapper::register_global(b"compress.zlib", Rc::new(ZlibWrapper));
     php_streams::wrapper::register_filter_global("zlib.*", Rc::new(ZlibFilterFactory));
-    m.function(
+    m.function_static(
         "gzfile(string $filename, bool $use_include_path = false): array|false",
         gzfile,
     )
-    .function(
+    .function_static(
         "gzopen(string $filename, string $mode, bool $use_include_path = false)",
         gzopen,
     )
-    .function(
+    .function_static(
         "readgzfile(string $filename, bool $use_include_path = false): int|false",
         readgzfile,
     )
-    .function("gzpassthru($stream): int", gzpassthru)
-    .function("gzgets($stream, ?int $length = null): string|false", gzgets);
+    .function_static("gzpassthru($stream): int", gzpassthru)
+    .function_static("gzgets($stream, ?int $length = null): string|false", gzgets);
     for (sig, target) in [
         (
             "gzwrite($stream, string $data, ?int $length = null): int|false",

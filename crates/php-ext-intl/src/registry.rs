@@ -234,7 +234,7 @@ pub(crate) fn register(
             .get(f.key)
             .copied()
             .unwrap_or(core::not_implemented as NativeFn);
-        m.function(sig_override(f.key, f.sig), h);
+        m.function_static(sig_override(f.key, f.sig), h);
         if let Some((since, msg)) = f.deprecated {
             m.deprecated(since, msg);
         }

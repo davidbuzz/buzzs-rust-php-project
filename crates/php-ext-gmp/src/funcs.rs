@@ -610,6 +610,6 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
 
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for &(sig, handler) in FUNCTIONS {
-        m.function(sig, handler);
+        m.function_static(sig, handler);
     }
 }

@@ -224,25 +224,25 @@ impl Extension for Random {
                 "8.3",
                 "as it uses a biased non-standard variant of Mt19937",
             );
-        m.function("lcg_value(): float", lcg_value)
+        m.function_static("lcg_value(): float", lcg_value)
             .deprecated("8.4", "use \\Random\\Randomizer::getFloat() instead")
-            .function(
+            .function_static(
                 "mt_srand(?int $seed = null, int $mode = MT_RAND_MT19937): void",
                 mt_srand,
             )
-            .function(
+            .function_static(
                 "srand(?int $seed = null, int $mode = MT_RAND_MT19937): void",
                 mt_srand,
             )
-            .function("rand(int $min = UNKNOWN, int $max = UNKNOWN): int", rand)
-            .function(
+            .function_static("rand(int $min = UNKNOWN, int $max = UNKNOWN): int", rand)
+            .function_static(
                 "mt_rand(int $min = UNKNOWN, int $max = UNKNOWN): int",
                 mt_rand,
             )
-            .function("mt_getrandmax(): int", mt_getrandmax)
-            .function("getrandmax(): int", mt_getrandmax)
-            .function("random_bytes(int $length): string", random_bytes)
-            .function("random_int(int $min, int $max): int", random_int);
+            .function_static("mt_getrandmax(): int", mt_getrandmax)
+            .function_static("getrandmax(): int", mt_getrandmax)
+            .function_static("random_bytes(int $length): string", random_bytes)
+            .function_static("random_int(int $min, int $max): int", random_int);
         register_classes(m);
     }
 }

@@ -94,15 +94,15 @@ impl Extension for SimpleXml {
             .flags(class_flags::NOT_SERIALIZABLE)
             .extends(mb.vm(), "SimpleXMLElement")
             .register(mb.vm());
-        mb.function(
+        mb.function_static(
             "simplexml_load_file(string $filename, ?string $class_name = SimpleXMLElement::class, int $options = 0, string $namespace_or_prefix = \"\", bool $is_prefix = false): SimpleXMLElement|false",
             m::load_file,
         )
-        .function(
+        .function_static(
             "simplexml_load_string(string $data, ?string $class_name = SimpleXMLElement::class, int $options = 0, string $namespace_or_prefix = \"\", bool $is_prefix = false): SimpleXMLElement|false",
             m::load_string,
         )
-        .function(
+        .function_static(
             "simplexml_import_dom(object $node, ?string $class_name = SimpleXMLElement::class): ?SimpleXMLElement",
             m::import_dom,
         );

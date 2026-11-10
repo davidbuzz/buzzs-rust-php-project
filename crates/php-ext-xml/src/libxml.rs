@@ -526,27 +526,27 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .prop("file", acc::PUBLIC, Some("string"), None)
         .prop("line", acc::PUBLIC, Some("int"), None)
         .register(m.vm());
-    m.function(
+    m.function_static(
         "libxml_set_streams_context($context): void",
         set_streams_context,
     )
-    .function(
+    .function_static(
         "libxml_use_internal_errors(?bool $use_errors = null): bool",
         use_internal_errors,
     )
-    .function("libxml_get_last_error(): LibXMLError|false", get_last_error)
-    .function("libxml_get_errors(): array", get_errors)
-    .function("libxml_clear_errors(): void", clear_errors_fn)
-    .function(
+    .function_static("libxml_get_last_error(): LibXMLError|false", get_last_error)
+    .function_static("libxml_get_errors(): array", get_errors)
+    .function_static("libxml_clear_errors(): void", clear_errors_fn)
+    .function_static(
         "libxml_disable_entity_loader(bool $disable = true): bool",
         disable_entity_loader,
     )
     .deprecated("8.0", "as external entity loading is disabled by default")
-    .function(
+    .function_static(
         "libxml_set_external_entity_loader(?callable $resolver_function): true",
         set_external_entity_loader,
     )
-    .function(
+    .function_static(
         "libxml_get_external_entity_loader(): ?callable",
         get_external_entity_loader,
     )

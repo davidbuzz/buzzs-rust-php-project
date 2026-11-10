@@ -586,115 +586,115 @@ impl Extension for SocketsExt {
             m.constant(name, Value::Int(*value));
         }
         m.on_request_startup(request_startup);
-        m.function(
+        m.function_static(
             "socket_select(?array &$read, ?array &$write, ?array &$except, ?int $seconds, int $microseconds = 0): int|false",
             socket_select,
         )
-        .function(
+        .function_static(
             "socket_create_listen(int $port, int $backlog = SOMAXCONN): Socket|false",
             socket_create_listen,
         )
-        .function("socket_accept(Socket $socket): Socket|false", socket_accept)
-        .function("socket_set_nonblock(Socket $socket): bool", socket_set_nonblock)
-        .function("socket_set_block(Socket $socket): bool", socket_set_block)
-        .function("socket_listen(Socket $socket, int $backlog = 0): bool", socket_listen)
-        .function("socket_close(Socket $socket): void", socket_close)
-        .function(
+        .function_static("socket_accept(Socket $socket): Socket|false", socket_accept)
+        .function_static("socket_set_nonblock(Socket $socket): bool", socket_set_nonblock)
+        .function_static("socket_set_block(Socket $socket): bool", socket_set_block)
+        .function_static("socket_listen(Socket $socket, int $backlog = 0): bool", socket_listen)
+        .function_static("socket_close(Socket $socket): void", socket_close)
+        .function_static(
             "socket_write(Socket $socket, string $data, ?int $length = null): int|false",
             socket_write,
         )
-        .function(
+        .function_static(
             "socket_read(Socket $socket, int $length, int $mode = PHP_BINARY_READ): string|false",
             socket_read,
         )
-        .function(
+        .function_static(
             "socket_getsockname(Socket $socket, &$address, &$port = null): bool",
             socket_getsockname,
         )
-        .function(
+        .function_static(
             "socket_getpeername(Socket $socket, &$address, &$port = null): bool",
             socket_getpeername,
         )
-        .function(
+        .function_static(
             "socket_create(int $domain, int $type, int $protocol): Socket|false",
             socket_create,
         )
-        .function(
+        .function_static(
             "socket_connect(Socket $socket, string $address, ?int $port = null): bool",
             socket_connect,
         )
-        .function("socket_strerror(int $error_code): string", socket_strerror)
-        .function(
+        .function_static("socket_strerror(int $error_code): string", socket_strerror)
+        .function_static(
             "socket_bind(Socket $socket, string $address, int $port = 0): bool",
             socket_bind,
         )
-        .function(
+        .function_static(
             "socket_recv(Socket $socket, &$data, int $length, int $flags): int|false",
             socket_recv,
         )
-        .function(
+        .function_static(
             "socket_send(Socket $socket, string $data, int $length, int $flags): int|false",
             socket_send,
         )
-        .function(
+        .function_static(
             "socket_recvfrom(Socket $socket, &$data, int $length, int $flags, &$address, &$port = null): int|false",
             socket_recvfrom,
         )
-        .function(
+        .function_static(
             "socket_sendto(Socket $socket, string $data, int $length, int $flags, string $address, ?int $port = null): int|false",
             socket_sendto,
         )
-        .function(
+        .function_static(
             "socket_get_option(Socket $socket, int $level, int $option): array|int|false",
             socket_get_option,
         )
-        .function(
+        .function_static(
             "socket_getopt(Socket $socket, int $level, int $option): array|int|false",
             socket_get_option,
         )
-        .function(
+        .function_static(
             "socket_set_option(Socket $socket, int $level, int $option, $value): bool",
             socket_set_option,
         )
-        .function(
+        .function_static(
             "socket_setopt(Socket $socket, int $level, int $option, $value): bool",
             socket_set_option,
         )
-        .function(
+        .function_static(
             "socket_create_pair(int $domain, int $type, int $protocol, &$pair): bool",
             socket_create_pair,
         )
-        .function("socket_shutdown(Socket $socket, int $mode = 2): bool", socket_shutdown)
-        .function("socket_atmark(Socket $socket): bool", socket_atmark)
-        .function("socket_last_error(?Socket $socket = null): int", socket_last_error)
-        .function("socket_clear_error(?Socket $socket = null): void", socket_clear_error)
-        .function("socket_import_stream($stream): Socket|false", socket_import_stream)
-        .function("socket_export_stream(Socket $socket)", socket_export_stream)
-        .function(
+        .function_static("socket_shutdown(Socket $socket, int $mode = 2): bool", socket_shutdown)
+        .function_static("socket_atmark(Socket $socket): bool", socket_atmark)
+        .function_static("socket_last_error(?Socket $socket = null): int", socket_last_error)
+        .function_static("socket_clear_error(?Socket $socket = null): void", socket_clear_error)
+        .function_static("socket_import_stream($stream): Socket|false", socket_import_stream)
+        .function_static("socket_export_stream(Socket $socket)", socket_export_stream)
+        .function_static(
             "socket_sendmsg(Socket $socket, array $message, int $flags = 0): int|false",
             socket_sendmsg,
         )
-        .function(
+        .function_static(
             "socket_recvmsg(Socket $socket, array &$message, int $flags = 0): int|false",
             socket_recvmsg,
         )
-        .function(
+        .function_static(
             "socket_cmsg_space(int $level, int $type, int $num = 0): int",
             socket_cmsg_space,
         )
-        .function(
+        .function_static(
             "socket_addrinfo_lookup(string $host, ?string $service = null, array $hints = [], &$error_code = null): array|false",
             socket_addrinfo_lookup,
         )
-        .function(
+        .function_static(
             "socket_addrinfo_connect(AddressInfo $address): Socket|false",
             socket_addrinfo_connect,
         )
-        .function(
+        .function_static(
             "socket_addrinfo_bind(AddressInfo $address): Socket|false",
             socket_addrinfo_bind,
         )
-        .function(
+        .function_static(
             "socket_addrinfo_explain(AddressInfo $address): array",
             socket_addrinfo_explain,
         );

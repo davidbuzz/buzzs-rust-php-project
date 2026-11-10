@@ -137,34 +137,34 @@ fn error_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the symmetric/digest/utility functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("openssl_encrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = \"\", &$tag = null, ?string $aad = \"\", int $tag_length = 16): string|false", encrypt);
-    m.function("openssl_decrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = \"\", ?string $tag = null, ?string $aad = \"\"): string|false", decrypt);
-    m.function(
+    m.function_static("openssl_encrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = \"\", &$tag = null, ?string $aad = \"\", int $tag_length = 16): string|false", encrypt);
+    m.function_static("openssl_decrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = \"\", ?string $tag = null, ?string $aad = \"\"): string|false", decrypt);
+    m.function_static(
         "openssl_cipher_iv_length(string $cipher_algo): int|false",
         cipher_iv_length,
     );
-    m.function(
+    m.function_static(
         "openssl_cipher_key_length(string $cipher_algo): int|false",
         cipher_key_length,
     );
-    m.function(
+    m.function_static(
         "openssl_digest(string $data, string $digest_algo, bool $binary = false): string|false",
         digest,
     );
-    m.function("openssl_pbkdf2(string $password, string $salt, int $key_length, int $iterations, string $digest_algo = \"sha1\"): string|false", pbkdf2);
-    m.function(
+    m.function_static("openssl_pbkdf2(string $password, string $salt, int $key_length, int $iterations, string $digest_algo = \"sha1\"): string|false", pbkdf2);
+    m.function_static(
         "openssl_random_pseudo_bytes(int $length, &$strong_result = null): string",
         random_pseudo_bytes,
     );
-    m.function(
+    m.function_static(
         "openssl_get_md_methods(bool $aliases = false): array",
         get_md_methods,
     );
-    m.function(
+    m.function_static(
         "openssl_get_cipher_methods(bool $aliases = false): array",
         get_cipher_methods,
     );
-    m.function("openssl_get_curve_names(): array|false", get_curve_names);
-    m.function("openssl_get_cert_locations(): array", get_cert_locations);
-    m.function("openssl_error_string(): string|false", error_string);
+    m.function_static("openssl_get_curve_names(): array|false", get_curve_names);
+    m.function_static("openssl_get_cert_locations(): array", get_cert_locations);
+    m.function_static("openssl_error_string(): string|false", error_string);
 }

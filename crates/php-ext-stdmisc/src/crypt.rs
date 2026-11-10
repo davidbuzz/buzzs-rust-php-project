@@ -71,19 +71,19 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, v) in password::STR_CONSTANTS {
         m.constant(name, Value::from(*v));
     }
-    m.function("crypt(#[\\SensitiveParameter] string $string, string $salt): string", crypt_fn)
-        .function(
+    m.function_static("crypt(#[\\SensitiveParameter] string $string, string $salt): string", crypt_fn)
+        .function_static(
             "password_hash(#[\\SensitiveParameter] string $password, string|int|null $algo, array $options = []): string",
             password_hash,
         )
-        .function(
+        .function_static(
             "password_needs_rehash(string $hash, string|int|null $algo, array $options = []): bool",
             password_needs_rehash,
         )
-        .function(
+        .function_static(
             "password_verify(#[\\SensitiveParameter] string $password, string $hash): bool",
             password_verify,
         )
-        .function("password_get_info(string $hash): array", password_get_info)
-        .function("password_algos(): array", password_algos);
+        .function_static("password_get_info(string $hash): array", password_get_info)
+        .function_static("password_algos(): array", password_algos);
 }

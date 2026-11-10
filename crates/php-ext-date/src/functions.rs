@@ -279,55 +279,55 @@ fn date_sun_info(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions of this module.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("strtotime(string $datetime, ?int $baseTimestamp = null): int|false", strtotime)
-        .function("date(string $format, ?int $timestamp = null): string", date)
-        .function("idate(string $format, ?int $timestamp = null): int|false", idate)
-        .function("gmdate(string $format, ?int $timestamp = null): string", gmdate)
-        .function(
+    m.function_static("strtotime(string $datetime, ?int $baseTimestamp = null): int|false", strtotime)
+        .function_static("date(string $format, ?int $timestamp = null): string", date)
+        .function_static("idate(string $format, ?int $timestamp = null): int|false", idate)
+        .function_static("gmdate(string $format, ?int $timestamp = null): string", gmdate)
+        .function_static(
             "mktime(int $hour, ?int $minute = null, ?int $second = null, ?int $month = null, ?int $day = null, ?int $year = null): int|false",
             mktime,
         )
-        .function(
+        .function_static(
             "gmmktime(int $hour, ?int $minute = null, ?int $second = null, ?int $month = null, ?int $day = null, ?int $year = null): int|false",
             gmmktime,
         )
-        .function("checkdate(int $month, int $day, int $year): bool", checkdate)
-        .function("strftime(string $format, ?int $timestamp = null): string|false", strftime)
+        .function_static("checkdate(int $month, int $day, int $year): bool", checkdate)
+        .function_static("strftime(string $format, ?int $timestamp = null): string|false", strftime)
         .deprecated("8.1", "use IntlDateFormatter::format() instead")
-        .function("gmstrftime(string $format, ?int $timestamp = null): string|false", gmstrftime)
+        .function_static("gmstrftime(string $format, ?int $timestamp = null): string|false", gmstrftime)
         .deprecated("8.1", "use IntlDateFormatter::format() instead")
-        .function("time(): int", time)
-        .function("localtime(?int $timestamp = null, bool $associative = false): array", localtime)
-        .function("getdate(?int $timestamp = null): array", getdate)
-        .function("date_parse(string $datetime): array", date_parse)
-        .function(
+        .function_static("time(): int", time)
+        .function_static("localtime(?int $timestamp = null, bool $associative = false): array", localtime)
+        .function_static("getdate(?int $timestamp = null): array", getdate)
+        .function_static("date_parse(string $datetime): array", date_parse)
+        .function_static(
             "date_parse_from_format(string $format, string $datetime): array",
             date_parse_from_format,
         )
-        .function("date_get_last_errors(): array|false", date_get_last_errors)
-        .function(
+        .function_static("date_get_last_errors(): array|false", date_get_last_errors)
+        .function_static(
             "timezone_name_from_abbr(string $abbr, int $utcOffset = -1, int $isDST = -1): string|false",
             timezone_name_from_abbr,
         )
-        .function(
+        .function_static(
             "timezone_identifiers_list(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array",
             timezone_identifiers_list,
         )
-        .function("timezone_abbreviations_list(): array", timezone_abbreviations_list)
-        .function("timezone_version_get(): string", timezone_version_get)
-        .function("date_default_timezone_set(string $timezoneId): bool", date_default_timezone_set)
-        .function("date_default_timezone_get(): string", date_default_timezone_get)
-        .function(
+        .function_static("timezone_abbreviations_list(): array", timezone_abbreviations_list)
+        .function_static("timezone_version_get(): string", timezone_version_get)
+        .function_static("date_default_timezone_set(string $timezoneId): bool", date_default_timezone_set)
+        .function_static("date_default_timezone_get(): string", date_default_timezone_get)
+        .function_static(
             "date_sunrise(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): string|int|float|false",
             date_sunrise,
         )
         .deprecated("8.1", "use date_sun_info() instead")
-        .function(
+        .function_static(
             "date_sunset(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): string|int|float|false",
             date_sunset,
         )
         .deprecated("8.1", "use date_sun_info() instead")
-        .function(
+        .function_static(
             "date_sun_info(int $timestamp, float $latitude, float $longitude): array",
             date_sun_info,
         );

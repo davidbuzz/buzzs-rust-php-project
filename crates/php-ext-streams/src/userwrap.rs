@@ -231,19 +231,19 @@ fn stream_wrapper_restore(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions of this module.
 pub fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "stream_wrapper_register(string $protocol, string $class, int $flags = 0): bool",
         stream_wrapper_register,
     )
-    .function(
+    .function_static(
         "stream_register_wrapper(string $protocol, string $class, int $flags = 0): bool",
         stream_wrapper_register,
     )
-    .function(
+    .function_static(
         "stream_wrapper_unregister(string $protocol): bool",
         stream_wrapper_unregister,
     )
-    .function(
+    .function_static(
         "stream_wrapper_restore(string $protocol): bool",
         stream_wrapper_restore,
     );

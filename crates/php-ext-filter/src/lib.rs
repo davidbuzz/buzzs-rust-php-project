@@ -333,12 +333,12 @@ impl Extension for Filter {
         ClassBuilder::new(php_filter::FILTER_FAILED_EXCEPTION_CLASS)
             .extends(m.vm(), php_filter::FILTER_EXCEPTION_CLASS)
             .register(m.vm());
-        m.function("filter_has_var(int $input_type, string $var_name): bool", filter_has_var)
-            .function("filter_input(int $type, string $var_name, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed", filter_input)
-            .function("filter_var(mixed $value, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed", filter_var)
-            .function("filter_input_array(int $type, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null", filter_input_array)
-            .function("filter_var_array(array $array, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false", filter_var_array)
-            .function("filter_list(): array", filter_list)
-            .function("filter_id(string $name): int|false", filter_id);
+        m.function_static("filter_has_var(int $input_type, string $var_name): bool", filter_has_var)
+            .function_static("filter_input(int $type, string $var_name, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed", filter_input)
+            .function_static("filter_var(mixed $value, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed", filter_var)
+            .function_static("filter_input_array(int $type, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null", filter_input_array)
+            .function_static("filter_var_array(array $array, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false", filter_var_array)
+            .function_static("filter_list(): array", filter_list)
+            .function_static("filter_id(string $name): int|false", filter_id);
     }
 }

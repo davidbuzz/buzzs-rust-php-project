@@ -1426,7 +1426,7 @@ mod tests {
             "testext"
         }
         fn register(&self, m: &mut ModuleBuilder<'_>) {
-            m.function("old_fn(int $x = 41): int", answer)
+            m.function_static("old_fn(int $x = 41): int", answer)
                 .deprecated("8.4", "use new_fn()");
             m.constant_deprecated("OLD_CONST", Value::Int(7), "", "gone soon");
             let vm = m.vm();

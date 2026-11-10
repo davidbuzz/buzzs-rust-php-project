@@ -236,7 +236,7 @@ impl crate::ext::Extension for CvExt {
         "cvtest"
     }
     fn register(&self, m: &mut crate::ext::ModuleBuilder<'_>) {
-        m.function("cv(mixed $callable, mixed ...$args): mixed", cv);
+        m.function_static("cv(mixed $callable, mixed ...$args): mixed", cv);
     }
 }
 

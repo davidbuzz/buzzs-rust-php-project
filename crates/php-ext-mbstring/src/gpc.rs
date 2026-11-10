@@ -127,5 +127,5 @@ fn register_all(
 
 /// Registers `mb_parse_str`.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("mb_parse_str(string $string, &$result): bool", mb_parse_str);
+    m.function_static("mb_parse_str(string $string, &$result): bool", mb_parse_str);
 }

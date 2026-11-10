@@ -74,32 +74,32 @@ impl Extension for Opcache {
 
         // Register functions
         module
-            .function("opcache_reset(): bool", opcache_reset)
-            .function(
+            .function_static("opcache_reset(): bool", opcache_reset)
+            .function_static(
                 "opcache_get_status(bool $include_scripts = true): array|false",
                 opcache_get_status,
             )
-            .function(
+            .function_static(
                 "opcache_compile_file(string $filename): bool",
                 opcache_compile_file,
             )
-            .function(
+            .function_static(
                 "opcache_invalidate(string $filename, bool $force = false): bool",
                 opcache_invalidate,
             )
-            .function(
+            .function_static(
                 "opcache_jit_blacklist(object $closure): void",
                 opcache_jit_blacklist,
             )
-            .function(
+            .function_static(
                 "opcache_get_configuration(): array|false",
                 opcache_get_configuration,
             )
-            .function(
+            .function_static(
                 "opcache_is_script_cached(string $filename): bool",
                 opcache_is_script_cached,
             )
-            .function(
+            .function_static(
                 "opcache_is_script_cached_in_file_cache(string $filename): bool",
                 opcache_is_script_cached_in_file_cache,
             );

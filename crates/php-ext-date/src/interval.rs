@@ -322,11 +322,11 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         })
         .register(vm);
 
-    m.function(
+    m.function_static(
         "date_interval_create_from_date_string(string $datetime): DateInterval|false",
         date_interval_create_from_date_string,
     )
-    .function(
+    .function_static(
         "date_interval_format(DateInterval $object, string $format): string",
         format,
     );

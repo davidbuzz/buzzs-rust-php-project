@@ -59,16 +59,16 @@ fn base64_decode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the `url.c` / `base64.c` functions and constants.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function(
+    m.function_static(
         "parse_url(string $url, int $component = -1): int|string|array|null|false",
         parse_url,
     )
-    .function("urlencode(string $string): string", urlencode)
-    .function("urldecode(string $string): string", urldecode)
-    .function("rawurlencode(string $string): string", rawurlencode)
-    .function("rawurldecode(string $string): string", rawurldecode)
-    .function("base64_encode(string $string): string", base64_encode)
-    .function(
+    .function_static("urlencode(string $string): string", urlencode)
+    .function_static("urldecode(string $string): string", urldecode)
+    .function_static("rawurlencode(string $string): string", rawurlencode)
+    .function_static("rawurldecode(string $string): string", rawurldecode)
+    .function_static("base64_encode(string $string): string", base64_encode)
+    .function_static(
         "base64_decode(string $string, bool $strict = false): string|false",
         base64_decode,
     );
