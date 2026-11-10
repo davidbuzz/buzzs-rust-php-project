@@ -594,3 +594,70 @@ int(4)
 "#
     );
 }
+
+/// The hot loop's assignments over arrays and objects (released as
+/// possible GC roots, destructors in order, the result stored before the
+/// variable), `&&`, `||`, `!` and `(bool)`, and an attached symbol table.
+#[test]
+fn hot_loop_assignments_and_logic_match_the_generic_ops() {
+    let src = r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "d", $this->n, " "; } }
+$val = [1, 2, 3];
+$f = false;
+for ($i = 0; $i < 3; $i++) { $x = $val ?: null; $y = $f ? null : $val; $z = $f ?: $i + 1; }
+var_dump(count($x), count($y), $z);
+for ($i = 0; $i < 3; $i++) { $o = new D($i); }
+echo "| ";
+$p = new D(10);
+$q = $p;
+$p = new D(11);
+echo "| ";
+$q = $o = 5;
+echo "\n";
+$a = 3; $b = 0; $n = 0;
+for ($i = 0; $i < 6; $i++) {
+    if ($i > 1 && $i < 4) { $n += 1; }
+    if ($i == 0 || $i == 5) { $n += 10; }
+    if (!($i % 2)) { $n += 100; }
+    $t = (bool) $i;
+    $u = !$a || $b;
+    $w = $a && !$b;
+}
+var_dump($n, $t, $u, $w);
+$arr = [[1], [2]];
+for ($i = 0; $i < 2; $i++) { $e = $arr[$i]; $e2 = $e; }
+var_dump($e2);
+function attached() { $v = [1]; $GLOBALS['zz'] = 1; extract(['k' => [5]]); for ($i = 0; $i < 2; $i++) { $k = $v; $v = [$i]; } return compact('k', 'v'); }
+var_dump(attached());
+$s = "0"; $r = !$s; var_dump($r);
+"#;
+    assert_eq!(
+        run(src),
+        r#"int(3)
+int(3)
+int(3)
+d0 d1 | | d2 d10 
+int(322)
+bool(true)
+bool(false)
+bool(true)
+array(1) {
+  [0]=>
+  int(2)
+}
+array(2) {
+  ["k"]=>
+  array(1) {
+    [0]=>
+    int(0)
+  }
+  ["v"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+bool(true)
+d11 "#
+    );
+}

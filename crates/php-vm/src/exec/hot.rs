@@ -27,8 +27,8 @@
 //! ([`sync_cv_cold`]).
 
 use super::spec::{cmp_simple_in, is_plain_slot, num_outcome, plain_truth, put_tmp, slot_truth};
-use super::{discard_unrooted, num_bin, Num};
-use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Op, Operand};
+use super::{discard_unrooted, num_bin, release_rooted, Num};
+use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Op, Operand, UnKind};
 use crate::vm::{CvSlot, Frame, Vm};
 use php_runtime::{BinaryOp, Value};
 
@@ -46,6 +46,12 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::Jmp(_)
             | Op::JmpZ(..)
             | Op::JmpNz(..)
+            | Op::JmpZEx { .. }
+            | Op::JmpNzEx { .. }
+            | Op::Unary {
+                op: UnKind::Not | UnKind::Bool,
+                ..
+            }
             | Op::AssignCv { .. }
             | Op::Move { .. }
             | Op::Coalesce { .. }
@@ -94,6 +100,36 @@ pub(super) fn run_hot(f: &mut Frame, ops: &[Op], mut ip: usize) -> (usize, usize
                 Some(false) => {}
                 None => return (at, NO_SAFE_POINT),
             },
+            // `&&` / `||` (`ZEND_JMPZ_EX`, `ZEND_JMPNZ_EX`): the jump
+            // leaves the boolean in `dst`.
+            Op::JmpZEx { a, dst, target } => match take_bool(f, a) {
+                Some(false) => {
+                    set_tmp_in(f, dst, Value::Bool(false));
+                    ip = target as usize;
+                }
+                Some(true) => {}
+                None => return (at, NO_SAFE_POINT),
+            },
+            Op::JmpNzEx { a, dst, target } => match take_bool(f, a) {
+                Some(true) => {
+                    set_tmp_in(f, dst, Value::Bool(true));
+                    ip = target as usize;
+                }
+                Some(false) => {}
+                None => return (at, NO_SAFE_POINT),
+            },
+            // `!a` and `(bool) a` (`ZEND_BOOL_NOT`, `ZEND_BOOL`) of a
+            // value whose truth needs no conversion.
+            Op::Unary {
+                op: un @ (UnKind::Not | UnKind::Bool),
+                a,
+                dst,
+            } => {
+                let Some(b) = operand_truth(f, a) else {
+                    return (at, NO_SAFE_POINT);
+                };
+                set_tmp_in(f, dst, Value::Bool(b != (un == UnKind::Not)));
+            }
             Op::AssignCv { cv, val, dst } => {
                 if !assign_cv_in(f, cv, val, dst) {
                     return (at, NO_SAFE_POINT);
@@ -314,8 +350,8 @@ fn sync_cv_cold(f: &Frame, cv: u32) {
     }
 }
 
-/// A copy of a plain scalar result (`num_bin` gives ints, floats and
-/// bools), without the out-of-line `Value::clone`.
+/// A copy of `v`: a scalar inline, anything else through `Value::clone`
+/// (out of line).
 #[inline(always)]
 #[allow(clippy::inline_always)]
 fn scalar_copy(v: &Value) -> Value {
@@ -358,6 +394,35 @@ fn take_bool(f: &mut Frame, op: Operand) -> Option<bool> {
         }
         Operand::Cv(cv) => f.peek_cv(cv, slot_truth),
         _ => None,
+    }
+}
+
+/// The truth of an operand that needs neither a diagnostic nor a
+/// conversion (`!a`, `(bool) a`): a temporary holding null, a bool, an int
+/// or a non-NaN float (consumed, as `read` does: nothing to release), a
+/// kept temporary, a defined compiled variable or a literal holding a value
+/// [`plain_truth`] decides. `None` for the generic read and `to_bool`.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn operand_truth(f: &mut Frame, op: Operand) -> Option<bool> {
+    match op {
+        Operand::Tmp(t) => {
+            let slot = f.tmps.get_mut(t as usize)?;
+            let b = match *slot {
+                Value::Null => false,
+                Value::Bool(b) => b,
+                Value::Int(i) => i != 0,
+                Value::Float(x) if !x.is_nan() => x != 0.0,
+                _ => return None,
+            };
+            // A scalar: nothing to drop.
+            std::mem::forget(std::mem::take(slot));
+            Some(b)
+        }
+        Operand::TmpKeep(t) => plain_truth(f.tmps.get(t as usize)?),
+        Operand::Cv(cv) => f.peek_cv(cv, slot_truth),
+        Operand::Lit(i) => plain_truth(f.code.literals.get(i as usize)?),
+        Operand::Unused => None,
     }
 }
 
@@ -540,20 +605,24 @@ fn assign_op_cv(f: &mut Frame, cv: u32, op: BinaryOp, val: Operand, dst: Option<
     true
 }
 
-/// `$cv = val` in place (`Vm::assign_cv_fast`): `val` is a literal, a
-/// temporary or a defined compiled variable, not a reference (a
-/// variable's reference is dereferenced and copied, `ZVAL_COPY_DEREF`),
-/// and the variable is undefined or holds no reference, array or object.
-/// `false`, nothing changed, for the generic assignment.
+/// `$cv = val` in place (`Vm::assign_cv_fast`, `ZEND_ASSIGN_SPEC_CV_*`):
+/// `val` is a literal, a temporary or a defined compiled variable, not a
+/// reference (a variable's reference is dereferenced and copied,
+/// `ZVAL_COPY_DEREF`), and the variable is undefined or holds no
+/// reference. An old array or object is released as `Vm::cv_assign` does
+/// (a possible GC root, out of line), unless the frame's symbol table is
+/// attached (the generic assignment detaches the slot first). `false`,
+/// nothing changed, for the generic assignment.
 #[inline(always)]
 #[allow(clippy::inline_always)]
 pub(super) fn assign_cv_in(f: &mut Frame, cv: u32, val: Operand, dst: Option<u32>) -> bool {
-    match f.cvs.get(cv as usize).map(CvSlot::get) {
+    let rooted = match f.cvs.get(cv as usize).map(CvSlot::get) {
+        Some(Some(Value::Array(_) | Value::Object(_))) if !f.symtab_attached => true,
         Some(Some(Value::Reference(_) | Value::Array(_) | Value::Object(_))) | None => {
             return false;
         }
-        Some(_) => {}
-    }
+        Some(_) => false,
+    };
     let v = match val {
         // Consumed, as `read` does; a reference held by the temporary is
         // left to the generic path (it derefs and releases it).
@@ -562,30 +631,36 @@ pub(super) fn assign_cv_in(f: &mut Frame, cv: u32, val: Operand, dst: Option<u32
             _ => return false,
         },
         Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
-            Some(s) if !matches!(s, Value::Reference(_)) => s.clone(),
+            Some(s) if !matches!(s, Value::Reference(_)) => scalar_copy(s),
             _ => return false,
         },
         Operand::Lit(i) => match f.code.literals.get(i as usize) {
-            Some(l) if !matches!(l, Value::Reference(_)) => l.clone(),
+            Some(l) if !matches!(l, Value::Reference(_)) => scalar_copy(l),
             _ => return false,
         },
         Operand::Cv(src) => match f.cvs.get(src as usize).and_then(CvSlot::get) {
             Some(Value::Reference(r)) => r.get(),
-            Some(s) => s.clone(),
+            Some(s) => scalar_copy(s),
             None => return false,
         },
         Operand::Unused => return false,
     };
-    let keep = dst.map(|_| v.clone());
+    // The result first, as the generic assignment stores it before the
+    // variable (an old value released there may queue a destructor).
+    if let Some(d) = dst {
+        set_tmp_in(f, d, scalar_copy(&v));
+    }
     let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
         return false;
     };
-    discard_unrooted(slot.replace(v));
+    let old = slot.replace(v);
     if f.symtab_attached {
         sync_cv_cold(f, cv);
     }
-    if let (Some(d), Some(k)) = (dst, keep) {
-        set_tmp_in(f, d, k);
+    if rooted {
+        release_rooted(old);
+    } else {
+        discard_unrooted(old);
     }
     true
 }
@@ -598,13 +673,13 @@ pub(super) fn assign_cv_in(f: &mut Frame, cv: u32, val: Operand, dst: Option<u32
 fn move_in(f: &mut Frame, src: Operand, dst: u32) -> bool {
     let v = match src {
         Operand::Lit(i) => match f.code.literals.get(i as usize) {
-            Some(v) if !matches!(v, Value::Reference(_)) => v.clone(),
+            Some(v) if !matches!(v, Value::Reference(_)) => scalar_copy(v),
             _ => return false,
         },
         Operand::Cv(cv) => {
             let v = f.peek_cv(cv, |slot| match slot {
                 Some(Value::Reference(r)) => Some(r.get()),
-                Some(v) => Some(v.clone()),
+                Some(v) => Some(scalar_copy(v)),
                 None => None,
             });
             let Some(v) = v else {
@@ -617,7 +692,7 @@ fn move_in(f: &mut Frame, src: Operand, dst: u32) -> bool {
             _ => return false,
         },
         Operand::TmpKeep(t) => match f.tmps.get(t as usize) {
-            Some(slot) if !matches!(slot, Value::Reference(_)) => slot.clone(),
+            Some(slot) if !matches!(slot, Value::Reference(_)) => scalar_copy(slot),
             _ => return false,
         },
         Operand::Unused => Value::Null,
