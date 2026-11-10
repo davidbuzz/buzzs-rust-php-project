@@ -1429,20 +1429,13 @@ pub(crate) fn register_hook_type(vm: &mut Vm) {
         for (sig, fl, h) in crate::builtins::enum_methods() {
             let s = crate::builtins::sig::parse_sig_borrowed(sig);
             let lc = ZStr::from(s.name.to_ascii_lowercase());
-            let b = Builtin {
-                name: ZStr::from(s.name),
-                params: s.params,
-                defaults: s.defaults,
-                required: s.required,
-                return_type: s.ret,
-                flags: fl,
-                handler: h,
-            };
+            let name = s.name;
+            let b = Builtin::new(ZStr::from(name), s.into(), fl, h);
             order.push(lc.clone());
             methods.insert(
                 lc,
                 Rc::new(Method {
-                    name: ZStr::from(s.name),
+                    name: ZStr::from(name),
                     func: Func::Builtin(Rc::new(b)),
                     flags: fl,
                     scope: weak.clone(),

@@ -14,15 +14,12 @@ thread_local! {
     /// The stand-in constructor of `new` on a constructor-less class with
     /// arguments, built once: it is never called, it only lets the SEND ops
     /// evaluate the arguments (see `Vm::op_new`).
-    static NO_CTOR: Rc<Builtin> = Rc::new(Builtin {
-        name: ZStr::from("__construct"),
-        params: Vec::new(),
-        defaults: Vec::new(),
-        required: 0,
-        return_type: None,
-        flags: flags::NO_BODY,
-        handler: |_vm, _args| Ok(Value::Null),
-    });
+    static NO_CTOR: Rc<Builtin> = Rc::new(Builtin::new(
+        ZStr::from("__construct"),
+        crate::func::Signature::default(),
+        flags::NO_BODY,
+        |_vm, _args| Ok(Value::Null),
+    ));
 }
 
 #[allow(dead_code)]

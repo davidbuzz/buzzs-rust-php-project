@@ -579,6 +579,102 @@ pub fn parse_sig_borrowed(sig: &str) -> Sig<&str> {
     }
 }
 
+/// What registration needs of a stub signature without parsing it: the
+/// name, whether it returns by reference (`&name(...)`) and whether its
+/// last parameter is variadic (`...$rest`). The rest
+/// ([`crate::func::Signature`]) is parsed on first use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SigHead<'a> {
+    pub name: &'a str,
+    pub by_ref_return: bool,
+    pub variadic: bool,
+}
+
+/// Scans `sig` for its [`SigHead`], agreeing with [`parse_sig_borrowed`]:
+/// a parameter is variadic when `...` precedes its `$`, and `...` occurs
+/// nowhere else in a parameter list outside quoted defaults (types, names,
+/// markers and unquoted defaults have no `..`).
+///
+/// # Panics
+/// Panics without `(` (signatures are compile-time constants).
+pub fn sig_head(sig: &str) -> SigHead<'_> {
+    let open = find_byte(sig, b'(').expect("signature has (");
+    let close = sig
+        .as_bytes()
+        .iter()
+        .rposition(|&b| b == b')')
+        .unwrap_or(sig.len());
+    let mut name = trim(&sig[..open]);
+    let by_ref_return = name.as_bytes().first() == Some(&b'&');
+    if by_ref_return {
+        name = &name[1..];
+    }
+    let params = sig.get(open + 1..close).unwrap_or_default();
+    // Most stubs have no `...` at all: the library's substring search
+    // rules them out without the byte-by-byte scan.
+    let variadic = params.contains("...") && has_variadic_marker(params.as_bytes());
+    SigHead {
+        name,
+        by_ref_return,
+        variadic,
+    }
+}
+
+/// Whether `params` has `...` outside quotes (quotes as [`depth0_comma`]
+/// sees them).
+fn has_variadic_marker(params: &[u8]) -> bool {
+    let mut quote: Option<u8> = None;
+    let mut dots = 0u8;
+    for &c in params {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => {
+                quote = Some(c);
+                dots = 0;
+            }
+            b'.' => {
+                dots += 1;
+                if dots == 3 {
+                    return true;
+                }
+            }
+            _ => dots = 0,
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod head_tests {
+    use super::{parse_sig_borrowed, sig_head};
+
+    #[test]
+    fn head_agrees_with_full_parse() {
+        for sig in [
+            "strlen(string $string): int",
+            "sprintf(string $format, mixed ...$values): string",
+            "array_push(array &$array, mixed ...$values): int",
+            "sscanf(string $string, string $format, mixed &...$vars): array|int|null",
+            "&getref(): array",
+            "f(string $s = \"...\", int $i = 0)",
+            "g(string $s = '...', $rest = null)",
+            "h()",
+            "k(#[\\SensitiveParameter] string $p, float $f = 1.5, ...$more): void",
+        ] {
+            let full = parse_sig_borrowed(sig);
+            let head = sig_head(sig);
+            assert_eq!(head.name, full.name, "{sig}");
+            assert_eq!(head.by_ref_return, full.by_ref_return, "{sig}");
+            assert_eq!(head.variadic, full.variadic, "{sig}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod int_literal_tests {
     use super::parse_int_literal;

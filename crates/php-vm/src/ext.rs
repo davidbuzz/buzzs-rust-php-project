@@ -333,7 +333,7 @@ impl<'a> ModuleBuilder<'a> {
     /// (`"name(type $param = default, ...): ret"`; `&$x` for by-reference,
     /// `...$rest` for variadics). Re-registering a name replaces it.
     pub fn function(&mut self, signature: &str, handler: NativeFn) -> &mut Self {
-        let name = crate::builtins::reg_module(self.vm, signature, handler, self.name);
+        let name = crate::builtins::reg_module_dynamic(self.vm, signature, handler, self.name);
         self.last_function = Some(name);
         self
     }
@@ -1235,7 +1235,7 @@ impl Vm {
     /// Registers a builtin function at runtime (same as
     /// [`ModuleBuilder::function`]).
     pub fn register_function(&mut self, signature: &str, handler: NativeFn) {
-        crate::builtins::reg(self, signature, handler);
+        crate::builtins::reg_dynamic(self, signature, handler);
     }
 
     /// Registers a builtin function from a static stub signature borrowing `&'static str`.

@@ -83,11 +83,11 @@ pub struct CompiledUnit {
 /// scalar values that are not deprecated (`can_ct_eval_const`), by their
 /// case-sensitive name. Shared by every compilation of a request.
 #[derive(Clone, Default)]
-pub struct CtConstants(Rc<HashMap<ZStr, Value>>);
+pub struct CtConstants(Rc<crate::class::NameMap<Value>>);
 
 impl CtConstants {
     /// Wraps a name → value table.
-    pub(crate) fn new(constants: HashMap<ZStr, Value>) -> Self {
+    pub(crate) fn new(constants: crate::class::NameMap<Value>) -> Self {
         Self(Rc::new(constants))
     }
 

@@ -5,7 +5,6 @@
 use super::{compile, CompileOptions, CompiledUnit, CtConstants};
 use crate::opcode::{BinKind, Op};
 use php_runtime::{BinaryOp, Value, ZStr};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 fn compile_src(src: &str, user_opcodes: Vec<&'static str>) -> CompiledUnit {
@@ -16,10 +15,11 @@ fn compile_src(src: &str, user_opcodes: Vec<&'static str>) -> CompiledUnit {
         user_opcodes,
         // The VM's persistent internal constants (`Vm::ct_constants`);
         // `PHP_EOL` is the one these tests use.
-        ct_constants: Some(CtConstants::new(HashMap::from([(
-            ZStr::from("PHP_EOL"),
-            Value::Str(ZStr::from("\n")),
-        )]))),
+        ct_constants: Some(CtConstants::new(
+            [(ZStr::from("PHP_EOL"), Value::Str(ZStr::from("\n")))]
+                .into_iter()
+                .collect(),
+        )),
         ..CompileOptions::default()
     };
     compile(&program, Rc::from(src.as_bytes()), opts).expect("compile")

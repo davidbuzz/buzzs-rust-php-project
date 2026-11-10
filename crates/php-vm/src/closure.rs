@@ -313,18 +313,17 @@ impl Vm {
                 attributes: Vec::new(),
             });
         }
-        let tramp = Builtin {
-            name: ZStr::from("__invoke"),
-            defaults: vec![None; params.len()],
-            params,
-            required: 0,
-            return_type: None,
-            flags: flags::PUBLIC
-                | flags::VARIADIC
-                | flags::CLOSURE
-                | (d.func.flags() & flags::RETURN_REF),
-            handler: closure_invoke,
-        };
+        let tramp = Builtin::new(
+            ZStr::from("__invoke"),
+            crate::func::Signature {
+                defaults: vec![None; params.len()],
+                params,
+                required: 0,
+                return_type: None,
+            },
+            flags::PUBLIC | flags::VARIADIC | flags::CLOSURE | (d.func.flags() & flags::RETURN_REF),
+            closure_invoke,
+        );
         let cls = self.find_class(b"Closure");
         Some(PendingCall {
             this: Some(o.clone()),
