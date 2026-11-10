@@ -610,9 +610,11 @@ pub fn sig_head(sig: &str) -> SigHead<'_> {
         name = &name[1..];
     }
     let params = sig.get(open + 1..close).unwrap_or_default();
-    // Most stubs have no `...` at all: the library's substring search
-    // rules them out without the byte-by-byte scan.
-    let variadic = params.contains("...") && has_variadic_marker(params.as_bytes());
+    // Most stubs have no `.` at all: a single-byte search (memchr) rules
+    // them out without the quote-aware scan, and without the set-up cost of
+    // a substring searcher on every signature.
+    let pb = params.as_bytes();
+    let variadic = pb.contains(&b'.') && has_variadic_marker(pb);
     SigHead {
         name,
         by_ref_return,
@@ -665,6 +667,8 @@ mod head_tests {
             "g(string $s = '...', $rest = null)",
             "h()",
             "k(#[\\SensitiveParameter] string $p, float $f = 1.5, ...$more): void",
+            "m(float $f = 0.5, string $s = '.'): float",
+            "n(string $s = '..', string $t = '.'): string",
         ] {
             let full = parse_sig_borrowed(sig);
             let head = sig_head(sig);
