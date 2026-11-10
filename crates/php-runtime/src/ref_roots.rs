@@ -11,11 +11,46 @@ use crate::reference::{PhpRef, WeakRef};
 use crate::Value;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+
+/// Hashes a buffered reference's address (the [`Index`] key) with one
+/// multiply instead of SipHash: every release of a handle of a reference
+/// to an array or object looks the reference up. The product's high bits,
+/// rotated down, pick the bucket (an aligned address's low bits are zero).
+#[derive(Default)]
+struct AddrHasher(u64);
+
+impl AddrHasher {
+    const K: u64 = 0x9E37_79B9_7F4A_7C15;
+}
+
+impl Hasher for AddrHasher {
+    #[inline]
+    fn write_usize(&mut self, n: usize) {
+        self.0 = (self.0 ^ n as u64).wrapping_mul(Self::K);
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        // Not used by the `usize` keys; kept total.
+        for &b in bytes {
+            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(Self::K);
+        }
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0.rotate_left(26)
+    }
+}
+
+/// Buffer position by reference address. Only looked up, never iterated,
+/// so the hasher changes nothing observable.
+type Index = HashMap<usize, usize, BuildHasherDefault<AddrHasher>>;
 
 #[derive(Default)]
 struct Buf {
     entries: Vec<WeakRef>,
-    index: HashMap<usize, usize>,
+    index: Index,
     /// Dead entries are dropped when `entries` grows past this (keeps the
     /// buffer bounded while the collector does not run).
     compact_at: usize,
@@ -182,7 +217,10 @@ pub fn unstash(s: Stash) {
         if let Ok(mut b) = b.try_borrow_mut() {
             let newer = std::mem::take(&mut b.entries);
             let mut entries = Vec::with_capacity(s.0.len() + newer.len());
-            let mut index = HashMap::with_capacity(s.0.len() + newer.len());
+            let mut index = Index::with_capacity_and_hasher(
+                s.0.len() + newer.len(),
+                BuildHasherDefault::default(),
+            );
             for w in s.0.into_iter().chain(newer) {
                 if w.strong_count() == 0 {
                     continue;
@@ -249,6 +287,31 @@ mod tests {
         let roots = take();
         assert!(matches!(&roots[0], Value::Reference(r) if PhpRef::ptr_eq(r, &a)));
         assert!(matches!(&roots[1], Value::Reference(r) if PhpRef::ptr_eq(r, &b)));
+        drop(roots);
+        set_recording(false);
+    }
+
+    /// Many references, each released several times, are buffered once
+    /// each and in release order (the address index finds every one).
+    #[test]
+    fn many_references_are_buffered_once_in_order() {
+        set_recording(true);
+        drop(take());
+        let refs: Vec<PhpRef> = (0..300)
+            .map(|_| PhpRef::new(Value::empty_array()))
+            .collect();
+        for _ in 0..3 {
+            for r in &refs {
+                drop(r.clone());
+            }
+        }
+        assert_eq!(len(), refs.len());
+        let roots = take();
+        assert_eq!(roots.len(), refs.len());
+        assert!(roots
+            .iter()
+            .zip(&refs)
+            .all(|(v, r)| matches!(v, Value::Reference(x) if PhpRef::ptr_eq(x, r))));
         drop(roots);
         set_recording(false);
     }
