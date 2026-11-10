@@ -646,3 +646,34 @@ NS\nullable_noret(): Return value must be of type ?int, none returned
 ";
     assert_eq!(run(source), expected);
 }
+
+/// `return_simple` moving a returned compiled variable out of the released
+/// frame (strings, numbers) or copying it (arrays, references), and storing
+/// the result straight into the caller's temporary: used, discarded,
+/// reused in a loop and passed on as an argument. Expected output is
+/// php-src's (`/usr/bin/php -n`).
+#[test]
+fn returned_variables_move_into_the_callers_result() {
+    let source = r#"<?php
+function s($x) { $y = $x . "!"; return $y; }
+function keep($x) { $copy = $x; return $x; }
+function arr($n) { $a = [$n, $n + 1]; return $a; }
+function refd() { $v = "r"; $f = function () use (&$v) { $v .= "x"; }; $f(); return $v; }
+function typed(string $s): string { return $s; }
+function fl(): float { $f = 1.5; return $f; }
+$a = s("a"); $b = s("b");
+echo $a, $b, s("c"), "\n";
+s("discarded");
+echo keep("k"), keep(3), "\n";
+$x = arr(1); $y = arr(5); echo $x[0], $x[1], $y[0], $y[1], "\n";
+echo refd(), "\n";
+echo typed("t") . typed("u"), "\n";
+var_dump(fl());
+for ($i = 0; $i < 3; $i++) { $t = s((string) $i); echo $t; }
+echo "\n";
+echo typed(s("abc")), "\n";
+var_dump(s(1) === "1!");
+"#;
+    let expected = "a!b!c!\nk3\n1256\nrx\ntu\nfloat(1.5)\n0!1!2!\nabc!\nbool(true)\n";
+    assert_eq!(run(source), expected);
+}
