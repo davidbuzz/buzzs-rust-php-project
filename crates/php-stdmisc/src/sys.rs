@@ -1076,3 +1076,27 @@ impl std::fmt::Debug for UntrackedWords {
         write!(f, "UntrackedWords({} words)", self.len)
     }
 }
+
+/// `strptime(3)` on a zeroed `struct tm` (`memset` first, as
+/// `PHP_FUNCTION(strptime)` does). Both strings end at their first NUL, as
+/// the C `char *` arguments do. Returns the filled `tm` and the byte offset
+/// of the unparsed rest of `input`, `None` when `strptime` fails.
+#[must_use]
+pub fn strptime(input: &[u8], format: &[u8]) -> Option<(libc::tm, usize)> {
+    let cut = |s: &[u8]| -> Vec<u8> { s.iter().take_while(|&&c| c != 0).copied().collect() };
+    let c_input = CString::new(cut(input)).ok()?;
+    let c_format = CString::new(cut(format)).ok()?;
+    // SAFETY: `libc::tm` is plain old data; all-zero is a valid value.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both strings are NUL-terminated and outlive the call; `tm`
+    // is a valid, writable `struct tm`.
+    let rest = unsafe { libc::strptime(c_input.as_ptr(), c_format.as_ptr(), &mut tm) };
+    if rest.is_null() {
+        return None;
+    }
+    // SAFETY: on success strptime returns a pointer into `c_input`, at or
+    // before its NUL terminator, so both pointers belong to one allocation.
+    let offset = unsafe { rest.cast_const().offset_from(c_input.as_ptr()) };
+    let offset = usize::try_from(offset).ok()?;
+    Some((tm, offset.min(c_input.as_bytes().len())))
+}

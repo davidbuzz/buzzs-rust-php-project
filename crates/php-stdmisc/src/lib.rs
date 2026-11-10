@@ -19,6 +19,7 @@
 //! * [`info`] — `phpinfo()` rendering primitives and layout.
 //! * [`query`] — `http_build_query`, `parse_str` and the SAPI's request
 //!   variable registration (`php_register_variable_ex`, `treat_data`).
+//! * [`datetime`] — `strptime()`.
 //! * [`getopt`] — `getopt()`.
 //! * [`highlight`] — `highlight_string`/`highlight_file` HTML and
 //!   `php_strip_whitespace`.
@@ -41,6 +42,7 @@
 
 pub mod browscap;
 pub mod crypt;
+pub mod datetime;
 pub mod dns;
 pub mod exec;
 pub mod getopt;
