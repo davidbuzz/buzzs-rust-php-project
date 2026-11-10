@@ -124,97 +124,82 @@ static LABEL_CHAR: [bool; 256] = {
 };
 
 /// Case-insensitive keyword table for labels in scripting state.
+///
+/// Dispatches on the label length first, then compares the lowercased bytes
+/// as a fixed-size array (which compiles to one or two integer compares per
+/// candidate) instead of testing every keyword in turn. Labels that cannot
+/// be keywords (too short or long, or not starting with a keyword's first
+/// letter) are rejected before lowercasing.
 fn keyword(label: &[u8]) -> Option<TokenKind> {
     use TokenKind as T;
-    if label.len() > 15 {
+    let len = label.len();
+    if !(2..=KEYWORD_MAX_LEN).contains(&len) || !KEYWORD_FIRST[usize::from(label[0])] {
         return None;
     }
-    let mut buf = [0u8; 15];
-    let lower = &mut buf[..label.len()];
-    lower.copy_from_slice(label);
-    lower.make_ascii_lowercase();
-    Some(match &*lower {
-        b"exit" | b"die" => T::Exit,
-        b"fn" => T::Fn,
-        b"function" => T::Function,
-        b"const" => T::Const,
-        b"return" => T::Return,
-        b"yield" => T::Yield,
-        b"try" => T::Try,
-        b"catch" => T::Catch,
-        b"finally" => T::Finally,
-        b"throw" => T::Throw,
-        b"if" => T::If,
-        b"elseif" => T::ElseIf,
-        b"endif" => T::EndIf,
-        b"else" => T::Else,
-        b"while" => T::While,
-        b"endwhile" => T::EndWhile,
-        b"do" => T::Do,
-        b"for" => T::For,
-        b"endfor" => T::EndFor,
-        b"foreach" => T::Foreach,
-        b"endforeach" => T::EndForeach,
-        b"declare" => T::Declare,
-        b"enddeclare" => T::EndDeclare,
-        b"instanceof" => T::Instanceof,
-        b"as" => T::As,
-        b"switch" => T::Switch,
-        b"match" => T::Match,
-        b"endswitch" => T::EndSwitch,
-        b"case" => T::Case,
-        b"default" => T::Default,
-        b"break" => T::Break,
-        b"continue" => T::Continue,
-        b"goto" => T::Goto,
-        b"echo" => T::Echo,
-        b"print" => T::Print,
-        b"class" => T::Class,
-        b"interface" => T::Interface,
-        b"trait" => T::Trait,
-        b"extends" => T::Extends,
-        b"implements" => T::Implements,
-        b"new" => T::New,
-        b"clone" => T::Clone,
-        b"var" => T::Var,
-        b"eval" => T::Eval,
-        b"include" => T::Include,
-        b"include_once" => T::IncludeOnce,
-        b"require" => T::Require,
-        b"require_once" => T::RequireOnce,
-        b"namespace" => T::Namespace,
-        b"use" => T::Use,
-        b"insteadof" => T::Insteadof,
-        b"global" => T::Global,
-        b"isset" => T::Isset,
-        b"empty" => T::Empty,
-        b"__halt_compiler" => T::HaltCompiler,
-        b"static" => T::Static,
-        b"abstract" => T::Abstract,
-        b"final" => T::Final,
-        b"private" => T::Private,
-        b"protected" => T::Protected,
-        b"public" => T::Public,
-        b"readonly" => T::Readonly,
-        b"unset" => T::Unset,
-        b"list" => T::List,
-        b"array" => T::Array,
-        b"callable" => T::Callable,
-        b"or" => T::LogicalOr,
-        b"and" => T::LogicalAnd,
-        b"xor" => T::LogicalXor,
-        b"__class__" => T::ClassC,
-        b"__trait__" => T::TraitC,
-        b"__function__" => T::FuncC,
-        b"__property__" => T::PropertyC,
-        b"__method__" => T::MethodC,
-        b"__line__" => T::Line,
-        b"__file__" => T::File,
-        b"__dir__" => T::Dir,
-        b"__namespace__" => T::NsC,
-        _ => return None,
-    })
+    let mut buf = [0u8; KEYWORD_MAX_LEN];
+    buf[..len].copy_from_slice(label);
+    buf.make_ascii_lowercase();
+    // Matches the first `$n` bytes of `buf` against `$n`-byte keywords.
+    macro_rules! arms {
+        ($n:literal: $($kw:literal => $kind:ident),+ $(,)?) => {{
+            let mut a = [0u8; $n];
+            a.copy_from_slice(&buf[..$n]);
+            match &a {
+                $($kw => Some(T::$kind),)+
+                _ => None,
+            }
+        }};
+    }
+    match len {
+        2 => arms!(2: b"fn" => Fn, b"if" => If, b"do" => Do, b"as" => As, b"or" => LogicalOr),
+        3 => {
+            arms!(3: b"die" => Exit, b"try" => Try, b"for" => For, b"new" => New, b"var" => Var, b"use" => Use, b"and" => LogicalAnd, b"xor" => LogicalXor)
+        }
+        4 => {
+            arms!(4: b"exit" => Exit, b"else" => Else, b"case" => Case, b"goto" => Goto, b"echo" => Echo, b"eval" => Eval, b"list" => List)
+        }
+        5 => {
+            arms!(5: b"const" => Const, b"yield" => Yield, b"catch" => Catch, b"throw" => Throw, b"endif" => EndIf, b"while" => While, b"match" => Match, b"break" => Break, b"print" => Print, b"class" => Class, b"trait" => Trait, b"clone" => Clone, b"isset" => Isset, b"empty" => Empty, b"final" => Final, b"unset" => Unset, b"array" => Array)
+        }
+        6 => {
+            arms!(6: b"return" => Return, b"elseif" => ElseIf, b"endfor" => EndFor, b"switch" => Switch, b"global" => Global, b"static" => Static, b"public" => Public)
+        }
+        7 => {
+            arms!(7: b"finally" => Finally, b"foreach" => Foreach, b"declare" => Declare, b"default" => Default, b"extends" => Extends, b"include" => Include, b"require" => Require, b"private" => Private, b"__dir__" => Dir)
+        }
+        8 => {
+            arms!(8: b"function" => Function, b"endwhile" => EndWhile, b"continue" => Continue, b"abstract" => Abstract, b"readonly" => Readonly, b"callable" => Callable, b"__line__" => Line, b"__file__" => File)
+        }
+        9 => {
+            arms!(9: b"endswitch" => EndSwitch, b"interface" => Interface, b"namespace" => Namespace, b"insteadof" => Insteadof, b"protected" => Protected, b"__class__" => ClassC, b"__trait__" => TraitC)
+        }
+        10 => {
+            arms!(10: b"endforeach" => EndForeach, b"enddeclare" => EndDeclare, b"instanceof" => Instanceof, b"implements" => Implements, b"__method__" => MethodC)
+        }
+        12 => {
+            arms!(12: b"include_once" => IncludeOnce, b"require_once" => RequireOnce, b"__function__" => FuncC, b"__property__" => PropertyC)
+        }
+        13 => arms!(13: b"__namespace__" => NsC),
+        15 => arms!(15: b"__halt_compiler" => HaltCompiler),
+        _ => None,
+    }
 }
+
+/// Length of the longest keyword (`__halt_compiler`).
+const KEYWORD_MAX_LEN: usize = 15;
+
+/// Bytes (either case) that start some keyword.
+static KEYWORD_FIRST: [bool; 256] = {
+    let mut t = [false; 256];
+    let firsts = b"_abcdefgilmnoprstuvwxy";
+    let mut i = 0;
+    while i < firsts.len() {
+        t[firsts[i] as usize] = true;
+        t[firsts[i].to_ascii_uppercase() as usize] = true;
+        i += 1;
+    }
+    t
+};
 
 impl<'a> Lexer<'a> {
     /// Creates a tokenizer-mode lexer starting in inline HTML.
@@ -2167,5 +2152,143 @@ mod label_tests {
         assert_eq!(lx.scan_label_end(7), 8);
         assert_eq!(lx.scan_label_end(8), 8);
         assert_eq!(lx.scan_label_end(9), 9);
+    }
+
+    /// Every PHP keyword (the `zend_language_scanner.l` list), lowercase.
+    const KEYWORDS: &[(&str, TokenKind)] = &[
+        ("exit", TokenKind::Exit),
+        ("die", TokenKind::Exit),
+        ("fn", TokenKind::Fn),
+        ("function", TokenKind::Function),
+        ("const", TokenKind::Const),
+        ("return", TokenKind::Return),
+        ("yield", TokenKind::Yield),
+        ("try", TokenKind::Try),
+        ("catch", TokenKind::Catch),
+        ("finally", TokenKind::Finally),
+        ("throw", TokenKind::Throw),
+        ("if", TokenKind::If),
+        ("elseif", TokenKind::ElseIf),
+        ("endif", TokenKind::EndIf),
+        ("else", TokenKind::Else),
+        ("while", TokenKind::While),
+        ("endwhile", TokenKind::EndWhile),
+        ("do", TokenKind::Do),
+        ("for", TokenKind::For),
+        ("endfor", TokenKind::EndFor),
+        ("foreach", TokenKind::Foreach),
+        ("endforeach", TokenKind::EndForeach),
+        ("declare", TokenKind::Declare),
+        ("enddeclare", TokenKind::EndDeclare),
+        ("instanceof", TokenKind::Instanceof),
+        ("as", TokenKind::As),
+        ("switch", TokenKind::Switch),
+        ("match", TokenKind::Match),
+        ("endswitch", TokenKind::EndSwitch),
+        ("case", TokenKind::Case),
+        ("default", TokenKind::Default),
+        ("break", TokenKind::Break),
+        ("continue", TokenKind::Continue),
+        ("goto", TokenKind::Goto),
+        ("echo", TokenKind::Echo),
+        ("print", TokenKind::Print),
+        ("class", TokenKind::Class),
+        ("interface", TokenKind::Interface),
+        ("trait", TokenKind::Trait),
+        ("extends", TokenKind::Extends),
+        ("implements", TokenKind::Implements),
+        ("new", TokenKind::New),
+        ("clone", TokenKind::Clone),
+        ("var", TokenKind::Var),
+        ("eval", TokenKind::Eval),
+        ("include", TokenKind::Include),
+        ("include_once", TokenKind::IncludeOnce),
+        ("require", TokenKind::Require),
+        ("require_once", TokenKind::RequireOnce),
+        ("namespace", TokenKind::Namespace),
+        ("use", TokenKind::Use),
+        ("insteadof", TokenKind::Insteadof),
+        ("global", TokenKind::Global),
+        ("isset", TokenKind::Isset),
+        ("empty", TokenKind::Empty),
+        ("__halt_compiler", TokenKind::HaltCompiler),
+        ("static", TokenKind::Static),
+        ("abstract", TokenKind::Abstract),
+        ("final", TokenKind::Final),
+        ("private", TokenKind::Private),
+        ("protected", TokenKind::Protected),
+        ("public", TokenKind::Public),
+        ("readonly", TokenKind::Readonly),
+        ("unset", TokenKind::Unset),
+        ("list", TokenKind::List),
+        ("array", TokenKind::Array),
+        ("callable", TokenKind::Callable),
+        ("or", TokenKind::LogicalOr),
+        ("and", TokenKind::LogicalAnd),
+        ("xor", TokenKind::LogicalXor),
+        ("__class__", TokenKind::ClassC),
+        ("__trait__", TokenKind::TraitC),
+        ("__function__", TokenKind::FuncC),
+        ("__property__", TokenKind::PropertyC),
+        ("__method__", TokenKind::MethodC),
+        ("__line__", TokenKind::Line),
+        ("__file__", TokenKind::File),
+        ("__dir__", TokenKind::Dir),
+        ("__namespace__", TokenKind::NsC),
+    ];
+
+    #[test]
+    fn keyword_table_is_exact_and_case_insensitive() {
+        assert_eq!(KEYWORDS.len(), 79);
+        for &(kw, kind) in KEYWORDS {
+            assert_eq!(keyword(kw.as_bytes()), Some(kind), "{kw}");
+            assert_eq!(
+                keyword(kw.to_ascii_uppercase().as_bytes()),
+                Some(kind),
+                "{kw}"
+            );
+            // Mixed case: uppercase every other byte.
+            let mixed: Vec<u8> = kw
+                .bytes()
+                .enumerate()
+                .map(|(i, b)| {
+                    if i % 2 == 0 {
+                        b.to_ascii_uppercase()
+                    } else {
+                        b
+                    }
+                })
+                .collect();
+            assert_eq!(keyword(&mixed), Some(kind), "{kw}");
+            // Prefixes and extensions are plain labels.
+            assert_eq!(keyword(&kw.as_bytes()[..kw.len() - 1]), None, "{kw}");
+            assert_eq!(keyword(format!("{kw}s").as_bytes()), None, "{kw}s");
+            assert_eq!(keyword(format!("{kw}_").as_bytes()), None, "{kw}_");
+        }
+        // Contextual words and non-keywords stay T_STRING.
+        for w in [
+            "enum",
+            "from",
+            "mixed",
+            "self",
+            "parent",
+            "true",
+            "null",
+            "int",
+            "a",
+            "_",
+            "",
+            "__halt_compiler_",
+            "__COMPILER_HALT_OFFSET__",
+            "\u{e9}lse",
+            "ifx",
+            "zz",
+            "ELS\u{c9}",
+        ] {
+            assert_eq!(keyword(w.as_bytes()), None, "{w}");
+        }
+        // Non-ASCII bytes are never folded.
+        assert_eq!(keyword(b"\xc9cho"), None);
+        assert_eq!(keyword(b"ech\xcf"), None);
     }
 }
