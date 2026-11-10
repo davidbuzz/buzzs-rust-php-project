@@ -88,6 +88,14 @@ pub fn dtoa_fixed(value: f64, ndigits: i32) -> DtoaDigits {
             negative,
         };
     }
+    if let Some(d) = dtoa_fixed_exact(value.abs(), ndigits) {
+        return DtoaDigits { negative, ..d };
+    }
+    dtoa_fixed_fmt(value, ndigits, negative)
+}
+
+/// [`dtoa_fixed`] through Rust's exact (bignum) float formatting.
+fn dtoa_fixed_fmt(value: f64, ndigits: i32, negative: bool) -> DtoaDigits {
     let n = usize::try_from(ndigits.max(0)).unwrap_or(0);
     let s = format!("{:.*}", n, value.abs());
     let (int_part, frac_part) = s.split_once('.').unwrap_or((s.as_str(), ""));
@@ -108,6 +116,61 @@ pub fn dtoa_fixed(value: f64, ndigits: i32) -> DtoaDigits {
         decpt: int_len - i32::try_from(leading).unwrap_or(0),
         negative,
     }
+}
+
+/// Exact integer fast path of [`dtoa_fixed`] for a finite, positive
+/// `value` and `ndigits <= 22`: with `value = m × 2^e`, `value × 10^n` is
+/// `m × 10^n` shifted by `e`, which fits in a `u128` (`m < 2^53`,
+/// `10^22 < 2^74`), and is rounded half-to-even on the exact remainder —
+/// the same result as the bignum path. `None` when the product overflows.
+fn dtoa_fixed_exact(value: f64, ndigits: i32) -> Option<DtoaDigits> {
+    let n = u32::try_from(ndigits).ok().filter(|&n| n <= 22)?;
+    let bits = value.to_bits();
+    let biased = i32::try_from((bits >> 52) & 0x7ff).ok()?;
+    let frac = bits & ((1u64 << 52) - 1);
+    let (m, e) = if biased == 0 {
+        (frac, -1074)
+    } else {
+        (frac | (1u64 << 52), biased - 1075)
+    };
+    let pow10 = 10u128.pow(n);
+    let q = if e >= 0 {
+        if e > 74 {
+            return None;
+        }
+        (u128::from(m) << e).checked_mul(pow10)?
+    } else {
+        let shift = e.unsigned_abs();
+        let num = u128::from(m) * pow10;
+        if shift >= 128 {
+            // num < 2^127 <= half of 2^shift: rounds to zero.
+            0
+        } else {
+            let q = num >> shift;
+            let r = num & ((1u128 << shift) - 1);
+            let half = 1u128 << (shift - 1);
+            if r > half || (r == half && q & 1 == 1) {
+                q + 1
+            } else {
+                q
+            }
+        }
+    };
+    if q == 0 {
+        return Some(DtoaDigits {
+            digits: Vec::new(),
+            decpt: -ndigits,
+            negative: false,
+        });
+    }
+    let mut digits = q.to_string().into_bytes();
+    let len = i32::try_from(digits.len()).ok()?;
+    strip_trailing_zeros(&mut digits);
+    Some(DtoaDigits {
+        digits,
+        decpt: len - ndigits,
+        negative: false,
+    })
 }
 
 /// `zend_gcvt(value, ndigit, dec_point, exponent, buf)`.
@@ -362,6 +425,59 @@ mod tests {
 
     fn g(v: f64, p: i32) -> String {
         format_double(v, p, DoubleMode::Plain)
+    }
+
+    #[test]
+    fn fixed_exact_matches_bignum_path() {
+        let mut vals = vec![
+            0.125,
+            0.375,
+            2.5,
+            3.5,
+            0.5,
+            1.5,
+            1e15 + 0.5,
+            0.045,
+            1.005,
+            1.0,
+            9.995,
+            123_456_789.125,
+            0.1,
+            0.2,
+            0.3,
+            1e-7,
+            5e-324,
+            1e22,
+            1e23,
+            9.007_199_254_740_993e15,
+            1.8e19,
+            3.4e38,
+            0.000_049_999,
+            99.999_999_999,
+            1e-22,
+            2.5e-5,
+            4.35,
+            0.615,
+        ];
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        for _ in 0..2000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let v = f64::from_bits(x >> 1);
+            if v.is_finite() && v != 0.0 {
+                vals.push(v);
+            }
+            #[allow(clippy::cast_precision_loss)]
+            vals.push((x % 1_000_000) as f64 / 1000.0);
+        }
+        for v in vals {
+            for nd in 0..=22 {
+                let fast = dtoa_fixed(v, nd);
+                let slow = dtoa_fixed_fmt(v, nd, false);
+                assert_eq!(fast, slow, "{v:e} with {nd} digits");
+            }
+        }
     }
 
     #[test]

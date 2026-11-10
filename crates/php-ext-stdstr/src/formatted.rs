@@ -11,7 +11,7 @@
 //! conversions, and the second pass formats with the real values.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use php_runtime::{Value, ZStr};
 use php_support::fmt::{php_formatted_print, ArgSource, FormatArg, FormatError, FormatOptions};
@@ -84,6 +84,77 @@ impl FormatArg for Converted {
     }
 }
 
+/// Single-pass argument for values whose conversions have no side
+/// effects and need no VM state (integers, booleans, null, strings used as
+/// strings, floats used as floats). Any other conversion sets `bail`, and
+/// the caller discards the result and takes the two-pass path.
+struct Plain<'a> {
+    v: &'a Value,
+    bail: &'a Cell<bool>,
+}
+
+impl Plain<'_> {
+    fn give_up<T: Default>(&self) -> T {
+        self.bail.set(true);
+        T::default()
+    }
+}
+
+impl FormatArg for Plain<'_> {
+    fn as_int(&self) -> i64 {
+        match self.v {
+            Value::Int(i) => *i,
+            Value::Bool(b) => i64::from(*b),
+            Value::Null => 0,
+            _ => self.give_up(),
+        }
+    }
+    #[allow(clippy::cast_precision_loss)]
+    fn as_float(&self) -> f64 {
+        match self.v {
+            Value::Int(i) => *i as f64,
+            Value::Float(f) => *f,
+            Value::Bool(b) => f64::from(u8::from(*b)),
+            Value::Null => 0.0,
+            _ => self.give_up(),
+        }
+    }
+    fn as_str(&self) -> Cow<'_, [u8]> {
+        match self.v {
+            Value::Str(s) => Cow::Borrowed(s.as_bytes()),
+            Value::Int(i) => Cow::Owned(i.to_string().into_bytes()),
+            Value::Bool(true) => Cow::Borrowed(b"1"),
+            Value::Bool(false) | Value::Null => Cow::Borrowed(b""),
+            _ => {
+                self.bail.set(true);
+                Cow::Borrowed(b"")
+            }
+        }
+    }
+    fn exact_int(&self) -> Option<i64> {
+        match self.v {
+            Value::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+}
+
+/// Maps the engine's result to the VM: diagnostics first, then the
+/// thrown error, as `php_formatted_print()` does.
+fn finish(
+    vm: &mut Vm,
+    r: Result<Vec<u8>, FormatError>,
+    diags: Vec<Diagnostic>,
+) -> VmResult<Vec<u8>> {
+    emit_diags(vm, diags)?;
+    match r {
+        Ok(v) => Ok(v),
+        Err(FormatError::ValueError(m)) => Err(vm.throw("ValueError", &m)),
+        Err(FormatError::ArgumentCountError(m)) => Err(vm.throw("ArgumentCountError", &m)),
+        Err(FormatError::Fatal(m)) => Err(vm.fatal(&m)),
+    }
+}
+
 fn emit_diags(vm: &mut Vm, diags: Vec<Diagnostic>) -> VmResult<()> {
     for d in diags {
         let level = i64::from(d.level.0);
@@ -114,6 +185,18 @@ pub fn format(vm: &mut Vm, fmt: &[u8], values: &[Value], source: ArgSource) -> V
         source,
         decimal_point: php_support::fmt::locale::decimal_point(),
     };
+    // Fast path: one formatting pass when no conversion can have a side
+    // effect (the common `%d`/`%s`/`%.2f` over ints, strings and floats).
+    if !values.iter().any(|v| matches!(v, Value::Reference(_))) {
+        let bail = Cell::new(false);
+        let plain: Vec<Plain<'_>> = values.iter().map(|v| Plain { v, bail: &bail }).collect();
+        let refs: Vec<&dyn FormatArg> = plain.iter().map(|a| a as &dyn FormatArg).collect();
+        let mut diags: Vec<Diagnostic> = Vec::new();
+        let r = php_formatted_print(fmt, &refs, opts, &mut diags);
+        if !bail.get() {
+            return finish(vm, r, diags);
+        }
+    }
     let values: Vec<Value> = values.iter().map(Value::deref).collect();
     let exact = |v: &Value| match v {
         Value::Int(i) => Some(*i),
@@ -153,13 +236,7 @@ pub fn format(vm: &mut Vm, fmt: &[u8], values: &[Value], source: ArgSource) -> V
     let refs: Vec<&dyn FormatArg> = conv.iter().map(|a| a as &dyn FormatArg).collect();
     let mut diags: Vec<Diagnostic> = Vec::new();
     let r = php_formatted_print(fmt, &refs, opts, &mut diags);
-    emit_diags(vm, diags)?;
-    match r {
-        Ok(v) => Ok(v),
-        Err(FormatError::ValueError(m)) => Err(vm.throw("ValueError", &m)),
-        Err(FormatError::ArgumentCountError(m)) => Err(vm.throw("ArgumentCountError", &m)),
-        Err(FormatError::Fatal(m)) => Err(vm.fatal(&m)),
-    }
+    finish(vm, r, diags)
 }
 
 fn array_values(a: &Args, n: usize) -> Vec<Value> {
