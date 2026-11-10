@@ -1864,6 +1864,12 @@ impl Lower<'_> {
     }
 
     fn lower_incdec(&mut self, p: u32, kind: IncDecKind, dst: Option<u32>) {
+        // `zend_do_free` compiles an unused `$i++` as `++$i`.
+        let kind = match (kind, dst) {
+            (IncDecKind::PostInc, None) => IncDecKind::PreInc,
+            (IncDecKind::PostDec, None) => IncDecKind::PreDec,
+            _ => kind,
+        };
         let pl = self.oa.places[p as usize].clone();
         if pl.segs.is_empty() {
             match &pl.base {

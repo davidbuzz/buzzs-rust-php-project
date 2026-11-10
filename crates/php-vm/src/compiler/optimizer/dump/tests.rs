@@ -254,3 +254,28 @@ fn pipes_into_method_callables_are_plain_calls() {
         "{out}"
     );
 }
+
+/// `list_assign_from_array_literal` (level 0): an `ASSIGN` whose result is
+/// unused still took a temporary number in `zend_compile`, so `swap()`
+/// has `T2`, `T3` and `tmps=4`.
+#[test]
+fn unoptimized_temporaries_count_dropped_results() {
+    let mut lines = vec![
+        ZLine::new("QM_ASSIGN").t(10).a(Z::Cv(1)),
+        ZLine::new("QM_ASSIGN").t(11).a(Z::Cv(0)),
+        ZLine::new("ASSIGN").a(Z::Cv(0)).b(Z::Tmp(10)),
+        ZLine::new("ASSIGN").a(Z::Cv(1)).b(Z::Tmp(11)),
+        ZLine::new("PRE_DEC").a(Z::Cv(0)),
+        ZLine::new("IS_SMALLER")
+            .t(12)
+            .a(Z::Const(Value::Int(0)))
+            .b(Z::Cv(0)),
+        ZLine::new("RETURN").a(Z::Tmp(12)),
+    ];
+    assert_eq!(passes::number_tmps(&mut lines), 6);
+    assert_eq!(lines[0].res.tmp(), Some(0));
+    assert_eq!(lines[1].res.tmp(), Some(1));
+    assert_eq!(lines[3].op2.tmp(), Some(1));
+    assert_eq!(lines[5].res.tmp(), Some(5));
+    assert_eq!(lines[6].op1.tmp(), Some(5));
+}
