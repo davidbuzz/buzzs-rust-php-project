@@ -160,13 +160,33 @@ fn forget_last_root() {
     let _ = LAST_ROOT.try_with(|c| c.set(0));
 }
 
+/// The object at `addr` left the buffer: clears [`LAST_ROOT`] if it is
+/// that object. Another object it records is still buffered.
+#[inline]
+fn forget_last_root_at(addr: usize) {
+    let _ = LAST_ROOT.try_with(|c| {
+        if c.get() == addr {
+            c.set(0);
+        }
+    });
+}
+
 /// `v.push(x)`, growing `v` outside the counted heap (see [`RootBuffer`]).
+/// The growth is out of line: the push itself is a capacity test and a
+/// store (php-src's `GC_LINK_UNUSED`/`GC_FETCH_NEXT_UNUSED`).
 #[inline]
 fn push_persistent<T>(v: &mut Vec<T>, x: T) {
     if v.len() == v.capacity() {
-        php_memlimit::persistent(|| v.reserve(1));
+        reserve_persistent(v);
     }
     v.push(x);
+}
+
+/// Grows `v` (amortized doubling) outside the counted heap.
+#[cold]
+#[inline(never)]
+fn reserve_persistent<T>(v: &mut Vec<T>) {
+    php_memlimit::persistent(|| v.reserve(1));
 }
 
 impl Drop for RootBuffer {
@@ -217,14 +237,25 @@ impl RootBuffer {
     }
 
     /// Records slot `i` as the one of `handle` (`GC_REF_SET_INFO`).
+    #[inline]
     fn set_index(&mut self, handle: u32, i: usize) {
         let h = handle as usize;
         if self.by_handle.len() <= h {
-            let by_handle = &mut self.by_handle;
-            php_memlimit::persistent(|| by_handle.resize(h + 1, 0));
+            self.grow_index(h);
         }
-        // `MAX_BUF_SIZE` keeps slot numbers far below `u32::MAX`.
-        self.by_handle[h] = u32::try_from(i + 1).unwrap_or(0);
+        if let Some(e) = self.by_handle.get_mut(h) {
+            // `MAX_BUF_SIZE` keeps slot numbers far below `u32::MAX`.
+            *e = u32::try_from(i + 1).unwrap_or(0);
+        }
+    }
+
+    /// Makes room in the index for `handle` `h` (outside the counted heap;
+    /// `resize` grows the capacity geometrically).
+    #[cold]
+    #[inline(never)]
+    fn grow_index(&mut self, h: usize) {
+        let by_handle = &mut self.by_handle;
+        php_memlimit::persistent(|| by_handle.resize(h + 1, 0));
     }
 
     /// Forgets that `handle` is at slot `i` (if that is what is recorded).
@@ -237,6 +268,7 @@ impl RootBuffer {
     }
 
     /// `GC_FETCH_UNUSED()`, else `GC_FETCH_NEXT_UNUSED()`.
+    #[inline]
     fn fetch(&mut self) -> usize {
         while let Some(i) = self.unused.pop() {
             if matches!(self.slots.get(i), Some(None)) {
@@ -259,13 +291,17 @@ impl RootBuffer {
     }
 
     /// Buffers `o`, the object with `handle`, which is not buffered;
-    /// returns its slot.
+    /// returns its slot (`gc_possible_root`: a slot from the unused list or
+    /// the next one, and the index recorded for the object).
+    #[inline]
     fn insert_new(&mut self, o: &Obj, handle: u32) -> usize {
         let i = self.fetch();
-        self.slots[i] = Some(Root {
-            weak: Rc::downgrade(o.rc()),
-            handle,
-        });
+        if let Some(slot) = self.slots.get_mut(i) {
+            *slot = Some(Root {
+                weak: Rc::downgrade(o.rc()),
+                handle,
+            });
+        }
         self.set_index(handle, i);
         self.num_roots += 1;
         i
@@ -307,14 +343,25 @@ impl RootBuffer {
     }
 
     /// `GC_REMOVE_FROM_BUFFER` of the object with `handle` at `addr`;
-    /// `false` if it was not buffered.
+    /// `false` if it was not buffered. The index gives the slot (php-src's
+    /// `GC_REF_ADDRESS`), which goes on the unused list.
+    #[inline]
     fn remove(&mut self, addr: usize, handle: u32) -> bool {
-        let Some(i) = self.slot_of(handle, addr) else {
+        let Some(e) = self.by_handle.get_mut(handle as usize) else {
             return false;
         };
-        forget_last_root();
-        self.by_handle[handle as usize] = 0;
-        self.slots[i] = None;
+        let Some(i) = (*e as usize).checked_sub(1) else {
+            return false;
+        };
+        let Some(slot) = self.slots.get_mut(i) else {
+            return false;
+        };
+        if !matches!(slot, Some(r) if r.handle == handle && weak_addr(&r.weak) == addr) {
+            return false;
+        }
+        *e = 0;
+        *slot = None;
+        forget_last_root_at(addr);
         push_persistent(&mut self.unused, i);
         self.num_roots = self.num_roots.saturating_sub(1);
         true
@@ -507,7 +554,10 @@ thread_local! {
     /// found or put in [`GcState::roots`] (0: none). It stays in the
     /// buffer until something takes a root out of it (a slot released or
     /// removed, the buffer compacted, set aside, swapped or reset), and
-    /// each of those clears this ([`forget_last_root`]). While it is set,
+    /// each of those clears this ([`forget_last_root`]; the removal of a
+    /// freed object, [`RootBuffer::remove`], only when it is that object:
+    /// `$o = new C; $o->m();` in a loop frees the previous object between
+    /// buffering the new one and its method's return). While it is set,
     /// buffering that object again would change nothing, so
     /// [`root_obj`] answers from it without borrowing the state:
     /// php-src's `gc_check_possible_root` only tests `GC_INFO` on the
@@ -790,7 +840,11 @@ fn buffer_obj(s: &mut GcState, o: &Obj) -> Option<usize> {
     buffer_obj_data(s, o, d)
 }
 
-/// [`buffer_obj`] of `o`, whose data `d` the caller looked up.
+/// [`buffer_obj`] of `o`, whose data `d` the caller looked up. Inline: on
+/// the hot path (a fresh object, a reusable slot) it is a few tests, a
+/// slot taken from the unused list and the index stored, like php-src's
+/// `gc_possible_root`.
+#[inline]
 fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
     if s.protected {
         return None;
@@ -923,17 +977,25 @@ pub fn note_possible_root() {
 /// (`GC_HAS_NEXT_UNUSED_UNDER_THRESHOLD`). The run cannot happen inside the
 /// release (it may be in `Drop`): it is due at the next safe point, over
 /// the roots buffered until now (frozen), not the new one.
+#[inline]
 fn note_new_slot(s: &mut GcState) {
     let used = s.roots.first_unused() + s.ref_pending + 1;
     if used > s.buf_size {
         grow_buffer(s);
     }
-    if s.enabled && !s.active && !s.due && used >= s.threshold {
-        s.due = true;
-        freeze(s);
-        WANT_RUN.with(|w| w.set(true));
-        crate::interrupt::raise_safe_point();
+    if used >= s.threshold && s.enabled && !s.active && !s.due {
+        run_due(s);
     }
+}
+
+/// [`note_new_slot`] reached the threshold: the run is due.
+#[cold]
+#[inline(never)]
+fn run_due(s: &mut GcState) {
+    s.due = true;
+    freeze(s);
+    WANT_RUN.with(|w| w.set(true));
+    crate::interrupt::raise_safe_point();
 }
 
 /// Sets the buffered roots aside for the due run (see [`Frozen`]); the
@@ -962,6 +1024,8 @@ fn thaw(s: &mut GcState) {
 }
 
 /// `gc_grow_root_buffer`.
+#[cold]
+#[inline(never)]
 fn grow_buffer(s: &mut GcState) {
     if s.buf_size >= MAX_BUF_SIZE {
         return;
