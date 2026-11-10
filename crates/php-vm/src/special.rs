@@ -888,7 +888,7 @@ impl Vm {
         }
         frame.ip = ip;
         let quick = if n == 1 {
-            frameless_inline(class, sent[0].as_ref())
+            frameless_inline(b.name.as_bytes(), class, sent[0].as_ref())
         } else {
             None
         };
