@@ -1,5 +1,5 @@
-//! `ext/pdo`, `ext/pdo_sqlite` and `ext/sqlite3` for the phprust VM: binds
-//! the `php-pdo` core (with its `SQLite` driver) and the `php-sqlite`
+//! `ext/pdo`, `ext/pdo_mysql`, `ext/pdo_sqlite` and `ext/sqlite3` for the
+//! phprust VM: binds the `php-pdo` core (with its `MySQL` and `SQLite` drivers) and the `php-sqlite`
 //! `SQLite3` classes through the `php_vm::ext` extension API.
 //!
 //! * [`host`] — [`host::VmHost`], the VM seen through the `PdoHost` and
@@ -30,7 +30,8 @@ use php_runtime::Value;
 use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_vm::ext::{Extension, ModuleBuilder};
 
-/// The `PDO` extension (also registers `pdo_sqlite` and `sqlite3`).
+/// The `PDO` extension (also registers `pdo_mysql`, `pdo_sqlite` and
+/// `sqlite3`).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pdo;
 
@@ -57,11 +58,18 @@ impl Extension for Pdo {
             ModifyHandler::Bool,
             "sqlite3",
         ));
+        m.ini(IniDirective::new(
+            "pdo_mysql.default_socket",
+            Some(php_pdo::mysql::DEFAULT_SOCKET),
+            Access::SYSTEM,
+            ModifyHandler::String,
+            "pdo_mysql",
+        ));
         let vm = m.vm();
         pdo::register(vm);
         stmt::register(vm);
         sqlite3::register(vm);
-        for ext in ["pdo_sqlite", "sqlite3"] {
+        for ext in ["pdo_mysql", "pdo_sqlite", "sqlite3"] {
             if !vm.loaded_extensions.iter().any(|e| e == ext) {
                 vm.loaded_extensions.push(ext.to_string());
             }

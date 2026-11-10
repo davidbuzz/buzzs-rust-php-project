@@ -80,7 +80,7 @@ fn bound_column_and_param_references() {
         while ($s->fetch(PDO::FETCH_BOUND)) { echo $v; }
         echo get_class($db), PDO::getAvailableDrivers()[0];
     "#);
-    assert_eq!(out, "34Pdo\\Sqlitesqlite");
+    assert_eq!(out, "34Pdo\\Sqlitemysql");
 }
 
 #[test]
