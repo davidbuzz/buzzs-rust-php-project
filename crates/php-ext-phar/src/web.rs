@@ -68,27 +68,43 @@ impl CliHost<'_> {
             _ => None,
         }
     }
+
+    /// The `SG(request_info)` field php-cgi fills from its environment
+    /// (`init_request_info()`), read from `$_SERVER` when that has it and
+    /// otherwise from the CGI environment: `variables_order` without `S`
+    /// leaves `$_SERVER` empty but not the request info.
+    fn request_info(&self, key: &str) -> Option<Vec<u8>> {
+        self.server_str(key)
+            .or_else(|| (self.sapi == CGI_SAPI).then(|| self.getenv(key)).flatten())
+    }
 }
+
+/// `cgi_sapi_module.name`.
+const CGI_SAPI: &str = "cgi-fcgi";
 
 impl WebHost for CliHost<'_> {
     fn sapi_name(&self) -> String {
         self.sapi.clone()
     }
     fn request_method(&self) -> Option<Vec<u8>> {
-        self.server_str("REQUEST_METHOD")
+        self.request_info("REQUEST_METHOD")
     }
     fn request_uri(&self) -> Option<Vec<u8>> {
         // `SG(request_info).request_uri`: php-cgi fills it from the
         // translated `SCRIPT_NAME` (`init_request_info`), the other SAPIs
         // from the request line.
-        if self.sapi == "cgi-fcgi" {
-            self.server_str("SCRIPT_NAME")
+        if self.sapi == CGI_SAPI {
+            self.request_info("SCRIPT_NAME")
         } else {
             self.server_str("REQUEST_URI")
         }
     }
     fn has_server(&self) -> bool {
-        self.is_web() && server_array(self.vm).is_some()
+        // `PG(http_globals)[TRACK_VARS_SERVER]` is only set once `$_SERVER`
+        // was armed; an empty one (no `S` in `variables_order`) behaves
+        // like the unset case, which reads the CGI environment
+        // (webphar_cgi_no_path_info.phpt).
+        self.is_web() && server_array(self.vm).is_some_and(|a| !a.is_empty())
     }
     fn server_get(&self, key: &str) -> Option<ServerValue> {
         self.server_value(key).map(|v| match v.deref() {
