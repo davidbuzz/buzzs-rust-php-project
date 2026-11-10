@@ -799,31 +799,12 @@ pub(crate) fn run_sccp(op_array: &mut OpArray) -> bool {
         }
         inst_to_block[len] = num_blocks;
 
-        // Mark parameters as Bottom at entry
-        let mut is_param = vec![false; num_cvs];
-        for op in &op_array.ops {
-            match op {
-                Op::Recv { cv, .. }
-                | Op::RecvInit { cv, .. }
-                | Op::RecvDefault { cv, .. }
-                | Op::RecvVariadic { cv, .. } => {
-                    if (*cv as usize) < num_cvs {
-                        is_param[*cv as usize] = true;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let entry_state: Vec<CvLattice> = (0..num_cvs)
-            .map(|cv| {
-                if is_param[cv] {
-                    CvLattice::Bottom
-                } else {
-                    CvLattice::Top
-                }
-            })
-            .collect();
+        // Every CV is overdefined at entry: a parameter holds an unknown
+        // argument, and any other CV is undefined, a real value whose read
+        // warns "Undefined variable". Starting it at Top would let a loop
+        // merge the entry path with a later assignment and fold the
+        // first-iteration read into that constant (jit/assign_047).
+        let entry_state: Vec<CvLattice> = vec![CvLattice::Bottom; num_cvs];
 
         let mut in_state = vec![vec![CvLattice::Top; num_cvs]; num_blocks];
         let mut out_state = vec![vec![CvLattice::Top; num_cvs]; num_blocks];

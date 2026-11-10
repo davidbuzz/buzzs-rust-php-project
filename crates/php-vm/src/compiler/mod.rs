@@ -946,6 +946,7 @@ impl Compiler<'_> {
 
     /// Finalises a function context into an op array.
     pub(crate) fn finish_fn(&mut self, mut f: FnCtx) -> CResult<OpArray> {
+        let is_main = f.kind == FnKind::Main;
         // Resolve gotos.
         for PendingGoto {
             at,
@@ -1034,7 +1035,16 @@ impl Compiler<'_> {
         // Optimizer passes run when opcache.optimization_level is nonzero
         // and no user opcode handlers are hooked.
         if self.opts.optimization_level != 0 && self.opts.user_opcodes.is_empty() {
-            optimizer::optimize_op_array(&mut op_array, self.opts.optimization_level);
+            // Top-level code's CVs are the global symbol table: other
+            // functions reach them through `global`/`$GLOBALS` and included
+            // files share them, so no assignment there is ever dead (php-src
+            // does not remove unused variables of pseudo-main code).
+            let level = if is_main {
+                self.opts.optimization_level & !optimizer::PASS_13
+            } else {
+                self.opts.optimization_level
+            };
+            optimizer::optimize_op_array(&mut op_array, level);
         }
         // Handler specialisation, last: every jump target is final. A
         // `zend_set_user_opcode_handler()` hook runs before its generic

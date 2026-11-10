@@ -8,8 +8,7 @@
 //! - Dead jump-to-next elimination.
 
 use super::{clear_def_tmp, def_tmp, for_each_operand_mut, for_each_place_operand_mut};
-use crate::opcode::{BinKind, CastKind, ClassSpec, Op, OpArray, Operand, UnKind};
-use php_runtime::BinaryOp;
+use crate::opcode::{BinKind, CastKind, ClassSpec, Op, OpArray, Operand};
 
 /// Runs DCE on `op_array`. Returns `true` if any instruction was removed or simplified.
 pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
@@ -279,87 +278,41 @@ fn count_non_free_uses(op_array: &OpArray, counts: &mut [u32]) {
     }
 }
 
+/// Whether `op` can be removed when its result is unused: it must not be able
+/// to warn, throw or call user code (php-src's `zend_may_throw()` gate in
+/// `dce.c`). Reading a CV can warn "Undefined variable"; a temporary of
+/// unknown type can be a NaN (bool coercion warns), an array (string
+/// conversion warns; `strlen()`/`count()`/`abs()` throw), a non-numeric
+/// string (arithmetic warns or throws) or an object (`__toString()`).
 fn is_pure_op(op: &Op) -> bool {
     match op {
-        Op::Move { src, .. } => {
-            matches!(src, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
-        }
-        Op::Unary { op, a, .. } => match op {
-            UnKind::Bool | UnKind::Not => {
-                matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
-            }
-            UnKind::BitNot | UnKind::Neg | UnKind::Plus => {
-                matches!(a, Operand::Lit(_) | Operand::Tmp(_))
-            }
-        },
-        Op::Cast { kind, a, .. } => match kind {
-            CastKind::Bool | CastKind::Null => {
-                matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
-            }
-            CastKind::Int | CastKind::Float | CastKind::String => {
-                matches!(a, Operand::Lit(_) | Operand::Tmp(_))
-            }
-            CastKind::Array | CastKind::Object => false,
-        },
+        Op::Move { src, .. } => matches!(src, Operand::Lit(_) | Operand::Tmp(_)),
+        Op::Cast {
+            kind: CastKind::Null,
+            a,
+            ..
+        } => matches!(a, Operand::Lit(_) | Operand::Tmp(_)),
         Op::Bin { op, a, b, .. } => {
-            let operands_safe = matches!(a, Operand::Lit(_) | Operand::Tmp(_))
-                && matches!(b, Operand::Lit(_) | Operand::Tmp(_));
-            if !operands_safe {
-                return false;
-            }
-            match op {
-                BinKind::Equal
-                | BinKind::NotEqual
-                | BinKind::Identical
-                | BinKind::NotIdentical
-                | BinKind::Less
-                | BinKind::LessEqual
-                | BinKind::Spaceship => true,
-                BinKind::Arith(bop) => !matches!(bop, BinaryOp::Div | BinaryOp::Mod),
-            }
-        }
-        Op::TypeCheck { a, .. } => {
-            matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
-        }
-        Op::Strlen { a, .. } => {
-            matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
-        }
-        Op::Count { a, .. } => {
             matches!(a, Operand::Lit(_) | Operand::Tmp(_))
+                && matches!(b, Operand::Lit(_) | Operand::Tmp(_))
+                && matches!(op, BinKind::Identical | BinKind::NotIdentical)
         }
+        Op::TypeCheck { a, .. } => matches!(a, Operand::Lit(_) | Operand::Tmp(_)),
         Op::InitArray { .. } => true,
-        Op::Rope { parts, .. } => parts
-            .iter()
-            .all(|p| matches!(p, Operand::Lit(_) | Operand::Tmp(_))),
         Op::FetchClassName { class, .. } => {
             matches!(
                 class,
                 ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
             )
         }
-        Op::Abs { src, to: None, .. } => {
-            matches!(src, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
-        }
         _ => false,
     }
 }
 
+/// Ops without a result that can be dropped (see [`is_pure_op`]).
 fn is_pure_dead_op(op: &Op) -> bool {
     match op {
-        Op::Strlen { dst: None, a } => {
-            matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
-        }
-        Op::TypeCheck { dst: None, a, .. } => {
-            matches!(a, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_))
-        }
-        Op::Count { dst: None, a, .. } => {
-            matches!(a, Operand::Lit(_) | Operand::Tmp(_))
-        }
-        Op::Abs {
-            dst: None,
-            to: None,
-            src,
-        } => matches!(src, Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_)),
+        Op::TypeCheck { dst: None, a, .. } => matches!(a, Operand::Lit(_) | Operand::Tmp(_)),
         Op::Free(Operand::Lit(_) | Operand::Unused) => true,
         _ => false,
     }
