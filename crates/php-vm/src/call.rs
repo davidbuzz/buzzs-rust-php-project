@@ -1204,8 +1204,19 @@ impl Vm {
             }
         }
         // The op's run-time cache slot (see `rtcache`).
-        if let Some(call) = self.static_call_hit(class, name) {
-            self.push_pending(call);
+        if let Some(hit) = self.static_call_hit(class, name) {
+            let crate::rtcache::StaticCallHit {
+                func,
+                this,
+                scope,
+                called,
+            } = hit;
+            self.push_pending_with(move || PendingCall {
+                this,
+                scope: Some(scope),
+                called: Some(called),
+                ..PendingCall::new(func)
+            });
             return Ok(());
         }
         let name_op = name;
