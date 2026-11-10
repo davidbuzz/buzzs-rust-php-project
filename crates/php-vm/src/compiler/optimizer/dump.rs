@@ -390,6 +390,27 @@ fn write_z(out: &mut Vec<u8>, z: &Z, is_var: bool, d: &Done, names: &[php_runtim
     }
 }
 
+/// The jump table of `MATCH` as `zend_dump_op` prints it: ` "key": NNNN,`
+/// (string keys raw, unescaped) or ` key: NNNN,` per entry, then
+/// ` default:` (the default target follows as the extended jump).
+fn write_jump_table(out: &mut Vec<u8>, jt: &[(Value, Z)]) {
+    for (k, z) in jt {
+        match k {
+            Value::Str(s) => {
+                out.extend_from_slice(b" \"");
+                out.extend_from_slice(s.as_bytes());
+                out.extend_from_slice(b"\":");
+            }
+            Value::Int(i) => out.extend_from_slice(format!(" {i}:").as_bytes()),
+            _ => {}
+        }
+        if let Z::Label(l) | Z::ZLabel(l) = z {
+            out.extend_from_slice(format!(" {l:04},").as_bytes());
+        }
+    }
+    out.extend_from_slice(b" default:");
+}
+
 fn write_cv(out: &mut Vec<u8>, c: u32, d: &Done, names: &[php_runtime::ZStr]) {
     let name = d
         .kept
@@ -458,6 +479,9 @@ fn write_entry(out: &mut Vec<u8>, e: &Entry, d: &Done, done: &[Done], msg: &str,
             None => l.op1.clone(),
         };
         write_z(out, &op1, l.op1_var, d, names);
+        if let Some(jt) = &l.jt {
+            write_jump_table(out, jt);
+        }
         write_z(out, &l.op2, l.op2_var, d, names);
         if let Some(j) = &l.ext_jmp {
             write_z(out, j, false, d, names);

@@ -15,8 +15,8 @@ use crate::class::ClassDecl;
 use crate::compiler::{FunctionInfo, FunctionTable};
 use crate::func::UserFunction;
 use crate::opcode::{
-    ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, ForeachKind, IncDecKind, IncludeKind, Op,
-    OpArray, Operand, Place, PlaceBase, Seg, UnKind,
+    ArgSrc, BinKind, CastKind, ClassSpec, FetchMode, ForeachKind, IncDecKind, IncludeKind,
+    MatchKey, Op, OpArray, Operand, Place, PlaceBase, Seg, UnKind,
 };
 use crate::types::TypeDecl;
 use php_runtime::{BinaryOp, Value, ZStr};
@@ -1225,6 +1225,24 @@ impl<'a> Lower<'a> {
             Op::MatchError { subject } => {
                 let s = self.z(subject);
                 self.push(ZLine::new("MATCH_ERROR").a(s));
+            }
+            Op::Match { subject, table } => {
+                let s = self.z(subject);
+                let mut l = ZLine::new("MATCH").a(s).j(Z::Label(table.default));
+                l.jt = Some(
+                    table
+                        .entries
+                        .iter()
+                        .map(|(k, t)| {
+                            let k = match k {
+                                MatchKey::Int(i) => Value::Int(*i),
+                                MatchKey::Str(b) => Value::Str(ZStr::from(&b[..])),
+                            };
+                            (k, Z::Label(*t))
+                        })
+                        .collect(),
+                );
+                self.push(l);
             }
             Op::TypeAssertArray { val, msg } => {
                 // "name(): Argument #N ($x) must be of type array".

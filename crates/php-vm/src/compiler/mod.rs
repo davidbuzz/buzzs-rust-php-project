@@ -1058,6 +1058,7 @@ impl Compiler<'_> {
             let ctx = optimizer::OptContext {
                 is_main,
                 bound_cvs: &f.bound_cvs,
+                verifies_return: f.has_return_type && !f.is_generator && !f.returns_ref,
             };
             optimizer::optimize_op_array_with(&mut op_array, level, &ctx);
             refresh_static_inits(&mut op_array);

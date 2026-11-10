@@ -804,3 +804,79 @@ pub(crate) fn remove_unused_const_statics(op_array: &mut OpArray, bound_cv_prefi
     }
     changed
 }
+
+/// `zend_jmp_optimization`'s "JMP L, L: RETURN to immediate RETURN": a
+/// `Jmp` to a block that holds only a `Return` becomes a copy of that
+/// return; then a `Move` of a literal into the temporary a `Return`
+/// returns right before it in its block is folded into the return (the
+/// block pass's `QM_ASSIGN` of a constant replaced in its use). Not run in
+/// a function with a `finally` (its returns run it) nor in one whose
+/// returns check a declared type (php-src's `VERIFY_RETURN_TYPE` before the
+/// `RETURN` makes that block two ops long; the VM folds it into `Return`).
+pub(crate) fn jmp_to_return(op_array: &mut OpArray) -> bool {
+    if op_array.try_table.iter().any(|e| e.finally.is_some()) {
+        return false;
+    }
+    let len = op_array.ops.len();
+    let leaders = find_leaders(op_array);
+    let mut block_start = vec![0usize; len + 1];
+    let mut block_end = vec![len; len + 1];
+    let mut start = 0;
+    for i in 0..len {
+        if leaders[i] {
+            start = i;
+        }
+        block_start[i] = start;
+    }
+    let mut end = len;
+    for i in (0..len).rev() {
+        block_end[i] = end;
+        if leaders[i] {
+            end = i;
+        }
+    }
+    let mut changed = false;
+    for i in 0..len {
+        let Op::Jmp(t) = op_array.ops[i] else {
+            continue;
+        };
+        let t = t as usize;
+        if t >= len || block_start[t] != t {
+            continue;
+        }
+        let mut live = (t..block_end[t]).filter(|&k| !matches!(op_array.ops[k], Op::Nop));
+        if let (Some(k), None) = (live.next(), live.next()) {
+            if matches!(op_array.ops[k], Op::Return { .. }) {
+                op_array.ops[i] = op_array.ops[k].clone();
+                changed = true;
+            }
+        }
+    }
+    for i in 0..len {
+        let Op::Return {
+            val: Operand::Tmp(t),
+        } = op_array.ops[i]
+        else {
+            continue;
+        };
+        // The op before it in its block, skipping NOPs.
+        let Some(p) = (block_start[i]..i)
+            .rev()
+            .find(|&k| !matches!(op_array.ops[k], Op::Nop))
+        else {
+            continue;
+        };
+        if let Op::Move {
+            src: src @ Operand::Lit(_),
+            dst,
+        } = op_array.ops[p]
+        {
+            if dst == t {
+                op_array.ops[p] = Op::Nop;
+                op_array.ops[i] = Op::Return { val: src };
+                changed = true;
+            }
+        }
+    }
+    changed
+}

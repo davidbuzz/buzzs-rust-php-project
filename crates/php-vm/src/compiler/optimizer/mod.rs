@@ -110,6 +110,10 @@ pub struct OptContext<'a> {
     /// and a by-reference one may change whenever user code runs or coerce
     /// what is assigned to it (a typed reference).
     pub bound_cvs: &'a [(u32, bool)],
+    /// The function's returns check a declared return type (php-src
+    /// emits `VERIFY_RETURN_TYPE` before each `RETURN`; the VM's `Return`
+    /// does the check itself).
+    pub verifies_return: bool,
 }
 
 impl OptContext<'_> {
@@ -165,6 +169,9 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
         }
         if (level & PASS_5) != 0 {
             changed |= block_pass::run_block_pass(op_array);
+            if !ctx.verifies_return {
+                changed |= block_pass::jmp_to_return(op_array);
+            }
         }
         if (level & PASS_14) != 0 {
             changed |= dce::run_dce(op_array);
@@ -220,6 +227,7 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
             let ctx = OptContext {
                 is_main: true,
                 bound_cvs: &[],
+                verifies_return: false,
             };
             optimize_op_array_with(code, level & !PASS_13, &ctx);
         }
@@ -378,7 +386,7 @@ pub(crate) fn for_each_operand_mut(op: &mut Op, mut f: impl FnMut(&mut Operand))
         Op::Include { a, .. } => f(a),
         Op::FeReset { subject, .. } => f(subject),
         Op::FeFetch { .. } | Op::FeFree { .. } | Op::FeFreeOnReturn { .. } => {}
-        Op::MatchError { subject } => f(subject),
+        Op::MatchError { subject } | Op::Match { subject, .. } => f(subject),
         Op::TypeAssertArray { val, .. } => f(val),
         Op::Ticks(_) | Op::Diag { .. } | Op::UserOpcode { .. } | Op::AssertCheck { .. } => {}
         Op::ConstPropCheck { obj, name, .. } => {
@@ -469,6 +477,11 @@ pub(crate) fn for_each_label_mut(op: &mut Op, mut f: impl FnMut(&mut Label)) {
         | Op::AssignOpCvJmp { target: t, .. } => f(t),
         Op::New { skip: t, .. } => {
             if *t != 0 {
+                f(t);
+            }
+        }
+        Op::Match { table, .. } => {
+            for t in table.labels_mut() {
                 f(t);
             }
         }

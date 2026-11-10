@@ -2404,8 +2404,20 @@ impl Vm {
                         }
                         Flow::Next
                     }
-                    Op::MatchError { subject } => {
+                    Op::Match { subject, table } => {
+                        // `ZEND_MATCH`: an undefined CV warns once
+                        // (`ZVAL_UNDEFINED_OP1`), then takes the default.
                         let v = self.read(*subject)?;
+                        ip = table.target(&v) as usize;
+                        Flow::Next
+                    }
+                    Op::MatchError { subject } => {
+                        // `GET_OP1_ZVAL_PTR_UNDEF`: an undefined CV is
+                        // reported as null without a warning.
+                        let v = match *subject {
+                            Operand::Cv(cv) => self.read_cv_defined(cv).unwrap_or(Value::Null),
+                            o => self.read(o)?,
+                        };
                         return Err(self.match_error(&v));
                     }
                     Op::TypeAssertArray { val, msg } => {
