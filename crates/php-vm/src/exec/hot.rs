@@ -39,9 +39,9 @@
 
 use super::spec::{
     self, assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in,
-    cast_string_in, cmp_simple_in, concat_cv_in, concat_in, fe_fetch_array_in, fetch_dim_cv_in,
-    fetch_dims_cv_in, incdec_dim_cv_in, is_plain_slot, isset_dim_cv_in, num_outcome, plain_truth,
-    put_tmp, rope_in, slot_truth,
+    cast_string_in, cmp_simple_in, concat_cv_in, concat_in, fe_assign_in, fe_fetch_array_in,
+    fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, is_plain_slot, isset_dim_cv_in,
+    num_outcome, plain_truth, put_tmp, rope_in, slot_truth,
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
 use crate::opcode::{cmp_outcome, BinKind, CastKind, IncDecKind, Op, Operand, UnKind};
@@ -702,7 +702,18 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
             val,
             key,
         } => match fe_fetch_array_in(f, iter, val, key) {
-            Some(true) => {}
+            // The assignments of the value and key that follow run here
+            // when they are plain `AssignCv`s (`fe_assign_in`).
+            Some(true) => {
+                let after = fe_assign_in(f, ops, ip, val);
+                if after != ip {
+                    if let Some(k) = key {
+                        ip = fe_assign_in(f, ops, after, k);
+                    } else {
+                        ip = after;
+                    }
+                }
+            }
             Some(false) => ip = end as usize,
             None => return DECLINED,
         },

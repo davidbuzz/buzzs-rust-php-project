@@ -1165,7 +1165,8 @@ impl ZStr {
         }
     }
 
-    /// Returns the (cached) PHP hash of the string.
+    /// Returns the (cached) PHP hash of the string (`ZSTR_H`, computed on
+    /// first use by `zend_string_hash_val`).
     #[inline]
     #[must_use]
     pub fn hash_value(&self) -> u64 {
@@ -1173,6 +1174,17 @@ impl ZStr {
         if h != 0 {
             return h;
         }
+        self.compute_hash()
+    }
+
+    /// The first [`ZStr::hash_value`] of a string: hashes the bytes and
+    /// caches the result. Out of line so that the cached read, which is
+    /// what every lookup of a hash-table key does, inlines into the probe
+    /// loops without the unrolled hash loop (php-src's
+    /// `zend_string_hash_val` calls `zend_string_hash_func` the same way).
+    #[cold]
+    #[inline(never)]
+    fn compute_hash(&self) -> u64 {
         let h = zend_hash_bytes(self.as_bytes());
         self.header().hash.set(h);
         h

@@ -1783,6 +1783,37 @@ impl HashTable {
             .find_map(|(i, b)| b.val.as_ref().map(|x| (to_u32(start + i), x)))
     }
 
+    /// [`HashTable::fe_fetch`] that also yields the element's key as a
+    /// PHP value (`ZEND_FE_FETCH_R` with a key result): the same slot
+    /// serves both, as [`HashTable::key_value_at`] at the returned position
+    /// would (a packed table's key is the position, a bucket's key is
+    /// cloned once), without a second lookup of the slot.
+    #[inline]
+    #[must_use]
+    pub fn fe_fetch_with_key(&self, pos: u32) -> Option<(u32, &Value, Value)> {
+        let start = pos as usize;
+        if let Store::Packed(v) = &self.store {
+            return v.get(start..)?.iter().enumerate().find_map(|(i, s)| {
+                s.as_ref().map(|x| {
+                    let p = to_u32(start + i);
+                    (p, x, Value::Int(i64::from(p)))
+                })
+            });
+        }
+        let Store::Hash(d) = &self.store else {
+            return None;
+        };
+        d.buckets
+            .get(start..)?
+            .iter()
+            .enumerate()
+            .find_map(|(i, b)| {
+                b.val
+                    .as_ref()
+                    .map(|x| (to_u32(start + i), x, b.key.to_value()))
+            })
+    }
+
     /// The entry at a position (holes and out-of-range give `None`).
     #[inline]
     #[must_use]
@@ -3613,6 +3644,71 @@ mod tests {
         assert_eq!(
             t.fe_fetch(1).map(|(p, v)| (p, v.as_int())),
             Some((2, Some(40)))
+        );
+    }
+
+    #[test]
+    fn fe_fetch_with_key_matches_fe_fetch_then_key_value_at() {
+        fn key_repr(k: &Value) -> String {
+            match k {
+                Value::Int(i) => format!("i{i}"),
+                Value::Str(s) => format!("s{}", String::from_utf8_lossy(s.as_bytes())),
+                _ => "?".to_owned(),
+            }
+        }
+        type Walk = Vec<(u32, Option<i64>, String)>;
+        fn walk_both(t: &HashTable) -> (Walk, Walk) {
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            let mut pos = 0;
+            while let Some((p, v)) = t.fe_fetch(pos) {
+                let k = t.key_value_at(p).map_or_else(String::new, |k| key_repr(&k));
+                a.push((p, v.as_int(), k));
+                pos = p + 1;
+            }
+            let mut pos = 0;
+            while let Some((p, v, k)) = t.fe_fetch_with_key(pos) {
+                b.push((p, v.as_int(), key_repr(&k)));
+                pos = p + 1;
+            }
+            // Past the end.
+            assert!(t.fe_fetch_with_key(t.used()).is_none());
+            assert!(t.fe_fetch_with_key(t.used() + 3).is_none());
+            (a, b)
+        }
+        // Packed with holes: the key is the position.
+        let mut t = HashTable::new();
+        assert!(t.fe_fetch_with_key(0).is_none());
+        for i in 0..6 {
+            t.push(Value::Int(i * 10)).unwrap();
+        }
+        t.remove(&ArrayKey::Int(0));
+        t.remove(&ArrayKey::Int(3));
+        assert!(t.is_packed());
+        let (a, b) = walk_both(&t);
+        assert_eq!(a, b);
+        assert_eq!(
+            b.iter().map(|e| e.2.as_str()).collect::<Vec<_>>(),
+            ["i1", "i2", "i4", "i5"]
+        );
+        // A hash of string and integer keys (numeric strings normalised:
+        // "08" and "-0" stay strings, "8" becomes 8) with a hole.
+        let mut t = HashTable::new();
+        t.insert("foo_1", Value::Int(1));
+        t.insert("08", Value::Int(2));
+        t.insert("8", Value::Int(3));
+        t.insert("-0", Value::Int(4));
+        t.insert(ArrayKey::Int(-5), Value::Int(5));
+        t.remove(&ArrayKey::from("08"));
+        let (a, b) = walk_both(&t);
+        assert_eq!(a, b);
+        assert_eq!(
+            b,
+            [
+                (0, Some(1), "sfoo_1".to_owned()),
+                (2, Some(3), "i8".to_owned()),
+                (3, Some(4), "s-0".to_owned()),
+                (4, Some(5), "i-5".to_owned()),
+            ]
         );
     }
 
