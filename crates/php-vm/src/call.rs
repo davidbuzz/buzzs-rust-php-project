@@ -213,6 +213,36 @@ impl Vm {
         }
     }
 
+    /// `ZEND_INIT_FCALL` of a call site whose function is in the run-time
+    /// cache, from the dispatch loop's hot-instruction block (no
+    /// `SAVE_OPLINE`): [`Vm::op_init_fcall`]'s cache hit for a name without
+    /// a global fallback (the fallback's per-site slot is found by the
+    /// saved instruction pointer). Returns `false`, having changed
+    /// nothing, otherwise.
+    #[inline]
+    pub(crate) fn init_fcall_fast(&mut self, name: u32, fallback: Option<u32>) -> bool {
+        if fallback.is_some() {
+            return false;
+        }
+        let Some(frame) = self.frames.last_mut() else {
+            return false;
+        };
+        let cached = frame
+            .code
+            .fcall_cache
+            .borrow()
+            .get(name as usize)
+            .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
+        let Some(func) = cached else {
+            return false;
+        };
+        push_call_in_place(&mut frame.calls, move || PendingCall {
+            direct: true,
+            ..PendingCall::new(func)
+        });
+        true
+    }
+
     pub(crate) fn op_init_fcall(
         &mut self,
         name: u32,
@@ -350,9 +380,7 @@ impl Vm {
         // `$closure()` (`zend_init_dynamic_call_object` of a closure): the
         // call is built straight from the closure's data.
         if let Value::Object(o) = &callee {
-            if let Some(mut call) = self.closure_user_call(o) {
-                call.dynamic = true;
-                self.push_pending(call);
+            if self.push_closure_user_call(o) {
                 return Ok(());
             }
             if let Some(mut call) = self.closure_call(o) {
@@ -365,6 +393,46 @@ impl Vm {
         call.dynamic = true;
         self.push_pending(call);
         Ok(())
+    }
+
+    /// [`Vm::closure_user_call`] as a dynamic call (`$closure()`), the call
+    /// built in place in `calls` ([`Vm::push_pending_with`]): only the
+    /// handles the call takes from the closure are carried out of its
+    /// data, not a whole `PendingCall` returned and pushed (two copies of
+    /// 216 bytes). Returns `false`, having pushed nothing, when the object
+    /// is not a closure of a user function.
+    #[inline]
+    fn push_closure_user_call(&mut self, o: &Obj) -> bool {
+        if object::class_of(o).lc_name.as_bytes() != b"closure" {
+            return false;
+        }
+        let parts = object::internal::<crate::closure::ClosureData, _>(o, |d| {
+            if !matches!(&d.func, Func::User(_)) {
+                return None;
+            }
+            Some((
+                d.this.clone(),
+                d.scope.clone(),
+                d.called.clone(),
+                if d.fake { None } else { Some(o.clone()) },
+                d.magic_name.clone(),
+                d.func.clone(),
+            ))
+        })
+        .flatten();
+        let Some((this, scope, called, closure, magic_name, func)) = parts else {
+            return false;
+        };
+        self.push_pending_with(move || PendingCall {
+            this,
+            scope,
+            called,
+            closure,
+            magic_name,
+            dynamic: true,
+            ..PendingCall::new(func)
+        });
+        true
     }
 
     /// `zend_init_dynamic_call_string` / `_array`: like
@@ -1354,6 +1422,76 @@ impl Vm {
         self.push_arg(pos, None, v)
     }
 
+    /// `ZEND_SEND_VAL` / `ZEND_SEND_VAR` of a positional by-value argument
+    /// into the pending call's inline buffer, from the dispatch loop's
+    /// hot-instruction block (no `SAVE_OPLINE`): a literal, a temporary
+    /// (a call result included) or a defined compiled variable, possibly
+    /// named by a plain `$cv` place, of a frame without an attached symbol
+    /// table, for a call that is not a `__call` trampoline, has had no
+    /// named argument and has inline room. That is [`Vm::op_send`]'s own
+    /// fast path for these operands, which cannot warn, throw or run code;
+    /// returns `false`, having changed nothing, for everything else.
+    #[inline]
+    pub(crate) fn send_fast(&mut self, src: &ArgSrc) -> bool {
+        let Some(frame) = self.frames.last_mut() else {
+            return false;
+        };
+        let Some(call) = frame.calls.last_mut() else {
+            return false;
+        };
+        let idx = call.inline_count as usize;
+        if idx >= call.inline_args.len()
+            || !call.args.is_empty()
+            || call.has_named
+            || call.magic_name.is_some()
+            || call.func.arg_by_ref(idx)
+        {
+            return false;
+        }
+        let cv = match src {
+            ArgSrc::Val(Operand::Lit(i)) => {
+                let Some(v) = frame.code.literals.get(*i as usize) else {
+                    return false;
+                };
+                call.inline_args[idx] = Some(v.clone());
+                call.inline_count += 1;
+                return true;
+            }
+            ArgSrc::Val(Operand::Tmp(t)) | ArgSrc::CallResult(Operand::Tmp(t)) => {
+                let Some(slot) = frame.tmps.get_mut(*t as usize) else {
+                    return false;
+                };
+                let v = match std::mem::take(slot) {
+                    Value::Reference(r) => r.get(),
+                    v => v,
+                };
+                call.inline_args[idx] = Some(v);
+                call.inline_count += 1;
+                return true;
+            }
+            ArgSrc::Val(Operand::Cv(cv)) => *cv,
+            ArgSrc::Place(pid) => match frame.code.places.get(*pid as usize) {
+                Some(p) if p.segs.is_empty() => match &p.base {
+                    crate::opcode::PlaceBase::Cv(cv) => *cv,
+                    _ => return false,
+                },
+                _ => return false,
+            },
+            _ => return false,
+        };
+        if frame.symtab_attached {
+            return false;
+        }
+        let v = match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+            Some(Value::Reference(r)) => r.get(),
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        call.inline_args[idx] = Some(v);
+        call.inline_count += 1;
+        true
+    }
+
     pub(crate) fn op_send(&mut self, src: &ArgSrc, name: Option<ZStr>) -> VmResult<()> {
         // Fast path: a positional by-value argument of an ordinary call
         // (the general path below computes the same thing in more steps).
@@ -1962,7 +2100,7 @@ impl Vm {
         }
         let (spare_args, closure) = {
             let (live_frames, pool) = self.frames.vec.split_at_mut(live);
-            let (Some(caller), Some(callee)) = (live_frames.last_mut(), pool.first_mut()) else {
+            let (Some(caller), Some(frame)) = (live_frames.last_mut(), pool.first_mut()) else {
                 return false;
             };
             let caller_strict = caller.code.strict_types;
@@ -1979,28 +2117,28 @@ impl Vm {
             let uf = Rc::clone(uf);
             let code = &uf.code;
             // `FrameStack::push_in_place`.
-            if callee.cvs.len() == code.cv_names.len()
-                && callee.tmps.len() == code.num_tmps as usize
-                && callee.iters.is_empty()
-                && callee.fins.is_empty()
+            if frame.cvs.len() == code.cv_names.len()
+                && frame.tmps.len() == code.num_tmps as usize
+                && frame.iters.is_empty()
+                && frame.fins.is_empty()
             {
-                callee.reinit_same_call(code, FrameKind::Function);
+                frame.reinit_same_call(code, FrameKind::Function);
             } else {
-                callee.reinit_for_call(Rc::clone(code), FrameKind::Function);
+                frame.reinit_for_call(Rc::clone(code), FrameKind::Function);
             }
-            callee.this = call.this.take();
-            callee.scope = call.scope.take();
-            callee.called = call.called.take();
-            callee.ret = dst.map_or(RetTarget::Discard, RetTarget::Tmp);
-            callee.caller_strict = caller_strict;
-            callee.called_from_internal = false;
-            callee.is_ctor = false;
+            frame.this = call.this.take();
+            frame.scope = call.scope.take();
+            frame.called = call.called.take();
+            frame.ret = dst.map_or(RetTarget::Discard, RetTarget::Tmp);
+            frame.caller_strict = caller_strict;
+            frame.called_from_internal = false;
+            frame.is_ctor = false;
             // The passed-argument count (`ZEND_CALL_NUM_ARGS`): one empty
             // entry per argument, each moved into its compiled variable.
-            crate::vm::refill_with(&mut callee.args, n, || None);
+            crate::vm::refill_with(&mut frame.args, n, || None);
             let mut first_op = 0;
             for (i, arg) in call.inline_args[..n].iter_mut().enumerate() {
-                if let Some(slot) = callee.cvs.get_mut(i) {
+                if let Some(slot) = frame.cvs.get_mut(i) {
                     slot.set(arg.take());
                 }
             }
@@ -2016,9 +2154,9 @@ impl Vm {
                     _ => break,
                 }
             }
-            callee.ip = first_op;
-            callee.func = Some(Func::User(Rc::clone(&uf)));
-            callee.ufunc = Some(uf);
+            frame.ip = first_op;
+            frame.func = Some(Func::User(Rc::clone(&uf)));
+            frame.ufunc = Some(uf);
             call.inline_count = 0;
             let spare = if call.args.capacity() > 0 {
                 Some(std::mem::take(&mut call.args))
@@ -2131,8 +2269,20 @@ impl Vm {
             (v, frame.ret)
         };
         self.frames.release_top(&self.empty_code);
-        if let RetTarget::Tmp(t) = ret {
-            self.set_tmp(t, v);
+        match ret {
+            RetTarget::Tmp(t) => self.set_tmp(t, v),
+            // An unused result (`g();`): a scalar owns nothing, so the
+            // out-of-line drop glue is skipped.
+            RetTarget::Discard => {
+                if matches!(
+                    v,
+                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+                ) {
+                    std::mem::forget(v);
+                } else {
+                    drop(v);
+                }
+            }
         }
         Some(crate::exec::Flow::Reload)
     }
