@@ -110,6 +110,8 @@ pub struct Lexer<'a> {
     heredoc_indentation: usize,
     heredoc_indentation_uses_spaces: bool,
     done: bool,
+    /// See [`Lexer::set_skip_trivia`].
+    skip_trivia: bool,
 }
 
 /// [`is_label_char`] (`[a-zA-Z0-9_\x80-\xff]`) as a lookup table.
@@ -185,6 +187,40 @@ fn keyword(label: &[u8]) -> Option<TokenKind> {
     }
 }
 
+/// The end (just past the `/`) of the first `*/` whose `*` is at or after
+/// `from`, or `None` if the comment is unterminated.
+///
+/// Doc comments put a `*` on every line, so this looks for the rarer `/`,
+/// eight bytes at a time, and then checks the byte before it.
+fn find_comment_close(src: &[u8], from: usize) -> Option<usize> {
+    const LO: u64 = 0x0101_0101_0101_0101;
+    const HI: u64 = 0x8080_8080_8080_8080;
+    const SLASH: u64 = 0x2f2f_2f2f_2f2f_2f2f; // `/` in every byte
+    let mut i = from + 1;
+    while i < src.len() {
+        if let Some(Ok(chunk)) = src.get(i..i + 8).map(<[u8; 8]>::try_from) {
+            // Classic "has zero byte" test on `word ^ "////////"`: the lowest
+            // flagged byte is exactly the first `/` (borrows only cause
+            // false flags above a real match).
+            let x = u64::from_le_bytes(chunk) ^ SLASH;
+            let found = x.wrapping_sub(LO) & !x & HI;
+            if found == 0 {
+                i += 8;
+                continue;
+            }
+            i += found.trailing_zeros() as usize / 8;
+        } else if src[i] != b'/' {
+            i += 1;
+            continue;
+        }
+        if src[i - 1] == b'*' {
+            return Some(i + 1);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Length of the longest keyword (`__halt_compiler`).
 const KEYWORD_MAX_LEN: usize = 15;
 
@@ -235,6 +271,7 @@ impl<'a> Lexer<'a> {
             heredoc_indentation: 0,
             heredoc_indentation_uses_spaces: false,
             done: false,
+            skip_trivia: false,
         }
     }
 
@@ -361,6 +398,18 @@ impl<'a> Lexer<'a> {
         self.done = true;
     }
 
+    /// Makes [`Self::next_token`] skip whitespace, ordinary comments and
+    /// open tags ([`TokenKind::is_trivia`] except doc comments) instead of
+    /// returning them, for a parser that discards them anyway.
+    ///
+    /// Line numbers, warnings and the following token's span are exactly
+    /// what they would be had the skipped tokens been returned and
+    /// ignored. Doc comments are still returned. `token_get_all()` and
+    /// `PhpToken` must not use this: they need every token.
+    pub fn set_skip_trivia(&mut self, skip: bool) {
+        self.skip_trivia = skip;
+    }
+
     fn parser_mode(&self) -> bool {
         self.opts.mode == LexMode::Parser
     }
@@ -470,16 +519,29 @@ impl<'a> Lexer<'a> {
         if self.done {
             return None;
         }
-        if self.increment_line {
-            self.line += 1;
-            self.increment_line = false;
-        }
-        self.value = None;
-        if self.parser_mode() {
-            self.error = None;
-        }
-        let start_line = self.line;
-        let kind = self.scan();
+        let (kind, start_line) = loop {
+            if self.increment_line {
+                self.line += 1;
+                self.increment_line = false;
+            }
+            self.value = None;
+            if self.parser_mode() {
+                self.error = None;
+            }
+            if self.skip_trivia && self.state == State::InScripting {
+                self.skip_plain_trivia();
+            }
+            let start_line = self.line;
+            let kind = self.scan();
+            if !(self.skip_trivia
+                && matches!(
+                    kind,
+                    TokenKind::Whitespace | TokenKind::Comment | TokenKind::OpenTag
+                ))
+            {
+                break (kind, start_line);
+            }
+        };
         if let Some(TokenValue::Str(bytes)) = &mut self.value {
             if let Some(converted) = self.encoding.as_ref().and_then(|state| state.output(bytes)) {
                 *bytes = converted;
@@ -513,6 +575,60 @@ impl<'a> Lexer<'a> {
                 end_line: self.line,
             },
         }
+    }
+
+    /// Skips the whitespace and ordinary (non-doc, terminated) comments at
+    /// the scanner position in scripting state, counting newlines, as if
+    /// they had been scanned as tokens and discarded. Stops before anything
+    /// else, including `#[`, `/**` and unterminated comments, which the
+    /// normal rules handle (the `/**` forms that are ordinary comments then
+    /// come back as `Comment` and are skipped by [`Self::next_token`]).
+    fn skip_plain_trivia(&mut self) {
+        let src = self.src.clone();
+        let len = src.len();
+        let mut p = self.pos;
+        while p < len {
+            match src[p] {
+                b' ' | b'\t' => p += 1,
+                b'\n' => {
+                    self.line += 1;
+                    p += 1;
+                }
+                b'\r' => {
+                    // A lone `\r` is a line break (see `count_newlines`).
+                    if self.at(p + 1) != b'\n' {
+                        self.line += 1;
+                    }
+                    p += 1;
+                }
+                b'#' if self.at(p + 1) != b'[' => p = self.line_comment_end(p + 1),
+                b'/' if self.at(p + 1) == b'/' => p = self.line_comment_end(p + 2),
+                b'/' if self.at(p + 1) == b'*' && self.at(p + 2) != b'*' => {
+                    // The first `*/` after the opening `/*`.
+                    let Some(end) = find_comment_close(&src, p + 2) else {
+                        break;
+                    };
+                    self.handle_newlines(p, end);
+                    p = end;
+                }
+                _ => break,
+            }
+        }
+        self.pos = p;
+    }
+
+    /// End of a `#`/`//` comment whose body starts at `q`: the next line
+    /// break or `?>` (neither included).
+    fn line_comment_end(&self, mut q: usize) -> usize {
+        let src: &[u8] = &self.src;
+        while q < src.len() {
+            match src[q] {
+                b'\r' | b'\n' => break,
+                b'?' if self.at(q + 1) == b'>' => break,
+                _ => q += 1,
+            }
+        }
+        q
     }
 
     fn handle_newlines(&mut self, start: usize, end: usize) {
@@ -1292,16 +1408,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_line_comment(&mut self, p: usize, prefix: usize) -> TokenKind {
-        let src = self.src.clone();
-        let mut q = p + prefix;
-        while q < src.len() {
-            match src[q] {
-                b'\r' | b'\n' => break,
-                b'?' if self.at(q + 1) == b'>' => break,
-                _ => q += 1,
-            }
-        }
-        self.pos = q;
+        self.pos = self.line_comment_end(p + prefix);
         TokenKind::Comment
     }
 
@@ -1310,30 +1417,19 @@ impl<'a> Lexer<'a> {
         let is_doc = self.at(p + 2) == b'*'
             && p + 3 < src.len()
             && matches!(self.at(p + 3), b' ' | b'\n' | b'\r' | b'\t');
-        let mut q = if is_doc { p + 4 } else { p + 2 };
-        let mut terminated = false;
-        // The first `*/` at or after `q`: jump from `*` to `*`.
-        while let Some(k) = src
-            .get(q..)
-            .and_then(|rest| rest.iter().position(|&c| c == b'*'))
-        {
-            q += k + 1;
-            if src.get(q) == Some(&b'/') {
-                terminated = true;
-                break;
-            }
-        }
-        if terminated {
-            q += 1;
+        let from = if is_doc { p + 4 } else { p + 2 };
+        let q = if let Some(end) = find_comment_close(&src, from) {
+            end
         } else {
-            q = src.len();
+            let q = src.len();
             let line = self.line;
             self.throw(format!("Unterminated comment starting line {line}"));
             if self.parser_mode() {
                 self.pos = q;
                 return TokenKind::Error;
             }
-        }
+            q
+        };
         self.pos = q;
         self.handle_newlines(p, q);
         if is_doc {
@@ -1578,6 +1674,7 @@ impl<'a> Lexer<'a> {
             heredoc_indentation: 0,
             heredoc_indentation_uses_spaces: false,
             done: false,
+            skip_trivia: false,
         };
         let mut level = 1;
         let mut first = None;
@@ -2141,6 +2238,36 @@ mod label_tests {
     fn label_char_table_matches_predicate() {
         for c in 0..=255u8 {
             assert_eq!(LABEL_CHAR[usize::from(c)], is_label_char(c), "{c:#x}");
+        }
+    }
+
+    #[test]
+    fn comment_close_matches_naive_search() {
+        fn naive(src: &[u8], from: usize) -> Option<usize> {
+            (from..src.len().saturating_sub(1))
+                .find(|&k| src[k] == b'*' && src[k + 1] == b'/')
+                .map(|k| k + 2)
+        }
+        let cases: &[&[u8]] = &[
+            b"/**/",
+            b"/*/",
+            b"/* a */",
+            b"/** \n * x/y http://a/b\n * z */ tail */",
+            b"/* ******** //////// *",
+            b"/* unterminated *",
+            b"/* 0123456789abcdef*/",
+            b"/* 0123456/89abcdef0123*/",
+            b"/*\xff\xfe////////*//",
+        ];
+        for &src in cases {
+            for from in 2..=src.len() {
+                assert_eq!(
+                    find_comment_close(src, from),
+                    naive(src, from),
+                    "{:?} from {from}",
+                    String::from_utf8_lossy(src)
+                );
+            }
         }
     }
 

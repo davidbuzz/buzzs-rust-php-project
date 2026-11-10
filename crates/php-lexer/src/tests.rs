@@ -266,3 +266,79 @@ fn line_numbers() {
         ]
     );
 }
+
+/// Parser-mode scan as `(token, value, error, warnings so far)` per token,
+/// either with [`Lexer::set_skip_trivia`] or by dropping the skipped kinds
+/// from a full scan.
+type Scanned = Vec<(Token, Option<TokenValue>, Option<LexError>, usize)>;
+
+fn parser_scan(src: &[u8], skip: bool, start_in_scripting: bool) -> Scanned {
+    let opts = LexerOptions {
+        mode: LexMode::Parser,
+        start_in_scripting,
+        ..LexerOptions::default()
+    };
+    let mut lx = Lexer::with_options(src, opts);
+    lx.set_skip_trivia(skip);
+    let mut out = Vec::new();
+    while let Some(t) = lx.next_token() {
+        let value = lx.take_value();
+        if matches!(
+            t.kind,
+            TokenKind::Whitespace | TokenKind::Comment | TokenKind::OpenTag
+        ) {
+            assert!(!skip, "{t:?} returned while skipping trivia");
+            continue;
+        }
+        out.push((t, value, lx.error().cloned(), lx.warnings().len()));
+    }
+    out.push((lx.next_token_or_end(), None, None, lx.warnings().len()));
+    out
+}
+
+#[test]
+fn skip_trivia_matches_discarding_trivia_tokens() {
+    let cases: &[&[u8]] = &[
+        b"<?php echo $a + 1;",
+        b"<?php\n\n  $a = 1; // c\n# d\r\n$b\r$c\r\r\n /* x\n y */ $d /**/ $e /** doc */ $f /**x*/ $g",
+        b"<?php #[Attr]\nfunction f() {}\n#",
+        b"<?php // comment ?>html<?php $a; ?>\n<?php\r\n/* a */?>\n",
+        b"<?php $a -> b /* c */ -> c;\n$x?->y;",
+        b"<?php $s = \"a {$b /* c */ ->d} $e[1]\";\n$h = <<<EOT\n  x {$y // z\n  }\n  EOT;\n",
+        b"<?php /* unterminated\n\n",
+        b"<?php\n\n /** unterminated",
+        b"<?php \t\x0b $a;",
+        b"<?php __halt_compiler(); // tail\n junk",
+        b"<?php (int) /* c */ $a; (integer) $b; \"\\400\";",
+        b"<?php\n{\n// x\n",
+        b"<?php $a = 0x1F + 08;",
+        b"<?php\r",
+    ];
+    for &src in cases {
+        assert_eq!(
+            parser_scan(src, true, false),
+            parser_scan(src, false, false),
+            "{}",
+            String::from_utf8_lossy(src)
+        );
+    }
+    let src = b"  /* a */\n$x // b\n;";
+    assert_eq!(parser_scan(src, true, true), parser_scan(src, false, true));
+}
+
+#[test]
+fn skip_trivia_keeps_doc_comments_and_lines() {
+    let mut lx = Lexer::with_options(
+        b"<?php\n// a\n/** d */\n\r\nfunction",
+        LexerOptions {
+            mode: LexMode::Parser,
+            ..LexerOptions::default()
+        },
+    );
+    lx.set_skip_trivia(true);
+    let doc = lx.next_token().map(|t| (t.kind, t.span.line, t.end_line));
+    assert_eq!(doc, Some((TokenKind::DocComment, 3, 3)));
+    let f = lx.next_token().map(|t| (t.kind, t.span.line, t.end_line));
+    assert_eq!(f, Some((TokenKind::Function, 5, 5)));
+    assert_eq!(lx.next_token(), None);
+}

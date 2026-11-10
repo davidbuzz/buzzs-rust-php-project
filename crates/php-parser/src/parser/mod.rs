@@ -151,11 +151,14 @@ impl<'a> Parser<'a> {
             start_in_scripting: opts.start_in_scripting,
             skip_shebang: opts.skip_shebang,
         };
-        let lexer = if opts.multibyte {
+        let mut lexer = if opts.multibyte {
             Lexer::with_script_encoding(src, lexer_opts, encoding)
         } else {
             Lexer::with_options(src, lexer_opts)
         };
+        // Whitespace and ordinary comments are discarded below anyway;
+        // the lexer skips them without building tokens.
+        lexer.set_skip_trivia(true);
         Self {
             lexer,
             buf: VecDeque::new(),
@@ -195,6 +198,7 @@ impl<'a> Parser<'a> {
             let t = self.lexer.next_token_or_end();
             self.collect_lexer_warnings();
             match t.kind {
+                // Not returned with `set_skip_trivia`; kept for safety.
                 TokenKind::Whitespace | TokenKind::Comment | TokenKind::OpenTag => continue,
                 TokenKind::DocComment => {
                     doc = Some(self.lexer.token_text(t).into_owned());
@@ -322,12 +326,47 @@ impl<'a> Parser<'a> {
         tok
     }
 
-    /// Consumes the current token if it is of kind `k`.
-    pub fn eat(&mut self, k: TokenKind) -> Option<Tok<'a>> {
+    /// Consumes the current token without returning it.
+    ///
+    /// Cheaper than discarding [`Self::bump`]'s result: the token is
+    /// dropped in the buffer instead of being moved out to the caller.
+    #[inline]
+    pub fn advance(&mut self) {
+        let tok = self.front();
+        let (span, end_line) = (tok.span, tok.end_line);
+        self.prev_span = span;
+        self.prev_end_line = end_line;
+        self.front_applied = false;
+        self.buf.pop_front();
+    }
+
+    /// Consumes the current token and returns its span.
+    #[inline]
+    pub fn bump_span(&mut self) -> Span {
+        self.advance();
+        self.prev_span
+    }
+
+    /// Consumes the current token if it is of kind `k`, returning whether
+    /// it did (`eat(k).is_some()` without moving the token out).
+    #[inline]
+    pub fn eat_kind(&mut self, k: TokenKind) -> bool {
         if self.peek() == k {
-            Some(self.bump())
+            self.advance();
+            true
         } else {
-            None
+            false
+        }
+    }
+
+    /// Like [`Self::expect1`] but discards the consumed token.
+    #[inline]
+    pub fn expect1_skip(&mut self, k: TokenKind) -> PResult<()> {
+        if self.peek() == k {
+            self.advance();
+            Ok(())
+        } else {
+            Err(self.unexpected(&[k]))
         }
     }
 
@@ -545,5 +584,31 @@ mod tok_tests {
         );
         assert_eq!(p.peek(), TokenKind::Class);
         assert_eq!(p.take_doc_comment().as_deref(), Some(&b"/** A */"[..]));
+    }
+
+    #[test]
+    fn discarding_consumers_track_the_previous_token() {
+        let src = b"<?php // c\n$a /* x */ ;\r\n# y\n( ) ?>";
+        let mut p = Parser::new(
+            src,
+            &ParseOptions::default(),
+            &ScriptEncodingOptions::default(),
+        );
+        assert_eq!(p.peek(), TokenKind::Variable);
+        assert_eq!(p.bump_span(), Span::new(11, 13, 2));
+        assert!(!p.eat_kind(TokenKind::Comma));
+        assert!(p.eat_kind(TokenKind::Semicolon));
+        assert_eq!(p.prev_span, Span::new(22, 23, 2));
+        assert!(p.expect1_skip(TokenKind::LParen).is_ok());
+        assert_eq!(p.prev_span.line, 4);
+        p.advance();
+        assert_eq!(p.prev_span, Span::new(31, 32, 4));
+        let err = p.expect1_skip(TokenKind::LParen).map_err(|e| e.message);
+        assert_eq!(
+            err,
+            Err("syntax error, unexpected token \";\", expecting \"(\"".into())
+        );
+        assert_eq!(p.bump().kind, TokenKind::Semicolon);
+        assert_eq!(p.peek(), TokenKind::End);
     }
 }

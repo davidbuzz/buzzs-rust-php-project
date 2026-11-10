@@ -206,7 +206,7 @@ impl Parser<'_> {
     pub(crate) fn parse_attributes(&mut self) -> PResult<Attributes> {
         let mut groups = Vec::new();
         while self.peek() == T::Attribute {
-            let start = self.bump().span;
+            let start = self.bump_span();
             self.peek();
             let saved_doc = self.take_doc_comment();
             let mut attributes = Vec::new();
@@ -225,7 +225,7 @@ impl Parser<'_> {
                 });
                 match self.peek() {
                     T::Comma => {
-                        self.bump();
+                        self.advance();
                         if self.peek() == T::RBracket {
                             break;
                         }
@@ -237,7 +237,7 @@ impl Parser<'_> {
                     _ => return Err(self.unexpected(&[T::RBracket])),
                 }
             }
-            self.bump(); // ]
+            self.advance(); // ]
             self.doc_comment = saved_doc;
             groups.push(AttributeGroup {
                 attributes,
@@ -270,7 +270,7 @@ impl Parser<'_> {
     fn parse_class_name_list(&mut self) -> PResult<Vec<Name>> {
         let mut names = vec![self.parse_class_name()?];
         while self.peek() == T::Comma {
-            self.bump();
+            self.advance();
             names.push(self.parse_class_name()?);
         }
         Ok(names)
@@ -324,7 +324,7 @@ impl Parser<'_> {
     /// Parses `type_expr` (or `type_expr_without_static`).
     pub(crate) fn parse_type(&mut self, allow_static: bool) -> PResult<Type> {
         let start = self.cur_span();
-        if self.eat(T::Question).is_some() {
+        if self.eat_kind(T::Question) {
             let inner = self.parse_single_type(allow_static)?;
             return Ok(Type {
                 kind: TypeKind::Nullable(Box::new(inner)),
@@ -339,7 +339,7 @@ impl Parser<'_> {
         };
         if !first_paren && self.peek() == T::AmpersandNotFollowedByVarOrVararg {
             let mut types = vec![first];
-            while self.eat(T::AmpersandNotFollowedByVarOrVararg).is_some() {
+            while self.eat_kind(T::AmpersandNotFollowedByVarOrVararg) {
                 types.push(self.parse_single_type(allow_static)?);
             }
             return Ok(Type {
@@ -349,7 +349,7 @@ impl Parser<'_> {
         }
         if self.peek() == T::Pipe {
             let mut types = vec![first];
-            while self.eat(T::Pipe).is_some() {
+            while self.eat_kind(T::Pipe) {
                 if self.peek() == T::LParen {
                     types.push(self.parse_paren_intersection(allow_static)?);
                 } else {
@@ -368,18 +368,18 @@ impl Parser<'_> {
     }
 
     fn parse_paren_intersection(&mut self, allow_static: bool) -> PResult<Type> {
-        let start = self.bump().span; // (
+        let start = self.bump_span(); // (
         let mut types = vec![self.parse_single_type(allow_static)?];
         if self.peek() != T::AmpersandNotFollowedByVarOrVararg {
             return Err(self.unexpected(&[T::AmpersandNotFollowedByVarOrVararg]));
         }
-        while self.eat(T::AmpersandNotFollowedByVarOrVararg).is_some() {
+        while self.eat_kind(T::AmpersandNotFollowedByVarOrVararg) {
             types.push(self.parse_single_type(allow_static)?);
         }
         if self.peek() != T::RParen {
             return Err(self.unexpected(&[T::AmpersandNotFollowedByVarOrVararg, T::RParen]));
         }
-        self.bump();
+        self.advance();
         Ok(Type {
             kind: TypeKind::Intersection(types),
             span: self.span_from(start),
@@ -388,7 +388,7 @@ impl Parser<'_> {
 
     /// `return_type`: `: type_expr`, optional.
     fn parse_return_type(&mut self) -> PResult<Option<Type>> {
-        if self.eat(T::Colon).is_some() {
+        if self.eat_kind(T::Colon) {
             Ok(Some(self.parse_type(true)?))
         } else {
             Ok(None)
@@ -399,7 +399,7 @@ impl Parser<'_> {
 
     /// Parses `'(' parameter_list ')'`.
     pub(crate) fn parse_parameter_list(&mut self) -> PResult<Vec<Param>> {
-        self.expect1(T::LParen)?;
+        self.expect1_skip(T::LParen)?;
         let mut params = Vec::new();
         if self.peek() != T::RParen {
             loop {
@@ -409,7 +409,7 @@ impl Parser<'_> {
                 params.push(self.parse_parameter()?);
                 match self.peek() {
                     T::Comma => {
-                        self.bump();
+                        self.advance();
                         if self.peek() == T::RParen {
                             break;
                         }
@@ -419,7 +419,7 @@ impl Parser<'_> {
                 }
             }
         }
-        self.bump(); // )
+        self.advance(); // )
         Ok(params)
     }
 
@@ -445,11 +445,11 @@ impl Parser<'_> {
         } else {
             None
         };
-        let by_ref = self.eat(T::AmpersandFollowedByVarOrVararg).is_some();
-        let variadic = self.eat(T::Ellipsis).is_some();
+        let by_ref = self.eat_kind(T::AmpersandFollowedByVarOrVararg);
+        let variadic = self.eat_kind(T::Ellipsis);
         let var = self.expect1(T::Variable)?;
         let name = Ident::new(var.text()[1..].to_vec(), var.span);
-        let default = if self.eat(T::Equals).is_some() {
+        let default = if self.eat_kind(T::Equals) {
             Some(self.parse_expr()?)
         } else {
             None
@@ -486,9 +486,9 @@ impl Parser<'_> {
 
     /// `'{' inner_statement_list '}'` (the `{` must be current).
     pub(crate) fn parse_brace_block(&mut self) -> PResult<Vec<Stmt>> {
-        self.bump(); // {
+        self.advance(); // {
         let stmts = self.parse_inner_list(&[T::RBrace], &[])?;
-        self.bump(); // }
+        self.advance(); // }
         Ok(stmts)
     }
 
@@ -497,7 +497,7 @@ impl Parser<'_> {
         let kw = self.bump();
         let start = kw.span;
         let by_ref = if is_ampersand(self.peek()) {
-            self.bump();
+            self.advance();
             true
         } else {
             false
@@ -545,7 +545,7 @@ impl Parser<'_> {
         let kw = self.bump();
         let is_fn = kw.kind == T::Fn;
         let by_ref = if is_ampersand(self.peek()) {
-            self.bump();
+            self.advance();
             true
         } else {
             false
@@ -561,7 +561,7 @@ impl Parser<'_> {
             if self.peek() != T::DoubleArrow {
                 return Err(self.unexpected(&[T::DoubleArrow]));
             }
-            self.bump();
+            self.advance();
             self.generator_stack.push(false);
             let body = self.parse_expr_bp(prec::ARROW_FN + 1);
             let is_generator = self.generator_stack.pop().unwrap_or(false);
@@ -585,12 +585,12 @@ impl Parser<'_> {
             ));
         }
         let mut uses = Vec::new();
-        if self.eat(T::Use).is_some() {
-            self.expect1(T::LParen)?;
+        if self.eat_kind(T::Use) {
+            self.expect1_skip(T::LParen)?;
             loop {
                 let ustart = self.cur_span();
                 let by_ref = if is_ampersand(self.peek()) {
-                    self.bump();
+                    self.advance();
                     true
                 } else {
                     false
@@ -614,7 +614,7 @@ impl Parser<'_> {
                 });
                 match self.peek() {
                     T::Comma => {
-                        self.bump();
+                        self.advance();
                         if self.peek() == T::RParen {
                             break;
                         }
@@ -623,7 +623,7 @@ impl Parser<'_> {
                     _ => return Err(self.unexpected(&[T::RParen])),
                 }
             }
-            self.bump();
+            self.advance();
         }
         let return_type = self.parse_return_type()?;
         if self.peek() != T::LBrace {
@@ -693,23 +693,23 @@ impl Parser<'_> {
         let mut backing_type = None;
         match kind {
             ClassKind::Class => {
-                if self.eat(T::Extends).is_some() {
+                if self.eat_kind(T::Extends) {
                     extends = Some(self.parse_class_name()?);
                 }
-                if self.eat(T::Implements).is_some() {
+                if self.eat_kind(T::Implements) {
                     implements = self.parse_class_name_list()?;
                 }
             }
             ClassKind::Interface => {
-                if self.eat(T::Extends).is_some() {
+                if self.eat_kind(T::Extends) {
                     implements = self.parse_class_name_list()?;
                 }
             }
             ClassKind::Enum => {
-                if self.eat(T::Colon).is_some() {
+                if self.eat_kind(T::Colon) {
                     backing_type = Some(self.parse_type(true)?);
                 }
-                if self.eat(T::Implements).is_some() {
+                if self.eat_kind(T::Implements) {
                     implements = self.parse_class_name_list()?;
                 }
             }
@@ -764,12 +764,12 @@ impl Parser<'_> {
                 span: Span::new(kw.span.end, kw.span.end, kw.end_line),
             }
         };
-        let extends = if self.eat(T::Extends).is_some() {
+        let extends = if self.eat_kind(T::Extends) {
             Some(self.parse_class_name()?)
         } else {
             None
         };
-        let implements = if self.eat(T::Implements).is_some() {
+        let implements = if self.eat_kind(T::Implements) {
             self.parse_class_name_list()?
         } else {
             Vec::new()
@@ -801,12 +801,12 @@ impl Parser<'_> {
 
     /// `'{' class_statement_list '}'`
     fn parse_class_body(&mut self) -> PResult<Vec<ClassMember>> {
-        self.bump(); // {
+        self.advance(); // {
         let mut members = Vec::new();
         while self.peek() != T::RBrace {
             members.push(self.parse_class_member()?);
         }
-        self.bump();
+        self.advance();
         Ok(members)
     }
 
@@ -817,20 +817,20 @@ impl Parser<'_> {
         let attributes = self.parse_attributes()?;
         let k = self.peek();
         if k == T::Use && !has_attrs {
-            self.bump();
+            self.advance();
             let traits = self.parse_class_name_list()?;
             let adaptations = match self.peek() {
                 T::Semicolon => {
-                    self.bump();
+                    self.advance();
                     Vec::new()
                 }
                 T::LBrace => {
-                    self.bump();
+                    self.advance();
                     let mut list = Vec::new();
                     while self.peek() != T::RBrace {
                         list.push(self.parse_trait_adaptation()?);
                     }
-                    self.bump();
+                    self.advance();
                     list
                 }
                 _ => return Err(self.unexpected(&[T::Comma, T::Semicolon, T::LBrace])),
@@ -844,7 +844,7 @@ impl Parser<'_> {
             });
         }
         if k == T::Case {
-            self.bump();
+            self.advance();
             self.peek();
             let doc_comment = self.take_doc_comment();
             if !is_identifier_token(self.peek()) {
@@ -852,7 +852,7 @@ impl Parser<'_> {
             }
             let t = self.bump();
             let name = self.ident_checked(&t)?;
-            let value = if self.eat(T::Equals).is_some() {
+            let value = if self.eat_kind(T::Equals) {
                 Some(self.parse_expr()?)
             } else {
                 None
@@ -860,7 +860,7 @@ impl Parser<'_> {
             if self.peek() != T::Semicolon {
                 return Err(self.unexpected(&[T::Semicolon]));
             }
-            self.bump();
+            self.advance();
             return Ok(ClassMember {
                 kind: ClassMemberKind::EnumCase(EnumCase {
                     attributes,
@@ -872,7 +872,7 @@ impl Parser<'_> {
             });
         }
         if k == T::Var {
-            self.bump();
+            self.advance();
             let group = self.parse_property_rest(attributes, Modifiers::VAR | Modifiers::PUBLIC)?;
             return Ok(ClassMember {
                 kind: ClassMemberKind::Property(group),
@@ -888,7 +888,7 @@ impl Parser<'_> {
                     modifier_list_to_flags(ModifierTarget::Constant, &mods)
                         .map_err(|m| self.action_error(m))?
                 };
-                self.bump();
+                self.advance();
                 let ty = if is_identifier_token(self.peek()) && self.peek_nth(1) == T::Equals {
                     None
                 } else {
@@ -942,7 +942,7 @@ impl Parser<'_> {
             }
             let t = self.bump();
             let name = self.ident_checked(&t)?;
-            self.expect1(T::Equals)?;
+            self.expect1_skip(T::Equals)?;
             let value = self.parse_expr()?;
             self.peek();
             let doc_comment = self.take_doc_comment();
@@ -954,10 +954,10 @@ impl Parser<'_> {
             });
             match self.peek() {
                 T::Comma => {
-                    self.bump();
+                    self.advance();
                 }
                 T::Semicolon => {
-                    self.bump();
+                    self.advance();
                     return Ok(consts);
                 }
                 _ => return Err(self.unexpected(&[T::Comma, T::Semicolon])),
@@ -981,7 +981,7 @@ impl Parser<'_> {
         loop {
             let v = self.expect1(T::Variable)?;
             let name = Ident::new(v.text()[1..].to_vec(), v.span);
-            let default = if self.eat(T::Equals).is_some() {
+            let default = if self.eat_kind(T::Equals) {
                 Some(self.parse_expr()?)
             } else {
                 None
@@ -1013,10 +1013,10 @@ impl Parser<'_> {
             });
             match self.peek() {
                 T::Comma => {
-                    self.bump();
+                    self.advance();
                 }
                 T::Semicolon => {
-                    self.bump();
+                    self.advance();
                     return Ok(PropertyGroup {
                         attributes,
                         modifiers,
@@ -1031,12 +1031,12 @@ impl Parser<'_> {
 
     /// `'{' property_hook_list '}'`
     fn parse_hook_list(&mut self) -> PResult<Vec<PropertyHook>> {
-        self.bump(); // {
+        self.advance(); // {
         let mut hooks = Vec::new();
         while self.peek() != T::RBrace {
             hooks.push(self.parse_property_hook()?);
         }
-        self.bump();
+        self.advance();
         Ok(hooks)
     }
 
@@ -1051,7 +1051,7 @@ impl Parser<'_> {
                 .map_err(|m| self.action_error(m))?
         };
         let by_ref = if is_ampersand(self.peek()) {
-            self.bump();
+            self.advance();
             true
         } else {
             false
@@ -1089,17 +1089,17 @@ impl Parser<'_> {
     fn parse_hook_body(&mut self) -> PResult<HookBody> {
         match self.peek() {
             T::Semicolon => {
-                self.bump();
+                self.advance();
                 Ok(HookBody::None)
             }
             T::LBrace => Ok(HookBody::Block(self.parse_brace_block()?)),
             T::DoubleArrow => {
-                self.bump();
+                self.advance();
                 let e = self.parse_expr()?;
                 if self.peek() != T::Semicolon {
                     return Err(self.unexpected(&[]));
                 }
-                self.bump();
+                self.advance();
                 Ok(HookBody::Expr(Box::new(e)))
             }
             _ => Err(self.unexpected(&[T::DoubleArrow, T::Semicolon, T::LBrace])),
@@ -1114,7 +1114,7 @@ impl Parser<'_> {
     ) -> PResult<MethodDecl> {
         let kw = self.bump(); // function
         let by_ref = if is_ampersand(self.peek()) {
-            self.bump();
+            self.advance();
             true
         } else {
             false
@@ -1133,7 +1133,7 @@ impl Parser<'_> {
         let return_type = self.parse_return_type()?;
         let (body, is_generator) = match self.peek() {
             T::Semicolon => {
-                self.bump();
+                self.advance();
                 (None, false)
             }
             T::LBrace => {
@@ -1163,7 +1163,7 @@ impl Parser<'_> {
         let k = self.peek();
         if (is_name_token(k) || k == T::Static) && self.peek_nth(1) == T::PaamayimNekudotayim {
             let trait_name = self.parse_class_name()?;
-            self.bump(); // ::
+            self.advance(); // ::
             if !is_identifier_token(self.peek()) {
                 return Err(self.unexpected(&[]));
             }
@@ -1192,7 +1192,7 @@ impl Parser<'_> {
         let absolute = method.trait_name.is_some();
         let adaptation = match self.peek() {
             T::Insteadof if absolute => {
-                self.bump();
+                self.advance();
                 let insteadof = self.parse_class_name_list()?;
                 TraitAdaptation::Precedence {
                     method,
@@ -1201,7 +1201,7 @@ impl Parser<'_> {
                 }
             }
             T::As => {
-                self.bump();
+                self.advance();
                 let k = self.peek();
                 if is_member_modifier(k) {
                     let mk = self.bump().kind;
@@ -1244,7 +1244,7 @@ impl Parser<'_> {
         if self.peek() != T::Semicolon {
             return Err(self.unexpected(&[T::Semicolon]));
         }
-        self.bump();
+        self.advance();
         Ok(adaptation)
     }
 }
