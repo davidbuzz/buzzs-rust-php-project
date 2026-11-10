@@ -77,11 +77,30 @@ impl Extension for Opcache {
     }
 }
 
+/// `OnEnable` (`zend_accelerator_module.c`): at run time opcache may only be
+/// disabled; enabling it again warns and is rejected, unless it is already
+/// on (a no-op).
+fn on_update_enable(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
+    if vm.ini_modify_stage() == php_vm::ext::IniStage::Restore
+        || !php_support::ini::quantity::parse_bool(value)
+        || vm.ini_bool("opcache.enable")
+    {
+        return Ok(true);
+    }
+    // `zend_error(E_WARNING, ...)`: no function-name prefix.
+    vm.raise(
+        2,
+        "Zend OPcache can't be temporarily enabled (it may be only disabled until the end of request)",
+    )?;
+    Ok(false)
+}
+
 fn register_ini(m: &mut ModuleBuilder<'_>) {
     let d = |name: &'static str, val: Option<&'static str>, acc: Access, handler: ModifyHandler| {
         IniDirective::new(name, val, acc, handler, "opcache")
     };
 
+    m.ini_on_modify("opcache.enable", on_update_enable);
     m.ini(d(
         "opcache.enable",
         Some("1"),
