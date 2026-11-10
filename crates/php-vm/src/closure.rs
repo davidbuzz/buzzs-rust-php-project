@@ -34,6 +34,45 @@ pub struct ClosureData {
     pub partial_inner: Option<u32>,
 }
 
+/// A closure's static-variable store.
+type StaticsStore = Rc<RefCell<Vec<Option<PhpRef>>>>;
+
+thread_local! {
+    /// The static-variable store of every closure that never writes one: a
+    /// real closure whose function declares no static variables, and any
+    /// fake closure (`Closure::fromCallable`, `f(...)`), which keeps using
+    /// its function's. Only `ZEND_BIND_STATIC` writes a closure's store,
+    /// through the frame ([`Vm::bind_closure_vars`] attaches it only when
+    /// the function has static variables), so this one stays empty, and
+    /// creating such a closure allocates no store of its own (php-src's
+    /// `zend_create_closure` has none without `static_variables`).
+    static NO_STATICS: StaticsStore = Rc::new(RefCell::new(Vec::new()));
+}
+
+/// Whether `func` is user code declaring static variables (`static $x`).
+#[inline]
+fn has_statics(func: &Func) -> bool {
+    matches!(func, Func::User(u) if u.code.num_statics != 0)
+}
+
+/// The static-variable store of a new closure of `func`: `slots` in a
+/// store of its own when it is a real closure of a function with static
+/// variables, else the shared empty one ([`NO_STATICS`]).
+fn closure_statics(func: &Func, fake: bool, slots: Vec<Option<PhpRef>>) -> StaticsStore {
+    if !fake && has_statics(func) {
+        Rc::new(RefCell::new(slots))
+    } else {
+        NO_STATICS.with(Rc::clone)
+    }
+}
+
+/// Allocates the shared empty static-variable store at startup (the
+/// `Closure` class registration), so that it is not counted against the
+/// first request's memory usage when its first closure is created.
+fn init_no_statics() {
+    NO_STATICS.with(|_| ());
+}
+
 impl Vm {
     /// The `Closure` class (`zend_ce_closure`), looked up by its
     /// lowercase name without building a key.
@@ -113,13 +152,14 @@ impl Vm {
                 }
             }
         }
+        let func = Func::User(f.clone());
         let data = ClosureData {
-            func: Func::User(f.clone()),
+            statics: closure_statics(&func, false, Vec::new()),
+            func,
             this,
             scope: fr.scope.clone(),
             called,
             vars,
-            statics: Rc::new(RefCell::new(Vec::new())),
             fake: false,
             magic_name: None,
             partial_inner: None,
@@ -178,12 +218,12 @@ impl Vm {
     /// `zend_create_fake_closure` from a resolved call.
     pub(crate) fn fake_closure(&mut self, call: PendingCall) -> Value {
         let data = ClosureData {
+            statics: closure_statics(&call.func, true, Vec::new()),
             func: call.func,
             this: call.this,
             scope: call.scope,
             called: call.called,
             vars: Vec::new(),
-            statics: Rc::new(RefCell::new(Vec::new())),
             fake: true,
             magic_name: call.magic_name,
             partial_inner: None,
@@ -342,7 +382,13 @@ impl Vm {
     }
 
     /// Binds captured variables and statics into the new frame at index
-    /// `frame` of the frame stack.
+    /// `frame` of the frame stack. The static-variable store is attached
+    /// only when the function declares static variables: without them no
+    /// op reads it ([`Vm::static_slot`], [`Vm::static_init`]), and a frame
+    /// left without one returns without `Frame::clear_rare_handles` (an
+    /// out-of-line call and a reference-count round trip per call).
+    /// Inlined into the call paths (`push_simple_ucall`, `push_user_call`).
+    #[inline]
     pub(crate) fn bind_closure_vars(&mut self, frame: usize, c: &Obj) {
         let Some(f) = self.frames.get_mut(frame) else {
             return;
@@ -365,7 +411,9 @@ impl Vm {
                     slot.set(Some(v.clone()));
                 }
             }
-            f.statics = Some(d.statics.clone());
+            if has_statics(&d.func) {
+                f.statics = Some(d.statics.clone());
+            }
         });
     }
 
@@ -497,12 +545,15 @@ impl Vm {
         }
         // Real closures get a snapshot of the static variables; fake ones
         // keep sharing the function's.
-        let statics: Vec<Option<PhpRef>> = d
-            .statics
-            .borrow()
-            .iter()
-            .map(|s| s.as_ref().map(|r| PhpRef::new(r.get())))
-            .collect();
+        let statics = if !d.fake && has_statics(&d.func) {
+            d.statics
+                .borrow()
+                .iter()
+                .map(|s| s.as_ref().map(|r| PhpRef::new(r.get())))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut vars = d.vars.clone();
         if let Some(inner_cv) = d.partial_inner {
             if let Some((_, Value::Object(inner))) = vars.iter_mut().find(|(cv, _)| *cv == inner_cv)
@@ -519,12 +570,12 @@ impl Vm {
             }
         }
         ClosureData {
+            statics: closure_statics(&d.func, d.fake, statics),
             func: d.func.clone(),
             this,
             scope,
             called,
             vars,
-            statics: Rc::new(RefCell::new(statics)),
             fake: d.fake,
             magic_name: d.magic_name.clone(),
             partial_inner: d.partial_inner,
@@ -876,6 +927,7 @@ fn static_var_names(u: &UserFunction) -> Vec<(u32, ZStr, Value)> {
 
 /// Registers the `Closure` class.
 pub(crate) fn register(vm: &mut Vm) {
+    init_no_statics();
     ClassBuilder::new("Closure")
         .flags(cflags::FINAL | cflags::NO_NEW | cflags::NOT_SERIALIZABLE | cflags::NO_DYNAMIC_PROPERTIES)
         .internal(InternalKind::Closure)

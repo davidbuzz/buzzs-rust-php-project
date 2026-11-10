@@ -330,3 +330,63 @@ fn scoped_closure_names_in_argument_errors() {
          ArgumentCountError: Too few arguments to function K::{closure:t.php:15}(), 0 passed in t.php on line 18 and exactly 1 expected\n"
     );
 }
+
+/// Closures without static variables share one empty store and leave it
+/// off their frames; closures with them keep their own, bound copies get
+/// a snapshot, fake closures use their function's, generators and loops
+/// keep per-object state (expected output from `/usr/bin/php8.5 -n`).
+#[test]
+fn closure_static_variable_stores() {
+    let out = run(r#"<?php
+$a = function () { static $n = 0; return ++$n; };
+$a(); $a();
+$b = $a->bindTo(null);
+echo $a(), $b(), $b(), $a(), "\n";
+function g() { static $c = 10; return ++$c; }
+$f = Closure::fromCallable('g'); $h = g(...);
+echo $f(), $h(), g(), "\n";
+$k = $f->bindTo(null); echo $k(), "\n";
+
+$x = 1;
+$m = function () use ($x) { return $x; };
+$m2 = $m->bindTo(null);
+echo $m(), $m2(), "\n";
+var_dump((new ReflectionFunction($m2))->getStaticVariables());
+$gen = function () { static $s = 0; yield ++$s; yield ++$s; };
+foreach ($gen() as $v) echo $v; foreach ($gen() as $v) echo $v; echo "\n";
+class C { function mk() { return function () { static $q = []; $q[] = count($q); return $q; }; } }
+$c1 = (new C)->mk(); $c1(); $c2 = $c1->bindTo(new C); $c1();
+echo json_encode([$c1(), $c2()]), "\n";
+for ($i = 0; $i < 3; $i++) { $t = function () { static $z = 0; return ++$z; }; echo $t(), $t(); }
+echo "\n";
+var_dump($a);
+"#);
+    assert_eq!(
+        out,
+        r#"3344
+111213
+14
+11
+array(1) {
+  ["x"]=>
+  int(1)
+}
+1234
+[[0,1,2],[0,1]]
+121212
+object(Closure)#1 (4) {
+  ["name"]=>
+  string(17) "{closure:t.php:2}"
+  ["file"]=>
+  string(5) "t.php"
+  ["line"]=>
+  int(2)
+  ["static"]=>
+  array(1) {
+    ["n"]=>
+    int(4)
+  }
+}
+"#
+    );
+}
