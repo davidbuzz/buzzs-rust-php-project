@@ -420,29 +420,23 @@ fn fold_builtin_calls(op_array: &mut OpArray, filter: impl Fn(&[u8]) -> bool) ->
     let len = op_array.ops.len();
 
     for i in 0..len {
-        let (fn_name_bytes, fallback_bytes) = match &op_array.ops[i] {
-            Op::InitFCall { name, fallback, .. } => {
-                let fname = match op_array.literals.get(*name as usize) {
-                    Some(Value::Str(s)) => s.clone(),
-                    _ => continue,
-                };
-                let fback = fallback.and_then(|fb| match op_array.literals.get(fb as usize) {
-                    Some(Value::Str(s)) => Some(s.clone()),
-                    _ => None,
-                });
-                (fname, fback)
-            }
+        // Only a call that resolves to the global function at compile time
+        // is evaluated: an unqualified call in a namespace (one with a
+        // fallback name) may reach a namespaced function of the same name
+        // declared later (`zend_compile_call` compiles it as
+        // `INIT_NS_FCALL_BY_NAME`, which php-src never evaluates).
+        let fn_name_bytes = match &op_array.ops[i] {
+            Op::InitFCall {
+                name,
+                fallback: None,
+                ..
+            } => match op_array.literals.get(*name as usize) {
+                Some(Value::Str(s)) if !s.as_bytes().contains(&b'\\') => s.clone(),
+                _ => continue,
+            },
             _ => continue,
         };
-
-        // Determine pure builtin candidate name
-        let name_bytes = if !fn_name_bytes.as_bytes().contains(&b'\\') {
-            fn_name_bytes.as_bytes().to_ascii_lowercase()
-        } else if let Some(fb) = &fallback_bytes {
-            fb.as_bytes().to_ascii_lowercase()
-        } else {
-            continue;
-        };
+        let name_bytes = fn_name_bytes.as_bytes().to_ascii_lowercase();
 
         if !filter(&name_bytes) {
             continue;

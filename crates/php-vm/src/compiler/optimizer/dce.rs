@@ -210,24 +210,43 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
         let mut inner_changed = false;
         let mut non_free_uses = vec![0u32; num_tmps + 1];
         count_non_free_uses(op_array, &mut non_free_uses);
+        let mut defs = vec![0u32; num_tmps + 1];
+        count_defs(op_array, &mut defs);
 
         for op in &mut op_array.ops {
             if let Some(t) = def_tmp(op) {
                 let uses = non_free_uses.get(t as usize).copied().unwrap_or(0);
                 if uses == 0 {
-                    if is_pure_op(op) {
-                        *op = Op::Nop;
+                    let rest = if is_pure_op(op) {
+                        leftover_of(op)
+                    } else {
+                        None
+                    };
+                    if let Some(rest) = rest {
+                        *op = rest;
                         inner_changed = true;
                     } else if clear_def_tmp(op) {
                         inner_changed = true;
                     }
                 }
-            } else if is_pure_dead_op(op) {
-                *op = Op::Nop;
+                continue;
+            }
+            let rest = if is_pure_dead_op(op) {
+                leftover_of(op)
+            } else {
+                None
+            };
+            if let Some(rest) = rest {
+                *op = rest;
                 inner_changed = true;
             } else if let Op::Free(Operand::Tmp(t)) = op {
+                // The `FREE` of a value an op still produces (`clone $a;`,
+                // `new C;`, `include`) is what releases it: without it the
+                // temporary keeps an object alive and its destructor runs
+                // late. It goes only once no op defines the temporary.
                 let uses = non_free_uses.get(*t as usize).copied().unwrap_or(0);
-                if uses == 0 {
+                let defined = defs.get(*t as usize).copied().unwrap_or(0);
+                if uses == 0 && defined == 0 {
                     *op = Op::Nop;
                     inner_changed = true;
                 }
@@ -241,6 +260,49 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
     }
 
     changed
+}
+
+/// What replaces a removed side-effect-free op: the `FREE` of the temporary
+/// it consumed, since reading a temporary releases it and an object in it
+/// must still be destroyed there (php-src's dce.c leaves a FREE of a
+/// refcounted operand), or a NOP. `None` when it consumes two temporaries.
+fn leftover_of(op: &Op) -> Option<Op> {
+    let mut consumed = None;
+    let mut extra = false;
+    let mut op_clone = op.clone();
+    for_each_operand_mut(&mut op_clone, |operand| {
+        if let Operand::Tmp(t) = operand {
+            if consumed.replace(*t).is_some() {
+                extra = true;
+            }
+        }
+    });
+    match (consumed, extra) {
+        (_, true) => None,
+        (Some(t), false) => Some(Op::Free(Operand::Tmp(t))),
+        (None, false) => Some(Op::Nop),
+    }
+}
+
+/// Counts the ops that write each temporary (including `FE_FETCH`'s value
+/// and key, which [`def_tmp`] does not report).
+fn count_defs(op_array: &OpArray, counts: &mut [u32]) {
+    let mut bump = |t: u32| {
+        if let Some(c) = counts.get_mut(t as usize) {
+            *c += 1;
+        }
+    };
+    for op in &op_array.ops {
+        if let Some(t) = def_tmp(op) {
+            bump(t);
+        }
+        if let Op::FeFetch { val, key, .. } = op {
+            bump(*val);
+            if let Some(k) = key {
+                bump(*k);
+            }
+        }
+    }
 }
 
 fn count_non_free_uses(op_array: &OpArray, counts: &mut [u32]) {
@@ -299,12 +361,9 @@ fn is_pure_op(op: &Op) -> bool {
         }
         Op::TypeCheck { a, .. } => matches!(a, Operand::Lit(_) | Operand::Tmp(_)),
         Op::InitArray { .. } => true,
-        Op::FetchClassName { class, .. } => {
-            matches!(
-                class,
-                ClassSpec::Named(_) | ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
-            )
-        }
+        // `static::class` (and `self::`/`parent::` in a closure or trait)
+        // resolve at run time and throw without a class scope.
+        Op::FetchClassName { class, .. } => matches!(class, ClassSpec::Named(_)),
         _ => false,
     }
 }
