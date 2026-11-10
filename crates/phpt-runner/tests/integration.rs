@@ -26,13 +26,25 @@ fn reference_php() -> Option<&'static str> {
     Path::new(REFERENCE_PHP).is_file().then_some(REFERENCE_PHP)
 }
 
+const REFERENCE_PHP_CGI: &str = "/usr/bin/php-cgi";
+
+fn reference_php_cgi() -> Option<&'static str> {
+    Path::new(REFERENCE_PHP_CGI)
+        .is_file()
+        .then_some(REFERENCE_PHP_CGI)
+}
+
 /// Copy the fixtures into a private directory (tests write generated files next to themselves).
 fn fixture_copy(tag: &str) -> PathBuf {
+    copy_fixtures(&fixtures(), tag)
+}
+
+fn copy_fixtures(from: &Path, tag: &str) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("phpt-fixtures-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    for entry in fs::read_dir(fixtures()).unwrap() {
+    for entry in fs::read_dir(from).unwrap() {
         let entry = entry.unwrap();
         fs::copy(entry.path(), dir.join(entry.file_name())).unwrap();
     }
@@ -47,8 +59,15 @@ fn run_runner(args: &[&str], paths: &[&Path]) -> (JsonReport, Option<i32>, Strin
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
+    // Runs are independent of a php-cgi beside the PHP binary unless a test asks for one.
+    let no_cgi: &[&str] = if args.contains(&"--php-cgi") {
+        &[]
+    } else {
+        &["--no-cgi"]
+    };
     let output = Command::new(env!("CARGO_BIN_EXE_phpt-runner"))
         .args(args)
+        .args(no_cgi)
         .arg("--json")
         .arg(&json)
         .args(paths)
@@ -747,5 +766,79 @@ fn junit_report_against_reference_php() {
             "{xml}"
         );
     }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// CGI tests (`--POST--`, `--GET--`, `--COOKIE--`, `--POST_RAW--`, `--EXPECTHEADERS--`) run
+/// through the reference `php-cgi -C`, with response headers split off the output.
+#[test]
+fn cgi_fixtures_against_reference_php_cgi() {
+    let (Some(php), Some(php_cgi)) = (reference_php(), reference_php_cgi()) else {
+        eprintln!("skipping: {REFERENCE_PHP} or {REFERENCE_PHP_CGI} not found");
+        return;
+    };
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cgi");
+    let dir = copy_fixtures(&src, "cgi");
+    let (report, _, stdout) = run_runner(
+        &[
+            "--php",
+            php,
+            "--php-cgi",
+            php_cgi,
+            "--no-color",
+            "--show-diff",
+            "--srcdir",
+            dir.to_str().unwrap(),
+        ],
+        &[&dir],
+    );
+    let got: BTreeMap<String, Status> = report
+        .tests
+        .iter()
+        .map(|t| (t.path.clone(), t.result))
+        .collect();
+    assert_eq!(got.len(), 6, "{stdout}");
+    for (name, status) in &got {
+        let expected = if name.starts_with("fail_") {
+            Status::Fail
+        } else {
+            Status::Pass
+        };
+        assert_eq!(*status, expected, "{name}\n{stdout}");
+    }
+    let diff = fs::read_to_string(dir.join("fail_headers.diff")).unwrap();
+    assert!(diff.contains("--HEADERS--"), "{diff}");
+    assert!(diff.contains("- X-Test: 2"), "{diff}");
+    assert!(diff.contains("+ X-Test: 1"), "{diff}");
+    // Without a CGI binary (and with --repeat) they skip with run-tests.php's reasons.
+    let (report, _, stdout) =
+        run_runner(&["--php", php, "--srcdir", dir.to_str().unwrap()], &[&dir]);
+    assert!(
+        report
+            .tests
+            .iter()
+            .all(|t| t.result == Status::Skip && t.info == "reason: CGI not available"),
+        "{stdout}"
+    );
+    let (report, _, stdout) = run_runner(
+        &[
+            "--php",
+            php,
+            "--php-cgi",
+            php_cgi,
+            "--repeat",
+            "2",
+            "--srcdir",
+            dir.to_str().unwrap(),
+        ],
+        &[&dir],
+    );
+    assert!(
+        report
+            .tests
+            .iter()
+            .all(|t| t.result == Status::Skip && t.info == "reason: CGI does not support --repeat"),
+        "{stdout}"
+    );
     let _ = fs::remove_dir_all(&dir);
 }

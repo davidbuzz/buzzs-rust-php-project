@@ -34,6 +34,14 @@ struct Cli {
     /// runner, e.g. target/debug/php].
     #[arg(long)]
     php: Option<PathBuf>,
+    /// CGI binary for tests with --GET--, --POST--, --CGI--, ... sections [default:
+    /// `$TEST_PHP_CGI_EXECUTABLE`, else `php-cgi` beside the PHP binary, as run-tests.php
+    /// finds it; without one those tests are skipped].
+    #[arg(long, value_name = "PATH")]
+    php_cgi: Option<PathBuf>,
+    /// Do not look for a CGI binary: skip CGI tests with "CGI not available".
+    #[arg(long, conflicts_with = "php_cgi")]
+    no_cgi: bool,
     /// Number of parallel workers [default: number of CPUs].
     #[arg(short = 'j', long)]
     jobs: Option<usize>,
@@ -136,6 +144,40 @@ fn default_php() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// run-tests.php `get_binary()`: a sibling SAPI binary of `php`, either in a php-src build
+/// tree (`<dir>/../../<sapi_path>`) or in an installation tree, where every `php` in the
+/// binary's name is replaced by `sapi` (so `php8.5` finds `php-cgi8.5`).
+fn get_binary(php: &Path, sapi: &str, sapi_path: &str) -> Option<PathBuf> {
+    let dir = php.parent().unwrap_or(Path::new("."));
+    let tree = dir.join("../..").join(sapi_path);
+    if tree.exists() {
+        return tree.canonicalize().ok();
+    }
+    let base = php.file_name()?.to_string_lossy().replace("php", sapi);
+    let inst = dir.join(base);
+    if inst.exists() {
+        return inst.canonicalize().ok();
+    }
+    None
+}
+
+/// The CGI binary: `--php-cgi`, else `$TEST_PHP_CGI_EXECUTABLE`, else `get_binary()` beside
+/// `php` (the path as given, before canonicalisation, like run-tests.php).
+fn find_php_cgi(cli_value: Option<&Path>, php: &Path) -> Result<Option<PathBuf>, String> {
+    let given = cli_value.map(Path::to_path_buf).or_else(|| {
+        std::env::var_os("TEST_PHP_CGI_EXECUTABLE")
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+    });
+    match given {
+        Some(p) => p
+            .canonicalize()
+            .map(Some)
+            .map_err(|e| format!("invalid CGI executable {}: {e}", p.display())),
+        None => Ok(get_binary(php, "php-cgi", "sapi/cgi/php-cgi")),
+    }
+}
+
 /// The shared probe-cache directory run-tests.php exports as `TEST_PHP_SHARED_CACHE_DIR`
 /// (used by `tests/probe_cache.inc`); removed when dropped.
 struct SharedProbeCache(PathBuf);
@@ -167,10 +209,11 @@ impl Drop for SharedProbeCache {
     }
 }
 
-/// A private hard link (or copy) of the binary under test; removed when dropped.
+/// Private hard links (or copies) of the binaries under test; removed when dropped.
 struct BinarySnapshot {
     dir: PathBuf,
-    path: PathBuf,
+    /// Snapshot paths, in the order the binaries were given.
+    paths: Vec<PathBuf>,
 }
 
 impl BinarySnapshot {
@@ -198,7 +241,7 @@ impl BinarySnapshot {
         }
     }
 
-    fn create(php: &Path) -> Result<Self, String> {
+    fn create(binaries: &[&Path]) -> Result<Self, String> {
         Self::remove_stale();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -209,13 +252,23 @@ impl BinarySnapshot {
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let snapshot = BinarySnapshot {
-            path: dir.join(php.file_name().unwrap_or_else(|| "php".as_ref())),
+        let mut snapshot = BinarySnapshot {
             dir,
+            paths: Vec::with_capacity(binaries.len()),
         };
-        if std::fs::hard_link(php, &snapshot.path).is_err() {
-            std::fs::copy(php, &snapshot.path)
-                .map_err(|e| format!("cannot snapshot {}: {e}", php.display()))?;
+        for (i, bin) in binaries.iter().enumerate() {
+            let name = bin
+                .file_name()
+                .map_or_else(|| format!("bin{i}"), |n| n.to_string_lossy().into_owned());
+            let mut path = snapshot.dir.join(&name);
+            if snapshot.paths.contains(&path) {
+                path = snapshot.dir.join(format!("{name}-{i}"));
+            }
+            if std::fs::hard_link(bin, &path).is_err() {
+                std::fs::copy(bin, &path)
+                    .map_err(|e| format!("cannot snapshot {}: {e}", bin.display()))?;
+            }
+            snapshot.paths.push(path);
         }
         Ok(snapshot)
     }
@@ -233,7 +286,7 @@ struct RunGuards {
     _snapshot: Option<BinarySnapshot>,
 }
 
-fn base_env(php: &Path, skip_slow: bool) -> Env {
+fn base_env(php: &Path, php_cgi: Option<&Path>, skip_slow: bool) -> Env {
     let mut env: Env = std::env::vars_os().collect();
     normalize_env(&mut env);
     let mut set = |k: &str, v: OsString| {
@@ -251,8 +304,15 @@ fn base_env(php: &Path, skip_slow: bool) -> Env {
         "TEST_PHP_EXECUTABLE_ESCAPED",
         escapeshellarg(&php_str).into(),
     );
-    set("TEST_PHP_CGI_EXECUTABLE", OsString::new());
-    set("TEST_PHP_CGI_EXECUTABLE_ESCAPED", "''".into());
+    set(
+        "TEST_PHP_CGI_EXECUTABLE",
+        php_cgi.map_or_else(OsString::new, |p| p.as_os_str().to_owned()),
+    );
+    set(
+        "TEST_PHP_CGI_EXECUTABLE_ESCAPED",
+        escapeshellarg(&php_cgi.map_or_else(String::new, |p| p.to_string_lossy().into_owned()))
+            .into(),
+    );
     set("TEST_PHPDBG_EXECUTABLE", OsString::new());
     set("TEST_PHPDBG_EXECUTABLE_ESCAPED", "''".into());
     if std::env::var_os("SKIP_ONLINE_TESTS").is_none() {
@@ -447,22 +507,32 @@ fn apply_scope(
 /// Locate the PHP binary, build the base environment and probe extensions. The returned probe
 /// cache directory must outlive the run.
 fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, RunGuards), String> {
-    let php = cli
+    let given_php = cli
         .php
         .clone()
         .or_else(default_php)
         .ok_or("no PHP binary found: build php-cli (target/debug/php) or pass --php <path>")?;
-    let php = php
+    let php = given_php
         .canonicalize()
-        .map_err(|e| format!("invalid PHP executable {}: {e}", php.display()))?;
+        .map_err(|e| format!("invalid PHP executable {}: {e}", given_php.display()))?;
+    let php_cgi = if cli.no_cgi {
+        None
+    } else {
+        find_php_cgi(cli.php_cgi.as_deref(), &given_php)?
+    };
     let snapshot = if cli.no_snapshot {
         None
     } else {
-        Some(BinarySnapshot::create(&php)?)
+        let mut binaries = vec![php.as_path()];
+        binaries.extend(php_cgi.as_deref());
+        Some(BinarySnapshot::create(&binaries)?)
     };
-    let php = snapshot.as_ref().map_or(php, |s| s.path.clone());
+    let (php, php_cgi) = match &snapshot {
+        Some(s) => (s.paths[0].clone(), s.paths.get(1).cloned()),
+        None => (php, php_cgi),
+    };
 
-    let mut env = base_env(&php, cli.skip_slow);
+    let mut env = base_env(&php, php_cgi.as_deref(), cli.skip_slow);
     if cli.repeat > 1 {
         env.insert("SKIP_REPEAT".into(), "1".into());
     }
@@ -499,6 +569,7 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, RunGuards), String> 
         });
     let runner = Runner::new(Config {
         php,
+        php_cgi,
         srcdir: srcdir.to_path_buf(),
         timeout: Duration::from_secs(cli.timeout),
         env,
@@ -750,5 +821,60 @@ fn main() -> ExitCode {
             eprintln!("ERROR: {msg}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn php_cgi_found_beside_php() {
+        let dir =
+            std::env::temp_dir().join(format!("phpt-runner-get-binary-{}", std::process::id()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for name in ["php8.5", "php-cgi8.5", "php"] {
+            std::fs::write(bin.join(name), "").unwrap();
+        }
+        let canon = |p: PathBuf| p.canonicalize().unwrap();
+        assert_eq!(
+            get_binary(&bin.join("php8.5"), "php-cgi", "sapi/cgi/php-cgi"),
+            Some(canon(bin.join("php-cgi8.5")))
+        );
+        // `php` has no sibling `php-cgi` yet.
+        assert_eq!(
+            get_binary(&bin.join("php"), "php-cgi", "sapi/cgi/php-cgi"),
+            None
+        );
+        // A php-src build tree wins: <dir>/../../sapi/cgi/php-cgi.
+        let tree = dir.join("sapi/cli");
+        std::fs::create_dir_all(dir.join("sapi/cgi")).unwrap();
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(dir.join("sapi/cgi/php-cgi"), "").unwrap();
+        assert_eq!(
+            get_binary(&tree.join("php"), "php-cgi", "sapi/cgi/php-cgi"),
+            Some(canon(dir.join("sapi/cgi/php-cgi")))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cgi_executable_exported() {
+        let env = base_env(Path::new("/x/php"), Some(Path::new("/x/php-cgi")), false);
+        assert_eq!(
+            env[&OsString::from("TEST_PHP_CGI_EXECUTABLE")],
+            "/x/php-cgi"
+        );
+        assert_eq!(
+            env[&OsString::from("TEST_PHP_CGI_EXECUTABLE_ESCAPED")],
+            "'/x/php-cgi'"
+        );
+        let env = base_env(Path::new("/x/php"), None, false);
+        assert_eq!(env[&OsString::from("TEST_PHP_CGI_EXECUTABLE")], "");
+        assert_eq!(
+            env[&OsString::from("TEST_PHP_CGI_EXECUTABLE_ESCAPED")],
+            "''"
+        );
     }
 }
