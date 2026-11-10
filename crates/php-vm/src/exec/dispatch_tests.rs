@@ -867,6 +867,7 @@ Value of type null is not callable
 2
 "#;
     assert_eq!(run(src), expected);
+}
 
 /// The builtin ops and calls the hot loop and the in-place frameless call
 /// take over (`ZEND_STRLEN`, `ZEND_COUNT`, `ZEND_TYPE_CHECK`,

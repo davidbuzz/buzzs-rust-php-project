@@ -38,7 +38,10 @@
 //! or reach an element held by reference, an object or user code.
 
 use super::spec::{
-    self, assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, cmp_simple_in, concat_cv_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, is_plain_slot, isset_dim_cv_in, num_outcome, plain_truth, put_tmp, slot_truth,
+    self, assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in,
+    cmp_simple_in, concat_cv_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dims_cv_in,
+    incdec_dim_cv_in, is_plain_slot, isset_dim_cv_in, num_outcome, plain_truth, put_tmp,
+    slot_truth,
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
 use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Op, Operand, UnKind};
