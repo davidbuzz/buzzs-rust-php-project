@@ -190,3 +190,65 @@ fn anonymous_class_methods_are_named_up_to_the_nul() {
     assert!(out.contains("\nclass@anonymous::m:\n"), "{out}");
     assert!(!out.contains("FETCH_CLASS"), "{out}");
 }
+
+#[test]
+fn typed_returns_get_verify_return_type() {
+    // pipe_optimizations.phpt: `int + 1` may overflow to a float, so the
+    // check stays.
+    let out = dump("<?php\nfunction f(int $a): int {\n    return $a + 1;\n}\n");
+    assert!(
+        out.contains("0001 T1 = ADD CV0($a) int(1)\n0002 VERIFY_RETURN_TYPE T1\n0003 RETURN T1\n"),
+        "{out}"
+    );
+    // A parameter of the declared type needs no check
+    // (`can_elide_return_type_check`).
+    let out = dump("<?php\nfunction f(int $a): int {\n    return $a;\n}\n");
+    assert!(!out.contains("VERIFY_RETURN_TYPE"), "{out}");
+    // A literal of the declared type needs no check; another literal is
+    // checked into a TMP (type_inference_final_class.phpt).
+    let out = dump("<?php\nfunction f(): int {\n    return 42;\n}\n");
+    assert!(!out.contains("VERIFY_RETURN_TYPE"), "{out}");
+    let out = dump("<?php\nfunction f(): float {\n    return 1;\n}\n");
+    assert!(
+        out.contains("0000 T0 = VERIFY_RETURN_TYPE int(1)\n0001 RETURN T0\n"),
+        "{out}"
+    );
+    // `void` and `mixed` are not checked.
+    let out = dump(
+        "<?php\nfunction f(): void {\n    return;\n}\nfunction g($x): mixed {\n    return $x;\n}\n",
+    );
+    assert!(!out.contains("VERIFY_RETURN_TYPE"), "{out}");
+}
+
+#[test]
+fn dfa_rewrites_arithmetic_with_literals() {
+    // pipe_optimizations.phpt: `MUL x, 2` of a number is `ADD x, x`.
+    let out = dump("<?php\nfunction f(int $a) {\n    return $a * 2;\n}\n");
+    assert!(out.contains("T1 = ADD CV0($a) CV0($a)\n"), "{out}");
+    // A long literal against a double becomes a double literal.
+    let out = dump("<?php\nfunction f(float $a) {\n    return $a + 1;\n}\n");
+    assert!(out.contains("T1 = ADD CV0($a) float(1)\n"), "{out}");
+    // Adding zero to a long is a copy.
+    let out = dump("<?php\nfunction f(int $a) {\n    return $a + 0;\n}\n");
+    assert!(!out.contains(" ADD "), "{out}");
+    // Untyped operands are left alone.
+    let out = dump("<?php\nfunction f($a) {\n    return $a * 2;\n}\n");
+    assert!(out.contains("T1 = MUL CV0($a) int(2)\n"), "{out}");
+}
+
+#[test]
+fn pipes_into_method_callables_are_plain_calls() {
+    // pipe_optimizations.phpt (`zend_partial_apply` in zend_compile_pipe).
+    let out = dump(
+        "<?php\nclass O {\n    public function foo($a) { return $a; }\n    public static function bar($a) { return $a; }\n}\n$o = new O;\n$r = 5 |> $o->foo(...) |> O::bar(...);\n",
+    );
+    assert!(!out.contains("CALLABLE_CONVERT"), "{out}");
+    assert!(
+        out.contains("INIT_METHOD_CALL 1 CV0($o) string(\"foo\")\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("INIT_STATIC_METHOD_CALL 1 string(\"O\") string(\"bar\")\n"),
+        "{out}"
+    );
+}
