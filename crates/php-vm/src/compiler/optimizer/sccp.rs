@@ -792,6 +792,16 @@ fn cvs_may_be_refs(op_array: &OpArray, ctx: &OptContext<'_>) -> bool {
 
 /// A build-step operand's literal: a literal, or a temporary known to
 /// hold one.
+/// Whether literals `a` and `b` are the same constant (same type and
+/// value; a float compares bitwise, so `0.0` and `-0.0` differ).
+fn same_literal(literals: &[Value], a: u32, b: u32) -> bool {
+    a == b
+        || matches!(
+            (literals.get(a as usize), literals.get(b as usize)),
+            (Some(x), Some(y)) if super::literals_equal(x, y)
+        )
+}
+
 fn known_lit(operand: &Operand, lit_def: &[Option<u32>]) -> Option<u32> {
     match operand {
         Operand::Lit(l) => Some(*l),
@@ -952,12 +962,38 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
         let mut def_count = vec![0u32; num_tmps + 1];
         let mut lit_def = vec![None; num_tmps + 1];
         let mut tmp_alias = vec![None; num_tmps + 1];
+        // Whether every definition of a temporary is a `QM_ASSIGN` of the
+        // same literal: the join of equal constants is that constant
+        // (sccp.c `join_lattice_values`), so `$c ? 1 : 1` is `1` on both
+        // paths (opcache/tests/ct_eval_frameless_002).
+        let mut same_lit = vec![true; num_tmps + 1];
+        let mut first_lit: Vec<Option<u32>> = vec![None; num_tmps + 1];
 
         for op in &op_array.ops {
+            if let Op::FeFetch { val, key, .. } = op {
+                for t in std::iter::once(*val).chain(*key) {
+                    if let Some(slot) = same_lit.get_mut(t as usize) {
+                        *slot = false;
+                    }
+                }
+            }
             if let Some(t) = super::def_tmp(op) {
                 let t_idx = t as usize;
                 if t_idx <= num_tmps {
                     def_count[t_idx] += 1;
+                    if let Op::Move {
+                        src: Operand::Lit(l),
+                        ..
+                    } = op
+                    {
+                        match first_lit[t_idx] {
+                            None => first_lit[t_idx] = Some(*l),
+                            Some(p) if same_literal(&op_array.literals, p, *l) => {}
+                            Some(_) => same_lit[t_idx] = false,
+                        }
+                    } else {
+                        same_lit[t_idx] = false;
+                    }
                     match op {
                         Op::Move { src, dst: _ } => match src {
                             Operand::Lit(l) => {
@@ -989,7 +1025,11 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
 
         for t in 0..=num_tmps {
             if def_count[t] != 1 {
-                lit_def[t] = None;
+                lit_def[t] = if def_count[t] > 1 && same_lit[t] {
+                    first_lit[t]
+                } else {
+                    None
+                };
                 tmp_alias[t] = None;
             }
         }
@@ -1044,7 +1084,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         ) {
                             if let Some(val) = fold_bin_op(*bkind, &va, &vb) {
                                 let lit = add_or_find_literal(&mut op_array.literals, val);
-                                if (*dst as usize) <= num_tmps {
+                                if def_count.get(*dst as usize).copied() == Some(1) {
                                     lit_def[*dst as usize] = Some(lit);
                                 }
                                 *op = Op::Move {
@@ -1122,7 +1162,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         ) {
                             if let Some(val) = fold_bin_op(*bkind, &va, &vb) {
                                 let lit = add_or_find_literal(&mut op_array.literals, val);
-                                if (*dst as usize) <= num_tmps {
+                                if def_count.get(*dst as usize).copied() == Some(1) {
                                     lit_def[*dst as usize] = Some(lit);
                                 }
                                 *op = Op::AssignCv {
@@ -1145,7 +1185,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         if let Some(va) = op_array.literals.get(la as usize).cloned() {
                             if let Some(val) = fold_unary_op(*ukind, &va) {
                                 let lit = add_or_find_literal(&mut op_array.literals, val);
-                                if (*dst as usize) <= num_tmps {
+                                if def_count.get(*dst as usize).copied() == Some(1) {
                                     lit_def[*dst as usize] = Some(lit);
                                 }
                                 *op = Op::Move {
@@ -1167,7 +1207,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         if let Some(va) = op_array.literals.get(la as usize).cloned() {
                             if let Some(val) = fold_cast(*kind, &va) {
                                 let lit = add_or_find_literal(&mut op_array.literals, val);
-                                if (*dst as usize) <= num_tmps {
+                                if def_count.get(*dst as usize).copied() == Some(1) {
                                     lit_def[*dst as usize] = Some(lit);
                                 }
                                 *op = Op::Move {
@@ -1191,7 +1231,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                                 let lit =
                                     add_or_find_literal(&mut op_array.literals, Value::Int(len));
                                 if let Some(d) = dst {
-                                    if (*d as usize) <= num_tmps {
+                                    if def_count.get(*d as usize).copied() == Some(1) {
                                         lit_def[*d as usize] = Some(lit);
                                     }
                                     *op = Op::Move {
@@ -1217,7 +1257,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                             let res = type_mask::matches(*mask, va);
                             let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
                             if let Some(d) = dst {
-                                if (*d as usize) <= num_tmps {
+                                if def_count.get(*d as usize).copied() == Some(1) {
                                     lit_def[*d as usize] = Some(lit);
                                 }
                                 *op = Op::Move {
@@ -1292,7 +1332,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                             if let Some(val) = fold_abs(va) {
                                 let lit = add_or_find_literal(&mut op_array.literals, val);
                                 if let Some(d) = dst {
-                                    if (*d as usize) <= num_tmps {
+                                    if def_count.get(*d as usize).copied() == Some(1) {
                                         lit_def[*d as usize] = Some(lit);
                                     }
                                 }

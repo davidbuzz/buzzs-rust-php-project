@@ -1127,6 +1127,65 @@ mod tests {
         );
     }
 
+    /// Both arms of `$c ? 1 : 1` give `1`, so `substr('foo', 1, ...)` is
+    /// evaluated at compile time (opcache `ct_eval_frameless_002`;
+    /// `/usr/bin/php` prints "o"); different arms stay a run-time choice.
+    #[test]
+    fn sccp_joins_equal_constants_of_both_branches() {
+        let unit = compile_src(
+            "<?php function f($foo) { echo substr('foo', 1, $foo ? 1 : 1); }\n\
+             function g($foo) { echo substr('foo', 1, $foo ? 1 : 2); }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let f = find_code(&unit, named(b"f"));
+        assert!(
+            !f.ops.iter().any(|op| matches!(op, Op::DoCall { .. })),
+            "{:?}",
+            f.ops
+        );
+        assert!(
+            f.ops.iter().any(|op| matches!(
+                op,
+                Op::Echo(Operand::Lit(l))
+                    if matches!(f.literals.get(*l as usize), Some(Value::Str(s)) if s.as_bytes() == b"o")
+            )),
+            "{:?}",
+            f.ops
+        );
+        let g = find_code(&unit, named(b"g"));
+        assert!(
+            g.ops.iter().any(|op| matches!(op, Op::DoCall { .. })),
+            "{:?}",
+            g.ops
+        );
+    }
+
+    /// A by-value foreach over an empty literal array is dropped; a
+    /// by-reference one keeps its `FE_RESET_RW` and `FE_FREE` but loses
+    /// the loop (opcache `opt/dce_009`).
+    #[test]
+    fn dce_drops_foreach_over_empty_literal_array() {
+        let unit = compile_src(
+            "<?php function a() { echo 1; foreach ([] as $x) { echo $x; } echo 2; }\n\
+             function b() { foreach ([] as $k => &$v) { echo $v; } }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let a = find_code(&unit, named(b"a"));
+        assert!(
+            !a.ops.iter().any(|op| matches!(
+                op,
+                Op::FeReset { .. } | Op::FeFetch { .. } | Op::FeFree { .. }
+            )),
+            "{:?}",
+            a.ops
+        );
+        let b = find_code(&unit, named(b"b"));
+        let has = |m: fn(&Op) -> bool| b.ops.iter().any(m);
+        assert!(has(|op| matches!(op, Op::FeReset { .. })), "{:?}", b.ops);
+        assert!(has(|op| matches!(op, Op::FeFree { .. })), "{:?}", b.ops);
+        assert!(!has(|op| matches!(op, Op::FeFetch { .. })), "{:?}", b.ops);
+    }
+
     #[test]
     fn test_nop_removal() {
         let unit = compile_src("<?php $a = 1; echo $a;", DEFAULT_OPTIMIZATION_LEVEL);
