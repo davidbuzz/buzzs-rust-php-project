@@ -28,8 +28,20 @@
 //! after the op, as there). A frame whose symbol table is attached (`Frame::symtab_attached`)
 //! has each written variable copied into its `VarStore` slot, out of line
 //! ([`sync_cv_cold`]).
+//!
+//! The array-dimension ops of a variable (`$cv[k]` read, `isset`, `=`,
+//! `op=`, `++`/`--`, nested chains) and `.=` on a variable run here as well
+//! (`exec/spec/dims.rs`, the pre-match's fast paths moved to the frame):
+//! they read an element (a refcount increment), or overwrite a plain
+//! element of an array the variable holds, separating a shared one first,
+//! and decline, having changed nothing, wherever the generic op could warn
+//! or reach an element held by reference, an object or user code.
 
-use super::spec::{cmp_simple_in, is_plain_slot, num_outcome, plain_truth, put_tmp, slot_truth};
+use super::spec::{
+    assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, cmp_simple_in,
+    concat_cv_in, fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, is_plain_slot,
+    isset_dim_cv_in, num_outcome, plain_truth, put_tmp, slot_truth,
+};
 use super::{discard_unrooted, num_bin, release_rooted, Num};
 use crate::opcode::{cmp_outcome, BinKind, IncDecKind, Op, Operand, UnKind};
 use crate::vm::{CvSlot, Frame};
@@ -70,6 +82,15 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::BinAssignCvJmp { .. }
             | Op::AssignOpCvJmp { .. }
             | Op::AssignOpCv { .. }
+            | Op::FetchDimCv { .. }
+            | Op::FetchDimsCv { .. }
+            | Op::IssetDimCv { .. }
+            | Op::AssignDimCv { .. }
+            | Op::AssignDimsCv { .. }
+            | Op::AssignOpDimCv { .. }
+            | Op::AssignOpDimsCv { .. }
+            | Op::IncDecDimCv { .. }
+            | Op::ConcatCv { .. }
     )
 }
 
@@ -355,6 +376,82 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
             ..
         } => {
             if !assign_op_cv(f, lits, cv, kind, val, dst) {
+                return DECLINED;
+            }
+        }
+        // Array dimensions of a variable and `.=` on one
+        // (`exec/spec/dims.rs`). With `to`, the `AssignCv` after a
+        // dimension fetch is done too (`Some(true)`: skip it).
+        Op::FetchDimCv {
+            cv, dim, dst, to, ..
+        } => match fetch_dim_cv_in(f, cv, dim, dst, to) {
+            Some(true) => ip += 1,
+            Some(false) => {}
+            None => return DECLINED,
+        },
+        Op::FetchDimsCv {
+            cv, place, dst, to, ..
+        } => match fetch_dims_cv_in(f, cv, place, dst, to) {
+            Some(true) => ip += 1,
+            Some(false) => {}
+            None => return DECLINED,
+        },
+        Op::IssetDimCv {
+            cv,
+            dim,
+            dst,
+            empty,
+            ..
+        } => {
+            if !isset_dim_cv_in(f, cv, dim, dst, empty) {
+                return DECLINED;
+            }
+        }
+        Op::AssignDimCv { cv, dim, val, .. } => {
+            if !assign_dim_cv_in(f, cv, dim, val) {
+                return DECLINED;
+            }
+        }
+        Op::AssignDimsCv { cv, val, place } => {
+            if !assign_dims_cv_in(f, cv, place, val) {
+                return DECLINED;
+            }
+        }
+        Op::AssignOpDimCv {
+            cv,
+            dim,
+            op: kind,
+            val,
+            ..
+        } => {
+            if !assign_op_dim_cv_in(f, cv, dim, kind, val) {
+                return DECLINED;
+            }
+        }
+        Op::AssignOpDimsCv {
+            cv,
+            op: kind,
+            val,
+            place,
+        } => {
+            if !assign_op_dims_cv_in(f, cv, kind, place, val) {
+                return DECLINED;
+            }
+        }
+        Op::IncDecDimCv {
+            cv, dim, kind, dst, ..
+        } => {
+            let Some(r) = incdec_dim_cv_in(f, cv, dim, kind) else {
+                return DECLINED;
+            };
+            // The result is an int or a float: an unused one needs no
+            // release.
+            if let Some(d) = dst {
+                set_tmp_in(f, d, r);
+            }
+        }
+        Op::ConcatCv { cv, val, dst, .. } => {
+            if !concat_cv_in(f, cv, val, dst) {
                 return DECLINED;
             }
         }

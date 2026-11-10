@@ -1178,71 +1178,9 @@ impl Vm {
                                 break 'slow;
                             }
                         }
-                        Op::AssignOpDimCv {
-                            cv,
-                            dim,
-                            op: kind,
-                            val,
-                            ..
-                        } => {
-                            if !self.assign_op_dim_cv_fast(*cv, *dim, *kind, *val) {
-                                break 'slow;
-                            }
-                        }
-                        Op::IncDecDimCv {
-                            cv, dim, kind, dst, ..
-                        } => match self.incdec_dim_cv_fast(*cv, *dim, *kind) {
-                            Some(r) => self.set_dst(*dst, r),
-                            None => break 'slow,
-                        },
-                        // With `to`, the `AssignCv` after a dimension fetch
-                        // is done here when the variable holds a plain
-                        // value (`Some(true)`: skip it).
-                        Op::FetchDimCv {
-                            cv, dim, dst, to, ..
-                        } => match self.fetch_dim_cv(*cv, *dim, *dst, *to) {
-                            Some(true) => ip += 1,
-                            Some(false) => {}
-                            None => break 'slow,
-                        },
-                        Op::FetchDimsCv {
-                            cv, place, dst, to, ..
-                        } => match self.fetch_dims_cv(*cv, *place, *dst, *to) {
-                            Some(true) => ip += 1,
-                            Some(false) => {}
-                            None => break 'slow,
-                        },
-                        Op::IssetDimCv {
-                            cv,
-                            dim,
-                            dst,
-                            empty,
-                            ..
-                        } => {
-                            if !self.isset_dim_cv(*cv, *dim, *dst, *empty) {
-                                break 'slow;
-                            }
-                        }
-                        Op::AssignDimCv { cv, dim, val, .. } => {
-                            if !self.assign_dim_cv_fast(*cv, *dim, *val) {
-                                break 'slow;
-                            }
-                        }
-                        Op::AssignDimsCv { cv, val, place } => {
-                            if !self.assign_dims_cv_fast(*cv, *place, *val) {
-                                break 'slow;
-                            }
-                        }
-                        Op::AssignOpDimsCv {
-                            cv,
-                            op: kind,
-                            val,
-                            place,
-                        } => {
-                            if !self.assign_op_dims_cv_fast(*cv, *kind, *place, *val) {
-                                break 'slow;
-                            }
-                        }
+                        // The array-dimension ops and `.=` on a variable
+                        // are hot ops (`exec/spec/dims.rs`): they never get
+                        // here, a declined one runs as its generic op.
                         // Static properties on a run-time cache hit
                         // (`exec/spec/statics.rs`).
                         Op::FetchStaticProp {
@@ -1391,11 +1329,6 @@ impl Vm {
                             Some(r) => self.set_tmp(*dst, Value::Bool(r)),
                             None => break 'slow,
                         },
-                        Op::ConcatCv { cv, val, dst, .. } => {
-                            if !self.concat_cv_fast(*cv, *val, *dst) {
-                                break 'slow;
-                            }
-                        }
                         Op::FetchConst {
                             name,
                             fallback,
