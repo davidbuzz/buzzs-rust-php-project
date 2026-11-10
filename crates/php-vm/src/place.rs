@@ -3714,10 +3714,28 @@ impl Vm {
         }
         // Fast paths: PRE/POST_INC/DEC_OBJ on a cached property, and the
         // element of a cached array property (`$this->a[$k]++`).
-        let (single, head) = {
+        let (single, head, stat) = {
             let p = &self.frame().code.places[pid as usize];
-            (propcache::cacheable(p), propcache::cacheable_head(p))
+            (
+                propcache::cacheable(p),
+                propcache::cacheable_head(p),
+                p.segs.is_empty()
+                    && matches!(
+                        p.base,
+                        PlaceBase::StaticProp {
+                            name: Operand::Lit(_),
+                            ..
+                        }
+                    ),
+            )
         };
+        // `self::$n++` / `A::$n--`: the static property's cached cell
+        // (`ZEND_*_INC_STATIC_PROP` with `CACHED_PTR`).
+        if stat {
+            if let Some(r) = self.inc_dec_static_prop_fast(pid, kind) {
+                return Ok(r);
+            }
+        }
         if single {
             if let Some(r) = self.prop_cache_incdec(pid, kind) {
                 return Ok(r);
