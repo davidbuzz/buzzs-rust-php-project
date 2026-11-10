@@ -122,3 +122,28 @@ fn user_opcode_hooks_bracket_silence() {
         .count();
     assert_eq!(hooks, 2, "{ops:?}");
 }
+
+#[test]
+fn switch_compares_a_variable_subject_in_place() {
+    // `zend_compile_switch`: `ZEND_IS_EQUAL` on the CV for every case
+    // (php-src: an undefined `$y` warns on each case line).
+    let ops = first_function_ops(&compile_src(
+        "<?php function f() {\nswitch ($y) {\ncase 'x':\ncase 'y':\n}\n}",
+        Vec::new(),
+    ));
+    let compares: Vec<&Op> = ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                Op::Bin {
+                    op: BinKind::Equal,
+                    a: crate::opcode::Operand::Cv(_),
+                    ..
+                }
+            )
+        })
+        .collect();
+    assert_eq!(compares.len(), 2, "{ops:?}");
+    assert!(!ops.iter().any(|op| matches!(op, Op::Move { .. })), "{ops:?}");
+}
