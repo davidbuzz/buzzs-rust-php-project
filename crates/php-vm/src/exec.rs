@@ -1428,6 +1428,62 @@ impl Vm {
                                 break 'slow;
                             }
                         }
+                        // `$this` of a method frame: its object, copied
+                        // (the generic arm's fast case; no `$this` throws
+                        // there).
+                        Op::FetchThis { dst } => {
+                            let Some(this) = self.frames.last().and_then(|f| f.this.clone()) else {
+                                break 'slow;
+                            };
+                            self.set_tmp(*dst, Value::Object(this));
+                        }
+                        // `$closure()` (`Vm::init_closure_call_fast`).
+                        Op::InitDynCall {
+                            callee: Operand::Cv(cv),
+                        } => {
+                            if !self.init_closure_call_fast(*cv) {
+                                break 'slow;
+                            }
+                        }
+                        // `$obj->name()` on a method cache hit
+                        // (`Vm::init_method_call_fast`).
+                        Op::InitMethodCall {
+                            obj,
+                            name: Operand::Lit(lit),
+                        } => {
+                            if !self.init_method_call_fast(*obj, *lit, at) {
+                                break 'slow;
+                            }
+                        }
+                        // `ZEND_DO_UCALL` of a plain user function
+                        // (`Vm::push_simple_ucall`, which stores `ip` as the
+                        // caller's resume point): the callee frame is
+                        // pushed and the loop goes on in it, as after
+                        // `Flow::Reload`. Declined, the generic `DoCall`
+                        // below runs (`Vm::op_do_call`).
+                        Op::DoCall { dst } => {
+                            if !self.push_simple_ucall(*dst, ip) {
+                                break 'slow;
+                            }
+                            if Self::safe_point_due() {
+                                self.safe_point_work(op)?;
+                            }
+                            continue 'frames;
+                        }
+                        // `ZEND_RETURN` on its common path
+                        // (`Vm::return_simple`): the frame is gone and the
+                        // loop goes on in the caller, as after
+                        // `Flow::Reload`. Declined, the generic `Return`
+                        // below runs (`Vm::op_return`).
+                        Op::Return { val } => {
+                            if self.return_simple(*val, base, ip).is_none() {
+                                break 'slow;
+                            }
+                            if Self::safe_point_due() {
+                                self.safe_point_work(op)?;
+                            }
+                            continue 'frames;
+                        }
                         _ => break 'slow,
                     }
                     if Self::safe_point_due() {
@@ -1880,16 +1936,13 @@ impl Vm {
                         }
                         Flow::Next
                     }
+                    // `Vm::return_simple` declined above.
                     Op::Return { val } => {
-                        if let Some(flow) = self.return_simple(*val, base) {
-                            flow
-                        } else {
-                            let v = match val {
-                                Operand::Unused => None,
-                                o => Some(self.read(*o)?),
-                            };
-                            self.op_return(v, base)?
-                        }
+                        let v = match val {
+                            Operand::Unused => None,
+                            o => Some(self.read(*o)?),
+                        };
+                        self.op_return(v, base)?
                     }
                     Op::ReturnByRefValue { val } => {
                         let unused = *val == Operand::Unused;

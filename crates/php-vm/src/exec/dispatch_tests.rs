@@ -719,3 +719,152 @@ float(9.223372036854776E+18)
 "#
     );
 }
+
+/// User calls and returns on the dispatch loop's fast paths
+/// (`Vm::push_simple_ucall`, `Vm::return_simple`) and the generic ones they
+/// decline to: defaults, coercion, destructor order of values released by
+/// the return, recursion, exceptions, closures with bound variables,
+/// methods, by-reference returns, static variables, generators, variadics,
+/// named arguments and backtraces.
+#[test]
+fn user_calls_and_returns() {
+    let src = r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "~", $this->n, " "; } }
+function id($x) { return $x; }
+function two($a, $b = 5) { return func_num_args() . ":" . ($a + $b); }
+function typed(int $i, ?string $s = null): int { return $i + strlen((string)$s); }
+function fl(float $f): float { return $f; }
+function mk($n) { $d = new D($n); return 7; }
+function keep($n) { return new D($n); }
+function rec($n) { return $n <= 0 ? 0 : $n + rec($n - 1); }
+function thrower($x) { if ($x) throw new Exception("boom $x"); return $x; }
+for ($i = 0; $i < 3; $i++) { echo id($i), two($i), two($i, 1), " "; }
+echo "\n", typed(3, "ab"), typed(4), " ", var_export(fl(2), true), " ", typed("5"), "\n";
+echo mk(1), " "; echo "after\n";
+$k = keep(2); echo "kept "; unset($k); echo "\n";
+id(new D(3)); echo "dropped\n";
+echo rec(50), "\n";
+try { thrower(0); thrower(1); } catch (Exception $e) { echo $e->getMessage(), " line ", $e->getLine(), "\n"; }
+$y = 10;
+$c = function($x) use ($y) { return $x + $y; };
+for ($i = 0; $i < 2; $i++) echo $c($i), " ";
+$o = new class { public $v = 3; function m($x) { return $x * $this->v; } static function s($x) { return $x - 1; } };
+for ($i = 0; $i < 2; $i++) echo $o->m($i), $o::s($i), " ";
+echo "\n";
+function &r(array &$a) { return $a[0]; }
+$arr = [1]; $ref = &r($arr); $ref = 9; echo $arr[0], "\n";
+function counter() { static $n = 0; return ++$n; }
+counter(); counter(); echo counter(), "\n";
+function gen() { yield 1; yield 2; }
+foreach (gen() as $g) echo $g; echo "\n";
+function arr($a) { $a[] = 1; return count($a); }
+$big = [1,2,3]; echo arr($big), count($big), "\n";
+function v(...$xs) { return implode(",", $xs); }
+echo v(1, 2, 3), " ", two(b: 1, a: 2), "\n";
+function strict_ret(): string { return 5; }
+var_dump(strict_ret());
+function noret() {}
+var_dump(noret());
+function bt() { return debug_backtrace()[0]['function'] . count(debug_backtrace()); }
+function outer() { return bt(); }
+echo outer(), "\n";
+echo "end\n";
+"#;
+    let expected = r#"01:52:1 11:62:2 21:72:3 
+54 2.0 5
+~1 7 after
+kept ~2 
+~3 dropped
+1275
+boom 1 line 10
+10 11 0-1 30 
+9
+3
+12
+43
+1,2,3 2:3
+string(1) "5"
+NULL
+bt2
+end
+"#;
+    assert_eq!(run(src), expected);
+}
+
+/// Method calls on the method cache's fast path from a variable and from
+/// temporaries (`$this`, `new`, call results) and the generic paths it
+/// declines to: the destructor of a temporary object released by the call,
+/// a static method called through an object, `__call`, overrides, a
+/// reference, an undefined variable and null.
+#[test]
+fn method_calls_on_variables_and_temporaries() {
+    let src = r#"<?php
+class D {
+    function __construct(public $n) {}
+    function __destruct() { echo "~", $this->n, " "; }
+    function m($x) { return $this->n + $x; }
+    function viaThis($x) { return $this->m($x) * 2; }
+    static function s($x) { return "s$x"; }
+    function __call($name, $args) { return "$name(" . implode(",", $args) . ")"; }
+}
+class E extends D { function m($x) { return -$x; } }
+function make($n) { return new D($n); }
+$d = new D(10);
+for ($i = 0; $i < 3; $i++) { echo $d->m($i), " ", $d->viaThis($i), " "; }
+echo "\n", (new D(1))->m(5), " after\n";
+echo make(2)->s(3), " after\n";
+echo $d->s(4), " ", $d->nope(1, 2), "\n";
+$objs = [new D(20), new E(30), new D(40)];
+foreach ($objs as $o) echo $o->m(1), " ";
+echo "\n";
+$r = &$d; echo $r->m(1), "\n";
+try { $u->m(1); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+$n = null;
+try { $n->m(1); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo "end\n";
+"#;
+    let expected = r#"10 20 11 22 12 24 
+~1 6 after
+~2 s3 after
+s4 nope(1,2)
+21 -1 41 
+11
+
+Warning: Undefined variable $u in t.php on line 21
+Error: Call to a member function m() on null
+Call to a member function m() on null
+end
+~10 ~20 ~30 ~40 "#;
+    assert_eq!(run(src), expected);
+}
+
+/// Dynamic calls of closures held by variables on the INIT fast path and
+/// the generic ones it declines to: recursion through a by-reference
+/// `use`, a bound `$this`, static closures, a reference to a closure,
+/// invokable objects, strings, arrays, first-class callables, an undefined
+/// variable and static variables.
+#[test]
+fn closure_and_dynamic_calls() {
+    let src = r#"<?php
+class Inv { public $k = 2; function __invoke($x) { return $x * $this->k; } function get() { return function($x) { return $x + $this->k; }; } }
+$f = function($x) use (&$f) { return $x <= 0 ? 0 : $x + $f($x - 1); };
+echo $f(4), " ";
+$inv = new Inv; echo $inv(5), " ";
+$s = 'strtoupper'; echo $s('ab'), " ";
+$b = $inv->get(); echo $b(1), " ";
+$st = static fn($x) => $x . "!"; echo $st('a'), " ";
+$ref = &$st; echo $ref('b'), " ";
+$m = [$inv, 'get']; echo $m()(3), " ";
+$fc = strlen(...); echo $fc('abcd'), "\n";
+try { $undef(1); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$counter = function() { static $n = 0; return ++$n; };
+$counter(); echo $counter(), "\n";
+"#;
+    let expected = r#"10 10 AB 3 a! b! 5 4
+
+Warning: Undefined variable $undef in t.php on line 12
+Value of type null is not callable
+2
+"#;
+    assert_eq!(run(src), expected);
+}

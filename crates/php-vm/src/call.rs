@@ -395,6 +395,29 @@ impl Vm {
         Ok(())
     }
 
+    /// `ZEND_INIT_DYNAMIC_CALL` of `$cv()` for a variable holding a closure
+    /// of a user function, from the dispatch loop's hot-instruction block
+    /// (no `SAVE_OPLINE`): [`Vm::op_init_dyn_call`]'s first case without
+    /// the generic operand read. Returns `false`, having changed nothing,
+    /// for an undefined variable, a reference or anything but such a
+    /// closure, and in a frame with an attached symbol table.
+    #[inline]
+    pub(crate) fn init_closure_call_fast(&mut self, cv: u32) -> bool {
+        let o = {
+            let Some(frame) = self.frames.last() else {
+                return false;
+            };
+            if frame.symtab_attached {
+                return false;
+            }
+            match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                Some(Value::Object(o)) => o.clone(),
+                _ => return false,
+            }
+        };
+        self.push_closure_user_call(&o)
+    }
+
     /// [`Vm::closure_user_call`] as a dynamic call (`$closure()`), the call
     /// built in place in `calls` ([`Vm::push_pending_with`]): only the
     /// handles the call takes from the closure are carried out of its
@@ -599,6 +622,83 @@ impl Vm {
         };
         let n = self.read(name)?;
         self.op_init_method_call(obj, n)
+    }
+
+    /// `ZEND_INIT_METHOD_CALL` of `$cv->name()` or `$tmp->name()` (`$this`
+    /// fetched by `FetchThis`, a call result, ...) on a run-time cache hit,
+    /// from the dispatch loop's hot-instruction block (no `SAVE_OPLINE`):
+    /// the hit of [`Vm::init_cached_method_call`] without the generic
+    /// operand read. The call's `$this` is a handle of its own, as there:
+    /// a copy of the variable's object, or the temporary's, which is
+    /// emptied as the read empties it. `slot` is the instruction's index
+    /// (its cache slot). Returns `false`, having changed nothing, for an
+    /// undefined variable, a reference or a value that is not an object, a
+    /// variable of a frame with an attached symbol table, a class with a
+    /// native `get_method` handler or a cache miss.
+    #[inline]
+    pub(crate) fn init_method_call_fast(&mut self, obj: Operand, lit: u32, slot: usize) -> bool {
+        let Some(frame) = self.frames.last_mut() else {
+            return false;
+        };
+        let o = match obj {
+            Operand::Cv(cv) if !frame.symtab_attached => {
+                match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+                    Some(Value::Object(o)) => o,
+                    _ => return false,
+                }
+            }
+            Operand::Tmp(t) => match frame.tmps.get(t as usize) {
+                Some(Value::Object(o)) => o,
+                _ => return false,
+            },
+            _ => return false,
+        };
+        let cls = object::class_of(o);
+        if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
+            return false;
+        }
+        let cls_addr = Rc::as_ptr(cls) as usize;
+        let scope_addr = frame.scope.as_ref().map_or(0, |s| Rc::as_ptr(s) as usize);
+        let hit = match frame.code.method_cache.borrow().get(slot) {
+            Some(Some(cached))
+                if cached.class_addr == cls_addr
+                    && cached.scope_addr == scope_addr
+                    && cached.name_lit == Some(lit) =>
+            {
+                cached.func.get().map(|func| {
+                    (
+                        func,
+                        cached
+                            .method_scope
+                            .as_ref()
+                            .and_then(std::rc::Weak::upgrade),
+                        cached.is_static,
+                    )
+                })
+            }
+            _ => None,
+        };
+        let Some((func, scope, is_static)) = hit else {
+            return false;
+        };
+        let called = Rc::clone(cls);
+        let this = if is_static { None } else { Some(o.clone()) };
+        push_call_in_place(&mut frame.calls, move || PendingCall {
+            this,
+            scope,
+            called: Some(called),
+            ..PendingCall::new(func)
+        });
+        // The temporary's handle is the read's (`std::mem::take`): released
+        // here, after the call took its own (the last handle of a static
+        // method's object goes as it goes there, its destructor left to
+        // the safe point after the instruction).
+        if let Operand::Tmp(t) = obj {
+            if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                drop(std::mem::take(slot));
+            }
+        }
+        true
     }
 
     /// The run-time cache hit of `ZEND_INIT_METHOD_CALL` for the method
@@ -1464,7 +1564,7 @@ impl Vm {
                 let Some(v) = frame.code.literals.get(*i as usize) else {
                     return false;
                 };
-                call.inline_args[idx] = Some(v.clone());
+                call.inline_args[idx] = Some(clone_value(v));
                 call.inline_count += 1;
                 return true;
             }
@@ -1495,7 +1595,7 @@ impl Vm {
         }
         let v = match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
             Some(Value::Reference(r)) => r.get(),
-            Some(v) => v.clone(),
+            Some(v) => clone_value(v),
             None => return false,
         };
         call.inline_args[idx] = Some(v);
@@ -2034,10 +2134,10 @@ impl Vm {
 
     /// Performs the pending call. Returns `true` when a user frame was
     /// pushed.
+    ///
+    /// The dispatch loop tries [`Vm::push_simple_ucall`] before it gets
+    /// here.
     pub(crate) fn op_do_call(&mut self, dst: Option<u32>) -> VmResult<bool> {
-        if self.push_simple_ucall(dst) {
-            return Ok(true);
-        }
         let frame = self.frames.last_mut().expect("active frame");
         let strict = frame.code.strict_types;
         let mut call = frame.calls.pop().expect("pending call");
@@ -2086,7 +2186,9 @@ impl Vm {
     /// (php-src's VM stack slot), and the arguments move from the call
     /// straight into the callee's compiled variables. Neither the
     /// `PendingCall` nor the `Frame` is moved (each move is an out-of-line
-    /// `memcpy` of 216 or 328 bytes).
+    /// `memcpy` of 216 or 328 bytes), and the emptied call is not passed
+    /// to its drop glue (five out-of-line `drop_in_place` calls, ~140
+    /// instructions per call, for fields that hold nothing by then).
     ///
     /// The call qualifies when the general path would take the fast branch
     /// of [`Vm::push_user_call`] anyway: a user function that is neither
@@ -2094,13 +2196,19 @@ impl Vm {
     /// static variables, foreach or finally slots, called with positional
     /// arguments only (all in the inline buffer, at least the required
     /// ones, none spread or by reference, each accepted by its declared
-    /// type as it is), not a constructor nor a `__call` trampoline, with no
-    /// observer and a pooled frame ready. It then does exactly what that
-    /// branch does, in the same order; a closure's bound variables are
-    /// bound afterwards as the general path binds them. Returns `false`,
-    /// having changed nothing, otherwise.
+    /// type as it is), not a constructor, a partial application nor a
+    /// `__call` trampoline, with no observer and a pooled frame ready. It
+    /// then does exactly what that branch does, in the same order; a
+    /// closure's bound variables are bound afterwards as the general path
+    /// binds them. `caller_ip` is stored as the caller's resume point
+    /// (`SAVE_OPLINE`) when the call is made. Returns `false`, having
+    /// changed nothing, otherwise.
+    ///
+    /// A pooled frame that last ran the same function still holds its
+    /// handles ([`Frame::clear_for_reuse`] keeps them): they are not
+    /// replaced.
     #[inline]
-    fn push_simple_ucall(&mut self, dst: Option<u32>) -> bool {
+    pub(crate) fn push_simple_ucall(&mut self, dst: Option<u32>, caller_ip: usize) -> bool {
         if self.observer.enabled {
             return false;
         }
@@ -2115,6 +2223,7 @@ impl Vm {
                 return false;
             };
             let caller_strict = caller.code.strict_types;
+            let pending = caller.calls.len();
             let Some(call) = caller.calls.last_mut() else {
                 return false;
             };
@@ -2125,8 +2234,9 @@ impl Vm {
             if !simple_ucall(uf, call, n) {
                 return false;
             }
-            let uf = Rc::clone(uf);
+            debug_assert!(call.inline_args[n..].iter().all(Option::is_none));
             let code = &uf.code;
+            let same_func = frame.ufunc.as_ref().is_some_and(|f| Rc::ptr_eq(f, uf));
             // `FrameStack::push_in_place`.
             if frame.cvs.len() == code.cv_names.len()
                 && frame.tmps.len() == code.num_tmps as usize
@@ -2146,16 +2256,24 @@ impl Vm {
             frame.is_ctor = false;
             // The passed-argument count (`ZEND_CALL_NUM_ARGS`): one empty
             // entry per argument, each moved into its compiled variable.
-            crate::vm::refill_with(&mut frame.args, n, || None);
-            let mut first_op = 0;
-            for (i, arg) in call.inline_args[..n].iter_mut().enumerate() {
-                if let Some(slot) = frame.cvs.get_mut(i) {
-                    slot.set(arg.take());
+            // The recycled buffer is empty (`Frame::clear_for_reuse`).
+            if !frame.args.is_empty() {
+                frame.args.clear();
+            }
+            #[allow(clippy::same_item_push)] // inline, unlike `resize`
+            for _ in 0..n {
+                frame.args.push(None);
+            }
+            for (slot, arg) in frame.cvs.iter_mut().zip(&mut call.inline_args[..n]) {
+                // The slot is empty: nothing to release.
+                if let Some(old) = slot.set(arg.take()) {
+                    drop(old);
                 }
             }
             // `RECV` of an argument that was passed and needs no coercion
             // has nothing left to do: start after it (after a `RECV_INIT`'s
             // default-value code).
+            let mut first_op = 0;
             for i in 0..n {
                 match code.ops.get(first_op) {
                     Some(Op::Recv { n, .. }) if *n as usize == i => first_op += 1,
@@ -2166,19 +2284,47 @@ impl Vm {
                 }
             }
             frame.ip = first_op;
-            set_opt(&mut frame.func, Some(Func::User(Rc::clone(&uf))));
-            set_opt(&mut frame.ufunc, Some(uf));
             call.inline_count = 0;
             let spare = if call.args.capacity() > 0 {
                 Some(std::mem::take(&mut call.args))
             } else {
                 None
             };
+            // Empty (`simple_ucall`), but it may own a buffer.
+            if call.named.capacity() > 0 {
+                drop(std::mem::take(&mut call.named));
+            }
             let closure = call.closure.take();
-            // What is left of the call (its function handle and empty
-            // buffers) is dropped where it lies.
-            let pending = caller.calls.len();
-            caller.calls.truncate(pending - 1);
+            caller.ip = caller_ip;
+            // What is left of the call owns nothing but its function
+            // handle: `this`, `scope`, `called`, `closure`, the argument
+            // buffer and the named arguments were taken above, the inline
+            // arguments `..n` moved into the frame and those after `n` are
+            // `None` (the inline buffer is filled in order: the
+            // `debug_assert` above, and what `gc::traverse` relies on),
+            // `magic_name` and `pfa` are `None` (`simple_ucall`), and the
+            // other fields are plain data.
+            //
+            // SAFETY: `pending - 1` is the index of `call` (the last
+            // element, `pending >= 1` as `last_mut` found it). Its `func` is
+            // read out once and the vector's length is then cut below the
+            // element, so the element is never dropped or read again and
+            // the handle is owned by `func` alone; nothing between the read
+            // and the length store can panic. Forgetting the rest of the
+            // element leaks nothing (see above).
+            let func = unsafe { std::ptr::read(&call.func) };
+            unsafe { caller.calls.set_len(pending - 1) };
+            if same_func {
+                // The frame holds this function already.
+                drop(func);
+            } else {
+                let ufunc = match &func {
+                    Func::User(uf) => Some(Rc::clone(uf)),
+                    Func::Builtin(_) => None,
+                };
+                set_opt(&mut frame.ufunc, ufunc);
+                set_opt(&mut frame.func, Some(func));
+            }
             (spare, closure)
         };
         self.frames.live = live + 1;
@@ -2209,11 +2355,18 @@ impl Vm {
     /// one `op_return` gives: the same checks, the same release order
     /// (`gc::frame_released`, then [`FrameStack::release_top`]) and a
     /// dereferenced value (`copy_on_assign` has nothing left to do).
-    /// Returns `None`, having changed nothing, otherwise.
+    /// `ip` is the instruction after the `RETURN`, stored as the frame's
+    /// resume point before the release (`SAVE_OPLINE`). Returns `None`,
+    /// having changed nothing, otherwise.
     ///
     /// [`FrameStack::release_top`]: crate::vm::FrameStack::release_top
     #[inline]
-    pub(crate) fn return_simple(&mut self, val: Operand, base: usize) -> Option<crate::exec::Flow> {
+    pub(crate) fn return_simple(
+        &mut self,
+        val: Operand,
+        base: usize,
+        ip: usize,
+    ) -> Option<crate::exec::Flow> {
         if self.observer.enabled {
             return None;
         }
@@ -2253,7 +2406,7 @@ impl Vm {
                         .and_then(crate::vm::CvSlot::get)?
                     {
                         Value::Reference(r) => r.get(),
-                        v => v.clone(),
+                        v => clone_value(v),
                     };
                     if !accepts(&v) {
                         return None;
@@ -2272,7 +2425,7 @@ impl Vm {
                     if matches!(lit, Value::Reference(_)) || !accepts(lit) {
                         return None;
                     }
-                    lit.clone()
+                    clone_value(lit)
                 }
                 // `return;` and the implicit return at the end of a body:
                 // `verify_return(None)` gives null for no return type and
@@ -2285,7 +2438,14 @@ impl Vm {
                 }
                 Operand::TmpKeep(_) => return None,
             };
-            crate::gc::frame_released(frame, caller.this.as_ref());
+            // `SAVE_OPLINE()`: the release below may report this line.
+            frame.ip = ip;
+            // `gc::frame_released` has nothing to record for a frame
+            // without `$this`, a closure or a compiled variable holding an
+            // array, object or reference (no symbol table is attached).
+            if frame.this.is_some() || frame.closure.is_some() || cvs_may_hold_roots(&frame.cvs) {
+                crate::gc::frame_released(frame, caller.this.as_ref());
+            }
             (v, frame.ret)
         };
         self.frames.release_top(&self.empty_code);
@@ -4226,31 +4386,72 @@ pub(crate) fn trampoline_name(name: &ZStr) -> ZStr {
 /// branch (the observer and stack-depth checks are the caller's).
 #[inline]
 fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
-    uf.flags & (flags::DEPRECATED | flags::NODISCARD | flags::NO_BODY | flags::GENERATOR) == 0
-        && uf.code.num_statics == 0
-        && uf.code.num_iters == 0
-        && uf.code.num_finally == 0
-        && call.args.is_empty()
-        && call.named.is_empty()
-        && call.magic_name.is_none()
-        && !call.is_ctor
-        && n >= uf.required as usize
-        && n <= uf.params.len()
-        && n <= call.inline_args.len()
-        && uf.statics.try_borrow().is_ok_and(|s| s.is_empty())
-        && uf.params.iter().all(|p| !p.variadic && !p.by_ref)
-        && uf.params[..n]
-            .iter()
-            .zip(&call.inline_args[..n])
-            .all(|(p, arg)| match &p.ty {
-                None => true,
-                Some(ty) => {
-                    ty.is_mixed()
-                        || arg
-                            .as_ref()
-                            .is_some_and(|v| accepts_without_coercion(ty.mask, v))
+    if uf.flags & (flags::DEPRECATED | flags::NODISCARD | flags::NO_BODY | flags::GENERATOR) != 0
+        || uf.code.num_statics != 0
+        || uf.code.num_iters != 0
+        || uf.code.num_finally != 0
+        || !call.args.is_empty()
+        || !call.named.is_empty()
+        || call.magic_name.is_some()
+        || call.pfa.is_some()
+        || call.is_ctor
+        || n < uf.required as usize
+        || n > uf.params.len()
+        || n > call.inline_args.len()
+        || n > uf.code.cv_names.len()
+        || !uf.statics.try_borrow().is_ok_and(|s| s.is_empty())
+    {
+        return false;
+    }
+    // Plain loops: the `Iterator::all` chains these replace were an
+    // out-of-line `try_fold` call per check.
+    for (i, p) in uf.params.iter().enumerate() {
+        if p.variadic || p.by_ref {
+            return false;
+        }
+        if i < n {
+            if let Some(ty) = &p.ty {
+                if !ty.is_mixed()
+                    && !call.inline_args[i]
+                        .as_ref()
+                        .is_some_and(|v| accepts_without_coercion(ty.mask, v))
+                {
+                    return false;
                 }
-            })
+            }
+        }
+    }
+    true
+}
+
+/// `v.clone()` with the scalar cases inline: the derived `Clone` of
+/// [`Value`] is an out-of-line call even for an integer.
+#[inline(always)]
+#[allow(clippy::inline_always)] // an argument or result per call
+fn clone_value(v: &Value) -> Value {
+    match v {
+        Value::Null => Value::Null,
+        Value::Bool(b) => Value::Bool(*b),
+        Value::Int(i) => Value::Int(*i),
+        Value::Float(f) => Value::Float(*f),
+        _ => v.clone(),
+    }
+}
+
+/// Whether a compiled variable of a returning frame holds a value
+/// [`crate::gc::possible_root`] may record: an array, an object or a
+/// reference (it ignores everything else).
+#[inline]
+fn cvs_may_hold_roots(cvs: &[crate::vm::CvSlot]) -> bool {
+    for slot in cvs {
+        if matches!(
+            slot.get(),
+            Some(Value::Array(_) | Value::Object(_) | Value::Reference(_))
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Stores `v` into an `Option` field of a frame being set up, releasing
