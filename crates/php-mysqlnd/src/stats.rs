@@ -412,14 +412,14 @@ pub fn reset_global() {
 /// `MYSQLND_INC_GLOBAL_STATISTIC_W_VALUE`
 pub fn inc_global(s: Stat, v: u64) {
     if ini::collect_statistics() {
-        GLOBAL.with(|g| g.borrow_mut().add(s, v));
+        let _ = GLOBAL.try_with(|g| g.borrow_mut().add(s, v));
     }
 }
 
 /// `MYSQLND_DEC_GLOBAL_STATISTIC`
 pub fn dec_global(s: Stat) {
     if ini::collect_statistics() {
-        GLOBAL.with(|g| g.borrow_mut().dec(s));
+        let _ = GLOBAL.try_with(|g| g.borrow_mut().dec(s));
     }
 }
 
@@ -427,7 +427,7 @@ pub fn dec_global(s: Stat) {
 /// style arithmetic); out-of-range indices are ignored.
 pub fn inc_conn_index(conn: &mut Stats, idx: usize, v: u64) {
     if idx < STAT_COUNT && ini::collect_statistics() {
-        GLOBAL.with(|g| {
+        let _ = GLOBAL.try_with(|g| {
             let mut g = g.borrow_mut();
             g.values[idx] = g.values[idx].wrapping_add(v);
         });
@@ -439,7 +439,7 @@ pub fn inc_conn_index(conn: &mut Stats, idx: usize, v: u64) {
 /// connection counters.
 pub fn inc_conn(conn: &mut Stats, s: Stat, v: u64) {
     if ini::collect_statistics() {
-        GLOBAL.with(|g| g.borrow_mut().add(s, v));
+        let _ = GLOBAL.try_with(|g| g.borrow_mut().add(s, v));
         conn.add(s, v);
     }
 }
@@ -472,5 +472,35 @@ mod tests {
         assert_eq!(s.get(Stat::OpenedConnections), 1);
         let pairs = s.to_pairs();
         assert_eq!(pairs[0], ("bytes_sent", "0".to_string()));
+    }
+
+    /// A connection cached in a thread-local (a persistent PDO handle)
+    /// is closed while the thread-locals of this crate may already be
+    /// destroyed: counting and warning must not panic then.
+    #[test]
+    fn statistics_after_thread_local_destruction() {
+        struct CloseOnDrop;
+        impl Drop for CloseOnDrop {
+            fn drop(&mut self) {
+                inc_global(Stat::CloseExplicit, 1);
+                dec_global(Stat::OpenedConnections);
+                let mut conn = Stats::default();
+                inc_conn(&mut conn, Stat::ComQuit, 1);
+                inc_conn_index(&mut conn, Stat::ComQuit as usize, 1);
+                crate::diag::warn("late");
+            }
+        }
+        thread_local! {
+            static CACHED: RefCell<Option<CloseOnDrop>> = const { RefCell::new(None) };
+        }
+        let t = std::thread::spawn(|| {
+            // registered first, so destroyed after the counters below
+            CACHED.with(|c| *c.borrow_mut() = Some(CloseOnDrop));
+            assert!(ini::collect_statistics());
+            inc_global(Stat::BytesSent, 1);
+            crate::diag::warn("early");
+            assert_eq!(global().get(Stat::BytesSent), 1);
+        });
+        assert!(t.join().is_ok());
     }
 }

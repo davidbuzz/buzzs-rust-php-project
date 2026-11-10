@@ -34,19 +34,23 @@ pub fn set_sink(sink: Option<Sink>) -> Option<Sink> {
 }
 
 fn emit(d: Diag) {
-    // take the sink out while calling it, so a re-entrant warning is queued
-    let taken = SINK.with(|s| s.borrow_mut().take());
+    // take the sink out while calling it, so a re-entrant warning is queued;
+    // once the thread-locals are gone (a persistent connection closed while
+    // the process exits) the diagnostic is dropped
+    let taken = SINK.try_with(|s| s.borrow_mut().take()).ok().flatten();
     match taken {
         Some(mut f) => {
             f(&d);
-            SINK.with(|s| {
+            let _ = SINK.try_with(|s| {
                 let mut slot = s.borrow_mut();
                 if slot.is_none() {
                     *slot = Some(f);
                 }
             });
         }
-        None => QUEUE.with(|q| q.borrow_mut().push(d)),
+        None => {
+            let _ = QUEUE.try_with(|q| q.borrow_mut().push(d));
+        }
     }
 }
 

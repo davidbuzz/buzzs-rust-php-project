@@ -135,10 +135,14 @@ pub fn settings() -> Settings {
     SETTINGS.with(|s| s.borrow().clone())
 }
 
-/// `MYSQLND_G(collect_statistics)`
+/// `MYSQLND_G(collect_statistics)`. `false` once the thread's settings are
+/// gone: a persistent connection cached in another thread-local can be
+/// closed after them while the process exits (module shutdown).
 #[must_use]
 pub fn collect_statistics() -> bool {
-    SETTINGS.with(|s| s.borrow().collect_statistics)
+    SETTINGS
+        .try_with(|s| s.borrow().collect_statistics)
+        .unwrap_or(false)
 }
 
 /// PHP's `zend_ini_parse_bool` for `OnUpdateBool`.
