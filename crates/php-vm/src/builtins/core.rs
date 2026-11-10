@@ -1583,7 +1583,7 @@ fn ret_null(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 fn memory_get_usage(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    vm.frames.drop_pool();
+    vm.frames.drop_pool(&vm.empty_vars);
     let real = a.has(0) && a.bool(0);
     Ok(Value::Int(
         i64::try_from(php_memlimit::memory_get_usage(real)).unwrap_or(i64::MAX),
