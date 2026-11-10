@@ -86,6 +86,13 @@ pub(super) fn is_hot(op: &Op) -> bool {
             | Op::AssignStaticProp { .. }
             | Op::IssetStaticProp { .. }
             | Op::FuncNumArgs { .. }
+            | Op::Strlen { .. }
+            | Op::Count { .. }
+            | Op::TypeCheck { .. }
+            | Op::Isset { .. }
+            | Op::Empty { .. }
+            | Op::InitFCall { fallback: None, .. }
+            | Op::Send { .. }
             | Op::Free(Operand::Tmp(_))
     )
 }
@@ -446,6 +453,57 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
                 set_tmp_in(f, d, Value::Int(n));
             }
         }
+        // `ZEND_STRLEN` of a string, `ZEND_COUNT` of an array.
+        Op::Strlen { a, dst } => {
+            let Some(n) = strlen_in(f, lits, a) else {
+                return DECLINED;
+            };
+            set_dst_in(f, dst, Value::Int(n));
+        }
+        Op::Count { a, dst, .. } => {
+            let Some(n) = count_in(f, lits, a) else {
+                return DECLINED;
+            };
+            set_dst_in(f, dst, Value::Int(n));
+        }
+        // `ZEND_TYPE_CHECK` (`is_int()` & co.) of a value read without
+        // a diagnostic.
+        Op::TypeCheck { a, mask, dst } => {
+            let Some(r) = type_check_in(f, lits, a, mask) else {
+                return DECLINED;
+            };
+            set_dst_in(f, dst, Value::Bool(r));
+        }
+        // `ZEND_ISSET_ISEMPTY_CV`.
+        Op::Isset { place, dst } => {
+            let Some(r) = isset_cv_in(f, place, false) else {
+                return DECLINED;
+            };
+            set_tmp_in(f, dst, Value::Bool(r));
+        }
+        Op::Empty { place, dst } => {
+            let Some(r) = isset_cv_in(f, place, true) else {
+                return DECLINED;
+            };
+            set_tmp_in(f, dst, Value::Bool(r));
+        }
+        // `ZEND_INIT_FCALL` on a run-time cache hit and `ZEND_SEND_VAL` /
+        // `ZEND_SEND_VAR` of a positional by-value argument: the pending
+        // call lives in the frame (`Vm::init_fcall_fast`, `Vm::send_fast`).
+        Op::InitFCall {
+            name,
+            fallback: None,
+            ..
+        } => {
+            if !crate::call::init_fcall_in(f, name) {
+                return DECLINED;
+            }
+        }
+        Op::Send { ref src } => {
+            if !crate::call::send_in(f, src) {
+                return DECLINED;
+            }
+        }
         // `ZEND_FREE` of a temporary whose release has no side effect.
         Op::Free(Operand::Tmp(t)) => {
             let Some(slot) = f.tmps.get_mut(t as usize) else {
@@ -459,6 +517,142 @@ pub(super) fn step(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usiz
         _ => return DECLINED,
     }
     ip
+}
+
+/// Stores the scalar result `v` of an op into its result temporary when
+/// the result is used ([`set_tmp_in`]); an unused int or bool owns nothing.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn set_dst_in(f: &mut Frame, dst: Option<u32>, v: Value) {
+    if let Some(t) = dst {
+        set_tmp_in(f, t, v);
+    }
+}
+
+/// `strlen()` of an operand holding a string, read as `Vm::read` reads it
+/// (a temporary is consumed and its string released): a defined compiled
+/// variable, a literal or a temporary. `None` for anything else (a
+/// reference, an undefined variable, other types: the generic op).
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn strlen_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
+    let n = match a {
+        Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
+            Value::Str(s) => s.len(),
+            _ => return None,
+        },
+        Operand::Lit(i) => match lits.get(i as usize)? {
+            Value::Str(s) => s.len(),
+            _ => return None,
+        },
+        Operand::TmpKeep(t) => match f.tmps.get(t as usize)? {
+            Value::Str(s) => s.len(),
+            _ => return None,
+        },
+        Operand::Tmp(t) => {
+            let slot = f.tmps.get_mut(t as usize)?;
+            let Value::Str(s) = slot else {
+                return None;
+            };
+            let n = s.len();
+            drop(std::mem::take(slot));
+            n
+        }
+        Operand::Unused => return None,
+    };
+    Some(i64::try_from(n).unwrap_or(i64::MAX))
+}
+
+/// `count()` / `sizeof()` of an operand holding an array, read as
+/// `Vm::read` reads it (a temporary is consumed and its array released,
+/// as `Vm::op_count_slow` releases it). `None` for anything else.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn count_in(f: &mut Frame, lits: &[Value], a: Operand) -> Option<i64> {
+    let n = match a {
+        Operand::Cv(cv) => match f.cvs.get(cv as usize).and_then(CvSlot::get)? {
+            Value::Array(arr) => arr.len(),
+            _ => return None,
+        },
+        Operand::Lit(i) => match lits.get(i as usize)? {
+            Value::Array(arr) => arr.len(),
+            _ => return None,
+        },
+        Operand::TmpKeep(t) => match f.tmps.get(t as usize)? {
+            Value::Array(arr) => arr.len(),
+            _ => return None,
+        },
+        Operand::Tmp(t) => {
+            let slot = f.tmps.get_mut(t as usize)?;
+            let Value::Array(arr) = slot else {
+                return None;
+            };
+            let n = arr.len();
+            drop(std::mem::take(slot));
+            n
+        }
+        Operand::Unused => return None,
+    };
+    Some(i64::try_from(n).unwrap_or(i64::MAX))
+}
+
+/// Whether the type of operand `a` is one of the `mask` bits
+/// ([`crate::opcode::type_mask::matches`]), read without a diagnostic: a
+/// defined compiled variable of a frame without an attached symbol table,
+/// a literal, or a temporary (consumed, as `Vm::read` consumes it).
+/// `None` for an undefined variable (the generic op warns).
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn type_check_in(f: &mut Frame, lits: &[Value], a: Operand, mask: u8) -> Option<bool> {
+    use crate::opcode::type_mask::matches;
+    match a {
+        Operand::Cv(cv) if !f.symtab_attached => {
+            Some(matches(mask, f.cvs.get(cv as usize).and_then(CvSlot::get)?))
+        }
+        Operand::Lit(i) => Some(matches(mask, lits.get(i as usize)?)),
+        Operand::TmpKeep(t) => Some(matches(mask, f.tmps.get(t as usize)?)),
+        Operand::Tmp(t) => {
+            let v = std::mem::take(f.tmps.get_mut(t as usize)?);
+            let r = matches(mask, &v);
+            discard_unrooted(Some(v));
+            Some(r)
+        }
+        Operand::Cv(_) | Operand::Unused => None,
+    }
+}
+
+/// `isset($cv)` / `empty($cv)` (`ZEND_ISSET_ISEMPTY_CV`, which never
+/// warns) of a plain compiled variable of a frame without an attached
+/// symbol table, as `Vm::place_isset` decides it: undefined is not set
+/// and empty; a value (behind a reference: the referenced one) is set
+/// unless null, and empty when [`plain_truth`] says false. `None` for any
+/// other place and for a value whose truth needs a conversion (objects:
+/// the generic op).
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn isset_cv_in(f: &Frame, place: crate::opcode::PlaceId, empty: bool) -> Option<bool> {
+    if f.symtab_attached {
+        return None;
+    }
+    let p = f.code.places.get(place as usize)?;
+    let crate::opcode::PlaceBase::Cv(cv) = &p.base else {
+        return None;
+    };
+    if !p.segs.is_empty() {
+        return None;
+    }
+    let decide = |v: &Value| {
+        if empty {
+            plain_truth(v).map(|b| !b)
+        } else {
+            Some(!matches!(v, Value::Null))
+        }
+    };
+    match f.cvs.get(*cv as usize)?.get() {
+        None => Some(empty),
+        Some(Value::Reference(r)) => decide(&*r.try_borrow()?),
+        Some(v) => decide(v),
+    }
 }
 
 /// Copies compiled variable `cv`'s new value into the attached symbol

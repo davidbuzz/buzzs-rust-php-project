@@ -867,4 +867,121 @@ Value of type null is not callable
 2
 "#;
     assert_eq!(run(src), expected);
+
+/// The builtin ops and calls the hot loop and the in-place frameless call
+/// take over (`ZEND_STRLEN`, `ZEND_COUNT`, `ZEND_TYPE_CHECK`,
+/// `ZEND_ISSET_ISEMPTY_CV`, `ZEND_INIT_FCALL`, `ZEND_SEND_*`,
+/// `ZEND_FRAMELESS_ICALL_n`), next to their declined shapes: references,
+/// undefined variables, coercions, errors whose traces show the builtin's
+/// frame, and builtins that call back into user code.
+#[test]
+fn hot_builtin_ops_and_frameless_calls_match_the_generic_ops() {
+    let src = r#"<?php
+function lens($s, $a) {
+    $r = [];
+    $r[] = strlen($s);
+    $r[] = strlen("abc");
+    $r[] = strlen($s . "xy");
+    $r[] = count($a);
+    $r[] = count([1, 2]);
+    $r[] = count(func_get_args());
+    $ref = &$s;
+    $r[] = strlen($s);
+    $r[] = strlen(12345);
+    $r[] = is_int($a[0]) ? "i" : "n";
+    $r[] = is_string($s) ? "s" : "n";
+    $r[] = is_array($a . "") ? "a" : "n";
+    $r[] = is_null($undef) ? "null" : "set";
+    echo implode(",", $r), "\n";
+}
+lens("hello", [1, 2, 3]);
+function issets() {
+    $n = null; $z = "0"; $e = ""; $a = []; $f = 0.0; $o = new stdClass; $s = "x";
+    $r = &$s;
+    var_dump(isset($u), empty($u), isset($n), empty($n), isset($z), empty($z), empty($e),
+        empty($a), empty($f), isset($o), empty($o), isset($r), empty($r));
+}
+issets();
+function frameless($s) {
+    var_dump(substr($s, 1, 3), substr($s, -2), strpos($s, "l"), strpos($s, "l", -2),
+        abs(-5), abs(-2.5), abs(PHP_INT_MIN), ord("A"), chr(66), in_array(2, [1, 2, 3], true),
+        in_array("2", [1, 2, 3]), intdiv(7, 2), str_contains($s, "ll"), strtolower("ABC"),
+        trim("  x "), round(2.5), floor(3), sqrt(16));
+    try { intdiv(1, 0); } catch (DivisionByZeroError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    try { strpos($s, "l", 10); } catch (ValueError $e) { echo $e->getMessage(), " @ ", $e->getTrace()[0]['function'], "\n"; }
+    try { str_repeat("x", -1); } catch (ValueError $e) { echo $e->getMessage(), " @ ", $e->getTrace()[0]['function'], "\n"; }
+}
+frameless("hello");
+echo strlen(null), "\n";
+try { strlen([]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { count(5); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+class C implements Countable { function count(): int { return 42; } }
+echo count(new C), "\n";
+echo is_int($nope) ? "y" : "n", "\n";
+echo call_user_func(function ($x) { return strlen($x) + count(debug_backtrace()); }, "abc"), "\n";
+$t = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $t += strlen("ab") + count([$i]) + (is_int($i) ? 1 : 0) + abs(-$i) % 3 + ord(chr(65 + $i % 26));
+}
+echo $t, "\n";
+function g($x) { return $x * 2; }
+$u = 0;
+for ($i = 0; $i < 100; $i++) { $u += g($i) + strlen(str_repeat("x", $i % 4)); }
+echo $u, "\n";
+"#;
+    assert_eq!(
+        run(src),
+        r#"
+Warning: Array to string conversion in t.php on line 15
+
+Warning: Undefined variable $undef in t.php on line 16
+5,3,7,3,2,2,5,5,i,s,n,null
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+string(3) "ell"
+string(2) "lo"
+int(2)
+int(3)
+int(5)
+float(2.5)
+float(9.223372036854776E+18)
+int(65)
+string(1) "B"
+bool(true)
+bool(true)
+int(3)
+bool(true)
+string(3) "abc"
+string(1) "x"
+float(3)
+float(3)
+float(4)
+DivisionByZeroError: Division by zero
+strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack) @ strpos
+str_repeat(): Argument #2 ($times) must be greater than or equal to 0 @ str_repeat
+
+Deprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in t.php on line 37
+0
+strlen(): Argument #1 ($string) must be of type string, array given
+count(): Argument #1 ($value) must be of type Countable|array, int given
+42
+
+Warning: Undefined variable $nope in t.php on line 42
+n
+4
+82415
+10050
+"#
+    );
 }

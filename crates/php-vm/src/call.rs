@@ -227,20 +227,7 @@ impl Vm {
         let Some(frame) = self.frames.last_mut() else {
             return false;
         };
-        let cached = frame
-            .code
-            .fcall_cache
-            .borrow()
-            .get(name as usize)
-            .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
-        let Some(func) = cached else {
-            return false;
-        };
-        push_call_in_place(&mut frame.calls, move || PendingCall {
-            direct: true,
-            ..PendingCall::new(func)
-        });
-        true
+        init_fcall_in(frame, name)
     }
 
     pub(crate) fn op_init_fcall(
@@ -1547,60 +1534,7 @@ impl Vm {
         let Some(frame) = self.frames.last_mut() else {
             return false;
         };
-        let Some(call) = frame.calls.last_mut() else {
-            return false;
-        };
-        let idx = call.inline_count as usize;
-        if idx >= call.inline_args.len()
-            || !call.args.is_empty()
-            || call.has_named
-            || call.magic_name.is_some()
-            || call.func.arg_by_ref(idx)
-        {
-            return false;
-        }
-        let cv = match src {
-            ArgSrc::Val(Operand::Lit(i)) => {
-                let Some(v) = frame.code.literals.get(*i as usize) else {
-                    return false;
-                };
-                call.inline_args[idx] = Some(clone_value(v));
-                call.inline_count += 1;
-                return true;
-            }
-            ArgSrc::Val(Operand::Tmp(t)) | ArgSrc::CallResult(Operand::Tmp(t)) => {
-                let Some(slot) = frame.tmps.get_mut(*t as usize) else {
-                    return false;
-                };
-                let v = match std::mem::take(slot) {
-                    Value::Reference(r) => r.get(),
-                    v => v,
-                };
-                call.inline_args[idx] = Some(v);
-                call.inline_count += 1;
-                return true;
-            }
-            ArgSrc::Val(Operand::Cv(cv)) => *cv,
-            ArgSrc::Place(pid) => match frame.code.places.get(*pid as usize) {
-                Some(p) if p.segs.is_empty() => match &p.base {
-                    crate::opcode::PlaceBase::Cv(cv) => *cv,
-                    _ => return false,
-                },
-                _ => return false,
-            },
-            _ => return false,
-        };
-        if frame.symtab_attached {
-            return false;
-        }
-        let v = match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
-            Some(Value::Reference(r)) => r.get(),
-            Some(v) => clone_value(v),
-            None => return false,
-        };
-        call.inline_args[idx] = Some(v);
-        call.inline_count += 1;
-        true
+        send_in(frame, src)
     }
 
     pub(crate) fn op_send(&mut self, src: &ArgSrc, name: Option<ZStr>) -> VmResult<()> {
@@ -2138,6 +2072,14 @@ impl Vm {
     /// The dispatch loop tries [`Vm::push_simple_ucall`] before it gets
     /// here.
     pub(crate) fn op_do_call(&mut self, dst: Option<u32>) -> VmResult<bool> {
+        // `ZEND_FRAMELESS_ICALL_n`: a frameless builtin, called in place.
+        if let Some(r) = self.frameless_icall_in_place(dst) {
+            let v = r?;
+            if let Some(d) = dst {
+                self.set_tmp(d, v);
+            }
+            return Ok(false);
+        }
         let frame = self.frames.last_mut().expect("active frame");
         let strict = frame.code.strict_types;
         let mut call = frame.calls.pop().expect("pending call");
@@ -3057,7 +2999,11 @@ fn fast_builtin_eval(name: &[u8], val: &Value) -> Option<Value> {
             _ => None,
         },
         b"chr" => match val {
-            Value::Int(c) if (0..=255).contains(c) => Some(Value::Str(ZStr::from(&[*c as u8][..]))),
+            // The shared one-character string (`ZSTR_CHAR`), as the
+            // handler returns it.
+            Value::Int(c) => u8::try_from(*c)
+                .ok()
+                .map(|c| Value::Str(ZStr::from_byte(c))),
             _ => None,
         },
         _ => None,
@@ -3156,30 +3102,49 @@ impl Vm {
         // (php-src's arguments stay in the call frame on the VM stack); the
         // handler gets copies.
         let pushed_args = std::mem::take(&mut call.args);
-        self.frames.push(Frame::with_vars(
-            self.empty_code.clone(),
-            FrameKind::Builtin,
-            self.empty_vars.clone(),
-            None,
-        ));
+        // The frame `Frame::with_vars` makes for the empty op array, built
+        // with the call's parts in place and without allocating: no
+        // compiled variables, temporaries or pending calls (a handler that
+        // starts a call grows `calls` then), and the argument buffer is
+        // the call's own. Only the named arguments, `$this` and scopes the
+        // call has are copied.
+        self.frames.push(Frame {
+            tmps: Vec::new(),
+            iters: Vec::new(),
+            fins: Vec::new(),
+            calls: Vec::new(),
+            cvs: Vec::new(),
+            symtab_attached: false,
+            vars: self.empty_vars.clone(),
+            named: if call.named.is_empty() {
+                Vec::new()
+            } else {
+                call.named.clone()
+            },
+            args: pushed_args,
+            this: call.this.clone(),
+            closure: call.closure.clone(),
+            generator: None,
+            pending_exc: None,
+            statics: None,
+            func: Some(call.func.clone()),
+            ufunc: None,
+            code: self.empty_code.clone(),
+            ip: 0,
+            scope: call.scope.clone(),
+            called: call.called.clone(),
+            ret: RetTarget::Discard,
+            kind: FrameKind::Builtin,
+            is_ctor: false,
+            silence_saved: Vec::new(),
+            builtin_name,
+            magic_name: self.magic_call_name.clone(),
+            caller_strict: false,
+            called_from_internal: false,
+            observed: false,
+            observer_hidden,
+        });
         let depth = self.frames.len();
-        {
-            // A new frame has no named arguments, `$this` or scopes: only
-            // the ones the call has are copied.
-            let f = &mut self.frames[depth - 1];
-            f.func = Some(call.func.clone());
-            f.builtin_name = builtin_name;
-            if !call.named.is_empty() {
-                f.named = call.named.clone();
-            }
-            install_buffer(&mut f.args, pushed_args);
-            f.this = call.this.clone();
-            f.scope = call.scope.clone();
-            f.called = call.called.clone();
-            f.closure = call.closure.clone();
-            f.magic_name = self.magic_call_name.clone();
-            f.observer_hidden = observer_hidden;
-        }
         self.observer_begin_top();
         // `zend_execute_internal` wraps the handler, which parses its own
         // arguments: internal enter precedes arity and type checks.
@@ -4475,6 +4440,95 @@ fn set_opt<T>(slot: &mut Option<T>, v: Option<T>) {
 #[allow(clippy::inline_always)] // the point is building in place
 fn push_call_in_place(calls: &mut Vec<PendingCall>, make: impl FnOnce() -> PendingCall) {
     calls.extend(std::iter::once_with(make));
+}
+
+/// [`Vm::init_fcall_fast`] on the running frame `frame`: `ZEND_INIT_FCALL`
+/// of a call site without a global fallback whose function is in the
+/// run-time cache, the pending call built in place in `frame.calls`.
+/// Returns `false`, having changed nothing, on a cache miss. Frame-local,
+/// so the dispatch loop's hot block (`exec/hot.rs`) runs it as well.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one cache probe and an in-place push per call site
+pub(crate) fn init_fcall_in(frame: &mut Frame, name: u32) -> bool {
+    let cached = frame
+        .code
+        .fcall_cache
+        .borrow()
+        .get(name as usize)
+        .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
+    let Some(func) = cached else {
+        return false;
+    };
+    push_call_in_place(&mut frame.calls, move || PendingCall {
+        direct: true,
+        ..PendingCall::new(func)
+    });
+    true
+}
+
+/// [`Vm::send_fast`] on the running frame `frame`: a positional by-value
+/// argument (a literal, a temporary or a defined compiled variable of a
+/// frame without an attached symbol table) into the pending call's inline
+/// buffer. Returns `false`, having changed nothing, otherwise.
+/// Frame-local, so the dispatch loop's hot block (`exec/hot.rs`) runs it
+/// as well.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one SEND per argument of every call
+pub(crate) fn send_in(frame: &mut Frame, src: &ArgSrc) -> bool {
+    let Some(call) = frame.calls.last_mut() else {
+        return false;
+    };
+    let idx = call.inline_count as usize;
+    if idx >= call.inline_args.len()
+        || !call.args.is_empty()
+        || call.has_named
+        || call.magic_name.is_some()
+        || call.func.arg_by_ref(idx)
+    {
+        return false;
+    }
+    let cv = match src {
+        ArgSrc::Val(Operand::Lit(i)) => {
+            let Some(v) = frame.code.literals.get(*i as usize) else {
+                return false;
+            };
+            call.inline_args[idx] = Some(clone_value(v));
+            call.inline_count += 1;
+            return true;
+        }
+        ArgSrc::Val(Operand::Tmp(t)) | ArgSrc::CallResult(Operand::Tmp(t)) => {
+            let Some(slot) = frame.tmps.get_mut(*t as usize) else {
+                return false;
+            };
+            let v = match std::mem::take(slot) {
+                Value::Reference(r) => r.get(),
+                v => v,
+            };
+            call.inline_args[idx] = Some(v);
+            call.inline_count += 1;
+            return true;
+        }
+        ArgSrc::Val(Operand::Cv(cv)) => *cv,
+        ArgSrc::Place(pid) => match frame.code.places.get(*pid as usize) {
+            Some(p) if p.segs.is_empty() => match &p.base {
+                crate::opcode::PlaceBase::Cv(cv) => *cv,
+                _ => return false,
+            },
+            _ => return false,
+        },
+        _ => return false,
+    };
+    if frame.symtab_attached {
+        return false;
+    }
+    let v = match frame.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get) {
+        Some(Value::Reference(r)) => r.get(),
+        Some(v) => clone_value(v),
+        None => return false,
+    };
+    call.inline_args[idx] = Some(v);
+    call.inline_count += 1;
+    true
 }
 
 fn install_buffer<T>(slot: &mut Vec<T>, buf: Vec<T>) {

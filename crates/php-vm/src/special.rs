@@ -22,7 +22,7 @@ use crate::object;
 use crate::opcode::Operand;
 use crate::typecheck::given_type;
 use crate::vm::{PendingCall, Vm, VmResult};
-use php_runtime::{Value, ZArray};
+use php_runtime::{Value, ZArray, ZStr};
 use std::rc::Rc;
 
 impl Vm {
@@ -619,9 +619,144 @@ impl Vm {
     }
 }
 
+/// The result of a one-argument frameless call that needs no handler:
+/// `abs()` of an int other than `PHP_INT_MIN` or of a float, `ord()` of a
+/// one-byte string, `chr()` of 0..=255 (the shared one-character string,
+/// `ZSTR_CHAR`, as the handler returns it). `arg` already has the shape
+/// [`frameless_args`] accepts for `class`; `None` for every other call.
+#[inline]
+fn frameless_inline(class: u32, arg: Option<&Value>) -> Option<Value> {
+    match (class, arg?) {
+        (fl::ABS, Value::Int(i)) if *i != i64::MIN => Some(Value::Int(i.abs())),
+        (fl::ABS, Value::Float(x)) => Some(Value::Float(x.abs())),
+        (fl::ORD, Value::Str(s)) => s.as_bytes().first().map(|&c| Value::Int(i64::from(c))),
+        (fl::CHR, Value::Int(c)) => u8::try_from(*c)
+            .ok()
+            .map(|c| Value::Str(ZStr::from_byte(c))),
+        _ => None,
+    }
+}
+
+impl Vm {
+    /// `ZEND_FRAMELESS_ICALL_n` / `ZEND_DO_ICALL` of the pending call when it
+    /// is a [`frameless_call`] whose arguments are all in the call's inline
+    /// buffer: the call is read where it lies in the caller's `calls`
+    /// (not moved out, as [`Vm::call_builtin`] takes it, three times), its
+    /// arguments move into the handler's `Args`, and the rest of it is
+    /// released before the handler runs, as [`Vm::call_builtin_frameless`]
+    /// releases it. `abs()`, `ord()` and `chr()` of one argument need no
+    /// handler at all ([`frameless_inline`]). Each step is the one the
+    /// general path takes, in the same order: the handler, the interrupt
+    /// check after it, the buffers back to their pools.
+    ///
+    /// Returns `None`, having changed nothing, for any other pending call
+    /// and while observers are enabled (they see every internal call).
+    /// `dst` is the call's result temporary (`pending_call_dst`).
+    #[inline]
+    pub(crate) fn frameless_icall_in_place(&mut self, dst: Option<u32>) -> Option<VmResult<Value>> {
+        if self.observer.enabled {
+            return None;
+        }
+        let frame = self.frames.last_mut()?;
+        let call = frame.calls.last_mut()?;
+        let Func::Builtin(b) = &call.func else {
+            return None;
+        };
+        let class = (b.flags & flags::FRAMELESS) >> flags::FRAMELESS_SHIFT;
+        if class == 0 || b.flags & (flags::DEPRECATED | flags::NODISCARD) != 0 {
+            return None;
+        }
+        let n = usize::from(call.inline_count);
+        let sent = call.inline_args.get(..n)?;
+        if !call.args.is_empty() || !plain_call(call) || !frameless_args(class, sent) {
+            return None;
+        }
+        let quick = if n == 1 {
+            frameless_inline(class, sent[0].as_ref())
+        } else {
+            None
+        };
+        let b = Rc::clone(b);
+        let (mut values, mut passed) = if quick.is_none() {
+            let nparams = b.params.len();
+            let mut values = self.call_bufs.values.pop().unwrap_or_default();
+            values.reserve(nparams.max(n));
+            let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+            passed.reserve(nparams.max(n));
+            for arg in &mut call.inline_args[..n] {
+                values.push(arg.take().unwrap_or_default());
+                passed.push(true);
+            }
+            (values, passed)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        call.inline_count = 0;
+        let spare = (call.args.capacity() > 0).then(|| std::mem::take(&mut call.args));
+        // What is left of the call (its function handle, empty buffers and,
+        // for an inline result, the argument) is dropped where it lies.
+        let pending = frame.calls.len();
+        frame.calls.truncate(pending - 1);
+        if let Some(v) = quick {
+            // `fast_builtin_call`'s order: the interrupt check, then the
+            // argument buffer back to its pool.
+            let r = self.check_interrupt().map(|()| v);
+            if let Some(args) = spare {
+                self.put_arg_vec(args);
+            }
+            return Some(r);
+        }
+        self.pending_call_dst = dst;
+        if self.magic_call_name.is_some() {
+            self.magic_call_name = None;
+        }
+        // The declared defaults of omitted trailing parameters, as for a
+        // framed call.
+        while values.len() < b.params.len() {
+            let i = values.len();
+            match self.builtin_default(&b, i) {
+                Some(d) if i >= b.required as usize => {
+                    values.push(d);
+                    passed.push(false);
+                }
+                _ => break,
+            }
+        }
+        let handler = b.handler;
+        let mut args = Args {
+            values,
+            passed,
+            named: Vec::new(),
+            this: None,
+            called: None,
+            func: Some(b),
+        };
+        let mut r = handler(self, &mut args);
+        // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
+        if r.is_ok() {
+            if let Err(e) = self.check_interrupt() {
+                r = Err(e);
+            }
+        }
+        let Args {
+            values,
+            passed,
+            named,
+            ..
+        } = args;
+        forget_unallocated(named);
+        self.put_val_vec(values);
+        self.put_bool_vec(passed);
+        if let Some(args) = spare {
+            self.put_arg_vec(args);
+        }
+        Some(r)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{fl, frameless_args, frameless_call, frameless_flags};
+    use super::{fl, frameless_args, frameless_call, frameless_flags, frameless_inline};
     use crate::compiler::{special_builtin_bit, SPECIAL_BUILTINS};
     use crate::func::Func;
     use crate::opcode::type_mask;
@@ -685,6 +820,38 @@ mod tests {
         let (b, mut magic) = call("abs", vec![Value::Int(1)]);
         magic.magic_name = Some(ZStr::from("abs"));
         assert!(!frameless_call(&b, &magic));
+    }
+
+    #[test]
+    fn inline_frameless_results_are_the_handlers() {
+        let s = |v: &str| Value::Str(ZStr::from(v));
+        let int = |v: Option<Value>| match v {
+            Some(Value::Int(i)) => Some(i),
+            _ => None,
+        };
+        assert_eq!(
+            int(frameless_inline(fl::ABS, Some(&Value::Int(-7)))),
+            Some(7)
+        );
+        assert_eq!(
+            int(frameless_inline(fl::ABS, Some(&Value::Int(7)))),
+            Some(7)
+        );
+        // abs(PHP_INT_MIN) is a float: the handler's.
+        assert!(frameless_inline(fl::ABS, Some(&Value::Int(i64::MIN))).is_none());
+        assert!(matches!(
+            frameless_inline(fl::ABS, Some(&Value::Float(-2.5))),
+            Some(Value::Float(x)) if x.to_bits() == 2.5f64.to_bits()
+        ));
+        assert_eq!(int(frameless_inline(fl::ORD, Some(&s("A")))), Some(65));
+        match frameless_inline(fl::CHR, Some(&Value::Int(66))) {
+            // `ZSTR_CHAR`: the shared one-character string.
+            Some(Value::Str(z)) => assert!(ZStr::ptr_eq(&z, &ZStr::from_byte(b'B'))),
+            other => panic!("chr(66) gave {other:?}"),
+        }
+        assert!(frameless_inline(fl::CHR, Some(&Value::Int(256))).is_none());
+        assert!(frameless_inline(fl::SUBSTR, Some(&s("abc"))).is_none());
+        assert!(frameless_inline(fl::ABS, None).is_none());
     }
 
     #[test]
