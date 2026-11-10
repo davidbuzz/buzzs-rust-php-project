@@ -516,9 +516,17 @@ fn gh11423_reflection_extension_constants() {
     let out = run(r#"
 $re = new ReflectionExtension('zend_test');
 $c = $re->getConstants();
-ksort($c);
-foreach ($c as $k => $v) {
-    echo "$k => $v\n";
+// The harness has no ext/standard: sort the names by hand (ksort()).
+$keys = [];
+$n = 0;
+foreach ($c as $k => $v) { $keys[] = $k; $n++; }
+for ($i = 1; $i < $n; $i++) {
+    for ($j = $i; $j > 0 && strcmp($keys[$j - 1], $keys[$j]) > 0; $j--) {
+        [$keys[$j - 1], $keys[$j]] = [$keys[$j], $keys[$j - 1]];
+    }
+}
+foreach ($keys as $k) {
+    echo "$k => {$c[$k]}\n";
 }
 "#);
     assert_eq!(
