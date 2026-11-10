@@ -1584,8 +1584,11 @@ impl Vm {
         let Some(v) = plain_value_in(f, val) else {
             return false;
         };
+        // `$cv[] = val`: `zend_hash_next_index_insert`; a full array (the
+        // next index is taken) is left to the generic op, which throws.
+        let append = dim == Operand::Unused;
         let dim_int = dim_int_in(f, dim);
-        let dim_key = if dim_int.is_none() {
+        let dim_key = if dim_int.is_none() && !append {
             let Some(k) = dim_key_in(f, dim) else {
                 return false;
             };
@@ -1604,7 +1607,11 @@ impl Vm {
                 if f.symtab_attached {
                     f.unsync_cv_from_symtab(cv);
                 }
-                let ok = Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v);
+                let ok = if append {
+                    arr.make_mut().push(v).is_ok()
+                } else {
+                    Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v)
+                };
                 if f.symtab_attached {
                     f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
                 }
@@ -1616,7 +1623,11 @@ impl Vm {
                 let Value::Array(arr) = &mut *guard else {
                     return false;
                 };
-                Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v)
+                if append {
+                    arr.make_mut().push(v).is_ok()
+                } else {
+                    Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v)
+                }
             } else {
                 return false;
             }

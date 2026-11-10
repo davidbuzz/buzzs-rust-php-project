@@ -1655,6 +1655,114 @@ enum RwThrow<'a> {
 }
 
 impl Vm {
+    /// The frame whose symbol table a generic access to place `pid`
+    /// attaches only for its own duration: the place starts at a compiled
+    /// variable of the running frame, whose table is not attached
+    /// ([`Vm::resolve_base`] walks the table's slot). The frame's index and
+    /// its table identify it afterwards.
+    #[inline]
+    fn cv_symtab_frame(&self, pid: PlaceId) -> Option<(usize, *const RefCell<VarStore>)> {
+        let f = self.frames.last()?;
+        if f.symtab_attached
+            || !matches!(
+                f.kind,
+                crate::vm::FrameKind::Main | crate::vm::FrameKind::Function
+            )
+        {
+            return None;
+        }
+        let p = f.code.places.get(pid as usize)?;
+        matches!(p.base, PlaceBase::Cv(_)).then(|| (self.frames.len() - 1, Rc::as_ptr(&f.vars)))
+    }
+
+    /// The base of a read (`place_fetch`, `place_isset`) of compiled
+    /// variable `cv` in a frame whose symbol table is not attached: the CV
+    /// slot is the variable (php-src's `EX_VAR`), so the read takes its
+    /// value (dereferenced, as [`Vm::fetch_base_value`] would) or, when it
+    /// is undefined, its name, and needs no table. `None` for any other
+    /// base or an attached table ([`Vm::resolve_base`] then).
+    #[inline]
+    fn cv_read_base(&self, base: &PlaceBase) -> Option<RBase> {
+        let PlaceBase::Cv(cv) = base else {
+            return None;
+        };
+        let f = self.frame();
+        if f.symtab_attached {
+            return None;
+        }
+        let cv = *cv as usize;
+        Some(match f.cvs.get(cv).and_then(crate::vm::CvSlot::get) {
+            Some(v) => RBase::Value(v.deref()),
+            None => RBase::Undef(f.code.cv_names.get(cv)?.clone()),
+        })
+    }
+
+    /// Runs the generic access `op` to place `pid`, then detaches the
+    /// symbol table it attached to reach a compiled variable
+    /// ([`Vm::cv_symtab_frame`]): a frame's table stays attached only when
+    /// the script asked for it (`$$name`, `extract()`, `global`,
+    /// `$GLOBALS`, an include, ...), so the compiled-variable fast paths
+    /// keep owning their values (refcount 1, nothing to mirror). php-src
+    /// never needs a table for `$cv[...]`; its CV slots are the variables.
+    #[inline]
+    fn with_cv_symtab<R>(&mut self, pid: PlaceId, op: impl FnOnce(&mut Self) -> R) -> R {
+        let Some((fidx, vars)) = self.cv_symtab_frame(pid) else {
+            return op(self);
+        };
+        let r = op(self);
+        if let Some(f) = self.frames.get_mut(fidx) {
+            if std::ptr::eq(Rc::as_ptr(&f.vars), vars) {
+                f.detach_symbol_table();
+            }
+        }
+        r
+    }
+
+    /// `place = $cv` where `$cv` may hold a reference ([`Vm::place_assign_cv_ref_impl`]).
+    pub(crate) fn place_assign_cv_ref(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
+        self.with_cv_symtab(pid, |vm| vm.place_assign_cv_ref_impl(pid, cv))
+    }
+
+    /// `place = v`.
+    pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+        self.with_cv_symtab(pid, |vm| vm.place_assign_impl(pid, v))
+    }
+
+    /// `place = $cv` with `$cv` undefined ([`Vm::place_assign_undef_cv_impl`]).
+    pub(crate) fn place_assign_undef_cv(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
+        self.with_cv_symtab(pid, |vm| vm.place_assign_undef_cv_impl(pid, cv))
+    }
+
+    /// `++place` etc.
+    pub(crate) fn place_incdec(&mut self, pid: PlaceId, kind: IncDecKind) -> VmResult<Value> {
+        self.with_cv_symtab(pid, |vm| vm.place_incdec_impl(pid, kind))
+    }
+
+    /// `place =& v`.
+    pub(crate) fn place_assign_ref(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+        self.with_cv_symtab(pid, |vm| vm.place_assign_ref_impl(pid, v))
+    }
+
+    /// Makes a place a reference.
+    pub(crate) fn place_make_ref(&mut self, pid: PlaceId) -> VmResult<PhpRef> {
+        self.with_cv_symtab(pid, |vm| vm.place_make_ref_impl(pid))
+    }
+
+    /// `unset(place)`.
+    pub(crate) fn place_unset(&mut self, pid: PlaceId) -> VmResult<()> {
+        self.with_cv_symtab(pid, |vm| vm.place_unset_impl(pid))
+    }
+
+    /// `place op= v`.
+    pub(crate) fn place_assign_op(
+        &mut self,
+        pid: PlaceId,
+        op: BinaryOp,
+        v: Value,
+    ) -> VmResult<Value> {
+        self.with_cv_symtab(pid, |vm| vm.place_assign_op_impl(pid, op, v))
+    }
+
     /// Resolves a place's base and segments.
     #[inline]
     pub(crate) fn resolve_place(&mut self, pid: PlaceId, write: bool) -> VmResult<(RBase, Segs)> {
@@ -1733,12 +1841,19 @@ impl Vm {
     ) -> VmResult<RBase> {
         Ok(match base {
             PlaceBase::Cv(cv) => {
-                self.frame_mut().attach_symbol_table();
-                self.frame_mut().sync_cvs_to_symtab();
+                // The walk works on the symbol table's slot: attach it (the
+                // entry points undo that afterwards, see
+                // [`Vm::with_cv_symtab`]) or bring it up to date.
+                let f = self.frame_mut();
+                if f.symtab_attached {
+                    f.sync_cvs_to_symtab();
+                } else {
+                    f.attach_symbol_table();
+                }
                 let f = self.frame();
                 let idx = if let Some(name) = f.code.cv_names.get(*cv as usize) {
                     let mut st = f.vars.borrow_mut();
-                    st.find_or_add(name.as_bytes()) as usize
+                    st.find_or_add_cv(*cv as usize, name.as_bytes()) as usize
                 } else {
                     *cv as usize
                 };
@@ -3023,7 +3138,7 @@ impl Vm {
     /// read it first, as before.
     #[cold]
     #[inline(never)]
-    pub(crate) fn place_assign_cv_ref(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
+    fn place_assign_cv_ref_impl(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
         // `$a[] = $a` (`zend_is_assign_to_self`): php-src copies the value
         // into a temporary before fetching the container.
         let to_self = matches!(
@@ -3126,7 +3241,7 @@ impl Vm {
     }
 
     /// `place = v`
-    pub(crate) fn place_assign(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+    fn place_assign_impl(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
         let (single, head) = {
             let p = &self.frame().code.places[pid as usize];
             (propcache::cacheable(p), propcache::cacheable_head(p))
@@ -3287,7 +3402,7 @@ impl Vm {
     /// them never sees it) and is not raised when the walk fails first:
     /// the walk raises it when it gets there ([`PendingRead`]).
     #[cold]
-    pub(crate) fn place_assign_undef_cv(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
+    fn place_assign_undef_cv_impl(&mut self, pid: PlaceId, cv: u32) -> VmResult<Value> {
         // `$o->{$p} = $v` / `$this->$p = $v`: ZEND_ASSIGN_OBJ fetches the
         // object, then reads OP_DATA, and only then its property name
         // (OP2), so the value's warning precedes the name's (bug #79599,
@@ -3333,12 +3448,7 @@ impl Vm {
     }
 
     /// `place op= v`
-    pub(crate) fn place_assign_op(
-        &mut self,
-        pid: PlaceId,
-        op: BinaryOp,
-        v: Value,
-    ) -> VmResult<Value> {
+    fn place_assign_op_impl(&mut self, pid: PlaceId, op: BinaryOp, v: Value) -> VmResult<Value> {
         let (single, head) = {
             let p = &self.frame().code.places[pid as usize];
             (propcache::cacheable(p), propcache::cacheable_head(p))
@@ -3596,7 +3706,7 @@ impl Vm {
     }
 
     /// `++place` etc.
-    pub(crate) fn place_incdec(&mut self, pid: PlaceId, kind: IncDecKind) -> VmResult<Value> {
+    fn place_incdec_impl(&mut self, pid: PlaceId, kind: IncDecKind) -> VmResult<Value> {
         // Fast path: `$i++` on a compiled variable holding an int (no
         // overflow), before resolving the place generically.
         if let Some(r) = self.incdec_cv_int_fast(pid, kind) {
@@ -3747,7 +3857,7 @@ impl Vm {
     }
 
     /// `place =& v`
-    pub(crate) fn place_assign_ref(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
+    fn place_assign_ref_impl(&mut self, pid: PlaceId, v: Value) -> VmResult<Value> {
         let v = match v {
             Value::Reference(r) => Value::Reference(r),
             other => {
@@ -3804,7 +3914,7 @@ impl Vm {
     }
 
     /// Makes a place a reference.
-    pub(crate) fn place_make_ref(&mut self, pid: PlaceId) -> VmResult<PhpRef> {
+    fn place_make_ref_impl(&mut self, pid: PlaceId) -> VmResult<PhpRef> {
         // Fast path: `&$this->p` on a cached declared slot.
         if propcache::cacheable(&self.frame().code.places[pid as usize]) {
             if let Some(rf) = self.prop_cache_make_ref(pid) {
@@ -3820,7 +3930,7 @@ impl Vm {
     }
 
     /// `unset(place)`
-    pub(crate) fn place_unset(&mut self, pid: PlaceId) -> VmResult<()> {
+    fn place_unset_impl(&mut self, pid: PlaceId) -> VmResult<()> {
         let code = self.frame().code.clone();
         let p = &code.places[pid as usize];
         if let (PlaceBase::StaticProp { class, name }, true) = (&p.base, p.segs.is_empty()) {
@@ -3994,7 +4104,10 @@ impl Vm {
             let v = self.fetch_global_by_key(&k, mode)?;
             (v, &segs[1..])
         } else {
-            let base = self.resolve_base(&place.base, false, mode == FetchMode::Is, None)?;
+            let base = match self.cv_read_base(&place.base) {
+                Some(b) => b,
+                None => self.resolve_base(&place.base, false, mode == FetchMode::Is, None)?,
+            };
             (self.fetch_base_value(pid, base, segs, mode)?, &segs[..])
         };
         // Each offset/name operand is read when its FETCH_DIM_*/FETCH_OBJ_*
@@ -4265,7 +4378,10 @@ impl Vm {
             let v = self.fetch_global_by_key_optional(&k);
             (v, 1)
         } else {
-            let base = self.resolve_base(&place.base, false, true, None)?;
+            let base = match self.cv_read_base(&place.base) {
+                Some(b) => b,
+                None => self.resolve_base(&place.base, false, true, None)?,
+            };
             let cur = match base {
                 RBase::Var(store, idx) => store.borrow().slots[idx].as_ref().map(Value::deref),
                 // ZEND_ISSET_ISEMPTY_PROP_OBJ / FETCH_*_IS on an unset `$this`
