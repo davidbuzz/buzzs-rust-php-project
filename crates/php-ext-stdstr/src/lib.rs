@@ -147,15 +147,17 @@ pub(crate) mod mem {
         if needle.is_empty() || needle.len() > hay.len() {
             return 0;
         }
-        let (h, n) = if ci {
-            (hay.to_ascii_lowercase(), needle.to_ascii_lowercase())
-        } else {
-            (hay.to_vec(), needle.to_vec())
-        };
-        php_stdstr::search::substr_count(&h, &n, 0, None)
-            .ok()
-            .and_then(|c| usize::try_from(c).ok())
-            .unwrap_or(0)
+        if ci {
+            let (h, n) = (hay.to_ascii_lowercase(), needle.to_ascii_lowercase());
+            return occurrences(&h, &n, false);
+        }
+        let mut count = 0;
+        let mut p = 0;
+        while let Some(r) = php_stdstr::search::memnstr(&hay[p..], needle) {
+            count += 1;
+            p += r + needle.len();
+        }
+        count
     }
 
     /// Reserves `alloc` bytes before building a result of that size; over

@@ -17,7 +17,21 @@ pub fn memnstr(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         0 => Some(0),
         1 => haystack.iter().position(|&c| c == needle[0]),
         n if n > haystack.len() => None,
-        n => haystack.windows(n).position(|w| w == needle),
+        n => {
+            // `zend_memnstr()`: scan for the first byte, then check the
+            // last byte before comparing the whole needle.
+            let (first, last) = (needle[0], needle[n - 1]);
+            let end = haystack.len() - n;
+            let mut i = 0;
+            while i <= end {
+                i += haystack[i..=end].iter().position(|&c| c == first)?;
+                if haystack[i + n - 1] == last && &haystack[i..i + n] == needle {
+                    return Some(i);
+                }
+                i += 1;
+            }
+            None
+        }
     }
 }
 
@@ -473,6 +487,39 @@ impl Strtok {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memnstr_matches_naive_search() {
+        let hays: [&[u8]; 6] = [
+            b"",
+            b"a",
+            b"abcabcab",
+            b"aaaaab",
+            b"xyzxyzaxyzb",
+            b"ab,cd,,ef,",
+        ];
+        let needles: [&[u8]; 8] = [
+            b"a",
+            b"ab",
+            b"abc",
+            b"cab",
+            b"aab",
+            b",,",
+            b"zb",
+            b"abcabcabc",
+        ];
+        for h in hays {
+            for n in needles {
+                let naive = if n.len() > h.len() {
+                    None
+                } else {
+                    h.windows(n.len()).position(|w| w == n)
+                };
+                assert_eq!(memnstr(h, n), naive, "{h:?} {n:?}");
+            }
+        }
+        assert_eq!(memnstr(b"abc", b""), Some(0));
+    }
 
     #[test]
     fn substr_rules() {
