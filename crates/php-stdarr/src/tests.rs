@@ -1296,3 +1296,87 @@ fn scalar_sort_separates_a_shared_array() {
     let r = PhpRef::new(Value::Int(1));
     assert!(sort::asort(&mut ctx, &r, SORT_REGULAR).is_err());
 }
+
+/// Int pairs compare inline in `sort_table` (`zend_compare`'s long/long
+/// case); ties keep their original order, `arsort`/`rsort` reverse the
+/// comparison but not the tie-break, and mixed values take the generic
+/// comparison. Expected orders from `/usr/bin/php -n`.
+#[test]
+fn int_sorts_compare_inline_and_stay_stable() {
+    let mut ctx = Ctx::new();
+    let v = [
+        3,
+        10,
+        -7,
+        3,
+        0,
+        9,
+        3,
+        1,
+        -7,
+        i64::MAX,
+        i64::MIN,
+        2,
+        3,
+        8,
+        6,
+        5,
+        4,
+        11,
+        12,
+        3,
+    ];
+    let key_list = |s: &str| s.split(',').map(str::to_owned).collect::<Vec<_>>();
+    let r = PhpRef::new(ints(&v));
+    sort::asort(&mut ctx, &r, SORT_REGULAR).unwrap();
+    assert_eq!(
+        keys(&arr_of(&r.get())),
+        key_list("10,2,8,4,7,11,0,3,6,12,19,16,15,14,13,5,1,17,18,9")
+    );
+    let r = PhpRef::new(ints(&v));
+    sort::arsort(&mut ctx, &r, SORT_REGULAR).unwrap();
+    assert_eq!(
+        keys(&arr_of(&r.get())),
+        key_list("9,18,17,1,5,13,14,15,16,0,3,6,12,19,11,7,4,2,8,10")
+    );
+    let r = PhpRef::new(ints(&v));
+    sort::rsort(&mut ctx, &r, SORT_REGULAR).unwrap();
+    assert_eq!(
+        int_vals(&arr_of(&r.get())),
+        [
+            i64::MAX,
+            12,
+            11,
+            10,
+            9,
+            8,
+            6,
+            5,
+            4,
+            3,
+            3,
+            3,
+            3,
+            3,
+            2,
+            1,
+            0,
+            -7,
+            -7,
+            i64::MIN
+        ]
+    );
+    let mixed = Value::Array(list([
+        Value::Int(3),
+        Value::string("10"),
+        Value::Float(2.5),
+        Value::Int(1),
+        Value::Int(3),
+        Value::string("abc"),
+        Value::Int(-7),
+        Value::Int(0),
+    ]));
+    let r = PhpRef::new(mixed);
+    sort::asort(&mut ctx, &r, SORT_REGULAR).unwrap();
+    assert_eq!(keys(&arr_of(&r.get())), key_list("6,7,3,2,0,4,1,5"));
+}
