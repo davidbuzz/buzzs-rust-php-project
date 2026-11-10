@@ -292,3 +292,41 @@ fn const_expr_callable_errors() {
         "\nFatal error: Uncaught Error: Creating a callable for the magic __callStatic() method is not supported in constant expressions in t.php:3\nStack trace:\n#0 {main}\n  thrown in t.php on line 3\n"
     );
 }
+
+/// Argument errors, by-reference warnings and deprecations name a closure
+/// after its bound scope like a method (`get_function_or_method_name`):
+/// `K::{closure:K::mk():5}`, `Closure::` for an object bound without a
+/// scope, the bare name only when unscoped (expected output from
+/// `/usr/bin/php8.5 -n`).
+#[test]
+fn scoped_closure_names_in_argument_errors() {
+    let out = run("<?php\n\
+         set_error_handler(function ($no, $str) { echo $str, \"\\n\"; return true; });\n\
+         function show($e) { echo get_class($e), ': ', $e->getMessage(), \"\\n\"; }\n\
+         class K {\n\
+             function mk() { return function (int $a, &$r = null) {}; }\n\
+             static function smk() { return static fn(int $a) => $a; }\n\
+             function dep() { return #[\\Deprecated] function () {}; }\n\
+         }\n\
+         $c = (new K)->mk();\n\
+         try { $c(); } catch (Error $e) { show($e); }\n\
+         try { $c(1, 2); } catch (Error $e) { show($e); }\n\
+         try { K::smk()(); } catch (Error $e) { show($e); }\n\
+         call_user_func($c, 1, 2);\n\
+         (new K)->dep()();\n\
+         $g = function (int $a) {};\n\
+         try { $g(); } catch (Error $e) { show($e); }\n\
+         try { $g->bindTo(new K)(); } catch (Error $e) { show($e); }\n\
+         try { Closure::bind($g, null, K::class)(); } catch (Error $e) { show($e); }\n");
+    assert_eq!(
+        out,
+        "ArgumentCountError: Too few arguments to function K::{closure:K::mk():5}(), 0 passed in t.php on line 10 and at least 1 expected\n\
+         Error: K::{closure:K::mk():5}(): Argument #2 ($r) could not be passed by reference\n\
+         ArgumentCountError: Too few arguments to function K::{closure:K::smk():6}(), 0 passed in t.php on line 12 and exactly 1 expected\n\
+         K::{closure:K::mk():5}(): Argument #2 ($r) must be passed by reference, value given\n\
+         Method K::{closure:K::dep():7}() is deprecated\n\
+         ArgumentCountError: Too few arguments to function {closure:t.php:15}(), 0 passed in t.php on line 16 and exactly 1 expected\n\
+         ArgumentCountError: Too few arguments to function Closure::{closure:t.php:15}(), 0 passed in t.php on line 17 and exactly 1 expected\n\
+         ArgumentCountError: Too few arguments to function K::{closure:t.php:15}(), 0 passed in t.php on line 18 and exactly 1 expected\n"
+    );
+}

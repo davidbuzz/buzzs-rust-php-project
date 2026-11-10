@@ -77,14 +77,14 @@ impl Vm {
             }
         }
     }
-    /// Display name of a function for messages (`A::m`, `foo`).
+    /// Display name of a function for messages (`A::m`, `foo`):
+    /// `get_function_or_method_name`. A closure is named after its bound
+    /// scope like a method (`K::{closure:K::mk():3}`, `Closure::{closure:…}`
+    /// for an object bound without a scope); only an unscoped one prints
+    /// its bare name.
+    #[allow(clippy::unused_self)] // method-style API used across the VM
     pub(crate) fn func_display(&self, func: &Func, scope: Option<&Rc<Class>>) -> String {
         let name = func.name().to_string_lossy();
-        if let Func::User(u) = func {
-            if u.is_closure() && !name.starts_with("{closure:pfa:") {
-                return name;
-            }
-        }
         match scope {
             Some(c) => format!("{}::{}", object::display_name(&c.name), name),
             None => name,
