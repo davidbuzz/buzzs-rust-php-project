@@ -24,3 +24,14 @@ ext/gd/tests/createfromstring-overflow.phpt
 # (8.3.6) and `/usr/bin/php8.5 -d memory_limit=1G` (8.5.12) fail this test identically with:
 #   [006] Expecting 245 for JSON got code 252 for BLOB
 ext/mysqli/tests/mysqli_fetch_field_types.phpt
+
+# MariaDB 10.11 differs from MySQL here; C PHP 8.5 fails these identically
+# against this server (checked 10 Nov 2026):
+# - JSON is a LONGTEXT alias, sent as BLOB (no JSON native type in getColumnMeta)
+ext/pdo_mysql/tests/gh20122.phpt
+# - a nonexistent user gets error 1698 instead of 1045
+ext/pdo_mysql/tests/pdo_mysql___construct.phpt
+# - the error text says "in 'SELECT'" instead of "in 'field list'"
+ext/pdo_mysql/tests/pdo_mysql_prepare_native_clear_error.phpt
+# - the 33-character MariaDB version string overflows the test's VARCHAR(25)
+ext/pdo_mysql/tests/pdo_mysql_stmt_nextrowset.phpt
