@@ -1417,6 +1417,125 @@ mod tests {
         }
     }
 
+    /// `isset()`/`empty()` of a known string offset or array element folds
+    /// (opcache `opt/sccp_isset_isempty_string_dim`, `opt/sccp_031`);
+    /// expectations from php 8.3.
+    #[test]
+    fn sccp_folds_isset_and_empty_of_known_dims() {
+        let unit = compile_src(
+            "<?php function a() { $k = -1; return isset(\"abc\"[$k]); }\n\
+             function b() { $k = 3; return empty(\"abc\"[$k]); }\n\
+             function c() { return empty(\"a0c\"[1]); }\n\
+             function d() { $a = [1, null]; return isset($a[1]); }\n\
+             function e() { $k = -4; return isset(\"abc\"[$k]); }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        for (name, want) in [
+            (&b"a"[..], true),
+            (b"b", true),
+            (b"c", true),
+            (b"d", false),
+            (b"e", false),
+        ] {
+            let code = find_code(&unit, named(name));
+            assert!(
+                matches!(returned_lit(&code), Some(Value::Bool(b)) if b == want),
+                "{}: {:?}",
+                String::from_utf8_lossy(name),
+                code.ops
+            );
+        }
+    }
+
+    /// Pure internal functions on constant arguments are evaluated, nested
+    /// calls included (opcache `opt/ct_eval_md5_sha1`,
+    /// `opt/ct_eval_standard_functions`); an argument the function rejects
+    /// keeps the call, so its `ValueError` is thrown at run time.
+    #[test]
+    fn sccp_evaluates_pure_function_calls() {
+        let unit = compile_src(
+            "<?php function f() { return bin2hex(md5(\"hello\", true)); }\n\
+             function g() { return str_increment(\"Z9\"); }\n\
+             function h() { return sha1(\"abc\"); }\n\
+             function k() { return str_increment(\"\"); }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        for (name, want) in [
+            (&b"f"[..], &b"5d41402abc4b2a76b9719d911017c592"[..]),
+            (b"g", b"AA0"),
+            (b"h", b"a9993e364706816aba3e25717850c26c9cd0d89d"),
+        ] {
+            let code = find_code(&unit, named(name));
+            assert!(
+                matches!(returned_lit(&code), Some(Value::Str(s)) if s.as_bytes() == want),
+                "{}: {:?}",
+                String::from_utf8_lossy(name),
+                code.ops
+            );
+        }
+        let k = find_code(&unit, named(b"k"));
+        assert!(
+            k.ops.iter().any(|op| matches!(op, Op::DoCall { .. })),
+            "{:?}",
+            k.ops
+        );
+    }
+
+    /// A literal store into a variable that holds nothing yet goes when
+    /// the next mention of the variable overwrites it (opcache
+    /// `opt/jmp_001`); one that is read first, or follows a loop head,
+    /// stays.
+    #[test]
+    fn dead_entry_store_is_removed() {
+        let unit = compile_src(
+            "<?php function f() { $v = null; $v = $v ?: g(); return $v; }\n\
+             function h() { $v = 1; var_dump($v); $v = g(); return $v; }\n\
+             function k($n) { while ($n--) { $v = 1; $v = g(); } return 0; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let lit_stores = |code: &OpArray| {
+            code.ops
+                .iter()
+                .filter(|op| {
+                    matches!(op, Op::AssignCv { cv, val: Operand::Lit(_), .. }
+                        if *cv == cv_index(code, b"v"))
+                })
+                .count()
+        };
+        let f = find_code(&unit, named(b"f"));
+        assert_eq!(lit_stores(&f), 0, "{:?}", f.ops);
+        let h = find_code(&unit, named(b"h"));
+        assert_eq!(lit_stores(&h), 1, "{:?}", h.ops);
+        let k = find_code(&unit, named(b"k"));
+        assert_eq!(lit_stores(&k), 1, "{:?}", k.ops);
+    }
+
+    /// The result of a side-effecting op that a `switch` frees on each way
+    /// out keeps its `FREE`s (opcache `opt/gh11245_2`).
+    #[test]
+    fn switch_subject_frees_are_kept() {
+        let unit = compile_src(
+            "<?php class X { static $p = \"aa\"; }\n\
+             function f() { switch (++X::$p) { default: if (empty($xx)) { return; } } }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let f = find_code(&unit, named(b"f"));
+        let freed: Vec<u32> = f
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Free(Operand::Tmp(t)) => Some(*t),
+                _ => None,
+            })
+            .collect();
+        assert!(freed.len() >= 2, "{:?}", f.ops);
+        assert!(
+            f.ops.iter().any(|op| def_tmp(op) == freed.first().copied()),
+            "{:?}",
+            f.ops
+        );
+    }
+
     /// `BOOL`/`BOOL_NOT` compared `===` with `true`/`false` folds into one
     /// `BOOL`/`BOOL_NOT` (opcache `opt/block_pass_007`, `match/005`); a
     /// non-bool operand keeps its `IS_IDENTICAL` (`2 === true` is false
