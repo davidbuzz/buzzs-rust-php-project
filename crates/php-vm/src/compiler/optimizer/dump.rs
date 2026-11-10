@@ -1,10 +1,545 @@
 //! Opcode array disassembler in `zend_dump.c` style.
 //!
-//! Used for `opcache.opt_debug_level` (0x10000 / 0x20000) and debugging.
+//! `opcache.opt_debug_level` with `ZEND_DUMP_AFTER_OPTIMIZER` (`0x20000`)
+//! prints every op array of a compiled script the way php-src's
+//! `zend_dump_op_array` (`Zend/Optimizer/zend_dump.c`) does after
+//! `zend_optimize_script` (`Zend/Optimizer/zend_optimizer.c`): the op
+//! arrays in `zend_foreach_op_array` order, each lowered to the Zend
+//! oplines php-src compiles for the same code ([`lower`]), with the
+//! variable contractions of the DFA pass, `zend_optimizer_compact_vars`,
+//! `zend_optimize_temporary_variables` and the live ranges
+//! ([`passes`]).
 
+mod lower;
+mod model;
+mod passes;
+#[cfg(test)]
+mod tests;
+
+use crate::class::ClassDecl;
+use crate::compiler::{CompiledUnit, FunctionTable};
+use crate::func::{flags, UserFunction};
 use crate::opcode::{ClassSpec, Op, OpArray, Operand};
+use model::{StackOf, ZLine, Z};
 use php_runtime::Value;
+use std::collections::HashMap;
 use std::fmt::Write;
+use std::rc::Rc;
+
+/// `ZEND_DUMP_BEFORE_OPTIMIZER`.
+pub const DUMP_BEFORE_OPTIMIZER: i64 = 1 << 16;
+/// `ZEND_DUMP_AFTER_OPTIMIZER`.
+pub const DUMP_AFTER_OPTIMIZER: i64 = 1 << 17;
+
+/// One op array to dump.
+struct Entry {
+    /// `zend_dump_op_array_name`.
+    name: Vec<u8>,
+    func: Rc<UserFunction>,
+    is_main: bool,
+    /// Lower-case name of the class scope.
+    scope: Option<Vec<u8>>,
+    /// The function decl indices this op array declares
+    /// (`dynamic_func_defs`).
+    dyn_defs: Vec<u32>,
+}
+
+/// The function decls op array `func` declares itself
+/// (`DECLARE_FUNCTION`, `DECLARE_LAMBDA_FUNCTION`), in decl order.
+fn dyn_defs_of(func: &UserFunction) -> Vec<u32> {
+    let mut v: Vec<u32> = func
+        .code
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::DeclareFunction(i) | Op::MakeClosure { idx: i, .. } => Some(*i),
+            _ => None,
+        })
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// Adds `func` and, recursively, the functions it declares
+/// (`zend_foreach_op_array_helper`).
+fn add_entry(
+    out: &mut Vec<Entry>,
+    name: Vec<u8>,
+    func: Rc<UserFunction>,
+    is_main: bool,
+    scope: Option<Vec<u8>>,
+) {
+    let dyn_defs = dyn_defs_of(&func);
+    let nested: Vec<Rc<UserFunction>> = {
+        let table = func.code.decls.functions.borrow();
+        dyn_defs
+            .iter()
+            .filter_map(|&i| table.get(i as usize).cloned())
+            .collect()
+    };
+    out.push(Entry {
+        name,
+        func,
+        is_main,
+        scope: scope.clone(),
+        dyn_defs,
+    });
+    for f in nested {
+        let n = f.name.as_bytes().to_vec();
+        add_entry(out, n, f, false, scope.clone());
+    }
+}
+
+/// The op arrays of `unit` in `zend_foreach_op_array` order: the main
+/// code, the script's functions, then each class's methods and property
+/// hooks.
+fn collect(unit: &CompiledUnit) -> Vec<Entry> {
+    let mut out = Vec::new();
+    add_entry(&mut out, b"$_main".to_vec(), unit.main.clone(), true, None);
+    let functions: Vec<Rc<UserFunction>> = {
+        let table = unit.decls.functions.borrow();
+        unit.hoisted_functions
+            .iter()
+            .filter_map(|&i| table.get(i as usize).cloned())
+            .collect()
+    };
+    for f in functions {
+        let n = f.name.as_bytes().to_vec();
+        add_entry(&mut out, n, f, false, None);
+    }
+    let classes: Vec<Rc<ClassDecl>> = unit.decls.classes.borrow().clone();
+    for c in classes {
+        let lc = c.name.as_bytes().to_ascii_lowercase();
+        for m in &c.methods {
+            if m.flags & flags::ABSTRACT != 0 || m.func.flags & flags::NO_BODY != 0 {
+                continue;
+            }
+            let mut n = c.name.as_bytes().to_vec();
+            n.extend_from_slice(b"::");
+            n.extend_from_slice(m.name.as_bytes());
+            add_entry(&mut out, n, m.func.clone(), false, Some(lc.clone()));
+        }
+        for p in &c.props {
+            let Some(h) = &p.hooks else { continue };
+            for (kind, f) in [("get", &h.get), ("set", &h.set)] {
+                let Some(f) = f else { continue };
+                if f.flags & (flags::ABSTRACT | flags::NO_BODY) != 0 {
+                    continue;
+                }
+                let mut n = c.name.as_bytes().to_vec();
+                n.extend_from_slice(b"::$");
+                n.extend_from_slice(p.name.as_bytes());
+                n.extend_from_slice(b"::");
+                n.extend_from_slice(kind.as_bytes());
+                add_entry(&mut out, n, f.clone(), false, Some(lc.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// One lowered and finished op array.
+struct Done {
+    lines: Vec<ZLine>,
+    /// The original index of each CV left.
+    kept: Vec<u32>,
+    /// `op_array->T`.
+    tmps: u32,
+    live: Vec<passes::LiveRange>,
+    num_args: u32,
+    /// The exception table.
+    exc: Vec<[Option<u32>; 4]>,
+}
+
+fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
+    let lower::Lowered {
+        lines: mut lines,
+        first_z,
+    } = lower::Lower::new(&e.func, e.scope.clone(), &e.dyn_defs, res).run();
+    passes::resolve_labels(&mut lines, &first_z);
+    let oa = &e.func.code;
+    let shape = passes::FuncShape {
+        is_main: e.is_main,
+        ncv: oa.cv_names.len(),
+        params: e
+            .func
+            .params
+            .iter()
+            .map(|p| passes::decl_type(p.ty.as_ref()))
+            .collect(),
+        by_ref: e.func.params.iter().map(|p| p.by_ref).collect(),
+        bound: e.func.uses.iter().map(|u| (u.cv, u.by_ref)).collect(),
+        ret: e
+            .func
+            .return_type
+            .as_ref()
+            .filter(|_| e.func.flags & flags::RETURN_REF == 0)
+            .map(passes::pure_type),
+    };
+    let level = res.level;
+    let types = passes::infer(&lines, &shape);
+    if level & super::PASS_6 != 0 && !e.is_main && passes::dfa_allowed(&lines) {
+        passes::dfa(&mut lines, &types, &shape);
+    }
+    let (mut lines, new_idx) = passes::remove_nops(lines);
+    // `try_catch_array`: try, catch, finally and finally-end oplines.
+    let at = |l: u32| -> u32 {
+        let z = first_z
+            .get(l as usize)
+            .or_else(|| first_z.last())
+            .copied()
+            .unwrap_or(0) as usize;
+        new_idx
+            .get(z)
+            .or_else(|| new_idx.last())
+            .copied()
+            .unwrap_or(0)
+    };
+    let mut exc: Vec<[Option<u32>; 4]> = oa
+        .try_table
+        .iter()
+        .rev()
+        .map(|t| {
+            let (fin, fin_end) = match t.finally {
+                Some((_, start, end)) => {
+                    let mut e = at(end);
+                    // `finally_end` is the `FAST_RET`.
+                    if e > 0
+                        && lines.get(e as usize).is_none_or(|l| l.op != "FAST_RET")
+                        && lines
+                            .get(e as usize - 1)
+                            .is_some_and(|l| l.op == "FAST_RET")
+                    {
+                        e -= 1;
+                    }
+                    (Some(at(start)), Some(e))
+                }
+                None => (None, None),
+            };
+            [Some(at(t.try_start)), t.catch_start.map(at), fin, fin_end]
+        })
+        .collect();
+    exc.sort_by_key(|e| e[0]);
+    let kept = if level & super::PASS_13 != 0 {
+        passes::compact_cvs(&mut lines, oa.cv_names.len())
+    } else {
+        (0..u32::try_from(oa.cv_names.len()).unwrap_or(0)).collect()
+    };
+    let mut is_var: HashMap<u32, bool> = HashMap::new();
+    for l in &lines {
+        if let Some(t) = l.res.tmp() {
+            is_var.insert(t, l.res_var);
+        }
+        // `FE_FETCH_RW` writes a VAR value operand.
+        if l.op == "FE_FETCH_RW" {
+            if let Some(t) = l.op2.tmp() {
+                is_var.insert(t, true);
+            }
+        }
+    }
+    // Without the optimizer's type information every live range stays.
+    let typed = level & super::PASS_6 != 0;
+    let needs: Vec<bool> = lines
+        .iter()
+        .map(|l| {
+            if !typed {
+                return true;
+            }
+            l.res.tmp().is_none_or(|t| {
+                types
+                    .tmp
+                    .get(&t)
+                    .is_none_or(|ty| ty & passes::ty::REFCOUNTED != 0)
+            })
+        })
+        .collect();
+    for l in &mut lines {
+        l.op1_var = l
+            .op1
+            .tmp()
+            .is_some_and(|t| is_var.get(&t).copied().unwrap_or(false));
+        l.op2_var = l
+            .op2
+            .tmp()
+            .is_some_and(|t| is_var.get(&t).copied().unwrap_or(false));
+    }
+    let tmps = if level & super::PASS_9 != 0 {
+        passes::compact_tmps(&mut lines, oa.num_finally > 0)
+    } else {
+        passes::number_tmps(&mut lines)
+    };
+    let live = passes::live_ranges(&mut lines, tmps, &|i| needs.get(i).copied().unwrap_or(true));
+    let num_args = u32::try_from(e.func.params.iter().filter(|p| !p.variadic).count()).unwrap_or(0);
+    Done {
+        lines,
+        kept,
+        tmps,
+        live,
+        num_args,
+        exc,
+    }
+}
+
+/// `%g` of C's printf.
+fn fmt_g(f: f64) -> String {
+    if f.is_nan() {
+        return "nan".into();
+    }
+    if f.is_infinite() {
+        return if f < 0.0 { "-inf".into() } else { "inf".into() };
+    }
+    if f == 0.0 {
+        return if f.is_sign_negative() {
+            "-0".into()
+        } else {
+            "0".into()
+        };
+    }
+    let sci = format!("{f:.5e}");
+    let (mant, exp) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
+    let exp: i32 = exp.parse().unwrap_or(0);
+    let trim = |s: &str| -> String {
+        if s.contains('.') {
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            s.to_string()
+        }
+    };
+    if !(-4..6).contains(&exp) {
+        let sign = if exp < 0 { '-' } else { '+' };
+        format!("{}e{sign}{:02}", trim(mant), exp.abs())
+    } else {
+        let decimals = usize::try_from(5 - exp).unwrap_or(0);
+        trim(&format!("{f:.decimals$}"))
+    }
+}
+
+/// `zend_dump_const` (without the leading space).
+fn write_const(out: &mut Vec<u8>, v: &Value) {
+    match v {
+        Value::Null => out.extend_from_slice(b"null"),
+        Value::Bool(false) => out.extend_from_slice(b"bool(false)"),
+        Value::Bool(true) => out.extend_from_slice(b"bool(true)"),
+        Value::Int(i) => out.extend_from_slice(format!("int({i})").as_bytes()),
+        Value::Float(f) => out.extend_from_slice(format!("float({})", fmt_g(*f)).as_bytes()),
+        Value::Str(s) => {
+            out.extend_from_slice(b"string(\"");
+            for &c in s.as_bytes() {
+                match c {
+                    b'\n' => out.extend_from_slice(b"\\n"),
+                    b'\r' => out.extend_from_slice(b"\\r"),
+                    b'\t' => out.extend_from_slice(b"\\t"),
+                    0x0c => out.extend_from_slice(b"\\f"),
+                    0x0b => out.extend_from_slice(b"\\v"),
+                    b'\\' => out.extend_from_slice(b"\\\\"),
+                    0x1b => out.extend_from_slice(b"\\e"),
+                    b'"' => out.extend_from_slice(b"\\\""),
+                    c if !(32..=126).contains(&c) => {
+                        out.extend_from_slice(format!("\\x{c:02X}").as_bytes());
+                    }
+                    c => out.push(c),
+                }
+            }
+            out.extend_from_slice(b"\")");
+        }
+        Value::Array(_) => out.extend_from_slice(b"array(...)"),
+        Value::Object(_) => out.extend_from_slice(b"zval(type=8)"),
+        Value::Resource(_) => out.extend_from_slice(b"zval(type=9)"),
+        Value::Reference(_) => out.extend_from_slice(b"zval(type=10)"),
+    }
+}
+
+/// Prints one operand with its leading space.
+fn write_z(out: &mut Vec<u8>, z: &Z, is_var: bool, d: &Done, names: &[php_runtime::ZStr]) {
+    let last_var = u32::try_from(d.kept.len()).unwrap_or(0);
+    match z {
+        Z::Unused => {}
+        Z::Cv(c) => {
+            out.push(b' ');
+            write_cv(out, *c, d, names);
+        }
+        Z::Tmp(t) => {
+            let k = if is_var { 'V' } else { 'T' };
+            out.extend_from_slice(format!(" {k}{}", last_var + t).as_bytes());
+        }
+        Z::Const(v) => {
+            out.push(b' ');
+            write_const(out, v);
+        }
+        Z::Num(n) => out.extend_from_slice(format!(" {n}").as_bytes()),
+        Z::Label(l) | Z::ZLabel(l) => out.extend_from_slice(format!(" {l:04}").as_bytes()),
+        Z::Text(t) => {
+            if !t.is_empty() {
+                out.push(b' ');
+                out.extend_from_slice(t.as_bytes());
+            }
+        }
+    }
+}
+
+fn write_cv(out: &mut Vec<u8>, c: u32, d: &Done, names: &[php_runtime::ZStr]) {
+    let name = d
+        .kept
+        .get(c as usize)
+        .and_then(|&o| names.get(o as usize))
+        .map(|n| n.as_bytes().to_vec())
+        .unwrap_or_default();
+    out.extend_from_slice(format!("CV{c}($").as_bytes());
+    out.extend_from_slice(&name);
+    out.push(b')');
+}
+
+/// `zend_vm_calc_used_stack` after `zend_adjust_fcall_stack_size`.
+fn stack_size(s: StackOf, done: &[Done]) -> u32 {
+    const FRAME_SLOTS: u32 = 5;
+    match s {
+        StackOf::Internal(n) => (FRAME_SLOTS + n) * 16,
+        StackOf::User(i, n) => done.get(i).map_or((FRAME_SLOTS + n) * 16, |d| {
+            let vars = u32::try_from(d.kept.len()).unwrap_or(0);
+            (FRAME_SLOTS + n + d.tmps + vars - d.num_args.min(n).min(vars)) * 16
+        }),
+    }
+}
+
+fn write_entry(out: &mut Vec<u8>, e: &Entry, d: &Done, done: &[Done], msg: &str, line_end: u32) {
+    let names = &e.func.code.cv_names;
+    out.push(b'\n');
+    out.extend_from_slice(&e.name);
+    out.extend_from_slice(
+        format!(
+            ":\n     ; (lines={}, args={}, vars={}, tmps={})\n",
+            d.lines.len(),
+            d.num_args,
+            d.kept.len(),
+            d.tmps
+        )
+        .as_bytes(),
+    );
+    out.extend_from_slice(format!("     ; ({msg})\n     ; ").as_bytes());
+    out.extend_from_slice(e.func.code.filename.as_bytes());
+    let (start, end) = if e.is_main {
+        (1, line_end)
+    } else {
+        (e.func.line_start, e.func.line_end)
+    };
+    out.extend_from_slice(format!(":{start}-{end}\n").as_bytes());
+    let last_var = u32::try_from(d.kept.len()).unwrap_or(0);
+    for (i, l) in d.lines.iter().enumerate() {
+        out.extend_from_slice(format!("{i:04} ").as_bytes());
+        match &l.res {
+            Z::Cv(c) => {
+                write_cv(out, *c, d, names);
+                out.extend_from_slice(b" = ");
+            }
+            Z::Tmp(t) => {
+                let k = if l.res_var { 'V' } else { 'T' };
+                out.extend_from_slice(format!("{k}{} = ", last_var + t).as_bytes());
+            }
+            _ => {}
+        }
+        out.extend_from_slice(l.op.as_bytes());
+        out.extend_from_slice(l.suffix.as_bytes());
+        out.extend_from_slice(l.ext.as_bytes());
+        let op1 = match l.stack {
+            Some(s) => Z::Num(stack_size(s, done)),
+            None => l.op1.clone(),
+        };
+        write_z(out, &op1, l.op1_var, d, names);
+        write_z(out, &l.op2, l.op2_var, d, names);
+        if let Some(j) = &l.ext_jmp {
+            write_z(out, j, false, d, names);
+        }
+        out.push(b'\n');
+    }
+    if !d.live.is_empty() {
+        out.extend_from_slice(b"LIVE RANGES:\n");
+        for r in &d.live {
+            out.extend_from_slice(
+                format!(
+                    "     {}: {:04} - {:04} ({})\n",
+                    last_var + r.var,
+                    r.start,
+                    r.end,
+                    r.kind
+                )
+                .as_bytes(),
+            );
+        }
+    }
+    if !d.exc.is_empty() {
+        out.extend_from_slice(b"EXCEPTION TABLE:\n");
+        for e in &d.exc {
+            let f = |x: Option<u32>| x.map_or_else(|| "-".to_string(), |v| format!("{v:04}"));
+            out.extend_from_slice(
+                format!("     {}, {}, {}, {}\n", f(e[0]), f(e[1]), f(e[2]), f(e[3])).as_bytes(),
+            );
+        }
+    }
+}
+
+/// Dumps every op array of `unit` as `zend_dump_op_array` with the
+/// message `msg` (`"after optimizer"`). `functions` is the function table
+/// the unit was compiled against and `internal` gives the [`flags`] and
+/// return type of its internal functions; `level` is
+/// `opcache.optimization_level`; `main_line_end` the last line of the
+/// file (`op_array->line_end` of the main code).
+#[must_use]
+pub fn dump_unit(
+    unit: &CompiledUnit,
+    functions: &dyn FunctionTable,
+    internal: &dyn Fn(&[u8]) -> (u32, Option<crate::types::TypeDecl>),
+    level: u32,
+    main_line_end: u32,
+    msg: &str,
+) -> Vec<u8> {
+    let entries = collect(unit);
+    let mut fn_index: HashMap<Vec<u8>, (usize, Rc<UserFunction>)> = HashMap::new();
+    {
+        let table = unit.decls.functions.borrow();
+        for &i in &unit.hoisted_functions {
+            if let Some(f) = table.get(i as usize) {
+                if let Some(pos) = entries.iter().position(|e| Rc::ptr_eq(&e.func, f)) {
+                    fn_index.insert(f.name.as_bytes().to_ascii_lowercase(), (pos, f.clone()));
+                }
+            }
+        }
+    }
+    let mut classes = HashMap::new();
+    for c in unit.decls.classes.borrow().iter() {
+        let mut methods = HashMap::new();
+        for m in &c.methods {
+            if let Some(pos) = entries.iter().position(|e| Rc::ptr_eq(&e.func, &m.func)) {
+                methods.insert(m.name.as_bytes().to_ascii_lowercase(), pos);
+            }
+        }
+        classes
+            .entry(c.name.as_bytes().to_ascii_lowercase())
+            .or_insert_with(|| (c.clone(), methods));
+    }
+    let res = lower::Resolver {
+        table: functions,
+        functions: fn_index,
+        classes,
+        internal,
+        level,
+    };
+    let done: Vec<Done> = entries.iter().map(|e| finish(e, &res)).collect();
+    let mut out = Vec::new();
+    for (e, d) in entries.iter().zip(&done) {
+        write_entry(&mut out, e, d, &done, msg, main_line_end);
+    }
+    out
+}
+
+/// `op_array->line_end` of a file's main code: the lexer's line at the end
+/// of `src` (up to `__halt_compiler();` when there is one).
+#[must_use]
+pub fn main_line_end(src: &[u8], halt_offset: Option<usize>) -> u32 {
+    let src = halt_offset.map_or(src, |o| &src[..o.min(src.len())]);
+    let n = src.iter().filter(|&&c| c == b'\n').count();
+    u32::try_from(n + 1).unwrap_or(u32::MAX)
+}
 
 /// Formats `op_array` in `zend_dump.c` style.
 #[must_use]

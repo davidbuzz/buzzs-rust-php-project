@@ -257,12 +257,25 @@ impl Vm {
                 && (self.ini.get_bool("opcache.enable_cli")
                     || self.ini.get_bool("opcache.file_cache_only"))
             {
-                u32::try_from(self.ini.get_long("opcache.optimization_level")).unwrap_or(0)
+                // A zend_long whose low 32 bits are the passes: `-1` is all.
+                u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
+                    .unwrap_or(0)
             } else {
                 0
             },
         };
         let halt_compiler_offset = program.halt_compiler_offset;
+        // `opcache.opt_debug_level` & `ZEND_DUMP_AFTER_OPTIMIZER`: opcache
+        // dumps each script it compiles (`zend_optimize_script`); eval'd
+        // code is not cached.
+        let dump_src = (!is_eval
+            && self.ini.get_bool("opcache.enable")
+            && (self.ini.get_bool("opcache.enable_cli")
+                || self.ini.get_bool("opcache.file_cache_only"))
+            && self.ini.get_long("opcache.opt_debug_level")
+                & compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER
+                != 0)
+            .then(|| src.clone());
         // A multibyte script's AST is kept for the semantic text of
         // diagnostics; any other is released statement by statement while
         // it compiles. The compiler sees the function table as it stands
@@ -318,6 +331,31 @@ impl Vm {
             }
         } else {
             self.emit_compile_warnings(&unit, filename)?;
+        }
+        // `opcache.opt_debug_level`: the optimized op arrays, after the
+        // compile warnings (php-src dumps from the optimizer, which runs
+        // when the script is cached).
+        if let Some(src) = dump_src {
+            let level =
+                u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
+                    .unwrap_or(0);
+            let functions = &self.functions;
+            let table = |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of);
+            let internal = |lc: &[u8]| match functions.get(lc) {
+                Some(crate::func::Func::Builtin(b)) => (b.flags, b.return_type.clone()),
+                _ => (0, None),
+            };
+            let end = compiler::optimizer::dump::main_line_end(&src, halt_compiler_offset);
+            let out = compiler::optimizer::dump::dump_unit(
+                &unit,
+                &table,
+                &internal,
+                level,
+                end,
+                "after optimizer",
+            );
+            self.flush_stdout();
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), &out);
         }
         Ok(CompileOutcome::Ok(unit))
     }
