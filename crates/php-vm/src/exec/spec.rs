@@ -920,11 +920,49 @@ impl Vm {
         Some(store_fetched_in(f, dst, to, v))
     }
 
+    /// The run-time cache hit of [`Vm::fetch_global_fast`]: `Some(result)`
+    /// when place `pid`'s slot was resolved before (only a literal name
+    /// fills it), read from the global scope's variable or the global
+    /// store without looking at the place again; `None` when unresolved.
+    #[inline(always)]
+    #[allow(clippy::inline_always, clippy::option_option)] // the FetchGlobal hit
+    fn fetch_global_cached(&self, pid: PlaceId, mode: FetchMode) -> Option<Option<Value>> {
+        let slot = *self
+            .frame()
+            .code
+            .rt_cache
+            .globals
+            .try_borrow()
+            .ok()?
+            .get(pid as usize)?;
+        let undefined = || (mode == FetchMode::Is).then_some(Value::Null);
+        match slot {
+            GlobalSlot::GlobalCv(cv) => {
+                let main = self.frames.first()?;
+                let slot = main.cvs.get(cv as usize)?;
+                Some(slot.get().map_or_else(undefined, |v| Some(v.deref())))
+            }
+            GlobalSlot::GlobalStore(idx) => {
+                let g = self.globals.try_borrow().ok()?;
+                Some(
+                    g.slots
+                        .get(idx as usize)
+                        .and_then(Option::as_ref)
+                        .map_or_else(undefined, |v| Some(v.deref())),
+                )
+            }
+            GlobalSlot::Empty => None,
+        }
+    }
+
     /// [`crate::opcode::Op::FetchGlobal`]: global variable read
     /// (`$GLOBALS['name']`, superglobals) resolved directly from the VM's
     /// global scope or the global store, with runtime caching.
     #[inline(always)]
     pub(crate) fn fetch_global_fast(&mut self, pid: PlaceId, mode: FetchMode) -> Option<Value> {
+        if let Some(hit) = self.fetch_global_cached(pid, mode) {
+            return hit;
+        }
         let (name_op, code) = {
             let f = self.frame();
             let p = f.code.places.get(pid as usize)?;
@@ -1656,6 +1694,29 @@ foreach (["a", "b"] as $k) { echo $GLOBALS[$k]; }
 echo "\n";
 "#);
         assert_eq!(out, "ABA\nAB\n");
+    }
+
+    /// Cached `$GLOBALS['name']` / superglobal reads (`fetch_global_cached`)
+    /// see later assignments, a global added after the first (undefined,
+    /// `??`) read, a write through a reference and a changed superglobal.
+    #[test]
+    fn cached_global_reads_follow_later_writes() {
+        let out = run(r#"<?php
+$main = 'm';
+function f() {
+    $o = [];
+    for ($i = 0; $i < 3; $i++) {
+        $o[] = $GLOBALS['main'] . ($GLOBALS['late'] ?? 'none') . count($_GET) . ($GLOBALS['dyn'] ?? '-');
+        if ($i == 0) { $GLOBALS['late'] = 'L'; }
+        if ($i == 1) { $GLOBALS['main'] = 'M'; $GLOBALS['dyn'] = 'D'; $_GET['k'] = 1; }
+    }
+    $r = &$GLOBALS['main']; $r = 'R'; $o[] = $GLOBALS['main'];
+    return implode(',', $o);
+}
+echo f(), "\n";
+for ($i = 0; $i < 2; $i++) { $x = $_GET; echo count($x), "\n"; }
+"#);
+        assert_eq!(out, "mnone0-,mL0-,ML1D,R\n1\n1\n");
     }
 
     #[test]
