@@ -2020,11 +2020,7 @@ impl Vm {
         let r = self.write_place_inner(base, segs, wop, false);
         flush_deferred_ref_assigns();
         self.frame_mut().sync_from_symbol_table();
-        if let Some(main) = self.frames.first_mut() {
-            if main.symtab_attached {
-                main.sync_from_symbol_table();
-            }
-        }
+        self.sync_global_frames();
         r
     }
 
@@ -3215,11 +3211,7 @@ impl Vm {
                     drop(wop.resolve_deferred());
                     flush_deferred_ref_assigns();
                     self.frame_mut().sync_from_symbol_table();
-                    if let Some(main) = self.frames.first_mut() {
-                        if main.symtab_attached {
-                            main.sync_from_symbol_table();
-                        }
-                    }
+                    self.sync_global_frames();
                     return r;
                 }
             }
@@ -3239,11 +3231,7 @@ impl Vm {
         };
         flush_deferred_ref_assigns();
         self.frame_mut().sync_from_symbol_table();
-        if let Some(main) = self.frames.first_mut() {
-            if main.symtab_attached {
-                main.sync_from_symbol_table();
-            }
-        }
+        self.sync_global_frames();
         r
     }
 
@@ -3512,11 +3500,7 @@ impl Vm {
                     *slot = Some(nv.clone());
                 }
                 self.frame_mut().sync_from_symbol_table();
-                if let Some(main) = self.frames.first_mut() {
-                    if main.symtab_attached {
-                        main.sync_from_symbol_table();
-                    }
-                }
+                self.sync_global_frames();
                 return Ok(nv);
             }
         }
@@ -3757,11 +3741,7 @@ impl Vm {
         if segs.is_empty() {
             if let Some(r) = incdec_var_int_fast(&base, kind) {
                 self.frame_mut().sync_from_symbol_table();
-                if let Some(main) = self.frames.first_mut() {
-                    if main.symtab_attached {
-                        main.sync_from_symbol_table();
-                    }
-                }
+                self.sync_global_frames();
                 return Ok(r);
             }
         }
@@ -3821,11 +3801,7 @@ impl Vm {
                 let r = self.write_place_inner(base2, &segs, WOp::Assign(nv), true);
                 flush_deferred_ref_assigns();
                 self.frame_mut().sync_from_symbol_table();
-                if let Some(main) = self.frames.first_mut() {
-                    if main.symtab_attached {
-                        main.sync_from_symbol_table();
-                    }
-                }
+                self.sync_global_frames();
                 r
             };
             if let Some(q) = quiet {
@@ -4662,11 +4638,7 @@ impl Vm {
         let slot = st.slots[idx].get_or_insert(Value::Null);
         let r = slot.make_ref();
         drop(st);
-        if let Some(main) = self.frames.first_mut() {
-            if main.symtab_attached {
-                main.sync_from_symbol_table();
-            }
-        }
+        self.sync_global_frames();
         r
     }
 }

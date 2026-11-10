@@ -1848,6 +1848,24 @@ impl Vm {
         Some(f.vars.clone())
     }
 
+    /// Refreshes the compiled variables of every frame attached to the global
+    /// symbol table (the main script and top-level `include`/`eval` frames,
+    /// which share it) after a write to it, as php-src's `IS_INDIRECT` slots
+    /// would show the new value. Those frames form the bottom of the stack,
+    /// so the walk stops at the first frame that is not one of them.
+    pub(crate) fn sync_global_frames(&mut self) {
+        let globals = self.globals.clone();
+        for f in self
+            .frames
+            .iter_mut()
+            .take_while(|f| f.kind == FrameKind::Main || Rc::ptr_eq(&f.vars, &globals))
+        {
+            if f.symtab_attached {
+                f.sync_from_symbol_table();
+            }
+        }
+    }
+
     /// [`Vm::rebuild_symbol_table`] for the global symbol table (`&EG(symbol_table)`).
     pub fn rebuild_global_symbol_table(&mut self) -> Rc<RefCell<VarStore>> {
         self.attach_globals_symbol_table();
