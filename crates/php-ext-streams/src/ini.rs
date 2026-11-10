@@ -49,6 +49,7 @@ fn on_open_basedir(vm: &mut Vm, new: &[u8]) -> VmResult<bool> {
     match r {
         Some(expanded) => {
             EXPANDED.with(|e| *e.borrow_mut() = Some((new.to_vec(), expanded)));
+            bridge::invalidate_settings();
             Ok(true)
         }
         None => Ok(false),
