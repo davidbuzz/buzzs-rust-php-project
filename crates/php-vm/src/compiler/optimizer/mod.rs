@@ -1139,6 +1139,184 @@ mod tests {
         );
     }
 
+    /// Both arms of `$c ? 1 : 1` give `1`, so `substr('foo', 1, ...)` is
+    /// evaluated at compile time (opcache `ct_eval_frameless_002`;
+    /// `/usr/bin/php` prints "o"); different arms stay a run-time choice.
+    #[test]
+    fn sccp_joins_equal_constants_of_both_branches() {
+        let unit = compile_src(
+            "<?php function f($foo) { echo substr('foo', 1, $foo ? 1 : 1); }\n\
+             function g($foo) { echo substr('foo', 1, $foo ? 1 : 2); }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let f = find_code(&unit, named(b"f"));
+        assert!(
+            !f.ops.iter().any(|op| matches!(op, Op::DoCall { .. })),
+            "{:?}",
+            f.ops
+        );
+        assert!(
+            f.ops.iter().any(|op| matches!(
+                op,
+                Op::Echo(Operand::Lit(l))
+                    if matches!(f.literals.get(*l as usize), Some(Value::Str(s)) if s.as_bytes() == b"o")
+            )),
+            "{:?}",
+            f.ops
+        );
+        let g = find_code(&unit, named(b"g"));
+        assert!(
+            g.ops.iter().any(|op| matches!(op, Op::DoCall { .. })),
+            "{:?}",
+            g.ops
+        );
+    }
+
+    /// A by-value foreach over an empty literal array is dropped; a
+    /// by-reference one keeps its `FE_RESET_RW` and `FE_FREE` but loses
+    /// the loop (opcache `opt/dce_009`).
+    #[test]
+    fn dce_drops_foreach_over_empty_literal_array() {
+        let unit = compile_src(
+            "<?php function a() { echo 1; foreach ([] as $x) { echo $x; } echo 2; }\n\
+             function b() { foreach ([] as $k => &$v) { echo $v; } }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let a = find_code(&unit, named(b"a"));
+        assert!(
+            !a.ops.iter().any(|op| matches!(
+                op,
+                Op::FeReset { .. } | Op::FeFetch { .. } | Op::FeFree { .. }
+            )),
+            "{:?}",
+            a.ops
+        );
+        let b = find_code(&unit, named(b"b"));
+        let has = |m: fn(&Op) -> bool| b.ops.iter().any(m);
+        assert!(has(|op| matches!(op, Op::FeReset { .. })), "{:?}", b.ops);
+        assert!(has(|op| matches!(op, Op::FeFree { .. })), "{:?}", b.ops);
+        assert!(!has(|op| matches!(op, Op::FeFetch { .. })), "{:?}", b.ops);
+    }
+
+    /// `$c = 1; $o instanceof $c` keeps `$c`: php-src substitutes only a
+    /// string constant for a dynamic class (opcache `opt/sccp_024`).
+    #[test]
+    fn sccp_keeps_non_string_constant_out_of_dynamic_class() {
+        let unit = compile_src(
+            "<?php function t($o) { $a = 'A'; $c = 1; echo $o instanceof $a; echo $o instanceof $c; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"t"));
+        let classes: Vec<&ClassSpec> = code
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::InstanceOf { class, .. } => Some(class),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(classes.len(), 2, "{:?}", code.ops);
+        assert!(
+            !matches!(classes[0], ClassSpec::Dyn(Operand::Cv(_))),
+            "{:?}",
+            code.ops
+        );
+        assert!(
+            matches!(classes[1], ClassSpec::Dyn(Operand::Cv(_))),
+            "{:?}",
+            code.ops
+        );
+    }
+
+    /// Two arrays meeting after a branch keep the elements they share
+    /// (sccp.c partial arrays, opcache `opt/sccp_007`): `$a[0]` folds,
+    /// `$a[1]` does not.
+    #[test]
+    fn sccp_partial_array_join_folds_shared_element() {
+        let unit = compile_src(
+            "<?php function f(int $x) { if ($x) { $a = [0, 1]; } else { $a = [0, 2]; } echo $a[0]; }\n\
+             function g(int $x) { if ($x) { $a = [0, 1]; } else { $a = [0, 2]; } echo $a[1]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let f = find_code(&unit, named(b"f"));
+        assert!(
+            !f.ops
+                .iter()
+                .any(|op| matches!(op, Op::Fetch { .. } | Op::Free(Operand::Cv(_)))),
+            "{:?}",
+            f.ops
+        );
+        let g = find_code(&unit, named(b"g"));
+        assert!(
+            g.ops.iter().any(|op| matches!(op, Op::Fetch { .. })),
+            "{:?}",
+            g.ops
+        );
+    }
+
+    /// A parameter is never undefined after its `RECV`, so the check of an
+    /// emptied `if ($x) {}` goes; an unset parameter keeps it.
+    #[test]
+    fn dce_drops_check_var_of_parameter() {
+        let unit = compile_src(
+            "<?php function f($x) { if ($x) {} return 1; }\n\
+             function g($x) { unset($x); if ($x) {} return 1; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let reads_cv = |code: &OpArray| {
+            code.ops
+                .iter()
+                .any(|op| matches!(op, Op::Free(Operand::Cv(_)) | Op::JmpZ(Operand::Cv(_), _)))
+        };
+        let f = find_code(&unit, named(b"f"));
+        assert!(!reads_cv(&*f), "{:?}", f.ops);
+        let g = find_code(&unit, named(b"g"));
+        assert!(reads_cv(&*g), "{:?}", g.ops);
+    }
+
+    /// `$a[0] = $x; $a[1] = 5;` on a local that starts undefined builds a
+    /// partial array whose `$a[1]` folds until `$a->foo = 5` (opcache
+    /// `opt/sccp_022`); a local copied from a parameter is unknown.
+    #[test]
+    fn sccp_partial_array_from_dim_writes_of_undefined_local() {
+        let unit = compile_src(
+            "<?php function foo(int $x) { $a[0] = $x; $a[1] = 5; echo $a[1]; $a->foo = 5; echo $a[1]; }\n\
+             function bar($s) { $a = $s; $a[1] = 5; echo $a[1]; }\n\
+             function baz($x) { $a[0] = $x; echo $a[0]; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let fetches = |code: &OpArray| {
+            code.ops
+                .iter()
+                .filter(|op| matches!(op, Op::Fetch { .. }))
+                .count()
+        };
+        let foo = find_code(&unit, named(b"foo"));
+        assert_eq!(fetches(&*foo), 1, "{:?}", foo.ops);
+        let bar = find_code(&unit, named(b"bar"));
+        assert_eq!(fetches(&*bar), 1, "{:?}", bar.ops);
+        let baz = find_code(&unit, named(b"baz"));
+        assert_eq!(fetches(&*baz), 1, "{:?}", baz.ops);
+    }
+
+    /// `yield from []` (directly or through a local holding `[]`) yields
+    /// nothing and gives null, so it goes; a non-empty one stays (opcache
+    /// `opt/sccp_032`).
+    #[test]
+    fn sccp_drops_yield_from_empty_array() {
+        let unit = compile_src(
+            "<?php function t() { $r = yield from []; $a = []; yield from $a; yield $r; $a[] = 3; yield from $a; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let code = find_code(&unit, named(b"t"));
+        let n = code
+            .ops
+            .iter()
+            .filter(|op| matches!(op, Op::YieldFrom { .. }))
+            .count();
+        assert_eq!(n, 1, "{:?}", code.ops);
+    }
+
     #[test]
     fn test_nop_removal() {
         let unit = compile_src("<?php $a = 1; echo $a;", DEFAULT_OPTIMIZATION_LEVEL);

@@ -8,7 +8,8 @@
 //! - Dead jump-to-next elimination.
 
 use super::{clear_def_tmp, def_tmp, for_each_operand_mut, for_each_place_operand_mut};
-use crate::opcode::{BinKind, CastKind, ClassSpec, Op, OpArray, Operand};
+use crate::opcode::{BinKind, CastKind, ClassSpec, ForeachKind, Op, OpArray, Operand};
+use php_runtime::Value;
 
 /// Runs DCE on `op_array`. Returns `true` if any instruction was removed or simplified.
 pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
@@ -85,6 +86,18 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
                     }
                     if b + 1 < num_blocks {
                         successors.push(b + 1);
+                    }
+                }
+                // A foreach over an empty literal array goes straight to
+                // its end: sccp.c marks only the `FE_RESET` target
+                // feasible (opt/dce_009).
+                Op::FeReset {
+                    subject: Operand::Lit(l),
+                    end: t,
+                    ..
+                } if is_empty_array_lit(&op_array.literals, *l) => {
+                    if (*t as usize) < len {
+                        successors.push(inst_to_block[*t as usize]);
                     }
                 }
                 Op::FastCall { target: t, .. }
@@ -199,6 +212,9 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
         }
     }
 
+    changed |= drop_empty_foreach(op_array);
+    changed |= drop_param_check_vars(op_array);
+
     // 2. Dead jump-to-next elimination
     for i in 0..len {
         if let Op::Jmp(target) = op_array.ops[i] {
@@ -288,6 +304,108 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
         changed = true;
     }
 
+    changed
+}
+
+/// Whether literal `l` is an empty array.
+fn is_empty_array_lit(literals: &[Value], l: u32) -> bool {
+    matches!(literals.get(l as usize), Some(Value::Array(a)) if a.is_empty())
+}
+
+/// Drops a by-value foreach over an empty literal array once its loop body
+/// is gone: the `FE_RESET_R` of an immutable array and its `FE_FREE` do
+/// nothing (opt/dce_009). The iterator must be named by no other op (no
+/// `FE_FETCH` left, no `FE_FREE` on a `return`). A by-reference
+/// `FE_RESET_RW` stays, as in php-src.
+fn drop_empty_foreach(op_array: &mut OpArray) -> bool {
+    let mut changed = false;
+    for i in 0..op_array.ops.len() {
+        let Op::FeReset {
+            subject: Operand::Lit(l),
+            place: None,
+            kind: ForeachKind::Value,
+            iter,
+            ..
+        } = op_array.ops[i]
+        else {
+            continue;
+        };
+        if !is_empty_array_lit(&op_array.literals, l) {
+            continue;
+        }
+        let only_freed = op_array.ops.iter().enumerate().all(|(j, op)| {
+            j == i
+                || !matches!(
+                    op,
+                    Op::FeReset { iter: x, .. }
+                    | Op::FeFetch { iter: x, .. }
+                    | Op::FeFreeOnReturn { iter: x, .. } if *x == iter
+                )
+        });
+        if !only_freed {
+            continue;
+        }
+        op_array.ops[i] = Op::Nop;
+        for op in &mut op_array.ops {
+            if matches!(op, Op::FeFree { iter: x } if *x == iter) {
+                *op = Op::Nop;
+            }
+        }
+        changed = true;
+    }
+    changed
+}
+
+/// Drops the `CHECK_VAR` (here `Free` of a CV) of a parameter after its
+/// `RECV`: it cannot be undefined, so the check warns about nothing
+/// (dce.c drops a `CHECK_VAR` whose operand is not `MAY_BE_UNDEF`;
+/// opt/sccp_007). Not when the function unsets the parameter, nor with
+/// dynamic variable access (`$$`, `extract()`, `include`, ...).
+fn drop_param_check_vars(op_array: &mut OpArray) -> bool {
+    if !op_array
+        .ops
+        .iter()
+        .any(|op| matches!(op, Op::Free(Operand::Cv(_))))
+        || super::compact::has_dynamic_var_access(op_array)
+    {
+        return false;
+    }
+    // The op after which each parameter is bound.
+    let mut bound_at = vec![None; op_array.cv_names.len()];
+    for (i, op) in op_array.ops.iter().enumerate() {
+        if let Op::Recv { cv, .. } | Op::RecvInit { cv, .. } | Op::RecvVariadic { cv, .. } = op {
+            if let Some(slot) = bound_at.get_mut(*cv as usize) {
+                slot.get_or_insert(i);
+            }
+        }
+    }
+    for op in &op_array.ops {
+        if let Op::Unset { place } = op {
+            if let Some(p) = op_array.places.get(*place as usize) {
+                if let crate::opcode::PlaceBase::Cv(c) = p.base {
+                    if p.segs.is_empty() {
+                        if let Some(slot) = bound_at.get_mut(c as usize) {
+                            *slot = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut changed = false;
+    for (i, op) in op_array.ops.iter_mut().enumerate() {
+        if let Op::Free(Operand::Cv(c)) = *op {
+            if bound_at
+                .get(c as usize)
+                .copied()
+                .flatten()
+                .is_some_and(|at| at < i)
+            {
+                *op = Op::Nop;
+                changed = true;
+            }
+        }
+    }
     changed
 }
 
