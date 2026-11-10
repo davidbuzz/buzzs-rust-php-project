@@ -578,7 +578,8 @@ destruct 1
 /// `return_simple`) for the general ones: by-reference parameters, more
 /// arguments than the inline buffer holds, named arguments, an undefined
 /// variable argument, frames with an attached symbol table, references,
-/// `void`/nullable returns and return-type coercion; and namespaced call
+/// `void`/nullable returns, implicit returns with and without a return
+/// type, return-type coercion; and namespaced call
 /// sites with a global fallback (`init_fcall_fast` declines them).
 /// Expected output is php-src's (`/usr/bin/php -n`).
 #[test]
@@ -611,6 +612,12 @@ function ret_bad(): int { return "12"; }
 var_dump(ret_bad());
 function ret_float(): float { return 3; }
 var_dump(ret_float());
+function nothing($a) {}
+var_dump(nothing(1));
+function noret(): int { if (false) { return 1; } }
+try { noret(); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+function nullable_noret(): ?int { if (false) { return 1; } }
+try { var_dump(nullable_noret()); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
 "#;
     let expected = r#"42Q
 xy xy
@@ -629,6 +636,9 @@ NULL
 NULL
 int(12)
 float(3)
+NULL
+NS\noret(): Return value must be of type int, none returned
+NS\nullable_noret(): Return value must be of type ?int, none returned
 "#;
     assert_eq!(run(source), expected);
 }

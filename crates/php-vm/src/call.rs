@@ -2274,7 +2274,16 @@ impl Vm {
                     }
                     lit.clone()
                 }
-                _ => return None,
+                // `return;` and the implicit return at the end of a body:
+                // `verify_return(None)` gives null for no return type and
+                // for `void`, and goes on to its diagnostics otherwise.
+                Operand::Unused => {
+                    if !rt.is_none_or(crate::types::TypeDecl::is_void) {
+                        return None;
+                    }
+                    Value::Null
+                }
+                Operand::TmpKeep(_) => return None,
             };
             crate::gc::frame_released(frame, caller.this.as_ref());
             (v, frame.ret)
