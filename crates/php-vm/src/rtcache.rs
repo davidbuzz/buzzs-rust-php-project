@@ -225,6 +225,19 @@ fn class_const_value(cls: &Class, e: &MemberSlot) -> Option<Value> {
     }
 }
 
+/// A cached `A::name()` call ([`Vm::static_call_hit`]): the parts of its
+/// `PendingCall`.
+pub(crate) struct StaticCallHit {
+    /// The method's function.
+    pub(crate) func: crate::func::Func,
+    /// `$this` (an instance method called with a compatible `$this`).
+    pub(crate) this: Option<php_runtime::Obj>,
+    /// The method's declaring class.
+    pub(crate) scope: Rc<Class>,
+    /// The called class (`static::`).
+    pub(crate) called: Rc<Class>,
+}
+
 impl Vm {
     // ------------------------------------------------------------------
     // Class resolution without side effects
@@ -842,9 +855,10 @@ impl Vm {
     /// The pending call of `A::name()` from the cache, if the op resolved
     /// the same class before and the method is still callable the same
     /// way: a static method, or an instance method with a compatible
-    /// `$this` (`parent::__construct()`).
+    /// `$this` (`parent::__construct()`). The parts are returned, not a
+    /// built `PendingCall`, so that the caller builds the call in place.
     #[inline]
-    pub(crate) fn static_call_hit(&self, spec: &ClassSpec, name: Operand) -> Option<PendingCall> {
+    pub(crate) fn static_call_hit(&self, spec: &ClassSpec, name: Operand) -> Option<StaticCallHit> {
         let Operand::Lit(l) = name else {
             return None;
         };
@@ -874,10 +888,11 @@ impl Vm {
             } else {
                 cls
             };
-            return Some(PendingCall {
-                scope: Some(m.scope()),
-                called: Some(called),
-                ..PendingCall::new(m.func.clone())
+            return Some(StaticCallHit {
+                func: m.func.clone(),
+                this: None,
+                scope: m.scope(),
+                called,
             });
         }
         let this = caller_frame.and_then(|f| f.this.clone())?;
@@ -885,11 +900,11 @@ impl Vm {
         if !called.is_subclass_of(&cls) {
             return None;
         }
-        Some(PendingCall {
+        Some(StaticCallHit {
+            func: m.func.clone(),
             this: Some(this),
-            scope: Some(m.scope()),
-            called: Some(called),
-            ..PendingCall::new(m.func.clone())
+            scope: m.scope(),
+            called,
         })
     }
 

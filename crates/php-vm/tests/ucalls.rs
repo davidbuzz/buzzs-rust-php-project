@@ -479,3 +479,166 @@ try {{ $objs[1]->q($objs[2]); }} catch (Error $e) {{ echo $e->getMessage(), "\n"
         "14850\nCall to private method K0::p() from global scope\nCall to private method K2::p() from scope K1\n"
     );
 }
+
+/// The in-place call and return paths (`push_simple_ucall`,
+/// `return_simple`) and the cases that must leave them for the general
+/// path: defaults skipped by `RECV_INIT`, extra and counted arguments,
+/// recursion, by-reference returns, return-type coercion, undefined return
+/// variables, methods, static methods, closures with bound variables and
+/// `$this`, first-class callables, type and count errors, generators,
+/// destructor order of released frames, and calls from internal code.
+/// Expected output is php-src's (`/usr/bin/php -n`).
+#[test]
+fn in_place_calls_and_returns_match_the_general_path() {
+    let source = r#"<?php
+function id($x) { return $x; }
+function add(int $a, int $b = 10): int { return $a + $b; }
+function lit() { return 5; }
+function cnt($a, $b = 2) { return func_num_args() . ':' . json_encode(func_get_args()); }
+function fib($n) { return $n < 2 ? $n : fib($n - 1) + fib($n - 2); }
+function &refret(array &$a) { return $a[0]; }
+function f2(?string $s): string { return $s ?? 'null'; }
+function coerce(int $i): string { return $i; }
+function undef() { return $nope; }
+class Obj {
+    public $v = 1;
+    function get($x) { return $x + $this->v; }
+    static function st($x) { return $x * 2; }
+    function __destruct() { echo "destruct {$this->v}\n"; }
+}
+echo id(1), id("s"), id(1.5), "\n";
+echo add(1), ' ', add(1, 2), "\n";
+echo lit(), "\n";
+echo cnt(1), ' ', cnt(1, 2, 3), "\n";
+echo fib(15), "\n";
+$arr = [1, 2]; $r = &refret($arr); $r = 9; echo $arr[0], "\n";
+echo f2(null), f2("x"), "\n";
+var_dump(coerce(3));
+var_dump(undef());
+$o = new Obj; echo $o->get(1), ' ', Obj::st(4), "\n";
+$k = 3;
+$c = function ($x) use ($k) { return $x + $k; };
+echo $c(1), "\n";
+$m = new Obj; $m->v = 7;
+$b = Closure::bind(function ($y) { return $this->v + $y; }, $m, Obj::class);
+echo $b(1), "\n";
+$fc = id(...); echo $fc(42), "\n";
+try { add("x"); } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { add(); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+function gen() { yield 1; return 2; }
+$g = gen(); foreach ($g as $v) echo $v; echo $g->getReturn(), "\n";
+function tmp_obj() { return new Obj; }
+tmp_obj();
+echo "after\n";
+function keep() { $x = new Obj; $x->v = 3; return 1; }
+echo keep(), "\n";
+function deep($n) { return $n ? deep($n - 1) : 'bottom'; }
+echo deep(100), "\n";
+echo array_sum(array_map(fn($x) => id($x) * 2, [1, 2, 3])), "\n";
+function nested($a) { return id(id($a)); }
+echo nested(8), "\n";
+function strict_arr(array $a): array { return $a; }
+echo count(strict_arr([1,2])), "\n";
+echo "end\n";
+"#;
+    let expected = r#"1s1.5
+11 3
+5
+1:[1] 3:[1,2,3]
+610
+9
+nullx
+string(1) "3"
+
+Warning: Undefined variable $nope in t.php on line 10
+NULL
+2 8
+4
+8
+42
+TypeError: add(): Argument #1 ($a) must be of type int, string given, called in t.php on line 34
+Too few arguments to function add(), 0 passed in t.php on line 35 and at least 1 expected
+12
+destruct 1
+after
+destruct 3
+1
+bottom
+12
+8
+2
+end
+destruct 7
+destruct 1
+"#;
+    assert_eq!(run(source), expected);
+}
+
+/// Sends and returns that must leave the in-place paths (`send_fast`,
+/// `return_simple`) for the general ones: by-reference parameters, more
+/// arguments than the inline buffer holds, named arguments, an undefined
+/// variable argument, frames with an attached symbol table, references,
+/// `void`/nullable returns, implicit returns with and without a return
+/// type, return-type coercion; and namespaced call
+/// sites with a global fallback (`init_fcall_fast` declines them).
+/// Expected output is php-src's (`/usr/bin/php -n`).
+#[test]
+fn sends_and_returns_outside_the_in_place_paths() {
+    let source = r#"<?php
+namespace NS;
+function local($x) { return strlen($x); }
+echo local('abcd'), \strlen('ab'), strtoupper('q'), "\n";
+function byref(&$a, $b) { $a .= $b; return $a; }
+function many($a, $b, $c, $d, $e, $f, $g, $h) { return "$a$b$c$d$e$f$g$h"; }
+function named($a, $b = 'B', $c = 'C') { return $a . $b . $c; }
+function show($x) { var_dump($x); return $x; }
+$s = 'x';
+echo byref($s, 'y'), ' ', $s, "\n";
+echo many(1, 2, 3, 4, 5, 6, 7, 8), "\n";
+echo named('a', c: 'z'), "\n";
+show($undefined_var);
+$GLOBALS['gv'] = 5;
+extract(['ev' => 6]);
+echo show($gv) + show($ev), "\n";
+$r = 10; $ref = &$r;
+echo show($ref), "\n";
+function ret_ref_cv() { $a = 1; $b = &$a; $b = 2; return $a; }
+echo ret_ref_cv(), "\n";
+function ret_void(): void { return; }
+var_dump(ret_void());
+function ret_nullable(): ?int { return null; }
+var_dump(ret_nullable());
+function ret_bad(): int { return "12"; }
+var_dump(ret_bad());
+function ret_float(): float { return 3; }
+var_dump(ret_float());
+function nothing($a) {}
+var_dump(nothing(1));
+function noret(): int { if (false) { return 1; } }
+try { noret(); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+function nullable_noret(): ?int { if (false) { return 1; } }
+try { var_dump(nullable_noret()); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+"#;
+    let expected = r#"42Q
+xy xy
+12345678
+aBz
+
+Warning: Undefined variable $undefined_var in t.php on line 13
+NULL
+int(5)
+int(6)
+11
+int(10)
+10
+2
+NULL
+NULL
+int(12)
+float(3)
+NULL
+NS\noret(): Return value must be of type int, none returned
+NS\nullable_noret(): Return value must be of type ?int, none returned
+"#;
+    assert_eq!(run(source), expected);
+}

@@ -63,8 +63,11 @@ impl VarNames {
     }
 
     /// Drops all names; a small owned buffer keeps its capacity for reuse.
+    /// Inline, and a no-op on names already dropped: every recycled frame
+    /// calls it on its return.
+    #[inline]
     fn clear(&mut self) {
-        self.shared = None;
+        clear_opt(&mut self.shared);
         clear_frame_buffer(&mut self.owned);
     }
 
@@ -909,12 +912,44 @@ pub struct Frame {
 }
 
 /// Keep small call buffers allocation-free without retaining exceptional frame sizes.
+///
+/// An empty buffer is left alone: `Vec::clear` of an empty vector still
+/// calls the element type's out-of-line slice `drop_in_place` (measured on
+/// every return for the named and positional argument buffers).
 #[inline]
 fn clear_frame_buffer<T>(buffer: &mut Vec<T>) {
     if buffer.capacity() > 256 {
         *buffer = Vec::new();
-    } else {
+    } else if !buffer.is_empty() {
         buffer.clear();
+    }
+}
+
+/// Empties an `Option` field of a frame being recycled. Only a set field is
+/// written: storing `None` over an unknown value calls the payload's
+/// out-of-line `drop_in_place` (an object handle's) even when it was
+/// already `None`, the common case for most fields of a returning frame.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a dozen fields per return
+fn clear_opt<T>(slot: &mut Option<T>) {
+    if slot.is_some() {
+        *slot = None;
+    }
+}
+
+/// Releases a value taken out of a recycled frame's slot: scalars own
+/// nothing and are forgotten (no `drop_in_place` call); anything else is
+/// dropped as before.
+#[inline(always)]
+#[allow(clippy::inline_always)] // once per temporary and compiled variable
+fn release_slot(v: Value) {
+    if matches!(
+        v,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    ) {
+        std::mem::forget(v);
+    } else {
+        drop(v);
     }
 }
 
@@ -925,8 +960,11 @@ fn clear_frame_buffer<T>(buffer: &mut Vec<T>) {
 /// `n` (the temporaries, iterators, finally slots and compiled variables
 /// of one function).
 #[inline]
-fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
-    v.clear();
+pub(crate) fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
+    // A recycled buffer is usually empty already (see `clear_frame_buffer`).
+    if !v.is_empty() {
+        v.clear();
+    }
     if n != 0 {
         v.reserve(n);
         for _ in 0..n {
@@ -1059,48 +1097,57 @@ impl Frame {
     /// so no observable state or handles survive, but the allocated vectors (`tmps`, `cvs`,
     /// `iters`, `fins`) retain their capacity and element counts so that calling the same
     /// function requires zero reallocation.
+    ///
+    /// The values are released in the same order as before; only fields
+    /// that hold something are written ([`clear_opt`], [`release_slot`]),
+    /// which keeps the `drop_in_place` calls of empty fields off the
+    /// return path.
     #[inline]
     pub fn clear_for_reuse(&mut self, empty_code: &Rc<OpArray>) {
         for t in &mut self.tmps {
-            *t = Value::Null;
+            release_slot(std::mem::take(t));
         }
         for it in &mut self.iters {
-            *it = None;
+            clear_opt(it);
         }
         for fin in &mut self.fins {
             *fin = FinState::None;
         }
         clear_frame_buffer(&mut self.calls);
         for slot in &mut self.cvs {
-            slot.set(None);
+            if let Some(old) = slot.as_mut().take() {
+                release_slot(old);
+            }
         }
         self.symtab_attached = false;
         if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
             let vs = rc_mut.get_mut();
             clear_frame_buffer(&mut vs.slots);
             vs.names.clear();
-            vs.index = None;
+            clear_opt(&mut vs.index);
         } else {
             self.vars = Rc::new(RefCell::new(VarStore::default()));
         }
         clear_frame_buffer(&mut self.named);
         clear_frame_buffer(&mut self.args);
-        self.this = None;
-        self.closure = None;
-        self.generator = None;
-        self.pending_exc = None;
-        self.statics = None;
-        self.func = None;
-        self.ufunc = None;
-        self.code = empty_code.clone();
+        clear_opt(&mut self.this);
+        clear_opt(&mut self.closure);
+        clear_opt(&mut self.generator);
+        clear_opt(&mut self.pending_exc);
+        clear_opt(&mut self.statics);
+        clear_opt(&mut self.func);
+        clear_opt(&mut self.ufunc);
+        if !Rc::ptr_eq(&self.code, empty_code) {
+            self.code = empty_code.clone();
+        }
         self.ip = 0;
-        self.scope = None;
-        self.called = None;
+        clear_opt(&mut self.scope);
+        clear_opt(&mut self.called);
         self.ret = RetTarget::Discard;
         self.is_ctor = false;
         clear_frame_buffer(&mut self.silence_saved);
-        self.builtin_name = None;
-        self.magic_name = None;
+        clear_opt(&mut self.builtin_name);
+        clear_opt(&mut self.magic_name);
         self.caller_strict = false;
         self.called_from_internal = false;
         self.observed = false;
@@ -1112,7 +1159,11 @@ impl Frame {
     pub(crate) fn reinit_same_call(&mut self, code: &Rc<OpArray>, kind: FrameKind) {
         self.kind = kind;
         self.ip = 0;
-        self.calls.clear();
+        // Empty after a return: `clear` would still call the out-of-line
+        // slice drop glue of `PendingCall`.
+        if !self.calls.is_empty() {
+            self.calls.clear();
+        }
         self.silence_saved.clear();
         self.symtab_attached = false;
         self.code = code.clone();
@@ -1457,7 +1508,7 @@ impl Frame {
     /// returns cannot borrow from it.
     #[inline(always)]
     #[allow(clippy::inline_always)]
-    pub(crate) fn peek_cv<R>(&self, cv: u32, read: fn(Option<&Value>) -> R) -> R {
+    pub(crate) fn peek_cv<R>(&self, cv: u32, read: impl FnOnce(Option<&Value>) -> R) -> R {
         let idx = cv as usize;
         read(self.cvs.get(idx).and_then(CvSlot::get))
     }
@@ -1912,6 +1963,32 @@ mod tests {
         assert!(matches!(&v, Some(Value::Str(s)) if s.as_bytes() == b"abc"));
         // The slot still holds its value.
         assert!(f.peek_cv(0, |s| matches!(s, Some(Value::Str(_)))));
+    }
+
+    #[test]
+    fn clear_for_reuse_releases_every_value_and_keeps_slot_counts() {
+        let mut f = frame_with(&["a", "b"]);
+        let s = ZStr::from("a string held by the frame");
+        f.cvs[0].set(Some(Value::Str(s.clone())));
+        f.cvs[1].set(Some(Value::Int(3)));
+        f.tmps = vec![Value::Str(s.clone()), Value::Float(1.5)];
+        f.args.push(Some(Value::Str(s.clone())));
+        f.magic_name = Some(s.clone());
+        assert_eq!(s.refcount(), 5);
+        let empty = Rc::new(OpArray::default());
+        f.clear_for_reuse(&empty);
+        assert_eq!(s.refcount(), 1);
+        assert_eq!(f.cvs.len(), 2);
+        assert!(f.cvs.iter().all(super::CvSlot::is_none));
+        assert_eq!(f.tmps.len(), 2);
+        assert!(f.tmps.iter().all(|t| matches!(t, Value::Null)));
+        assert!(f.args.is_empty());
+        assert!(f.magic_name.is_none());
+        assert!(Rc::ptr_eq(&f.code, &empty));
+        // Recycling a recycled frame changes nothing.
+        f.clear_for_reuse(&empty);
+        assert_eq!(f.cvs.len(), 2);
+        assert!(Rc::ptr_eq(&f.code, &empty));
     }
 
     #[test]

@@ -1469,6 +1469,19 @@ impl Vm {
                             }
                             None => break 'slow,
                         },
+                        // A call site resolved before (`Vm::init_fcall_fast`).
+                        Op::InitFCall { name, fallback, .. } => {
+                            if !self.init_fcall_fast(*name, *fallback) {
+                                break 'slow;
+                            }
+                        }
+                        // A by-value argument into the call's inline buffer
+                        // (`Vm::send_fast`).
+                        Op::Send { src } => {
+                            if !self.send_fast(src) {
+                                break 'slow;
+                            }
+                        }
                         _ => break 'slow,
                     }
                     if Self::safe_point_due() {
@@ -1921,13 +1934,16 @@ impl Vm {
                         }
                         Flow::Next
                     }
-                    Op::Return { val } => {
-                        let v = match val {
-                            Operand::Unused => None,
-                            o => Some(self.read(*o)?),
-                        };
-                        self.op_return(v, base)?
-                    }
+                    Op::Return { val } => match self.return_simple(*val, base) {
+                        Some(flow) => flow,
+                        None => {
+                            let v = match val {
+                                Operand::Unused => None,
+                                o => Some(self.read(*o)?),
+                            };
+                            self.op_return(v, base)?
+                        }
+                    },
                     Op::ReturnByRefValue { val } => {
                         let unused = *val == Operand::Unused;
                         let raw = if unused {

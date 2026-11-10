@@ -701,11 +701,13 @@ fn root_obj(o: &Obj) {
     }
 }
 
-/// [`root_obj`] for an object that stays referenced.
+/// [`root_obj`] for an object that stays referenced (`$this` or the
+/// closure of every method or closure call returning, among others): the
+/// object's data is looked up once for the check and the buffering.
 #[inline(never)]
 fn root_shared_obj(o: &Obj) {
-    if o.downcast_ref::<ObjectData>().is_some() {
-        with_state(|s| buffer_obj(s, o));
+    if let Some(d) = o.downcast_ref::<ObjectData>() {
+        with_state(|s| buffer_obj_data(s, o, d));
     }
 }
 
@@ -713,11 +715,16 @@ fn root_shared_obj(o: &Obj) {
 /// (`GC_MAY_LEAK`); returns its slot. Roots released by destructors during
 /// a run are kept for the next one (they never trigger a nested run).
 fn buffer_obj(s: &mut GcState, o: &Obj) -> Option<usize> {
+    // Only the VM's own objects are buffered (the callers check).
+    let d = o.downcast_ref::<ObjectData>()?;
+    buffer_obj_data(s, o, d)
+}
+
+/// [`buffer_obj`] of `o`, whose data `d` the caller looked up.
+fn buffer_obj_data(s: &mut GcState, o: &Obj, d: &ObjectData) -> Option<usize> {
     if s.protected {
         return None;
     }
-    // Only the VM's own objects are buffered (the callers check).
-    let d = o.downcast_ref::<ObjectData>()?;
     // php-src reads `GC_INFO` from the object itself. Here an object that
     // was never buffered (`oflags::GC_BUFFERED` clear, the case of every
     // fresh object) cannot be in the buffer, so the lookup is skipped.
