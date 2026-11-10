@@ -5,6 +5,7 @@
 use crate::host::{rt_throw, spl_state_of, VmHost};
 use php_runtime::{Obj, Value, ZStr};
 use php_spl::classes::{ClassDef, ClassKind, MethodDef, MethodFlags};
+use php_vm::class::FxHasher;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, VmResult};
 use php_vm::func::Func;
 use php_vm::opcode::{Op, Operand};
@@ -12,6 +13,7 @@ use php_vm::vm::FrameKind;
 use php_vm::{Throw, Vm};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::ops::BitOr;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -27,24 +29,54 @@ struct Target {
     deprecated: bool,
 }
 
+/// A map keyed by `Builtin` addresses (no protection against chosen keys
+/// is needed: the keys are the VM's own pointers).
+type PtrMap<V> = HashMap<usize, V, BuildHasherDefault<FxHasher>>;
+
 thread_local! {
     /// Native method handlers, keyed by the address of their `Builtin`.
-    static METHODS: RefCell<HashMap<usize, Target>> = RefCell::new(HashMap::new());
+    static METHODS: RefCell<PtrMap<Target>> = RefCell::new(PtrMap::default());
 }
 
-/// The stub signatures of all SPL methods, built once per process (the
-/// class builder needs `&'static str` signatures).
-fn signatures() -> &'static HashMap<(&'static str, &'static str), String> {
-    static SIGS: OnceLock<HashMap<(&'static str, &'static str), String>> = OnceLock::new();
-    SIGS.get_or_init(|| {
-        let mut m = HashMap::new();
-        for c in php_spl::classes::class_table() {
-            for d in c.methods {
-                m.insert((c.name, d.name), signature(d));
-            }
+/// The SPL class table, indexed once per process: the stub signature of
+/// every method (the class builder needs `&'static str` signatures), by
+/// class position in [`php_spl::classes::class_table`] and method position
+/// in [`ClassDef::methods`], and each class's position by name.
+struct Tables {
+    sigs: Vec<Vec<String>>,
+    by_name: HashMap<&'static str, usize>,
+}
+
+fn tables() -> &'static Tables {
+    static TABLES: OnceLock<Tables> = OnceLock::new();
+    TABLES.get_or_init(|| {
+        let table = php_spl::classes::class_table();
+        Tables {
+            sigs: table
+                .iter()
+                .map(|c| c.methods.iter().map(signature).collect())
+                .collect(),
+            by_name: table.iter().enumerate().map(|(i, c)| (c.name, i)).collect(),
         }
-        m
     })
+}
+
+/// The SPL class declaration named `name` (canonical spelling first, then
+/// any case).
+fn spl_class(name: &str) -> Option<&'static ClassDef> {
+    match tables().by_name.get(name) {
+        Some(&i) => php_spl::classes::class_table().get(i),
+        None => php_spl::classes::find_class(name),
+    }
+}
+
+/// Whether `c` is the SPL class `ancestor` or extends it, as
+/// [`php_spl::classes::is_subclass_of`] answers for a class `ancestor`:
+/// interfaces never lead to a class, and an `extends` chain that leaves
+/// the SPL table (into the exception hierarchy) never comes back to it.
+fn extends_spl(c: &'static ClassDef, ancestor: &str) -> bool {
+    std::iter::successors(Some(c), |d| d.parent.and_then(spl_class))
+        .any(|d| d.name.eq_ignore_ascii_case(ancestor))
 }
 
 /// Renders a value as a literal the VM's stub parser understands.
@@ -89,15 +121,24 @@ pub fn eval_default(src: &str, class: &str) -> Option<Value> {
             };
         }
     }
-    match s.to_ascii_lowercase().as_str() {
-        "null" => return Some(Value::Null),
-        "true" => return Some(Value::Bool(true)),
-        "false" => return Some(Value::Bool(false)),
-        "[]" => return Some(Value::empty_array()),
-        "php_int_max" => return Some(Value::Int(i64::MAX)),
-        "sort_regular" | "count_normal" => return Some(Value::Int(0)),
-        "preg_split_no_empty" => return Some(Value::Int(1)),
-        _ => {}
+    let is = |name: &str| s.eq_ignore_ascii_case(name);
+    if is("null") {
+        return Some(Value::Null);
+    }
+    if is("true") || is("false") {
+        return Some(Value::Bool(is("true")));
+    }
+    if s == "[]" {
+        return Some(Value::empty_array());
+    }
+    if is("php_int_max") {
+        return Some(Value::Int(i64::MAX));
+    }
+    if is("sort_regular") || is("count_normal") {
+        return Some(Value::Int(0));
+    }
+    if is("preg_split_no_empty") {
+        return Some(Value::Int(1));
     }
     if let Ok(i) = s.parse::<i64>() {
         return Some(Value::Int(i));
@@ -209,24 +250,24 @@ fn method_flags(d: &MethodDef) -> u32 {
 
 /// Classes whose handlers have no `clone_obj` (dual iterators, recursive
 /// iterators, `SplFileObject`, `GlobIterator`).
-fn uncloneable(name: &str) -> bool {
+fn uncloneable(c: &'static ClassDef) -> bool {
     matches!(
-        name,
+        c.name,
         "GlobIterator" | "SplFileObject" | "SplTempFileObject" | "RecursiveIteratorIterator"
-    ) || php_spl::classes::is_subclass_of(name, "IteratorIterator")
-        || php_spl::classes::is_subclass_of(name, "RecursiveIteratorIterator")
+    ) || extends_spl(c, "IteratorIterator")
+        || extends_spl(c, "RecursiveIteratorIterator")
 }
 
 /// Classes whose objects own a directory or file stream, closed by their
 /// `dtor_obj` (`spl_filesystem_object_destroy_object`).
-fn owns_stream(name: &str) -> bool {
-    php_spl::classes::is_subclass_of(name, "DirectoryIterator")
-        || php_spl::classes::is_subclass_of(name, "SplFileObject")
+fn owns_stream(c: &'static ClassDef) -> bool {
+    extends_spl(c, "DirectoryIterator") || extends_spl(c, "SplFileObject")
 }
 
-/// Registers one SPL class or interface.
-fn register_class(vm: &mut Vm, c: &'static ClassDef) {
-    let sigs = signatures();
+/// Registers one SPL class or interface; `idx` is its position in
+/// [`php_spl::classes::class_table`].
+fn register_class(vm: &mut Vm, idx: usize, c: &'static ClassDef) {
+    let sigs = tables().sigs.get(idx).map_or(&[][..], Vec::as_slice);
     let mut b = ClassBuilder::new(c.name);
     match c.kind {
         ClassKind::Interface => b = b.flags(class_flags::INTERFACE),
@@ -239,7 +280,7 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
     if c.name == "SplFileInfo" {
         b = b.flags(class_flags::NOT_SERIALIZABLE);
     }
-    if uncloneable(c.name) {
+    if uncloneable(c) {
         b = b.flags(class_flags::NO_CLONE);
     }
     if let Some(p) = c.parent {
@@ -253,10 +294,7 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
         let def = p.default.and_then(|d| eval_default(d, c.name));
         b = b.prop(p.name, acc::PUBLIC, p.ty, def);
     }
-    for d in c.methods {
-        let Some(sig) = sigs.get(&(c.name, d.name)) else {
-            continue;
-        };
+    for (d, sig) in c.methods.iter().zip(sigs) {
         let fl = method_flags(d);
         if c.kind == ClassKind::Interface || d.flags & MethodFlags::ABSTRACT != 0 {
             b = b.abstract_method(sig, fl);
@@ -265,7 +303,7 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
         }
     }
     if c.kind != ClassKind::Interface {
-        let mut hooks = if owns_stream(c.name) {
+        let mut hooks = if owns_stream(c) {
             crate::hooks::filesystem_class_hooks()
         } else {
             crate::hooks::class_hooks()
@@ -284,9 +322,10 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
     let cls = b.register(vm);
     METHODS.with(|m| {
         let mut m = m.borrow_mut();
+        m.reserve(c.methods.len());
         for d in c.methods {
             let lc = d.name.to_ascii_lowercase();
-            if let Some(meth) = cls.methods.get(&ZStr::from(lc)) {
+            if let Some(meth) = cls.methods.get(lc.as_bytes()) {
                 if let Func::Builtin(bi) = &meth.func {
                     m.insert(
                         Rc::as_ptr(bi) as usize,
@@ -308,34 +347,34 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
 pub fn register_classes(vm: &mut Vm) -> Vec<&'static str> {
     crate::hooks::register_gc();
     let mut skipped = Vec::new();
-    let mut pending: Vec<&'static ClassDef> = Vec::new();
-    for c in php_spl::classes::class_table() {
+    let mut pending: Vec<(usize, &'static ClassDef)> = Vec::new();
+    for (idx, c) in php_spl::classes::class_table().iter().enumerate() {
         if vm.find_class(c.name.as_bytes()).is_some() {
             skipped.push(c.name);
         } else {
-            pending.push(c);
+            pending.push((idx, c));
         }
     }
     while !pending.is_empty() {
         let before = pending.len();
         let mut rest = Vec::new();
-        for c in pending {
+        for (idx, c) in pending {
             let ready = c
                 .parent
                 .iter()
                 .chain(c.interfaces.iter())
                 .all(|n| vm.find_class(n.as_bytes()).is_some());
             if ready {
-                register_class(vm, c);
+                register_class(vm, idx, c);
             } else {
-                rest.push(c);
+                rest.push((idx, c));
             }
         }
         pending = rest;
         if pending.len() == before {
             // Unresolvable dependencies: register anyway.
-            for c in pending.drain(..) {
-                register_class(vm, c);
+            for (idx, c) in pending.drain(..) {
+                register_class(vm, idx, c);
             }
         }
     }
@@ -781,6 +820,55 @@ mod tests {
             lit("PHP_INT_MAX", "").as_deref(),
             Some("9223372036854775807")
         );
+    }
+
+    #[test]
+    fn spl_ancestry_matches_the_class_table() {
+        for c in php_spl::classes::class_table() {
+            for a in [
+                "IteratorIterator",
+                "RecursiveIteratorIterator",
+                "DirectoryIterator",
+                "SplFileObject",
+            ] {
+                assert_eq!(
+                    extends_spl(c, a),
+                    php_spl::classes::is_subclass_of(c.name, a),
+                    "{} / {a}",
+                    c.name
+                );
+            }
+        }
+        let glob = spl_class("GlobIterator").expect("GlobIterator");
+        assert!(uncloneable(glob) && owns_stream(glob));
+        let temp = spl_class("splTEMPfileobject").expect("any case");
+        assert!(uncloneable(temp) && owns_stream(temp));
+        assert!(!uncloneable(
+            spl_class("ArrayIterator").expect("ArrayIterator")
+        ));
+    }
+
+    #[test]
+    fn signature_table_follows_the_class_table() {
+        let t = tables();
+        for (i, c) in php_spl::classes::class_table().iter().enumerate() {
+            assert_eq!(t.by_name.get(c.name), Some(&i));
+            assert_eq!(t.sigs[i].len(), c.methods.len());
+            for (d, sig) in c.methods.iter().zip(&t.sigs[i]) {
+                assert_eq!(*sig, signature(d));
+            }
+        }
+    }
+
+    #[test]
+    fn named_defaults_ignore_case() {
+        assert_eq!(lit("NULL", "").as_deref(), Some("null"));
+        assert_eq!(lit("True", "").as_deref(), Some("true"));
+        assert_eq!(lit("false", "").as_deref(), Some("false"));
+        assert_eq!(lit("[]", "").as_deref(), Some("[]"));
+        assert_eq!(lit("Sort_Regular", "").as_deref(), Some("0"));
+        assert_eq!(lit("COUNT_NORMAL", "").as_deref(), Some("0"));
+        assert_eq!(lit("PREG_SPLIT_NO_EMPTY", "").as_deref(), Some("1"));
     }
 
     #[test]
