@@ -719,3 +719,74 @@ float(9.223372036854776E+18)
 "#
     );
 }
+
+/// User calls and returns on the dispatch loop's fast paths
+/// (`Vm::push_simple_ucall`, `Vm::return_simple`) and the generic ones they
+/// decline to: defaults, coercion, destructor order of values released by
+/// the return, recursion, exceptions, closures with bound variables,
+/// methods, by-reference returns, static variables, generators, variadics,
+/// named arguments and backtraces.
+#[test]
+fn user_calls_and_returns() {
+    let src = r#"<?php
+class D { function __construct(public $n) {} function __destruct() { echo "~", $this->n, " "; } }
+function id($x) { return $x; }
+function two($a, $b = 5) { return func_num_args() . ":" . ($a + $b); }
+function typed(int $i, ?string $s = null): int { return $i + strlen((string)$s); }
+function fl(float $f): float { return $f; }
+function mk($n) { $d = new D($n); return 7; }
+function keep($n) { return new D($n); }
+function rec($n) { return $n <= 0 ? 0 : $n + rec($n - 1); }
+function thrower($x) { if ($x) throw new Exception("boom $x"); return $x; }
+for ($i = 0; $i < 3; $i++) { echo id($i), two($i), two($i, 1), " "; }
+echo "\n", typed(3, "ab"), typed(4), " ", var_export(fl(2), true), " ", typed("5"), "\n";
+echo mk(1), " "; echo "after\n";
+$k = keep(2); echo "kept "; unset($k); echo "\n";
+id(new D(3)); echo "dropped\n";
+echo rec(50), "\n";
+try { thrower(0); thrower(1); } catch (Exception $e) { echo $e->getMessage(), " line ", $e->getLine(), "\n"; }
+$y = 10;
+$c = function($x) use ($y) { return $x + $y; };
+for ($i = 0; $i < 2; $i++) echo $c($i), " ";
+$o = new class { public $v = 3; function m($x) { return $x * $this->v; } static function s($x) { return $x - 1; } };
+for ($i = 0; $i < 2; $i++) echo $o->m($i), $o::s($i), " ";
+echo "\n";
+function &r(array &$a) { return $a[0]; }
+$arr = [1]; $ref = &r($arr); $ref = 9; echo $arr[0], "\n";
+function counter() { static $n = 0; return ++$n; }
+counter(); counter(); echo counter(), "\n";
+function gen() { yield 1; yield 2; }
+foreach (gen() as $g) echo $g; echo "\n";
+function arr($a) { $a[] = 1; return count($a); }
+$big = [1,2,3]; echo arr($big), count($big), "\n";
+function v(...$xs) { return implode(",", $xs); }
+echo v(1, 2, 3), " ", two(b: 1, a: 2), "\n";
+function strict_ret(): string { return 5; }
+var_dump(strict_ret());
+function noret() {}
+var_dump(noret());
+function bt() { return debug_backtrace()[0]['function'] . count(debug_backtrace()); }
+function outer() { return bt(); }
+echo outer(), "\n";
+echo "end\n";
+"#;
+    let expected = r#"01:52:1 11:62:2 21:72:3 
+54 2.0 5
+~1 7 after
+kept ~2 
+~3 dropped
+1275
+boom 1 line 10
+10 11 0-1 30 
+9
+3
+12
+43
+1,2,3 2:3
+string(1) "5"
+NULL
+bt2
+end
+"#;
+    assert_eq!(run(src), expected);
+}
