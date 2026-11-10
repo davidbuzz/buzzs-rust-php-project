@@ -1021,29 +1021,35 @@ fn step_cond(
 /// tests of the operator instead of [`num_bin`]'s two-level dispatch over
 /// [`BinKind`] and [`BinaryOp`]. The same results as `num_bin`; `None` for
 /// every other case (mixed kinds, an overflow, other operators), which
-/// `num_bin` then decides.
+/// `num_bin` then decides (out of line: [`bin_tmp_other`] & co.).
+///
+/// The result is a [`Num`], not a `Value`: the callers store it with
+/// [`put_num_tmp`] / [`put_num_cv`], a tag and a payload store into the
+/// destination slot, where a `Value` result merged with `num_bin`'s (whose
+/// booleans keep their payload in another byte) was assembled in a stack
+/// temporary and copied into the slot as 16 bytes.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn arith_fast(op: BinKind, x: Num, y: Num) -> Option<Value> {
+fn arith_num(op: BinKind, x: Num, y: Num) -> Option<Num> {
     match (x, y) {
         (Num::Float(p), Num::Float(q)) => {
             if matches!(op, BinKind::Arith(BinaryOp::Mul)) {
-                Some(Value::Float(p * q))
+                Some(Num::Float(p * q))
             } else if matches!(op, BinKind::Arith(BinaryOp::Add)) {
-                Some(Value::Float(p + q))
+                Some(Num::Float(p + q))
             } else if matches!(op, BinKind::Arith(BinaryOp::Sub)) {
-                Some(Value::Float(p - q))
+                Some(Num::Float(p - q))
             } else {
                 None
             }
         }
         (Num::Int(p), Num::Int(q)) => {
             if matches!(op, BinKind::Arith(BinaryOp::Add)) {
-                p.checked_add(q).map(Value::Int)
+                p.checked_add(q).map(Num::Int)
             } else if matches!(op, BinKind::Arith(BinaryOp::Sub)) {
-                p.checked_sub(q).map(Value::Int)
+                p.checked_sub(q).map(Num::Int)
             } else if matches!(op, BinKind::Arith(BinaryOp::Mul)) {
-                p.checked_mul(q).map(Value::Int)
+                p.checked_mul(q).map(Num::Int)
             } else {
                 None
             }
@@ -1052,14 +1058,65 @@ fn arith_fast(op: BinKind, x: Num, y: Num) -> Option<Value> {
     }
 }
 
-/// [`num_bin`] with [`arith_fast`] tried first.
+/// Stores number `n` into temporary slot `slot`, as [`put_tmp`] does: over
+/// an old null, bool, int or float (nothing to release; nearly always, a
+/// temporary being consumed by its reader) by the tag and payload stores
+/// alone, else through `put_tmp` out of line.
 #[inline(always)]
 #[allow(clippy::inline_always)]
-fn num_bin_fast(op: BinKind, x: Num, y: Num) -> Option<Value> {
-    match arith_fast(op, x, y) {
-        Some(r) => Some(r),
-        None => num_bin(op, x, y),
+fn put_num_tmp(slot: &mut Value, n: Num) {
+    if matches!(
+        *slot,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+    ) {
+        let old = match n {
+            Num::Int(i) => std::mem::replace(slot, Value::Int(i)),
+            Num::Float(x) => std::mem::replace(slot, Value::Float(x)),
+        };
+        // A scalar: nothing to drop.
+        std::mem::forget(old);
+    } else {
+        put_tmp_other(slot, num_value(n));
     }
+}
+
+/// [`put_tmp`] over an old value that may own something (out of line).
+#[inline(never)]
+fn put_tmp_other(slot: &mut Value, v: Value) {
+    put_tmp(slot, v);
+}
+
+/// Stores number `n` into compiled variable slot `slot` when that is
+/// undefined or holds a plain value ([`is_plain_slot`]), releasing the old
+/// value as `discard_unrooted` does: `true`. An undefined or scalar old
+/// value is overwritten by the tag and payload stores alone; an old string
+/// is released out of line. `false`, nothing changed, for any other slot.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn put_num_cv(slot: &mut Option<Value>, n: Num) -> bool {
+    match *slot {
+        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+            let old = match n {
+                Num::Int(i) => slot.replace(Value::Int(i)),
+                Num::Float(x) => slot.replace(Value::Float(x)),
+            };
+            // Undefined or a scalar: nothing to drop.
+            std::mem::forget(old);
+            true
+        }
+        Some(Value::Str(_)) => {
+            replace_plain_cv(slot, num_value(n));
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Replaces the plain value of a compiled variable slot (a string: released
+/// at once), out of line.
+#[inline(never)]
+fn replace_plain_cv(slot: &mut Option<Value>, v: Value) {
+    discard_unrooted(slot.replace(v));
 }
 
 /// The jump decision of a smart branch on two plain numbers: the
@@ -1108,10 +1165,27 @@ fn bin_tmp(f: &mut Frame, lits: &[Value], op: BinKind, a: Operand, b: Operand, d
     let Some(y) = num_of(f, lits, b) else {
         return false;
     };
-    let Some(r) = num_bin_fast(op, x, y) else {
+    // Reading the operands changed nothing: a missing slot can decline
+    // before the result is computed.
+    let Some(slot) = f.tmps.get_mut(dst as usize) else {
         return false;
     };
-    let Some(slot) = f.tmps.get_mut(dst as usize) else {
+    match arith_num(op, x, y) {
+        Some(n) => {
+            put_num_tmp(slot, n);
+            true
+        }
+        None => bin_tmp_other(slot, op, x, y),
+    }
+}
+
+/// [`bin_tmp`] for what [`arith_num`] leaves to [`num_bin`] (other
+/// operators, mixed kinds, an int overflow), out of line: `num_bin` is two
+/// jump tables over the operator and many arms, which inline would grow
+/// [`run_hot`] and the register pressure of its loop for every op.
+#[inline(never)]
+fn bin_tmp_other(slot: &mut Value, op: BinKind, x: Num, y: Num) -> bool {
+    let Some(r) = num_bin(op, x, y) else {
         return false;
     };
     put_tmp(slot, r);
@@ -1154,7 +1228,34 @@ fn bin_assign_cv(
 ) -> Option<bool> {
     let x = num_of(f, lits, a)?;
     let y = num_of(f, lits, b)?;
-    let r = num_bin_fast(op, x, y)?;
+    let Some(n) = arith_num(op, x, y) else {
+        return bin_assign_cv_other(f, op, x, y, cv, dst);
+    };
+    if let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) {
+        if put_num_cv(slot, n) {
+            if f.symtab_attached {
+                sync_cv_cold(f, cv);
+            }
+            return Some(true);
+        }
+    }
+    let slot = f.tmps.get_mut(dst as usize)?;
+    put_num_tmp(slot, n);
+    Some(false)
+}
+
+/// [`bin_assign_cv`] for what [`arith_num`] leaves to [`num_bin`], out of
+/// line (as [`bin_tmp_other`]).
+#[inline(never)]
+fn bin_assign_cv_other(
+    f: &mut Frame,
+    op: BinKind,
+    x: Num,
+    y: Num,
+    cv: u32,
+    dst: u32,
+) -> Option<bool> {
+    let r = num_bin(op, x, y)?;
     if let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) {
         if is_plain_slot(slot.as_ref()) {
             discard_unrooted(slot.replace(r));
@@ -1256,7 +1357,42 @@ fn assign_op_cv(
         Some(Value::Float(v)) => Num::Float(v),
         _ => return false,
     };
-    let Some(r) = num_bin_fast(BinKind::Arith(op), x, y) else {
+    let Some(n) = arith_num(BinKind::Arith(op), x, y) else {
+        return assign_op_cv_other(f, cv, op, x, y, dst);
+    };
+    // The old value is an int or a float: nothing to release.
+    let old = match n {
+        Num::Int(i) => slot.replace(Value::Int(i)),
+        Num::Float(v) => slot.replace(Value::Float(v)),
+    };
+    std::mem::forget(old);
+    if f.symtab_attached {
+        sync_cv_cold(f, cv);
+    }
+    if let Some(t) = dst {
+        if let Some(s) = f.tmps.get_mut(t as usize) {
+            put_num_tmp(s, n);
+        }
+    }
+    true
+}
+
+/// [`assign_op_cv`] for what [`arith_num`] leaves to [`num_bin`], out of
+/// line (as [`bin_tmp_other`]); `x` is the number compiled variable `cv`
+/// holds.
+#[inline(never)]
+fn assign_op_cv_other(
+    f: &mut Frame,
+    cv: u32,
+    op: BinaryOp,
+    x: Num,
+    y: Num,
+    dst: Option<u32>,
+) -> bool {
+    let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
+        return false;
+    };
+    let Some(slot) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
         return false;
     };
     let keep = dst.map(|_| scalar_copy(&r));
@@ -1436,7 +1572,8 @@ fn jmp_null_in(f: &mut Frame, a: Operand, dst: u32) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        arith_fast, int_outcome, jump_of, num_bin, num_bin_fast, num_outcome, num_value, Num,
+        arith_num, int_outcome, jump_of, num_bin, num_outcome, num_value, put_num_cv, put_num_tmp,
+        Num,
     };
     use crate::opcode::{cmp_outcome, BinKind};
     use php_runtime::{BinaryOp, Value};
@@ -1454,7 +1591,7 @@ mod tests {
 
     // php -r 'var_dump(PHP_INT_MAX + 1, 3 * 4, 0.1 + 0.2, -0.0 * 1.0, 2 - 5);'
     #[test]
-    fn arith_fast_matches_num_bin() {
+    fn arith_num_matches_num_bin() {
         let nums = [
             Num::Int(0),
             Num::Int(3),
@@ -1479,30 +1616,74 @@ mod tests {
                 for op in ops {
                     let kind = BinKind::Arith(op);
                     let slow = bits(num_bin(kind, x, y));
-                    assert_eq!(bits(num_bin_fast(kind, x, y)), slow);
                     // The fast path answers only where num_bin does, and the
-                    // same.
-                    if let Some(r) = arith_fast(kind, x, y) {
-                        assert_eq!(bits(Some(r)), slow);
+                    // same; `+`, `-`, `*` of two floats always.
+                    match arith_num(kind, x, y) {
+                        Some(r) => assert_eq!(bits(Some(num_value(r))), slow),
+                        None => assert!(
+                            !matches!(
+                                (x, y, op),
+                                (
+                                    Num::Float(_),
+                                    Num::Float(_),
+                                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul
+                                )
+                            ),
+                            "float {op:?} declined"
+                        ),
                     }
                 }
                 for kind in [BinKind::Less, BinKind::Equal, BinKind::Identical] {
-                    assert!(arith_fast(kind, x, y).is_none());
-                    assert_eq!(bits(num_bin_fast(kind, x, y)), bits(num_bin(kind, x, y)));
+                    assert!(arith_num(kind, x, y).is_none());
                 }
             }
         }
         // `PHP_INT_MAX + 1` overflows: the generic op makes it a float.
-        assert!(arith_fast(
+        assert!(arith_num(
             BinKind::Arith(BinaryOp::Add),
             Num::Int(i64::MAX),
             Num::Int(1)
         )
         .is_none());
         assert!(matches!(
-            arith_fast(BinKind::Arith(BinaryOp::Mul), Num::Int(3), Num::Int(4)),
-            Some(Value::Int(12))
+            arith_num(BinKind::Arith(BinaryOp::Mul), Num::Int(3), Num::Int(4)),
+            Some(Num::Int(12))
         ));
+    }
+
+    // The direct number stores: over a scalar or an undefined variable by
+    // the tag and payload alone, over a string by releasing it, and never
+    // over an array (the generic assignment's).
+    #[test]
+    fn number_stores() {
+        let mut tmp = Value::Null;
+        put_num_tmp(&mut tmp, Num::Int(7));
+        assert!(matches!(tmp, Value::Int(7)));
+        put_num_tmp(&mut tmp, Num::Float(-0.0));
+        assert!(matches!(tmp, Value::Float(x) if x.to_bits() == (-0.0_f64).to_bits()));
+        put_num_tmp(&mut tmp, Num::Int(i64::MIN));
+        assert!(matches!(tmp, Value::Int(i64::MIN)));
+        let mut tmp = Value::from("left in a temporary");
+        put_num_tmp(&mut tmp, Num::Float(2.5));
+        assert!(matches!(tmp, Value::Float(x) if x.to_bits() == 2.5_f64.to_bits()));
+        let mut tmp = Value::empty_array();
+        put_num_tmp(&mut tmp, Num::Int(1));
+        assert!(matches!(tmp, Value::Int(1)));
+
+        let mut cv: Option<Value> = None;
+        assert!(put_num_cv(&mut cv, Num::Int(3)));
+        assert!(matches!(cv, Some(Value::Int(3))));
+        assert!(put_num_cv(&mut cv, Num::Float(0.5)));
+        assert!(matches!(cv, Some(Value::Float(x)) if x.to_bits() == 0.5_f64.to_bits()));
+        let mut cv = Some(Value::Bool(true));
+        assert!(put_num_cv(&mut cv, Num::Int(-1)));
+        assert!(matches!(cv, Some(Value::Int(-1))));
+        let mut cv = Some(Value::from("a string"));
+        assert!(put_num_cv(&mut cv, Num::Int(4)));
+        assert!(matches!(cv, Some(Value::Int(4))));
+        let mut cv = Some(Value::empty_array());
+        assert!(!put_num_cv(&mut cv, Num::Int(4)));
+        assert!(matches!(cv, Some(Value::Array(_))));
     }
 
     #[test]
