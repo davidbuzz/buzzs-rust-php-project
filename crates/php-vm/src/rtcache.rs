@@ -54,13 +54,25 @@ pub struct StaticPropCacheEntry {
     pub fast_plain: bool,
 }
 
+thread_local! {
+    /// The cell of every unfilled [`StaticPropCacheEntry`]: shared, so that
+    /// growing the entry table ([`grow_slots`], whose fill must not
+    /// allocate) and later overwriting an unfilled entry allocate and free
+    /// nothing. A cell per default entry was allocated outside the counted
+    /// heap and freed inside it, so each first fill of a place lowered
+    /// `memory_get_usage()` by the cell's size for good. An unfilled entry
+    /// has `class_ptr == 0`, which no lookup matches, so this cell is never
+    /// read or written through the cache.
+    static UNFILLED_CELL: Rc<RefCell<Value>> = Rc::new(RefCell::new(Value::Null));
+}
+
 impl Default for StaticPropCacheEntry {
     fn default() -> Self {
         Self {
             scope_ptr: 0,
             called_ptr: 0,
             class_ptr: 0,
-            cell: Rc::new(RefCell::new(Value::Null)),
+            cell: UNFILLED_CELL.with(Rc::clone),
             fast_plain: false,
         }
     }

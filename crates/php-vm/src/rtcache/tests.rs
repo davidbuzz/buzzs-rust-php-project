@@ -567,3 +567,16 @@ w1w1
 "#
     );
 }
+
+/// Unfilled static property entries share one placeholder cell, so that
+/// growing the entry table (outside the counted heap) and overwriting an
+/// unfilled entry (inside it) allocate and free nothing: a cell per entry
+/// made each first fill of an `A::$x` place lower `memory_get_usage()` by
+/// 40 bytes for good (C PHP: 0).
+#[test]
+fn unfilled_static_prop_entries_share_their_cell() {
+    let a = super::StaticPropCacheEntry::default();
+    let b = super::StaticPropCacheEntry::default();
+    assert!(Rc::ptr_eq(&a.cell, &b.cell));
+    assert_eq!(a.class_ptr, 0);
+}
