@@ -175,20 +175,6 @@ impl Mode {
     }
 }
 
-/// php-src's frameless functions (`ZEND_FRAMELESS_FUNCTION`) and the
-/// arities of their variants, in declaration order.
-fn frameless_arities(lc: &[u8]) -> &'static [u32] {
-    match lc {
-        b"clamp" | b"preg_replace" | b"str_replace" => &[3],
-        b"class_exists" | b"dirname" | b"implode" | b"ltrim" | b"rtrim" | b"trim" => &[1, 2],
-        b"dechex" | b"is_numeric" | b"strtolower" | b"strtoupper" => &[1],
-        b"in_array" | b"strpos" | b"strstr" | b"strtr" | b"substr" => &[2, 3],
-        b"max" | b"min" | b"preg_match" | b"property_exists" | b"str_contains"
-        | b"str_ends_with" | b"str_starts_with" => &[2],
-        _ => &[],
-    }
-}
-
 /// The opcode name of a binary operator.
 pub(crate) fn bin_name(op: BinKind) -> &'static str {
     match op {
@@ -1778,7 +1764,8 @@ impl Lower<'_> {
         let known = self.res.function(&lc, line);
         let frameless = match known {
             Some(k) if fallback.is_none() && k.user.is_none() && simple && n <= 3 => {
-                let ok = frameless_arities(&lc)
+                let ok = crate::compiler::frameless_arities(&lc)
+                    .unwrap_or(&[])
                     .iter()
                     .any(|&a| a == n && k.info.required <= n && (!k.info.variadic || a == n));
                 ok.then(|| (lc.clone(), n))
