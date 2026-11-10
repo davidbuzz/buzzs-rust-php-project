@@ -4601,7 +4601,7 @@ fn return_accepts(rt: Option<&crate::types::TypeDecl>, v: &Value) -> bool {
 /// [`Value`] is an out-of-line call even for an integer.
 #[inline(always)]
 #[allow(clippy::inline_always)] // an argument or result per call
-fn clone_value(v: &Value) -> Value {
+pub(crate) fn clone_value(v: &Value) -> Value {
     match v {
         Value::Null => Value::Null,
         Value::Bool(b) => Value::Bool(*b),
