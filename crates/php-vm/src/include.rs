@@ -287,7 +287,9 @@ impl Vm {
             && (self.ini.get_bool("opcache.enable_cli")
                 || self.ini.get_bool("opcache.file_cache_only"))
             && self.ini.get_long("opcache.opt_debug_level")
-                & compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER
+                & (compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER
+                    | compiler::optimizer::dump::DUMP_BEFORE_DFA_PASS
+                    | compiler::optimizer::dump::DUMP_AFTER_DFA_PASS)
                 != 0)
             .then(|| src.clone());
         // A multibyte script's AST is kept for the semantic text of
@@ -360,14 +362,22 @@ impl Vm {
                 _ => (0, None),
             };
             let end = compiler::optimizer::dump::main_line_end(&src, halt_compiler_offset);
-            let out = compiler::optimizer::dump::dump_unit(
-                &unit,
-                &table,
-                &internal,
-                level,
-                end,
-                "after optimizer",
+            let debug = self.ini.get_long("opcache.opt_debug_level");
+            // The DFA pass dumps each op array while it optimizes them,
+            // before `zend_optimize_script` dumps the result.
+            let mut out = compiler::optimizer::dump::dump_unit_dfa(
+                &unit, &table, &internal, level, end, debug,
             );
+            if debug & compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER != 0 {
+                out.extend(compiler::optimizer::dump::dump_unit(
+                    &unit,
+                    &table,
+                    &internal,
+                    level,
+                    end,
+                    "after optimizer",
+                ));
+            }
             self.flush_stdout();
             let _ = std::io::Write::write_all(&mut std::io::stderr(), &out);
         }
