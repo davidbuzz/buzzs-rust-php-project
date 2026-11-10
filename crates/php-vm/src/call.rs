@@ -2137,9 +2137,9 @@ impl Vm {
             } else {
                 frame.reinit_for_call(Rc::clone(code), FrameKind::Function);
             }
-            frame.this = call.this.take();
-            frame.scope = call.scope.take();
-            frame.called = call.called.take();
+            set_opt(&mut frame.this, call.this.take());
+            set_opt(&mut frame.scope, call.scope.take());
+            set_opt(&mut frame.called, call.called.take());
             frame.ret = dst.map_or(RetTarget::Discard, RetTarget::Tmp);
             frame.caller_strict = caller_strict;
             frame.called_from_internal = false;
@@ -2166,8 +2166,8 @@ impl Vm {
                 }
             }
             frame.ip = first_op;
-            frame.func = Some(Func::User(Rc::clone(&uf)));
-            frame.ufunc = Some(uf);
+            set_opt(&mut frame.func, Some(Func::User(Rc::clone(&uf))));
+            set_opt(&mut frame.ufunc, Some(uf));
             call.inline_count = 0;
             let spare = if call.args.capacity() > 0 {
                 Some(std::mem::take(&mut call.args))
@@ -4250,6 +4250,18 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
                             .is_some_and(|v| accepts_without_coercion(ty.mask, v))
                 }
             })
+}
+
+/// Stores `v` into an `Option` field of a frame being set up, releasing
+/// what it held: the drop glue of the payload runs only when there was
+/// one (a recycled frame's fields are empty), where `*slot = v` calls the
+/// out-of-line `drop_in_place` of the whole `Option` either way.
+#[inline(always)]
+#[allow(clippy::inline_always)] // five fields per call
+fn set_opt<T>(slot: &mut Option<T>, v: Option<T>) {
+    if let Some(old) = std::mem::replace(slot, v) {
+        drop(old);
+    }
 }
 
 /// Appends the pending call `make` builds to `calls`, written straight

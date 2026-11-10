@@ -935,7 +935,10 @@ fn release_slot(v: Value) {
 /// of one function).
 #[inline]
 pub(crate) fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
-    v.clear();
+    // A recycled buffer is usually empty already (see `clear_frame_buffer`).
+    if !v.is_empty() {
+        v.clear();
+    }
     if n != 0 {
         v.reserve(n);
         for _ in 0..n {
@@ -1130,7 +1133,11 @@ impl Frame {
     pub(crate) fn reinit_same_call(&mut self, code: &Rc<OpArray>, kind: FrameKind) {
         self.kind = kind;
         self.ip = 0;
-        self.calls.clear();
+        // Empty after a return: `clear` would still call the out-of-line
+        // slice drop glue of `PendingCall`.
+        if !self.calls.is_empty() {
+            self.calls.clear();
+        }
         self.silence_saved.clear();
         self.symtab_attached = false;
         self.code = code.clone();
