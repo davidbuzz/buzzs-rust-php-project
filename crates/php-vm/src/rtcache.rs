@@ -1102,31 +1102,48 @@ impl Vm {
         let Operand::Lit(l) = name else {
             return None;
         };
-        let cache = self.frame().code.rt_cache.static_calls.borrow();
-        let (cls, e) = self.rt_find(spec, cache.get(l as usize)?)?;
+        // The calling frame: the running user frame, whose scope checks
+        // the access and whose `$this` / called scope the call takes.
+        let f = self.frame();
+        if f.kind == FrameKind::Builtin {
+            return None;
+        }
+        let cache = f.code.rt_cache.static_calls.try_borrow().ok()?;
+        let entries = cache.get(l as usize)?;
+        let owned;
+        let (cls, e) = match spec {
+            ClassSpec::Named(_) => {
+                let (c, e) = rt_find_in(f, spec, entries)?;
+                owned = c;
+                (&owned, e)
+            }
+            ClassSpec::Dyn(_) => return None,
+            // `self::`, `parent::`, `static::`: the class is borrowed from
+            // the frame, not cloned.
+            ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static => {
+                let c = match spec {
+                    ClassSpec::SelfClass => f.scope.as_ref()?,
+                    ClassSpec::Parent => f.scope.as_ref()?.parent.as_ref()?,
+                    _ => f.called.as_ref()?,
+                };
+                let scope = f.scope.as_ref();
+                let e = entries.iter().find(|e| {
+                    Rc::as_ptr(c) == e.class.as_ptr() && access_ok_in(scope, &e.access)
+                })?;
+                (c, e)
+            }
+        };
         let Target::Method(m) = &e.target else {
             return None;
         };
         let m = m.upgrade()?;
-        let caller_frame = self
-            .frames
-            .iter()
-            .rev()
-            .find(|f| f.kind != FrameKind::Builtin);
         if m.is_static() {
             // `forwarded_called` (call.rs): `self::`/`parent::`/`static::`
             // forward the called scope when it is a subclass.
-            let forward = matches!(
-                spec,
-                ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
-            );
-            let called = if forward {
-                caller_frame
-                    .and_then(|f| f.called.clone())
-                    .filter(|c| c.is_subclass_of(&cls))
-                    .unwrap_or(cls)
-            } else {
-                cls
+            let forward = !matches!(spec, ClassSpec::Named(_));
+            let called = match f.called.as_ref() {
+                Some(c) if forward && c.is_subclass_of(cls) => c.clone(),
+                _ => cls.clone(),
             };
             return Some(StaticCallHit {
                 func: m.func.clone(),
@@ -1135,9 +1152,9 @@ impl Vm {
                 called,
             });
         }
-        let this = caller_frame.and_then(|f| f.this.clone())?;
+        let this = f.this.clone()?;
         let called = object::class_of(&this).clone();
-        if !called.is_subclass_of(&cls) {
+        if !called.is_subclass_of(cls) {
             return None;
         }
         Some(StaticCallHit {
