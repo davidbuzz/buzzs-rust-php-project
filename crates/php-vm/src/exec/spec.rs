@@ -1007,7 +1007,9 @@ impl Vm {
                     if cacheable {
                         let mut cache = code.rt_cache.globals.borrow_mut();
                         if cache.len() <= pid as usize {
-                            cache.resize(pid as usize + 1, GlobalSlot::Empty);
+                            crate::rtcache::grow_slots(&mut cache, pid as usize + 1, || {
+                                GlobalSlot::Empty
+                            });
                         }
                         cache[pid as usize] = GlobalSlot::GlobalCv(cv);
                     }
@@ -1033,7 +1035,7 @@ impl Vm {
             if cacheable {
                 let mut cache = code.rt_cache.globals.borrow_mut();
                 if cache.len() <= pid as usize {
-                    cache.resize(pid as usize + 1, GlobalSlot::Empty);
+                    crate::rtcache::grow_slots(&mut cache, pid as usize + 1, || GlobalSlot::Empty);
                 }
                 cache[pid as usize] = GlobalSlot::GlobalStore(idx);
             }

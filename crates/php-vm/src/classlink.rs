@@ -172,7 +172,7 @@ impl Vm {
                 let c = self.lookup_class_or_error(&n)?;
                 let mut cache = self.frame().code.class_cache.borrow_mut();
                 if cache.len() <= slot {
-                    cache.resize(slot + 1, Weak::new());
+                    crate::rtcache::grow_slots(&mut cache, slot + 1, Weak::new);
                 }
                 cache[slot] = Rc::downgrade(&c);
                 Ok(c)

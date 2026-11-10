@@ -2103,7 +2103,11 @@ impl Vm {
             }
             sp.initialized.set(true);
         }
-        *cls.defaults.borrow_mut() = Some(out.clone());
+        // php-src builds `default_properties_table` when it compiles the
+        // class: the cached copy is not request memory the first `new`
+        // allocates (cloning the values only shares them).
+        let saved = php_memlimit::persistent(|| out.clone());
+        *cls.defaults.borrow_mut() = Some(saved);
         Ok(out)
     }
 

@@ -304,7 +304,7 @@ impl Vm {
             let size = self.frame().code.literals.len().max(slot + 1);
             let mut cache = self.frame().code.fcall_cache.borrow_mut();
             if cache.len() <= slot {
-                cache.resize(size, None);
+                crate::rtcache::grow_slots(&mut cache, size, || None);
             }
             cache[slot] = Some(crate::opcode::CachedFunc::new(&func));
         }
@@ -342,7 +342,7 @@ impl Vm {
         let size = (code.literals.len() + code.ops.len()).max(slot + 1);
         let mut cache = code.fcall_cache.borrow_mut();
         if cache.len() <= slot {
-            cache.resize(size, None);
+            crate::rtcache::grow_slots(&mut cache, size, || None);
         }
         cache[slot] = Some(crate::opcode::CachedFunc::new(func));
     }
@@ -370,7 +370,7 @@ impl Vm {
         let size = (code.literals.len() + code.ops.len()).max(slot + 1);
         let mut cache = code.fcall_cache.borrow_mut();
         if cache.len() <= slot {
-            cache.resize(size, None);
+            crate::rtcache::grow_slots(&mut cache, size, || None);
         }
         cache[slot] = Some(crate::opcode::CachedFunc::new_static(func, scope, called));
     }
@@ -685,7 +685,7 @@ impl Vm {
         let mut cache = f.code.method_cache.borrow_mut();
         if cache.len() <= slot {
             let size = f.code.ops.len().max(slot + 1);
-            cache.resize(size, None);
+            crate::rtcache::grow_slots(&mut cache, size, || None);
         }
         cache[slot] = Some(entry);
         drop(cache);
@@ -789,7 +789,7 @@ impl Vm {
                 let mut cache = self.frame().code.method_cache.borrow_mut();
                 if cache.len() <= slot {
                     let size = self.frame().code.ops.len().max(slot + 1);
-                    cache.resize(size, None);
+                    crate::rtcache::grow_slots(&mut cache, size, || None);
                 }
                 cache[slot] = Some(entry);
                 drop(cache);
@@ -825,7 +825,7 @@ impl Vm {
             let mut cache = self.frame().code.method_cache.borrow_mut();
             if cache.len() <= slot {
                 let size = self.frame().code.ops.len().max(slot + 1);
-                cache.resize(size, None);
+                crate::rtcache::grow_slots(&mut cache, size, || None);
             }
             cache[slot] = Some(entry);
         }
