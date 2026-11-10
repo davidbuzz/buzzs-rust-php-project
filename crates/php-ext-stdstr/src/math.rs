@@ -123,7 +123,7 @@ float_fns! {
     sin => f64::sin, cos => f64::cos, tan => f64::tan,
     asin => f64::asin, acos => f64::acos, atan => f64::atan,
     sinh => f64::sinh, cosh => f64::cosh, tanh => f64::tanh,
-    asinh => f64::asinh, acosh => f64::acosh, atanh => f64::atanh,
+    asinh => math::asinh, acosh => math::acosh, atanh => math::atanh,
     expm1 => f64::exp_m1, log1p => f64::ln_1p, exp => f64::exp,
     log10 => f64::log10, sqrt => f64::sqrt,
     deg2rad => math::deg2rad, rad2deg => math::rad2deg,

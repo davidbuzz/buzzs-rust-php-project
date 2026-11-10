@@ -520,10 +520,71 @@ pub fn rad2deg(num: f64) -> f64 {
     (num / std::f64::consts::PI) * 180.0
 }
 
+/// The C library's inverse hyperbolic functions, which
+/// `PHP_FUNCTION(asinh)`, `acosh` and `atanh` call. Rust's `f64::asinh`,
+/// `acosh` and `atanh` are std's own formulas over `ln_1p`/`hypot`, not
+/// libm's, and differ from it in the last bit for many arguments
+/// (`asinh(1 / 997)`), so PHP's results come from libm here.
+mod libm {
+    // libm is the C math library every std binary on this target already
+    // links (`f64::sin`, `f64::sinh` & co. call into it).
+    #[link(name = "m")]
+    extern "C" {
+        pub fn asinh(x: f64) -> f64;
+        pub fn acosh(x: f64) -> f64;
+        pub fn atanh(x: f64) -> f64;
+    }
+}
+
+/// `asinh(float $num): float` (libm `asinh`).
+pub fn asinh(num: f64) -> f64 {
+    // SAFETY: a pure C math function of a double: no pointers, no global
+    // state beyond `errno`, defined for every input (NAN/INF included).
+    unsafe { libm::asinh(num) }
+}
+
+/// `acosh(float $num): float` (libm `acosh`; NAN below 1).
+pub fn acosh(num: f64) -> f64 {
+    // SAFETY: as for `asinh`.
+    unsafe { libm::acosh(num) }
+}
+
+/// `atanh(float $num): float` (libm `atanh`; ±INF at ±1, NAN beyond).
+pub fn atanh(num: f64) -> f64 {
+    // SAFETY: as for `asinh`.
+    unsafe { libm::atanh(num) }
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    /// libm's results, which Rust's `f64::asinh`/`acosh`/`atanh` miss by
+    /// one bit for these arguments (`/usr/bin/php -n`).
+    #[test]
+    fn inverse_hyperbolics_are_libms() {
+        assert_eq!(asinh(0.044_318_560_479_840_056), 0.044_304_065_350_020_95);
+        assert_eq!(asinh(0.099_966_677_774_075_31), 0.099_800_921_990_461_77);
+        assert_eq!(acosh(1.001_003_009_027_081_2), 0.044_784_850_133_250_17);
+        assert_eq!(acosh(1.002_006_018_054_162_6), 0.063_330_051_760_081_58);
+        assert_eq!(
+            atanh(0.002_332_555_814_728_423_7),
+            0.002_332_560_045_078_388
+        );
+        assert_eq!(
+            atanh(0.002_665_778_073_975_341_6),
+            0.002_665_784_388_673_144_5
+        );
+        assert_eq!(asinh(1.0), 0.881_373_587_019_543);
+        assert_eq!(acosh(2.0), 1.316_957_896_924_816_6);
+        assert_eq!(asinh(f64::NEG_INFINITY), f64::NEG_INFINITY);
+        assert!(asinh(-0.0).is_sign_negative());
+        assert!(acosh(0.0).is_nan() && acosh(f64::NAN).is_nan());
+        assert_eq!(acosh(1.0), 0.0);
+        assert_eq!(atanh(-1.0), f64::NEG_INFINITY);
+        assert!(atanh(2.0).is_nan() && atanh(f64::INFINITY).is_nan());
+    }
 
     fn conv(s: &[u8], base: u32) -> (Number, Vec<Notice>) {
         let mut n = Vec::new();
