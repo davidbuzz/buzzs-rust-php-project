@@ -1425,14 +1425,15 @@ impl Vm {
             Some(ctor.scope())
         };
         let ctor_func = ctor.func.clone();
-        let call = PendingCall {
+        // `ZEND_NEW` writes the constructor's call frame straight into the
+        // VM stack: built in place, the call is not copied on the way.
+        self.push_pending_with(move || PendingCall {
             this: if is_static { None } else { Some(o) },
             scope,
             called: Some(cls),
             is_ctor: true,
             ..PendingCall::new(ctor_func)
-        };
-        self.push_pending(call);
+        });
         Ok(true)
     }
 
@@ -2148,9 +2149,10 @@ impl Vm {
     /// static variables, foreach or finally slots, called with positional
     /// arguments only (all in the inline buffer, at least the required
     /// ones, none spread or by reference, each accepted by its declared
-    /// type as it is), not a constructor, a partial application nor a
-    /// `__call` trampoline, with no observer and a pooled frame ready. It
-    /// then does exactly what that branch does, in the same order; a
+    /// type as it is), not a partial application nor a `__call`
+    /// trampoline (a constructor called by `new` qualifies: the frame
+    /// keeps `is_ctor` for unwinding, as the general path's does), with
+    /// no observer and a pooled frame ready. It then does exactly what that branch does, in the same order; a
     /// closure's bound variables are bound afterwards as the general path
     /// binds them. `caller_ip` is stored as the caller's resume point
     /// (`SAVE_OPLINE`) when the call is made. Returns `false`, having
@@ -2205,7 +2207,10 @@ impl Vm {
             frame.ret = dst.map_or(RetTarget::Discard, RetTarget::Tmp);
             frame.caller_strict = caller_strict;
             frame.called_from_internal = false;
-            frame.is_ctor = false;
+            // `new`'s constructor call (`ZEND_NEW` pushes it like any
+            // other): the frame only remembers it for unwinding
+            // (`zend_object_store_ctor_failed`).
+            frame.is_ctor = call.is_ctor;
             // The passed-argument count (`ZEND_CALL_NUM_ARGS`): one empty
             // entry per argument, each moved into its compiled variable.
             // The recycled buffer is empty (`Frame::clear_for_reuse`).
@@ -2709,7 +2714,6 @@ impl Vm {
             && !self.has_observers()
             && closure.is_none()
             && magic_name.is_none()
-            && !is_ctor
             && args.is_empty()
             && passed_argc >= uf.required as usize
             && passed_argc <= uf.params.len()
@@ -2738,7 +2742,7 @@ impl Vm {
             f.ret = ret;
             f.caller_strict = caller_strict;
             f.called_from_internal = from_internal;
-            f.is_ctor = false;
+            f.is_ctor = is_ctor;
 
             f.args.clear();
             f.args.resize(passed_argc, None);
@@ -4369,7 +4373,6 @@ fn simple_ucall(uf: &UserFunction, call: &PendingCall, n: usize) -> bool {
         || !call.named.is_empty()
         || call.magic_name.is_some()
         || call.pfa.is_some()
-        || call.is_ctor
         || n < uf.required as usize
         || n > uf.params.len()
         || n > call.inline_args.len()
