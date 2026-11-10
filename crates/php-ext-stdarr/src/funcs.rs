@@ -49,14 +49,16 @@ pub fn count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(rt(vm, r)?))
 }
 
+// `Z_PARAM_ZVAL` + `Z_PARAM_ARRAY` read the needle and the table in
+// place: no copy of either per call.
 pub fn in_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (n, h) = (a.at(0), a.array(1));
+    let (n, h) = (a.at_ref(0), a.array_ref(1));
     let r = sa::basic::in_array(vm, &n, &h, a.bool(2));
     Ok(Value::Bool(rt(vm, r)?))
 }
 
 pub fn array_search(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (n, h) = (a.at(0), a.array(1));
+    let (n, h) = (a.at_ref(0), a.array_ref(1));
     let r = sa::basic::array_search(vm, &n, &h, a.bool(2));
     rt(vm, r)
 }
