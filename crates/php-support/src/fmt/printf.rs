@@ -266,6 +266,22 @@ enum Align {
     Right,
 }
 
+/// Writes the decimal digits of `n` right-aligned into `buf` (at least 20
+/// bytes, `u64::MAX` has 20 digits) and returns the index of the first.
+fn write_u64_rev(buf: &mut [u8; 21], mut n: u64) -> usize {
+    let mut i = buf.len();
+    loop {
+        i -= 1;
+        #[allow(clippy::cast_possible_truncation)]
+        let digit = (n % 10) as u8;
+        buf[i] = b'0' + digit;
+        n /= 10;
+        if n == 0 {
+            return i;
+        }
+    }
+}
+
 struct Out {
     buf: Vec<u8>,
 }
@@ -329,14 +345,25 @@ impl Out {
             padding
         };
         let neg = number < 0;
-        let mut s = Vec::with_capacity(21);
+        let mut buf = [0u8; 21];
+        let mut start = write_u64_rev(&mut buf, number.unsigned_abs());
         if neg {
-            s.push(b'-');
+            start -= 1;
+            buf[start] = b'-';
         } else if always_sign {
-            s.push(b'+');
+            start -= 1;
+            buf[start] = b'+';
         }
-        s.extend_from_slice(number.unsigned_abs().to_string().as_bytes());
-        self.append_string(&s, width, 0, padding, alignment, neg, false, always_sign)
+        self.append_string(
+            &buf[start..],
+            width,
+            0,
+            padding,
+            alignment,
+            neg,
+            false,
+            always_sign,
+        )
     }
 
     /// `php_sprintf_appenduint()`.
@@ -352,9 +379,10 @@ impl Out {
         } else {
             padding
         };
-        let s = number.to_string();
+        let mut buf = [0u8; 21];
+        let start = write_u64_rev(&mut buf, number);
         self.append_string(
-            s.as_bytes(),
+            &buf[start..],
             width,
             0,
             padding,

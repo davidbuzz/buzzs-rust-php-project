@@ -650,6 +650,47 @@ fn reserve_replace(
     Ok(())
 }
 
+/// `php_str_to_str_ex()` (case-sensitive, non-empty `search`): the
+/// subject itself when `search` does not occur (no allocation), else one
+/// exactly sized result. Reserves the grown size first, like
+/// [`reserve_replace`].
+fn replace_cs(vm: &mut Vm, subject: ZStr, search: &[u8], replace: &[u8]) -> VmResult<(ZStr, i64)> {
+    let hay = subject.as_bytes();
+    let Some(first) = search::memnstr(hay, search) else {
+        return Ok((subject, 0));
+    };
+    let mut count = 1usize;
+    let mut p = first + search.len();
+    while let Some(r) = search::memnstr(&hay[p..], search) {
+        count += 1;
+        p += r + search.len();
+    }
+    let size = if replace.len() > search.len() {
+        let grown = hay
+            .len()
+            .saturating_add(count.saturating_mul(replace.len() - search.len()));
+        mem::check(vm, mem::zstr(grown))?;
+        grown
+    } else {
+        hay.len() - count * (search.len() - replace.len())
+    };
+    let mut out = ZStrBuf::with_capacity(size);
+    let mut p = 0;
+    let mut at = Some(first);
+    while let Some(r) = at {
+        out.push(&hay[p..p + r]);
+        out.push(replace);
+        p += r + search.len();
+        at = if p <= hay.len() {
+            search::memnstr(&hay[p..], search)
+        } else {
+            None
+        };
+    }
+    out.push(&hay[p..]);
+    Ok((out.finish(), i64::try_from(count).unwrap_or(i64::MAX)))
+}
+
 fn replace_in_subject(
     vm: &mut Vm,
     search: &Value,
@@ -663,6 +704,9 @@ fn replace_in_subject(
     let Value::Array(searches) = search else {
         let s = to_str(vm, search)?;
         let r = to_str(vm, replace)?;
+        if !ci && !s.is_empty() {
+            return replace_cs(vm, subject, &s, &r);
+        }
         reserve_replace(vm, &subject, &s, &r, ci)?;
         let res = transform::str_replace(
             subject.as_bytes(),
@@ -691,6 +735,17 @@ fn replace_in_subject(
             None => repl_one.clone(),
         };
         if s.is_empty() {
+            continue;
+        }
+        if !ci {
+            let (out, n) = replace_cs(vm, subject, &s, &r)?;
+            subject = out;
+            if n > 0 {
+                count += n;
+                if subject.is_empty() {
+                    break;
+                }
+            }
             continue;
         }
         reserve_replace(vm, &subject, &s, &r, ci)?;
