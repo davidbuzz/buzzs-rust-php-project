@@ -1293,7 +1293,7 @@ fn lint(cfg: &Config, src: &[u8], php_self: &[u8], how: Release) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::memcap::address_space_cap;
+    use super::memcap::{address_space_cap, meminfo_kb};
     use super::*;
 
     const MAPS: &[u8] = b"\

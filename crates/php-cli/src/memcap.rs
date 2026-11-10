@@ -48,7 +48,7 @@ pub(crate) fn address_space_cap(override_mb: Option<u64>, meminfo: Option<&[u8]>
 
 /// The value of the `/proc/meminfo` line starting with `key` (such as
 /// `MemTotal:`), in kB; 0 when the line is absent or malformed.
-fn meminfo_kb(meminfo: &[u8], key: &[u8]) -> u64 {
+pub(crate) fn meminfo_kb(meminfo: &[u8], key: &[u8]) -> u64 {
     meminfo
         .split(|&c| c == b'\n')
         .find_map(|line| {
