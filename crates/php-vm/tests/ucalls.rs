@@ -573,3 +573,62 @@ destruct 1
 "#;
     assert_eq!(run(source), expected);
 }
+
+/// Sends and returns that must leave the in-place paths (`send_fast`,
+/// `return_simple`) for the general ones: by-reference parameters, more
+/// arguments than the inline buffer holds, named arguments, an undefined
+/// variable argument, frames with an attached symbol table, references,
+/// `void`/nullable returns and return-type coercion; and namespaced call
+/// sites with a global fallback (`init_fcall_fast` declines them).
+/// Expected output is php-src's (`/usr/bin/php -n`).
+#[test]
+fn sends_and_returns_outside_the_in_place_paths() {
+    let source = r#"<?php
+namespace NS;
+function local($x) { return strlen($x); }
+echo local('abcd'), \strlen('ab'), strtoupper('q'), "\n";
+function byref(&$a, $b) { $a .= $b; return $a; }
+function many($a, $b, $c, $d, $e, $f, $g, $h) { return "$a$b$c$d$e$f$g$h"; }
+function named($a, $b = 'B', $c = 'C') { return $a . $b . $c; }
+function show($x) { var_dump($x); return $x; }
+$s = 'x';
+echo byref($s, 'y'), ' ', $s, "\n";
+echo many(1, 2, 3, 4, 5, 6, 7, 8), "\n";
+echo named('a', c: 'z'), "\n";
+show($undefined_var);
+$GLOBALS['gv'] = 5;
+extract(['ev' => 6]);
+echo show($gv) + show($ev), "\n";
+$r = 10; $ref = &$r;
+echo show($ref), "\n";
+function ret_ref_cv() { $a = 1; $b = &$a; $b = 2; return $a; }
+echo ret_ref_cv(), "\n";
+function ret_void(): void { return; }
+var_dump(ret_void());
+function ret_nullable(): ?int { return null; }
+var_dump(ret_nullable());
+function ret_bad(): int { return "12"; }
+var_dump(ret_bad());
+function ret_float(): float { return 3; }
+var_dump(ret_float());
+"#;
+    let expected = r#"42Q
+xy xy
+12345678
+aBz
+
+Warning: Undefined variable $undefined_var in t.php on line 13
+NULL
+int(5)
+int(6)
+11
+int(10)
+10
+2
+NULL
+NULL
+int(12)
+float(3)
+"#;
+    assert_eq!(run(source), expected);
+}

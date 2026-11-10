@@ -1877,6 +1877,32 @@ mod tests {
     }
 
     #[test]
+    fn clear_for_reuse_releases_every_value_and_keeps_slot_counts() {
+        let mut f = frame_with(&["a", "b"]);
+        let s = ZStr::from("a string held by the frame");
+        f.cvs[0].set(Some(Value::Str(s.clone())));
+        f.cvs[1].set(Some(Value::Int(3)));
+        f.tmps = vec![Value::Str(s.clone()), Value::Float(1.5)];
+        f.args.push(Some(Value::Str(s.clone())));
+        f.magic_name = Some(s.clone());
+        assert_eq!(s.refcount(), 5);
+        let empty = Rc::new(OpArray::default());
+        f.clear_for_reuse(&empty);
+        assert_eq!(s.refcount(), 1);
+        assert_eq!(f.cvs.len(), 2);
+        assert!(f.cvs.iter().all(super::CvSlot::is_none));
+        assert_eq!(f.tmps.len(), 2);
+        assert!(f.tmps.iter().all(|t| matches!(t, Value::Null)));
+        assert!(f.args.is_empty());
+        assert!(f.magic_name.is_none());
+        assert!(Rc::ptr_eq(&f.code, &empty));
+        // Recycling a recycled frame changes nothing.
+        f.clear_for_reuse(&empty);
+        assert_eq!(f.cvs.len(), 2);
+        assert!(Rc::ptr_eq(&f.code, &empty));
+    }
+
+    #[test]
     fn frame_stack_reuses_frames_in_place() {
         let code = Rc::new(OpArray::default());
         let mut stack = super::FrameStack::new();
