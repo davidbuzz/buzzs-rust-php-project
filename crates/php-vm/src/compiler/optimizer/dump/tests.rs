@@ -389,3 +389,34 @@ fn calls_of_functions_returning_a_literal_are_inlined() {
     // The literal echoed in place of a temporary is a string.
     assert!(main.contains("ECHO string(\"1\")"), "{out}");
 }
+
+#[test]
+fn functions_the_vm_optimizer_reduced_to_a_literal_are_not_inlined() {
+    // sccp_042.phpt / ct_eval_md5_sha1.phpt: php-src inlines a call only
+    // when the callee's compiled code is a literal return; SCCP's result
+    // comes too late.
+    let src =
+        "<?php\nfunction t() {\n    $a = 1;\n    $b = 2;\n    return [$a <=> $b];\n}\necho t();\n";
+    let program =
+        php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    let opts = CompileOptions {
+        filename: "t.php".into(),
+        optimization_level: level,
+        ..CompileOptions::default()
+    };
+    let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
+    let table = |_: &[u8]| -> Option<FunctionInfo> { None };
+    let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
+    let end = main_line_end(src.as_bytes(), None);
+    let out = String::from_utf8(dump_unit(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        "after optimizer",
+    ))
+    .expect("utf-8");
+    assert!(section(&out, "$_main").contains("DO_UCALL"), "{out}");
+}
