@@ -6,6 +6,7 @@
 
 pub mod baseline;
 pub mod bytes;
+pub mod cgi;
 pub mod diff;
 pub mod discover;
 pub mod environment;

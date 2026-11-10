@@ -13,6 +13,7 @@ use crate::bytes::{
     contains, explode_lines, lossy, normalize_crlf, php_empty, replace, starts_with_ignore_case,
     trim, trim_end, trim_start,
 };
+use crate::cgi;
 use crate::diff::generate_diff;
 use crate::expectf::{expectf_to_regex, regex_matches, LineMatcher};
 use crate::ini::{escapeshellarg, IniSettings};
@@ -134,6 +135,9 @@ pub fn probe_loads_ini_files(php: &Path, env: &Env, cwd: &Path) -> bool {
 pub struct Config {
     /// The PHP binary under test.
     pub php: PathBuf,
+    /// The CGI binary for tests with request sections (`TestFile::isCGI`); those tests are
+    /// skipped without one.
+    pub php_cgi: Option<PathBuf>,
     /// The php-src root; tests run with this as their working directory and paths are reported
     /// relative to it.
     pub srcdir: PathBuf,
@@ -213,6 +217,8 @@ struct Attempt<'a> {
     shortname: String,
     test: TestFile,
     tested: String,
+    /// The test runs under `php-cgi -C` (`$uses_cgi`).
+    uses_cgi: bool,
 }
 
 impl Attempt<'_> {
@@ -406,6 +412,18 @@ fn is_transient_spawn_error(e: &std::io::Error) -> bool {
     })
 }
 
+/// The output to compare and the response headers: for CGI tests the header block before the
+/// first blank line is split off and the body trimmed (but, as in run-tests.php, not
+/// CRLF-normalised); otherwise the trimmed, CRLF-normalised output and no headers.
+fn cgi_output(out: &[u8], uses_cgi: bool) -> (Vec<u8>, cgi::Headers) {
+    if uses_cgi {
+        if let Some((head, body)) = cgi::split_response(out) {
+            return (trim(body).to_vec(), cgi::parse_headers(head));
+        }
+    }
+    (normalize_crlf(trim(out)), cgi::Headers::new())
+}
+
 fn remove_request_vars(env: &Env) -> Env {
     let mut env = env.clone();
     for k in [
@@ -463,10 +481,18 @@ impl Runner {
         }
     }
 
-    /// `create_test_command()`: `[php, (--repeat N), <ini args>]`; the caller appends
+    /// `$php_path` and `$sapi_option_args`: `php-cgi -C` for CGI tests, else `php`.
+    fn sapi_argv(&self, cgi: bool) -> Vec<OsString> {
+        match (&self.config.php_cgi, cgi) {
+            (Some(php_cgi), true) => vec![php_cgi.clone().into_os_string(), os("-C")],
+            _ => vec![self.config.php.clone().into_os_string()],
+        }
+    }
+
+    /// `create_test_command()`: `[php, (-C), (--repeat N), <ini args>]`; the caller appends
     /// `-f <file>`.
-    fn php_argv(&self, extra: &[String]) -> Vec<OsString> {
-        let mut argv = vec![self.config.php.clone().into_os_string()];
+    fn php_argv(&self, extra: &[String], cgi: bool) -> Vec<OsString> {
+        let mut argv = self.sapi_argv(cgi);
         if self.config.repeating() {
             argv.push(os("--repeat"));
             argv.push(os(&self.config.repeat.to_string()));
@@ -475,10 +501,17 @@ impl Runner {
         argv
     }
 
-    /// `[php, -q, <ini args>, <extra>, <script>]`, the command line for SKIPIF, CLEAN and
-    /// REDIRECTTEST helper scripts.
-    fn helper_argv(&self, ini_args: &[String], extra: &[&str], script: &Path) -> Vec<OsString> {
-        let mut argv = vec![self.config.php.clone().into_os_string(), os("-q")];
+    /// `[php, (-C), -q, <ini args>, <extra>, <script>]`, the command line for SKIPIF (run by
+    /// the test's SAPI), CLEAN and REDIRECTTEST helper scripts (always the CLI).
+    fn helper_argv(
+        &self,
+        cgi: bool,
+        ini_args: &[String],
+        extra: &[&str],
+        script: &Path,
+    ) -> Vec<OsString> {
+        let mut argv = self.sapi_argv(cgi);
+        argv.push(os("-q"));
         argv.extend(ini_args.iter().map(OsString::from));
         argv.extend(extra.iter().map(|a| os(a)));
         argv.push(script.as_os_str().to_owned());
@@ -531,11 +564,17 @@ impl Runner {
         if repeating && attempt.test.has_section("FILE_EXTERNAL") {
             return attempt.skip("Test with FILE_EXTERNAL might not be repeatable");
         }
-        // Without CGI and phpdbg binaries, their "does not support --repeat" skips are
-        // unreachable: the "not available" skips come first in run-tests.php too.
         if attempt.test.is_cgi() {
-            return attempt.skip("CGI not available");
+            if self.config.php_cgi.is_none() {
+                return attempt.skip("CGI not available");
+            }
+            attempt.uses_cgi = true;
+            if repeating {
+                return attempt.skip("CGI does not support --repeat");
+            }
         }
+        // Without a phpdbg binary its "does not support --repeat" skip is unreachable: the
+        // "not available" skip comes first in run-tests.php too.
         if attempt.test.has_section("PHPDBG") {
             return attempt.skip("phpdbg not available");
         }
@@ -633,6 +672,7 @@ impl Runner {
                     shortname,
                     test,
                     tested,
+                    uses_cgi: false,
                 })
             }
             Err(e) => Err(Once::Done(TestResult {
@@ -785,6 +825,7 @@ impl Runner {
         let mut skip_env = remove_request_vars(&p.env);
         set_env(&mut skip_env, "TEST_PHP_EVALUATING_SKIPIF", "1");
         let argv = self.helper_argv(
+            a.uses_cgi,
             &p.orig_ini_args,
             &[
                 "-d",
@@ -840,21 +881,16 @@ impl Runner {
         }
         let env = &mut p.env;
         let test_file_os = test_file.into_os_string();
-        set_env(env, "REDIRECT_STATUS", "1");
-        for k in ["PATH_TRANSLATED", "SCRIPT_FILENAME"] {
-            if env.get(&os(k)).is_none_or(|v| v.is_empty()) {
-                set_env(env, k, test_file_os.clone());
-            }
-        }
-        set_env(env, "HTTP_COOKIE", "");
-        set_env(env, "REQUEST_METHOD", "GET");
-        set_env(env, "CONTENT_TYPE", "");
-        set_env(env, "CONTENT_LENGTH", "");
+        cgi::set_request_vars(env, &a.test, &test_file_os);
+        // run-tests.php hands the body over as a file on stdin, whatever --CAPTURE_STDIO-- says.
+        let Ok(request) = cgi::build_request(&a.test, env) else {
+            return Err(a.bork("empty $request".into(), ""));
+        };
         if a.test.has_section("XLEAK") {
             set_env(env, "ZEND_ALLOC_PRINT_LEAKS", "0");
         }
 
-        let mut argv = self.php_argv(&p.test_ini_args);
+        let mut argv = self.php_argv(&p.test_ini_args, a.uses_cgi);
         argv.push(os("-f"));
         argv.push(test_file_os);
         if let Some(args) = a.test.section("ARGS") {
@@ -868,7 +904,16 @@ impl Runner {
             shell.push_str(&lossy(args));
             argv = vec![os("/bin/sh"), os("-c"), os(&format!("exec {shell}"))];
         }
-        let mut out = self.exec(&argv, env, a.test.section("STDIN"), a.capture());
+        let mut out = match &request {
+            Some(body) => {
+                let capture = Capture {
+                    stdin: true,
+                    ..a.capture()
+                };
+                self.exec(&argv, env, Some(body), capture)
+            }
+            None => self.exec(&argv, env, a.test.section("STDIN"), a.capture()),
+        };
         if self.config.repeating() {
             out = strip_repeat_output(&out);
         }
@@ -878,6 +923,7 @@ impl Runner {
             let clean_file = a.paths.file("clean.php");
             if fs::write(&clean_file, trim(a.test.section_or_empty("CLEAN"))).is_ok() {
                 let argv = self.helper_argv(
+                    false,
                     &p.orig_ini_args,
                     &[
                         "-d",
@@ -911,8 +957,13 @@ impl Runner {
                 "",
             );
         };
-        let output = normalize_crlf(trim(out));
-        let wanted = normalize_crlf(trim(expected));
+        let (mut output, headers) = cgi_output(out, a.uses_cgi);
+        let mut wanted = normalize_crlf(trim(expected));
+        let header_check = a
+            .test
+            .section("EXPECTHEADERS")
+            .map(|s| cgi::check_headers(s, &headers));
+        let failed_headers = header_check.as_ref().is_some_and(|c| c.failed);
         let passed = match kind {
             ExpectKind::Exact => output == wanted,
             ExpectKind::Format => regex_matches(&expectf_to_regex(&wanted), &output),
@@ -927,7 +978,7 @@ impl Runner {
         }
 
         let test_file = a.paths.file("php");
-        if passed {
+        if passed && !failed_headers {
             let _ = fs::remove_file(&test_file);
             if !php_empty(clean_output) {
                 let mut once = a.bork(lossy(&output), "reason: invalid output from CLEAN");
@@ -954,6 +1005,10 @@ impl Runner {
             return Once::Done(a.result(status, a.tested.clone(), info));
         }
 
+        if let Some(check) = header_check.filter(|c| c.failed) {
+            wanted = [&check.wanted[..], &b"\n--HEADERS--\n"[..], &wanted[..]].concat();
+            output = [&check.output[..], &b"\n--HEADERS--\n"[..], &output[..]].concat();
+        }
         let (status, info) = if timed_out {
             (Status::Timeout, skip_info.text)
         } else {
@@ -1051,7 +1106,7 @@ impl Runner {
             .unwrap_or_default();
         let script_file = dir.join(format!("{stem}.redirect.php"));
         fs::write(&script_file, script).map_err(|e| e.to_string())?;
-        let argv = self.helper_argv(ini_args, &[], &script_file);
+        let argv = self.helper_argv(false, ini_args, &[], &script_file);
         let out = self.exec(&argv, &self.config.env, None, Capture::STDOUT_ONLY);
         let _ = fs::remove_file(&script_file);
 
@@ -1133,6 +1188,22 @@ mod tests {
         assert!(is_flaky(&t));
         assert!(is_flaky_output(b"Connection refused by peer"));
         assert!(!is_flaky_output(b"all good"));
+    }
+
+    #[test]
+    fn cgi_output_strips_headers() {
+        let (out, headers) = cgi_output(
+            b"X-Powered-By: PHP\r\nContent-type: text/html\r\n\r\n a\r\nb \n",
+            true,
+        );
+        assert_eq!(out, b"a\r\nb");
+        assert_eq!(headers.get(&b"Content-type"[..]).unwrap(), b"text/html");
+        let (out, headers) = cgi_output(b"no headers\r\nhere\n", true);
+        assert_eq!(out, b"no headers\nhere");
+        assert!(headers.is_empty());
+        let (out, headers) = cgi_output(b"a: b\n\nc\r\n", false);
+        assert_eq!(out, b"a: b\n\nc");
+        assert!(headers.is_empty());
     }
 
     #[test]

@@ -34,6 +34,8 @@ target/debug/phpt-runner [OPTIONS] <PATHS>...
 | `--environment <FILE>` | Host-environment failure list (default: `phpt-environment.txt` in the php-src root or an ancestor, i.e. the repository root). |
 | `--no-environment` | Report host-environment failures as `FAIL`. |
 | `--env KEY=VALUE` | Extra environment variable for every test (repeatable). |
+| `--php-cgi <PATH>` | CGI binary for tests with `--GET--`, `--POST--`, `--POST_RAW--`, `--PUT--`, `--GZIP_POST--`, `--DEFLATE_POST--`, `--COOKIE--`, `--EXPECTHEADERS--` or `--CGI--` (default: `$TEST_PHP_CGI_EXECUTABLE`, else run-tests.php's `get_binary()` search beside `--php`: `<dir>/../../sapi/cgi/php-cgi`, then the binary's name with `php` replaced by `php-cgi`, e.g. `target/debug/php-cgi`, `/usr/bin/php-cgi8.5` for `/usr/bin/php8.5`). Without one those tests SKIP with `CGI not available`. |
+| `--no-cgi` | Do not look for a CGI binary (CGI tests SKIP). |
 | `--no-snapshot` | Run the binary in place. By default it is hard-linked (or copied) into a private temp directory first, so a concurrent `cargo build` relinking `target/debug/php` cannot break a long run. |
 | `--resume <FILE>` | Append each result to a JSON-lines log as it completes; tests already in the log are not rerun (their results are reused), so a killed full-suite run can be continued. |
 | `--repeat <N>` | Run each test script N times in one process (`php --repeat N`) and check the output of the last run, like `run-tests.php --repeat`; see below. |
@@ -174,8 +176,16 @@ total/pass/fail/skip and pass rates per suite (Zend/tests, tests/, ext/, sapi/) 
   ones), test cases are sorted by path, times have millisecond resolution, out-of-scope tests
   are left out, and the redirecting test of a `--REDIRECTTEST--` gets no entry of its own.
   Results reused by `--resume` carry no diff.
-- Not supported: CGI (`--GET--`, `--POST--`, `--COOKIE--`, `--EXPECTHEADERS--`, ...) and
-  `--PHPDBG--` tests are parsed but SKIPPED; no valgrind/ASAN leak detection (XLEAK) and no
+- CGI tests run as `php-cgi -C <ini args> -f test.php` with run-tests.php's request
+  environment (`REDIRECT_STATUS`, `QUERY_STRING`, `PATH_TRANSLATED`, `SCRIPT_FILENAME`,
+  `REQUEST_METHOD`, `CONTENT_TYPE`, `CONTENT_LENGTH`, `HTTP_COOKIE`, `HTTP_CONTENT_ENCODING`)
+  and the body on stdin; their SKIPIF runs under `php-cgi -C` too, CLEAN under the CLI. The
+  response headers before the first blank line are split off the output and compared with
+  `--EXPECTHEADERS--` (a mismatch fails with a `--HEADERS--` block in the diff). One
+  difference: `--GZIP_POST--`/`--DEFLATE_POST--` bodies use stored (uncompressed) deflate
+  blocks instead of level-9 compression, so `CONTENT_LENGTH` differs; the inflated body is the
+  same. The CGI binary is snapshotted along with the PHP binary.
+- Not supported: `--PHPDBG--` tests are parsed but SKIPPED; no valgrind/ASAN leak detection (XLEAK) and no
   opcache file-cache/preload modes (out of scope).
 
 ## Validation
