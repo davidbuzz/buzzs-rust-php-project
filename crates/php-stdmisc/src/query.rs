@@ -436,6 +436,9 @@ pub fn register_variable_ex(
     };
 
     let mut table: &mut HashTable = track.make_mut();
+    // Whether `table` is still the track array itself (`symtable1 ==
+    // PG(http_globals)[TRACK_VARS_COOKIE]` for cookies).
+    let mut top_level = true;
     // `index` is a (start, len) slice of `buf`, `None` = append.
     let mut index: Option<(usize, usize)> = Some((0, var_len));
 
@@ -482,7 +485,7 @@ pub fn register_variable_ex(
                             q += 1;
                         }
                         index = index.map(|(s, _)| (s, cstr_len(&buf, s)));
-                        plain_var(table, &buf, index, val, var_name, opts);
+                        plain_var(table, &buf, index, val, var_name, opts, top_level);
                         return Ok(());
                     }
                     Some(off) => {
@@ -507,20 +510,24 @@ pub fn register_variable_ex(
                     as_table(table.lookup(ArrayKey::from_bytes(name)))
                 }
             };
+            top_level = false;
             index = new_index;
             ip += 1;
             if at(&buf, ip) == b'[' {
                 buf[ip] = 0;
             } else {
-                plain_var(table, &buf, index, val, var_name, opts);
+                plain_var(table, &buf, index, val, var_name, opts, false);
                 return Ok(());
             }
         }
     }
-    plain_var(table, &buf, index, val, var_name, opts);
+    plain_var(table, &buf, index, val, var_name, opts, top_level);
     Ok(())
 }
 
+/// The `plain_var:` tail of `php_register_variable_ex()`.  A duplicate
+/// cookie name is skipped only in `$_COOKIE` itself (rfc2965: the more
+/// specific path comes first); nested arrays keep the last value.
 fn plain_var(
     table: &mut HashTable,
     buf: &[u8],
@@ -528,6 +535,7 @@ fn plain_var(
     val: Value,
     var_name: &[u8],
     opts: &RegisterOptions<'_>,
+    top_level: bool,
 ) {
     match index {
         None => {
@@ -539,7 +547,7 @@ fn plain_var(
                 return;
             }
             let key = ArrayKey::from_bytes(name);
-            if opts.cookie && table.contains_key(&key) {
+            if opts.cookie && top_level && table.contains_key(&key) {
                 return;
             }
             table.insert(key, val);
