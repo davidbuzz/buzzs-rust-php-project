@@ -1672,7 +1672,7 @@ impl Vm {
             return None;
         }
         let p = f.code.places.get(pid as usize)?;
-        matches!(p.base, PlaceBase::Cv(_)).then(|| (self.frames.len() - 1, Rc::as_ptr(&f.vars)))
+        matches!(p.base, PlaceBase::Cv(_)).then_some((self.frames.len() - 1, Rc::as_ptr(&f.vars)))
     }
 
     /// The base of a read (`place_fetch`, `place_isset`) of compiled

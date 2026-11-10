@@ -323,18 +323,26 @@ fn idx_key(i: usize) -> i64 {
     i64::try_from(i).unwrap_or(i64::MAX)
 }
 
-/// A fresh index for `table_size` buckets: `table_size` empty hash slots
+/// The number of hash slots of a table of `table_size` buckets: twice as
+/// many, as php-src's `HT_SIZE_TO_MASK(nSize)` (`-(nSize + nSize)`) keeps
+/// the chains short (a load factor of at most 1/2).
+#[inline]
+fn index_len(table_size: u32) -> usize {
+    table_size as usize * 2
+}
+
+/// A fresh index for `table_size` buckets: [`index_len`] empty hash slots
 /// (`HT_INVALID_IDX` / `u32::MAX`).
 fn new_index(table_size: u32) -> Box<[u32]> {
-    vec![INVALID; table_size as usize].into_boxed_slice()
+    vec![INVALID; index_len(table_size)].into_boxed_slice()
 }
 
 /// The hash slot of `h` (`nIndex = h | nTableMask`: `h` modulo the
-/// `nTableSize` slots).
+/// `2 * nTableSize` slots).
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
 fn hash_slot(table_size: u32, h: u64) -> usize {
-    (h as usize) & (table_size as usize - 1)
+    (h as usize) & (index_len(table_size) - 1)
 }
 
 /// Whether two key strings have the same bytes (`zend_string_equal_content`
@@ -682,12 +690,12 @@ impl HashData {
     /// (`zend_hash_rehash` without compaction).
     #[allow(clippy::cast_possible_truncation)]
     fn relink(&mut self, ts: u32) {
-        if self.index.len() != ts as usize {
+        if self.index.len() != index_len(ts) {
             self.index = new_index(ts);
         } else {
             self.index.fill(INVALID);
         }
-        let mask = ts as usize - 1;
+        let mask = index_len(ts) - 1;
         for (i, b) in self.buckets.iter_mut().enumerate() {
             if b.val.is_none() {
                 b.next = INVALID;
@@ -3308,10 +3316,10 @@ mod tests {
     }
 
     #[test]
-    fn hash_index_is_compacted_to_four_bytes_per_slot() {
+    fn hash_index_has_two_four_byte_slots_per_bucket() {
         let t = HashTable::with_capacity_mixed(16);
         let Store::Hash(d) = &t.store else { panic!() };
-        assert_eq!(d.index.len(), t.table_size() as usize);
+        assert_eq!(d.index.len(), 2 * t.table_size() as usize);
         assert_eq!(std::mem::size_of_val(&d.index[0]), 4);
         assert!(d.index.iter().all(|&x| x == u32::MAX));
     }
