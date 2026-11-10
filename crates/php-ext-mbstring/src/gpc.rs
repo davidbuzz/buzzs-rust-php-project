@@ -297,13 +297,18 @@ impl Rfc1867Translation for MultipartTranslation {
 
     fn convert(&mut self, s: &[u8]) -> Option<Vec<u8>> {
         let from = self.input?;
-        Some(convert_until_oom(
-            s,
-            from,
-            self.internal,
-            self.sub,
-            self.mode,
-        ))
+        let converted = convert_until_oom(s, from, self.internal, self.sub, self.mode);
+        if crate::mem::pending() {
+            return Some(converted);
+        }
+        // php_mb_zend_encoding_converter() hands back a copy of
+        // mb_fast_convert()'s result (emalloc + memcpy): both are live at
+        // once, which is what pushes a part past memory_limit. Once a
+        // violation is pending the request fails anyway, and the copy
+        // could only reach the hard limit.
+        let copy = converted.as_slice().to_vec();
+        drop(converted);
+        Some(copy)
     }
 }
 
