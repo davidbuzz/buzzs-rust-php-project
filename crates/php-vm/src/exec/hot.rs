@@ -47,9 +47,10 @@ use super::spec::{
     num_outcome, plain_truth, put_tmp, rope_in, slot_truth,
 };
 use super::{discard_unrooted, num_bin, release_rooted, Num};
-use crate::opcode::{cmp_outcome, BinKind, CastKind, IncDecKind, Op, Operand, UnKind};
-use crate::vm::{CvSlot, Frame};
+use crate::opcode::{cmp_outcome, BinKind, CastKind, IncDecKind, Op, OpArray, Operand, UnKind};
+use crate::vm::{CvSlot, Frame, Vm};
 use php_runtime::{BinaryOp, Value, ZStr};
+use std::rc::Rc;
 
 /// The second half of [`run_hot`]'s result when no safe point is due: the
 /// op at the returned `ip` stopped the loop.
@@ -133,32 +134,127 @@ pub(super) fn is_hot(op: &Op) -> bool {
     )
 }
 
-/// Runs the ops of frame `f` (its op array's `ops` and `lits`, held by
-/// the caller, so that the loop does not reload them through `f.code`)
-/// from `ip` while they are hot ops whose fast path applies ([`step`]).
-/// Returns `(ip, NO_SAFE_POINT)` when the op at `ip` must run in `Vm::run`
-/// (not a hot op, or its fast path declined, having changed nothing), or
-/// `(ip, at)` when the safe point after the op at `at` is due, `ip` being
-/// where execution continues.
+/// Set in the `ip` [`run_hot`] returns when a call or a return it made
+/// changed the current frame: the `ip` (without this bit) is one of the
+/// new current frame's, whose op array `Vm::run` loads first (`LOAD_OPLINE`
+/// after `ZEND_VM_ENTER`/`ZEND_VM_LEAVE`). Op indexes never reach it.
+pub(super) const SWITCHED: usize = 1 << (usize::BITS - 1);
+
+/// The second half of [`run_hot`]'s result when a call or a return it made
+/// changed the current frame and the safe point after it is due: the
+/// frame's `ip` is stored in it (the callee's first op, or the caller's
+/// resume point), and `Vm::run` runs the safe point as after its own fast
+/// `DoCall` and `Return` (`Vm::safe_point_after_leave`) before reloading
+/// the frame.
+pub(super) const LEFT: usize = usize::MAX - 1;
+
+/// Whether `op` is a call or a return [`run_hot`] makes itself when its
+/// fast path applies (`Vm::push_simple_ucall`, `Vm::return_simple`).
+#[inline(always)]
+#[allow(clippy::inline_always)] // a discriminant test
+pub(super) fn is_frame_op(op: &Op) -> bool {
+    matches!(op, Op::DoCall { .. } | Op::Return { .. })
+}
+
+/// Whether `Vm::run` enters [`run_hot`] at `op` after a hot op: a hot op
+/// or a call or return it makes itself ([`is_frame_op`]).
+#[inline(always)]
+#[allow(clippy::inline_always)] // a discriminant test
+pub(super) fn enters_hot(op: &Op) -> bool {
+    is_hot(op) || is_frame_op(op)
+}
+
+/// Runs the ops of the current frame (its op array's `ops` and `lits`,
+/// held by the caller, so that the loop does not reload them through the
+/// frame's `code`) from `ip` while they are hot ops whose fast path
+/// applies ([`step`]), and the plain user calls and returns among them
+/// (`ZEND_DO_UCALL`, `ZEND_RETURN`: [`Vm::push_simple_ucall`],
+/// [`Vm::return_simple`]), switching to the callee's or the caller's frame
+/// and op array in place of returning to `Vm::run` to reload them.
+/// Returns:
 ///
-/// Never inlined: its own register allocation keeps `f`, `ops`, `lits` and
-/// `ip` out of `Vm::run`'s stack frame. `Vm::run` enters it when a hot op
-/// it ran is followed by another (a loop of hot ops stays here); a lone
+/// * `(ip, NO_SAFE_POINT)` when the op at `ip` must run in `Vm::run` (not
+///   a hot op, or its fast path declined, having changed nothing; a
+///   `DoCall` or `Return` here was declined by its fast path);
+/// * `(ip, at)` when the safe point after the op at `at` is due, `ip`
+///   being where execution continues;
+/// * either with [`SWITCHED`] set in `ip` when the current frame changed
+///   since the call (`ip` and `at` are then the new frame's);
+/// * `(_, LEFT)` when a call or return changed the frame and the safe
+///   point after it is due ([`LEFT`]).
+///
+/// `base` is `Vm::run`'s: the frame at that index is never returned from
+/// here (`Vm::return_simple` declines it). Exactly what `Vm::run`'s fast
+/// `DoCall` and `Return` arms do, in the same order: those push or pop
+/// only plain user frames (no observer, generator, by-reference return,
+/// attached symbol table, named or spread arguments, coercion, deep
+/// recursion: anything else is declined and runs as the generic op), and
+/// run no user code; the frame's `ip` is stored as there, and a due safe
+/// point is run by `Vm::run` right after the call or return, as there.
+///
+/// Never inlined: its own register allocation keeps the frame, `ops`,
+/// `lits` and `ip` out of `Vm::run`'s stack frame. `Vm::run` enters it
+/// when a hot op it ran is followed by another or by a call or return
+/// ([`enters_hot`]: a loop of hot ops and plain calls stays here); a lone
 /// hot op among others runs in `Vm::run` through [`step`], without the
 /// call. The loop inlines only `step`'s core ops; the others are one call
 /// each ([`step_ext`]), which keeps the loop small enough for its state to
 /// stay in registers.
 #[inline(never)]
-pub(super) fn run_hot(f: &mut Frame, ops: &[Op], lits: &[Value], mut ip: usize) -> (usize, usize) {
+pub(super) fn run_hot(
+    vm: &mut Vm,
+    base: usize,
+    mut ops: &[Op],
+    mut lits: &[Value],
+    mut ip: usize,
+) -> (usize, usize) {
+    let mut switched = 0;
     loop {
-        let at = ip;
-        ip = step(f, ops, lits, at);
-        if ip == DECLINED {
-            return (at, NO_SAFE_POINT);
+        let Some(f) = vm.frames.last_mut() else {
+            return (ip | switched, NO_SAFE_POINT);
+        };
+        let at = loop {
+            let at = ip;
+            ip = step(f, ops, lits, at);
+            if ip == DECLINED {
+                break at;
+            }
+            if crate::interrupt::safe_point_due() {
+                return (ip | switched, at);
+            }
+        };
+        // `ZEND_DO_UCALL` / `ZEND_RETURN` of a plain user function: the
+        // fast arms of `Vm::run`, which store `at + 1` as the frame's
+        // resume point (`SAVE_OPLINE`).
+        let changed = match ops.get(at) {
+            Some(&Op::DoCall { dst }) => vm.push_simple_ucall(dst, at + 1),
+            Some(&Op::Return { val }) => vm.return_simple(val, base, at + 1).is_some(),
+            _ => false,
+        };
+        if !changed {
+            return (at | switched, NO_SAFE_POINT);
         }
+        // The frame's op array may be freed with it: `ops`, `lits` and
+        // the op are not read again before they are reloaded below.
+        switched = SWITCHED;
         if crate::interrupt::safe_point_due() {
-            return (ip, at);
+            return (0, LEFT);
         }
+        // `LOAD_OPLINE()` of the new current frame, as `Vm::run` does.
+        let Some(f) = vm.frames.last() else {
+            return (0, LEFT);
+        };
+        ip = f.ip;
+        // SAFETY: as in `Vm::run`: the op array is owned by `Rc`s, one of
+        // them held by the current frame, so its heap block stays where it
+        // is while that frame is current. Until the next call or return
+        // above (after which this is reloaded), only hot ops run, which
+        // neither push nor pop frames nor replace a frame's `code`; and
+        // `Vm::run`, which gets this frame's `ip` back with `SWITCHED`,
+        // reloads the op array from the frame itself.
+        let code: &OpArray = unsafe { &*Rc::as_ptr(&f.code) };
+        ops = &code.ops;
+        lits = &code.literals;
     }
 }
 
@@ -2004,6 +2100,158 @@ string(3) "621"
 Warning: Undefined property: stdClass::$absent in t.php on line 14
 
 done
+"#
+        );
+    }
+
+    /// Plain user calls and returns made in `run_hot`'s loop (the callee's
+    /// and the caller's frames switched there): recursion, an empty body,
+    /// a frame pool grown by a deep recursion.
+    #[test]
+    fn calls_and_returns_in_the_loop() {
+        assert_eq!(
+            run(r#"<?php
+function fibo($n) { return ($n < 2) ? 1 : fibo($n - 2) + fibo($n - 1); }
+function ack($m, $n) {
+    if ($m == 0) return $n + 1;
+    if ($n == 0) return ack($m - 1, 1);
+    return ack($m - 1, ack($m, ($n - 1)));
+}
+function depth($n) { return $n == 0 ? 0 : 1 + depth($n - 1); }
+function id($a) { return $a; }
+function none() {}
+$s = 0;
+for ($i = 0; $i < 50; $i++) { $s += id($i); none(); }
+echo fibo(15), " ", ack(2, 3), " ", depth(3000), " ", $s, "\n";
+"#),
+            "987 9 3000 1225\n"
+        );
+    }
+
+    /// An exception thrown two frames below a hot loop (its trace and
+    /// line), caught there; generators called from a hot loop (declined:
+    /// the generic call).
+    #[test]
+    fn exceptions_and_generators_across_switched_frames() {
+        assert_eq!(
+            run(r#"<?php
+function inner($i) {
+    if ($i == 3) throw new RuntimeException("at $i");
+    return $i * 2;
+}
+function outer($i) { $x = $i + 1; return inner($x - 1) + 1; }
+$t = 0;
+for ($i = 0; $i < 6; $i++) {
+    try {
+        $t += outer($i);
+    } catch (RuntimeException $e) {
+        echo $e->getMessage(), " line ", $e->getLine(), "\n", $e->getTraceAsString(), "\n";
+    }
+}
+echo $t, "\n";
+function gen($n) { for ($k = 0; $k < $n; $k++) yield $k => $k * 10; }
+$sum = 0;
+for ($i = 1; $i < 4; $i++) {
+    foreach (gen($i) as $k => $v) { $sum += $k + $v; }
+}
+echo $sum, "\n";
+"#),
+            r#"at 3 line 3
+#0 t.php(6): inner(3)
+#1 t.php(10): outer(3)
+#2 {main}
+29
+44
+"#
+        );
+    }
+
+    /// Destructors of a callee's locals run at its return, before the
+    /// caller goes on; `debug_backtrace()`, `func_get_args()` and return
+    /// type errors in functions called from a hot loop.
+    #[test]
+    fn destructors_backtraces_and_return_types_after_switches() {
+        assert_eq!(
+            run(r#"<?php
+class D {
+    public function __construct(public int $n) {}
+    public function __destruct() { echo "dtor {$this->n}\n"; }
+}
+function make($i) { $o = new D($i); return $i + 1; }
+function keep($i) { return new D($i); }
+for ($i = 0; $i < 3; $i++) {
+    $r = make($i);
+    echo "after $r\n";
+}
+for ($i = 5; $i < 7; $i++) {
+    $o = keep($i);
+    echo "kept {$o->n}\n";
+}
+unset($o);
+function where($a, $b = 2) {
+    $bt = debug_backtrace();
+    return $bt[0]['line'] . ":" . $bt[0]['function'] . ":" . implode(",", $bt[0]['args']) . ":" . implode(",", func_get_args()) . ":" . func_num_args();
+}
+function via($i) { return where($i); }
+for ($i = 0; $i < 2; $i++) {
+    echo where($i), " ", via($i + 10), "\n";
+}
+function typed(int $a): int { return $a; }
+function bad($a): int { return $a; }
+for ($i = 0; $i < 3; $i++) {
+    echo typed($i);
+    try { echo bad($i == 2 ? "x" : $i); } catch (TypeError $e) { echo "\n", $e->getMessage(), " @", $e->getLine(), "\n"; }
+}
+echo "\n";
+"#),
+            r#"dtor 0
+after 1
+dtor 1
+after 2
+dtor 2
+after 3
+kept 5
+dtor 5
+kept 6
+dtor 6
+23:where:0:0:1 21:where:10:10:1
+23:where:1:1:1 21:where:11:11:1
+00112
+bad(): Return value must be of type int, string returned @26
+
+"#
+        );
+    }
+
+    /// Calls from a callback's frame (the base frame of a nested run, which
+    /// returns through the generic op), static closures, ticks between
+    /// plain calls, and an exception's trace through recursive calls.
+    #[test]
+    fn nested_runs_ticks_and_recursive_traces() {
+        assert_eq!(
+            run(r#"<?php
+function id($a) { return $a; }
+function sq($a) { return $a * $a; }
+echo implode(",", array_map(function ($x) { return id($x) + sq($x); }, [1, 2, 3])), "\n";
+$f = static fn($x) => id($x) * 2;
+$s = 0;
+for ($i = 0; $i < 5; $i++) { $s += $f($i) + id($i); }
+echo $s, "\n";
+function tick() { echo "tick\n"; }
+register_tick_function('tick');
+declare(ticks=1) {
+    for ($i = 0; $i < 2; $i++) { $v = id($i); }
+}
+unregister_tick_function('tick');
+function rec($n) { if ($n > 0) { return rec($n - 1); } throw new LogicException("bottom"); }
+try { rec(3); } catch (LogicException $e) { echo $e->getMessage(), " ", count($e->getTrace()), " ", $e->getTrace()[3]['line'], "\n"; }
+"#),
+            r#"2,6,12
+30
+tick
+tick
+tick
+bottom 4 16
 "#
         );
     }

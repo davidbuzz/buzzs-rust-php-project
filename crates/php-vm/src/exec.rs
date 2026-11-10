@@ -1153,8 +1153,14 @@ impl Vm {
             // and destructors push and pop frames above it only), so
             // every use of `code`, `ops` and `op` below happens while
             // that frame's handle keeps the block alive.
-            let code: &crate::opcode::OpArray = unsafe { &*Rc::as_ptr(&top.code) };
-            let ops: &[Op] = &code.ops;
+            //
+            // `hot::run_hot` makes plain calls and returns itself: when it
+            // comes back in another frame (`hot::SWITCHED`), `code` and
+            // `ops` are reloaded from that frame below, before any use, as
+            // here (the frame it left may have been freed with its op
+            // array; `op` is not read again either).
+            let mut code: &crate::opcode::OpArray = unsafe { &*Rc::as_ptr(&top.code) };
+            let mut ops: &[Op] = &code.ops;
             'ops: loop {
                 let at = ip;
                 let mut op = &ops[at];
@@ -1171,7 +1177,10 @@ impl Vm {
                     // frame and `ip` in registers, until an op it does not
                     // handle or whose fast path declined (that op then runs
                     // here: a declined hot op as its generic op, any other
-                    // through this pre-match), or a due safe point.
+                    // through this pre-match), or a due safe point. Plain
+                    // user calls and returns among them run there as well,
+                    // which then goes on in the callee's or the caller's
+                    // frame (`hot::SWITCHED`: reloaded here).
                     if hot::is_hot(op) {
                         let Some(f) = self.frames.last_mut() else {
                             break 'slow;
@@ -1186,16 +1195,33 @@ impl Vm {
                             ip = self.safe_point(ip, op)?;
                             continue 'ops;
                         }
-                        if !ops.get(ip).is_some_and(hot::is_hot) {
+                        if !ops.get(ip).is_some_and(hot::enters_hot) {
                             continue 'ops;
                         }
-                        let (next, last) = hot::run_hot(f, ops, lits, ip);
+                        let (mut next, last) = hot::run_hot(self, base, ops, lits, ip);
+                        if last == hot::LEFT {
+                            // A call or return there, with the safe point
+                            // after it due (as after the fast `DoCall` and
+                            // `Return` arms below).
+                            self.safe_point_after_leave()?;
+                            continue 'frames;
+                        }
+                        if next & hot::SWITCHED != 0 {
+                            // `LOAD_OPLINE()` of the frame it went on in.
+                            next &= !hot::SWITCHED;
+                            // SAFETY: as for `code` above; the current
+                            // frame holds this op array.
+                            code = unsafe { &*Rc::as_ptr(&self.frame().code) };
+                            ops = &code.ops;
+                        }
                         if last != hot::NO_SAFE_POINT {
                             ip = self.safe_point(next, &ops[last])?;
                             continue 'ops;
                         }
                         ip = next;
-                        if hot::is_hot(&ops[next]) {
+                        // A hot op whose fast path declined, or a call or
+                        // return `run_hot` did not make: the generic op.
+                        if hot::enters_hot(&ops[next]) {
                             op = &ops[next];
                             ip = next + 1;
                             break 'slow;
