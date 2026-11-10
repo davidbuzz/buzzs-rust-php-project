@@ -955,6 +955,41 @@ mod tests {
         assert_eq!(writes_of(&code, a), 2, "{:?}", code.ops);
     }
 
+    /// SCCP substitutes a known temporary constant into kept reads too:
+    /// `match` reads its subject with `TmpKeep` in every arm, and the
+    /// defining move is removed, so a missed kept read was undefined
+    /// (`match($x)` with `$x = 3` fell through to `default`).
+    #[test]
+    fn sccp_substitutes_kept_temporary_reads() {
+        let unit = compile_src(
+            "<?php function t() { $x = 3; return match($x) { 1, 3 => 'a', default => 'b' }; }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let funcs = unit.main.code.decls.functions.borrow();
+        let t = funcs.iter().find(|f| f.name.as_bytes() == b"t").expect("t");
+        let code = &t.code;
+        let mut defined = vec![false; code.num_tmps as usize + 1];
+        for op in &code.ops {
+            if let Some(d) = def_tmp(op) {
+                if let Some(slot) = defined.get_mut(d as usize) {
+                    *slot = true;
+                }
+            }
+        }
+        for op in &code.ops {
+            let mut probe = op.clone();
+            for_each_operand_mut(&mut probe, |o| {
+                if let Operand::TmpKeep(k) = o {
+                    assert!(
+                        defined.get(*k as usize).copied().unwrap_or(false),
+                        "kept read of undefined T{k}: {:?}",
+                        code.ops
+                    );
+                }
+            });
+        }
+    }
+
     #[test]
     fn test_constant_folding() {
         let unit = compile_src("<?php echo 1 + 2 * 3;", DEFAULT_OPTIMIZATION_LEVEL);

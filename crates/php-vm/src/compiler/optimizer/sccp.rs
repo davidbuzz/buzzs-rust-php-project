@@ -754,7 +754,9 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
         if lit_def.iter().any(|d| d.is_some()) {
             for op in &mut op_array.ops {
                 for_each_operand_mut(op, |operand| {
-                    if let Operand::Tmp(t) = operand {
+                    // A kept read (`TmpKeep`, e.g. each arm of a `match`)
+                    // too: the defining `Move` is removed below.
+                    if let Operand::Tmp(t) | Operand::TmpKeep(t) = operand {
                         if let Some(Some(l)) = lit_def.get(*t as usize) {
                             *operand = Operand::Lit(*l);
                             changed = true;
@@ -765,7 +767,9 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
 
             for place in &mut op_array.places {
                 for_each_place_operand_mut(place, |operand| {
-                    if let Operand::Tmp(t) = operand {
+                    // A kept read (`TmpKeep`, e.g. each arm of a `match`)
+                    // too: the defining `Move` is removed below.
+                    if let Operand::Tmp(t) | Operand::TmpKeep(t) = operand {
                         if let Some(Some(l)) = lit_def.get(*t as usize) {
                             *operand = Operand::Lit(*l);
                             changed = true;
