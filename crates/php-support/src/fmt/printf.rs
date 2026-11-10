@@ -273,9 +273,8 @@ fn write_u64_rev(buf: &mut [u8; 21], mut n: u64) -> usize {
     loop {
         i -= 1;
         #[allow(clippy::cast_possible_truncation)]
-        {
-            buf[i] = b'0' + (n % 10) as u8;
-        }
+        let digit = (n % 10) as u8;
+        buf[i] = b'0' + digit;
         n /= 10;
         if n == 0 {
             return i;
