@@ -8,13 +8,17 @@
 //! oplines php-src compiles for the same code ([`lower`]), with the
 //! variable contractions of the DFA pass, `zend_optimizer_compact_vars`,
 //! `zend_optimize_temporary_variables` and the live ranges
-//! ([`passes`]).
+//! ([`passes`]). The DFA pass's own SSA dumps (`ZEND_DUMP_BEFORE_DFA_PASS`,
+//! `ZEND_DUMP_AFTER_DFA_PASS`) are [`ssa`]'s.
 
 mod lower;
 mod model;
 mod passes;
+mod ssa;
 #[cfg(test)]
 mod tests;
+
+pub use ssa::{dump_unit_dfa, DUMP_AFTER_DFA_PASS, DUMP_BEFORE_DFA_PASS};
 
 use crate::class::ClassDecl;
 use crate::compiler::{CompiledUnit, FunctionTable};
