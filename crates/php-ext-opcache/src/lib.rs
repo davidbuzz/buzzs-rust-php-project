@@ -3,6 +3,7 @@
 //!
 //! ref: ext/opcache/zend_accelerator_module.c, ext/opcache/opcache.stub.php
 
+use php_opcache::blacklist::Blacklist;
 use php_opcache::file_cache;
 use php_opcache::{CacheLookup, PreloadStats, ScriptCache};
 pub use php_opcache::{JitBuffer, JitConfig, JitTraceInfo, JitTraceTracker};
@@ -17,7 +18,36 @@ use std::rc::Rc;
 
 thread_local! {
     static GLOBAL_CACHE: RefCell<ScriptCache<Rc<CompiledUnit>>> = RefCell::new(ScriptCache::new(10000));
-    static IS_PRELOADING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `accel_blacklist`, with the `opcache.blacklist_filename` it was
+    /// loaded from.
+    static BLACKLIST: RefCell<Option<(String, Rc<Blacklist>)>> = const { RefCell::new(None) };
+    /// `ZCSG(restart_pending)`.
+    static RESTART_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `accel_blacklist`: loaded once from `opcache.blacklist_filename`
+/// (`zend_accel_blacklist_load()` at startup, which logs what it cannot
+/// load); `None` when the directive is empty.
+fn blacklist(vm: &mut Vm) -> Option<Rc<Blacklist>> {
+    let pattern = get_ini_string(vm, "opcache.blacklist_filename");
+    if pattern.is_empty() {
+        return None;
+    }
+    let loaded = BLACKLIST.with(|b| {
+        b.borrow()
+            .as_ref()
+            .filter(|(p, _)| *p == pattern)
+            .map(|(_, l)| l.clone())
+    });
+    if loaded.is_some() {
+        return loaded;
+    }
+    let list = Rc::new(Blacklist::load(&pattern));
+    for warning in &list.warnings {
+        vm_accel_log(vm, AccelLog::Warning, warning);
+    }
+    BLACKLIST.with(|b| *b.borrow_mut() = Some((pattern, list.clone())));
+    Some(list)
 }
 
 /// The `opcache` extension.
@@ -72,41 +102,87 @@ impl Extension for Opcache {
 
         // Install additive compile hook
         Vm::set_compile_hook(opcache_compile_hook);
-
-        maybe_run_preload(module.vm());
     }
 }
 
-/// `zend_accel_error(ACCEL_LOG_WARNING, ...)` (`zend_accelerator_debug.c`):
-/// written when `opcache.log_verbosity_level` admits warnings, to
-/// `opcache.error_log` (stderr when unset or "stderr"), as
-/// "<asctime> (<pid>): Warning <message>" plus a newline. The messages
-/// passed here end in their own newline, as php-src's do.
-fn accel_log_warning(vm: &Vm, message: &str) {
+/// The levels of `zend_accel_error()` (`zend_accelerator_debug.h`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AccelLog {
+    /// `ACCEL_LOG_FATAL`.
+    Fatal = 0,
+    /// `ACCEL_LOG_ERROR`.
+    Error = 1,
+    /// `ACCEL_LOG_WARNING`.
+    Warning = 2,
+    /// `ACCEL_LOG_INFO`.
+    Info = 3,
+    /// `ACCEL_LOG_DEBUG`.
+    Debug = 4,
+}
+
+/// `zend_accel_error()` (`zend_accelerator_debug.c`): when
+/// `opcache.log_verbosity_level` (`verbosity`) admits `kind`, writes
+/// "<asctime> (<pid>): <Kind> <message>" and a newline to
+/// `opcache.error_log` (`error_log`; stderr when empty or "stderr", or
+/// when the file cannot be opened). The caller does what the level implies
+/// (a fatal exits, an error bails out).
+pub fn accel_log(verbosity: i64, error_log: &str, kind: AccelLog, message: &str) {
     use std::io::Write as _;
-    if vm.ini_long("opcache.log_verbosity_level") < 2 {
+    if kind as i64 > verbosity {
         return;
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let label = match kind {
+        AccelLog::Fatal => "Fatal Error",
+        AccelLog::Error => "Error",
+        AccelLog::Warning => "Warning",
+        AccelLog::Info => "Message",
+        AccelLog::Debug => "Debug",
+    };
     let line = format!(
-        "{} ({}): Warning {message}\n",
+        "{} ({}): {label} {message}\n",
         format_ctime(now),
         std::process::id()
     );
-    let target = get_ini_string(vm, "opcache.error_log");
-    if !target.is_empty() && target != "stderr" {
+    if !error_log.is_empty() && error_log != "stderr" {
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .append(true)
             .create(true)
-            .open(&target)
+            .open(error_log)
         {
             let _ = f.write_all(line.as_bytes());
             return;
         }
     }
-    let _ = std::io::stderr().write_all(line.as_bytes());
+    let mut stderr = std::io::stderr();
+    let _ = stderr.write_all(line.as_bytes());
+    let _ = stderr.flush();
+}
+
+/// [`accel_log`] with the request's `opcache.log_verbosity_level` and
+/// `opcache.error_log`. The script's output so far goes out first, as
+/// php-src's CLI writes it unbuffered.
+fn vm_accel_log(vm: &mut Vm, kind: AccelLog, message: &str) {
+    let verbosity = vm.ini_long("opcache.log_verbosity_level");
+    if kind as i64 > verbosity {
+        return;
+    }
+    vm.flush_stdout();
+    accel_log(
+        verbosity,
+        &get_ini_string(vm, "opcache.error_log"),
+        kind,
+        message,
+    );
+}
+
+/// `zend_accel_error(ACCEL_LOG_WARNING, ...)` for the startup INI checks,
+/// whose messages end in their own newline, as php-src's do (the line
+/// then ends in two).
+fn accel_log_warning(vm: &mut Vm, message: &str) {
+    vm_accel_log(vm, AccelLog::Warning, message);
 }
 
 /// The startup-stage checks of opcache's INI handlers
@@ -630,147 +706,24 @@ fn parse_jit_mode(s: &str) -> (i64, i64, i64) {
     }
 }
 
-fn maybe_run_preload(vm: &mut Vm) {
-    let is_preloading = IS_PRELOADING.with(|p| p.get());
-    if is_preloading {
+/// Fills the preload statistics of `opcache_get_status()` from what the
+/// startup preload (`accel_preload()`, run once by the SAPI before the
+/// first request: [`Vm::run_preload`]) made persistent. The preload script
+/// itself never runs in a request.
+fn sync_preload_stats() {
+    if GLOBAL_CACHE.with(|c| c.borrow().preload_stats.is_some()) {
         return;
     }
-
-    if !is_opcache_enabled(vm) || vm.ini_bool("opcache.file_cache_only") {
+    let Some(info) = Vm::preload_info() else {
         return;
-    }
-
-    let preload_setting = get_ini_string(vm, "opcache.preload");
-    let preload_setting = preload_setting.trim();
-    if preload_setting.is_empty() {
-        return;
-    }
-
-    use std::os::unix::ffi::OsStrExt;
-    let path = std::path::Path::new(preload_setting);
-    let realpath = match std::fs::canonicalize(path) {
-        Ok(p) => p,
-        Err(_) => path.to_path_buf(),
     };
-    let real_str = realpath.to_string_lossy().into_owned();
-    let real_z = ZStr::from(realpath.as_os_str().as_bytes());
+    let name = |z: &ZStr| String::from_utf8_lossy(z.as_bytes()).into_owned();
+    let preloaded_functions: Vec<String> = info.functions.iter().map(name).collect();
+    let preloaded_classes: Vec<String> = info.classes.iter().map(name).collect();
+    let preloaded_scripts: Vec<String> = info.scripts.iter().map(name).collect();
 
-    let already_has_stats = GLOBAL_CACHE.with(|c| c.borrow().preload_stats.is_some());
-    if already_has_stats && vm.included_set.contains(&real_z) {
-        return;
-    }
-
-    let source = match std::fs::read(&realpath) {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-
-    let existing_functions: std::collections::HashSet<ZStr> =
-        vm.functions.keys().cloned().collect();
-    let existing_classes: std::collections::HashSet<ZStr> = vm.classes.keys().cloned().collect();
-    let existing_scripts: std::collections::HashSet<ZStr> = vm.included_set.clone();
-    let existing_cached_scripts: std::collections::HashSet<String> =
-        GLOBAL_CACHE.with(|c| c.borrow().scripts.keys().cloned().collect());
-    let existing_units = vm.units.len();
-
-    let saved_script_path = vm.script_path.clone();
-
-    IS_PRELOADING.with(|p| p.set(true));
-    let _ = vm.run_main(&source, &real_z);
-    IS_PRELOADING.with(|p| p.set(false));
-
-    vm.script_path = saved_script_path;
-
-    // Collect preloaded functions in declaration order
-    let mut preloaded_functions: Vec<String> = Vec::new();
-    if vm.units.len() >= existing_units {
-        for u in &vm.units[existing_units..] {
-            for &idx in &u.hoisted_functions {
-                if let Some(f) = u.decls.functions.borrow().get(idx as usize) {
-                    let name = String::from_utf8_lossy(f.name.as_bytes()).into_owned();
-                    let lc = ZStr::from(f.name.to_ascii_lowercase());
-                    if !existing_functions.contains(&lc) && !preloaded_functions.contains(&name) {
-                        preloaded_functions.push(name);
-                    }
-                }
-            }
-        }
-    }
-    for (k, v) in &vm.functions {
-        if !existing_functions.contains(k) {
-            let name = String::from_utf8_lossy(v.name().as_bytes()).into_owned();
-            if !preloaded_functions.contains(&name) {
-                preloaded_functions.push(name);
-            }
-        }
-    }
-
-    // Collect preloaded classes in declaration order
-    let mut preloaded_classes: Vec<String> = Vec::new();
-    for k in &vm.class_order {
-        if !existing_classes.contains(k) {
-            if let Some(c) = vm.classes.get(k) {
-                let name = String::from_utf8_lossy(c.name.as_bytes()).into_owned();
-                if !preloaded_classes.contains(&name) {
-                    preloaded_classes.push(name);
-                }
-            }
-        }
-    }
-    for (k, c) in &vm.classes {
-        if !existing_classes.contains(k) {
-            let name = String::from_utf8_lossy(c.name.as_bytes()).into_owned();
-            if !preloaded_classes.contains(&name) {
-                preloaded_classes.push(name);
-            }
-        }
-    }
-
-    // Collect preloaded scripts
-    let mut preloaded_scripts: Vec<String> = Vec::new();
-    preloaded_scripts.push(real_str.clone());
-    for s in &vm.included {
-        let s_str = String::from_utf8_lossy(s.as_bytes()).into_owned();
-        if !existing_scripts.contains(s) && !preloaded_scripts.contains(&s_str) {
-            preloaded_scripts.push(s_str);
-        }
-    }
-    GLOBAL_CACHE.with(|c| {
-        for s in c.borrow().scripts.keys() {
-            if !existing_cached_scripts.contains(s) && !preloaded_scripts.contains(s) {
-                preloaded_scripts.push(s.clone());
-            }
-        }
-    });
-
-    // Ensure all preloaded scripts are cached in GLOBAL_CACHE
-    for s_path in &preloaded_scripts {
-        GLOBAL_CACHE.with(|c| {
-            let mut cache = c.borrow_mut();
-            if !cache.is_cached(s_path) {
-                let p = std::path::Path::new(s_path);
-                if let Ok(s_src) = std::fs::read(p) {
-                    let mtime = std::fs::metadata(p)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-                    let p_z = ZStr::from(p.as_os_str().as_bytes());
-                    if let Ok(CompileOutcome::Ok(unit)) =
-                        vm.compile_source_default(Rc::from(s_src.clone()), &p_z, false, true)
-                    {
-                        cache.insert(s_path.clone(), mtime, s_src.len() + 1024, now, unit);
-                    }
-                }
-            }
-        });
-    }
-
+    // The preload request compiled the scripts through the compile hook,
+    // which cached them (the cache is per thread, as preloading is).
     // Calculate memory consumption
     let base_preload_mem = 16384;
     let script_mem: usize = GLOBAL_CACHE.with(|c| {
@@ -802,7 +755,7 @@ fn opcache_compile_hook(
     filename: &ZStr,
     skip_shebang: bool,
 ) -> VmResult<CompileOutcome> {
-    maybe_run_preload(vm);
+    sync_preload_stats();
 
     let enable = vm.ini_bool("opcache.enable");
     let enable_cli = vm.ini_bool("opcache.enable_cli");
@@ -817,6 +770,11 @@ fn opcache_compile_hook(
     let path = std::path::Path::new(std::ffi::OsStr::from_bytes(filename.as_bytes()));
     let realpath = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let real_str = realpath.to_string_lossy().into_owned();
+
+    // A blacklisted script is compiled, never cached (`persistent_compile_file`).
+    if blacklist(vm).is_some_and(|l| l.is_blacklisted(realpath.as_os_str().as_bytes())) {
+        return vm.compile_source_default(src, filename, false, skip_shebang);
+    }
 
     let mtime_sec = std::fs::metadata(&realpath)
         .and_then(|m| m.modified())
@@ -906,6 +864,8 @@ fn opcache_compile_hook(
     let res = vm.compile_source_default(src.clone(), filename, false, skip_shebang)?;
     if let CompileOutcome::Ok(ref unit) = res {
         if !file_cache_only {
+            // `cache_script_in_shared_memory()`.
+            vm_accel_log(vm, AccelLog::Info, &format!("Cached script '{real_str}'"));
             GLOBAL_CACHE.with(|c| {
                 c.borrow_mut()
                     .insert(real_str, mtime_sec, src.len() + 1024, now_sec, unit.clone());
@@ -930,12 +890,17 @@ fn opcache_reset(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     if !enabled || vm.ini_bool("opcache.file_cache_only") {
         return Ok(Value::Bool(false));
     }
+    // `zend_accel_schedule_restart(ACCEL_RESTART_USER)`, which does not
+    // schedule (or log) a pending restart twice.
+    if !RESTART_PENDING.with(|r| r.replace(true)) {
+        vm_accel_log(vm, AccelLog::Debug, "Restart Scheduled! Reason: user");
+    }
     GLOBAL_CACHE.with(|c| c.borrow_mut().reset());
     Ok(Value::Bool(true))
 }
 
 fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    maybe_run_preload(vm);
+    sync_preload_stats();
     let include_scripts = if a.has(0) { a.bool(0) } else { true };
     let enabled = is_opcache_enabled(vm);
     let file_cache_only = vm.ini_bool("opcache.file_cache_only");
@@ -1287,7 +1252,7 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    maybe_run_preload(vm);
+    sync_preload_stats();
     let filename_z = a.str(0);
 
     let enabled = vm.ini_bool("opcache.enable")
@@ -1635,15 +1600,24 @@ fn opcache_get_configuration(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         .make_mut()
         .insert(ZStr::from("version"), Value::Array(ver));
 
+    // `add_blacklist_path` over `accel_blacklist`.
+    let mut entries = ZArray::new();
+    if let Some(list) = blacklist(vm) {
+        for entry in &list.entries {
+            let _ = entries
+                .make_mut()
+                .push(Value::Str(ZStr::from(entry.as_str())));
+        }
+    }
     config
         .make_mut()
-        .insert(ZStr::from("blacklist"), Value::Array(ZArray::new()));
+        .insert(ZStr::from("blacklist"), Value::Array(entries));
 
     Ok(Value::Array(config))
 }
 
 fn opcache_is_script_cached(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    maybe_run_preload(vm);
+    sync_preload_stats();
     let filename_z = a.str(0);
     let enabled = is_opcache_enabled(vm);
     if !enabled || vm.ini_bool("opcache.file_cache_only") {

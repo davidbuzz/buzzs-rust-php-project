@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::startup::Reporter;
+use php_ext_opcache::AccelLog;
 use php_vm::{PersistentDeclarations, Throw, Vm};
 use std::cell::RefCell;
 use std::ffi::CString;
@@ -29,25 +30,40 @@ pub(crate) fn startup(cfg: &Config) -> Result<(), i32> {
         return Ok(());
     }
     let reporter = Reporter::new(cfg);
+    // `zend_accel_error()`: opcache's own log, not a PHP error.
+    let verbosity = cfg
+        .get("opcache.log_verbosity_level")
+        .map_or(1, |v| php_support::ini::parse_quantity(v.as_bytes()).0);
+    let error_log = cfg.get("opcache.error_log").unwrap_or_default().to_string();
+    let accel_log = |kind, message: &str| {
+        php_ext_opcache::accel_log(verbosity, &error_log, kind, message);
+    };
+    // `ACCEL_LOG_FATAL` exits with -2.
+    let accel_fatal = |message: &str| {
+        accel_log(AccelLog::Fatal, message);
+        Err(254)
+    };
     if cfg
         .get("opcache.file_cache_only")
         .is_some_and(|v| php_support::ini::parse_bool(v.as_bytes()))
     {
-        reporter.report(2, "Preloading doesn't work in \"file_cache_only\" mode");
+        accel_log(
+            AccelLog::Warning,
+            "Preloading doesn't work in \"file_cache_only\" mode",
+        );
         return Ok(());
     }
     // SAFETY: geteuid has no pointer arguments or side effects.
     let uid = unsafe { libc::geteuid() };
     if let Some(user) = cfg.get("opcache.preload_user").filter(|u| !u.is_empty()) {
         if uid != 0 {
-            reporter.report(
-                2,
+            accel_log(
+                AccelLog::Warning,
                 "\"opcache.preload_user\" is ignored because the current user is not \"root\"",
             );
         } else {
             let Ok(name) = CString::new(user) else {
-                reporter.report(1, &format!("Preloading failed to getpwnam(\"{user}\")"));
-                return Err(1);
+                return accel_fatal(&format!("Preloading failed to getpwnam(\"{user}\")"));
             };
             // SAFETY: name is NUL-terminated; copy the numeric uid before
             // another libc lookup can overwrite the static passwd entry.
@@ -56,8 +72,7 @@ pub(crate) fn startup(cfg: &Config) -> Result<(), i32> {
                 (!entry.is_null()).then(|| (*entry).pw_uid)
             };
             let Some(target) = target else {
-                reporter.report(1, &format!("Preloading failed to getpwnam(\"{user}\")"));
-                return Err(1);
+                return accel_fatal(&format!("Preloading failed to getpwnam(\"{user}\")"));
             };
             if target != uid {
                 // A cross-user preload requires a child-to-parent declaration
@@ -95,7 +110,7 @@ pub(crate) fn startup(cfg: &Config) -> Result<(), i32> {
     let mut vm = crate::new_vm(&startup_config);
     crate::request_startup(&mut vm);
     let path = php_runtime::ZStr::from(crate::real_path(path.as_bytes()));
-    let result = vm.run_main(&source, &path);
+    let result = vm.run_preload(&source, &path);
     let persistent = vm.finish_preload(result)?;
     DECLARATIONS.with(|d| *d.borrow_mut() = Some(Rc::new(persistent)));
     Ok(())

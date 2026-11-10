@@ -5,6 +5,7 @@
 //! ext/opcache/zend_file_cache.c, ext/opcache/zend_persist.c,
 //! ext/opcache/jit/zend_jit.c, ext/opcache/jit/zend_jit_trace.c
 
+pub mod blacklist;
 pub mod file_cache;
 
 use std::collections::HashMap;
