@@ -248,6 +248,8 @@ struct CommandLine {
     script_file: Option<Vec<u8>>,
     /// `-i`, `-m`, `-v`.
     info: Option<u8>,
+    /// `-a`: "Interactive mode enabled" is printed (nothing else changes).
+    interactive: bool,
     /// Index of the first non-option argument.
     optind: usize,
 }
@@ -258,6 +260,7 @@ fn parse_command_line(argv: &[Vec<u8>]) -> CommandLine {
     let mut g = GetOpt::new(argv, OPTIONS, false);
     while let Some((c, v)) = g.next_opt() {
         match u8::try_from(c).unwrap_or(0) {
+            b'a' => cl.interactive = true,
             b'C' => cl.no_chdir = true,
             b'f' => {
                 cl.script_file = v;
@@ -409,6 +412,9 @@ fn run(argv: &[Vec<u8>]) -> i32 {
     let mut source: Option<Vec<u8>> = None;
     if !cgi && !skip_getopt {
         cl = parse_command_line(argv);
+        if cl.interactive {
+            out(b"Interactive mode enabled\n\n");
+        }
         match cl.info {
             Some(b'v') => {
                 out(version_banner().as_bytes());
@@ -439,9 +445,41 @@ fn run(argv: &[Vec<u8>]) -> i32 {
     }
 
     match cl.behavior {
-        Behavior::Lint => return lint(&cfg, info.path_translated.as_deref()),
-        Behavior::Highlight | Behavior::Strip if source.is_none() => {
-            let path = info.path_translated.clone().unwrap_or_default();
+        Behavior::Lint => {
+            // `goto do_repeat`: the arguments after the first file are
+            // linted in turn (`-f` names the first one).
+            let mut files = vec![info.path_translated.clone()];
+            if !cgi {
+                let mut optind = cl.optind;
+                while argv.len() > optind + 1 {
+                    optind += 1;
+                    files.push(Some(argv[optind].clone()));
+                }
+            }
+            let mut status = 0;
+            for f in files {
+                match lint(&cfg, f.as_deref()) {
+                    Some(0) => {}
+                    Some(_) => status = 255,
+                    None => return 255,
+                }
+            }
+            return status;
+        }
+        Behavior::Highlight | Behavior::Strip
+            if source.is_none()
+                && info.path_translated.as_deref().is_none_or(|p| {
+                    std::fs::File::open(std::ffi::OsStr::from_bytes(p)).is_ok()
+                }) =>
+        {
+            // Standard input when no file is named ("Standard input code").
+            let path = match info.path_translated.clone() {
+                Some(p) => p,
+                None => match stdin_to_temp() {
+                    Some(p) => p,
+                    None => Vec::new(),
+                },
+            };
             let mut code = if cl.behavior == Behavior::Highlight {
                 b"<?php highlight_file('".to_vec()
             } else {
@@ -503,6 +541,8 @@ fn run(argv: &[Vec<u8>]) -> i32 {
     };
     let prepared = new_prepared_vm(&cfg, ini);
     let (_, vm) = php_cli_server::sapi::run_request(prepared, &ctx, &server_cfg, false);
+    // The copy of standard input `stdin_to_temp` may have made.
+    let _ = std::fs::remove_file(stdin_temp_path());
     let _ = std::io::stdout().flush();
     // The process exits next: skip the VM's destruction.
     std::mem::forget(vm);
@@ -660,19 +700,27 @@ fn new_vm(cfg: &Config) -> Vm {
 }
 
 /// `-l`: `php_lint_script()`; "No syntax errors detected in <file>" or
-/// "Errors parsing <file>" (exit status 255).
-fn lint(cfg: &Config, path: Option<&[u8]>) -> i32 {
-    let Some(path) = path else {
-        out(b"No input file specified.\n");
-        return 255;
-    };
-    let Ok(src) = std::fs::read(std::ffi::OsStr::from_bytes(path)) else {
-        out(b"No input file specified.\n");
-        return 255;
+/// "Errors parsing <file>" (`Some(255)`). Without a file standard input is
+/// linted as "Standard input code"; a file that cannot be opened prints
+/// "No input file specified." and ends the run (`None`).
+fn lint(cfg: &Config, path: Option<&[u8]>) -> Option<i32> {
+    let (src, shown) = match path {
+        Some(path) => {
+            let Ok(src) = std::fs::read(std::ffi::OsStr::from_bytes(path)) else {
+                out(b"No input file specified.\n");
+                return None;
+            };
+            (src, path.to_vec())
+        }
+        None => {
+            let mut src = Vec::new();
+            let _ = std::io::stdin().lock().read_to_end(&mut src);
+            (src, b"Standard input code".to_vec())
+        }
     };
     let mut vm = new_vm(cfg);
-    let ok = vm.lint_script(&src, &ZStr::from(path));
-    let shown = String::from_utf8_lossy(path);
+    let ok = vm.lint_script(&src, &ZStr::from(shown.as_slice()));
+    let shown = String::from_utf8_lossy(&shown);
     let verdict = if ok {
         format!("No syntax errors detected in {shown}\n")
     } else {
@@ -682,11 +730,23 @@ fn lint(cfg: &Config, path: Option<&[u8]>) -> i32 {
     let _ = vm.shutdown(Ok(()));
     let _ = std::io::stdout().flush();
     std::mem::forget(vm);
-    if ok {
-        0
-    } else {
-        255
-    }
+    Some(if ok { 0 } else { 255 })
+}
+
+/// Where [`stdin_to_temp`] puts standard input.
+fn stdin_temp_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("php-cgi-stdin-{}", std::process::id()))
+}
+
+/// Standard input copied to a temporary file, for `-s`/`-w` without a file
+/// (C reads the stream directly; `highlight_file()` and
+/// `php_strip_whitespace()` take a path).
+fn stdin_to_temp() -> Option<Vec<u8>> {
+    let mut src = Vec::new();
+    std::io::stdin().lock().read_to_end(&mut src).ok()?;
+    let path = stdin_temp_path();
+    std::fs::write(&path, src).ok()?;
+    Some(path.into_os_string().into_vec())
 }
 
 #[cfg(test)]
