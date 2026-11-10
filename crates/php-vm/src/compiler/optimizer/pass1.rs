@@ -595,6 +595,9 @@ fn bin2hex(s: &[u8]) -> Vec<u8> {
 
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
 fn evaluate_pure_builtin(name: &[u8], args: &[&Value]) -> Option<Value> {
+    if super::is_disabled_function(name) {
+        return None;
+    }
     match name {
         b"strlen" => {
             if args.len() == 1 {
