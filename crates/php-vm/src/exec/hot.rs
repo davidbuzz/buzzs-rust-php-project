@@ -1074,11 +1074,13 @@ fn step_cond(
     Some(jump_of(x, y, mask))
 }
 
-/// `+`, `-` and `*` of two floats, or of two ints whose result does not
-/// overflow: the operators of nearly all numeric loops, chosen by direct
-/// tests of the operator instead of [`num_bin`]'s two-level dispatch over
-/// [`BinKind`] and [`BinaryOp`]. The same results as `num_bin`; `None` for
-/// every other case (mixed kinds, an overflow, other operators), which
+/// `+`, `-`, `*` and `/` (by anything but zero) of two floats or of an
+/// int and a float (php-src's `(double)` widening of the int), and `+`,
+/// `-`, `*` of two ints whose result does not overflow: the operators of
+/// nearly all numeric loops, chosen by direct tests of the operator
+/// instead of [`num_bin`]'s two-level dispatch over [`BinKind`] and
+/// [`BinaryOp`]. The same results as `num_bin`; `None` for every other
+/// case (an overflow, a zero divisor, an int `/`, other operators), which
 /// `num_bin` then decides (out of line: [`bin_tmp_other`] & co.).
 ///
 /// The result is a [`Num`], not a `Value`: the callers store it with
@@ -1089,20 +1091,11 @@ fn step_cond(
 #[inline(always)]
 #[allow(clippy::inline_always)]
 fn arith_num(op: BinKind, x: Num, y: Num) -> Option<Num> {
-    match (x, y) {
-        (Num::Float(p), Num::Float(q)) => {
-            if matches!(op, BinKind::Arith(BinaryOp::Mul)) {
-                Some(Num::Float(p * q))
-            } else if matches!(op, BinKind::Arith(BinaryOp::Add)) {
-                Some(Num::Float(p + q))
-            } else if matches!(op, BinKind::Arith(BinaryOp::Sub)) {
-                Some(Num::Float(p - q))
-            } else {
-                None
-            }
-        }
+    #[allow(clippy::cast_precision_loss)] // php-src's (double) widening
+    let (p, q) = match (x, y) {
+        (Num::Float(p), Num::Float(q)) => (p, q),
         (Num::Int(p), Num::Int(q)) => {
-            if matches!(op, BinKind::Arith(BinaryOp::Add)) {
+            return if matches!(op, BinKind::Arith(BinaryOp::Add)) {
                 p.checked_add(q).map(Num::Int)
             } else if matches!(op, BinKind::Arith(BinaryOp::Sub)) {
                 p.checked_sub(q).map(Num::Int)
@@ -1110,9 +1103,23 @@ fn arith_num(op: BinKind, x: Num, y: Num) -> Option<Num> {
                 p.checked_mul(q).map(Num::Int)
             } else {
                 None
-            }
+            };
         }
-        _ => None,
+        (Num::Int(p), Num::Float(q)) => (p as f64, q),
+        (Num::Float(p), Num::Int(q)) => (p, q as f64),
+    };
+    if matches!(op, BinKind::Arith(BinaryOp::Mul)) {
+        Some(Num::Float(p * q))
+    } else if matches!(op, BinKind::Arith(BinaryOp::Add)) {
+        Some(Num::Float(p + q))
+    } else if matches!(op, BinKind::Arith(BinaryOp::Sub)) {
+        Some(Num::Float(p - q))
+    } else if matches!(op, BinKind::Arith(BinaryOp::Div)) && q != 0.0 {
+        // `div_function` with a double operand; a zero divisor (also
+        // -0.0) throws "Division by zero" on the generic path.
+        Some(Num::Float(p / q))
+    } else {
+        None
     }
 }
 
@@ -1675,19 +1682,16 @@ mod tests {
                     let kind = BinKind::Arith(op);
                     let slow = bits(num_bin(kind, x, y));
                     // The fast path answers only where num_bin does, and the
-                    // same; `+`, `-`, `*` of two floats always.
+                    // same; `+`, `-`, `*` and `/` by a non-zero divisor of a
+                    // float and a float or an int always.
+                    let floats = matches!(x, Num::Float(_)) || matches!(y, Num::Float(_));
                     match arith_num(kind, x, y) {
                         Some(r) => assert_eq!(bits(Some(num_value(r))), slow),
                         None => assert!(
-                            !matches!(
-                                (x, y, op),
-                                (
-                                    Num::Float(_),
-                                    Num::Float(_),
-                                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul
-                                )
-                            ),
-                            "float {op:?} declined"
+                            !(floats
+                                && (matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+                                    || (op == BinaryOp::Div && y.as_f64() != 0.0))),
+                            "{op:?} of a float declined"
                         ),
                     }
                 }
