@@ -364,6 +364,11 @@ echo "end\n";
     // The handles: the generator #1, the iterator's #2, the yielded #3;
     // freed in the order #2, #1, #3, so the next object takes #3.
     let handles = "object(stdClass)#3 (0) {\n}\nobject(stdClass)#3 (0) {\n}\n";
+    // A new request's object store (`zend_objects_store_init`), as the
+    // script gets in its own `php` process: the store is per thread, and
+    // the handles the script above freed would otherwise be reused first,
+    // in the order it freed them (the next object then took #4).
+    php_vm::object::reset_store();
     assert_eq!(
         run(r#"<?php
 function o() { yield new stdClass; throw new Exception("x"); }
