@@ -413,7 +413,7 @@ fn assign_hit(f: &mut Frame, pid: PlaceId, val: Operand, dst: Option<u32>) -> bo
 /// allows one) and the bitwise ops of two ints. Returns the new value, or
 /// `None`, having changed nothing.
 #[inline(always)]
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)] // PHP's int-to-float overflow
 fn assign_op_in(
     od: &ObjectData,
     slot: usize,
