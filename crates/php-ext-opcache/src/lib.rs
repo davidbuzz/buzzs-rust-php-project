@@ -855,9 +855,7 @@ fn opcache_compile_hook(
         if let Some(unit) = hit {
             unit.clear_runtime_caches();
             if vm.ini_bool("opcache.record_warnings") {
-                for (level, msg, line) in &unit.warnings {
-                    vm.error_at(*level, msg, filename, *line)?;
-                }
+                vm.emit_compile_warnings(&unit, filename)?;
             }
             return Ok(CompileOutcome::Ok(unit));
         }

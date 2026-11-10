@@ -232,8 +232,16 @@ impl Vm {
                 u
             }
             Err(e) => {
-                for (level, msg, line) in &e.warnings {
-                    self.error_at(*level, msg, filename, *line)?;
+                // `compile_file` records the diagnostics of a compilation;
+                // a fatal error emits them first, with the user error
+                // handler disabled (Zend/zend.c, "Emit any delayed error
+                // before handling fatal error").
+                if is_eval {
+                    for (level, msg, line) in &e.warnings {
+                        self.error_at(*level, msg, filename, *line)?;
+                    }
+                } else {
+                    self.emit_warnings_without_handler(&e.warnings, filename);
                 }
                 self.report_compile_error(&e.message, filename, e.line, e.is_parse);
                 return Ok(CompileOutcome::Fatal);
@@ -244,9 +252,6 @@ impl Vm {
                 .halt_offsets
                 .insert(filename.clone(), i64::try_from(off).unwrap_or(0));
         }
-        for (level, msg, line) in &unit.warnings {
-            self.error_at(*level, msg, filename, *line)?;
-        }
         if let Some(program) = kept {
             self.parsed_sources
                 .borrow_mut()
@@ -256,7 +261,76 @@ impl Vm {
         if declares_anything(&unit) {
             self.units.push(unit.clone());
         }
+        if is_eval {
+            for (level, msg, line) in &unit.warnings {
+                self.error_at(*level, msg, filename, *line)?;
+            }
+        } else {
+            self.emit_compile_warnings(&unit, filename)?;
+        }
         Ok(CompileOutcome::Ok(unit))
+    }
+
+    /// Emits the diagnostics recorded while compiling a file
+    /// (`zend_emit_recorded_errors` after `compile_file`, or opcache's
+    /// replay of a cached script's warnings).
+    ///
+    /// php-src binds a file's top-level functions while it compiles, so:
+    /// - a function that is already declared (or declared twice in the
+    ///   file) is a compile-time fatal error, before which the recorded
+    ///   diagnostics are emitted with the user error handler disabled;
+    /// - an exception thrown by the user error handler leaves the file's
+    ///   functions and early-bound classes declared, though the file does
+    ///   not run (GH-17422).
+    pub fn emit_compile_warnings(&mut self, unit: &CompiledUnit, filename: &ZStr) -> VmResult<()> {
+        if unit.warnings.is_empty() {
+            return Ok(());
+        }
+        if self.hoisted_function_conflict(unit) {
+            self.emit_warnings_without_handler(&unit.warnings, filename);
+            return Ok(());
+        }
+        for (level, msg, line) in &unit.warnings {
+            if let Err(t) = self.error_at(*level, msg, filename, *line) {
+                if matches!(t, Throw::Exception(_)) {
+                    self.declare_hoisted(unit)?;
+                }
+                return Err(t);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether declaring `unit`'s hoisted functions would fail with
+    /// "Cannot redeclare function".
+    fn hoisted_function_conflict(&self, unit: &CompiledUnit) -> bool {
+        let funcs = unit.decls.functions.borrow();
+        let mut seen: Vec<ZStr> = Vec::new();
+        for &i in &unit.hoisted_functions {
+            let Some(f) = funcs.get(i as usize) else {
+                continue;
+            };
+            let lc = f.name.to_ascii_lowercase();
+            if self.functions.contains_key(&lc) || seen.contains(&lc) {
+                return true;
+            }
+            seen.push(lc);
+        }
+        false
+    }
+
+    /// Emits diagnostics with the user error handler disabled, as php-src
+    /// does for the recorded ones before a fatal error.
+    #[cold]
+    fn emit_warnings_without_handler(&mut self, warnings: &[(i64, String, u32)], filename: &ZStr) {
+        if warnings.is_empty() {
+            return;
+        }
+        let handlers = std::mem::take(&mut self.error_handlers);
+        for (level, msg, line) in warnings {
+            let _ = self.error_at(*level, msg, filename, *line);
+        }
+        self.error_handlers = handlers;
     }
 
     /// Declares the hoisted functions and classes of a unit.
