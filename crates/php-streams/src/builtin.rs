@@ -15,15 +15,19 @@ pub fn plain_wrapper() -> Rc<dyn Wrapper> {
     PLAIN.with(Rc::clone)
 }
 
-/// Registers `https` (ext/openssl's MINIT runs first in PHP), then
-/// `php`, `file`, `glob`, `data`, `http` and the standard filters.
+/// Registers `https` and `ftps` (ext/openssl's MINIT runs first in PHP),
+/// then `php`, `file`, `glob`, `data`, `http`, `ftp` and the standard
+/// filters.
 pub(crate) fn register_builtin(wrappers: &mut WrapperTable, filters: &mut FilterRegistry) {
     let http: Rc<dyn Wrapper> = Rc::new(crate::http::HttpWrapper);
+    let ftp: Rc<dyn Wrapper> = Rc::new(crate::ftp::FtpWrapper);
     wrappers.add(b"https", Rc::clone(&http));
+    wrappers.add(b"ftps", Rc::clone(&ftp));
     wrappers.add(b"php", Rc::new(crate::php_wrapper::PhpWrapper));
     wrappers.add(b"file", plain_wrapper());
     wrappers.add(b"glob", Rc::new(crate::glob_wrapper::GlobWrapper));
     wrappers.add(b"data", Rc::new(crate::memory::DataWrapper));
     wrappers.add(b"http", http);
+    wrappers.add(b"ftp", ftp);
     crate::filter::standard::register_standard_filters(filters);
 }

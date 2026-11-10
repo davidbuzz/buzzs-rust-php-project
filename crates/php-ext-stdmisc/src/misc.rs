@@ -678,6 +678,27 @@ fn phpcredits(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `MAXPATHLEN`.
 const MAXPATHLEN: usize = 4096;
 
+/// `strptime(string $timestamp, string $format): array|false`
+/// (ext/standard/datetime.c, deprecated since 8.2).
+#[allow(clippy::unnecessary_wraps)]
+fn strptime(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let timestamp = a.str(0);
+    let format = a.str(1);
+    let Some(parsed) = php_stdmisc::datetime::strptime(timestamp.as_bytes(), format.as_bytes())
+    else {
+        return Ok(Value::Bool(false));
+    };
+    let mut t = php_runtime::HashTable::new();
+    for (name, v) in parsed.fields {
+        t.insert_str_raw(ZStr::from(name), Value::Int(v));
+    }
+    t.insert_str_raw(
+        ZStr::from("unparsed"),
+        Value::Str(ZStr::from(parsed.unparsed)),
+    );
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
 /// `dl($extension_filename)`: phprust links its extensions statically, so
 /// after php-src's checks every load fails like a missing shared object.
 fn dl(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -759,5 +780,13 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     .function_static("assert_options(int $option, mixed $value = UNKNOWN): mixed", assert_options)
     .function_static("phpinfo(int $flags = INFO_ALL): true", phpinfo)
     .function_static("phpcredits(int $flags = CREDITS_ALL): true", phpcredits)
-    .function_static("dl(string $extension_filename): bool", dl);
+    .function_static("dl(string $extension_filename): bool", dl)
+    .function_static(
+        "strptime(string $timestamp, string $format): array|false",
+        strptime,
+    )
+    .deprecated(
+        "8.2",
+        "use date_parse_from_format() (for locale-independent parsing), or IntlDateFormatter::parse() (for locale-dependent parsing) instead",
+    );
 }

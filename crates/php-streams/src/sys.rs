@@ -10,6 +10,40 @@ use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
+/// The `MDTM` time conversion of the `ftp://` wrapper's `url_stat`
+/// (`ext/standard/ftp_fopen_wrapper.c`): the broken-down UTC time
+/// `[year, month (1-12), day, hour, minute, second]` corrected by the
+/// current offset between `mktime(gmtime(now))` and `now`, then passed
+/// through `mktime()` (local time, DST from the corrected `gmtime`).
+/// `None` when `gmtime_r()` fails.
+pub fn ftp_mdtm_mktime(fields: [i32; 6]) -> Option<i64> {
+    // SAFETY: `time(NULL)` only returns the clock.
+    let stamp = unsafe { libc::time(std::ptr::null_mut()) };
+    // SAFETY: `libc::tm` is plain old data; all-zero is a valid value.
+    let mut gmt: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers reference live, properly aligned locals.
+    if unsafe { libc::gmtime_r(&stamp, &mut gmt) }.is_null() {
+        return None;
+    }
+    gmt.tm_isdst = -1;
+    // SAFETY: `gmt` is a valid, initialised `tm` that mktime may normalise.
+    let local = unsafe { libc::mktime(&mut gmt) };
+    // SAFETY: `libc::tm` is plain old data; all-zero is a valid value.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    tm.tm_year = fields[0].wrapping_sub(1900);
+    tm.tm_mon = fields[1].wrapping_sub(1);
+    tm.tm_mday = fields[2];
+    tm.tm_hour = fields[3];
+    tm.tm_min = fields[4];
+    // `tm.tm_sec += (long)(stamp - mktime(gmt))` stores into an int.
+    #[allow(clippy::cast_possible_truncation)]
+    let offset = stamp.wrapping_sub(local) as i32;
+    tm.tm_sec = fields[5].wrapping_add(offset);
+    tm.tm_isdst = gmt.tm_isdst;
+    // SAFETY: `tm` is a valid, initialised `tm` that mktime may normalise.
+    Some(unsafe { libc::mktime(&mut tm) })
+}
+
 /// Returns `strerror(errno)` (the text PHP prints after "Failed to open
 /// stream: ").
 pub fn strerror(errno: i32) -> String {

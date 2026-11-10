@@ -136,7 +136,7 @@ pub fn set_env(env: Rc<dyn HttpEnv>) {
     ENV.with(|e| *e.borrow_mut() = env);
 }
 
-fn env() -> Rc<dyn HttpEnv> {
+pub(crate) fn env() -> Rc<dyn HttpEnv> {
     ENV.with(|e| Rc::clone(&e.borrow()))
 }
 
@@ -434,6 +434,10 @@ impl HeaderInfo {
 
 /// State shared by every hop of one request.
 struct Request<'a> {
+    /// `wrapper->wops->label`: `"http"`, or `"ftp"` when the `ftp://`
+    /// wrapper proxies a read through HTTP (selects the `proxy` and
+    /// `timeout` options).
+    label: &'static str,
     mode: &'a str,
     options: u32,
     context: Option<&'a ContextRef>,
@@ -450,6 +454,12 @@ impl Request<'_> {
     fn opt(&self, name: &str) -> Option<Value> {
         self.context
             .and_then(|c| c.borrow().get("http", name).cloned())
+    }
+
+    /// `php_stream_context_get_option(context, wrapper->wops->label, name)`.
+    fn wrapper_opt(&self, name: &str) -> Option<Value> {
+        self.context
+            .and_then(|c| c.borrow().get(self.label, name).cloned())
     }
 
     /// `php_stream_wrapper_log_warn()`.
@@ -504,7 +514,23 @@ pub fn open_url(
     options: u32,
     context: Option<&ContextRef>,
 ) -> Result<Stream, OpenError> {
+    open_url_as(LABEL, path, mode, options, context)
+}
+
+/// [`open_url`] on behalf of the wrapper labelled `label` (the `ftp://`
+/// wrapper proxying a read through HTTP).
+///
+/// # Errors
+/// As [`open_url`].
+pub fn open_url_as(
+    label: &'static str,
+    path: &[u8],
+    mode: &str,
+    options: u32,
+    context: Option<&ContextRef>,
+) -> Result<Stream, OpenError> {
     let mut req = Request {
+        label,
         mode,
         options,
         context,
@@ -537,7 +563,7 @@ struct Target {
 /// Picks the transport (`tcp://host:port`, `ssl://...` or the proxy).
 fn target(req: &mut Request<'_>, resource: &mut Uri) -> Option<Target> {
     let scheme = resource.scheme.clone().unwrap_or_default();
-    let proxy = match req.opt("proxy") {
+    let proxy = match req.wrapper_opt("proxy") {
         Some(Value::Str(s)) if !s.is_empty() => Some(s),
         _ => None,
     };
@@ -587,7 +613,7 @@ fn target(req: &mut Request<'_>, resource: &mut Uri) -> Option<Target> {
 /// The `timeout` option (`default_socket_timeout` otherwise); `Err` after
 /// logging when it is too large. `None` waits forever.
 fn timeout(req: &mut Request<'_>) -> Result<Option<Duration>, ()> {
-    let secs = if let Some(v) = req.opt("timeout") {
+    let secs = if let Some(v) = req.wrapper_opt("timeout") {
         let d = v.to_double();
         if d > TIMEOUT_MAX {
             req.log(
