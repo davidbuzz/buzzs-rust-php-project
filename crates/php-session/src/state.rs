@@ -327,10 +327,8 @@ pub(crate) fn clear_session_array(h: &mut dyn SessionHost) {
 
 /// `php_session_encode()`.
 pub(crate) fn encode(h: &mut dyn SessionHost) -> Option<Vec<u8>> {
-    if h.session().status != SessionStatus::Active {
-        warn(h, ErrorLevel::Warning, "Cannot encode non-existent session");
-        return None;
-    }
+    // `php_session_encode()`: only `IF_SESSION_VARS()` is checked, so
+    // `$_SESSION` still encodes after `session_write_close()`.
     let Some(vars) = session_array(h) else {
         warn(h, ErrorLevel::Warning, "Cannot encode non-existent session");
         return None;

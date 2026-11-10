@@ -817,7 +817,9 @@ pub fn session_cache_expire(h: &mut dyn SessionHost, value: Option<i64>) -> RtRe
 
 /// `session_encode(): string|false`.
 pub fn session_encode(h: &mut dyn SessionHost) -> RtResult<Value> {
-    if h.session().status != SessionStatus::Active {
+    // `php_session_encode()`: `IF_SESSION_VARS()`, not the session status,
+    // so `$_SESSION` still encodes after `session_write_close()`.
+    if state::session_array(h).is_none() {
         warn(h, ErrorLevel::Warning, "Cannot encode non-existent session");
         return finish(h, Value::Bool(false));
     }
