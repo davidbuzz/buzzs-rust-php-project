@@ -546,8 +546,27 @@ pub(crate) fn literals_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
+/// The array temporary an array-literal build step adds to (`ZEND_ADD_ARRAY_ELEMENT`,
+/// `ZEND_ADD_ARRAY_UNPACK`): a raw tmp index rather than an [`Operand`], so
+/// [`for_each_operand_mut`] does not visit it. Every pass that counts, marks
+/// or renumbers temporaries must include it.
+pub(crate) fn array_build_tmp_mut(op: &mut Op) -> Option<&mut u32> {
+    match op {
+        Op::ArrayAdd { arr, .. }
+        | Op::ArrayAddRef { arr, .. }
+        | Op::ArrayUnpack { arr, .. }
+        | Op::ConstArrayUnpack { arr, .. } => Some(arr),
+        _ => None,
+    }
+}
+
 pub(crate) fn count_tmp_uses(op_array: &OpArray, counts: &mut [u32]) {
     for op in &op_array.ops {
+        if let Some(t) = array_build_tmp_mut(&mut op.clone()) {
+            if let Some(c) = counts.get_mut(*t as usize) {
+                *c += 1;
+            }
+        }
         let mut op_clone = op.clone();
         for_each_operand_mut(&mut op_clone, |operand| match operand {
             Operand::Tmp(t) | Operand::TmpKeep(t) => {

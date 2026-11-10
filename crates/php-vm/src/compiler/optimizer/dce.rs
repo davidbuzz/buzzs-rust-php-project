@@ -250,6 +250,12 @@ fn count_non_free_uses(op_array: &OpArray, counts: &mut [u32]) {
             continue;
         }
         let mut op_clone = op.clone();
+        // Adding an element can throw or warn, so it keeps its array alive.
+        if let Some(t) = super::array_build_tmp_mut(&mut op_clone) {
+            if let Some(c) = counts.get_mut(*t as usize) {
+                *c += 1;
+            }
+        }
         for_each_operand_mut(&mut op_clone, |operand| match operand {
             Operand::Tmp(t) | Operand::TmpKeep(t) => {
                 if let Some(c) = counts.get_mut(*t as usize) {

@@ -113,6 +113,9 @@ pub(crate) fn compact_tmps(op_array: &mut OpArray) -> bool {
         if let Some(t) = def_tmp(op) {
             mark_tmp(t);
         }
+        if let Some(t) = super::array_build_tmp_mut(&mut op_clone) {
+            mark_tmp(*t);
+        }
     }
 
     for place in &op_array.places {
@@ -152,6 +155,9 @@ pub(crate) fn compact_tmps(op_array: &mut OpArray) -> bool {
             Operand::Tmp(t) | Operand::TmpKeep(t) => remap_tmp(t),
             _ => {}
         });
+        if let Some(t) = super::array_build_tmp_mut(op) {
+            remap_tmp(t);
+        }
 
         match op {
             Op::Move { dst, .. }
@@ -671,8 +677,12 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
     // Eliminate assignments to unread variables
     for op in &mut op_array.ops {
         match op {
+            // Reading a CV can raise "Undefined variable" (ZEND_ASSIGN with a CV
+            // operand), so an assignment of one is kept even when its target is
+            // never read.
             Op::AssignCv { cv, val, dst } => {
                 if (*cv as usize) >= num_param_cvs as usize
+                    && !matches!(val, Operand::Cv(_))
                     && read_counts.get(*cv as usize).copied().unwrap_or(0) == 0
                 {
                     *op = match dst {
@@ -691,6 +701,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray) -> bool {
                     if let PlaceBase::Cv(cv) = p.base {
                         if p.segs.is_empty()
                             && (cv as usize) >= num_param_cvs as usize
+                            && !matches!(val, Operand::Cv(_))
                             && read_counts.get(cv as usize).copied().unwrap_or(0) == 0
                         {
                             *op = match dst {
