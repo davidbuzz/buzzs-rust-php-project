@@ -335,13 +335,12 @@ fn drop_empty_foreach(op_array: &mut OpArray) -> bool {
         }
         let only_freed = op_array.ops.iter().enumerate().all(|(j, op)| {
             j == i
-                || match op {
-                    Op::FeFree { .. } => true,
+                || !matches!(
+                    op,
                     Op::FeReset { iter: x, .. }
                     | Op::FeFetch { iter: x, .. }
-                    | Op::FeFreeOnReturn { iter: x, .. } => *x != iter,
-                    _ => true,
-                }
+                    | Op::FeFreeOnReturn { iter: x, .. } if *x == iter
+                )
         });
         if !only_freed {
             continue;
