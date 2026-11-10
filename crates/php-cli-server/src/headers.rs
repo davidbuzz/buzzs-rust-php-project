@@ -146,11 +146,14 @@ impl SapiHeaders {
             remove_header(&mut self.headers, c_str(&line));
             return Ok(true);
         }
-        if line.iter().any(|&c| c == b'\n' || c == b'\r') {
-            return Err(HeaderError::NewLine);
-        }
-        if line.contains(&0) {
-            return Err(HeaderError::Nul);
+        // The first offending byte decides the warning, as in the C loop.
+        for &c in &line {
+            if c == b'\n' || c == b'\r' {
+                return Err(HeaderError::NewLine);
+            }
+            if c == 0 {
+                return Err(HeaderError::Nul);
+            }
         }
         if line.len() >= 5 && line[..5].eq_ignore_ascii_case(b"HTTP/") {
             self.update_response_code(extract_response_code(&line));
@@ -514,6 +517,18 @@ mod tests {
         assert_eq!(
             op(&mut h, HeaderOp::Replace(b"X: \0", 0)),
             Err(HeaderError::Nul)
+        );
+        // bug60227_3.phpt: a NUL before the newline reports the NUL.
+        assert_eq!(
+            op(
+                &mut h,
+                HeaderOp::Replace(b"X-Foo6: e\0Set-Cookie: ID=\n123\n d", 0)
+            ),
+            Err(HeaderError::Nul)
+        );
+        assert_eq!(
+            op(&mut h, HeaderOp::Replace(b"X-Foo6: e\nSet-Cookie: \0", 0)),
+            Err(HeaderError::NewLine)
         );
         assert_eq!(op(&mut h, HeaderOp::Replace(b"", 0)), Ok(false));
         assert_eq!(

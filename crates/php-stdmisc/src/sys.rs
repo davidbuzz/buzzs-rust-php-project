@@ -71,6 +71,24 @@ pub fn mblen(s: &[u8]) -> isize {
     r
 }
 
+/// `(tm_mon, tm_mday)` of `php_localtime_r(time(NULL))` (months count
+/// from 0), or `None` when the conversion fails.
+#[must_use]
+pub fn local_month_day() -> Option<(i32, i32)> {
+    // SAFETY: `time` accepts a NULL output pointer.
+    let now = unsafe { libc::time(ptr::null_mut()) };
+    // SAFETY: an all-zero `struct tm` is a valid value to overwrite.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers refer to live locals of the right types;
+    // `localtime_r` only writes into `tm`.
+    let r = unsafe { libc::localtime_r(&raw const now, &raw mut tm) };
+    if r.is_null() {
+        None
+    } else {
+        Some((tm.tm_mon, tm.tm_mday))
+    }
+}
+
 /// `sysconf(_SC_ARG_MAX)`, or -1.
 #[must_use]
 pub fn arg_max() -> i64 {
