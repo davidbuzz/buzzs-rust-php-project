@@ -15,7 +15,7 @@
 //! must run (which then sees exactly the state the generic op would have
 //! seen). See `compiler/specialise.rs` for when the compiler selects these
 //! ops. Variable slots are read in place through [`Frame::peek_cv`] /
-//! [`Frame::peek_cv_dim`] where one slot is inspected, through a shared
+//! [`Frame::peek_cv_dim_int`] where one slot is inspected, through a shared
 //! borrow of the store where two slots or a chain of containers are
 //! compared, and written through the store's `try_borrow_mut`, like the
 //! `AssignCv` fast path (`Vm::assign_cv_fast`).
@@ -31,7 +31,7 @@
 //! [`Op::AssignOpDimCv`]: crate::opcode::Op::AssignOpDimCv
 //! [`Op::IncDecDimCv`]: crate::opcode::Op::IncDecDimCv
 //! [`Frame::peek_cv`]: crate::vm::Frame::peek_cv
-//! [`Frame::peek_cv_dim`]: crate::vm::Frame::peek_cv_dim
+//! [`Frame::peek_cv_dim_int`]: crate::vm::Frame::peek_cv_dim_int
 
 use super::{discard_unrooted, num_bin, CvOpData, Num};
 use crate::opcode::{
@@ -226,6 +226,84 @@ fn dim_key_in(f: &Frame, dim: Operand) -> Option<ArrayKey> {
     }
 }
 
+/// An int or string offset operand, borrowed where it lives (a literal, a
+/// temporary or a compiled variable; a reference is not looked through).
+#[derive(Clone, Copy)]
+enum DimRef<'a> {
+    Int(i64),
+    Str(&'a ZStr),
+}
+
+/// The offset operand `dim` of frame `f` as a [`DimRef`] when it holds an
+/// int or a string: the keys [`dim_key_in`] accepts, without cloning the
+/// string into an [`ArrayKey`].
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot offset peek of the array-dimension fast paths
+fn dim_ref_in(f: &Frame, dim: Operand) -> Option<DimRef<'_>> {
+    let v = match dim {
+        Operand::Tmp(t) | Operand::TmpKeep(t) => f.tmps.get(t as usize)?,
+        Operand::Lit(i) => f.code.literals.get(i as usize)?,
+        Operand::Cv(cv) => f.cvs.get(cv as usize).and_then(CvSlot::get)?,
+        Operand::Unused => return None,
+    };
+    match v {
+        Value::Int(i) => Some(DimRef::Int(*i)),
+        Value::Str(s) => Some(DimRef::Str(s)),
+        _ => None,
+    }
+}
+
+/// The element of `arr` at offset `d` (`zend_fetch_dimension_address_inner`'s
+/// lookup: `zend_hash_index_find`, or `zend_symtable_find` for a string).
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot element lookup of the array-dimension fast paths
+fn table_dim<'t>(arr: &'t HashTable, d: DimRef<'_>) -> Option<&'t Value> {
+    match d {
+        // A packed table indexes its values directly (inlined here).
+        DimRef::Int(i) if arr.is_packed() => arr.get_packed(i),
+        DimRef::Int(i) => arr.get_int(i),
+        DimRef::Str(s) => arr.get_sym_zstr(s),
+    }
+}
+
+/// Mutable [`table_dim`].
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot element lookup of the array-dimension fast paths
+fn table_dim_mut<'t>(arr: &'t mut HashTable, d: DimRef<'_>) -> Option<&'t mut Value> {
+    match d {
+        DimRef::Int(i) if arr.is_packed() => arr.get_packed_mut(i),
+        DimRef::Int(i) => arr.get_int_mut(i),
+        DimRef::Str(s) => arr.get_sym_zstr_mut(s),
+    }
+}
+
+/// `$cv[dim]` of frame `f` when `$cv` holds an array (directly or through
+/// a reference) that has the int or string offset `dim` peeks as: the
+/// element, dereferenced and cloned (`ZEND_FETCH_DIM_R` on a hit). `None`
+/// leaves the operation to the caller's slower path, nothing consumed.
+#[inline(always)]
+#[allow(clippy::inline_always)] // hot array-dimension read in the dispatch pre-match
+fn cv_dim_hit_in(f: &Frame, cv: u32, dim: Operand) -> Option<Value> {
+    let d = dim_ref_in(f, dim)?;
+    let slot = f.cvs.get(cv as usize).and_then(CvSlot::get)?;
+    let guard;
+    let arr = match slot {
+        Value::Array(a) => a,
+        Value::Reference(r) => {
+            guard = r.try_borrow()?;
+            match &*guard {
+                Value::Array(a) => a,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    Some(match table_dim(arr, d)? {
+        Value::Reference(r) => r.get(),
+        v => v.clone(),
+    })
+}
+
 /// Releases the string a consumed temporary operand of frame `f` holds;
 /// other temporaries are left in place (see [`Vm::peek_num`]).
 #[inline(always)]
@@ -252,8 +330,10 @@ fn store_fetched_in(f: &mut Frame, dst: u32, to: Option<u32>, v: Value) -> bool 
         let idx = to as usize;
         if let Some(slot) = f.cvs.get(idx) {
             if is_plain_slot(slot.get()) {
-                let old = slot.set(Some(v.clone()));
+                // The table's mirror first (it only touches the table), so
+                // the value moves into the slot without a clone.
                 f.sync_cv_to_symtab(to, &v);
+                let old = slot.set(Some(v));
                 // A scalar is forgotten; a string is released.
                 discard_unrooted(old);
                 return true;
@@ -267,7 +347,7 @@ fn store_fetched_in(f: &mut Frame, dst: u32, to: Option<u32>, v: Value) -> bool 
 /// The value of `$cv[d1][d2]...` (place `place` of frame `f`) when every
 /// container on the way is an array (the variable itself possibly through
 /// a reference) holding the offset and every offset peeks as an int or a
-/// string ([`dim_key_in`]); dereferenced and cloned.
+/// string ([`dim_ref_in`]); dereferenced and cloned.
 #[inline]
 fn dims_value_in(f: &Frame, cv: u32, place: PlaceId) -> Option<Value> {
     let segs = &f.code.places.get(place as usize)?.segs;
@@ -284,11 +364,11 @@ fn dims_value_in(f: &Frame, cv: u32, place: PlaceId) -> Option<Value> {
         let Seg::Dim(dim) = seg else {
             return None;
         };
-        let key = dim_key_in(f, *dim)?;
+        let key = dim_ref_in(f, *dim)?;
         let Value::Array(a) = cur else {
             return None;
         };
-        cur = a.get(&key)?;
+        cur = table_dim(a, key)?;
     }
     Some(match cur {
         Value::Reference(r) => Value::clone(&*r.try_borrow()?),
@@ -464,7 +544,7 @@ fn concat_dims(tbl: &mut HashTable, keys: &[Option<ArrayKey>], add: &Value) -> b
 /// offset is an int or string; `None` for the generic path.
 #[inline]
 fn isset_dim_in(f: &Frame, cv: u32, dim: Operand, empty: bool) -> Option<bool> {
-    let key = dim_key_in(f, dim)?;
+    let key = dim_ref_in(f, dim)?;
     let slot = f.cvs.get(cv as usize).and_then(CvSlot::get)?;
     let guard;
     let arr = match slot {
@@ -478,7 +558,7 @@ fn isset_dim_in(f: &Frame, cv: u32, dim: Operand, empty: bool) -> Option<bool> {
         }
         _ => return None,
     };
-    let Some(v) = arr.get(&key) else {
+    let Some(v) = table_dim(arr, key) else {
         return Some(empty);
     };
     if empty {
@@ -1095,25 +1175,28 @@ impl Vm {
         to: Option<u32>,
     ) -> Option<bool> {
         let f = self.frames.last_mut()?;
-        if let Some(i) = dim_int_in(f, dim) {
-            if let Some(v) = f.peek_cv_dim_int(cv, i) {
-                return Some(store_fetched_in(f, dst, to, v));
-            }
+        if let Some(v) = cv_dim_hit_in(f, cv, dim) {
+            release_str_tmp_in(f, dim);
+            return Some(store_fetched_in(f, dst, to, v));
         }
-        let key = dim_key_in(f, dim)?;
-        let v = match f.peek_cv_dim(cv, &key) {
-            Some(v) => v,
-            None => {
-                let ArrayKey::Int(offset) = key else {
-                    return None;
-                };
-                match f.cvs.get(cv as usize).and_then(CvSlot::get) {
-                    Some(Value::Str(s)) => string_offset_char(s, offset)?,
-                    _ => return None,
-                }
-            }
-        };
-        release_str_tmp_in(f, dim);
+        // `zend_fetch_dimension_str`: an int (or canonical integer string)
+        // offset inside a string.
+        if let Some(Value::Str(s)) = f.cvs.get(cv as usize).and_then(CvSlot::get) {
+            let offset = match dim_ref_in(f, dim)? {
+                DimRef::Int(i) => i,
+                DimRef::Str(k) => match ArrayKey::from_zstr(k) {
+                    ArrayKey::Int(i) => i,
+                    ArrayKey::Str(_) => return None,
+                },
+            };
+            let v = string_offset_char(s, offset)?;
+            release_str_tmp_in(f, dim);
+            return Some(store_fetched_in(f, dst, to, v));
+        }
+        // An int offset held by reference (which `dim_ref_in` does not
+        // look through) on an array hit.
+        let i = dim_int_in(f, dim)?;
+        let v = f.peek_cv_dim_int(cv, i)?;
         Some(store_fetched_in(f, dst, to, v))
     }
 
@@ -1304,10 +1387,10 @@ impl Vm {
         if op == BinaryOp::Concat {
             return self.concat_dim_cv_fast(cv, dim, val);
         }
-        let Some(key) = self.peek_dim_key(dim) else {
+        let f = self.frame();
+        let Some(key) = dim_ref_in(f, dim) else {
             return false;
         };
-        let f = self.frame();
         let Some(y) = Self::peek_num(f, val) else {
             return false;
         };
@@ -1316,11 +1399,36 @@ impl Vm {
             Some(s) => s,
             None => return false,
         };
+        // SAFETY: the CV slot is not otherwise borrowed: `key` is an int or
+        // a string held by another operand (an array-holding `$cv` itself
+        // is no int or string offset), and `y` is a copied number.
         let val_mut = unsafe { slot.get_mut_unchecked() };
         let Some(Value::Array(arr)) = val_mut else {
             return false;
         };
-        let x = match arr.get(&key) {
+        // The variable's own table (no other handle, no symbol-table
+        // mirror): `SEPARATE_ARRAY` is a no-op, so the element is looked up
+        // once and updated in place.
+        if !f.symtab_attached {
+            if let Some(tbl) = arr.get_mut_unshared() {
+                let Some(el) = table_dim_mut(tbl, key) else {
+                    return false;
+                };
+                let x = match el {
+                    Value::Int(i) => Num::Int(*i),
+                    Value::Float(x) => Num::Float(*x),
+                    _ => return false,
+                };
+                let Some(r) = num_bin(BinKind::Arith(op), x, y) else {
+                    return false;
+                };
+                // A number replaces a number: no drop glue to run.
+                std::mem::forget(std::mem::replace(el, r));
+                self.release_tmp_str(dim);
+                return true;
+            }
+        }
+        let x = match table_dim(arr, key) {
             Some(Value::Int(i)) => Num::Int(*i),
             Some(Value::Float(x)) => Num::Float(*x),
             _ => return false,
@@ -1331,7 +1439,7 @@ impl Vm {
         if f.symtab_attached {
             f.unsync_cv_from_symtab(cv);
         }
-        let Some(slot) = arr.make_mut().get_mut(&key) else {
+        let Some(slot) = table_dim_mut(arr.make_mut(), key) else {
             if f.symtab_attached {
                 f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
             }
@@ -1476,35 +1584,52 @@ impl Vm {
         dim: Operand,
         kind: IncDecKind,
     ) -> Option<Value> {
-        let key = self.peek_dim_key(dim)?;
         let f = self.frame();
+        let key = dim_ref_in(f, dim)?;
         let idx = cv as usize;
         let slot = f.cvs.get(idx)?;
+        // SAFETY: as in `assign_op_dim_cv_fast`, the offset `key` borrows
+        // another operand, never this CV slot.
         let val_mut = unsafe { slot.get_mut_unchecked() };
         let Some(Value::Array(arr)) = val_mut else {
             return None;
         };
-        let (old, new) = match arr.get(&key)? {
-            Value::Int(i) => {
-                let i = *i;
-                let n = if kind.is_inc() {
-                    i.checked_add(1)?
-                } else {
-                    i.checked_sub(1)?
-                };
-                (Value::Int(i), Value::Int(n))
-            }
-            Value::Float(x) => {
-                let x = *x;
-                let n = if kind.is_inc() { x + 1.0 } else { x - 1.0 };
-                (Value::Float(x), Value::Float(n))
-            }
-            _ => return None,
+        let step = |v: &Value| -> Option<(Value, Value)> {
+            Some(match v {
+                Value::Int(i) => {
+                    let i = *i;
+                    let n = if kind.is_inc() {
+                        i.checked_add(1)?
+                    } else {
+                        i.checked_sub(1)?
+                    };
+                    (Value::Int(i), Value::Int(n))
+                }
+                Value::Float(x) => {
+                    let x = *x;
+                    let n = if kind.is_inc() { x + 1.0 } else { x - 1.0 };
+                    (Value::Float(x), Value::Float(n))
+                }
+                _ => return None,
+            })
         };
+        // The variable's own table: one lookup, updated in place (see
+        // `assign_op_dim_cv_fast`).
+        if !f.symtab_attached {
+            if let Some(tbl) = arr.get_mut_unshared() {
+                let el = table_dim_mut(tbl, key)?;
+                let (old, new) = step(&*el)?;
+                // A number replaces a number: no drop glue to run.
+                std::mem::forget(std::mem::replace(el, new.clone()));
+                self.release_tmp_str(dim);
+                return Some(if kind.is_post() { old } else { new });
+            }
+        }
+        let (old, new) = step(table_dim(arr, key)?)?;
         if f.symtab_attached {
             f.unsync_cv_from_symtab(cv);
         }
-        let Some(slot) = arr.make_mut().get_mut(&key) else {
+        let Some(slot) = table_dim_mut(arr.make_mut(), key) else {
             if f.symtab_attached {
                 f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
             }
@@ -1566,6 +1691,30 @@ impl Vm {
         true
     }
 
+    /// [`Vm::assign_to_array_table`] with the offset an int or a borrowed
+    /// string: an existing element at a string offset is found
+    /// (`zend_symtable_find`) and overwritten without building a key.
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
+    fn assign_dim_table(
+        tbl: &mut HashTable,
+        dim_int: Option<i64>,
+        dim_str: Option<&ZStr>,
+        v: Value,
+    ) -> bool {
+        let Some(s) = dim_str else {
+            return Self::assign_to_array_table(tbl, dim_int, None, v);
+        };
+        if let Some(slot) = tbl.get_sym_zstr_mut(s) {
+            if !is_plain_value(slot) {
+                return false;
+            }
+            drop(std::mem::replace(slot, v));
+            return true;
+        }
+        Self::assign_to_array_table(tbl, None, Some(ArrayKey::from_zstr(s)), v)
+    }
+
     /// `$cv[dim] = val;` when `$cv` holds an array (directly or through a reference),
     /// the offset is an int or string, the value is plain and the element it
     /// replaces (if any) is plain: the `zend_fetch_dimension_address_inner_W`
@@ -1584,12 +1733,17 @@ impl Vm {
         let Some(v) = plain_value_in(f, val) else {
             return false;
         };
+        // `$cv[] = val`: `zend_hash_next_index_insert`; a full array (the
+        // next index is taken) is left to the generic op, which throws.
+        let append = dim == Operand::Unused;
         let dim_int = dim_int_in(f, dim);
-        let dim_key = if dim_int.is_none() {
-            let Some(k) = dim_key_in(f, dim) else {
+        // A string offset stays borrowed: an existing element needs no
+        // key of its own (only an insertion takes one).
+        let dim_str = if dim_int.is_none() && !append {
+            let Some(DimRef::Str(s)) = dim_ref_in(f, dim) else {
                 return false;
             };
-            Some(k)
+            Some(s)
         } else {
             None
         };
@@ -1604,7 +1758,11 @@ impl Vm {
                 if f.symtab_attached {
                     f.unsync_cv_from_symtab(cv);
                 }
-                let ok = Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v);
+                let ok = if append {
+                    arr.make_mut().push(v).is_ok()
+                } else {
+                    Self::assign_dim_table(arr.make_mut(), dim_int, dim_str, v)
+                };
                 if f.symtab_attached {
                     f.sync_cv_to_symtab(cv, &Value::Array(arr.clone()));
                 }
@@ -1616,7 +1774,11 @@ impl Vm {
                 let Value::Array(arr) = &mut *guard else {
                     return false;
                 };
-                Self::assign_to_array_table(arr.make_mut(), dim_int, dim_key, v)
+                if append {
+                    arr.make_mut().push(v).is_ok()
+                } else {
+                    Self::assign_dim_table(arr.make_mut(), dim_int, dim_str, v)
+                }
             } else {
                 return false;
             }
@@ -1770,6 +1932,150 @@ mod tests {
     }
 
     // Expected outputs below are from `/usr/bin/php -n` (8.3).
+
+    #[test]
+    fn detached_symbol_table_leaves_no_duplicate_handle() {
+        // After a generic `??=` (which attaches the table for that access
+        // only), the array is owned by its variable alone: the refcount
+        // php-src shows, and an append that does not separate a copy.
+        let src = r#"<?php
+function k() { $a = [1, 2]; $a['x'] ??= 3; $a[] = 4; debug_zval_dump($a); $b = $a; $a[] = 5; debug_zval_dump($b); echo count($a), "\n"; }
+k();
+$m = [1]; $m['y'] ??= 2; $m[] = 3; debug_zval_dump($m);
+"#;
+        let expected = r#"array(4) refcount(2){
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  ["x"]=>
+  int(3)
+  [2]=>
+  int(4)
+}
+array(4) refcount(2){
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  ["x"]=>
+  int(3)
+  [2]=>
+  int(4)
+}
+5
+array(3) refcount(2){
+  [0]=>
+  int(1)
+  ["y"]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+"#;
+        assert_eq!(run(src), expected);
+    }
+
+    #[test]
+    fn dimension_fast_paths_and_symbol_table_detach() {
+        // String and numeric-string offsets looked up in place, compound
+        // assignments and increments on unshared and shared arrays and
+        // through references, nested reads, appends (`$a[] = v`, a full
+        // array, an undefined variable, a string), string offsets, and a function whose
+        // generic `??=` attaches its symbol table only for that access:
+        // later `$$`, `get_defined_vars()`, `global` and `$GLOBALS` still
+        // see every variable.
+        let src = r#"<?php
+$h = ["alpha" => 1, "beta" => 2, 5 => "five", "05" => "oh-five"];
+$k = "beta"; $n = "5"; $z = "05";
+echo $h["beta"], $h[$k], $h[$n], $h[$z], $h[5], "\n";
+var_dump(isset($h["5"]), isset($h["gamma"]), empty($h["alpha"]), isset($h[$z]));
+$h["beta"] += 40; $h[$n] .= "!"; $h["alpha"]++; ++$h[$k];
+var_dump($h);
+$r = &$h; echo $r["alpha"], $r[$n], "\n"; $r["alpha"] *= 3; echo $h["alpha"], "\n"; unset($r);
+$c = $h; $c["beta"] -= 1; echo $h["beta"], " ", $c["beta"], "\n";
+$m = [[1, 2], ["x" => [3]]]; $i = 1; $x = "x";
+echo $m[0][1], $m[$i][$x][0], "\n";
+$a = []; for ($j = 0; $j < 5; $j++) { $a[] = $j * 2; } $a[] = "s"; $a[] = 1.5; $a[] = null;
+var_dump($a);
+$b = $a; $b[] = 9; echo count($a), count($b), "\n";
+$q = &$a; $q[] = 7; echo count($a), "\n"; unset($q);
+$f = [PHP_INT_MAX => 1];
+try { $f[] = 2; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+$u[] = 1; var_dump($u);
+$s = "str"; try { $s[] = "x"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+function g() {
+    $a = []; $a['x'] ??= 1; $a['y'] = 2; $t = 0;
+    for ($i = 0; $i < 3; $i++) { $a[$i] = $i; $t += $a[$i]; }
+    $v = 'a'; echo count($$v), " ", $t, "\n";
+    ${$v}['w'] = 9; $n = 'dyn'; $$n = 5; $t += $a['w'] + $dyn; echo $t, "\n";
+    foreach (get_defined_vars() as $name => $val) { echo $name, ' '; } echo "\n";
+    $a['z'] = 3; foreach ($a as $kk => $vv) { echo $kk, ','; } echo "\n";
+}
+g();
+$G = [1]; $G[] = 2; $W = ['k' => 1]; $W['k2'] ??= 5;
+function h() { global $G; $G[] = 3; $GLOBALS['W']['k3'] = 7; echo count($GLOBALS['G']), "\n"; }
+h(); $G[] = 4; $W['k4'] = 1; echo implode(',', $G), " "; foreach ($W as $kk => $vv) { echo $kk, ','; } echo "\n";
+$str = "test"; $o = "1"; $ri = 2; $rr = &$ri;
+echo $str[1], $str["2"], $str[-1], $str[$o], $str[$rr], "\n";
+$arr = [10, 20, 30]; echo $arr[$rr], "\n";
+"#;
+        let expected = r#"22fiveoh-fivefive
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+array(4) {
+  ["alpha"]=>
+  int(2)
+  ["beta"]=>
+  int(43)
+  [5]=>
+  string(5) "five!"
+  ["05"]=>
+  string(7) "oh-five"
+}
+2five!
+6
+43 42
+23
+array(8) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(2)
+  [2]=>
+  int(4)
+  [3]=>
+  int(6)
+  [4]=>
+  int(8)
+  [5]=>
+  string(1) "s"
+  [6]=>
+  float(1.5)
+  [7]=>
+  NULL
+}
+89
+9
+Error: Cannot add element to the array as the next element is already occupied
+array(1) {
+  [0]=>
+  int(1)
+}
+[] operator not supported for strings
+5 3
+17
+a t i v n dyn 
+x,y,0,1,2,w,z,
+3
+1,2,3,4 k,k2,k3,k4,
+estes
+30
+"#;
+        assert_eq!(run(src), expected);
+    }
 
     #[test]
     fn smart_branches_on_numbers_and_other_values() {

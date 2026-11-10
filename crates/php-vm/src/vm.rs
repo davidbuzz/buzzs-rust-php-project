@@ -4,7 +4,7 @@ use crate::class::{Class, NameMap};
 use crate::compiler::CompiledUnit;
 use crate::func::{Func, UserFunction};
 use crate::opcode::OpArray;
-use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZStr};
+use php_runtime::{HashTable, Obj, PhpRef, Value, ZStr};
 use php_support::ini::IniRegistry;
 use php_support::output::OutputStack;
 use std::cell::RefCell;
@@ -112,7 +112,7 @@ pub struct VarStore {
     pub slots: Vec<Option<Value>>,
     /// Names, parallel to `slots`.
     pub names: VarNames,
-    index: Option<HashMap<ZStr, u32>>,
+    index: Option<NameMap<u32>>,
 }
 
 impl VarStore {
@@ -141,7 +141,8 @@ impl VarStore {
 
     fn build_index(&mut self) {
         if self.index.is_none() {
-            let mut m = HashMap::with_capacity(self.names.len());
+            let mut m = NameMap::default();
+            m.reserve(self.names.len());
             for (i, n) in self.names.iter().enumerate() {
                 m.insert(n.clone(), u32::try_from(i).unwrap_or(0));
             }
@@ -167,6 +168,31 @@ impl VarStore {
             }
         }
         p
+    }
+
+    /// The slot of compiled variable `cv`, named `name`: `cv` itself when
+    /// the table's names line up with the op array's there (every
+    /// function's own table), else [`VarStore::find`] by name.
+    #[inline]
+    pub fn find_cv(&mut self, cv: usize, name: &[u8]) -> Option<u32> {
+        if self.names.get(cv).is_some_and(|n| n.as_bytes() == name) {
+            if self.slots.len() <= cv {
+                self.slots.resize(self.names.len().max(cv + 1), None);
+            }
+            if let Ok(i) = u32::try_from(cv) {
+                return Some(i);
+            }
+        }
+        self.find(name)
+    }
+
+    /// [`VarStore::find_cv`], creating the slot when the name is missing.
+    #[inline]
+    pub fn find_or_add_cv(&mut self, cv: usize, name: &[u8]) -> u32 {
+        match self.find_cv(cv, name) {
+            Some(i) => i,
+            None => self.find_or_add(name),
+        }
     }
 
     /// Finds or creates a variable slot by name.
@@ -1236,10 +1262,41 @@ impl Frame {
             }
         }
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            let slot = st.find_or_add(name.as_bytes()) as usize;
+            let slot = st.find_or_add_cv(i, name.as_bytes()) as usize;
             if slot < st.slots.len() {
                 if let Some(val) = self.cvs.get(i).and_then(CvSlot::get) {
                     st.slots[slot] = Some(val.clone());
+                }
+            }
+        }
+    }
+
+    /// Undoes an [`Frame::attach_symbol_table`] that only a generic
+    /// variable access needed (the place walk of `place.rs` works on the
+    /// table's slots): the table's value of each compiled variable
+    /// moves back into the CV slot (the table is authoritative while
+    /// attached, as in [`Frame::sync_from_symbol_table`]) and the table
+    /// keeps no duplicate handle, so later in-place writes see refcount 1
+    /// and no write has to be mirrored. Variables the table holds that are
+    /// not compiled variables stay in it. The next attach copies the CVs
+    /// back in.
+    pub fn detach_symbol_table(&mut self) {
+        if !self.symtab_attached {
+            return;
+        }
+        self.symtab_attached = false;
+        let mut st = self.vars.borrow_mut();
+        for (i, name) in self.code.cv_names.iter().enumerate() {
+            let Some(idx) = st.find_cv(i, name.as_bytes()) else {
+                continue;
+            };
+            let Some(sv) = st.slots.get_mut(idx as usize) else {
+                continue;
+            };
+            let val = sv.take();
+            if let Some(cv) = self.cvs.get(i) {
+                if let Some(old) = cv.set(val) {
+                    crate::gc::release_duplicate(old);
                 }
             }
         }
@@ -1252,7 +1309,7 @@ impl Frame {
         }
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            if let Some(slot) = st.find(name.as_bytes()) {
+            if let Some(slot) = st.find_cv(i, name.as_bytes()) {
                 let val = st.slots.get(slot as usize).cloned().flatten();
                 if let Some(cv) = self.cvs.get_mut(i) {
                     if let Some(old) = cv.set(val) {
@@ -1270,7 +1327,7 @@ impl Frame {
         }
         let mut st = self.vars.borrow_mut();
         for (i, name) in self.code.cv_names.iter().enumerate() {
-            if let Some(slot) = st.find(name.as_bytes()) {
+            if let Some(slot) = st.find_cv(i, name.as_bytes()) {
                 let slot = slot as usize;
                 if slot < st.slots.len() {
                     // A CV that is `None` was never assigned in this frame
@@ -1403,23 +1460,6 @@ impl Frame {
     pub(crate) fn peek_cv<R>(&self, cv: u32, read: fn(Option<&Value>) -> R) -> R {
         let idx = cv as usize;
         read(self.cvs.get(idx).and_then(CvSlot::get))
-    }
-
-    /// `$cv[key]` looked up in place: the element of the array compiled
-    /// variable `cv` holds (directly or through a reference), dereferenced
-    /// and cloned; `None` when the variable is undefined, holds no array or
-    /// the array has no such key.
-    #[inline]
-    pub(crate) fn peek_cv_dim(&self, cv: u32, key: &ArrayKey) -> Option<Value> {
-        let idx = cv as usize;
-        match self.cvs.get(idx).and_then(CvSlot::get)? {
-            Value::Array(a) => a.get(key).map(Value::deref),
-            Value::Reference(r) => match &*r.try_borrow()? {
-                Value::Array(a) => a.get(key).map(Value::deref),
-                _ => None,
-            },
-            _ => None,
-        }
     }
 
     /// `$cv[i]` looked up for a 64-bit integer index on a packed array:
@@ -1820,6 +1860,48 @@ mod tests {
         assert_eq!(f.peek_cv(0, as_int), Some(7));
         // Undefined.
         assert!(f.peek_cv(1, |s| s.is_none()));
+    }
+
+    #[test]
+    fn detach_symbol_table_moves_values_back_into_the_cvs() {
+        use php_runtime::ZArray;
+        let mut f = frame_with(&["a", "b", "c"]);
+        let arr = ZArray::from_values([Value::Int(1)]);
+        f.cvs[0].set(Some(Value::Array(arr.clone())));
+        f.cvs[1].set(Some(Value::Int(2)));
+        f.attach_symbol_table();
+        // Attached: the table holds a second handle of the array.
+        assert_eq!(arr.refcount(), 3);
+        // A write through the table (`write_place` on its slot) ...
+        f.vars.borrow_mut().slots[1] = Some(Value::Int(5));
+        // ... and a variable only the table has.
+        let extra = f.vars.borrow_mut().find_or_add(b"extra");
+        f.vars.borrow_mut().slots[extra as usize] = Some(Value::Int(9));
+        f.detach_symbol_table();
+        assert!(!f.symtab_attached);
+        // The table's values moved into the CVs; it keeps no duplicate.
+        assert_eq!(arr.refcount(), 2);
+        assert_eq!(as_int(f.cvs[1].get()), Some(5));
+        assert!(f.cvs[2].is_none());
+        let st = f.vars.borrow();
+        assert!(st.slots[..3].iter().all(Option::is_none));
+        assert!(matches!(st.slots[extra as usize], Some(Value::Int(9))));
+        drop(st);
+        // Detaching again is a no-op; attaching copies the CVs back in.
+        f.detach_symbol_table();
+        f.attach_symbol_table();
+        assert!(matches!(f.vars.borrow().slots[1], Some(Value::Int(5))));
+    }
+
+    #[test]
+    fn find_cv_uses_the_position_when_the_names_line_up() {
+        let f = frame_with(&["a", "b"]);
+        let mut st = f.vars.borrow_mut();
+        assert_eq!(st.find_cv(1, b"b"), Some(1));
+        // Not at that position: looked up by name.
+        assert_eq!(st.find_cv(0, b"b"), Some(1));
+        assert_eq!(st.find_cv(0, b"zz"), None);
+        assert_eq!(st.find_or_add_cv(5, b"zz"), 2);
     }
 
     #[test]

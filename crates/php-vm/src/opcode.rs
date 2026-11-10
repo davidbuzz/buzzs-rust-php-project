@@ -757,8 +757,9 @@ pub enum Op {
     },
     /// `Assign` of `$cv[dim] = val` without a used result
     /// (`ZEND_ASSIGN_DIM_SPEC_CV_*_OP_DATA_*` on an array with an int or
-    /// string offset and a scalar value); anything else goes through
-    /// `place`.
+    /// string offset and a scalar value; `dim` [`Operand::Unused`] is
+    /// `$cv[] = val`, `ZEND_ASSIGN_DIM_SPEC_CV_UNUSED_*`, appending);
+    /// anything else goes through `place`.
     AssignDimCv {
         cv: u32,
         dim: Operand,

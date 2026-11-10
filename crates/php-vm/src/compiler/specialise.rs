@@ -309,6 +309,15 @@ fn assign(places: &[Place], place: PlaceId, val: Operand, dst: Option<u32>) -> O
             place,
         });
     }
+    // `$cv[] = val;`: `ZEND_ASSIGN_DIM` with an unused offset appends.
+    if let Some(cv) = cv_append(places, place) {
+        return Some(Op::AssignDimCv {
+            cv,
+            dim: Operand::Unused,
+            val,
+            place,
+        });
+    }
     // `$cv[d1][d2]... = val;` (`mkmatrix`'s `$mx[$i][$j] = $count++`).
     short_cv_dims(places, place).map(|cv| Op::AssignDimsCv { cv, val, place })
 }
@@ -658,6 +667,15 @@ fn cv_dim(places: &[Place], pid: PlaceId) -> Option<(u32, Operand)> {
     }
 }
 
+/// The CV of a place `$cv[]` (an append).
+fn cv_append(places: &[Place], pid: PlaceId) -> Option<u32> {
+    let p = places.get(pid as usize)?;
+    match (&p.base, p.segs.as_slice()) {
+        (PlaceBase::Cv(cv), [Seg::Append]) => Some(*cv),
+        _ => None,
+    }
+}
+
 /// The CV of a place `$cv[d1][d2]...` with two or more dimensions, all
 /// with defined offset operands.
 fn cv_dims(places: &[Place], pid: PlaceId) -> Option<u32> {
@@ -956,14 +974,24 @@ mod tests {
             1,
             "{ops:?}"
         );
-        // Nested dimension reads and writes get the chain forms; appends
-        // keep the generic place ops.
+        // Nested dimension reads and writes get the chain forms; an append
+        // `$a[] = v;` is `AssignDimCv` without an offset.
         let ops = main_ops(
             "<?php $a = [[1]]; echo $a[0][0]; $a[] = 1; $a[0][0] = 2; $x = $a[0][0]; $y = $a[0][0] ?? 1;",
         );
         assert!(
-            !ops.iter()
-                .any(|op| matches!(op, Op::FetchDimCv { .. } | Op::AssignDimCv { .. })),
+            !ops.iter().any(|op| matches!(op, Op::FetchDimCv { .. })
+                || matches!(op, Op::AssignDimCv { dim, .. } if *dim != crate::opcode::Operand::Unused)),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::AssignDimCv {
+                    dim: crate::opcode::Operand::Unused,
+                    ..
+                }
+            )),
             "{ops:?}"
         );
         assert!(
