@@ -551,3 +551,42 @@ array(0) {\n\
 ";
     assert_eq!(run(src), expected);
 }
+
+/// `$cv op= scalar` (`Vm::assign_op_cv_scalar`): bools, null, ints,
+/// floats and numeric strings juggled as by the generic path, overflow
+/// to float, the exceptions that leave the variable unchanged, and the
+/// cases left to the generic path (a fractional float in a bitwise
+/// operation, a leading-numeric string) with their diagnostics.
+#[test]
+fn scalar_compound_assignments_juggle_like_the_generic_path() {
+    let src = r#"<?php
+function f($b, $n, $s) {
+    $x = 5; $y = 1.5; $r = [];
+    $x += $b; $r[] = $x;
+    $x -= $n; $r[] = $x;
+    $x *= $s; $r[] = $x;
+    $x /= $b; $r[] = $x;
+    $y += $b; $r[] = $y;
+    $y *= " 2 "; $r[] = $y;
+    $x = 7; $x %= $b; $r[] = $x;
+    $x = 6; $x |= $b; $r[] = $x;
+    $x <<= $b; $r[] = $x;
+    $x ^= $n; $r[] = $x;
+    $x = PHP_INT_MAX; $x += $b; $r[] = $x;
+    try { $x = 1; $x /= !$b; } catch (DivisionByZeroError $e) { $r[] = $e->getMessage() . ":" . $x; }
+    try { $x = 1; $x %= $n; } catch (DivisionByZeroError $e) { $r[] = $e->getMessage() . ":" . $x; }
+    try { $x = 1; $x <<= -$b; } catch (ArithmeticError $e) { $r[] = $e->getMessage() . ":" . $x; }
+    $y = 2.5; $y |= $b; $r[] = $y;
+    $x = 1; $x += "5 apples"; $r[] = $x;
+    echo implode(",", $r), "\n";
+}
+f(true, null, "3");
+"#;
+    let expected = "
+Deprecated: Implicit conversion from float 2.5 to int loses precision in t.php on line 18
+
+Warning: A non-numeric value encountered in t.php on line 19
+6,6,18,18,2.5,5,0,7,14,14,9.2233720368548E+18,Division by zero:1,Modulo by zero:1,Bit shift by negative number:1,3,6
+";
+    assert_eq!(run(src), expected);
+}
