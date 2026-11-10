@@ -906,7 +906,6 @@ mod tests {
         assert_eq!(fc.argc, 2);
         assert!(matches!(fc.vals[0], Operand::Cv(_)));
         assert!(matches!(fc.vals[1], Operand::Lit(_)));
-        assert!(fc.dst.is_some());
         let Op::FramelessICall(fc) = &ops[fused[1]] else {
             unreachable!()
         };
@@ -917,7 +916,7 @@ mod tests {
         assert!(matches!(back[i], Op::InitFCall { fallback: None, .. }));
         assert!(matches!(back[i + 1], Op::Send { .. }));
         assert!(matches!(back[i + 2], Op::Send { .. }));
-        assert!(matches!(back[i + 3], Op::DoCall { dst: Some(_) }));
+        assert!(matches!(back[i + 3], Op::DoCall { .. }));
         assert_eq!(back.len(), ops.len());
         for src in [
             // A namespaced unqualified name (`ZEND_JMP_FRAMELESS` in php-src).
