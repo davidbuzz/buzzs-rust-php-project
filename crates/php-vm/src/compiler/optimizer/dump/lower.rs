@@ -30,6 +30,8 @@ pub(crate) struct Known {
     pub info: FunctionInfo,
     /// The index of a user function among the dumped op arrays.
     pub user: Option<usize>,
+    /// `ZEND_ACC_DEPRECATED` / `ZEND_ACC_NODISCARD` ([`crate::func::flags`]).
+    pub flags: u32,
 }
 
 /// What the lowering knows about the script being dumped.
@@ -43,6 +45,10 @@ pub(crate) struct Resolver<'a> {
     /// The script's top-level classes by lower-case name, with the dumped
     /// index of each method by lower-case method name.
     pub classes: HashMap<Vec<u8>, (Rc<ClassDecl>, HashMap<Vec<u8>, usize>)>,
+    /// The flags of an internal function by lower-case name.
+    pub internal_flags: &'a dyn Fn(&[u8]) -> u32,
+    /// `opcache.optimization_level`.
+    pub level: u32,
 }
 
 impl Resolver<'_> {
@@ -54,18 +60,28 @@ impl Resolver<'_> {
         )
     }
 
-    /// A function called by lower-case name.
-    fn function(&self, lc: &[u8]) -> Option<Known> {
+    /// A function called by lower-case name on line `line`: the script's
+    /// functions are found by `zend_compile_call` once declared, and by
+    /// pass 4 (`optimize_func_calls`) anywhere.
+    fn function(&self, lc: &[u8], line: u32) -> Option<Known> {
         if let Some((idx, f)) = self.functions.get(lc) {
-            return Some(Known {
-                info: Self::user_info(f),
-                user: Some(*idx),
-            });
+            if self.level & crate::compiler::optimizer::PASS_4 != 0 || f.line_start < line {
+                return Some(Known {
+                    info: Self::user_info(f),
+                    user: Some(*idx),
+                    flags: f.flags,
+                });
+            }
+            return None;
         }
         self.table
             .find(lc)
             .filter(|i| i.internal)
-            .map(|info| Known { info, user: None })
+            .map(|info| Known {
+                info,
+                user: None,
+                flags: (self.internal_flags)(lc),
+            })
     }
 
     /// A method of a script class.
@@ -79,6 +95,7 @@ impl Resolver<'_> {
             Known {
                 info: Self::user_info(&m.func),
                 user: idx.get(method_lc).copied(),
+                flags: m.func.flags,
             },
             m.flags,
             decl.flags,
@@ -1740,7 +1757,8 @@ impl Lower<'_> {
     fn lower_init_fcall(&mut self, i: usize, name: u32, fallback: Option<u32>, display: u32) {
         let lc = self.lit_bytes(name);
         let (n, simple) = self.scan_call(i);
-        let known = self.res.function(&lc);
+        let line = self.oa.line(i);
+        let known = self.res.function(&lc, line);
         let frameless = match known {
             Some(k) if fallback.is_none() && k.user.is_none() && simple && n <= 3 => {
                 let ok = frameless_arities(&lc)
@@ -1915,7 +1933,16 @@ impl Lower<'_> {
             }
             return;
         }
+        // `zend_get_call_op`: deprecated functions, and `#[\NoDiscard]` ones
+        // whose result is unused, keep `DO_FCALL_BY_NAME`.
+        let by_name = call.known.is_some_and(|k| {
+            use crate::func::flags;
+            k.flags & flags::DEPRECATED != 0 || (k.flags & flags::NODISCARD != 0 && dst.is_none())
+        });
         let op = match (call.kind, call.known) {
+            (CallKind::FCall | CallKind::Method | CallKind::Static, Some(_)) if by_name => {
+                "DO_FCALL_BY_NAME"
+            }
             (CallKind::FCall, Some(k)) => {
                 if k.user.is_some() {
                     "DO_UCALL"

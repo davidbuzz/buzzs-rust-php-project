@@ -30,7 +30,17 @@ fn dump(src: &str) -> String {
         })
     };
     let end = main_line_end(src.as_bytes(), None);
-    String::from_utf8(dump_unit(&unit, &table, end, "after optimizer")).expect("utf-8")
+    let flags = |_: &[u8]| 0;
+    let level = crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL;
+    String::from_utf8(dump_unit(
+        &unit,
+        &table,
+        &flags,
+        level,
+        end,
+        "after optimizer",
+    ))
+    .expect("utf-8")
 }
 
 #[test]

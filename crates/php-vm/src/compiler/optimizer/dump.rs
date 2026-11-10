@@ -171,8 +171,9 @@ fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
         by_ref: e.func.params.iter().map(|p| p.by_ref).collect(),
         bound: e.func.uses.iter().map(|u| (u.cv, u.by_ref)).collect(),
     };
+    let level = res.level;
     let types = passes::infer(&lines, &shape);
-    if !e.is_main && passes::dfa_allowed(&lines) {
+    if level & super::PASS_6 != 0 && !e.is_main && passes::dfa_allowed(&lines) {
         passes::dfa(&mut lines, &types);
     }
     let (mut lines, new_idx) = passes::remove_nops(lines);
@@ -214,7 +215,11 @@ fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
         })
         .collect();
     exc.sort_by_key(|e| e[0]);
-    let kept = passes::compact_cvs(&mut lines, oa.cv_names.len());
+    let kept = if level & super::PASS_13 != 0 {
+        passes::compact_cvs(&mut lines, oa.cv_names.len())
+    } else {
+        (0..u32::try_from(oa.cv_names.len()).unwrap_or(0)).collect()
+    };
     let mut is_var: HashMap<u32, bool> = HashMap::new();
     for l in &lines {
         if let Some(t) = l.res.tmp() {
@@ -227,9 +232,14 @@ fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
             }
         }
     }
+    // Without the optimizer's type information every live range stays.
+    let typed = level & super::PASS_6 != 0;
     let needs: Vec<bool> = lines
         .iter()
         .map(|l| {
+            if !typed {
+                return true;
+            }
             l.res.tmp().is_none_or(|t| {
                 types
                     .tmp
@@ -248,7 +258,11 @@ fn finish(e: &Entry, res: &lower::Resolver<'_>) -> Done {
             .tmp()
             .is_some_and(|t| is_var.get(&t).copied().unwrap_or(false));
     }
-    let tmps = passes::compact_tmps(&mut lines, oa.num_finally > 0);
+    let tmps = if level & super::PASS_9 != 0 {
+        passes::compact_tmps(&mut lines, oa.num_finally > 0)
+    } else {
+        passes::number_tmps(&mut lines)
+    };
     let live = passes::live_ranges(&mut lines, tmps, &|i| needs.get(i).copied().unwrap_or(true));
     let num_args = u32::try_from(e.func.params.iter().filter(|p| !p.variadic).count()).unwrap_or(0);
     Done {
@@ -460,12 +474,16 @@ fn write_entry(out: &mut Vec<u8>, e: &Entry, d: &Done, done: &[Done], msg: &str,
 
 /// Dumps every op array of `unit` as `zend_dump_op_array` with the
 /// message `msg` (`"after optimizer"`). `functions` is the function table
-/// the unit was compiled against; `main_line_end` the last line of the
+/// the unit was compiled against and `internal_flags` gives the
+/// [`flags`] of its internal functions; `level` is
+/// `opcache.optimization_level`; `main_line_end` the last line of the
 /// file (`op_array->line_end` of the main code).
 #[must_use]
 pub fn dump_unit(
     unit: &CompiledUnit,
     functions: &dyn FunctionTable,
+    internal_flags: &dyn Fn(&[u8]) -> u32,
+    level: u32,
     main_line_end: u32,
     msg: &str,
 ) -> Vec<u8> {
@@ -497,6 +515,8 @@ pub fn dump_unit(
         table: functions,
         functions: fn_index,
         classes,
+        internal_flags,
+        level,
     };
     let done: Vec<Done> = entries.iter().map(|e| finish(e, &res)).collect();
     let mut out = Vec::new();

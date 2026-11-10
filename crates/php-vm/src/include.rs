@@ -259,10 +259,24 @@ impl Vm {
             self.error_at(*level, msg, filename, *line)?;
         }
         if let Some(src) = dump_src {
+            let level =
+                u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
+                    .unwrap_or(0);
             let functions = &self.functions;
             let table = |lc: &[u8]| functions.get(lc).map(compiler::FunctionInfo::of);
+            let flags = |lc: &[u8]| match functions.get(lc) {
+                Some(crate::func::Func::Builtin(b)) => b.flags,
+                _ => 0,
+            };
             let end = compiler::optimizer::dump::main_line_end(&src, halt_compiler_offset);
-            let out = compiler::optimizer::dump::dump_unit(&unit, &table, end, "after optimizer");
+            let out = compiler::optimizer::dump::dump_unit(
+                &unit,
+                &table,
+                &flags,
+                level,
+                end,
+                "after optimizer",
+            );
             self.flush_stdout();
             let _ = std::io::Write::write_all(&mut std::io::stderr(), &out);
         }

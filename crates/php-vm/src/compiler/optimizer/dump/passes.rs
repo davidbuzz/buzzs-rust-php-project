@@ -990,6 +990,33 @@ pub(crate) fn compact_tmps(lines: &mut [ZLine], has_finally: bool) -> u32 {
     u32::try_from(max + 1).unwrap_or(0)
 }
 
+/// Without pass 9 the temporaries keep their numbers, made dense in order
+/// of definition; returns `op_array->T`.
+pub(crate) fn number_tmps(lines: &mut [ZLine]) -> u32 {
+    let mut map: HashMap<u32, u32> = HashMap::new();
+    for l in lines.iter() {
+        for z in [&l.res, &l.op1, &l.op2] {
+            if let Some(t) = z.tmp() {
+                let n = u32::try_from(map.len()).unwrap_or(0);
+                map.entry(t).or_insert(n);
+            }
+        }
+    }
+    let fix = |z: &mut Z| {
+        if let Z::Tmp(t) = z {
+            if let Some(&n) = map.get(t) {
+                *t = n;
+            }
+        }
+    };
+    for l in lines.iter_mut() {
+        fix(&mut l.res);
+        fix(&mut l.op1);
+        fix(&mut l.op2);
+    }
+    u32::try_from(map.len()).unwrap_or(0)
+}
+
 /// One `zend_live_range`.
 pub(crate) struct LiveRange {
     /// The temporary (already renumbered).
