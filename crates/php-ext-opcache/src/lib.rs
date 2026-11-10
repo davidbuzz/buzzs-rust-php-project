@@ -84,15 +84,29 @@ impl Extension for Opcache {
 /// "<asctime> (<pid>): Warning <message>" plus a newline. The messages
 /// passed here end in their own newline, as php-src's do.
 fn accel_log_warning(vm: &Vm, message: &str) {
+    accel_log(vm, 2, "Warning", message);
+}
+
+/// `zend_accel_error_noreturn(ACCEL_LOG_FATAL, ...)`: logged when
+/// `opcache.log_verbosity_level` admits fatal errors (level 0), and the
+/// process exits with status -2 whether logged or not.
+fn accel_fatal(vm: &Vm, message: &str) -> ! {
+    accel_log(vm, 0, "Fatal Error", message);
+    std::process::exit(254);
+}
+
+/// `zend_accel_error_va_args`: "<asctime> (<pid>): <label> <message>\n"
+/// when `type <= opcache.log_verbosity_level`.
+fn accel_log(vm: &Vm, ty: i64, label: &str, message: &str) {
     use std::io::Write as _;
-    if vm.ini_long("opcache.log_verbosity_level") < 2 {
+    if vm.ini_long("opcache.log_verbosity_level") < ty {
         return;
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
     let line = format!(
-        "{} ({}): Warning {message}\n",
+        "{} ({}): {label} {message}\n",
         format_ctime(now),
         std::process::id()
     );
@@ -173,6 +187,46 @@ fn check_startup_ini(vm: &mut Vm) {
             "opcache.max_wasted_percentage must be set between 1 and 50.\n",
         );
         vm.ini.reset_to_default("opcache.max_wasted_percentage");
+    }
+    check_startup_shm(vm);
+}
+
+/// The shared-memory set-up of `accel_post_startup` /
+/// `zend_accel_init_shm`, for its fatal errors: the interned strings
+/// buffer must fit in `opcache.memory_consumption`, and file-cache-only
+/// mode needs `opcache.file_cache`.
+fn check_startup_shm(vm: &Vm) {
+    /// `sizeof(zend_accel_shared_globals)` on 64-bit builds.
+    const SHARED_GLOBALS_SIZE: i64 = 1088;
+    const MIB: i64 = 1024 * 1024;
+    if !is_opcache_enabled(vm) {
+        return;
+    }
+    if vm.ini_bool("opcache.file_cache_only") {
+        if get_ini_string(vm, "opcache.file_cache").is_empty() {
+            accel_fatal(
+                vm,
+                "opcache.file_cache_only is set without a proper setting of opcache.file_cache",
+            );
+        }
+        return;
+    }
+    let interned = vm.ini_long("opcache.interned_strings_buffer");
+    let size = if interned > 0 {
+        SHARED_GLOBALS_SIZE + interned.saturating_mul(MIB)
+    } else {
+        SHARED_GLOBALS_SIZE + 4
+    };
+    if size
+        > vm.ini_long("opcache.memory_consumption")
+            .saturating_mul(MIB)
+    {
+        accel_fatal(
+            vm,
+            &format!(
+                "Insufficient shared memory for interned strings buffer! (tried to allocate {size} bytes)"
+            ),
+        );
     }
 }
 
