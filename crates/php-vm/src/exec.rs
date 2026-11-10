@@ -1873,6 +1873,10 @@ impl Vm {
                     Op::Return { val } => {
                         let v = match val {
                             Operand::Unused => None,
+                            Operand::Cv(cv) => match self.return_undefined_typed_cv(*cv)? {
+                                Some(v) => Some(v),
+                                None => Some(self.read(*val)?),
+                            },
                             o => Some(self.read(*o)?),
                         };
                         self.op_return(v, base)?
@@ -3474,5 +3478,36 @@ pub(crate) fn ctor_failed_unfinished(calls: &[crate::vm::PendingCall]) {
                 d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
             }
         }
+    }
+}
+
+impl Vm {
+    /// `return $cv;` of an undefined CV in a function with a checked return
+    /// type: php-src's `ZEND_VERIFY_RETURN_TYPE` reads the CV first (one
+    /// "Undefined variable" warning) and `ZEND_RETURN` reads it again (a
+    /// second one) when null passes the type. Returns the value to return
+    /// when the second read must not happen (null fails the type, so the
+    /// check throws before `ZEND_RETURN`); `None` when the ordinary read
+    /// follows.
+    #[cold]
+    #[inline(never)]
+    fn return_undefined_typed_cv(&mut self, cv: u32) -> VmResult<Option<Value>> {
+        let f = self.frame();
+        let defined = f.cvs.get(cv as usize).and_then(CvSlot::get).is_some();
+        let Some(uf) = f.ufunc.as_ref() else {
+            return Ok(None);
+        };
+        if defined || uf.flags & crate::func::flags::GENERATOR != 0 {
+            return Ok(None);
+        }
+        let Some(rt) = uf.return_type.as_ref() else {
+            return Ok(None);
+        };
+        if rt.is_mixed() {
+            return Ok(None);
+        }
+        let accepts_null = crate::call::accepts_without_coercion(rt.mask, &Value::Null);
+        let v = self.read(Operand::Cv(cv))?;
+        Ok((!accepts_null).then_some(v))
     }
 }

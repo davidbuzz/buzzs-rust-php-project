@@ -23,6 +23,9 @@ thread_local! {
     static BLACKLIST: RefCell<Option<(String, Rc<Blacklist>)>> = const { RefCell::new(None) };
     /// `ZCSG(restart_pending)`.
     static RESTART_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `JIT_G(enabled)`: decided at startup, cleared by a run-time
+    /// `opcache.jit=disable`.
+    static JIT_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 /// `accel_blacklist`: loaded once from `opcache.blacklist_filename`
@@ -65,6 +68,9 @@ impl Extension for Opcache {
 
         // Register INI directives
         register_ini(module);
+
+        // Includes of deleted files served from the cache (`validate_timestamps=0`).
+        Vm::set_cached_include_hook(opcache_cached_include);
 
         // Register functions
         module
@@ -181,6 +187,14 @@ fn vm_accel_log(vm: &mut Vm, kind: AccelLog, message: &str) {
 /// `zend_accel_error(ACCEL_LOG_WARNING, ...)` for the startup INI checks,
 /// whose messages end in their own newline, as php-src's do (the line
 /// then ends in two).
+/// `zend_accel_error_noreturn(ACCEL_LOG_FATAL, ...)`: logged when
+/// `opcache.log_verbosity_level` admits fatal errors, and the process
+/// exits with status 254 (-2) whether logged or not.
+fn accel_fatal(vm: &mut Vm, message: &str) -> ! {
+    vm_accel_log(vm, AccelLog::Fatal, message);
+    std::process::exit(254);
+}
+
 fn accel_log_warning(vm: &mut Vm, message: &str) {
     vm_accel_log(vm, AccelLog::Warning, message);
 }
@@ -249,6 +263,79 @@ fn check_startup_ini(vm: &mut Vm) {
         );
         vm.ini.reset_to_default("opcache.max_wasted_percentage");
     }
+    check_startup_shm(vm);
+    JIT_ENABLED.with(|c| c.set(jit_enabled_at_startup(vm)));
+}
+
+/// `JIT_G(enabled)` after start-up: `zend_jit_config` on the configured
+/// `opcache.jit`, then `accel_post_startup` turns it off without a JIT
+/// buffer or in file-cache-only mode (when opcache starts at all).
+fn jit_enabled_at_startup(vm: &Vm) -> bool {
+    let configured = JitConfig::parse(&get_ini_string(vm, "opcache.jit")).is_ok_and(|c| c.enabled);
+    if !configured || !is_opcache_enabled(vm) {
+        return configured;
+    }
+    let raw_buf = vm.ini_string("opcache.jit_buffer_size").unwrap_or_default();
+    let (buffer_size, _) = php_support::ini::parse_quantity(&raw_buf);
+    buffer_size > 0 && !vm.ini_bool("opcache.file_cache_only")
+}
+
+/// `OnUpdateJit` (`zend_jit_config`): at run time the JIT mode can change
+/// only while the JIT is enabled.
+fn on_update_jit(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
+    if vm.ini_modify_stage() == php_vm::ext::IniStage::Restore {
+        return Ok(true);
+    }
+    if !JIT_ENABLED.with(std::cell::Cell::get) {
+        vm.raise(
+            2,
+            "Cannot change opcache.jit setting at run-time (JIT is disabled)",
+        )?;
+        return Ok(false);
+    }
+    if let Ok(cfg) = JitConfig::parse(&String::from_utf8_lossy(value)) {
+        JIT_ENABLED.with(|c| c.set(cfg.enabled));
+    }
+    Ok(true)
+}
+
+/// The shared-memory set-up of `accel_post_startup` /
+/// `zend_accel_init_shm`, for its fatal errors: the interned strings
+/// buffer must fit in `opcache.memory_consumption`, and file-cache-only
+/// mode needs `opcache.file_cache`.
+fn check_startup_shm(vm: &Vm) {
+    /// `sizeof(zend_accel_shared_globals)` on 64-bit builds.
+    const SHARED_GLOBALS_SIZE: i64 = 1088;
+    const MIB: i64 = 1024 * 1024;
+    if !is_opcache_enabled(vm) {
+        return;
+    }
+    if vm.ini_bool("opcache.file_cache_only") {
+        if get_ini_string(vm, "opcache.file_cache").is_empty() {
+            accel_fatal(
+                vm,
+                "opcache.file_cache_only is set without a proper setting of opcache.file_cache",
+            );
+        }
+        return;
+    }
+    let interned = vm.ini_long("opcache.interned_strings_buffer");
+    let size = if interned > 0 {
+        SHARED_GLOBALS_SIZE + interned.saturating_mul(MIB)
+    } else {
+        SHARED_GLOBALS_SIZE + 4
+    };
+    if size
+        > vm.ini_long("opcache.memory_consumption")
+            .saturating_mul(MIB)
+    {
+        accel_fatal(
+            vm,
+            &format!(
+                "Insufficient shared memory for interned strings buffer! (tried to allocate {size} bytes)"
+            ),
+        );
+    }
 }
 
 /// `OnEnable` (`zend_accelerator_module.c`): at run time opcache may only be
@@ -275,6 +362,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     };
 
     m.ini_on_modify("opcache.enable", on_update_enable);
+    m.ini_on_modify("opcache.jit", on_update_jit);
     m.on_request_startup(check_startup_ini);
     m.ini(d(
         "opcache.enable",
@@ -596,6 +684,20 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     ));
 }
 
+/// `zend_finalize_system_id` for the file cache, from the internal
+/// function table as it stands after `disable_functions` (GH-17733).
+fn ensure_system_id(vm: &Vm) {
+    if file_cache::system_id_is_final() {
+        return;
+    }
+    let names = vm
+        .functions
+        .iter()
+        .filter(|(_, f)| matches!(f, php_vm::func::Func::Builtin(_)))
+        .map(|(name, _)| name.as_bytes());
+    file_cache::set_system_id(file_cache::compute_system_id(names));
+}
+
 fn is_opcache_enabled(vm: &Vm) -> bool {
     let enable = vm.ini_bool("opcache.enable");
     let enable_cli = vm.ini_bool("opcache.enable_cli");
@@ -761,6 +863,7 @@ fn opcache_compile_hook(
     let enable_cli = vm.ini_bool("opcache.enable_cli");
     let file_cache_only = vm.ini_bool("opcache.file_cache_only");
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
+    ensure_system_id(vm);
 
     if !enable || (!enable_cli && !file_cache_only) {
         return vm.compile_source_default(src, filename, false, skip_shebang);
@@ -813,9 +916,7 @@ fn opcache_compile_hook(
         if let Some(unit) = hit {
             unit.clear_runtime_caches();
             if vm.ini_bool("opcache.record_warnings") {
-                for (level, msg, line) in &unit.warnings {
-                    vm.error_at(*level, msg, filename, *line)?;
-                }
+                vm.emit_compile_warnings(&unit, filename)?;
             }
             return Ok(CompileOutcome::Ok(unit));
         }
@@ -852,9 +953,8 @@ fn opcache_compile_hook(
                 return Ok(res);
             }
             Err(corrupted_msg) => {
-                if vm.ini_long("opcache.log_verbosity_level") >= 2 {
-                    let _ = vm.error(2, &corrupted_msg);
-                }
+                // zend_accel_error(ACCEL_LOG_WARNING, "...\n").
+                accel_log_warning(vm, &format!("{corrupted_msg}\n"));
             }
             Ok(None) => {}
         }
@@ -863,6 +963,8 @@ fn opcache_compile_hook(
     // 3. Cache Miss: compile source
     let res = vm.compile_source_default(src.clone(), filename, false, skip_shebang)?;
     if let CompileOutcome::Ok(ref unit) = res {
+        // `zend_accel_script_optimize` -> `zend_optimize_script`.
+        vm.call_registered_optimizer_passes();
         if !file_cache_only {
             // `cache_script_in_shared_memory()`.
             vm_accel_log(vm, AccelLog::Info, &format!("Cached script '{real_str}'"));
@@ -876,13 +978,64 @@ fn opcache_compile_hook(
             if let Err((msg, _)) =
                 file_cache::write_file_cache(cache_dir, &realpath, mtime_sec, &src)
             {
-                if vm.ini_long("opcache.log_verbosity_level") >= 2 {
-                    let _ = vm.error(2, &msg);
-                }
+                accel_log_warning(vm, &format!("{msg}\n"));
             }
         }
     }
     Ok(res)
+}
+
+/// An include of a file that cannot be opened: `persistent_compile_file`
+/// looks the script up by its key before opening the file, so with
+/// `opcache.validate_timestamps=0` a cached script runs even after its file
+/// was deleted (until `opcache_invalidate()`).
+fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc<CompiledUnit>)>> {
+    use std::os::unix::ffi::OsStrExt;
+    if !is_opcache_enabled(vm)
+        || vm.ini_bool("opcache.file_cache_only")
+        || vm.ini_bool("opcache.validate_timestamps")
+    {
+        return Ok(None);
+    }
+    let path = std::path::Path::new(std::ffi::OsStr::from_bytes(name));
+    let full = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(path),
+            Err(_) => return Ok(None),
+        }
+    };
+    // The file is gone: resolve its directory.
+    let key = match (full.parent(), full.file_name()) {
+        (Some(dir), Some(base)) => {
+            std::fs::canonicalize(dir).map_or(full.clone(), |d| d.join(base))
+        }
+        _ => full,
+    };
+    let key = key.to_string_lossy().into_owned();
+    let now_sec = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let hit = GLOBAL_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if !cache.is_cached(&key) {
+            return None;
+        }
+        match cache.get(&key, 0, false, 0, now_sec) {
+            CacheLookup::Hit(unit) => Some(unit.clone()),
+            _ => None,
+        }
+    });
+    let Some(unit) = hit else {
+        return Ok(None);
+    };
+    unit.clear_runtime_caches();
+    let filename = ZStr::from(key.as_bytes());
+    if vm.ini_bool("opcache.record_warnings") {
+        vm.emit_compile_warnings(&unit, &filename)?;
+    }
+    Ok(Some((filename, unit)))
 }
 
 fn opcache_reset(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -1309,6 +1462,7 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 });
             }
             let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
+            ensure_system_id(vm);
             if !file_cache_dir.is_empty() {
                 let cache_dir = std::path::Path::new(&file_cache_dir);
                 let _ = file_cache::write_file_cache(cache_dir, &realpath, mtime_sec, &src);
@@ -1337,6 +1491,8 @@ fn opcache_invalidate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let real_str = realpath.to_string_lossy().into_owned();
 
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
+
+    ensure_system_id(vm);
     if !file_cache_dir.is_empty() {
         let cache_dir = std::path::Path::new(&file_cache_dir);
         file_cache::invalidate_file_cache(cache_dir, &realpath);
@@ -1577,7 +1733,11 @@ fn opcache_get_configuration(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     );
     dirs.make_mut().insert(
         ZStr::from("opcache.jit_prof_threshold"),
-        Value::Float(0.005),
+        Value::Float(
+            vm.ini_string("opcache.jit_prof_threshold")
+                .and_then(|v| std::str::from_utf8(&v).ok()?.trim().parse::<f64>().ok())
+                .unwrap_or(0.005),
+        ),
     );
     dirs.make_mut().insert(
         ZStr::from("opcache.jit_max_trace_length"),
@@ -1640,6 +1800,7 @@ fn opcache_is_script_cached_in_file_cache(vm: &mut Vm, a: &mut Args) -> VmResult
     let enabled = vm.ini_bool("opcache.enable")
         && (vm.ini_bool("opcache.enable_cli") || vm.ini_bool("opcache.file_cache_only"));
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
+    ensure_system_id(vm);
     if !enabled || file_cache_dir.is_empty() {
         return Ok(Value::Bool(false));
     }

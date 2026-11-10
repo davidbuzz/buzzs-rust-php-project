@@ -29,9 +29,50 @@ pub fn adler32(data: &[u8]) -> u32 {
     (b << 16) | a
 }
 
-/// Returns the system id.
+/// The finalized system id, once [`set_system_id`] ran.
+static FINAL_SYSTEM_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Returns the system id: the finalized one, else [`SYSTEM_ID`].
 pub fn system_id() -> &'static str {
-    SYSTEM_ID
+    FINAL_SYSTEM_ID.get().map_or(SYSTEM_ID, String::as_str)
+}
+
+/// Whether the system id was finalized.
+pub fn system_id_is_final() -> bool {
+    FINAL_SYSTEM_ID.get().is_some()
+}
+
+/// Finalizes the system id (`zend_finalize_system_id`); later calls keep
+/// the first value.
+pub fn set_system_id(id: String) {
+    let _ = FINAL_SYSTEM_ID.set(id);
+}
+
+/// `zend_finalize_system_id`: cached scripts may refer to internal
+/// functions, so the effects of `disable_functions` (and of the loaded
+/// extensions) are part of the system id (GH-17733). `function_names` are
+/// the internal function table's keys; their order does not matter here.
+/// The result is 32 lowercase hex digits.
+pub fn compute_system_id<'a>(function_names: impl IntoIterator<Item = &'a [u8]>) -> String {
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut names: Vec<&[u8]> = function_names.into_iter().collect();
+    names.sort_unstable();
+    let mut h1: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut h2: u64 = 0x8422_2325_cbf2_9ce4;
+    let mut feed = |bytes: &[u8]| {
+        for &b in bytes {
+            h1 = (h1 ^ u64::from(b)).wrapping_mul(PRIME);
+            h2 = (h2 ^ u64::from(b.rotate_left(3))).wrapping_mul(PRIME);
+        }
+        // The terminating NUL php-src hashes with each name.
+        h1 = h1.wrapping_mul(PRIME);
+        h2 = (h2 ^ 0xff).wrapping_mul(PRIME);
+    };
+    feed(SYSTEM_ID.as_bytes());
+    for n in names {
+        feed(n);
+    }
+    format!("{h1:016x}{h2:016x}")
 }
 
 /// Returns the full path to the `.bin` cache file for the given script.
@@ -46,7 +87,16 @@ pub fn get_bin_path(cache_dir: &Path, script_path: &Path) -> PathBuf {
         .unwrap_or_default();
     file_name.push(".bin");
     let parent = rel.parent().unwrap_or_else(|| Path::new(""));
-    cache_dir.join(SYSTEM_ID).join(parent).join(file_name)
+    cache_dir.join(system_id()).join(parent).join(file_name)
+}
+
+/// `strerror(errno)`: the error text without Rust's " (os error N)".
+fn strerror(e: &std::io::Error) -> String {
+    let text = e.to_string();
+    match text.find(" (os error") {
+        Some(i) => text[..i].to_string(),
+        None => text,
+    }
 }
 
 /// Writes a script's payload to the file cache.
@@ -62,7 +112,7 @@ pub fn write_file_cache(
             let msg = format!(
                 "opcache cannot create directory for file '{}', {}",
                 bin_path.display(),
-                e
+                strerror(&e)
             );
             return Err((msg, e));
         }
@@ -71,7 +121,7 @@ pub fn write_file_cache(
     let checksum = adler32(payload);
     let mut bytes = Vec::with_capacity(HEADER_SIZE + payload.len());
     bytes.extend_from_slice(MAGIC);
-    bytes.extend_from_slice(SYSTEM_ID.as_bytes());
+    bytes.extend_from_slice(system_id().as_bytes());
     bytes.extend_from_slice(&mtime.to_le_bytes());
     bytes.extend_from_slice(&checksum.to_le_bytes());
     bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
@@ -83,7 +133,7 @@ pub fn write_file_cache(
             let msg = format!(
                 "opcache cannot write to file '{}': {}",
                 bin_path.display(),
-                e
+                strerror(&e)
             );
             let _ = std::fs::remove_file(&bin_path);
             Err((msg, e))
@@ -123,7 +173,7 @@ pub fn read_file_cache(
         ));
     }
 
-    if &bytes[8..40] != SYSTEM_ID.as_bytes() {
+    if &bytes[8..40] != system_id().as_bytes() {
         let _ = std::fs::remove_file(&bin_path);
         return Err(format!(
             "opcache cannot read from file '{}' (wrong \"system_id\")",
@@ -175,7 +225,7 @@ pub fn is_script_cached_in_file_cache(
             if let Ok(bytes) = std::fs::read(&bin_path) {
                 if bytes.len() >= 48
                     && &bytes[0..8] == MAGIC
-                    && &bytes[8..40] == SYSTEM_ID.as_bytes()
+                    && &bytes[8..40] == system_id().as_bytes()
                 {
                     let mtime = i64::from_le_bytes(bytes[40..48].try_into().unwrap());
                     return mtime == expected;
@@ -185,4 +235,20 @@ pub fn is_script_cached_in_file_cache(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_system_id;
+
+    #[test]
+    fn system_id_depends_on_the_function_set_not_its_order() {
+        let all: [&[u8]; 3] = [b"strlen", b"str_repeat", b"zend_version"];
+        let id = compute_system_id(all);
+        assert_eq!(id.len(), 32);
+        assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(id, compute_system_id([all[2], all[0], all[1]]));
+        assert_ne!(id, compute_system_id([all[0], all[1]]));
+        assert_ne!(id, compute_system_id([all[0], all[2]]));
+    }
 }

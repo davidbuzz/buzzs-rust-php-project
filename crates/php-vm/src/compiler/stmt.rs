@@ -458,15 +458,10 @@ impl Compiler<'_> {
                     None => 0,
                 };
                 self.ticks = u32::try_from(n.max(0)).unwrap_or(u32::MAX);
-            } else if d.name.eq_ignore_case("encoding") {
-                // Encoding is ignored (no zend.multibyte).
-            } else {
-                self.warnings.push((
-                    128,
-                    format!("Unsupported declare '{}'", d.name.as_str_lossy()),
-                    d.span.line,
-                ));
             }
+            // `encoding` is ignored (no zend.multibyte); php-parser's
+            // validation pass already reported "Unsupported declare" for
+            // any other directive.
         }
         if let Some(b) = body {
             let r = self.compile_stmt(b);
@@ -1155,15 +1150,12 @@ impl Compiler<'_> {
 
     fn compile_switch(&mut self, subject: &Expr, cases: &[ast::SwitchCase]) -> CResult<()> {
         let s = self.compile_expr(subject)?;
+        // A variable subject is compared as it stands at each case
+        // (`ZEND_IS_EQUAL` on the CV, not a copy): each case reads it, so
+        // an undefined one warns on every case line, and a case expression
+        // that assigns it changes what later cases compare.
         let (subj, cleanup) = match s {
             Operand::Tmp(t) => (Operand::TmpKeep(t), Cleanup::FreeTmp(t)),
-            Operand::Cv(_) => {
-                // Copy so that case expressions modifying the variable do
-                // not change the subject.
-                let t = self.tmp();
-                self.emit(Op::Move { src: s, dst: t });
-                (Operand::TmpKeep(t), Cleanup::FreeTmp(t))
-            }
             o => (o, Cleanup::None),
         };
         let mut case_jumps = Vec::new();

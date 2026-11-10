@@ -20,14 +20,65 @@ pub enum CompileOutcome {
 /// A hook called when compiling file source (`zend_compile_file` override point).
 pub type CompileHookFn = fn(&mut Vm, Rc<[u8]>, &ZStr, bool) -> VmResult<CompileOutcome>;
 
+/// A hook that serves an `include` whose file cannot be opened from a
+/// script cache (opcache finds a script by its key before opening the
+/// file, so with `opcache.validate_timestamps=0` a deleted file still
+/// runs). Returns the cached unit and its path.
+pub type CachedIncludeHookFn = fn(&mut Vm, &[u8]) -> VmResult<Option<(ZStr, Rc<CompiledUnit>)>>;
+
+/// A pass registered with `zend_optimizer_register_pass`, run on each
+/// script opcache optimizes.
+pub type OptimizerPassFn = fn(&mut Vm);
+
 thread_local! {
+    static OPTIMIZER_PASSES: std::cell::RefCell<Vec<OptimizerPassFn>> = const { std::cell::RefCell::new(Vec::new()) };
+    static CACHED_INCLUDE_HOOK: std::cell::Cell<Option<CachedIncludeHookFn>> = const { std::cell::Cell::new(None) };
     static COMPILE_HOOK: std::cell::Cell<Option<CompileHookFn>> = const { std::cell::Cell::new(None) };
+    /// Set while compiling a file opened through a stream wrapper other
+    /// than `file://` and `phar://`: such source bypasses the compile hook
+    /// (opcache's `persistent_compile_file` falls back to the original
+    /// `compile_file` for it, bug #64482).
+    static UNCACHEABLE_STREAM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `is_stream_path() && !is_cacheable_stream_path()` (ZendAccelerator.c):
+/// a `scheme://` name whose wrapper is neither `file` nor `phar`.
+fn is_uncacheable_stream_path(name: &[u8]) -> bool {
+    let scheme = name
+        .iter()
+        .take_while(|&&c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
+        .count();
+    scheme > 0
+        && name[scheme..].starts_with(b"://")
+        && !name.starts_with(b"file://")
+        && !name.starts_with(b"phar://")
 }
 
 impl Vm {
     /// Installs a compile hook (`zend_compile_file` override point) for files.
     pub fn set_compile_hook(f: CompileHookFn) {
         COMPILE_HOOK.with(|h| h.set(Some(f)));
+    }
+
+    /// `zend_optimizer_register_pass`: `pass` runs after opcache's
+    /// optimizer on each script it compiles.
+    pub fn register_optimizer_pass(pass: OptimizerPassFn) {
+        OPTIMIZER_PASSES.with(|p| p.borrow_mut().push(pass));
+    }
+
+    /// `zend_optimizer_call_registered_passes`, at the end of
+    /// `zend_optimize_script`.
+    pub fn call_registered_optimizer_passes(&mut self) {
+        let passes = OPTIMIZER_PASSES.with(|p| p.borrow().clone());
+        for pass in passes {
+            pass(self);
+        }
+    }
+
+    /// Installs the hook serving includes of unopenable files from a
+    /// script cache.
+    pub fn set_cached_include_hook(f: CachedIncludeHookFn) {
+        CACHED_INCLUDE_HOOK.with(|h| h.set(Some(f)));
     }
 
     /// The constants the compiler may substitute (`zend_try_ct_eval_const`,
@@ -123,7 +174,7 @@ impl Vm {
         is_eval: bool,
         skip_shebang: bool,
     ) -> VmResult<CompileOutcome> {
-        if !is_eval {
+        if !is_eval && !UNCACHEABLE_STREAM.with(|c| c.replace(false)) {
             if let Some(hook) = COMPILE_HOOK.with(|h| h.get()) {
                 return hook(self, src, filename, skip_shebang);
             }
@@ -232,8 +283,16 @@ impl Vm {
                 u
             }
             Err(e) => {
-                for (level, msg, line) in &e.warnings {
-                    self.error_at(*level, msg, filename, *line)?;
+                // `compile_file` records the diagnostics of a compilation;
+                // a fatal error emits them first, with the user error
+                // handler disabled (Zend/zend.c, "Emit any delayed error
+                // before handling fatal error").
+                if is_eval {
+                    for (level, msg, line) in &e.warnings {
+                        self.error_at(*level, msg, filename, *line)?;
+                    }
+                } else {
+                    self.emit_warnings_without_handler(&e.warnings, filename);
                 }
                 self.report_compile_error(&e.message, filename, e.line, e.is_parse);
                 return Ok(CompileOutcome::Fatal);
@@ -244,9 +303,6 @@ impl Vm {
                 .halt_offsets
                 .insert(filename.clone(), i64::try_from(off).unwrap_or(0));
         }
-        for (level, msg, line) in &unit.warnings {
-            self.error_at(*level, msg, filename, *line)?;
-        }
         if let Some(program) = kept {
             self.parsed_sources
                 .borrow_mut()
@@ -256,7 +312,76 @@ impl Vm {
         if declares_anything(&unit) {
             self.units.push(unit.clone());
         }
+        if is_eval {
+            for (level, msg, line) in &unit.warnings {
+                self.error_at(*level, msg, filename, *line)?;
+            }
+        } else {
+            self.emit_compile_warnings(&unit, filename)?;
+        }
         Ok(CompileOutcome::Ok(unit))
+    }
+
+    /// Emits the diagnostics recorded while compiling a file
+    /// (`zend_emit_recorded_errors` after `compile_file`, or opcache's
+    /// replay of a cached script's warnings).
+    ///
+    /// php-src binds a file's top-level functions while it compiles, so:
+    /// - a function that is already declared (or declared twice in the
+    ///   file) is a compile-time fatal error, before which the recorded
+    ///   diagnostics are emitted with the user error handler disabled;
+    /// - an exception thrown by the user error handler leaves the file's
+    ///   functions and early-bound classes declared, though the file does
+    ///   not run (GH-17422).
+    pub fn emit_compile_warnings(&mut self, unit: &CompiledUnit, filename: &ZStr) -> VmResult<()> {
+        if unit.warnings.is_empty() {
+            return Ok(());
+        }
+        if self.hoisted_function_conflict(unit) {
+            self.emit_warnings_without_handler(&unit.warnings, filename);
+            return Ok(());
+        }
+        for (level, msg, line) in &unit.warnings {
+            if let Err(t) = self.error_at(*level, msg, filename, *line) {
+                if matches!(t, Throw::Exception(_)) {
+                    self.declare_hoisted(unit)?;
+                }
+                return Err(t);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether declaring `unit`'s hoisted functions would fail with
+    /// "Cannot redeclare function".
+    fn hoisted_function_conflict(&self, unit: &CompiledUnit) -> bool {
+        let funcs = unit.decls.functions.borrow();
+        let mut seen: Vec<ZStr> = Vec::new();
+        for &i in &unit.hoisted_functions {
+            let Some(f) = funcs.get(i as usize) else {
+                continue;
+            };
+            let lc = f.name.to_ascii_lowercase();
+            if self.functions.contains_key(&lc) || seen.contains(&lc) {
+                return true;
+            }
+            seen.push(lc);
+        }
+        false
+    }
+
+    /// Emits diagnostics with the user error handler disabled, as php-src
+    /// does for the recorded ones before a fatal error.
+    #[cold]
+    fn emit_warnings_without_handler(&mut self, warnings: &[(i64, String, u32)], filename: &ZStr) {
+        if warnings.is_empty() {
+            return;
+        }
+        let handlers = std::mem::take(&mut self.error_handlers);
+        for (level, msg, line) in warnings {
+            let _ = self.error_at(*level, msg, filename, *line);
+        }
+        self.error_handlers = handlers;
     }
 
     /// Declares the hoisted functions and classes of a unit.
@@ -530,7 +655,15 @@ impl Vm {
                     source,
                     opened_path,
                 } => {
-                    return self.include_source(kind, kind_name, source, opened_path, dst);
+                    let uncacheable = is_uncacheable_stream_path(name);
+                    return self.include_source(
+                        kind,
+                        kind_name,
+                        source,
+                        opened_path,
+                        dst,
+                        uncacheable,
+                    );
                 }
                 crate::ext::IncludeOpen::Failed => {
                     return self.include_failed(kind, kind_name, &s, dst);
@@ -540,6 +673,13 @@ impl Vm {
         }
         let resolved = self.resolve_include_path(name);
         let Some(path) = resolved else {
+            if !name.is_empty() {
+                if let Some(hook) = CACHED_INCLUDE_HOOK.with(std::cell::Cell::get) {
+                    if let Some((path, unit)) = hook(self, name)? {
+                        return self.include_cached(kind, kind_name, &unit, path, dst);
+                    }
+                }
+            }
             if name.is_empty() {
                 self.warning(&format!("{kind_name}(): Filename cannot be empty"))?;
             } else {
@@ -588,6 +728,30 @@ impl Vm {
         Ok(true)
     }
 
+    /// Runs a unit a script cache served for `path`.
+    fn include_cached(
+        &mut self,
+        kind: IncludeKind,
+        kind_name: &str,
+        unit: &Rc<CompiledUnit>,
+        path: ZStr,
+        dst: u32,
+    ) -> VmResult<bool> {
+        if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
+            && self.included_set.contains(&path)
+        {
+            self.set_tmp(dst, Value::Bool(true));
+            return Ok(false);
+        }
+        if !self.included_set.contains(&path) {
+            self.included_set.insert(path.clone());
+            self.included.push(path);
+        }
+        self.declare_hoisted(unit)?;
+        self.push_include_frame(unit, FrameKind::Include, dst, Some(kind_name));
+        Ok(true)
+    }
+
     /// Includes already-opened source (from an opener hook).
     fn include_source(
         &mut self,
@@ -596,6 +760,7 @@ impl Vm {
         src: Vec<u8>,
         path: ZStr,
         dst: u32,
+        uncacheable: bool,
     ) -> VmResult<bool> {
         if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
             && self.included_set.contains(&path)
@@ -608,7 +773,11 @@ impl Vm {
             self.included.push(path.clone());
         }
         let src = self.filter_source(&path, src)?;
-        let unit = match self.compile_source(Rc::from(src), &path, false, true)? {
+        // The flag is read once, when `compile_source` chooses the hook.
+        let saved = UNCACHEABLE_STREAM.with(|c| c.replace(uncacheable));
+        let compiled = self.compile_source(Rc::from(src), &path, false, true);
+        UNCACHEABLE_STREAM.with(|c| c.set(saved));
+        let unit = match compiled? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),
@@ -758,5 +927,23 @@ impl CompiledUnit {
                 m.func.statics.borrow_mut().clear();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_uncacheable_stream_path;
+
+    #[test]
+    fn stream_paths_other_than_file_and_phar_are_not_cacheable() {
+        assert!(is_uncacheable_stream_path(
+            b"php://filter/read=string.toupper/resource=a.inc"
+        ));
+        assert!(is_uncacheable_stream_path(b"data://text/plain,x"));
+        assert!(!is_uncacheable_stream_path(b"file:///tmp/a.inc"));
+        assert!(!is_uncacheable_stream_path(b"phar:///tmp/a.phar/b.php"));
+        assert!(!is_uncacheable_stream_path(b"/tmp/a.inc"));
+        assert!(!is_uncacheable_stream_path(b"://x"));
+        assert!(!is_uncacheable_stream_path(b"data:text/plain,x"));
     }
 }
