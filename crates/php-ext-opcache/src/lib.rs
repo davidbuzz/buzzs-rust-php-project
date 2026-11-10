@@ -1688,4 +1688,30 @@ mod tests {
         assert_eq!(parse_jit_mode("254"), (5, 4, 2));
         assert_eq!(parse_jit_mode("invalid_mode"), (5, 4, 6));
     }
+
+    #[test]
+    fn accel_log_levels_and_format() {
+        let path = std::env::temp_dir().join(format!("phprust-accel-log-{}", std::process::id()));
+        let log = path.to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&path);
+        accel_log(2, &log, AccelLog::Info, "not written");
+        accel_log(4, &log, AccelLog::Info, "Cached script '/x.php'");
+        accel_log(4, &log, AccelLog::Debug, "Restart Scheduled! Reason: user");
+        accel_log(
+            1,
+            &log,
+            AccelLog::Fatal,
+            "Preloading failed to getpwnam(\"nobody-x\")",
+        );
+        let written = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_file(&path);
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(lines.len(), 3);
+        let pid = format!(" ({}): ", std::process::id());
+        assert!(lines[0].contains(&pid) && lines[0].ends_with("Message Cached script '/x.php'"));
+        assert!(lines[1].ends_with("Debug Restart Scheduled! Reason: user"));
+        assert!(lines[2].ends_with("Fatal Error Preloading failed to getpwnam(\"nobody-x\")"));
+        // asctime(): "Www Mmm dd hh:mm:ss yyyy".
+        assert_eq!(lines[0].find(" (").map(|i| i == 24), Some(true));
+    }
 }
