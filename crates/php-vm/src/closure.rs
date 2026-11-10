@@ -343,30 +343,40 @@ impl Vm {
 
     /// Binds captured variables and statics into the new frame at index
     /// `frame` of the frame stack.
+    ///
+    /// The closure's data is read through a shared borrow found from the
+    /// object's header once (it is only read here), not through
+    /// `object::internal`'s second lookup and mutable borrow: this runs on
+    /// every call of a closure.
     pub(crate) fn bind_closure_vars(&mut self, frame: usize, c: &Obj) {
         let Some(f) = self.frames.get_mut(frame) else {
             return;
         };
-        object::internal::<ClosureData, _>(c, |d| {
-            if f.this.is_none() && d.this.is_some() {
-                f.this = d.this.clone();
+        let internal = object::data(c).internal.borrow();
+        let Some(d) = internal
+            .as_ref()
+            .and_then(|x| x.downcast_ref::<ClosureData>())
+        else {
+            return;
+        };
+        if f.this.is_none() && d.this.is_some() {
+            f.this = d.this.clone();
+        }
+        if f.scope.is_none() && d.scope.is_some() {
+            f.scope = d.scope.clone();
+        }
+        if f.called.is_none() && d.called.is_some() {
+            f.called = d.called.clone();
+        }
+        if f.magic_name.is_none() && d.magic_name.is_some() {
+            f.magic_name = d.magic_name.clone();
+        }
+        for (cv, v) in &d.vars {
+            if let Some(slot) = f.cvs.get_mut(*cv as usize) {
+                slot.set(Some(v.clone()));
             }
-            if f.scope.is_none() && d.scope.is_some() {
-                f.scope = d.scope.clone();
-            }
-            if f.called.is_none() && d.called.is_some() {
-                f.called = d.called.clone();
-            }
-            if f.magic_name.is_none() && d.magic_name.is_some() {
-                f.magic_name = d.magic_name.clone();
-            }
-            for (cv, v) in &d.vars {
-                if let Some(slot) = f.cvs.get_mut(*cv as usize) {
-                    slot.set(Some(v.clone()));
-                }
-            }
-            f.statics = Some(d.statics.clone());
-        });
+        }
+        f.statics = Some(d.statics.clone());
     }
 
     fn statics_store(&mut self) -> Rc<RefCell<Vec<Option<PhpRef>>>> {
