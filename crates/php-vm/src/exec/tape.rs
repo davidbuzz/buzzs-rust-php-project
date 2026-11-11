@@ -956,7 +956,12 @@ tape_ops! {
         //
         //
         // ---- props (exec/tape/props.rs) ----
-
+        FetchObjProp = (props::prop_in, 1, poll),
+        AssignObjProp = (props::prop_in, 1, poll),
+        AssignOpObjProp = (props::prop_in, 1, poll),
+        IncDecObjProp = (props::prop_in, 1, poll),
+        IssetObjProp = (props::prop_in, 1, poll),
+        New = (props::new_prop, 1, branch_poll),
 
         // ---- end of props ----
         //

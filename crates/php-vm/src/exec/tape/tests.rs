@@ -643,6 +643,57 @@ int(6)
     );
 }
 
+const PROPS_IN_EVERY_SPECIALISED_FORM: &str = r#"<?php
+class P { public int $x = 10; public string $s = "ab"; public float $f = 1.5; public function __construct() {} }
+class Q { public int $y = 3; }
+function props($o) {
+    echo $o->x, " "; $o->x = 20; $o->x += 5; $o->x++; $p = $o->x++;
+    echo $o->x, " ", $p, "\n";
+    if (isset($o->x)) { echo "set "; }
+    if (empty($o->s)) { echo "empty "; }
+    $v = $o->x; var_dump($v);
+    $m = $o->x; echo $m, "\n";
+    $o->x = $o->x = 9; echo $o->x, "\n";
+    $n = new P(); var_dump($n->x);
+    $q = new Q(); var_dump($q->y);
+    return $o->x;
+}
+$o = new P(); var_dump(props($o));
+"#;
+
+/// Object properties and `new` in every specialised form: reads, writes,
+/// compound assignments, `++`/`--`, `isset`/`empty`, chained assignment,
+/// and `new` on both the ctor path (fall-through) and the no-ctor path
+/// (jump over the ctor call). Every props family instruction appears, the
+/// tape shape is checked, and the output matches `/usr/bin/php`.
+#[test]
+fn props_in_every_specialised_form() {
+    let arrays = op_arrays(PROPS_IN_EVERY_SPECIALISED_FORM);
+    for code in &arrays {
+        check(code);
+    }
+    let tape = check(&arrays[1]);
+    let has = |op: TOp| tape.iter().any(|i| i.op == op);
+    for op in [
+        TOp::FetchObjProp,
+        TOp::AssignObjProp,
+        TOp::AssignOpObjProp,
+        TOp::IncDecObjProp,
+        TOp::IssetObjProp,
+        TOp::New,
+    ] {
+        assert!(
+            has(op),
+            "{op:?} missing in {:?}",
+            tape.iter().map(|i| i.op).collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(
+        run(PROPS_IN_EVERY_SPECIALISED_FORM),
+        "10 27 26\nset int(27)\n27\n9\nint(10)\nint(3)\nint(9)\n"
+    );
+}
+
 const DIMS_IN_EVERY_SPECIALISED_FORM: &str = r#"<?php
 function dims($n) {
     $a = [1, 2, 3, 4, 5];

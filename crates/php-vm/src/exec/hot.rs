@@ -207,6 +207,13 @@ pub(super) fn is_core(op: &Op) -> bool {
             | Op::AssignOpDimsCv { .. }
             | Op::IncDecDimCv { .. }
             | Op::ConcatCv { .. }
+            // Object property cache hits and `new` (`exec/spec/props.rs`).
+            | Op::FetchObjProp { .. }
+            | Op::AssignObjProp { .. }
+            | Op::AssignOpObjProp { .. }
+            | Op::IncDecObjProp { .. }
+            | Op::IssetObjProp { .. }
+            | Op::New { .. }
     )
 }
 
