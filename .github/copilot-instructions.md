@@ -47,11 +47,13 @@ target/debug/phpt-runner --php target/debug/php -j 8 -q --no-artifacts modules/p
   pass rates.
 - `--json report.json` + `scripts/update_feature_gap.py report.json` rewrites FEATURE_GAP.md's
   `%` column from a run (`--summary` prints the headline table).
-- `scripts/perf_gate.sh` is the performance gate: it builds a release `php` and compares
-  user-space instruction counts per workload against `/usr/bin/php`, failing when any ratio
-  exceeds its budget in `perf/bench/budgets.tsv`. Performance work must keep every workload
-  within budget, with the end goal of parity or better (ratio ≤ 1.0) vs the C implementation.
-  Run it after changes to hot paths (VM executor, runtime value/array/string code).
+- `scripts/acceptance.sh` is the performance acceptance check: it builds a release `php` and
+  compares user-space instruction counts per workload against the **goal** — the instruction
+  counts measured for the C implementation, recorded in `perf/bench/goal.tsv`. The criterion
+  is one number per workload: candidate ≤ 1.10 × goal. The check passes only when every
+  workload meets it (the final deliverable); there are no progressive checkpoints. Regenerate
+  the goal with `perf/bench/acceptance.py --record`. Run the check after changes to hot paths
+  (VM executor, runtime value/array/string code).
 
 ## Architecture
 
@@ -84,7 +86,7 @@ Cargo workspace, ~100 crates, strictly layered:
   (`/usr/bin/php -d memory_limit=1G`) rather than guessing.
 - Don't trade speed for convenience in hot paths: avoid needless allocation, cloning, and
   indirection in the executor and `php-runtime` core types. The target is to match or beat
-  the C implementation; `scripts/perf_gate.sh` enforces this per workload.
+  the C implementation; `scripts/acceptance.sh` enforces this per workload.
 
 ## Workflow
 

@@ -1,28 +1,32 @@
 #!/usr/bin/env python3
-"""Deterministic instruction-count performance gate.
+"""Deterministic instruction-count performance acceptance check.
 
 Counts user-space instructions (``perf stat -e instructions:u``, or callgrind's
 ``Ir`` when perf is unavailable: BACKEND=callgrind) of each workload for the
-candidate php and for the reference /usr/bin/php, subtracts each binary's own
-fixed cost (startup + compiling the driver), and compares the ratio
-cand/ref against a per-workload budget stored in budgets.tsv.  This mirrors
-php-src's benchmark/benchmark.php, which tracks callgrind instruction counts of
-Zend/bench.php per commit, but as a pass/fail gate.
+candidate php, and compares each count against the recorded goal: the
+instruction counts measured for the C implementation (/usr/bin/php), stored in
+goal.tsv. This mirrors php-src's benchmark/benchmark.php, which tracks
+callgrind instruction counts of Zend/bench.php per commit, as a pass/fail check.
 
-Workload sets (GATE_SET, comma separated; default "zend,micro,suite,ops"):
+The acceptance criterion is one number per workload:
+    candidate instructions <= 1.10 * recorded C instructions
+The check PASSES only when every workload meets the criterion. There is no
+aggregate statistic and no progressive checkpoints: the goal is the final
+deliverable — every workload within 10% of the C implementation.
+
+Workload sets (ACCEPTANCE_SET, comma separated; default "zend,micro,suite,ops"):
   zend   one process per Zend/bench.php test function (simple, mandel, ...)
-  micro  one process per Zend/micro_bench.php section, N=GATE_MICRO_N (300000)
+  micro  one process per Zend/micro_bench.php section, N=ACCEPTANCE_MICRO_N (300000)
   suite  perf/bench/suite/*.php whole scripts
   ops    perf/bench/<op>.php micro-ops, instructions per loop iteration
          (runs at n and n/10 and takes the difference, like irun.sh)
 
-usage: gate.py <candidate-php> [--budgets FILE] [--init | --ratchet] [--filter RX]
-  --init     write budgets.tsv from this run (measured ratio + MARGIN, default 3 %)
-  --ratchet  lower budgets that the run beats by more than MARGIN (never raises)
-Exit status: 0 = every workload within budget, 1 = at least one over budget or
+usage: acceptance.py <candidate-php> [--goal FILE] [--ref PHP] [--filter RX]
+  --record  measure the reference C php and write goal.tsv (the goal numbers
+            come from a real measurement of /usr/bin/php, never hand-written)
+Exit status: 0 = every workload within the goal, 1 = at least one over goal or
 failed, 2 = usage / environment error.
 """
-import math
 import os
 import re
 import shutil
@@ -35,8 +39,7 @@ ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
 ZEND = os.path.join(ROOT, 'modules', 'php-src', 'Zend')
 REF = os.environ.get('REF', '/usr/bin/php')
 COMMON = ['-d', 'memory_limit=1G', '-d', 'opcache.enable_cli=0']
-MARGIN = float(os.environ.get('MARGIN', '0.03'))
-TARGET = 1.10
+FLOOR = 1.10
 OPS = ['empty_loop', 'int_add', 'float_mul', 'is_smaller_jmp', 'concat_assign', 'dim_read',
        'dim_write', 'hash_read', 'prop_read', 'prop_write', 'strlen', 'abs', 'count',
        'userfunc', 'userfunc_typed', 'method', 'static_method', 'closure', 'new_obj']
@@ -54,7 +57,7 @@ def backend():
         pass
     if shutil.which('valgrind'):
         return 'callgrind'
-    sys.exit('gate.py: need `sudo -n perf` or valgrind')
+    sys.exit('acceptance.py: need `sudo -n perf` or valgrind')
 
 
 BACKEND = None
@@ -63,7 +66,7 @@ BACKEND = None
 def count(binary, args, timeout=None):
     """User-space instructions of one run of `binary args` with a hard timeout."""
     if timeout is None:
-        timeout = float(os.environ.get('GATE_TIMEOUT', '15.0' if BACKEND == 'callgrind' else '2.5'))
+        timeout = float(os.environ.get('ACCEPTANCE_TIMEOUT', '15.0' if BACKEND == 'callgrind' else '2.5'))
     cmd = [binary] + COMMON + args
     timeout_cmd = ['timeout', '--kill-after=0.5s', f'{timeout:.1f}s']
     if BACKEND == 'perf':
@@ -153,7 +156,7 @@ def workloads(sets, tmp, filt):
         for name, call in calls:
             yield f'zend:{name}', 'sub', (driver(tmp, lib, f'zend_{name}', call), base)
     if 'micro' in sets:
-        lib, calls = split_micro(tmp, int(os.environ.get('GATE_MICRO_N', '300000')))
+        lib, calls = split_micro(tmp, int(os.environ.get('ACCEPTANCE_MICRO_N', '300000')))
         base = driver(tmp, lib, 'micro__empty', '')
         for name, body in calls:
             yield f'micro:{name}', 'sub', (driver(tmp, lib, f'micro_{name}', body), base)
@@ -181,104 +184,106 @@ def measure(binary, kind, payload, cache):
             cache[key] = count(binary, ['-r', ''])[0]
         n, rc = count(binary, [payload])
         return n - cache[key], rc
-    n = int(os.environ.get('GATE_OPS_N', '200000'))
+    n = int(os.environ.get('ACCEPTANCE_OPS_N', '200000'))
     a, rc = count(binary, [payload, str(n)])
     c, _ = count(binary, [payload, str(n // 10)])
     return (a - c) // (n - n // 10), rc
 
 
-def load_budgets(path):
-    b = {}
+def load_goal(path):
+    goal = {}
     if os.path.exists(path):
         for line in open(path):
             if line.startswith('#') or not line.strip():
                 continue
             f = line.rstrip('\n').split('\t')
-            b[f[0]] = float(f[1])
-    return b
+            goal[f[0]] = int(f[1])
+    return goal
 
 
-def save_budgets(path, budgets, measured):
+def save_goal(path, rows):
     with open(path, 'w') as f:
-        f.write('# workload\tbudget (max cand/ref instruction ratio)\tlast measured\n')
-        f.write(f'# Final target for every row: {TARGET:.2f} (parity goal 1.00). Regenerate: perf/bench/gate.py <php> --init / --ratchet\n')
-        for k in sorted(budgets):
-            f.write(f'{k}\t{budgets[k]:.2f}\t{measured.get(k, float("nan")):.3f}\n')
+        f.write('# goal.tsv — the goal: user-space instruction counts measured for the C implementation\n')
+        f.write(f'# Acceptance criterion: candidate instructions <= {FLOOR:.2f} x goal per workload. Regenerate: perf/bench/acceptance.py --record\n')
+        f.write('# workload\tC_instructions\n')
+        for k in sorted(rows):
+            f.write(f'{k}\t{rows[k]}\n')
 
 
 def main():
     global BACKEND
     args = sys.argv[1:]
-    if not args or args[0].startswith('-'):
+    if not args:
         sys.exit(__doc__)
-    cand = os.path.abspath(args.pop(0))
-    budgets_path = os.path.join(HERE, 'budgets.tsv')
+    cand = None
+    goal_path = os.path.join(HERE, 'goal.tsv')
     mode = 'check'
     filt = re.compile('.')
+    ref = REF
     while args:
         a = args.pop(0)
-        if a == '--budgets':
-            budgets_path = args.pop(0)
-        elif a in ('--init', '--ratchet'):
-            mode = a[2:]
+        if a == '--goal':
+            goal_path = args.pop(0)
+        elif a == '--ref':
+            ref = args.pop(0)
+        elif a == '--record':
+            mode = 'record'
         elif a == '--filter':
             filt = re.compile(args.pop(0))
         else:
-            sys.exit(f'unknown argument {a}')
+            cand = os.path.abspath(a)
     BACKEND = backend()
-    sets = os.environ.get('GATE_SET', 'zend,micro,suite,ops').split(',')
-    budgets = load_budgets(budgets_path)
+    sets = os.environ.get('ACCEPTANCE_SET', 'zend,micro,suite,ops').split(',')
+    if mode == 'record':
+        target = ref  # record mode measures the C implementation itself
+        goal = {}
+    else:
+        if cand is None:
+            sys.exit('acceptance.py: <candidate-php> required (or use --record)')
+        target = cand
+        if not os.path.exists(goal_path):
+            sys.exit(f'acceptance.py: goal file {goal_path} missing — run acceptance.py --record')
+        goal = load_goal(goal_path)
     measured = {}
     failed = []
     cache = {}
-    print(f'# gate backend={BACKEND} candidate={cand} reference={REF} margin={MARGIN}')
-    print('workload\tcand_ins\tref_ins\tratio\tbudget\tstatus')
+    print(f'# acceptance backend={BACKEND} target={target} goal={goal_path}')
+    print('workload\tcand_ins\tgoal\tratio\tstatus' if mode == 'check' else 'workload\tC_instructions')
     with tempfile.TemporaryDirectory() as tmp:
         for name, kind, payload in workloads(sets, tmp, filt):
             if not filt.search(name):
                 continue
             try:
-                c, crc = measure(cand, kind, payload, cache)
-                r, _ = measure(REF, kind, payload, cache)
+                c, crc = measure(target, kind, payload, cache)
             except RuntimeError as e:
-                print(f'{name}\t-\t-\t-\t-\tERROR {e}', flush=True)
+                print(f'{name}\t-\t-\t-\tERROR {e}', flush=True)
                 failed.append(name)
                 continue
-            ratio = c / max(r, 1)
-            measured[name] = ratio
-            bud = budgets.get(name)
+            if mode == 'record':
+                measured[name] = c
+                print(f'{name}\t{c}', flush=True)
+                continue
+            g = goal.get(name)
+            ratio = c / max(g, 1) if g is not None else float('nan')
             if crc != 0:
                 status = f'FAIL(exit {crc})'
                 failed.append(name)
-            elif bud is None:
+            elif g is None:
                 status = 'NEW'
-            elif ratio > bud:
-                status = 'OVER BUDGET'
+                failed.append(name)
+            elif ratio > FLOOR:
+                status = 'OVER GOAL'
                 failed.append(name)
             else:
                 status = 'ok'
-            if ratio <= TARGET and status == 'ok':
-                status = 'ok (meets 1.10 target)'
-            print(f'{name}\t{c}\t{r}\t{ratio:.2f}\t{"-" if bud is None else f"{bud:.2f}"}\t{status}',
-                  flush=True)
-    if measured:
-        geo = math.exp(sum(math.log(max(v, 1e-9)) for v in measured.values()) / len(measured))
-        print(f'# geometric mean ratio over {len(measured)} workloads: {geo:.2f}')
-    if mode == 'init':
-        nb = {k: math.ceil(v * (1 + MARGIN) * 100) / 100 for k, v in measured.items()}
-        save_budgets(budgets_path, {**budgets, **nb}, measured)
-        print(f'# wrote {len(nb)} budgets to {budgets_path}')
+            print(f'{name}\t{c}\t{"-" if g is None else g}\t{ratio:.2f}\t{status}', flush=True)
+    if mode == 'record':
+        save_goal(goal_path, measured)
+        print(f'# goal recorded: {len(measured)} workloads -> {goal_path}')
         return 0
-    if mode == 'ratchet':
-        nb = dict(budgets)
-        for k, v in measured.items():
-            cand_b = math.ceil(v * (1 + MARGIN) * 100) / 100
-            if k not in nb or cand_b < nb[k]:
-                nb[k] = cand_b
-        save_budgets(budgets_path, nb, measured)
-        print(f'# ratcheted budgets in {budgets_path}')
+    print(f'# criterion: candidate instructions <= {FLOOR:.2f}x the recorded C count, every workload')
     if failed:
-        print(f'# FAILED: {len(failed)} workload(s) over budget or failing: {" ".join(failed)}')
+        print(f'# FAILED: {len(failed)} workload(s) over goal or failing: {" ".join(failed)}')
         return 1
     print('# PASS')
     return 0

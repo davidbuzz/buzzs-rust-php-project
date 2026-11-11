@@ -6,9 +6,10 @@ this file, on top of master `eae5e3dc`. Written as a record of where this work s
 ## Summary
 
 - Plain loops and integer and float arithmetic now execute fewer instructions than C PHP 8.3.6
-  (18-28% fewer on the gate's four workloads of that kind).
-- Over the 82 workloads of the performance gate we are still **2.89x** slower than C PHP,
-  down from 3.27x. The gate passes: every workload is inside its budget.
+  (18-28% fewer on the acceptance check's four workloads of that kind).
+- Over the 82 workloads of the acceptance check we are still **2.89x** slower than C PHP,
+  down from 3.27x. The check passed then against the budgets of the time (since replaced by
+  the C goal in `perf/bench/goal.tsv`: 11 of 82 workloads now meet the 1.10 criterion).
 - 36 workloads got faster, 30 got slower (by 1-14%) and 16 did not change.
 - The slower ones are dominated by function calls, array access and object creation. The new
   loop does not handle those itself yet, and handing them to the old code now costs one extra
@@ -40,7 +41,7 @@ instruction.
 
 ## How it was measured
 
-- `scripts/perf_gate.sh` (method in `perf/README.md`): user-space instruction counts from
+- `scripts/acceptance.sh` (method in `perf/README.md`): user-space instruction counts from
   `perf stat -e instructions:u` on a release build, with start-up subtracted.
 - Reference: `/usr/bin/php` 8.3.6. Both binaries run with
   `-d memory_limit=1G -d opcache.enable_cli=0`.
@@ -62,14 +63,15 @@ instruction.
 | `perf/bench/suite/*.php` | 10 | 3.47 | 3.48 |
 | Single operations, `perf/bench/*.php` | 19 | 3.47 | 2.61 |
 
-The figures are geometric means of the ratio to C PHP. The "All" row is the gate's own figure;
-the rows per set are computed from the per-workload ratios in the appendix.
+The figures are aggregate averages of the ratio to C PHP as recorded at the time. The "All" row
+is the check's own figure; the rows per set are computed from the per-workload ratios in the
+appendix.
 
 ### Single operations
 
 Instructions per loop iteration, loop overhead included.
 
-| Operation | Gate name | C PHP | Before | After | After ÷ C PHP |
+| Operation | Workload name | C PHP | Before | After | After ÷ C PHP |
 |---|---|---:|---:|---:|---:|
 | Empty `for` loop | `ops:empty_loop` | 29 | 94 | 23 | 0.79 |
 | Integer add | `ops:int_add` | 69 | 198 | 50 | 0.72 |
@@ -93,7 +95,7 @@ Instructions per loop iteration, loop overhead included.
 
 ### Other loop shapes
 
-These are not gate workloads. Each loop ran inside a function, at 1,000,000 and at 2,000,000
+These are not acceptance workloads. Each loop ran inside a function, at 1,000,000 and at 2,000,000
 iterations; the figure is the difference in instructions divided by 1,000,000. `...` stands for
 `for ($i = 0; $i < $n; $i++)`.
 
@@ -108,7 +110,7 @@ iterations; the figure is the difference in instructions divided by 1,000,000. `
 
 ### Other workloads that moved most
 
-Ratio to C PHP, for the gate workloads other than the single operations.
+Ratio to C PHP, for the acceptance workloads other than the single operations.
 
 | Faster | Before | After |
 |---|---:|---:|
@@ -158,7 +160,7 @@ needs 141 for the same iteration.
 ## Open findings
 
 1. **A script that has used `require` or `include` keeps the functions it calls on the old
-   loop.** `empty_loop($n)` of `Zend/micro_bench.php`, which the gate loads with `require`,
+   loop.** `empty_loop($n)` of `Zend/micro_bench.php`, which the acceptance check loads with `require`,
    still costs 95 instructions per iteration (`micro:empty_loop`, unchanged at 3.17). A minimal
    copy behaves the same: called from a script that loaded it with `require`, the function
    costs 95 per iteration; declared in the main file it costs 24.
@@ -173,7 +175,8 @@ needs 141 for the same iteration.
    way. It takes no argument, and such a call is made by `Vm::run`, not by the old loop. This
    last part is read from the code, not confirmed by a trace.
 
-   The gate runs every `Zend/bench.php` and `Zend/micro_bench.php` workload from a script that
+   The acceptance check runs every `Zend/bench.php` and `Zend/micro_bench.php` workload from a
+   script that
    starts with `require`, so this holds those rows back. The rows that did not change at all
    (`micro:empty_loop`, `micro:int_func`, `zend:nestedloop`) fit this; it has not been checked
    row by row.
@@ -211,8 +214,8 @@ needs 141 for the same iteration.
 ## Reproduce
 
 ```sh
-GATE_TIMEOUT=40 scripts/perf_gate.sh                    # release build, then all 82 workloads
-GATE_TIMEOUT=40 scripts/perf_gate.sh --filter '^ops:'   # the single operations only
+ACCEPTANCE_TIMEOUT=40 scripts/acceptance.sh                    # release build, then all 82 workloads
+ACCEPTANCE_TIMEOUT=40 scripts/acceptance.sh --filter '^ops:'   # the single operations only
 cargo test -p php-vm --lib tape                         # the unit tests of the tape
 ```
 

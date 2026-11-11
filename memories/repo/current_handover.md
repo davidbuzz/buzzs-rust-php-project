@@ -30,11 +30,12 @@ function statics, not the Main frame's CVs).
 - `cargo test -p php-vm --lib`: **350 passed, 0 failed** ✅ (was 349/1 before the fix)
 - `cargo clippy --all-targets -p php-vm -p php-runtime`: clean (only pre-existing doc_markdown warnings)
 - PHPT Zend/tests: **in progress** (background terminal 6c11e2fa; check with get_terminal_output)
-- Perf gate: **not yet run**
+- Acceptance check: **not yet run**
 
 ## Immediate next steps
 1. Confirm PHPT results from terminal 6c11e2fa.
-2. Run perf gate: `scripts/perf_gate.sh` (release build in `~/.cache/phprust-perf-gate`).
+2. Run the acceptance check: `scripts/acceptance.sh` (release build in
+   `~/.cache/phprust-perf-acceptance`).
 3. Commit the `op_return_raw` fix:
    ```sh
    git add crates/php-vm/src/exec.rs
