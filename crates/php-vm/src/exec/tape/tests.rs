@@ -642,3 +642,126 @@ int(6)
 "#
     );
 }
+
+const DIMS_IN_EVERY_SPECIALISED_FORM: &str = r#"<?php
+function dims($n) {
+    $a = [1, 2, 3, 4, 5];
+    $s = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $s = $s + $a[$i];
+        $a[$i] = $a[$i] + 1;
+        $a[$i] += 2;
+        if (isset($a[$i])) { echo "set ", $a[$i], " "; }
+        if (empty($a[$i])) { echo "empty "; }
+    }
+    var_dump($s, $a);
+    $d = [[1,2],[3,4]];
+    $d[0][1] = 9; $d[1][0] += 5;
+    var_dump($d);
+    $v = $d[0][1];
+    var_dump($v);
+    $x = 1; $x .= 'a'; $x .= 'b';
+    var_dump($x);
+    $c = [10, 20];
+    $c[0]++; $c[1]--; $p = $c[0]++; $q = --$c[1];
+    var_dump($c, $p, $q);
+    $str = "hello";
+    echo $str[1], $str[4], "\n";
+    $big = 0;
+    for ($i = 0; $i < 3; $i++) { $big += $a[$i] * 2; }
+    var_dump($big);
+    $k = ['x' => 1, 'y' => 2];
+    echo $k['x'], $k['y'], "\n";
+    $k['z'] = 3;
+    var_dump($k);
+    return $a[0];
+}
+var_dump(dims(5));
+"#;
+
+/// Array dimensions of a variable in every specialised form: reads, writes,
+/// compound assignments, `isset`/`empty`, `++`/`--`, chained dimensions,
+/// string offsets, string keys, and `.=` on a variable. Every dims family
+/// instruction appears, the tape shape is checked, and the output matches
+/// `/usr/bin/php`.
+#[test]
+fn dims_in_every_specialised_form() {
+    let arrays = op_arrays(DIMS_IN_EVERY_SPECIALISED_FORM);
+    for code in &arrays {
+        check(code);
+    }
+    let tape = check(&arrays[1]);
+    let has = |op: TOp| tape.iter().any(|i| i.op == op);
+    for op in [
+        TOp::FetchDimC,
+        TOp::AssignDimC,
+        TOp::AssignOpDimC,
+        TOp::IssetDimC,
+        TOp::FetchDimsC,
+        TOp::AssignDimsC,
+        TOp::AssignOpDimsC,
+        TOp::IncDecDimC,
+        TOp::ConcatCv,
+    ] {
+        assert!(
+            has(op),
+            "{op:?} missing in {:?}",
+            tape.iter().map(|i| i.op).collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(
+        run(DIMS_IN_EVERY_SPECIALISED_FORM),
+        r#"set 4 set 5 set 6 set 7 set 8 int(15)
+array(5) {
+  [0]=>
+  int(4)
+  [1]=>
+  int(5)
+  [2]=>
+  int(6)
+  [3]=>
+  int(7)
+  [4]=>
+  int(8)
+}
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(9)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    int(8)
+    [1]=>
+    int(4)
+  }
+}
+int(9)
+string(3) "1ab"
+array(2) {
+  [0]=>
+  int(12)
+  [1]=>
+  int(18)
+}
+int(11)
+int(18)
+eo
+int(30)
+12
+array(3) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
+  ["z"]=>
+  int(3)
+}
+int(4)
+"#
+    );
+}
