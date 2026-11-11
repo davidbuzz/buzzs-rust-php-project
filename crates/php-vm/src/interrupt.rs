@@ -144,7 +144,7 @@ pub(crate) fn safe_point_due() -> bool {
 /// queue, the collector's root buffering behind the inlinable
 /// `gc::possible_root`, the execution guard) names `SAFE_POINT` and gets
 /// it exported ("Linkage of the flags" in the module docs). In the release
-/// binaries of 4e1c2df8 and of the 13:33 perf gate the static was a global
+/// binaries of 4e1c2df8 and of the 13:33 acceptance run the static was a global
 /// symbol polled through the GOT, although every reference to it was
 /// php-vm code. Raising is rare (a destructor queued, a collection due, a
 /// signal), so the call costs nothing measurable.
