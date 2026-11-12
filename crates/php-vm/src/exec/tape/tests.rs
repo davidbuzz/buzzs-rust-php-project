@@ -88,6 +88,11 @@ fn check(code: &OpArray) -> Box<[Inst]> {
                 Some(&Op::CmpJmp { target, .. }) => Some(target),
                 other => panic!("op {i}: fused with {other:?}"),
             },
+            // A property read into its folded `AssignCv`'s variable: past
+            // that op.
+            Op::FetchObjProp { to: Some(_), .. } if inst.op == TOp::FetchObjPropTo => {
+                Some(u32::try_from(i + 2).expect("op index"))
+            }
             // The smart branches of `strs`: the jump of the op after them.
             Op::TypeCheck { .. } | Op::Isset { .. } | Op::Empty { .. }
                 if matches!(inst.op, TOp::TypeCheckJmpC | TOp::IssetJmpC) =>
@@ -711,6 +716,8 @@ fn props_in_every_specialised_form() {
     let has = |op: TOp| tape.iter().any(|i| i.op == op);
     for op in [
         TOp::FetchObjProp,
+        // `$v = $o->x;`: the read into the folded `AssignCv`'s variable.
+        TOp::FetchObjPropTo,
         TOp::AssignObjProp,
         TOp::AssignOpObjProp,
         TOp::IncDecObjProp,
