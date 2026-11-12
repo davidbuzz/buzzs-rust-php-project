@@ -38,8 +38,12 @@ fn run(src: &str) -> String {
 fn op_arrays(src: &str) -> Vec<Rc<OpArray>> {
     let program =
         php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+    // As the VM compiles: the builtins are registered, so the special
+    // functions compile to their opcodes.
     let opts = CompileOptions {
         filename: "t.php".into(),
+        strlen_builtin: true,
+        special_builtins: u32::MAX,
         ..CompileOptions::default()
     };
     let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
@@ -84,6 +88,15 @@ fn check(code: &OpArray) -> Box<[Inst]> {
                 Some(&Op::CmpJmp { target, .. }) => Some(target),
                 other => panic!("op {i}: fused with {other:?}"),
             },
+            // The smart branches of `strs`: the jump of the op after them.
+            Op::TypeCheck { .. } | Op::Isset { .. } | Op::Empty { .. }
+                if matches!(inst.op, TOp::TypeCheckJmpC | TOp::IssetJmpC) =>
+            {
+                match code.ops.get(i + 1) {
+                    Some(&(Op::JmpZ(_, t) | Op::JmpNz(_, t))) => Some(t),
+                    other => panic!("op {i}: fused with {other:?}"),
+                }
+            }
             _ => None,
         };
         if let Some(label) = label {
@@ -819,5 +832,50 @@ array(3) {
 }
 int(4)
 "#
+    );
+}
+
+const STRS_IN_EVERY_SPECIALISED_FORM: &str = r#"<?php
+function f($s, $a, $n) {
+    $r = 0;
+    for ($i = 0; $i < 3; $i++) {
+        $r += strlen($s) + count($a);
+        strlen($s);
+        count($a);
+        $b = is_int($n);
+        if (is_string($s)) { $r++; }
+        if (!is_array($s)) { $r++; }
+        $c = isset($s);
+        $d = empty($a);
+        if (isset($n)) { $r++; }
+        if (empty($u)) { $r++; }
+    }
+    var_dump($r, $b, $c, $d);
+}
+f("abc", [1, 2], 5);
+f("", [], "5");
+"#;
+
+/// `strlen()`, `count()`, the type tests and `isset()`/`empty()` of a
+/// variable, as values and as smart branches.
+#[test]
+fn strs_in_every_specialised_form() {
+    let arrays = op_arrays(STRS_IN_EVERY_SPECIALISED_FORM);
+    for code in &arrays {
+        check(code);
+    }
+    let tape = check(&arrays[1]);
+    let count = |op: TOp| tape.iter().filter(|i| i.op == op).count();
+    assert_eq!(count(TOp::StrlenC), 2, "a result and an unused one");
+    assert_eq!(count(TOp::CountC), 2, "a result and an unused one");
+    // `!is_array()` is `BOOL_NOT` and `JMPZ` after the test, as in
+    // php-src before the optimizer folds them.
+    assert_eq!(count(TOp::TypeCheckC), 2, "$b = is_int($n), !is_array()");
+    assert_eq!(count(TOp::TypeCheckJmpC), 1, "if (is_string())");
+    assert_eq!(count(TOp::IssetC), 2, "$c = isset(), $d = empty()");
+    assert_eq!(count(TOp::IssetJmpC), 2, "if (isset()) / if (empty())");
+    assert_eq!(
+        run(STRS_IN_EVERY_SPECIALISED_FORM),
+        "int(27)\nbool(true)\nbool(true)\nbool(false)\nint(12)\nbool(false)\nbool(true)\nbool(true)\n"
     );
 }

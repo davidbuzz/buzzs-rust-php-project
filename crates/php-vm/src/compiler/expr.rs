@@ -456,25 +456,32 @@ impl Compiler<'_> {
                 self.free(op);
                 self.lit(Value::Null)
             }
+            // The parser makes `isset($a, $b, $c)` the `ZEND_AST_AND` chain
+            // `(isset($a) && isset($b)) && isset($c)`, compiled by
+            // `zend_compile_short_circuiting`; one variable is its
+            // `ZEND_ISSET_ISEMPTY_*` alone.
             ExprKind::Isset(vars) => {
-                let t = self.tmp();
-                let mut jumps = Vec::new();
-                for (i, v) in vars.iter().enumerate() {
+                let Some((first, rest)) = vars.split_first() else {
+                    return Ok(self.lit(Value::Bool(true)));
+                };
+                let mut acc = self.compile_isset_one(first)?;
+                for v in rest {
+                    let t = self.tmp();
+                    let j = self.emit(Op::JmpZEx {
+                        a: acc,
+                        dst: t,
+                        target: 0,
+                    });
                     let r = self.compile_isset_one(v)?;
-                    if i + 1 < vars.len() {
-                        jumps.push(self.emit(Op::JmpZEx {
-                            a: r,
-                            dst: t,
-                            target: 0,
-                        }));
-                    } else {
-                        self.emit(Op::Move { src: r, dst: t });
-                    }
-                }
-                for j in jumps {
+                    self.emit(Op::Unary {
+                        op: UnKind::Bool,
+                        a: r,
+                        dst: t,
+                    });
                     self.patch_here(j);
+                    acc = Operand::Tmp(t);
                 }
-                Operand::Tmp(t)
+                acc
             }
             ExprKind::Empty(inner) => {
                 let t = self.tmp();

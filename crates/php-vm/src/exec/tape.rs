@@ -994,7 +994,12 @@ tape_ops! {
         //
         //
         // ---- strs (exec/tape/strs.rs) ----
-
+        StrlenC = (strs::strlen_cv, 1, plain),
+        CountC = (strs::count_cv, 1, plain),
+        TypeCheckC = (strs::type_check_cv, 1, plain),
+        TypeCheckJmpC = (strs::type_check_jmp_cv, 2, branch),
+        IssetC = (strs::isset_cv, 1, plain),
+        IssetJmpC = (strs::isset_jmp_cv, 2, branch),
 
         // ---- end of strs ----
         //
