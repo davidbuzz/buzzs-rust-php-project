@@ -160,12 +160,53 @@ pub(super) unsafe fn num_bin_tmp(frame: *mut crate::vm::Frame, inst: &Inst) -> b
 #[inline(always)]
 #[allow(clippy::inline_always)]
 unsafe fn num_result(st: St, inst: &Inst) -> Option<php_runtime::Value> {
-    let op = *NUM_OPS.get(usize::from(inst.e))?;
     // SAFETY: the caller's contract.
     let x = unsafe { num_of_kind(st, inst.k >> 4, inst.a) }?;
     // SAFETY: the caller's contract.
     let y = unsafe { num_of_kind(st, inst.k & 0xf, inst.b) }?;
+    if let (Num::Int(x), Num::Int(y)) = (x, y) {
+        return int_result(inst.e, x, y);
+    }
+    let op = *NUM_OPS.get(usize::from(inst.e))?;
     crate::exec::num_bin(op, x, y)
+}
+
+/// [`NUM_OPS`]`[e]` of two ints, as `exec::num_bin` computes it, by the
+/// operator's index alone (one dispatch, where `num_bin` tests for two
+/// floats first and then matches the operator's nested enum). `None` for
+/// what `num_bin` declines: a zero divisor, `PHP_INT_MIN / -1`, a negative
+/// or too wide shift.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the int case of `num_result`
+fn int_result(e: u8, x: i64, y: i64) -> Option<php_runtime::Value> {
+    use php_runtime::Value;
+    Some(match e {
+        // `div_function`: an exact quotient stays an int, any other is
+        // `(double) x / y`.
+        0 => {
+            if x.checked_rem(y)? == 0 {
+                Value::Int(x / y)
+            } else {
+                Value::Float(Num::Int(x).as_f64() / Num::Int(y).as_f64())
+            }
+        }
+        1 => Value::Int(x.checked_rem(y)?),
+        2 => Value::Int(x.checked_shl(u32::try_from(y).ok()?)?),
+        3 => Value::Int(x.checked_shr(u32::try_from(y).ok()?)?),
+        4 => Value::Int(x | y),
+        5 => Value::Int(x & y),
+        6 => Value::Int(x ^ y),
+        7 => Value::Bool(x < y),
+        8 => Value::Bool(x <= y),
+        9 | 11 => Value::Bool(x == y),
+        10 | 12 => Value::Bool(x != y),
+        13 => Value::Int(match x.cmp(&y) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }),
+        _ => return None,
+    })
 }
 
 /// Whether a compiled variable holds nothing to release: undefined or a
@@ -269,5 +310,28 @@ pub(super) unsafe fn jmpnz_cv(st: St, inst: &Inst) -> Br {
         Some(true) => Br::Jump,
         Some(false) => Br::Fall,
         None => Br::Decline,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{int_result, Num, NUM_OPS};
+
+    /// `int_result` is `exec::num_bin` of two ints for every operator of
+    /// [`NUM_OPS`], declines included (by the operator's index).
+    #[test]
+    fn int_result_is_num_bin_of_two_ints() {
+        let vals = [0, 1, -1, 2, 3, -4, -7, 12, 63, 64, 65, i64::MAX, i64::MIN];
+        for (e, &op) in NUM_OPS.iter().enumerate() {
+            let e8 = u8::try_from(e).expect("operator index");
+            for &x in &vals {
+                for &y in &vals {
+                    let ours = int_result(e8, x, y);
+                    let theirs = crate::exec::num_bin(op, Num::Int(x), Num::Int(y));
+                    assert_eq!(format!("{ours:?}"), format!("{theirs:?}"), "{op:?} {x} {y}");
+                }
+            }
+        }
+        assert!(int_result(14, 1, 1).is_none());
     }
 }
