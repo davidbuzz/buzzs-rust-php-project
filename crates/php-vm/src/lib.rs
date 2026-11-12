@@ -466,10 +466,16 @@ impl Vm {
             let _ = self.call_global_destructors();
             self.in_shutdown = false;
         }
+        // `php_request_shutdown()`'s order: 3. flush all output buffers
+        // (`php_output_end_all()`), 5. the extensions' RSHUTDOWN, 6. shut
+        // the output layer down (`php_output_deactivate()`). A handler a
+        // module started (`output_handler=ob_gzhandler`) still has its
+        // module's request state when it is flushed.
+        php_support::output::end_all(self);
         for h in self.shutdown_hooks.clone() {
             h(self);
         }
-        php_support::output::request_shutdown(self);
+        php_support::output::deactivate(self);
         object::set_destructors_enabled(false);
         // `sapi_deactivate`: headers go out (and header_register_callback
         // runs) even when the script produced no output.

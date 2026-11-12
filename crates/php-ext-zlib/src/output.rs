@@ -225,25 +225,9 @@ fn update_handler(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
 fn request_startup(vm: &mut Vm) {
     STATE.with(|st| *st.borrow_mut() = State::default());
     let result = (|| {
-        // php_request_startup(): `output_handler=ob_gzhandler` starts the
-        // alias (php_output_start_user() -> php_zlib_output_handler_init())
-        // before RINIT, which then sees `handler_registered` (bug55544.phpt).
-        // The VM does not interpret `output_handler` itself.
-        if vm.ini.raw("output_handler") == Some(b"ob_gzhandler".as_slice()) {
-            init_handler(vm, 0, flags::STDFLAGS)?;
-            output::start(
-                vm,
-                StartHandler::Alias {
-                    name: b"ob_gzhandler".to_vec(),
-                    callback: Value::from("ob_gzhandler"),
-                },
-                0,
-                flags::STDFLAGS,
-            );
-            if let Some(t) = vm.pending_throw.take() {
-                return Err(t);
-            }
-        }
+        // The INI values first: php-src applies `zlib.output_compression`
+        // (`OnUpdate_zlib_output_compression`) when the INI is read, before
+        // the request starts.
         let compression = vm.ini_string("zlib.output_compression").unwrap_or_default();
         let handler = vm.ini_string("zlib.output_handler").unwrap_or_default();
         let value = parse_compression(vm, &compression)?;
@@ -265,6 +249,29 @@ fn request_startup(vm: &mut Vm) {
             vm.raise(16, msg)?;
             return Ok(());
         }
+        env.apply(vm)?;
+        // php_request_startup(): `output_handler=ob_gzhandler` starts the
+        // alias (php_output_start_user() -> php_zlib_output_handler_init(),
+        // which sets the compression size and `handler_registered`) before
+        // RINIT, which then leaves both alone (bug55544.phpt). The VM does
+        // not interpret `output_handler` itself.
+        if vm.ini.raw("output_handler") == Some(b"ob_gzhandler".as_slice()) {
+            init_handler(vm, 0, flags::STDFLAGS)?;
+            output::start(
+                vm,
+                StartHandler::Alias {
+                    name: b"ob_gzhandler".to_vec(),
+                    callback: Value::from("ob_gzhandler"),
+                },
+                0,
+                flags::STDFLAGS,
+            );
+            if let Some(t) = vm.pending_throw.take() {
+                return Err(t);
+            }
+        }
+        // `PHP_RINIT_FUNCTION(zlib)`.
+        let mut env = VmEnv::new(vm, value != 0)?;
         let s = STATE.with(|st| st.borrow_mut().zlib.request_startup(&mut env));
         env.apply(vm)?;
         if let Some(s) = s {

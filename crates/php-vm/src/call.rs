@@ -2578,7 +2578,9 @@ impl Vm {
             // place, without the out-of-line call and the second lookup of
             // the top frame; the stack is popped just below. Same release,
             // same order (the frame's values, then the result's slot).
-            frame.clear_for_reuse(&self.empty_code);
+            if !frame.release_direct() {
+                frame.clear_for_reuse(&self.empty_code);
+            }
             (v, ret)
         };
         self.frames.pop_cleared_top();

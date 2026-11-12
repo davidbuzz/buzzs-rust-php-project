@@ -998,6 +998,11 @@ pub struct Frame {
     pub(crate) observed: bool,
     /// VM implementation frames must not be exposed as PHP calls.
     pub(crate) observer_hidden: bool,
+    /// Made current by the tape's call protocol (`exec::tape::calls`),
+    /// which leaves every field but the slots, the passed arguments and the
+    /// resume state as [`Frame::clear_for_reuse`] leaves them: released by
+    /// [`Frame::release_direct`].
+    pub(crate) direct: bool,
 }
 
 /// What the shared compiled-variable names of a frame's variable store
@@ -1171,6 +1176,7 @@ impl Frame {
             called_from_internal: false,
             observed: false,
             observer_hidden: false,
+            direct: false,
         }
     }
 
@@ -1217,6 +1223,7 @@ impl Frame {
         self.called_from_internal = false;
         self.observed = false;
         self.observer_hidden = false;
+        self.direct = false;
     }
 
     /// Clears a frame for pool reuse while retaining its compiled code and buffer sizes.
@@ -1347,6 +1354,7 @@ impl Frame {
             called_from_internal: false,
             observed: false,
             observer_hidden: false,
+            direct: false,
         }
     }
 
@@ -1474,6 +1482,62 @@ impl Frame {
         self.called_from_internal = false;
         self.observed = false;
         self.observer_hidden = false;
+        self.direct = false;
+    }
+
+    /// [`Frame::clear_for_reuse`] of a frame the tape's call protocol made
+    /// current ([`Frame::direct`]): every other field is as that release
+    /// leaves it, and the function's code can only have changed a few of
+    /// them since, which are tested; then the slots and the passed
+    /// arguments are released (`zend_leave_helper`'s one test of
+    /// `call_info`, then its loop over the compiled variables). `false`,
+    /// having released nothing, for any other frame, or when the code left
+    /// more behind (a symbol table attached or used, a caught exception
+    /// held, an `@` still open, a pending call, a function nothing else
+    /// holds): the full `clear_for_reuse` then runs.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // part of every direct return
+    pub(crate) fn release_direct(&mut self) -> bool {
+        if !self.direct
+            || self.symtab_attached
+            || self.pending_exc.is_some()
+            || !self.silence_saved.is_empty()
+            || !self.calls.is_empty()
+            || !self.keeps_function()
+        {
+            return false;
+        }
+        let Some(rc_mut) = Rc::get_mut(&mut self.vars) else {
+            return false;
+        };
+        let vs = rc_mut.get_mut();
+        if !vs.names.owned.is_empty() || vs.index.is_some() || vs.slots.iter().any(Option::is_some)
+        {
+            return false;
+        }
+        // In `clear_for_reuse`'s order: the temporaries, the compiled
+        // variables, the passed arguments.
+        for t in &mut self.tmps {
+            release_slot(std::mem::take(t));
+        }
+        for slot in &mut self.cvs {
+            if let Some(old) = slot.as_mut().take() {
+                release_slot(old);
+            }
+        }
+        clear_arg_buffer(&mut self.args);
+        // A method's `$this` and scopes, a closure, in
+        // `clear_rest_for_reuse`'s order.
+        clear_opt(&mut self.this);
+        clear_opt(&mut self.closure);
+        self.ip = 0;
+        clear_opt(&mut self.scope);
+        clear_opt(&mut self.called);
+        self.ret = RetTarget::Discard;
+        self.is_ctor = false;
+        self.caller_strict = false;
+        self.direct = false;
+        true
     }
 
     /// The foreach iterators, finally states and pending calls of
@@ -1698,6 +1762,7 @@ impl Frame {
             called_from_internal: false,
             observed: false,
             observer_hidden: false,
+            direct: false,
         }
     }
 

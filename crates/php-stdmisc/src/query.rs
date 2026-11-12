@@ -672,7 +672,25 @@ pub fn treat_data(
     Ok(())
 }
 
-/// `php_std_post_handler()` / `add_post_vars()`.
+/// `SAPI_POST_HANDLER_BUFSIZ` (`BUFSIZ`, 8192 with glibc): how much of the
+/// body `php_std_post_handler()` reads at a time.
+const POST_READ_CHUNK: usize = 8192;
+
+/// `SMART_STR_PAGE`: a `smart_str` grows a whole page at a time.
+const SMART_STR_PAGE: usize = 4096;
+
+/// `SMART_STR_OVERHEAD` on a 64-bit build: the string header and the
+/// terminating NUL a `smart_str` allocation carries beside its bytes.
+const SMART_STR_OVERHEAD: usize = 25;
+
+/// `php_std_post_handler()`: the body is read a chunk at a time into a
+/// buffer that keeps what is not parsed yet (`post_data.str`), and after
+/// each chunk the complete variables in it (each ended by `&`) are
+/// registered ([`add_post_vars`]); the rest when the body ends. The buffer
+/// counts towards `memory_limit` as php-src's does, so a variable too big
+/// for the limit stops the parse while it is read, as there; every step
+/// that allocates is followed by php-src's `ZEND_HAS_OOM()` check, which
+/// ends the parse.
 fn treat_post(
     data: &[u8],
     track: &mut ZArray,
@@ -681,22 +699,92 @@ fn treat_post(
     mut filter: Option<InputFilter<'_>>,
     ctx: &mut (impl RuntimeContext + ?Sized),
 ) -> RtResult<()> {
-    let mut count = 0i64;
-    for var in data.split(|&c| c == b'&') {
-        if var.is_empty() && std::ptr::eq(var.as_ptr(), data.as_ptr().wrapping_add(data.len())) {
+    let mut vars = PostVars {
+        buf: Vec::new(),
+        scanned: 0,
+        count: 0,
+    };
+    let mut pos = 0;
+    while pos < data.len() {
+        let chunk = &data[pos..(pos + POST_READ_CHUNK).min(data.len())];
+        pos += chunk.len();
+        smart_str_append(&mut vars.buf, chunk);
+        if oom_pending() {
+            return Ok(());
+        }
+        if !add_post_vars(&mut vars, false, track, settings, opts, &mut filter, ctx)? {
+            return Ok(());
+        }
+        if chunk.len() != POST_READ_CHUNK {
             break;
         }
+    }
+    // `if (post_data.str.s)`: anything was read.
+    if !data.is_empty() {
+        add_post_vars(&mut vars, true, track, settings, opts, &mut filter, ctx)?;
+    }
+    Ok(())
+}
+
+/// `post_var_data_t`: the read buffer, how much of its first variable has
+/// been searched for its end already (`already_scanned`), and the
+/// variables registered so far (`cnt`).
+struct PostVars {
+    buf: Vec<u8>,
+    scanned: usize,
+    count: i64,
+}
+
+/// `smart_str_appendl()`: appends `bytes` to `buf`, which grows as a
+/// `smart_str` does (`SMART_STR_NEW_LEN`: the needed length with the
+/// string's overhead, rounded up to a whole page).
+fn smart_str_append(buf: &mut Vec<u8>, bytes: &[u8]) {
+    let need = buf.len() + bytes.len();
+    if need > buf.capacity() {
+        let new_cap = (need + SMART_STR_OVERHEAD).div_ceil(SMART_STR_PAGE) * SMART_STR_PAGE
+            - SMART_STR_OVERHEAD;
+        buf.reserve_exact(new_cap - buf.len());
+    }
+    buf.extend_from_slice(bytes);
+}
+
+/// `add_post_vars()` with its `add_post_var()` loop: registers the
+/// complete variables at the front of the buffer (every one when `eof`),
+/// then moves what is left to its front. `false` when the parse must stop:
+/// a pending OOM, or more than `max_input_vars` variables (warned).
+#[allow(clippy::too_many_arguments)] // the handler's state and php-src's parameters
+fn add_post_vars(
+    vars: &mut PostVars,
+    eof: bool,
+    track: &mut ZArray,
+    settings: &InputSettings,
+    opts: &RegisterOptions<'_>,
+    filter: &mut Option<InputFilter<'_>>,
+    ctx: &mut (impl RuntimeContext + ?Sized),
+) -> RtResult<bool> {
+    let mut ptr = 0;
+    while ptr < vars.buf.len() {
+        let start = ptr + vars.scanned;
+        let vsep = match vars.buf[start..].iter().position(|&c| c == b'&') {
+            Some(i) => start + i,
+            None if !eof => {
+                vars.scanned = vars.buf.len() - ptr;
+                break;
+            }
+            None => vars.buf.len(),
+        };
+        let var = &vars.buf[ptr..vsep];
         let (k, v) = match var.iter().position(|&c| c == b'=') {
             Some(i) => (&var[..i], &var[i + 1..]),
             None => (var, &b""[..]),
         };
         let name = url_decode(k, false);
-        // `add_post_var()`: the value's `estrndup()` copy, then the
-        // registration, each followed by a `ZEND_HAS_OOM()` check that
-        // ends the parse (the variable is not counted).
+        // The value's `estrndup()` copy, then the registration, each
+        // followed by a `ZEND_HAS_OOM()` check that ends the parse (the
+        // variable is not counted).
         let val = url_decode(v, false);
         if oom_pending() {
-            break;
+            return Ok(false);
         }
         let val = match filter.as_mut() {
             Some(f) => f(ParseKind::Post, &name, val),
@@ -706,10 +794,12 @@ fn treat_post(
             register_variable_ex(&name, Value::Str(ZStr::new(val)), track, opts, ctx)?;
         }
         if oom_pending() {
-            break;
+            return Ok(false);
         }
-        count += 1;
-        if count > settings.max_input_vars {
+        ptr = vsep + usize::from(vsep != vars.buf.len());
+        vars.scanned = 0;
+        vars.count += 1;
+        if vars.count > settings.max_input_vars {
             ctx.diagnostic(
                 ErrorLevel::Warning,
                 &format!(
@@ -717,10 +807,20 @@ fn treat_post(
                     opts.warning_prefix, settings.max_input_vars
                 ),
             )?;
-            break;
+            return Ok(false);
+        }
+        if oom_pending() {
+            return Ok(false);
         }
     }
-    Ok(())
+    if oom_pending() {
+        return Ok(false);
+    }
+    if !eof && ptr != 0 {
+        // The `memmove()` of the unparsed rest to the buffer's front.
+        vars.buf.drain(..ptr);
+    }
+    Ok(true)
 }
 
 /// `parse_str($string, &$result)`: returns the new `$result` array.

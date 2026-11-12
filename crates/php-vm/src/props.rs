@@ -73,6 +73,26 @@ pub(crate) fn new_with_ctor(
     cls: Rc<Class>,
     calls: &mut Vec<crate::vm::PendingCall>,
 ) -> Option<Obj> {
+    let (func, scope) = ctor_call(&cls)?;
+    let o = new_for_ctor(&cls)?;
+    let this = o.clone();
+    calls.extend(std::iter::once_with(move || crate::vm::PendingCall {
+        this: Some(this),
+        scope: Some(scope),
+        called: Some(cls),
+        is_ctor: true,
+        ..crate::vm::PendingCall::new(func)
+    }));
+    Some(o)
+}
+
+/// The constructor of `cls` and its declaring class (`Vm::op_new`'s
+/// `scope`: a constructor inherited from a parent is scoped to it) when
+/// [`new_with_ctor`] applies to the class: an instantiable class (not
+/// `Generator`) without internal hooks, not a `Throwable`, whose
+/// constructor is public and not static. Nothing is created.
+#[inline]
+pub(crate) fn ctor_call(cls: &Rc<Class>) -> Option<(crate::func::Func, Rc<Class>)> {
     if cls.flags & NOT_INSTANTIABLE != 0
         || cls.hooks.is_some()
         || cls.internal == InternalKind::Throwable
@@ -84,26 +104,24 @@ pub(crate) fn new_with_ctor(
     if ctor.visibility() != flags::PUBLIC || ctor.is_static() {
         return None;
     }
-    // The declaring class (`Vm::op_new`'s `scope`), found before anything
-    // is created: a constructor inherited from a parent is scoped to it.
-    let scope = if std::rc::Weak::as_ptr(&ctor.scope) == Rc::as_ptr(&cls) {
+    let scope = if std::rc::Weak::as_ptr(&ctor.scope) == Rc::as_ptr(cls) {
         cls.clone()
     } else {
         ctor.scope.upgrade()?
     };
+    Some((ctor.func.clone(), scope))
+}
+
+/// The object [`new_with_ctor`] creates for a class [`ctor_call`]
+/// accepted: its slots copied from `default_properties_table`. `None`,
+/// having created nothing, when the defaults are not evaluated yet.
+#[inline]
+pub(crate) fn new_for_ctor(cls: &Rc<Class>) -> Option<Obj> {
     let defaults = cls.defaults.try_borrow().ok()?;
-    let o = object::new_object_from_defaults(cls.clone(), defaults.as_deref()?);
-    drop(defaults);
-    let func = ctor.func.clone();
-    let this = o.clone();
-    calls.extend(std::iter::once_with(move || crate::vm::PendingCall {
-        this: Some(this),
-        scope: Some(scope),
-        called: Some(cls),
-        is_ctor: true,
-        ..crate::vm::PendingCall::new(func)
-    }));
-    Some(o)
+    Some(object::new_object_from_defaults(
+        cls.clone(),
+        defaults.as_deref()?,
+    ))
 }
 
 impl Vm {

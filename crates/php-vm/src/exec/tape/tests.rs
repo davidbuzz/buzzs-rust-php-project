@@ -64,7 +64,11 @@ fn check(code: &OpArray) -> Box<[Inst]> {
     assert_eq!(tape[code.ops.len()].op, TOp::Exit);
     for (i, op) in code.ops.iter().enumerate() {
         let inst = &tape[i];
-        assert_eq!(inst.op == TOp::Exit, !hot::is_hot(op), "op {i}: {op:?}");
+        // The call instructions also take ops `Vm::run` runs itself
+        // (`InitMethodCall`).
+        if inst.op != TOp::CallInit {
+            assert_eq!(inst.op == TOp::Exit, !hot::is_hot(op), "op {i}: {op:?}");
+        }
         // An unspecialised hot op is handed to the old fast path that
         // runs it: `hot::step`'s own arms, or `hot::step_ext`.
         if matches!(inst.op, TOp::Step | TOp::Ext) {
@@ -680,7 +684,8 @@ fn props_in_every_specialised_form() {
         TOp::AssignOpObjProp,
         TOp::IncDecObjProp,
         TOp::IssetObjProp,
-        TOp::New,
+        // `new`: a call instruction now (`calls::new_object`).
+        TOp::CallInit,
     ] {
         assert!(
             has(op),

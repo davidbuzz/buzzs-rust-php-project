@@ -71,7 +71,7 @@
 
 use super::hot::{self, DECLINED, LEFT, NO_SAFE_POINT, SWITCHED};
 use super::Num;
-use crate::opcode::{BinKind, Op, OpArray, Operand};
+use crate::opcode::{BinKind, ClassSpec, Op, OpArray, Operand};
 use crate::vm::{CvSlot, Frame, Vm};
 use php_runtime::{BinaryOp, Value};
 use std::cell::OnceCell;
@@ -344,6 +344,9 @@ const WHY_EXIT: u8 = 1;
 /// Why [`run_core`] stopped: the op at `ip` is a hot op outside
 /// [`hot::step`]'s core arms: it runs through [`hot::step_ext`].
 const WHY_EXT: u8 = 3;
+/// Why [`run_core`] stopped: the op at `ip` starts a call or passes an
+/// argument ([`calls`]), which [`run_tape`] runs with the VM at hand.
+const WHY_CALL: u8 = 4;
 /// Why [`run_core`] stopped: the jump at `at` was taken (to `ip`) and a safe
 /// point is due.
 const WHY_POLL: u8 = 2;
@@ -363,6 +366,16 @@ fn step_out(ip: *const Inst) -> Out {
         at: ip,
         why: WHY_STEP,
     }
+}
+
+/// The instruction after a fused loop step that did not jump back (its
+/// smart branch and jump op skipped): out of line and cold, so that the
+/// compiler lays the loop's jump back out as the straight path (inline, it
+/// put the jump out of line: one more instruction per iteration).
+#[cold]
+#[inline(never)]
+fn loop_exit(ip: *const Inst) -> *const Inst {
+    ip.wrapping_add(3)
 }
 
 /// Takes the jump of the instruction at `$ip` and polls for a safe point,
@@ -482,6 +495,10 @@ macro_rules! tape_ops {
             /// Any other hot op with no specialised form:
             /// [`hot::step_ext`] runs it.
             Ext,
+            /// `Op::InitFCall` without a namespace fallback ([`calls`]).
+            CallInit,
+            /// `Op::Send` of a value ([`calls`]).
+            CallSend,
             /// `Op::Jmp`.
             Jmp,
             /// `Op::JmpZ` of a temporary holding a bool.
@@ -592,6 +609,9 @@ macro_rules! tape_ops {
                     TOp::Step => return step_out(ip),
                     TOp::Ext => {
                         return Out { ip, at: ip, why: WHY_EXT };
+                    }
+                    TOp::CallInit | TOp::CallSend => {
+                        return Out { ip, at: ip, why: WHY_CALL };
                     }
                     TOp::Jmp => take_jump!(ip, inst),
                     TOp::JmpZT => {
@@ -768,8 +788,10 @@ macro_rules! tape_ops {
                             if int_test::<$im>(n, y) {
                                 take_jump!(ip, inst);
                             } else {
-                                // Past the smart branch and its jump op.
-                                ip = ip.add(3);
+                                // Past the smart branch and its jump op: the
+                                // loop's exit, once per loop (the jump back
+                                // is the common way; see `loop_exit`).
+                                ip = loop_exit(ip);
                             }
                         }
                     )*
@@ -966,7 +988,6 @@ tape_ops! {
         AssignOpObjProp = (props::prop_in, 1, poll),
         IncDecObjProp = (props::prop_in, 1, poll),
         IssetObjProp = (props::prop_in, 1, poll),
-        New = (props::new_prop, 1, branch_poll),
 
         // ---- end of props ----
         //
@@ -1385,6 +1406,16 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
     let mut switched = 0;
     let mut code: *const OpArray = code;
     let mut ip = ip;
+    // The call `calls::prepare` readied in the current frame, until its
+    // `DoCall` enters it. Turned back into the generic pending call
+    // (`flush`) before anything else could see the caller's calls: an op
+    // handed to the generic code that passes an argument, and every way
+    // out of this function.
+    let mut prep: Option<calls::Prepared> = None;
+    // Whether the current frame was just pushed by a call made below: its
+    // slots are sized for its code and no symbol table is attached
+    // (`usable` holds without the test).
+    let mut fresh = false;
     'frames: loop {
         // SAFETY: as in `Vm::run`: the op array is owned by `Rc`s, one of
         // them held by the current frame, so its heap block stays where it
@@ -1397,9 +1428,11 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         let ops: &[Op] = &c.ops;
         let lits: &[Value] = &c.literals;
         let Some(f) = vm.frames.last_mut() else {
+            flush(vm, &mut prep);
             return (ip | switched, NO_SAFE_POINT);
         };
-        let at = if usable(f, c) {
+        let at = if fresh || usable(f, c) {
+            fresh = false;
             let tape: &[Inst] = c.tape.get(c);
             debug_assert_eq!(tape.len(), ops.len() + 1);
             let tbase = tape.as_ptr();
@@ -1408,7 +1441,14 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
             // at most `ops.len()`: inside the tape, whose last element is
             // the sentinel.
             let mut p = unsafe { tbase.add(ip.min(ops.len())) };
+            // The current frame by raw pointer: the call instructions need
+            // the VM (the frame stack), and the frame is looked up again
+            // after each of them.
+            let mut fp: *mut Frame = f;
             loop {
+                // SAFETY: `fp` is the current frame (`vm.frames`' last
+                // live one), derived after the last use of the VM.
+                let f = unsafe { &mut *fp };
                 // The slot vectors are read again after every hot op run
                 // out of the core (none of them resizes one, but none is
                 // bound not to replace its buffer).
@@ -1427,15 +1467,34 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 #[allow(clippy::cast_sign_loss)]
                 let at = unsafe { out.ip.offset_from(tbase) } as usize;
                 let next = match out.why {
-                    WHY_EXT => hot::step_ext(f, ops, lits, at),
+                    WHY_CALL => {
+                        let next = run_call(vm, &mut prep, ops, lits, at);
+                        let Some(f) = vm.frames.last_mut() else {
+                            flush(vm, &mut prep);
+                            return (0, NO_SAFE_POINT);
+                        };
+                        fp = f;
+                        next
+                    }
+                    WHY_EXT => {
+                        // An argument the generic `Send` passes goes to the
+                        // newest pending call: the prepared one becomes it.
+                        if prep.is_some() && matches!(ops.get(at), Some(Op::Send { .. })) {
+                            flush(vm, &mut prep);
+                        }
+                        // SAFETY: `fp` is current (`flush` only changed
+                        // the frame's pending calls).
+                        hot::step_ext(unsafe { &mut *fp }, ops, lits, at)
+                    }
                     // A declined instruction: the op's old fast path, by
                     // the shortest route (a family op is not one of
-                    // `hot::step`'s own arms).
-                    // (`ext`, worked out by `lower`).
+                    // `hot::step`'s own arms; `ext`, worked out by
+                    // `lower`).
                     // SAFETY: `out.ip` points into the tape (as above).
                     WHY_STEP if unsafe { (*out.ip).ext } => hot::step_ext(f, ops, lits, at),
                     WHY_STEP => step_slow(f, ops, lits, at),
                     WHY_POLL => {
+                        flush(vm, &mut prep);
                         // SAFETY: as above.
                         #[allow(clippy::cast_sign_loss)]
                         let last = unsafe { out.at.offset_from(tbase) } as usize;
@@ -1447,11 +1506,14 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                     break at;
                 }
                 if crate::interrupt::safe_point_due() {
+                    flush(vm, &mut prep);
                     return (next | switched, at);
                 }
-                if f.symtab_attached {
+                // SAFETY: as above; `fp` is current.
+                if unsafe { (*fp).symtab_attached } {
                     // The op attached a symbol table: the frame leaves the
                     // tape.
+                    flush(vm, &mut prep);
                     ip = next;
                     continue 'frames;
                 }
@@ -1462,19 +1524,38 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         } else {
             let (next, last) = hot::run_steps(f, ops, lits, ip);
             if last != NO_SAFE_POINT {
+                flush(vm, &mut prep);
                 return (next | switched, last);
             }
             next
         };
         // `ZEND_DO_UCALL` / `ZEND_RETURN` of a plain user function: the
-        // fast arms of `Vm::run`, which store `at + 1` as the frame's
-        // resume point (`SAVE_OPLINE`).
+        // prepared call entered directly (`calls::enter`), or the fast
+        // arms of `Vm::run`, which store `at + 1` as the frame's resume
+        // point (`SAVE_OPLINE`).
         let changed = match ops.get(at) {
-            Some(&Op::DoCall { dst }) => vm.push_simple_ucall(dst, at + 1),
-            Some(&Op::Return { val }) => vm.return_simple(val, base, at + 1).is_some(),
+            Some(&Op::DoCall { dst }) => {
+                fresh = true;
+                match prep.take() {
+                    Some(call) => match calls::enter(vm, call, dst, at + 1) {
+                        Ok(()) => true,
+                        Err(call) => {
+                            calls::materialize(vm, call);
+                            vm.push_simple_ucall(dst, at + 1)
+                        }
+                    },
+                    None => vm.push_simple_ucall(dst, at + 1),
+                }
+            }
+            Some(&Op::Return { val }) => {
+                flush(vm, &mut prep);
+                fresh = false;
+                vm.return_simple(val, base, at + 1).is_some()
+            }
             _ => false,
         };
         if !changed {
+            flush(vm, &mut prep);
             return (at | switched, NO_SAFE_POINT);
         }
         // The frame's op array may be freed with it: `ops`, `lits` and
@@ -1490,6 +1571,120 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
         ip = f.ip;
         code = Rc::as_ptr(&f.code);
     }
+}
+
+/// Turns a prepared call back into the generic pending call
+/// ([`calls::materialize`]).
+#[inline(always)]
+#[allow(clippy::inline_always)] // a test on every way out of the loop
+fn flush(vm: &mut Vm, prep: &mut Option<calls::Prepared>) {
+    // Tested first: `take` would store `None` back on every way out.
+    if prep.is_some() {
+        flush_cold(vm, prep);
+    }
+}
+
+/// [`flush`] of a prepared call, out of line.
+#[cold]
+#[inline(never)]
+fn flush_cold(vm: &mut Vm, prep: &mut Option<calls::Prepared>) {
+    if let Some(call) = prep.take() {
+        calls::materialize(vm, call);
+    }
+}
+
+/// Runs the call instruction at `at` ([`WHY_CALL`]) with the VM:
+/// `InitFCall` prepares the call ([`calls::prepare`]), `Send` writes into
+/// the prepared call ([`calls::send`]); when they do not apply (the call
+/// is first turned back into a pending call), the op's generic fast path
+/// (`hot::step_ext`: `init_fcall_in`, `send_in`). Returns where execution
+/// continues, or [`DECLINED`].
+#[inline(never)]
+fn run_call(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    ops: &[Op],
+    lits: &[Value],
+    at: usize,
+) -> usize {
+    match ops.get(at) {
+        Some(&Op::InitFCall { name, .. }) => {
+            flush(vm, prep);
+            *prep = calls::prepare(vm, name);
+            if prep.is_some() {
+                return at + 1;
+            }
+        }
+        Some(&Op::InitMethodCall {
+            obj,
+            name: Operand::Lit(lit),
+        }) => {
+            flush(vm, prep);
+            *prep = calls::prepare_method(vm, obj, lit, at);
+            if prep.is_some() {
+                return at + 1;
+            }
+            // Not a hot op: its generic fast path (`Vm::run`'s pre-match
+            // arm), else the generic op in `Vm::run`.
+            return if vm.init_method_call_fast(obj, lit, at) {
+                at + 1
+            } else {
+                DECLINED
+            };
+        }
+        Some(&Op::New {
+            class: ClassSpec::Named(lit),
+            dst,
+            skip,
+        }) => {
+            flush(vm, prep);
+            match calls::new_object(vm, lit, dst, skip) {
+                Some(calls::NewDone::Skip(target)) => return target,
+                Some(calls::NewDone::Prepared(call)) => {
+                    *prep = Some(call);
+                    return at + 1;
+                }
+                Some(calls::NewDone::Pending) => return at + 1,
+                // The generic `New` (`hot::step_ext`, then `Vm::run`).
+                None => {}
+            }
+        }
+        Some(&Op::InitStaticCall { .. }) => {
+            flush(vm, prep);
+            *prep = calls::prepare_static(vm, at);
+            // Not a hot op: else the generic op in `Vm::run`.
+            return if prep.is_some() { at + 1 } else { DECLINED };
+        }
+        Some(&Op::InitDynCall {
+            callee: Operand::Cv(cv),
+        }) => {
+            flush(vm, prep);
+            *prep = calls::prepare_closure(vm, cv);
+            if prep.is_some() {
+                return at + 1;
+            }
+            // Not a hot op: its generic fast path (`Vm::run`'s pre-match
+            // arm), else the generic op in `Vm::run`.
+            return if vm.init_closure_call_fast(cv) {
+                at + 1
+            } else {
+                DECLINED
+            };
+        }
+        Some(Op::Send { src }) => {
+            if let Some(call) = prep.as_mut() {
+                if calls::send(vm, call, src) {
+                    return at + 1;
+                }
+            }
+            flush(vm, prep);
+        }
+        _ => {}
+    }
+    let Some(f) = vm.frames.last_mut() else {
+        return DECLINED;
+    };
+    hot::step_ext(f, ops, lits, at)
 }
 
 mod calls;
