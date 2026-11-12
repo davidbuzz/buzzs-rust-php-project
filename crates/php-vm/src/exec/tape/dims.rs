@@ -25,8 +25,8 @@ use crate::exec::spec::{
     fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, isset_dim_cv_in, put_tmp,
 };
 use crate::opcode::{IncDecKind, Op, OpArray, Operand};
-use crate::vm::Frame;
-use php_runtime::BinaryOp;
+use crate::vm::{CvSlot, Frame};
+use php_runtime::{ArrayKey, BinaryOp, Value};
 
 /// The kind of an operand, as stored in `k`: a compiled variable, a
 /// consumed temporary, a kept temporary, a literal, or none.
@@ -172,6 +172,52 @@ fn folded_assign(code: &OpArray, i: usize, to: Option<u32>) -> Option<(u32, u32)
 /// `to` of a fetch without a folded `AssignCv`.
 const NO_TO: u32 = u32::MAX;
 
+/// The instruction of an `Op::FetchDimCv`, chosen from what the offset
+/// operand can hold when the tape is built: [`TOp::FetchDimIC`] (an int
+/// offset into a packed array: [`fetch_dim_int`]) for an offset in a
+/// temporary or a variable (an int is tested for when it runs) or an int
+/// literal; [`TOp::FetchDimSC`] ([`fetch_dim_str`]) for a string literal
+/// that is no integer key (`"1"` is key 1: the generic lookup converts
+/// it); else [`TOp::FetchDimC`], the general read. Both fast paths store
+/// into the folded `AssignCv`'s variable: a read without one is general.
+fn fetch_op(code: &OpArray, dk: u8, di: u32, to: u32) -> TOp {
+    if to == NO_TO {
+        return TOp::FetchDimC;
+    }
+    match dk {
+        KIND_TMP | KIND_TMPKEEP | KIND_CV => TOp::FetchDimIC,
+        KIND_LIT => match code.literals.get(di as usize) {
+            Some(Value::Int(_)) => TOp::FetchDimIC,
+            Some(Value::Str(s)) if matches!(ArrayKey::from_zstr(s), ArrayKey::Str(_)) => {
+                TOp::FetchDimSC
+            }
+            _ => TOp::FetchDimC,
+        },
+        _ => TOp::FetchDimC,
+    }
+}
+
+/// The instruction of an `Op::AssignDimCv`: [`TOp::AssignDimIC`]
+/// ([`assign_dim_int`]) when the offset can be an int or is absent (an
+/// append; not a literal of another type) and the value can be a scalar or
+/// a string (not a literal of another type); else [`TOp::AssignDimC`].
+fn assign_op(code: &OpArray, (dk, di): (u8, u32), (vk, vi): (u8, u32)) -> TOp {
+    let lit = |i: u32| code.literals.get(i as usize);
+    let dim_ok = match dk {
+        KIND_LIT => matches!(lit(di), Some(Value::Int(_))),
+        _ => true,
+    };
+    let val_ok = match vk {
+        KIND_LIT => lit(vi).is_some_and(Value::is_plain),
+        _ => true,
+    };
+    if dim_ok && val_ok {
+        TOp::AssignDimIC
+    } else {
+        TOp::AssignDimC
+    }
+}
+
 /// What a fetch handler did: stored into the folded `AssignCv`'s variable
 /// (the instruction jumps past that op, as `hot::step_ext` skips it), into
 /// the temporary (the `AssignCv` runs next), or nothing.
@@ -201,7 +247,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 d: to,
                 k: dk,
                 p: dst as usize,
-                ..plain(TOp::FetchDimC)
+                ..plain(fetch_op(code, dk, di, to))
             }
         }
         Op::FetchDimsCv {
@@ -243,7 +289,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 b: di,
                 p: vi as usize,
                 k: dk | (vk << 3),
-                ..plain(TOp::AssignDimC)
+                ..plain(assign_op(code, (dk, di), (vk, vi)))
             }
         }
         Op::AssignDimsCv { cv, val, place } => {
@@ -324,6 +370,230 @@ pub(super) unsafe fn fetch_dim(frame: *mut Frame, inst: &Inst) -> Br {
     fetched(fetch_dim_cv_in(f, inst.a, dim, inst.p as u32, to))
 }
 
+/// `TOp::FetchDimIC`: [`fetch_packed_into_cv`], else the general read
+/// ([`fetch_dim`]). A handler of its own, so that the fast path's few
+/// registers are all its call saves.
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+pub(super) unsafe fn fetch_dim_int(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    if let Some(br) = fetch_packed_into_cv(unsafe { &mut *frame }, inst) {
+        return br;
+    }
+    // SAFETY: as above; the fast path's borrow of the frame has ended.
+    unsafe { fetch_dim(frame, inst) }
+}
+
+/// `TOp::FetchDimSC`: [`fetch_str_into_cv`], else the general read
+/// ([`fetch_dim`]), as [`fetch_dim_int`].
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+pub(super) unsafe fn fetch_dim_str(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    if let Some(br) = fetch_str_into_cv(unsafe { &mut *frame }, inst) {
+        return br;
+    }
+    // SAFETY: as above; the fast path's borrow of the frame has ended.
+    unsafe { fetch_dim(frame, inst) }
+}
+
+/// The commonest `$v = $cv[$i]`, as `fetch_dim_cv_in` and
+/// `store_fetched_in` make it, without their general steps: an int offset
+/// (in a temporary, a variable or a literal) into a packed array the
+/// variable holds directly, an element that is a scalar or a string, and a
+/// folded `AssignCv` variable that holds no array, object or reference
+/// (no possible garbage collection root is released). The element is
+/// copied into the variable, an old string released, and the instruction
+/// jumps past the `AssignCv` (`ZEND_FETCH_DIM_R` + `ZEND_ASSIGN` on these
+/// operands). `None`, nothing changed, for anything else: the general path
+/// runs.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the head of `fetch_dim`
+fn fetch_packed_into_cv(f: &mut Frame, inst: &Inst) -> Option<Br> {
+    if f.symtab_attached {
+        return None;
+    }
+    let i = int_dim(f, inst)?;
+    let Value::Array(arr) = f.cvs.get(inst.a as usize)?.get()? else {
+        return None;
+    };
+    let v = plain_copy(arr.get_packed(i)?)?;
+    store_plain_into(f, inst.d, v)
+}
+
+/// `$v = $cv["key"]` for a literal key that is no integer key
+/// ([`TOp::FetchDimSC`]), as [`fetch_packed_into_cv`]: an array the variable holds
+/// directly that has the key (`zend_hash_find_known_hash`, as
+/// `ZEND_FETCH_DIM_R` with a constant offset looks it up), an element that
+/// is a scalar or a string, a destination that holds no array, object or
+/// reference.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the head of `fetch_dim`
+fn fetch_str_into_cv(f: &mut Frame, inst: &Inst) -> Option<Br> {
+    if f.symtab_attached {
+        return None;
+    }
+    let Value::Str(k) = f.code.literals.get(inst.b as usize)? else {
+        return None;
+    };
+    let Value::Array(arr) = f.cvs.get(inst.a as usize)?.get()? else {
+        return None;
+    };
+    let v = plain_copy(arr.get_zstr(k)?)?;
+    store_plain_into(f, inst.d, v)
+}
+
+/// The store of the fast paths of `fetch_dim`: the copied element `v` into
+/// the folded `AssignCv`'s variable `to` when that holds nothing a release
+/// could make a garbage collection root of (`zend_assign_to_variable` of a
+/// variable that is no reference: an old string is released), and the jump
+/// past the `AssignCv`; `None`, `v` dropped and nothing changed, otherwise.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the tail of `fetch_dim`'s fast paths
+fn store_plain_into(f: &Frame, to: u32, v: Value) -> Option<Br> {
+    let slot = f.cvs.get(to as usize)?;
+    if matches!(
+        slot.get(),
+        Some(Value::Array(_) | Value::Object(_) | Value::Reference(_) | Value::Resource(_))
+    ) {
+        return None;
+    }
+    // An old scalar owns nothing; an old string is released.
+    drop(slot.set(Some(v)));
+    Some(Br::Jump)
+}
+
+/// The int offset of a fast path: the offset operand (a temporary, a
+/// variable or a literal) when it holds an int directly. A temporary keeps
+/// it (an int owns nothing), as `dim_int_in` leaves it.
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of the fast paths' heads
+fn int_dim(f: &Frame, inst: &Inst) -> Option<i64> {
+    let v = match dim_kind(inst) {
+        KIND_TMP | KIND_TMPKEEP => f.tmps.get(inst.b as usize)?,
+        KIND_CV => f.cvs.get(inst.b as usize)?.get()?,
+        KIND_LIT => f.code.literals.get(inst.b as usize)?,
+        _ => return None,
+    };
+    match v {
+        Value::Int(i) => Some(*i),
+        _ => None,
+    }
+}
+
+/// A copy of a scalar or a string (a reference count up); `None` for any
+/// other value (an array, an object, a reference, a resource).
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of the fast paths' heads
+fn plain_copy(v: &Value) -> Option<Value> {
+    Some(match v {
+        Value::Int(x) => Value::Int(*x),
+        Value::Float(x) => Value::Float(*x),
+        Value::Bool(b) => Value::Bool(*b),
+        Value::Null => Value::Null,
+        Value::Str(s) => Value::Str(s.clone()),
+        _ => return None,
+    })
+}
+
+/// The commonest `$cv[$i] = $v` and `$cv[] = $v` ([`TOp::AssignDimIC`]), as
+/// `assign_dim_cv_in` makes them, without its general steps: an array the
+/// variable holds directly and alone (no separation; no symbol table), an
+/// int offset (as [`fetch_packed_into_cv`]) of an existing element of a
+/// packed table that is a scalar or a string, or the next one
+/// (`HashTable::assign_packed_int`), or an append to any table
+/// (`HashTable::push`), and a value that is a scalar or a string
+/// (`ZEND_ASSIGN_DIM` + `OP_DATA` on these operands: copied from a
+/// variable or a literal, moved out of a consumed temporary). An old
+/// string element is released; no possible garbage collection root is.
+/// `None`, nothing changed (a moved value is put back), for anything else:
+/// the general path runs.
+#[inline(always)]
+#[allow(clippy::inline_always)] // the head of `assign_dim`
+fn assign_packed(f: &mut Frame, inst: &Inst) -> Option<()> {
+    if f.symtab_attached {
+        return None;
+    }
+    let i = if dim_kind(inst) == KIND_UNUSED {
+        None
+    } else {
+        Some(int_dim(f, inst)?)
+    };
+    let vk = val_kind(inst);
+    let v = match vk {
+        KIND_CV => plain_copy(f.cvs.get(inst.p)?.get()?)?,
+        KIND_LIT => plain_copy(f.code.literals.get(inst.p)?)?,
+        KIND_TMPKEEP => plain_copy(f.tmps.get(inst.p)?)?,
+        KIND_TMP => {
+            let t = f.tmps.get_mut(inst.p)?;
+            if !t.is_plain() {
+                return None;
+            }
+            std::mem::take(t)
+        }
+        _ => return None,
+    };
+    match write_plain(f, inst.a, i, v) {
+        Ok(()) => Some(()),
+        Err(v) => {
+            if vk == KIND_TMP {
+                if let Some(t) = f.tmps.get_mut(inst.p) {
+                    // The slot holds the `Null` `take` left (nothing to
+                    // release).
+                    std::mem::forget(std::mem::replace(t, v));
+                }
+            }
+            None
+        }
+    }
+}
+
+/// The write of [`assign_packed`]: `v` into the array variable `cv` holds
+/// alone, at int offset `i` of a packed table or appended (`i` absent).
+/// `Err` gives the value back, nothing changed.
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of `assign_packed`
+fn write_plain(f: &mut Frame, cv: u32, i: Option<i64>, v: Value) -> Result<(), Value> {
+    let Some(Some(Value::Array(arr))) = f.cvs.get_mut(cv as usize).map(CvSlot::as_mut) else {
+        return Err(v);
+    };
+    let Some(tbl) = arr.get_mut_unshared() else {
+        return Err(v);
+    };
+    let Some(i) = i else {
+        return tbl.push(v).map(|_| ());
+    };
+    if let Some(slot) = tbl.get_packed_mut(i) {
+        if !slot.is_plain() {
+            return Err(v);
+        }
+        discard_plain(std::mem::replace(slot, v));
+        return Ok(());
+    }
+    // The next element of a packed table (or a hole, a hash table: given
+    // back).
+    if let Some(old) = tbl.assign_packed_int(i, v)? {
+        discard_plain(old);
+    }
+    Ok(())
+}
+
+/// Releases a replaced scalar or string element: a scalar owns nothing (no
+/// drop glue), a string is released.
+#[inline(always)]
+#[allow(clippy::inline_always)] // part of `write_plain`
+fn discard_plain(old: Value) {
+    if matches!(old, Value::Str(_)) {
+        drop(old);
+    } else {
+        std::mem::forget(old);
+    }
+}
+
 /// `Op::FetchDimsCv`: `$cv[d1][d2]...` read (`fetch_dims_cv_in`), as
 /// [`fetch_dim`].
 ///
@@ -363,6 +633,21 @@ pub(super) unsafe fn assign_dim(frame: *mut Frame, inst: &Inst) -> bool {
     let dim = operand(dim_kind(inst), inst.b);
     let val = operand(val_kind(inst), inst.p as u32);
     assign_dim_cv_in(f, inst.a, dim, val)
+}
+
+/// `TOp::AssignDimIC`: [`assign_packed`], else the general write
+/// ([`assign_dim`]), as [`fetch_dim_int`].
+///
+/// # Safety
+/// As [`fetch_dim`].
+#[inline(never)]
+pub(super) unsafe fn assign_dim_int(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    if assign_packed(unsafe { &mut *frame }, inst).is_some() {
+        return true;
+    }
+    // SAFETY: as above; the fast path's borrow of the frame has ended.
+    unsafe { assign_dim(frame, inst) }
 }
 
 /// `Op::AssignDimsCv`: `$cv[d1][d2]... = val` (`assign_dims_cv_in`).

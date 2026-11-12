@@ -88,11 +88,12 @@ fn check(code: &OpArray) -> Box<[Inst]> {
                 Some(&Op::CmpJmp { target, .. }) => Some(target),
                 other => panic!("op {i}: fused with {other:?}"),
             },
-            // A property read into its folded `AssignCv`'s variable: past
-            // that op.
+            // A property or element read into its folded `AssignCv`'s
+            // variable: past that op.
             Op::FetchObjProp { to: Some(_), .. } if inst.op == TOp::FetchObjPropTo => {
                 Some(u32::try_from(i + 2).expect("op index"))
             }
+            Op::FetchDimCv { to: Some(_), .. } => Some(u32::try_from(i + 2).expect("op index")),
             // The smart branches of `strs`: the jump of the op after them.
             Op::TypeCheck { .. } | Op::Isset { .. } | Op::Empty { .. }
                 if matches!(inst.op, TOp::TypeCheckJmpC | TOp::IssetJmpC) =>
@@ -786,9 +787,15 @@ fn dims_in_every_specialised_form() {
     }
     let tape = check(&arrays[1]);
     let has = |op: TOp| tape.iter().any(|i| i.op == op);
+    // A read or write of one offset is one of its instructions (the
+    // general one or a fast path's, from its operands).
+    assert!(tape
+        .iter()
+        .any(|i| matches!(i.op, TOp::FetchDimC | TOp::FetchDimIC | TOp::FetchDimSC)));
+    assert!(tape
+        .iter()
+        .any(|i| matches!(i.op, TOp::AssignDimC | TOp::AssignDimIC)));
     for op in [
-        TOp::FetchDimC,
-        TOp::AssignDimC,
         TOp::AssignOpDimC,
         TOp::IssetDimC,
         TOp::FetchDimsC,
@@ -856,6 +863,81 @@ array(3) {
   int(3)
 }
 int(4)
+"#
+    );
+}
+
+const DIM_FAST_PATHS: &str = r#"<?php
+function f($a, $i, $h) {
+    $v = $a[$i];
+    $x = $a[$i + 1];
+    $y = $a[2];
+    $z = $h["beta"];
+    $u = $h["7"];
+    $w = $a[1.5];
+    echo $a[$i], "\n";
+    $a[$i] = $v . $x . $y . $z . $u;
+    $a[] = 5;
+    $a["k"] = 1;
+    $a[$i] = [1];
+    $a[0] = $i + 1;
+    var_dump($a, $w);
+}
+f([10, 20, 30], 1, ["beta" => 2, 7 => "seven"]);
+"#;
+
+/// The fast path an array read or write tries first is chosen from what
+/// its operands can hold when the tape is built: an int offset (a variable,
+/// a temporary, an int literal), a literal string key that is no integer
+/// key, an append; none for a read without a folded `AssignCv`, a float
+/// or integer-string literal offset, a string literal key of a write or an
+/// array literal value.
+#[test]
+fn dim_fast_paths_follow_the_operands() {
+    use TOp::{AssignDimC, AssignDimIC, FetchDimC, FetchDimIC, FetchDimSC};
+    let arrays = op_arrays(DIM_FAST_PATHS);
+    let tape = check(&arrays[1]);
+    let ops = |pick: fn(TOp) -> bool| {
+        tape.iter()
+            .map(|i| i.op)
+            .filter(|&op| pick(op))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ops(|op| matches!(op, FetchDimC | FetchDimIC | FetchDimSC)),
+        [FetchDimIC, FetchDimIC, FetchDimIC, FetchDimSC, FetchDimC, FetchDimC, FetchDimC]
+    );
+    assert_eq!(
+        ops(|op| matches!(op, AssignDimC | AssignDimIC)),
+        [
+            AssignDimIC,
+            AssignDimIC,
+            AssignDimC,
+            AssignDimC,
+            AssignDimIC
+        ]
+    );
+    assert_eq!(
+        run(DIM_FAST_PATHS),
+        r#"
+Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 8
+20
+array(5) {
+  [0]=>
+  int(2)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+  [2]=>
+  int(30)
+  [3]=>
+  int(5)
+  ["k"]=>
+  int(1)
+}
+int(20)
 "#
     );
 }

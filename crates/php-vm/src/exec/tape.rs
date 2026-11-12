@@ -1038,9 +1038,12 @@ tape_ops! {
         //
         // ---- dims (exec/tape/dims.rs) ----
         FetchDimC = (dims::fetch_dim, 1, branch_poll_f),
+        FetchDimIC = (dims::fetch_dim_int, 1, branch_poll_f),
+        FetchDimSC = (dims::fetch_dim_str, 1, branch_poll_f),
         FetchDimsC = (dims::fetch_dims, 1, branch_poll_f),
         IssetDimC = (dims::isset_dim, 1, poll_f),
         AssignDimC = (dims::assign_dim, 1, poll_f),
+        AssignDimIC = (dims::assign_dim_int, 1, poll_f),
         AssignDimsC = (dims::assign_dims, 1, poll_f),
         AssignOpDimC = (dims::assign_op_dim, 1, poll_f),
         AssignOpDimsC = (dims::assign_op_dims, 1, poll_f),
