@@ -1377,7 +1377,8 @@ fn usable(f: &Frame, code: &OpArray) -> bool {
 /// `ip`, and the plain user calls and returns among them
 /// (`ZEND_DO_UCALL`, `ZEND_RETURN`: [`Vm::push_simple_ucall`],
 /// [`Vm::return_simple`]), going on in the callee's or the caller's frame
-/// in place of returning to `Vm::run` to reload it. Specialised
+/// in place of returning to `Vm::run` to reload it, and the plain builtin
+/// calls by name (`ZEND_DO_ICALL`: `calls::call_native`). Specialised
 /// instructions run in [`run_core`]; a hot op without one, or whose
 /// instruction declined, runs through [`hot::step`] or
 /// [`hot::step_ext`]; a frame the tape cannot run on ([`usable`]) has its
@@ -1391,7 +1392,11 @@ fn usable(f: &Frame, code: &OpArray) -> bool {
 /// * either with [`SWITCHED`] set in `ip` when the current frame changed
 ///   since the call (`ip` and `at` are then the new frame's);
 /// * `(_, LEFT)` when a call or return changed the frame and the safe
-///   point after it is due ([`LEFT`]).
+///   point after it is due ([`LEFT`]);
+/// * `(_, THREW)` when a builtin it called (`calls::call_native`) threw or
+///   exited ([`hot::THREW`]): the throw is in `Vm::tape_throw`, the
+///   current frame's resume point stored as for `Vm::run`'s generic
+///   `DoCall` (`SAVE_OPLINE`), so the exception unwinds from the call.
 ///
 /// `base` is `Vm::run`'s: the frame at that index is never returned from
 /// here (`Vm::return_simple` declines it). The calls and returns are
@@ -1545,6 +1550,32 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 match prep.take() {
                     Some(call) => match calls::enter(vm, call, dst, at + 1) {
                         Ok(()) => true,
+                        // `ZEND_DO_ICALL` of the prepared builtin call (`enter`
+                        // gives it back): the handler runs here, and the
+                        // caller goes on after the call, looked at afresh
+                        // (the handler may have attached its symbol table),
+                        // with the safe point after the call when it is due,
+                        // as after `Vm::run`'s generic `DoCall`.
+                        Err(call) if call.is_native() => {
+                            fresh = false;
+                            match calls::call_native(vm, call, dst, at + 1) {
+                                Ok(Ok(())) => {
+                                    if crate::interrupt::safe_point_due() {
+                                        return ((at + 1) | switched, at);
+                                    }
+                                    ip = at + 1;
+                                    continue 'frames;
+                                }
+                                Ok(Err(t)) => {
+                                    vm.tape_throw = Some(t);
+                                    return (at | switched, hot::THREW);
+                                }
+                                Err(call) => {
+                                    calls::materialize(vm, call);
+                                    false
+                                }
+                            }
+                        }
                         Err(call) => {
                             calls::materialize(vm, call);
                             vm.push_simple_ucall(dst, at + 1)
@@ -1617,8 +1648,8 @@ fn run_call(
         Some(&Op::InitFCall { name, .. }) => {
             flush(vm, prep);
             *prep = calls::prepare(vm, name);
-            if prep.is_some() {
-                return at + 1;
+            if let Some(call) = prep.as_mut() {
+                return send_following(vm, call, ops, at);
             }
         }
         Some(&Op::InitMethodCall {
@@ -1627,8 +1658,8 @@ fn run_call(
         }) => {
             flush(vm, prep);
             *prep = calls::prepare_method(vm, obj, lit, at);
-            if prep.is_some() {
-                return at + 1;
+            if let Some(call) = prep.as_mut() {
+                return send_following(vm, call, ops, at);
             }
             // Not a hot op: its generic fast path (`Vm::run`'s pre-match
             // arm), else the generic op in `Vm::run`.
@@ -1647,8 +1678,8 @@ fn run_call(
             match calls::new_object(vm, lit, dst, skip) {
                 Some(calls::NewDone::Skip(target)) => return target,
                 Some(calls::NewDone::Prepared(call)) => {
-                    *prep = Some(call);
-                    return at + 1;
+                    let call = prep.insert(call);
+                    return send_following(vm, call, ops, at);
                 }
                 Some(calls::NewDone::Pending) => return at + 1,
                 // The generic `New` (`hot::step_ext`, then `Vm::run`).
@@ -1659,15 +1690,18 @@ fn run_call(
             flush(vm, prep);
             *prep = calls::prepare_static(vm, at);
             // Not a hot op: else the generic op in `Vm::run`.
-            return if prep.is_some() { at + 1 } else { DECLINED };
+            return match prep.as_mut() {
+                Some(call) => send_following(vm, call, ops, at),
+                None => DECLINED,
+            };
         }
         Some(&Op::InitDynCall {
             callee: Operand::Cv(cv),
         }) => {
             flush(vm, prep);
             *prep = calls::prepare_closure(vm, cv);
-            if prep.is_some() {
-                return at + 1;
+            if let Some(call) = prep.as_mut() {
+                return send_following(vm, call, ops, at);
             }
             // Not a hot op: its generic fast path (`Vm::run`'s pre-match
             // arm), else the generic op in `Vm::run`.
@@ -1691,6 +1725,24 @@ fn run_call(
         return DECLINED;
     };
     hot::step_ext(f, ops, lits, at)
+}
+
+/// The `Send`s right after the op at `at`, which started the prepared
+/// `call`, passed at once ([`calls::send`]): they are its arguments (an
+/// argument's own call would start with its own op), and nothing runs in
+/// between, so each loop round trip saved changes nothing else. Returns
+/// where the tape goes on: the op after the last one passed (the `DoCall`,
+/// or a `Send` `calls::send` declined, which then runs as before).
+#[inline]
+fn send_following(vm: &mut Vm, call: &mut calls::Prepared, ops: &[Op], at: usize) -> usize {
+    let mut next = at + 1;
+    while let Some(Op::Send { src }) = ops.get(next) {
+        if !calls::send(vm, call, src) {
+            break;
+        }
+        next += 1;
+    }
+    next
 }
 
 mod calls;

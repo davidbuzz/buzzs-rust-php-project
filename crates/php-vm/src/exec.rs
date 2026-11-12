@@ -1226,6 +1226,12 @@ impl Vm {
                             ops = &code.ops;
                         }
                         if last != hot::NO_SAFE_POINT {
+                            // A builtin called on the tape threw: the frame's
+                            // resume point is stored (`SAVE_OPLINE`), and the
+                            // exception unwinds from there.
+                            if last == hot::THREW {
+                                return Err(self.tape_throw.take().unwrap_or(Throw::Fatal));
+                            }
                             ip = self.safe_point(next, &ops[last])?;
                             continue 'ops;
                         }

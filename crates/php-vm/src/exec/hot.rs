@@ -149,6 +149,13 @@ pub(super) const SWITCHED: usize = 1 << (usize::BITS - 1);
 /// the frame.
 pub(super) const LEFT: usize = usize::MAX - 1;
 
+/// The second half of [`super::tape::run_tape`]'s result when a builtin it
+/// called threw or exited: the throw is in `Vm::tape_throw`, and the
+/// current frame's resume point is stored (`SAVE_OPLINE`), so `Vm::run`
+/// propagates it as its own generic `DoCall` would. A sentinel instead of
+/// a `Result`: the result stays two registers wide on every return.
+pub(super) const THREW: usize = usize::MAX - 2;
+
 /// Whether `op` is a call or a return [`super::tape::run_tape`] makes itself when its
 /// fast path applies (`Vm::push_simple_ucall`, `Vm::return_simple`).
 #[inline(always)]

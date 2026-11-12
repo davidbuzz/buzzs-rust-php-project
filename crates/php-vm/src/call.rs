@@ -3751,7 +3751,7 @@ impl Vm {
     }
 
     /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
-    fn pop_frames_to(&mut self, depth: usize) {
+    pub(crate) fn pop_frames_to(&mut self, depth: usize) {
         if self.observer.keep_builtin_frame {
             return;
         }

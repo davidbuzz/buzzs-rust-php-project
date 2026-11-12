@@ -1297,7 +1297,12 @@ impl Frame {
     /// slots (their buffers keep their capacity; the released slots own
     /// nothing). The variable store is kept: it is empty, either the
     /// frame's own or the shared `empty_vars`.
-    #[inline]
+    ///
+    /// Always inline: with the tape's builtin call as a second caller it
+    /// came out of line, which cost every generic builtin call ~13
+    /// instructions.
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
     pub(crate) fn reinit_for_builtin(&mut self, empty_code: &Rc<OpArray>) {
         self.kind = FrameKind::Builtin;
         if !self.tmps.is_empty() {
@@ -1536,6 +1541,49 @@ impl Frame {
         self.ret = RetTarget::Discard;
         self.is_ctor = false;
         self.caller_strict = false;
+        self.direct = false;
+        true
+    }
+
+    /// [`Frame::clear_builtin_for_reuse`] of the builtin frame the tape's
+    /// internal call made current (`exec/tape/calls.rs`, `call_native`):
+    /// that call set only its function, name and passed arguments, which
+    /// are released (`zend_vm_stack_free_args`); every other field is still
+    /// in the released state [`Frame::reinit_for_builtin`] left, which is
+    /// tested. `false`, having released nothing, when the handler left
+    /// more behind (a pending call, a symbol table, an `@`, named
+    /// arguments, a store of its own): the full release then runs.
+    #[inline]
+    pub(crate) fn release_native(&mut self, empty_vars: &Rc<RefCell<VarStore>>) -> bool {
+        if self.kind != FrameKind::Builtin
+            || self.symtab_attached
+            || !self.calls.is_empty()
+            || !self.named.is_empty()
+            || !self.silence_saved.is_empty()
+            || self.magic_name.is_some()
+            || self.this.is_some()
+            || self.closure.is_some()
+            || self.scope.is_some()
+            || self.called.is_some()
+            || self.generator.is_some()
+            || self.pending_exc.is_some()
+            || self.statics.is_some()
+            || !self.tmps.is_empty()
+            || !self.cvs.is_empty()
+            || !Rc::ptr_eq(&self.vars, empty_vars)
+        {
+            return false;
+        }
+        clear_arg_buffer(&mut self.args);
+        clear_opt(&mut self.func);
+        clear_opt(&mut self.builtin_name);
+        self.ip = 0;
+        self.ret = RetTarget::Discard;
+        self.is_ctor = false;
+        self.caller_strict = false;
+        self.called_from_internal = false;
+        self.observed = false;
+        self.observer_hidden = false;
         self.direct = false;
         true
     }
@@ -2190,6 +2238,9 @@ pub struct Vm {
     pub fibers: Vec<Obj>,
     /// Destination temporary of the builtin call in progress (fibers).
     pub pending_call_dst: Option<u32>,
+    /// What a builtin the tape loop called threw (`exec::hot::THREW`),
+    /// until `Vm::run` takes it.
+    pub(crate) tape_throw: Option<Throw>,
     /// Set by `op_do_call_nodiscard` when it already reported a native
     /// function's deprecation (`call_builtin_impl` consumes it).
     pub(crate) builtin_deprecation_reported: bool,

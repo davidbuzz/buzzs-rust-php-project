@@ -879,3 +879,36 @@ fn strs_in_every_specialised_form() {
         "int(27)\nbool(true)\nbool(true)\nbool(false)\nint(12)\nbool(false)\nbool(true)\nbool(true)\n"
     );
 }
+
+const BUILTIN_CALLS: &str = r#"<?php
+function f($s, $n) {
+    $r = [];
+    for ($i = 0; $i < 3; $i++) {
+        $r[] = str_repeat($s, $n);
+        $r[] = ucfirst(strrev($s));
+        strrev($s);
+        try { str_repeat($s, -1); } catch (ValueError $e) { $r[] = $e->getLine(); }
+        $r[] = str_repeat($s, "2");
+    }
+    return implode("|", $r);
+}
+echo f("ab", 2), "\n";
+"#;
+
+/// Builtin calls by name start as call instructions; their results, an
+/// exception a builtin throws (caught in the loop, with its line), an
+/// argument the generic call coerces and nested calls come out as in
+/// php-src.
+#[test]
+fn builtin_calls() {
+    let arrays = op_arrays(BUILTIN_CALLS);
+    for code in &arrays {
+        check(code);
+    }
+    let tape = check(&arrays[1]);
+    assert!(tape.iter().filter(|i| i.op == TOp::CallInit).count() >= 4);
+    assert_eq!(
+        run(BUILTIN_CALLS),
+        "abab|Ba|8|abab|abab|Ba|8|abab|abab|Ba|8|abab\n"
+    );
+}

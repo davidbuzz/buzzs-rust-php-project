@@ -319,6 +319,32 @@ pub struct Builtin {
     sig: OnceCell<Signature>,
     /// The stub text `sig` is parsed from.
     text: StubText,
+    /// [`Builtin::plain_call`], once worked out: [`PLAIN_UNKNOWN`],
+    /// [`PLAIN_NO`], [`PLAIN_NAMED`] or [`PLAIN_UNNAMED`].
+    plain: Cell<u8>,
+}
+
+/// [`Builtin::plain_call`] not worked out yet.
+const PLAIN_UNKNOWN: u8 = 0;
+/// Not a plain call.
+const PLAIN_NO: u8 = 1;
+/// A plain call whose frame carries the function's name.
+const PLAIN_NAMED: u8 = 2;
+/// A plain call whose frame has no name: `call_user_func()` and
+/// `call_user_func_array()` called by name, which php-src compiles to the
+/// callback's own call (`zend_compile_func_cuf`), so no frame of theirs
+/// shows in a backtrace.
+const PLAIN_UNNAMED: u8 = 3;
+
+/// How a call by name of a builtin can run on the tape ([`Builtin::plain_call`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlainCall {
+    /// Through the generic call.
+    No,
+    /// Directly; the frame carries the function's name.
+    Named,
+    /// Directly; the frame has no name.
+    Unnamed,
 }
 
 impl Builtin {
@@ -330,6 +356,7 @@ impl Builtin {
             handler,
             sig: OnceCell::from(sig),
             text: StubText::None,
+            plain: Cell::new(PLAIN_UNKNOWN),
         }
     }
 
@@ -347,6 +374,7 @@ impl Builtin {
             handler,
             sig: OnceCell::new(),
             text: StubText::Static(text),
+            plain: Cell::new(PLAIN_UNKNOWN),
         }
     }
 
@@ -358,6 +386,7 @@ impl Builtin {
             handler,
             sig: OnceCell::new(),
             text: StubText::Owned(text.into()),
+            plain: Cell::new(PLAIN_UNKNOWN),
         }
     }
 
@@ -365,6 +394,8 @@ impl Builtin {
     pub(crate) fn renamed(&self, name: ZStr) -> Self {
         Builtin {
             name,
+            // Depends on the name.
+            plain: Cell::new(PLAIN_UNKNOWN),
             ..self.clone()
         }
     }
@@ -373,6 +404,46 @@ impl Builtin {
     #[inline]
     pub fn signature(&self) -> &Signature {
         self.sig.get_or_init(|| self.parse_stub())
+    }
+
+    /// Whether a call by name of this function, all of whose arguments are
+    /// passed by value and have the declared types, can run as the tape's
+    /// direct internal call (`exec/tape/calls.rs`): no parameter is passed
+    /// by reference, the function is neither deprecated nor
+    /// `#[\NoDiscard]` (diagnostics before the call), and it has no
+    /// frameless class (`special::frameless_call` decides those calls).
+    /// Worked out once.
+    #[inline]
+    pub(crate) fn plain_call(&self) -> PlainCall {
+        match self.plain.get() {
+            PLAIN_NAMED => PlainCall::Named,
+            PLAIN_UNNAMED => PlainCall::Unnamed,
+            PLAIN_NO => PlainCall::No,
+            _ => self.plain_call_slow(),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn plain_call_slow(&self) -> PlainCall {
+        let plain = self.flags & (flags::DEPRECATED | flags::NODISCARD | flags::FRAMELESS) == 0
+            && !self.signature().params.iter().any(|p| p.by_ref);
+        let kind = if !plain {
+            PlainCall::No
+        } else if matches!(
+            self.name.as_bytes(),
+            b"call_user_func" | b"call_user_func_array"
+        ) {
+            PlainCall::Unnamed
+        } else {
+            PlainCall::Named
+        };
+        self.plain.set(match kind {
+            PlainCall::No => PLAIN_NO,
+            PlainCall::Named => PLAIN_NAMED,
+            PlainCall::Unnamed => PLAIN_UNNAMED,
+        });
+        kind
     }
 
     /// Parses the stub text. The tables are persistent in php-src
@@ -412,6 +483,8 @@ impl std::ops::DerefMut for Builtin {
     /// some of its functions after registration).
     fn deref_mut(&mut self) -> &mut Signature {
         self.signature();
+        // Worked out again from the edited signature.
+        self.plain.set(PLAIN_UNKNOWN);
         self.sig.get_mut().expect("signature initialised above")
     }
 }
