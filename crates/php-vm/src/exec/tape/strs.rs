@@ -7,6 +7,10 @@
 //! `JMPZ`/`JMPNZ` of the result right after them is taken by the test
 //! itself (`ZEND_VM_SMART_BRANCH`), which the fused instructions here do.
 //!
+//! The handlers are out of line, as the `dims` family's: inlined into
+//! [`super::run_core`] they changed its register allocation and cost every
+//! user call ~10 instructions.
+//!
 //! See the "Families" section of [`super`] for the contract of a handler
 //! and of [`lower`].
 
@@ -132,8 +136,7 @@ unsafe fn put_result(st: St, c: u32, v: Value) -> bool {
 ///
 /// # Safety
 /// `inst` is an instruction [`lower`] built for the frame of `st`.
-#[inline(always)]
-#[allow(clippy::inline_always)]
+#[inline(never)]
 pub(super) unsafe fn strlen_cv(st: St, inst: &Inst) -> bool {
     // SAFETY: the caller's contract: `a` is a validated variable offset.
     let Some(Value::Str(s)) = (unsafe { &*cv_slot(st, inst.a) }) else {
@@ -150,8 +153,7 @@ pub(super) unsafe fn strlen_cv(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`strlen_cv`].
-#[inline(always)]
-#[allow(clippy::inline_always)]
+#[inline(never)]
 pub(super) unsafe fn count_cv(st: St, inst: &Inst) -> bool {
     // SAFETY: as in `strlen_cv`.
     let Some(Value::Array(a)) = (unsafe { &*cv_slot(st, inst.a) }) else {
@@ -180,8 +182,7 @@ unsafe fn type_test(st: St, a: u32, mask: u8) -> Option<bool> {
 ///
 /// # Safety
 /// As [`strlen_cv`].
-#[inline(always)]
-#[allow(clippy::inline_always)]
+#[inline(never)]
 pub(super) unsafe fn type_check_cv(st: St, inst: &Inst) -> bool {
     // SAFETY: as in `strlen_cv`.
     let Some(r) = (unsafe { type_test(st, inst.a, inst.k) }) else {
@@ -196,8 +197,7 @@ pub(super) unsafe fn type_check_cv(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`strlen_cv`].
-#[inline(always)]
-#[allow(clippy::inline_always)]
+#[inline(never)]
 pub(super) unsafe fn type_check_jmp_cv(st: St, inst: &Inst) -> Br {
     // SAFETY: as in `strlen_cv`.
     match unsafe { type_test(st, inst.a, inst.k) } {
@@ -238,8 +238,7 @@ unsafe fn isset_test(st: St, a: u32, empty: bool) -> Option<bool> {
 ///
 /// # Safety
 /// As [`strlen_cv`].
-#[inline(always)]
-#[allow(clippy::inline_always)]
+#[inline(never)]
 pub(super) unsafe fn isset_cv(st: St, inst: &Inst) -> bool {
     // SAFETY: as in `strlen_cv`.
     let Some(r) = (unsafe { isset_test(st, inst.a, inst.b != 0) }) else {
@@ -254,8 +253,7 @@ pub(super) unsafe fn isset_cv(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`strlen_cv`].
-#[inline(always)]
-#[allow(clippy::inline_always)]
+#[inline(never)]
 pub(super) unsafe fn isset_jmp_cv(st: St, inst: &Inst) -> Br {
     // SAFETY: as in `strlen_cv`.
     match unsafe { isset_test(st, inst.a, inst.b != 0) } {
