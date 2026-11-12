@@ -198,22 +198,6 @@ pub(super) fn is_core(op: &Op) -> bool {
             | Op::BinAssignCvJmp { .. }
             | Op::AssignOpCvJmp { .. }
             | Op::AssignOpCv { .. }
-            | Op::FetchDimCv { .. }
-            | Op::FetchDimsCv { .. }
-            | Op::IssetDimCv { .. }
-            | Op::AssignDimCv { .. }
-            | Op::AssignDimsCv { .. }
-            | Op::AssignOpDimCv { .. }
-            | Op::AssignOpDimsCv { .. }
-            | Op::IncDecDimCv { .. }
-            | Op::ConcatCv { .. }
-            // Object property cache hits and `new` (`exec/spec/props.rs`).
-            | Op::FetchObjProp { .. }
-            | Op::AssignObjProp { .. }
-            | Op::AssignOpObjProp { .. }
-            | Op::IncDecObjProp { .. }
-            | Op::IssetObjProp { .. }
-            | Op::New { .. }
     )
 }
 

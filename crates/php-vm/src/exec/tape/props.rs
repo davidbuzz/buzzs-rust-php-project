@@ -148,8 +148,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
 ///
 /// # Safety
 /// `inst` is an instruction [`lower`] built for the frame of `st`.
-#[inline(always)]
-#[allow(clippy::inline_always)]
+#[inline(never)]
 pub(super) unsafe fn prop_in(st: St, inst: &Inst) -> bool {
     // SAFETY: the caller's contract; `st.f` is the current frame.
     let f = unsafe { &mut *st.f };
@@ -171,8 +170,7 @@ pub(super) unsafe fn prop_in(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`prop_in`].
-#[inline(always)]
-#[allow(clippy::inline_always)]
+#[inline(never)]
 pub(super) unsafe fn new_prop(st: St, inst: &Inst) -> Br {
     // SAFETY: the caller's contract; `st.f` is the current frame.
     let f = unsafe { &mut *st.f };

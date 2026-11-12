@@ -691,7 +691,11 @@ macro_rules! tape_ops {
                     TOp::AssignT => {
                         let s = st.tmps.add(inst.b as usize).cast::<Value>();
                         let d = st.cvs.add(inst.a as usize).cast::<Option<Value>>();
-                        if !is_scalar(&*s)
+                        // A scalar, or a string moved out of the
+                        // temporary (`ZEND_ASSIGN_SPEC_CV_TMP`: the value
+                        // changes owner, no reference count changes, and
+                        // the destination holds nothing to release).
+                        if !(is_scalar(&*s) || matches!(&*s, Value::Str(_)))
                             || !matches!(&*d, None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)))
                         {
                             return step_out(ip);
@@ -1422,7 +1426,13 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 let at = unsafe { out.ip.offset_from(tbase) } as usize;
                 let next = match out.why {
                     WHY_EXT => hot::step_ext(f, ops, lits, at),
-                    WHY_STEP => step_slow(f, ops, lits, at),
+                    // A declined instruction: the op's old fast path, by
+                    // the shortest route (a family op is not one of
+                    // `hot::step`'s own arms).
+                    WHY_STEP if ops.get(at).is_some_and(hot::is_core) => {
+                        step_slow(f, ops, lits, at)
+                    }
+                    WHY_STEP => hot::step_ext(f, ops, lits, at),
                     WHY_POLL => {
                         // SAFETY: as above.
                         #[allow(clippy::cast_sign_loss)]

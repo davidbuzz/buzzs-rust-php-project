@@ -268,8 +268,7 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
 ///
 /// # Safety
 /// `inst` is an instruction [`lower`] built for the frame of `st`.
-#[inline(always)]
-#[allow(clippy::inline_always)]
+#[inline(never)]
 pub(super) unsafe fn fetch_dim(st: St, inst: &Inst) -> bool {
     // SAFETY: the caller's contract; `st.f` is the current frame.
     let f = unsafe { &mut *st.f };
@@ -282,8 +281,7 @@ pub(super) unsafe fn fetch_dim(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`fetch_dim`].
-#[inline(always)]
-#[allow(clippy::inline_always)]
+#[inline(never)]
 pub(super) unsafe fn fetch_dims(st: St, inst: &Inst) -> bool {
     let f = unsafe { &mut *st.f };
     fetch_dims_cv_in(f, inst.a, inst.d, inst.c >> SLOT_SHIFT, None) == Some(false)
@@ -293,8 +291,7 @@ pub(super) unsafe fn fetch_dims(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`fetch_dim`].
-#[inline(always)]
-#[allow(clippy::inline_always)]
+#[inline(never)]
 pub(super) unsafe fn isset_dim(st: St, inst: &Inst) -> bool {
     let f = unsafe { &mut *st.f };
     let dim = operand(dim_kind(inst), inst.b);
@@ -306,8 +303,8 @@ pub(super) unsafe fn isset_dim(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`fetch_dim`].
-#[inline(always)]
-#[allow(clippy::inline_always, clippy::cast_possible_truncation)]
+#[inline(never)]
+#[allow(clippy::cast_possible_truncation)]
 pub(super) unsafe fn assign_dim(st: St, inst: &Inst) -> bool {
     let f = unsafe { &mut *st.f };
     let dim = operand(dim_kind(inst), inst.b);
@@ -319,8 +316,8 @@ pub(super) unsafe fn assign_dim(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`fetch_dim`].
-#[inline(always)]
-#[allow(clippy::inline_always, clippy::cast_possible_truncation)]
+#[inline(never)]
+#[allow(clippy::cast_possible_truncation)]
 pub(super) unsafe fn assign_dims(st: St, inst: &Inst) -> bool {
     let f = unsafe { &mut *st.f };
     let val = operand(val_kind(inst), inst.p as u32);
@@ -331,8 +328,8 @@ pub(super) unsafe fn assign_dims(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`fetch_dim`].
-#[inline(always)]
-#[allow(clippy::inline_always, clippy::cast_possible_truncation)]
+#[inline(never)]
+#[allow(clippy::cast_possible_truncation)]
 pub(super) unsafe fn assign_op_dim(st: St, inst: &Inst) -> bool {
     let f = unsafe { &mut *st.f };
     let dim = operand(dim_kind(inst), inst.b);
@@ -344,8 +341,8 @@ pub(super) unsafe fn assign_op_dim(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`fetch_dim`].
-#[inline(always)]
-#[allow(clippy::inline_always, clippy::cast_possible_truncation)]
+#[inline(never)]
+#[allow(clippy::cast_possible_truncation)]
 pub(super) unsafe fn assign_op_dims(st: St, inst: &Inst) -> bool {
     let f = unsafe { &mut *st.f };
     let val = operand(val_kind(inst), inst.p as u32);
@@ -357,8 +354,8 @@ pub(super) unsafe fn assign_op_dims(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`fetch_dim`].
-#[inline(always)]
-#[allow(clippy::inline_always, clippy::cast_ptr_alignment)]
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)]
 pub(super) unsafe fn incdec_dim(st: St, inst: &Inst) -> bool {
     let f = unsafe { &mut *st.f };
     let dim = operand(dim_kind(inst), inst.b);
@@ -377,8 +374,8 @@ pub(super) unsafe fn incdec_dim(st: St, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`fetch_dim`].
-#[inline(always)]
-#[allow(clippy::inline_always, clippy::cast_possible_truncation)]
+#[inline(never)]
+#[allow(clippy::cast_possible_truncation)]
 pub(super) unsafe fn concat_cv(st: St, inst: &Inst) -> bool {
     let f = unsafe { &mut *st.f };
     let val = operand(val_kind(inst), inst.p as u32);

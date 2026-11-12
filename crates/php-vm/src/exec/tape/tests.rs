@@ -65,11 +65,11 @@ fn check(code: &OpArray) -> Box<[Inst]> {
     for (i, op) in code.ops.iter().enumerate() {
         let inst = &tape[i];
         assert_eq!(inst.op == TOp::Exit, !hot::is_hot(op), "op {i}: {op:?}");
-        assert_eq!(
-            inst.op == TOp::Ext,
-            hot::is_hot(op) && !hot::is_core(op),
-            "op {i}: {op:?}"
-        );
+        // An unspecialised hot op is handed to the old fast path that
+        // runs it: `hot::step`'s own arms, or `hot::step_ext`.
+        if matches!(inst.op, TOp::Step | TOp::Ext) {
+            assert_eq!(inst.op == TOp::Ext, !hot::is_core(op), "op {i}: {op:?}");
+        }
         if matches!(inst.op, TOp::Exit | TOp::Step | TOp::Ext) {
             continue;
         }
