@@ -232,7 +232,7 @@ fn read_in(od: &ObjectData, slot: usize, dyn_prop: Option<&ZStr>) -> Option<Valu
 /// (`ZEND_DYNAMIC_PROPERTY_OFFSET`: `zend_hash_find` in
 /// `zobj->properties`), copied.
 #[inline(always)]
-fn read_hit(f: &Frame, pid: PlaceId) -> Option<Value> {
+pub(in crate::exec) fn read_hit(f: &Frame, pid: PlaceId) -> Option<Value> {
     let hit = hit_key(f, pid, PC_READ, 0)?;
     let dyn_prop = dyn_name(f, &hit);
     if hit.flags & PC_DYN != 0 && dyn_prop.is_none() {

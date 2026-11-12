@@ -6,19 +6,22 @@
 //! ref: `Zend/zend_vm_execute.h` property handlers, through
 //! [`crate::exec::spec::prop_op_in`].
 //!
-//! A property instruction carries the op index in `d`; the handler
-//! borrows the op from its own handle on the frame's `Rc<OpArray>` and
-//! runs `prop_op_in` on it — the exact entry point `hot::step` uses, so the
-//! family cannot diverge from the generic path. `prop_op_in` covers the
-//! prop cache, typed-property checks and `__get`/`__set` (it declines when
-//! object handlers must run). Every handler may release a value (an old
-//! property value, a consumed source) or allocate, so all rows poll; the
-//! read into a folded `AssignCv`'s variable also branches past that op.
+//! A read carries its place, temporary and folded variable, and runs the
+//! cache hit `prop_op_in` runs for it (`read_hit`, then
+//! `store_fetched_in`). Any other property instruction carries the op
+//! index in `d`; its handler borrows the op from its own handle on the
+//! frame's `Rc<OpArray>` and runs `prop_op_in` on it — the exact entry
+//! point `hot::step` uses, so the family cannot diverge from the generic
+//! path. `prop_op_in` covers the prop cache, typed-property checks and
+//! `__get`/`__set` (it declines when object handlers must run). Every
+//! handler may release a value (an old property value, a consumed source)
+//! or allocate, so all rows poll; the read into a folded `AssignCv`'s
+//! variable also branches past that op.
 //! `new` is a call instruction ([`super::calls`]): it prepares the
 //! constructor's frame.
 
 use super::{Br, Inst, TOp};
-use crate::exec::spec::prop_op_in;
+use crate::exec::spec::{prop_op_in, read_hit, store_fetched_in};
 use crate::opcode::{FetchMode, Op, OpArray, Operand};
 use crate::vm::Frame;
 use std::rc::Rc;
@@ -63,20 +66,21 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             match to {
                 None => Inst {
                     a: place,
-                    d: i as u32,
+                    b: dst,
                     ..plain(TOp::FetchObjProp)
                 },
                 // `$cv = $obj->prop`: the folded `AssignCv` after the read
                 // (`c` jumps past it when the value went into the
-                // variable).
+                // variable `d`).
                 Some(cv) => {
                     if (cv as usize) >= code.cv_names.len() {
                         return None;
                     }
                     Inst {
                         a: place,
+                        b: dst,
                         c: super::rel(code, i, u32::try_from(i + 2).ok()?)?,
-                        d: i as u32,
+                        d: cv,
                         ..plain(TOp::FetchObjPropTo)
                     }
                 }
@@ -146,28 +150,40 @@ pub(super) unsafe fn prop_in(frame: *mut Frame, inst: &Inst) -> bool {
     prop_op_in(f, op, &mut ip)
 }
 
-/// `Op::FetchObjProp` into its folded `AssignCv`'s variable (`$cv =
-/// $obj->prop`), as [`prop_in`]: on a cache hit the value goes into the
-/// variable when that holds nothing to release (the jump past the
-/// `AssignCv`), else into the read's temporary (falling through to the
-/// `AssignCv`, which stores it), as `prop_op_in` reports by the op it
-/// moves to.
+/// `Op::FetchObjProp` (`ZEND_FETCH_OBJ_R` / `_IS` on a cache hit) into
+/// its temporary `b`: `read_hit`, the hit `prop_op_in` takes, without
+/// going through the op. Declines a miss (the generic op: magic, a
+/// lazy object, an uninitialized or undeclared property).
 ///
 /// # Safety
-/// As [`prop_in`].
+/// As [`prop_in`]; `a` is the op's place and `b` its temporary.
 #[inline(never)]
-pub(super) unsafe fn prop_to(frame: *mut Frame, inst: &Inst) -> Br {
+pub(super) unsafe fn fetch_prop(frame: *mut Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract.
     let f = unsafe { &mut *frame };
-    let code = Rc::clone(&f.code);
-    let i = inst.d as usize;
-    let Some(op) = code.ops.get(i) else {
+    let Some(v) = read_hit(f, inst.a) else {
+        return false;
+    };
+    store_fetched_in(f, inst.b, None, v);
+    true
+}
+
+/// `Op::FetchObjProp` into its folded `AssignCv`'s variable `d` (`$cv =
+/// $obj->prop`), as [`fetch_prop`]: the value goes into the variable when
+/// that holds nothing to release (`store_fetched_in`; the jump past the
+/// `AssignCv`), else into the read's temporary `b` (falling through to the
+/// `AssignCv`, which stores it).
+///
+/// # Safety
+/// As [`fetch_prop`]; `d` is a variable of the frame.
+#[inline(never)]
+pub(super) unsafe fn fetch_prop_to(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    let Some(v) = read_hit(f, inst.a) else {
         return Br::Decline;
     };
-    let mut ip = i;
-    if !prop_op_in(f, op, &mut ip) {
-        Br::Decline
-    } else if ip > i {
+    if store_fetched_in(f, inst.b, Some(inst.d), v) {
         Br::Jump
     } else {
         Br::Fall

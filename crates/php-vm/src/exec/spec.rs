@@ -49,7 +49,7 @@ pub(super) use dims::{
     fe_assign_in, fe_fetch_array_in, fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in,
     isset_dim_cv_in,
 };
-pub(super) use props::prop_op_in;
+pub(super) use props::{prop_op_in, read_hit};
 pub(super) use statics::{
     assign_static_prop_in, fetch_class_const_in, fetch_const_in, fetch_static_prop_in,
     isset_static_prop_in,
@@ -368,7 +368,12 @@ pub(super) fn release_str_tmp_in(f: &mut Frame, op: Operand) {
 /// else into temporary `dst` (`false`).
 #[inline(always)]
 #[allow(clippy::inline_always)] // hot folded AssignCv store in the dispatch pre-match
-fn store_fetched_in(f: &mut Frame, dst: u32, to: Option<u32>, v: Value) -> bool {
+pub(in crate::exec) fn store_fetched_in(
+    f: &mut Frame,
+    dst: u32,
+    to: Option<u32>,
+    v: Value,
+) -> bool {
     if let Some(to) = to {
         let idx = to as usize;
         if let Some(slot) = f.cvs.get(idx) {
