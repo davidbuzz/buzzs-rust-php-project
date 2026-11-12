@@ -4,7 +4,9 @@
 //! See the "Families" section of [`super`] for the contract of a handler
 //! and of [`lower`].
 
-use super::{cv_off, cv_slot, is_scalar, num, rel, src, tmp_off, Br, Inst, St, TOp, KC, KI, KT};
+use super::{
+    cv_off, cv_slot, frame_st, is_scalar, num, rel, src, tmp_off, Br, Inst, St, TOp, KC, KI, KT,
+};
 use super::{Num, KL};
 use crate::exec::spec::plain_truth;
 use crate::opcode::{BinKind, Op, OpArray, Operand};
@@ -123,45 +125,15 @@ unsafe fn num_of_kind(st: St, kind: u8, x: u32) -> Option<Num> {
 /// negative or too wide shift: the generic op converts, warns or throws)
 /// and a destination holding a value to release.
 ///
-/// The tape loop's arm passes only the frame (`st.f`): these handlers read
-/// the slot bases from it ([`frame_st`]). Passed all four bases, as the
-/// other families' handlers take them, the three calls made the loop keep
-/// the variables' base of every other op on the stack instead of in a
-/// register (+1 to +2 instructions per iteration of any loop).
+/// Called with the frame alone (`fam_arm!`'s thin modes), as the other
+/// families' handlers are: it reads the slot bases from the frame
+/// ([`super::frame_st`]).
 ///
 /// # Safety
-/// `inst` is an instruction [`lower`] built for the frame of `st`.
-#[inline(always)]
-#[allow(clippy::inline_always)]
-pub(super) unsafe fn num_bin_tmp(st: St, inst: &Inst) -> bool {
-    // SAFETY: the caller's contract.
-    unsafe { num_bin_tmp_in(st.f, inst) }
-}
-
-/// The slot bases of frame `f`, as [`super::run_tape`] derives them.
-///
-/// # Safety
-/// `f` is the current frame, whose slot vectors the tape's offsets fit.
-#[inline(always)]
-#[allow(clippy::inline_always)]
-unsafe fn frame_st(f: *mut crate::vm::Frame) -> St {
-    // SAFETY: the caller's contract.
-    let fr = unsafe { &mut *f };
-    St {
-        cvs: fr.cvs.as_mut_ptr().cast(),
-        tmps: fr.tmps.as_mut_ptr().cast(),
-        lits: fr.code.literals.as_ptr().cast(),
-        f,
-    }
-}
-
-/// [`num_bin_tmp`] on the frame's own slot bases.
-///
-/// # Safety
-/// As [`num_bin_tmp`], `f` being the instruction's frame.
+/// `inst` is an instruction [`lower`] built for `frame`, the current frame.
 #[inline(never)]
 #[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
-unsafe fn num_bin_tmp_in(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+pub(super) unsafe fn num_bin_tmp(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract.
     let st = unsafe { frame_st(frame) };
     // By raw pointer: the destination may be one of the operands.
@@ -213,19 +185,8 @@ fn plain_cv(v: Option<&php_runtime::Value>) -> bool {
 ///
 /// # Safety
 /// As [`num_bin_tmp`].
-#[inline(always)]
-#[allow(clippy::inline_always)]
-pub(super) unsafe fn num_bin_cv(st: St, inst: &Inst) -> bool {
-    // SAFETY: the caller's contract.
-    unsafe { num_bin_cv_in(st.f, inst) }
-}
-
-/// [`num_bin_cv`] on the frame's own slot bases.
-///
-/// # Safety
-/// As [`num_bin_tmp_in`].
 #[inline(never)]
-unsafe fn num_bin_cv_in(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+pub(super) unsafe fn num_bin_cv(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract.
     let st = unsafe { frame_st(frame) };
     // SAFETY: `d` is a validated variable offset.
@@ -248,19 +209,8 @@ unsafe fn num_bin_cv_in(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
 ///
 /// # Safety
 /// As [`num_bin_tmp`].
-#[inline(always)]
-#[allow(clippy::inline_always)]
-pub(super) unsafe fn num_assign_op_cv(st: St, inst: &Inst) -> bool {
-    // SAFETY: the caller's contract.
-    unsafe { num_assign_op_cv_in(st.f, inst) }
-}
-
-/// [`num_assign_op_cv`] on the frame's own slot bases.
-///
-/// # Safety
-/// As [`num_bin_tmp_in`].
 #[inline(never)]
-unsafe fn num_assign_op_cv_in(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+pub(super) unsafe fn num_assign_op_cv(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
     // SAFETY: the caller's contract.
     let st = unsafe { frame_st(frame) };
     // SAFETY: the caller's contract (the variable is `a`, of kind `KC`).

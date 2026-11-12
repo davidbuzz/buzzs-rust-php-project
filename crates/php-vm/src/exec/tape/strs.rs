@@ -14,9 +14,10 @@
 //! See the "Families" section of [`super`] for the contract of a handler
 //! and of [`lower`].
 
-use super::{cv_off, cv_slot, is_scalar, rel, tmp_off, tmp_slot, Br, Inst, St, TOp};
+use super::{cv_off, cv_slot, frame_st, is_scalar, rel, tmp_off, tmp_slot, Br, Inst, St, TOp};
 use crate::exec::spec::plain_truth;
 use crate::opcode::{type_mask, Op, OpArray, Operand, PlaceBase};
+use crate::vm::Frame;
 use php_runtime::Value;
 
 /// The result field of an instruction whose result is unused.
@@ -135,9 +136,11 @@ unsafe fn put_result(st: St, c: u32, v: Value) -> bool {
 /// reference, another type: the generic op coerces, warns or throws).
 ///
 /// # Safety
-/// `inst` is an instruction [`lower`] built for the frame of `st`.
+/// `inst` is an instruction [`lower`] built for `frame`, the current frame.
 #[inline(never)]
-pub(super) unsafe fn strlen_cv(st: St, inst: &Inst) -> bool {
+pub(super) unsafe fn strlen_cv(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract: `frame` is the current frame.
+    let st = unsafe { frame_st(frame) };
     // SAFETY: the caller's contract: `a` is a validated variable offset.
     let Some(Value::Str(s)) = (unsafe { &*cv_slot(st, inst.a) }) else {
         return false;
@@ -154,7 +157,9 @@ pub(super) unsafe fn strlen_cv(st: St, inst: &Inst) -> bool {
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
-pub(super) unsafe fn count_cv(st: St, inst: &Inst) -> bool {
+pub(super) unsafe fn count_cv(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract: `frame` is the current frame.
+    let st = unsafe { frame_st(frame) };
     // SAFETY: as in `strlen_cv`.
     let Some(Value::Array(a)) = (unsafe { &*cv_slot(st, inst.a) }) else {
         return false;
@@ -183,7 +188,9 @@ unsafe fn type_test(st: St, a: u32, mask: u8) -> Option<bool> {
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
-pub(super) unsafe fn type_check_cv(st: St, inst: &Inst) -> bool {
+pub(super) unsafe fn type_check_cv(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract: `frame` is the current frame.
+    let st = unsafe { frame_st(frame) };
     // SAFETY: as in `strlen_cv`.
     let Some(r) = (unsafe { type_test(st, inst.a, inst.k) }) else {
         return false;
@@ -198,7 +205,9 @@ pub(super) unsafe fn type_check_cv(st: St, inst: &Inst) -> bool {
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
-pub(super) unsafe fn type_check_jmp_cv(st: St, inst: &Inst) -> Br {
+pub(super) unsafe fn type_check_jmp_cv(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract: `frame` is the current frame.
+    let st = unsafe { frame_st(frame) };
     // SAFETY: as in `strlen_cv`.
     match unsafe { type_test(st, inst.a, inst.k) } {
         Some(r) if r == (inst.e != 0) => Br::Jump,
@@ -239,7 +248,9 @@ unsafe fn isset_test(st: St, a: u32, empty: bool) -> Option<bool> {
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
-pub(super) unsafe fn isset_cv(st: St, inst: &Inst) -> bool {
+pub(super) unsafe fn isset_cv(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract: `frame` is the current frame.
+    let st = unsafe { frame_st(frame) };
     // SAFETY: as in `strlen_cv`.
     let Some(r) = (unsafe { isset_test(st, inst.a, inst.b != 0) }) else {
         return false;
@@ -254,7 +265,9 @@ pub(super) unsafe fn isset_cv(st: St, inst: &Inst) -> bool {
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
-pub(super) unsafe fn isset_jmp_cv(st: St, inst: &Inst) -> Br {
+pub(super) unsafe fn isset_jmp_cv(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract: `frame` is the current frame.
+    let st = unsafe { frame_st(frame) };
     // SAFETY: as in `strlen_cv`.
     match unsafe { isset_test(st, inst.a, inst.b != 0) } {
         Some(r) if r == (inst.e != 0) => Br::Jump,

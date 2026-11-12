@@ -19,12 +19,13 @@
 //! `hot::step_ext` skips it; otherwise the value goes to `dst` and the
 //! `AssignCv` runs next. Every other dims instruction covers one op.
 
-use super::{rel, tmp_slot, Br, Inst, St, TOp, SLOT_SHIFT};
+use super::{rel, Br, Inst, TOp, SLOT_SHIFT};
 use crate::exec::spec::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, concat_cv_in,
     fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, isset_dim_cv_in, put_tmp,
 };
 use crate::opcode::{IncDecKind, Op, OpArray, Operand};
+use crate::vm::Frame;
 use php_runtime::BinaryOp;
 
 /// The kind of an operand, as stored in `k`: a compiled variable, a
@@ -312,12 +313,12 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
 /// (jump past that op) or to `dst` (fall through to it).
 ///
 /// # Safety
-/// `inst` is an instruction [`lower`] built for the frame of `st`.
+/// `inst` is an instruction [`lower`] built for `frame`, the current frame.
 #[inline(never)]
 #[allow(clippy::cast_possible_truncation)]
-pub(super) unsafe fn fetch_dim(st: St, inst: &Inst) -> Br {
-    // SAFETY: the caller's contract; `st.f` is the current frame.
-    let f = unsafe { &mut *st.f };
+pub(super) unsafe fn fetch_dim(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    let f = unsafe { &mut *frame };
     let dim = operand(dim_kind(inst), inst.b);
     let to = (inst.d != NO_TO).then_some(inst.d);
     fetched(fetch_dim_cv_in(f, inst.a, dim, inst.p as u32, to))
@@ -330,9 +331,9 @@ pub(super) unsafe fn fetch_dim(st: St, inst: &Inst) -> Br {
 /// As [`fetch_dim`].
 #[inline(never)]
 #[allow(clippy::cast_possible_truncation)]
-pub(super) unsafe fn fetch_dims(st: St, inst: &Inst) -> Br {
-    // SAFETY: the caller's contract; `st.f` is the current frame.
-    let f = unsafe { &mut *st.f };
+pub(super) unsafe fn fetch_dims(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract; `frame` is the current frame.
+    let f = unsafe { &mut *frame };
     let to = (inst.b != NO_TO).then_some(inst.b);
     fetched(fetch_dims_cv_in(f, inst.a, inst.d, inst.p as u32, to))
 }
@@ -342,8 +343,9 @@ pub(super) unsafe fn fetch_dims(st: St, inst: &Inst) -> Br {
 /// # Safety
 /// As [`fetch_dim`].
 #[inline(never)]
-pub(super) unsafe fn isset_dim(st: St, inst: &Inst) -> bool {
-    let f = unsafe { &mut *st.f };
+pub(super) unsafe fn isset_dim(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
     let dim = operand(dim_kind(inst), inst.b);
     isset_dim_cv_in(f, inst.a, dim, inst.c >> SLOT_SHIFT, inst.e != 0)
 }
@@ -355,8 +357,9 @@ pub(super) unsafe fn isset_dim(st: St, inst: &Inst) -> bool {
 /// As [`fetch_dim`].
 #[inline(never)]
 #[allow(clippy::cast_possible_truncation)]
-pub(super) unsafe fn assign_dim(st: St, inst: &Inst) -> bool {
-    let f = unsafe { &mut *st.f };
+pub(super) unsafe fn assign_dim(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
     let dim = operand(dim_kind(inst), inst.b);
     let val = operand(val_kind(inst), inst.p as u32);
     assign_dim_cv_in(f, inst.a, dim, val)
@@ -368,8 +371,9 @@ pub(super) unsafe fn assign_dim(st: St, inst: &Inst) -> bool {
 /// As [`fetch_dim`].
 #[inline(never)]
 #[allow(clippy::cast_possible_truncation)]
-pub(super) unsafe fn assign_dims(st: St, inst: &Inst) -> bool {
-    let f = unsafe { &mut *st.f };
+pub(super) unsafe fn assign_dims(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
     let val = operand(val_kind(inst), inst.p as u32);
     assign_dims_cv_in(f, inst.a, inst.d, val)
 }
@@ -380,8 +384,9 @@ pub(super) unsafe fn assign_dims(st: St, inst: &Inst) -> bool {
 /// As [`fetch_dim`].
 #[inline(never)]
 #[allow(clippy::cast_possible_truncation)]
-pub(super) unsafe fn assign_op_dim(st: St, inst: &Inst) -> bool {
-    let f = unsafe { &mut *st.f };
+pub(super) unsafe fn assign_op_dim(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
     let dim = operand(dim_kind(inst), inst.b);
     let val = operand(val_kind(inst), inst.p as u32);
     assign_op_dim_cv_in(f, inst.a, dim, op_from_code(inst.e), val)
@@ -393,8 +398,9 @@ pub(super) unsafe fn assign_op_dim(st: St, inst: &Inst) -> bool {
 /// As [`fetch_dim`].
 #[inline(never)]
 #[allow(clippy::cast_possible_truncation)]
-pub(super) unsafe fn assign_op_dims(st: St, inst: &Inst) -> bool {
-    let f = unsafe { &mut *st.f };
+pub(super) unsafe fn assign_op_dims(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
     let val = operand(val_kind(inst), inst.p as u32);
     assign_op_dims_cv_in(f, inst.a, op_from_code(inst.e), inst.d, val)
 }
@@ -405,16 +411,17 @@ pub(super) unsafe fn assign_op_dims(st: St, inst: &Inst) -> bool {
 /// # Safety
 /// As [`fetch_dim`].
 #[inline(never)]
-#[allow(clippy::cast_ptr_alignment)]
-pub(super) unsafe fn incdec_dim(st: St, inst: &Inst) -> bool {
-    let f = unsafe { &mut *st.f };
+pub(super) unsafe fn incdec_dim(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
     let dim = operand(dim_kind(inst), inst.b);
     let Some(r) = incdec_dim_cv_in(f, inst.a, dim, kind_from_code(inst.e)) else {
         return false;
     };
     if inst.c != u32::MAX {
-        // SAFETY: `c` is a validated temporary offset.
-        put_tmp(unsafe { tmp_slot(st, inst.c) }, r);
+        if let Some(slot) = f.tmps.get_mut((inst.c >> SLOT_SHIFT) as usize) {
+            put_tmp(slot, r);
+        }
     }
     true
 }
@@ -426,8 +433,9 @@ pub(super) unsafe fn incdec_dim(st: St, inst: &Inst) -> bool {
 /// As [`fetch_dim`].
 #[inline(never)]
 #[allow(clippy::cast_possible_truncation)]
-pub(super) unsafe fn concat_cv(st: St, inst: &Inst) -> bool {
-    let f = unsafe { &mut *st.f };
+pub(super) unsafe fn concat_cv(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: as in `fetch_dim`.
+    let f = unsafe { &mut *frame };
     let val = operand(val_kind(inst), inst.p as u32);
     let dst = (inst.c != u32::MAX).then_some(inst.c >> SLOT_SHIFT);
     concat_cv_in(f, inst.a, val, dst)

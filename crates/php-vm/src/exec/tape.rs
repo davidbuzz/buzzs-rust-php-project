@@ -237,6 +237,24 @@ unsafe fn tmp_slot<'a>(st: St, off: u32) -> &'a mut Value {
     unsafe { &mut *st.tmps.add(off as usize).cast::<Value>() }
 }
 
+/// The slot bases of frame `f`, as [`run_tape`] derives them: what a thin
+/// handler (`fam_arm!`'s `_f` modes) reads its operands through.
+///
+/// # Safety
+/// `f` is the current frame, whose slot vectors the tape's offsets fit.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a few loads at the top of a thin handler
+unsafe fn frame_st(f: *mut Frame) -> St {
+    // SAFETY: the caller's contract.
+    let fr = unsafe { &mut *f };
+    St {
+        cvs: fr.cvs.as_mut_ptr().cast(),
+        tmps: fr.tmps.as_mut_ptr().cast(),
+        lits: fr.code.literals.as_ptr().cast(),
+        f,
+    }
+}
+
 /// The number operand `x` of kind `K` holds; `None` when it holds anything
 /// else (or is an undefined variable).
 ///
@@ -423,6 +441,54 @@ enum Br {
 ///   jump does;
 /// * `branch_poll`: the same, polling on the fall-through path as well.
 macro_rules! fam_arm {
+    // The thin modes: the handler is called with the frame alone (`st.f`)
+    // and reads any slot base from it (`frame_st`). Passed all four bases,
+    // the calls raise their weight in the loop's register allocation: three
+    // more such arms put the variables' base of every op on the stack.
+    (plain_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+        if !($h)($st.f, $inst) {
+            return step_out($ip);
+        }
+        $ip = $ip.add($n);
+    }};
+    (poll_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+        if !($h)($st.f, $inst) {
+            return step_out($ip);
+        }
+        let at = $ip;
+        $ip = $ip.add($n);
+        if crate::interrupt::safe_point_due() {
+            return Out {
+                ip: $ip,
+                at,
+                why: WHY_POLL,
+            };
+        }
+    }};
+    (branch_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+        match ($h)($st.f, $inst) {
+            Br::Decline => return step_out($ip),
+            Br::Fall => $ip = $ip.add($n),
+            Br::Jump => take_jump!($ip, $inst),
+        }
+    }};
+    (branch_poll_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+        match ($h)($st.f, $inst) {
+            Br::Decline => return step_out($ip),
+            Br::Fall => {
+                let at = $ip;
+                $ip = $ip.add($n);
+                if crate::interrupt::safe_point_due() {
+                    return Out {
+                        ip: $ip,
+                        at,
+                        why: WHY_POLL,
+                    };
+                }
+            }
+            Br::Jump => take_jump!($ip, $inst),
+        }
+    }};
     (plain, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
         if !($h)($st, $inst) {
             return step_out($ip);
@@ -962,47 +1028,47 @@ tape_ops! {
         Nop = (scalar::nop, 1, plain),
         JmpZC = (scalar::jmpz_cv, 1, branch),
         JmpNzC = (scalar::jmpnz_cv, 1, branch),
-        NumBinT = (scalar::num_bin_tmp, 1, plain),
-        NumBinC = (scalar::num_bin_cv, 2, plain),
-        NumAssignOpC = (scalar::num_assign_op_cv, 1, plain),
+        NumBinT = (scalar::num_bin_tmp, 1, plain_f),
+        NumBinC = (scalar::num_bin_cv, 2, plain_f),
+        NumAssignOpC = (scalar::num_assign_op_cv, 1, plain_f),
 
         // ---- end of scalar ----
         //
         //
         //
         // ---- dims (exec/tape/dims.rs) ----
-        FetchDimC = (dims::fetch_dim, 1, branch_poll),
-        FetchDimsC = (dims::fetch_dims, 1, branch_poll),
-        IssetDimC = (dims::isset_dim, 1, poll),
-        AssignDimC = (dims::assign_dim, 1, poll),
-        AssignDimsC = (dims::assign_dims, 1, poll),
-        AssignOpDimC = (dims::assign_op_dim, 1, poll),
-        AssignOpDimsC = (dims::assign_op_dims, 1, poll),
-        IncDecDimC = (dims::incdec_dim, 1, poll),
-        ConcatCv = (dims::concat_cv, 1, poll),
+        FetchDimC = (dims::fetch_dim, 1, branch_poll_f),
+        FetchDimsC = (dims::fetch_dims, 1, branch_poll_f),
+        IssetDimC = (dims::isset_dim, 1, poll_f),
+        AssignDimC = (dims::assign_dim, 1, poll_f),
+        AssignDimsC = (dims::assign_dims, 1, poll_f),
+        AssignOpDimC = (dims::assign_op_dim, 1, poll_f),
+        AssignOpDimsC = (dims::assign_op_dims, 1, poll_f),
+        IncDecDimC = (dims::incdec_dim, 1, poll_f),
+        ConcatCv = (dims::concat_cv, 1, poll_f),
 
         // ---- end of dims ----
         //
         //
         //
         // ---- props (exec/tape/props.rs) ----
-        FetchObjProp = (props::prop_in, 1, poll),
-        AssignObjProp = (props::prop_in, 1, poll),
-        AssignOpObjProp = (props::prop_in, 1, poll),
-        IncDecObjProp = (props::prop_in, 1, poll),
-        IssetObjProp = (props::prop_in, 1, poll),
+        FetchObjProp = (props::prop_in, 1, poll_f),
+        AssignObjProp = (props::prop_in, 1, poll_f),
+        AssignOpObjProp = (props::prop_in, 1, poll_f),
+        IncDecObjProp = (props::prop_in, 1, poll_f),
+        IssetObjProp = (props::prop_in, 1, poll_f),
 
         // ---- end of props ----
         //
         //
         //
         // ---- strs (exec/tape/strs.rs) ----
-        StrlenC = (strs::strlen_cv, 1, plain),
-        CountC = (strs::count_cv, 1, plain),
-        TypeCheckC = (strs::type_check_cv, 1, plain),
-        TypeCheckJmpC = (strs::type_check_jmp_cv, 2, branch),
-        IssetC = (strs::isset_cv, 1, plain),
-        IssetJmpC = (strs::isset_jmp_cv, 2, branch),
+        StrlenC = (strs::strlen_cv, 1, plain_f),
+        CountC = (strs::count_cv, 1, plain_f),
+        TypeCheckC = (strs::type_check_cv, 1, plain_f),
+        TypeCheckJmpC = (strs::type_check_jmp_cv, 2, branch_f),
+        IssetC = (strs::isset_cv, 1, plain_f),
+        IssetJmpC = (strs::isset_jmp_cv, 2, branch_f),
 
         // ---- end of strs ----
         //

@@ -15,9 +15,10 @@
 //! source) or allocate, so all rows are `poll`. `new` is a call
 //! instruction ([`super::calls`]): it prepares the constructor's frame.
 
-use super::{Inst, St, TOp};
+use super::{Inst, TOp};
 use crate::exec::spec::prop_op_in;
 use crate::opcode::{FetchMode, Op, OpArray, Operand};
+use crate::vm::Frame;
 
 /// Whether `place` is a slot of `code`'s place table (the prop cache is
 /// keyed by place; an out-of-range place is a safe miss in `prop_op_in`,
@@ -114,11 +115,11 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
 /// shared `Rc<OpArray>` so the `&Op` borrow does not alias `&mut f`.
 ///
 /// # Safety
-/// `inst` is an instruction [`lower`] built for the frame of `st`.
+/// `inst` is an instruction [`lower`] built for `frame`, the current frame.
 #[inline(never)]
-pub(super) unsafe fn prop_in(st: St, inst: &Inst) -> bool {
-    // SAFETY: the caller's contract; `st.f` is the current frame.
-    let f = unsafe { &mut *st.f };
+pub(super) unsafe fn prop_in(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
     let code = f.code.clone();
     let i = inst.d as usize;
     let op = code.ops[i].clone();
