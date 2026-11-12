@@ -375,11 +375,12 @@ fn header_value<'a>(headers: &'a [(Vec<u8>, Vec<u8>)], key: &[u8]) -> Option<&'a
 }
 
 /// The byte length of a character by its first byte
-/// (`php_mb_mbchar_bytes()`); [`single_byte`] without encoding
-/// translation, where the `php_ap_*` helpers step one byte at a time.
+/// (`php_mb_mbchar_bytes()`); always 1 without encoding translation, where
+/// the `php_ap_*` helpers step one byte at a time.
 type CharLen<'a> = &'a dyn Fn(u8) -> usize;
 
 /// [`CharLen`] of the plain (`php_ap_*`) helpers.
+#[cfg(test)]
 fn single_byte(_: u8) -> usize {
     1
 }

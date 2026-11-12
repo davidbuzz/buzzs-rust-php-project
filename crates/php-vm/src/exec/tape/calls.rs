@@ -289,7 +289,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     if uf.call_shape() == CallShape::NOT_PLAIN {
         return None;
     }
-    let called = Rc::clone(cls);
+    let called_class = Rc::clone(cls);
     // The call's `$this`, as `Vm::init_method_call_fast` takes it: the
     // temporary's handle moved out, or a copy of the variable's object;
     // a static method takes none (the temporary's handle is released
@@ -305,7 +305,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     ready_frame(frame, &uf);
     frame.this = this;
     frame.scope = scope;
-    frame.called = Some(called);
+    frame.called = Some(called_class);
     let calls_len = caller.calls.len();
     drop(released);
     Some(Prepared {
@@ -339,7 +339,7 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
         return None;
     };
     let slot = caller.code.literals.len() + at + 1;
-    let (func, scope, called) = caller
+    let (func, scope, called_class) = caller
         .code
         .fcall_cache
         .borrow()
@@ -353,7 +353,7 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
     }
     ready_frame(frame, &uf);
     frame.scope = scope;
-    frame.called = called;
+    frame.called = called_class;
     Some(Prepared {
         uf,
         n: 0,

@@ -1400,8 +1400,9 @@ fn usable(f: &Frame, code: &OpArray) -> bool {
 /// runs on the tape whatever its caller ran on.
 ///
 /// Never inlined: the loop's state (instruction pointer, slot bases) lives
-/// in its own registers.
+/// in its own registers, which is also why it is one function.
 #[inline(never)]
+#[allow(clippy::too_many_lines)]
 pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (usize, usize) {
     let mut switched = 0;
     let mut code: *const OpArray = code;

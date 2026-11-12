@@ -81,10 +81,16 @@ fn filter_superglobal(vm: &mut Vm, name: &[u8], filter: i64, flags: i64) -> VmRe
 
 /// `filter.default` over the string leaves of `arr` (`php_sapi_filter`
 /// runs on every registered value, nested ones included).
+///
+/// Once a memory-limit violation is pending (`ZEND_HAS_OOM()`),
+/// `php_sapi_filter` returns 0 and request parsing stops: the request ends
+/// with the "Allowed memory size" fatal before the script runs, so the
+/// remaining values are not registered.
 fn filter_array(vm: &mut Vm, arr: &ZArray, filter: i64, flags: i64) -> VmResult<ZArray> {
     let mut out = ZArray::new();
     for (k, v) in arr.iter() {
         let v = match v.deref() {
+            Value::Str(raw) if !default_output_fits(raw.as_bytes(), filter) => Value::from(""),
             Value::Str(raw) => run(vm, |h| {
                 php_filter::apply_default_filter(h, raw.as_bytes(), filter, flags)
             })?,
@@ -92,8 +98,24 @@ fn filter_array(vm: &mut Vm, arr: &ZArray, filter: i64, flags: i64) -> VmResult<
             other => other,
         };
         out.make_mut().insert(k.clone(), v);
+        if php_memlimit::is_pending() {
+            break;
+        }
     }
     Ok(out)
+}
+
+/// `php_filter_encode_url` (`FILTER_SANITIZE_ENCODED`) allocates its
+/// output up front with the fallible `zend_string_safe_falloc(len, 3, 0)`:
+/// over the soft memory limit the allocation fails and records the
+/// delayed OOM (`zend_mm_check_limit`), and the value becomes `""`. The
+/// other filters grow their output and are checked after the call.
+fn default_output_fits(raw: &[u8], filter: i64) -> bool {
+    // `ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(0))`: the 24-byte header and
+    // the terminating NUL, 8-aligned.
+    const ZSTR_OVERHEAD: usize = 32;
+    filter != php_filter::constants::FILTER_SANITIZE_ENCODED
+        || php_memlimit::try_reserve_n(raw.len(), 3, ZSTR_OVERHEAD).is_ok()
 }
 
 /// A request input registered by the SAPI (`IF_G(get_array)` and kin are
@@ -144,7 +166,7 @@ fn request_startup(vm: &mut Vm) {
         b"_SERVER",
         b"_ENV",
     ] {
-        if filter_superglobal(vm, name, filter, flags).is_err() {
+        if filter_superglobal(vm, name, filter, flags).is_err() || php_memlimit::is_pending() {
             break;
         }
     }

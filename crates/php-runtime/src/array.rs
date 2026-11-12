@@ -1374,6 +1374,7 @@ impl HashTable {
     /// Looks up an integer key in a packed array (`Store::Packed`).
     /// Zero-overhead read avoiding string conversion and hashing.
     #[inline(always)]
+    #[allow(clippy::inline_always)] // the tape's packed `$a[$i]` read
     #[must_use]
     pub fn get_packed(&self, i: i64) -> Option<&Value> {
         if let Store::Packed(v) = &self.store {
@@ -1386,6 +1387,7 @@ impl HashTable {
 
     /// Looks up an existing integer key mutably in a packed array (`Store::Packed`).
     #[inline(always)]
+    #[allow(clippy::inline_always)] // the tape's packed `$a[$i] = ...` write
     pub fn get_packed_mut(&mut self, i: i64) -> Option<&mut Value> {
         if let Store::Packed(v) = &mut self.store {
             if i >= 0 {
