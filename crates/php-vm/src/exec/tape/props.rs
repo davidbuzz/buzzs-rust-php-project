@@ -6,18 +6,23 @@
 //! ref: `Zend/zend_vm_execute.h` property handlers, through
 //! [`crate::exec::spec::prop_op_in`].
 //!
-//! An instruction carries the op index in `d` (and the `New` jump in `c`);
-//! the handler clones the op from the frame's `Rc<OpArray>` and runs
-//! `prop_op_in` on it — the exact entry point `hot::step` uses, so the
-//! family cannot diverge from the generic path. `prop_op_in` covers the
-//! prop cache, typed-property checks, `__get`/`__set` (it declines when
-//! object handlers must run), the class cache, and the ctor call. Every
-//! handler may release a value (an old property value, a consumed source)
-//! or allocate, so all rows are `poll` (`branch_poll` for `New`).
+//! A property instruction carries the op index in `d`; the handler clones
+//! the op from the frame's `Rc<OpArray>` and runs `prop_op_in` on it — the
+//! exact entry point `hot::step` uses, so the family cannot diverge from
+//! the generic path. `prop_op_in` covers the prop cache, typed-property
+//! checks and `__get`/`__set` (it declines when object handlers must run).
+//! `New` instead encodes its operands in the instruction (`a` the
+//! destination slot, `b` the class literal, `c` the ctor-skip jump, `e`
+//! whether a `skip` target exists) and runs the class-cache hit and
+//! `props::new_plain` / `props::new_with_ctor` directly, without the
+//! per-execution op clone. Every handler may release a value (an old
+//! property value, a consumed source) or allocate, so all rows are `poll`
+//! (`branch_poll` for `New`).
 
-use super::{rel, Br, Inst, St, TOp};
-use crate::exec::spec::prop_op_in;
+use super::{rel, tmp_off, tmp_slot, Br, Inst, St, TOp};
+use crate::exec::spec::{prop_op_in, put_tmp};
 use crate::opcode::{ClassSpec, FetchMode, Op, OpArray, Operand};
+use php_runtime::Value;
 
 /// Whether `place` is a slot of `code`'s place table (the prop cache is
 /// keyed by place; an out-of-range place is a safe miss in `prop_op_in`,
@@ -108,17 +113,27 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
         }
         // `new Named(...)`: the ctor path falls through to the following
         // `InitFCall` (the calls family / numeric path runs it); the
-        // no-ctor path jumps over it via `c`.
+        // no-ctor path jumps over it via `c`. `a` is the destination
+        // temporary index, `b` the class literal index (both validated
+        // against the frame's tables and the op array's literals), and
+        // `e` records whether a `skip` target exists (`skip != 0`): only
+        // then can the no-constructor path jump; with arguments
+        // (`skip == 0`) the generic op starts the placeholder call that
+        // evaluates them, so that path declines.
         Op::New {
             class: ClassSpec::Named(lit),
             dst,
             skip,
         } => {
             let c = rel(code, i, skip)?;
-            if dst >= code.num_tmps || (lit as usize) >= code.literals.len() {
+            let a = tmp_off(code, dst)?;
+            if (lit as usize) >= code.literals.len() {
                 return None;
             }
             Inst {
+                a,
+                b: lit,
+                e: u8::from(skip != 0),
                 c,
                 d: i as u32,
                 ..plain(TOp::New)
@@ -145,9 +160,14 @@ pub(super) unsafe fn prop_in(st: St, inst: &Inst) -> bool {
     prop_op_in(f, &op, &mut ip)
 }
 
-/// `New`: `prop_op_in` leaves `ip` at the op on the ctor path (the
-/// following `InitFCall` runs as the fall-through) and sets it to the
-/// skip target on the no-ctor path.
+/// `New` of a statically named class: the `exec::spec::props` fast arm
+/// inlined on the encoded operands — the run-time class cache hit, then
+/// [`crate::props::new_plain`] (no constructor: jump over the ctor call)
+/// or [`crate::props::new_with_ctor`] (constructor call on it: the
+/// following `InitFCall` runs it as the fall-through). Every decline
+/// changes nothing; the generic op (through `hot::step`) resolves the
+/// class, starts the argument-evaluation placeholder call, or refuses the
+/// class as such.
 ///
 /// # Safety
 /// As [`prop_in`].
@@ -156,17 +176,36 @@ pub(super) unsafe fn prop_in(st: St, inst: &Inst) -> bool {
 pub(super) unsafe fn new_prop(st: St, inst: &Inst) -> Br {
     // SAFETY: the caller's contract; `st.f` is the current frame.
     let f = unsafe { &mut *st.f };
-    let code = f.code.clone();
-    let i = inst.d as usize;
-    let op = code.ops[i].clone();
-    let mut ip = i;
-    if prop_op_in(f, &op, &mut ip) {
-        if ip == i {
-            Br::Fall
-        } else {
-            Br::Jump
+    // `CACHED_PTR`: the generic op's `Vm::resolve_class_spec` fills the
+    // cache; a miss (or a borrowed RefCell) declines to it.
+    let Some(cls) = f
+        .code
+        .class_cache
+        .try_borrow()
+        .ok()
+        .and_then(|cache| cache.get(inst.b as usize).and_then(|w| w.upgrade()))
+    else {
+        return Br::Decline;
+    };
+    if cls.magic.construct.is_none() {
+        // Without a `skip` target (arguments being evaluated), the
+        // generic op starts the placeholder call that evaluates them.
+        if inst.e == 0 {
+            return Br::Decline;
         }
+        let Some(o) = crate::props::new_plain(&cls) else {
+            return Br::Decline;
+        };
+        // SAFETY: `inst.a` is `dst`'s slot, validated against
+        // `num_tmps` at lowering; the frame is sized to it (`usable`).
+        put_tmp(unsafe { tmp_slot(st, inst.a) }, Value::Object(o));
+        Br::Jump
     } else {
-        Br::Decline
+        let Some(o) = crate::props::new_with_ctor(cls, &mut f.calls) else {
+            return Br::Decline;
+        };
+        // SAFETY: as above.
+        put_tmp(unsafe { tmp_slot(st, inst.a) }, Value::Object(o));
+        Br::Fall
     }
 }
