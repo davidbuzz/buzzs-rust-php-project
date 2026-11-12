@@ -962,6 +962,9 @@ tape_ops! {
         Nop = (scalar::nop, 1, plain),
         JmpZC = (scalar::jmpz_cv, 1, branch),
         JmpNzC = (scalar::jmpnz_cv, 1, branch),
+        NumBinT = (scalar::num_bin_tmp, 1, plain),
+        NumBinC = (scalar::num_bin_cv, 2, plain),
+        NumAssignOpC = (scalar::num_assign_op_cv, 1, plain),
 
         // ---- end of scalar ----
         //

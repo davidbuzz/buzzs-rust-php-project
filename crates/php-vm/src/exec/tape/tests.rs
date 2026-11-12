@@ -211,20 +211,38 @@ fn fused_steps_with_the_variable_on_the_right() {
 
 /// Ops with no specialised form keep their place: hot ones are `Step`,
 /// the others `Exit`, and a string or array literal operand is not a
-/// number.
+/// number (`/` and `%` of a number literal are specialised).
 #[test]
 fn unspecialised_ops_keep_their_place() {
     let src = "<?php function f($a) { $s = $a . 'x'; $t = $a + 'y'; $u = [1] + $a; $v = $a / 2; \
-               $w = $a % 2; return strlen($s); }";
+               $w = $a % 2; $x = $a / 'z'; return strlen($s); }";
     let arrays = op_arrays(src);
     let code = &arrays[1];
     let tape = check(code);
     for (i, op) in code.ops.iter().enumerate() {
-        if let Op::Bin { .. } | Op::BinAssignCv { .. } = op {
+        let (binop, b) = match *op {
+            Op::Bin { op, b, .. } | Op::BinAssignCv { op, b, .. } => (Some(op), b),
+            _ => (None, crate::opcode::Operand::Unused),
+        };
+        let Some(binop) = binop else {
+            if let Op::Return { .. } = op {
+                assert_eq!(tape[i].op, TOp::Exit);
+            }
+            continue;
+        };
+        // `$a / 2`, `$a % 2`: the plain-number instruction of `scalar`.
+        let by_number = matches!(
+            binop,
+            crate::opcode::BinKind::Arith(php_runtime::BinaryOp::Div | php_runtime::BinaryOp::Mod)
+        ) && matches!(b, crate::opcode::Operand::Lit(l)
+            if matches!(code.literals[l as usize], php_runtime::Value::Int(_)));
+        if by_number {
+            assert!(
+                matches!(tape[i].op, TOp::NumBinT | TOp::NumBinC),
+                "op {i}: {op:?}"
+            );
+        } else {
             assert_eq!(tape[i].op, TOp::Step, "op {i}: {op:?}");
-        }
-        if let Op::Return { .. } = op {
-            assert_eq!(tape[i].op, TOp::Exit);
         }
     }
 }
@@ -911,4 +929,74 @@ fn builtin_calls() {
         run(BUILTIN_CALLS),
         "abab|Ba|8|abab|abab|Ba|8|abab|abab|Ba|8|abab\n"
     );
+}
+
+const OTHER_BINARY_OPERATORS: &str = r#"<?php
+function f($a, $b, $x) {
+    $r = [];
+    for ($i = 0; $i < 3; $i++) {
+        $r[] = $a & 7; $r[] = $a | $b; $r[] = $a ^ $b; $r[] = $a << 2; $r[] = $a >> 1;
+        $r[] = $a % 3; $r[] = $a / 4; $r[] = $a / $b; $r[] = $x / 2;
+        $r[] = $a < $b; $r[] = $a <= $x; $r[] = $a == $b; $r[] = $a != $x;
+        $r[] = $a === $b; $r[] = $a !== $x; $r[] = $a <=> $b;
+        $r[] = $a << 70; $r[] = -$a >> 70; $r[] = $a % -1;
+        $a++;
+    }
+    return implode(",", array_map(fn($v) => var_export($v, true), $r));
+}
+echo f(10, 3, 2.5), "\n";
+try { f(1, 0, 1.0); } catch (DivisionByZeroError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+function g($a) { return $a % 0; }
+try { g(5); } catch (DivisionByZeroError $e) { echo $e->getMessage(), "\n"; }
+function h($a) { return $a << -1; }
+try { h(5); } catch (ArithmeticError $e) { echo $e->getMessage(), "\n"; }
+"#;
+
+/// `/`, `%`, `<<`, `>>`, `|`, `&`, `^` and the comparisons into a
+/// temporary: one instruction ([`TOp::NumBinT`]) whose plain-number cases
+/// match php-src, and whose errors (a zero divisor, a negative shift) and
+/// wide shifts are the generic op's.
+#[test]
+fn other_binary_operators() {
+    let arrays = op_arrays(OTHER_BINARY_OPERATORS);
+    for code in &arrays {
+        check(code);
+    }
+    // `f`'s nineteen results are temporaries appended to `$r`.
+    let all: Vec<TOp> = arrays
+        .iter()
+        .flat_map(|c| lower(c).to_vec())
+        .map(|i| i.op)
+        .collect();
+    assert!(
+        all.iter().filter(|&&op| op == TOp::NumBinT).count() >= 16,
+        "{all:?}"
+    );
+    assert_eq!(run(OTHER_BINARY_OPERATORS), "2,11,9,40,5,1,2.5,3.3333333333333335,1.25,false,false,false,true,false,true,1,0,-1,0,3,11,8,44,5,2,2.75,3.6666666666666665,1.25,false,false,false,true,false,true,1,0,-1,0,4,15,15,48,6,0,3,4,1.25,false,false,false,true,false,true,1,0,-1,0\nDivisionByZeroError: Division by zero\nModulo by zero\nBit shift by negative number\n");
+}
+
+const BINARY_OPERATORS_INTO_VARIABLES: &str = r#"<?php
+function k($a, $b) { $x = 0; for ($i = 0; $i < 3; $i++) { $x = $a & 6; $y = $a % $b; $x ^= $b; $y <<= 1; $z = $a < $b; $a++; } return "$x $y " . var_export($z, true); }
+echo k(10, 3), "\n";
+function m($a) { $s = "str"; $s = $a & 1; $r = [1]; $r = $a | 2; return [$s, $r]; }
+echo implode(",", m(5)), "\n";
+"#;
+
+/// The same operators assigned to a variable (`$x = $a & 6`, through the
+/// `AssignCv` after the op when the variable holds a string or an array)
+/// and compound-assigned (`$x ^= $b`).
+#[test]
+fn binary_operators_into_variables() {
+    let arrays = op_arrays(BINARY_OPERATORS_INTO_VARIABLES);
+    for code in &arrays {
+        check(code);
+    }
+    let all: Vec<TOp> = arrays
+        .iter()
+        .flat_map(|c| lower(c).to_vec())
+        .map(|i| i.op)
+        .collect();
+    assert!(all.contains(&TOp::NumBinC), "{all:?}");
+    assert!(all.contains(&TOp::NumAssignOpC), "{all:?}");
+    assert_eq!(run(BINARY_OPERATORS_INTO_VARIABLES), "7 0 false\n1,7\n");
 }

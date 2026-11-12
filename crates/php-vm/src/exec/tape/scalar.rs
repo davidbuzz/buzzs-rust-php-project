@@ -4,9 +4,31 @@
 //! See the "Families" section of [`super`] for the contract of a handler
 //! and of [`lower`].
 
-use super::{cv_off, cv_slot, rel, Br, Inst, St, TOp};
+use super::{cv_off, cv_slot, is_scalar, num, rel, src, tmp_off, Br, Inst, St, TOp, KC, KI, KT};
+use super::{Num, KL};
 use crate::exec::spec::plain_truth;
-use crate::opcode::{Op, OpArray, Operand};
+use crate::opcode::{BinKind, Op, OpArray, Operand};
+use php_runtime::BinaryOp;
+
+/// The operators of [`num_bin_tmp`], by their code in an instruction's `e`:
+/// those of `Op::Bin` the numeric families of [`super`] leave out, for
+/// which `exec::num_bin` decides the plain number cases.
+const NUM_OPS: [BinKind; 14] = [
+    BinKind::Arith(BinaryOp::Div),
+    BinKind::Arith(BinaryOp::Mod),
+    BinKind::Arith(BinaryOp::ShiftLeft),
+    BinKind::Arith(BinaryOp::ShiftRight),
+    BinKind::Arith(BinaryOp::BitOr),
+    BinKind::Arith(BinaryOp::BitAnd),
+    BinKind::Arith(BinaryOp::BitXor),
+    BinKind::Less,
+    BinKind::LessEqual,
+    BinKind::Equal,
+    BinKind::NotEqual,
+    BinKind::Identical,
+    BinKind::NotIdentical,
+    BinKind::Spaceship,
+];
 
 /// The specialised instruction of the op at `i` when this family has one.
 pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
@@ -23,8 +45,232 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             c: rel(code, i, target)?,
             ..plain(TOp::JmpNzC)
         },
+        // `$cv = a op b` (the `Bin` and the `AssignCv` after it): the
+        // variable is in `d`.
+        Op::BinAssignCv { op, a, b, cv, .. } => {
+            let e = NUM_OPS.iter().position(|&o| o == op)?;
+            let (ka, fa) = src(code, a)?;
+            let (kb, fb) = src(code, b)?;
+            Inst {
+                k: (ka << 4) | kb,
+                e: u8::try_from(e).ok()?,
+                a: fa,
+                b: fb,
+                d: cv_off(code, cv)?,
+                ..plain(TOp::NumBinC)
+            }
+        }
+        // `$cv op= val`, result unused.
+        Op::AssignOpCv {
+            cv,
+            op,
+            val,
+            dst: None,
+            ..
+        } => {
+            let e = NUM_OPS.iter().position(|&o| o == BinKind::Arith(op))?;
+            let (kb, fb) = src(code, val)?;
+            Inst {
+                k: (KC << 4) | kb,
+                e: u8::try_from(e).ok()?,
+                a: cv_off(code, cv)?,
+                b: fb,
+                ..plain(TOp::NumAssignOpC)
+            }
+        }
+        Op::Bin { op, a, b, dst } => {
+            let e = NUM_OPS.iter().position(|&o| o == op)?;
+            let (ka, fa) = src(code, a)?;
+            let (kb, fb) = src(code, b)?;
+            Inst {
+                k: (ka << 4) | kb,
+                e: u8::try_from(e).ok()?,
+                a: fa,
+                b: fb,
+                c: tmp_off(code, dst)?,
+                ..plain(TOp::NumBinT)
+            }
+        }
         _ => return None,
     })
+}
+
+/// The number operand `x` of kind `kind` (the kinds of [`super::src`]);
+/// `None` when it holds anything else.
+///
+/// # Safety
+/// As [`num`]: `x` is a validated offset of the kind `kind` names.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+unsafe fn num_of_kind(st: St, kind: u8, x: u32) -> Option<Num> {
+    // SAFETY: the caller's contract.
+    unsafe {
+        match kind {
+            KC => num::<KC>(st, x),
+            KT => num::<KT>(st, x),
+            KI => num::<KI>(st, x),
+            _ => num::<KL>(st, x),
+        }
+    }
+}
+
+/// `Op::Bin` into a temporary of two plain numbers for the operators the
+/// numeric families leave out ([`NUM_OPS`]: `/`, `%`, `<<`, `>>`, `|`,
+/// `&`, `^` and the comparisons; `ZEND_DIV` ... `ZEND_SPACESHIP` on longs
+/// and doubles), decided by `exec::num_bin` as `hot::step` decides them:
+/// the operator in `e`, the operand kinds in `k` (`a`'s high nibble, `b`'s
+/// low one). Declines anything else (other types, a zero divisor, a
+/// negative or too wide shift: the generic op converts, warns or throws)
+/// and a destination holding a value to release.
+///
+/// The tape loop's arm passes only the frame (`st.f`): these handlers read
+/// the slot bases from it ([`frame_st`]). Passed all four bases, as the
+/// other families' handlers take them, the three calls made the loop keep
+/// the variables' base of every other op on the stack instead of in a
+/// register (+1 to +2 instructions per iteration of any loop).
+///
+/// # Safety
+/// `inst` is an instruction [`lower`] built for the frame of `st`.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn num_bin_tmp(st: St, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    unsafe { num_bin_tmp_in(st.f, inst) }
+}
+
+/// The slot bases of frame `f`, as [`super::run_tape`] derives them.
+///
+/// # Safety
+/// `f` is the current frame, whose slot vectors the tape's offsets fit.
+#[inline(always)]
+#[allow(clippy::inline_always)]
+unsafe fn frame_st(f: *mut crate::vm::Frame) -> St {
+    // SAFETY: the caller's contract.
+    let fr = unsafe { &mut *f };
+    St {
+        cvs: fr.cvs.as_mut_ptr().cast(),
+        tmps: fr.tmps.as_mut_ptr().cast(),
+        lits: fr.code.literals.as_ptr().cast(),
+        f,
+    }
+}
+
+/// [`num_bin_tmp`] on the frame's own slot bases.
+///
+/// # Safety
+/// As [`num_bin_tmp`], `f` being the instruction's frame.
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+unsafe fn num_bin_tmp_in(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // By raw pointer: the destination may be one of the operands.
+    // SAFETY: `c` is a validated temporary offset.
+    let dst = unsafe { st.tmps.add(inst.c as usize).cast::<php_runtime::Value>() };
+    // SAFETY: `dst` points at a live temporary.
+    if !is_scalar(unsafe { &*dst }) {
+        return false;
+    }
+    // SAFETY: the caller's contract.
+    let Some(result) = (unsafe { num_result(st, inst) }) else {
+        return false;
+    };
+    // SAFETY: a scalar has nothing to drop; `dst` is valid for writes.
+    unsafe { std::ptr::write(dst, result) };
+    true
+}
+
+/// The result of [`NUM_OPS`]`[e]` on the operands of `inst` (kinds in
+/// `k`), as `exec::num_bin` decides it; `None` for anything else.
+///
+/// # Safety
+/// As [`num_bin_tmp`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+unsafe fn num_result(st: St, inst: &Inst) -> Option<php_runtime::Value> {
+    let op = *NUM_OPS.get(usize::from(inst.e))?;
+    // SAFETY: the caller's contract.
+    let x = unsafe { num_of_kind(st, inst.k >> 4, inst.a) }?;
+    // SAFETY: the caller's contract.
+    let y = unsafe { num_of_kind(st, inst.k & 0xf, inst.b) }?;
+    crate::exec::num_bin(op, x, y)
+}
+
+/// Whether a compiled variable holds nothing to release: undefined or a
+/// scalar (a store over it is a plain write, as `hot::is_plain_slot`).
+#[inline(always)]
+#[allow(clippy::inline_always)]
+fn plain_cv(v: Option<&php_runtime::Value>) -> bool {
+    v.is_none_or(is_scalar)
+}
+
+/// `Op::BinAssignCv` (`$cv = a op b`) for the operators of [`NUM_OPS`] on
+/// two plain numbers, when the variable (`d`) holds nothing to release:
+/// the result goes straight into it, and the `AssignCv` after the op is
+/// skipped (the instruction covers both ops), as `hot::bin_assign_cv`
+/// stores it. Declines a variable holding anything else (the generic op
+/// stores through the `AssignCv`) and as [`num_bin_tmp`] does.
+///
+/// # Safety
+/// As [`num_bin_tmp`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn num_bin_cv(st: St, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    unsafe { num_bin_cv_in(st.f, inst) }
+}
+
+/// [`num_bin_cv`] on the frame's own slot bases.
+///
+/// # Safety
+/// As [`num_bin_tmp_in`].
+#[inline(never)]
+unsafe fn num_bin_cv_in(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: `d` is a validated variable offset.
+    if !plain_cv(unsafe { &*cv_slot(st, inst.d) }.as_ref()) {
+        return false;
+    }
+    // SAFETY: the caller's contract.
+    let Some(r) = (unsafe { num_result(st, inst) }) else {
+        return false;
+    };
+    // SAFETY: as above; undefined or a scalar has nothing to drop.
+    std::mem::forget(unsafe { cv_slot(st, inst.d) }.replace(r));
+    true
+}
+
+/// `Op::AssignOpCv` (`$cv op= val`, result unused) for the operators of
+/// [`NUM_OPS`] on a variable and a value holding plain numbers.
+/// Declines as [`num_bin_tmp`] does (an undefined variable or a reference
+/// included: the generic op warns or writes through it).
+///
+/// # Safety
+/// As [`num_bin_tmp`].
+#[inline(always)]
+#[allow(clippy::inline_always)]
+pub(super) unsafe fn num_assign_op_cv(st: St, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    unsafe { num_assign_op_cv_in(st.f, inst) }
+}
+
+/// [`num_assign_op_cv`] on the frame's own slot bases.
+///
+/// # Safety
+/// As [`num_bin_tmp_in`].
+#[inline(never)]
+unsafe fn num_assign_op_cv_in(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: the caller's contract (the variable is `a`, of kind `KC`).
+    let Some(r) = (unsafe { num_result(st, inst) }) else {
+        return false;
+    };
+    // SAFETY: `a` is a validated variable offset; it held a number, which
+    // owns nothing.
+    std::mem::forget(unsafe { cv_slot(st, inst.a) }.replace(r));
+    true
 }
 
 /// `Op::Nop`.
