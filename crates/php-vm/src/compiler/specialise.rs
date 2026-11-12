@@ -812,7 +812,12 @@ fn is_abs_call(op: &Op, literals: &[Literal]) -> bool {
         return false;
     }
     match literals.get(*name as usize) {
-        Some(Value::Str(s)) => s.as_bytes().eq_ignore_ascii_case(b"abs"),
+        // `abs` is the internal function unless `disable_functions`
+        // removed it, which lets user code declare its own `abs()`.
+        Some(Value::Str(s)) => {
+            s.as_bytes().eq_ignore_ascii_case(b"abs")
+                && !super::optimizer::is_disabled_function(b"abs")
+        }
         _ => false,
     }
 }
@@ -1481,6 +1486,19 @@ mod tests {
                     ..
                 }
             )),
+            "{ops:?}"
+        );
+    }
+
+    /// With `abs` removed by `disable_functions`, user code may declare its
+    /// own `abs()`: the call stays a call.
+    #[test]
+    fn abs_calls_of_a_disabled_abs_are_calls() {
+        crate::compiler::optimizer::set_disabled_functions([b"abs".to_vec()]);
+        let ops = main_ops("<?php function abs($x) { return 1; } $x = -3; $y = abs($x);");
+        crate::compiler::optimizer::set_disabled_functions(std::iter::empty());
+        assert!(
+            !ops.iter().any(|op| matches!(op, Op::Abs { .. })),
             "{ops:?}"
         );
     }
