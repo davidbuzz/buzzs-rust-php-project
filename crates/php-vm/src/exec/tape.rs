@@ -1432,7 +1432,8 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                     // the shortest route (a family op is not one of
                     // `hot::step`'s own arms).
                     // (`ext`, worked out by `lower`).
-                    WHY_STEP if tape[at].ext => hot::step_ext(f, ops, lits, at),
+                    // SAFETY: `out.ip` points into the tape (as above).
+                    WHY_STEP if unsafe { (*out.ip).ext } => hot::step_ext(f, ops, lits, at),
                     WHY_STEP => step_slow(f, ops, lits, at),
                     WHY_POLL => {
                         // SAFETY: as above.
