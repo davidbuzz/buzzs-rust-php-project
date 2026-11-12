@@ -1,5 +1,6 @@
 #!/bin/bash
-# Full php-src PHPT run (about 8 minutes); results in ./test_results.log.
+# Full php-src PHPT run; results in ./test_results.log. At most 3 CPUs
+# (the owner shares the box): 3 workers, pinned to 3 cores.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -15,7 +16,7 @@ export PDO_MYSQL_TEST_DSN='mysql:host=127.0.0.1;dbname=test' PDO_MYSQL_TEST_USER
 unset LANGUAGE
 
 cargo build -p php-cli -p phpt-runner
-time target/debug/phpt-runner --php target/debug/php -j 12 --no-artifacts \
+time taskset -c 13-15 target/debug/phpt-runner --php target/debug/php -j 3 --no-artifacts \
     --summary-depth 2 modules/php-src | tee ./test_results.log
 
 

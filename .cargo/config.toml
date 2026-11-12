@@ -1,3 +1,7 @@
-# 16-core/31GB box: cap per-invocation parallelism at 6 jobs.
+# Shared box: the owner needs most of it. At most 3 CPUs in total: 3 build
+# jobs, 3 test threads per test binary (13 Nov 2026).
 [build]
-jobs = 6
+jobs = 3
+
+[env]
+RUST_TEST_THREADS = "3"

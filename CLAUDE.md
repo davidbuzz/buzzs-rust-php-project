@@ -22,7 +22,7 @@ cargo test -p <crate> <test_name_substring>      # one Rust test
 
 # .phpt tests, the real acceptance criterion (file or directory):
 target/debug/phpt-runner --php target/debug/php modules/php-src/Zend/tests/foo.phpt
-env -u LANGUAGE target/debug/phpt-runner --php target/debug/php -j 12 -q --no-artifacts \
+env -u LANGUAGE target/debug/phpt-runner --php target/debug/php -j 3 -q --no-artifacts \
     --summary-depth 2 modules/php-src/ext/json
 ```
 
@@ -131,7 +131,7 @@ When coordinating subagents on a large task:
 - Run long builds, test suites and phpt runs in the background instead of blocking on them. Never foreground-wait on builds, suites or agents; act on completion notifications and use the wait for reviews, docs and commits.
 
 ## Resource limits (the box has OOM-crashed once)
-- `.cargo/config.toml` caps `cargo` at 6 jobs; never override it with `-j`.
+- **Use at most 3 CPUs in total** (the owner needs the rest of the box): `.cargo/config.toml` caps `cargo` at 3 jobs and test binaries at 3 threads (`RUST_TEST_THREADS`); never override it with `-j`. Run the PHPT runner with `-j 3` (its default is every CPU), and run one heavy job at a time: never a build, a test suite, a PHPT run or a profile alongside another.
 - EVERY invocation of `/usr/bin/php` (oracle scripts, fixture generators) MUST pass `-d memory_limit=1G`. Ubuntu's CLI php.ini sets `memory_limit=-1`, and one unbounded script took the machine down. (Our own `php` caps its address space with `RLIMIT_AS` in `crates/php-cli/src/main.rs`.)
 - Do not run more than one `cargo test`/`cargo build` at a time from a single agent; do not run the whole php-src suite with `--php /usr/bin/php` (use subsets).
 
