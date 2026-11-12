@@ -173,6 +173,10 @@ pub(crate) struct Inst {
     /// Set by [`lower`], not by the families: whether `Vm::run` enters the
     /// tape at this instruction ([`worth_entering`]).
     enter: bool,
+    /// Set by [`lower`]: whether the op's old fast path is
+    /// `hot::step_ext` (not one of `hot::step`'s own arms), where a
+    /// declined instruction hands it.
+    ext: bool,
     /// A pointer-sized operand (the address of something that lives as
     /// long as the op array, such as a cache entry the tape owns).
     #[allow(dead_code)] // for the family modules
@@ -190,6 +194,7 @@ impl Inst {
             c: 0,
             d: 0,
             enter: false,
+            ext: false,
             p: 0,
         }
     }
@@ -941,8 +946,8 @@ tape_ops! {
         //
         //
         // ---- dims (exec/tape/dims.rs) ----
-        FetchDimC = (dims::fetch_dim, 1, poll),
-        FetchDimsC = (dims::fetch_dims, 1, poll),
+        FetchDimC = (dims::fetch_dim, 1, branch_poll),
+        FetchDimsC = (dims::fetch_dims, 1, branch_poll),
         IssetDimC = (dims::isset_dim, 1, poll),
         AssignDimC = (dims::assign_dim, 1, poll),
         AssignDimsC = (dims::assign_dims, 1, poll),
@@ -1283,6 +1288,7 @@ pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
     // specialised instruction when the tape also runs what follows it.
     for i in 0..code.ops.len() {
         let follows = likely_next(code, i);
+        tape[i].ext = !hot::is_core(&code.ops[i]);
         tape[i].enter = !matches!(tape[i].op, TOp::Exit | TOp::Step | TOp::Ext)
             && tape.get(follows).is_some_and(|next| next.op != TOp::Exit);
     }
@@ -1425,10 +1431,9 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                     // A declined instruction: the op's old fast path, by
                     // the shortest route (a family op is not one of
                     // `hot::step`'s own arms).
-                    WHY_STEP if ops.get(at).is_some_and(hot::is_core) => {
-                        step_slow(f, ops, lits, at)
-                    }
-                    WHY_STEP => hot::step_ext(f, ops, lits, at),
+                    // (`ext`, worked out by `lower`).
+                    WHY_STEP if tape[at].ext => hot::step_ext(f, ops, lits, at),
+                    WHY_STEP => step_slow(f, ops, lits, at),
                     WHY_POLL => {
                         // SAFETY: as above.
                         #[allow(clippy::cast_sign_loss)]

@@ -14,11 +14,12 @@
 //! temporary's byte offset in `c` (sentinel `u32::MAX` when there is no
 //! used result), the place in `d`, and the value operand's index in `p`.
 //!
-//! A fetch op passes `to: None`: the result goes to `dst`, and the
-//! `AssignCv` right after it runs as the numeric family's `AssignT`, so
-//! every dims instruction covers exactly one op.
+//! A fetch folded with the `AssignCv` after it (`to`) stores into that
+//! variable when it holds a plain value and jumps past the `AssignCv`, as
+//! `hot::step_ext` skips it; otherwise the value goes to `dst` and the
+//! `AssignCv` runs next. Every other dims instruction covers one op.
 
-use super::{tmp_slot, Inst, St, TOp, SLOT_SHIFT};
+use super::{rel, tmp_slot, Br, Inst, St, TOp, SLOT_SHIFT};
 use crate::exec::spec::{
     assign_dim_cv_in, assign_dims_cv_in, assign_op_dim_cv_in, assign_op_dims_cv_in, concat_cv_in,
     fetch_dim_cv_in, fetch_dims_cv_in, incdec_dim_cv_in, isset_dim_cv_in, put_tmp,
@@ -151,27 +152,71 @@ fn kind_from_code(e: u8) -> IncDecKind {
     }
 }
 
+/// The variable of the `AssignCv` folded into a fetch at `i` (`to`;
+/// [`NO_TO`] when there is none) and the jump past that `AssignCv` (`i + 2`)
+/// for when the fetch stored into the variable itself. `None` when either
+/// is out of range.
+fn folded_assign(code: &OpArray, i: usize, to: Option<u32>) -> Option<(u32, u32)> {
+    match to {
+        None => Some((NO_TO, 0)),
+        Some(cv) => {
+            if cv as usize >= code.cv_names.len() || cv == NO_TO {
+                return None;
+            }
+            Some((cv, rel(code, i, u32::try_from(i + 2).ok()?)?))
+        }
+    }
+}
+
+/// `to` of a fetch without a folded `AssignCv`.
+const NO_TO: u32 = u32::MAX;
+
+/// What a fetch handler did: stored into the folded `AssignCv`'s variable
+/// (the instruction jumps past that op, as `hot::step_ext` skips it), into
+/// the temporary (the `AssignCv` runs next), or nothing.
+fn fetched(r: Option<bool>) -> Br {
+    match r {
+        Some(true) => Br::Jump,
+        Some(false) => Br::Fall,
+        None => Br::Decline,
+    }
+}
+
 /// The specialised instruction of the op at `i` when this family has one.
 #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
 pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     Some(match *code.ops.get(i)? {
-        Op::FetchDimCv { cv, dim, dst, .. } => {
+        Op::FetchDimCv {
+            cv, dim, dst, to, ..
+        } => {
             let (dk, di) = dim_operand(code, dim)?;
+            dst_off(code, dst)?;
+            let (to, c) = folded_assign(code, i, to)?;
             Inst {
                 a: ((cv as usize) < code.cv_names.len()).then_some(cv)?,
                 b: di,
-                c: dst_off(code, dst)?,
+                c,
+                d: to,
                 k: dk,
+                p: dst as usize,
                 ..plain(TOp::FetchDimC)
             }
         }
-        Op::FetchDimsCv { cv, place, dst, .. } => Inst {
-            a: ((cv as usize) < code.cv_names.len()).then_some(cv)?,
-            c: dst_off(code, dst)?,
-            d: place_idx(code, place)?,
-            ..plain(TOp::FetchDimsC)
-        },
+        Op::FetchDimsCv {
+            cv, place, dst, to, ..
+        } => {
+            dst_off(code, dst)?;
+            let (to, c) = folded_assign(code, i, to)?;
+            Inst {
+                a: ((cv as usize) < code.cv_names.len()).then_some(cv)?,
+                b: to,
+                c,
+                d: place_idx(code, place)?,
+                p: dst as usize,
+                ..plain(TOp::FetchDimsC)
+            }
+        }
         Op::IssetDimCv {
             cv,
             dim,
@@ -263,17 +308,19 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
 }
 
 /// `Op::FetchDimCv`: `$cv[dim]` read (`exec/spec/dims.rs`
-/// `fetch_dim_cv_in`). The result goes to `dst`; the `AssignCv` after it
-/// runs as the numeric family's `AssignT`.
+/// `fetch_dim_cv_in`). The result goes to the folded `AssignCv`'s variable
+/// (jump past that op) or to `dst` (fall through to it).
 ///
 /// # Safety
 /// `inst` is an instruction [`lower`] built for the frame of `st`.
 #[inline(never)]
-pub(super) unsafe fn fetch_dim(st: St, inst: &Inst) -> bool {
+#[allow(clippy::cast_possible_truncation)]
+pub(super) unsafe fn fetch_dim(st: St, inst: &Inst) -> Br {
     // SAFETY: the caller's contract; `st.f` is the current frame.
     let f = unsafe { &mut *st.f };
     let dim = operand(dim_kind(inst), inst.b);
-    fetch_dim_cv_in(f, inst.a, dim, inst.c >> SLOT_SHIFT, None) == Some(false)
+    let to = (inst.d != NO_TO).then_some(inst.d);
+    fetched(fetch_dim_cv_in(f, inst.a, dim, inst.p as u32, to))
 }
 
 /// `Op::FetchDimsCv`: `$cv[d1][d2]...` read (`fetch_dims_cv_in`), as
@@ -282,9 +329,12 @@ pub(super) unsafe fn fetch_dim(st: St, inst: &Inst) -> bool {
 /// # Safety
 /// As [`fetch_dim`].
 #[inline(never)]
-pub(super) unsafe fn fetch_dims(st: St, inst: &Inst) -> bool {
+#[allow(clippy::cast_possible_truncation)]
+pub(super) unsafe fn fetch_dims(st: St, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract; `st.f` is the current frame.
     let f = unsafe { &mut *st.f };
-    fetch_dims_cv_in(f, inst.a, inst.d, inst.c >> SLOT_SHIFT, None) == Some(false)
+    let to = (inst.b != NO_TO).then_some(inst.b);
+    fetched(fetch_dims_cv_in(f, inst.a, inst.d, inst.p as u32, to))
 }
 
 /// `Op::IssetDimCv`: `isset` / `empty` of `$cv[dim]` (`isset_dim_cv_in`).
