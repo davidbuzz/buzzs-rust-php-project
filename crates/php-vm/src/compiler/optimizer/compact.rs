@@ -720,8 +720,8 @@ pub(crate) fn for_each_op_place(op: &Op, mut f: impl FnMut(u32)) {
         | Op::IncDecObjProp { place: p, .. }
         | Op::IncDecObjPropDim { place: p, .. }
         | Op::IssetObjProp { place: p, .. }
-        | Op::IssetObjPropDim { place: p, .. } => src(&ArgSrc::Place(*p)),
-        Op::FeReset { place: Some(p), .. } => src(&ArgSrc::Place(*p)),
+        | Op::IssetObjPropDim { place: p, .. }
+        | Op::FeReset { place: Some(p), .. } => src(&ArgSrc::Place(*p)),
         Op::Send { src: s }
         | Op::SendNamed { src: s, .. }
         | Op::ArrayKeyExists { array: s, .. } => {

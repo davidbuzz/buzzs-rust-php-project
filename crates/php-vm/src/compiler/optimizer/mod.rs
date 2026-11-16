@@ -1186,7 +1186,12 @@ mod tests {
         );
         let f = find_code(&unit, named(b"foo"));
         assert!(
-            matches!(&f.ops[..], [Op::Return { val: Operand::Lit(_) }]),
+            matches!(
+                &f.ops[..],
+                [Op::Return {
+                    val: Operand::Lit(_)
+                }]
+            ),
             "{:?}",
             f.ops
         );
