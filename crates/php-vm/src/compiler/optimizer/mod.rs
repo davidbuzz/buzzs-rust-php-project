@@ -152,7 +152,7 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
     // Iterative optimization loop: constant folding, jump threading, SCCP,
     // block-pass, and dead code elimination feed each other until a fixed
     // point or iteration limit is reached.
-    for _ in 0..8 {
+    for round in 0..8 {
         let mut changed = false;
 
         if (level & PASS_1) != 0 {
@@ -171,7 +171,9 @@ pub fn optimize_op_array_with(op_array: &mut OpArray, level: u32, ctx: &OptConte
             changed |= sccp::run_sccp(op_array, ctx);
         }
         if (level & PASS_5) != 0 {
-            changed |= block_pass::run_block_pass(op_array);
+            // php-src's block pass runs once, before SCCP and DCE: echoes
+            // they make adjacent stay apart (opt/sccp_003).
+            changed |= block_pass::run_block_pass(op_array, round == 0);
             if !ctx.verifies_return {
                 changed |= block_pass::jmp_to_return(op_array);
             }

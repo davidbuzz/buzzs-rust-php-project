@@ -107,7 +107,9 @@ pub(crate) fn find_leaders(op_array: &OpArray) -> Vec<bool> {
 }
 
 /// Runs Pass 5 on `op_array`. Returns `true` if any instruction was modified.
-pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
+/// `merge_echoes`: also merge consecutive literal `ECHO`s (only on the
+/// pass that stands for php-src's single block pass).
+pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool {
     let mut changed = false;
     let leaders = find_leaders(op_array);
     let len = op_array.ops.len();
@@ -519,8 +521,10 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
         changed |= fold_tmp_copy(op_array, b_start, b_end, &use_counts);
 
         // 5. Consecutive string literal Echo merging
-        for i in b_start..b_end {
-            if let Op::Echo(Operand::Lit(l1)) = op_array.ops[i] {
+        // A whole run in one go (`echo 'a'; echo 'b'; echo 'c';`): each
+        // merge leaves the next echo of the run after `i`.
+        for i in (b_start..b_end).filter(|_| merge_echoes) {
+            while let Op::Echo(Operand::Lit(l1)) = op_array.ops[i] {
                 let mut next_i = i + 1;
                 while next_i < b_end && matches!(op_array.ops[next_i], Op::Nop) {
                     next_i += 1;
@@ -545,9 +549,11 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray) -> bool {
                             op_array.ops[i] = Op::Echo(Operand::Lit(lit));
                             op_array.ops[next_i] = Op::Nop;
                             changed = true;
+                            continue;
                         }
                     }
                 }
+                break;
             }
         }
     }
