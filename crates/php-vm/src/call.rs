@@ -2551,28 +2551,33 @@ impl Vm {
             };
             // `SAVE_OPLINE()`: the release below may report this line.
             frame.ip = ip;
-            // `gc::frame_released` has nothing to record for a frame
-            // without `$this`, a closure or a compiled variable holding an
-            // array, object or reference (no symbol table is attached).
-            if frame.this.is_some() || frame.closure.is_some() || cvs_may_hold_roots(&frame.cvs) {
-                crate::gc::frame_released(frame, caller.this.as_ref());
-            }
             let ret = frame.ret;
             // `ZEND_RETURN` copies the value into the caller's result slot
             // (`EX(return_value)`) before `zend_leave_helper` releases the
             // frame: done here, through the caller already at hand, when
             // the slot holds a scalar (its release has no effect). Another
             // value in the slot is released after the frame, by `set_tmp`
-            // below, as before.
+            // below, as before. The store runs before the `gc` step below
+            // in the first case, so the value's register is dead across
+            // the out-of-line `frame_released` call (it only reads the
+            // frame and the caller's `$this`, and the frame is released
+            // after both, as before).
             let v = match ret {
                 RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
                     Some(slot) if is_scalar(slot) => {
                         std::mem::forget(std::mem::replace(slot, v));
+                        gc_on_release(frame, caller);
                         None
                     }
-                    _ => Some(v),
+                    _ => {
+                        gc_on_release(frame, caller);
+                        Some(v)
+                    }
                 },
-                RetTarget::Discard => Some(v),
+                RetTarget::Discard => {
+                    gc_on_release(frame, caller);
+                    Some(v)
+                }
             };
             // `FrameStack::release_top` of the frame at hand: released in
             // place, without the out-of-line call and the second lookup of
@@ -4806,6 +4811,17 @@ pub(crate) fn clone_value(v: &Value) -> Value {
         Value::Int(i) => Value::Int(*i),
         Value::Float(f) => Value::Float(*f),
         _ => v.clone(),
+    }
+}
+
+/// The `gc::frame_released` step of a direct return: nothing to record
+/// for a frame without `$this`, a closure or a compiled variable holding
+/// an array, object or reference (no symbol table is attached).
+#[inline(always)]
+#[allow(clippy::inline_always)] // one test per return
+fn gc_on_release(frame: &crate::vm::Frame, caller: &crate::vm::Frame) {
+    if frame.this.is_some() || frame.closure.is_some() || cvs_may_hold_roots(&frame.cvs) {
+        crate::gc::frame_released(frame, caller.this.as_ref());
     }
 }
 
