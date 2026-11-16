@@ -523,7 +523,17 @@ fn functions_the_vm_optimizer_reduced_to_a_literal_are_not_inlined() {
 #[test]
 fn ssa_dump_after_dfa_pass_infers_ranges() {
     let src = "<?php\nfunction test($a, $b) {\n    return ($a <=> $b) + 1;\n}\n";
-    let unit = compile_src(src);
+    // Compiled at the level it is dumped at, as `include.rs` compiles a
+    // script opcache dumps (the unreachable implicit `RETURN null` after
+    // the explicit return is dropped by then).
+    let program =
+        php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).expect("parse");
+    let opts = CompileOptions {
+        filename: "t.php".into(),
+        optimization_level: crate::compiler::optimizer::DEFAULT_OPTIMIZATION_LEVEL,
+        ..CompileOptions::default()
+    };
+    let unit = compile(&program, Rc::from(src.as_bytes()), opts).expect("compile");
     let table = |_: &[u8]| -> Option<FunctionInfo> { None };
     let flags = |_: &[u8]| -> (u32, Option<crate::types::TypeDecl>) { (0, None) };
     let out = super::dump_unit_dfa(

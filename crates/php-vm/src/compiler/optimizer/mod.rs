@@ -1240,15 +1240,18 @@ mod tests {
         );
         let f = find_code(&unit, named(b"f"));
         assert!(
-            !f.ops
-                .iter()
-                .any(|op| matches!(op, Op::Fetch { .. } | Op::Free(Operand::Cv(_)))),
+            !f.ops.iter().any(|op| matches!(
+                op,
+                Op::Fetch { .. } | Op::FetchDimCv { .. } | Op::Free(Operand::Cv(_))
+            )),
             "{:?}",
             f.ops
         );
         let g = find_code(&unit, named(b"g"));
         assert!(
-            g.ops.iter().any(|op| matches!(op, Op::Fetch { .. })),
+            g.ops
+                .iter()
+                .any(|op| matches!(op, Op::Fetch { .. } | Op::FetchDimCv { .. })),
             "{:?}",
             g.ops
         );
@@ -1288,7 +1291,7 @@ mod tests {
         let fetches = |code: &OpArray| {
             code.ops
                 .iter()
-                .filter(|op| matches!(op, Op::Fetch { .. }))
+                .filter(|op| matches!(op, Op::Fetch { .. } | Op::FetchDimCv { .. }))
                 .count()
         };
         let foo = find_code(&unit, named(b"foo"));

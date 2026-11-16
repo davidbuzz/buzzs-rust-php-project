@@ -8,7 +8,7 @@
 //! - Dead jump-to-next elimination.
 
 use super::{clear_def_tmp, def_tmp, for_each_operand_mut, for_each_place_operand_mut};
-use crate::opcode::{BinKind, CastKind, ClassSpec, ForeachKind, Op, OpArray, Operand};
+use crate::opcode::{BinKind, CastKind, ClassSpec, ForeachKind, Op, OpArray, Operand, PlaceBase};
 use php_runtime::Value;
 
 /// Runs DCE on `op_array`. Returns `true` if any instruction was removed or simplified.
@@ -91,11 +91,13 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
                 // A foreach over an empty literal array goes straight to
                 // its end: sccp.c marks only the `FE_RESET` target
                 // feasible (opt/dce_009).
+                // By reference the literal is the place's base value.
                 Op::FeReset {
-                    subject: Operand::Lit(l),
+                    subject,
+                    place,
                     end: t,
                     ..
-                } if is_empty_array_lit(&op_array.literals, *l) => {
+                } if foreach_over_empty_lit(op_array, *subject, *place) => {
                     if (*t as usize) < len {
                         successors.push(inst_to_block[*t as usize]);
                     }
@@ -305,6 +307,24 @@ pub(crate) fn run_dce(op_array: &mut OpArray) -> bool {
     }
 
     changed
+}
+
+/// Whether a foreach's subject is an empty literal array: by value the
+/// operand, by reference (`FE_RESET_RW`) the base value of its place, with
+/// no dimension or property after it.
+fn foreach_over_empty_lit(op_array: &OpArray, subject: Operand, place: Option<u32>) -> bool {
+    let l = match (subject, place) {
+        (Operand::Lit(l), None) => l,
+        (Operand::Unused, Some(p)) => match op_array.places.get(p as usize) {
+            Some(pl) if pl.segs.is_empty() => match pl.base {
+                PlaceBase::Value(Operand::Lit(l)) => l,
+                _ => return false,
+            },
+            _ => return false,
+        },
+        _ => return false,
+    };
+    is_empty_array_lit(&op_array.literals, l)
 }
 
 /// Whether literal `l` is an empty array.
