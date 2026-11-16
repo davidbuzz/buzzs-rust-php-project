@@ -113,6 +113,9 @@ pub struct OptContext<'a> {
     /// The by-value parameters of a scalar-only declared type: until the
     /// function assigns one, its value has no destructor.
     pub scalar_params: &'a [u32],
+    /// `PHP_SAPI` of the running SAPI, when known at compile time: what
+    /// `php_sapi_name()` gives (`@compile-time-eval`).
+    pub sapi_name: Option<&'a Value>,
     /// The function's returns check a declared return type (php-src
     /// emits `VERIFY_RETURN_TYPE` before each `RETURN`; the VM's `Return`
     /// does the check itself).
@@ -233,6 +236,7 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
                 is_main: true,
                 bound_cvs: &[],
                 scalar_params: &[],
+                sapi_name: None,
                 verifies_return: false,
             };
             optimize_op_array_with(code, level & !PASS_13, &ctx);

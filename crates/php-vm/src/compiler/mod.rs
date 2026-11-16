@@ -1068,6 +1068,11 @@ impl Compiler<'_> {
                 is_main,
                 bound_cvs: &f.bound_cvs,
                 scalar_params: &f.scalar_params,
+                sapi_name: self
+                    .opts
+                    .ct_constants
+                    .as_ref()
+                    .and_then(|c| c.get(b"PHP_SAPI")),
                 verifies_return: f.has_return_type && !f.is_generator && !f.returns_ref,
             };
             optimizer::optimize_op_array_with(&mut op_array, level, &ctx);

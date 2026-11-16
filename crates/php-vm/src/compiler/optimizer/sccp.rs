@@ -258,6 +258,7 @@ fn ct_eval_func_call(name: &[u8], args: &[&Value]) -> Option<Value> {
 /// first, so `bin2hex(md5($s, true))` folds in one go.
 fn fold_const_func_calls(
     op_array: &mut OpArray,
+    sapi_name: Option<&Value>,
     def_count: &[u32],
     lit_def: &mut [Option<u32>],
 ) -> bool {
@@ -315,7 +316,11 @@ fn fold_const_func_calls(
             .iter()
             .map(|&l| op_array.literals.get(l as usize))
             .collect();
-        let Some(result) = vals.and_then(|v| ct_eval_func_call(&fname, &v)) else {
+        // `php_sapi_name()` (`@compile-time-eval`): the SAPI's `PHP_SAPI`.
+        let sapi = (fname == b"php_sapi_name" && args.is_empty())
+            .then(|| sapi_name.cloned())
+            .flatten();
+        let Some(result) = sapi.or_else(|| vals.and_then(|v| ct_eval_func_call(&fname, &v))) else {
             continue;
         };
         let lit = add_or_find_literal(&mut op_array.literals, result);
@@ -1576,7 +1581,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
             }
         }
 
-        changed |= fold_const_func_calls(op_array, &def_count, &mut lit_def);
+        changed |= fold_const_func_calls(op_array, ctx.sapi_name, &def_count, &mut lit_def);
         changed |= fold_const_array_builds(op_array, &def_count, &mut lit_def);
 
         // Substitute known temporary constants: every use, including the
