@@ -1175,6 +1175,23 @@ mod tests {
     /// A by-value foreach over an empty literal array is dropped; a
     /// by-reference one keeps its `FE_RESET_RW` and `FE_FREE` but loses
     /// the loop (opcache `opt/dce_009`).
+    /// A variable SCCP turned into constants loses its stores (pass 13):
+    /// the place of the folded `$a += $b` is named by no op any more and
+    /// reads nothing (opcache `opt/sccp_001`).
+    #[test]
+    fn unused_variables_ignore_places_no_op_names() {
+        let unit = compile_src(
+            "<?php\nfunction foo() {\n    $a = 1;\n    $b = $a + 2;\n    $a += $b;\n    return $a;\n}\n",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let f = find_code(&unit, named(b"foo"));
+        assert!(
+            matches!(&f.ops[..], [Op::Return { val: Operand::Lit(_) }]),
+            "{:?}",
+            f.ops
+        );
+    }
+
     #[test]
     fn dce_drops_foreach_over_empty_literal_array() {
         let unit = compile_src(

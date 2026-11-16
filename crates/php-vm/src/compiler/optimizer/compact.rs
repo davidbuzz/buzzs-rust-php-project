@@ -9,7 +9,7 @@ use super::{
     def_tmp, for_each_label_mut, for_each_operand_mut, for_each_place_operand_mut, literals_equal,
     OptContext,
 };
-use crate::opcode::{ClassSpec, Op, OpArray, Operand, Place, PlaceBase};
+use crate::opcode::{ArgSrc, ClassSpec, Op, OpArray, Operand, Place, PlaceBase};
 use php_runtime::Value;
 use std::collections::HashMap;
 
@@ -668,6 +668,74 @@ fn bound_cv_prefix(op_array: &OpArray, ctx: &OptContext<'_>) -> u32 {
     prefix
 }
 
+/// Calls `f` with each place `op` names: its `place` (or a foreach's by
+/// reference), a by-reference argument source (`Send`, `SendNamed`,
+/// `array_key_exists()`'s array, a frameless call's argument). Every
+/// `PlaceId` of an op is one of these.
+pub(crate) fn for_each_op_place(op: &Op, mut f: impl FnMut(u32)) {
+    let mut src = |s: &ArgSrc| {
+        if let ArgSrc::Place(p) | ArgSrc::TempPlace(p) = s {
+            f(*p);
+        }
+    };
+    match op {
+        Op::ArrayAddRef { place: p, .. }
+        | Op::Assign { place: p, .. }
+        | Op::AssignOp { place: p, .. }
+        | Op::IncDec { place: p, .. }
+        | Op::AssignRef { place: p, .. }
+        | Op::MakeRef { place: p, .. }
+        | Op::ListFetchRef { place: p, .. }
+        | Op::Fetch { place: p, .. }
+        | Op::Isset { place: p, .. }
+        | Op::Empty { place: p, .. }
+        | Op::Unset { place: p, .. }
+        | Op::ReturnRef { place: p, .. }
+        | Op::YieldRef { place: p, .. }
+        | Op::IncDecCv { place: p, .. }
+        | Op::AssignOpCv { place: p, .. }
+        | Op::AssignOpDimCv { place: p, .. }
+        | Op::IncDecDimCv { place: p, .. }
+        | Op::FetchDimCv { place: p, .. }
+        | Op::FetchDimsCv { place: p, .. }
+        | Op::IssetDimCv { place: p, .. }
+        | Op::AssignDimCv { place: p, .. }
+        | Op::FetchStaticProp { place: p, .. }
+        | Op::FetchGlobal { place: p, .. }
+        | Op::AssignStaticProp { place: p, .. }
+        | Op::AssignOpStaticProp { place: p, .. }
+        | Op::IssetStaticProp { place: p, .. }
+        | Op::ConcatCv { place: p, .. }
+        | Op::AssignDimsCv { place: p, .. }
+        | Op::AssignOpDimsCv { place: p, .. }
+        | Op::IncDecCvCmpJmp { place: p, .. }
+        | Op::AssignOpCvCmpJmp { place: p, .. }
+        | Op::AssignOpCvJmp { place: p, .. }
+        | Op::FetchObjProp { place: p, .. }
+        | Op::FetchObjPropDim { place: p, .. }
+        | Op::AssignObjProp { place: p, .. }
+        | Op::AssignObjPropDim { place: p, .. }
+        | Op::AssignOpObjProp { place: p, .. }
+        | Op::AssignOpObjPropDim { place: p, .. }
+        | Op::IncDecObjProp { place: p, .. }
+        | Op::IncDecObjPropDim { place: p, .. }
+        | Op::IssetObjProp { place: p, .. }
+        | Op::IssetObjPropDim { place: p, .. } => src(&ArgSrc::Place(*p)),
+        Op::FeReset { place: Some(p), .. } => src(&ArgSrc::Place(*p)),
+        Op::Send { src: s }
+        | Op::SendNamed { src: s, .. }
+        | Op::ArrayKeyExists { array: s, .. } => {
+            src(s);
+        }
+        Op::FramelessICall(fc) => {
+            for s in &fc.args {
+                src(s);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Pass 13: Removes assignments to variables that are never read and never referenced (ZEND_OPTIMIZER_PASS_13).
 pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
     let num_cvs = op_array.cv_names.len();
@@ -753,9 +821,24 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
         })
         .collect();
 
+    // The places some op names: a place no op names any more (left behind
+    // by an op a pass folded away, as `$a += $b` once SCCP computed it)
+    // reads nothing.
+    let mut named = vec![false; op_array.places.len()];
+    for op in &op_array.ops {
+        for_each_op_place(op, |p| {
+            if let Some(slot) = named.get_mut(p as usize) {
+                *slot = true;
+            }
+        });
+    }
+
     // Count reads from places
     for (pid, place) in op_array.places.iter().enumerate() {
         let pid_u32 = pid as u32;
+        if !named.get(pid).copied().unwrap_or(true) {
+            continue;
+        }
         let mut used_in_non_plain_assign = !plain_assign_places.contains(&pid_u32);
 
         if let PlaceBase::Cv(cv) = place.base {
