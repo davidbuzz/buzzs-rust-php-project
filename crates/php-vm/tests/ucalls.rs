@@ -758,7 +758,9 @@ echo d(4), "\n";
 /// typed, with a static variable, extra arguments, a backtrace line,
 /// through `array_map`, recursive, with bound variables) behave as on the
 /// general path. Expected output is php-src's (`/usr/bin/php -n`, the same
-/// with `/usr/bin/php8.5 -n`).
+/// with `/usr/bin/php8.5 -n`); the bare test VM has no `array_sum()`, so a
+/// loop sums `array_map()`'s results (on the same line: the backtrace line
+/// above is part of the output).
 #[test]
 fn static_closures_with_a_cached_object_take_the_plain_call_path() {
     let source = r#"<?php
@@ -782,7 +784,7 @@ try { $t("x"); } catch (TypeError $e) { echo get_class($e), "\n"; }
 $c = $k->counter(); echo $c(), $c(), $c(), "\n";
 $a = $k->args(); echo $a(1), " ", $a(2), " ", $a(3, 4), "\n";
 $ln = $k->line(); echo $ln(0), " ", $ln(100), "\n";
-echo array_sum(array_map($f, [1, 2, 3])), " ", implode(",", array_map($g, [1, 2], [3, 4])), "\n";
+$m = 0; foreach (array_map($f, [1, 2, 3]) as $x) { $m += $x; } echo $m, " ", implode(",", array_map($g, [1, 2], [3, 4])), "\n";
 function outer() { return static function ($x) { return $x + 1; }; }
 $o = outer(); echo $o(1), $o(2), outer()(3), "\n";
 var_dump((new ReflectionFunction($f))->getStaticVariables());
@@ -800,12 +802,14 @@ echo rec(4), "\n";
 /// passed-argument count (`UserFunction::plain_first_op`) instead of the
 /// per-call `RECV` walk: every count from none to all six inline
 /// arguments, with defaults computed by `RECV_INIT` code, starts where the
-/// walk started. Expected output is php-src's (`/usr/bin/php -n`).
+/// walk started. Expected output is php-src's (`/usr/bin/php -n`); the
+/// bare test VM has no ext/json, so the array default is printed by hand
+/// as `json_encode()` prints it.
 #[test]
 fn precomputed_first_op_matches_every_argument_count() {
     let source = r#"<?php
 function d($a = 1, $b = [2], $c = PHP_INT_SIZE, $d = "x" . "y", $e = null, $f = 6) {
-    return implode(",", [$a, json_encode($b), $c, $d, var_export($e, true), $f]);
+    return implode(",", [$a, is_array($b) ? "[" . implode(",", $b) . "]" : $b, $c, $d, var_export($e, true), $f]);
 }
 function r($a, $b, $c = 3) { return "$a$b$c"; }
 for ($i = 0; $i < 2; $i++) {
