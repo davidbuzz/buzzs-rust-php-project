@@ -2458,9 +2458,110 @@ impl Vm {
     /// Out of line for the reason [`Vm::push_simple_ucall`] is; called by
     /// `Vm::run`'s fast `Return` arm and by `exec::tape::run_tape`.
     ///
-    /// [`FrameStack::release_top`]: crate::vm::FrameStack::release_top
+    /// Only the shape the call workloads return through — an untyped
+    /// user function returning a plain scalar into a caller temporary
+    /// holding a scalar — runs here, small and without spilled registers;
+    /// anything else goes to [`Vm::return_generic`], which repeats the
+    /// tests for it (the operand shape is dispatched before this
+    /// function's prologue, so the common fallbacks do not pay it twice).
     #[inline(never)]
     pub(crate) fn return_simple(
+        &mut self,
+        val: Operand,
+        base: usize,
+        ip: usize,
+    ) -> Option<crate::exec::Flow> {
+        if !matches!(val, Operand::Cv(_) | Operand::Tmp(_)) {
+            return self.return_generic(val, base, ip);
+        }
+        if self.observer.enabled {
+            return None;
+        }
+        let fidx = self.frames.live.checked_sub(1)?;
+        if fidx <= base {
+            return None;
+        }
+        {
+            let (callers, rest) = self.frames.vec.split_at_mut(fidx);
+            let caller = callers.last_mut()?;
+            let frame = rest.first_mut()?;
+            if frame.kind != FrameKind::Function
+                || frame.symtab_attached
+                || frame.generator.is_some()
+                || Rc::ptr_eq(&frame.vars, &self.globals)
+            {
+                return None;
+            }
+            let uf = frame.ufunc.as_ref()?;
+            if uf.flags & (flags::RETURN_REF | flags::GENERATOR) != 0 || uf.return_type.is_some()
+            {
+                return None;
+            }
+            // A declared return type (checked by `return_generic`'s
+            // `return_accepts`) is left to it too: coercion rules may
+            // rewrite the value (int 3 returned from a `: string`
+            // function gives "3"), which the direct path must not skip.
+            // `return_accepts`, as are references, arrays and objects
+            // (which must be copied, not moved, for `gc::frame_released`).
+            let v = match val {
+                Operand::Cv(cv) => match frame.cvs.get_mut(cv as usize) {
+                    Some(slot)
+                        if matches!(
+                            slot.get(),
+                            Some(Value::Int(_) | Value::Bool(_) | Value::Float(_))
+                        ) =>
+                    {
+                        slot.as_mut().take()?
+                    }
+                    _ => return self.return_generic(val, base, ip),
+                },
+                Operand::Tmp(t) => match frame.tmps.get_mut(t as usize) {
+                    Some(slot)
+                        if matches!(slot, Value::Int(_) | Value::Bool(_) | Value::Float(_)) =>
+                    {
+                        std::mem::take(slot)
+                    }
+                    _ => return self.return_generic(val, base, ip),
+                },
+                _ => return self.return_generic(val, base, ip),
+            };
+            // `SAVE_OPLINE()`: the release below may report this line.
+            frame.ip = ip;
+            let ret = frame.ret;
+            // The store runs before the `gc` step: the value's register
+            // is then dead across the out-of-line `frame_released` call
+            // (it only reads the frame and the caller's `$this`, and the
+            // frame is released after both).
+            match ret {
+                RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
+                    Some(slot) if is_scalar(slot) => {
+                        std::mem::forget(std::mem::replace(slot, v));
+                        gc_on_release(frame, caller);
+                    }
+                    _ => return self.return_generic(val, base, ip),
+                },
+                RetTarget::Discard => {
+                    std::mem::forget(v);
+                    gc_on_release(frame, caller);
+                }
+            }
+            // `FrameStack::release_top` of the frame at hand: released in
+            // place, without the out-of-line call and the second lookup
+            // of the top frame; the stack is popped just below.
+            if !frame.release_direct() {
+                frame.clear_for_reuse(&self.empty_code);
+            }
+        };
+        self.frames.pop_cleared_top();
+        Some(crate::exec::Flow::Reload)
+    }
+
+    /// The generic `ZEND_RETURN` of [`Vm::return_simple`]: any frame or
+    /// result shape the direct path leaves, with the value's slot order
+    /// (`set_tmp` releasing the result slot after the frame) it keeps.
+    #[inline(never)]
+    #[allow(clippy::too_many_lines)] // the direct path's shape, in full
+    fn return_generic(
         &mut self,
         val: Operand,
         base: usize,
@@ -2551,33 +2652,23 @@ impl Vm {
             };
             // `SAVE_OPLINE()`: the release below may report this line.
             frame.ip = ip;
+            gc_on_release(frame, caller);
             let ret = frame.ret;
             // `ZEND_RETURN` copies the value into the caller's result slot
             // (`EX(return_value)`) before `zend_leave_helper` releases the
             // frame: done here, through the caller already at hand, when
             // the slot holds a scalar (its release has no effect). Another
             // value in the slot is released after the frame, by `set_tmp`
-            // below, as before. The store runs before the `gc` step below
-            // in the first case, so the value's register is dead across
-            // the out-of-line `frame_released` call (it only reads the
-            // frame and the caller's `$this`, and the frame is released
-            // after both, as before).
+            // below, as before.
             let v = match ret {
                 RetTarget::Tmp(t) => match caller.tmps.get_mut(t as usize) {
                     Some(slot) if is_scalar(slot) => {
                         std::mem::forget(std::mem::replace(slot, v));
-                        gc_on_release(frame, caller);
                         None
                     }
-                    _ => {
-                        gc_on_release(frame, caller);
-                        Some(v)
-                    }
+                    _ => Some(v),
                 },
-                RetTarget::Discard => {
-                    gc_on_release(frame, caller);
-                    Some(v)
-                }
+                RetTarget::Discard => Some(v),
             };
             // `FrameStack::release_top` of the frame at hand: released in
             // place, without the out-of-line call and the second lookup of
