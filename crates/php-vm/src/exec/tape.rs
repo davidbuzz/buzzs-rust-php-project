@@ -1574,7 +1574,23 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             return (0, NO_SAFE_POINT);
                         };
                         fp = f;
-                        next
+                        if next & (CALLED | CALL_THREW) == 0 || next == DECLINED {
+                            next
+                        } else if next & CALL_THREW != 0 {
+                            // As after the `DoCall` arm's call below.
+                            return ((next & !CALL_THREW) | switched, hot::THREW);
+                        } else {
+                            // The builtin call was made: the safe point
+                            // after its `DoCall`, as the arm below; then
+                            // the op after it (the loop looks at the frame
+                            // afresh: the handler may have attached its
+                            // symbol table).
+                            let d = next & !CALLED;
+                            if crate::interrupt::safe_point_due() {
+                                return ((d + 1) | switched, d);
+                            }
+                            d + 1
+                        }
                     }
                     WHY_EXT => {
                         // An argument the generic `Send` passes goes to the
@@ -1817,6 +1833,16 @@ fn run_call(
 /// callee's frame is the current one.
 const ENTERED: usize = usize::MAX - 1;
 
+/// Set in [`run_call`]'s answer (with the `DoCall`'s index) when it made
+/// the builtin call it prepared ([`calls::call_native`]): the caller goes
+/// on after the `DoCall`.
+const CALLED: usize = 1 << (usize::BITS - 2);
+
+/// Set in [`run_call`]'s answer (with the `DoCall`'s index) when the
+/// builtin call it made threw ([`calls::call_native`]; the throw is in
+/// `Vm::tape_throw`).
+const CALL_THREW: usize = 1 << (usize::BITS - 3);
+
 /// The `Send`s after the op at `at` that started `call`
 /// ([`send_following`]), and the call itself when its `DoCall` comes right
 /// after them and it is a user one (`ZEND_DO_UCALL`: [`calls::enter`]),
@@ -1834,8 +1860,18 @@ fn send_and_enter(
     at: usize,
 ) -> usize {
     let next = send_following(vm, &mut call, ops, at);
-    if !call.is_native() {
-        if let Some(&Op::DoCall { dst }) = ops.get(next) {
+    if let Some(&Op::DoCall { dst }) = ops.get(next) {
+        if call.is_native() {
+            // `ZEND_DO_ICALL` at once (as the loop's `DoCall` arm runs it).
+            match calls::call_native(vm, call, dst, next + 1) {
+                Ok(Ok(())) => return next | CALLED,
+                Ok(Err(t)) => {
+                    vm.tape_throw = Some(t);
+                    return next | CALL_THREW;
+                }
+                Err(back) => call = back,
+            }
+        } else {
             match calls::enter(vm, call, dst, next + 1) {
                 Ok(()) => return ENTERED,
                 Err(back) => call = back,
