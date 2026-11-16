@@ -2846,7 +2846,7 @@ enum BodyKind<'a> {
     None,
 }
 
-fn is_superglobal_or_globals(n: &[u8]) -> bool {
+pub(super) fn is_superglobal_or_globals(n: &[u8]) -> bool {
     super::expr::is_superglobal(n) || n == b"GLOBALS"
 }
 

@@ -1,5 +1,6 @@
 //! Expression compilation.
 
+use super::decl::is_superglobal_or_globals;
 use super::stack;
 use super::stmt::is_ref_expr;
 use super::{CResult, Compiler, FnKind};
@@ -1518,6 +1519,12 @@ impl Compiler<'_> {
                     if let ExprKind::Var(VarName::Name(id)) = &left.kind {
                         if id.name == b"this" {
                             self.compile_expr(left)?
+                        } else if !is_superglobal_or_globals(&id.name) {
+                            // `ZEND_COALESCE` of the CV itself, read
+                            // without the undefined-variable warning (the
+                            // handlers' `read_cv_defined` / `coalesce_in`),
+                            // not a copy into a temporary first.
+                            Operand::Cv(self.cv(&id.name))
                         } else {
                             let (p, jumps) = self.compile_is_place(left)?;
                             let r = self.fetch_place(p, FetchMode::Is);
