@@ -643,7 +643,7 @@ pub(super) fn step_ext(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> 
         // `ZEND_FUNC_NUM_ARGS`.
         Op::FuncNumArgs { dst } => {
             if let Some(d) = dst {
-                let n = i64::try_from(f.args.len()).unwrap_or(i64::MAX);
+                let n = i64::try_from(f.num_args()).unwrap_or(i64::MAX);
                 set_tmp_in(f, d, Value::Int(n));
             }
         }

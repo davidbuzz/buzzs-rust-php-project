@@ -49,7 +49,7 @@ fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         ));
     }
     let f = &vm.frames[idx];
-    let n = f.args.len();
+    let n = f.num_args();
     Ok(Value::Int(i64::try_from(n).unwrap_or(0)))
 }
 

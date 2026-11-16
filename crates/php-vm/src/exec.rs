@@ -2167,7 +2167,7 @@ impl Vm {
                         Flow::Next
                     }
                     Op::FuncNumArgs { dst } => {
-                        let n = self.frame().args.len();
+                        let n = self.frame().num_args();
                         self.set_dst(*dst, Value::Int(i64::try_from(n).unwrap_or(i64::MAX)));
                         Flow::Next
                     }

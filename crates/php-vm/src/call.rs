@@ -4161,7 +4161,7 @@ impl Vm {
         let uf = f.ufunc.clone().expect("user frame");
         let func = f.func.clone().expect("func");
         let scope = f.scope.clone();
-        let passed = f.args.len();
+        let passed = f.num_args();
         let internal = f.called_from_internal;
         let fname = self.func_display(&func, scope.as_ref());
         if passed > n as usize {

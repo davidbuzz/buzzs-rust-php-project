@@ -674,13 +674,15 @@ pub(super) fn enter(
     frame.caller_strict = caller.code.strict_types;
     frame.called_from_internal = false;
     frame.is_ctor = prep.ctor;
-    // The passed-argument count (`ZEND_CALL_NUM_ARGS`): one empty entry
-    // per argument, each already in its compiled variable.
+    // The passed-argument count (`ZEND_CALL_NUM_ARGS`): each argument is
+    // already in its compiled variable, so the buffer stays empty and the
+    // count is kept instead (`Frame::num_args`).
     if !frame.args.is_empty() {
         frame.args.clear();
     }
-    for _ in 0..n {
-        frame.args.push(None);
+    #[allow(clippy::cast_possible_truncation)] // at most `MAX_ARGS`
+    {
+        frame.direct_argc = n as u32;
     }
     // The `RECV`s of the passed arguments have nothing left to do.
     frame.ip = uf.plain_first_op(n);

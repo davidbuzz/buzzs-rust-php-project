@@ -1003,6 +1003,11 @@ pub struct Frame {
     /// resume state as [`Frame::clear_for_reuse`] leaves them: released by
     /// [`Frame::release_direct`].
     pub(crate) direct: bool,
+    /// The passed-argument count of a frame the tape's call protocol made
+    /// current (`ZEND_CALL_NUM_ARGS`): its arguments are all in their
+    /// compiled variables, so `args` stays empty instead of holding a
+    /// `None` per argument. See [`Frame::num_args`].
+    pub(crate) direct_argc: u32,
 }
 
 /// What the shared compiled-variable names of a frame's variable store
@@ -1177,6 +1182,7 @@ impl Frame {
             observed: false,
             observer_hidden: false,
             direct: false,
+            direct_argc: 0,
         }
     }
 
@@ -1224,6 +1230,7 @@ impl Frame {
         self.observed = false;
         self.observer_hidden = false;
         self.direct = false;
+        self.direct_argc = 0;
     }
 
     /// Clears a frame for pool reuse while retaining its compiled code and buffer sizes.
@@ -1360,6 +1367,7 @@ impl Frame {
             observed: false,
             observer_hidden: false,
             direct: false,
+            direct_argc: 0,
         }
     }
 
@@ -1488,6 +1496,7 @@ impl Frame {
         self.observed = false;
         self.observer_hidden = false;
         self.direct = false;
+        self.direct_argc = 0;
     }
 
     /// [`Frame::clear_for_reuse`] of a frame the tape's call protocol made
@@ -1550,6 +1559,7 @@ impl Frame {
         self.is_ctor = false;
         self.caller_strict = false;
         self.direct = false;
+        self.direct_argc = 0;
         true
     }
 
@@ -1593,6 +1603,7 @@ impl Frame {
         self.observed = false;
         self.observer_hidden = false;
         self.direct = false;
+        self.direct_argc = 0;
         true
     }
 
@@ -1630,6 +1641,14 @@ impl Frame {
         clear_frame_buffer(&mut self.silence_saved);
         clear_opt(&mut self.builtin_name);
         clear_opt(&mut self.magic_name);
+    }
+
+    /// The number of arguments passed to the call (`ZEND_CALL_NUM_ARGS`):
+    /// the argument buffer's length, or the count a directly entered frame
+    /// keeps instead ([`Frame::direct_argc`]).
+    #[inline]
+    pub(crate) fn num_args(&self) -> usize {
+        self.args.len().max(self.direct_argc as usize)
     }
 
     /// Whether a frame being recycled keeps its function handles (`func`,
@@ -1823,6 +1842,7 @@ impl Frame {
             observed: false,
             observer_hidden: false,
             direct: false,
+            direct_argc: 0,
         }
     }
 
