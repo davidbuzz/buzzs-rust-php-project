@@ -187,16 +187,19 @@ fn fold_isset_dim(container: &Value, dim: &Value, empty: bool) -> Option<bool> {
 
 /// The container and offset literals of an `isset()`/`empty()` place
 /// `container[dim]`: a literal base, or a CV holding a known constant.
-fn isset_operands(place: &Place, cur_state: &[CvLattice]) -> Option<(u32, u32)> {
-    let container = match &place.base {
-        PlaceBase::Value(Operand::Lit(c)) => *c,
+/// Whether the container is a partial array (only its known elements
+/// fold: any other key may exist).
+fn isset_operands(place: &Place, cur_state: &[CvLattice]) -> Option<(u32, u32, bool)> {
+    let (container, partial) = match &place.base {
+        PlaceBase::Value(Operand::Lit(c)) => (*c, false),
         PlaceBase::Cv(cv) => match cur_state.get(*cv as usize) {
-            Some(CvLattice::Const(l)) => *l,
+            Some(CvLattice::Const(l)) => (*l, false),
+            Some(CvLattice::Partial(l)) => (*l, true),
             _ => return None,
         },
         _ => return None,
     };
-    Some((container, single_dim_lit(place)?))
+    Some((container, single_dim_lit(place)?, partial))
 }
 
 /// Compile-time evaluation of a pure internal function on constant
@@ -1514,7 +1517,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                     let (place, dst) = (*place, *dst);
                     let empty = matches!(op, Op::Empty { .. });
                     let folded = op_array.places.get(place as usize).and_then(|p| {
-                        let (c, d) = isset_operands(p, &[])?;
+                        let (c, d, _) = isset_operands(p, &[])?;
                         fold_isset_dim(
                             op_array.literals.get(c as usize)?,
                             op_array.literals.get(d as usize)?,
@@ -2100,12 +2103,23 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
                         let (place, dst) = (*place, *dst);
                         let empty = matches!(op, Op::Empty { .. });
                         let folded = op_array.places.get(place as usize).and_then(|p| {
-                            let (c, d) = isset_operands(p, &cur_state)?;
-                            fold_isset_dim(
-                                op_array.literals.get(c as usize)?,
-                                op_array.literals.get(d as usize)?,
-                                empty,
-                            )
+                            let (c, d, partial) = isset_operands(p, &cur_state)?;
+                            let container = op_array.literals.get(c as usize)?;
+                            let dim = op_array.literals.get(d as usize)?;
+                            // sccp.c `ct_eval_isset_dim` of a partial array:
+                            // a key it does not know may exist.
+                            if partial {
+                                let Value::Array(arr) = container else {
+                                    return None;
+                                };
+                                let known = match dim {
+                                    Value::Int(i) => arr.get_int(*i),
+                                    Value::Str(s) => arr.get_sym(s.as_bytes()),
+                                    _ => None,
+                                };
+                                known?;
+                            }
+                            fold_isset_dim(container, dim, empty)
                         });
                         if let Some(res) = folded {
                             let lit = add_or_find_literal(&mut op_array.literals, Value::Bool(res));
