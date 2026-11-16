@@ -232,6 +232,17 @@ fn ct_eval_func_call(name: &[u8], args: &[&Value]) -> Option<Value> {
         (b"str_decrement", [Value::Str(s)]) => {
             string(php_stdstr::transform::str_decrement(s.as_bytes()).ok()?)
         }
+        // `substr()` never fails (an offset or length outside the string
+        // gives a shorter or empty string).
+        (b"substr", [Value::Str(s), Value::Int(off)]) => {
+            string(php_stdstr::search::substr(s.as_bytes(), *off, None).to_vec())
+        }
+        (b"substr", [Value::Str(s), Value::Int(off), Value::Int(len)]) => {
+            string(php_stdstr::search::substr(s.as_bytes(), *off, Some(*len)).to_vec())
+        }
+        (b"substr", [Value::Str(s), Value::Int(off), Value::Null]) => {
+            string(php_stdstr::search::substr(s.as_bytes(), *off, None).to_vec())
+        }
         _ => None,
     }
 }

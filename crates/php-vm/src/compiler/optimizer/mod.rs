@@ -1237,6 +1237,36 @@ mod tests {
         assert_eq!(writes(&baz), 1, "{:?}", baz.ops);
     }
 
+    /// `substr()` of literals is evaluated at compile time, as php-src's
+    /// stub marks it (`@compile-time-eval`).
+    #[test]
+    fn substr_of_literals_folds() {
+        let unit = compile_src(
+            "<?php function f() { echo substr('foo', 1, 1), substr('hello', -3), substr('ab', 5, null); }",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let f = find_code(&unit, named(b"f"));
+        assert!(
+            !f.ops
+                .iter()
+                .any(|op| matches!(op, Op::InitFCall { .. } | Op::DoCall { .. })),
+            "{:?}",
+            f.ops
+        );
+        let echoed: Vec<String> = f
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Echo(Operand::Lit(l)) => match &f.literals[*l as usize] {
+                    Value::Str(s) => Some(String::from_utf8_lossy(s.as_bytes()).into_owned()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(echoed.concat(), "ollo", "{:?}", f.ops);
+    }
+
     #[test]
     fn dce_drops_foreach_over_empty_literal_array() {
         let unit = compile_src(
