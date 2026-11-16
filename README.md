@@ -89,6 +89,19 @@ a newer php-src means editing the pin and re-baselining.
 `/usr/bin/php` (PHP 8.3.6) is used as an oracle by the library test suites. Where 8.3 and
 php-src master differ, the port follows master.
 
+## License
+
+phprust is licensed under the BSD-3-Clause, the same license PHP master is
+distributed under, with the copyright held by David Buzz:
+
+```
+Copyright © 2025–2026, David Buzz <davidbuzz@gmail.com>
+```
+
+Third-party components keep their own licenses (the oracle tree under
+`modules/php-src` is PHP-3.01, © The PHP Group; `tools/lcov` is GPL-2.0-or-later;
+linked system libraries keep theirs). See [LICENSE](LICENSE).
+
 ## Related work
 
 Projects with a related thesis or implementation:
