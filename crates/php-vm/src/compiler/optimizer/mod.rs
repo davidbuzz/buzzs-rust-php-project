@@ -1267,6 +1267,30 @@ mod tests {
         assert_eq!(echoed.concat(), "ollo", "{:?}", f.ops);
     }
 
+    /// A ternary whose arms are the same literal is that literal, the
+    /// condition only checked (php-src's SCCP joins the two values; a CV
+    /// condition leaves a `CHECK_VAR` for its undefined-variable warning),
+    /// so a call of it folds (opcache `ct_eval_frameless_002`).
+    #[test]
+    fn ternary_of_equal_literals_folds() {
+        let unit = compile_src(
+            "<?php echo substr('foo', 1, $foo ? 1 : 1);",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let ops = &unit.main.code.ops;
+        assert!(
+            matches!(
+                &ops[..],
+                [
+                    Op::Free(Operand::Cv(0)),
+                    Op::Echo(Operand::Lit(_)),
+                    Op::Return { .. }
+                ]
+            ),
+            "{ops:?}"
+        );
+    }
+
     #[test]
     fn dce_drops_foreach_over_empty_literal_array() {
         let unit = compile_src(

@@ -280,7 +280,11 @@ fn fold_const_func_calls(
         let mut call = None;
         for (j, op) in op_array.ops.iter().enumerate().skip(i + 1) {
             match op {
+                // A `CHECK_VAR` between the arguments stays where it is:
+                // its warning comes first either way, and a folded call
+                // raises nothing.
                 Op::Nop
+                | Op::Free(Operand::Cv(_))
                 | Op::Move {
                     src: Operand::Lit(_),
                     ..
@@ -1127,7 +1131,7 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
         return false;
     }
 
-    let mut changed = false;
+    let mut changed = fold_equal_literal_arms(op_array);
     let refs_possible = cvs_may_be_refs(op_array, ctx);
 
     // 1. Temporary constant discovery & SSA propagation
@@ -2283,5 +2287,81 @@ pub(crate) fn run_sccp(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
     // removes it with the dead SSA variable it defines).
     changed |= super::dce::remove_dead_entry_stores(op_array, ctx, refs_possible);
 
+    changed
+}
+
+/// `JMPZ/JMPNZ c, L1; T = x; JMP L2; L1: T = y; L2:` with `x` and `y` the
+/// same literal: `T` is that literal on both paths (sccp.c joins equal
+/// constants at the merge, and DCE then removes the branch), so the
+/// condition is only evaluated: a CV's `CHECK_VAR` (`Free` of the CV, which
+/// warns about an undefined variable), a temporary's `FREE`, nothing for a
+/// literal; then `T = x`. Nothing else may jump into the arms.
+fn fold_equal_literal_arms(op_array: &mut OpArray) -> bool {
+    let len = op_array.ops.len();
+    let mut targeted = vec![0u32; len + 1];
+    for op in &op_array.ops {
+        let mut op = op.clone();
+        super::for_each_label_mut(&mut op, |l| {
+            if let Some(n) = targeted.get_mut(*l as usize) {
+                *n += 1;
+            }
+        });
+    }
+    let mut changed = false;
+    for i in 0..len.saturating_sub(3) {
+        let (Op::JmpZ(c, l1) | Op::JmpNz(c, l1)) = op_array.ops[i] else {
+            continue;
+        };
+        let (
+            Op::Move {
+                src: Operand::Lit(x),
+                dst: t1,
+            },
+            Op::Jmp(l2),
+            Op::Move {
+                src: Operand::Lit(y),
+                dst: t2,
+            },
+        ) = (
+            &op_array.ops[i + 1],
+            &op_array.ops[i + 2],
+            &op_array.ops[i + 3],
+        )
+        else {
+            continue;
+        };
+        let same = match (
+            op_array.literals.get(*x as usize),
+            op_array.literals.get(*y as usize),
+        ) {
+            (Some(Value::Null), Some(Value::Null)) => true,
+            (Some(Value::Bool(a)), Some(Value::Bool(b))) => a == b,
+            (Some(Value::Int(a)), Some(Value::Int(b))) => a == b,
+            (Some(Value::Str(a)), Some(Value::Str(b))) => a.as_bytes() == b.as_bytes(),
+            _ => false,
+        };
+        if !same
+            || t1 != t2
+            || l1 as usize != i + 3
+            || *l2 as usize != i + 4
+            || targeted[i + 1] != 0
+            || targeted[i + 2] != 0
+            || targeted[i + 3] != 1
+        {
+            continue;
+        }
+        let (x, t) = (*x, *t1);
+        op_array.ops[i] = match c {
+            Operand::Cv(_) | Operand::Tmp(_) => Op::Free(c),
+            _ => Op::Nop,
+        };
+        op_array.ops[i + 1] = Op::Move {
+            src: Operand::Lit(x),
+            dst: t,
+        };
+        op_array.ops[i + 2] = Op::Nop;
+        op_array.ops[i + 3] = Op::Nop;
+        changed = true;
+    }
     changed
 }
