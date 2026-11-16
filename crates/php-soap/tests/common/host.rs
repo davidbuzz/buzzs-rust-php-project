@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A minimal engine for exercising the extension without the VM.
 
 #![allow(dead_code, clippy::missing_panics_doc, clippy::must_use_candidate)]

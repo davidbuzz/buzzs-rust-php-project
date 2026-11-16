@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Encoder descriptors (`encode`/`encodeType` of `php_encoding.h`): the
 //! built-in table `defaultEncoding[]`, encoders created by the schema
 //! loader and user `typemap` encoders.

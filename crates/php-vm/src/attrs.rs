@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Engine-side attribute semantics: `#[\Deprecated]` messages
 //! (`get_deprecation_suffix_from_attribute`, `zend_deprecated_*`).
 

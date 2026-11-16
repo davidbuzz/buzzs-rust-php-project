@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The object model: documents (`php_libxml_ref_obj`) and node handles
 //! (`php_libxml_node_object`), plus the node-freeing routines of
 //! `ext/libxml` (`php_libxml_node_free_list` and friends).

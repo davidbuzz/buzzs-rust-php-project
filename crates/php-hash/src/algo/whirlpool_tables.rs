@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 // @generated from php-src/ext/hash/php_hash_whirlpool_tables.h by a table extraction script; do not edit.
 #![allow(clippy::unreadable_literal)]
 

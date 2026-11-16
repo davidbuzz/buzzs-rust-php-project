@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Byte-exact comparison against fixtures produced by PHP's C
 //! implementation (`gen_fixtures.php`, PHP 8.3 + system zlib).
 

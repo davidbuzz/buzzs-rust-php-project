@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Hand-written declarations for the system libxslt 1.1.x / libexslt, the
 //! libxml2 XPath functions the crate needs that `php-libxml` does not
 //! declare, a few libc functions, and the C glue compiled by `build.rs`

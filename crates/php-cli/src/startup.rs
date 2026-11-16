@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Module startup (`php_module_startup()`): the diagnostics PHP raises
 //! before any request — INI values rejected or adjusted by their
 //! handlers, deprecated or removed directives, and `extension=` /

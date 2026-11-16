@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Output compression: `ob_gzhandler()`, the `"zlib output compression"`
 //! output handler behind `zlib.output_compression` and
 //! `ob_start('ob_gzhandler')`, and `zlib_get_coding_type()`

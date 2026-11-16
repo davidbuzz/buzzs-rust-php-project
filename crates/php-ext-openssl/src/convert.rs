@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Conversions between VM values and the library's argument and array
 //! types (`php_openssl_pkey_from_zval`, `php_openssl_x509_from_zval`, …).
 

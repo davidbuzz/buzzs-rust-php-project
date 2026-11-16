@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Runs the ext/spl `.phpt` tests through the test interpreter.
 //!
 //! `phpt_passing` asserts that every test listed in `tests/phpt_pass.txt`

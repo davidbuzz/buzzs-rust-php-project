@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `Phar::webPhar()` over the VM's SAPI.
 //!
 //! Under the CLI there is no request (`SG(request_info).request_method` is

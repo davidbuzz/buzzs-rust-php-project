@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Shared match driver and the capture-array builder used by
 //! `preg_match()`, `preg_match_all()` and `preg_replace_callback()`.
 

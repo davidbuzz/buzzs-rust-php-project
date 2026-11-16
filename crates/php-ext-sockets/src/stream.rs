@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The socket stream `socket_export_stream()` creates
 //! (`php_stream_sock_open_from_socket()` / the transport's socket ops).
 

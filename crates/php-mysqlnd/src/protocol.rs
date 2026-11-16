@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Decoders and encoders for the individual protocol packets
 //! (ref: `mysqlnd_wireprotocol.c`). Decoders work on a complete payload and
 //! report malformed input the way mysqlnd does (a queued PHP warning plus a

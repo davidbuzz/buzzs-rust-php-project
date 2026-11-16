@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `Phar::webPhar()` front-controller routing, the mime table and
 //! `Phar::mungServer()` (`phar_object.c`).
 //!

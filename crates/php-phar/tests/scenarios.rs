@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Scenario oracle tests: `tests/scenarios/<name>.scn` scripts are run by
 //! PHP (`tests/oracle/scenario.php`, output cached as `<name>.out` by the
 //! ignored `regenerate_scenarios` test) and by [`run`] here; the outputs

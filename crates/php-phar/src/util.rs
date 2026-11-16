@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Small byte-level helpers shared by the formats: little-endian fields,
 //! `zend_hash_func`, the `phar_path_check()` scanner, `phar_fix_filepath()`,
 //! alias validation and case-insensitive searches.

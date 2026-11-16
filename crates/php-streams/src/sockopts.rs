@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `socket` context options of socket transports
 //! (`php_sockop_parse_sockvals`, the `STREAM_SOCKOP_*` flags of
 //! `php_tcp_sockop_bind`/`connect`/`accept` and

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The SAPI's PHP functions: `ext/standard/head.c` (header, cookies,
 //! response code) and the SAPI-dependent parts of `basic_functions.c`
 //! (flush, connection status, uploads, time limit) bound to the Apache

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! SPL object state: one [`SplState`] variant per family of SPL classes,
 //! stored by the VM next to the object's properties (the C `*_object`
 //! structs that embed `zend_object`).

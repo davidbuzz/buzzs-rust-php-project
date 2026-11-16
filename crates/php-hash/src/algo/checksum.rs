@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Non-cryptographic checksums: Adler-32, the three CRC-32 flavours, FNV-1 /
 //! FNV-1a and Jenkins one-at-a-time (ref: ext/hash/hash_{adler32,crc32,fnv,joaat}.c).
 

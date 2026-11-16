@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `PDO::*` constants (`php_pdo_driver.h`, `pdo_dbh.stub.php`).
 //!
 //! Values follow the php-src reference tree, where the fetch flags were

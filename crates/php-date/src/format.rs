@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `date()` / `DateTime::format()` and `DateInterval::format()` (ports of
 //! `date_format()` and `date_interval_format()` from `php_date.c`).
 

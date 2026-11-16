@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `IMAGETYPE_*` constants, `image_type_to_mime_type()`,
 //! `image_type_to_extension()` and the file-type sniffing of
 //! `php_getimagetype()` (ref: `ext/standard/php_image.h`,

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Per-place runtime cache of property lookups: php-src's
 //! `CACHE_ADDR(opline->extended_value)` slot of `ZEND_FETCH_OBJ_R`/`_IS`/
 //! `_W`/`_RW`, `ZEND_ASSIGN_OBJ`, `ZEND_ASSIGN_OBJ_OP`,

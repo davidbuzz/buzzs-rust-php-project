@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Engine state (de)serialization helpers: the values found in the state
 //! array of `__serialize()` / `__unserialize()` and PHP's little-endian hex
 //! encoding (`php_random_bin2hex_le` / `php_random_hex2bin_le`).

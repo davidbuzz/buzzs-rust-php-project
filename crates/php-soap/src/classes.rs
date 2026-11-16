@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The class table of ext/soap (`soap.stub.php`): classes, their declared
 //! properties (with types and defaults), methods and the functions, for
 //! the engine to register.

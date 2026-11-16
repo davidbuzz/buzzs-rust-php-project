@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Trees shared with php-libxml's document layer (the `SimpleXML` side of
 //! `simplexml_import_dom()` / `dom_import_simplexml()`).
 

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Classification of `CURLOPT_*` options by how ext/curl's
 //! `_php_curl_setopt()` coerces and applies the PHP value.
 

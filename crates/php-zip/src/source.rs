@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `php_zip_create_string_source()` (`zip_source.c`): a libzip source
 //! function serving an in-memory string, which can also receive the
 //! rewritten archive (used by `ZipArchive::openString()` /

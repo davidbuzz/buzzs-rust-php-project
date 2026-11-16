@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! HTTP artefacts: the session cookie (`php_session_send_cookie`) and the
 //! cache limiter header sets (`CACHE_LIMITER_FUNC`s).
 

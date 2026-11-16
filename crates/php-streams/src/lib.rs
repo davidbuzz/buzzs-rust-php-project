@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The PHP streams layer for phprust.
 //!
 //! A port of `main/streams/` and the file-related parts of `ext/standard`

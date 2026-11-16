@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The candidate subgraph and its analysis: php-src's `gc_mark_roots`
 //! (trial deletion), `gc_scan_roots` (scan black/white) and
 //! `gc_collect_roots` (collect white), restated over `Rc` counts.

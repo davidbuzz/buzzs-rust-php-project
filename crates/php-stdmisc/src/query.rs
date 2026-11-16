@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Query strings: `http_build_query()` (`ext/standard/http.c`), and the
 //! request-variable registration of `main/php_variables.c`
 //! (`php_register_variable_ex`, `php_default_treat_data`) behind

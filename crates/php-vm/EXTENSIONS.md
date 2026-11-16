@@ -1,4 +1,4 @@
-# Writing phprust extensions
+# Writing buzzs-rust-php-project extensions
 
 Native PHP extensions (`ext/*`) are bound to the VM in their own crates
 (`crates/php-ext-<name>`), using only the public API in `php_vm::ext`.

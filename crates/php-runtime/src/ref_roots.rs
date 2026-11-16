@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The possible-root buffer for references (`gc_check_possible_root` for
 //! `zend_reference`), consumed by the VM's cycle collector.
 //!

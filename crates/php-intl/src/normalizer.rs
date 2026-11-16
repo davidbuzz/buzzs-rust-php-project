@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `Normalizer` / `normalizer_*` (php-src `ext/intl/normalizer`).
 
 use crate::error::{Error, Result, UErrorCode};

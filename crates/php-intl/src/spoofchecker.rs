@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `Spoofchecker` (php-src `ext/intl/spoofchecker`).
 //!
 //! The object status is reset at the start of every method (as by

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `consumed` filter (`ext/standard/filters.c`).
 //!
 //! It passes data through unchanged while counting the bytes it saw; on the

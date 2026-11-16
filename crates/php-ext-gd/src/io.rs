@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Reading image files and writing encoded images through the stream
 //! layer (`_php_image_create_from()`, `create_output_context()` and
 //! `create_stream_context()` of gd.c).

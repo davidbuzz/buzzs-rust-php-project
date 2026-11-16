@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Traditional and `BSDi`-extended DES-based `crypt()`, ported from
 //! `ext/standard/crypt_freesec.c` (`FreeSec` by David Burren, with Solar
 //! Designer's fixes).

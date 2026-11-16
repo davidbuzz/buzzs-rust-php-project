@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `XSLTProcessor` class declaration and the extension's constants
 //! (`php_xsl.stub.php`), as data the VM registers generically, plus the
 //! `phpinfo()` rows (`PHP_MINFO_FUNCTION(xsl)`).

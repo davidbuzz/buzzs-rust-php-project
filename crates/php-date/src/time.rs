@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The broken-down time structure (`timelib_time`), relative times, and the
 //! conversions between broken-down time and Unix timestamps (ports of
 //! timelib's `tm2unixtime.c`, `unixtime2tm.c` and parts of `timelib.c`).

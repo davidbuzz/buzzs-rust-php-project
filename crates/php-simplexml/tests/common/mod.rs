@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A tiny PHP-ish harness for porting `ext/simplexml/tests/*.phpt`: an
 //! object store with PHP's handle reuse, a [`RuntimeContext`]/[`SxeHost`]
 //! implementation, output capture (including diagnostics formatted like

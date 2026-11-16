@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Object identity through the object store and the property count of a
 //! table whose declared slot is being unset (`Zend/tests/unset`).
 //! Expected outputs are `/usr/bin/php -n` (8.3, same as master here).

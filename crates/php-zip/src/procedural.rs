@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The deprecated procedural API: `zip_open()`, `zip_read()`,
 //! `zip_close()` and `zip_entry_*()` (resources "Zip Directory" and
 //! "Zip Entry"). The VM reports the `#[\Deprecated]` notices and the

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! INI modify handlers owned by the streams layer: `OnUpdateBaseDir`
 //! (`open_basedir` may only be tightened at runtime) and the
 //! `open_basedir` check of `OnUpdateErrorLog`.

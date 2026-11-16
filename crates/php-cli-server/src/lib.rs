@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The CLI built-in web server: `php -S <addr>:<port> [-t docroot] [router]`
 //! (ref: `sapi/cli/php_cli_server.c`).
 //!

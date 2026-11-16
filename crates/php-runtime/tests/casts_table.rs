@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `(int)`, `(float)`, `(string)` and `(bool)` casts verified against the PHP
 //! oracle (`tests/data/gen_casts.php` → `tests/data/casts_table.txt`).
 

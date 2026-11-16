@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Helpers for the legacy `Serializable` formats of SPL classes, which
 //! embed several `php_var_unserialize` calls in one buffer: a scanner that
 //! finds the extent of one serialized value, and a context wrapper that

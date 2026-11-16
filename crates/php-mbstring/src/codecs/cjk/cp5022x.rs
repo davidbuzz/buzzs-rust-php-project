@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `CP50220`, `CP50221`, `CP50222`: Microsoft's variants of ISO-2022-JP
 //! (JIS X 0208 with the CP932 extensions, user-defined area mapped to the
 //! PUA, JIS X 0201 kana via `ESC ( I` or SO/SI).

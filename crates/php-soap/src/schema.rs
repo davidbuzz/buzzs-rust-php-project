@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! XML Schema loading (`php_schema.c`): turns `<xsd:schema>` elements into
 //! [`SdlType`]s, encoders, elements, groups and attributes, then resolves
 //! references in a second pass (`schema_pass2`).

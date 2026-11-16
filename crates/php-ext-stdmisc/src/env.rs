@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Environment and process information: `getenv`/`putenv`, `php_uname`,
 //! load average, rusage, process ids, script page info, `ftok`, the time
 //! and sleep functions, connection state, `getopt` and `get_cfg_var`.

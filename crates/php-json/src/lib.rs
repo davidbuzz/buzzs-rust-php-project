@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's `ext/json` for phprust: `json_encode`, `json_decode`,
 //! `json_validate`, `json_last_error(_msg)`, `JsonSerializable` and
 //! `JsonException` support.

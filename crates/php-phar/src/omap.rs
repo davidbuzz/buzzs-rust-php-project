@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! An insertion-ordered byte-string map with `zend_hash` semantics: new keys
 //! append, updates keep their position, deletions leave the order of the
 //! remaining keys intact and keys can be renamed in place.

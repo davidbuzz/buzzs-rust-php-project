@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `CURLOPT_POSTFIELDS` arrays: `build_mime_structure_from_hash()` with
 //! `CURLFile`/`CURLStringFile` uploads.
 

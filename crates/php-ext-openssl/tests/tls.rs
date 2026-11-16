@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end TLS over the stream layer: a listener created with
 //! `tcp://` + `ssl` context options, an accepted connection upgraded with
 //! `stream_socket_enable_crypto()` (it must inherit the listener's

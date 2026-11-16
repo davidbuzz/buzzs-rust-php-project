@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Glue between the VM and the `php-streams` library.
 //!
 //! The library reports warnings through a thread-local diagnostics queue and

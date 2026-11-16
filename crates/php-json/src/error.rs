@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! JSON error codes (`php_json_error_code`), error details with location and
 //! the error types returned by [`crate::encode()`] / [`crate::decode()`].
 

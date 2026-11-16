@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `mysqli_result` (ref: `mysqli_api.c` fetch functions, `mysqli_nonapi.c`
 //! `mysqli_fetch_*`, `mysqli_result_iterator.c`).
 

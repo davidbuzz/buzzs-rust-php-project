@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ZArray`: PHP's ordered hash table (`HashTable` / `zend_array`).
 //!
 //! The layout mirrors `Zend/zend_hash.c` closely because several PHP-visible

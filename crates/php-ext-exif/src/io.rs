@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Stream plumbing: opening paths through the stream layer, adapting an
 //! open [`Stream`] to `Read + Seek` for the `php-exif` parsers, and
 //! working out the [`StreamOrigin`] exif reports in its `FILE` section.

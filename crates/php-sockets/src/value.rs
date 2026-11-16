@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A minimal model of the PHP values ext/sockets inspects
 //! (`socket_set_option()` values, `socket_sendmsg()`/`socket_recvmsg()`
 //! message arrays) and produces (`socket_get_option()` arrays, received

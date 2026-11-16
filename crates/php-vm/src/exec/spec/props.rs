@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Handlers of the dedicated property ops ([`Op::FetchObjProp`],
 //! [`Op::FetchObjPropDim`], [`Op::AssignObjProp`], [`Op::AssignObjPropDim`],
 //! [`Op::AssignOpObjProp`], [`Op::AssignOpObjPropDim`], [`Op::IncDecObjProp`],

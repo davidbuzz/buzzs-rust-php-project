@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Process-wide configuration: the apache2handler INI defaults, `php.ini`
 //! loading (`PHPINIDir`, `$PHPRC`, `$PHP_INI_SCAN_DIR`) and the evaluation
 //! of the directives the handler itself consults before a VM exists

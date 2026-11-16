@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! JIT auto-globals (`zend_is_auto_global`, `zend_activate_auto_globals`;
 //! ref: Zend/zend_compile.c, main/php_variables.c): an armed `$_ENV` /
 //! `$_REQUEST` exists only once compiled code names it. Expected outputs

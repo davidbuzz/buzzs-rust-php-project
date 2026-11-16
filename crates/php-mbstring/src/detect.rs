@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Encoding detection (`mb_guess_encoding_for_strings`), `mb_detect_encoding`,
 //! `mb_convert_encoding` and the core of `mb_convert_variables`.
 //!

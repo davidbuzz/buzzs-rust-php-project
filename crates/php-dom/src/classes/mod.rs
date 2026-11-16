@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Mapping from libxml2 node types to PHP classes
 //! (`php_dom_create_object`, `dom_get_*_ce`).
 

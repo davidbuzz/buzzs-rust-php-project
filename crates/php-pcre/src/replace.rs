@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `preg_replace()`, `preg_filter()`, `preg_replace_callback()` and
 //! `preg_replace_callback_array()` (`php_pcre_replace_impl`,
 //! `php_pcre_replace_func_impl`, `php_pcre_replace_array`).

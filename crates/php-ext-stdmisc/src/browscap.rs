@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `get_browser()` (`ext/standard/browscap.c`): loads the `browscap` INI
 //! file once and matches user agents with [`php_stdmisc::browscap`].
 

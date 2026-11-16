@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The "fast" conversion machinery of libmbfl (`mb_convert_buf`,
 //! `mb_illegal_output`, `mb_fast_convert`).
 //!

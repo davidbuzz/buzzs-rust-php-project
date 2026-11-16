@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! SOAP messages: building requests (`serialize_function_call`), parsing
 //! responses (`parse_packet_soap`), parsing requests on the server
 //! (`deserialize_function_call`) and building responses/faults

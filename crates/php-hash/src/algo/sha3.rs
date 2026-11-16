@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! SHA3-224/256/384/512 (ref: `ext/hash/hash_sha3.c` with the bundled XKCP
 //! `generic64lc` Keccak implementation).
 //!

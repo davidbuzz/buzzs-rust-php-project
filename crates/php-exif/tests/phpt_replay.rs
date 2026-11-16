@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Replays the logic of php-src master `.phpt` tests (copied to
 //! `tests/fixtures/phpt`) through the crate API and matches the output
 //! against the `--EXPECT--` / `--EXPECTF--` sections, like run-tests.php.

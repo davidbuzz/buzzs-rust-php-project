@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `Dom\HTMLDocument` (`html_document.c`): HTML5 parsing through lexbor,
 //! HTML5 serialization, and the `body`/`head`/`title` accessors.
 

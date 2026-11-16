@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Quoted-printable (RFC 2045) — a port of `ext/standard/quot_print.c`.
 
 const HEX: &[u8; 16] = b"0123456789ABCDEF";

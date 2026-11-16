@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Request variables: `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`,
 //! `$_SERVER`, `$_ENV` and `$_REQUEST` (`php_hash_environment()`,
 //! `php_apache_sapi_register_variables()`, `sapi_read_post_data()` and the

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Parsing documents with libxml2 (`dom_document_parser`, `dom_load_html`)
 //! and the error-routing scope used around every libxml2 call that may
 //! report errors.

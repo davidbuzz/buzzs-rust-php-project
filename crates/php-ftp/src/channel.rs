@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Sockets with ext/ftp's I/O semantics (`my_send`, `my_recv`,
 //! `my_accept`, `data_available`): plain TCP or TLS over TCP, every
 //! operation bounded by the connection timeout, failures reported as the

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! [`XNode`]: a node reference that `SimpleXML` can walk the way the C code
 //! walks `xmlNode` pointers (children, siblings, properties, entity
 //! declarations behind entity references), while keeping the node alive

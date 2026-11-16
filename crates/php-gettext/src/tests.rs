@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Unit tests.  Tests touching libintl's process-global state (locale,
 //! default domain, bindings) serialise on [`GLOBAL`]; the catalog tests use
 //! the `.mo` fixtures copied from `ext/gettext/tests` into

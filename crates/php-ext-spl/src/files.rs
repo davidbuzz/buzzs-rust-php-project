@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `SplFileInfo` family streams as PHP resources, and the VM lent to the
 //! stream layer while SPL file methods run.
 //!

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Full request lifecycles against an in-memory backend (no httpd): the
 //! VM runs real scripts and the test inspects status, headers, body and
 //! log entries the SAPI produced.

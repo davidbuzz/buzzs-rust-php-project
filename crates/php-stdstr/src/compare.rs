@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! String comparison functions: `strcmp()` and friends
 //! (`Zend/zend_operators.c` `zend_binary_str*cmp`), `strnatcmp()` /
 //! `strnatcasecmp()` (`ext/standard/strnatcmp.c`) and `substr_compare()`.

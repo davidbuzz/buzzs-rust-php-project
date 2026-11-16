@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `object_handlers.c`: classes with custom `do_operation`, `cast_object`,
 //! `compare` and dimension handlers.
 

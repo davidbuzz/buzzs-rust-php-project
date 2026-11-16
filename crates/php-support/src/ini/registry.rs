@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The INI directive registry (`EG(ini_directives)` and `Zend/zend_ini.c`):
 //! registration with defaults, `ini_get()`, `ini_set()`, `ini_restore()`,
 //! `ini_get_all()`, request deactivation, and the typed modify handlers of

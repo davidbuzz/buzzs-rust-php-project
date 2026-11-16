@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The CLI's `STDIN`/`STDOUT`/`STDERR` resources close their descriptors
 //! only on an explicit `fclose()` (GH-8827); dropping a VM (teardown,
 //! embeddings such as `php -S` workers, in-process tests) leaves the

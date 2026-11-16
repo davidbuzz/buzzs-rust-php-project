@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Server-side renegotiation rate limiting (`reneg_limit`,
 //! `reneg_window`, `reneg_limit_callback`): a leaky bucket fed by the
 //! `SSL_CB_HANDSHAKE_START` info callback

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/zlib` and `ext/bz2` for the phprust VM: binds the `php-zlib` and
 //! `php-bz2` libraries through the `php_vm::ext` extension API.
 //!

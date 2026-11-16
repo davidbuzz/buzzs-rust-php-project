@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Raw declarations of the system libgd 2.3.3 API (`gd.h`, `gd_io.h`,
 //! `gdfont*.h`). Layouts are checked against the C headers in the unit
 //! tests below (`sizeof(gdImage) == 7336` on LP64).

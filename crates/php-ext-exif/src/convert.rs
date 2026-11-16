@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `zend_multibyte_*` conversions exif performs, backed by the
 //! `php-mbstring` libmbfl port (PHP routes them through mbstring when it is
 //! loaded, which phprust always does).

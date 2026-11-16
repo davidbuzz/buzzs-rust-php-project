@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Stream filters (`main/streams/filter.c`, `ext/standard/user_filters.c`).
 //!
 //! A filter transforms bucket brigades. The read chain is wound when the

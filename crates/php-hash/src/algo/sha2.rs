@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! SHA-224/256 and SHA-384/512, SHA-512/224, SHA-512/256 (ref: `ext/hash/hash_sha.c`).
 
 use super::{

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Script-level tests of the dispatch loop (`Vm::run`): the local `ip`,
 //! jumps, safe points and the loop layout. Expected output from
 //! `/usr/bin/php -n` (PHP 8.3), paths normalised to `t.php`.

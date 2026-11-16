@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The static variable table (`op_array->static_variables`) and the
 //! optimizer's removal of unused constant-initialized statics
 //! (`Zend/Optimizer/dce.c`, opcache `optimize_static_002`).

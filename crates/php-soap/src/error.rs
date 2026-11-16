@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Error propagation inside the extension.
 //!
 //! `soap_error*(E_ERROR, …)` and `php_error_docref(…, E_ERROR, …)` abort

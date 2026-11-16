@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Compression codecs exactly as phar applies them: the `zlib.deflate` /
 //! `zlib.inflate` stream filters (raw deflate per entry, gzip for whole
 //! archives) and `bzip2.compress` / `bzip2.decompress`.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `gd_info()`, `imagetypes()`, the `phpinfo()` rows and the constants of
 //! gd.stub.php, for a build against the system libgd 2.3.3 with the
 //! features the Ubuntu package provides (`FreeType`, GIF, JPEG, PNG, WBMP,

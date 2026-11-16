@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! CJK encodings (port of `libmbfl/filters/mbfilter_cjk.c`) and the
 //! Japanese mobile UTF-8 variants (`mbfilter_utf8.c`).
 //!

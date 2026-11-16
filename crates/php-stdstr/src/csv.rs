@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! CSV parsing and formatting — ports of `php_fgetcsv()` and
 //! `php_fputcsv()` from `ext/standard/file.c`, and the argument handling
 //! of `str_getcsv()`, `fgetcsv()` and `fputcsv()`.

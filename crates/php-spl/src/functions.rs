@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The SPL functions (`php_spl.c`): `spl_object_hash()`, `spl_object_id()`,
 //! `class_implements()`, `class_parents()`, `class_uses()`,
 //! `spl_classes()`, the autoload registry and `spl_autoload()`, and the

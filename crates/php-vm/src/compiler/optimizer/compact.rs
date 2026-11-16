@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Compaction passes:
 //! - Pass 9: Temporary variable compaction (ZEND_OPTIMIZER_PASS_9)
 //! - Pass 10: NOP removal with full label and exception table remapping (ZEND_OPTIMIZER_PASS_10)

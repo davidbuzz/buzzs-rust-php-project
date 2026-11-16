@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Path helpers from `main/fopen_wrappers.c` and `TSRM/tsrm_virtual_cwd.c`:
 //! `expand_filepath()`, `open_basedir` checks, `php_resolve_path()` and
 //! `realpath()`.

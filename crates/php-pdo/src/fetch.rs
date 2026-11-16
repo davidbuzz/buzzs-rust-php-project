@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The fetch engine of `pdo_stmt.c`: `fetch_value()` (with the
 //! `ORACLE_NULLS` / stringify / type-override conversions), `do_fetch()`
 //! for every `PDO::FETCH_*` mode, `fetchAll()` grouping, fetch-mode

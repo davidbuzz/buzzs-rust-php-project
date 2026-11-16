@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `LOAD DATA LOCAL INFILE` support (ref: `mysqlnd_loaddata.c`): the
 //! pluggable reader used to stream a client-side file to the server and the
 //! `local_infile_directory` containment check.

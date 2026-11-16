@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Lazy ghosts and the properties table (`Zend/zend_lazy_objects.c`,
 //! `zend_lazy_object_init`): when the table exists before initialization,
 //! the initializer's first dynamic-property write separates it from the

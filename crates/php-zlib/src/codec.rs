@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! One-shot compression: `zlib_encode()`, `gzdeflate()`, `gzencode()`,
 //! `gzcompress()` and their decoding counterparts (`php_zlib_encode()`,
 //! `php_zlib_decode()`, `php_zlib_inflate_rounds()`).

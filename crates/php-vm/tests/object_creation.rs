@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `new` (`ZEND_NEW`, `object_init_ex`, `object_properties_init`,
 //! `zend_std_get_constructor`): the instantiability errors, constructor
 //! visibility, constructor-less classes with arguments, default property

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Callables kept or called by the engine (`Fiber`, user error and
 //! exception handlers, output handlers): where php-src resolves them
 //! (`zend_fcall_info_init` at registration, or `zend_call_function`

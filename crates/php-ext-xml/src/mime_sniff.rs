@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Charset sniffing from HTTP `Content-Type` headers
 //! (`ext/libxml/mime_sniff.c`): the WHATWG "parse a MIME type" algorithm,
 //! reduced to finding the first valid `charset` parameter.

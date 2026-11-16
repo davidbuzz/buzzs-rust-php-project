@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The request thread's small-block heap: a port of the small-size part of
 //! `Zend/zend_alloc.c` (`zend_mm`).
 //!

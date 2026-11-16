@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/xml`: the expat-compatible SAX API (`xml_parser_create()`,
 //! `xml_parse()`, `xml_parse_into_struct()`, …) on libxml2.
 //!

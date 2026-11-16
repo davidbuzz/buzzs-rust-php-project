@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `IntlTimeZone` / `intltz_*` (php-src `ext/intl/timezone`) plus the
 //! time-zone argument coercions shared by `IntlCalendar` and
 //! `IntlDateFormatter` (`timezone_process_timezone_argument`,

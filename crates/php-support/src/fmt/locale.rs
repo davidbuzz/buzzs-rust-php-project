@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The current `LC_NUMERIC` decimal point, as PHP's formatters read it
 //! through `LCONV_DECIMAL_POINT` (`main/snprintf.c`, `main/spprintf.c`,
 //! `ext/standard/formatted_print.c`; `localeconv_decimal_point()` in

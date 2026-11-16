@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `cargo run -p php-exif --example exif_dump -- FILE [SECTIONS] [ARRAYS] [THUMB]`
 //! prints what `var_dump(exif_read_data(...))` would, preceded by the
 //! diagnostics.

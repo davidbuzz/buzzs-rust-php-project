@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's `ext/sockets` for Linux (ref: `ext/sockets/sockets.c`,
 //! `sockaddr_conv.c`, `multicast.c`, `sendrecvmsg.c`, `conversions.c`,
 //! `sockets.stub.php`).

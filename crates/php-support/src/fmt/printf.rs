@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `sprintf()` family engine — a port of `php_formatted_print()` from
 //! `ext/standard/formatted_print.c`.
 //!

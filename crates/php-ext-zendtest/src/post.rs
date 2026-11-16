@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `zend_test_handle_post_data()`: runs the POST handler registered for a
 //! content type over a stream, as if that stream were the request body
 //! (`sapi_read_post_data()` + `sapi_handle_post()`).

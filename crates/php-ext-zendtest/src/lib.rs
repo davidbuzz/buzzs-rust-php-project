@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/zend_test` for the phprust VM: the engine's own test extension
 //! (the functions, classes, enums, attributes, INI settings and observer
 //! hooks that php-src's `.phpt` tests rely on through `--EXTENSIONS--

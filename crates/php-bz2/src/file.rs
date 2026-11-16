@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! libbz2's high-level `BZFILE` interface (`BZ2_bzopen`/`bzdopen`,
 //! `BZ2_bzread`, `BZ2_bzwrite`, `BZ2_bzflush`, `BZ2_bzclose`,
 //! `BZ2_bzerror`) ported over Rust `Read`/`Write` (bzip2 1.0.8

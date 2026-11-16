@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Byte-level helpers for the client/server protocol: little-endian
 //! integers, length-encoded integers/strings (ref: `mysqlnd_wireprotocol.c`
 //! `php_mysqlnd_net_field_length*`, `php_mysqlnd_net_store_length`).

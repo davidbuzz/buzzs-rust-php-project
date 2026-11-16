@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Argument parsing for SPL methods and functions (`zend_parse_parameters`
 //! in weak typing mode), producing PHP's exact `ArgumentCountError`,
 //! `TypeError` and deprecation texts.

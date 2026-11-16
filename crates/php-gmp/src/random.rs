@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Port of GMP's Mersenne Twister random state (`gmp_randinit_mt`,
 //! `gmp_randseed`, `mpz_urandomb`, `mpz_urandomm`), so that seeded
 //! `gmp_random_*` sequences match PHP bit for bit.

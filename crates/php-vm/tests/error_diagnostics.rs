@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The error/warning system: `@` and `error_reporting` across exceptions,
 //! error handler stacking, and diagnostics whose order or form an error
 //! handler can observe (`Zend/zend.c` `zend_error_impl`,

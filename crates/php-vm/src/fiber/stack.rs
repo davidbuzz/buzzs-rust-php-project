@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Native stacks and context switching for fibers (`Zend/zend_fibers.c`
 //! `zend_fiber_init_context` / `zend_fiber_switch_context`, with the
 //! assembly of boost.context's `jump_fcontext` reduced to what we need).

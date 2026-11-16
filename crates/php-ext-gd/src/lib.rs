@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/gd` for the phprust VM: binds the `php-gd` library (`GdImage`,
 //! `GdFont`, the `image*` functions and the GD constants) through the
 //! `php_vm::ext` extension API. Ref: ext/gd/gd.c, ext/gd/gd.stub.php.

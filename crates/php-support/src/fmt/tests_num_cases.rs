@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 // Generated from /usr/bin/php 8.3: [value(%.17g), echo at precision -1/1/5/14/17/20,
 // number_format dec 0/2/3/-2, var_export(round(v, 0/2/5/-1))].
 pub(super) const CASES: &[[&str; 15]] = &[

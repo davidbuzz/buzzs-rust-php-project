@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's `ext/pdo` core for phprust: the `PDO`, `PDOStatement` and `PDORow`
 //! classes as Rust handles, the driver interface, the fetch engine and the
 //! error modes, plus the adapters for the `SQLite` driver of `php-sqlite`

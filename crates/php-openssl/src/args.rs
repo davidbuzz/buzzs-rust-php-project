@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The extension's object types and the "object or string" parameter
 //! conversions (`php_openssl_x509_from_param`, `php_openssl_pkey_from_zval`,
 //! …), plus file-path checks and certificate store helpers.

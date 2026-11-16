@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/curl` for the phprust VM: binds the `php-curl` libcurl wrapper
 //! through the `php_vm::ext` extension API (ref: `ext/curl/interface.c`,
 //! `multi.c`, `share.c`, `curl_file.c`).

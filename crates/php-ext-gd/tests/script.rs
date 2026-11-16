@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end tests: PHP scripts run on a VM with the `gd` extension (plus
 //! the stream and string functions they use). Expected outputs follow
 //! `/usr/bin/php` (8.3 against the same system libgd) with php-src master

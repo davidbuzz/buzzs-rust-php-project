@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A request as the built-in server sees it (`php_cli_server_request`),
 //! the parser callbacks that fill it (`php_cli_server_client_read_request_on_*`)
 //! and the URL → file mapping (`normalize_vpath`,

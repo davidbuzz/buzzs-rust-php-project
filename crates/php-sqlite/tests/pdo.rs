@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Ports of the `ext/pdo_sqlite/tests/*.phpt` expectations at the driver
 //! level. A tiny stand-in for the PDO core (`Core`) drives the driver the
 //! way `pdo_stmt.c` / `pdo_dbh.c` do.

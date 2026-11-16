@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Opening streams and directories through wrappers
 //! (`_php_stream_open_wrapper_ex`, `_php_stream_opendir`, path operations).
 

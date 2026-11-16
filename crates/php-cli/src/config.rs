@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The configuration hash of the CLI SAPI (`php_init_config()` of
 //! `main/php_ini.c`): `sapi_cli_ini_defaults`, the `php.ini` search
 //! (`-c`, `$PHPRC`, the binary's directory, the configured path; first

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Tiger with 3 and 4 passes (ref: `ext/hash/hash_tiger.c`).
 
 use super::tiger_tables::TIGER_TABLE;

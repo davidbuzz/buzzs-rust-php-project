@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `tcp_socket/ssl` stream ops (`php_openssl_socket_ops`): a socket
 //! that is either plain or carries an OpenSSL session, with PHP's
 //! blocking/timeout emulation over a non-blocking descriptor.

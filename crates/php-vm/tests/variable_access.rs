@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Variable access semantics: compound assignments, string offsets,
 //! quiet fetches, unset, dynamic calls (`Zend/tests/{offsets,isset,unset,
 //! coalesce,dynamic_call,varSyntax,in-de-crement}`). Expected outputs come

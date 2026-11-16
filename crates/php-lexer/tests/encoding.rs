@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 use php_lexer::{LexMode, Lexer, LexerOptions, ScriptEncodingOptions, TokenKind, TokenValue};
 use php_mbstring::convert::ErrorMode;
 use php_mbstring::encoding::{by_name, utf8, Encoding};

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `array_unique` and the `array_intersect*` / `array_diff*` families.
 //!
 //! The sort-based algorithms (`php_array_intersect`, `php_array_diff`) are

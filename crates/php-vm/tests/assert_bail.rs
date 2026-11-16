@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `assert()` with `assert.bail` after the callback threw
 //! (`ext/standard/assert.c`): `zend_exception_error(EG(exception),
 //! E_WARNING)` reports the exception through `zend_error_va`, i.e. straight

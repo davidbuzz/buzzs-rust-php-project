@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `MessageFormatter` / `msgfmt_*` (php-src `ext/intl/msgformat`).
 //!
 //! Patterns are validated by ICU (`umsg_open`), so syntax errors, type

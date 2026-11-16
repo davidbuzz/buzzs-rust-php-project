@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Entry streams (`zip_stream.c`): the read-only `php_stream_zipio_ops`
 //! returned by `ZipArchive::getStream*()` and the `zip://` wrapper
 //! (`zip://archive.zip#entry`).

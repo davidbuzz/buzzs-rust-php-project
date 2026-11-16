@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Lowering of an [`OpArray`] to the Zend oplines php-src would show for
 //! the same code (`zend_compile.c` and the optimizer passes that rewrite
 //! call and send opcodes, `Zend/Optimizer/optimize_func_calls.c`).

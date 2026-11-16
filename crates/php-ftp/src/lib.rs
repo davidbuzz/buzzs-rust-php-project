@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's `ext/ftp` client engine (`ext/ftp/ftp.c`) without the VM.
 //!
 //! [`Ftp`] is `ftpbuf_t`: a control connection with the exact reply

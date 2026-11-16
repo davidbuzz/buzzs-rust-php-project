@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Generic registration of the SPL classes from
 //! [`php_spl::classes::class_table`] and the single native method handler
 //! that routes every call to [`php_spl::call_method`].

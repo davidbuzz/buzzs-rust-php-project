@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Unit tests for behaviours the oracle fixture cannot express:
 //! references, recursion, the internal pointer, objects, and php-src master
 //! semantics that differ from the installed oracle PHP.

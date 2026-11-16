@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/libxml`: the `libxml_*()` functions, the `LibXMLError` class, the
 //! `LIBXML_*` constants and the per-request libxml state shared by every
 //! libxml-based extension.

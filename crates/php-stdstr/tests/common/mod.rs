@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Table-driven oracle harness shared by the `oracle_*` integration tests.
 //!
 //! Each test file builds a list of [`Case`]s: a single-line PHP expression

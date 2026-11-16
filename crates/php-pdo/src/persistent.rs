@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The persistent-connection list (`EG(persistent_list)` entries of type
 //! "PDO persistent database"), keyed by
 //! `PDO:DBH:DSN=<dsn>:<user>:<pass>[:<key>]`.

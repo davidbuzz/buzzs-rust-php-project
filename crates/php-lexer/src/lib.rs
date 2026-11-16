@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A tokenizer for PHP source code, ported from the Zend engine's re2c
 //! scanner (`Zend/zend_language_scanner.l`, php-src master).
 //!

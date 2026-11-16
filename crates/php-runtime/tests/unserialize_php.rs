@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `unserialize()` results, error offsets, key semantics and performance,
 //! compared with the PHP oracle (`tests/data/gen_unserialize.php` →
 //! `tests/data/unserialize_cases.txt`).

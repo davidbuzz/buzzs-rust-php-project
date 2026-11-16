@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `Openssl` namespace classes of php-src master: `OpensslException`,
 //! `Psk` (a validated pre-shared key value object) and `Session` (an
 //! exported/imported TLS session, `SSL_SESSION`).

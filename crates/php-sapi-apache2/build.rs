@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Compiles the httpd module shim (`csrc/mod_phprust.c`) against the
 //! Apache/APR headers located with `apxs` / `apr-1-config`, and links the
 //! object into the cdylib only (the rlib and test binaries never reference

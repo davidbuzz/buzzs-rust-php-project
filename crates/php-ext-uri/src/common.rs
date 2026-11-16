@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Helpers shared by the RFC 3986 and WHATWG bindings: enum cases, error
 //! objects, raw property access and argument conversion.
 

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Parser and AST for PHP, a port of `Zend/zend_language_parser.y` and
 //! `Zend/zend_ast.{h,c}` (php-src master grammar).
 //!

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Whirlpool (ref: `ext/hash/hash_whirlpool.c`).
 
 use super::whirlpool_tables::{WHIRLPOOL_C, WHIRLPOOL_RC};

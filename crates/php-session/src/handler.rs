@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Save handlers (`ps_module`): the [`SaveModule`]/[`SaveHandler`] traits
 //! for native storage modules, the module reference stored in
 //! `PS(mod)`/`PS(default_mod)` and the dispatch functions

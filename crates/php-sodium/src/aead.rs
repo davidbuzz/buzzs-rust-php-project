@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `sodium_crypto_aead_*`: AES-256-GCM, ChaCha20-Poly1305 (original and
 //! IETF) and XChaCha20-Poly1305-IETF.
 

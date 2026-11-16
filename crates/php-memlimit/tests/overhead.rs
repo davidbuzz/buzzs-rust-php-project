@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Informational: cost of the accounting on an allocation-heavy loop
 //! (pure malloc/free churn, the worst case), comparing a
 //! `CountingAlloc<System>` instance against bare `System`.

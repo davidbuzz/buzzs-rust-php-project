@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Runs the php-src `ext/dom` `.phpt` tests through a tiny PHP interpreter
 //! (`tests/minphp`) that calls into this crate via `php_dom::dispatch`.
 //!

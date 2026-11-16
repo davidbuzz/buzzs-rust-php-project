@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `PDOStatement` class (`pdo_stmt.c`, everything except the fetch
 //! engine in [`crate::fetch`]): parameter and column binding, `execute`,
 //! attributes, column metadata, row sets, `debugDumpParams()` and the

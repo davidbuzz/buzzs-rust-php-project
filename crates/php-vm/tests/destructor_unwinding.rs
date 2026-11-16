@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Destructors run while an exception unwinds the stack
 //! (`cleanup_live_vars`, `zend_leave_helper`), chained to the exception
 //! in flight, and exceptions thrown by output handlers at shutdown.

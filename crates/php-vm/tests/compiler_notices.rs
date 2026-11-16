@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Compile-time decisions with observable notices and errors: by-reference
 //! returns and yields (`zend_compile_return`, `zend_compile_yield`), the
 //! argument fetch mode of `zend_compile_args` (`Cannot use [] for reading`)

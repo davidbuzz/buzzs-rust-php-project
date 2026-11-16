@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Configuration functions of `basic_functions.c` that no other binding
 //! provides: `ini_get_all`, `parse_ini_string`, `parse_ini_file`, and
 //! `get_included_files` (`zend_builtin_functions.c`).

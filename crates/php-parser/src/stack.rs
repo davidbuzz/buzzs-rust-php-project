@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Native stack management for the recursive parser.
 //!
 //! PHP's bison parser accepts nesting up to depth 10000 before failing with

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! String building in the VM: `.=` on a compiled variable extends the
 //! string in place (`zend_string_extend` on a refcount-1 string), ropes
 //! (`"a $b c"`, `ZEND_ROPE_*`) build their result in one exactly sized

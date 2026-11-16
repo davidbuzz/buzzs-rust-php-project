@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 #![allow(clippy::unreadable_literal)]
 //! The constants ext/sockets registers on Linux (x86-64 glibc), in
 //! `sockets_arginfo.h` registration order.

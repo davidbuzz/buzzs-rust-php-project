@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Regression test: validation-error contexts must not copy the rest of the
 //! input for every error (that is quadratic; a 100 KiB input of `%` used to
 //! need gigabytes).

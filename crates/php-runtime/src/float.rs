@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Float → string conversion matching PHP (`zend_gcvt`, `smart_str_append_double`).
 //!
 //! PHP formats floats through `zend_dtoa` in one of two modes:

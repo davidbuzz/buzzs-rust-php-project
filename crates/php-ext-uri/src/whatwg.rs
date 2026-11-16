@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `Uri\WhatWg\Url`, `Uri\WhatWg\UrlBuilder`, `Uri\WhatWg\InvalidUrlException`,
 //! `Uri\WhatWg\UrlValidationError` and `Uri\WhatWg\url_percent_encode()`
 //! (ref: `ext/uri/php_uri.c`, `ext/uri/uri_parser_whatwg.c`).

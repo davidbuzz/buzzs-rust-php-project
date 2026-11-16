@@ -1,4 +1,4 @@
-# phprust — Copilot instructions
+# buzzs-rust-php-project — Copilot instructions
 
 A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test suite.
 Success is defined by **byte-for-byte output matching** with PHP: error/warning message

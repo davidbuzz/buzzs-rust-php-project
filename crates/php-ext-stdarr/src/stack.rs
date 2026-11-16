@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A model of `ZEND_CHECK_STACK_LIMIT` for the recursive array functions
 //! (`count(..., COUNT_RECURSIVE)`, `array_walk_recursive()`,
 //! `array_replace_recursive()`, `compact()`).

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Tests against real kernel IPC objects (unique keys per process, every
 //! object removed afterwards), with hand-ported `.phpt` expectations and
 //! `/usr/bin/php` interoperability checks where the oracle is installed.

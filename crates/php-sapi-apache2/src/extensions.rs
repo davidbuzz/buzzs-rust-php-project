@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The native extensions linked into the module: a subset of the `php`
 //! CLI's (`crates/php-cli/src/extensions.rs`) in the same order, including
 //! the stream/file functions (needed for `php://input`) and ext/session

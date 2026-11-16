@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The inline logo images of the HTML `phpinfo()` page (`ext/standard/info.h`).
 
 /// `PHP_LOGO_DATA_URI`: The PHP logo.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Shared ownership of a tree between this layer and another object model
 //! (simulated here by setting `node->_private`, PHP's convention).
 

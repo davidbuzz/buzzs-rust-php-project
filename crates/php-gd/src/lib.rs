@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/gd` for phprust: a binding of the system libgd with PHP's `ext/gd`
 //! semantics (ref: ext/gd/gd.c, ext/gd/gd.stub.php). VM-independent;
 //! `php-ext-gd` exposes it to PHP.

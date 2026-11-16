@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! ASCII, ISO-8859-*, Windows-125x, CP866, CP850, KOI8-*, ArmSCII-8.
 //!
 //! Ref: `libmbfl/filters/mbfilter_singlebyte.c`.

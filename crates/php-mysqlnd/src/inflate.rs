@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A small zlib (RFC 1950) / DEFLATE (RFC 1951) codec for the compressed
 //! client/server protocol (`CLIENT_COMPRESS`). The decoder is modelled on
 //! zlib's `puff.c`; the encoder ([`compress`]) emits one fixed-Huffman block

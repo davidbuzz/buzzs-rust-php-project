@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `mb_parse_str()` (`_php_mb_encoding_handler_ex` in `mb_gpc.c`), the
 //! request input translation of `mbstring.encoding_translation`, and the
 //! multipart parser's multibyte callbacks (`php_mb_rfc1867_*` in

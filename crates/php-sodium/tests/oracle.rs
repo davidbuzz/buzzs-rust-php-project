@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Replays `examples/sodium_oracle.php` through this crate and compares
 //! every line with the output recorded from `/usr/bin/php` 8.3.6 (bundled
 //! with libsodium 1.0.18) in `data/oracle.txt`.  Where php-src master

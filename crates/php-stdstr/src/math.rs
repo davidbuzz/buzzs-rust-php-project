@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Pure helpers behind `ext/standard/math.c`: base conversion
 //! (`base_convert`, `bindec`/`hexdec`/`octdec`, `decbin`/`dechex`/`decoct`),
 //! the argument handling of `round()`, and the small arithmetic functions

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `shuffle`, `array_rand` and `str_shuffle`. The random engine is supplied
 //! as a [`RangeFn`] (the engine's `range(min, max)`, e.g. the default
 //! `Mt19937` engine's `php_mt_rand_range`), so the exact PHP sequences are

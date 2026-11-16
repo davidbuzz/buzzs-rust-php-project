@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Compile-time evaluation in expression compilation
 //! (`zend_try_ct_eval_binary_op()`, `zend_try_ct_eval_const()`) and
 //! `zend_set_user_opcode_handler()` hooks.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Stream resources for the values PDO and SQLite3 hand to PHP code
 //! (`PDO::PARAM_LOB` columns, `openBlob()`) and read from it (LOB
 //! parameters), shared with `php-ext-streams` so that `fread()`,

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `getopt()` (`ext/standard/basic_functions.c` over `main/getopt.c`'s
 //! `php_getopt`), including its quirks: options parsed from the leading
 //! alphanumeric run of `$short_options`, `::` optional values (only in the

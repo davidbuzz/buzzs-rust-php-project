@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ZipArchive::*` class constants, in `php_zip.stub.php` order, gated on
 //! the libzip version like the `#ifdef`s of the stub (PHP built against
 //! the system libzip exposes exactly these).

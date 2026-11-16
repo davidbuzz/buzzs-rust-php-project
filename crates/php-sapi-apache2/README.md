@@ -1,4 +1,4 @@
-# php-sapi-apache2 — phprust as an Apache 2.4 module
+# php-sapi-apache2 — buzzs-rust-php-project as an Apache 2.4 module
 
 `apache2handler` SAPI (ref: `sapi/apache2handler`): builds
 `target/<profile>/libphprust_apache2.so`, a drop-in replacement for

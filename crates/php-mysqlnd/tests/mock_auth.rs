@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Authentication plugins and TLS against an in-process mock server
 //! (MariaDB can't exercise `caching_sha2_password` / `sha256_password`):
 //! fast and full caching_sha2 auth (RSA with requested or configured key,

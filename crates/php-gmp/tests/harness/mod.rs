@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A tiny dispatcher that evaluates `gmp_*` calls the way the VM would
 //! (argument conversion in order, then the function), rendering results in a
 //! compact form so `.phpt` expectations can be transcribed directly.

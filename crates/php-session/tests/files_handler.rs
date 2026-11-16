@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `files` save handler: on-disk layout, locking, GC and messages
 //! (`mod_files.c`, `ext/session/tests/mod_files/*.phpt`), plus interop
 //! with `/usr/bin/php` when it is installed.

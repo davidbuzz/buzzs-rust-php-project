@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Session upload progress (`php_session_rfc1867_callback` in
 //! `session.c`): the SAPI's multipart parser reports its events here
 //! *before* `RINIT`, and the progress array is stored in

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Native state of the date classes and the object plumbing shared by them
 //! (`php_date_obj`, `php_timezone_obj`, `php_interval_obj`,
 //! `php_period_obj`, uninitialised-object errors, raw clones, the standard

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle probe: reads tab-separated commands on stdin and prints results
 //! in the same canonical format as `tools/probe.php`, so the two can be
 //! diffed against `/usr/bin/php`.

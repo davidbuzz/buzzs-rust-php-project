@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Compares every function against outputs recorded from the C implementation
 //! (`tests/data/gen_oracle.php`, PHP 8.3 with ext/calendar).
 

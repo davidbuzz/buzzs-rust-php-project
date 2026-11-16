@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `Random\Engine\PcgOneseq128XslRr64` (`ext/random/engine_pcgoneseq128xslrr64.c`).
 
 use super::{Engine, Generated, Seed};

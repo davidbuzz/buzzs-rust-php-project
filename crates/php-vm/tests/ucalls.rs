@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The user-call path: arguments bound into CVs when the frame is pushed
 //! (`i_init_func_execute_data`), `RECV` skipping and in-place verification,
 //! the `ZEND_INIT_METHOD_CALL` run-time cache and closure variable binding.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tables: thousands of inputs (mined from php-src's ext/date tests
 //! plus deterministic random grammar combinations) with the output PHP
 //! produced for them (see `tools/gen_oracle.py` and `tools/probe.php`).

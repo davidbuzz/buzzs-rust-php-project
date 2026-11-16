@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The lexbor → libxml2 bridge (`html5_parser.c`): converts a parsed
 //! lexbor tree into libxml2 nodes using the `Dom\*` namespace model.
 

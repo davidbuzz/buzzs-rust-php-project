@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 // @generated from ext/dom/php_dom.stub.php by a script; do not edit.
 use super::{ClassInfo, ClassKind, ConstInfo, MethodInfo, ParamInfo, PropInfo};
 

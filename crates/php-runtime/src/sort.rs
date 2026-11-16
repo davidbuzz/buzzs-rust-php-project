@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Port of `zend_sort` / `zend_insert_sort` (`Zend/zend_sort.c`).
 //!
 //! PHP's sort is a hybrid insertion sort / quicksort derived from libc++. It

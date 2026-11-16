@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The virtual properties of the mysqli classes (ref: `mysqli_prop.c`,
 //! `mysqli_driver.c`, `mysqli_warning.c`, `mysqli.c` property handlers):
 //! reads, `isset()`/`empty()`, read-only writes and the `var_dump()`

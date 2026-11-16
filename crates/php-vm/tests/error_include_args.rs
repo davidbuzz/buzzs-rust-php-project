@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `error_include_args` origins and master's `require` failure Error
 //! (`php_verror`, `php_message_handler_for_zend`).
 

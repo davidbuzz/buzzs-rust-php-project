@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The global (per-request) random state and the procedural API:
 //! `mt_srand`/`srand`, `mt_rand`/`rand`, `mt_getrandmax`/`getrandmax`,
 //! `lcg_value`, `shuffle`, `str_shuffle`, `array_rand` and `uniqid`

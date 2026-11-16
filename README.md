@@ -1,4 +1,4 @@
-# phprust
+# buzzs-rust-php-project
 
 David Buzz's Rust PHP project: an independent re-implementation of PHP in Rust whose goal is
 to pass the php-src `.phpt` test suite, 100%, and have runtime performance as-good-or-better
@@ -91,7 +91,7 @@ php-src master differ, the port follows master.
 
 ## License
 
-phprust is licensed under the BSD-3-Clause, the same license PHP master is
+buzzs-rust-php-project is licensed under the BSD-3-Clause, the same license PHP master is
 distributed under, with the copyright held by David Buzz:
 
 ```

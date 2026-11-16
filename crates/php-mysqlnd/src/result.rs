@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Result sets (ref: `mysqlnd_result.c`, `mysqlnd_result_meta.c`):
 //! buffered (`store_result`) and unbuffered (`use_result`) sets over the
 //! text or binary protocol, row fetching into PHP values, field metadata

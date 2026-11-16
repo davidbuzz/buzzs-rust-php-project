@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A tiny model of the `php_stream` operations the image parsers use.
 //!
 //! PHP's plain-file and memory streams both allow seeking past the end of the

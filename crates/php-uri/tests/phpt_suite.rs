@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Runs `modules/php-src/ext/uri/tests/**/*.phpt` through a miniature PHP
 //! evaluator wired to `php_uri::api`, and checks the pass rate.
 //!

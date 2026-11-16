@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `sodium_crypto_pwhash*` (Argon2i/Argon2id), the scrypt variants, and
 //! the argon2 backend of `password_hash()` that ext/sodium registers when
 //! the core was built without libargon2 (`sodium_pwhash.c`).

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Compares `token_get_all()` output with `/usr/bin/php` on a corpus of
 //! tricky snippets. Skipped when PHP (with ext/tokenizer) is unavailable.
 //!

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Prepared statements (ref: `mysqlnd_ps.c`, `mysqlnd_ps_codec.c`):
 //! prepare, parameter binding and binary encoding, execute, buffered /
 //! unbuffered / cursor fetching, long data, reset and close.

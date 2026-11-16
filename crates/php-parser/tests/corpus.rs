@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Corpus test: parses the `--FILE--` section of every `.phpt` test under
 //! `modules/php-src/{Zend/tests,tests,ext/standard/tests}` and compares the
 //! outcome with PHP's own.

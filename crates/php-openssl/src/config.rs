@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `struct php_x509_request`: the `$options` array of key/CSR functions
 //! merged with the OpenSSL configuration file (`php_openssl_parse_config`),
 //! and private-key generation (`php_openssl_generate_private_key`).

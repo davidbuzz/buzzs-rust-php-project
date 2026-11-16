@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! SOAP encoding (`php_encoding.c`): PHP values ⇄ XML for every XSD
 //! built-in type, structs, SOAP arrays, Apache maps, `any`, `SoapVar`,
 //! user `typemap` callbacks, multi-references and the SOAP 1.1/1.2,

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A hand-written recursive-descent parser (with precedence climbing for
 //! binary operators) for the grammar of `Zend/zend_language_parser.y`.
 //!

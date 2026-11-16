@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Type declarations at runtime: argument, return value and property type
 //! verification with PHP's coercion rules (`zend_check_type`,
 //! `zend_verify_scalar_type_hint`).

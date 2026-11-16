@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `UTF-16`, `UTF-16BE`, `UTF-16LE`.
 //!
 //! Ports the portable (non-SIMD) paths of libmbfl; the AVX2 variants in C

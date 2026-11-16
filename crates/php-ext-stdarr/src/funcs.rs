@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The native handlers: argument unpacking, `Z_PARAM_FUNC`-style callback
 //! checks and the call into php-stdarr.
 //!

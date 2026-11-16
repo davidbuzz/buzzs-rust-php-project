@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! SHA-1 (ref: ext/standard/sha1.c).
 
 use super::{be_words, md_update32, put_be32, HashState, ImageReader, ImageWriter, PADDING};

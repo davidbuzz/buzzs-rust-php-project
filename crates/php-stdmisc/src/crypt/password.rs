@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The password hashing API (`ext/standard/password.c`): `password_hash`,
 //! `password_verify`, `password_needs_rehash`, `password_get_info`,
 //! `password_algos`, for the `2y` (bcrypt), `argon2i` and `argon2id`

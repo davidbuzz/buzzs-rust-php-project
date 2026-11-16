@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `Uri\Rfc3986\Uri` and `Uri\Rfc3986\UriBuilder` (ref: `ext/uri/php_uri.c`,
 //! `ext/uri/uri_parser_rfc3986.c`).
 

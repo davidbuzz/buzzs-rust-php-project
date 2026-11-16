@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The plain functions of `test.stub.php` (`ext_functions[]`).
 
 use crate::patch::{deprecate_function, edit_function};

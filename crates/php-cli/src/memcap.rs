@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The address-space cap shared by the `php` and `php-cgi` binaries.
 
 /// Caps the address space (`RLIMIT_AS`) so that runaway native code fails

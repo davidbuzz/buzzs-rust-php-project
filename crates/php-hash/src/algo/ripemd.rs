@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! RIPEMD-128/160/256/320 (ref: `ext/hash/hash_ripemd.c`).
 
 use super::{le_words, md_update32, put_le32, HashState, ImageReader, ImageWriter, PADDING};

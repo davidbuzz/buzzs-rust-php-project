@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Tape instructions for the array elements of a variable.
 //!
 //! See the "Families" section of [`super`] for the contract of a handler

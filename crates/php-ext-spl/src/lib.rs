@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/spl` for the phprust VM.
 //!
 //! The SPL classes, their object handlers and the `spl_*`/`iterator_*`

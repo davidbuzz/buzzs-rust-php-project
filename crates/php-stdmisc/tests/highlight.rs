@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for `highlight_string()` and `php_strip_whitespace()`:
 //! hand-written snippets (byte-exact) and a corpus of php-src `.phpt`
 //! FILE sections (md5 of the outputs; skipped when `modules/php-src` is

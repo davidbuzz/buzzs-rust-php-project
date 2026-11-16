@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `__toString()` renderers of the reflection classes (`_class_string`,
 //! `_function_string`, `_parameter_string`, `_property_string`,
 //! `_class_const_string`, `_enum_case_string`, `_const_string`), and the

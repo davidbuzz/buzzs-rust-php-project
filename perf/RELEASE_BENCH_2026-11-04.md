@@ -6,7 +6,7 @@ int/float/recursion/string/array/object script). Our binary: `cargo build --rele
 at HEAD 01d791a. System: `/usr/bin/php` 8.3.6 CLI default (opcache off); the JIT row used
 `-d opcache.enable_cli=1 -d opcache.jit=tracing -d opcache.jit_buffer_size=64M`.
 
-| Metric | phprust (release) | PHP 8.3.6 (no opcache) | PHP 8.3.6 + JIT | ratio (ours / php) |
+| Metric | buzzs-rust-php-project (release) | PHP 8.3.6 (no opcache) | PHP 8.3.6 + JIT | ratio (ours / php) |
 |---|---|---|---|---|
 | binary size | 30.5 MB (26.8 MB stripped), static, all extensions built in | 5.8 MB + 13 MB of extension .so files | same | 1.6x of php+ext |
 | startup `php -r 'echo 1;'` (avg of 20) | 50.6 ms | 36.5 ms | | 1.4x |

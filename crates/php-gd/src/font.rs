@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `imageloadfont()`'s font file format and the bitmap text helpers of
 //! gd.c (`php_find_gd_font()`, `php_gdimagecharup()`, `overflow2()`).
 

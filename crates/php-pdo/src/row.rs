@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `PDORow`, the object `PDO::FETCH_LAZY` returns: its property and
 //! dimension handlers read columns of the statement's current row on
 //! demand (`row_prop_read`, `row_dim_read`, ...).

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `XSLTProcessor` (`ext/xsl/xsltprocessor.c`).
 //!
 //! Every method takes `&self` (state lives in `Cell`/`RefCell`s and no

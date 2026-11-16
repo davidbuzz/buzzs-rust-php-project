@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `GdImage` and `GdFont` classes: final, not serializable, not
 //! cloneable, not constructible from PHP; each instance carries its
 //! library value behind an `Rc`.

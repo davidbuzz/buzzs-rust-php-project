@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `zend_ini_parse_quantity()`, `zend_ini_parse_uquantity()` and
 //! `zend_ini_parse_bool()` from `Zend/zend_ini.c`.
 

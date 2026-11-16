@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The SSA dumps of the DFA pass.
 //!
 //! `opcache.opt_debug_level` with `ZEND_DUMP_BEFORE_DFA_PASS` (`0x200000`)

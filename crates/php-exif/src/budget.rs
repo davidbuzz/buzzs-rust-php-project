@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Emulation of the Zend memory limit for the allocations whose size is
 //! controlled by the input file (the `ZEND_HAS_OOM()` checks of exif.c and
 //! the "fallible" allocations of image.c).

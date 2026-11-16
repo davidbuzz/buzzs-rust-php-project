@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `IntlChar` (php-src `ext/intl/uchar/uchar.cpp`).
 //!
 //! Every method taking a code point accepts either an `int` or a string

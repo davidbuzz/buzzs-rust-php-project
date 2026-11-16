@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `include`/`require` through phar: the VM's include opener
 //! (`phar_resolve_path()` + `php_stream_open_for_zend_ex()` for `phar://`
 //! URLs and `phar://` include paths), source filter

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Pass 1, 2, 4: Local optimizations, strength reduction, and function call optimization:
 //! - Pass 1 (ZEND_OPTIMIZER_PASS_1): Local constant folding, constant branches, echo folding.
 //! - Pass 2 (ZEND_OPTIMIZER_PASS_2): Constant conversion and typecheck strength reduction.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The ZPP probes (`zend_bool`, `zend_int_or_null_slow_zpp`, ...): each
 //! returns its parsed argument. Where the stub type and the `Z_PARAM_*`
 //! macro agree, the VM's own argument parsing does the work; the class

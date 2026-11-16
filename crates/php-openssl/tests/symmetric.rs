@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle-checked symmetric crypto (expected values produced by
 //! `/usr/bin/php` 8.3 linked against the same OpenSSL 3.0).
 

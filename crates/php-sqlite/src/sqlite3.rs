@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/sqlite3`: the `SQLite3`, `SQLite3Stmt` and `SQLite3Result` classes.
 //!
 //! Each PHP object maps to a Rust handle ([`Sqlite3`], [`Sqlite3Stmt`],

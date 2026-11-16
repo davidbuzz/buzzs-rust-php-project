@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Hand ports of `ext/pdo/tests/attr_statement_class/*.phpt`,
 //! `pecl_bug_*.phpt` and the constructor tests over `sqlite::memory:`.
 

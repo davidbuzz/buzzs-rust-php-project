@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The CLI SAPI's own symbols (`php_cli.c`'s `additional_functions`,
 //! `php_cli_process_title.c`), the configuration-file functions backed
 //! by the SAPI's `php_init_config()` result, and the CLI request

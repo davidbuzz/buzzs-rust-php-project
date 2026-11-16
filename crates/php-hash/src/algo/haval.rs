@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! HAVAL with 3, 4 or 5 passes and 128..256-bit output
 //! (ref: `ext/hash/hash_haval.c`).
 

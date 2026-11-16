@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Loop layout of `zend_compile_while()` / `zend_compile_for()`: the
 //! condition follows the body and ends in one `JMPNZ` back to it, and the
 //! body is compiled (CVs numbered) before the condition.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Token kinds, spans and tokens.
 //!
 //! [`TokenKind`] mirrors the `T_*` token set of the Zend engine

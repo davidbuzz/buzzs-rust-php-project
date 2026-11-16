@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Binds the system libcurl lazily: `build/lazy_dl.rs` (shared from
 //! php-libxml) generates stubs for the libcurl functions this crate calls,
 //! which `dlopen` libcurl on first use, so its large dependency tree

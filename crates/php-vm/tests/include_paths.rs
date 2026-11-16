@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The file name an included file is compiled under: its opened path, as
 //! `open_file_for_scanning` takes `file_handle->opened_path` when there is
 //! one. For a plain file that is the real path `php_resolve_path()`

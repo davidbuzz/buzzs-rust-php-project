@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `Phar`, `PharData` and `PharFileInfo` methods (`phar_object.c`).
 //!
 //! Each method is a Rust function with plain inputs; PHP values the VM

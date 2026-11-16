@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `zend_is_callable_ex` (`Zend/zend_API.c`): resolution of callable values
 //! with the scope rules, deprecations and error messages used by
 //! `is_callable()`, `callable` type checks and `Closure::fromCallable()`.

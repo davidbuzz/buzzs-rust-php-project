@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ignore_repeated_errors` / `ignore_repeated_source` (`php_error_cb`
 //! in main/main.c).
 

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Port of the re2c INI scanner (`Zend/zend_ini_scanner.l`).
 //!
 //! re2c picks the longest match among the rules active in the current

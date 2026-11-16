@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `mb_output_handler()` and the bits of SAPI header state it needs.
 //!
 //! The active SAPI's header binding supplies header additions. MIME state

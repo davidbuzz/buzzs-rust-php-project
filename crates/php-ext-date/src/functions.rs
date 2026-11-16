@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The procedural functions of ext/date that do not operate on objects:
 //! `date()`, `strtotime()`, `mktime()`, `date_parse()`, the timezone
 //! listing functions, the sun functions, ...

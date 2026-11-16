@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PFA lifetime across compilation units within one request, not preloading.
 use php_runtime::ZStr;
 use php_vm::{Vm, VmOptions};

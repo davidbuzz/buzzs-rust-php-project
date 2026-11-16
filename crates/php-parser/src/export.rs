@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Converts the AST back to PHP code, exactly like `zend_ast_export()`
 //! (`Zend/zend_ast.c`). PHP uses this for `assert()` failure messages
 //! (`assert($a > 1)`), so the output is byte-for-byte that of PHP: operator

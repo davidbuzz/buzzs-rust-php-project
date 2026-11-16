@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Deterministic fuzzing: concatenations of PHP-ish fragments and random
 //! bytes must lex without panicking in every mode, with tokens tiling the
 //! input in tokenizer mode.

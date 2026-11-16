@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Connection-level features: multi statements, charsets and escaping,
 //! `change_user`, transactions, LOAD DATA LOCAL INFILE, init commands,
 //! compression, async queries and statistics — compared with `/usr/bin/php`.

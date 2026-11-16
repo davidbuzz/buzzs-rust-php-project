@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Known-failure baselines: a text file listing one test path per line (`#` starts a comment).
 
 use std::collections::BTreeSet;

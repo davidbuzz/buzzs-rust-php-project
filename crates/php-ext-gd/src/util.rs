@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Argument helpers shared by the functions: C `int` conversions, ZPP of
 //! the extra `imagefilter()` arguments, `zval_try_get_long()`, and the
 //! replay of libgd's queued messages.

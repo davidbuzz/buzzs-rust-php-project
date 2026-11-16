@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The class/function table of the extension (from `php_zip.stub.php`),
 //! gated like the stub: parameter names, types and defaults for the VM's
 //! argument parsing and reflection.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Shared helpers for the live tests: connection parameters (`MYSQL_TEST`_*),
 //! graceful skipping when the server is down, an oracle runner for
 //! `/usr/bin/php` (mysqli) and a value renderer both sides agree on.

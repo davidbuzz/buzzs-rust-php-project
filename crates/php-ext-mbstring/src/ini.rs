@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `mbstring.*` INI table and its on-modify semantics.
 //!
 //! The directives are registered without a built-in modify handler; the

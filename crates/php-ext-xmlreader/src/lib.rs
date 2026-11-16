@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/xmlreader` for the phprust VM: binds the `php-xmlreader` library
 //! (the `XMLReader` class over libxml2's `xmlTextReader`) through the
 //! `php_vm::ext` extension API.

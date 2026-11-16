@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Locates the system libxml2 through `pkg-config` (package `libxml-2.0`)
 //! and emits the link directives. Falls back to a plain `-lxml2` when
 //! `pkg-config` is unavailable.

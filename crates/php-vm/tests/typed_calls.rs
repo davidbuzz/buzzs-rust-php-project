@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Parameter and return type verification of user calls
 //! (`zend_verify_recv_arg_type`, `zend_verify_return_type`): the slow paths
 //! that coerce, resolve class types or raise the `TypeError`. Expected

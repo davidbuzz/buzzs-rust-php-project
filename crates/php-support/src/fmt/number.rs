@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `round()` (`_php_math_round()`) and `number_format()`
 //! (`_php_math_number_format_ex()` / `_php_math_number_format_long()`) from
 //! `ext/standard/math.c`.

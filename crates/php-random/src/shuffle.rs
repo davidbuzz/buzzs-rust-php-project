@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Array/string shuffling and key picking shared by `shuffle()`,
 //! `str_shuffle()`, `array_rand()` and the `Randomizer` methods
 //! (`php_array_data_shuffle`, `php_binary_string_shuffle`,

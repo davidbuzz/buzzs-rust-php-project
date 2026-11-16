@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Replays oracle fixtures recorded from PHP 8.3 (`/usr/bin/php`) against the
 //! Unicode and transfer-encoding codecs: every `mb_convert_encoding` /
 //! `mb_check_encoding` call made by the relevant php-src `.phpt` tests

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Process title support (`sapi/cli/ps_title.c`, the Linux
 //! "clobber argv" strategy): `ps` shows `/proc/<pid>/cmdline`, which is
 //! the memory holding the original `argv` strings, so a new title is

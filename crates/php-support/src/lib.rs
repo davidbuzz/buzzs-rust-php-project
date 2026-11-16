@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Runtime support services for phprust that do not depend on the value model.
 //!
 //! This crate hosts three self-contained subsystems, each a faithful port of

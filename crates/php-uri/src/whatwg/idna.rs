@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! UTS #46 processing as implemented by lexbor (`lexbor/unicode/idna.c`):
 //! mapping, NFC normalization, label splitting, Punycode and the (partial)
 //! validity criteria lexbor applies.

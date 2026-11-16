@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Randomised operation sequences over SimpleXML objects: no panics, no
 //! memory errors (run under valgrind for the latter), consistent results.
 

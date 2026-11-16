@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `GB18030`, `GB18030-2022`, `CP936`.
 //!
 //! Ref: `libmbfl/filters/mbfilter_cjk.c` (section "GB18030/CP936").

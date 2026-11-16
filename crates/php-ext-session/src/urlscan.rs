@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The trans-sid URL rewriter (`ext/standard/url_scanner_ex.re`).
 //!
 //! The VM has no URL rewriter, and `session.use_trans_sid` needs one: the

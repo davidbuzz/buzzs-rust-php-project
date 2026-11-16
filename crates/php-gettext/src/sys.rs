@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Thin, safe wrappers over glibc's built-in libintl (`gettext(3)` family).
 //!
 //! This is the only module of the crate containing `unsafe` code.  All

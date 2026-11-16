@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Handlers of the opcodes that `zend_try_compile_special_func()` compiles
 //! builtin calls to (ref: `Zend/zend_compile.c` `zend_compile_func_strlen`,
 //! `_count`, `_typecheck`, `_gettype`, `_defined`, `_in_array`,

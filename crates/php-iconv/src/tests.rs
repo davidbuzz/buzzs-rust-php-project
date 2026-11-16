@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Unit tests: settings, diagnostics, output handler, filter, and
 //! hand-ported `.phpt` expectations.  The bulk of behavioural coverage is
 //! the oracle replay in `tests/oracle.rs`.

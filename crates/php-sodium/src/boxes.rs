@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `sodium_crypto_box*` (X25519-XSalsa20-Poly1305, incl. sealed boxes),
 //! `sodium_crypto_kx*` and `sodium_crypto_scalarmult*`.
 

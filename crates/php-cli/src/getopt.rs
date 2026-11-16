@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A port of `php_getopt()` (`main/getopt.c`): short options (clustered
 //! `-nq`), values given as `-dfoo`, `-d foo` or `-d=foo`, long options
 //! (`--define foo`, `--ini=diff`) and `--` as the end of the options.

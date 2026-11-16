@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Unsigned magnitude arithmetic on little-endian `u64` limb slices.
 //!
 //! All functions accept non-normalized input unless documented otherwise and

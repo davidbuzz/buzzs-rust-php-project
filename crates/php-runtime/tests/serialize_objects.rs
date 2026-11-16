@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Object (`O:`/`C:`/`r:`) unserialize → serialize round trips through
 //! `CollectingContext`'s plain-object hooks. Expected strings and error
 //! offsets come from the PHP oracle.

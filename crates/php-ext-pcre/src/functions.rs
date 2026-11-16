@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `preg_*` functions (the `PHP_FUNCTION`s of `ext/pcre/php_pcre.c`).
 
 use php_pcre::{limit_from_php, MatchFailure, PregError, Regex, Replacement};

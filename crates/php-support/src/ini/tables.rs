@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 // Generated from Zend/zend_ini_parser.y with GNU Bison 3.8.2 (LALR tables).
 // Do not edit by hand.
 

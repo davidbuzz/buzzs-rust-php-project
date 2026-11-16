@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/standard/formatted_print.c`: `sprintf()`, `printf()`,
 //! `vsprintf()`, `vprintf()` over `php_support::fmt::php_formatted_print`.
 //!

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The stat family and file metadata functions (`ext/standard/filestat.c`).
 //!
 //! `stat()`/`lstat()` results are cached per path exactly like PHP's

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! libxml2 declarations used by this crate that `php_libxml::ffi` does not
 //! provide (yet). Structure layouts were checked against the libxml2
 //! 2.9.14 headers with a C program (LP64); see the `layout` assertions.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! libcurl constant values (generated from `ext/curl/curl.stub.php` against the
 //! system libcurl 8.5.0 headers by `gen_consts.py`; `#if LIBCURL_VERSION_NUM`
 //! gates of the stub are evaluated by the C preprocessor). Do not edit by hand.

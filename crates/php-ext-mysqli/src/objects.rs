@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Native state of the mysqli objects (`MYSQLI_RESOURCE` behind
 //! `mysqli_object::ptr`) and the `MYSQLI_FETCH_RESOURCE*` helpers that
 //! produce the "object is already closed" / "not fully initialized"

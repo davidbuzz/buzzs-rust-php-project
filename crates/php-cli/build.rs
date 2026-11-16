@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Records the build time in C's `__DATE__ " " __TIME__` format
 //! (`PHP_BUILD_DATE`, the `-v` banner) and puts libc and libstdc++ at the
 //! head of the binary's `DT_NEEDED` list (start-up time, see `main`).

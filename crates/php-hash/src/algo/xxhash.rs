@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! xxHash: XXH32, XXH64 (own streaming ports with the exact
 //! `XXH32_state_t`/`XXH64_state_t` layouts, needed for serialization) and
 //! XXH3-64/XXH3-128 (via `twox-hash`; PHP does not serialize those)

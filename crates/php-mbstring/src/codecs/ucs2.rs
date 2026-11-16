@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `UCS-2`, `UCS-2BE`, `UCS-2LE`.
 //!
 //! Ref: `libmbfl/filters/mbfilter_ucs2.c`.

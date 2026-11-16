@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Tar-based archives (`tar.c`): ustar/old-style reading with pax header
 //! skipping, `././@LongLink` names, magic `.phar/*` files, and PHP's own
 //! ustar writer.

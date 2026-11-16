@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Error reporting (`zend_error`, `php_error_cb`): user error handlers,
 //! display, logging, fatal errors and uncaught exceptions.
 

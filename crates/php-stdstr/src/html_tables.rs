@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Data tables for `html.rs`, generated from php-src
 //! `ext/standard/html_tables.h` by `tools/gen_html_tables.py`.
 //! DO NOT EDIT BY HAND.

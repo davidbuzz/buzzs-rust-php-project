@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Session ID generation and validation (`php_session_create_id`,
 //! `bin_to_readable`, `php_session_valid_key`).
 

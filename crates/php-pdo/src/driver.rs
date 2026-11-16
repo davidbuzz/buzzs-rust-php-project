@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The driver interface: [`DbhDriver`] mirrors `struct pdo_dbh_methods`,
 //! [`StmtDriver`] mirrors `struct pdo_stmt_methods`, and [`DriverEntry`]
 //! is `pdo_driver_t` (name + handle factory). The registry of available

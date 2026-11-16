@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `zend_test_uri_parser()` (ref: ext/zend_test/test.c): exercises the
 //! internal URI parser API of ext/uri (`php_ext_uri::internal_api`).
 

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 #![allow(clippy::many_single_char_names)]
 //! Cross-checks the engine against results recorded from the system libgmp
 //! (`tests/data/gen_oracle.py`, GMP 6.3.0 via ctypes).

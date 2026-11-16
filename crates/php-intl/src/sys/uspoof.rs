@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `uspoof_*` and the `uset_*` calls needed to build an allowed set.
 //!
 //! The ext/intl Spoofchecker threads a single, never-reset object status

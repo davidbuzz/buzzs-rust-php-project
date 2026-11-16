@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Minimal hand-written bindings to the system libxml2 (2.9.x ABI).
 //!
 //! Only the functions, structures and constants this crate (and the future

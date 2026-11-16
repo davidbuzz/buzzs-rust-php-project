@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Argument helpers shared by the procedural functions and their method
 //! aliases (`zend_parse_method_parameters` + `ERROR_ARG_POS`).
 

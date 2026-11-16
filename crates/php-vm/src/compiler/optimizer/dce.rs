@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Pass 14: DCE (Dead Code Elimination) (ZEND_OPTIMIZER_PASS_14)
 //!
 //! - Basic block CFG reachability: eliminates dead blocks following unconditional

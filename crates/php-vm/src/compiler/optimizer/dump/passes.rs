@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The passes php-src runs after its optimizer's main work, applied to the
 //! lowered oplines: the variable contractions of the DFA pass
 //! (`zend_dfa_optimize_op_array`, `Zend/Optimizer/dfa_pass.c`) on top of a

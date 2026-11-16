@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP value conversions used when reading option arrays and filter
 //! parameters (`zval_try_get_long()`, `zval_try_get_string()`,
 //! `zend_zval_type_name()`, `zend_zval_value_name()`).

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `mysqlnd.*` INI settings (ref: `php_mysqlnd.c`).
 //!
 //! Settings live in a thread-local table; the embedding SAPI forwards INI

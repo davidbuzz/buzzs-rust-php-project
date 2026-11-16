@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Unit tests mirroring the `ext/filter/tests` cases the PHP 8.3 oracle
 //! cannot record: request input (`--GET--`/`--POST--`/`--COOKIE--`), the
 //! master-only `FILTER_THROW_ON_FAILURE`, references and ini handling.

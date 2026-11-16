@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `socket_get_option()`/`socket_set_option()` (and the aliases
 //! `socket_getopt()`/`socket_setopt()`), including `multicast.c`.
 

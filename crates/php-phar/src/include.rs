@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The compiler hooks phar installs (`phar_compile_file()`,
 //! `phar_resolve_path()` in `phar.c`): what to compile when a phar is
 //! included directly (`include 'app.phar'`), and include-path resolution

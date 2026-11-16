@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Symmetric ciphers, digests, PBKDF2, randomness and algorithm listings.
 
 use crate::constants::{OPENSSL_DONT_ZERO_PAD_KEY, OPENSSL_RAW_DATA, OPENSSL_ZERO_PADDING};

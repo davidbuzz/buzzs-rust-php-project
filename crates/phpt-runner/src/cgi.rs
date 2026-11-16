@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! CGI test support: the request a test sends to `php-cgi` (`--GET--`, `--POST--`,
 //! `--POST_RAW--`, `--PUT--`, `--GZIP_POST--`, `--DEFLATE_POST--`, `--COOKIE--`) and the
 //! response headers checked against `--EXPECTHEADERS--` (ref: `run-tests.php` `run_test()`).

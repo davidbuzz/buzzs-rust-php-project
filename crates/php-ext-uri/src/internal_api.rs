@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The engine-facing URI parser API of `ext/uri/php_uri.c`
 //! (`php_uri_get_parser`, `php_uri_parse`, the `php_uri_get_*` component
 //! readers and `php_uri_parse_to_struct`) over the three registered parsers

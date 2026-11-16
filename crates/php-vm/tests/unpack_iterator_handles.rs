@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Object handles around `...$it` argument unpacking, `[...$it]` array
 //! spreading and the bare VM's `iterator_to_array()`: php-src's
 //! `ZEND_SEND_UNPACK` / `ZEND_ADD_ARRAY_UNPACK` / `spl_iterator_apply` drive

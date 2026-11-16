@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The polling core behind `Io\Poll` (`main/poll/`): the `poll(2)` and
 //! `epoll(7)` backends with `PHP_POLL_*` event bits, one-shot and
 //! edge-triggered registrations and `php_poll_error` codes.

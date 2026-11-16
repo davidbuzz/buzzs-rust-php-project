@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! opcache.preload: declarations promoted from a startup request into the
 //! fresh VM of each later request (`Vm::finish_preload`,
 //! `Vm::install_persistent_declarations`).

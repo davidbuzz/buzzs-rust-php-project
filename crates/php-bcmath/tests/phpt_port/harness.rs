@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A tiny emulation of the PHP features the ext/bcmath `.phpt` scripts use
 //! (`echo`, `var_dump`, exceptions, zpp coercions, operators), so each script
 //! can be transcribed to Rust and its output compared with the original

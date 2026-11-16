@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `preg_split()` (`php_pcre_split_impl`), `preg_grep()` and `preg_quote()`.
 
 use crate::cache::MatchConfig;

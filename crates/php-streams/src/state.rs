@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Request-global state of the streams layer (`FG()`, `BG()`, `PG()`).
 //!
 //! PHP keeps these in per-request globals; here they are thread-local. The

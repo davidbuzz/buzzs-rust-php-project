@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The server's console log (`php_cli_server_logf` /
 //! `sapi_cli_server_log_write`): `[<asctime>] message` lines on stderr,
 //! prefixed with the PID when running with several workers.

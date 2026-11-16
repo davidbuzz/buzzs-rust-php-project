@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Pass 8: SCCP (Sparse Conditional Constant Propagation) & DFA (ZEND_OPTIMIZER_PASS_8)
 //!
 //! - Global SSA temporary constant propagation: for any temporary Tmp(t) defined

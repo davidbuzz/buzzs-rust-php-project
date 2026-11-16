@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Links the system libzip (found through pkg-config) and exports its version
 //! so the crate can gate constants and methods like PHP's `config.m4` does.
 //! libzip is bound lazily (`build/lazy_dl.rs`, shared from php-libxml: stubs

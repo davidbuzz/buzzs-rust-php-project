@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `--EXPECTF--` / `--EXPECTREGEX--` matching (ref: `run-tests.php` `expectf_to_regex()`).
 //!
 //! run-tests.php builds `'/^' . $re . '$/s'` and calls `preg_match()`, so matching is done with

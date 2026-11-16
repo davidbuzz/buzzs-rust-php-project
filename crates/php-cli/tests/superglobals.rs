@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The CLI symbol table (`php_hash_environment`, `php_startup_auto_globals`
 //! in main/php_variables.c; `do_cli` in sapi/cli/php_cli.c): php-src master
 //! registers `$argv`/`$argc` first, then the non-JIT auto-globals, then

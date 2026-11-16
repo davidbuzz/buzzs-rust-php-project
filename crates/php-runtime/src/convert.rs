@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Type conversions (`zend_operators.c`: `zval_get_long`, `zval_get_double`,
 //! `zval_try_get_string`, `zend_is_true`, `convert_to_array`, ...).
 //!

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Tree helpers shared by all classes (`php_dom.c`, `parentnode/tree.c`).
 
 use std::ptr;

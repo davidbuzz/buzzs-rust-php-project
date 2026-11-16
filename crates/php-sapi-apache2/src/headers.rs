@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Response headers: `sapi_header_op()` / `sapi_send_headers()` from
 //! `main/SAPI.c` combined with the apache2handler header handler
 //! (`php_apache_sapi_header_handler` / `php_apache_sapi_send_headers`).

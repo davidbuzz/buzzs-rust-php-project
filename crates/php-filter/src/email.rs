@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `FILTER_VALIDATE_EMAIL` (`php_filter_validate_email`).
 //!
 //! php-src matches the address against a fixed PCRE (based on Michael

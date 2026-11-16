@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Math functions (`ext/standard/math.c`) and random numbers: fallback
 //! bindings for the bare VM. The `php` binary links `php-ext-stdstr`, which
 //! re-registers the math.c functions (all but `pow`) with full semantics.

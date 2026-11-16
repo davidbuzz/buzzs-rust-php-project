@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Port of run-tests.php's `Differ` / `DiffOutputBuilder`, producing the same `.diff` format:
 //! `001- expected` / `001+ actual` with three lines of context.
 

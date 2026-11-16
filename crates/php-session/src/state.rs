@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The per-request session state (`php_ps_globals`) and the internal
 //! lifecycle of `session.c`: `php_session_start`, `php_session_initialize`,
 //! `php_session_reset_id`, `php_session_send_cookie`, cache limiters,

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! File function tests; expected results and messages were taken from
 //! `/usr/bin/php` (message prefixes follow master: no docref parameters).
 

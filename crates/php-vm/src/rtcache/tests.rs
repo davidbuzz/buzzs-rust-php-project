@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Script-level tests of the run-time lookup caches: every script reads
 //! the same names repeatedly, so the second and later executions run
 //! from the cache. Expected output from `/usr/bin/php -n` (paths

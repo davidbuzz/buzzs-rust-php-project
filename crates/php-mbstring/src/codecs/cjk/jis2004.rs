@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! JIS X 0213:2004 encodings: `ISO-2022-JP-2004`, `EUC-JP-2004`,
 //! `SJIS-2004`.
 //!

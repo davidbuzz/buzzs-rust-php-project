@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Small helpers shared by the function families: PHP's base64 codec,
 //! `bin2hex`, path expansion and ASN.1 time conversion.
 

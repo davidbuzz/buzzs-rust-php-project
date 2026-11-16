@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `ZipArchive` object (`ze_zip_object` + `php_zip_archive`) and every
 //! method of the class (`PHP_METHOD(ZipArchive, …)` in `php_zip.c`).
 //!

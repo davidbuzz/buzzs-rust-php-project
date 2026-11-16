@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Class/function/constant name collision regressions
 //! (`Zend/tests/{name_collision,class_alias,class_name,namespaces`}).
 use php_vm::{Vm, VmOptions};

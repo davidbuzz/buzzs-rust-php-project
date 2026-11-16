@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `setlocale()`, `localeconv()`, `nl_langinfo()` (`ext/standard/string.c`)
 //! over the C library, plus the startup/shutdown locale handling of
 //! `main/main.c` (`zend_reset_lc_ctype_locale`).

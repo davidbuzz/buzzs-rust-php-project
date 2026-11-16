@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `mb_send_mail()`: MIME-encodes the subject and body according to
 //! `mb_language()` and hands the message to `php-stdmisc`'s `php_mail_ex`,
 //! with `mail.log` files written through the stream layer as

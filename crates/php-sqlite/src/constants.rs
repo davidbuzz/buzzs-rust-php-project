@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Constants registered by `ext/sqlite3` and `ext/pdo_sqlite`, in stub
 //! declaration order (which `ReflectionClass::getConstants()` exposes).
 

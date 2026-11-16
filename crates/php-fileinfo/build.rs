@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Links the system libmagic, located through `pkg-config` when available.
 //! It is bound lazily (`build/lazy_dl.rs`, shared from php-libxml: stubs
 //! that `dlopen` it on first use), falling back to an ordinary link.

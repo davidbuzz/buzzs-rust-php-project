@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Reads with a length beyond `memory_limit` record the violation instead
 //! of allocating (`fread_oom_length.phpt`, `gh15653.phpt`). Its own test
 //! binary with a single test: it sets the process-wide limit.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A model of the Zend allocator's `memory_limit` for results whose size
 //! the (possibly hostile) input controls: decompression output and
 //! `gzfile()` arrays.

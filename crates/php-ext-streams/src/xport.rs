@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Socket transport registry (`php_stream_xport_register`) and the hooks
 //! other extensions use to plug in transports (`ssl://`, `tls://`, ...)
 //! and crypto (`stream_socket_enable_crypto()`).

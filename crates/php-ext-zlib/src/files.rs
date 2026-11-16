@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `gzopen()`, `gzfile()`, `readgzfile()`, the `gz*` stream function
 //! aliases, and registration of the `compress.zlib://` wrapper and the
 //! `zlib.*` stream filters.

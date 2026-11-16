@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The SOAP 1.2 test collection (`ext/soap/tests/soap12/*.phpt`): raw
 //! requests handled by a `SoapServer` over `soap12-test.wsdl` with the
 //! `Soap12test` class; the response must match byte for byte.

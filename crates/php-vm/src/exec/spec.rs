@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Fast paths of the specialised ops ([`Op::CmpJmp`], [`Op::BinAssignCv`],
 //! [`Op::IncDecCv`], [`Op::AssignOpCv`], [`Op::FetchDimCv`],
 //! [`Op::FetchDimsCv`], [`Op::IssetDimCv`], [`Op::AssignDimCv`],

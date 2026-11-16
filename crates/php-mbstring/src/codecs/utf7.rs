@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `UTF-7` (RFC 2152).
 //!
 //! Ref: `libmbfl/filters/mbfilter_utf7.c`, `libmbfl/filters/utf7_helper.h`.

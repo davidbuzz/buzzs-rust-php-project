@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The hard ceiling kills the process, so each scenario runs in a child
 //! process: the parent test re-executes this test binary filtered to a
 //! `child_*` test with `PHP_MEMLIMIT_CHILD` set.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Snefru-256 (ref: `ext/hash/hash_snefru.c`).
 
 use super::snefru_tables::SNEFRU_TABLES;

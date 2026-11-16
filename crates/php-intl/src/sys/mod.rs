@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Thin safe wrappers over the raw [`crate::ffi`] declarations: RAII
 //! handles for ICU service objects and safe functions for the stateless
 //! APIs.  Every `unsafe` block in the crate lives here or in `ffi.rs` and

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `php-cgi` binary: the CGI/1.1 SAPI (ref: sapi/cgi/cgi_main.c).
 //! FastCGI (`-b`, `FCGI_WEB_SERVER_ADDRS`, an accepting socket on stdin)
 //! is not supported.

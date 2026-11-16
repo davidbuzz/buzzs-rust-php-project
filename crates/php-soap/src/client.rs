@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `SoapClient` (`soap.c`): construction, calls, the request/response
 //! cycle and the small accessor methods. All state lives in the private
 //! properties of the object (read and written through

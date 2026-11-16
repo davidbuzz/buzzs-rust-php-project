@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/libxml/image_svg.c`: the SVG image type (`IMAGETYPE_SVG`) that
 //! `ext/libxml` adds to `getimagesize()` / `image_type_to_*()` through the
 //! image handler table of `php-ext-exif`.

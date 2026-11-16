@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's `ext/posix` (ref: `ext/posix/posix.c`, `posix.stub.php`).
 //!
 //! Every `posix_*` function is a method on [`Posix`], which owns the module

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `get_class_vars()` (`Zend/zend_builtin_functions.c`: `add_class_vars`
 //! over `ce->properties_info`): the order of the entries (a class's own
 //! declarations in declaration order, then the parent's table, then the

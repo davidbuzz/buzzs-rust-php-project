@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `gc_collect_cycles()`, `gc_enable()`, `gc_disable()`, `gc_enabled()`,
 //! `gc_status()` and the `zend.enable_gc` modify handler
 //! (`Zend/zend_builtin_functions.c`, `OnUpdateGCEnabled`).

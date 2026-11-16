@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The request VM's release: discarded on the exit path (`Vm::discard`,
 //! php-src's fast shutdown), dropped when another request follows
 //! (`--repeat`, `-l` over several files). Everything a script left behind

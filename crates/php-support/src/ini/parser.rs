@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! LALR(1) driver for `Zend/zend_ini_parser.y`, using the tables Bison
 //! generates for that grammar (see `tables.rs`) and Bison's
 //! `parse.error verbose` message construction, so syntax errors read

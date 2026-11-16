@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `htmlentities()` subset used by `FILTER_SANITIZE_FULL_SPECIAL_CHARS`:
 //! `php_escape_html_entities_ex(s, all = 1, ENT_QUOTES | ENT_NOQUOTES,
 //! charset = default (UTF-8), double_encode = 0, quiet = 0)` with the

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The mysqlnd character-set table and the charset-aware escaping
 //! routines behind `mysqli_real_escape_string` (ref: `mysqlnd_charset.c`).
 

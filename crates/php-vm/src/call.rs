@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Function calls: `INIT_*`, `SEND_*`, `DO_FCALL`, `RECV*` and returns.
 
 use crate::class::Class;

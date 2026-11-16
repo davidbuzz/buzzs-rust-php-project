@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end tests: loads `libphprust_apache2.so` into the system
 //! `apache2` binary (prefork MPM) on 127.0.0.1:8089 and exercises it over
 //! HTTP with `curl`.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Frame-local fast paths of string building: [`Op::Rope`] (php-src's
 //! `ZEND_ROPE_INIT` / `ZEND_ROPE_ADD` / `ZEND_ROPE_END`) and `ZEND_CONCAT`
 //! ([`Op::Bin`] / [`Op::BinAssignCv`] with `.`) whose operands are strings

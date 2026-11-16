@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `mb_encode_numericentity` / `mb_decode_numericentity`.
 //!
 //! Ref: `ext/mbstring/mbstring.c` (`html_numeric_entity_encode`,

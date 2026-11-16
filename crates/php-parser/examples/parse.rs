@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Parses PHP files and prints the result:
 //! `cargo run --example parse -- [-d|-e] FILE...`
 //! (`-e` prints the AST exported as PHP code, `-d` the debug AST).

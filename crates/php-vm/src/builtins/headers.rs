@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Response headers under the CLI SAPI (`main/SAPI.c`, `ext/standard/head.c`)
 //! and the output start location (`php_output_header()`).
 //!

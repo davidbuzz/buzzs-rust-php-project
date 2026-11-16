@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for `http_build_query()` and `parse_str()`, plus hand
 //! ports of the `max_input_vars`/nesting phpt expectations.
 

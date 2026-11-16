@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The filter engine of `filter.c`: `php_zval_filter`, the recursive
 //! application over arrays, `php_filter_call`, `php_filter_array_handler`
 //! and the PHP-level functions.

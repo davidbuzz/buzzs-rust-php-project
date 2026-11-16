@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! [`VmHost`]: the VM seen through the [`PdoHost`] trait of `php-pdo` and
 //! the [`php_sqlite::Host`] trait of `php-sqlite`, plus the conversions
 //! between VM throws and the error types of those crates.

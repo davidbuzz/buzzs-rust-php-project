@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The file and stream functions of `ext/standard` for the phprust VM:
 //! binds the `php-streams` library through the `php_vm::ext` extension API.
 //!

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! One PHP request: the state shared between the VM, the SAPI functions and
 //! the output writer ([`RequestCtx`]), and the request lifecycle
 //! ([`run`]) — `php_apache_request_ctor()`, `php_request_startup()`,

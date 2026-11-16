@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! GOST R 34.11-94 with the test and `CryptoPro` parameter sets
 //! (ref: `ext/hash/hash_gost.c`).
 

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `mb_ereg*` support (port of the encoding and option bookkeeping of
 //! `ext/mbstring/php_mbregex.c`).
 //!

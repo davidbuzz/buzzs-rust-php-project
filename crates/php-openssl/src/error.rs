@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Diagnostics (warnings/deprecations), thrown errors, and PHP's private
 //! OpenSSL error ring buffer behind `openssl_error_string()`.
 

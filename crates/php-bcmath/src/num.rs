@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `bc_num` representation and its basic operations.
 //!
 //! Ports of `libbcmath/src/{init,str2num,num2str,compare,zero,nearzero,rmzero,

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The only place with `unsafe`: safe wrappers over the system libgd.
 //!
 //! [`Image`] owns a `gdImagePtr`. Its methods take `&self` even when they

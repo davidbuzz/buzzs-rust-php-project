@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Namespaces, type codes and the PHP-visible constants of ext/soap
 //! (`php_soap.h`, `php_encoding.h`, `php_sdl.h`, `soap.stub.php`).
 

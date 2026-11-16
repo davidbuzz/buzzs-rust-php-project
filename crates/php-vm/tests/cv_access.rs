@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Compiled-variable reads and assignments (`ZEND_ASSIGN` to a CV,
 //! `zend_assign_to_variable`): the in-place fast forms must behave exactly
 //! like the generic path — references on either side, typed references,

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `foreach` and `==` on objects through their properties table
 //! (`zend_object_handlers.c`: `zend_std_compare_objects`,
 //! `zend_vm_def.h`: `ZEND_FE_RESET_R` / `ZEND_FE_FETCH_R` on plain objects),

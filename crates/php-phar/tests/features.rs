@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Behaviour that the PHP 8.3 oracle cannot check (no ext/bz2 there, no
 //! running VM, php-src master fixes) — exercised directly.
 

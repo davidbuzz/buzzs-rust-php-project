@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Replays `tests/fixtures/oracle.txt`, recorded from `/usr/bin/php` by
 //! `tests/oracle/gen_oracle.php`: the hand-written matrix of
 //! `tests/oracle/custom.php` (every filter over representative inputs,

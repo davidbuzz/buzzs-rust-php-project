@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `BASE64` (a transfer encoding: it converts raw bytes, not text).
 //!
 //! `mb_convert_encoding` treats the other side of a conversion from/to Base64

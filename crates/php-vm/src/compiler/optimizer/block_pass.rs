@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Pass 5: CFG basic block pass (ZEND_OPTIMIZER_PASS_5)
 //!
 //! - Basic block discovery based on branches, targets, try regions, and live ranges.

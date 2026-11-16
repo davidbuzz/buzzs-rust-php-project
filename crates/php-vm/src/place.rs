@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Reading and writing places (`$a[..]->b[..]`): the equivalent of Zend's
 //! `FETCH_DIM_*`, `FETCH_OBJ_*`, `ASSIGN_DIM`, `ASSIGN_OBJ`, `UNSET_*`,
 //! `ISSET_ISEMPTY_*` handlers.

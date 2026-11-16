@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Compile-time checks that the Zend compiler (`Zend/zend_compile.c`)
 //! performs on the AST before generating code, reported with the same
 //! messages and line numbers (`Fatal error: ...`).

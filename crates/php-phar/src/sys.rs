@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Operating-system access: files addressed by byte paths, the clock, and
 //! the libc `localtime_r()` / `mktime()` pair used for zip DOS timestamps.
 

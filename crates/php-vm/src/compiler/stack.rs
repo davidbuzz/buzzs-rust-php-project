@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Compile-time stack limit: `zend_check_stack_limit()` and
 //! `zend_stack_limit_error()` (Zend/zend_compile.c).
 //!

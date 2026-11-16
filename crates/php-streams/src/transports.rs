@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Socket transports (`main/streams/transports.c`, `xp_socket.c`).
 //!
 //! A minimal client side: `stream_socket_client()` for `tcp://`, `udp://`

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Safe binding of the system Oniguruma library (`libonig`), the regex
 //! engine behind `mb_ereg*` (ref: `ext/mbstring/php_mbregex.c`; API of
 //! `oniguruma.h` 6.9.x).

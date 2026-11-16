@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Integration tests: the section parser and EXPECTF matcher against fixtures, and end-to-end
 //! runs of the `phpt-runner` binary with the reference `/usr/bin/php` (skipped when absent).
 

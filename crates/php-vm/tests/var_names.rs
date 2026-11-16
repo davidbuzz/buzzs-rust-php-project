@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Variable-table names shared with the op array (`op_array->vars`): a
 //! frame copies the compiled-variable names only when a variable is created
 //! at run time. Expected PHP outputs are php-src's (`/usr/bin/php -n`).

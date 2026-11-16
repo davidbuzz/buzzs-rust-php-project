@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! INI parser tests.  `tests_cases.rs` holds inputs and the results PHP
 //! produced for them (rendered compactly by a small PHP script mirroring
 //! [`render`]); constants `BIRD`, `TEST_CONST`, `NUM` and environment

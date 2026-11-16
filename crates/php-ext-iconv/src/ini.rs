@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `iconv.*` INI entries and their on-modify semantics.
 //!
 //! The VM's INI registry has no extension callbacks, so the directives are

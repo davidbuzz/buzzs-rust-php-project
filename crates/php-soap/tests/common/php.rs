@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A tiny PHP interpreter for running the ext/soap `.phpt` scripts
 //! against the extension through [`TestHost`]. It covers the subset of
 //! PHP these scripts use (classes with promoted constructor parameters,

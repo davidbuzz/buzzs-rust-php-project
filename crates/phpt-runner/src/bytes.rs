@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Small byte-string helpers that mirror the PHP functions `run-tests.php` relies on.
 
 /// Characters stripped by PHP's `trim()` with the default character list.

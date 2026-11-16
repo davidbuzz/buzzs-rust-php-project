@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The SPL functions: `php-spl` implements them; the autoload registry is
 //! mirrored into the VM's (`Vm::autoloaders`), which performs autoloading.
 

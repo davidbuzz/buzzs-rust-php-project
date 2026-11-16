@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! ISO 8601 durations, recurrences and start/end dates (port of timelib's
 //! `parse_iso_intervals.re`), used by `new DateInterval()` and
 //! `new DatePeriod($isostr)`.

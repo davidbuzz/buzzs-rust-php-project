@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Status lines, the always-present response headers, the built-in error
 //! pages (`php_cli_server_send_error_page`) and the time formats the
 //! server uses.

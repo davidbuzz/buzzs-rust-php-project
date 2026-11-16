@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `pdo_sql_parser.re` port: scanners and `pdo_parse_params()` rewriting,
 //! following the cases of ext/pdo/tests (`debug_emulated_prepares`,
 //! `bug_43130`, `bug_71885`), ext/pdo_mysql/tests/pdo_mysql_parser.phpt and

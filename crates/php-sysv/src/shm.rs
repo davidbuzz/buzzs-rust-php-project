@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/sysvshm` (ref: `ext/sysvshm/sysvshm.c`, `php_sysvshm.h`).
 //!
 //! A PHP shared-memory segment starts with a `sysvshm_chunk_head`

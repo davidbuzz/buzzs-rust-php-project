@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Stream wrappers and the wrapper registry (`php_stream_wrapper`,
 //! `url_stream_wrappers_hash`, `FG(stream_wrappers)`).
 

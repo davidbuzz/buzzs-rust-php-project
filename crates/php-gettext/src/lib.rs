@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's `ext/gettext` (ref: `ext/gettext/gettext.c`, `gettext.stub.php`).
 //!
 //! Every PHP function is a free function over glibc's built-in libintl.

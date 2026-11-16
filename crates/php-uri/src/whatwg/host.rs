@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Host parsing (domain, IPv4, IPv6, opaque) and host serialization, after
 //! lexbor's `lxb_url_host_parse` and friends.
 

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Builtins compiled to dedicated opcodes (`zend_try_compile_special_func`:
 //! `ZEND_STRLEN`, `ZEND_TYPE_CHECK`, `ZEND_CAST`, `ZEND_GET_TYPE`,
 //! `ZEND_DEFINED`, `ZEND_IN_ARRAY`, `ZEND_ARRAY_KEY_EXISTS`) or constants

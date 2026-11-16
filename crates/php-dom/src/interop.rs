@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Raw interoperability with other libxml2-based extensions
 //! (`php_libxml_import_node` / `php_dom_create_object` equivalents), used
 //! by the XSL binding's `DomAccess` provider and similar consumers.

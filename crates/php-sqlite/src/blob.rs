@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Incremental BLOB I/O streams (`SQLite3::openBlob()`,
 //! `Pdo\Sqlite::openBlob()`): `php_stream_sqlite3_ops` /
 //! `php_stream_pdosqlite3_ops` as a [`StreamOps`] implementation.

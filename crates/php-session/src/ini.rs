@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `session.*` INI directives (`PHP_INI_BEGIN` … `PHP_INI_END` of
 //! `session.c`): defaults, access levels, the on-modify validation of every
 //! directive and a small store implementing `zend_alter_ini_entry_ex`,

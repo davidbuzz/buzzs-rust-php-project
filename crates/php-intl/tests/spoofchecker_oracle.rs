@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `Spoofchecker` checked against fixtures from `/usr/bin/php` (8.3 has
 //! only the ICU checks; skeleton and bidi methods are covered by the phpt
 //! ports in `phpt_spoofchecker.rs`).

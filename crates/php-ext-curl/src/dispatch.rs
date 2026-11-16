@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The [`Handler`] that runs PHP callbacks during a transfer
 //! (`curl_write`, `curl_read`, `curl_progress`, ... in interface.c).
 

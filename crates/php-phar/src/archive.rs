@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The in-memory archive model (`phar_archive_data` / `phar_entry_info`)
 //! and entry content access (`phar_open_entry_fp()`, `phar_get_efp()`,
 //! `phar_postprocess_file()`).

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `BcMath\Number` (PHP 8.4): an immutable arbitrary-precision number whose
 //! operations infer the result scale from their operands instead of using
 //! `bcmath.scale`.

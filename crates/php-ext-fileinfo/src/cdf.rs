@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A dry run of the first steps of php-src's bundled CDF reader
 //! (`libmagic/cdf.c`: `cdf_read_header`, `cdf_read_sat`, `cdf_count_chain`,
 //! `cdf_read_ssat`), to learn how much it would allocate.

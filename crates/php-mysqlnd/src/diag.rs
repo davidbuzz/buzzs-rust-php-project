@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP-level diagnostics raised by mysqlnd itself (`php_error_docref` /
 //! `php_error` calls deep in the protocol code). They are queued in a
 //! thread-local list; the binding drains them with [`take`] after each call

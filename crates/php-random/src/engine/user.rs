@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Userland engines (`ext/random/engine_user.c`): any object implementing
 //! `Random\Engine` whose `generate()` returns a byte string.
 

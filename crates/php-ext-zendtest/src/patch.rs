@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! In-place edits of registered functions and classes, for the parts of
 //! the stubs that `ModuleBuilder::function` / `ClassBuilder` cannot
 //! express (parameter and property attributes, `#[\NoDiscard]`,

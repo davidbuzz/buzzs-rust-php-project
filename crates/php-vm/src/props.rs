@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Object properties (`zend_std_read_property`, `zend_std_write_property`,
 //! `zend_std_has_property`, `zend_std_unset_property`, magic `__get` & co.)
 //! and object instantiation.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Typed references: references bound to typed properties carry the
 //! properties as "type sources" (`ZEND_REF_HAS_TYPE_SOURCES`), and every
 //! assignment through such a reference must satisfy all of them

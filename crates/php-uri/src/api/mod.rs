@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP-level semantics of the `ext/uri` classes.
 //!
 //! Every PHP method maps to one Rust method here; the VM only converts

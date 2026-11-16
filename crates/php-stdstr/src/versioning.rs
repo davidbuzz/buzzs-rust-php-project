@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `version_compare()` — port of `ext/standard/versioning.c`.
 //!
 //! The C implementation works on NUL-terminated strings, so a version

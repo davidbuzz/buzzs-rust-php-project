@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `mb_*` functions that walk arrays (and objects):
 //! `mb_convert_encoding` on arrays (`php_mb_convert_encoding_recursive`),
 //! `mb_check_encoding` on arrays (`php_mb_check_encoding_recursive`) and

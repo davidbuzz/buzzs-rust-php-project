@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `SplDoublyLinkedList`, `SplQueue` and `SplStack` (`spl_dllist.c`).
 //!
 //! Elements are reference-counted nodes like `spl_ptr_llist_element`: an

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `foreach` (`FE_RESET_*`, `FE_FETCH_*`, `FE_FREE`) and generic iteration
 //! of `Traversable` objects.
 

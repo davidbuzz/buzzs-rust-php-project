@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Glue between the VM and the `php-stdmisc` library: error conversion,
 //! the [`QueryContext`] implementation and small argument helpers.
 

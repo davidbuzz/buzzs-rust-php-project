@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Authentication plugin primitives (ref: `mysqlnd_auth.c`):
 //! `mysql_native_password`, `caching_sha2_password` (fast path scramble +
 //! RSA full authentication), `sha256_password` and `mysql_clear_password`.

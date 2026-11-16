@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Conversions between VM values and the `php_sockets::value` model.
 
 use php_runtime::{ArrayKey, PropertyPurpose, RuntimeContext, Value, ZArray, ZStr};

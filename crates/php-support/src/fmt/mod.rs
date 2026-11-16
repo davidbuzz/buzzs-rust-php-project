@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's formatted-print engine and float formatting.
 //!
 //! * [`double`] — `zend_dtoa()` digit generation, `zend_gcvt()`,

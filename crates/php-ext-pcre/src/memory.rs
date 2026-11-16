@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `memory_limit` reservations for the (potentially huge) values the
 //! `preg_*` functions build, through `php-memlimit`.
 //!

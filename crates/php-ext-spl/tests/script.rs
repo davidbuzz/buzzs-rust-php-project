@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! SPL property-table reference boundaries exercised through the VM.
 
 use php_ext_spl::host::{std_properties, BridgedHost, VmHost};

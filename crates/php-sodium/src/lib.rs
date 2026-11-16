@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's `ext/sodium` for phprust, bound to the system libsodium (1.0.18).
 //!
 //! Every `sodium_*` PHP function maps to a Rust function of the same name

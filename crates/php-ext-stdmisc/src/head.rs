@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `setcookie()` / `setrawcookie()` (`ext/standard/head.c`): php-src's
 //! argument and option validation, then the `Set-Cookie` line is added
 //! through the VM's `header()` (`sapi_header_op(SAPI_HEADER_ADD)`), which

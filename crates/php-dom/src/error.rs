@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Exceptions and diagnostics raised by DOM operations.
 //!
 //! Operations return `Result<_, DomError>`: an `Err` corresponds to an

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `UTF7-IMAP` (modified UTF-7 for IMAP mailbox names, RFC 3501).
 //!
 //! Ref: `libmbfl/filters/mbfilter_utf7imap.c`.

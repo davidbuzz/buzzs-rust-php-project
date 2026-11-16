@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `phpinfo()` rendering (`ext/standard/info.c`): the table/box/section
 //! primitives in text (CLI) and HTML mode, and [`print_info`], which lays
 //! out the sections from data the VM supplies through [`InfoSource`].

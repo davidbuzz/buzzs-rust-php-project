@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Minimal libbz2 binding (the `bzip2.compress` / `bzip2.decompress` stream
 //! filters with their default parameters, as phar uses them).
 //!

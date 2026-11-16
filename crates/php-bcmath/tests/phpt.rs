@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Ports of every php-src `ext/bcmath/tests/**/*.phpt` script.
 //!
 //! The original test files are vendored under `tests/phpt/` (read-only

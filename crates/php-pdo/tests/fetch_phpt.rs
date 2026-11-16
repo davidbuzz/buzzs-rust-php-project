@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Hand ports of the fetch-mode `ext/pdo/tests/*.phpt` over
 //! `sqlite::memory:` (and `sqlemu:`, SQLite behind PDO's prepare
 //! emulation).

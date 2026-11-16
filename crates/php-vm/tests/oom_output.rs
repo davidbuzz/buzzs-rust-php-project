@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A `memory_limit` fatal discards the output buffers without calling
 //! user handlers (`php_error_cb`, GH-11189), with the real allocator.
 //! One test: the counters and the pending violation are process-wide.

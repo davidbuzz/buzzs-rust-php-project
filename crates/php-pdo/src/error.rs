@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The error-handling core of `pdo_dbh.c`: `pdo_raise_impl_error()`,
 //! `pdo_handle_error()`, `pdo_throw_exception()` and the argument-error
 //! message builders (`zend_argument_*_error`).

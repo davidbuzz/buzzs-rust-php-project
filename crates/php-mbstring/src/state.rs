@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Per-request mbstring state (`zend_mbstring_globals`) and the INI /
 //! getter-setter functions built on it (`mb_language`, `mb_internal_encoding`,
 //! `mb_http_input`, `mb_http_output`, `mb_detect_order`,

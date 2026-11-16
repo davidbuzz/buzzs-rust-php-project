@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Fast paths of the static-property ops ([`Op::FetchStaticProp`],
 //! [`Op::AssignStaticProp`], [`Op::AssignOpStaticProp`],
 //! [`Op::IssetStaticProp`]): php-src's `ZEND_FETCH_STATIC_PROP_R` / `_IS`,

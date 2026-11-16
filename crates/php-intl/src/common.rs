@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Process-wide intl state and helpers shared by several classes:
 //! the `intl.default_locale` INI value, version constants and locale
 //! validation helpers.

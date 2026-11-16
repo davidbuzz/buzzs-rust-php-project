@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A fast, unseeded hasher for the VM's tables of declared names: the
 //! registration tables (the attribution of functions, classes and constants
 //! to extensions) and the per-class member tables

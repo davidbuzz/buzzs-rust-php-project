@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP references (`zend_reference`): the shared mutable slot behind `&`.
 //!
 //! php-src's `zend_reference` is 32 bytes: the refcounted header (refcount

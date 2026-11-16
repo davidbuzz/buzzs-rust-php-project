@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Pass 3: Jump optimization (ZEND_OPTIMIZER_PASS_3)
 //!
 //! - Jump-to-jump threading: Jmp(L1) where L1 resolves to Jmp(L2) -> thread to L2 (cycle-safe).

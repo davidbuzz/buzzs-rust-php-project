@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Module introspection: `get_extension_funcs()` and the categorized
 //! `get_defined_constants(true)` (`Zend/zend_builtin_functions.c`), and
 //! the registry that attributes internal functions, classes and constants

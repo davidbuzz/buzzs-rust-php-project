@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Unsigned big-integer helpers on base-10⁹ limbs.
 //!
 //! libbcmath stores numbers as one decimal digit per byte and converts them

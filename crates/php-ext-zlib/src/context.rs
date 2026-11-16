@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The incremental contexts: `deflate_init()`/`deflate_add()` and
 //! `inflate_init()`/`inflate_add()`/`inflate_get_status()`/
 //! `inflate_get_read_len()`, with the final, opaque `DeflateContext` and

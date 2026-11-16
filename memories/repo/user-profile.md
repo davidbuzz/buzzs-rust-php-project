@@ -8,7 +8,7 @@ metadata:
   modified: 2026-11-06T03:15:16.892Z
 ---
 
-David Buzz (davidbuzz@gmail.com) runs the phprust port as a hands-off director: short prompts ("report", "proceed with goal", "give me a command i can run") and expects me to coordinate agents autonomously.
+David Buzz (davidbuzz@gmail.com) runs buzzs-rust-php-project (repo dir `/home/buzz/phprust`) as a hands-off director: short prompts ("report", "proceed with goal", "give me a command i can run") and expects me to coordinate agents autonomously.
 
 - Wants code-writing subagents on Opus ("Opus 5") by default; up to 20 concurrent subagents (confirmed 6 Nov 2026). Agreed 6 Nov 2026 ("yes, do that"): Fable 5.1 for the riskiest performance packages' helpers and fix-up (valuesize, allocator, arrays, dispatch) and for build-capable fix-up agents; running Opus agents are not restarted. The main session itself moved to Fable 5.1 the same day; at ~12:55 the Fable usage credits ran out (every running agent died with HTTP 429), and the user switched back to Opus 5.5 (`/model opus`; commit attribution `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`). Agents can't be resumed with SendMessage after that: a resumed agent keeps its original model and fails again, so relaunch fresh agents (model inherited or "opus") pointed at the dead agent's worktree and status file.
 - Wants README.md and FEATURE_GAP.md kept current with *measured* pass rates, plus runnable commands.

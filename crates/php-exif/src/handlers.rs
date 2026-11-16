@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The image handler table of `ext/standard/image.c` (`php_image.h`):
 //! formats contributed by other extensions at module startup through
 //! `php_image_register_handler()` (php-src master registers SVG from

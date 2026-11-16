@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! What `Phar::interceptFileFuncs()` changes (`func_interceptors.c`).
 //!
 //! Once enabled, the listed functions resolve *relative* paths against the

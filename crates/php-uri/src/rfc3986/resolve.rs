@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Reference resolution (RFC 3986 §5.2) as implemented by uriparser's
 //! `uriAddBaseUriExMmA` in strict mode.
 

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Object footprint (`zend_object`, `Zend/zend_objects.c`): the
 //! per-object state stays small, and the "explicitly unset" slot flags
 //! (`IS_PROP_UNINIT` in php-src's property zval `u2`) kept in a bit set

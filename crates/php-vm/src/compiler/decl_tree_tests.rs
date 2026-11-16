@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Ownership of compiled declarations: an op array's table holds only the
 //! declarations nested in it (php-src's `dynamic_func_defs`), so no
 //! declared function's code refers back to a table that holds the function,

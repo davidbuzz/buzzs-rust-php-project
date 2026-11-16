@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The remaining "misc" of PHP's `ext/standard` that is not covered by the
 //! string/array/stream crates (php-src master semantics, verified against
 //! `/usr/bin/php` with oracle fixtures in `tests/fixtures`).

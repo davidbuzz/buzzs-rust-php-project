@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `is_uploaded_file()` / `move_uploaded_file()` (ext/standard) accept only
 //! the paths in the request's `SG(rfc1867_uploaded_files)`
 //! (`Vm::rfc1867_uploaded_files`), whichever SAPI filled it.

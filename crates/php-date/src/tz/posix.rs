@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! POSIX TZ footer strings (`EST5EDT,M3.2.0,M11.1.0`), port of timelib's
 //! `parse_posix.c`.
 //!

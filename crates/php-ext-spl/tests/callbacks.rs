@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! SPL callables (`iterator_apply()`, the callback filter iterators,
 //! `ArrayObject::uasort()`): resolved once, in the calling scope, with the
 //! callable deprecations raised there (`Z_PARAM_FUNC`), and called through

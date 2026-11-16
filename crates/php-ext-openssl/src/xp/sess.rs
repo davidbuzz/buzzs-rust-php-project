@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! TLS session resumption: the `session_data`, `session_new_cb`,
 //! `session_get_cb`, `session_remove_cb`, `session_cache*`,
 //! `session_timeout` and `session_id_context` options.

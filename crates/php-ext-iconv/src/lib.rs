@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/iconv` for the phprust VM: binds the `php-iconv` library through
 //! the `php_vm::ext` extension API (ref: `ext/iconv/iconv.c`).
 //!

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `SessionHandlerInterface`, `SessionIdInterface`,
 //! `SessionUpdateTimestampHandlerInterface` and `SessionHandler`
 //! (`mod_user_class.c`), plus the `PHP_SESSION_*` constants.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The PDO SQL placeholder parser: a port of `ext/pdo/pdo_sql_parser.re`
 //! (`pdo_parse_params()` and the default re2c scanner) plus the SQLite
 //! driver's scanner (`ext/pdo_sqlite/sqlite_sql_parser.re`).

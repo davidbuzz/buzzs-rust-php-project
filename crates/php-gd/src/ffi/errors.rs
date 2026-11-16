@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! libgd's error callback (`gdSetErrorMethod`): messages are formatted with
 //! the C `vsnprintf` and queued per thread, for the binding to raise as
 //! `func(): message` diagnostics once the libgd call returns (PHP's

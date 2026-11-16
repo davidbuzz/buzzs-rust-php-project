@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/pdo`, `ext/pdo_mysql`, `ext/pdo_sqlite` and `ext/sqlite3` for the
 //! phprust VM: binds the `php-pdo` core (with its `MySQL` and `SQLite` drivers) and the `php-sqlite`
 //! `SQLite3` classes through the `php_vm::ext` extension API.

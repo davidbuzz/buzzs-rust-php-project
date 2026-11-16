@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Ulrich Drepper's SHA-256/SHA-512 crypt (`$5$`, `$6$`), ported from
 //! `ext/standard/crypt_sha256.c` / `crypt_sha512.c`, and the FreeBSD MD5
 //! crypt (`$1$`) of `ext/standard/php_crypt_r.c`.

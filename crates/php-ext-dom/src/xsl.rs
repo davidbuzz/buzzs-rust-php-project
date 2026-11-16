@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The DOM provider of XML documents for `XSLTProcessor`
 //! (`php_ext_xsl::access::DomAccess`, i.e. `php_libxml_import_node` and
 //! `php_dom_create_object` for ext/xsl) and `dom_import_simplexml()`.

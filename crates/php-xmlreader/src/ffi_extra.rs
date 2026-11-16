@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! libxml2 declarations that `php-libxml`'s [`php_libxml::ffi`] does not
 //! (yet) provide: the `xmlTextReader` API, Relax-NG schema loading and a few
 //! helpers. Declarations only; see `reader.rs` for the safe wrappers.

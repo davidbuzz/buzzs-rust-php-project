@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! bcrypt (`$2a$`, `$2b$`, `$2x$`, `$2y$`), ported from
 //! `ext/standard/crypt_blowfish.c` (Solar Designer's `crypt_blowfish` 1.3),
 //! including the `$2x$` sign-extension bug emulation and the `$2a$`

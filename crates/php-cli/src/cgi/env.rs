@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The CGI/1.1 environment of `php-cgi`: `init_request_info()` (the
 //! `cgi.fix_pathinfo` translation of `SCRIPT_FILENAME`, `PATH_INFO`,
 //! `PATH_TRANSLATED` and `SCRIPT_NAME`), `is_valid_path()`, the `PHP_SELF`

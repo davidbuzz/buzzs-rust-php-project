@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A small insertion-ordered map with integer or string keys, mirroring the
 //! parts of Zend's `HashTable` semantics the SDL model relies on
 //! (`zend_hash_add` fails on duplicates, `zend_hash_next_index_insert`

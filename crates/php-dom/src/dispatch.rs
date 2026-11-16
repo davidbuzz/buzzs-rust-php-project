@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Generic entry points for an embedding VM: method calls, property
 //! access and iteration by name, driven by [`crate::classes::class_table`].
 //!

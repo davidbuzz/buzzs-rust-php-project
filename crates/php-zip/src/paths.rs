@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Byte-level path helpers used by `ZipArchive::extractTo()` and the glob
 //! options: a port of `virtual_file_ex(…, CWD_EXPAND)` (purely textual
 //! `tsrm_realpath_r`), `php_zip_make_relative_path()`, `php_basename()`

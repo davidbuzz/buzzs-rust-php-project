@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `zend_call_function`'s interrupt check after a callee that threw: the
 //! interrupt handlers run in the caller's frame with the exception set
 //! aside (php-src `pcntl_signal_dispatch_exception_pending_user_frame`).

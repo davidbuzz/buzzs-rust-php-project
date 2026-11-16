@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ZStr`: PHP's refcounted, immutable, binary-safe byte string (`zend_string`).
 //!
 //! A [`ZStr`] is a cheap-to-clone handle (a single thin pointer) to an immutable

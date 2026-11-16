@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Native state of `Phar`/`PharData` and `PharFileInfo` objects.
 //!
 //! The objects extend SPL classes whose state occupies the VM object's

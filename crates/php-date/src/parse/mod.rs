@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Date/time string parsers (ports of timelib's `parse_date.re` and
 //! `parse_iso_intervals.re`).
 //!

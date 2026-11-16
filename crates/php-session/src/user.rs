@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `user` save handler (`ext/session/mod_user.c`): bridges the module
 //! operations to the callables registered with `session_set_save_handler()`
 //! through [`SessionHost::call_handler`].

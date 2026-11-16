@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The event loop (`php_cli_server_do_event_loop`): a `poll()`-driven,
 //! single-threaded server that reads requests from many connections,
 //! runs PHP one request at a time and streams static files and error

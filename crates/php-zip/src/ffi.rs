@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Raw declarations for the subset of the libzip C API this crate uses
 //! (`<zip.h>` of libzip 1.7.3; newer entry points are gated on the version
 //! found by `build.rs`).

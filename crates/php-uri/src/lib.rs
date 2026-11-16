@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! URI parsing for PHP's `ext/uri`: RFC 3986 (`Uri\Rfc3986\Uri`, modelled on
 //! uriparser) and the WHATWG URL Standard (`Uri\WhatWg\Url`, modelled on
 //! lexbor's URL module).

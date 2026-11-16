@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for `search.rs`.
 mod common;
 use common::{case, check_mapped, lit, pure, regenerate, Case, V};

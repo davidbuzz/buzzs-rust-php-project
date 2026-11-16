@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Locates the system ICU through pkg-config and tells the crate which
 //! versioned symbol suffix (`_74` for ICU 74.x) the C API is exported under.
 //!

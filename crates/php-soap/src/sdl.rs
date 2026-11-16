@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The service description model (`php_sdl.h`): WSDL functions, bindings,
 //! messages and the XML Schema type registry, plus the encoder lookups of
 //! `php_sdl.c` (`get_encoder`, `get_encoder_ex`, `get_element`, …).

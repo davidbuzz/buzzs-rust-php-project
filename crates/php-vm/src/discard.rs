@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Fast request shutdown for a process that exits next (ref:
 //! Zend/zend_execute_API.c `shutdown_executor()` with `fast_shutdown`,
 //! `zend_shutdown_executor_values()`; Zend/zend_hash.c `zend_hash_discard()`).

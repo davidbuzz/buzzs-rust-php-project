@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Replays every `mb_*` call made by php-src's `ext/mbstring` `.phpt` tests
 //! (recorded under PHP 8.3 by `fixtures/phpt/gen_phpt_oracle.py`) against
 //! this crate, and reports per-test reproducibility.

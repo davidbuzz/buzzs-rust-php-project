@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Syntax highlighting and whitespace stripping: `highlight_string()`,
 //! `highlight_file()`, `show_source()` and `php_strip_whitespace()`
 //! (`Zend/zend_highlight.c`), driven by the `php-lexer` tokenizer.

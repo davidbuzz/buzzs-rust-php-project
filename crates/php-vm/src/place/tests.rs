@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Script-level tests of the place walks: assignments whose value is a
 //! reference to a container of the place (`ZEND_ASSIGN_DIM` reads `OP_DATA`
 //! after the container fetch), operands read inside the walk, and walks an

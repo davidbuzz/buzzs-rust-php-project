@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Glue between the VM and the [`urlscan`] rewriter: the
 //! `session.trans_sid_*`/`url_rewriter.*` directives (with their master
 //! deprecations), the `URL-Rewriter` output handler and the

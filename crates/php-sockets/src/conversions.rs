@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `conversions.c`: PHP arrays ⇄ `struct msghdr`/`cmsghdr`/`sockaddr`/
 //! `in6_pktinfo`/`ucred`, with PHP's error paths
 //! (`"error converting user data (path: msghdr > control > element #0 >

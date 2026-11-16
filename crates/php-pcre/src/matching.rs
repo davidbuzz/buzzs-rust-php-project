@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `preg_match()` / `preg_match_all()` (`php_pcre_match_impl`).
 //!
 //! Matching runs in two phases so that callers can account for memory

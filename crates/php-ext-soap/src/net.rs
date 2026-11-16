@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The HTTP transport's network layer: `php-soap`'s [`HttpStream`] over
 //! socket streams opened with `stream_socket_client()` (so every transport
 //! registered with php-ext-streams — `tcp`, `ssl`, `tls`, … — is

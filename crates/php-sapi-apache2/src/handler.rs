@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The content handler on the httpd side (`php_handler()`): request
 //! filtering, the per-process request lock, the request thread, the
 //! `max_execution_time` watchdog and the error-log capture.

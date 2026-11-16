@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A tiny model of the PHP arrays the `preg_*` functions build.
 //!
 //! The crate does not depend on the VM's value types, so results are handed

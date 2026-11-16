@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PKCS#12: `openssl_pkcs12_export`, `_export_to_file`, `_read`.
 
 use crate::args::{CertArg, KeyArg};

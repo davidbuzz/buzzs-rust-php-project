@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `finfo_file()` / `finfo_buffer()` over every php-src fixture, compared
 //! with results recorded from `/usr/bin/php` (see `data/oracle.tsv`), plus
 //! the documented divergences between the system libmagic and PHP's

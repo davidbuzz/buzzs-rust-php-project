@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Row decoding into PHP values (text protocol `php_mysqlnd_rowp_read_text_protocol`
 //! and binary protocol `php_mysqlnd_rowp_read_binary_protocol` +
 //! `mysqlnd_ps_fetch_functions`) and the statistics they collect

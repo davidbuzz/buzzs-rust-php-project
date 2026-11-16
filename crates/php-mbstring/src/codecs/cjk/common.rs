@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Helpers shared by several CJK codecs (the macros and small functions at
 //! the top of `mbfilter_cjk.c`, plus the mobile emoji decoders exported via
 //! `mbfilter_cjk.h`).

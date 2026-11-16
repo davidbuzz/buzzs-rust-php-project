@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `easter_date()` / `easter_days()` (port of `easter.c`).
 
 use crate::{CalError, CAL_EASTER_ALWAYS_GREGORIAN, CAL_EASTER_ALWAYS_JULIAN, CAL_EASTER_ROMAN};

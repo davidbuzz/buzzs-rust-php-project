@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Character-set masks and string "analysis" functions from
 //! `ext/standard/string.c`, `levenshtein.c`, `soundex.c` and `metaphone.c`:
 //! `php_charmask`, `similar_text`, `levenshtein`, `soundex`, `metaphone`,

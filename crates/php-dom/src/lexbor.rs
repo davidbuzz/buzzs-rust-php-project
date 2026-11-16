@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Safe wrappers over lexbor (compiled from php-src's vendored copy) and
 //! the C glue in `csrc/glue.c`: the HTML5 parser, fragment parser,
 //! encodings, CSS selector engine and read-only lexbor DOM accessors.

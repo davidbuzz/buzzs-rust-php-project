@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Frameless builtin calls (php-src `ZEND_FRAMELESS_ICALL_n`): which call
 //! shapes run without the builtin frame, and that every shape which can
 //! warn or throw keeps the frame, so traces, error handlers and

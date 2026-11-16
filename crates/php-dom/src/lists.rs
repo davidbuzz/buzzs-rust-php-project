@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Live node collections: `DOMNodeList`, `DOMNamedNodeMap`,
 //! `Dom\NodeList`, `Dom\NamedNodeMap`, `Dom\DtdNamedNodeMap` and
 //! `Dom\HTMLCollection` (`obj_map.c`, `nodelist.c`, `namednodemap.c`,

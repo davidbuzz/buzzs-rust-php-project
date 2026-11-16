@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's libxml error model (`ext/libxml/libxml.c`).
 //!
 //! * With `libxml_use_internal_errors(true)` every libxml2 error is copied

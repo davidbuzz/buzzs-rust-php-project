@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Run-time caches of named lookups: global constants, class constants,
 //! static properties, static method calls and class names
 //! (php-src's op-array run-time cache, `CACHED_PTR` / `CACHE_PTR` /

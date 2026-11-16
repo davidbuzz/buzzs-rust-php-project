@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 use php_mbstring::encoding::{by_name, utf8};
 use php_parser::ast::{ExprKind, StmtKind};
 use php_parser::{parse, parse_with_encoding, ParseOptions, Program, ScriptEncodingOptions};

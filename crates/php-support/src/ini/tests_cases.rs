@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 // Generated from /usr/bin/php 8.3 parse_ini_string() results; see tests.rs.
 pub(super) const CASES: &[(&[u8], bool, u8, &str)] = &[
     (b"a = 1\nb = hello\n", false, 0, "{s\"a\":s\"1\",s\"b\":s\"hello\"}"),

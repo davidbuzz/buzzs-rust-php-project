@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Raw declarations of the libcurl 8.5.0 C API used by this crate.
 //!
 //! Only the subset needed by ext/curl is declared. Everything here is

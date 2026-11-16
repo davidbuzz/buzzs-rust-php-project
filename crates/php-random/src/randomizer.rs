@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `Random\Randomizer` (ext/random/randomizer.c).
 //!
 //! The methods are generic over any [`Engine`]; the VM keeps the engine

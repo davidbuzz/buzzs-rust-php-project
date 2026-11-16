@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A `gdIOCtx` that writes into a Rust [`Write`] (PHP's
 //! `create_output_context()` / `create_stream_context()` in gd.c).
 

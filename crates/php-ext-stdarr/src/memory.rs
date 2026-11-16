@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A model of the Zend allocator's limits for the array functions that
 //! build arrays whose size the caller controls (`array_fill`, `range`,
 //! `array_pad`, `array_chunk`, `array_map(null, ...)`).

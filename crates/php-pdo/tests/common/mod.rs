@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A miniature VM for replaying `ext/pdo/tests/*.phpt` over the PDO core:
 //! a class table with closures as constructors/methods, objects with
 //! property tables, `var_dump` output, diagnostics in CLI format and an

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for `url.rs` (urlencode family, `parse_url`).
 mod common;
 use common::{assoc, case, check, lit, pure, regenerate, Case, V};

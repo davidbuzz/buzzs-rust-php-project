@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Pre-shared keys: the `psk_client_cb` / `psk_server_cb` options for
 //! TLS 1.2 (`SSL_CTX_set_psk_*_callback`) and TLS 1.3
 //! (`SSL_CTX_set_psk_use_session_callback` /

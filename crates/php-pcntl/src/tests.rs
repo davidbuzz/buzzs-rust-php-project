@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Tests.  Anything that forks, waits for arbitrary children, changes
 //! signal dispositions/masks or process attributes runs in an isolated
 //! subprocess (the test binary re-executed with a single `iso_*` test), so

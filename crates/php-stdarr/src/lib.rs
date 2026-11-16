@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's array functions (`ext/standard/array.c`) on top of `php-runtime`.
 //!
 //! Every function of `array.c` is ported with PHP's exact semantics: key

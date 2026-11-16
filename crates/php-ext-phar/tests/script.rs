@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end tests: PHP scripts run on a VM with the streams, SPL and
 //! phar extensions. Expected output comes from `/usr/bin/php` 8.3 (run
 //! with `-d phar.readonly=0` where noted).

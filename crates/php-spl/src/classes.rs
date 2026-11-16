@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The SPL class table: every class and interface with its parent,
 //! interfaces, constants and method signatures (generated from the
 //! `*.stub.php` files by `tools/gen_classes.py`), so the VM can register

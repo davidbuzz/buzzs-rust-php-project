@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `MurmurHash3` x86-32 ("murmur3a"), x86-128 ("murmur3c") and x64-128
 //! ("murmur3f"), as incremental `PMurHash` ports (ref: ext/hash/murmur/).
 //!

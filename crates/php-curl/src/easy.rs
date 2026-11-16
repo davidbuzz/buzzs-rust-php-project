@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Easy handles (`CURL *`) with the bookkeeping ext/curl keeps next to
 //! them: the error buffer, `curl_slist`s and MIME structures that must
 //! outlive the handle (shared between duplicated handles), and the default

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 // Generated from /usr/bin/php 8.3 sprintf() results (see printf.rs tests).
 // (format, args as (type, value), expected: "OK:<hex>" or "E:<class>:<message>")
 /// One case: format, `(type, value)` arguments, expected result.

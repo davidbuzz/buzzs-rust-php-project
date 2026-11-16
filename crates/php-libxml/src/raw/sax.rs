@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Port of `ext/xml/compat.c`: an expat-like push parser on top of
 //! libxml2's SAX interface.
 //!

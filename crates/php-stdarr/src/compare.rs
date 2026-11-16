@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The bucket comparison functions of `ext/standard/array.c`
 //! (`php_array_key_compare*`, `php_array_data_compare*`,
 //! `php_array_natural*`), `strnatcmp_ex`, and the user-callback comparators

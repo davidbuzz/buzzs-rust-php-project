@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The γ-section method for drawing floats from an interval
 //! (ext/random/gammasection.c, after F. Goualard, ACM TOMACS 32:3, 2022).
 //!

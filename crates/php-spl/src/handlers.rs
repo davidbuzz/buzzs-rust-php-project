@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Object handlers of the SPL classes (`zend_object_handlers` overrides),
 //! dispatched on the object's [`SplState`].
 //!

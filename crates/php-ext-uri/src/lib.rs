@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/uri` for the phprust VM: the `Uri\Rfc3986\*` and `Uri\WhatWg\*`
 //! classes, their enums and exceptions, and `Uri\WhatWg\url_percent_encode()`.
 //!

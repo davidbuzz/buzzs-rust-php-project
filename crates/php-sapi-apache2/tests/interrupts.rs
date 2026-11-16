@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! What reaches the executor through its interrupt flag, at the SAPI level:
 //!
 //! * `max_execution_time`: the handler's watchdog polls the request

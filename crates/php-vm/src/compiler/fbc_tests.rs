@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `zend_compile_args`' known-`fbc` decision: an argument for a by-value
 //! parameter of a function in `CG(function_table)` is compiled for reading,
 //! as are the arguments of a namespaced call's frameless branch.

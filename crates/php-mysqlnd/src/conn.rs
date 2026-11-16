@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The connection object (ref: `mysqlnd_connection.c`, `mysqlnd_commands.c`,
 //! `mysqlnd_auth.c`, `mysqlnd_result.c` header reading, `mysqlnd_loaddata.c`).
 //!

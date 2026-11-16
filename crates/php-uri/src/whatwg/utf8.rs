@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! lexbor's lenient UTF-8 helpers (`lxb_encoding_decode_valid_utf_8_single`
 //! and friends). They trust lead bytes and do not validate continuation
 //! bytes, which affects how invalid input is reported.

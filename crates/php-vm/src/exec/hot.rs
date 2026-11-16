@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The frame-local inner dispatch loop: jumps, smart branches, numeric
 //! arithmetic, `++`/`--` and plain assignments of compiled variables and
 //! temporaries, run on the current frame and the local `ip` alone.

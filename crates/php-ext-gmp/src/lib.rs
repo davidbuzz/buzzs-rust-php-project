@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/gmp` for the phprust VM: binds the `php-gmp` library (the `gmp_*`
 //! functions and the `GMP` class with operator overloading, comparison,
 //! casts and serialization) through the `php_vm::ext` extension API.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The VM as `php_runtime::RuntimeContext` (object handlers, diagnostics)
 //! and as `php_support::output::OutputHost` (SAPI output).
 

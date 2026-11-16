@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Non-callback array functions: `count`, `min`/`max`, `in_array`,
 //! `array_search`, `array_keys`, `array_values`, `array_count_values`,
 //! `array_flip`, `array_change_key_case`, `array_key_first`/`last`,

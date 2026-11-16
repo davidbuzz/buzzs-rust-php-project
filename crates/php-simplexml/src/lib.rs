@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! PHP's `ext/simplexml`: `SimpleXMLElement`, `SimpleXMLIterator` and the
 //! `simplexml_*()` functions over the system libxml2 (through
 //! `php-libxml`'s reference-counted tree).

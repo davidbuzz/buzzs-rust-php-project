@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `php://temp` and `data:` streams enclose a memory stream that has a
 //! resource of its own (`php_stream_temp_create()`), which `fclose()`
 //! refuses (GH-21221).

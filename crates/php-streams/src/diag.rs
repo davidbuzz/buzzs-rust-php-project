@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Diagnostics (warnings and notices) raised by the streams layer.
 //!
 //! PHP reports stream problems through `php_error_docref()` and the

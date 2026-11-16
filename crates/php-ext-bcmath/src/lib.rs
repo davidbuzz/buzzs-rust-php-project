@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/bcmath` for the phprust VM: binds the `php-bcmath` library (the
 //! procedural `bc*()` functions and `BcMath\Number`) through the
 //! `php_vm::ext` extension API.

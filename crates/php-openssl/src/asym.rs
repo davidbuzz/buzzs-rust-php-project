@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! RSA encryption primitives, signatures and envelopes:
 //! `openssl_{private,public}_{encrypt,decrypt}`, `openssl_sign`,
 //! `openssl_verify`, `openssl_seal`, `openssl_open`.

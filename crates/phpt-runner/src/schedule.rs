@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Parallel execution honouring conflict keys (ref: `run-tests.php` `run_all_tests_parallel()`):
 //! while a test holding key K runs, no other test holding K may start; tests with the key `all`
 //! run alone at the end.

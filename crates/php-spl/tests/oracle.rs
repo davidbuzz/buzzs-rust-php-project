@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests: the scripts in `tests/oracle/*.php` are run through the
 //! test interpreter and compared with the output of `/usr/bin/php`
 //! (8.3, cached in `*.out`; the scripts avoid 8.3-vs-master differences).

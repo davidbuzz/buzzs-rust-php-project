@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for `similar_text()`, `levenshtein()`, `soundex()`,
 //! `metaphone()`, `str_word_count()`, `count_chars()` and the
 //! `php_charmask()` warnings (observed through `str_word_count()`).

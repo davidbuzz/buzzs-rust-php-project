@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 use php_runtime::{ArrayKey, Value};
 use php_vm::ext::Extension;
 use php_vm::{Throw, Vm, VmOptions};

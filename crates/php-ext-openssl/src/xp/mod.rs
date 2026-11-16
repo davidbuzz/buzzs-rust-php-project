@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `ssl://` / `tls://` / `tlsv1.x://` socket transports and the
 //! crypto hooks behind `stream_socket_enable_crypto()`,
 //! `stream_socket_get_crypto_status()` and `stream_get_meta_data()["crypto"]`

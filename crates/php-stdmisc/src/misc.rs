@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Small pieces of per-request state: `assert_options()` (the `assert.*`
 //! INI-backed table, `ext/standard/assert.c`), `php_ini_loaded_file()`,
 //! `php_ini_scanned_files()` and `get_cfg_var()`.

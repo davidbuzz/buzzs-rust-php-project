@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `BcMath\Number`: the class registration, its methods and the object
 //! handlers (operators, comparison, casts, virtual readonly properties).
 //!

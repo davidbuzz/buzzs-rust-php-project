@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Methods the dual iterators forward to their inner iterator
 //! (`spl_dual_it_get_method`, `ext/spl/spl_iterators.c`).
 

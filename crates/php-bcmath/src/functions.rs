@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The procedural `bc*()` functions of ext/bcmath (bcmath.c), with PHP's
 //! exact argument validation and error messages.
 //!

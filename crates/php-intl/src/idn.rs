@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `idn_to_ascii()` / `idn_to_utf8()` (php-src `ext/intl/idn`).
 
 use crate::error::{Error, Result};

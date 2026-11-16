@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The XML Schema encoding matrix of `ext/soap/tests/schema/*.phpt`: every
 //! test is an XSD snippet plus a PHP value; the client request built from
 //! it and the value decoded by the server are compared with the expected

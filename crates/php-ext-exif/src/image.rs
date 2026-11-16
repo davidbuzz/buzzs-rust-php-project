@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! ext/standard's `image.c` and `iptc.c`: `getimagesize()`,
 //! `getimagesizefromstring()`, `image_type_to_mime_type()`,
 //! `image_type_to_extension()`, `iptcparse()` and `iptcembed()`.

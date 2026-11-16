@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Replays `tests/oracle/cases.txt` against php-pcre and compares with the
 //! output recorded from a real PHP binary in `tests/oracle/cases.expected`
 //! (see `tests/oracle/gen.php`).

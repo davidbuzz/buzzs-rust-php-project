@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Binds the system libgd (`libgd-dev`, found through pkg-config) lazily:
 //! `build/lazy_dl.rs` (shared from php-libxml) generates stubs for the
 //! libgd functions this crate calls, which `dlopen` libgd on first use, so

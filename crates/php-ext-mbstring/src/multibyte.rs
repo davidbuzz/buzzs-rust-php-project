@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `zend.multibyte`: mbstring's script-encoding support
 //! (`php_mb_zend_encoding_*` callbacks of `zend_multibyte.c`).
 //!

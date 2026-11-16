@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `proc_open()`, `proc_close()`, `proc_get_status()`, `proc_terminate()`.
 //!
 //! The parent ends of the child's pipes are wrapped into `stream`

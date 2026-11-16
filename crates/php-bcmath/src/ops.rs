@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Multiplication, division, powers, roots and rounding.
 //!
 //! Ports of `libbcmath/src/{recmul,div,divmod,raise,raisemod,sqrt,

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `sodium_crypto_auth*` (HMAC-SHA512-256), `sodium_crypto_shorthash*`
 //! (SipHash-2-4), `sodium_crypto_generichash*` (`BLAKE2b`) and
 //! `sodium_crypto_kdf*`.

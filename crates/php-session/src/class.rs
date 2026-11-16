@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The session classes and interfaces (`session.stub.php`,
 //! `mod_user_class.c`): declarations for the VM to register, the
 //! `SessionHandler` methods delegating to the previous (default) module,

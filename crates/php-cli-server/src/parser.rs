@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! A port of the request side of `sapi/cli/php_http_parser.c` (the
 //! joyent `http_parser` fork the built-in server uses).
 //!

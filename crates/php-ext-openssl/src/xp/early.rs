@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! TLS 1.3 early data (0-RTT): the client `early_data` payload and the
 //! server `max_early_data` / `early_data_cb` options.
 

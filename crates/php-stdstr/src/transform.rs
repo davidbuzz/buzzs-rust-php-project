@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! String transformations from `ext/standard/string.c`: case mapping,
 //! trimming, padding, wrapping, splitting, translation and replacement,
 //! plus the path helpers `basename()`/`dirname()`/`pathinfo()`.

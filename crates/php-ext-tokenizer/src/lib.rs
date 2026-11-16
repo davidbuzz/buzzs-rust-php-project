@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/tokenizer` for the phprust VM: `token_get_all()`, `token_name()`,
 //! the `PhpToken` class and the `T_*` constants, on top of `php-lexer`
 //! (tokens) and `php-parser` (`TOKEN_PARSE` mode).

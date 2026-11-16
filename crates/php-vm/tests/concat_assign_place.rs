@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `.=` on properties, array elements and static properties extends the
 //! string in place: php-src's `ZEND_ASSIGN_OBJ_OP`, `ZEND_ASSIGN_DIM_OP` and
 //! `ZEND_ASSIGN_STATIC_PROP_OP` with `ZEND_CONCAT` run `concat_function` on

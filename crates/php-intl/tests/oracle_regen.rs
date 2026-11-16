@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Regenerates the oracle fixtures from `/usr/bin/php` (ICU 74.2):
 //! `cargo test -p php-intl --test oracle_regen -- --ignored`.
 

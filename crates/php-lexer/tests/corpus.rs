@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Lexes the `--FILE--` section of every `.phpt` file under
 //! `modules/php-src` (Zend/tests, tests/, ext/*/tests, sapi/...) in both
 //! modes and checks that nothing panics and that tokens tile the input.

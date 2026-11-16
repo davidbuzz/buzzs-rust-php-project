@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Build-script support shared by the C-library binding crates (php-curl,
 //! php-gd, php-intl, php-xsl; each includes this file with `#[path]`):
 //! binds a shared library lazily, on the first call of one of its

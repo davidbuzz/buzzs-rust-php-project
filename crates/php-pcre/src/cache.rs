@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The per-request compiled pattern cache and the `pcre.*` INI settings
 //! (`PCRE_G(pcre_cache)`, `pcre.backtrack_limit`, `pcre.recursion_limit`,
 //! `pcre.jit`).

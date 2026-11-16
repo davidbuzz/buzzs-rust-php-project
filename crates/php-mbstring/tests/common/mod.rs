@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Shared helpers for the oracle replay tests: value encoding (see
 //! `fixtures/strings/gen_oracle.php`) and dispatch of `mb_*` calls to
 //! `MbState` methods.

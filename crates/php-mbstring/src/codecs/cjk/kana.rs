@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `mb_convert_kana` support: `mb_convert_kana_codepoint`, the
 //! `MBFL_HAN2ZEN_*` / `MBFL_ZEN2HAN_*` mode flags, the option-string parser
 //! and the conversion loop of `PHP_FUNCTION(mb_convert_kana)`.

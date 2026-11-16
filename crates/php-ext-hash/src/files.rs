@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Reading files and streams for `hash_file()`, `hash_hmac_file()`,
 //! `hash_update_file()`, `hash_update_stream()`, `md5_file()` and
 //! `sha1_file()`.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `crypt()` (`ext/standard/crypt.c` with the bundled `php_crypt_r`
 //! implementations) and the password hashing API (`ext/standard/password.c`).
 //!

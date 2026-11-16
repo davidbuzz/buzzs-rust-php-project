@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Tests mirroring `tests/output/*.phpt`.  [`TestHost`] plays the VM: it
 //! displays diagnostics the way the CLI does (through the output layer,
 //! "in %s on line %d" kept literally), tracks the active internal function

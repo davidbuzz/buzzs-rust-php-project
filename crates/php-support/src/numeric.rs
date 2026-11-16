@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Small numeric-string helpers mirroring `Zend/zend_operators.c`
 //! (`_is_numeric_string_ex`) and libc `strtol`/`atoi` as PHP uses them.
 //!

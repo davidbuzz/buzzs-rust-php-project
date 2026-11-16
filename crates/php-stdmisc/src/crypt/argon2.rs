@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Argon2 (RFC 9106; Argon2i / Argon2id / Argon2d, versions 0x10 and 0x13)
 //! with `BLAKE2b`, plus the PHC string encoding of the reference `libargon2`
 //! (`encoding.c`), which PHP's `password_hash()` uses when built with

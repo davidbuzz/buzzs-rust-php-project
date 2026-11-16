@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Error reporting (ref: `mysqli_report.c`, `mysqli_exception.c`,
 //! `MYSQLI_REPORT_MYSQL_ERROR` / `MYSQLI_REPORT_STMT_ERROR`): turns mysqlnd
 //! errors into warnings or `mysqli_sql_exception`s according to the report

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `Uri\Rfc3986\Uri`, `Uri\Rfc3986\UriBuilder` and their enums.
 
 use super::{invalid_serialization_data, port_str_to_long, DebugValue};

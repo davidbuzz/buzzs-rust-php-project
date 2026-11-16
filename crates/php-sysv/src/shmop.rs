@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/shmop` (ref: `ext/shmop/shmop.c`).
 
 use crate::{c_int, key_from_arg, strerror, sys, SysvError, SysvResult};

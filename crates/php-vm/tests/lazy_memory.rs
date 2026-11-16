@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `memory_get_usage()` does not move when a script first uses a table that
 //! php-src preallocates or keeps outside the Zend heap: the global symbol
 //! table's entries for the main script's variables, the GC root buffer,

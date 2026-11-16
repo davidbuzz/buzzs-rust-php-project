@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Ports of the conversion primitives of `ext/iconv/iconv.c`:
 //! `php_iconv_string`, `_php_iconv_appendl`, `_php_iconv_strlen`,
 //! `_php_iconv_substr` and `_php_iconv_strpos`.

@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `convert.*` filters: `convert.base64-encode`, `convert.base64-decode`,
 //! `convert.quoted-printable-encode` and `convert.quoted-printable-decode`
 //! (`ext/standard/filters.c`).

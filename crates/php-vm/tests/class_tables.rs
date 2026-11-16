@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Consistency of the per-class member tables (`Class::methods`,
 //! `const_map`, `static_map`, `prop_map`: php-src's `function_table`,
 //! `constants_table` and `properties_info`) with their declaration-order

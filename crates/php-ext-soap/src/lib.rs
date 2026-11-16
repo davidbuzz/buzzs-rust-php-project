@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `ext/soap` for the phprust VM: binds the `php-soap` library (WSDL
 //! model, SOAP encoding, client/server state machines, HTTP transport)
 //! through the `php_vm::ext` extension API.

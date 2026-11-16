@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Runs the `.phpt` scripts of `ext/soap/tests` (interop rounds, bug
 //! regressions, client/server tests) with the test interpreter over the
 //! extension and compares their output with the expected one.

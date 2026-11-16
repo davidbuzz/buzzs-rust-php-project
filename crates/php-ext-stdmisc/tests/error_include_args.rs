@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `error_include_args` on warnings the library already prefixes with the
 //! function name (`php_verror` builds the origin with the arguments).
 

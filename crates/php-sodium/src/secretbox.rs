@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `sodium_crypto_secretbox*` (XSalsa20-Poly1305) and
 //! `sodium_crypto_stream*` (`XSalsa20` and `XChaCha20` keystreams).
 

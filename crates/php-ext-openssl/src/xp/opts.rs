@@ -1,3 +1,5 @@
+// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Access to the `ssl` stream context options (`GET_VER_OPT*` in
 //! `xp_ssl.c`) and writing captured values back into the context.
 
