@@ -102,6 +102,13 @@ Third-party components keep their own licenses (the oracle tree under
 `modules/php-src` is PHP-3.01, © The PHP Group; `tools/lcov` is GPL-2.0-or-later;
 linked system libraries keep theirs). See [LICENSE](LICENSE).
 
+If you want to reuse files from this repository, the [LICENSE](LICENSE) file
+includes a plain-language addendum listing exactly what compliance requires:
+keep the per-file copyright header, ship the license text, don't use the
+project or author name for endorsement, and honor the original notices on
+the few ported PHP/Zend files. Attribution of the notices is the whole of
+the burden — no copyleft, no share-alike, no fee.
+
 ## Related work
 
 Projects with a related thesis or implementation:
