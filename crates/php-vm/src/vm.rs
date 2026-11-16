@@ -1530,7 +1530,15 @@ impl Frame {
                 release_slot(old);
             }
         }
-        clear_arg_buffer(&mut self.args);
+        // A direct frame's passed arguments are in its compiled variables:
+        // the buffer holds the `None` of each (`calls::enter`), so it is
+        // emptied here, as `clear_arg_buffer` would, without the call (the
+        // drop of any value it held runs as there).
+        if self.args.capacity() > 256 {
+            self.args = Vec::new();
+        } else {
+            self.args.clear();
+        }
         // A method's `$this` and scopes, a closure, in
         // `clear_rest_for_reuse`'s order.
         clear_opt(&mut self.this);
@@ -1632,7 +1640,11 @@ impl Frame {
     /// through it) and something besides this frame holds the function
     /// (dropping the frame's handles would free nothing). The handles are
     /// overwritten by the next call made in the slot.
-    #[inline]
+    ///
+    /// Inline: out of line it cost every direct return a call (16
+    /// instructions and the call's own).
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
     fn keeps_function(&self) -> bool {
         match (&self.ufunc, &self.func) {
             (Some(u), Some(Func::User(f))) => {

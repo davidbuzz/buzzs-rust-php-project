@@ -1553,6 +1553,22 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 let next = match out.why {
                     WHY_CALL => {
                         let next = run_call(vm, &mut prep, ops, lits, at);
+                        if next == ENTERED {
+                            // The call was entered: the tape goes on in the
+                            // callee's frame, as after an entered `DoCall`
+                            // below (sized for its code, no symbol table).
+                            fresh = true;
+                            switched = SWITCHED;
+                            if crate::interrupt::safe_point_due() {
+                                return (0, LEFT);
+                            }
+                            let Some(f) = vm.frames.last() else {
+                                return (0, LEFT);
+                            };
+                            ip = f.ip;
+                            code = Rc::as_ptr(&f.code);
+                            continue 'frames;
+                        }
                         let Some(f) = vm.frames.last_mut() else {
                             flush(vm, &mut prep);
                             return (0, NO_SAFE_POINT);
@@ -1720,9 +1736,8 @@ fn run_call(
     match ops.get(at) {
         Some(&Op::InitFCall { name, .. }) => {
             flush(vm, prep);
-            *prep = calls::prepare(vm, name);
-            if let Some(call) = prep.as_mut() {
-                return send_following(vm, call, ops, at);
+            if let Some(call) = calls::prepare(vm, name) {
+                return send_and_enter(vm, prep, call, ops, at);
             }
         }
         Some(&Op::InitMethodCall {
@@ -1730,9 +1745,8 @@ fn run_call(
             name: Operand::Lit(lit),
         }) => {
             flush(vm, prep);
-            *prep = calls::prepare_method(vm, obj, lit, at);
-            if let Some(call) = prep.as_mut() {
-                return send_following(vm, call, ops, at);
+            if let Some(call) = calls::prepare_method(vm, obj, lit, at) {
+                return send_and_enter(vm, prep, call, ops, at);
             }
             // Not a hot op: its generic fast path (`Vm::run`'s pre-match
             // arm), else the generic op in `Vm::run`.
@@ -1751,8 +1765,7 @@ fn run_call(
             match calls::new_object(vm, lit, dst, skip) {
                 Some(calls::NewDone::Skip(target)) => return target,
                 Some(calls::NewDone::Prepared(call)) => {
-                    let call = prep.insert(call);
-                    return send_following(vm, call, ops, at);
+                    return send_and_enter(vm, prep, call, ops, at);
                 }
                 Some(calls::NewDone::Pending) => return at + 1,
                 // The generic `New` (`hot::step_ext`, then `Vm::run`).
@@ -1761,10 +1774,9 @@ fn run_call(
         }
         Some(&Op::InitStaticCall { .. }) => {
             flush(vm, prep);
-            *prep = calls::prepare_static(vm, at);
             // Not a hot op: else the generic op in `Vm::run`.
-            return match prep.as_mut() {
-                Some(call) => send_following(vm, call, ops, at),
+            return match calls::prepare_static(vm, at) {
+                Some(call) => send_and_enter(vm, prep, call, ops, at),
                 None => DECLINED,
             };
         }
@@ -1772,9 +1784,8 @@ fn run_call(
             callee: Operand::Cv(cv),
         }) => {
             flush(vm, prep);
-            *prep = calls::prepare_closure(vm, cv);
-            if let Some(call) = prep.as_mut() {
-                return send_following(vm, call, ops, at);
+            if let Some(call) = calls::prepare_closure(vm, cv) {
+                return send_and_enter(vm, prep, call, ops, at);
             }
             // Not a hot op: its generic fast path (`Vm::run`'s pre-match
             // arm), else the generic op in `Vm::run`.
@@ -1798,6 +1809,37 @@ fn run_call(
         return DECLINED;
     };
     hot::step_ext(f, ops, lits, at)
+}
+
+/// [`run_call`]'s answer when it entered the call it prepared: the
+/// callee's frame is the current one.
+const ENTERED: usize = usize::MAX - 1;
+
+/// The `Send`s after the op at `at` that started `call`
+/// ([`send_following`]), and the call itself when its `DoCall` comes right
+/// after them and it is a user one (`ZEND_DO_UCALL`: [`calls::enter`]),
+/// without another round trip through the loop: [`ENTERED`]. Otherwise the
+/// call is kept in `prep` for its `DoCall` (a builtin's, one `enter`
+/// declines, or one whose `Send`s were not all passed here), and the op
+/// where the tape goes on is returned.
+#[inline(always)]
+#[allow(clippy::inline_always)] // one copy per kind of call start
+fn send_and_enter(
+    vm: &mut Vm,
+    prep: &mut Option<calls::Prepared>,
+    mut call: calls::Prepared,
+    ops: &[Op],
+    at: usize,
+) -> usize {
+    let next = send_following(vm, &mut call, ops, at);
+    if let Some(&Op::DoCall { dst }) = ops.get(next) {
+        match calls::enter(vm, call, dst, next + 1) {
+            Ok(()) => return ENTERED,
+            Err(back) => call = back,
+        }
+    }
+    *prep = Some(call);
+    next
 }
 
 /// The `Send`s right after the op at `at`, which started the prepared
