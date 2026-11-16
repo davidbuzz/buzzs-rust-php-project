@@ -379,6 +379,10 @@ pub(crate) struct FnCtx {
     /// variables), with whether each is bound by reference (for the
     /// optimizer).
     pub bound_cvs: Vec<(u32, bool)>,
+    /// The by-value, non-variadic parameters whose declared type is
+    /// scalar-only (`int`, `?string`, `bool|float`, ...): what they are
+    /// bound to has no destructor (for the optimizer).
+    pub scalar_params: Vec<u32>,
 }
 
 impl FnCtx {
@@ -426,6 +430,7 @@ impl FnCtx {
             in_frameless_branch: false,
             decls: None,
             bound_cvs: Vec::new(),
+            scalar_params: Vec::new(),
         }
     }
 }
@@ -1062,6 +1067,7 @@ impl Compiler<'_> {
             let ctx = optimizer::OptContext {
                 is_main,
                 bound_cvs: &f.bound_cvs,
+                scalar_params: &f.scalar_params,
                 verifies_return: f.has_return_type && !f.is_generator && !f.returns_ref,
             };
             optimizer::optimize_op_array_with(&mut op_array, level, &ctx);

@@ -583,6 +583,9 @@ impl Compiler<'_> {
                 Some(t) => Some(self.resolve_type(t)?),
                 None => None,
             };
+            if !p.by_ref && !p.variadic && ty.as_ref().is_some_and(is_scalar_only) {
+                self.f().scalar_params.push(param_cv);
+            }
             // `zend_compile_params` compiles the default without constant
             // substitution.
             let saved_subst = std::mem::replace(&mut self.no_const_subst, true);
@@ -2909,3 +2912,11 @@ pub(super) fn is_reserved_class_name(lc: &[u8]) -> bool {
 
 #[allow(dead_code)]
 fn unused(_: StmtKind) {}
+
+/// Whether `t` admits only scalars and null (no array, object, resource,
+/// callable, iterable or class name): a value of it has no destructor.
+fn is_scalar_only(t: &crate::types::TypeDecl) -> bool {
+    use crate::types::mask;
+    let scalars = mask::NULL | mask::BOOL | mask::LONG | mask::DOUBLE | mask::STRING;
+    t.mask != 0 && t.mask & !scalars == 0 && t.classes.is_empty() && t.intersections.is_empty()
+}

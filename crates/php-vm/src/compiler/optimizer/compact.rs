@@ -9,7 +9,7 @@ use super::{
     def_tmp, for_each_label_mut, for_each_operand_mut, for_each_place_operand_mut, literals_equal,
     OptContext,
 };
-use crate::opcode::{ArgSrc, ClassSpec, Op, OpArray, Operand, Place, PlaceBase};
+use crate::opcode::{ArgSrc, ClassSpec, Op, OpArray, Operand, Place, PlaceBase, Seg};
 use php_runtime::Value;
 use std::collections::HashMap;
 
@@ -764,6 +764,118 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
         }
     }
 
+    // The scalar-typed parameters the function never writes (only the
+    // `RECV` binds them): their value has no destructor.
+    let mut stable_scalar = vec![false; num_cvs];
+    for &cv in ctx.scalar_params {
+        if let Some(slot) = stable_scalar.get_mut(cv as usize) {
+            *slot = true;
+        }
+    }
+    for op in &op_array.ops {
+        if matches!(
+            op,
+            Op::Recv { .. } | Op::RecvInit { .. } | Op::RecvDefault { .. }
+        ) {
+            continue;
+        }
+        // Every mention that is not a plain operand read may write.
+        let mut mentioned = Vec::new();
+        let mut op_clone = op.clone();
+        for_each_cv_mut(&mut op_clone, |c| mentioned.push(*c));
+        let mut read = Vec::new();
+        let mut op_clone = op.clone();
+        for_each_operand_mut(&mut op_clone, |operand| {
+            if let Operand::Cv(c) = operand {
+                read.push(*c);
+            }
+        });
+        for c in mentioned {
+            if let Some(i) = read.iter().position(|&r| r == c) {
+                read.swap_remove(i);
+            } else if let Some(slot) = stable_scalar.get_mut(c as usize) {
+                *slot = false;
+            }
+        }
+    }
+    for place in &op_array.places {
+        if let PlaceBase::Cv(cv) = place.base {
+            if let Some(slot) = stable_scalar.get_mut(cv as usize) {
+                *slot = false;
+            }
+        }
+    }
+    // `$cv[k] = v` with an offset and a value that have no destructor (a
+    // literal, a stable scalar parameter): a write of the variable, not a
+    // read, which goes with it when nothing else reads the variable
+    // (php-src's dce.c drops an ASSIGN_DIM of a variable that does not
+    // escape and an OP_DATA without MAY_HAVE_DTOR).
+    // The write must also do just that: the variable holds an array or
+    // nothing (every assignment of it is a literal array: a scalar or a
+    // string in it makes the write throw or warn), and the offset is an
+    // int or string literal or absent (a float or null one warns).
+    let mut array_only = vec![true; num_cvs];
+    for op in &op_array.ops {
+        let target = match op {
+            Op::AssignCv { cv, val, .. } => Some((*cv, *val)),
+            Op::Assign { place, val, .. } => {
+                op_array
+                    .places
+                    .get(*place as usize)
+                    .and_then(|p| match p.base {
+                        PlaceBase::Cv(cv) if p.segs.is_empty() => Some((cv, *val)),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        };
+        if let Some((cv, val)) = target {
+            let lit_array = matches!(val, Operand::Lit(l)
+                if matches!(op_array.literals.get(l as usize), Some(Value::Array(_))));
+            if !lit_array {
+                if let Some(slot) = array_only.get_mut(cv as usize) {
+                    *slot = false;
+                }
+            }
+        }
+    }
+    let dim_ok = |seg: &Seg| match seg {
+        Seg::Append => true,
+        Seg::Dim(Operand::Lit(l)) => matches!(
+            op_array.literals.get(*l as usize),
+            Some(Value::Int(_) | Value::Str(_))
+        ),
+        _ => false,
+    };
+    let no_dtor = |o: Operand| match o {
+        Operand::Lit(_) => true,
+        Operand::Cv(c) => stable_scalar.get(c as usize).copied().unwrap_or(false),
+        Operand::Unused | Operand::Tmp(_) | Operand::TmpKeep(_) => false,
+    };
+    // (Before specialisation: `Assign` to a one-offset place of the
+    // variable; `AssignDimCv` comes later.)
+    let pure_dim_write = |op: &Op| {
+        let Op::Assign {
+            place,
+            val,
+            dst: None,
+        } = op
+        else {
+            return false;
+        };
+        match op_array.places.get(*place as usize) {
+            Some(p) => match (&p.base, &p.segs[..]) {
+                (PlaceBase::Cv(cv), [seg]) => {
+                    array_only.get(*cv as usize).copied().unwrap_or(false)
+                        && dim_ok(seg)
+                        && no_dtor(*val)
+                }
+                _ => false,
+            },
+            None => false,
+        }
+    };
+
     // Count reads from ops
     for op in &op_array.ops {
         let mut op_clone = op.clone();
@@ -825,7 +937,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
     // by an op a pass folded away, as `$a += $b` once SCCP computed it)
     // reads nothing.
     let mut named = vec![false; op_array.places.len()];
-    for op in &op_array.ops {
+    for op in op_array.ops.iter().filter(|op| !pure_dim_write(op)) {
         for_each_op_place(op, |p| {
             if let Some(slot) = named.get_mut(p as usize) {
                 *slot = true;
@@ -959,8 +1071,19 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
     let mut changed = false;
 
     // Eliminate assignments to unread variables
-    for op in &mut op_array.ops {
+    let pure_dim_writes: Vec<bool> = op_array.ops.iter().map(&pure_dim_write).collect();
+    for (op, pure) in op_array.ops.iter_mut().zip(pure_dim_writes) {
         match op {
+            Op::Assign { place, .. } if pure => {
+                let cv = match op_array.places.get(*place as usize).map(|p| &p.base) {
+                    Some(PlaceBase::Cv(cv)) => *cv,
+                    _ => continue,
+                };
+                if removable(cv) {
+                    *op = Op::Nop;
+                    changed = true;
+                }
+            }
             // Reading a CV can raise "Undefined variable" (ZEND_ASSIGN with a CV
             // operand), so an assignment of one is kept even when its target is
             // never read.

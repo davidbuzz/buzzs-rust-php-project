@@ -110,6 +110,9 @@ pub struct OptContext<'a> {
     /// and a by-reference one may change whenever user code runs or coerce
     /// what is assigned to it (a typed reference).
     pub bound_cvs: &'a [(u32, bool)],
+    /// The by-value parameters of a scalar-only declared type: until the
+    /// function assigns one, its value has no destructor.
+    pub scalar_params: &'a [u32],
     /// The function's returns check a declared return type (php-src
     /// emits `VERIFY_RETURN_TYPE` before each `RETURN`; the VM's `Return`
     /// does the check itself).
@@ -227,6 +230,7 @@ pub fn optimize_unit(unit: &mut CompiledUnit, level: u32) {
             let ctx = OptContext {
                 is_main: true,
                 bound_cvs: &[],
+                scalar_params: &[],
                 verifies_return: false,
             };
             optimize_op_array_with(code, level & !PASS_13, &ctx);
@@ -1195,6 +1199,40 @@ mod tests {
             "{:?}",
             f.ops
         );
+    }
+
+    /// `$a[k] = v` with a literal offset and a value without a destructor
+    /// (a literal, a scalar-typed parameter the function never assigns)
+    /// goes with a variable nothing reads (opcache `opt/sccp_009`); a
+    /// variable that held a scalar keeps the write, which throws.
+    #[test]
+    fn unused_variables_lose_their_plain_dim_writes() {
+        let unit = compile_src(
+            "<?php\nfunction foo(int $x) {\n    $a[0] = $x;\n    $a[1] = 2;\n    echo $a[1];\n}\n\
+             function bar() { $a = 5; $a[0] = 1; return 1; }\n\
+             function baz($x) { $a[0] = $x; return 1; }\n",
+            DEFAULT_OPTIMIZATION_LEVEL,
+        );
+        let foo = find_code(&unit, named(b"foo"));
+        assert!(
+            matches!(
+                &foo.ops[..],
+                [Op::Recv { .. }, Op::Echo(_), Op::Return { .. }]
+            ),
+            "{:?}",
+            foo.ops
+        );
+        let writes = |code: &OpArray| {
+            code.ops
+                .iter()
+                .filter(|op| matches!(op, Op::Assign { .. } | Op::AssignDimCv { .. }))
+                .count()
+        };
+        let bar = find_code(&unit, named(b"bar"));
+        assert_eq!(writes(&bar), 1, "{:?}", bar.ops);
+        // An untyped parameter may hold an object: the write stays.
+        let baz = find_code(&unit, named(b"baz"));
+        assert_eq!(writes(&baz), 1, "{:?}", baz.ops);
     }
 
     #[test]
