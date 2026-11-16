@@ -1637,34 +1637,36 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
             Some(&Op::DoCall { dst }) => {
                 fresh = true;
                 match prep.take() {
-                    Some(call) => match calls::enter(vm, call, dst, at + 1) {
-                        Ok(()) => true,
-                        // `ZEND_DO_ICALL` of the prepared builtin call (`enter`
-                        // gives it back): the handler runs here, and the
-                        // caller goes on after the call, looked at afresh
-                        // (the handler may have attached its symbol table),
-                        // with the safe point after the call when it is due,
-                        // as after `Vm::run`'s generic `DoCall`.
-                        Err(call) if call.is_native() => {
-                            fresh = false;
-                            match calls::call_native(vm, call, dst, at + 1) {
-                                Ok(Ok(())) => {
-                                    if crate::interrupt::safe_point_due() {
-                                        return ((at + 1) | switched, at);
-                                    }
-                                    ip = at + 1;
-                                    continue 'frames;
+                    // `ZEND_DO_ICALL` of the prepared builtin call: the
+                    // handler runs here, and the caller goes on after the
+                    // call, looked at afresh (the handler may have attached
+                    // its symbol table), with the safe point after the call
+                    // when it is due, as after `Vm::run`'s generic `DoCall`.
+                    // Tested before `enter`, which would only hand the call
+                    // back: called for builtins too, it was taken out of
+                    // line and cost each builtin call ~75 instructions.
+                    Some(call) if call.is_native() => {
+                        fresh = false;
+                        match calls::call_native(vm, call, dst, at + 1) {
+                            Ok(Ok(())) => {
+                                if crate::interrupt::safe_point_due() {
+                                    return ((at + 1) | switched, at);
                                 }
-                                Ok(Err(t)) => {
-                                    vm.tape_throw = Some(t);
-                                    return (at | switched, hot::THREW);
-                                }
-                                Err(call) => {
-                                    calls::materialize(vm, call);
-                                    false
-                                }
+                                ip = at + 1;
+                                continue 'frames;
+                            }
+                            Ok(Err(t)) => {
+                                vm.tape_throw = Some(t);
+                                return (at | switched, hot::THREW);
+                            }
+                            Err(call) => {
+                                calls::materialize(vm, call);
+                                false
                             }
                         }
+                    }
+                    Some(call) => match calls::enter(vm, call, dst, at + 1) {
+                        Ok(()) => true,
                         Err(call) => {
                             calls::materialize(vm, call);
                             vm.push_simple_ucall(dst, at + 1)
@@ -1832,10 +1834,12 @@ fn send_and_enter(
     at: usize,
 ) -> usize {
     let next = send_following(vm, &mut call, ops, at);
-    if let Some(&Op::DoCall { dst }) = ops.get(next) {
-        match calls::enter(vm, call, dst, next + 1) {
-            Ok(()) => return ENTERED,
-            Err(back) => call = back,
+    if !call.is_native() {
+        if let Some(&Op::DoCall { dst }) = ops.get(next) {
+            match calls::enter(vm, call, dst, next + 1) {
+                Ok(()) => return ENTERED,
+                Err(back) => call = back,
+            }
         }
     }
     *prep = Some(call);
