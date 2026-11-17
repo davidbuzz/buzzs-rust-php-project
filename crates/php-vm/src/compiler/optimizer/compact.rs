@@ -738,6 +738,71 @@ pub(crate) fn for_each_op_place(op: &Op, mut f: impl FnMut(u32)) {
     }
 }
 
+/// True when an instruction's result can never need a user-visible
+/// destructor at an arbitrary time: numbers, bools, strings and plain
+/// arrays.  Objects, closures, `NEW`, calls and dynamic fetches are all
+/// left out; they may carry a `__destruct` or wrap a resource.
+fn result_is_inert(op: &Op) -> bool {
+    match op {
+        Op::Bin { .. }
+        | Op::Unary { .. }
+        | Op::Rope { .. }
+        | Op::InitArray { .. }
+        | Op::Isset { .. }
+        | Op::Empty { .. }
+        | Op::InstanceOf { .. }
+        | Op::InArray { .. }
+        | Op::KeyExists { .. }
+        | Op::ArrayKeyExists { .. }
+        | Op::Defined { .. }
+        | Op::TypeCheck { .. }
+        | Op::Count { .. }
+        | Op::Strlen { .. }
+        | Op::FuncNumArgs { .. }
+        | Op::GetClass { .. }
+        | Op::GetType { .. }
+        | Op::IncDec { .. }
+        | Op::IncDecCv { .. }
+        | Op::AssignOp { .. }
+        | Op::AssignOpCv { .. }
+        | Op::BinAssignCv { .. }
+        | Op::JmpZEx { .. }
+        | Op::JmpNzEx { .. }
+        | Op::JmpNull { .. } => true,
+        Op::Cast { kind, .. } => *kind != crate::opcode::CastKind::Object,
+        _ => false,
+    }
+}
+
+/// True when an operand's value provably needs no destructor at an
+/// arbitrary time: a literal, or a temporary whose single defining
+/// instruction is inert.  `Move` chains are followed; anything ambiguous
+/// counts as possibly an object.
+fn operand_is_inert(op_array: &OpArray, tmp_def: &[usize], mut val: Operand) -> bool {
+    for _ in 0..32 {
+        match val {
+            Operand::Lit(_) => return true,
+            Operand::Tmp(t) | Operand::TmpKeep(t) => {
+                let d = match tmp_def.get(t as usize) {
+                    Some(&d) if d >= usize::MAX - 1 => return false,
+                    Some(&d) => d,
+                    None => return false,
+                };
+                let op = &op_array.ops[d];
+                if result_is_inert(op) {
+                    return true;
+                }
+                match op {
+                    Op::Move { src, .. } => val = *src,
+                    _ => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Pass 13: Removes assignments to variables that are never read and never referenced (ZEND_OPTIMIZER_PASS_13).
 pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'_>) -> bool {
     let num_cvs = op_array.cv_names.len();
@@ -1035,12 +1100,35 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
         });
     }
 
-    // A variable that is ever assigned a non-literal value may hold an
-    // object (or an array of them): dropping the assignment of it destroys
-    // the object early, and dropping a later overwrite destroys it late
-    // (php-src's dce.c keeps an ASSIGN whose old value may have a
-    // destructor). Only variables that only ever receive literals lose
-    // their assignments.
+    // Dropping an assignment to an unread variable changes when the value
+    // it produced is destroyed.  That is unobservable unless a destructor
+    // can run: an object (or a resource, whose shutdown hooks users can
+    // reach).  So a variable that ever receives a value which may be an
+    // object keeps its assignments; numbers, bools, strings and plain
+    // arrays lose them, exactly like php-src's dce.c, whose SCCP type
+    // flags single out IS_OBJECT for the same reason.
+    //
+    // A temporary's type comes from its defining instruction: `CONCAT`
+    // yields a string, `NEW` an object.  `Move`s are followed to their
+    // source.  Anything unprovable counts as possibly an object.
+    const NO_DEF: usize = usize::MAX;
+    const MANY_DEFS: usize = usize::MAX - 1;
+    let mut tmp_def: Vec<usize> = vec![NO_DEF; op_array.num_tmps as usize];
+    for (i, op) in op_array.ops.iter().enumerate() {
+        if let Some(t) = def_tmp(op) {
+            if let Some(slot) = tmp_def.get_mut(t as usize) {
+                *slot = if *slot == NO_DEF {
+                    i
+                } else if *slot == MANY_DEFS || *slot != i {
+                    // A temporary defined in more than one place may hold
+                    // anything any of those places produced.
+                    MANY_DEFS
+                } else {
+                    *slot
+                };
+            }
+        }
+    }
     let mut may_hold_object = vec![false; num_cvs];
     for op in &op_array.ops {
         let target = match op {
@@ -1057,7 +1145,7 @@ pub(crate) fn remove_unused_variables(op_array: &mut OpArray, ctx: &OptContext<'
             _ => None,
         };
         if let Some((cv, val)) = target {
-            if !matches!(val, Operand::Lit(_)) {
+            if !operand_is_inert(op_array, &tmp_def, val) {
                 if let Some(m) = may_hold_object.get_mut(cv as usize) {
                     *m = true;
                 }
