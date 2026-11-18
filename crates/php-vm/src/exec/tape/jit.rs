@@ -83,6 +83,12 @@ pub(crate) static OBSERVER_ON: AtomicBool = AtomicBool::new(false);
 /// `plan_call`'s marker for a callee `return` of `Operand::Unused`
 /// (`return;`): the trace stores a null into the caller's result slot.
 const KNULL_ARG: u8 = 5;
+/// `plan_call`'s marker for a caller-side `Send` that can be left out
+/// entirely: the callee's inlined body never mentions that parameter
+/// (or the caller passed more arguments than the callee declares, and
+/// the plain call discards the extras), so there is nothing to guard
+/// and nothing to store, whatever the caller-side value was.
+const KSKIP: u8 = 6;
 /// The most arguments an inlined call may pass (the plain-call path's
 /// inline argument buffer, `calls.rs`'s `MAX_ARGS`).
 const MAX_CALL_ARGS: usize = 6;
@@ -312,7 +318,7 @@ struct Guard {
 /// value) as the *caller* sees it: an `Inst`-style kind/offset pair, with
 /// `KC`/`KT`/`KL` meaning the caller's compiled variable, temporary or
 /// literal, and `lit` the resolved value of a `KL` (or the marker value
-/// of a `KNULL_ARG`).
+/// of a `KNULL_ARG` or `KSKIP`).
 #[derive(Clone, Copy)]
 struct Arg {
     kind: u8,
@@ -735,13 +741,19 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
 }
 
 /// The whole analysis of the plain user-function call started by the
-/// `InitFCall` at `init`: resolve the callee, read the call's shape out
-/// of the raw ops (the `InitFCall`, the `Send`s and the `DoCall` the
-/// fused `CallInit` row stands for, at the same indexes), and decode
-/// the callee's straight-line body into [`CallPlan`] rows whose slot
-/// offsets address the trace's scratch buffer. Every assumption is
-/// plan-time or guarded by the trace's function-table version check;
-/// `None` refuses the inlining (and with it the whole region).
+/// `InitFCall` at `init`, or the static method call started by a
+/// named-class literal-method `InitStaticCall` there: resolve the
+/// callee, read the call's shape out of the raw ops (the init row, the
+/// `Send`s and the `DoCall` the fused `CallInit` row stands for, at the
+/// same indexes), and decode the callee's straight-line body into
+/// [`CallPlan`] rows whose slot offsets address the trace's scratch
+/// buffer. A static call's callee comes from the site's `fcall_cache`
+/// slot past the literals (the `prepare_static` formula); the scopes
+/// it resolved are not needed by an inlined straight-line body, which
+/// cannot read them (no whitelisted row touches a frame). Every
+/// assumption is plan-time or guarded by the trace's function-table
+/// version check; `None` refuses the inlining (and with it the whole
+/// region).
 fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<CallPlan> {
     macro_rules! rj {
         ($($a:tt)*) => {{
@@ -760,19 +772,25 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     // (Any other shape lowers to *raw* `Op`s, not to the fused
     // `CallInit`/`CallSend` rows this scan matched, so it never reaches
     // here; the re-match is belt-and-braces.)
+    // `Some(name)` for a plain call (its callee is cached by the name
+    // literal); `None` for a static call (cached at a per-site slot).
     let name = match code.ops.get(init)? {
         Op::InitFCall {
             name,
             fallback: None,
             ..
-        } => *name,
-        _ => rj!("raw row is not a plain InitFCall"),
+        } => Some(*name),
+        Op::InitStaticCall {
+            class: crate::opcode::ClassSpec::Named(_),
+            name: Operand::Lit(_),
+        } => None,
+        _ => rj!("raw row is not a plain InitFCall or a Named/Lit InitStaticCall"),
     };
     let mut sends: Vec<Arg> = Vec::new();
     let mut ci = init + 1;
     let dst = loop {
-        match code.ops.get(ci)? {
-            Op::Send { src: arg } => {
+        match code.ops.get(ci) {
+            Some(Op::Send { src: arg }) => {
                 let o = match arg {
                     ArgSrc::Val(o @ (Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_)))
                     | ArgSrc::CallResult(o @ Operand::Tmp(_)) => *o,
@@ -785,7 +803,17 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
                     },
                     _ => rj!("send arg is not a plain value"),
                 };
-                let (kind, off) = src(code, o)?;
+                let (kind, off) = match o {
+                    // A literal operand of any kind (even a string, as
+                    // in `hallo("hallo")`): a `KL` whose value is only
+                    // resolved below if the send turns out to be live;
+                    // a dead send is dropped whatever it holds.
+                    Operand::Lit(l) if l < super::SLOT_LIMIT => (KL, l << SLOT_SHIFT),
+                    _ => match src(code, o) {
+                        Some(ko) => ko,
+                        None => rj!("send arg {o:?} has no inlinable source"),
+                    },
+                };
                 if kind == KI {
                     // A small-int constant operand: `src` carried its
                     // value in the offset; make it a plain literal.
@@ -798,12 +826,18 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
                     ci += 1;
                     continue;
                 }
-                let lit = if kind == KL { resolved_lit(st, off)? } else { 0 };
-                sends.push(Arg { kind, off, lit });
+                // A `KL`'s value is resolved later, only if the send
+                // turns out to be live; keep the literal's index until
+                // then.
+                sends.push(Arg { kind, off, lit: 0 });
                 ci += 1;
             }
-            Op::DoCall { dst } => break *dst,
-            _ => rj!("row after InitFCall is neither Send nor DoCall"),
+            Some(Op::DoCall { dst }) => break *dst,
+            None => rj!("op array ends inside the call"),
+            _ => rj!(
+                "row {ci} after InitFCall is neither Send nor DoCall: {:?}",
+                code.ops.get(ci)
+            ),
         }
     };
     let ns = sends.len();
@@ -813,25 +847,47 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
 
     // The callee: the run-time cache the interpreted call path filled
     // for this exact site, still alive and a plain user function.
-    let uf = {
-        let cache = code.fcall_cache.borrow();
-        match cache.get(name as usize) {
-            None => rj!("no fcall cache slot for the name"),
-            Some(None) => rj!("fcall cache not filled"),
-            Some(Some(cell)) => match cell.get() {
-                Some(Func::User(uf)) => uf,
-                Some(Func::Builtin(_)) => rj!("callee is a builtin"),
-                None => rj!("cached callee is dead"),
-            },
+    let uf = match name {
+        Some(name) => {
+            let cache = code.fcall_cache.borrow();
+            match cache.get(name as usize) {
+                None => rj!("no fcall cache slot for the name"),
+                Some(None) => rj!("fcall cache not filled"),
+                Some(Some(cell)) => match cell.get() {
+                    Some(Func::User(uf)) => uf,
+                    Some(Func::Builtin(_)) => rj!("callee is a builtin"),
+                    None => rj!("cached callee is dead"),
+                },
+            }
+        }
+        None => {
+            // The static-call site's slot (past the literals, the
+            // `prepare_static` formula): a resolved method whose declaring
+            // scope and called class are still alive.
+            let slot = code.literals.len() + init + 1;
+            match code
+                .fcall_cache
+                .borrow()
+                .get(slot)
+                .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get_call))
+            {
+                None => rj!("static call cache slot unfilled or stale"),
+                Some((Func::User(uf), _, _)) => uf,
+                Some((Func::Builtin(_), _, _)) => rj!("callee is a builtin"),
+            }
         }
     };
     let shape = uf.call_shape();
     if shape == crate::func::CallShape::NOT_PLAIN || !uf.uses.is_empty() {
         rj!("callee not plain or has `use`s");
     }
-    if uf.required as usize > ns || ns > uf.params.len() {
-        rj!("arg count mismatch");
+    if uf.required as usize > ns {
+        rj!("too few args");
     }
+    // More sends than declared parameters are allowed: the extras are
+    // dead (a plain user function ignores them), and the liveness scan
+    // below turns them (and any send to an unused parameter) into
+    // `KSKIP`.
     if shape == crate::func::CallShape::TYPED {
         // The trace always passes `Int`s: every parameter must accept
         // one without coercion, and an `int` return is the only one the
@@ -866,9 +922,10 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     let mut rows: Vec<Inst> = Vec::new();
     let mut bc = uf.plain_first_op(ns);
     let ret = loop {
-        match uf.code.ops.get(bc)? {
-            Op::Return { val } => break *val,
-            _ => {}
+        match uf.code.ops.get(bc) {
+            Some(Op::Return { val }) => break *val,
+            Some(_) => {}
+            None => rj!("callee body walk ran off the op array at {bc}"),
         }
         let row = uf.code.tape.get(&uf.code)[bc];
         let (c, m) = match classify(&cst, &row) {
@@ -893,14 +950,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
 
     // The scratch slice: the callee's compiled variables, then its
     // temporaries, 16 bytes each; the `KR` offsets below are relative
-    // to it (`set_base` adds the call's place in the buffer). The
-    // parameters (`cvs[0..ns]`) start as known `Int`s (the trace just
-    // wrote them); a slot whose every write is a compiled Int store
-    // needs no runtime tag check, so the walk tracks which those are.
-    let mut known = vec![false; ncvs + nt];
-    for i in 0..ns {
-        known[i] = true;
-    }
+    // to it (`set_base` adds the call's place in the buffer).
     let scratch_idx = |kind: u8, off: u32| -> Option<usize> {
         let s = off >> 4;
         match kind {
@@ -909,6 +959,49 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             _ => None,
         }
     };
+    // Which parameters the inlined body touches, while the rows are
+    // still raw (before the remap): its `KC` operands, and a `Return`
+    // of a compiled variable. Over-reading is safe (a send stays that
+    // could have been dropped); a parameter never mentioned is *dead*,
+    // and its send can go whatever the caller-side value was (even a
+    // non-int literal: `hallo("hallo")` to a parameterless body sends
+    // a dead argument). So do the sends' `KL` resolutions and `KSKIP`
+    // conversions here.
+    let mut live = vec![false; ncvs];
+    for k in 0..classes.len() {
+        let m = &metas[k];
+        let row = rows[k];
+        for (kind, off) in [(m.ka, row.a), (m.kb, row.b), (m.kc, row.c)] {
+            if kind == KC {
+                if let Some(i) = scratch_idx(kind, off) {
+                    live[i] = true;
+                }
+            }
+        }
+    }
+    if let Operand::Cv(i) = ret {
+        if (i as usize) < ncvs {
+            live[i as usize] = true;
+        }
+    }
+    for (j, arg) in sends.iter_mut().enumerate() {
+        if j >= uf.params.len() || j >= ncvs || !live[j] {
+            arg.kind = KSKIP;
+            arg.off = 0;
+            arg.lit = 0;
+        } else if arg.kind == KL {
+            arg.lit = resolved_lit(st, arg.off)?;
+        }
+    }
+    // The parameters the trace actually wrote start as known `Int`s;
+    // a slot whose every write is a compiled Int store needs no
+    // runtime tag check, so the walk tracks which those are.
+    let mut known = vec![false; ncvs + nt];
+    for (j, arg) in sends.iter().enumerate() {
+        if j < ncvs && arg.kind != KSKIP {
+            known[j] = true;
+        }
+    }
     // Slot kinds become `KR`, and a `KT` offset moves past the
     // compiled-variable part of the slice.
     let remap = |kind: &mut u8, off: &mut u32| -> bool {
@@ -1002,7 +1095,10 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             lit: 0,
         },
         o => {
-            let (mut kind, mut off) = src(&uf.code, o)?;
+            let (mut kind, mut off) = match src(&uf.code, o) {
+                Some(ko) => ko,
+                None => rj!("callee return {o:?} has no inlinable source"),
+            };
             if kind == KI {
                 let v = i64::from(off as i32);
                 kind = KL;
@@ -1394,6 +1490,9 @@ impl Emitter {
     /// plan proved every read one is a known `Int`.
     fn emit_call(&mut self, cp: &CallPlan) {
         for (n, arg) in cp.sends.iter().enumerate() {
+            if arg.kind == KSKIP {
+                continue;
+            }
             let off = cp.base.wrapping_add((n as u32) << SLOT_SHIFT);
             self.to_r9(arg.kind, arg.off, arg.lit);
             self.store_int_r9_base(KR, off);
