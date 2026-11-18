@@ -109,8 +109,16 @@ const _: () = {
 pub(crate) struct Tape {
     insts: OnceCell<Box<[Inst]>>,
     /// The trace JIT's per-instruction hot-loop tables (see [`jit`]),
-    /// created on the tape's first hot back edge with JIT enabled.
+    /// created when the tape is decoded with the JIT enabled. Their raw
+    /// pointers sit beside the cell so [`run_tape`] reads them with two
+    /// plain loads; `kill` nulls them (freeing the traces for later
+    /// frames of this tape) while the cell keeps the arrays alive for
+    /// frames already running.
     jit: OnceCell<jit::Tables>,
+    jit_cnt: std::sync::atomic::AtomicPtr<AtomicI32>,
+    jit_tr: std::sync::atomic::AtomicPtr<AtomicUsize>,
+    /// A trace from this tape has proved useful (see [`Tape::jit_good`]).
+    jit_good: std::sync::atomic::AtomicBool,
 }
 
 impl Tape {
@@ -118,13 +126,54 @@ impl Tape {
     #[inline]
     fn get(&self, code: &OpArray) -> &[Inst] {
         self.insts
-            .get_or_init(|| php_memlimit::persistent(|| lower(code)))
+            .get_or_init(|| {
+                php_memlimit::persistent(|| {
+                    let tape = lower(code);
+                    if jit::enabled() {
+                        self.jit_init(tape.len());
+                    }
+                    tape
+                })
+            })
     }
 
-    /// The hot-loop tables, created on first use. `n` is the tape's
-    /// instruction count.
-    fn jit_tables(&self, n: usize) -> &jit::Tables {
-        self.jit.get_or_init(|| jit::Tables::new(n))
+    /// The hot-loop tables, created with the tape.
+    fn jit_init(&self, n: usize) {
+        let jt = self.jit.get_or_init(|| jit::Tables::new(n));
+        self.jit_cnt
+            .store(jt.cnt() as *mut AtomicI32, std::sync::atomic::Ordering::Relaxed);
+        self.jit_tr
+            .store(jt.tr() as *mut AtomicUsize, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Stop arming traces for this tape (a trace was refused or its
+    /// guards failed): frames entered after this run the tape fully
+    /// interpreted, without the per-back-edge hook.
+    pub(crate) fn jit_kill(&self) {
+        self.jit_cnt
+            .store(std::ptr::null_mut(), std::sync::atomic::Ordering::Relaxed);
+        self.jit_tr
+            .store(std::ptr::null_mut(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// This tape produced a trace that paid for itself (compiled, or ran
+    /// to a poll/cap): never kill its tracing.
+    pub(crate) fn jit_good(&self) {
+        self.jit_good.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A trace was refused or failed its entry guards. If this tape has
+    /// not produced a useful trace yet, stop hooking its back edges
+    /// (frames entered after this run it fully interpreted); the
+    /// per-back-edge hook is worth its cost once a trace has paid off.
+    /// Returns whether the tape was killed (so callers can stop hooking
+    /// their own back edges too).
+    pub(crate) fn jit_bad(&self) -> bool {
+        if self.jit_good.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        self.jit_kill();
+        true
     }
 }
 
@@ -235,6 +284,9 @@ struct St {
     tlen: usize,
     tcnt: *const AtomicI32,
     ttr: *const AtomicUsize,
+    /// The [`Tape`] the tables above belong to (null when there are no
+    /// tables): the JIT kills the tape's tracing through it.
+    tape: *const Tape,
 }
 
 /// The compiled-variable slot at byte offset `off`.
@@ -279,6 +331,7 @@ unsafe fn frame_st(f: *mut Frame) -> St {
         tlen: 0,
         tcnt: std::ptr::null(),
         ttr: std::ptr::null(),
+        tape: std::ptr::null(),
     }
 }
 
@@ -453,7 +506,7 @@ macro_rules! take_jump {
             // SAFETY: both point into the running tape, and the test
             // just made the jump backward. (Reached from `run_core`'s
             // `unsafe` block, hence no `unsafe` here.)
-            $ip = jit::back_edge(&$st, at, $ip);
+            $ip = jit::back_edge(&mut $st, at, $ip);
         }
     }};
 }
@@ -713,6 +766,24 @@ macro_rules! tape_ops {
                             ..jit::JitMeta::default()
                         }),
                     )*
+                    $(
+                        TOp::$an => Some(jit::JitMeta {
+                            class: jit::J_ARITH_TMP,
+                            ka: $aka,
+                            kb: $akb,
+                            arith: jit::jit_arith_id!($aop),
+                            ..jit::JitMeta::default()
+                        }),
+                    )*
+                    $(
+                        TOp::$on => Some(jit::JitMeta {
+                            class: jit::J_ASSIGN_OP,
+                            ka: KC,
+                            kb: $okb,
+                            arith: jit::jit_arith_id!($oop),
+                            ..jit::JitMeta::default()
+                        }),
+                    )*
                     _ => None,
                 }
             }
@@ -735,7 +806,7 @@ macro_rules! tape_ops {
             // bases of `Vec<Value>` and `Vec<CvSlot>` buffers.
             clippy::cast_ptr_alignment
         )]
-        unsafe fn run_core(st: St, mut ip: *const Inst) -> Out {
+        unsafe fn run_core(mut st: St, mut ip: *const Inst) -> Out {
             // SAFETY (the whole loop): `ip` stays inside the tape (every
             // instruction advances it by what `lower` validated: the next
             // op, the ops a fused instruction covers, or a jump target, and
@@ -1596,14 +1667,21 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
             let tape: &[Inst] = c.tape.get(c);
             debug_assert_eq!(tape.len(), ops.len() + 1);
             let tbase = tape.as_ptr();
-            // The trace JIT's tables for this tape (created on first use
-            // when enabled): `take_jump!` counts hot back edges through
-            // them and may run or compile a trace.
-            let (tlen, tcnt, ttr) = if jit::enabled() {
-                let jt = c.tape.jit_tables(tape.len());
-                (tape.len(), jt.cnt(), jt.tr())
-            } else {
-                (0, std::ptr::null(), std::ptr::null())
+            // The trace JIT's tables for this tape (see [`jit`]): `take_jump!`
+            // counts hot back edges through them and may run or compile a
+            // trace. Two relaxed loads off the (hot) op array; null when the
+            // JIT is off or this tape's tracing was killed.
+            let (tlen, tcnt, ttr) = {
+                let cnt = c.tape.jit_cnt.load(std::sync::atomic::Ordering::Relaxed);
+                if cnt.is_null() {
+                    (0, std::ptr::null(), std::ptr::null())
+                } else {
+                    (
+                        tape.len(),
+                        cnt as *const AtomicI32,
+                        c.tape.jit_tr.load(std::sync::atomic::Ordering::Relaxed) as *const AtomicUsize,
+                    )
+                }
             };
             // SAFETY: `ip` is an op index of this op array (`Vm::run`'s, a
             // frame's stored resume point, or what a hot op continued at),
@@ -1630,6 +1708,7 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                     tlen,
                     tcnt,
                     ttr,
+                    tape: std::ptr::from_ref(&c.tape),
                 };
                 // SAFETY: the frame is `usable` for this tape (tested
                 // above; a hot op that attaches a symbol table sends the

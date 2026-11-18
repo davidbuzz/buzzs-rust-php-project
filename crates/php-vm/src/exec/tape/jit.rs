@@ -140,6 +140,23 @@ pub(crate) const C_ASSIGN_L: u16 = 5;
 pub(crate) const J_CMP: u16 = 10;
 pub(crate) const J_INCCMP: u16 = 11;
 pub(crate) const J_ARITH_CV: u16 = 12;
+pub(crate) const J_ASSIGN_T: u16 = 13;
+pub(crate) const J_ARITH_TMP: u16 = 14;
+pub(crate) const J_ASSIGN_OP: u16 = 15;
+pub(crate) const J_NUMBIN_T: u16 = 16;
+pub(crate) const J_NUMBIN_C: u16 = 17;
+
+/// The number of tape instructions one whitelisted class consumes
+/// (fused rows cover the ops they merge).
+pub(crate) fn c_step(c: u16) -> usize {
+    if c == J_CMP || c == J_ARITH_CV {
+        2
+    } else if c == J_INCCMP {
+        3
+    } else {
+        1
+    }
+}
 
 /// The arithmetic of a fused family row: 0 = `+`, 1 = `-`, 2 = `*`.
 macro_rules! jit_arith_id {
@@ -215,8 +232,7 @@ struct Plan {
 /// The class and meta of one instruction, or `None` if the whitelist
 /// does not cover it. `KL` operands are resolved to their int values
 /// here (a plan only compiles int literals).
-fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {
-    let mut m = match inst.op {
+fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {    let mut m = match inst.op {
         TOp::Jmp => JitMeta {
             class: C_JMP,
             ..JitMeta::default()
@@ -243,6 +259,39 @@ fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {
             kb: KL,
             ..JitMeta::default()
         },
+        // `$cv = TMP` (the int path: the source tmp is guarded exact).
+        TOp::AssignT => JitMeta {
+            class: J_ASSIGN_T,
+            ka: KC,
+            kb: KT,
+            ..JitMeta::default()
+        },
+        // The generic numeric rows carry the operator (`e`) and the
+        // operand kinds (`k`) inline; the JIT compiles the arithmetic
+        // subset only when `jit_meta`'s ids cover `e`.
+        TOp::NumBinT => {
+            let (ka, kb) = (inst.k >> 4, inst.k & 0xf);
+            JitMeta {
+                class: J_NUMBIN_T,
+                ka,
+                kb,
+                arith: op_arith(inst.e)?,
+                ..JitMeta::default()
+            }
+        }
+        TOp::NumAssignOpC => {
+            let (ka, kb) = (inst.k >> 4, inst.k & 0xf);
+            if ka != KC {
+                return None;
+            }
+            JitMeta {
+                class: J_NUMBIN_C,
+                ka,
+                kb,
+                arith: op_arith(inst.e)?,
+                ..JitMeta::default()
+            }
+        }
         op => op.jit_meta()?,
     };
     if m.ka == KL {
@@ -269,9 +318,22 @@ fn resolved_lit(st: &St, off: u32) -> Option<i64> {
     }
 }
 
+/// The JIT's arithmetic id for a `NUM_OPS` index (`inst.e`): `+`/`-`/`*`
+/// never reach this (the specialised `arith_tmp`/`arith_cv`/`assign_op`
+/// rows own them), so within the numeric families' reach only `%`
+/// (id 1 in `NUM_OPS`, the C `%` on x86) has an emitter id here (5,
+/// distinct from `jit_arith_id!`'s 0/1/2); division's int-or-float
+/// result and the bit/logic ops stay interpreted.
+fn op_arith(e: u8) -> Option<u8> {
+    if e == 1 {
+        Some(5)
+    } else {
+        None
+    }
+}
+
 /// Add one slot guard (merging with an existing one: exact wins).
-fn add_slot(guards: &mut Vec<Guard>, base: u8, off: u32, exact: bool) -> bool {
-    if let Some(g) = guards.iter_mut().find(|g| g.base == base && g.off == off) {
+fn add_slot(guards: &mut Vec<Guard>, base: u8, off: u32, exact: bool) -> bool {    if let Some(g) = guards.iter_mut().find(|g| g.base == base && g.off == off) {
         g.exact |= exact;
         true
     } else if guards.len() >= MAX_GUARDS {
@@ -302,14 +364,27 @@ fn add_class_guards(tape: &[Inst], i: usize, class: u16, m: JitMeta, guards: &mu
         C_ASSIGN_I | C_ASSIGN_L => add_slot(guards, KC, inst.a, false),
         // The `J_ARITH_CV` destination keeps its tag: it is guarded
         // `Int` (and every whitelisted write keeps it `Int`), so only
-        // the payload is stored.
-        J_ARITH_CV => {
-            read(m.ka, inst.a, guards)
-                && read(m.kb, inst.b, guards)
-                && add_slot(guards, KC, inst.c, true)
-        }
+        // the payload is stored. `J_ASSIGN_OP`/`J_NUMBIN_C` update
+        // `inst.a` in place (`inst.c` is a jump offset or a separate
+        // literal slot), so the read of `a` already carries the exact
+        // guard.
+        J_ARITH_CV => read(m.ka, inst.a, guards)
+            && read(m.kb, inst.b, guards)
+            && add_slot(guards, KC, inst.c, true),
+        J_ASSIGN_OP | J_NUMBIN_C => read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards),
         J_CMP => read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards),
         J_INCCMP => add_slot(guards, KC, inst.a, true) && read(m.kb, inst.b, guards),
+        // `inst.a` = a temp (exact: read as an int), then the cv it is
+        // written into (weak: nothing of its own is read).
+        J_ASSIGN_T => add_slot(guards, KT, inst.b, true) && add_slot(guards, KC, inst.a, false),
+        // Arithmetic into a temporary: the destination is fully stored
+        // (tag and payload), so it only needs the weak guard (a scalar
+        // or nothing, what the interpreter's own store test accepts).
+        J_ARITH_TMP | J_NUMBIN_T => {
+            read(m.ka, inst.a, guards)
+                && read(m.kb, inst.b, guards)
+                && add_slot(guards, KT, inst.c, false)
+        }
         _ => false,
     }
 }
@@ -325,8 +400,16 @@ fn jump_target(tape: &[Inst], i: usize) -> usize {
 /// The region scan. `close` is the closing backward jump, `head` its
 /// target; both are instruction indexes.
 fn plan(st: &St, tape: &[Inst], head: usize, close: usize) -> Option<Plan> {
+    macro_rules! rej {
+        ($why:expr) => {{
+            if debug_on() {
+                eprintln!("jit:   plan reject at {head}..={close}: {}", $why);
+            }
+            return None;
+        }};
+    }
     if head >= close || close - head + 1 > MAX_REGION {
-        return None;
+        rej!("empty or too big");
     }
     let len = close - head + 1;
     let mut class = vec![0u16; len];
@@ -335,26 +418,40 @@ fn plan(st: &St, tape: &[Inst], head: usize, close: usize) -> Option<Plan> {
     // Class every instruction; a fused instruction's coverage marks
     // the ops it consumes, exactly as `run_core` skips them.
     let mut i = head;
+    let mut last = usize::MAX;
     while i <= close {
-        let (c, m) = classify(st, &tape[i])?;
+        let (c, m) = match classify(st, &tape[i]) {
+            Some(cm) => cm,
+            None => rej!(format!("{:?} not whitelisted", tape[i].op)),
+        };
         class[i - head] = c;
         meta[i - head] = m;
-        i += if c == J_CMP || c == J_ARITH_CV {
-            2
-        } else if c == J_INCCMP {
-            3
-        } else {
-            1
-        };
+        if debug_on() {
+            eprintln!(
+                "jit:   scan [{i}] {:?} -> class {c}, step {}",
+                tape[i].op,
+                c_step(c)
+            );
+        }
+        last = i;
+        i += c_step(c);
+    }
+    // The scan must land *on* the close (a fused instruction's coverage
+    // may run past it: those slots are outside the loop).
+    if last != close {
+        rej!("scan stepped over the close");
     }
     // The close must be a jump instruction the scan landed on exactly,
     // and it must jump to the head (that is what a back edge is).
     let cc = class[close - head];
     if cc != C_JMP && cc != J_CMP && cc != J_INCCMP {
-        return None;
+        rej!("close is not a jump class");
     }
     if jump_target(tape, close) != head {
-        return None;
+        rej!(format!(
+            "close jumps to {}, not the head",
+            jump_target(tape, close)
+        ));
     }
 
     // Guards: every slot read as an int must be exact; slots only
@@ -362,8 +459,11 @@ fn plan(st: &St, tape: &[Inst], head: usize, close: usize) -> Option<Plan> {
     // whitelisted write to an exact-guarded slot keeps it an int.
     let mut guards: Vec<Guard> = Vec::new();
     for j in 0..len {
-        if class[j] == 0 || !add_class_guards(tape, head + j, class[j], meta[j], &mut guards) {
-            return None;
+        if class[j] == 0 {
+            continue;
+        }
+        if !add_class_guards(tape, head + j, class[j], meta[j], &mut guards) {
+            rej!(format!("guards at [{}, {:?}]", head + j, tape[head + j].op));
         }
     }
 
@@ -378,7 +478,7 @@ fn plan(st: &St, tape: &[Inst], head: usize, close: usize) -> Option<Plan> {
             continue;
         }
         if (c == J_CMP || c == J_INCCMP) && jcc_for(meta[j].mask).is_none() {
-            return None;
+            rej!(format!("unknown cmp mask {}", meta[j].mask));
         }
         if c == C_JMP || c == J_CMP || c == J_INCCMP {
             let y = jump_target(tape, head + j);
@@ -387,13 +487,13 @@ fn plan(st: &St, tape: &[Inst], head: usize, close: usize) -> Option<Plan> {
             }
             if y > head && y <= close {
                 if class[y - head] == 0 {
-                    return None;
+                    rej!(format!("jump lands on covered slot {y}"));
                 }
                 if !entries.contains(&y) {
                     entries.push(y);
                 }
             } else if y < head {
-                return None;
+                rej!(format!("nested backward jump to {y}"));
             }
         }
     }
@@ -459,6 +559,7 @@ struct Emitter {
 /// REX.W (0x40) plus the ModRM-reg field's high bit (0x04) plus the
 /// ModRM-rm field's high bit (0x01), for the encodings below.
 const REX_W: u8 = 0x48;
+const REX: u8 = 0x40; // a REX prefix without W (the bits below need it)
 const REX_R: u8 = 0x04;
 const REX_B: u8 = 0x01;
 
@@ -482,26 +583,32 @@ impl Emitter {
     }
 
     /// `movabs {r11,r9}, imm64` (the poll address, a literal operand).
+    /// `B8+rd` encodes the register in the *opcode*, which `REX.B`
+    /// (not `REX.R`) extends: `r9` is `49 B9`, `r11` is `49 BB`.
     fn movabs(&mut self, r9: bool, v: i64) {
-        let mut b = if r9 { vec![0x4C, 0xB9] } else { vec![0x49, 0xBB] };
+        let mut b = vec![REX_W | REX_B, if r9 { 0xB9 } else { 0xBB }];
         b.extend_from_slice(&v.to_le_bytes());
         self.put(&b);
     }
 
-    /// `cmp byte [base + off], imm8` (base 0 = `rdi` (rm 7), 1 = `rsi`
-    /// (rm 6); `80 /7` with a disp32, no REX needed for either).
+    /// `cmp byte [base + off], imm8` (`80 /7`, disp32): base 0 = `rdi`
+    /// (rm 111, modrm 0xBF), 1 = `rsi` (rm 110, modrm 0xBE). `rm=110`
+    /// is `rsi` *without* any REX; `REX.B` would name `r14`.
     fn cmpb(&mut self, base: u8, off: u32, imm: u8) {
-        let rm = if base == 1 { 0x7E } else { 0x7F }; // mod=10, reg=/7
-        self.put(&[0x80, rm]);
+        self.put(&[0x80, if base == 1 { 0xBE } else { 0xBF }]);
         self.put(&off.to_le_bytes());
         self.put(&[imm]);
     }
 
+    /// Bytes `cmpb` emits for `base` (the guard-skip maths needs this).
+    fn cmpb_len(_base: u8) -> usize {
+        7
+    }
+
     /// `mov rax, [base + off + 8]`: the payload of a slot already known
-    /// to hold an `Int`.
+    /// to hold an `Int` (`8B` reg=rax: rm 111/110, modrm 0x87/0x86).
     fn load_int(&mut self, base: u8, off: u32) {
-        let rm = if base == 1 { 0x8E } else { 0x87 }; // REX.W mod=10 rm
-        self.put(&[REX_W, 0x8B, rm]);
+        self.put(&[REX_W, 0x8B, if base == 1 { 0x86 } else { 0x87 }]);
         self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
     }
 
@@ -510,9 +617,13 @@ impl Emitter {
     fn to_r9(&mut self, kind: u8, off: u32, lit: i64) {
         match kind {
             KC | KT => {
-                // mod=10, reg=r9 (with REX.R), rm = rdi (0xF) / rsi (0xE)
-                let rm = if kind == KT { 0x8E } else { 0x8F };
-                self.put(&[REX_W | REX_R, 0x8B, rm]);
+                // `8B` reg=r9 (field 001 + REX.R), rm = rdi (0xF) /
+                // rsi (0x8E: field 110 is `rsi`, no REX.B).
+                if kind == KT {
+                    self.put(&[REX_W | REX_R, 0x8B, 0x8E]);
+                } else {
+                    self.put(&[REX_W | REX_R, 0x8B, 0x8F]);
+                }
                 self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
             }
             KI => self.movabs(true, i64::from(off as i32)),
@@ -520,10 +631,11 @@ impl Emitter {
         }
     }
 
-    /// `mov [rdi + off + 8], rax` (tag untouched: the slot was
-    /// exact-guarded `Int`, or was just written as one below).
-    fn store_int(&mut self, off: u32) {
-        self.put(&[REX_W, 0x89, 0x87]);
+    /// `mov [rdi/rsi + off + 8], rax` (tag untouched: the slot was
+    /// exact-guarded `Int`, or was just written as one below; the base
+    /// is `rsi` for a temporary (`KT`)). `89` reg=rax: modrm 0x87/0x86.
+    fn store_int(&mut self, base: u8, off: u32) {
+        self.put(&[REX_W, 0x89, if base == 1 { 0x86 } else { 0x87 }]);
         self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
     }
 
@@ -543,11 +655,20 @@ impl Emitter {
         self.put(&off.to_le_bytes());
         self.put(&[TAG_INT]);
     }
+
+    /// `mov byte [rdi/rsi + off], imm8`: the tag store with an explicit
+    /// base (`rsi` for a temporary) and value (`C6 /0`: modrm 0x87/0x86).
+    fn store_tag_base(&mut self, base: u8, off: u32, tag: u8) {
+        self.put(&[0xC6, if base == 1 { 0x86 } else { 0x87 }]);
+        self.put(&off.to_le_bytes());
+        self.put(&[tag]);
+    }
 }
 impl Emitter {
-    /// `mov [rdi + off + 8], r9` (payload store from `r9`).
+    /// `mov [rdi + off + 8], r9` (payload store from `r9`: `89 /r` names
+    /// `r9` through the *reg* field, which `REX.R` extends).
     fn store_int_r9(&mut self, off: u32) {
-        self.put(&[REX_W | REX_B, 0x89, 0x8F]);
+        self.put(&[REX_W | REX_R, 0x89, 0x8F]);
         self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
     }
 
@@ -598,7 +719,7 @@ impl Emitter {
                 self.load_int(KC, inst.a);
                 self.put(&[REX_W, 0x83, if self.plan.class[j] == C_INC { 0xC0 } else { 0xE8 }, 0x01]);
                 self.jcc(0x80, Target::Stub(i)); // jo: overflow, before any store
-                self.store_int(inst.a);
+                self.store_int(KC, inst.a);
             }
             C_ASSIGN_I => {
                 self.store_imm(inst.a, inst.b as i32);
@@ -628,22 +749,67 @@ impl Emitter {
                 self.load_int(KC, inst.a);
                 self.put(&[REX_W, 0x83, if m.inc { 0xC0 } else { 0xE8 }, 0x01]);
                 self.jcc(0x80, Target::Stub(i)); // jo: overflow, before any store
-                self.store_int(inst.a);
+                self.store_int(KC, inst.a);
                 self.put(&[REX_W | REX_R, 0x39, 0xC8]); // cmp rax, r9
                 let cc = jcc_for(m.mask).unwrap_or(0x85);
                 self.jcc(cc, self.jump_tgt(j));
             }
+            // `$cv = TMP`: copy the int, then consume the temporary
+            // (null it, as the interpreted row does).
+            J_ASSIGN_T => {
+                self.load_int(KT, inst.b);
+                self.store_int(KC, inst.a);
+                self.store_tag(inst.a);
+                self.movabs_rax(0);
+                self.store_int(KT, inst.b);
+                self.store_tag_base(KT, inst.b, TAG_NULL);
+            }
             _ => {
-                // J_ARITH_CV (the plan guarantees): `jo` before any store.
+                // `J_ARITH_CV` / `J_ASSIGN_OP` / `J_ARITH_TMP` /
+                // `J_NUMBIN_T` / `J_NUMBIN_C` (the plan guarantees):
+                // `jo` (or the `idiv` guards) before any store. The
+                // destination is `inst.c` except for `$cv op= b`,
+                // which updates `inst.a`.
+                let dst_base = if self.plan.class[j] == J_ASSIGN_OP {
+                    KC
+                } else if self.plan.class[j] == J_ARITH_TMP || self.plan.class[j] == J_NUMBIN_T {
+                    KT
+                } else {
+                    KC
+                };
+                let dst = if self.plan.class[j] == J_ASSIGN_OP || self.plan.class[j] == J_NUMBIN_C {
+                    inst.a
+                } else {
+                    inst.c
+                };
                 self.to_rax(m.ka, inst.a, m.lit_a);
                 self.to_r9(m.kb, inst.b, m.lit_b);
                 match m.arith {
                     0 => self.put(&[REX_W | REX_R, 0x01, 0xC8]), // add rax, r9
                     1 => self.put(&[REX_W | REX_R, 0x29, 0xC8]), // sub rax, r9
-                    _ => self.put(&[REX_W | REX_R, 0x0F, 0xAF, 0xC1]), // imul rax, r9
+                    // `imul r, r/m`: reg = `rax`, rm = `r9` (needs REX.B,
+                    // not REX.R: the *rm* field names `r9`).
+                    2 => self.put(&[REX_W | REX_B, 0x0F, 0xAF, 0xC1]), // imul rax, r9
+                    _ => {
+                        // `%`: `idiv` faults on a zero divisor and on
+                        // `i64::MIN % -1`, so both are guarded exits.
+                        self.put(&[REX_W | REX_R | REX_B, 0x85, 0xC9]); // test r9, r9
+                        self.jcc(0x84, Target::Stub(i)); // je
+                        self.put(&[REX_W | REX_B, 0x83, 0xF9, 0xFF]); // cmp r9, -1
+                        self.jcc(0x84, Target::Stub(i)); // je
+                        self.put(&[REX_W, 0x99]); // cqo
+                        self.put(&[REX_W | REX_B, 0xF7, 0xF9]); // idiv r9
+                        // `idiv` leaves the remainder in `rdx`.
+                        self.put(&[REX_W, 0x89, 0xD0]); // mov rax, rdx
+                    }
                 }
-                self.jcc(0x80, Target::Stub(i)); // jo: overflow
-                self.store_int(inst.c);
+                if m.arith != 5 {
+                    self.jcc(0x80, Target::Stub(i)); // jo: overflow
+                }
+                self.store_int(dst_base, dst);
+                if dst_base == KT {
+                    self.store_tag_base(KT, dst, TAG_INT);
+                }
             }
         }
     }
@@ -668,7 +834,7 @@ impl Emitter {
         // iteration counter, and the entry guards (all exit at the
         // head so the interpreted step decides what to do instead).
         self.movabs(false, crate::interrupt::jit_poll_addr() as i64);
-        self.put(&[0x41, 0x31, 0xC0]); // xor r8d, r8d
+        self.put(&[REX | REX_R | REX_B, 0x31, 0xC0]); // xor r8d, r8d
         for k in 0..self.plan.guards.len() {
             let g = self.plan.guards[k];
             if g.exact {
@@ -678,9 +844,10 @@ impl Emitter {
                 // A scalar (below `Str`) or nothing: what the
                 // interpreter's own store test accepts.
                 self.cmpb(g.base, g.off, TAG_STR);
-                // jb over the next pair: jb itself (6) + cmpb (7) + jne (6)
-                // (`code.len()` is read before the jb is emitted).
-                self.jcc(0x82, Target::At(self.code.len() + 19));
+                // jb over the next pair: jb (6) + cmpb (`cmpb_len`) +
+                // jne (6) (`code.len()` is read before the jb is emitted).
+                let skip = self.code.len() + 6 + Self::cmpb_len(g.base) + 6;
+                self.jcc(0x82, Target::At(skip));
                 self.cmpb(g.base, g.off, TAG_NONE);
                 self.jcc(0x85, Target::Disarm(self.plan.head)); // jne
             }
@@ -692,7 +859,10 @@ impl Emitter {
         self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
         self.jcc(0x85, Target::Stub(self.plan.head)); // jne
         self.put(&[0x41, 0x83, 0xC0, 0x01]); // add r8d, 1
-        self.put(&[0x41, 0x3D]); // cmp r8d, ITER_CAP
+        // `cmp r8d, imm32`: `3D` has no ModRM byte (its REX prefix is
+        // ignored and it would compare a leftover `eax`), so use the
+        // `81 /7` form.
+        self.put(&[REX | REX_B, 0x81, 0xF8]);
         self.put(&ITER_CAP.to_le_bytes());
         self.jcc(0x87, Target::Stub(self.plan.head)); // ja
         // The region itself.
@@ -704,13 +874,7 @@ impl Emitter {
             if c != 0 {
                 self.label(head + j);
                 self.emit_instr(j);
-                j += if c == J_CMP || c == J_ARITH_CV {
-                    2
-                } else if c == J_INCCMP {
-                    3
-                } else {
-                    1
-                };
+                j += c_step(c);
             } else {
                 j += 1;
             }
@@ -838,7 +1002,14 @@ fn attempt(st: &St, head: usize, close: usize) -> usize {
     let tape = unsafe { std::slice::from_raw_parts(st.tbase, st.tlen) };
     if debug_on() {
         eprintln!("jit: region {head}..={close} of tape len {}", st.tlen);
-        for (i, inst) in tape[head..=close].iter().enumerate() {
+        // Small tapes dump whole (the region alone hides where a
+        // region's temp is produced); big tapes dump just the region.
+        let (d0, d1) = if st.tlen <= 64 {
+            (0, st.tlen)
+        } else {
+            (head, close + 1)
+        };
+        for (i, inst) in tape[d0..d1].iter().enumerate() {
             let note = if classify(st, inst).is_some() {
                 ""
             } else {
@@ -846,7 +1017,7 @@ fn attempt(st: &St, head: usize, close: usize) -> usize {
             };
             eprintln!(
                 "jit:   [{}] {:?} a={} b={} c={} e={} k={}{}",
-                head + i,
+                d0 + i,
                 inst.op,
                 inst.a,
                 inst.b,
@@ -866,6 +1037,16 @@ fn attempt(st: &St, head: usize, close: usize) -> usize {
             return usize::MAX;
         }
     };
+    if debug_on() {
+        for g in &p.guards {
+            eprintln!(
+                "jit:   guard base {} off {} {}",
+                g.base,
+                g.off,
+                if g.exact { "exact" } else { "weak" }
+            );
+        }
+    }
     let mut em = Emitter::new(p, tape.to_vec());
     em.emit();
     em.resolve();
@@ -893,7 +1074,7 @@ fn attempt(st: &St, head: usize, close: usize) -> usize {
 /// `at`/`target` point into the running tape described by `st`, with
 /// `target < at`, and `st.tcnt`/`st.ttr` are non-null and cover it.
 #[inline(always)]
-pub(crate) unsafe fn back_edge(st: &St, at: *const Inst, target: *const Inst) -> *const Inst {
+pub(crate) unsafe fn back_edge(st: &mut St, at: *const Inst, target: *const Inst) -> *const Inst {
     // SAFETY: guaranteed by the caller.
     let idx = unsafe { at.offset_from(st.tbase) } as usize;
     // SAFETY: the cells cover the whole tape (`Tables::new(tape.len())`).
@@ -913,10 +1094,35 @@ pub(crate) unsafe fn back_edge(st: &St, at: *const Inst, target: *const Inst) ->
         // SAFETY: the region only touches the frame's slots, and exits
         // leave them exactly as an interpreted run would.
         let r = unsafe { f(st.cvs, st.tmps) };
+        if debug_on() {
+            static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let k = RUNS.fetch_add(1, Ordering::Relaxed);
+            if k % 100_000 == 0 {
+                eprintln!("jit: trace run #{k} r={r}");
+            }
+        }
         if r < 0 {
+            if debug_on() {
+                // Which guard's slot broke the assumption: dump the tags.
+                let tags = unsafe { std::slice::from_raw_parts(st.cvs, 64) };
+                eprintln!(
+                    "jit:   cvs tags @0,16,32,48 = {} {} {} {}",
+                    tags[0], tags[16], tags[32], tags[48]
+                );
+            }
             cell.store(usize::MAX, Ordering::Release);
+            // This tape's tracing never paid off: stop hooking its back
+            // edges, both for frames entered from now on and (by nulling
+            // this frame's table pointer) right here.
+            if !st.tape.is_null() && unsafe { (*st.tape).jit_bad() } {
+                st.tcnt = std::ptr::null();
+                st.ttr = std::ptr::null();
+            }
             let r = (-(r + 1)).clamp(0, (st.tlen - 1) as i64) as usize;
             return unsafe { st.tbase.add(r) };
+        }
+        if !st.tape.is_null() {
+            unsafe { (*st.tape).jit_good() };
         }
         let r = r.clamp(0, (st.tlen - 1) as i64) as usize;
         return unsafe { st.tbase.add(r) };
@@ -929,7 +1135,7 @@ pub(crate) unsafe fn back_edge(st: &St, at: *const Inst, target: *const Inst) ->
 /// (try to compile, then run or mark refused). Out of line so the
 /// steady-state hook stays tiny.
 #[cold]
-unsafe fn edge_count(st: &St, at: *const Inst, target: *const Inst, idx: usize) -> *const Inst {
+unsafe fn edge_count(st: &mut St, at: *const Inst, target: *const Inst, idx: usize) -> *const Inst {
     if debug_on() {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let k = N.fetch_add(1, Ordering::Relaxed);
@@ -952,6 +1158,14 @@ unsafe fn edge_count(st: &St, at: *const Inst, target: *const Inst, idx: usize) 
     let cell = unsafe { &*st.ttr.add(idx) };
     cell.store(compiled, Ordering::Release);
     if compiled == usize::MAX {
+        // The region can't be traced (and never could): if this tape has
+        // no useful trace yet, stop hooking its back edges, for frames
+        // entered from now on and (by nulling this frame's table
+        // pointer) right here.
+        if !st.tape.is_null() && unsafe { (*st.tape).jit_bad() } {
+            st.tcnt = std::ptr::null();
+            st.ttr = std::ptr::null();
+        }
         target
     } else {
         // SAFETY: as above; now the cell is armed.
