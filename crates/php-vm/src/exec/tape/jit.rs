@@ -68,7 +68,7 @@ use std::sync::{Mutex, OnceLock};
 
 use super::{Inst, SLOT_SHIFT, St, Tape, TOp, src, tmp_off, KC, KI, KL, KT, KR};
 use crate::opcode::PROP_CACHE_THIS;
-use crate::place::propcache::{PC_DYN, PC_READ};
+use crate::place::propcache::{PC_DYN, PC_READ, PC_WRITE};
 use crate::func::{Func, FUNC_TABLE_VERSION};
 use crate::opcode::{ArgSrc, Op, Operand};
 use crate::types::mask;
@@ -282,6 +282,14 @@ const C_CALL: u16 = 18;
 /// property cache, with the receiver class and the frame's calling scope
 /// re-checked at run time (see `plan_prop`).
 const C_PROP: u16 = 19;
+/// A plain instance-property write: `$obj->name = int` through the op
+/// array's property cache, with the receiver class, the frame's calling
+/// scope and the slot's current `Int` tag re-checked at run time (see
+/// `plan_prop_write`).
+const C_PROPW: u16 = 20;
+/// `JitMeta.db` for a property write whose result is discarded (no
+/// destination temporary).
+const NO_DST: u32 = u32::MAX;
 
 /// The number of tape instructions one whitelisted class consumes
 /// (fused rows cover the ops they merge).
@@ -335,6 +343,17 @@ pub(crate) struct JitMeta {
     pub(crate) db: u32,
     /// `C_PROP`: the property's slot index in the object.
     pub(crate) slot: u32,
+    /// `C_PROPW`: the written value's kind (`KC` a compiled variable,
+    /// `KT` a temporary, `KL` an int literal resolved into `lit_c`).
+    pub(crate) sc: u8,
+    /// `C_PROPW`: byte offset of the written value's slot (unused for
+    /// `KL`).
+    pub(crate) sw: u32,
+    /// `C_PROPW`: the written literal's int value (`sc == KL`).
+    pub(crate) lit_c: i64,
+    /// `C_PROPW`: the source is an `Operand::Tmp`: null it out after
+    /// the write, as the interpreted row does.
+    pub(crate) consume: bool,
 }
 
 impl Default for JitMeta {
@@ -352,6 +371,10 @@ impl Default for JitMeta {
             sb: 0,
             db: 0,
             slot: 0,
+            sc: KC,
+            sw: 0,
+            lit_c: 0,
+            consume: false,
         }
     }
 }
@@ -653,6 +676,19 @@ fn add_class_guards(
         // receiver, scope and class are re-checked by the emitted
         // code, not entry-guarded.
         C_PROP => defs.contains(&m.db) || add_slot(guards, KT, m.db, false),
+        // A property write: a `KT` source needs no entry guard (the
+        // emitted row re-checks its tag every iteration, so a temporary
+        // an earlier row of the region produced, or one whose entry
+        // value is the `TAG_NULL` a previous consume left, is fine); a
+        // `KL` source is a plan-time constant; a `KC` source is read as
+        // an int like an arithmetic operand. The destination temporary
+        // is fully stored like a read's. The base, scope, class and the
+        // slot's own tag are re-checked by the emitted code, not
+        // entry-guarded.
+        C_PROPW => (m.sc == KT || m.sc == KL || read(m.sc, m.sw, guards))
+            && (m.db == NO_DST
+                || defs.contains(&m.db)
+                || add_slot(guards, KT, m.db, false)),
         _ => false,
     }
 }
@@ -715,6 +751,106 @@ fn plan_prop(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitM
     })
 }
 
+/// The run-time shape of a plain instance-property write
+/// (`AssignObjProp`, `$obj->name = int`): like [`plan_prop`], but for a
+/// write the cache entry flags (`PC_WRITE`, no `PC_DYN`) and *untyped*
+/// (`accept == u32::MAX`, so no coercion and no `slot_unset` bookkeeping
+/// can differ from a plain slot store). The written value must be an
+/// `Int` the plan can prove: a compiled variable, a temporary, or an
+/// int literal; `Operand::Unused` (an error form) is rejected.
+///
+/// `emit_prop_write` re-checks (per iteration, like `emit_prop`) the
+/// base, the scope, the class, the lazy and slots cells and the slot
+/// length, plus one check the read does not need: the *slot's own tag*
+/// is `Int`. That single tag check carries the write's whole heap
+/// story: the old value is then a scalar (nothing to release, and an
+/// `Int` cannot be aliased through a `Reference` or shared, so the
+/// payload store cannot split an alias), its tag equals the new value's
+/// (so only the payload word is stored and the tag byte never flaps at
+/// a safe point), and an unset (`TAG_NONE`) or typed-uninitialised slot
+/// takes the interpreted path with its `__set()`/`set_slot_unset`
+/// checks. The *source* is guarded `Int` exactly like an arithmetic
+/// read (`KT` sources re-checked per row, so a source an earlier row
+/// fully stored passes the check on its fresh value).
+fn plan_prop_write(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
+    let Some(Op::AssignObjProp { place, val, dst }) = code.ops.get(inst.d as usize) else {
+        return None;
+    };
+    if *place != inst.a {
+        return None;
+    }
+    let e = code.prop_cache.try_borrow().ok()?.get(*place as usize)?.clone();
+    if e.class_addr == 0 || e.flags & (PC_WRITE | PC_DYN) != PC_WRITE || e.accept != u32::MAX {
+        return None;
+    }
+    // The slot index must fit the `slot << SLOT_SHIFT` disp32s.
+    if e.slot >= 1 << 27 {
+        return None;
+    }
+    // The plan ran in this very frame; its scope is what the guard
+    // compares against (and 0 for none).
+    // SAFETY: the frame outlives the plan (the trace runs in it).
+    let scope = unsafe { &*st.f }
+        .scope
+        .as_ref()
+        .map_or(0, |s| Rc::as_ptr(s) as usize);
+    if e.scope_addr != scope {
+        return None;
+    }
+    let (ka, sb) = if e.base == PROP_CACHE_THIS {
+        (KTHIS, 0)
+    } else {
+        if e.base as usize >= code.cv_names.len() {
+            return None;
+        }
+        (KC, e.base << SLOT_SHIFT)
+    };
+    let (sc, sw, lit_c, consume) = match val {
+        Operand::Cv(cv) if (*cv as usize) < code.cv_names.len() => (KC, *cv << SLOT_SHIFT, 0, false),
+        Operand::Tmp(t) | Operand::TmpKeep(t) if *t < code.num_tmps => (
+            KT,
+            *t << SLOT_SHIFT,
+            0,
+            matches!(val, Operand::Tmp(_)),
+        ),
+        Operand::Lit(l) => match code.literals.get(*l as usize) {
+            Some(php_runtime::Value::Int(v)) => (KL, 0, *v, false),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    // The result temporary (fully stored, as for a read), or `NO_DST`
+    // when the expression's value is discarded.
+    let db = match dst {
+        None => NO_DST,
+        Some(t) if *t < code.num_tmps => *t << SLOT_SHIFT,
+        Some(_) => return None,
+    };
+    // `$t = ($o->p = $t)`: the source consume and the result copy meet
+    // on one slot; leave that shape to the interpreter.
+    if consume && db == sw {
+        return None;
+    }
+    Some(JitMeta {
+        class: C_PROPW,
+        ka,
+        sb,
+        db,
+        slot: e.slot,
+        sc,
+        sw,
+        lit_c,
+        consume,
+        lit_a: e.class_addr as i64 - i64::from(RC_VALUE_OFFSET),
+        lit_b: if e.scope_addr == 0 {
+            0
+        } else {
+            e.scope_addr as i64 - i64::from(RC_VALUE_OFFSET)
+        },
+        ..JitMeta::default()
+    })
+}
+
 /// The target instruction index of the jump of the instruction at
 /// index `i`, for the classes that jump.
 fn jump_target(tape: &[Inst], i: usize) -> usize {
@@ -764,6 +900,11 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
             match plan_prop(st, code, &tape[i]) {
                 Some(m) => (C_PROP, m, 1, None),
                 None => rej!(format!("[{i}] property read not inlinable")),
+            }
+        } else if tape[i].op == TOp::AssignObjProp {
+            match plan_prop_write(st, code, &tape[i]) {
+                Some(m) => (C_PROPW, m, 1, None),
+                None => rej!(format!("[{i}] property write not inlinable")),
             }
         } else {
             match classify(st, &tape[i]) {
@@ -816,6 +957,7 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
     // re-checks the frame's scope: keep the frame pointer (entry
     // argument `rdx`) in `r10` for those guards.
     let frame = class.contains(&C_PROP)
+        || class.contains(&C_PROPW)
         || calls.iter().flatten().any(|cp| {
             cp.recv.is_some_and(|(kind, _, _)| kind == KTHIS)
         });
@@ -851,6 +993,20 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
         // in order by the rows after it.
         match class[j] {
             C_PROP => defs.push(meta[j].db),
+            // The destination is fully stored too; a consumed `Tmp`
+            // source is left `TAG_NULL` (the interpreted row nulls it),
+            // so it is no longer a known `Int`.
+            C_PROPW => {
+                if meta[j].db != NO_DST {
+                    defs.push(meta[j].db);
+                }
+                if meta[j].consume && meta[j].sc == KT {
+                    defs.retain(|d| *d != meta[j].sw);
+                }
+            }
+            // Same consume hygiene: the source temporary is `TAG_NULL`
+            // after this row.
+            J_ASSIGN_T => defs.retain(|d| d != &tape[head + j].b),
             J_ARITH_TMP | J_NUMBIN_T => defs.push(tape[head + j].c),
             _ => {}
         }
@@ -1635,6 +1791,29 @@ impl Emitter {
         self.store_imm_base(KC, off, v);
     }
 
+    /// `mov rcx, [base + off]` (`8B` with the `reg` field `001` = `rcx`,
+    /// no `REX.R`): a slot word into the second compare/move register,
+    /// so `rax` can keep holding the slot array a property row
+    /// dereferences.
+    fn movrcx_at(&mut self, base: u8, off: u32) {
+        self.put(&[REX_W, 0x8B, Self::rm3(base, 1)]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `mov [base + off + 8], rcx` (`89` with `reg` field `001`): a slot
+    /// payload store from `rcx`.
+    fn store_rcx_base(&mut self, base: u8, off: u32) {
+        self.put(&[REX_W, 0x89, Self::rm3(base, 1)]);
+        self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
+    }
+
+    /// `mov [rax + off], rcx` (`48 89 88 d32`): a word of the slot array
+    /// already dereferenced into `rax` (the property slot's payload).
+    fn store_rcx_at_rax(&mut self, off: u32) {
+        self.put(&[REX_W, 0x89, 0x88]);
+        self.put(&off.to_le_bytes());
+    }
+
     /// `mov qword [base + off + 8], imm32` (`C7 /0`): a literal payload
     /// store with an explicit base.
     fn store_imm_base(&mut self, base: u8, off: u32, v: i32) {
@@ -1717,6 +1896,7 @@ impl Emitter {
         match self.plan.class[j] {
             C_JMP => self.jmp(self.jump_tgt(j)),
             C_PROP => self.emit_prop(m, Target::Stub(i)),
+            C_PROPW => self.emit_propw(m, Target::Stub(i)),
             J_CMP => {
                 self.to_rax(m.ka, inst.a, m.lit_a);
                 self.to_r9(m.kb, inst.b, m.lit_b);
@@ -1910,17 +2090,34 @@ impl Emitter {
         }
     }
 
-    /// Emit one property read (`C_PROP`): re-check the base (an object
-    /// of the pinned class, read through the frame for `$this`), the
-    /// frame's calling scope, an unborrowed and empty `lazy` cell, an
-    /// unborrowed `slots` cell long enough for the slot, and the slot
-    /// holding an `Int`; then copy the payload into the destination
-    /// temporary with an `Int` tag. Every mismatch exits to the
-    /// interpreted row *without* disarming: classes, scopes and dynamic
-    /// properties legitimately alternate between iterations, and the
-    /// interpreted lookup is always correct. The derefs mirror the
-    /// interpreted path, so none can fault once its checks pass.
+    /// Emit one property read (`C_PROP`): [`emit_prop_guards`] then copy
+    /// the slot's payload into the destination temporary with an `Int`
+    /// tag.
     fn emit_prop(&mut self, m: JitMeta, jo: Target) {
+        self.emit_prop_guards(m, jo);
+        // `rax` is the slot array and the slot is an `Int`: load its
+        // payload.
+        let so = m.slot << SLOT_SHIFT;
+        self.mov_rax_rax(so.wrapping_add(PAYLOAD));
+        // Fully store the destination temporary (tag and payload).
+        self.store_int(KT, m.db);
+        self.store_tag_base(KT, m.db, TAG_INT);
+    }
+
+    /// The checks one property access (read or write) re-runs every
+    /// iteration: the base (an object of the pinned class, read through
+    /// the frame for `$this`), the frame's calling scope, an unborrowed
+    /// and empty `lazy` cell, an unborrowed `slots` cell long enough for
+    /// the slot, and the slot itself holding an `Int`. On fall-through
+    /// `rax` is the slot array's base, so the caller reads or writes
+    /// `rax + (slot << SLOT_SHIFT) + PAYLOAD`.
+    ///
+    /// Every mismatch exits to the interpreted row *without* disarming:
+    /// classes, scopes and dynamic properties legitimately alternate
+    /// between iterations, and the interpreted lookup is always correct.
+    /// The derefs mirror the interpreted path, so none can fault once
+    /// its checks pass.
+    fn emit_prop_guards(&mut self, m: JitMeta, jo: Target) {
         if debug_on() {
             eprintln!(
                 "jit:   prop base {} off {:#x} class {:#x} scope {:#x} slot {}",
@@ -1980,14 +2177,55 @@ impl Emitter {
         // The slot itself: `Option<Value>`'s niche gives an unset slot
         // tag `TAG_NONE` and a real value its own tag, so one `Int`
         // check rejects unset slots, references and strings together.
-        let so = m.slot << SLOT_SHIFT;
+        // For a write the same check carries the whole heap story: the
+        // old value is a scalar (nothing to release, and an `Int` is
+        // neither shared nor aliased through a `Reference`, so the
+        // payload store cannot split an alias), and its tag equals the
+        // new value's, so the tag byte never needs writing.
         self.mov_rax_r9(SLOTS_FIRST);
-        self.cmpb_rax(so, TAG_INT);
+        self.cmpb_rax(m.slot << SLOT_SHIFT, TAG_INT);
         self.jcc(0x85, jo); // jne: not an int (or nothing)
-        self.mov_rax_rax(so.wrapping_add(PAYLOAD));
-        // Fully store the destination temporary (tag and payload).
-        self.store_int(KT, m.db);
-        self.store_tag_base(KT, m.db, TAG_INT);
+    }
+
+    /// Emit one property write (`C_PROPW`): [`emit_prop_guards`] then
+    /// store the written value's payload into the slot, with the value
+    /// also copied to the result temporary when the expression's value
+    /// is used (`assign_hit` writes `dst` with the *new* value), and the
+    /// source temporary nulled out when the op's operand was a consumed
+    /// `Tmp`. Every exit goes to the interpreted row: it re-runs the
+    /// whole write, which is what its own checks decide.
+    fn emit_propw(&mut self, m: JitMeta, jo: Target) {
+        self.emit_prop_guards(m, jo);
+        let so = m.slot << SLOT_SHIFT;
+        // The written value in `rcx`: a `KT` source is re-checked per
+        // iteration (its entry value may be anything, including the
+        // `TAG_NULL` an earlier row's consume left, and a temporary the
+        // region itself produced passes on its fresh value); a `KC`
+        // source carries an exact entry guard like an arithmetic
+        // operand; a `KL` source is a plan-time constant.
+        match m.sc {
+            KT => {
+                self.cmpb(KT, m.sw, TAG_INT);
+                self.jcc(0x85, jo); // jne: not an int
+                self.movrcx_at(KT, m.sw.wrapping_add(PAYLOAD));
+            }
+            KC => self.movrcx_at(KC, m.sw.wrapping_add(PAYLOAD)),
+            _ => self.movabs_rcx(m.lit_c),
+        }
+        // The result temporary: fully stored (tag and payload), as the
+        // read's destination is.
+        if m.db != NO_DST {
+            self.store_rcx_base(KT, m.db);
+            self.store_tag_base(KT, m.db, TAG_INT);
+        }
+        // The slot: tag already `Int` (the guard), so one payload word.
+        self.store_rcx_at_rax(so.wrapping_add(PAYLOAD));
+        // A consumed source temporary is left null, as the interpreted
+        // row does (`put_tmp(slot, Value::Null)`).
+        if m.consume {
+            self.store_imm_base(KT, m.sw, 0);
+            self.store_tag_base(KT, m.sw, TAG_NULL);
+        }
     }
 }
 impl Emitter {
@@ -2653,5 +2891,19 @@ mod layout_tests {
         // `cmp byte [rax + disp32], imm8`: the slot's tag byte.
         em.cmpb_rax(0x50, TAG_INT);
         assert_eq!(em.code, vec![0x80, 0xB8, 0x50, 0x00, 0x00, 0x00, TAG_INT]);
+        em.code.clear();
+        // `mov rcx, [rsi + disp32]`: a source temporary's payload while
+        // `rax` holds the slot array (`8B` with `reg` field `001`, no
+        // `REX.R`: `rm=110` stays `rsi`).
+        em.movrcx_at(KT, 0x28);
+        assert_eq!(em.code, vec![REX_W, 0x8B, 0x8E, 0x28, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        // `mov [rsi + off + 8], rcx`: the result temporary's payload.
+        em.store_rcx_base(KT, 0x10);
+        assert_eq!(em.code, vec![REX_W, 0x89, 0x8E, 0x18, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        // `mov [rax + disp32], rcx`: the property slot's payload word.
+        em.store_rcx_at_rax(0x48);
+        assert_eq!(em.code, vec![REX_W, 0x89, 0x88, 0x48, 0x00, 0x00, 0x00]);
     }
 }
