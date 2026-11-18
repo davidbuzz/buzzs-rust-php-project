@@ -409,6 +409,16 @@ const fn payload_offset<T>() -> usize {
     std::mem::size_of::<ObjHeader>().next_multiple_of(std::mem::align_of::<T>())
 }
 
+/// Offset of the payload of an [`Obj`] handle's allocation, seen from the
+/// handle's pointer (the base of the `ObjCell<T>`). An `Obj`'s payload is
+/// one fixed distance behind the header, so a consumer that knows the
+/// payload type (like `php-vm`'s trace JIT, reading an `ObjectData`) can
+/// reach it with one displacement.
+#[must_use]
+pub const fn obj_payload_offset<T>() -> usize {
+    payload_offset::<T>()
+}
+
 impl<T: PhpObject> PhpObject for ObjCell<T> {
     #[inline]
     fn handle(&self) -> u32 {

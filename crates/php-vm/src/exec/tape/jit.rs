@@ -89,6 +89,10 @@ const KNULL_ARG: u8 = 5;
 /// the plain call discards the extras), so there is nothing to guard
 /// and nothing to store, whatever the caller-side value was.
 const KSKIP: u8 = 6;
+/// `plan_call`'s receiver kind for a method call whose receiver is the
+/// frame's `$this` (`InitMethodCall` with `Operand::Unused`): not a
+/// slot, read through the frame pointer instead (see `THIS_FIELD`).
+const KTHIS: u8 = 7;
 /// The most arguments an inlined call may pass (the plain-call path's
 /// inline argument buffer, `calls.rs`'s `MAX_ARGS`).
 const MAX_CALL_ARGS: usize = 6;
@@ -101,6 +105,20 @@ const TAG_NULL: u8 = 0;
 const TAG_BOOL: u8 = 1;
 const TAG_INT: u8 = 2;
 const TAG_STR: u8 = 4;
+const TAG_OBJECT: u8 = 6;
+/// Byte offset of an `Obj` handle's payload (`ObjectData`) in its
+/// allocation, from the handle pointer (the `ObjCell<T>` header):
+/// pinned by `php-runtime`'s `jit_value_layout` test.
+const OBJ_PAYLOAD: u32 = php_runtime::value::obj_payload_offset::<crate::object::ObjectData>() as u32;
+/// Byte offset of `ObjectData::class`, the `Rc<Class>` field.
+const CLASS_FIELD: u32 = std::mem::offset_of!(crate::object::ObjectData, class) as u32;
+/// Distance from an `Rc`'s allocation base (the raw field word, its
+/// `NonNull` handle) to `Rc::as_ptr`, the value: the inner box's two
+/// reference-count words. Pinned by `rc_inner_prefix_size` below.
+const RC_VALUE_OFFSET: u32 = 2 * std::mem::size_of::<usize>() as u32;
+/// Byte offset of `Frame::this`, the `Option<Obj>`: `None` is a null
+/// pointer (`Option<NonNull>`'s niche, pinned by `value_is_16_bytes`).
+const THIS_FIELD: u32 = std::mem::offset_of!(crate::vm::Frame, this) as u32;
 /// `Option::None`: a `Value` tag never reaches it, and its niche is the
 /// all-ones tag word, so the tag byte reads as this.
 const TAG_NONE: u8 = 9;
@@ -354,6 +372,14 @@ struct CallPlan {
     rows: Vec<Inst>,
     /// The callee's `Return` operand, as the caller sees it.
     ret: Arg,
+    /// An instance method call's receiver guard: the receiver slot
+    /// (kind, offset) and the class address the plan resolved from the
+    /// site's `method_cache` entry (`None` for a plain or static call,
+    /// whose callee the function-table version guard covers). The slot
+    /// kind is `KC`/`KT` for a compiled-variable or temporary receiver,
+    /// or [`KTHIS`] for `$this` (offset unused, read through the frame
+    /// pointer).
+    recv: Option<(u8, u32, u64)>,
     /// The call's scratch slice base (set once the buffer is mapped).
     base: u32,
     /// The scratch slice size.
@@ -397,6 +423,9 @@ struct Plan {
     /// The inlined calls, indexed by region instruction.
     calls: Vec<Option<CallPlan>>,
     has_calls: bool,
+    /// Some inlined call guards `$this`: the frame pointer (the third
+    /// entry argument, `rdx`) is parked in `r10` by the prologue.
+    frame: bool,
     /// The function table's version when the plan was made: the trace
     /// disarms itself when it runs with a different one (the guard on
     /// `FUNC_TABLE_VERSION`, only emitted `has_calls`).
@@ -660,6 +689,11 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
     // *caller* operands (the `Send` sources) are read as ints by the
     // trace, and its result temporary is fully written.
     let has_calls = calls.iter().any(|c| c.is_some());
+    // Some inlined call reads its `$this` receiver: keep the frame
+    // pointer (entry argument `rdx`) in `r10` for its guard.
+    let frame = calls.iter().flatten().any(|cp| {
+        cp.recv.is_some_and(|(kind, _, _)| kind == KTHIS)
+    });
     let mut guards: Vec<Guard> = Vec::new();
     for j in 0..len {
         if class[j] == 0 {
@@ -736,21 +770,26 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
         span,
         calls,
         has_calls,
+        frame,
         version: FUNC_TABLE_VERSION.load(Ordering::Relaxed),
     })
 }
 
 /// The whole analysis of the plain user-function call started by the
-/// `InitFCall` at `init`, or the static method call started by a
-/// named-class literal-method `InitStaticCall` there: resolve the
-/// callee, read the call's shape out of the raw ops (the init row, the
-/// `Send`s and the `DoCall` the fused `CallInit` row stands for, at the
-/// same indexes), and decode the callee's straight-line body into
-/// [`CallPlan`] rows whose slot offsets address the trace's scratch
-/// buffer. A static call's callee comes from the site's `fcall_cache`
-/// slot past the literals (the `prepare_static` formula); the scopes
-/// it resolved are not needed by an inlined straight-line body, which
-/// cannot read them (no whitelisted row touches a frame). Every
+/// `InitFCall` at `init`, the static method call started by a
+/// named-class literal-method `InitStaticCall` there, or the instance
+/// method call started by a literal-method `InitMethodCall` there:
+/// resolve the callee, read the call's shape out of the raw ops (the
+/// init row, the `Send`s and the `DoCall` the fused `CallInit` row
+/// stands for, at the same indexes), and decode the callee's
+/// straight-line body into [`CallPlan`] rows whose slot offsets address
+/// the trace's scratch buffer. A static call's callee comes from the
+/// site's `fcall_cache` slot past the literals (the `prepare_static`
+/// formula); an instance call's from the site's own `method_cache` slot
+/// (the `prepare_method` formula), with the receiver's class re-checked
+/// at run time by a guard. The scopes a static call resolved are not
+/// needed by an inlined straight-line body, which cannot read them (no
+/// whitelisted row touches a frame, `$this` or `self::`). Every
 /// assumption is plan-time or guarded by the trace's function-table
 /// version check; `None` refuses the inlining (and with it the whole
 /// region).
@@ -773,18 +812,28 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     // `CallInit`/`CallSend` rows this scan matched, so it never reaches
     // here; the re-match is belt-and-braces.)
     // `Some(name)` for a plain call (its callee is cached by the name
-    // literal); `None` for a static call (cached at a per-site slot).
-    let name = match code.ops.get(init)? {
+    // literal); `None` for a static call (cached at a per-site slot);
+    // and for an instance call the site's receiver operand and method
+    // name literal (the callee is cached at the site's own
+    // `method_cache` slot, its class re-checked at run time).
+    let (name, mcall) = match code.ops.get(init)? {
         Op::InitFCall {
             name,
             fallback: None,
             ..
-        } => Some(*name),
+        } => (Some(*name), None),
         Op::InitStaticCall {
             class: crate::opcode::ClassSpec::Named(_),
             name: Operand::Lit(_),
-        } => None,
-        _ => rj!("raw row is not a plain InitFCall or a Named/Lit InitStaticCall"),
+        } => (None, None),
+        Op::InitMethodCall {
+            obj: obj @ (Operand::Cv(_) | Operand::Tmp(_) | Operand::TmpKeep(_) | Operand::Unused),
+            name: Operand::Lit(lit),
+        } => (None, Some((obj, *lit))),
+        _ => rj!(
+            "raw row is not a plain InitFCall, a Named/Lit InitStaticCall \
+             or a Cv/Tmp/Unused/Lit InitMethodCall"
+        ),
     };
     let mut sends: Vec<Arg> = Vec::new();
     let mut ci = init + 1;
@@ -846,35 +895,71 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     }
 
     // The callee: the run-time cache the interpreted call path filled
-    // for this exact site, still alive and a plain user function.
-    let uf = match name {
-        Some(name) => {
-            let cache = code.fcall_cache.borrow();
-            match cache.get(name as usize) {
-                None => rj!("no fcall cache slot for the name"),
-                Some(None) => rj!("fcall cache not filled"),
-                Some(Some(cell)) => match cell.get() {
-                    Some(Func::User(uf)) => uf,
-                    Some(Func::Builtin(_)) => rj!("callee is a builtin"),
-                    None => rj!("cached callee is dead"),
-                },
-            }
+    // for this exact site, still alive and a plain user function. For
+    // an instance call the receiver's class is *not* a plan-time
+    // assumption: the emitted guard re-reads it at run time (poll and
+    // cap exits resume without disarming), so only the cache entry's
+    // shape is checked here, mirroring `prepare_method`.
+    let mut recv: Option<(u8, u32, u64)> = None;
+    let uf = if let Some(name) = name {
+        let cache = code.fcall_cache.borrow();
+        match cache.get(name as usize) {
+            None => rj!("no fcall cache slot for the name"),
+            Some(None) => rj!("fcall cache not filled"),
+            Some(Some(cell)) => match cell.get() {
+                Some(Func::User(uf)) => uf,
+                Some(Func::Builtin(_)) => rj!("callee is a builtin"),
+                None => rj!("cached callee is dead"),
+            },
         }
-        None => {
-            // The static-call site's slot (past the literals, the
-            // `prepare_static` formula): a resolved method whose declaring
-            // scope and called class are still alive.
-            let slot = code.literals.len() + init + 1;
-            match code
-                .fcall_cache
-                .borrow()
-                .get(slot)
-                .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get_call))
-            {
-                None => rj!("static call cache slot unfilled or stale"),
-                Some((Func::User(uf), _, _)) => uf,
-                Some((Func::Builtin(_), _, _)) => rj!("callee is a builtin"),
-            }
+    } else if let Some((obj, lit)) = mcall {
+        let (kind, off) = match obj {
+            // `$this` is not a slot: the guard reads the frame field.
+            Operand::Unused => (KTHIS, 0),
+            _ => match src(code, *obj) {
+                Some((kind @ (KC | KT), off)) => (kind, off),
+                _ => rj!("method-call receiver has no inlinable source"),
+            },
+        };
+        let cache = code.method_cache.borrow();
+        let Some(cached) = cache.get(init).and_then(|c| c.as_ref()) else {
+            rj!("method cache slot unfilled");
+        };
+        if cached.name_lit != Some(lit) {
+            rj!("method cache entry is for another name");
+        }
+        if cached.class_addr == 0 {
+            rj!("method cache entry has no class");
+        }
+        let cls = match cached.class.upgrade() {
+            Some(c) => c,
+            None => rj!("cached receiver class is dead"),
+        };
+        if cls.hooks.as_ref().and_then(|h| h.get_method).is_some() {
+            rj!("receiver class has a get_method hook");
+        }
+        // The guard: this slot must hold an object of exactly this class
+        // on every compiled call.
+        recv = Some((kind, off, cached.class_addr as u64));
+        match cached.func.get() {
+            Some(Func::User(uf)) => uf,
+            Some(Func::Builtin(_)) => rj!("method is a builtin"),
+            None => rj!("cached method is dead"),
+        }
+    } else {
+        // The static-call site's slot (past the literals, the
+        // `prepare_static` formula): a resolved method whose declaring
+        // scope and called class are still alive.
+        let slot = code.literals.len() + init + 1;
+        match code
+            .fcall_cache
+            .borrow()
+            .get(slot)
+            .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get_call))
+        {
+            None => rj!("static call cache slot unfilled or stale"),
+            Some((Func::User(uf), _, _)) => uf,
+            Some((Func::Builtin(_), _, _)) => rj!("callee is a builtin"),
         }
     };
     let shape = uf.call_shape();
@@ -1140,6 +1225,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         metas,
         rows,
         ret,
+        recv,
         base: 0,
         size: (((ncvs + nt) as u32) << 4).max(16),
     })
@@ -1251,6 +1337,59 @@ impl Emitter {
     fn load_int(&mut self, base: u8, off: u32) {
         self.put(&[REX_W, 0x8B, Self::rm3(base, 0)]);
         self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
+    }
+
+    /// `mov r9, [base + off]`: the raw payload of a slot already known
+    /// to hold a pointer value (an `Obj` handle, tag-checked first), not
+    /// an `Int` (`8B` reg=r9, rm = the slot base, no payload offset).
+    fn load_r9_at(&mut self, base: u8, off: u32) {
+        self.put(&[REX_W | REX_R, 0x8B, Self::rm3(base, 1)]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `r9` = the raw `Rc<Class>` inner pointer of the object in slot
+    /// `base + off`, whose tag was just checked `Object`: the handle's
+    /// payload (`ObjectData`) and its `class` field in one displacement.
+    /// Exactly the read the interpreted method-call path performs at
+    /// the same site, so no read can fault on a value that passed the
+    /// tag check.
+    fn load_obj_class(&mut self, base: u8, off: u32) {
+        // The slot payload is the `Obj` handle: the `ObjCell` base.
+        self.load_r9_at(base, off.wrapping_add(PAYLOAD));
+        self.obj_class_from_r9();
+    }
+
+    /// `r9` = the raw `Rc<Class>` inner pointer of the object whose
+    /// handle is already in `r9`: one deref, `OBJ_PAYLOAD` (the
+    /// `ObjCell` header, shared with `load_obj_class`) plus
+    /// `CLASS_FIELD` (the `class` field inside `ObjectData`). The field
+    /// holds the `Rc` allocation's inner pointer directly (the same
+    /// word `Rc::as_ptr` minus `RC_VALUE_OFFSET` names, which is what
+    /// the guard's `movabs` constant is), so no further deref belongs
+    /// here: a second one would load the strong count. Shared with the
+    /// `$this` guard (`load_r9_frame`).
+    fn obj_class_from_r9(&mut self) {
+        // `mov r9, [r9 + disp32]` (`4D 8B 89 d32`: `REX.R` extends the
+        // `reg` field to `r9`, `REX.B` the `rm` field).
+        self.put(&[REX_W | REX_R | REX_B, 0x8B, 0x89]);
+        self.put(&OBJ_PAYLOAD.wrapping_add(CLASS_FIELD).to_le_bytes());
+    }
+
+    /// `mov r9, [r10 + disp32]` (`4D 8B 8A d32`): a frame field, with
+    /// the frame pointer parked in `r10` by the prologue (`Plan.frame`).
+    /// The modrm is mod `10` (disp32), `reg = 001` widened to `r9` by
+    /// `REX.R` (the destination), `rm = 010` widened to `r10` by
+    /// `REX.B` (the base). `rm = 001` (`0x89`/`0x91`) would be `r9`,
+    /// and dropping `REX.R` moves the destination to `rdx`.
+    fn load_r9_frame(&mut self, off: u32) {
+        self.put(&[REX_W | REX_R | REX_B, 0x8B, 0x8A]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `cmp rax, r9` (`39 /r`: `reg` = `r9` (source), `rm` = `rax`
+    /// (destination), so `REX.R` only; modrm `11 001 000` = `0xC8`).
+    fn cmp_rax_r9(&mut self) {
+        self.put(&[REX_W | REX_R, 0x39, 0xC8]);
     }
 
     /// The `mod=10, disp32` ModRM byte for memory base `rdi` (KC),
@@ -1489,6 +1628,40 @@ impl Emitter {
     /// `DoCall` temporary. Callee slots never need a tag check: the
     /// plan proved every read one is a known `Int`.
     fn emit_call(&mut self, cp: &CallPlan) {
+        // An instance call first re-checks its receiver: the slot must
+        // still hold an object of exactly the class the plan resolved
+        // from the site's monomorphic cache. A mismatch (or a
+        // non-object) resumes at the call's init row *without*
+        // disarming: the receiver class may alternate between
+        // iterations, and the interpreted path re-runs the whole raw
+        // call either way. The payload derefs mirror that path, so
+        // they cannot fault once the tag matches.
+        if let Some((rk, roff, cls_addr)) = cp.recv {
+            if debug_on() {
+                eprintln!(
+                    "jit:   recv kind {rk} off {roff} class {cls_addr:#x}"
+                );
+            }
+            if rk == KTHIS {
+                // `$this`: the frame field is an `Option<Obj>` with no
+                // tag byte to check; `None` is a null pointer (the
+                // `NonNull` niche).
+                self.load_r9_frame(THIS_FIELD);
+                self.put(&[REX_W | REX_R | REX_B, 0x85, 0xC9]); // test r9, r9
+                self.jcc(0x84, Target::Stub(cp.callove)); // je: no `$this`
+                self.obj_class_from_r9();
+            } else {
+                self.cmpb(rk, roff, TAG_OBJECT);
+                self.jcc(0x85, Target::Stub(cp.callove)); // jne: not an object
+                self.load_obj_class(rk, roff);
+            }
+            // `r9` holds the raw `Rc<Class>` field word: the inner
+            // box's base, `RC_VALUE_OFFSET` below the `Class` value the
+            // cache names.
+            self.movabs_rax(cls_addr.wrapping_sub(u64::from(RC_VALUE_OFFSET)) as i64);
+            self.cmp_rax_r9();
+            self.jcc(0x85, Target::Stub(cp.callove)); // jne: other class
+        }
         for (n, arg) in cp.sends.iter().enumerate() {
             if arg.kind == KSKIP {
                 continue;
@@ -1578,6 +1751,19 @@ impl Emitter {
         // the callees, the inlined bodies may be stale, so disarm and
         // let the interpreter run the calls.
         if self.plan.has_calls {
+            // A `$this` receiver guard reads the frame field through
+            // `r10`: park the frame pointer (entry argument `rdx`)
+            // before the scratch load overwrites `rdx`. The frame
+            // cannot move while the trace runs (no real call can
+            // happen inside it: every call is inlined or exits).
+            if self.plan.frame {
+                // `mov r10, rdx` (`4C 8B D2`: the `8B` form moves
+                // `r/m` into `reg`, so `REX.R` extends the destination
+                // `reg` field to `r10` and plain `rm = 010` is the
+                // source `rdx`). `4C 89 D2` would be the `89` form,
+                // which moves the *other* way (`mov rdx, r10`).
+                self.put(&[REX_W | REX_R, 0x8B, 0xD2]);
+            }
             self.movabs_rdx(self.scratch);
             self.movabs_rax(crate::func::FUNC_TABLE_VERSION.as_ptr() as i64);
             // `cmp qword [rax], imm32` (`81 /7`, mod=00 rm=000: 0x38).
@@ -1739,8 +1925,9 @@ fn mmap_scratch(total: usize) -> Option<*mut u8> {
     Some(p.cast::<u8>())
 }
 
-/// The compiled entry: `fn(cvs, tmps) -> resume index`.
-type LoopFn = unsafe extern "C" fn(*mut u8, *mut u8) -> i64;
+/// The compiled entry: `fn(cvs, tmps, frame) -> resume index` (the frame
+/// pointer is only read by `$this` receiver guards; others ignore it).
+type LoopFn = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8) -> i64;
 
 /// How many traces the process has compiled (bounded by `MAX_TRACES`).
 static TRACES: AtomicUsize = AtomicUsize::new(0);
@@ -1859,6 +2046,14 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
     em.resolve();
     if debug_on() {
         eprintln!("jit: region {head}..={close} compiled to {} bytes", em.code.len());
+        eprintln!(
+            "jit: bytes {}",
+            em.code
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join("")
+        );
     }
     match place(&em.code) {
         Some(p) => p as usize,
@@ -1914,7 +2109,7 @@ pub(super) unsafe fn back_edge(
         let f: LoopFn = unsafe { std::mem::transmute(c) };
         // SAFETY: the region only touches the frame's slots, and exits
         // leave them exactly as an interpreted run would.
-        let r = unsafe { f(st.cvs, st.tmps) };
+        let r = unsafe { f(st.cvs, st.tmps, st.f.cast::<u8>()) };
         if debug_on() {
             static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let k = RUNS.fetch_add(1, Ordering::Relaxed);
@@ -2002,5 +2197,87 @@ unsafe fn edge_count(
     } else {
         // SAFETY: as above; now the cell is armed.
         unsafe { back_edge(st, ctx, at, target) }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// The receiver guard compares the raw `Rc<Class>` field word of a
+    /// live object against `class_addr - RC_VALUE_OFFSET`, so the inner
+    /// box's prefix (the strong and weak count words before the value)
+    /// must be exactly `RC_VALUE_OFFSET` bytes.
+    #[test]
+    fn rc_inner_prefix_size() {
+        struct Holder {
+            class: std::rc::Rc<std::cell::Cell<u64>>,
+        }
+        let h = Holder {
+            class: std::rc::Rc::new(std::cell::Cell::new(7)),
+        };
+        // The raw field word: the `NonNull<RcInner<T>>` `std::rc::Rc`
+        // stores, i.e. the allocation base.
+        let raw = unsafe { *(std::ptr::addr_of!(h.class) as *const usize) };
+        let value = std::rc::Rc::as_ptr(&h.class) as usize;
+        assert_eq!(value - raw, usize::try_from(RC_VALUE_OFFSET).unwrap());
+    }
+
+    fn emitter() -> Emitter {
+        Emitter::new(
+            Plan {
+                head: 0,
+                close: 0,
+                class: Vec::new(),
+                meta: Vec::new(),
+                guards: Vec::new(),
+                entries: Vec::new(),
+                span: Vec::new(),
+                calls: Vec::new(),
+                has_calls: false,
+                frame: false,
+                version: 0,
+            },
+            Vec::new(),
+            0,
+        )
+    }
+
+    /// The receiver guards run on machine code we cannot run here, so
+    /// pin their exact encodings: a wrong REX bit silently renames a
+    /// register (`mov r10, rdx` without `REX.W` is `mov r10d, r10d`;
+    /// `4D 8B 91` loads `r10`, not `r9`) and the trace crashes.
+    #[test]
+    fn receiver_guard_encodings() {
+        let mut em = emitter();
+        em.load_r9_frame(0x22);
+        assert_eq!(em.code, vec![0x4D, 0x8B, 0x8A, 0x22, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        em.put(&[REX_W | REX_R | REX_B, 0x85, 0xC9]); // test r9, r9
+        assert_eq!(em.code, vec![0x4D, 0x85, 0xC9]);
+        em.code.clear();
+        em.obj_class_from_r9();
+        let mut want = vec![0x4D, 0x8B, 0x89];
+        want.extend_from_slice(&OBJ_PAYLOAD.wrapping_add(CLASS_FIELD).to_le_bytes());
+        assert_eq!(em.code, want);
+        em.code.clear();
+        em.movabs_rax(-16);
+        let mut want = vec![0x48, 0xB8];
+        want.extend_from_slice(&(-16i64).to_le_bytes());
+        assert_eq!(em.code, want);
+        em.code.clear();
+        em.cmp_rax_r9();
+        // `REX.R` widens the `reg` field to `r9`: without it this would
+        // be `cmp rax, rcx`.
+        assert_eq!(em.code, vec![REX_W | REX_R, 0x39, 0xC8]);
+    }
+
+    /// The prologue parks the frame in `r10` with `mov r10, rdx`
+    /// (`4C 8B D2`, the `8B` reg←r/m form). The `89` form moves the
+    /// other way: `4C 89 D2` is `mov rdx, r10`, which clobbers the
+    /// frame argument and leaves `r10` holding the entry value.
+    #[test]
+    fn frame_park_encoding() {
+        assert_eq!(vec![REX_W | REX_R, 0x8B, 0xD2], vec![0x4C, 0x8B, 0xD2]);
     }
 }

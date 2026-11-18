@@ -5,7 +5,7 @@
 //! compiled-variable slots by comparing that byte directly; if rustc
 //! ever lays `Value` out differently, this test fails first.
 
-use php_runtime::Value;
+use php_runtime::{Obj, Value};
 
 fn bytes(v: &Value) -> [u8; 16] {
     // SAFETY: `Value` is 16 bytes (`value_is_16_bytes` in the crate's
@@ -39,4 +39,17 @@ fn tag_byte_and_int_payload() {
     let b = bytes(&n.unwrap_or(Value::Int(42)));
     assert_eq!(b[0], 2);
     assert_eq!(u64::from_le_bytes(b[8..16].try_into().unwrap()), 42);
+}
+
+#[test]
+fn object_tag_and_payload_reach() {
+    // The `Object` tag (variant ordinal): the JIT's receiver guard
+    // compares it before dereferencing the handle.
+    assert_eq!(bytes(&Value::Object(Obj::dummy("C")))[0], 6);
+
+    // The handle payload is the allocation's base; the `ObjCell<T>`
+    // payload (what an `ObjectData` pointer names) sits one fixed,
+    // align-8 displacement behind it: past the 32-byte header (the fat
+    // `Rc<dyn PhpObject>` plus its `TypeId`), the JIT's `OBJ_PAYLOAD`.
+    assert_eq!(php_runtime::value::obj_payload_offset::<u64>(), 32);
 }
