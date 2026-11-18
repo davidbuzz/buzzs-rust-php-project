@@ -221,6 +221,13 @@ pub struct Slots {
     len: usize,
 }
 
+// Byte offsets of the `Slots` fields, mirroring what `RefCell::try_borrow`
+// and slicing read: pinned by the `jit` layout tests so a renamed or
+// reordered field breaks them, not a trace.
+pub(crate) const SLOTS_BORROW_OFF: usize = std::mem::offset_of!(Slots, borrow);
+pub(crate) const SLOTS_FIRST_OFF: usize = std::mem::offset_of!(Slots, first);
+pub(crate) const SLOTS_LEN_OFF: usize = std::mem::offset_of!(Slots, len);
+
 impl Slots {
     /// `len` slots at `first`.
     fn new(first: NonNull<Option<Value>>, len: usize) -> Self {

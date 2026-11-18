@@ -67,6 +67,8 @@ use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::{Inst, SLOT_SHIFT, St, Tape, TOp, src, tmp_off, KC, KI, KL, KT, KR};
+use crate::opcode::PROP_CACHE_THIS;
+use crate::place::propcache::{PC_DYN, PC_READ};
 use crate::func::{Func, FUNC_TABLE_VERSION};
 use crate::opcode::{ArgSrc, Op, Operand};
 use crate::types::mask;
@@ -119,6 +121,24 @@ const RC_VALUE_OFFSET: u32 = 2 * std::mem::size_of::<usize>() as u32;
 /// Byte offset of `Frame::this`, the `Option<Obj>`: `None` is a null
 /// pointer (`Option<NonNull>`'s niche, pinned by `value_is_16_bytes`).
 const THIS_FIELD: u32 = std::mem::offset_of!(crate::vm::Frame, this) as u32;
+/// Byte offset of `Frame::scope`, the `Option<Rc<Class>>` calling scope:
+/// `None` is a null pointer, else the `Rc`'s allocation handle.
+const SCOPE_FIELD: u32 = std::mem::offset_of!(crate::vm::Frame, scope) as u32;
+/// Byte offset of `ObjectData::slots` (the inline `Slots`, whose field
+/// layout mirrors `RefCell<...>`'s).
+const OBJ_SLOTS: u32 = OBJ_PAYLOAD + std::mem::offset_of!(crate::object::ObjectData, slots) as u32;
+/// Where the `Slots` borrow counter, slot-array pointer and slot count
+/// live inside `ObjectData::slots`.
+const SLOTS_BORROW: u32 = OBJ_SLOTS + crate::object::SLOTS_BORROW_OFF as u32;
+const SLOTS_FIRST: u32 = OBJ_SLOTS + crate::object::SLOTS_FIRST_OFF as u32;
+const SLOTS_LEN: u32 = OBJ_SLOTS + crate::object::SLOTS_LEN_OFF as u32;
+/// Byte offset of `ObjectData::lazy` (the inline
+/// `RefCell<Option<Box<LazyInfo>>>`): `None` is a null pointer, and a
+/// borrowed cell has a non-null borrow source.
+const OBJ_LAZY: u32 = OBJ_PAYLOAD + std::mem::offset_of!(crate::object::ObjectData, lazy) as u32;
+/// Inside an inline `RefCell<T>`: the borrow source at 0, the value at 8.
+const REFCELL_BORROW: u32 = 0;
+const REFCELL_VALUE: u32 = 8;
 /// `Option::None`: a `Value` tag never reaches it, and its niche is the
 /// all-ones tag word, so the tag byte reads as this.
 const TAG_NONE: u8 = 9;
@@ -258,6 +278,10 @@ pub(crate) const J_NUMBIN_T: u16 = 16;
 pub(crate) const J_NUMBIN_C: u16 = 17;
 /// A plain user-function call inlined into the trace (see `CallPlan`).
 const C_CALL: u16 = 18;
+/// A plain instance-property read: `$obj->name` through the op array's
+/// property cache, with the receiver class and the frame's calling scope
+/// re-checked at run time (see `plan_prop`).
+const C_PROP: u16 = 19;
 
 /// The number of tape instructions one whitelisted class consumes
 /// (fused rows cover the ops they merge).
@@ -304,6 +328,13 @@ pub(crate) struct JitMeta {
     pub(crate) inc: bool,
     pub(crate) lit_a: i64,
     pub(crate) lit_b: i64,
+    /// `C_PROP`: byte offset of the base's compiled-variable slot (0 when
+    /// the base is `$this`, whose kind is `KTHIS`).
+    pub(crate) sb: u32,
+    /// `C_PROP`: byte offset of the destination temporary.
+    pub(crate) db: u32,
+    /// `C_PROP`: the property's slot index in the object.
+    pub(crate) slot: u32,
 }
 
 impl Default for JitMeta {
@@ -318,6 +349,9 @@ impl Default for JitMeta {
             inc: false,
             lit_a: 0,
             lit_b: 0,
+            sb: 0,
+            db: 0,
+            slot: 0,
         }
     }
 }
@@ -561,10 +595,24 @@ fn add_slot(guards: &mut Vec<Guard>, base: u8, off: u32, exact: bool) -> bool { 
 /// `inst.a`/`inst.b`/`inst.c` byte offset among `cvs`), `KT` = a
 /// temporary slot among `tmps`; `KI`/`KL` need no guard (their value
 /// was checked at plan time).
-fn add_class_guards(tape: &[Inst], i: usize, class: u16, m: JitMeta, guards: &mut Vec<Guard>) -> bool {
+fn add_class_guards(
+    tape: &[Inst],
+    i: usize,
+    class: u16,
+    m: JitMeta,
+    defs: &[u32],
+    guards: &mut Vec<Guard>,
+) -> bool {
     let inst = &tape[i];
+    // A temporary fully stored (tag and payload) by an earlier region
+    // row is guaranteed fresh at every later read in the trace: the
+    // trace is linear, a row whose store is conditional (a guard
+    // exit) leaves the trace when it doesn't store.  Such a read needs
+    // no entry guard, and its entry value (a consumed `TAG_NULL`, for
+    // instance) may be anything.
     let read = |kind: u8, off: u32, guards: &mut Vec<Guard>| -> bool {
         match kind {
+            KT if defs.contains(&off) => true,
             KC | KT => add_slot(guards, kind, off, true),
             KI | KL => true,
             _ => false,
@@ -588,7 +636,8 @@ fn add_class_guards(tape: &[Inst], i: usize, class: u16, m: JitMeta, guards: &mu
         J_INCCMP => add_slot(guards, KC, inst.a, true) && read(m.kb, inst.b, guards),
         // `inst.a` = a temp (exact: read as an int), then the cv it is
         // written into (weak: nothing of its own is read).
-        J_ASSIGN_T => add_slot(guards, KT, inst.b, true) && add_slot(guards, KC, inst.a, false),
+        J_ASSIGN_T => (defs.contains(&inst.b) || add_slot(guards, KT, inst.b, true))
+            && add_slot(guards, KC, inst.a, false),
         // Arithmetic into a temporary: the destination is fully stored
         // (tag and payload), so it only needs the weak guard (a scalar
         // or nothing, what the interpreter's own store test accepts).
@@ -597,8 +646,73 @@ fn add_class_guards(tape: &[Inst], i: usize, class: u16, m: JitMeta, guards: &mu
                 && read(m.kb, inst.b, guards)
                 && add_slot(guards, KT, inst.c, false)
         }
+        // A property read fully stores its destination temporary (tag
+        // and payload); the weak guard only keeps a heap value from
+        // being overwritten without release (a fresh temporary, or one
+        // an earlier row already stored an int into, is safe). The
+        // receiver, scope and class are re-checked by the emitted
+        // code, not entry-guarded.
+        C_PROP => defs.contains(&m.db) || add_slot(guards, KT, m.db, false),
         _ => false,
     }
+}
+
+/// The run-time shape of a plain instance-property read (`FetchObjProp`
+/// /`FetchObjPropTo`): the op array's property cache entry for the read's
+/// place, when it is filled for the current frame's calling scope,
+/// allows plain reads of a *declared* (not dynamic) property, and has
+/// `$this` or a compiled variable as its base. The returned [`JitMeta`]
+/// carries everything `emit_prop` re-checks at run time (the receiver,
+/// the scope, the class) and everything it reads (`slot`, `db`); the
+/// entry only *proved* those once, so none of them may be assumed. A
+/// `None` meta rejects the trace instead: the interpreted row re-runs
+/// the full lookup, which is always correct.
+fn plan_prop(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
+    let e = code.prop_cache.try_borrow().ok()?.get(inst.a as usize)?.clone();
+    if e.class_addr == 0 || e.flags & (PC_READ | PC_DYN) != PC_READ {
+        return None;
+    }
+    // The slot index must fit the `slot << SLOT_SHIFT` disp32s.
+    if e.slot >= 1 << 27 {
+        return None;
+    }
+    // The plan ran in this very frame; its scope is what the guard
+    // compares against (and 0 for none).
+    // SAFETY: the frame outlives the plan (the trace runs in it).
+    let scope = unsafe { &*st.f }
+        .scope
+        .as_ref()
+        .map_or(0, |s| Rc::as_ptr(s) as usize);
+    if e.scope_addr != scope || inst.b >= code.num_tmps {
+        return None;
+    }
+    let (ka, sb) = if e.base == PROP_CACHE_THIS {
+        (KTHIS, 0)
+    } else {
+        if e.base as usize >= code.cv_names.len() {
+            return None;
+        }
+        (KC, e.base << SLOT_SHIFT)
+    };
+    Some(JitMeta {
+        class: C_PROP,
+        ka,
+        sb,
+        db: inst.b << SLOT_SHIFT,
+        slot: e.slot,
+        // The raw `Rc<Class>` field word: `emit_prop` reads the field
+        // itself, which names `Rc::as_ptr` minus `RC_VALUE_OFFSET`.
+        lit_a: e.class_addr as i64 - i64::from(RC_VALUE_OFFSET),
+        // The same for the scope field, keeping 0 = "no scope" (what the
+        // emitted `test`/`jne` pair checks); an entry's `scope_addr` is
+        // an `Rc::as_ptr` value address like `class_addr`.
+        lit_b: if e.scope_addr == 0 {
+            0
+        } else {
+            e.scope_addr as i64 - i64::from(RC_VALUE_OFFSET)
+        },
+        ..JitMeta::default()
+    })
 }
 
 /// The target instruction index of the jump of the instruction at
@@ -641,6 +755,15 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
                     (C_CALL, JitMeta::default(), span, Some(cp))
                 }
                 None => rej!(format!("[{i}] call not inlinable")),
+            }
+        } else if matches!(tape[i].op, TOp::FetchObjProp | TOp::FetchObjPropTo) {
+            // A property read never spans: the folded `AssignCv` of a
+            // `FetchObjPropTo` is scanned and emitted as its own row
+            // (the read stores into its temporary and that row moves
+            // it, mirroring the interpreted fall-through).
+            match plan_prop(st, code, &tape[i]) {
+                Some(m) => (C_PROP, m, 1, None),
+                None => rej!(format!("[{i}] property read not inlinable")),
             }
         } else {
             match classify(st, &tape[i]) {
@@ -689,12 +812,17 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
     // *caller* operands (the `Send` sources) are read as ints by the
     // trace, and its result temporary is fully written.
     let has_calls = calls.iter().any(|c| c.is_some());
-    // Some inlined call reads its `$this` receiver: keep the frame
-    // pointer (entry argument `rdx`) in `r10` for its guard.
-    let frame = calls.iter().flatten().any(|cp| {
-        cp.recv.is_some_and(|(kind, _, _)| kind == KTHIS)
-    });
+    // Some inlined call reads its `$this` receiver, or a property read
+    // re-checks the frame's scope: keep the frame pointer (entry
+    // argument `rdx`) in `r10` for those guards.
+    let frame = class.contains(&C_PROP)
+        || calls.iter().flatten().any(|cp| {
+            cp.recv.is_some_and(|(kind, _, _)| kind == KTHIS)
+        });
     let mut guards: Vec<Guard> = Vec::new();
+    // Temporary offsets fully stored by an earlier row of the region
+    // (in program order): reads of those at guard time are dead.
+    let mut defs: Vec<u32> = Vec::new();
     for j in 0..len {
         if class[j] == 0 {
             continue;
@@ -702,6 +830,7 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
         if class[j] == C_CALL {
             let cp = calls[j].as_ref().unwrap();
             if !cp.sends.iter().all(|arg| match arg.kind {
+                KT if defs.contains(&arg.off) => true,
                 KC | KT => add_slot(&mut guards, arg.kind, arg.off, true),
                 _ => true,
             }) {
@@ -711,11 +840,19 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
                 if !add_slot(&mut guards, KT, d, false) {
                     rej!(format!("guard for the call result at {}", head + j));
                 }
+                defs.push(d);
             }
             continue;
         }
-        if !add_class_guards(tape, head + j, class[j], meta[j], &mut guards) {
+        if !add_class_guards(tape, head + j, class[j], meta[j], &defs, &mut guards) {
             rej!(format!("guards at [{}, {:?}]", head + j, tape[head + j].op));
+        }
+        // The temps this row fully stores (int tag and payload), seen
+        // in order by the rows after it.
+        match class[j] {
+            C_PROP => defs.push(meta[j].db),
+            J_ARITH_TMP | J_NUMBIN_T => defs.push(tape[head + j].c),
+            _ => {}
         }
     }
     // With calls in the region, `rdx` holds the scratch base for its
@@ -1386,6 +1523,72 @@ impl Emitter {
         self.put(&off.to_le_bytes());
     }
 
+    /// `mov rax, [r10 + disp32]` (`41 8B 82 d32`): a frame field, with
+    /// the frame pointer parked in `r10` (`Plan.frame`). Unlike
+    /// `load_r9_frame` the destination is `rax` (no `REX.R`).
+    fn load_rax_frame(&mut self, off: u32) {
+        self.put(&[REX_W | REX_B, 0x8B, 0x82]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `mov rax, [r9 + disp32]` (`48 8B 81 d32`): a field of the object
+    /// data whose handle is in `r9` (its `class` field, or the
+    /// `RefCell<Slots>` array words). `REX.B` extends the `rm` field to
+    /// `r9`; without `REX.R` the `reg` field is `rax`.
+    fn mov_rax_r9(&mut self, off: u32) {
+        self.put(&[REX_W | REX_B, 0x8B, 0x81]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `mov rax, [rax + disp32]` (`48 8B 80 d32`): dereference `rax`
+    /// (the slot array pointer) at a byte offset.
+    fn mov_rax_rax(&mut self, off: u32) {
+        self.put(&[REX_W, 0x8B, 0x80]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `movabs rcx, imm64` (`48 B9`): a second compare constant, so the
+    /// `movabs rax` idiom keeps working while `r9` holds a pointer.
+    fn movabs_rcx(&mut self, v: i64) {
+        self.put(&[REX_W, 0xB9]);
+        self.put(&v.to_le_bytes());
+    }
+
+    /// `cmp rax, rcx` (`3B /r`: `reg` = `rax` (destination), `rm` =
+    /// `rcx` (source), modrm `11 000 001` = `0xC1`, no REX bits needed
+    /// beyond `REX.W`).
+    fn cmp_rax_rcx(&mut self) {
+        self.put(&[REX_W, 0x3B, 0xC1]);
+    }
+
+    /// `test rax, rax` (`48 85 C0`): set the zero flag from `rax`.
+    fn test_rax(&mut self) {
+        self.put(&[REX_W, 0x85, 0xC0]);
+    }
+
+    /// `cmp qword [r9 + disp32], imm8` (`49 83 B9 d32 imm8`).
+    fn cmpq_r9(&mut self, off: u32, imm: i8) {
+        self.put(&[REX_W | REX_B, 0x83, 0xB9]);
+        self.put(&off.to_le_bytes());
+        self.put(&[imm as u8]);
+    }
+
+    /// `cmp rax, imm32` (`48 3D id`, sign-extended): `rax` already holds
+    /// an unsigned count (a slot array length).
+    fn cmp_rax_imm(&mut self, imm: u32) {
+        self.put(&[REX_W, 0x3D]);
+        self.put(&imm.to_le_bytes());
+    }
+
+    /// `cmp byte [rax + disp32], imm8` (`80 B8 d32 imm8`): the tag byte
+    /// of the slot array already dereferenced into `rax`. `rm = 000` is
+    /// `rax` without any REX.
+    fn cmpb_rax(&mut self, off: u32, imm: u8) {
+        self.put(&[0x80, 0xB8]);
+        self.put(&off.to_le_bytes());
+        self.put(&[imm]);
+    }
+
     /// `cmp rax, r9` (`39 /r`: `reg` = `r9` (source), `rm` = `rax`
     /// (destination), so `REX.R` only; modrm `11 001 000` = `0xC8`).
     fn cmp_rax_r9(&mut self) {
@@ -1513,6 +1716,7 @@ impl Emitter {
         let m = self.plan.meta[j];
         match self.plan.class[j] {
             C_JMP => self.jmp(self.jump_tgt(j)),
+            C_PROP => self.emit_prop(m, Target::Stub(i)),
             J_CMP => {
                 self.to_rax(m.ka, inst.a, m.lit_a);
                 self.to_r9(m.kb, inst.b, m.lit_b);
@@ -1705,6 +1909,86 @@ impl Emitter {
             }
         }
     }
+
+    /// Emit one property read (`C_PROP`): re-check the base (an object
+    /// of the pinned class, read through the frame for `$this`), the
+    /// frame's calling scope, an unborrowed and empty `lazy` cell, an
+    /// unborrowed `slots` cell long enough for the slot, and the slot
+    /// holding an `Int`; then copy the payload into the destination
+    /// temporary with an `Int` tag. Every mismatch exits to the
+    /// interpreted row *without* disarming: classes, scopes and dynamic
+    /// properties legitimately alternate between iterations, and the
+    /// interpreted lookup is always correct. The derefs mirror the
+    /// interpreted path, so none can fault once its checks pass.
+    fn emit_prop(&mut self, m: JitMeta, jo: Target) {
+        if debug_on() {
+            eprintln!(
+                "jit:   prop base {} off {:#x} class {:#x} scope {:#x} slot {}",
+                m.ka, m.sb, m.lit_a, m.lit_b, m.slot
+            );
+        }
+        // The receiver handle in `r9`.
+        if m.ka == KTHIS {
+            // `$this`: an `Option<Obj>` frame field, `None` a null
+            // pointer (no tag byte to check).
+            self.load_r9_frame(THIS_FIELD);
+            self.put(&[REX_W | REX_R | REX_B, 0x85, 0xC9]); // test r9, r9
+            self.jcc(0x84, jo); // je: no `$this`
+        } else {
+            self.cmpb(KC, m.sb, TAG_OBJECT);
+            self.jcc(0x85, jo); // jne: not an object
+            // The slot payload is the `Obj` handle (the `ObjCell` base).
+            self.load_r9_at(KC, m.sb.wrapping_add(PAYLOAD));
+        }
+        // The frame's calling scope must be the one the cache entry was
+        // filled for (`0` = none): a `use`d or different scope changes
+        // what a protected property lookup resolves to.
+        self.load_rax_frame(SCOPE_FIELD);
+        if m.lit_b == 0 {
+            self.test_rax();
+        } else {
+            self.movabs_rcx(m.lit_b);
+            self.cmp_rax_rcx();
+        }
+        self.jcc(0x85, jo); // jne: other scope
+        // The receiver's class field must name the pinned class. The
+        // field word is the raw `Rc` inner pointer, which is what the
+        // plan-time `lit_a` already names (`class_addr` minus
+        // `RC_VALUE_OFFSET`), so no deref beyond the field.
+        self.mov_rax_r9(OBJ_PAYLOAD.wrapping_add(CLASS_FIELD));
+        self.movabs_rcx(m.lit_a);
+        self.cmp_rax_rcx();
+        self.jcc(0x85, jo); // jne: other class
+        // The `lazy` cell must be unborrowed and empty: the interpreted
+        // read consults it first, and anything in it (or a live borrow)
+        // takes the slow path. `try_borrow` only fails on a nonzero
+        // borrow state, so comparing against 0 is stricter than needed,
+        // never looser.
+        self.cmpq_r9(OBJ_LAZY.wrapping_add(REFCELL_BORROW), 0);
+        self.jcc(0x85, jo); // jne: borrowed
+        self.cmpq_r9(OBJ_LAZY.wrapping_add(REFCELL_VALUE), 0);
+        self.jcc(0x85, jo); // jne: lazy properties present
+        // The `slots` cell must be unborrowed (a live borrow could make
+        // this read alias one that panics) and long enough for the slot
+        // (a slot count shrunk by... never happens, but an entry filled
+        // for another class's layout is the real case this catches).
+        self.cmpq_r9(SLOTS_BORROW, 0);
+        self.jcc(0x85, jo); // jne: borrowed
+        self.mov_rax_r9(SLOTS_LEN);
+        self.cmp_rax_imm(m.slot.wrapping_add(1));
+        self.jcc(0x82, jo); // jb: `slot` past the array
+        // The slot itself: `Option<Value>`'s niche gives an unset slot
+        // tag `TAG_NONE` and a real value its own tag, so one `Int`
+        // check rejects unset slots, references and strings together.
+        let so = m.slot << SLOT_SHIFT;
+        self.mov_rax_r9(SLOTS_FIRST);
+        self.cmpb_rax(so, TAG_INT);
+        self.jcc(0x85, jo); // jne: not an int (or nothing)
+        self.mov_rax_rax(so.wrapping_add(PAYLOAD));
+        // Fully store the destination temporary (tag and payload).
+        self.store_int(KT, m.db);
+        self.store_tag_base(KT, m.db, TAG_INT);
+    }
 }
 impl Emitter {
     fn new(plan: Plan, tape: Vec<Inst>, scratch: i64) -> Emitter {
@@ -1745,25 +2029,25 @@ impl Emitter {
                 self.jcc(0x85, Target::Disarm(self.plan.head)); // jne
             }
         }
-        // With inlined calls: the scratch buffer base in `rdx` (every
-        // `KR` offset is relative to it) and the function-table version
-        // guard: if any function was (re)defined since the plan read
-        // the callees, the inlined bodies may be stale, so disarm and
-        // let the interpreter run the calls.
+        // A `$this` receiver guard or a property read's scope check
+        // reads the frame through `r10`: park the frame pointer (entry
+        // argument `rdx`) before the scratch load overwrites `rdx`.
+        // The frame cannot move while the trace runs (no real call can
+        // happen inside it: every call is inlined or exits).
+        if self.plan.frame {
+            // `mov r10, rdx` (`4C 8B D2`: the `8B` form moves
+            // `r/m` into `reg`, so `REX.R` extends the destination
+            // `reg` field to `r10` and plain `rm = 010` is the
+            // source `rdx`). `4C 89 D2` would be the `89` form,
+            // which moves the *other* way (`mov rdx, r10`).
+            self.put(&[REX_W | REX_R, 0x8B, 0xD2]);
+        }
+        // With inlined calls in the region: the scratch buffer base in
+        // `rdx` (every `KR` offset is relative to it) and the function-
+        // table version guard: if any function was (re)defined since the
+        // plan read the callees, the inlined bodies may be stale, so
+        // disarm and let the interpreter run the calls.
         if self.plan.has_calls {
-            // A `$this` receiver guard reads the frame field through
-            // `r10`: park the frame pointer (entry argument `rdx`)
-            // before the scratch load overwrites `rdx`. The frame
-            // cannot move while the trace runs (no real call can
-            // happen inside it: every call is inlined or exits).
-            if self.plan.frame {
-                // `mov r10, rdx` (`4C 8B D2`: the `8B` form moves
-                // `r/m` into `reg`, so `REX.R` extends the destination
-                // `reg` field to `r10` and plain `rm = 010` is the
-                // source `rdx`). `4C 89 D2` would be the `89` form,
-                // which moves the *other* way (`mov rdx, r10`).
-                self.put(&[REX_W | REX_R, 0x8B, 0xD2]);
-            }
             self.movabs_rdx(self.scratch);
             self.movabs_rax(crate::func::FUNC_TABLE_VERSION.as_ptr() as i64);
             // `cmp qword [rax], imm32` (`81 /7`, mod=00 rm=000: 0x38).
@@ -2119,12 +2403,17 @@ pub(super) unsafe fn back_edge(
         }
         if r < 0 {
             if debug_on() {
-                // Which guard's slot broke the assumption: dump the tags.
-                let tags = unsafe { std::slice::from_raw_parts(st.cvs, 64) };
-                eprintln!(
-                    "jit:   cvs tags @0,16,32,48 = {} {} {} {}",
-                    tags[0], tags[16], tags[32], tags[48]
-                );
+                // Which guard's slot broke the assumption: dump every tag.
+                // The tag byte is the first byte of each slot's `Value`.
+                let f = unsafe { &*st.f };
+                let t: Vec<u8> = (0..f.cvs.len())
+                    .map(|i| unsafe { *(st.cvs.add(i * 16)) })
+                    .collect();
+                eprintln!("jit:   cv tags = {t:?}");
+                let t: Vec<u8> = (0..f.tmps.len())
+                    .map(|i| unsafe { *(st.tmps.add(i * 16)) })
+                    .collect();
+                eprintln!("jit:   tmp tags = {t:?}");
             }
             cell.store(usize::MAX, Ordering::Release);
             // This tape's tracing never paid off: stop hooking its back
@@ -2279,5 +2568,90 @@ mod layout_tests {
     #[test]
     fn frame_park_encoding() {
         assert_eq!(vec![REX_W | REX_R, 0x8B, 0xD2], vec![0x4C, 0x8B, 0xD2]);
+    }
+
+    /// `emit_prop` reads the slot array through fixed displacements, so
+    /// the `Slots` fields must sit where `SLOTS_*_OFF` says (and where
+    /// an `Option<Value>` slice's words actually live).
+    #[test]
+    fn slots_field_offsets() {
+        assert_eq!(crate::object::SLOTS_BORROW_OFF, 0);
+        assert_eq!(crate::object::SLOTS_FIRST_OFF, 8);
+        assert_eq!(crate::object::SLOTS_LEN_OFF, 16);
+    }
+
+    /// The `lazy` guards compare the two words of an inline
+    /// `RefCell<Option<Box<T>>>`: the borrow state at 0 and the option's
+    /// pointer at 8 (its null niche is `None`), like `REFCELL_*`.
+    #[test]
+    fn refcell_words() {
+        let cell = std::cell::RefCell::new(Some(Box::new(7u32)));
+        let raw = std::ptr::addr_of!(cell) as usize;
+        // Unborrowed: the borrow flag word is 0.
+        assert_eq!(unsafe { *(raw as *const usize) }, 0);
+        // `as_ptr` names the value: 8 bytes past the cell's base.
+        assert_eq!(
+            cell.as_ptr() as usize - raw,
+            usize::try_from(REFCELL_VALUE).unwrap()
+        );
+        let empty: std::cell::RefCell<Option<Box<u32>>> = std::cell::RefCell::new(None);
+        assert_eq!(unsafe { *((std::ptr::addr_of!(empty) as usize + 8) as *const usize) }, 0);
+    }
+
+    /// `emit_prop`'s `$this` guard treats a null field word as "no
+    /// `$this`" and its scope guard as "no scope": both fields are
+    /// `Option`ed pointers whose niche must make `None` null.
+    #[test]
+    fn option_pointers_are_null() {
+        assert_eq!(std::mem::size_of::<Option<std::rc::Rc<std::cell::Cell<u64>>>>(), 8);
+        assert_eq!(std::mem::size_of::<Option<php_runtime::Obj>>(), 8);
+    }
+
+    /// Pin the property-read guards' encodings, same reasoning as
+    /// `receiver_guard_encodings`: a wrong REX bit renames a register,
+    /// narrows the access or flips the compared operands, and the trace
+    /// crashes or miscompares.
+    #[test]
+    fn prop_guard_encodings() {
+        let mut em = emitter();
+        // `mov rax, [r10 + disp32]`: a frame field (`REX.W|REX.B`: the
+        // `reg` field stays `rax`, `rm` widened to `r10`).
+        em.load_rax_frame(0x22);
+        assert_eq!(em.code, vec![0x49, 0x8B, 0x82, 0x22, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        // `mov rax, [r9 + disp32]`: an `ObjectData` field word.
+        em.mov_rax_r9(0x18);
+        assert_eq!(em.code, vec![0x49, 0x8B, 0x81, 0x18, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        // `mov rax, [rax + disp32]`: the slot array, dereferenced.
+        em.mov_rax_rax(0x30);
+        assert_eq!(em.code, vec![0x48, 0x8B, 0x80, 0x30, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        // `movabs rcx, imm64`: the second compare constant.
+        em.movabs_rcx(-16);
+        let mut want = vec![0x48, 0xB9];
+        want.extend_from_slice(&(-16i64).to_le_bytes());
+        assert_eq!(em.code, want);
+        em.code.clear();
+        // `cmp rax, rcx` (`3B /r`: `reg = rax` is the *destination*, so
+        // this compares exactly like `cmp rax, [field]` vs `movabs`).
+        em.cmp_rax_rcx();
+        assert_eq!(em.code, vec![REX_W, 0x3B, 0xC1]);
+        em.code.clear();
+        // `test rax, rax`: the null-scope check.
+        em.test_rax();
+        assert_eq!(em.code, vec![REX_W, 0x85, 0xC0]);
+        em.code.clear();
+        // `cmp qword [r9 + disp32], imm8`: borrow and lazy-empty checks.
+        em.cmpq_r9(0x40, 0);
+        assert_eq!(em.code, vec![0x49, 0x83, 0xB9, 0x40, 0x00, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        // `cmp rax, imm32`: the slot-array length check.
+        em.cmp_rax_imm(0x140);
+        assert_eq!(em.code, vec![REX_W, 0x3D, 0x40, 0x01, 0x00, 0x00]);
+        em.code.clear();
+        // `cmp byte [rax + disp32], imm8`: the slot's tag byte.
+        em.cmpb_rax(0x50, TAG_INT);
+        assert_eq!(em.code, vec![0x80, 0xB8, 0x50, 0x00, 0x00, 0x00, TAG_INT]);
     }
 }
