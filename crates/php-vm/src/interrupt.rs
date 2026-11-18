@@ -70,6 +70,14 @@ static INTERRUPT: AtomicBool = AtomicBool::new(false);
 /// per-instruction poll is a single direct load.
 static SAFE_POINT: SafePoint = SafePoint::new();
 
+/// The address of the safe point's `due` flag, for the trace JIT's
+/// machine code to poll per loop iteration (the poll is `cmp byte
+/// [addr], 0`: `AtomicBool` is one byte, and the flag is process-wide,
+/// so an absolute address is stable for the process's lifetime).
+pub(crate) fn jit_poll_addr() -> *const u8 {
+    &SAFE_POINT.due as *const AtomicBool as *const u8
+}
+
 thread_local! {
     /// How deeply this thread nests [`Vm::execute`] (see [`ExecutionGuard`]).
     static EXECUTION_DEPTH: Cell<u32> = const { Cell::new(0) };
