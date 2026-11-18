@@ -275,18 +275,6 @@ struct St {
     /// The frame itself, for what is not a slot (`$this`, the op array).
     #[allow(dead_code)] // for the family modules
     f: *mut Frame,
-    /// The trace JIT's tables for the tape being run ([`jit`]): its base
-    /// and length, and the per-instruction back-edge count and trace
-    /// cells. Null when the JIT is off or no hot back edge has been seen
-    /// on this tape yet (`jit::back_edge` is hooked into `take_jump!`
-    /// and checks the count cell for the instruction taking the jump).
-    tbase: *const Inst,
-    tlen: usize,
-    tcnt: *const AtomicI32,
-    ttr: *const AtomicUsize,
-    /// The [`Tape`] the tables above belong to (null when there are no
-    /// tables): the JIT kills the tape's tracing through it.
-    tape: *const Tape,
 }
 
 /// The compiled-variable slot at byte offset `off`.
@@ -327,11 +315,6 @@ unsafe fn frame_st(f: *mut Frame) -> St {
         tmps: fr.tmps.as_mut_ptr().cast(),
         lits: fr.code.literals.as_ptr().cast(),
         f,
-        tbase: std::ptr::null(),
-        tlen: 0,
-        tcnt: std::ptr::null(),
-        ttr: std::ptr::null(),
-        tape: std::ptr::null(),
     }
 }
 
@@ -482,7 +465,7 @@ fn loop_exit(ip: *const Inst) -> *const Inst {
 /// and allocate nothing, so only an asynchronous request (a signal, a
 /// timeout) can be pending, and it is seen here.
 macro_rules! take_jump {
-    ($ip:ident, $inst:ident, $st:ident) => {{
+    ($ip:ident, $inst:ident, $st:ident, $jit:expr, $ctx:expr) => {{
         let at = $ip;
         #[allow(clippy::cast_possible_wrap)]
         {
@@ -499,14 +482,20 @@ macro_rules! take_jump {
         // back edge, and the hook counts it and may run (or compile and
         // run) the loop as machine code.  It returns the instruction to
         // continue at, which is the target itself when the loop is not
-        // hot yet or cannot be compiled.  Forward jumps (the common
-        // case) never arm a trace, so the pointer test keeps them at two
-        // instructions.
-        if $ip < at && !$st.tcnt.is_null() {
-            // SAFETY: both point into the running tape, and the test
-            // just made the jump backward. (Reached from `run_core`'s
-            // `unsafe` block, hence no `unsafe` here.)
-            $ip = jit::back_edge(&mut $st, at, $ip);
+        // hot yet or cannot be compiled.  `$jit` is `run_core`'s const
+        // generic: a frame without a live context runs the instantation
+        // where the hook is compiled out entirely (its two-instruction
+        // test measurably reshapes `run_core`: +114M instructions on
+        // `fib`).  `$ctx` is `run_core`'s context parameter: non-null
+        // exactly when `$jit` is true.
+        if $jit && $ip < at {
+            // SAFETY: guaranteed by `$jit` and the test just made the
+            // jump backward. (Reached from `run_core`'s `unsafe` block,
+            // hence no `unsafe` here.)  `st` goes by VALUE: taking its
+            // address anywhere in `run_core` keeps it a memory local and
+            // demotes every slot-base access to the stack (measured:
+            // +210M instructions on `fib`).
+            $ip = jit::back_edge($st, unsafe { &*$ctx }, at, $ip);
         }
     }};
 }
@@ -538,13 +527,13 @@ macro_rules! fam_arm {
     // and reads any slot base from it (`frame_st`). Passed all four bases,
     // the calls raise their weight in the loop's register allocation: three
     // more such arms put the variables' base of every op on the stack.
-    (plain_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (plain_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         if !($h)($st.f, $inst) {
             return step_out($ip);
         }
         $ip = $ip.add($n);
     }};
-    (poll_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (poll_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         if !($h)($st.f, $inst) {
             return step_out($ip);
         }
@@ -558,14 +547,14 @@ macro_rules! fam_arm {
             };
         }
     }};
-    (branch_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (branch_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         match ($h)($st.f, $inst) {
             Br::Decline => return step_out($ip),
             Br::Fall => $ip = $ip.add($n),
-            Br::Jump => take_jump!($ip, $inst, $st),
+            Br::Jump => take_jump!($ip, $inst, $st, JIT, $ctx),
         }
     }};
-    (branch_poll_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (branch_poll_f, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         match ($h)($st.f, $inst) {
             Br::Decline => return step_out($ip),
             Br::Fall => {
@@ -579,16 +568,16 @@ macro_rules! fam_arm {
                     };
                 }
             }
-            Br::Jump => take_jump!($ip, $inst, $st),
+            Br::Jump => take_jump!($ip, $inst, $st, JIT, $ctx),
         }
     }};
-    (plain, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (plain, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         if !($h)($st, $inst) {
             return step_out($ip);
         }
         $ip = $ip.add($n);
     }};
-    (poll, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (poll, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         if !($h)($st, $inst) {
             return step_out($ip);
         }
@@ -602,14 +591,14 @@ macro_rules! fam_arm {
             };
         }
     }};
-    (branch, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (branch, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         match ($h)($st, $inst) {
             Br::Decline => return step_out($ip),
             Br::Fall => $ip = $ip.add($n),
-            Br::Jump => take_jump!($ip, $inst, $st),
+            Br::Jump => take_jump!($ip, $inst, $st, JIT, $ctx),
         }
     }};
-    (branch_poll, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident) => {{
+    (branch_poll, $h:expr, $n:literal, $st:ident, $inst:ident, $ip:ident, $ctx:ident) => {{
         match ($h)($st, $inst) {
             Br::Decline => return step_out($ip),
             Br::Fall => {
@@ -623,7 +612,7 @@ macro_rules! fam_arm {
                     };
                 }
             }
-            Br::Jump => take_jump!($ip, $inst, $st),
+            Br::Jump => take_jump!($ip, $inst, $st, JIT, $ctx),
         }
     }};
 }
@@ -806,7 +795,11 @@ macro_rules! tape_ops {
             // bases of `Vec<Value>` and `Vec<CvSlot>` buffers.
             clippy::cast_ptr_alignment
         )]
-        unsafe fn run_core(mut st: St, mut ip: *const Inst) -> Out {
+        unsafe fn run_core<const JIT: bool>(
+            mut st: St,
+            ctx: *const jit::JitCtx,
+            mut ip: *const Inst,
+        ) -> Out {
             // SAFETY (the whole loop): `ip` stays inside the tape (every
             // instruction advances it by what `lower` validated: the next
             // op, the ops a fused instruction covers, or a jump target, and
@@ -826,7 +819,7 @@ macro_rules! tape_ops {
                     TOp::CallInit | TOp::CallSend => {
                         return Out { ip, at: ip, why: WHY_CALL };
                     }
-                    TOp::Jmp => take_jump!(ip, inst, st),
+                    TOp::Jmp => take_jump!(ip, inst, st, JIT, ctx),
                     TOp::JmpZT => {
                         let s = tmp_slot(st, inst.a);
                         let Value::Bool(b) = *s else {
@@ -838,7 +831,7 @@ macro_rules! tape_ops {
                         if b {
                             ip = ip.add(1);
                         } else {
-                            take_jump!(ip, inst, st);
+                            take_jump!(ip, inst, st, JIT, ctx);
                         }
                     }
                     TOp::JmpNzT => {
@@ -848,7 +841,7 @@ macro_rules! tape_ops {
                         };
                         std::ptr::write(s, Value::Null);
                         if b {
-                            take_jump!(ip, inst, st);
+                            take_jump!(ip, inst, st, JIT, ctx);
                         } else {
                             ip = ip.add(1);
                         }
@@ -976,7 +969,7 @@ macro_rules! tape_ops {
                                 None => return step_out(ip),
                             };
                             if jump {
-                                take_jump!(ip, inst, st);
+                                take_jump!(ip, inst, st, JIT, ctx);
                             } else {
                                 // Past the jump op the comparison decided.
                                 ip = ip.add(2);
@@ -999,7 +992,7 @@ macro_rules! tape_ops {
                             };
                             *i = n;
                             if int_test::<$im>(n, y) {
-                                take_jump!(ip, inst, st);
+                                take_jump!(ip, inst, st, JIT, ctx);
                             } else {
                                 // Past the smart branch and its jump op: the
                                 // loop's exit, once per loop (the jump back
@@ -1127,7 +1120,7 @@ macro_rules! tape_ops {
                         }
                     )*
                     $(
-                        TOp::$fname => fam_arm!($fmode, $fh, $fskip, st, inst, ip),
+                        TOp::$fname => fam_arm!($fmode, $fh, $fskip, st, inst, ip, ctx),
                     )*
                 }
             } }
@@ -1669,20 +1662,10 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
             let tbase = tape.as_ptr();
             // The trace JIT's tables for this tape (see [`jit`]): `take_jump!`
             // counts hot back edges through them and may run or compile a
-            // trace. Two relaxed loads off the (hot) op array; null when the
-            // JIT is off or this tape's tracing was killed.
-            let (tlen, tcnt, ttr) = {
-                let cnt = c.tape.jit_cnt.load(std::sync::atomic::Ordering::Relaxed);
-                if cnt.is_null() {
-                    (0, std::ptr::null(), std::ptr::null())
-                } else {
-                    (
-                        tape.len(),
-                        cnt as *const AtomicI32,
-                        c.tape.jit_tr.load(std::sync::atomic::Ordering::Relaxed) as *const AtomicUsize,
-                    )
-                }
-            };
+            // trace. Built once per frame entry (two relaxed loads off the
+            // op array); dead when the JIT is off or this tape's tracing
+            // was killed.
+            let jctx = jit::JitCtx::maybe_for_tape(&c.tape, tape);
             // SAFETY: `ip` is an op index of this op array (`Vm::run`'s, a
             // frame's stored resume point, or what a hot op continued at),
             // at most `ops.len()`: inside the tape, whose last element is
@@ -1704,17 +1687,17 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                     tmps: f.tmps.as_mut_ptr().cast(),
                     lits: lits.as_ptr().cast(),
                     f: std::ptr::from_mut(f),
-                    tbase,
-                    tlen,
-                    tcnt,
-                    ttr,
-                    tape: std::ptr::from_ref(&c.tape),
                 };
                 // SAFETY: the frame is `usable` for this tape (tested
                 // above; a hot op that attaches a symbol table sends the
                 // frame back through that test below), and `p` points into
-                // the tape.
-                let out = unsafe { run_core(st, p) };
+                // the tape.  The `JIT` parameter picks the instantation:
+                // with a dead (or absent) context the back-edge hook is
+                // compiled out of the loop entirely.
+                let out = match &jctx {
+                    Some(j) => unsafe { run_core::<true>(st, std::ptr::from_ref(j), p) },
+                    None => unsafe { run_core::<false>(st, std::ptr::null(), p) },
+                };
                 // SAFETY: both point into the tape.
                 #[allow(clippy::cast_sign_loss)]
                 let at = unsafe { out.ip.offset_from(tbase) } as usize;

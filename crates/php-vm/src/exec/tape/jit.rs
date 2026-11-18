@@ -61,11 +61,12 @@
 //! be running is a solved problem this version does not need).
 
 use std::collections::HashMap;
+use std::cell::Cell;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use super::{Inst, St, TOp, KC, KI, KL, KT};
+use super::{Inst, St, Tape, TOp, KC, KI, KL, KT};
 
 /// A `Value`/`Option<Value>` slot's tag byte (offset 0 of the slot): the
 /// enum discriminant, pinned by `php-runtime`'s `jit_value_layout` test.
@@ -83,6 +84,71 @@ const PAYLOAD: u32 = 8;
 /// `size_of::<Inst>()`: a jump operand is a signed byte offset, and the
 /// plan works in instruction indexes.
 const INST_SIZE: i64 = 32;
+
+/// The JIT's view of the tape a `run_tape` call is running: the tables
+/// [`back_edge`] hooks the tape's backward jumps with, kept *out* of the
+/// interpreter's state struct (`tape::St`, which stays tiny so its hot
+/// loop keeps everything in registers) and reached through one raw
+/// pointer there.  The count/trace cells are [`Cell`]s of *const
+/// pointers so a dead trace can disarm the current frame through a
+/// shared reference.
+pub(crate) struct JitCtx {
+    /// Per-instruction back-edge counters (null once tracing is dead).
+    jcnt: Cell<*const AtomicI32>,
+    /// Per-instruction trace cells: 0 = none, `usize::MAX` = refused,
+    /// else the entry address (null once tracing is dead).
+    jtr: Cell<*const AtomicUsize>,
+    /// The tape's instruction array and its length.
+    tbase: *const Inst,
+    tlen: usize,
+    /// The [`Tape`] the tables belong to (null if there are none): used
+    /// to kill a tape's tracing once it proves useless.
+    tape: *const Tape,
+}
+
+impl JitCtx {
+    /// A context for `tape` (already decoded to `tape_slice`), reading
+    /// its eagerly-created tables; `None` when the JIT is off (checked
+    /// with one load), the JIT was off while `tape` was decoded, or
+    /// [`Tape::jit_kill`] ran.
+    #[inline]
+    pub(crate) fn maybe_for_tape(tape: &Tape, tape_slice: &[Inst]) -> Option<JitCtx> {
+        if !enabled() {
+            return None;
+        }
+        // SAFETY: the loads pair with [`Tape`]'s stores at decode; a
+        // non-null table outlives the tape's cell's `Box` until the tape
+        // itself is dropped (after every running frame of it).
+        let (cnt, tr) = unsafe {
+            use std::sync::atomic::Ordering::Relaxed;
+            (
+                tape.jit_cnt.load(Relaxed) as *const AtomicI32,
+                tape.jit_tr.load(Relaxed) as *const AtomicUsize,
+            )
+        };
+        if cnt.is_null() || tr.is_null() {
+            return None;
+        }
+        Some(JitCtx {
+            jcnt: Cell::new(cnt),
+            jtr: Cell::new(tr),
+            tbase: tape_slice.as_ptr(),
+            tlen: tape_slice.len(),
+            tape: std::ptr::from_ref(tape),
+        })
+    }
+
+    #[inline(always)]
+    pub(crate) fn alive(&self) -> bool {
+        !self.jcnt.get().is_null()
+    }
+
+    /// Stop hooking this frame's back edges (the tape's tracing is dead).
+    fn disarm(&self) {
+        self.jcnt.set(std::ptr::null());
+        self.jtr.set(std::ptr::null());
+    }
+}
 
 /// A backward jump onto instruction `close`'s target compiles the loop
 /// once `close` has been taken this many times.
@@ -992,20 +1058,20 @@ fn debug_on() -> bool {
 /// Compile the loop `head ..= close` on `st`'s tape. The result is the
 /// entry address as a `usize`, or `usize::MAX` (refused: the region,
 /// this version, stays interpreted).
-fn attempt(st: &St, head: usize, close: usize) -> usize {
+fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
     if TRACES.fetch_add(1, Ordering::Relaxed) >= MAX_TRACES {
         return usize::MAX;
     }
     let _g = COMPILE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // SAFETY: `tbase`/`tlen` are the tape being run, alive until it is
     // dropped (later than every compiled region through the cell).
-    let tape = unsafe { std::slice::from_raw_parts(st.tbase, st.tlen) };
+    let tape = unsafe { std::slice::from_raw_parts(ctx.tbase, ctx.tlen) };
     if debug_on() {
-        eprintln!("jit: region {head}..={close} of tape len {}", st.tlen);
+        eprintln!("jit: region {head}..={close} of tape len {}", ctx.tlen);
         // Small tapes dump whole (the region alone hides where a
         // region's temp is produced); big tapes dump just the region.
-        let (d0, d1) = if st.tlen <= 64 {
-            (0, st.tlen)
+        let (d0, d1) = if ctx.tlen <= 64 {
+            (0, ctx.tlen)
         } else {
             (head, close + 1)
         };
@@ -1071,14 +1137,28 @@ fn attempt(st: &St, head: usize, close: usize) -> usize {
 /// `HOT_LIMIT` and compiling go out of line.
 ///
 /// # Safety
-/// `at`/`target` point into the running tape described by `st`, with
-/// `target < at`, and `st.tcnt`/`st.ttr` are non-null and cover it.
-#[inline(always)]
-pub(crate) unsafe fn back_edge(st: &mut St, at: *const Inst, target: *const Inst) -> *const Inst {
+/// `at`/`target` point into the running tape described by `ctx`, with
+/// `target < at`, and `ctx.alive()`.
+// Not inlined: `take_jump!`'s pointer test already keeps the JIT-off
+// back edge at two instructions, and an inlined copy of this body at
+// every jump site in `run_core` costs the interpreted path registers
+// (measured: +210M instructions on `fib`).
+#[inline(never)]
+pub(crate) unsafe fn back_edge(
+    st: St,
+    ctx: &JitCtx,
+    at: *const Inst,
+    target: *const Inst,
+) -> *const Inst {
+    // A guard failure or refused compile disarms the current frame's
+    // context (`disarm`), but its pointer in `St` stays: re-check here.
+    if !ctx.alive() {
+        return target;
+    }
     // SAFETY: guaranteed by the caller.
-    let idx = unsafe { at.offset_from(st.tbase) } as usize;
+    let idx = unsafe { at.offset_from(ctx.tbase) } as usize;
     // SAFETY: the cells cover the whole tape (`Tables::new(tape.len())`).
-    let cell = unsafe { &*st.ttr.add(idx) };
+    let cell = unsafe { &*ctx.jtr.get().add(idx) };
     let c = cell.load(Ordering::Relaxed);
     if c != 0 {
         if c == usize::MAX {
@@ -1113,62 +1193,73 @@ pub(crate) unsafe fn back_edge(st: &mut St, at: *const Inst, target: *const Inst
             cell.store(usize::MAX, Ordering::Release);
             // This tape's tracing never paid off: stop hooking its back
             // edges, both for frames entered from now on and (by nulling
-            // this frame's table pointer) right here.
-            if !st.tape.is_null() && unsafe { (*st.tape).jit_bad() } {
-                st.tcnt = std::ptr::null();
-                st.ttr = std::ptr::null();
+            // this frame's table pointer) right here.  A guard failure
+            // also raises the safe point: the frame leaves `run_core`
+            // through the jump's own poll check and re-enters with a
+            // fresh (dead) context, so the remaining iterations pay the
+            // hook's two instructions and no call at all (the pointer
+            // in `St` is register-local and cannot be nulled here).
+            if !ctx.tape.is_null() && unsafe { (*ctx.tape).jit_bad() } {
+                ctx.disarm();
+                crate::interrupt::raise_safe_point();
             }
-            let r = (-(r + 1)).clamp(0, (st.tlen - 1) as i64) as usize;
-            return unsafe { st.tbase.add(r) };
+            let r = (-(r + 1)).clamp(0, (ctx.tlen - 1) as i64) as usize;
+            return unsafe { ctx.tbase.add(r) };
         }
-        if !st.tape.is_null() {
-            unsafe { (*st.tape).jit_good() };
+        if !ctx.tape.is_null() {
+            unsafe { (*ctx.tape).jit_good() };
         }
-        let r = r.clamp(0, (st.tlen - 1) as i64) as usize;
-        return unsafe { st.tbase.add(r) };
+        let r = r.clamp(0, (ctx.tlen - 1) as i64) as usize;
+        return unsafe { ctx.tbase.add(r) };
     }
     // SAFETY: as above.
-    unsafe { edge_count(st, at, target, idx) }
+    unsafe { edge_count(st, ctx, at, target, idx) }
 }
 
 /// Not hot yet (count toward `HOT_LIMIT`), or hot and not yet compiled
 /// (try to compile, then run or mark refused). Out of line so the
 /// steady-state hook stays tiny.
 #[cold]
-unsafe fn edge_count(st: &mut St, at: *const Inst, target: *const Inst, idx: usize) -> *const Inst {
+unsafe fn edge_count(
+    st: St,
+    ctx: &JitCtx,
+    at: *const Inst,
+    target: *const Inst,
+    idx: usize,
+) -> *const Inst {
     if debug_on() {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let k = N.fetch_add(1, Ordering::Relaxed);
         if k % 1_000_000 == 0 {
-            let head = unsafe { target.offset_from(st.tbase) };
-            eprintln!("jit: count #{k} at={idx} head={head} tlen={}", st.tlen);
+            let head = unsafe { target.offset_from(ctx.tbase) };
+            eprintln!("jit: count #{k} at={idx} head={head} tlen={}", ctx.tlen);
         }
     }
-    let head = unsafe { target.offset_from(st.tbase) } as usize;
-    if idx >= st.tlen || head > idx {
+    let head = unsafe { target.offset_from(ctx.tbase) } as usize;
+    if idx >= ctx.tlen || head > idx {
         return target;
     }
     // SAFETY: the counters cover the whole tape.
-    let n = unsafe { (*st.tcnt.add(idx)).fetch_add(1, Ordering::Relaxed) };
+    let n = unsafe { (*ctx.jcnt.get().add(idx)).fetch_add(1, Ordering::Relaxed) };
     if n + 1 < HOT_LIMIT {
         return target;
     }
-    let compiled = attempt(st, head, idx);
+    let compiled = attempt(&st, ctx, head, idx);
     // SAFETY: as above.
-    let cell = unsafe { &*st.ttr.add(idx) };
+    let cell = unsafe { &*ctx.jtr.get().add(idx) };
     cell.store(compiled, Ordering::Release);
     if compiled == usize::MAX {
         // The region can't be traced (and never could): if this tape has
         // no useful trace yet, stop hooking its back edges, for frames
-        // entered from now on and (by nulling this frame's table
-        // pointer) right here.
-        if !st.tape.is_null() && unsafe { (*st.tape).jit_bad() } {
-            st.tcnt = std::ptr::null();
-            st.ttr = std::ptr::null();
+        // entered from now on and (by disarming this frame's context)
+        // right here.
+        if !ctx.tape.is_null() && unsafe { (*ctx.tape).jit_bad() } {
+            ctx.disarm();
+            crate::interrupt::raise_safe_point();
         }
         target
     } else {
         // SAFETY: as above; now the cell is armed.
-        unsafe { back_edge(st, at, target) }
+        unsafe { back_edge(st, ctx, at, target) }
     }
 }
