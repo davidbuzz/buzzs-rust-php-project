@@ -400,50 +400,11 @@ pub(crate) fn run_block_pass(op_array: &mut OpArray, merge_echoes: bool) -> bool
                     changed = true;
                 }
 
-                (
-                    Op::Unary {
-                        op: UnKind::Not,
-                        a,
-                        dst: t1,
-                    },
-                    Op::JmpZEx {
-                        a: Operand::Tmp(t2),
-                        dst: d,
-                        target,
-                    },
-                ) if t1 == t2 && use_counts.get(*t1 as usize).copied().unwrap_or(0) <= 1 => {
-                    let new_jmp = Op::JmpNzEx {
-                        a: *a,
-                        dst: *d,
-                        target: *target,
-                    };
-                    op_array.ops[next_i] = new_jmp;
-                    op_array.ops[i] = Op::Nop;
-                    changed = true;
-                }
-
-                (
-                    Op::Unary {
-                        op: UnKind::Not,
-                        a,
-                        dst: t1,
-                    },
-                    Op::JmpNzEx {
-                        a: Operand::Tmp(t2),
-                        dst: d,
-                        target,
-                    },
-                ) if t1 == t2 && use_counts.get(*t1 as usize).copied().unwrap_or(0) <= 1 => {
-                    let new_jmp = Op::JmpZEx {
-                        a: *a,
-                        dst: *d,
-                        target: *target,
-                    };
-                    op_array.ops[next_i] = new_jmp;
-                    op_array.ops[i] = Op::Nop;
-                    changed = true;
-                }
-
+                // No `T = BOOL_NOT(X)` + `T = JMPZ_EX(T)` (or `JMPNZ_EX`) arm:
+                // the jump also stores the tested value, so reversing its
+                // sense on `X` would leave `X`'s truth in the result where
+                // the negated one is expected (`!a && !b` took the wrong
+                // branch). `zend_optimize_block` folds only a `BOOL` there.
                 (
                     Op::Move {
                         src: Operand::Lit(l),
