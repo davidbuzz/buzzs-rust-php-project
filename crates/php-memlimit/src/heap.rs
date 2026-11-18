@@ -178,12 +178,17 @@ pub fn small_bin(layout: Layout) -> Option<usize> {
 /// `log2(CHUNK_SIZE)`.
 const CHUNK_SHIFT: u32 = CHUNK_SIZE.trailing_zeros();
 
-/// Chunks are tracked for addresses below `2^ADDRESS_BITS` (the user half
-/// of a 48-bit address space). A chunk the inner allocator places above
-/// that is not used.
-const ADDRESS_BITS: u32 = 47;
+/// Chunks are tracked for addresses below `2^ADDRESS_BITS`: the whole
+/// 48-bit user address space. x86-64 gives user space the lower half of
+/// it (47 bits), but AArch64 Linux with 48-bit virtual addresses gives
+/// user space all of it and maps from the top down, so with 47 bits every
+/// chunk there was refused and each small allocation cost a fresh 2 MiB
+/// mapping. A chunk the inner allocator places above that (52-bit
+/// addressing, which the kernel only uses for a mapping asked for with
+/// such a hint) is not used.
+const ADDRESS_BITS: u32 = 48;
 
-/// Words of the chunk map (one bit per possible chunk): 8 MiB of zeroed
+/// Words of the chunk map (one bit per possible chunk): 16 MiB of zeroed
 /// static memory, of which only the pages covering chunks in use are ever
 /// touched.
 const MAP_WORDS: usize = 1 << (ADDRESS_BITS - CHUNK_SHIFT - 6);
