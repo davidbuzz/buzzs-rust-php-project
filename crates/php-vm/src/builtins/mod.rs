@@ -115,6 +115,7 @@ fn insert_builtin(
         .functions
         .insert(lc.clone(), Func::Builtin(Rc::new(b)))
         .is_none();
+    crate::func::bump_func_table_version();
     (lc, is_new)
 }
 
@@ -130,6 +131,7 @@ pub(crate) fn alias(vm: &mut Vm, alias: &str, target: &str) {
         {
             info::note_new_function(&lc);
         }
+        crate::func::bump_func_table_version();
     }
 }
 

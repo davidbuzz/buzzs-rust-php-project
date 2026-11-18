@@ -454,6 +454,7 @@ impl Vm {
                 if !self.functions.contains_key(&lc) {
                     crate::builtins::info::note_user_function(&lc);
                     self.functions.insert(lc, Func::User(f));
+                    crate::func::bump_func_table_version();
                 }
             }
         }
@@ -676,6 +677,7 @@ impl Vm {
             if let std::collections::hash_map::Entry::Vacant(e) = self.functions.entry(name) {
                 crate::builtins::info::note_user_function(e.key());
                 e.insert(Func::User(function));
+                crate::func::bump_func_table_version();
             }
         }
         // The startup declaration order has already resolved dependencies.

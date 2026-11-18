@@ -32,6 +32,7 @@ impl Vm {
             }
         }
         self.functions.retain(|_, f| !f.is_user());
+        crate::func::bump_func_table_version();
 
         // 2. Classes: clear user class static props, constants, defaults, enum cases,
         // and retain only internal classes.

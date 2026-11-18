@@ -1602,6 +1602,10 @@ impl OpArray {
 
     /// Clears run-time caches so this op array carries no request state.
     pub fn clear_runtime_caches(&self) {
+        // A JIT trace that inlined a call resolved it through
+        // `fcall_cache`: clearing it means a later call at the same site
+        // can resolve to a different function (see `jit.rs`).
+        crate::func::bump_func_table_version();
         self.fcall_cache.borrow_mut().clear();
         self.class_cache.borrow_mut().clear();
         self.rt_cache.clear();

@@ -826,6 +826,7 @@ impl Vm {
         self.observer_declared(&lc, false);
         crate::builtins::info::note_user_function(&lc);
         self.functions.insert(lc, Func::User(f.clone()));
+        crate::func::bump_func_table_version();
         Ok(())
     }
 

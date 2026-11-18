@@ -820,6 +820,7 @@ impl Vm {
             let lc = name.to_ascii_lowercase();
             if self.functions.remove(lc.as_slice()).is_some() {
                 removed.push(lc);
+                crate::func::bump_func_table_version();
             }
         }
         crate::compiler::optimizer::set_disabled_functions(removed);

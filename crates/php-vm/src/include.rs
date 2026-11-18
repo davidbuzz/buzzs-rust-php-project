@@ -474,6 +474,7 @@ impl Vm {
             self.observer_declared(&lc, false);
             crate::builtins::info::note_user_function(&lc);
             self.functions.insert(lc, crate::func::Func::User(f));
+            crate::func::bump_func_table_version();
         }
         let mut progress = true;
         while progress {

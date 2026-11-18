@@ -66,7 +66,26 @@ use std::os::raw::c_void;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use super::{Inst, St, Tape, TOp, KC, KI, KL, KT};
+use super::{Inst, SLOT_SHIFT, St, Tape, TOp, src, tmp_off, KC, KI, KL, KT, KR};
+use crate::func::{Func, FUNC_TABLE_VERSION};
+use crate::opcode::{ArgSrc, Op, Operand};
+use crate::types::mask;
+use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+
+/// Whether a hook observer is installed (set once by `Vm::set_observer`).
+/// An observed call runs the function's `pass_two` observers on entry and
+/// exit, which an inlined call cannot, so plans with calls refuse one
+/// while this is set. (Enabling an observer *during* a trace is a
+/// documented limitation: the trace keeps running inlined.)
+pub(crate) static OBSERVER_ON: AtomicBool = AtomicBool::new(false);
+
+/// `plan_call`'s marker for a callee `return` of `Operand::Unused`
+/// (`return;`): the trace stores a null into the caller's result slot.
+const KNULL_ARG: u8 = 5;
+/// The most arguments an inlined call may pass (the plain-call path's
+/// inline argument buffer, `calls.rs`'s `MAX_ARGS`).
+const MAX_CALL_ARGS: usize = 6;
 
 /// A `Value`/`Option<Value>` slot's tag byte (offset 0 of the slot): the
 /// enum discriminant, pinned by `php-runtime`'s `jit_value_layout` test.
@@ -119,7 +138,7 @@ impl JitCtx {
         // SAFETY: the loads pair with [`Tape`]'s stores at decode; a
         // non-null table outlives the tape's cell's `Box` until the tape
         // itself is dropped (after every running frame of it).
-        let (cnt, tr) = unsafe {
+        let (cnt, tr) = {
             use std::sync::atomic::Ordering::Relaxed;
             (
                 tape.jit_cnt.load(Relaxed) as *const AtomicI32,
@@ -153,11 +172,13 @@ impl JitCtx {
 /// A backward jump onto instruction `close`'s target compiles the loop
 /// once `close` has been taken this many times.
 const HOT_LIMIT: i32 = 20_000;
-/// The largest region compiled (instructions); larger loops stay
-/// interpreted in this version.
-const MAX_REGION: usize = 64;
+/// The largest region compiled (instructions, counting an inlined call as
+/// its full span); larger loops stay interpreted in this version.
+const MAX_REGION: usize = 128;
+/// The largest inlined call body.
+const MAX_CALLEE: usize = 48;
 /// The largest number of guards one region runs.
-const MAX_GUARDS: usize = 16;
+const MAX_GUARDS: usize = 32;
 /// The most traces compiled by the process (each is a page pair; this
 /// bounds the arena).
 const MAX_TRACES: usize = 4096;
@@ -211,6 +232,8 @@ pub(crate) const J_ARITH_TMP: u16 = 14;
 pub(crate) const J_ASSIGN_OP: u16 = 15;
 pub(crate) const J_NUMBIN_T: u16 = 16;
 pub(crate) const J_NUMBIN_C: u16 = 17;
+/// A plain user-function call inlined into the trace (see `CallPlan`).
+const C_CALL: u16 = 18;
 
 /// The number of tape instructions one whitelisted class consumes
 /// (fused rows cover the ops they merge).
@@ -247,6 +270,11 @@ pub(crate) struct JitMeta {
     pub(crate) class: u16,
     pub(crate) ka: u8,
     pub(crate) kb: u8,
+    /// The *destination* kind of an arithmetic row (`J_ARITH_CV` /
+    /// `J_ASSIGN_OP` write a compiled variable, `J_ARITH_TMP` /
+    /// `J_NUMBIN_T` a temporary); `classify` sets it, and an inlined
+    /// call's plan remaps it to `KR` like the source kinds.
+    pub(crate) kc: u8,
     pub(crate) mask: u8,
     pub(crate) arith: u8,
     pub(crate) inc: bool,
@@ -260,6 +288,7 @@ impl Default for JitMeta {
             class: 0,
             ka: KC,
             kb: KC,
+            kc: KC,
             mask: 0,
             arith: 0,
             inc: false,
@@ -279,6 +308,70 @@ struct Guard {
     exact: bool,
 }
 
+/// One operand of an inlined call (an argument or the callee's return
+/// value) as the *caller* sees it: an `Inst`-style kind/offset pair, with
+/// `KC`/`KT`/`KL` meaning the caller's compiled variable, temporary or
+/// literal, and `lit` the resolved value of a `KL` (or the marker value
+/// of a `KNULL_ARG`).
+#[derive(Clone, Copy)]
+struct Arg {
+    kind: u8,
+    off: u32,
+    lit: i64,
+}
+
+/// A plain user-function call inlined into a trace: the callee's whole
+/// straight-line body, its slots addressed off the trace's scratch buffer
+/// (`KR`, based at `base`), surrounded by the argument stores (the
+/// caller-side `Send` rows, at the scratch slots of the callee's
+/// parameters) and the copy of the return value into the caller's `DoCall`
+/// result slot. The `Inst` rows were decoded from the callee's tape at
+/// plan time, and their slot kinds remapped to `KR` with `set_base`; the
+/// `Rc` keeps the callee's tape alive as long as the plan is.
+struct CallPlan {
+    // Never read: it keeps the callee's `UserFunction` (and its tape and
+    // op array, which the decoded rows were taken from) alive as long
+    // as the plan.
+    #[allow(dead_code)]
+    uf: Rc<crate::func::UserFunction>,
+    /// The closing instruction to resume at (disarmed) if the callee's
+    /// code changes under the trace (the function-table guard).
+    callove: usize,
+    /// Region instructions the call covers: the `CallInit` row, the
+    /// `Send` rows and the `DoCall` row.
+    span: usize,
+    sends: Vec<Arg>,
+    /// The `DoCall`'s result temporary (`None` = discarded).
+    dst: Option<u32>,
+    classes: Vec<u16>,
+    metas: Vec<JitMeta>,
+    rows: Vec<Inst>,
+    /// The callee's `Return` operand, as the caller sees it.
+    ret: Arg,
+    /// The call's scratch slice base (set once the buffer is mapped).
+    base: u32,
+    /// The scratch slice size.
+    size: u32,
+}
+
+impl CallPlan {
+    /// Base every `KR` slot offset of the inlined body at `base` (the
+    /// call's slice of the trace's scratch buffer).
+    fn set_base(&mut self, base: u32) {
+        self.base = base;
+        let remap = |kind: u8, off: &mut u32| {
+            if kind == KR {
+                *off = off.wrapping_add(base);
+            }
+        };
+        for (m, inst) in self.metas.iter().zip(&mut self.rows) {
+            remap(m.ka, &mut inst.a);
+            remap(m.kb, &mut inst.b);
+            remap(m.kc, &mut inst.c);
+        }
+    }
+}
+
 /// What one hot loop compiles to. `plan` builds it or refuses.
 struct Plan {
     head: usize,
@@ -292,6 +385,16 @@ struct Plan {
     /// label); sorted, and never the head or a covered slot.
     #[allow(dead_code)] // the plan's shape record (every label is emitted)
     entries: Vec<usize>,
+    /// Per region instruction: the region instructions its class covers
+    /// (1, 2 or 3 for the fused rows; the call's full span for `C_CALL`).
+    span: Vec<u32>,
+    /// The inlined calls, indexed by region instruction.
+    calls: Vec<Option<CallPlan>>,
+    has_calls: bool,
+    /// The function table's version when the plan was made: the trace
+    /// disarms itself when it runs with a different one (the guard on
+    /// `FUNC_TABLE_VERSION`, only emitted `has_calls`).
+    version: u64,
 }
 // ----------------------------------------------------------------- plan
 
@@ -359,6 +462,14 @@ fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {    let mut m = mat
             }
         }
         op => op.jit_meta()?,
+    };
+    // The arithmetic destination's kind (the family tables leave it the
+    // default): `+`/`*` into a temporary write `inst.c`, everything else
+    // writes a compiled variable.
+    m.kc = if matches!(m.class, J_ARITH_TMP | J_NUMBIN_T) {
+        KT
+    } else {
+        KC
     };
     if m.ka == KL {
         m.lit_a = resolved_lit(st, inst.a)?;
@@ -465,7 +576,7 @@ fn jump_target(tape: &[Inst], i: usize) -> usize {
 
 /// The region scan. `close` is the closing backward jump, `head` its
 /// target; both are instruction indexes.
-fn plan(st: &St, tape: &[Inst], head: usize, close: usize) -> Option<Plan> {
+fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, close: usize) -> Option<Plan> {
     macro_rules! rej {
         ($why:expr) => {{
             if debug_on() {
@@ -480,27 +591,42 @@ fn plan(st: &St, tape: &[Inst], head: usize, close: usize) -> Option<Plan> {
     let len = close - head + 1;
     let mut class = vec![0u16; len];
     let mut meta = vec![JitMeta::default(); len];
+    let mut span = vec![0u32; len];
+    let mut calls: Vec<Option<CallPlan>> = (0..len).map(|_| None).collect();
 
     // Class every instruction; a fused instruction's coverage marks
     // the ops it consumes, exactly as `run_core` skips them.
     let mut i = head;
     let mut last = usize::MAX;
     while i <= close {
-        let (c, m) = match classify(st, &tape[i]) {
-            Some(cm) => cm,
-            None => rej!(format!("{:?} not whitelisted", tape[i].op)),
+        let (c, m, step, call) = if tape[i].op == TOp::CallInit {
+            match plan_call(st, code, i) {
+                Some(cp) => {
+                    let span = cp.span;
+                    (C_CALL, JitMeta::default(), span, Some(cp))
+                }
+                None => rej!(format!("[{i}] call not inlinable")),
+            }
+        } else {
+            match classify(st, &tape[i]) {
+                Some((c, m)) => (c, m, c_step(c), None),
+                None => rej!(format!("{:?} not whitelisted", tape[i].op)),
+            }
         };
         class[i - head] = c;
         meta[i - head] = m;
+        span[i - head] = step as u32;
+        if call.is_some() {
+            calls[i - head] = call;
+        }
         if debug_on() {
             eprintln!(
-                "jit:   scan [{i}] {:?} -> class {c}, step {}",
-                tape[i].op,
-                c_step(c)
+                "jit:   scan [{i}] {:?} -> class {c}, step {step}",
+                tape[i].op
             );
         }
         last = i;
-        i += c_step(c);
+        i += step;
     }
     // The scan must land *on* the close (a fused instruction's coverage
     // may run past it: those slots are outside the loop).
@@ -523,13 +649,42 @@ fn plan(st: &St, tape: &[Inst], head: usize, close: usize) -> Option<Plan> {
     // Guards: every slot read as an int must be exact; slots only
     // written get the weak guard. A merged exact guard is sound: every
     // whitelisted write to an exact-guarded slot keeps it an int.
+    // An inlined call's slots live in the scratch buffer and are tracked
+    // by its own known-Int analysis, so they get no entry guard; its
+    // *caller* operands (the `Send` sources) are read as ints by the
+    // trace, and its result temporary is fully written.
+    let has_calls = calls.iter().any(|c| c.is_some());
     let mut guards: Vec<Guard> = Vec::new();
     for j in 0..len {
         if class[j] == 0 {
             continue;
         }
+        if class[j] == C_CALL {
+            let cp = calls[j].as_ref().unwrap();
+            if !cp.sends.iter().all(|arg| match arg.kind {
+                KC | KT => add_slot(&mut guards, arg.kind, arg.off, true),
+                _ => true,
+            }) {
+                rej!(format!("guards for the call at {}", head + j));
+            }
+            if let Some(d) = cp.dst {
+                if !add_slot(&mut guards, KT, d, false) {
+                    rej!(format!("guard for the call result at {}", head + j));
+                }
+            }
+            continue;
+        }
         if !add_class_guards(tape, head + j, class[j], meta[j], &mut guards) {
             rej!(format!("guards at [{}, {:?}]", head + j, tape[head + j].op));
+        }
+    }
+    // With calls in the region, `rdx` holds the scratch base for its
+    // whole run, so no `%` (whose `idiv` clobbers it) may be compiled
+    // anywhere in it.
+    if has_calls {
+        let id5 = |ms: &[JitMeta]| ms.iter().any(|m| m.arith == 5);
+        if id5(&meta) || calls.iter().flatten().any(|cp| id5(&cp.metas)) {
+            rej!("% with calls (rdx is the scratch base)");
         }
     }
 
@@ -572,8 +727,328 @@ fn plan(st: &St, tape: &[Inst], head: usize, close: usize) -> Option<Plan> {
         meta,
         guards,
         entries,
+        span,
+        calls,
+        has_calls,
+        version: FUNC_TABLE_VERSION.load(Ordering::Relaxed),
     })
 }
+
+/// The whole analysis of the plain user-function call started by the
+/// `InitFCall` at `init`: resolve the callee, read the call's shape out
+/// of the raw ops (the `InitFCall`, the `Send`s and the `DoCall` the
+/// fused `CallInit` row stands for, at the same indexes), and decode
+/// the callee's straight-line body into [`CallPlan`] rows whose slot
+/// offsets address the trace's scratch buffer. Every assumption is
+/// plan-time or guarded by the trace's function-table version check;
+/// `None` refuses the inlining (and with it the whole region).
+fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<CallPlan> {
+    macro_rules! rj {
+        ($($a:tt)*) => {{
+            if debug_on() {
+                eprintln!("jit:   call reject at {init}: {}", format_args!($($a)*));
+            }
+            return None;
+        }};
+    }
+    // An observed call runs the function's entry/exit hooks, which an
+    // inlined call cannot.
+    if OBSERVER_ON.load(Ordering::Relaxed) {
+        rj!("observer on");
+    }
+    // The raw shape: a plain named call, value sends, then the `DoCall`.
+    // (Any other shape lowers to *raw* `Op`s, not to the fused
+    // `CallInit`/`CallSend` rows this scan matched, so it never reaches
+    // here; the re-match is belt-and-braces.)
+    let name = match code.ops.get(init)? {
+        Op::InitFCall {
+            name,
+            fallback: None,
+            ..
+        } => *name,
+        _ => rj!("raw row is not a plain InitFCall"),
+    };
+    let mut sends: Vec<Arg> = Vec::new();
+    let mut ci = init + 1;
+    let dst = loop {
+        match code.ops.get(ci)? {
+            Op::Send { src: arg } => {
+                let o = match arg {
+                    ArgSrc::Val(o @ (Operand::Lit(_) | Operand::Tmp(_) | Operand::Cv(_)))
+                    | ArgSrc::CallResult(o @ Operand::Tmp(_)) => *o,
+                    // `f($x)` passes a plain variable as a *place*; the
+                    // plain shapes have no by-ref parameter, so it is
+                    // just a value read of that compiled variable.
+                    ArgSrc::Place(pid) => match super::calls::place_cv(code, *pid) {
+                        Some(cv) => Operand::Cv(cv),
+                        None => rj!("place arg is not a plain variable"),
+                    },
+                    _ => rj!("send arg is not a plain value"),
+                };
+                let (kind, off) = src(code, o)?;
+                if kind == KI {
+                    // A small-int constant operand: `src` carried its
+                    // value in the offset; make it a plain literal.
+                    let v = i64::from(off as i32);
+                    sends.push(Arg {
+                        kind: KL,
+                        off: 0,
+                        lit: v,
+                    });
+                    ci += 1;
+                    continue;
+                }
+                let lit = if kind == KL { resolved_lit(st, off)? } else { 0 };
+                sends.push(Arg { kind, off, lit });
+                ci += 1;
+            }
+            Op::DoCall { dst } => break *dst,
+            _ => rj!("row after InitFCall is neither Send nor DoCall"),
+        }
+    };
+    let ns = sends.len();
+    if ns > MAX_CALL_ARGS {
+        rj!("too many args");
+    }
+
+    // The callee: the run-time cache the interpreted call path filled
+    // for this exact site, still alive and a plain user function.
+    let uf = {
+        let cache = code.fcall_cache.borrow();
+        match cache.get(name as usize) {
+            None => rj!("no fcall cache slot for the name"),
+            Some(None) => rj!("fcall cache not filled"),
+            Some(Some(cell)) => match cell.get() {
+                Some(Func::User(uf)) => uf,
+                Some(Func::Builtin(_)) => rj!("callee is a builtin"),
+                None => rj!("cached callee is dead"),
+            },
+        }
+    };
+    let shape = uf.call_shape();
+    if shape == crate::func::CallShape::NOT_PLAIN || !uf.uses.is_empty() {
+        rj!("callee not plain or has `use`s");
+    }
+    if uf.required as usize > ns || ns > uf.params.len() {
+        rj!("arg count mismatch");
+    }
+    if shape == crate::func::CallShape::TYPED {
+        // The trace always passes `Int`s: every parameter must accept
+        // one without coercion, and an `int` return is the only one the
+        // body can be trusted to honour.
+        if uf.params.iter().any(|p| {
+            p.ty
+                .as_ref()
+                .is_some_and(|t| t.mask & mask::LONG == 0)
+        }) || uf
+            .return_type
+            .as_ref()
+            .is_some_and(|t| t.mask & mask::LONG == 0)
+        {
+            rj!("typed callee rejects an int param or return");
+        }
+    }
+
+    // The callee body, from the first op after its `RECV`s to its
+    // `Return`: straight-line, every row in the arithmetic/assignment
+    // whitelist (no jump of any kind, and no nested call: the
+    // whitelist has no call class, and no `CallInit` row can classify).
+    let cst = St {
+        cvs: std::ptr::null_mut(),
+        tmps: std::ptr::null_mut(),
+        lits: uf.code.literals.as_ptr().cast(),
+        f: std::ptr::null_mut(),
+    };
+    let ncvs = uf.code.cv_names.len();
+    let nt = uf.code.num_tmps as usize;
+    let mut classes: Vec<u16> = Vec::new();
+    let mut metas: Vec<JitMeta> = Vec::new();
+    let mut rows: Vec<Inst> = Vec::new();
+    let mut bc = uf.plain_first_op(ns);
+    let ret = loop {
+        match uf.code.ops.get(bc)? {
+            Op::Return { val } => break *val,
+            _ => {}
+        }
+        let row = uf.code.tape.get(&uf.code)[bc];
+        let (c, m) = match classify(&cst, &row) {
+            Some(cm) => cm,
+            None => rj!("callee row {bc} ({:?}) not classifiable", row.op),
+        };
+        if !matches!(
+            c,
+            C_INC | C_DEC | C_ASSIGN_I | C_ASSIGN_L | J_ASSIGN_T | J_ARITH_TMP | J_NUMBIN_T
+                | J_ARITH_CV | J_ASSIGN_OP | J_NUMBIN_C
+        ) {
+            rj!("callee row {bc} ({:?}) off whitelist", row.op);
+        }
+        if classes.len() >= MAX_CALLEE {
+            rj!("callee too long");
+        }
+        classes.push(c);
+        metas.push(m);
+        rows.push(row);
+        bc += c_step(c);
+    };
+
+    // The scratch slice: the callee's compiled variables, then its
+    // temporaries, 16 bytes each; the `KR` offsets below are relative
+    // to it (`set_base` adds the call's place in the buffer). The
+    // parameters (`cvs[0..ns]`) start as known `Int`s (the trace just
+    // wrote them); a slot whose every write is a compiled Int store
+    // needs no runtime tag check, so the walk tracks which those are.
+    let mut known = vec![false; ncvs + nt];
+    for i in 0..ns {
+        known[i] = true;
+    }
+    let scratch_idx = |kind: u8, off: u32| -> Option<usize> {
+        let s = off >> 4;
+        match kind {
+            KC if (s as usize) < ncvs => Some(s as usize),
+            KT if (s as usize) < nt => Some(ncvs + s as usize),
+            _ => None,
+        }
+    };
+    // Slot kinds become `KR`, and a `KT` offset moves past the
+    // compiled-variable part of the slice.
+    let remap = |kind: &mut u8, off: &mut u32| -> bool {
+        match *kind {
+            KC => {
+                *kind = KR;
+                true
+            }
+            KT => {
+                *kind = KR;
+                *off += (ncvs as u32) << 4;
+                true
+            }
+            KI | KL => true,
+            _ => false,
+        }
+    };
+    for k in 0..classes.len() {
+        let c = classes[k];
+        let m = &mut metas[k];
+        let row = &mut rows[k];
+        let (ia, ib, ic) = (row.a, row.b, row.c);
+        // Reads the instruction makes, before any write.
+        let read = |kind: u8, off: u32, known: &Vec<bool>| -> bool {
+            match kind {
+                KI | KL => true,
+                KC | KT => scratch_idx(kind, off).is_some_and(|i| known[i]),
+                _ => false,
+            }
+        };
+        if !read(m.ka, ia, &known) || !read(m.kb, ib, &known) {
+            // (C_INC/C_DEC re-read what they write, so a not-yet-known
+            // slot refuses the region.)
+            rj!("callee row reads a slot that is not a known int");
+        }
+        // The kind/offset remap, per class, and the writes.
+        match c {
+            C_INC | C_DEC => {
+                if !remap(&mut m.ka, &mut row.a) {
+                    return None;
+                }
+                known[scratch_idx(KC, ia)?] = true;
+            }
+            C_ASSIGN_I | C_ASSIGN_L => {
+                if !remap(&mut m.ka, &mut row.a) {
+                    return None;
+                }
+                known[scratch_idx(KC, ia)?] = true;
+            }
+            J_ASSIGN_T => {
+                // The interpreted row also *nulls* the source temp: the
+                // slot is no longer a known `Int`.
+                if !remap(&mut m.ka, &mut row.a) || !remap(&mut m.kb, &mut row.b) {
+                    return None;
+                }
+                known[scratch_idx(KC, ia)?] = true;
+                if let Some(i) = scratch_idx(KT, ib) {
+                    known[i] = false;
+                }
+            }
+            J_ARITH_CV | J_ARITH_TMP | J_NUMBIN_T => {
+                if !remap(&mut m.ka, &mut row.a)
+                    || !remap(&mut m.kb, &mut row.b)
+                    || !remap(&mut m.kc, &mut row.c)
+                {
+                    return None;
+                }
+                if m.kc != KI && m.kc != KL {
+                    m.kc = KR;
+                }
+                known[scratch_idx(if c == J_ARITH_CV { KC } else { KT }, ic)?] = true;
+            }
+            _ => {
+                // `J_ASSIGN_OP` / `J_NUMBIN_C`: `inst.c` is not a slot
+                // (a jump offset or literal slot); the destination is
+                // `inst.a`, which the read above already checked.
+                if !remap(&mut m.ka, &mut row.a) || !remap(&mut m.kb, &mut row.b) {
+                    return None;
+                }
+                m.kc = KR;
+                known[scratch_idx(if c == J_ASSIGN_OP { KC } else { KT }, ia)?] = true;
+            }
+        }
+    }
+
+    // The `Return` operand, as the caller's `DoCall` result.
+    let ret = match ret {
+        Operand::Unused => Arg {
+            kind: KNULL_ARG,
+            off: 0,
+            lit: 0,
+        },
+        o => {
+            let (mut kind, mut off) = src(&uf.code, o)?;
+            if kind == KI {
+                let v = i64::from(off as i32);
+                kind = KL;
+                off = 0;
+                Arg {
+                    kind,
+                    off,
+                    lit: v,
+                }
+            } else {
+                let lit = if kind == KL { resolved_lit(&cst, off)? } else { 0 };
+                if kind == KC || kind == KT {
+                    if !scratch_idx(kind, off).is_some_and(|i| known[i]) {
+                        rj!("callee return slot is not a known int");
+                    }
+                    // A callee slot: the scratch slice holds the
+                    // temporaries after the compiled variables.
+                    if kind == KT {
+                        off += (ncvs as u32) << 4;
+                    }
+                    kind = KR;
+                }
+                Arg { kind, off, lit }
+            }
+        }
+    };
+    // The result temporary must be a real slot of the caller.
+    let dst = match dst {
+        Some(d) => Some(tmp_off(code, d)?),
+        None => None,
+    };
+    Some(CallPlan {
+        uf,
+        callove: init,
+        span: ci - init + 1,
+        sends,
+        dst,
+        classes,
+        metas,
+        rows,
+        ret,
+        base: 0,
+        size: (((ncvs + nt) as u32) << 4).max(16),
+    })
+}
+
 // --------------------------------------------------------------- emitter
 
 /// The jcc opcode (the second byte of `0F cc`, rel32 form) for a
@@ -615,6 +1090,9 @@ struct Emitter {
     code: Vec<u8>,
     plan: Plan,
     tape: Vec<Inst>,
+    /// The scratch buffer's address (`has_calls`: `rdx` is set to it in
+    /// the prologue; every `KR` offset is relative to it).
+    scratch: i64,
     labels: HashMap<usize, usize>,
     stubs: HashMap<usize, usize>,
     disms: HashMap<usize, usize>,
@@ -672,24 +1150,32 @@ impl Emitter {
     }
 
     /// `mov rax, [base + off + 8]`: the payload of a slot already known
-    /// to hold an `Int` (`8B` reg=rax: rm 111/110, modrm 0x87/0x86).
+    /// to hold an `Int` (`8B` reg=rax: rm 111/110/010, modrm
+    /// 0x87/0x86/0x82 for `rdi`/`rsi`/`rdx`).
     fn load_int(&mut self, base: u8, off: u32) {
-        self.put(&[REX_W, 0x8B, if base == 1 { 0x86 } else { 0x87 }]);
+        self.put(&[REX_W, 0x8B, Self::rm3(base, 0)]);
         self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
+    }
+
+    /// The `mod=10, disp32` ModRM byte for memory base `rdi` (KC),
+    /// `rsi` (KT) or `rdx` (KR), with `reg` from the high three bits
+    /// (`0` = `rax`, 1 = `r9`): the three fields are `mod`, `reg`, `rm`.
+    fn rm3(base: u8, reg: u8) -> u8 {
+        let rm: u8 = match base {
+            KT => 0b110,
+            KR => 0b010,
+            _ => 0b111,
+        };
+        (0b10 << 6) | (reg << 3) | rm
     }
 
     /// The second operand into `r9`: a slot payload, an inline `KI`
     /// constant, or a resolved `KL` literal.
     fn to_r9(&mut self, kind: u8, off: u32, lit: i64) {
         match kind {
-            KC | KT => {
-                // `8B` reg=r9 (field 001 + REX.R), rm = rdi (0xF) /
-                // rsi (0x8E: field 110 is `rsi`, no REX.B).
-                if kind == KT {
-                    self.put(&[REX_W | REX_R, 0x8B, 0x8E]);
-                } else {
-                    self.put(&[REX_W | REX_R, 0x8B, 0x8F]);
-                }
+            KC | KT | KR => {
+                // `8B` reg=r9 (field 001 + REX.R), rm = the slot base.
+                self.put(&[REX_W | REX_R, 0x8B, Self::rm3(kind, 1)]);
                 self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
             }
             KI => self.movabs(true, i64::from(off as i32)),
@@ -701,31 +1187,31 @@ impl Emitter {
     /// exact-guarded `Int`, or was just written as one below; the base
     /// is `rsi` for a temporary (`KT`)). `89` reg=rax: modrm 0x87/0x86.
     fn store_int(&mut self, base: u8, off: u32) {
-        self.put(&[REX_W, 0x89, if base == 1 { 0x86 } else { 0x87 }]);
+        self.put(&[REX_W, 0x89, Self::rm3(base, 0)]);
         self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
     }
 
     /// `mov qword [rdi + off + 8], imm32` (sign-extended): a literal
     /// payload store.
     fn store_imm(&mut self, off: u32, v: i32) {
-        self.put(&[REX_W, 0xC7, 0x87]);
+        self.store_imm_base(KC, off, v);
+    }
+
+    /// `mov qword [base + off + 8], imm32` (`C7 /0`): a literal payload
+    /// store with an explicit base.
+    fn store_imm_base(&mut self, base: u8, off: u32, v: i32) {
+        self.put(&[REX_W, 0xC7, Self::rm3(base, 0)]);
         self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
         self.put(&v.to_le_bytes());
     }
 
-    /// `mov byte [rdi + off], TAG_INT`: the tag store, always after the
-    /// payload store (a slot is only ever read as a value at a safe
-    /// point, between compiled calls, where the pair is stable).
-    fn store_tag(&mut self, off: u32) {
-        self.put(&[0xC6, 0x87]);
-        self.put(&off.to_le_bytes());
-        self.put(&[TAG_INT]);
-    }
-
-    /// `mov byte [rdi/rsi + off], imm8`: the tag store with an explicit
-    /// base (`rsi` for a temporary) and value (`C6 /0`: modrm 0x87/0x86).
+    /// `mov byte [rdi/rsi/rdx + off], imm8`: the tag store (always
+    /// after the payload store: a slot is only ever read as a value at
+    /// a safe point, between compiled calls, where the pair is stable)
+    /// with an explicit base (`rsi` for a temporary, `rdx` for a scratch
+    /// slot) and value (`C6 /0`: modrm 0x87/0x86/0x82).
     fn store_tag_base(&mut self, base: u8, off: u32, tag: u8) {
-        self.put(&[0xC6, if base == 1 { 0x86 } else { 0x87 }]);
+        self.put(&[0xC6, Self::rm3(base, 0)]);
         self.put(&off.to_le_bytes());
         self.put(&[tag]);
     }
@@ -734,7 +1220,12 @@ impl Emitter {
     /// `mov [rdi + off + 8], r9` (payload store from `r9`: `89 /r` names
     /// `r9` through the *reg* field, which `REX.R` extends).
     fn store_int_r9(&mut self, off: u32) {
-        self.put(&[REX_W | REX_R, 0x89, 0x8F]);
+        self.store_int_r9_base(KC, off);
+    }
+
+    /// `mov [base + off + 8], r9`: the same with an explicit base.
+    fn store_int_r9_base(&mut self, base: u8, off: u32) {
+        self.put(&[REX_W | REX_R, 0x89, Self::rm3(base, 1)]);
         self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
     }
 
@@ -744,10 +1235,16 @@ impl Emitter {
         self.put(&v.to_le_bytes());
     }
 
+    /// `movabs rdx, imm64` (the scratch buffer base).
+    fn movabs_rdx(&mut self, v: i64) {
+        self.put(&[REX_W, 0xBA]);
+        self.put(&v.to_le_bytes());
+    }
+
     /// The first operand into `rax`.
     fn to_rax(&mut self, kind: u8, off: u32, lit: i64) {
         match kind {
-            KC | KT => self.load_int(kind, off),
+            KC | KT | KR => self.load_int(kind, off),
             KI => self.movabs_rax(i64::from(off as i32)),
             _ => self.movabs_rax(lit),
         }
@@ -781,26 +1278,6 @@ impl Emitter {
         let m = self.plan.meta[j];
         match self.plan.class[j] {
             C_JMP => self.jmp(self.jump_tgt(j)),
-            C_INC | C_DEC => {
-                self.load_int(KC, inst.a);
-                self.put(&[REX_W, 0x83, if self.plan.class[j] == C_INC { 0xC0 } else { 0xE8 }, 0x01]);
-                self.jcc(0x80, Target::Stub(i)); // jo: overflow, before any store
-                self.store_int(KC, inst.a);
-            }
-            C_ASSIGN_I => {
-                self.store_imm(inst.a, inst.b as i32);
-                self.store_tag(inst.a);
-            }
-            C_ASSIGN_L => {
-                let v = m.lit_b;
-                if i64::from(i32::try_from(v).unwrap_or(i32::MAX)) == v {
-                    self.store_imm(inst.a, v as i32);
-                } else {
-                    self.movabs(true, v);
-                    self.store_int_r9(inst.a);
-                }
-                self.store_tag(inst.a);
-            }
             J_CMP => {
                 self.to_rax(m.ka, inst.a, m.lit_a);
                 self.to_r9(m.kb, inst.b, m.lit_b);
@@ -820,30 +1297,58 @@ impl Emitter {
                 let cc = jcc_for(m.mask).unwrap_or(0x85);
                 self.jcc(cc, self.jump_tgt(j));
             }
+            c => {
+                // Every other class exits at the instruction itself
+                // (the interpreter re-runs it).
+                self.emit_op(c, m, &inst, Target::Stub(i));
+            }
+        }
+    }
+
+    /// Emit one whitelisted row (a caller row or an inlined callee
+    /// row): operands by the meta's kinds (`KR` addresses the scratch
+    /// buffer), and every exit goes to `jo` (for a callee row that is
+    /// the call's `InitFCall`: the interpreter re-runs the whole call).
+    fn emit_op(&mut self, c: u16, m: JitMeta, inst: &Inst, jo: Target) {
+        match c {
+            C_INC | C_DEC => {
+                self.load_int(m.ka, inst.a);
+                self.put(&[REX_W, 0x83, if c == C_INC { 0xC0 } else { 0xE8 }, 0x01]);
+                self.jcc(0x80, jo); // jo: overflow, before any store
+                self.store_int(m.ka, inst.a);
+            }
+            C_ASSIGN_I => {
+                self.store_imm_base(m.ka, inst.a, inst.b as i32);
+                self.store_tag_base(m.ka, inst.a, TAG_INT);
+            }
+            C_ASSIGN_L => {
+                let v = m.lit_b;
+                if i64::from(i32::try_from(v).unwrap_or(i32::MAX)) == v {
+                    self.store_imm_base(m.ka, inst.a, v as i32);
+                } else {
+                    self.movabs(true, v);
+                    self.store_int_r9_base(m.ka, inst.a);
+                }
+                self.store_tag_base(m.ka, inst.a, TAG_INT);
+            }
             // `$cv = TMP`: copy the int, then consume the temporary
             // (null it, as the interpreted row does).
             J_ASSIGN_T => {
-                self.load_int(KT, inst.b);
-                self.store_int(KC, inst.a);
-                self.store_tag(inst.a);
+                self.load_int(m.kb, inst.b);
+                self.store_int(m.ka, inst.a);
+                self.store_tag_base(m.ka, inst.a, TAG_INT);
                 self.movabs_rax(0);
-                self.store_int(KT, inst.b);
-                self.store_tag_base(KT, inst.b, TAG_NULL);
+                self.store_int(m.kb, inst.b);
+                self.store_tag_base(m.kb, inst.b, TAG_NULL);
             }
             _ => {
                 // `J_ARITH_CV` / `J_ASSIGN_OP` / `J_ARITH_TMP` /
                 // `J_NUMBIN_T` / `J_NUMBIN_C` (the plan guarantees):
                 // `jo` (or the `idiv` guards) before any store. The
-                // destination is `inst.c` except for `$cv op= b`,
-                // which updates `inst.a`.
-                let dst_base = if self.plan.class[j] == J_ASSIGN_OP {
-                    KC
-                } else if self.plan.class[j] == J_ARITH_TMP || self.plan.class[j] == J_NUMBIN_T {
-                    KT
-                } else {
-                    KC
-                };
-                let dst = if self.plan.class[j] == J_ASSIGN_OP || self.plan.class[j] == J_NUMBIN_C {
+                // destination kind is in the meta; the destination is
+                // `inst.c` except for `$cv op= b`, which updates
+                // `inst.a`.
+                let dst = if c == J_ASSIGN_OP || c == J_NUMBIN_C {
                     inst.a
                 } else {
                     inst.c
@@ -859,10 +1364,12 @@ impl Emitter {
                     _ => {
                         // `%`: `idiv` faults on a zero divisor and on
                         // `i64::MIN % -1`, so both are guarded exits.
+                        // (`rdx` is the `idiv`'s payload half: a region
+                        // with scratch calls has no `%`, see `plan`.)
                         self.put(&[REX_W | REX_R | REX_B, 0x85, 0xC9]); // test r9, r9
-                        self.jcc(0x84, Target::Stub(i)); // je
+                        self.jcc(0x84, jo); // je
                         self.put(&[REX_W | REX_B, 0x83, 0xF9, 0xFF]); // cmp r9, -1
-                        self.jcc(0x84, Target::Stub(i)); // je
+                        self.jcc(0x84, jo); // je
                         self.put(&[REX_W, 0x99]); // cqo
                         self.put(&[REX_W | REX_B, 0xF7, 0xF9]); // idiv r9
                         // `idiv` leaves the remainder in `rdx`.
@@ -870,22 +1377,70 @@ impl Emitter {
                     }
                 }
                 if m.arith != 5 {
-                    self.jcc(0x80, Target::Stub(i)); // jo: overflow
+                    self.jcc(0x80, jo); // jo: overflow
                 }
-                self.store_int(dst_base, dst);
-                if dst_base == KT {
+                self.store_int(m.kc, dst);
+                if m.kc == KT {
                     self.store_tag_base(KT, dst, TAG_INT);
                 }
             }
         }
     }
+
+    /// Emit an inlined call: the arguments into the callee's parameter
+    /// slots (scratch offsets `base + 0, 16, ...`), the callee's rows
+    /// (already based at `cp.base`), then the result into the caller's
+    /// `DoCall` temporary. Callee slots never need a tag check: the
+    /// plan proved every read one is a known `Int`.
+    fn emit_call(&mut self, cp: &CallPlan) {
+        for (n, arg) in cp.sends.iter().enumerate() {
+            let off = cp.base.wrapping_add((n as u32) << SLOT_SHIFT);
+            self.to_r9(arg.kind, arg.off, arg.lit);
+            self.store_int_r9_base(KR, off);
+            self.store_tag_base(KR, off, TAG_INT);
+        }
+        for k in 0..cp.classes.len() {
+            self.emit_op(cp.classes[k], cp.metas[k], &cp.rows[k], Target::Disarm(cp.callove));
+        }
+        if let Some(d) = cp.dst {
+            match cp.ret.kind {
+                // A bare `return;`: the interpreted `DoCall` leaves a
+                // null result.
+                KNULL_ARG => {
+                    self.movabs_rax(0);
+                    self.store_int(KT, d);
+                    self.store_tag_base(KT, d, TAG_NULL);
+                }
+                // An `int` return of a callee slot the plan proved is
+                // an `Int`: copy it.
+                KR => {
+                    self.to_r9(KR, cp.ret.off, 0);
+                    self.store_int_r9_base(KT, d);
+                    self.store_tag_base(KT, d, TAG_INT);
+                }
+                // An `int` literal return: store it directly.
+                KL => {
+                    let v = cp.ret.lit;
+                    if i64::from(i32::try_from(v).unwrap_or(i32::MAX)) == v {
+                        self.store_imm(d, v as i32);
+                    } else {
+                        self.movabs(true, v);
+                        self.store_int_r9(d);
+                    }
+                    self.store_tag_base(KT, d, TAG_INT);
+                }
+                _ => {}
+            }
+        }
+    }
 }
 impl Emitter {
-    fn new(plan: Plan, tape: Vec<Inst>) -> Emitter {
+    fn new(plan: Plan, tape: Vec<Inst>, scratch: i64) -> Emitter {
         Emitter {
             code: Vec::new(),
             plan,
             tape,
+            scratch,
             labels: HashMap::new(),
             stubs: HashMap::new(),
             disms: HashMap::new(),
@@ -918,6 +1473,19 @@ impl Emitter {
                 self.jcc(0x85, Target::Disarm(self.plan.head)); // jne
             }
         }
+        // With inlined calls: the scratch buffer base in `rdx` (every
+        // `KR` offset is relative to it) and the function-table version
+        // guard: if any function was (re)defined since the plan read
+        // the callees, the inlined bodies may be stale, so disarm and
+        // let the interpreter run the calls.
+        if self.plan.has_calls {
+            self.movabs_rdx(self.scratch);
+            self.movabs_rax(crate::func::FUNC_TABLE_VERSION.as_ptr() as i64);
+            // `cmp qword [rax], imm32` (`81 /7`, mod=00 rm=000: 0x38).
+            self.put(&[REX_W, 0x81, 0x38]);
+            self.put(&u32::try_from(self.plan.version).unwrap_or(u32::MAX).to_le_bytes());
+            self.jcc(0x85, Target::Disarm(self.plan.head)); // jne
+        }
         // The head: per-iteration interrupt poll and iteration cap,
         // both exiting at the head (the interpreter then runs one
         // iteration and services the safe point at its back edge).
@@ -939,8 +1507,15 @@ impl Emitter {
             let c = self.plan.class[j];
             if c != 0 {
                 self.label(head + j);
-                self.emit_instr(j);
-                j += c_step(c);
+                if c == C_CALL {
+                    // Each call plan is consumed once (the driver
+                    // visits each region instruction once).
+                    let cp = self.plan.calls[j].take().expect("planned call");
+                    self.emit_call(&cp);
+                } else {
+                    self.emit_instr(j);
+                }
+                j += self.plan.span[j] as usize;
             } else {
                 j += 1;
             }
@@ -1040,6 +1615,31 @@ fn place(code: &[u8]) -> Option<*mut u8> {
     Some(p.cast::<u8>())
 }
 
+/// A trace's scratch buffer for inlined calls: `total` bytes of fresh
+/// private anonymous `RW` memory, zeroed by the mapping and never freed
+/// (like the trace pages themselves). `None` when the mapping fails.
+fn mmap_scratch(total: usize) -> Option<*mut u8> {
+    if total == 0 {
+        return None;
+    }
+    let len = total.next_multiple_of(PAGE);
+    // SAFETY: a fresh private anonymous mapping of `len` bytes.
+    let p = unsafe {
+        mmap(
+            std::ptr::null_mut(),
+            len,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
+    if p == (-1isize) as *mut c_void {
+        return None;
+    }
+    Some(p.cast::<u8>())
+}
+
 /// The compiled entry: `fn(cvs, tmps) -> resume index`.
 type LoopFn = unsafe extern "C" fn(*mut u8, *mut u8) -> i64;
 
@@ -1066,6 +1666,9 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
     // SAFETY: `tbase`/`tlen` are the tape being run, alive until it is
     // dropped (later than every compiled region through the cell).
     let tape = unsafe { std::slice::from_raw_parts(ctx.tbase, ctx.tlen) };
+    // The op array (for the inlined calls' raw shapes and callee codes).
+    // SAFETY: `st.f` is the running frame, alive through the compile.
+    let code = unsafe { &*std::rc::Rc::as_ptr(&(*st.f).code) };
     if debug_on() {
         eprintln!("jit: region {head}..={close} of tape len {}", ctx.tlen);
         // Small tapes dump whole (the region alone hides where a
@@ -1076,7 +1679,8 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
             (head, close + 1)
         };
         for (i, inst) in tape[d0..d1].iter().enumerate() {
-            let note = if classify(st, inst).is_some() {
+            let note = if inst.op == TOp::CallInit || classify(st, inst).is_some() {
+                // (`CallInit`: `plan_call` decides its own whitelist.)
                 ""
             } else {
                 " <-- not whitelisted"
@@ -1094,7 +1698,7 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
             );
         }
     }
-    let p = match plan(st, tape, head, close) {
+    let mut p = match plan(st, code, tape, head, close) {
         Some(p) => p,
         None => {
             if debug_on() {
@@ -1113,7 +1717,45 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
             );
         }
     }
-    let mut em = Emitter::new(p, tape.to_vec());
+    // The inlined calls' scratch buffer: disjoint slices, one per call,
+    // each the callee's compiled variables then its temporaries. The
+    // `KR` offsets are relative to the buffer start (`rdx` is set to
+    // its address in the prologue), so `set_base` lays out byte offsets
+    // from 0.
+    let mut scratch = 0i64;
+    if p.has_calls {
+        let total: usize = p
+            .calls
+            .iter()
+            .flatten()
+            .map(|cp| cp.size as usize)
+            .sum();
+        if total >= i32::MAX as usize {
+            if debug_on() {
+                eprintln!("jit: region {head}..={close}: scratch too big");
+            }
+            return usize::MAX;
+        }
+        match mmap_scratch(total) {
+            Some(ptr) => {
+                scratch = ptr as i64;
+                let mut base = 0u32;
+                for cp in &mut p.calls {
+                    if let Some(cp) = cp {
+                        cp.set_base(base);
+                        base = base.wrapping_add(cp.size);
+                    }
+                }
+            }
+            None => {
+                if debug_on() {
+                    eprintln!("jit: region {head}..={close}: scratch mmap failed");
+                }
+                return usize::MAX;
+            }
+        }
+    }
+    let mut em = Emitter::new(p, tape.to_vec(), scratch);
     em.emit();
     em.resolve();
     if debug_on() {
@@ -1144,7 +1786,7 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
 // every jump site in `run_core` costs the interpreted path registers
 // (measured: +210M instructions on `fib`).
 #[inline(never)]
-pub(crate) unsafe fn back_edge(
+pub(super) unsafe fn back_edge(
     st: St,
     ctx: &JitCtx,
     at: *const Inst,

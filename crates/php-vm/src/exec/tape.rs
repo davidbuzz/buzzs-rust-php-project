@@ -205,6 +205,10 @@ const KI: u8 = 2;
 /// Operand kind: any other numeric literal (byte offset in the literal
 /// table).
 const KL: u8 = 3;
+/// Operand kind: a byte offset from `rdx`, the JIT's per-trace scratch
+/// buffer holding an inlined callee's slots (JIT-only; no tape family
+/// emits it).
+const KR: u8 = 4;
 
 /// One pre-decoded instruction (32 bytes, the size of an [`Op`] and of a
 /// `zend_op`).
@@ -495,7 +499,7 @@ macro_rules! take_jump {
             // address anywhere in `run_core` keeps it a memory local and
             // demotes every slot-base access to the stack (measured:
             // +210M instructions on `fib`).
-            $ip = jit::back_edge($st, unsafe { &*$ctx }, at, $ip);
+            $ip = jit::back_edge($st, &*$ctx, at, $ip);
         }
     }};
 }
@@ -796,7 +800,7 @@ macro_rules! tape_ops {
             clippy::cast_ptr_alignment
         )]
         unsafe fn run_core<const JIT: bool>(
-            mut st: St,
+            st: St,
             ctx: *const jit::JitCtx,
             mut ip: *const Inst,
         ) -> Out {
@@ -1234,7 +1238,7 @@ fn step_slow(f: &mut Frame, ops: &[Op], lits: &[Value], at: usize) -> usize {
 /// The kind and operand field of a numeric operand; `None` when it has no
 /// specialised form (not a number literal, or out of range).
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn src(code: &OpArray, o: Operand) -> Option<(u8, u32)> {
+pub(crate) fn src(code: &OpArray, o: Operand) -> Option<(u8, u32)> {
     match o {
         Operand::Cv(i) => Some((KC, cv_off(code, i)?)),
         Operand::Tmp(t) | Operand::TmpKeep(t) => Some((KT, tmp_off(code, t)?)),
@@ -1256,7 +1260,7 @@ fn cv_off(code: &OpArray, cv: u32) -> Option<u32> {
 }
 
 /// The byte offset of a temporary; `None` when out of range.
-fn tmp_off(code: &OpArray, t: u32) -> Option<u32> {
+pub(crate) fn tmp_off(code: &OpArray, t: u32) -> Option<u32> {
     (t < code.num_tmps && t < SLOT_LIMIT).then_some(t << SLOT_SHIFT)
 }
 
@@ -2053,7 +2057,7 @@ fn send_following(vm: &mut Vm, call: &mut calls::Prepared, ops: &[Op], at: usize
 
 mod calls;
 mod dims;
-mod jit;
+pub(crate) mod jit;
 mod props;
 mod scalar;
 mod strs;

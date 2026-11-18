@@ -111,6 +111,7 @@ impl Vm {
         // variables or constants are freed as
         // `zend_objects_store_free_object_storage()` frees them.
         functions.retain(|_, f| !f.is_user());
+        crate::func::bump_func_table_version();
         classes.retain(|_, c| c.flags & cflags::INTERNAL != 0);
         constants.retain(|_, v| !holds_payload(v));
         // The persistent part lives until the process ends (php-src frees it

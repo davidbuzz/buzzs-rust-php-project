@@ -136,7 +136,7 @@ fn direct_src(code: &OpArray, src: &ArgSrc) -> bool {
 /// The compiled variable a place stands for when it is one without
 /// segments (`f($x)` compiles the argument as a place: by reference when
 /// the parameter is).
-fn place_cv(code: &OpArray, pid: u32) -> Option<u32> {
+pub(crate) fn place_cv(code: &OpArray, pid: u32) -> Option<u32> {
     let p = code.places.get(pid as usize)?;
     match (&p.base, p.segs.is_empty()) {
         (PlaceBase::Cv(cv), true) => Some(*cv),

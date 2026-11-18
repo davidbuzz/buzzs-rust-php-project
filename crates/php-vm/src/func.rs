@@ -10,6 +10,21 @@ use php_runtime::{Obj, PhpRef, Value, ZStr};
 use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Bumped on every change to the VM's function table (a declaration, an
+/// include's hoisted declaration, a reset, a discard, a disable, a
+/// re-registration). A JIT trace that inlines a user-function call
+/// resolves the callee at plan time without a per-entry name lookup, so
+/// its entry code compares this counter with the planned value and
+/// disarms itself when they differ (see `jit.rs`).
+pub(crate) static FUNC_TABLE_VERSION: AtomicU64 = AtomicU64::new(1);
+
+/// Records a change to the function table.
+#[inline]
+pub(crate) fn bump_func_table_version() {
+    FUNC_TABLE_VERSION.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Function flags (`ZEND_ACC_*` subset).
 pub mod flags {

@@ -210,6 +210,14 @@ impl Vm {
             hooks: Some(hooks),
             ..ObserverState::default()
         };
+        // The JIT refuses to inline calls from now on (an observed call
+        // must run the enter/leave hooks, which an inlined call cannot);
+        // traces armed with inlined calls disarm through the version
+        // bump. (Traces already *running* when the observer arrives
+        // finish their current compiled stretch: accepted, the observer
+        // is installed before request execution in every real path.)
+        crate::exec::tape::jit::OBSERVER_ON.store(true, std::sync::atomic::Ordering::Relaxed);
+        crate::func::bump_func_table_version();
     }
 
     /// Exception currently being reported to an end/leave observer.
