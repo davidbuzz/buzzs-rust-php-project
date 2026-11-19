@@ -68,7 +68,7 @@ use std::sync::{Mutex, OnceLock};
 
 use super::{Inst, SLOT_SHIFT, St, Tape, TOp, src, tmp_off, KC, KI, KL, KT, KR};
 use crate::opcode::PROP_CACHE_THIS;
-use crate::place::propcache::{PC_DYN, PC_READ, PC_WRITE};
+use crate::place::propcache::{PC_DYN, PC_ISSET, PC_READ, PC_WRITE};
 use crate::func::{Func, FUNC_TABLE_VERSION};
 use crate::opcode::{ArgSrc, Op, Operand};
 use crate::types::mask;
@@ -287,6 +287,23 @@ const C_PROP: u16 = 19;
 /// scope and the slot's current `Int` tag re-checked at run time (see
 /// `plan_prop_write`).
 const C_PROPW: u16 = 20;
+/// A plain instance-property `++`/`--` on an `Int` slot: the property
+/// guards, then an `add`/`sub` that exits `jo` *before* any store when
+/// the int overflows (the interpreted row then converts or reports as
+/// it decides; see `plan_prop_incdec`).
+const C_PROPINC: u16 = 21;
+/// A plain instance-property `isset()`/`empty()` on a declared slot:
+/// the property guards up to the slot array, then a branch on the
+/// slot's tag (`Int`, `Null` or `Bool` answered inline, anything else
+/// the interpreted row) storing a clean `Bool` into the destination
+/// temporary (see `plan_prop_isset`).
+const C_PROPISSET: u16 = 22;
+/// A plain instance-property compound write (`+=`/`-=`/`*=`/`&=`/`|=`/
+/// `^=` on an `Int` slot by a number): the property guards, then the
+/// arithmetic into `r9`, exiting `jo` before any store on int overflow
+/// (the interpreted row then converts to `Float` where the property's
+/// type allows; see `plan_prop_opa`).
+const C_PROPOPA: u16 = 23;
 /// `JitMeta.db` for a property write whose result is discarded (no
 /// destination temporary).
 const NO_DST: u32 = u32::MAX;
@@ -355,6 +372,19 @@ pub(crate) struct JitMeta {
     /// the write, as the interpreted row does.
     pub(crate) consume: bool,
 }
+
+/// The arithmetic ids `C_PROPOPA` accepts in `arith`: `jit_arith_id!`
+/// covers `+`/`-`/`*` (0/1/2) and [`op_arith`] adds `%` (5), so the
+/// bitwise ops use the free 6/7/8. Div, Mod, Pow, Concat, the shifts
+/// and the boolean operators have no int-int inline form.
+/// `JitMeta.mask` flag for a `J_ASSIGN_T` row whose source temporary is
+/// one an `isset()`/`empty()` row of the same region stored: the tag
+/// written into the compiled variable is `Bool`, not `Int`.
+const BOOL_SRC: u8 = 0x80;
+
+const OPA_BITAND: u8 = 6;
+const OPA_BITOR: u8 = 7;
+const OPA_BITXOR: u8 = 8;
 
 impl Default for JitMeta {
     fn default() -> JitMeta {
@@ -624,6 +654,8 @@ fn add_class_guards(
     class: u16,
     m: JitMeta,
     defs: &[u32],
+    bools: &[u32],
+    cvbools: &[u32],
     guards: &mut Vec<Guard>,
 ) -> bool {
     let inst = &tape[i];
@@ -636,14 +668,30 @@ fn add_class_guards(
     let read = |kind: u8, off: u32, guards: &mut Vec<Guard>| -> bool {
         match kind {
             KT if defs.contains(&off) => true,
+            // A compiled variable the region itself wrote a `Bool`
+            // into (an `isset()`/`empty()` result assigned to it) is
+            // `Bool` at the trace's entry, so an exact guard would
+            // fail on every entry: the region is rejected instead.
+            KC if cvbools.contains(&off) => false,
             KC | KT => add_slot(guards, kind, off, true),
             KI | KL => true,
             _ => false,
         }
     };
+    // A destination whose tag the row keeps as `Int` (`++`, `+=`): a
+    // `Bool` the region wrote there makes the exact guard dead.
+    let keep_int = |off: u32, guards: &mut Vec<Guard>| -> bool {
+        !cvbools.contains(&off) && add_slot(guards, KC, off, true)
+    };
+    // A destination fully stored with tag and payload: the entry value
+    // is never read, so a slot an earlier region row already wrote
+    // (an int *or* a bool) needs no guard at all.
+    let fresh_dst = |off: u32, guards: &mut Vec<Guard>| -> bool {
+        defs.contains(&off) || bools.contains(&off) || add_slot(guards, KT, off, false)
+    };
     match class {
         C_JMP => true,
-        C_INC | C_DEC => add_slot(guards, KC, inst.a, true),
+        C_INC | C_DEC => keep_int(inst.a, guards),
         C_ASSIGN_I | C_ASSIGN_L => add_slot(guards, KC, inst.a, false),
         // The `J_ARITH_CV` destination keeps its tag: it is guarded
         // `Int` (and every whitelisted write keeps it `Int`), so only
@@ -653,29 +701,32 @@ fn add_class_guards(
         // guard.
         J_ARITH_CV => read(m.ka, inst.a, guards)
             && read(m.kb, inst.b, guards)
-            && add_slot(guards, KC, inst.c, true),
+            && keep_int(inst.c, guards),
         J_ASSIGN_OP | J_NUMBIN_C => read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards),
         J_CMP => read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards),
-        J_INCCMP => add_slot(guards, KC, inst.a, true) && read(m.kb, inst.b, guards),
+        J_INCCMP => keep_int(inst.a, guards) && read(m.kb, inst.b, guards),
         // `inst.a` = a temp (exact: read as an int), then the cv it is
-        // written into (weak: nothing of its own is read).
-        J_ASSIGN_T => (defs.contains(&inst.b) || add_slot(guards, KT, inst.b, true))
+        // written into (weak: nothing of its own is read).  A temp an
+        // earlier `isset()`/`empty()` row of the region stored is fresh
+        // too, and the meta's `mask` flag (set in the scan) tells the
+        // emitted row to store the `Bool` tag, not `Int`.
+        J_ASSIGN_T => (defs.contains(&inst.b)
+            || bools.contains(&inst.b)
+            || add_slot(guards, KT, inst.b, true))
             && add_slot(guards, KC, inst.a, false),
         // Arithmetic into a temporary: the destination is fully stored
         // (tag and payload), so it only needs the weak guard (a scalar
         // or nothing, what the interpreter's own store test accepts).
-        J_ARITH_TMP | J_NUMBIN_T => {
-            read(m.ka, inst.a, guards)
-                && read(m.kb, inst.b, guards)
-                && add_slot(guards, KT, inst.c, false)
-        }
+        J_ARITH_TMP | J_NUMBIN_T => read(m.ka, inst.a, guards)
+            && read(m.kb, inst.b, guards)
+            && fresh_dst(inst.c, guards),
         // A property read fully stores its destination temporary (tag
         // and payload); the weak guard only keeps a heap value from
         // being overwritten without release (a fresh temporary, or one
         // an earlier row already stored an int into, is safe). The
         // receiver, scope and class are re-checked by the emitted
         // code, not entry-guarded.
-        C_PROP => defs.contains(&m.db) || add_slot(guards, KT, m.db, false),
+        C_PROP => fresh_dst(m.db, guards),
         // A property write: a `KT` source needs no entry guard (the
         // emitted row re-checks its tag every iteration, so a temporary
         // an earlier row of the region produced, or one whose entry
@@ -686,9 +737,15 @@ fn add_class_guards(
         // slot's own tag are re-checked by the emitted code, not
         // entry-guarded.
         C_PROPW => (m.sc == KT || m.sc == KL || read(m.sc, m.sw, guards))
-            && (m.db == NO_DST
-                || defs.contains(&m.db)
-                || add_slot(guards, KT, m.db, false)),
+            && (m.db == NO_DST || fresh_dst(m.db, guards)),
+        // `++`/`--`, `isset()`/`empty()` and `op=` re-check the base,
+        // scope, class and slot every iteration like a write; only the
+        // result temporary needs an entry guard (fully stored, tag and
+        // payload, by the emitted row).
+        C_PROPINC => m.db == NO_DST || fresh_dst(m.db, guards),
+        C_PROPISSET => fresh_dst(m.db, guards),
+        C_PROPOPA => (m.sc == KT || m.sc == KL || read(m.sc, m.sw, guards))
+            && (m.db == NO_DST || fresh_dst(m.db, guards)),
         _ => false,
     }
 }
@@ -851,6 +908,159 @@ fn plan_prop_write(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Optio
     })
 }
 
+/// The base, slot, scope and class checks the three planners below
+/// share with [`plan_prop_write`] (their emitted guards are identical);
+/// `want` is the entry flag the op's interpreted hit requires.
+fn prop_common(st: &St, code: &crate::opcode::OpArray, inst: &Inst, want: u8) -> Option<JitMeta> {
+    let e = code.prop_cache.try_borrow().ok()?.get(inst.a as usize)?.clone();
+    if e.class_addr == 0 || e.flags & (want | PC_DYN) != want {
+        return None;
+    }
+    // The slot index must fit the `slot << SLOT_SHIFT` disp32s.
+    if e.slot >= 1 << 27 {
+        return None;
+    }
+    // The plan ran in this very frame; its scope is what the guard
+    // compares against (and 0 for none).
+    // SAFETY: the frame outlives the plan (the trace runs in it).
+    let scope = unsafe { &*st.f }
+        .scope
+        .as_ref()
+        .map_or(0, |s| Rc::as_ptr(s) as usize);
+    if e.scope_addr != scope {
+        return None;
+    }
+    let (ka, sb) = if e.base == PROP_CACHE_THIS {
+        (KTHIS, 0)
+    } else {
+        if e.base as usize >= code.cv_names.len() {
+            return None;
+        }
+        (KC, e.base << SLOT_SHIFT)
+    };
+    let m = JitMeta {
+        ka,
+        sb,
+        slot: e.slot,
+        lit_a: e.class_addr as i64 - i64::from(RC_VALUE_OFFSET),
+        lit_b: if e.scope_addr == 0 {
+            0
+        } else {
+            e.scope_addr as i64 - i64::from(RC_VALUE_OFFSET)
+        },
+        ..JitMeta::default()
+    };
+    Some(m)
+}
+
+/// The destination temporary of an `Option<u32>` result slot: `NO_DST`
+/// when the expression's value is discarded, the byte offset when it is
+/// kept (an out-of-range temporary rejects the plan).
+fn prop_dst(code: &crate::opcode::OpArray, dst: Option<u32>) -> Option<u32> {
+    match dst {
+        None => Some(NO_DST),
+        Some(t) if t < code.num_tmps => Some(t << SLOT_SHIFT),
+        Some(_) => None,
+    }
+}
+
+/// The run-time shape of a plain `++$o->p`/`$o->p--` row
+/// (`IncDecObjProp`): the cache entry allows plain read-*and*-write
+/// hits of a declared slot (what `incdec_hit` requires), and the slot
+/// holds an `Int` (re-checked per iteration). Unlike `plan_prop_write`
+/// there is no `accept` requirement: an int overflow exits `jo` before
+/// any store, and the interpreted row then converts to `Float` or
+/// declines exactly as its own `accept` check decides. `inc` carries
+/// the direction and `kc` the post-ness of the `IncDecKind`.
+fn plan_prop_incdec(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
+    let Some(Op::IncDecObjProp { place, kind, dst }) = code.ops.get(inst.d as usize) else {
+        return None;
+    };
+    if *place != inst.a {
+        return None;
+    }
+    let mut m = prop_common(st, code, inst, PC_READ | PC_WRITE)?;
+    m.class = C_PROPINC;
+    m.db = prop_dst(code, *dst)?;
+    m.inc = kind.is_inc();
+    m.kc = u8::from(kind.is_post());
+    Some(m)
+}
+
+/// The run-time shape of a plain `isset($o->p)`/`empty($o->p)` row
+/// (`IssetObjProp`): the cache entry allows plain isset hits of a
+/// *declared* slot (the interpreted hit also answers dynamic-property
+/// hits, which the JIT leaves to it), and the emitted code answers
+/// `Int`/`Null`/`Bool` slots inline and exits to the interpreted row
+/// for anything else. `inc` carries `empty`.
+fn plan_prop_isset(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
+    let Some(Op::IssetObjProp { place, dst, empty }) = code.ops.get(inst.d as usize) else {
+        return None;
+    };
+    if *place != inst.a {
+        return None;
+    }
+    let mut m = prop_common(st, code, inst, PC_ISSET)?;
+    m.class = C_PROPISSET;
+    // `isset`/`empty` always write their result temporary.
+    m.db = prop_dst(code, Some(*dst))?;
+    m.inc = *empty;
+    Some(m)
+}
+
+/// The run-time shape of a plain `$o->p += $x` row (`AssignOpObjProp`
+/// of an int-typed cache entry): read-and-write hit on a declared slot,
+/// an `Int` slot (re-checked per iteration), and a number source: a
+/// compiled variable, temporary or int literal, exactly as
+/// `plan_prop_write` resolves them. Only int-int operators inline:
+/// `+`/`-`/`*` (which exit `jo` on overflow, leaving the interpreted
+/// row to decide the `Float` conversion) and the three bitwise ops.
+fn plan_prop_opa(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
+    let Some(Op::AssignOpObjProp { place, op, val, dst }) = code.ops.get(inst.d as usize) else {
+        return None;
+    };
+    if *place != inst.a {
+        return None;
+    }
+    let arith = match op {
+        php_runtime::BinaryOp::Add => 0,
+        php_runtime::BinaryOp::Sub => 1,
+        php_runtime::BinaryOp::Mul => 2,
+        php_runtime::BinaryOp::BitAnd => OPA_BITAND,
+        php_runtime::BinaryOp::BitOr => OPA_BITOR,
+        php_runtime::BinaryOp::BitXor => OPA_BITXOR,
+        _ => return None,
+    };
+    let mut m = prop_common(st, code, inst, PC_READ | PC_WRITE)?;
+    m.class = C_PROPOPA;
+    m.arith = arith;
+    let (sc, sw, lit_c, consume) = match val {
+        Operand::Cv(cv) if (*cv as usize) < code.cv_names.len() => (KC, *cv << SLOT_SHIFT, 0, false),
+        Operand::Tmp(t) | Operand::TmpKeep(t) if *t < code.num_tmps => (
+            KT,
+            *t << SLOT_SHIFT,
+            0,
+            matches!(val, Operand::Tmp(_)),
+        ),
+        Operand::Lit(l) => match code.literals.get(*l as usize) {
+            Some(php_runtime::Value::Int(v)) => (KL, 0, *v, false),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    m.db = prop_dst(code, *dst)?;
+    // `$t = ($o->p += $t)`: the source consume and the result copy meet
+    // on one slot; leave that shape to the interpreter (as for a write).
+    if consume && m.db == sw {
+        return None;
+    }
+    m.sc = sc;
+    m.sw = sw;
+    m.lit_c = lit_c;
+    m.consume = consume;
+    Some(m)
+}
+
 /// The target instruction index of the jump of the instruction at
 /// index `i`, for the classes that jump.
 fn jump_target(tape: &[Inst], i: usize) -> usize {
@@ -906,6 +1116,21 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
                 Some(m) => (C_PROPW, m, 1, None),
                 None => rej!(format!("[{i}] property write not inlinable")),
             }
+        } else if tape[i].op == TOp::IncDecObjProp {
+            match plan_prop_incdec(st, code, &tape[i]) {
+                Some(m) => (C_PROPINC, m, 1, None),
+                None => rej!(format!("[{i}] property inc/dec not inlinable")),
+            }
+        } else if tape[i].op == TOp::IssetObjProp {
+            match plan_prop_isset(st, code, &tape[i]) {
+                Some(m) => (C_PROPISSET, m, 1, None),
+                None => rej!(format!("[{i}] property isset/empty not inlinable")),
+            }
+        } else if tape[i].op == TOp::AssignOpObjProp {
+            match plan_prop_opa(st, code, &tape[i]) {
+                Some(m) => (C_PROPOPA, m, 1, None),
+                None => rej!(format!("[{i}] property op= not inlinable")),
+            }
         } else {
             match classify(st, &tape[i]) {
                 Some((c, m)) => (c, m, c_step(c), None),
@@ -958,13 +1183,22 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
     // argument `rdx`) in `r10` for those guards.
     let frame = class.contains(&C_PROP)
         || class.contains(&C_PROPW)
+        || class.contains(&C_PROPINC)
+        || class.contains(&C_PROPISSET)
+        || class.contains(&C_PROPOPA)
         || calls.iter().flatten().any(|cp| {
             cp.recv.is_some_and(|(kind, _, _)| kind == KTHIS)
         });
     let mut guards: Vec<Guard> = Vec::new();
     // Temporary offsets fully stored by an earlier row of the region
-    // (in program order): reads of those at guard time are dead.
+    // (in program order): reads of those at guard time are dead.  The
+    // same for a `Bool` an `isset()`/`empty()` row stored (`bools`:
+    // fresh to *copy*, never a known `Int` to do arithmetic with), and
+    // for the compiled variables whose whole trace-time value is such
+    // a `Bool` (`cvbools`: no row may read those as ints).
     let mut defs: Vec<u32> = Vec::new();
+    let mut bools: Vec<u32> = Vec::new();
+    let mut cvbools: Vec<u32> = Vec::new();
     for j in 0..len {
         if class[j] == 0 {
             continue;
@@ -986,8 +1220,29 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
             }
             continue;
         }
-        if !add_class_guards(tape, head + j, class[j], meta[j], &defs, &mut guards) {
+        if !add_class_guards(
+            tape,
+            head + j,
+            class[j],
+            meta[j],
+            &defs,
+            &bools,
+            &cvbools,
+            &mut guards,
+        ) {
             rej!(format!("guards at [{}, {:?}]", head + j, tape[head + j].op));
+        }
+        // An `isset()`/`empty()` temp copied into a compiled variable
+        // (`$ok = isset(...)`, `$ok = empty(...)`) writes a `Bool`
+        // there for the trace's whole run: flag the row so the emitted
+        // store tags it `Bool` (the isset's clean 0/1 payload makes the
+        // constant tag sound), and record the variable as a bool.
+        if class[j] == J_ASSIGN_T && bools.contains(&tape[head + j].b) {
+            meta[j].mask = BOOL_SRC;
+            let a = tape[head + j].a;
+            if !cvbools.contains(&a) {
+                cvbools.push(a);
+            }
         }
         // The temps this row fully stores (int tag and payload), seen
         // in order by the rows after it.
@@ -1004,10 +1259,57 @@ fn plan(st: &St, code: &crate::opcode::OpArray, tape: &[Inst], head: usize, clos
                     defs.retain(|d| *d != meta[j].sw);
                 }
             }
+            // `++`/`--`: the slot keeps its `Int` tag and the result
+            // temporary (if kept) is fully stored.
+            C_PROPINC => {
+                if meta[j].db != NO_DST {
+                    defs.push(meta[j].db);
+                }
+            }
+            // `isset`/`empty` store a `Bool`: the destination is a
+            // fresh value, but never a known `Int`, and it overwrites
+            // any earlier `Int` def for the same slot.
+            C_PROPISSET => {
+                bools.retain(|d| *d != meta[j].db);
+                defs.retain(|d| *d != meta[j].db);
+                bools.push(meta[j].db);
+            }
+            // `op=`: like a write; the slot stays `Int`, the result
+            // temporary (if kept) is fully stored, and a consumed `Tmp`
+            // source becomes `TAG_NULL`.
+            C_PROPOPA => {
+                if meta[j].db != NO_DST {
+                    defs.push(meta[j].db);
+                }
+                if meta[j].consume && meta[j].sc == KT {
+                    defs.retain(|d| *d != meta[j].sw);
+                }
+            }
             // Same consume hygiene: the source temporary is `TAG_NULL`
-            // after this row.
-            J_ASSIGN_T => defs.retain(|d| d != &tape[head + j].b),
+            // after this row, whatever tag it had.
+            J_ASSIGN_T => {
+                let b = tape[head + j].b;
+                defs.retain(|d| d != &b);
+                bools.retain(|d| d != &b);
+            }
             J_ARITH_TMP | J_NUMBIN_T => defs.push(tape[head + j].c),
+            _ => {}
+        }
+        // Any row that writes an int into a compiled variable (or an int
+        // from a temporary through `AssignT`) ends its `Bool` state.
+        match class[j] {
+            C_INC | C_DEC | C_ASSIGN_I | C_ASSIGN_L | J_INCCMP | J_ASSIGN_OP | J_NUMBIN_C => {
+                let a = tape[head + j].a;
+                cvbools.retain(|c| c != &a);
+            }
+            J_ARITH_CV => {
+                let a = tape[head + j].c;
+                cvbools.retain(|c| c != &a);
+            }
+            J_ASSIGN_T if meta[j].mask != BOOL_SRC => {
+                let a = tape[head + j].a;
+                cvbools.retain(|c| c != &a);
+            }
             _ => {}
         }
     }
@@ -1573,6 +1875,9 @@ struct Emitter {
     disms: HashMap<usize, usize>,
     fixups: Vec<(usize, Target)>,
     head_pos: usize,
+    /// Counter for the synthetic forward labels the `isset`/`empty`
+    /// tag dispatch registers (see [`Emitter::synth_label`]).
+    synth: usize,
 }
 
 /// REX.W (0x40) plus the ModRM-reg field's high bit (0x04) plus the
@@ -1846,6 +2151,43 @@ impl Emitter {
         self.put(&off.wrapping_add(PAYLOAD).to_le_bytes());
     }
 
+    /// `mov rcx, [rax + off]` (`48 8B 88 d32`): a word of the slot
+    /// array already dereferenced into `rax`.
+    fn movrcx_at_rax(&mut self, off: u32) {
+        self.put(&[REX_W, 0x8B, 0x88]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `mov r9, [rax + off]` (`4C 8B 88 d32`: `8B /r` moves `r/m` into
+    /// `reg`, so the `reg` field `001` widened by `REX.R` names the
+    /// destination `r9`; `rm = 000` is `rax`): a word of the slot array
+    /// into the scratch register.
+    fn mov_r9_rax(&mut self, off: u32) {
+        self.put(&[REX_W | REX_R, 0x8B, 0x88]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `mov [rax + off], r9` (`4C 89 88 d32`: `89 /r` names `r9`
+    /// through the *reg* field (`001`), `REX.R` extending it; `rm =
+    /// 000` is `rax`): a word of the slot array already dereferenced
+    /// into `rax`.
+    fn store_r9_at_rax(&mut self, off: u32) {
+        self.put(&[REX_W | REX_R, 0x89, 0x88]);
+        self.put(&off.to_le_bytes());
+    }
+
+    /// `mov r9, rcx` (`4C 8B C9`): keep a value across an operation.
+    fn mov_r9_rcx(&mut self) {
+        self.put(&[REX_W | REX_R, 0x8B, 0xC9]);
+    }
+
+    /// `mov ecx, imm32` (`B9 id`, sign-extended through `rcx`). It does
+    /// *not* clobber the flags, so a `setcc` can follow it after a test.
+    fn mov_ecx(&mut self, v: u32) {
+        self.put(&[0xB9]);
+        self.put(&v.to_le_bytes());
+    }
+
     /// `movabs rax, imm64`.
     fn movabs_rax(&mut self, v: i64) {
         self.put(&[REX_W, 0xB8]);
@@ -1874,6 +2216,20 @@ impl Emitter {
         self.labels.insert(idx, self.code.len());
     }
 
+    /// A forward label not tied to a region instruction (the
+    /// `isset`/`empty` tag dispatch's branch targets): its key is above
+    /// every region label's, so it cannot collide, and `resolve` patches
+    /// it exactly like a region label.
+    fn synth_label(&mut self) -> usize {
+        self.synth += 1;
+        self.plan.close + self.synth
+    }
+
+    /// Register synthetic label `key` at the current code position.
+    fn set_label(&mut self, key: usize) {
+        self.labels.insert(key, self.code.len());
+    }
+
     /// Where the jump of region instruction `j` goes (the plan
     /// validated the landing).
     fn jump_tgt(&self, j: usize) -> Target {
@@ -1897,6 +2253,9 @@ impl Emitter {
             C_JMP => self.jmp(self.jump_tgt(j)),
             C_PROP => self.emit_prop(m, Target::Stub(i)),
             C_PROPW => self.emit_propw(m, Target::Stub(i)),
+            C_PROPINC => self.emit_propinc(m, Target::Stub(i)),
+            C_PROPISSET => self.emit_propisset(m, Target::Stub(i)),
+            C_PROPOPA => self.emit_propopa(m, Target::Stub(i)),
             J_CMP => {
                 self.to_rax(m.ka, inst.a, m.lit_a);
                 self.to_r9(m.kb, inst.b, m.lit_b);
@@ -1955,7 +2314,15 @@ impl Emitter {
             J_ASSIGN_T => {
                 self.load_int(m.kb, inst.b);
                 self.store_int(m.ka, inst.a);
-                self.store_tag_base(m.ka, inst.a, TAG_INT);
+                // A `Bool` from the region's own `isset()`/`empty()`
+                // row keeps its tag (that row always stores a clean
+                // 0/1 payload, so the tag is constant here); otherwise
+                // this is the int path the plan checked.
+                self.store_tag_base(
+                    m.ka,
+                    inst.a,
+                    if m.mask == BOOL_SRC { TAG_BOOL } else { TAG_INT },
+                );
                 self.movabs_rax(0);
                 self.store_int(m.kb, inst.b);
                 self.store_tag_base(m.kb, inst.b, TAG_NULL);
@@ -2090,11 +2457,12 @@ impl Emitter {
         }
     }
 
-    /// Emit one property read (`C_PROP`): [`emit_prop_guards`] then copy
-    /// the slot's payload into the destination temporary with an `Int`
-    /// tag.
+    /// Emit one property read (`C_PROP`): [`emit_prop_slots`] and
+    /// [`emit_prop_int_slot`] then copy the slot's payload into the
+    /// destination temporary with an `Int` tag.
     fn emit_prop(&mut self, m: JitMeta, jo: Target) {
-        self.emit_prop_guards(m, jo);
+        self.emit_prop_slots(m, jo);
+        self.emit_prop_int_slot(m, jo);
         // `rax` is the slot array and the slot is an `Int`: load its
         // payload.
         let so = m.slot << SLOT_SHIFT;
@@ -2107,17 +2475,17 @@ impl Emitter {
     /// The checks one property access (read or write) re-runs every
     /// iteration: the base (an object of the pinned class, read through
     /// the frame for `$this`), the frame's calling scope, an unborrowed
-    /// and empty `lazy` cell, an unborrowed `slots` cell long enough for
-    /// the slot, and the slot itself holding an `Int`. On fall-through
-    /// `rax` is the slot array's base, so the caller reads or writes
-    /// `rax + (slot << SLOT_SHIFT) + PAYLOAD`.
+    /// and empty `lazy` cell, and an unborrowed `slots` cell long enough
+    /// for the slot. On fall-through `rax` is the slot array's base, so
+    /// the caller reads or writes `rax + (slot << SLOT_SHIFT) +
+    /// PAYLOAD` (see [`emit_prop_int_slot`] for the value check).
     ///
     /// Every mismatch exits to the interpreted row *without* disarming:
     /// classes, scopes and dynamic properties legitimately alternate
     /// between iterations, and the interpreted lookup is always correct.
     /// The derefs mirror the interpreted path, so none can fault once
     /// its checks pass.
-    fn emit_prop_guards(&mut self, m: JitMeta, jo: Target) {
+    fn emit_prop_slots(&mut self, m: JitMeta, jo: Target) {
         if debug_on() {
             eprintln!(
                 "jit:   prop base {} off {:#x} class {:#x} scope {:#x} slot {}",
@@ -2174,20 +2542,27 @@ impl Emitter {
         self.mov_rax_r9(SLOTS_LEN);
         self.cmp_rax_imm(m.slot.wrapping_add(1));
         self.jcc(0x82, jo); // jb: `slot` past the array
-        // The slot itself: `Option<Value>`'s niche gives an unset slot
-        // tag `TAG_NONE` and a real value its own tag, so one `Int`
-        // check rejects unset slots, references and strings together.
-        // For a write the same check carries the whole heap story: the
-        // old value is a scalar (nothing to release, and an `Int` is
-        // neither shared nor aliased through a `Reference`, so the
-        // payload store cannot split an alias), and its tag equals the
-        // new value's, so the tag byte never needs writing.
+        // `rax` is the slot array's base for the caller.
         self.mov_rax_r9(SLOTS_FIRST);
+    }
+
+    /// The `Int`-slot check that ends a plain read or write's guards:
+    /// [`emit_prop_slots`] must have just left `rax` at the slot array.
+    /// The slot itself: `Option<Value>`'s niche gives an unset slot
+    /// tag `TAG_NONE` and a real value its own tag, so one `Int`
+    /// check rejects unset slots, references and strings together.
+    /// For a write the same check carries the whole heap story: the
+    /// old value is a scalar (nothing to release, and an `Int` is
+    /// neither shared nor aliased through a `Reference`, so the
+    /// payload store cannot split an alias), and its tag equals the
+    /// new value's, so the tag byte never needs writing.
+    fn emit_prop_int_slot(&mut self, m: JitMeta, jo: Target) {
         self.cmpb_rax(m.slot << SLOT_SHIFT, TAG_INT);
         self.jcc(0x85, jo); // jne: not an int (or nothing)
     }
 
-    /// Emit one property write (`C_PROPW`): [`emit_prop_guards`] then
+    /// Emit one property write (`C_PROPW`): [`emit_prop_slots`] and
+    /// [`emit_prop_int_slot`] then
     /// store the written value's payload into the slot, with the value
     /// also copied to the result temporary when the expression's value
     /// is used (`assign_hit` writes `dst` with the *new* value), and the
@@ -2195,7 +2570,8 @@ impl Emitter {
     /// `Tmp`. Every exit goes to the interpreted row: it re-runs the
     /// whole write, which is what its own checks decide.
     fn emit_propw(&mut self, m: JitMeta, jo: Target) {
-        self.emit_prop_guards(m, jo);
+        self.emit_prop_slots(m, jo);
+        self.emit_prop_int_slot(m, jo);
         let so = m.slot << SLOT_SHIFT;
         // The written value in `rcx`: a `KT` source is re-checked per
         // iteration (its entry value may be anything, including the
@@ -2227,6 +2603,156 @@ impl Emitter {
             self.store_tag_base(KT, m.sw, TAG_NULL);
         }
     }
+
+    /// Emit one property `++`/`--` (`C_PROPINC`): [`emit_prop_slots`]
+    /// and [`emit_prop_int_slot`], then the increment of the slot's
+    /// payload in place. `inc` is the direction and `kc` the post-ness
+    /// (the `IncDecKind` packed by `plan_prop_incdec`). The `add`/`sub`
+    /// exits `jo` *before* any store on int overflow, exactly like the
+    /// fused `for` rows: the interpreted row then re-runs the whole op
+    /// and decides the `Float` conversion by its own `accept` check.
+    /// The slot keeps its `Int` tag, so only the payload word is
+    /// written; the result temporary (when the expression's value is
+    /// used) gets the *old* value for a post op (parked in `r9`) or the
+    /// new one (in `rcx`) for a pre op.
+    fn emit_propinc(&mut self, m: JitMeta, jo: Target) {
+        self.emit_prop_slots(m, jo);
+        self.emit_prop_int_slot(m, jo);
+        let so = m.slot << SLOT_SHIFT;
+        // The current payload in `rcx`; a post op keeps it in `r9` as
+        // the expression's value before changing it.
+        self.movrcx_at_rax(so.wrapping_add(PAYLOAD));
+        if m.kc != 0 {
+            self.mov_r9_rcx();
+        }
+        // `add rcx, 1` / `sub rcx, 1` (`83 /0` and `/5`).
+        self.put(&[REX_W, 0x83, if m.inc { 0xC1 } else { 0xE9 }, 0x01]);
+        self.jcc(0x80, jo); // jo: overflow, before any store
+        // The slot takes the new value (tag still `Int`, the guard).
+        self.store_rcx_at_rax(so.wrapping_add(PAYLOAD));
+        // The result temporary: fully stored (tag and payload).
+        if m.db != NO_DST {
+            if m.kc != 0 {
+                self.store_int_r9_base(KT, m.db);
+            } else {
+                self.store_rcx_base(KT, m.db);
+            }
+            self.store_tag_base(KT, m.db, TAG_INT);
+        }
+    }
+
+    /// Emit one `isset()`/`empty()` on a property (`C_PROPISSET`):
+    /// [`emit_prop_slots`] (no `Int` slot check — the slot's *tag* is
+    /// what answers), then a branch on the tag byte: `Int`, `Null` and
+    /// `Bool` slots are answered inline, anything else (unset, string,
+    /// object, reference) exits to the interpreted row, which also
+    /// carries the dynamic-property cases the cache entry excludes.
+    /// `inc` carries `empty`. The destination temporary gets a clean
+    /// `0`/`1` payload with a `Bool` tag (never an `Int` def, so later
+    /// rows re-guard it as they read it).
+    fn emit_propisset(&mut self, m: JitMeta, jo: Target) {
+        self.emit_prop_slots(m, jo);
+        let so = m.slot << SLOT_SHIFT;
+        // The tag byte of the slot, three forward branches.
+        self.cmpb_rax(so, TAG_INT);
+        let l_int = self.synth_label();
+        self.jcc(0x84, Target::Label(l_int)); // je
+        self.cmpb_rax(so, TAG_NULL);
+        let l_null = self.synth_label();
+        self.jcc(0x84, Target::Label(l_null)); // je
+        self.cmpb_rax(so, TAG_BOOL);
+        let l_bool = self.synth_label();
+        self.jcc(0x84, Target::Label(l_bool)); // je
+        self.jmp(jo); // any other tag: the interpreted row decides
+        // `Int`: set, and empty only when the payload is 0.
+        self.set_label(l_int);
+        if m.inc {
+            self.movrcx_at_rax(so.wrapping_add(PAYLOAD));
+            self.put(&[REX_W, 0x85, 0xC9]); // test rcx, rcx
+            self.mov_ecx(0);
+            self.put(&[0x0F, 0x94, 0xC1]); // sete cl
+        } else {
+            self.mov_ecx(1);
+        }
+        let l_end = self.synth_label();
+        self.jmp(Target::Label(l_end));
+        // `Null`: not set, and empty.
+        self.set_label(l_null);
+        self.mov_ecx(u32::from(m.inc));
+        self.jmp(Target::Label(l_end));
+        // `Bool`: set; empty only when the payload byte is 0 (the
+        // payload's upper bits are unspecified, so compare byte-wise).
+        self.set_label(l_bool);
+        if m.inc {
+            self.movrcx_at_rax(so.wrapping_add(PAYLOAD));
+            self.put(&[0x84, 0xC9]); // test cl, cl
+            self.mov_ecx(0);
+            self.put(&[0x0F, 0x94, 0xC1]); // sete cl
+        } else {
+            self.mov_ecx(1);
+        }
+        // Store the clean `Bool` into the result temporary.
+        self.set_label(l_end);
+        self.store_rcx_base(KT, m.db);
+        self.store_tag_base(KT, m.db, TAG_BOOL);
+    }
+
+    /// Emit one property compound write (`C_PROPOPA`): the guards of a
+    /// plain write, then the second operand in `rcx` (re-checked per
+    /// iteration for a `KT` source, exact-guarded for `KC`, constant
+    /// for `KL` — exactly `emit_propw`'s rules), the old payload in
+    /// `r9`, and the arithmetic into `r9`. `+`/`-`/`*` exit `jo` before
+    /// any store on int overflow (the interpreted row then converts to
+    /// `Float` where the property's `accept` allows, as the JIT's plan
+    /// does not pin `accept`); the bitwise ops always succeed on two
+    /// ints (`assign_op_in` agrees) and need no check. The slot keeps
+    /// its `Int` tag; the result temporary (when used) gets the new
+    /// value, and a consumed `Tmp` source is nulled like a write's.
+    fn emit_propopa(&mut self, m: JitMeta, jo: Target) {
+        self.emit_prop_slots(m, jo);
+        self.emit_prop_int_slot(m, jo);
+        let so = m.slot << SLOT_SHIFT;
+        // The second operand in `rcx`.
+        match m.sc {
+            KT => {
+                self.cmpb(KT, m.sw, TAG_INT);
+                self.jcc(0x85, jo); // jne: not an int
+                self.movrcx_at(KT, m.sw.wrapping_add(PAYLOAD));
+            }
+            KC => self.movrcx_at(KC, m.sw.wrapping_add(PAYLOAD)),
+            _ => self.movabs_rcx(m.lit_c),
+        }
+        // The arithmetic into `r9`: `01`/`29` `add`/`sub` r/m64, r64
+        // with `rm = 001` widened to `r9` by `REX.B` and `reg = 001`
+        // the source `rcx`; `imul r9, rcx` is the `0F AF /r` form with
+        // `reg = r9` (`REX.R`). Overflow of `+`/`-`/`*` (the `OF` flag)
+        // exits before the store below; `and`/`or`/`xor` clear `OF`.
+        self.mov_r9_rax(so.wrapping_add(PAYLOAD));
+        let checked = m.arith <= 2;
+        match m.arith {
+            0 => self.put(&[REX_W | REX_B, 0x01, 0xC9]), // add r9, rcx
+            1 => self.put(&[REX_W | REX_B, 0x29, 0xC9]), // sub r9, rcx
+            2 => self.put(&[REX_W | REX_R, 0x0F, 0xAF, 0xC9]), // imul r9, rcx
+            OPA_BITAND => self.put(&[REX_W | REX_B, 0x21, 0xC9]), // and r9, rcx
+            OPA_BITOR => self.put(&[REX_W | REX_B, 0x09, 0xC9]), // or r9, rcx
+            _ => self.put(&[REX_W | REX_B, 0x31, 0xC9]), // xor r9, rcx
+        }
+        if checked {
+            self.jcc(0x80, jo); // jo: overflow, before any store
+        }
+        // The slot takes the new value (tag still `Int`, the guard).
+        self.store_r9_at_rax(so.wrapping_add(PAYLOAD));
+        // The result temporary: fully stored (tag and payload).
+        if m.db != NO_DST {
+            self.store_int_r9_base(KT, m.db);
+            self.store_tag_base(KT, m.db, TAG_INT);
+        }
+        // A consumed source temporary is left null, as for a write.
+        if m.consume {
+            self.store_imm_base(KT, m.sw, 0);
+            self.store_tag_base(KT, m.sw, TAG_NULL);
+        }
+    }
 }
 impl Emitter {
     fn new(plan: Plan, tape: Vec<Inst>, scratch: i64) -> Emitter {
@@ -2240,6 +2766,7 @@ impl Emitter {
             disms: HashMap::new(),
             fixups: Vec::new(),
             head_pos: 0,
+            synth: 0,
         }
     }
 
@@ -2905,5 +3432,67 @@ mod layout_tests {
         // `mov [rax + disp32], rcx`: the property slot's payload word.
         em.store_rcx_at_rax(0x48);
         assert_eq!(em.code, vec![REX_W, 0x89, 0x88, 0x48, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        // `mov rcx, [rax + disp32]`: the slot payload while `rax` holds
+        // the slot array.
+        em.movrcx_at_rax(0x18);
+        assert_eq!(em.code, vec![REX_W, 0x8B, 0x88, 0x18, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        // `mov r9, [rax + disp32]`: the old payload into the scratch
+        // register (`8B /r` names destination `r9` via `REX.R`, the
+        // modrm `reg` field `001`; `rm = 000` is `rax`).
+        em.mov_r9_rax(0x18);
+        assert_eq!(em.code, vec![0x4C, 0x8B, 0x88, 0x18, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        // `mov [rax + disp32], r9`: the slot payload from `r9` (`89 /r`
+        // names *source* `r9` via `REX.R`, `rm = 000` is `rax`).
+        em.store_r9_at_rax(0x18);
+        assert_eq!(em.code, vec![0x4C, 0x89, 0x88, 0x18, 0x00, 0x00, 0x00]);
+        em.code.clear();
+        // `mov r9, rcx`: keep the old value across the increment.
+        em.mov_r9_rcx();
+        assert_eq!(em.code, vec![0x4C, 0x8B, 0xC9]);
+        em.code.clear();
+        // `mov ecx, imm32`: the `isset`/`empty` result (and the zero
+        // the `setcc` writes into) without clobbering the flags.
+        em.mov_ecx(1);
+        assert_eq!(em.code, vec![0xB9, 0x01, 0x00, 0x00, 0x00]);
+    }
+
+    /// The `C_PROPINC`/`C_PROPOPA` arithmetic words: `add`/`sub` with
+    /// the *destination* `r9` named through `rm` (`REX.B`) and `imul`
+    /// with it named through `reg` (`REX.R`) — swapped REX bits silently
+    /// compute into `rcx` and leave the slot untouched.
+    #[test]
+    fn prop_arith_encodings() {
+        let mut em = emitter();
+        // `add rcx, 1` / `sub rcx, 1` (`83 /0`, `/5`).
+        em.put(&[REX_W, 0x83, 0xC1, 0x01]);
+        assert_eq!(em.code, vec![0x48, 0x83, 0xC1, 0x01]);
+        em.code.clear();
+        em.put(&[REX_W, 0x83, 0xE9, 0x01]);
+        assert_eq!(em.code, vec![0x48, 0x83, 0xE9, 0x01]);
+        em.code.clear();
+        // `add r9, rcx`, `sub r9, rcx`, `and`/`or`/`xor r9, rcx`
+        // (`01`/`29`/`21`/`09`/`31 /r`: `rm = 001` widened to `r9` is
+        // the destination, `reg = 001` (`rcx`) the source).
+        for op in [0x01u8, 0x29, 0x21, 0x09, 0x31] {
+            em.put(&[REX_W | REX_B, op, 0xC9]);
+            assert_eq!(em.code, vec![0x49, op, 0xC9]);
+            em.code.clear();
+        }
+        // `imul r9, rcx` (`0F AF /r`: `reg = r9` is the *destination*).
+        em.put(&[REX_W | REX_R, 0x0F, 0xAF, 0xC9]);
+        assert_eq!(em.code, vec![0x4C, 0x0F, 0xAF, 0xC9]);
+        em.code.clear();
+        // `test rcx, rcx` / `test cl, cl` and `sete cl`: the `empty()`
+        // zero tests (`mov ecx` between them keeps the flags).
+        em.put(&[REX_W, 0x85, 0xC9]);
+        em.put(&[0xB9, 0, 0, 0, 0]);
+        em.put(&[0x0F, 0x94, 0xC1]);
+        assert_eq!(
+            em.code,
+            vec![0x48, 0x85, 0xC9, 0xB9, 0, 0, 0, 0, 0x0F, 0x94, 0xC1]
+        );
     }
 }
