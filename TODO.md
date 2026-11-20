@@ -70,8 +70,11 @@ Score: 66/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by d
       dce_*, sccp_*, nullsafe_*, coalesce, assign_dim_op_result_type, gh18107_1/2,
       preload_optimizer, array_map_foreach_optimization_007/008/013/014,
       named_parameter_new, gh18050, gh9164, jit/ignored_opcodes.
-- [ ] tests/basic/oom_rfc1867_files_registration_full_path.
-- [ ] ext/session rfc1867_incomplete_class_reserved_props.
+- [ ] tests/basic/oom_rfc1867_files_registration_full_path: needs Zend MM's placement of
+      large blocks in 2 MiB chunks (the third 1.2 MiB copy of the file name needs a fifth
+      chunk there); php-memlimit counts those blocks by size, so 8M is not reached.
+- [x] ext/session rfc1867_incomplete_class_reserved_props (2026-11-20): a member with no
+      declared property lost its name mangling in `Vm::write_mangled_prop`.
 - [ ] ext/gettext 6 failures: host locale `.mo` setup (environment, not engine) — script
       a locale fixture setup so they run.
 - [ ] Debug-binary-only opcache failures (sccp_003/004/009/016/031/032,
