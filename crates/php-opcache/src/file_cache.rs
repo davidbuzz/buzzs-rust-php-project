@@ -5,7 +5,7 @@
 //! Stores compiled scripts on disk under `opcache.file_cache` directory.
 //! Path structure: `<file_cache_dir>/<system_id>/<canonical_path>.bin`
 //! Header: magic `OPCACHE\0`, 32-char hex system id, 64-bit timestamp,
-//! 32-bit Adler-32 checksum, 64-bit payload length.
+//! 64-bit XXH3 checksum, 64-bit payload length.
 //!
 //! Ref: `ext/opcache/zend_file_cache.c`
 
@@ -17,29 +17,20 @@ pub const MAGIC: &[u8; 8] = b"OPCACHE\0";
 /// 32-character hexadecimal system id, matching php-src's `zend_system_id`.
 pub const SYSTEM_ID: &str = "817478635848e894c2598be6984e49ef";
 
-/// Header size: 8 (magic) + 32 (system_id) + 8 (mtime) + 4 (checksum) + 8 (len) = 60 bytes.
-pub const HEADER_SIZE: usize = 60;
+/// Header size: 8 (magic) + 32 (system_id) + 8 (mtime) + 8 (checksum) + 8 (len) = 64 bytes.
+pub const HEADER_SIZE: usize = 64;
 
-/// Calculates Adler-32 checksum, matching `zend_adler32` in php-src.
-///
-/// The sums are reduced only every `NMAX` bytes, as `zend_adler32` and
-/// zlib do: 5552 is the largest count for which `b` cannot overflow a
-/// `u32` before the reduction, so the result equals reducing after every
-/// byte.
-pub fn adler32(data: &[u8]) -> u32 {
-    const BASE: u32 = 65521;
-    const NMAX: usize = 5552;
-    let mut a: u32 = 1;
-    let mut b: u32 = 0;
-    for chunk in data.chunks(NMAX) {
-        for &byte in chunk {
-            a += u32::from(byte);
-            b += a;
-        }
-        a %= BASE;
-        b %= BASE;
-    }
-    (b << 16) | a
+/// Names the header layout and checksum in the system id, so entries
+/// written with another header are not found instead of being taken for
+/// corrupted.
+const HEADER_TAG: &[u8] = b"file-cache-header: xxh3-64";
+
+/// The checksum of an entry's payload (`zend_file_cache_script_store`
+/// stores `zend_adler32`). It only detects damaged entries, so any good
+/// checksum serves; XXH3 reads about 40 GB/s, several times Adler-32.
+#[must_use]
+pub fn checksum(payload: &[u8]) -> u64 {
+    twox_hash::XxHash3_64::oneshot(payload)
 }
 
 /// The finalized system id, once [`set_system_id`] ran.
@@ -82,6 +73,7 @@ pub fn compute_system_id<'a>(function_names: impl IntoIterator<Item = &'a [u8]>)
         h2 = (h2 ^ 0xff).wrapping_mul(PRIME);
     };
     feed(SYSTEM_ID.as_bytes());
+    feed(HEADER_TAG);
     for n in names {
         feed(n);
     }
@@ -141,12 +133,12 @@ pub fn write_file_cache(
         }
     }
 
-    let checksum = adler32(payload);
+    let sum = checksum(payload);
     let mut bytes = Vec::with_capacity(HEADER_SIZE + payload.len());
     bytes.extend_from_slice(MAGIC);
     bytes.extend_from_slice(system_id().as_bytes());
     bytes.extend_from_slice(&mtime.to_le_bytes());
-    bytes.extend_from_slice(&checksum.to_le_bytes());
+    bytes.extend_from_slice(&sum.to_le_bytes());
     bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
     bytes.extend_from_slice(payload);
 
@@ -189,6 +181,22 @@ pub fn write_file_cache(
     }
 }
 
+/// A cache entry's payload, inside the file's bytes as read (the header
+/// is not cut off, which would copy the whole payload).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Payload {
+    bytes: Vec<u8>,
+    start: usize,
+}
+
+impl std::ops::Deref for Payload {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.bytes.get(self.start..).unwrap_or_default()
+    }
+}
+
 /// Reads a script's payload from the file cache.
 /// Returns `Ok(Some(payload))` on cache hit, `Ok(None)` on cache miss or stale,
 /// and `Err(msg)` on a corrupted file. A stale or corrupted entry is
@@ -200,7 +208,7 @@ pub fn read_file_cache(
     validate_timestamps: bool,
     consistency_checks: bool,
     read_only: bool,
-) -> Result<Option<Vec<u8>>, String> {
+) -> Result<Option<Payload>, String> {
     let bin_path = get_bin_path(cache_dir, script_path);
     let Ok(bytes) = std::fs::read(&bin_path) else {
         return Ok(None);
@@ -239,26 +247,32 @@ pub fn read_file_cache(
         return Ok(None);
     }
 
-    let checksum = u32::try_from(u64::from_le_bytes(field(48..52))).unwrap_or(u32::MAX);
-    let payload = usize::try_from(u64::from_le_bytes(field(52..60)))
+    let stored = u64::from_le_bytes(field(48..56));
+    let payload = usize::try_from(u64::from_le_bytes(field(56..64)))
         .ok()
         .and_then(|len| bytes.get(HEADER_SIZE..)?.get(..len));
     let Some(payload) = payload else {
         return corrupted("mem");
     };
+    let end = HEADER_SIZE + payload.len();
     if consistency_checks {
-        let actual = adler32(payload);
-        if actual != checksum {
+        let actual = checksum(payload);
+        if actual != stored {
             discard();
             // Sic: php-src writes "excepted".
             return Err(format!(
-                "corrupted file '{}' excepted checksum: 0x{checksum:08x} actual checksum: 0x{actual:08x}",
+                "corrupted file '{}' excepted checksum: 0x{stored:016x} actual checksum: 0x{actual:016x}",
                 bin_path.display()
             ));
         }
     }
 
-    Ok(Some(payload.to_vec()))
+    let mut bytes = bytes;
+    bytes.truncate(end);
+    Ok(Some(Payload {
+        bytes,
+        start: HEADER_SIZE,
+    }))
 }
 
 /// Invalidates (unlinks) a script in the file cache.
@@ -297,7 +311,7 @@ pub fn is_script_cached_in_file_cache(
 
 #[cfg(test)]
 mod tests {
-    use super::{adler32, compute_system_id, get_bin_path, read_file_cache, write_file_cache};
+    use super::{checksum, compute_system_id, get_bin_path, read_file_cache, write_file_cache};
     use std::path::{Path, PathBuf};
 
     /// A fresh, empty cache directory for one test.
@@ -311,6 +325,7 @@ mod tests {
 
     fn read(dir: &Path, read_only: bool) -> Result<Option<Vec<u8>>, String> {
         read_file_cache(dir, Path::new("/app/a.php"), 7, true, true, read_only)
+            .map(|p| p.map(|p| p.to_vec()))
     }
 
     #[test]
@@ -372,29 +387,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The reduction after every byte, as `zend_adler32` defines the sum.
-    fn adler32_per_byte(data: &[u8]) -> u32 {
-        let (mut a, mut b) = (1_u32, 0_u32);
-        for &byte in data {
-            a = (a + u32::from(byte)) % 65521;
-            b = (b + a) % 65521;
-        }
-        (b << 16) | a
-    }
-
     #[test]
-    fn adler32_matches_the_per_byte_definition() {
-        assert_eq!(adler32(b""), 1);
-        assert_eq!(adler32(b"Wikipedia"), 0x11E6_0398);
-        // All-0xff input maximizes the sums; lengths around the block size.
-        for len in [1, 5551, 5552, 5553, 11104, 11105, 100_000] {
-            let ff = vec![0xff_u8; len];
-            assert_eq!(adler32(&ff), adler32_per_byte(&ff), "0xff x {len}");
-            let mixed: Vec<u8> = (0..len)
-                .map(|i| u8::try_from(i * 131 % 251).expect("below 251"))
-                .collect();
-            assert_eq!(adler32(&mixed), adler32_per_byte(&mixed), "mixed x {len}");
-        }
+    fn checksum_is_xxh3_64() {
+        // Reference values of XXH3-64 with seed 0.
+        assert_eq!(checksum(b""), 0x2D06_8005_38D3_94C2);
+        assert_ne!(checksum(b"a"), checksum(b"b"));
     }
 
     #[test]

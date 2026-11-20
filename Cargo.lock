@@ -1141,6 +1141,7 @@ name = "php-opcache"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+ "twox-hash",
 ]
 
 [[package]]
