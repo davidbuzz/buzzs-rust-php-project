@@ -1471,6 +1471,64 @@ impl HashTable {
         d.buckets.get(idx as usize)?.val.as_ref()
     }
 
+    /// `$a[h] = val` of a plain value (a scalar or a string) over an
+    /// element that is absent or plain (`zend_hash_index_update` and the
+    /// release of a value that owns nothing more than a string): one probe
+    /// of the table, then the store in place, the append to a packed table
+    /// or to a hash with room, or the general insert (initialisation, a
+    /// hole, growth, conversion). `Err(val)`, nothing changed, when the
+    /// element holds anything else: a reference to write through, or an
+    /// array or object whose release is the caller's business.
+    ///
+    /// # Errors
+    /// Gives `val` back when the existing element is not plain.
+    #[inline]
+    pub fn set_int_plain(&mut self, h: i64, val: Value) -> Result<(), Value> {
+        let ts = self.table_size;
+        match &mut self.store {
+            Store::Packed(v) => {
+                if let Ok(i) = usize::try_from(h) {
+                    let len = v.len();
+                    if i < len {
+                        if let Some(slot) = &mut v[i] {
+                            if !slot.is_plain() {
+                                return Err(val);
+                            }
+                            *slot = val;
+                            return Ok(());
+                        }
+                    } else if i == len && h < i64::from(ts) {
+                        v.push(Some(val));
+                        self.next_free = h + 1;
+                        self.num_elements += 1;
+                        return Ok(());
+                    }
+                }
+            }
+            Store::Hash(d) => {
+                if let Some(idx) = d.find_int(ts, h) {
+                    if let Some(slot) = d.buckets.get_mut(idx as usize).and_then(|b| b.val.as_mut())
+                    {
+                        if !slot.is_plain() {
+                            return Err(val);
+                        }
+                        *slot = val;
+                    }
+                    return Ok(());
+                }
+                if d.buckets.len() < ts as usize {
+                    d.append(ts, ArrayKey::Int(h), val);
+                    self.note_int_key(h);
+                    self.num_elements += 1;
+                    return Ok(());
+                }
+            }
+            Store::Uninit => {}
+        }
+        // A new key from here on (an existing one was decided above).
+        self.index_insert_slow(h, val, Mode::Update).map(|_| ())
+    }
+
     /// Mutable lookup of an integer key (one probe, no second storage
     /// match for the slot).
     #[inline]
@@ -2164,6 +2222,55 @@ impl HashTable {
             },
             renumber,
         );
+    }
+
+    /// `sort()` / `rsort()` of a table whose every value is an int (the
+    /// values ordered as `zend_compare` orders two ints, the keys
+    /// renumbered `0..n`): what [`HashTable::sort_by`] makes of it with
+    /// that comparison, produced by sorting the bare numbers. Equal ints
+    /// cannot be told apart, so the stable order needs no tie-break here.
+    /// `false`, nothing changed, when some value is not an int (the general
+    /// sort compares it) and for a table of fewer than two elements (whose
+    /// early exits are the general sort's).
+    pub fn sort_ints(&mut self, reverse: bool) -> bool {
+        if self.num_elements <= 1 {
+            return false;
+        }
+        let mut nums: Vec<i64> = Vec::with_capacity(self.num_elements as usize);
+        match &self.store {
+            Store::Uninit => return false,
+            Store::Packed(v) => {
+                for slot in v {
+                    match slot {
+                        Some(Value::Int(i)) => nums.push(*i),
+                        Some(_) => return false,
+                        None => {}
+                    }
+                }
+            }
+            Store::Hash(d) => {
+                for b in &d.buckets {
+                    match &b.val {
+                        Some(Value::Int(i)) => nums.push(*i),
+                        Some(_) => return false,
+                        None => {}
+                    }
+                }
+            }
+        }
+        nums.sort_unstable();
+        if reverse {
+            nums.reverse();
+        }
+        // As `sort_finish` leaves a renumbered table.
+        self.internal_ptr = 0;
+        let n = nums.len();
+        let cap = (self.table_size as usize).max(n);
+        let mut vals = Vec::with_capacity(cap);
+        vals.extend(nums.into_iter().map(|i| Some(Value::Int(i))));
+        self.store = Store::Packed(vals);
+        self.next_free = idx_key(n);
+        true
     }
 
     /// Like [`HashTable::sort_by`] without the stability tie-break.
@@ -3281,6 +3388,137 @@ impl FromIterator<Value> for ZArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `sort_ints` gives what `sort_by` gives with the int comparison, for
+    /// lists, tables with holes and tables with string keys, ascending and
+    /// descending; and leaves a table with any other value alone.
+    #[test]
+    fn sort_ints_is_the_general_sort_of_ints() {
+        let lists: [Vec<i64>; 5] = [
+            vec![3, 1, 2],
+            vec![5, 5, -1, i64::MAX, i64::MIN, 0, 5],
+            (0..200).map(|i| (i * 7919) % 101 - 50).collect(),
+            (0..50).rev().collect(),
+            vec![1, 1],
+        ];
+        let dump = |t: &HashTable| {
+            (
+                t.iter()
+                    .map(|(k, v)| format!("{k:?}={v:?}"))
+                    .collect::<Vec<_>>(),
+                t.len(),
+                t.next_index(),
+            )
+        };
+        for list in &lists {
+            for reverse in [false, true] {
+                for shape in 0..3 {
+                    let build = || {
+                        let mut t = HashTable::new();
+                        for (n, &v) in list.iter().enumerate() {
+                            match shape {
+                                0 => {
+                                    let _ = t.push(Value::Int(v));
+                                }
+                                1 => {
+                                    let k = i64::try_from(n).unwrap_or(0) * 3 + 7;
+                                    t.insert(ArrayKey::Int(k), Value::Int(v));
+                                }
+                                _ => {
+                                    let k = ZStr::from(format!("k{n}").as_str());
+                                    t.insert(ArrayKey::Str(k), Value::Int(v));
+                                }
+                            }
+                        }
+                        t
+                    };
+                    let mut fast = build();
+                    assert!(fast.sort_ints(reverse), "{list:?}");
+                    let mut general = build();
+                    general.sort_by(
+                        |_, a, _, b| {
+                            let (Value::Int(x), Value::Int(y)) = (a, b) else {
+                                return 0;
+                            };
+                            let r = i32::from(x > y) - i32::from(x < y);
+                            if reverse {
+                                -r
+                            } else {
+                                r
+                            }
+                        },
+                        true,
+                    );
+                    assert_eq!(dump(&fast), dump(&general), "{list:?} {reverse} {shape}");
+                }
+            }
+        }
+        let mut mixed = HashTable::new();
+        let _ = mixed.push(Value::Int(2));
+        let _ = mixed.push(Value::Float(1.5));
+        let _ = mixed.push(Value::Int(1));
+        assert!(!mixed.sort_ints(false));
+        assert!(matches!(mixed.get_int(0), Some(Value::Int(2))));
+        let mut one = HashTable::new();
+        let _ = one.push(Value::Int(2));
+        assert!(!one.sort_ints(false));
+        assert!(!HashTable::new().sort_ints(false));
+    }
+
+    /// `set_int_plain` leaves a table exactly as `insert` leaves it, key
+    /// by key, for the orders that take its different paths (a packed
+    /// append, a descending fill that starts a hash, holes, overwrites),
+    /// and declines an element that is not plain.
+    #[test]
+    fn set_int_plain_is_insert_for_plain_elements() {
+        let orders: [Vec<i64>; 6] = [
+            (0..40).collect(),
+            (0..40).rev().collect(),
+            vec![0, 1, 2, 5, 3, 4, 100, 6, -1, 7, 2, 5],
+            vec![7, 7, 7, 3, 3, 0],
+            vec![i64::MAX, i64::MIN, 0, 1, i64::MAX - 1],
+            (0..300).map(|i| (i * 7919) % 101).collect(),
+        ];
+        for order in &orders {
+            let mut a = HashTable::new();
+            let mut b = HashTable::new();
+            for (n, &k) in order.iter().enumerate() {
+                let v = i64::try_from(n).unwrap_or(0);
+                assert!(
+                    a.set_int_plain(k, Value::Int(v)).is_ok(),
+                    "{order:?} at {k}"
+                );
+                b.insert(ArrayKey::Int(k), Value::Int(v));
+                assert_eq!(a.len(), b.len(), "{order:?} at {k}");
+                assert_eq!(a.next_index(), b.next_index(), "{order:?} at {k}");
+            }
+            let pairs = |t: &HashTable| {
+                t.iter()
+                    .map(|(k, v)| format!("{k:?}={v:?}"))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(pairs(&a), pairs(&b), "{order:?}");
+        }
+        // A string over an int and an int over a string are plain stores.
+        let mut t = HashTable::new();
+        assert!(t.set_int_plain(3, Value::Str(ZStr::from("s"))).is_ok());
+        assert!(t.set_int_plain(3, Value::Int(1)).is_ok());
+        assert!(matches!(t.get_int(3), Some(Value::Int(1))));
+        // An array element is not overwritten: the value comes back.
+        t.insert(ArrayKey::Int(4), Value::Array(ZArray::new()));
+        assert!(matches!(
+            t.set_int_plain(4, Value::Int(9)),
+            Err(Value::Int(9))
+        ));
+        assert!(matches!(t.get_int(4), Some(Value::Array(_))));
+        let mut packed = HashTable::new();
+        for i in 0..3 {
+            packed.insert(ArrayKey::Int(i), Value::Array(ZArray::new()));
+        }
+        assert!(packed.set_int_plain(1, Value::Int(9)).is_err());
+        assert!(packed.set_int_plain(3, Value::Int(9)).is_ok());
+        assert_eq!(packed.len(), 4);
+    }
 
     #[test]
     fn sym_zstr_lookups_match_the_built_key() {

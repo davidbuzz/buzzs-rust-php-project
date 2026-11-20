@@ -4659,6 +4659,16 @@ impl Vm {
             call.args = call_args;
             return self.call_pending(call);
         }
+        // A pure int function compiled whole, every parameter passed an
+        // int (`array_map(fn($x) => $x & 1, $ints)`): the call is made in
+        // machine code, as the tape makes it (`exec::tape::calls::compiled`).
+        if !template.is_ctor {
+            if let Func::User(uf) = &template.func {
+                if let Some(r) = self.native_callback(uf, args) {
+                    return r;
+                }
+            }
+        }
         // `call_pending` for a by-value user callee: the interrupt check,
         // dereferenced arguments, the deprecation, then the frame.
         self.check_interrupt()?;
@@ -4695,6 +4705,50 @@ impl Vm {
             Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
             r => r,
         }
+    }
+
+    /// [`Vm::call_prepared`] of a user function whose whole body runs as
+    /// machine code (`exec::tape::jit::native_call`: a pure int function,
+    /// counted and compiled there once it is called often enough): a plain
+    /// call that passes every declared parameter an int. Such a body reads
+    /// no `$this`, scope or bound variable, so a closure's, a method's and
+    /// a function's call are the same call. `None`, nothing changed, when
+    /// it does not apply or the native code declined (an overflow, a
+    /// pending safe point): the call is then made with its frame.
+    #[inline]
+    fn native_callback(
+        &mut self,
+        uf: &Rc<UserFunction>,
+        args: &mut [Value],
+    ) -> Option<VmResult<Value>> {
+        use crate::exec::tape::jit;
+        let n = args.len();
+        if uf.call_shape.native.get() == jit::NATIVE_REFUSED
+            || n != uf.params.len()
+            || n > jit::NATIVE_MAX_ARGS
+            || self.observer.enabled
+            || uf.flags & (flags::DEPRECATED | flags::NODISCARD) != 0
+            || uf.call_shape() == crate::func::CallShape::NOT_PLAIN
+        {
+            return None;
+        }
+        let mut ints = [0i64; jit::NATIVE_MAX_ARGS];
+        for (slot, a) in ints.iter_mut().zip(args.iter()) {
+            let Value::Int(i) = a else {
+                return None;
+            };
+            *slot = *i;
+        }
+        // The interrupt check of `call_pending`, before the call.
+        if let Err(e) = self.check_interrupt() {
+            return Some(Err(e));
+        }
+        let r = jit::native_call(uf, &ints[..n])?;
+        // The arguments are moved out, as the framed call leaves them.
+        for a in args.iter_mut() {
+            *a = Value::Null;
+        }
+        Some(Ok(Value::Int(r)))
     }
 
     /// Calls a callable with named arguments too.

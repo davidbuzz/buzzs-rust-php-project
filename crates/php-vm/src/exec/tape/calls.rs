@@ -59,6 +59,18 @@ const MAX_ARGS: usize = 6;
 pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     let plain = Inst::plain;
     match code.ops.get(i)? {
+        // A builtin whose one-argument call needs no handler, called with
+        // one computed argument: the function's id in `e`, its frameless
+        // class in `d` (`prepare_quick`).
+        Op::InitFCall { .. } if quick_call(code, i).is_some() => {
+            let (id, class) = quick_call(code, i)?;
+            Some(Inst {
+                k: CALL_QUICK,
+                e: id,
+                d: class,
+                ..plain(TOp::CallInit)
+            })
+        }
         op if preparable(op) => Some(plain(TOp::CallInit)),
         // `ZEND_FRAMELESS_ICALL_n` (the forms `strs::lower` left): run with
         // the VM at hand (`run_vm_op`).
@@ -102,6 +114,55 @@ fn auto_global_place(code: &OpArray, place: u32) -> bool {
             Some(Value::Str(name)) if name.as_bytes().first() == Some(&b'_')
         ),
         _ => false,
+    }
+}
+
+/// The mark (`k`) of a `CallInit` instruction whose call [`prepare_quick`]
+/// may take.
+pub(super) const CALL_QUICK: u8 = 1;
+
+/// The id and frameless class (`special::quick_id`) of the builtin the
+/// `InitFCall` at `i` names, when its call is `f(<expression>)`: one
+/// argument, a temporary, passed right before the `DoCall`, with no other
+/// call started while it is computed. `None` for any other call.
+fn quick_call(code: &OpArray, i: usize) -> Option<(u8, u32)> {
+    let Op::InitFCall {
+        name,
+        fallback: None,
+        ..
+    } = code.ops.get(i)?
+    else {
+        return None;
+    };
+    let Value::Str(lc) = code.literals.get(*name as usize)? else {
+        return None;
+    };
+    let quick = crate::special::quick_id(lc.as_bytes())?;
+    let mut j = i + 1;
+    loop {
+        match code.ops.get(j)? {
+            Op::Send {
+                src: ArgSrc::Val(Operand::Tmp(_)) | ArgSrc::CallResult(Operand::Tmp(_)),
+            } => {
+                return matches!(code.ops.get(j + 1)?, Op::DoCall { .. }).then_some(quick);
+            }
+            // Another argument, or another call: not this shape.
+            Op::Send { .. }
+            | Op::SendNamed { .. }
+            | Op::SendUnpack { .. }
+            | Op::SendPlaceholder { .. }
+            | Op::DoCall { .. }
+            | Op::CallableConvert { .. }
+            | Op::CallablePartial { .. }
+            | Op::FramelessICall(_)
+            | Op::InitFCall { .. }
+            | Op::InitDynCall { .. }
+            | Op::InitMethodCall { .. }
+            | Op::InitStaticCall { .. }
+            | Op::InitParentHook { .. }
+            | Op::New { .. } => return None,
+            _ => j += 1,
+        }
     }
 }
 
@@ -190,6 +251,11 @@ enum Callee {
     /// A builtin function called by name ([`Builtin::plain_call`]): the
     /// arguments go into the pooled frame's argument buffer.
     Native(Rc<Builtin>, PlainCall),
+    /// A builtin whose one-argument call needs no handler
+    /// ([`prepare_quick`]): its id (`special::quick_id`) and the index of
+    /// its `InitFCall`. Nothing is readied: the `Send` computes the result
+    /// ([`quick_send`]), or the call becomes the generic pending call.
+    Quick(u8, u32),
 }
 
 /// A call prepared by [`prepare`]: the function, how many arguments
@@ -280,6 +346,80 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
         closure: false,
         ctor: false,
     })
+}
+
+/// `ZEND_INIT_FCALL` of a call [`CALL_QUICK`] marks (`f(<expression>)` of
+/// a builtin whose one-argument call needs no handler: `id`, of frameless
+/// class `class`), `at` its index: when the call site's cache holds that
+/// builtin (neither deprecated nor `#[\NoDiscard]`) and no observer is
+/// installed, the call is prepared without readying anything. Its `Send`
+/// makes it ([`quick_send`]). `None`, nothing changed, otherwise.
+pub(super) fn prepare_quick(
+    vm: &mut Vm,
+    name: u32,
+    id: u8,
+    class: u32,
+    at: usize,
+) -> Option<Prepared> {
+    if vm.observer.enabled {
+        return None;
+    }
+    let caller = vm.frames.last()?;
+    {
+        let cache = caller.code.fcall_cache.try_borrow().ok()?;
+        let entry = cache.get(name as usize)?.as_ref()?;
+        let crate::opcode::CachedFuncKind::Builtin(b) = &entry.func else {
+            return None;
+        };
+        if !crate::special::frameless_class_is(b.flags, class) {
+            return None;
+        }
+    }
+    Some(Prepared {
+        callee: Callee::Quick(id, u32::try_from(at).ok()?),
+        n: 0,
+        limit: 1,
+        calls_len: caller.calls.len(),
+        fcall: true,
+        closure: false,
+        ctor: false,
+    })
+}
+
+/// The `Send` of a call [`prepare_quick`] prepared (at `at`, the `DoCall`
+/// right after it): when the argument, a temporary, has a shape the
+/// function accepts as it is (`special::quick_eval`), the result is
+/// computed, the temporary consumed and the result stored in the
+/// `DoCall`'s temporary (the caller's resume point saved as for the call:
+/// `SAVE_OPLINE()`). Returns the op after the `DoCall`. `None`, nothing
+/// changed, for any other argument: the call becomes the pending call and
+/// the generic `Send` and `DoCall` run.
+pub(super) fn quick_send(
+    vm: &mut Vm,
+    id: u8,
+    src: &ArgSrc,
+    ops: &[Op],
+    at: usize,
+) -> Option<usize> {
+    let (ArgSrc::Val(Operand::Tmp(t)) | ArgSrc::CallResult(Operand::Tmp(t))) = src else {
+        return None;
+    };
+    let Some(&Op::DoCall { dst }) = ops.get(at + 1) else {
+        return None;
+    };
+    let caller = vm.frames.last_mut()?;
+    if dst.is_some_and(|d| d as usize >= caller.tmps.len()) {
+        return None;
+    }
+    let result = crate::special::quick_eval(id, caller.tmps.get(*t as usize)?)?;
+    // The argument is consumed: a number, or a string for `ord()`.
+    drop(std::mem::take(caller.tmps.get_mut(*t as usize)?));
+    caller.ip = at + 2;
+    match dst.and_then(|d| caller.tmps.get_mut(d as usize)) {
+        Some(slot) => crate::exec::spec::put_tmp(slot, result),
+        None => drop(result),
+    }
+    Some(at + 2)
 }
 
 /// Readies the pooled frame `frame` for a call of `uf`, as
@@ -741,6 +881,8 @@ pub(super) fn send(vm: &mut Vm, prep: &mut Prepared, src: &ArgSrc) -> bool {
         // `ZEND_SEND_VAL` / `ZEND_SEND_VAR` into the call frame's argument
         // slot.
         Callee::Native(..) => frame.args.push(Some(v)),
+        // (Its `Send` is `quick_send`'s.)
+        Callee::Quick(..) => return false,
     }
     prep.n = n + 1;
     true
@@ -897,6 +1039,14 @@ pub(super) fn compiled(vm: &mut Vm, prep: &Prepared, dst: Option<u32>) -> bool {
 impl Prepared {
     pub(super) fn is_native(&self) -> bool {
         matches!(self.callee, Callee::Native(..))
+    }
+
+    /// The function id of a call [`prepare_quick`] prepared.
+    pub(super) fn quick_id(&self) -> Option<u8> {
+        match self.callee {
+            Callee::Quick(id, _) => Some(id),
+            _ => None,
+        }
     }
 }
 
@@ -1103,6 +1253,25 @@ fn bind_closure_vars(frame: &mut crate::vm::Frame) {
 /// returns the frame to the pool.
 #[inline(never)]
 pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
+    // A quick call readied nothing: the pending call its `InitFCall` would
+    // have built, from the call site's cache (resolved again if the cache
+    // was cleared while the argument was computed: the builtin is still
+    // there). Nothing newer is pending: a call started since would have
+    // materialized this one first.
+    if let Callee::Quick(_, init_at) = prep.callee {
+        let Some(caller) = vm.frames.last_mut() else {
+            return;
+        };
+        let Some(&Op::InitFCall { name, display, .. }) = caller.code.ops.get(init_at as usize)
+        else {
+            return;
+        };
+        if !crate::call::init_fcall_in(caller, name) {
+            let made = vm.op_init_fcall(name, None, display);
+            debug_assert!(made.is_ok(), "a builtin's call site resolves");
+        }
+        return;
+    }
     let live = vm.frames.live;
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
     let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
@@ -1110,6 +1279,8 @@ pub(super) fn materialize(vm: &mut Vm, prep: Prepared) {
     };
     let uf = match prep.callee {
         Callee::User(uf) => uf,
+        // (Returned above.)
+        Callee::Quick(..) => return,
         Callee::Native(b, _) => {
             // `InitFCall` and the `Send`s of the generic protocol: a direct
             // call with its arguments inline. The frame was not readied.

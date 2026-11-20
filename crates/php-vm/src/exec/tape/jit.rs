@@ -107,6 +107,9 @@ const MAX_CALL_ARGS: usize = 6;
 const TAG_NULL: u8 = 0;
 const TAG_BOOL: u8 = 1;
 const TAG_INT: u8 = 2;
+/// The last of the scalar tags (`Null`, `Bool`, `Int`, `Float`): a tag
+/// above it is a reference-counted value, or nothing (`TAG_NONE`).
+const TAG_FLOAT: u8 = 3;
 const TAG_STR: u8 = 4;
 const TAG_OBJECT: u8 = 6;
 /// Byte offset of an `Obj` handle's payload (`ObjectData`) in its
@@ -451,6 +454,35 @@ const C_NOP: u16 = 33;
 /// `++`/`--` of a static property whose pinned cell holds an `Int`
 /// ([`plan_sprop_incdec`]).
 const C_SPROPINC: u16 = 34;
+/// `Op::Move` into a temporary (`ZEND_QM_ASSIGN`: a ternary's arms): an
+/// int, bool or null literal, a compiled variable or a temporary holding a
+/// scalar ([`plan_move`]).
+const C_MOVE: u16 = 35;
+/// `Op::JmpZ` of a compiled variable holding a bool, an int or null.
+const C_JMPZ: u16 = 36;
+/// `Op::JmpNz` of such a variable.
+const C_JMPNZ: u16 = 37;
+/// `$cv ?: ...` (`Op::JmpSet`) of such a variable: a truthy value is
+/// copied into the result temporary and the jump taken.
+const C_JMPSET: u16 = 38;
+/// `$cv ?? ...` (`Op::Coalesce`) of a variable that is undefined or holds
+/// a scalar: one that is not null is copied and the jump taken.
+const C_COALESCE: u16 = 39;
+
+/// `$cv[d1][d2]...` read into a temporary by the tape's own handler
+/// (`dims::fetch_dims`), called from the trace ([`jit_row_fetch_dims`]):
+/// the handler checks every operand on every iteration, and the result is
+/// of no known kind (a row that reads it as an int checks its tag).
+const C_DIMSR: u16 = 40;
+
+/// Whether rows of class `c` may jump (their target is the row's `c`
+/// field, as for every tape instruction that jumps).
+fn is_jump_class(c: u16) -> bool {
+    matches!(
+        c,
+        C_JMP | J_CMP | J_INCCMP | C_JMPZ | C_JMPNZ | C_JMPSET | C_COALESCE
+    )
+}
 /// `JitMeta.db` for a property write whose result is discarded (no
 /// destination temporary).
 const NO_DST: u32 = u32::MAX;
@@ -539,6 +571,14 @@ pub(crate) struct JitMeta {
     /// row itself only loads the receiver again and reads or writes the
     /// slot.
     pub(crate) bare: bool,
+    /// Operand `a` is a temporary whose content the plan does not know
+    /// where the row reads it (a value from before the loop, or one that
+    /// differs between the paths that reach the row): the emitted row
+    /// checks its tag before it uses it, and leaves when it is not what
+    /// the row needs (an `Int`; any scalar for a `C_MOVE`).
+    pub(crate) ca: bool,
+    /// The same for operand `b`.
+    pub(crate) cb: bool,
 }
 
 /// The arithmetic ids `C_PROPOPA` accepts in `arith`: `jit_arith_id!`
@@ -553,6 +593,11 @@ const BOOL_SRC: u8 = 0x80;
 /// holds the `Null` of an inlined call that returned nothing (`return;`):
 /// the row stores a `Null` into the compiled variable.
 const NULL_SRC: u8 = 0x40;
+/// `JitMeta.mask` flag for a `J_ASSIGN_T` row whose source temporary
+/// holds a scalar of a kind the plan does not know (the result of a
+/// ternary, `?:` or `??`: one kind on one path, another on the other):
+/// both words of the slot are copied.
+const SCALAR_SRC: u8 = 0x20;
 
 const OPA_BITAND: u8 = 6;
 const OPA_BITOR: u8 = 7;
@@ -592,6 +637,8 @@ impl Default for JitMeta {
             sg: true,
             kd: KT,
             bare: false,
+            ca: false,
+            cb: false,
         }
     }
 }
@@ -623,6 +670,10 @@ struct Arg {
     kind: u8,
     off: u32,
     lit: i64,
+    /// A temporary whose content the plan does not know where the call
+    /// reads it: its tag is checked (an `Int`) before the argument is
+    /// passed.
+    chk: bool,
 }
 
 /// A plain user-function call inlined into a trace: the callee's whole
@@ -727,40 +778,76 @@ impl CallPlan {
     }
 }
 
-/// What a temporary the region itself fully stored holds, for the rows
-/// after it (see `plan`'s `defs`/`bools`/`nulls`).
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// What a temporary holds at one point of the region, as far as the rows
+/// of the region itself tell (see [`TmpState`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum TmpKind {
-    /// An `Int`: later reads need no entry guard.
+    /// An `Int`: reads need no check.
     Int,
-    /// A `Bool` (an `isset()`/`empty()` result): fresh to copy, never an
-    /// int to compute with.
+    /// A `Bool` (an `isset()`/`empty()` result, a folded constant): fresh
+    /// to copy, never an int to compute with.
     Bool,
-    /// The `Null` of an inlined call that returned nothing.
+    /// A `Null` (an inlined call that returned nothing, a folded
+    /// constant).
     Null,
-    /// Consumed (nulled by the row that read it) or otherwise unknown.
+    /// A scalar (null, a bool, an int or a float), which one unknown: the
+    /// result of a ternary, `?:` or `??`, or what two paths that left
+    /// different scalars agree on. Fresh to copy whole.
+    Scalar,
+    /// Consumed (nulled by the row that read it), never written by the
+    /// region before this point, or written on one path only: a row that
+    /// reads it checks its tag in the trace.
     Unknown,
 }
 
-/// Record that a region row just left `kind` in temporary `off`: the
-/// temporary leaves the other lists, so a slot once a `Bool` and then
-/// re-stored as an `Int` (or the other way round) is only what its last
-/// store made it.
-fn set_tmp_kind(
-    defs: &mut Vec<u32>,
-    bools: &mut Vec<u32>,
-    nulls: &mut Vec<u32>,
-    off: u32,
-    kind: TmpKind,
-) {
-    defs.retain(|d| *d != off);
-    bools.retain(|d| *d != off);
-    nulls.retain(|d| *d != off);
-    match kind {
-        TmpKind::Int => defs.push(off),
-        TmpKind::Bool => bools.push(off),
-        TmpKind::Null => nulls.push(off),
-        TmpKind::Unknown => {}
+/// What the rows of a region left in its temporaries at one point of it:
+/// the kind of every temporary one of them fully stored (tag and payload)
+/// on every path to that point; any other temporary is
+/// [`TmpKind::Unknown`]. `plan` carries one through the region in program
+/// order and merges the states of the paths that meet at a label.
+#[derive(Clone, Default)]
+struct TmpState {
+    known: Vec<(u32, TmpKind)>,
+}
+
+impl TmpState {
+    /// What temporary `off` holds.
+    fn kind(&self, off: u32) -> TmpKind {
+        self.known
+            .iter()
+            .find(|(o, _)| *o == off)
+            .map_or(TmpKind::Unknown, |(_, k)| *k)
+    }
+
+    /// A row just left `kind` in temporary `off`: it is only what its
+    /// last store made it.
+    fn set(&mut self, off: u32, kind: TmpKind) {
+        self.known.retain(|(o, _)| *o != off);
+        if kind != TmpKind::Unknown {
+            self.known.push((off, kind));
+        }
+    }
+
+    /// Nothing is known (a point reached by a path the plan did not
+    /// follow: a nested loop's back edge).
+    fn clear(&mut self) {
+        self.known.clear();
+    }
+
+    /// The state where two paths meet: a temporary keeps a kind both
+    /// agree on, is a scalar of unknown kind when they left different
+    /// scalars, and is unknown when one of them did not store it.
+    fn merge(&self, other: &TmpState) -> TmpState {
+        let mut out = TmpState::default();
+        for &(off, kind) in &self.known {
+            let merged = match other.kind(off) {
+                TmpKind::Unknown => TmpKind::Unknown,
+                k if k == kind => kind,
+                _ => TmpKind::Scalar,
+            };
+            out.set(off, merged);
+        }
+        out
     }
 }
 
@@ -867,6 +954,34 @@ fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {
             kb: KI,
             ..JitMeta::default()
         },
+        // The truth jumps of a compiled variable, `?:` and `??` (the
+        // result temporary in `inst.b`), and a value moved into a
+        // temporary: no operand of theirs is an `Int` to guard.
+        TOp::JmpZC => JitMeta {
+            class: C_JMPZ,
+            ka: KI,
+            kb: KI,
+            ..JitMeta::default()
+        },
+        TOp::JmpNzC => JitMeta {
+            class: C_JMPNZ,
+            ka: KI,
+            kb: KI,
+            ..JitMeta::default()
+        },
+        TOp::JmpSetC => JitMeta {
+            class: C_JMPSET,
+            ka: KI,
+            kb: KI,
+            ..JitMeta::default()
+        },
+        TOp::CoalesceC => JitMeta {
+            class: C_COALESCE,
+            ka: KI,
+            kb: KI,
+            ..JitMeta::default()
+        },
+        TOp::MoveT => plan_move(st, inst)?,
         // `abs(x)`: the operand's kind in `inst.k`, the result temporary
         // in `inst.c` (`u32::MAX`: unused).
         TOp::AbsN => JitMeta {
@@ -905,6 +1020,50 @@ fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {
         m.lit_b = resolved_lit(st, inst.b)?;
     }
     Some((m.class, m))
+}
+
+/// The meta of a `MoveT` row (`Op::Move` into the temporary `inst.c`): the
+/// source's kind in `sc` (`KL`: a literal folded into `arith`/`lit_c` as
+/// [`plan_const`] folds one - an int, a bool or null; `KC`: the compiled
+/// variable `inst.a`; `KT`: the temporary `inst.a`, nulled afterwards when
+/// `consume`). `None` for a literal of another type (the interpreted
+/// row's: a float, a string, an array).
+fn plan_move(st: &St, inst: &Inst) -> Option<JitMeta> {
+    use super::scalar::{MOVE_CV, MOVE_KEEP, MOVE_LIT, MOVE_TMP};
+    let (sc, arith, lit_c) = match inst.k {
+        MOVE_CV => (KC, 0, 0),
+        MOVE_TMP | MOVE_KEEP => (KT, 0, 0),
+        MOVE_LIT => {
+            // SAFETY: a validated literal offset into a table of `Value`s
+            // (tag byte, then for a `Bool` its value byte, payload word),
+            // alive as long as the op array.
+            unsafe {
+                let p = st.lits.add(inst.a as usize);
+                match *p {
+                    TAG_INT => (
+                        KL,
+                        CONST_INT,
+                        std::ptr::read_unaligned(p.add(PAYLOAD as usize).cast::<i64>()),
+                    ),
+                    TAG_NULL => (KL, CONST_NULL, 0),
+                    TAG_BOOL => (KL, CONST_BOOL, i64::from(*p.add(BOOL_BYTE as usize))),
+                    _ => return None,
+                }
+            }
+        }
+        // No operand: null.
+        _ => (KL, CONST_NULL, 0),
+    };
+    Some(JitMeta {
+        class: C_MOVE,
+        ka: KI,
+        kb: KI,
+        sc,
+        arith,
+        lit_c,
+        consume: inst.k == MOVE_TMP,
+        ..JitMeta::default()
+    })
 }
 
 /// The int a `KL` operand names, read from the frame's literal table
@@ -992,40 +1151,43 @@ fn add_defined(guards: &mut Vec<Guard>, off: u32) -> bool {
 /// `inst.a`/`inst.b`/`inst.c` byte offset among `cvs`), `KT` = a
 /// temporary slot among `tmps`; `KI`/`KL` need no guard (their value
 /// was checked at plan time).
+///
+/// A compiled variable read as an int gets an exact entry guard, which
+/// holds for the trace's whole run (every row that writes such a variable
+/// keeps it an int, or the region is refused). A temporary gets none: `ts`
+/// says what the rows before this one left in it on every path here, and
+/// one whose content is not known that way is checked by the row itself
+/// (`m.ca`/`m.cb`, set here). `false` refuses the region.
 fn add_class_guards(
     tape: &[Inst],
     i: usize,
     class: u16,
-    m: JitMeta,
-    defs: &[u32],
-    bools: &[u32],
-    nulls: &[u32],
+    m: &mut JitMeta,
+    ts: &TmpState,
     cvbools: &[u32],
     guards: &mut Vec<Guard>,
 ) -> bool {
     let inst = &tape[i];
-    // A temporary fully stored (tag and payload) by an earlier region
-    // row is guaranteed fresh at every later read in the trace: the
-    // trace is linear, a row whose store is conditional (a guard
-    // exit) leaves the trace when it doesn't store.  Such a read needs
-    // no entry guard, and its entry value (a consumed `TAG_NULL`, for
-    // instance) may be anything.
-    let read = |kind: u8, off: u32, guards: &mut Vec<Guard>| -> bool {
+    // An operand read as an int: `Some(true)` when the emitted row has to
+    // check its tag, `None` when it cannot be one.
+    let read = |kind: u8, off: u32, guards: &mut Vec<Guard>| -> Option<bool> {
         match kind {
-            KT if defs.contains(&off) => true,
-            // A temporary an earlier row of this iteration left a `Bool`
-            // or a `Null` in is not an `Int` at this read, whatever it
-            // held at the entry: an entry guard could pass on that stale
-            // value, so the region is rejected.
-            KT if bools.contains(&off) || nulls.contains(&off) => false,
+            KT => match ts.kind(off) {
+                // Fully stored as an `Int` on every path here.
+                TmpKind::Int => Some(false),
+                // A `Bool` or a `Null` is no `Int` at this read.
+                TmpKind::Bool | TmpKind::Null => None,
+                // Whatever it holds: checked where it is read.
+                TmpKind::Scalar | TmpKind::Unknown => Some(true),
+            },
             // A compiled variable the region itself wrote a `Bool`
             // into (an `isset()`/`empty()` result assigned to it) is
             // `Bool` at the trace's entry, so an exact guard would
             // fail on every entry: the region is rejected instead.
-            KC if cvbools.contains(&off) => false,
-            KC | KT => add_slot(guards, kind, off, true),
-            KI | KL => true,
-            _ => false,
+            KC if cvbools.contains(&off) => None,
+            KC => add_slot(guards, kind, off, true).then_some(false),
+            KI | KL => Some(false),
+            _ => None,
         }
     };
     // A destination whose tag the row keeps as `Int` (`++`, `+=`): a
@@ -1035,12 +1197,19 @@ fn add_class_guards(
     };
     // A destination fully stored with tag and payload: the entry value
     // is never read, so a slot an earlier region row already wrote
-    // (an int *or* a bool) needs no guard at all.
+    // needs no guard at all; any other gets the weak one (a scalar or
+    // nothing: no value the store would have to release).
     let fresh_dst = |off: u32, guards: &mut Vec<Guard>| -> bool {
-        defs.contains(&off)
-            || bools.contains(&off)
-            || nulls.contains(&off)
-            || add_slot(guards, KT, off, false)
+        ts.kind(off) != TmpKind::Unknown || add_slot(guards, KT, off, false)
+    };
+    // The two operands of an arithmetic or comparison row.
+    let both = |m: &mut JitMeta, guards: &mut Vec<Guard>| -> bool {
+        let (Some(ca), Some(cb)) = (read(m.ka, inst.a, guards), read(m.kb, inst.b, guards)) else {
+            return false;
+        };
+        m.ca = ca;
+        m.cb = cb;
+        true
     };
     match class {
         C_JMP => true,
@@ -1052,30 +1221,28 @@ fn add_class_guards(
         // `inst.a` in place (`inst.c` is a jump offset or a separate
         // literal slot), so the read of `a` already carries the exact
         // guard.
-        J_ARITH_CV => {
-            read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards) && keep_int(inst.c, guards)
+        J_ARITH_CV => both(m, guards) && keep_int(inst.c, guards),
+        J_ASSIGN_OP | J_NUMBIN_C | J_CMP => both(m, guards),
+        J_INCCMP => {
+            let Some(cb) = read(m.kb, inst.b, guards) else {
+                return false;
+            };
+            m.cb = cb;
+            keep_int(inst.a, guards)
         }
-        J_ASSIGN_OP | J_NUMBIN_C => read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards),
-        J_CMP => read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards),
-        J_INCCMP => keep_int(inst.a, guards) && read(m.kb, inst.b, guards),
-        // `inst.a` = a temp (exact: read as an int), then the cv it is
-        // written into (weak: nothing of its own is read).  A temp an
-        // earlier `isset()`/`empty()` row of the region stored is fresh
-        // too, and the meta's `mask` flag (set in the scan) tells the
-        // emitted row to store the `Bool` tag, not `Int`.
+        // `$cv = TMP`: the temporary's kind picks the copy (`plan` flags
+        // a `Bool`, a `Null` and a scalar of unknown kind in the meta's
+        // `mask`); one the plan knows nothing about is taken for an
+        // `Int` and checked by the row. The variable is only written
+        // (weak: nothing of its own is read).
         J_ASSIGN_T => {
-            (defs.contains(&inst.b)
-                || bools.contains(&inst.b)
-                || nulls.contains(&inst.b)
-                || add_slot(guards, KT, inst.b, true))
-                && add_slot(guards, KC, inst.a, false)
+            m.cb = ts.kind(inst.b) == TmpKind::Unknown;
+            add_slot(guards, KC, inst.a, false)
         }
         // Arithmetic into a temporary: the destination is fully stored
         // (tag and payload), so it only needs the weak guard (a scalar
         // or nothing, what the interpreter's own store test accepts).
-        J_ARITH_TMP | J_NUMBIN_T => {
-            read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards) && fresh_dst(inst.c, guards)
-        }
+        J_ARITH_TMP | J_NUMBIN_T => both(m, guards) && fresh_dst(inst.c, guards),
         // A property read fully stores its destination temporary (tag
         // and payload); the weak guard only keeps a heap value from
         // being overwritten without release (a fresh temporary, or one
@@ -1091,49 +1258,55 @@ fn add_class_guards(
         // an int like an arithmetic operand. The destination temporary
         // is fully stored like a read's. The base, scope, class and the
         // slot's own tag are re-checked by the emitted code, not
-        // entry-guarded.
-        C_PROPW => {
-            (m.sc == KT || m.sc == KL || read(m.sc, m.sw, guards))
+        // entry-guarded. A static-property write follows the same rule.
+        C_PROPW | C_PROPOPA | C_SPROPW => {
+            (m.sc == KT || m.sc == KL || read(m.sc, m.sw, guards).is_some())
                 && (m.db == NO_DST || fresh_dst(m.db, guards))
         }
-        // `++`/`--`, `isset()`/`empty()` and `op=` re-check the base,
-        // scope, class and slot every iteration like a write; only the
-        // result temporary needs an entry guard (fully stored, tag and
-        // payload, by the emitted row).
+        // `++`/`--` re-check the base, scope, class and slot (or the
+        // pinned cell) every iteration like a write; only the result
+        // temporary needs an entry guard (fully stored, tag and payload,
+        // by the emitted row).
         C_PROPINC | C_SPROPINC => m.db == NO_DST || fresh_dst(m.db, guards),
-        C_PROPISSET => fresh_dst(m.db, guards),
-        C_PROPOPA => {
-            (m.sc == KT || m.sc == KL || read(m.sc, m.sw, guards))
-                && (m.db == NO_DST || fresh_dst(m.db, guards))
-        }
-        // A static-property read, `isset()`/`empty()` or a folded
-        // constant: everything they touch is the pinned cell (or
-        // nothing at all) re-checked by the emitted row; only the
-        // result temporary needs an entry guard (fully stored, tag and
-        // payload, by the emitted row).
-        C_SPROP | C_SPROPISSET | C_CONSTI => fresh_dst(m.db, guards),
-        // A static-property write: exactly the instance-write rule —
-        // a `KT` source is re-checked per iteration, a `KC` source is
-        // read as an int, a `KL` source is plan-time; the result
-        // temporary is fully stored.
-        C_SPROPW => {
-            (m.sc == KT || m.sc == KL || read(m.sc, m.sw, guards))
-                && (m.db == NO_DST || fresh_dst(m.db, guards))
-        }
+        // `isset()`/`empty()`, a static-property read and a folded
+        // constant: everything they touch is re-checked by the emitted
+        // row (or is nothing at all); the result temporary is fully
+        // stored.
+        C_PROPISSET | C_SPROP | C_SPROPISSET | C_CONSTI => fresh_dst(m.db, guards),
         // `$cv = a op b`: as `J_ARITH_CV`, the destination (`inst.d`)
         // keeps its `Int` tag and only its payload is stored.
-        J_NUMBIN_D => {
-            read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards) && keep_int(inst.d, guards)
-        }
+        J_NUMBIN_D => both(m, guards) && keep_int(inst.d, guards),
         C_NOP => true,
         // `abs(x)`: the operand is read as an int; a result temporary is
         // fully stored.
-        C_ABS => read(m.ka, inst.a, guards) && (inst.c == u32::MAX || fresh_dst(inst.c, guards)),
+        C_ABS => {
+            let Some(ca) = read(m.ka, inst.a, guards) else {
+                return false;
+            };
+            m.ca = ca;
+            inst.c == u32::MAX || fresh_dst(inst.c, guards)
+        }
         // The array rows hand their operands to a helper by address, and
         // the helper checks every one of them on every iteration (a
         // wrong type declines, which leaves the row to the interpreter):
         // nothing to guard at the entry.
         C_DIMR | C_DIMW | C_DIMOP => true,
+        // A value moved into a temporary: the row checks a compiled
+        // variable's tag itself (any scalar), and a temporary's when the
+        // plan does not know what it holds; the destination is fully
+        // stored.
+        C_MOVE => {
+            m.ca = m.sc == KT && ts.kind(inst.a) == TmpKind::Unknown;
+            fresh_dst(inst.c, guards)
+        }
+        // The truth jumps look at their variable's tag in the trace.
+        C_JMPZ | C_JMPNZ => true,
+        // The handler checks its operands and releases what its temporary
+        // held.
+        C_DIMSR => true,
+        // `?:` and `??` as well, and fully store their result temporary
+        // (`inst.b`) when they jump.
+        C_JMPSET | C_COALESCE => fresh_dst(inst.b, guards),
         _ => false,
     }
 }
@@ -2258,7 +2431,7 @@ unsafe extern "C" fn jit_dim_set(
     val: *const u8,
     _word: u32,
 ) -> u32 {
-    use php_runtime::{ArrayKey, Value};
+    use php_runtime::Value;
     // SAFETY: the caller's contract; the operands are read before the
     // array is borrowed mutably (they are other slots, or decline).
     unsafe {
@@ -2281,23 +2454,9 @@ unsafe extern "C" fn jit_dim_set(
         };
         match key {
             None => u32::from(tbl.push(Value::Int(v)).is_err()),
-            Some(i) => {
-                if let Some(slot) = tbl.get_int_mut(i) {
-                    if !slot.is_plain() {
-                        return 1;
-                    }
-                    match std::mem::replace(slot, Value::Int(v)) {
-                        old @ Value::Str(_) => drop(old),
-                        old => std::mem::forget(old),
-                    }
-                } else if let Err(v) = tbl.assign_packed_int(i, Value::Int(v)) {
-                    // Not the next element of a packed table (which the
-                    // call above appends in place): a new key of a hash,
-                    // a hole, a key past the end.
-                    drop(tbl.insert(ArrayKey::Int(i), v));
-                }
-                0
-            }
+            // One probe of the table: the store over a plain element, or
+            // the new key (an element holding anything else declines).
+            Some(i) => u32::from(tbl.set_int_plain(i, Value::Int(v)).is_err()),
         }
     }
 }
@@ -2349,6 +2508,31 @@ unsafe extern "C" fn jit_dim_op(
             }
             None => 1,
         }
+    }
+}
+
+/// `$cv[d1][d2]...` read for a trace ([`C_DIMSR`]): the tape's handler
+/// for the row `inst` (`dims::fetch_dims`), with the result always left in
+/// the row's temporary (the folded `AssignCv` of the row, if it has one,
+/// is its own row in the trace). Returns 0 when the read was made, 1 when
+/// the handler declined (nothing changed: the interpreter runs the row).
+///
+/// # Safety
+/// `frame` is the running frame and `inst` a `FetchDimsC` row of its tape.
+unsafe extern "C" fn jit_row_fetch_dims(
+    frame: *mut crate::vm::Frame,
+    inst: *const Inst,
+    _unused: *const u8,
+    _word: u32,
+) -> u32 {
+    // SAFETY: the caller's contract.
+    let mut row = unsafe { *inst };
+    row.b = super::dims::NO_TO;
+    // SAFETY: as above; the copy differs from the tape's row only in where
+    // the value goes.
+    match unsafe { super::dims::fetch_dims(frame, &row) } {
+        super::Br::Decline => 1,
+        _ => 0,
     }
 }
 
@@ -2444,6 +2628,22 @@ fn plan(
                 Some(m) => (C_CONSTI, m, 2, None),
                 None => rej!(format!("[{i}] $this::NAME not foldable")),
             }
+        } else if tape[i].op == TOp::FetchDimsC {
+            // Through the tape's handler; the result temporary is `p`.
+            let Ok(t) = u32::try_from(tape[i].p) else {
+                rej!(format!("[{i}] element read's temporary out of range"));
+            };
+            if t >= code.num_tmps {
+                rej!(format!("[{i}] element read's temporary out of range"));
+            }
+            let m = JitMeta {
+                class: C_DIMSR,
+                ka: KI,
+                kb: KI,
+                db: t << SLOT_SHIFT,
+                ..JitMeta::default()
+            };
+            (C_DIMSR, m, 1, None)
         } else if is_dim_row(tape[i].op) {
             match plan_dim(st, code, &tape[i]) {
                 Some((c, m, step)) => (c, m, step, None),
@@ -2497,6 +2697,43 @@ fn plan(
         ));
     }
 
+    // Every mid-region jump must land on the head, on a region
+    // instruction (which gets a label), or beyond the region (an exit
+    // that resumes there). Backward jumps to before the head and landings
+    // on covered slots are refused. `back_targets` are the labels a
+    // backward jump of the region lands on (a nested loop's head).
+    let mut entries: Vec<usize> = Vec::new();
+    let mut back_targets: Vec<usize> = Vec::new();
+    for j in 0..len {
+        let c = class[j];
+        if c == 0 {
+            continue;
+        }
+        if (c == J_CMP || c == J_INCCMP) && jcc_for(meta[j].mask).is_none() {
+            rej!(format!("unknown cmp mask {}", meta[j].mask));
+        }
+        if is_jump_class(c) {
+            let y = jump_target(tape, head + j);
+            if y == head || y == close && j == len - 1 {
+                continue;
+            }
+            if y > head && y <= close {
+                if class[y - head] == 0 {
+                    rej!(format!("jump lands on covered slot {y}"));
+                }
+                if !entries.contains(&y) {
+                    entries.push(y);
+                }
+                if y <= head + j && !back_targets.contains(&y) {
+                    back_targets.push(y);
+                }
+            } else if y < head {
+                rej!(format!("nested backward jump to {y}"));
+            }
+        }
+    }
+    entries.sort_unstable();
+
     // Guards: every slot read as an int must be exact; slots only
     // written get the weak guard. A merged exact guard is sound: every
     // whitelisted write to an exact-guarded slot keeps it an int.
@@ -2519,48 +2756,85 @@ fn plan(
         || class.contains(&C_SPROPISSET)
         || class.contains(&C_SPROPINC)
         || class.contains(&C_CONSTI)
+        || class.contains(&C_DIMSR)
         || calls
             .iter()
             .flatten()
             .any(|cp| cp.recv.is_some() || cp.rel.is_some());
     let mut guards: Vec<Guard> = Vec::new();
-    // Temporary offsets fully stored by an earlier row of the region (in
-    // program order), by what the store left there: an `Int` (`defs`:
-    // reads of those at guard time are dead), a `Bool` an
-    // `isset()`/`empty()` row stored (`bools`) or the `Null` of an
-    // inlined call that returned nothing (`nulls`). The last two are
-    // fresh to *copy*, never ints to do arithmetic with, and a temporary
-    // is in at most one list (`set_tmp_kind`). `cvbools` are the compiled
-    // variables whose current trace-time value is such a `Bool` or
-    // `Null` (no later row may read those as ints), and `ever_nonint`
-    // every compiled variable the region writes one into anywhere.
-    let mut defs: Vec<u32> = Vec::new();
-    let mut bools: Vec<u32> = Vec::new();
-    let mut nulls: Vec<u32> = Vec::new();
+    // What the rows of the region left in its temporaries (`ts`, a
+    // [`TmpState`]): carried through the region in program order, with
+    // the states of the paths that meet at a label merged there
+    // (`incoming`: what each forward jump carries to its target; a label
+    // a backward jump lands on is reached by a path this pass has not
+    // followed yet, so nothing is known there). `cvbools` are the compiled
+    // variables whose current trace-time value is a `Bool`, a `Null` or a
+    // scalar of unknown kind the region wrote (no later row may read those
+    // as ints), and `ever_nonint` every compiled variable the region
+    // writes one into anywhere.
+    let mut ts = TmpState::default();
+    let mut incoming: Vec<(usize, TmpState)> = Vec::new();
+    let mut reachable = true;
     let mut cvbools: Vec<u32> = Vec::new();
     let mut ever_nonint: Vec<u32> = Vec::new();
     for j in 0..len {
         if class[j] == 0 {
             continue;
         }
+        if entries.contains(&(head + j)) {
+            let mut merged = reachable.then(|| ts.clone());
+            for (y, state) in &incoming {
+                if *y == head + j {
+                    merged = Some(match merged {
+                        Some(m) => m.merge(state),
+                        None => state.clone(),
+                    });
+                }
+            }
+            incoming.retain(|(y, _)| *y != head + j);
+            ts = merged.unwrap_or_default();
+            if back_targets.contains(&(head + j)) {
+                ts.clear();
+            }
+            reachable = true;
+        }
         if class[j] == C_CALL {
-            let cp = calls[j].as_ref().unwrap();
+            let Some(cp) = calls[j].as_mut() else {
+                rej!(format!("no plan for the call at {}", head + j));
+            };
             // An argument is read as an `Int`: a temporary or variable the
-            // region itself left a `Bool` or `Null` in cannot be one (an
-            // entry guard would only test what it held at the entry).
-            if !cp.sends.iter().all(|arg| match arg.kind {
-                KT if defs.contains(&arg.off) => true,
-                KT if bools.contains(&arg.off) || nulls.contains(&arg.off) => false,
-                KC if cvbools.contains(&arg.off) => false,
-                KC | KT => add_slot(&mut guards, arg.kind, arg.off, true),
-                // A dropped send of a compiled variable (`plan_call` left
-                // its slot in `off`): whatever it holds is unused, but it
-                // must hold something - the interpreted send of an
-                // undefined variable warns.
-                KSKIP if arg.lit == 1 => add_defined(&mut guards, arg.off),
-                _ => true,
-            }) {
+            // region itself left a `Bool` or `Null` in cannot be one; a
+            // temporary of unknown content is checked before it is passed.
+            let mut ok = true;
+            for arg in &mut cp.sends {
+                ok &= match arg.kind {
+                    KT => match ts.kind(arg.off) {
+                        TmpKind::Int => true,
+                        TmpKind::Bool | TmpKind::Null => false,
+                        TmpKind::Scalar | TmpKind::Unknown => {
+                            arg.chk = true;
+                            true
+                        }
+                    },
+                    KC if cvbools.contains(&arg.off) => false,
+                    KC => add_slot(&mut guards, arg.kind, arg.off, true),
+                    // A dropped send of a compiled variable (`plan_call`
+                    // left its slot in `off`): whatever it holds is
+                    // unused, but it must hold something - the
+                    // interpreted send of an undefined variable warns.
+                    KSKIP if arg.lit == 1 => add_defined(&mut guards, arg.off),
+                    _ => true,
+                };
+            }
+            if !ok {
                 rej!(format!("guards for the call at {}", head + j));
+            }
+            // A checked temporary is an `Int` from here on (the call
+            // copies an int argument; it nulls nothing).
+            for arg in &cp.sends {
+                if arg.chk {
+                    ts.set(arg.off, TmpKind::Int);
+                }
             }
             if let Some(d) = cp.dst {
                 if !add_slot(&mut guards, KT, d, false) {
@@ -2575,7 +2849,7 @@ fn plan(
                 } else {
                     TmpKind::Int
                 };
-                set_tmp_kind(&mut defs, &mut bools, &mut nulls, d, kind);
+                ts.set(d, kind);
             }
             continue;
         }
@@ -2585,7 +2859,7 @@ fn plan(
             // iteration, so the region is not worth compiling.
             let m = &meta[j];
             let non_int = |kind: u8, off: u32| match kind {
-                KT => bools.contains(&off) || nulls.contains(&off),
+                KT => matches!(ts.kind(off), TmpKind::Bool | TmpKind::Null),
                 KC => cvbools.contains(&off),
                 _ => false,
             };
@@ -2597,28 +2871,36 @@ fn plan(
             tape,
             head + j,
             class[j],
-            meta[j],
-            &defs,
-            &bools,
-            &nulls,
+            &mut meta[j],
+            &ts,
             &cvbools,
             &mut guards,
         ) {
             rej!(format!("guards at [{}, {:?}]", head + j, tape[head + j].op));
         }
+        // An operand the row checks is an `Int` after it (the row left the
+        // trace otherwise).
+        if !matches!(class[j], C_MOVE | J_ASSIGN_T) {
+            if meta[j].ca {
+                ts.set(tape[head + j].a, TmpKind::Int);
+            }
+            if meta[j].cb {
+                ts.set(tape[head + j].b, TmpKind::Int);
+            }
+        }
         // A `Bool` or `Null` temporary copied into a compiled variable
         // (`$ok = isset(...)`, `$ok = empty(...)`, `$r = f()` of a
-        // function that returns nothing) writes that value there for the
-        // trace's whole run: flag the row so the emitted store writes the
-        // right tag and value, and record the variable as not an `Int`.
+        // function that returns nothing), or a scalar of unknown kind (a
+        // ternary's result), writes that value there for the trace's
+        // whole run: flag the row so the emitted store writes the right
+        // tag and value, and record the variable as not an `Int`.
         if class[j] == J_ASSIGN_T {
             let b = tape[head + j].b;
-            let flag = if bools.contains(&b) {
-                BOOL_SRC
-            } else if nulls.contains(&b) {
-                NULL_SRC
-            } else {
-                0
+            let flag = match ts.kind(b) {
+                TmpKind::Bool => BOOL_SRC,
+                TmpKind::Null => NULL_SRC,
+                TmpKind::Scalar => SCALAR_SRC,
+                TmpKind::Int | TmpKind::Unknown => 0,
             };
             if flag != 0 {
                 meta[j].mask = flag;
@@ -2637,7 +2919,7 @@ fn plan(
             // A property or static-property read and a folded constant:
             // the destination temporary holds an `Int`.
             C_PROP | C_SPROP => {
-                set_tmp_kind(&mut defs, &mut bools, &mut nulls, meta[j].db, TmpKind::Int);
+                ts.set(meta[j].db, TmpKind::Int);
             }
             // A folded constant: what the constant is.
             C_CONSTI => {
@@ -2646,7 +2928,7 @@ fn plan(
                     CONST_BOOL => TmpKind::Bool,
                     _ => TmpKind::Int,
                 };
-                set_tmp_kind(&mut defs, &mut bools, &mut nulls, meta[j].db, kind);
+                ts.set(meta[j].db, kind);
             }
             // A write, an `op=` and a `++`/`--`: the result temporary (if
             // kept) is fully stored with the `Int`; a consumed `Tmp`
@@ -2654,37 +2936,31 @@ fn plan(
             // so it is no longer a known `Int`.
             C_PROPW | C_PROPOPA | C_SPROPW | C_PROPINC | C_SPROPINC => {
                 if meta[j].db != NO_DST {
-                    set_tmp_kind(&mut defs, &mut bools, &mut nulls, meta[j].db, TmpKind::Int);
+                    ts.set(meta[j].db, TmpKind::Int);
                 }
                 if meta[j].consume && meta[j].sc == KT {
-                    set_tmp_kind(
-                        &mut defs,
-                        &mut bools,
-                        &mut nulls,
-                        meta[j].sw,
-                        TmpKind::Unknown,
-                    );
+                    ts.set(meta[j].sw, TmpKind::Unknown);
                 }
             }
             // `isset`/`empty` store a `Bool`: a fresh value, never a
             // known `Int`, replacing whatever the slot held.
             C_PROPISSET | C_SPROPISSET => {
-                set_tmp_kind(&mut defs, &mut bools, &mut nulls, meta[j].db, TmpKind::Bool);
+                ts.set(meta[j].db, TmpKind::Bool);
             }
             // The source temporary is `TAG_NULL` after this row (the
             // consume), whatever it held.
             J_ASSIGN_T => {
                 let b = tape[head + j].b;
-                set_tmp_kind(&mut defs, &mut bools, &mut nulls, b, TmpKind::Unknown);
+                ts.set(b, TmpKind::Unknown);
             }
             J_ARITH_TMP | J_NUMBIN_T => {
                 let c = tape[head + j].c;
-                set_tmp_kind(&mut defs, &mut bools, &mut nulls, c, TmpKind::Int);
+                ts.set(c, TmpKind::Int);
             }
             C_ABS => {
                 let c = tape[head + j].c;
                 if c != u32::MAX {
-                    set_tmp_kind(&mut defs, &mut bools, &mut nulls, c, TmpKind::Int);
+                    ts.set(c, TmpKind::Int);
                 }
             }
             // An array read stored an `Int` into its destination (or left
@@ -2693,7 +2969,7 @@ fn plan(
             C_DIMR => {
                 let d = meta[j].db;
                 if meta[j].kc == KT {
-                    set_tmp_kind(&mut defs, &mut bools, &mut nulls, d, TmpKind::Int);
+                    ts.set(d, TmpKind::Int);
                 } else {
                     cvbools.retain(|c| c != &d);
                 }
@@ -2703,8 +2979,32 @@ fn plan(
             C_DIMW | C_DIMOP => {
                 if meta[j].consume {
                     let t = meta[j].sw;
-                    set_tmp_kind(&mut defs, &mut bools, &mut nulls, t, TmpKind::Unknown);
+                    ts.set(t, TmpKind::Unknown);
                 }
+            }
+            // The handler left a value of no known kind.
+            C_DIMSR => ts.set(meta[j].db, TmpKind::Unknown),
+            // A moved value: the literal's kind, any scalar from a
+            // variable, a temporary's own kind (a checked one is some
+            // scalar); a consumed source temporary is left null.
+            C_MOVE => {
+                let inst = &tape[head + j];
+                let kind = match meta[j].sc {
+                    KL => match meta[j].arith {
+                        CONST_NULL => TmpKind::Null,
+                        CONST_BOOL => TmpKind::Bool,
+                        _ => TmpKind::Int,
+                    },
+                    KT => match ts.kind(inst.a) {
+                        TmpKind::Unknown => TmpKind::Scalar,
+                        k => k,
+                    },
+                    _ => TmpKind::Scalar,
+                };
+                if meta[j].sc == KT && meta[j].consume {
+                    ts.set(inst.a, TmpKind::Unknown);
+                }
+                ts.set(inst.c, kind);
             }
             _ => {}
         }
@@ -2730,6 +3030,23 @@ fn plan(
             }
             _ => {}
         }
+        // What a jump carries to a label further down: the state after
+        // the row, with the result of a `?:` or `??` (stored only when
+        // the jump is taken) a scalar. Nothing falls through a plain jump.
+        if is_jump_class(class[j]) {
+            let y = jump_target(tape, head + j);
+            if y > head + j && y <= close {
+                let mut edge = ts.clone();
+                if matches!(class[j], C_JMPSET | C_COALESCE) {
+                    edge.set(tape[head + j].b, TmpKind::Scalar);
+                }
+                incoming.push((y, edge));
+            }
+            if class[j] == C_JMP {
+                reachable = false;
+                ts.clear();
+            }
+        }
     }
     // A compiled variable the region writes a `Bool` or `Null` into is no
     // `Int` from the second iteration on, wherever in the body that write
@@ -2753,37 +3070,6 @@ fn plan(
         }
     }
 
-    // Every mid-region jump must land on the head, on a region
-    // instruction (which gets a label), or beyond the region (an exit
-    // that resumes there). Backward jumps to a non-head (a nested
-    // loop) and landings on covered slots are refused in this version.
-    let mut entries: Vec<usize> = Vec::new();
-    for j in 0..len {
-        let c = class[j];
-        if c == 0 {
-            continue;
-        }
-        if (c == J_CMP || c == J_INCCMP) && jcc_for(meta[j].mask).is_none() {
-            rej!(format!("unknown cmp mask {}", meta[j].mask));
-        }
-        if c == C_JMP || c == J_CMP || c == J_INCCMP {
-            let y = jump_target(tape, head + j);
-            if y == head || y == close && j == len - 1 {
-                continue;
-            }
-            if y > head && y <= close {
-                if class[y - head] == 0 {
-                    rej!(format!("jump lands on covered slot {y}"));
-                }
-                if !entries.contains(&y) {
-                    entries.push(y);
-                }
-            } else if y < head {
-                rej!(format!("nested backward jump to {y}"));
-            }
-        }
-    }
-    entries.sort_unstable();
     guards.sort_by_key(|g| (g.base, g.off));
     // A pinned cell or constant fold is only as fresh as the runtime
     // caches that produced it; the prologue's version guard covers the
@@ -2922,6 +3208,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
                         kind: KL,
                         off: 0,
                         lit: v,
+                        chk: false,
                     });
                     ci += 1;
                     continue;
@@ -2929,7 +3216,12 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
                 // A `KL`'s value is resolved later, only if the send
                 // turns out to be live; keep the literal's index until
                 // then.
-                sends.push(Arg { kind, off, lit: 0 });
+                sends.push(Arg {
+                    kind,
+                    off,
+                    lit: 0,
+                    chk: false,
+                });
                 ci += 1;
             }
             Some(Op::DoCall { dst }) => break *dst,
@@ -3519,6 +3811,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             kind: KNULL_ARG,
             off: 0,
             lit: 0,
+            chk: false,
         },
         o => {
             let (mut kind, mut off) = match src(&uf.code, o) {
@@ -3529,7 +3822,12 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
                 let v = i64::from(off as i32);
                 kind = KL;
                 off = 0;
-                Arg { kind, off, lit: v }
+                Arg {
+                    kind,
+                    off,
+                    lit: v,
+                    chk: false,
+                }
             } else {
                 let lit = if kind == KL {
                     resolved_lit(&cst, off)?
@@ -3547,7 +3845,12 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
                     }
                     kind = KR;
                 }
-                Arg { kind, off, lit }
+                Arg {
+                    kind,
+                    off,
+                    lit,
+                    chk: false,
+                }
             }
         }
     };
@@ -3648,6 +3951,8 @@ enum HArg {
     Slot(u8, u32),
     Abs(i64),
     Null,
+    /// The frame (`r10`: the plan's `frame` is set).
+    Frame,
 }
 
 /// The x86-64 emitter. Slots are addressed off `rdi` (`st.cvs`) and
@@ -3660,6 +3965,9 @@ struct Emitter {
     code: Vec<u8>,
     plan: Plan,
     tape: Vec<Inst>,
+    /// The address of the tape the trace is of (the rows a handler called
+    /// from the trace reads; 0 in the unit tests).
+    tbase: usize,
     /// The scratch buffer's address (`has_calls`: `rdx` is set to it in
     /// the prologue; every `KR` offset is relative to it).
     scratch: i64,
@@ -4077,7 +4385,65 @@ impl Emitter {
             C_DIMR => self.emit_dimr(m, i),
             C_DIMW => self.emit_dimw(m, i, jit_dim_set as *const () as usize, 0),
             C_DIMOP => self.emit_dimw(m, i, jit_dim_op as *const () as usize, u32::from(m.arith)),
+            C_MOVE => self.emit_move(m, &inst, Target::Side(i)),
+            // The tape's handler for the row, then the poll every row that
+            // may release or allocate ends with.
+            C_DIMSR => {
+                let row = self.tbase.wrapping_add(i * std::mem::size_of::<Inst>());
+                // The row's address as the 64 bits a `movabs` loads.
+                let row = i64::from_ne_bytes(row.to_ne_bytes());
+                self.emit_helper(
+                    jit_row_fetch_dims as *const () as usize,
+                    [HArg::Frame, HArg::Abs(row), HArg::Null],
+                    0,
+                    Target::Side(i),
+                );
+                self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
+                self.jcc(0x85, Target::Poll(i + 1, i)); // jne
+            }
+            C_JMPZ | C_JMPNZ => {
+                let end = self.synth_label();
+                let (on_true, on_false) = if self.plan.class[j] == C_JMPNZ {
+                    (self.jump_tgt(j), Target::Label(end))
+                } else {
+                    (Target::Label(end), self.jump_tgt(j))
+                };
+                self.emit_cv_truth(inst.a, on_true, on_false, Target::Side(i));
+                self.set_label(end);
+            }
+            // `$cv ?: ...`: a truthy value into the result temporary, then
+            // the jump.
+            C_JMPSET => {
+                let (copy, end) = (self.synth_label(), self.synth_label());
+                self.emit_cv_truth(
+                    inst.a,
+                    Target::Label(copy),
+                    Target::Label(end),
+                    Target::Side(i),
+                );
+                self.set_label(copy);
+                self.copy_slot(KC, inst.a, KT, inst.b);
+                self.jmp(self.jump_tgt(j));
+                self.set_label(end);
+            }
+            // `$cv ?? ...`: undefined or null falls through; a bool, an
+            // int or a float is copied and the jump taken; anything else
+            // is the interpreted row's.
+            C_COALESCE => {
+                let end = self.synth_label();
+                self.cmpb(KC, inst.a, TAG_NULL);
+                self.jcc(0x84, Target::Label(end)); // je
+                self.cmpb(KC, inst.a, TAG_NONE);
+                self.jcc(0x84, Target::Label(end)); // je
+                self.cmpb(KC, inst.a, TAG_FLOAT);
+                self.jcc(0x87, Target::Side(i)); // ja: not a scalar
+                self.copy_slot(KC, inst.a, KT, inst.b);
+                self.jmp(self.jump_tgt(j));
+                self.set_label(end);
+            }
             J_CMP => {
+                self.chk_int(m.ca, inst.a, Target::Side(i));
+                self.chk_int(m.cb, inst.b, Target::Side(i));
                 self.to_rax(m.ka, inst.a, m.lit_a);
                 self.to_r9(m.kb, inst.b, m.lit_b);
                 self.put(&[REX_W | REX_R, 0x39, 0xC8]); // cmp rax, r9
@@ -4087,6 +4453,7 @@ impl Emitter {
             J_INCCMP => {
                 // `b` is read *before* the increment (it may be the
                 // same slot as `a`).
+                self.chk_int(m.cb, inst.b, Target::Side(i));
                 self.to_r9(m.kb, inst.b, m.lit_b);
                 self.load_int(KC, inst.a);
                 self.put(&[REX_W, 0x83, if m.inc { 0xC0 } else { 0xE8 }, 0x01]);
@@ -4136,6 +4503,7 @@ impl Emitter {
             // negative value, leaving `PHP_INT_MIN` (the one `neg`
             // overflows on) to the interpreted row.
             C_ABS => {
+                self.chk_int(m.ca, inst.a, jo);
                 if inst.c != u32::MAX {
                     self.to_rax(m.ka, inst.a, m.lit_a);
                     self.test_rax();
@@ -4164,8 +4532,14 @@ impl Emitter {
                     // nothing: a zero payload and the tag.
                     self.store_imm_base(m.ka, inst.a, 0);
                     self.store_tag_base(m.ka, inst.a, TAG_NULL);
+                } else if m.mask == SCALAR_SRC {
+                    // A scalar of a kind the plan does not know (a
+                    // ternary's result): both words of the slot.
+                    self.copy_slot(m.kb, inst.b, m.ka, inst.a);
                 } else {
-                    // The int path the plan checked.
+                    // The int path: the plan knows the temporary holds
+                    // one, or the row checks it.
+                    self.chk_int(m.cb, inst.b, jo);
                     self.load_int(m.kb, inst.b);
                     self.store_int(m.ka, inst.a);
                     self.store_tag_base(m.ka, inst.a, TAG_INT);
@@ -4188,6 +4562,8 @@ impl Emitter {
                 } else {
                     inst.c
                 };
+                self.chk_int(m.ca, inst.a, jo);
+                self.chk_int(m.cb, inst.b, jo);
                 self.to_rax(m.ka, inst.a, m.lit_a);
                 self.to_r9(m.kb, inst.b, m.lit_b);
                 match m.arith {
@@ -4367,6 +4743,7 @@ impl Emitter {
                 continue;
             }
             let off = cp.base.wrapping_add((n as u32) << SLOT_SHIFT);
+            self.chk_int(arg.chk, arg.off, Target::Side(cp.callove));
             self.to_r9(arg.kind, arg.off, arg.lit);
             self.store_int_r9_base(KR, off);
             self.store_tag_base(KR, off, TAG_INT);
@@ -4418,6 +4795,109 @@ impl Emitter {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// The check of a temporary the plan knows nothing about (`flag`: the
+    /// meta's `ca`/`cb`), where a row reads it as an int: its tag, or the
+    /// row is the interpreter's.
+    fn chk_int(&mut self, flag: bool, off: u32, jo: Target) {
+        if flag {
+            self.cmpb(KT, off, TAG_INT);
+            self.jcc(0x85, jo); // jne: not an int
+        }
+    }
+
+    /// `cmp qword [base + off], imm8` (`REX.W 83 /7`, disp32): a slot
+    /// word against a small constant.
+    fn cmpq_slot(&mut self, base: u8, off: u32, imm: i8) {
+        self.put(&[REX_W, 0x83, Self::rm3(base, 7)]);
+        self.put(&off.to_le_bytes());
+        self.put(&[imm.to_le_bytes()[0]]);
+    }
+
+    /// Copies a whole slot (the tag word and the payload word) through
+    /// `rax` and `rcx`: a scalar, whatever its kind.
+    fn copy_slot(&mut self, from_base: u8, from: u32, to_base: u8, to: u32) {
+        // `mov rax, [from]`, `mov rcx, [from + 8]`.
+        self.put(&[REX_W, 0x8B, Self::rm3(from_base, 0)]);
+        self.put(&from.to_le_bytes());
+        self.movrcx_at(from_base, from.wrapping_add(PAYLOAD));
+        // `mov [to], rax`, `mov [to + 8], rcx`.
+        self.put(&[REX_W, 0x89, Self::rm3(to_base, 0)]);
+        self.put(&to.to_le_bytes());
+        self.store_rcx_base(to_base, to);
+    }
+
+    /// Branches on the truth of the compiled variable at `off`, decided
+    /// as `plain_truth` decides it for what the trace handles: a bool by
+    /// its value byte, an int by its payload, null false. Anything else
+    /// (a float, a string, an array, an object, an undefined variable)
+    /// leaves through `jo`. Every path ends in a jump.
+    fn emit_cv_truth(&mut self, off: u32, on_true: Target, on_false: Target, jo: Target) {
+        let not_bool = self.synth_label();
+        self.cmpb(KC, off, TAG_BOOL);
+        self.jcc(0x85, Target::Label(not_bool)); // jne
+        self.cmpb(KC, off.wrapping_add(BOOL_BYTE), 0);
+        self.jcc(0x85, on_true); // jne: true
+        self.jmp(on_false);
+        self.set_label(not_bool);
+        let not_int = self.synth_label();
+        self.cmpb(KC, off, TAG_INT);
+        self.jcc(0x85, Target::Label(not_int)); // jne
+        self.cmpq_slot(KC, off.wrapping_add(PAYLOAD), 0);
+        self.jcc(0x85, on_true); // jne: not 0
+        self.jmp(on_false);
+        self.set_label(not_int);
+        self.cmpb(KC, off, TAG_NULL);
+        self.jcc(0x85, jo); // jne: the interpreted row decides
+        self.jmp(on_false);
+    }
+
+    /// Emit one `C_MOVE` row (`Op::Move` into the temporary `inst.c`): a
+    /// folded literal stored as [`emit_consti`] stores one; a compiled
+    /// variable copied whole once its tag says it holds a scalar; a
+    /// temporary copied whole (checked first when the plan does not know
+    /// what it holds) and, when the op consumes it, left null as the
+    /// interpreted row leaves it.
+    fn emit_move(&mut self, m: JitMeta, inst: &Inst, jo: Target) {
+        match m.sc {
+            KC => {
+                self.cmpb(KC, inst.a, TAG_FLOAT);
+                self.jcc(0x87, jo); // ja: not a scalar (or undefined)
+                self.copy_slot(KC, inst.a, KT, inst.c);
+            }
+            KT => {
+                if m.ca {
+                    self.cmpb(KT, inst.a, TAG_FLOAT);
+                    self.jcc(0x87, jo); // ja: not a scalar
+                }
+                self.copy_slot(KT, inst.a, KT, inst.c);
+                if m.consume && inst.a != inst.c {
+                    self.store_imm_base(KT, inst.a, 0);
+                    self.store_tag_base(KT, inst.a, TAG_NULL);
+                }
+            }
+            _ => match m.arith {
+                CONST_NULL => {
+                    self.store_imm_base(KT, inst.c, 0);
+                    self.store_tag_base(KT, inst.c, TAG_NULL);
+                }
+                CONST_BOOL => {
+                    self.mov_ecx(u32::from(m.lit_c != 0));
+                    self.store_cl_base(KT, inst.c.wrapping_add(BOOL_BYTE));
+                    self.store_tag_base(KT, inst.c, TAG_BOOL);
+                }
+                _ => {
+                    if let Ok(v) = i32::try_from(m.lit_c) {
+                        self.store_imm_base(KT, inst.c, v);
+                    } else {
+                        self.movabs(true, m.lit_c);
+                        self.store_int_r9_base(KT, inst.c);
+                    }
+                    self.store_tag_base(KT, inst.c, TAG_INT);
+                }
+            },
         }
     }
 
@@ -5001,6 +5481,9 @@ impl Emitter {
             },
             // `xor e?x, e?x` (`31 /r`, the register in both fields).
             HArg::Null => self.put(&[0x31, 0xC0 | (reg << 3) | reg]),
+            // `mov r?x, r10` (`4C 89 /r`: `REX.R` names `r10` in the reg
+            // field, the destination is the rm field).
+            HArg::Frame => self.put(&[REX_W | REX_R, 0x89, 0xD0 | reg]),
         }
     }
 
@@ -5113,6 +5596,7 @@ impl Emitter {
             code: Vec::new(),
             plan,
             tape,
+            tbase: 0,
             scratch,
             labels: HashMap::new(),
             stubs: HashMap::new(),
@@ -5436,17 +5920,24 @@ fn native_int_class(c: u16) -> bool {
 fn native_arg(code: &crate::opcode::OpArray, cst: &St, o: Operand) -> Option<Arg> {
     let (kind, off) = src(code, o)?;
     Some(match kind {
-        KC | KT => Arg { kind, off, lit: 0 },
+        KC | KT => Arg {
+            kind,
+            off,
+            lit: 0,
+            chk: false,
+        },
         #[allow(clippy::cast_possible_wrap)]
         KI => Arg {
             kind: KL,
             off: 0,
             lit: i64::from(off as i32),
+            chk: false,
         },
         _ => Arg {
             kind: KL,
             off: 0,
             lit: resolved_lit(cst, off)?,
+            chk: false,
         },
     })
 }
@@ -6300,6 +6791,7 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
         }
     }
     let mut em = Emitter::new(p, tape.to_vec(), scratch);
+    em.tbase = ctx.tbase as usize;
     em.emit();
     em.resolve();
     if debug_on() {
@@ -6642,16 +7134,44 @@ mod layout_tests {
     /// list.
     #[test]
     fn tmp_kinds_replace_each_other() {
-        let (mut defs, mut bools, mut nulls) = (Vec::new(), Vec::new(), Vec::new());
-        set_tmp_kind(&mut defs, &mut bools, &mut nulls, 16, TmpKind::Bool);
-        assert_eq!((defs.len(), bools.len(), nulls.len()), (0, 1, 0));
-        set_tmp_kind(&mut defs, &mut bools, &mut nulls, 16, TmpKind::Int);
-        assert_eq!((defs.len(), bools.len(), nulls.len()), (1, 0, 0));
-        set_tmp_kind(&mut defs, &mut bools, &mut nulls, 16, TmpKind::Null);
-        assert_eq!((defs.len(), bools.len(), nulls.len()), (0, 0, 1));
-        set_tmp_kind(&mut defs, &mut bools, &mut nulls, 32, TmpKind::Int);
-        set_tmp_kind(&mut defs, &mut bools, &mut nulls, 16, TmpKind::Unknown);
-        assert_eq!((defs.clone(), bools.len(), nulls.len()), (vec![32], 0, 0));
+        let mut ts = TmpState::default();
+        assert_eq!(ts.kind(16), TmpKind::Unknown);
+        ts.set(16, TmpKind::Bool);
+        assert_eq!(ts.kind(16), TmpKind::Bool);
+        ts.set(16, TmpKind::Int);
+        assert_eq!(ts.kind(16), TmpKind::Int);
+        ts.set(16, TmpKind::Null);
+        ts.set(32, TmpKind::Int);
+        assert_eq!((ts.kind(16), ts.kind(32)), (TmpKind::Null, TmpKind::Int));
+        ts.set(16, TmpKind::Unknown);
+        assert_eq!(ts.known, vec![(32, TmpKind::Int)]);
+    }
+
+    /// Where two paths meet, a temporary is what both left in it: the
+    /// same kind stays, two different scalars are "a scalar", and one a
+    /// path did not store is unknown.
+    #[test]
+    fn tmp_kinds_merge_at_a_join() {
+        let mut then_path = TmpState::default();
+        then_path.set(0, TmpKind::Int);
+        then_path.set(16, TmpKind::Bool);
+        then_path.set(32, TmpKind::Int);
+        then_path.set(48, TmpKind::Scalar);
+        let mut else_path = TmpState::default();
+        else_path.set(0, TmpKind::Int);
+        else_path.set(16, TmpKind::Int);
+        else_path.set(48, TmpKind::Null);
+        else_path.set(64, TmpKind::Int);
+        for m in [then_path.merge(&else_path), else_path.merge(&then_path)] {
+            assert_eq!(m.kind(0), TmpKind::Int);
+            assert_eq!(m.kind(16), TmpKind::Scalar);
+            assert_eq!(m.kind(32), TmpKind::Unknown);
+            assert_eq!(m.kind(48), TmpKind::Scalar);
+            assert_eq!(m.kind(64), TmpKind::Unknown);
+        }
+        let mut cleared = then_path.clone();
+        cleared.clear();
+        assert_eq!(cleared.kind(0), TmpKind::Unknown);
     }
 
     /// The `Bool` value byte moves through `cl`: `mov byte [base + d32],
@@ -7389,6 +7909,118 @@ mod layout_tests {
         assert!(em.fixups.is_empty(), "no guard for a named constant");
     }
 
+    /// The scalar rows of a ternary: a whole-slot copy is two loads and
+    /// two stores through `rax`/`rcx` with the bases of both slots, the
+    /// word compare is `REX.W 83 /7`, and the truth of a variable is
+    /// decided on its tag (a bool by its value byte, an int by its
+    /// payload, null false; anything else leaves).
+    #[test]
+    fn scalar_move_encodings() {
+        let mut em = emitter();
+        em.copy_slot(KC, 0x10, KT, 0x20);
+        assert_eq!(
+            em.code,
+            [
+                0x48, 0x8B, 0x87, 0x10, 0, 0, 0, // mov rax, [rdi + 0x10]
+                0x48, 0x8B, 0x8F, 0x18, 0, 0, 0, // mov rcx, [rdi + 0x18]
+                0x48, 0x89, 0x86, 0x20, 0, 0, 0, // mov [rsi + 0x20], rax
+                0x48, 0x89, 0x8E, 0x28, 0, 0, 0, // mov [rsi + 0x28], rcx
+            ]
+        );
+        let mut em = emitter();
+        em.cmpq_slot(KC, 0x28, 0);
+        assert_eq!(em.code, [0x48, 0x83, 0xBF, 0x28, 0, 0, 0, 0]);
+        let mut em = emitter();
+        em.cmpq_slot(KT, 0x8, 0);
+        assert_eq!(em.code, [0x48, 0x83, 0xBE, 0x08, 0, 0, 0, 0]);
+
+        // The truth dispatch: three tag tests, each path ending in a jump.
+        let mut em = emitter();
+        em.emit_cv_truth(0x30, Target::Stub(1), Target::Stub(2), Target::Side(3));
+        let mut want = emitter();
+        let not_bool = want.synth_label();
+        want.cmpb(KC, 0x30, TAG_BOOL);
+        want.jcc(0x85, Target::Label(not_bool));
+        want.cmpb(KC, 0x30 + BOOL_BYTE, 0);
+        want.jcc(0x85, Target::Stub(1));
+        want.jmp(Target::Stub(2));
+        want.set_label(not_bool);
+        let not_int = want.synth_label();
+        want.cmpb(KC, 0x30, TAG_INT);
+        want.jcc(0x85, Target::Label(not_int));
+        want.cmpq_slot(KC, 0x30 + PAYLOAD, 0);
+        want.jcc(0x85, Target::Stub(1));
+        want.jmp(Target::Stub(2));
+        want.set_label(not_int);
+        want.cmpb(KC, 0x30, TAG_NULL);
+        want.jcc(0x85, Target::Side(3));
+        want.jmp(Target::Stub(2));
+        assert_eq!(em.code, want.code);
+
+        // A moved literal is stored as a folded constant is; a variable is
+        // copied whole after its tag says "scalar"; a consumed temporary
+        // of a known kind is copied without a check and left null.
+        let mut em = emitter();
+        let lit = JitMeta {
+            class: C_MOVE,
+            sc: KL,
+            arith: CONST_BOOL,
+            lit_c: 1,
+            ..JitMeta::default()
+        };
+        let inst = Inst {
+            c: 0x40,
+            ..Inst::plain(TOp::MoveT)
+        };
+        em.emit_move(lit, &inst, Target::Side(0));
+        let mut want = emitter();
+        want.mov_ecx(1);
+        want.store_cl_base(KT, 0x40 + BOOL_BYTE);
+        want.store_tag_base(KT, 0x40, TAG_BOOL);
+        assert_eq!(em.code, want.code);
+
+        let mut em = emitter();
+        let from_cv = JitMeta {
+            class: C_MOVE,
+            sc: KC,
+            ..JitMeta::default()
+        };
+        let inst = Inst {
+            a: 0x10,
+            c: 0x40,
+            ..Inst::plain(TOp::MoveT)
+        };
+        em.emit_move(from_cv, &inst, Target::Side(0));
+        let mut want = emitter();
+        want.cmpb(KC, 0x10, TAG_FLOAT);
+        want.jcc(0x87, Target::Side(0));
+        want.copy_slot(KC, 0x10, KT, 0x40);
+        assert_eq!(em.code, want.code);
+
+        let mut em = emitter();
+        let from_tmp = JitMeta {
+            class: C_MOVE,
+            sc: KT,
+            consume: true,
+            ..JitMeta::default()
+        };
+        em.emit_move(from_tmp, &inst, Target::Side(0));
+        let mut want = emitter();
+        want.copy_slot(KT, 0x10, KT, 0x40);
+        want.store_imm_base(KT, 0x10, 0);
+        want.store_tag_base(KT, 0x10, TAG_NULL);
+        assert_eq!(em.code, want.code);
+        assert!(em.fixups.is_empty(), "a known scalar is not checked");
+
+        // An operand the plan knows nothing about is checked before use.
+        let mut em = emitter();
+        em.chk_int(false, 0x20, Target::Side(0));
+        assert!(em.code.is_empty());
+        em.chk_int(true, 0x20, Target::Side(0));
+        assert_eq!(&em.code[..7], [0x80, 0xBE, 0x20, 0, 0, 0, TAG_INT]);
+        assert_eq!(em.fixups.len(), 1);
+    }
+
     #[test]
     fn exit_stub_encodings() {
         let mut em = emitter();
@@ -7434,6 +8066,7 @@ mod layout_tests {
             kind: KC,
             off: 0,
             lit: 0,
+            chk: false,
         });
         let plan = NPlan {
             rows: vec![Some(ret)],

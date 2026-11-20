@@ -1780,7 +1780,9 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 let at = unsafe { out.ip.offset_from(tbase) } as usize;
                 let next = match out.why {
                     WHY_CALL => {
-                        let next = run_call(vm, &mut prep, ops, lits, at);
+                        // SAFETY: `out.ip` points into the tape (the
+                        // instruction that stopped the core).
+                        let next = run_call(vm, &mut prep, ops, lits, at, unsafe { &*out.ip });
                         if next == ENTERED {
                             // The call was entered: the tape goes on in the
                             // callee's frame, as after an entered `DoCall`
@@ -2054,10 +2056,19 @@ fn run_call(
     ops: &[Op],
     lits: &[Value],
     at: usize,
+    inst: &Inst,
 ) -> usize {
     match ops.get(at) {
         Some(&Op::InitFCall { name, .. }) => {
             flush(vm, prep);
+            // `f(<expression>)` of a builtin that needs no handler: nothing
+            // to ready; its `Send` makes the call.
+            if inst.k == calls::CALL_QUICK {
+                if let Some(call) = calls::prepare_quick(vm, name, inst.e, inst.d, at) {
+                    *prep = Some(call);
+                    return at + 1;
+                }
+            }
             if let Some(call) = calls::prepare(vm, name) {
                 return send_and_enter(vm, prep, call, ops, at);
             }
@@ -2126,7 +2137,13 @@ fn run_call(
         }
         Some(Op::Send { src }) => {
             if let Some(call) = prep.as_mut() {
-                if calls::send(vm, call, src) {
+                if let Some(id) = call.quick_id() {
+                    // The argument and the call at once, past the `DoCall`.
+                    if let Some(next) = calls::quick_send(vm, id, src, ops, at) {
+                        *prep = None;
+                        return next;
+                    }
+                } else if calls::send(vm, call, src) {
                     return at + 1;
                 }
             }

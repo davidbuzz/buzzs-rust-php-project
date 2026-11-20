@@ -172,7 +172,7 @@ fn folded_assign(code: &OpArray, i: usize, to: Option<u32>) -> Option<(u32, u32)
 }
 
 /// `to` of a fetch without a folded `AssignCv`.
-const NO_TO: u32 = u32::MAX;
+pub(super) const NO_TO: u32 = u32::MAX;
 
 /// The instruction of an `Op::FetchDimCv`, chosen from what the offset
 /// operand can hold when the tape is built: [`TOp::FetchDimIC`] (an int

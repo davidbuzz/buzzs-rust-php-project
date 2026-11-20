@@ -170,15 +170,15 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
 
 /// The source of a [`TOp::MoveT`] instruction (its `k`): a compiled
 /// variable.
-const MOVE_CV: u8 = 0;
+pub(super) const MOVE_CV: u8 = 0;
 /// A temporary, consumed.
-const MOVE_TMP: u8 = 1;
+pub(super) const MOVE_TMP: u8 = 1;
 /// A temporary, kept.
-const MOVE_KEEP: u8 = 2;
+pub(super) const MOVE_KEEP: u8 = 2;
 /// A literal.
-const MOVE_LIT: u8 = 3;
+pub(super) const MOVE_LIT: u8 = 3;
 /// No operand: null.
-const MOVE_NULL: u8 = 4;
+pub(super) const MOVE_NULL: u8 = 4;
 
 /// A copy of `v` (`ZVAL_COPY`): a scalar's bits, any other value's
 /// reference count raised (out of line).

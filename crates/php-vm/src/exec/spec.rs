@@ -798,6 +798,14 @@ impl Vm {
     /// `Some(false)` into `dst`. `None`, nothing changed, on a miss and
     /// for an undefined variable read with a warning:
     /// [`Vm::fetch_global_fast`] or the generic op decides.
+    ///
+    /// Written out rather than built from [`Vm::fetch_global_cached`] and
+    /// [`store_fetched_in`]: the value goes from the global's slot into
+    /// the variable with one copy (a scalar's bits, a reference count),
+    /// and the variable may hold an array or an object, released as an
+    /// assignment releases it (the tape polls for a safe point after the
+    /// op). Only a variable bound by reference, which the `AssignCv`
+    /// writes through, sends the value to the temporary.
     #[inline]
     pub(in crate::exec) fn fetch_global_hit(
         &mut self,
@@ -806,8 +814,45 @@ impl Vm {
         dst: u32,
         to: Option<u32>,
     ) -> Option<bool> {
-        let v = self.fetch_global_cached(pid, mode)??;
-        Some(store_fetched_in(self.frames.last_mut()?, dst, to, v))
+        let live = self.frames.live;
+        let slot = *self
+            .frames
+            .vec
+            .get(live.checked_sub(1)?)?
+            .code
+            .rt_cache
+            .globals
+            .try_borrow()
+            .ok()?
+            .get(pid as usize)?;
+        let fetched = |v: Option<&Value>| match v {
+            Some(Value::Reference(r)) => Some(r.get()),
+            Some(v) => Some(copy_value(v)),
+            None if mode == FetchMode::Is => Some(Value::Null),
+            None => None,
+        };
+        let v = match slot {
+            GlobalSlot::GlobalCv(cv) => {
+                fetched(self.frames.vec.first()?.cvs.get(cv as usize)?.get())?
+            }
+            GlobalSlot::GlobalStore(idx) => {
+                let g = self.globals.try_borrow().ok()?;
+                fetched(g.slots.get(idx as usize).and_then(Option::as_ref))?
+            }
+            GlobalSlot::Empty => return None,
+        };
+        let f = self.frames.vec.get_mut(live - 1)?;
+        if let Some(to) = to {
+            if let Some(slot) = f.cvs.get(to as usize) {
+                if !matches!(slot.get(), Some(Value::Reference(_))) {
+                    f.sync_cv_to_symtab(to, &v);
+                    super::release_slot_value(slot.set(Some(v)));
+                    return Some(true);
+                }
+            }
+        }
+        put_tmp(f.tmps.get_mut(dst as usize)?, v);
+        Some(false)
     }
 
     /// [`crate::opcode::Op::FetchGlobal`]: global variable read

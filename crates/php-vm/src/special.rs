@@ -640,9 +640,28 @@ fn frameless_inline(name: &[u8], class: u32, arg: Option<&Value>) -> Option<Valu
         (fl::CHR, Value::Int(c)) => u8::try_from(*c)
             .ok()
             .map(|c| Value::Str(ZStr::from_byte(c))),
+        (fl::DECHEX, Value::Int(i)) => Some(Value::Str(dechex_str(*i))),
         (fl::FLOAT | fl::LOG | fl::ROUND, v) => crate::call::float_builtin_eval(name, v),
         _ => None,
     }
+}
+
+/// `dechex()` of `num` as its handler builds it
+/// (`_php_math_longtobase(num, 16)`: the number read as unsigned, in
+/// lower-case digits), without the handler's argument and result vectors.
+fn dechex_str(num: i64) -> ZStr {
+    let mut value = u64::from_ne_bytes(num.to_ne_bytes());
+    let mut buf = [0u8; 16];
+    let mut at = buf.len();
+    loop {
+        at -= 1;
+        buf[at] = b"0123456789abcdef"[usize::from((value & 15) as u8)];
+        value >>= 4;
+        if value == 0 {
+            break;
+        }
+    }
+    ZStr::from(&buf[at..])
 }
 
 /// [`quick_id`] of `abs()`: the ids of the math functions
@@ -652,6 +671,8 @@ pub(crate) const QUICK_ABS: u8 = 0x40;
 pub(crate) const QUICK_ORD: u8 = 0x41;
 /// [`quick_id`] of `chr()`.
 pub(crate) const QUICK_CHR: u8 = 0x42;
+/// [`quick_id`] of `dechex()`.
+pub(crate) const QUICK_DECHEX: u8 = 0x43;
 const _: () = assert!(crate::call::ff::COUNT <= QUICK_ABS);
 
 /// The id of the builtin named `lc` (lower case) when its one-argument
@@ -664,6 +685,7 @@ pub(crate) fn quick_id(lc: &[u8]) -> Option<(u8, u32)> {
         fl::ABS => QUICK_ABS,
         fl::ORD => QUICK_ORD,
         fl::CHR => QUICK_CHR,
+        fl::DECHEX => QUICK_DECHEX,
         fl::FLOAT | fl::LOG | fl::ROUND => crate::call::float_fn_id(lc)?,
         _ => return None,
     };
@@ -695,7 +717,8 @@ pub(crate) fn quick_eval(id: u8, v: &Value) -> Option<Value> {
         (QUICK_CHR, Value::Int(c)) => u8::try_from(*c)
             .ok()
             .map(|c| Value::Str(ZStr::from_byte(c))),
-        (QUICK_ABS | QUICK_ORD | QUICK_CHR, _) => None,
+        (QUICK_DECHEX, Value::Int(i)) => Some(Value::Str(dechex_str(*i))),
+        (QUICK_ABS | QUICK_ORD | QUICK_CHR | QUICK_DECHEX, _) => None,
         (id, v) => crate::call::float_fn_eval(id, v),
     }
 }
@@ -1308,6 +1331,7 @@ mod tests {
             "abs",
             "ord",
             "chr",
+            "dechex",
             "sqrt",
             "sin",
             "cos",
@@ -1381,6 +1405,15 @@ mod tests {
         // Functions whose call needs its handler have no id.
         for name in ["strpos", "substr", "max", "trim", "pi", "intdiv", "strlen"] {
             assert!(quick_id(name.as_bytes()).is_none(), "{name}");
+        }
+        // `dechex()` is the handler's string.
+        for n in [0, 1, 15, 16, 255, 4096, -1, i64::MIN, i64::MAX] {
+            let ours = super::dechex_str(n);
+            assert_eq!(
+                ours.as_bytes(),
+                php_stdstr::math::long_to_base(n, 16).as_slice(),
+                "{n}"
+            );
         }
         assert!(quick_eval(0x7f, &Value::Int(1)).is_none());
         // The class test of the call site's cached function.
