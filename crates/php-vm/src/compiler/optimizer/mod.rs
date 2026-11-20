@@ -1176,9 +1176,13 @@ mod tests {
             "{:?}",
             f.ops
         );
+        // (The call that stays is one frameless op at its `DoCall`: its
+        // third argument is computed first.)
         let g = find_code(&unit, named(b"g"));
         assert!(
-            g.ops.iter().any(|op| matches!(op, Op::DoCall { .. })),
+            g.ops
+                .iter()
+                .any(|op| matches!(op, Op::DoCall { .. } | Op::FramelessICall(_))),
             "{:?}",
             g.ops
         );

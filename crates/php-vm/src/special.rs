@@ -723,6 +723,153 @@ pub(crate) fn quick_eval(id: u8, v: &Value) -> Option<Value> {
     }
 }
 
+/// [`quick_id_n`] of `strpos()` with two or three arguments.
+pub(crate) const QUICK_STRPOS: u8 = 0x50;
+/// [`quick_id_n`] of `substr()` with two or three arguments.
+pub(crate) const QUICK_SUBSTR: u8 = 0x51;
+/// [`quick_id_n`] of `max()` with two arguments.
+pub(crate) const QUICK_MAX: u8 = 0x52;
+/// [`quick_id_n`] of `min()` with two arguments.
+pub(crate) const QUICK_MIN: u8 = 0x53;
+/// [`quick_id_n`] of `in_array()` with three arguments.
+pub(crate) const QUICK_IN_ARRAY: u8 = 0x54;
+/// [`quick_id_n`] of `str_contains()`.
+pub(crate) const QUICK_STR_CONTAINS: u8 = 0x55;
+/// [`quick_id_n`] of `str_starts_with()`.
+pub(crate) const QUICK_STR_STARTS: u8 = 0x56;
+/// [`quick_id_n`] of `str_ends_with()`.
+pub(crate) const QUICK_STR_ENDS: u8 = 0x57;
+
+/// The id of the builtin named `lc` (lower case) when its call with `argc`
+/// arguments can be answered without its handler ([`quick_eval_n`]), with
+/// its frameless class: what a tape instruction carries in place of the
+/// name (`exec/tape/strs.rs`). `None` for every other call.
+pub(crate) fn quick_id_n(lc: &[u8], argc: usize) -> Option<(u8, u32)> {
+    if argc == 1 {
+        return quick_id(lc);
+    }
+    let id = match (lc, argc) {
+        (b"strpos", 2 | 3) => QUICK_STRPOS,
+        (b"substr", 2 | 3) => QUICK_SUBSTR,
+        (b"max", 2) => QUICK_MAX,
+        (b"min", 2) => QUICK_MIN,
+        (b"in_array", 3) => QUICK_IN_ARRAY,
+        (b"str_contains", 2) => QUICK_STR_CONTAINS,
+        (b"str_starts_with", 2) => QUICK_STR_STARTS,
+        (b"str_ends_with", 2) => QUICK_STR_ENDS,
+        _ => return None,
+    };
+    Some((id, frameless_flags(lc) >> flags::FRAMELESS_SHIFT))
+}
+
+/// Whether php-src itself compiles the call of the builtin named `lc` with
+/// `argc` arguments to a `ZEND_FRAMELESS_ICALL_n` (its
+/// `ZEND_FRAMELESS_FUNCTION`s of that arity): the arguments are then
+/// compiled as expressions before the one op, which reads a variable among
+/// them when it runs. The other functions with a frameless class here are
+/// regular calls in php-src, whose `SEND`s copy each argument where it
+/// stands (`compiler::specialise::spread_frameless_call_at`).
+pub(crate) fn defers_like_php_src(lc: &[u8], argc: usize) -> bool {
+    match frameless_flags(lc) >> flags::FRAMELESS_SHIFT {
+        fl::DECHEX | fl::CASE | fl::IS_NUMERIC => argc == 1,
+        fl::TRIM | fl::DIRNAME => argc == 1 || argc == 2,
+        fl::STR_TEST | fl::MIN_MAX => argc == 2,
+        fl::STRPOS | fl::SUBSTR | fl::STRSTR | fl::IN_ARRAY | fl::STRTR => argc == 2 || argc == 3,
+        fl::STR_REPLACE => argc == 3,
+        _ => false,
+    }
+}
+
+/// The result of the call of the function with id `id` ([`quick_id_n`])
+/// with the two or three arguments `args` (one argument: [`quick_eval`]),
+/// as its handler computes it for arguments of
+/// the types it is declared with, shape test included ([`frameless_args`]
+/// for the id's class, of which this takes the common part): `None` when
+/// the call needs its handler (another type, an offset outside the
+/// haystack, a loose `in_array()`, numbers of mixed types for `max()` and
+/// `min()`).
+pub(crate) fn quick_eval_n(id: u8, args: &[&Value]) -> Option<Value> {
+    use php_stdstr::search;
+    use Value::{Array, Bool, Float, Int, Null, Str};
+    let found = |r: Option<i64>| r.map_or(Bool(false), Int);
+    let part = |s: &ZStr, offset: i64, length: Option<i64>| {
+        // `RETURN_STR_COPY(str)` for the whole string, else
+        // `RETURN_STRINGL_FAST` (the shared empty and one-byte strings).
+        let r = search::substr(s.as_bytes(), offset, length);
+        Str(if r.len() == s.len() {
+            s.clone()
+        } else {
+            ZStr::init_fast(r)
+        })
+    };
+    Some(match (id, args) {
+        (QUICK_STRPOS, [Str(h), Str(n)]) => {
+            found(search::strpos(h.as_bytes(), n.as_bytes(), 0).ok()?)
+        }
+        // An offset outside the haystack is the handler's `ValueError`.
+        (QUICK_STRPOS, [Str(h), Str(n), Int(offset)]) => {
+            found(search::strpos(h.as_bytes(), n.as_bytes(), *offset).ok()?)
+        }
+        (QUICK_SUBSTR, [Str(s), Int(offset)] | [Str(s), Int(offset), Null]) => {
+            part(s, *offset, None)
+        }
+        (QUICK_SUBSTR, [Str(s), Int(offset), Int(length)]) => part(s, *offset, Some(*length)),
+        // `ZEND_FRAMELESS_FUNCTION(max, 2)` / `(min, 2)` of two ints or two
+        // floats: `max` keeps the first of two equal values, `min` the
+        // second, and a NaN on either side gives the second.
+        (QUICK_MAX, [Int(l), Int(r)]) => Int(if l >= r { *l } else { *r }),
+        (QUICK_MIN, [Int(l), Int(r)]) => Int(if l < r { *l } else { *r }),
+        (QUICK_MAX, [Float(l), Float(r)]) => Float(if l >= r { *l } else { *r }),
+        (QUICK_MIN, [Float(l), Float(r)]) => Float(if l < r { *l } else { *r }),
+        (QUICK_IN_ARRAY, [needle, Array(haystack), Bool(true)]) => {
+            Bool(in_array_identical(needle, haystack)?)
+        }
+        (QUICK_STR_CONTAINS, [Str(h), Str(n)]) => {
+            Bool(search::str_contains(h.as_bytes(), n.as_bytes()))
+        }
+        (QUICK_STR_STARTS, [Str(h), Str(n)]) => {
+            Bool(search::str_starts_with(h.as_bytes(), n.as_bytes()))
+        }
+        (QUICK_STR_ENDS, [Str(h), Str(n)]) => {
+            Bool(search::str_ends_with(h.as_bytes(), n.as_bytes()))
+        }
+        _ => return None,
+    })
+}
+
+/// A strict `in_array()` of a null, bool, int, float or string needle: the
+/// identity test of each element (behind a reference: the referenced
+/// value), which for these types is a comparison of the same type's values
+/// (`fast_is_identical_function`). `None` for any other needle and for a
+/// reference being written.
+fn in_array_identical(needle: &Value, haystack: &ZArray) -> Option<bool> {
+    let same = |v: &Value| match (needle, v) {
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Int(a), Value::Int(b)) => a == b,
+        #[allow(clippy::float_cmp)] // `Z_DVAL_P(op1) == Z_DVAL_P(op2)`
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::Str(a), Value::Str(b)) => a.as_bytes() == b.as_bytes(),
+        _ => false,
+    };
+    if !matches!(
+        needle,
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+    ) {
+        return None;
+    }
+    for v in haystack.values() {
+        let hit = match v {
+            Value::Reference(r) => same(&*r.try_borrow()?),
+            v => same(v),
+        };
+        if hit {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
 impl Vm {
     /// `ZEND_FRAMELESS_ICALL_n` / `ZEND_DO_ICALL` of the pending call when it
     /// is a [`frameless_call`] whose arguments are all in the call's inline
@@ -1040,8 +1187,9 @@ impl Vm {
     /// [`Op::FramelessICall`](crate::opcode::Op::FramelessICall) in
     /// place (`ZEND_FRAMELESS_ICALL_n`): when the call site resolved to a
     /// builtin with a frameless class (its run-time cache entry, filled by
-    /// the first, generic run of the op) and the arguments (literals, and
-    /// defined variables of a frame without an attached symbol table) have
+    /// the first, generic run of the op) and the arguments (literals,
+    /// defined variables of a frame without an attached symbol table, and
+    /// the temporaries of arguments computed before the op) have
     /// shapes [`frameless_args`] accepts, the handler runs on the caller's
     /// frame with the arguments read straight from their operands: no
     /// pending call, no `SEND`s, no `DO_ICALL`. Each step is the one
@@ -1095,11 +1243,25 @@ impl Vm {
                     Value::Reference(r) => r.get(),
                     v => crate::call::clone_value(v),
                 },
+                // An argument computed before the op: a copy for now; the
+                // temporary is released below, once the call is known to
+                // run here (its `Send` would have moved it).
+                Operand::Tmp(t) => match frame.tmps.get(t as usize)? {
+                    Value::Reference(r) => r.get(),
+                    v => crate::call::clone_value(v),
+                },
                 _ => return None,
             });
         }
         if !frameless_args(class, &sent[..n]) {
             return None;
+        }
+        for operand in &fc.vals[..n] {
+            if let Operand::Tmp(t) = *operand {
+                if let Some(slot) = frame.tmps.get_mut(t as usize) {
+                    drop(std::mem::take(slot));
+                }
+            }
         }
         frame.ip = ip;
         let quick = if n == 1 {
@@ -1402,7 +1564,7 @@ mod tests {
                 );
             }
         }
-        // Functions whose call needs its handler have no id.
+        // Functions whose one-argument call needs its handler have no id.
         for name in ["strpos", "substr", "max", "trim", "pi", "intdiv", "strlen"] {
             assert!(quick_id(name.as_bytes()).is_none(), "{name}");
         }
@@ -1425,6 +1587,182 @@ mod tests {
             fl::ABS
         ));
         assert!(!frameless_class_is(0, fl::ABS));
+    }
+
+    /// `quick_eval_n` of several arguments gives what the function's
+    /// handler gives, for every argument list it answers, and answers none
+    /// the handler reports about or converts.
+    #[test]
+    #[allow(clippy::too_many_lines)] // a table of calls
+    fn quick_results_of_several_arguments_are_the_handlers() {
+        use super::{defers_like_php_src, quick_eval_n, quick_id_n};
+        use crate::func::Args;
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        let s = |v: &str| Value::Str(ZStr::from(v));
+        let ints = || {
+            Value::Array(php_runtime::ZArray::from_values([
+                Value::Int(3),
+                Value::Int(1),
+                Value::Int(2),
+            ]))
+        };
+        let mixed = || {
+            Value::Array(php_runtime::ZArray::from_values([
+                Value::Null,
+                Value::Bool(false),
+                Value::Int(1),
+                Value::Float(1.5),
+                Value::Str(ZStr::from("2")),
+            ]))
+        };
+        let t = Value::Bool(true);
+        // A string by its bytes (two handles of one content may differ in
+        // what else they record).
+        let show = |v: &Value| match v {
+            Value::Str(s) => format!("string {:?}", s.as_bytes()),
+            v => format!("{v:?}"),
+        };
+        let cases: Vec<(&str, Vec<Value>)> = vec![
+            ("strpos", vec![s("hello world"), s("o")]),
+            ("strpos", vec![s("hello world"), s("o"), Value::Int(5)]),
+            ("strpos", vec![s("hello world"), s("o"), Value::Int(-3)]),
+            ("strpos", vec![s("hello world"), s("wor"), Value::Int(0)]),
+            ("strpos", vec![s("hello"), s("")]),
+            ("strpos", vec![s("hello"), s(""), Value::Int(5)]),
+            ("strpos", vec![s("hello"), s("z")]),
+            ("strpos", vec![s(""), s("")]),
+            ("substr", vec![s("hello"), Value::Int(1)]),
+            ("substr", vec![s("hello"), Value::Int(-2)]),
+            ("substr", vec![s("hello"), Value::Int(9)]),
+            ("substr", vec![s("hello"), Value::Int(-9)]),
+            ("substr", vec![s("hello"), Value::Int(4)]),
+            ("substr", vec![s("hello"), Value::Int(5)]),
+            ("substr", vec![s("hello"), Value::Int(1), Value::Int(1)]),
+            ("substr", vec![s("hello"), Value::Int(0), Value::Int(5)]),
+            ("substr", vec![s("hello"), Value::Int(0), Value::Int(50)]),
+            ("substr", vec![s("hello"), Value::Int(1), Value::Int(-1)]),
+            ("substr", vec![s("hello"), Value::Int(1), Value::Int(-9)]),
+            ("substr", vec![s("hello"), Value::Int(-9), Value::Int(-9)]),
+            ("substr", vec![s("hello"), Value::Int(2), Value::Int(0)]),
+            ("substr", vec![s("hello"), Value::Int(2), Value::Null]),
+            ("substr", vec![s(""), Value::Int(0), Value::Int(1)]),
+            ("max", vec![Value::Int(1), Value::Int(2)]),
+            ("max", vec![Value::Int(2), Value::Int(2)]),
+            ("max", vec![Value::Int(-3), Value::Int(-7)]),
+            ("min", vec![Value::Int(1), Value::Int(2)]),
+            ("min", vec![Value::Int(2), Value::Int(2)]),
+            ("min", vec![Value::Int(i64::MAX), Value::Int(i64::MIN)]),
+            ("max", vec![Value::Float(1.5), Value::Float(-1.5)]),
+            ("max", vec![Value::Float(0.0), Value::Float(-0.0)]),
+            ("max", vec![Value::Float(-0.0), Value::Float(0.0)]),
+            ("max", vec![Value::Float(f64::NAN), Value::Float(1.0)]),
+            ("max", vec![Value::Float(1.0), Value::Float(f64::NAN)]),
+            ("min", vec![Value::Float(1.5), Value::Float(-1.5)]),
+            ("min", vec![Value::Float(0.0), Value::Float(-0.0)]),
+            ("min", vec![Value::Float(-0.0), Value::Float(0.0)]),
+            ("min", vec![Value::Float(f64::NAN), Value::Float(1.0)]),
+            ("min", vec![Value::Float(1.0), Value::Float(f64::NAN)]),
+            ("in_array", vec![Value::Int(2), ints(), t.clone()]),
+            ("in_array", vec![Value::Int(7), ints(), t.clone()]),
+            ("in_array", vec![s("2"), ints(), t.clone()]),
+            ("in_array", vec![s("2"), mixed(), t.clone()]),
+            ("in_array", vec![Value::Null, mixed(), t.clone()]),
+            ("in_array", vec![Value::Null, ints(), t.clone()]),
+            ("in_array", vec![Value::Bool(false), mixed(), t.clone()]),
+            ("in_array", vec![Value::Bool(true), mixed(), t.clone()]),
+            ("in_array", vec![Value::Float(1.5), mixed(), t.clone()]),
+            ("in_array", vec![Value::Float(1.0), mixed(), t.clone()]),
+            ("in_array", vec![Value::Int(1), mixed(), t.clone()]),
+            ("str_contains", vec![s("hello"), s("ell")]),
+            ("str_contains", vec![s("hello"), s("")]),
+            ("str_contains", vec![s("hello"), s("elx")]),
+            ("str_starts_with", vec![s("hello"), s("he")]),
+            ("str_starts_with", vec![s("hello"), s("lo")]),
+            ("str_starts_with", vec![s("hello"), s("")]),
+            ("str_ends_with", vec![s("hello"), s("lo")]),
+            ("str_ends_with", vec![s("hello"), s("he")]),
+            ("str_ends_with", vec![s(""), s("")]),
+        ];
+        for (name, args) in cases {
+            let (id, class) =
+                quick_id_n(name.as_bytes(), args.len()).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(
+                class,
+                frameless_flags(name.as_bytes()) >> crate::func::flags::FRAMELESS_SHIFT,
+                "{name}"
+            );
+            let refs: Vec<&Value> = args.iter().collect();
+            let quick = quick_eval_n(id, &refs).unwrap_or_else(|| panic!("{name} {args:?}"));
+            // The handler's arguments, as a call passes them: the declared
+            // defaults of the omitted ones behind the sent ones.
+            let Some(Func::Builtin(b)) = vm.functions.get(&ZStr::from(name)).cloned() else {
+                panic!("{name} is a core builtin");
+            };
+            let mut values = args.clone();
+            let mut passed = vec![true; values.len()];
+            while let Some(d) = vm.builtin_default(&b, values.len()) {
+                values.push(d);
+                passed.push(false);
+            }
+            let mut a = Args {
+                values,
+                passed,
+                named: Vec::new(),
+                this: None,
+                called: None,
+                func: Some(b.clone()),
+            };
+            let Ok(theirs) = (b.handler)(&mut vm, &mut a) else {
+                panic!("{name} {args:?} threw");
+            };
+            assert_eq!(show(&quick), show(&theirs), "{name} {args:?}");
+        }
+        // What the handler reports about, converts or compares loosely.
+        let declined: Vec<(&str, Vec<Value>)> = vec![
+            ("strpos", vec![s("abc"), s("b"), Value::Int(4)]),
+            ("strpos", vec![s("abc"), s("b"), Value::Int(-4)]),
+            ("strpos", vec![s("abc"), Value::Int(1)]),
+            ("substr", vec![s("abc"), s("1")]),
+            ("substr", vec![Value::Int(123), Value::Int(1)]),
+            ("max", vec![Value::Int(1), Value::Float(2.0)]),
+            ("max", vec![s("a"), s("b")]),
+            ("min", vec![Value::Float(1.0), Value::Int(2)]),
+            ("in_array", vec![Value::Int(1), ints(), Value::Bool(false)]),
+            ("in_array", vec![ints(), ints(), t.clone()]),
+            ("str_contains", vec![s("abc"), Value::Int(1)]),
+        ];
+        for (name, args) in declined {
+            let (id, _) =
+                quick_id_n(name.as_bytes(), args.len()).unwrap_or_else(|| panic!("{name}"));
+            let refs: Vec<&Value> = args.iter().collect();
+            assert!(quick_eval_n(id, &refs).is_none(), "{name} {args:?}");
+        }
+        // Other arities and functions have no id.
+        for (name, argc) in [("max", 3), ("in_array", 2), ("strpos", 4), ("trim", 2)] {
+            assert!(quick_id_n(name.as_bytes(), argc).is_none(), "{name}/{argc}");
+        }
+        assert_eq!(quick_id_n(b"ord", 1), super::quick_id(b"ord"));
+        // php-src's own frameless functions, by arity.
+        for (name, argc, yes) in [
+            ("substr", 2, true),
+            ("substr", 3, true),
+            ("max", 2, true),
+            ("max", 3, false),
+            ("in_array", 3, true),
+            ("str_replace", 3, true),
+            ("trim", 1, true),
+            ("abs", 1, false),
+            ("ord", 1, false),
+            ("sqrt", 1, false),
+            ("intdiv", 2, false),
+            ("strlen", 1, false),
+        ] {
+            assert_eq!(
+                defers_like_php_src(name.as_bytes(), argc),
+                yes,
+                "{name}/{argc}"
+            );
+        }
     }
 
     #[test]

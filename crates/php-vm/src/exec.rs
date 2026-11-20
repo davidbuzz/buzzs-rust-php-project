@@ -1444,12 +1444,13 @@ impl Vm {
                         },
                         // `ZEND_FRAMELESS_ICALL_n` in place
                         // (`Vm::frameless_icall_op`), past the `Nop`s of the
-                        // call ops it replaced. Declined, the generic arm
-                        // below runs those ops.
+                        // call ops it replaced (those after it: none when it
+                        // stands at the call's `DoCall`). Declined, the
+                        // generic arm below runs those ops.
                         Op::FramelessICall(fc) => match self.frameless_icall_op(fc, ip) {
                             Some(r) => {
                                 r?;
-                                ip = at + usize::from(fc.argc) + 2;
+                                ip = at + 1 + fc.tail();
                             }
                             None => break 'slow,
                         },

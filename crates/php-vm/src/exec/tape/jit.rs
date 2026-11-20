@@ -111,6 +111,7 @@ const TAG_INT: u8 = 2;
 /// above it is a reference-counted value, or nothing (`TAG_NONE`).
 const TAG_FLOAT: u8 = 3;
 const TAG_STR: u8 = 4;
+const TAG_ARRAY: u8 = 5;
 const TAG_OBJECT: u8 = 6;
 /// Byte offset of an `Obj` handle's payload (`ObjectData`) in its
 /// allocation, from the handle pointer (the `ObjCell<T>` header):
@@ -123,6 +124,12 @@ const CLASS_FIELD: u32 = std::mem::offset_of!(crate::object::ObjectData, class) 
 /// `NonNull` handle) to `Rc::as_ptr`, the value: the inner box's two
 /// reference-count words. Pinned by `rc_inner_prefix_size` below.
 const RC_VALUE_OFFSET: u32 = 2 * std::mem::size_of::<usize>() as u32;
+/// Byte offset of an array's element count (a `u32`) from the handle word
+/// of a `Value::Array` (the `Rc` allocation: its two count words, then the
+/// table). The strong count is the word at the handle itself. Pinned by
+/// the layout tests' `array_handle_layout`.
+#[allow(clippy::cast_possible_truncation)] // an offset inside a table
+const ARRAY_COUNT: u32 = RC_VALUE_OFFSET + php_runtime::HashTable::NUM_ELEMENTS_OFFSET as u32;
 /// Byte offset of `Frame::this`, the `Option<Obj>`: `None` is a null
 /// pointer (`Option<NonNull>`'s niche, pinned by the layout tests'
 /// `option_pointers_are_null`).
@@ -187,6 +194,20 @@ pub(crate) struct JitCtx {
     /// The row a compiled loop's poll exit belongs to (null when its
     /// last exit was no poll): `take_jump!` reports the safe point there.
     poll_row: Cell<*const Inst>,
+    /// [`hot_limit`], read once per context: the count at which a back
+    /// edge leaves [`back_edge`]'s counting path.
+    hot: i32,
+    /// The VM the frame belongs to ([`JitCtx::set_vm`]), handed to the
+    /// rows of a trace that read through its global scope.
+    vm: Cell<*mut crate::vm::Vm>,
+}
+
+thread_local! {
+    /// The VM whose frame the running trace belongs to, for
+    /// [`jit_row_vm_read`]: set by [`back_edge_slow`] right before it
+    /// enters a trace (a trace has no register to spare for it, and the
+    /// rows that want it are few).
+    static TRACE_VM: Cell<*mut crate::vm::Vm> = const { Cell::new(std::ptr::null_mut()) };
 }
 
 impl JitCtx {
@@ -219,12 +240,25 @@ impl JitCtx {
             tlen: tape_slice.len(),
             tape: std::ptr::from_ref(tape),
             poll_row: Cell::new(std::ptr::null()),
+            hot: hot_limit(),
+            vm: Cell::new(std::ptr::null_mut()),
         })
     }
 
     #[inline(always)]
     pub(crate) fn alive(&self) -> bool {
         !self.jcnt.get().is_null()
+    }
+
+    /// Names the VM the frame about to run belongs to: `run_tape` calls
+    /// this before each entry of its core loop, with the pointer it holds
+    /// the VM by. A trace entered from that run may call back into it
+    /// ([`jit_row_vm_read`]) while `run_tape` itself is suspended in the
+    /// core loop, which reads nothing of the VM but the frame's slots.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // one store on the way into the core loop
+    pub(crate) fn set_vm(&self, vm: *mut crate::vm::Vm) {
+        self.vm.set(vm);
     }
 
     /// The instruction a safe point that came due inside the compiled
@@ -474,6 +508,12 @@ const C_COALESCE: u16 = 39;
 /// the handler checks every operand on every iteration, and the result is
 /// of no known kind (a row that reads it as an int checks its tag).
 const C_DIMSR: u16 = 40;
+/// A read through the VM's global scope (`$GLOBALS['name']`, a superglobal
+/// as a whole: the tape's `VmOp` rows of `Op::FetchGlobal` and `Op::Fetch`)
+/// on its fast path, called from the trace ([`jit_row_vm_read`]). The value
+/// goes into the row's temporary, or straight into the variable of the
+/// assignment folded behind a `FetchGlobal` (the row then covers both ops).
+const C_VMREAD: u16 = 41;
 
 /// Whether rows of class `c` may jump (their target is the row's `c`
 /// field, as for every tape instruction that jumps).
@@ -579,6 +619,11 @@ pub(crate) struct JitMeta {
     pub(crate) ca: bool,
     /// The same for operand `b`.
     pub(crate) cb: bool,
+    /// The compiled variable the row reads (`C_MOVE` from a variable, the
+    /// truth jumps, `?:`, `??`) held an array when the plan was made: the
+    /// row takes an array as well as a scalar (its truth is its element
+    /// count; a copy of it is one more handle on it).
+    pub(crate) arr: bool,
 }
 
 /// The arithmetic ids `C_PROPOPA` accepts in `arith`: `jit_arith_id!`
@@ -598,6 +643,12 @@ const NULL_SRC: u8 = 0x40;
 /// ternary, `?:` or `??`: one kind on one path, another on the other):
 /// both words of the slot are copied.
 const SCALAR_SRC: u8 = 0x20;
+/// `JitMeta.mask` flag for a `J_ASSIGN_T` row whose source temporary owns
+/// a value of any type ([`TmpKind::Val`]): both words of the slot move
+/// into the variable (a move needs no count), whose old value is released
+/// first when it is an array (the row checks what the variable holds; it
+/// has no entry guard).
+const VAL_SRC: u8 = 0x10;
 
 const OPA_BITAND: u8 = 6;
 const OPA_BITOR: u8 = 7;
@@ -639,6 +690,7 @@ impl Default for JitMeta {
             bare: false,
             ca: false,
             cb: false,
+            arr: false,
         }
     }
 }
@@ -794,6 +846,13 @@ enum TmpKind {
     /// result of a ternary, `?:` or `??`, or what two paths that left
     /// different scalars agree on. Fresh to copy whole.
     Scalar,
+    /// A value the temporary owns, of a type the plan does not know: a
+    /// copy of a variable that held an array when the plan was made (a
+    /// scalar or an array, the temporary holding a handle on it), what a
+    /// read through the global scope stored (anything), or what a path
+    /// that left such a value and one that left a scalar agree on. Moved
+    /// whole, never stored over in place.
+    Val,
     /// Consumed (nulled by the row that read it), never written by the
     /// region before this point, or written on one path only: a row that
     /// reads it checks its tag in the trace.
@@ -836,18 +895,25 @@ impl TmpState {
 
     /// The state where two paths meet: a temporary keeps a kind both
     /// agree on, is a scalar of unknown kind when they left different
-    /// scalars, and is unknown when one of them did not store it.
+    /// scalars (a scalar or an array when either may have left an array),
+    /// and is unknown when one of them did not store it.
     fn merge(&self, other: &TmpState) -> TmpState {
         let mut out = TmpState::default();
         for &(off, kind) in &self.known {
             let merged = match other.kind(off) {
                 TmpKind::Unknown => TmpKind::Unknown,
                 k if k == kind => kind,
+                k if k == TmpKind::Val || kind == TmpKind::Val => TmpKind::Val,
                 _ => TmpKind::Scalar,
             };
             out.set(off, merged);
         }
         out
+    }
+
+    /// Whether some temporary may hold an array here.
+    fn has_val(&self) -> bool {
+        self.known.iter().any(|(_, k)| *k == TmpKind::Val)
     }
 }
 
@@ -961,24 +1027,28 @@ fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {
             class: C_JMPZ,
             ka: KI,
             kb: KI,
+            arr: cv_holds_array(st, inst.a),
             ..JitMeta::default()
         },
         TOp::JmpNzC => JitMeta {
             class: C_JMPNZ,
             ka: KI,
             kb: KI,
+            arr: cv_holds_array(st, inst.a),
             ..JitMeta::default()
         },
         TOp::JmpSetC => JitMeta {
             class: C_JMPSET,
             ka: KI,
             kb: KI,
+            arr: cv_holds_array(st, inst.a),
             ..JitMeta::default()
         },
         TOp::CoalesceC => JitMeta {
             class: C_COALESCE,
             ka: KI,
             kb: KI,
+            arr: cv_holds_array(st, inst.a),
             ..JitMeta::default()
         },
         TOp::MoveT => plan_move(st, inst)?,
@@ -1062,8 +1132,22 @@ fn plan_move(st: &St, inst: &Inst) -> Option<JitMeta> {
         arith,
         lit_c,
         consume: inst.k == MOVE_TMP,
+        arr: inst.k == MOVE_CV && cv_holds_array(st, inst.a),
         ..JitMeta::default()
     })
+}
+
+/// Whether the compiled variable at byte offset `off` of the frame a plan
+/// is made in holds an array right now: the rows that read it then take an
+/// array too (a loop's variables keep their types from one iteration to
+/// the next far more often than not; a row meeting anything else leaves the
+/// trace). `false` where there is no frame (a callee's body is planned
+/// before it runs).
+fn cv_holds_array(st: &St, off: u32) -> bool {
+    // SAFETY: `off` is a variable offset the tape validated for the frame
+    // `st` describes, whose slots are alive while the plan is made; the
+    // first byte of a slot is its tag.
+    !st.cvs.is_null() && unsafe { *st.cvs.add(off as usize) } == TAG_ARRAY
 }
 
 /// The int a `KL` operand names, read from the frame's literal table
@@ -1178,7 +1262,7 @@ fn add_class_guards(
                 // A `Bool` or a `Null` is no `Int` at this read.
                 TmpKind::Bool | TmpKind::Null => None,
                 // Whatever it holds: checked where it is read.
-                TmpKind::Scalar | TmpKind::Unknown => Some(true),
+                TmpKind::Scalar | TmpKind::Val | TmpKind::Unknown => Some(true),
             },
             // A compiled variable the region itself wrote a `Bool`
             // into (an `isset()`/`empty()` result assigned to it) is
@@ -1199,8 +1283,14 @@ fn add_class_guards(
     // is never read, so a slot an earlier region row already wrote
     // needs no guard at all; any other gets the weak one (a scalar or
     // nothing: no value the store would have to release).
+    // (A temporary that may hold an array is never stored over: the
+    // region is refused.)
     let fresh_dst = |off: u32, guards: &mut Vec<Guard>| -> bool {
-        ts.kind(off) != TmpKind::Unknown || add_slot(guards, KT, off, false)
+        match ts.kind(off) {
+            TmpKind::Unknown => add_slot(guards, KT, off, false),
+            TmpKind::Val => false,
+            _ => true,
+        }
     };
     // The two operands of an arithmetic or comparison row.
     let both = |m: &mut JitMeta, guards: &mut Vec<Guard>| -> bool {
@@ -1235,9 +1325,11 @@ fn add_class_guards(
         // `mask`); one the plan knows nothing about is taken for an
         // `Int` and checked by the row. The variable is only written
         // (weak: nothing of its own is read).
+        // A temporary that may hold an array goes into a variable the row
+        // looks at itself (it may hold an array to release): no guard.
         J_ASSIGN_T => {
             m.cb = ts.kind(inst.b) == TmpKind::Unknown;
-            add_slot(guards, KC, inst.a, false)
+            ts.kind(inst.b) == TmpKind::Val || add_slot(guards, KC, inst.a, false)
         }
         // Arithmetic into a temporary: the destination is fully stored
         // (tag and payload), so it only needs the weak guard (a scalar
@@ -1295,15 +1387,22 @@ fn add_class_guards(
         // variable's tag itself (any scalar), and a temporary's when the
         // plan does not know what it holds; the destination is fully
         // stored.
+        // (A kept temporary that may hold an array would need one more
+        // handle on it: the interpreted row's.)
         C_MOVE => {
             m.ca = m.sc == KT && ts.kind(inst.a) == TmpKind::Unknown;
-            fresh_dst(inst.c, guards)
+            !(m.sc == KT && !m.consume && ts.kind(inst.a) == TmpKind::Val)
+                && fresh_dst(inst.c, guards)
         }
         // The truth jumps look at their variable's tag in the trace.
         C_JMPZ | C_JMPNZ => true,
         // The handler checks its operands and releases what its temporary
         // held.
         C_DIMSR => true,
+        // A read through the global scope fully stores its temporary; the
+        // variable of a folded assignment is looked at by the read itself
+        // (it releases what the variable holds).
+        C_VMREAD => m.kc == KC || fresh_dst(m.db, guards),
         // `?:` and `??` as well, and fully store their result temporary
         // (`inst.b`) when they jump.
         C_JMPSET | C_COALESCE => fresh_dst(inst.b, guards),
@@ -2536,6 +2635,111 @@ unsafe extern "C" fn jit_row_fetch_dims(
     }
 }
 
+/// The meta of a `VmOp` row that is a read through the global scope, and
+/// the ops it covers: `Op::FetchGlobal` (two ops with the assignment
+/// folded behind it, the variable then in `db` with `kc == KC`) or the read
+/// of a superglobal as a whole (`Op::Fetch`), the result temporary in `db`.
+/// `None` for any other op.
+fn plan_vm_read(code: &crate::opcode::OpArray, i: usize) -> Option<(JitMeta, usize)> {
+    let tmp = |t: u32| (t < code.num_tmps).then_some(t << SLOT_SHIFT);
+    let (kc, db, step) = match *code.ops.get(i)? {
+        Op::FetchGlobal {
+            to: Some(cv),
+            mode: FetchMode::Read | FetchMode::Is,
+            ..
+        } => {
+            if cv as usize >= code.cv_names.len() {
+                return None;
+            }
+            (KC, cv << SLOT_SHIFT, 2)
+        }
+        Op::FetchGlobal {
+            dst,
+            to: None,
+            mode: FetchMode::Read | FetchMode::Is,
+            ..
+        }
+        | Op::Fetch {
+            dst,
+            mode: FetchMode::Read,
+            ..
+        } => (KT, tmp(dst)?, 1),
+        _ => return None,
+    };
+    let m = JitMeta {
+        class: C_VMREAD,
+        ka: KI,
+        kb: KI,
+        kc,
+        db,
+        ..JitMeta::default()
+    };
+    Some((m, step))
+}
+
+/// [`C_VMREAD`]'s helper: the read at op `at` of the frame's code on its
+/// fast path (`tape::vm_read`). Returns 0 when the value is stored (in the
+/// row's temporary, or in the variable of the folded assignment), 1 when
+/// the row is the interpreter's, nothing changed: a miss of the run-time
+/// cache, an undefined variable read with a warning, a variable bound by
+/// reference (the assignment writes through it), no VM named.
+///
+/// # Safety
+/// `frame` is the frame the trace runs in, and [`TRACE_VM`] names the VM
+/// it belongs to or is null ([`back_edge_slow`] sets it from the context
+/// `run_tape` filled before it entered the core loop this trace was
+/// entered from). `run_tape` is suspended in that loop meanwhile, and the
+/// loop holds nothing of the VM but the frame's slot bases, which the read
+/// leaves where they are (it stores one value into a slot).
+unsafe extern "C" fn jit_row_vm_read(
+    frame: *mut crate::vm::Frame,
+    at: usize,
+    _unused: *const u8,
+    _word: u32,
+) -> u32 {
+    let vm = TRACE_VM.with(Cell::get);
+    if vm.is_null() {
+        return 1;
+    }
+    // The op's operands, copied out of the frame's code before the VM is
+    // used (the frame is not borrowed across the read).
+    let (place, dst, to, mode) = {
+        // SAFETY: the caller's contract: the frame the trace runs in.
+        let f = unsafe { &*frame };
+        match f.code.ops.get(at) {
+            Some(&Op::FetchGlobal {
+                place,
+                dst,
+                to,
+                mode,
+            }) => {
+                // A variable bound by reference takes the value through
+                // its assignment, which the row covers: the interpreter's.
+                let by_ref = to.is_some_and(|cv| {
+                    matches!(
+                        f.cvs.get(cv as usize).and_then(crate::vm::CvSlot::get),
+                        Some(php_runtime::Value::Reference(_))
+                    )
+                });
+                if by_ref {
+                    return 1;
+                }
+                (place, dst, to, Some(mode))
+            }
+            Some(&Op::Fetch {
+                place,
+                mode: FetchMode::Read,
+                dst,
+            }) => (place, dst, None, None),
+            _ => return 1,
+        }
+    };
+    // SAFETY: the caller's contract: the VM the frame belongs to, which
+    // nothing else uses while the trace runs.
+    let vm = unsafe { &mut *vm };
+    u32::from(super::vm_read(vm, place, dst, to, mode).is_none())
+}
+
 /// The target instruction index of the jump of the instruction at
 /// index `i`, for the classes that jump.
 fn jump_target(tape: &[Inst], i: usize) -> usize {
@@ -2628,6 +2832,13 @@ fn plan(
                 Some(m) => (C_CONSTI, m, 2, None),
                 None => rej!(format!("[{i}] $this::NAME not foldable")),
             }
+        } else if tape[i].op == TOp::VmOp {
+            // A read through the global scope; any other `VmOp` (a
+            // frameless call with its handler) stays the interpreter's.
+            let Some((m, step)) = plan_vm_read(code, i) else {
+                rej!(format!("[{i}] op with the VM not compiled"));
+            };
+            (C_VMREAD, m, step, None)
         } else if tape[i].op == TOp::FetchDimsC {
             // Through the tape's handler; the result temporary is `p`.
             let Ok(t) = u32::try_from(tape[i].p) else {
@@ -2757,6 +2968,7 @@ fn plan(
         || class.contains(&C_SPROPINC)
         || class.contains(&C_CONSTI)
         || class.contains(&C_DIMSR)
+        || class.contains(&C_VMREAD)
         || calls
             .iter()
             .flatten()
@@ -2777,6 +2989,11 @@ fn plan(
     let mut reachable = true;
     let mut cvbools: Vec<u32> = Vec::new();
     let mut ever_nonint: Vec<u32> = Vec::new();
+    // The compiled variables a row moves a value that may be an array
+    // into (they get no guard: the row looks at what they hold), and
+    // whether any temporary may hold an array at all.
+    let mut counted: Vec<u32> = Vec::new();
+    let mut any_val = false;
     for j in 0..len {
         if class[j] == 0 {
             continue;
@@ -2811,7 +3028,7 @@ fn plan(
                     KT => match ts.kind(arg.off) {
                         TmpKind::Int => true,
                         TmpKind::Bool | TmpKind::Null => false,
-                        TmpKind::Scalar | TmpKind::Unknown => {
+                        TmpKind::Scalar | TmpKind::Val | TmpKind::Unknown => {
                             arg.chk = true;
                             true
                         }
@@ -2900,8 +3117,12 @@ fn plan(
                 TmpKind::Bool => BOOL_SRC,
                 TmpKind::Null => NULL_SRC,
                 TmpKind::Scalar => SCALAR_SRC,
+                TmpKind::Val => VAL_SRC,
                 TmpKind::Int | TmpKind::Unknown => 0,
             };
+            if flag == VAL_SRC && !counted.contains(&tape[head + j].a) {
+                counted.push(tape[head + j].a);
+            }
             if flag != 0 {
                 meta[j].mask = flag;
                 let a = tape[head + j].a;
@@ -2984,6 +3205,22 @@ fn plan(
             }
             // The handler left a value of no known kind.
             C_DIMSR => ts.set(meta[j].db, TmpKind::Unknown),
+            // A value of any type, owned by the temporary, or stored into
+            // the variable, which is then no int the trace knows of and
+            // may hold a value to release.
+            C_VMREAD => {
+                let d = meta[j].db;
+                if meta[j].kc == KT {
+                    ts.set(d, TmpKind::Val);
+                    any_val = true;
+                } else {
+                    for list in [&mut counted, &mut cvbools, &mut ever_nonint] {
+                        if !list.contains(&d) {
+                            list.push(d);
+                        }
+                    }
+                }
+            }
             // A moved value: the literal's kind, any scalar from a
             // variable, a temporary's own kind (a checked one is some
             // scalar); a consumed source temporary is left null.
@@ -2999,8 +3236,10 @@ fn plan(
                         TmpKind::Unknown => TmpKind::Scalar,
                         k => k,
                     },
+                    _ if meta[j].arr => TmpKind::Val,
                     _ => TmpKind::Scalar,
                 };
+                any_val |= kind == TmpKind::Val;
                 if meta[j].sc == KT && meta[j].consume {
                     ts.set(inst.a, TmpKind::Unknown);
                 }
@@ -3035,10 +3274,24 @@ fn plan(
         // the jump is taken) a scalar. Nothing falls through a plain jump.
         if is_jump_class(class[j]) {
             let y = jump_target(tape, head + j);
+            // A temporary that may hold an array is consumed before the
+            // loop goes round: the next iteration stores over it.
+            if y == head && ts.has_val() {
+                rej!(format!(
+                    "a temporary may hold an array at the back edge at {}",
+                    head + j
+                ));
+            }
             if y > head + j && y <= close {
                 let mut edge = ts.clone();
                 if matches!(class[j], C_JMPSET | C_COALESCE) {
-                    edge.set(tape[head + j].b, TmpKind::Scalar);
+                    let kind = if meta[j].arr {
+                        any_val = true;
+                        TmpKind::Val
+                    } else {
+                        TmpKind::Scalar
+                    };
+                    edge.set(tape[head + j].b, kind);
                 }
                 incoming.push((y, edge));
             }
@@ -3059,6 +3312,22 @@ fn plan(
         .any(|g| g.base == KC && g.exact && ever_nonint.contains(&g.off))
     {
         rej!("a variable is read as an int and assigned a bool or null in the same loop");
+    }
+    // A variable that may hold an array is only written by the rows that
+    // release what it holds, and only read by the rows that look at its
+    // tag: any guard on it comes from a row that would store over it or
+    // read it as an int.
+    if guards
+        .iter()
+        .any(|g| g.base == KC && counted.contains(&g.off))
+    {
+        rej!("a variable that may hold an array is also written or read as a scalar");
+    }
+    // The state at a nested loop's head is not followed (`ts.clear()`): a
+    // temporary holding an array there would be taken for free to store
+    // over.
+    if any_val && !back_targets.is_empty() {
+        rej!("a temporary may hold an array in a region with a nested loop");
     }
     // With calls in the region, `rdx` holds the scratch base for its
     // whole run, so no `%` (whose `idiv` clobbers it) may be compiled
@@ -4401,6 +4670,23 @@ impl Emitter {
                 self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
                 self.jcc(0x85, Target::Poll(i + 1, i)); // jne
             }
+            // The read's fast path through the helper, then the poll every
+            // row that may release a value ends with.
+            C_VMREAD => {
+                self.emit_helper(
+                    jit_row_vm_read as *const () as usize,
+                    [
+                        HArg::Frame,
+                        HArg::Abs(i64::try_from(i).unwrap_or(i64::MAX)),
+                        HArg::Null,
+                    ],
+                    0,
+                    Target::Side(i),
+                );
+                let next = i + self.plan.span[j] as usize;
+                self.put(&[0x41, 0x80, 0x3B, 0x00]); // cmp byte [r11], 0
+                self.jcc(0x85, Target::Poll(next, i)); // jne
+            }
             C_JMPZ | C_JMPNZ => {
                 let end = self.synth_label();
                 let (on_true, on_false) = if self.plan.class[j] == C_JMPNZ {
@@ -4408,7 +4694,7 @@ impl Emitter {
                 } else {
                     (Target::Label(end), self.jump_tgt(j))
                 };
-                self.emit_cv_truth(inst.a, on_true, on_false, Target::Side(i));
+                self.emit_cv_truth(inst.a, m.arr, on_true, on_false, Target::Side(i));
                 self.set_label(end);
             }
             // `$cv ?: ...`: a truthy value into the result temporary, then
@@ -4417,12 +4703,17 @@ impl Emitter {
                 let (copy, end) = (self.synth_label(), self.synth_label());
                 self.emit_cv_truth(
                     inst.a,
+                    m.arr,
                     Target::Label(copy),
                     Target::Label(end),
                     Target::Side(i),
                 );
                 self.set_label(copy);
-                self.copy_slot(KC, inst.a, KT, inst.b);
+                if m.arr {
+                    self.copy_cv_value(inst.a, inst.b, true, Target::Side(i));
+                } else {
+                    self.copy_slot(KC, inst.a, KT, inst.b);
+                }
                 self.jmp(self.jump_tgt(j));
                 self.set_label(end);
             }
@@ -4435,9 +4726,7 @@ impl Emitter {
                 self.jcc(0x84, Target::Label(end)); // je
                 self.cmpb(KC, inst.a, TAG_NONE);
                 self.jcc(0x84, Target::Label(end)); // je
-                self.cmpb(KC, inst.a, TAG_FLOAT);
-                self.jcc(0x87, Target::Side(i)); // ja: not a scalar
-                self.copy_slot(KC, inst.a, KT, inst.b);
+                self.copy_cv_value(inst.a, inst.b, m.arr, Target::Side(i));
                 self.jmp(self.jump_tgt(j));
                 self.set_label(end);
             }
@@ -4535,6 +4824,26 @@ impl Emitter {
                 } else if m.mask == SCALAR_SRC {
                     // A scalar of a kind the plan does not know (a
                     // ternary's result): both words of the slot.
+                    self.copy_slot(m.kb, inst.b, m.ka, inst.a);
+                } else if m.mask == VAL_SRC {
+                    // A value the temporary owns, moved as it is. The
+                    // variable may hold an array from the iteration
+                    // before: one handle less on it,
+                    // unless it is the last (freeing it is the interpreted
+                    // row's, like a string, an object or a reference
+                    // there). Nothing is changed before the last test.
+                    let store = self.synth_label();
+                    self.cmpb(KC, inst.a, TAG_FLOAT);
+                    self.jcc(0x86, Target::Label(store)); // jbe: a scalar
+                    self.cmpb(KC, inst.a, TAG_NONE);
+                    self.jcc(0x84, Target::Label(store)); // je: undefined
+                    self.cmpb(KC, inst.a, TAG_ARRAY);
+                    self.jcc(0x85, jo); // jne
+                    self.load_int(KC, inst.a);
+                    self.count_op(7, 1); // cmp qword [rax], 1
+                    self.jcc(0x84, jo); // je: the last handle
+                    self.count_op(5, 1); // sub qword [rax], 1
+                    self.set_label(store);
                     self.copy_slot(m.kb, inst.b, m.ka, inst.a);
                 } else {
                     // The int path: the plan knows the temporary holds
@@ -4829,12 +5138,69 @@ impl Emitter {
         self.store_rcx_base(to_base, to);
     }
 
+    /// `cmp dword [rax + disp32], imm8` (`83 /7 ib` with mod `10` and rm
+    /// `000`, 32-bit operands: no `REX.W`): a `u32` field of what `rax`
+    /// points at.
+    fn cmpl_rax(&mut self, off: u32, imm: i8) {
+        self.put(&[0x83, 0xB8]);
+        self.put(&off.to_le_bytes());
+        self.put(&[imm.to_le_bytes()[0]]);
+    }
+
+    /// `add` (`ext` 0), `sub` (5) or `cmp` (7) `qword [rax], imm8`
+    /// (`REX.W 83 /ext ib`, mod `00`, rm `000`): the strong count of the
+    /// array whose handle is in `rax`.
+    fn count_op(&mut self, ext: u8, imm: i8) {
+        self.put(&[REX_W, 0x83, ext << 3, imm.to_le_bytes()[0]]);
+    }
+
+    /// Copies the compiled variable at `from` into the temporary at `to`
+    /// when it holds a scalar or, with `arr`, an array, which the
+    /// temporary then holds a handle on as well (its count goes up).
+    /// Anything else (a string, an object, a reference, an undefined
+    /// variable) leaves through `jo`, nothing changed.
+    fn copy_cv_value(&mut self, from: u32, to: u32, arr: bool, jo: Target) {
+        let copy = self.synth_label();
+        if arr {
+            let other = self.synth_label();
+            self.cmpb(KC, from, TAG_ARRAY);
+            self.jcc(0x85, Target::Label(other)); // jne
+            self.load_int(KC, from);
+            self.count_op(0, 1); // add qword [rax], 1
+            self.jmp(Target::Label(copy));
+            self.set_label(other);
+        }
+        self.cmpb(KC, from, TAG_FLOAT);
+        self.jcc(0x87, jo); // ja: not a scalar (or undefined)
+        self.set_label(copy);
+        self.copy_slot(KC, from, KT, to);
+    }
+
     /// Branches on the truth of the compiled variable at `off`, decided
     /// as `plain_truth` decides it for what the trace handles: a bool by
-    /// its value byte, an int by its payload, null false. Anything else
-    /// (a float, a string, an array, an object, an undefined variable)
-    /// leaves through `jo`. Every path ends in a jump.
-    fn emit_cv_truth(&mut self, off: u32, on_true: Target, on_false: Target, jo: Target) {
+    /// its value byte, an int by its payload, null false, and with `arr`
+    /// an array by its element count (tested first: the variable held one
+    /// when the plan was made). Anything else (a float, a string, an
+    /// object, an undefined variable) leaves through `jo`. Every path ends
+    /// in a jump.
+    fn emit_cv_truth(
+        &mut self,
+        off: u32,
+        arr: bool,
+        on_true: Target,
+        on_false: Target,
+        jo: Target,
+    ) {
+        if arr {
+            let other = self.synth_label();
+            self.cmpb(KC, off, TAG_ARRAY);
+            self.jcc(0x85, Target::Label(other)); // jne
+            self.load_int(KC, off);
+            self.cmpl_rax(ARRAY_COUNT, 0);
+            self.jcc(0x85, on_true); // jne: not empty
+            self.jmp(on_false);
+            self.set_label(other);
+        }
         let not_bool = self.synth_label();
         self.cmpb(KC, off, TAG_BOOL);
         self.jcc(0x85, Target::Label(not_bool)); // jne
@@ -4862,11 +5228,7 @@ impl Emitter {
     /// interpreted row leaves it.
     fn emit_move(&mut self, m: JitMeta, inst: &Inst, jo: Target) {
         match m.sc {
-            KC => {
-                self.cmpb(KC, inst.a, TAG_FLOAT);
-                self.jcc(0x87, jo); // ja: not a scalar (or undefined)
-                self.copy_slot(KC, inst.a, KT, inst.c);
-            }
+            KC => self.copy_cv_value(inst.a, inst.c, m.arr, jo),
             KT => {
                 if m.ca {
                     self.cmpb(KT, inst.a, TAG_FLOAT);
@@ -6835,24 +7197,68 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
 
 /// The `take_jump!` hook: `at` took a jump BACK to `target` (the caller
 /// tested it; only then is this reached, and only when the tape has
-/// tables). Returns the `ip` to continue at: `target` when the jump
-/// stays interpreted, else what the compiled loop ran and where it
-/// asked to resume.
+/// tables) in frame `f`. Returns the `ip` to continue at: `target` when
+/// the jump stays interpreted, else what the compiled loop ran and where
+/// it asked to resume.
 ///
-/// The steady-state shapes stay inlined: a disarmed cell (`usize::MAX`,
-/// the loop was refused or a guard failed) costs a load and a compare,
-/// an armed one a call into the compiled code. Only counting toward
-/// `HOT_LIMIT` and compiling go out of line.
+/// This is the part every interpreted back edge pays, so it is a leaf: a
+/// loop that was refused (or whose guard failed) costs two loads and a
+/// compare, one that is not hot yet a count on top of them. Running a
+/// trace, compiling one and every way a trace leaves are
+/// [`back_edge_slow`]'s. (Before the split a counted back edge cost about
+/// 88 instructions: the call into the whole hook, then `edge_count`.)
 ///
 /// # Safety
 /// `at`/`target` point into the running tape described by `ctx`, with
-/// `target <= at`, and `ctx.alive()`.
+/// `target <= at`, and `f` is the frame that runs it.
 // Not inlined: `take_jump!`'s pointer test already keeps the JIT-off
 // back edge at two instructions, and an inlined copy of this body at
 // every jump site in `run_core` costs the interpreted path registers
 // (measured: +210M instructions on `fib`).
 #[inline(never)]
 pub(super) unsafe fn back_edge(
+    f: *mut crate::vm::Frame,
+    ctx: &JitCtx,
+    at: *const Inst,
+    target: *const Inst,
+) -> *const Inst {
+    // A guard failure or refused compile disarms the current frame's
+    // context (`disarm`), but the caller's pointer to it stays.
+    let counts = ctx.jcnt.get();
+    if counts.is_null() {
+        return target;
+    }
+    // SAFETY: guaranteed by the caller.
+    #[allow(clippy::cast_sign_loss)] // `at` is a row of the tape at `tbase`
+    let idx = unsafe { at.offset_from(ctx.tbase) } as usize;
+    // SAFETY: the cells cover the whole tape (`Tables::new(tape.len())`).
+    let c = unsafe { &*ctx.jtr.get().add(idx) }.load(Ordering::Relaxed);
+    if c == usize::MAX {
+        return target;
+    }
+    if c < MAX_ATTEMPTS {
+        // Not compiled: one more back edge toward the limit. The edge that
+        // reaches it is counted by `edge_count`, which compiles.
+        // SAFETY: the counters cover the whole tape.
+        let count = unsafe { &*counts.add(idx) };
+        let n = count.load(Ordering::Relaxed).wrapping_add(1);
+        if n < ctx.hot {
+            count.store(n, Ordering::Relaxed);
+            return target;
+        }
+    }
+    // SAFETY: the caller's contract; the slot bases are the frame's.
+    unsafe { back_edge_slow(super::frame_st(f), ctx, at, target) }
+}
+
+/// [`back_edge`] past its counting path: the cell holds a trace to run, or
+/// the loop just became hot.
+///
+/// # Safety
+/// As [`back_edge`]; `st` holds the slot bases of the frame.
+#[inline(never)]
+#[allow(clippy::too_many_lines)] // every way a trace leaves, in one place
+unsafe fn back_edge_slow(
     st: St,
     ctx: &JitCtx,
     at: *const Inst,
@@ -6898,6 +7304,7 @@ pub(super) unsafe fn back_edge(
         // SAFETY: the region only touches the frame's slots, and exits
         // leave them exactly as an interpreted run would.
         ctx.poll_row.set(std::ptr::null());
+        TRACE_VM.with(|vm| vm.set(ctx.vm.get()));
         let ret = unsafe { f(st.cvs, st.tmps, st.f.cast::<u8>()) };
         let r = ret.r;
         if debug_on() {
@@ -7066,7 +7473,7 @@ unsafe fn edge_count(
         // SAFETY: as above; now the cell is armed.
         unsafe {
             (*ctx.jcnt.get().add(idx)).store(0, Ordering::Relaxed);
-            back_edge(st, ctx, at, target)
+            back_edge_slow(st, ctx, at, target)
         }
     }
 }
@@ -7147,6 +7554,42 @@ mod layout_tests {
         assert_eq!(ts.known, vec![(32, TmpKind::Int)]);
     }
 
+    /// What the rows that move an array rely on: the payload word of a
+    /// `Value::Array` is the handle of its `Rc` allocation, whose first
+    /// word is the strong count, and the table's element count is
+    /// `ARRAY_COUNT` bytes from the handle.
+    #[test]
+    fn array_handle_layout() {
+        use php_runtime::{Value, ZArray};
+        let a = ZArray::from_values([Value::Int(7), Value::Int(8), Value::Int(9)]);
+        let slot = Value::Array(a.clone());
+        let words = std::ptr::from_ref(&slot).cast::<u8>();
+        // SAFETY: a `Value` is a tag byte and a payload word
+        // (`value_layout`); the words read are inside the live array's
+        // allocation.
+        unsafe {
+            assert_eq!(*words, TAG_ARRAY);
+            let handle = std::ptr::read_unaligned(words.add(PAYLOAD as usize).cast::<*const u8>());
+            let strong = || std::ptr::read_unaligned(handle.cast::<usize>());
+            assert_eq!(strong(), a.refcount());
+            assert_eq!(strong(), 2);
+            let third = slot.clone();
+            assert_eq!(strong(), 3);
+            drop(third);
+            assert_eq!(strong(), 2);
+            let count = std::ptr::read_unaligned(handle.add(ARRAY_COUNT as usize).cast::<u32>());
+            assert_eq!(count, 3);
+        }
+        let empty = Value::Array(ZArray::new());
+        let words = std::ptr::from_ref(&empty).cast::<u8>();
+        // SAFETY: as above.
+        unsafe {
+            let handle = std::ptr::read_unaligned(words.add(PAYLOAD as usize).cast::<*const u8>());
+            let count = std::ptr::read_unaligned(handle.add(ARRAY_COUNT as usize).cast::<u32>());
+            assert_eq!(count, 0);
+        }
+    }
+
     /// Where two paths meet, a temporary is what both left in it: the
     /// same kind stays, two different scalars are "a scalar", and one a
     /// path did not store is unknown.
@@ -7168,6 +7611,21 @@ mod layout_tests {
             assert_eq!(m.kind(32), TmpKind::Unknown);
             assert_eq!(m.kind(48), TmpKind::Scalar);
             assert_eq!(m.kind(64), TmpKind::Unknown);
+            assert!(!m.has_val());
+        }
+        // A path that may have left an array: a scalar or an array, also
+        // against a null or an int; still unknown against nothing.
+        let mut arr_path = TmpState::default();
+        arr_path.set(0, TmpKind::Val);
+        arr_path.set(16, TmpKind::Val);
+        arr_path.set(32, TmpKind::Val);
+        arr_path.set(64, TmpKind::Val);
+        for m in [then_path.merge(&arr_path), arr_path.merge(&then_path)] {
+            assert_eq!(m.kind(0), TmpKind::Val);
+            assert_eq!(m.kind(16), TmpKind::Val);
+            assert_eq!(m.kind(32), TmpKind::Val);
+            assert_eq!(m.kind(64), TmpKind::Unknown);
+            assert!(m.has_val());
         }
         let mut cleared = then_path.clone();
         cleared.clear();
@@ -7936,7 +8394,13 @@ mod layout_tests {
 
         // The truth dispatch: three tag tests, each path ending in a jump.
         let mut em = emitter();
-        em.emit_cv_truth(0x30, Target::Stub(1), Target::Stub(2), Target::Side(3));
+        em.emit_cv_truth(
+            0x30,
+            false,
+            Target::Stub(1),
+            Target::Stub(2),
+            Target::Side(3),
+        );
         let mut want = emitter();
         let not_bool = want.synth_label();
         want.cmpb(KC, 0x30, TAG_BOOL);
@@ -7996,6 +8460,37 @@ mod layout_tests {
         want.jcc(0x87, Target::Side(0));
         want.copy_slot(KC, 0x10, KT, 0x40);
         assert_eq!(em.code, want.code);
+
+        // A variable that held an array when the plan was made: the array
+        // case first (one more handle), then the scalar one.
+        let mut em = emitter();
+        let from_arr = JitMeta {
+            arr: true,
+            ..from_cv
+        };
+        em.emit_move(from_arr, &inst, Target::Side(0));
+        let mut want = emitter();
+        want.cmpb(KC, 0x10, TAG_ARRAY);
+        want.put(&[0x0F, 0x85, 0, 0, 0, 0]); // jne to the scalar test
+        want.put(&[0x48, 0x8B, 0x87, 0x18, 0, 0, 0]); // mov rax, [rdi + 0x18]
+        want.put(&[0x48, 0x83, 0x00, 0x01]); // add qword [rax], 1
+        want.put(&[0xE9, 0, 0, 0, 0]); // jmp to the copy
+        want.cmpb(KC, 0x10, TAG_FLOAT);
+        want.put(&[0x0F, 0x87, 0, 0, 0, 0]); // ja out
+        want.copy_slot(KC, 0x10, KT, 0x40);
+        assert_eq!(em.code, want.code);
+        let mut em = emitter();
+        em.count_op(7, 1);
+        em.count_op(5, 1);
+        em.cmpl_rax(0x30, 0);
+        assert_eq!(
+            em.code,
+            [
+                0x48, 0x83, 0x38, 0x01, // cmp qword [rax], 1
+                0x48, 0x83, 0x28, 0x01, // sub qword [rax], 1
+                0x83, 0xB8, 0x30, 0, 0, 0, 0, // cmp dword [rax + 0x30], 0
+            ]
+        );
 
         let mut em = emitter();
         let from_tmp = JitMeta {

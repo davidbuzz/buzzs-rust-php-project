@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 66/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 20/82 with `BUZZS_JIT=0`).
+Score: 68/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 19/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -35,10 +35,15 @@ Score: 66/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by d
       `$this` inlined (suite:calls 3.95 -> 0.11, suite:props 2.40 -> 0.82 with `self::$s++`
       compiled too); builtin calls prepared at a depth without a pooled frame; one-argument
       builtins with a computed argument (`chr(65 + $i % 26)`) and `dechex()` without a
-      frame or handler (strings 2.16 -> 1.64, hash1 3.37 -> 1.95). Open: the
-      builtin call protocol itself (suite:builtins 4.52: per call ~3 leaves of the core
-      loop for init/send/call, argument vectors, ~900 instructions against C's ~200), and
-      the interpreter's user-call protocol (memory note `call-redesign-plan`).
+      frame or handler (strings 2.16 -> 1.64, hash1 3.37 -> 1.95). Done 2026-11-20: a
+      builtin call with computed arguments is one frameless op at its `DoCall`
+      (`specialise::spread_frameless_call_at`), and `strpos`/`substr`/`max`/`min`/strict
+      `in_array`/`str_contains` & co. are answered without their handler
+      (`special::quick_eval_n`, tape row `FramelessQ`): suite:builtins 4.52 -> 1.55,
+      suite:strings 1.64 -> 1.34. Open: those loops in a trace (their rows through the
+      tape's handlers), the general frameless path (~155 instructions a call around the
+      function itself), and the interpreter's user-call protocol (memory note
+      `call-redesign-plan`).
 - [~] JIT Step 4 — `New` rows (new_obj 3.27, micro:new_Foo 2.02, objects 4.64),
       elvis/ternary, `$this::CONST`, `$GLOBALS['v']`, `$_GET`. Done 2026-11-20: tape
       instructions for all of them (a ternary's arms, `?:`, `??`, non-scalar assignments,
@@ -50,8 +55,11 @@ Score: 66/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by d
       so the scalar forms compile (x_eq_f_elvis_tmp 1.40 -> 0.33, x_eq_f_q_f_tmp 1.48 ->
       0.38); a hand-written cached global read (x_eq__GET 2.60 -> 1.96, x_eq_GLOBALS_v
       2.02 -> 1.89).
-      Open: refcounted values in a trace (the two forms that move an array: x_eq_f_q_f_a
-      2.43, x_eq_a_elvis_null 1.86), the global reads inside a trace.
+      Done 2026-11-20: a trace copies and releases arrays (x_eq_f_q_f_a 2.43 -> 0.44,
+      x_eq_a_elvis_null 1.86 -> 0.40) and calls the cached global read (x_eq__GET 1.96 ->
+      1.79, x_eq_GLOBALS_v 1.89 -> 1.69).
+      Open: the global read itself (~200 instructions an iteration in the trace against
+      C's 121); strings and objects moved by a trace.
       Done earlier: `null`/bool constant folds (x_eq_TEST 2.37 -> 0.29).
 - [x] JIT is the default (owner, 2026-11-20; `57aa54cc`): on for x86-64 Linux, `BUZZS_JIT=0`
       turns it off. `scripts/acceptance.sh` now measures it without a wrapper binary.

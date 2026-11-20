@@ -1112,12 +1112,13 @@ function f($x, $s) {
 echo f(4, "a"), "\n";
 "#;
 
-/// Frameless calls stay on the tape: a one-argument call whose result
-/// needs no handler is one instruction ([`TOp::FramelessQ`], which leaves
-/// an argument it does not cover to the handler: `sqrt("16")`), any other
-/// one runs with the VM at hand (a call instruction), and a call whose
-/// arguments are computed first is prepared and made without its frame.
-/// An error a handler raises comes out with the call's line.
+/// Frameless calls stay on the tape: a call whose result needs no handler
+/// is one instruction ([`TOp::FramelessQ`], which leaves an argument it
+/// does not cover to the handler: `sqrt("16")`), also with two or three
+/// arguments and with arguments computed first; any other one runs with
+/// the VM at hand (a call instruction). The instruction jumps to the op
+/// after the call. An error a handler raises comes out with the call's
+/// line.
 #[test]
 fn frameless_calls() {
     let arrays = op_arrays(FRAMELESS_CALLS);
@@ -1138,14 +1139,36 @@ fn frameless_calls() {
     assert!(quick("floor"), "floor(2.5)");
     assert!(quick("ord"), "ord($s)");
     assert!(quick("sin"), "sin($x), unused");
-    // `substr('hello', $i)` and `max($i, 2)`: two arguments.
-    let fused = code
-        .ops
-        .iter()
-        .zip(tape.iter())
-        .filter(|(op, inst)| matches!(op, Op::FramelessICall(_)) && inst.op == TOp::VmOp)
-        .count();
-    assert!(fused >= 2, "{fused}");
+    // The instruction of the call of `name`, with the op its jump lands on.
+    let row = |name: &str| {
+        code.ops
+            .iter()
+            .zip(tape.iter())
+            .enumerate()
+            .find(|(_, (op, _))| {
+                matches!(op, Op::FramelessICall(fc)
+                    if matches!(&code.literals[fc.name as usize],
+                        php_runtime::Value::Str(lc) if lc.as_bytes() == name.as_bytes()))
+            })
+            .map(|(i, (op, inst))| {
+                let Op::FramelessICall(fc) = op else {
+                    unreachable!()
+                };
+                (inst.op, target(&tape, i) - i, fc.tail() + 1)
+            })
+    };
+    // `substr('hello', $i)` and `max($i, 2)`: two arguments, sent right
+    // after the call's start: past the three `Nop`s behind the op.
+    assert_eq!(row("substr"), Some((TOp::FramelessQ, 4, 4)));
+    assert_eq!(row("max"), Some((TOp::FramelessQ, 4, 4)));
+    assert_eq!(row("ord"), Some((TOp::FramelessQ, 3, 3)));
+    // `strpos($s . 'xyz', 'y')` and `chr(64 + $i)`: an argument computed
+    // first, the op at the call's `DoCall`.
+    assert_eq!(row("strpos"), Some((TOp::FramelessQ, 1, 1)));
+    assert_eq!(row("chr"), Some((TOp::FramelessQ, 1, 1)));
+    // `intdiv($x, $i - 2)`: php-src sends `$x` before `$i - 2` is computed,
+    // so the call keeps its ops.
+    assert_eq!(row("intdiv"), None);
     assert_eq!(
         run(FRAMELESS_CALLS),
         "2|1|2|97|A|2|ello|2|9.2233720368548E+18|4|-4|2.2360679774998|0|2|97|B|2|llo|2|9.2233720368548E+18|4|8|2.4494897427832|1|2|97|C|2|lo|3|9.2233720368548E+18|4|6\n"

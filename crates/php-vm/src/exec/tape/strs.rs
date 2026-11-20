@@ -9,9 +9,10 @@
 //! `JMPZ`/`JMPNZ` of the result right after them is taken by the test
 //! itself (`ZEND_VM_SMART_BRANCH`), which the fused instructions here do.
 //!
-//! Also the one-argument frameless calls whose result needs no handler
-//! (`ZEND_FRAMELESS_ICALL_1` of `abs()`, `ord()`, `chr()` and the math
-//! functions: `special::quick_eval`).
+//! Also the frameless calls whose result needs no handler
+//! (`ZEND_FRAMELESS_ICALL_n` of `abs()`, `ord()`, `chr()`, the math
+//! functions, `strpos()`, `substr()`, `max()`, `min()`, a strict
+//! `in_array()` and the `str_contains()` family: `special::quick_eval_n`).
 //!
 //! The handlers are out of line, as the `dims` family's: inlined into
 //! [`super::run_core`] they changed its register allocation and cost every
@@ -21,8 +22,7 @@
 //! and of [`lower`].
 
 use super::{
-    cv_off, cv_slot, frame_st, is_scalar, lit_off, rel, tmp_off, tmp_slot, Br, Inst, St, TOp, KC,
-    KL,
+    cv_off, cv_slot, frame_st, is_scalar, lit_off, rel, tmp_off, tmp_slot, Br, Inst, St, TOp,
 };
 use crate::exec::spec::plain_truth;
 use crate::opcode::{type_mask, CachedFuncKind, Op, OpArray, Operand, PlaceBase};
@@ -31,6 +31,21 @@ use php_runtime::Value;
 
 /// The result field of an instruction whose result is unused.
 const NO_DST: u32 = u32::MAX;
+
+/// The kinds of a frameless call instruction's operands, two bits each in
+/// its `k` (the first operand lowest; the count in the top two bits): a
+/// compiled variable, a temporary (consumed), a literal.
+const Q_CV: u8 = 0;
+const Q_TMP: u8 = 1;
+const Q_LIT: u8 = 2;
+/// `k` of a call of one compiled variable, and of one literal.
+const Q_ONE_CV: u8 = (1 << 6) | Q_CV;
+const Q_ONE_LIT: u8 = (1 << 6) | Q_LIT;
+/// Where a frameless call instruction's `p` keeps the function's frameless
+/// class (five bits; the result's offset is below it, the call site's cache
+/// slot above).
+const Q_CLASS_SHIFT: u32 = 32;
+const Q_CACHE_SHIFT: u32 = 37;
 
 /// The specialised instruction of the op at `i` when this family has one.
 pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
@@ -76,33 +91,54 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::TypeCheckC)
             },
         },
-        // `f($cv)` or `f(literal)` of a builtin whose one-argument call
-        // needs no handler: the function's id in `e`, its frameless class
-        // in `d`, the call site's cache slot in `b`. The instruction covers
-        // the `Nop`s of the `Send` and the `DoCall` the op replaced.
+        // The call of a builtin whose result needs no handler for the
+        // arguments it is usually given (`special::quick_eval_n`): the
+        // function's id in `e`, the kinds of its 1..=3 operands and their
+        // count in `k`, the operands in `a`, `b` and `d`, and in `p` the
+        // result's offset, the function's frameless class and the call
+        // site's cache slot. The instruction ends in a jump (`c`) to the op
+        // after the call: past the `Nop`s of the `Send`s and the `DoCall`
+        // behind an op that stands at its call's `InitFCall`, to the next
+        // op for one that stands at the `DoCall` (arguments computed
+        // first).
         Op::FramelessICall(ref fc) => {
-            if fc.argc != 1 {
-                return None;
-            }
+            let argc = usize::from(fc.argc);
             let Some(Value::Str(lc)) = code.literals.get(fc.name as usize) else {
                 return None;
             };
-            let (id, class) = crate::special::quick_id(lc.as_bytes())?;
-            let (k, a) = match fc.vals[0] {
-                Operand::Cv(cv) => (KC, cv_off(code, cv)?),
-                Operand::Lit(l) => {
-                    code.literals.get(l as usize)?;
-                    (KL, lit_off(l)?)
-                }
-                _ => return None,
-            };
+            let (id, class) = crate::special::quick_id_n(lc.as_bytes(), argc)?;
+            if class >= 1 << (Q_CACHE_SHIFT - Q_CLASS_SHIFT) {
+                return None;
+            }
+            let mut k = fc.argc << 6;
+            let mut offs = [0u32; 3];
+            for (i, val) in fc.vals.get(..argc)?.iter().enumerate() {
+                let (kind, off) = match *val {
+                    Operand::Cv(cv) => (Q_CV, cv_off(code, cv)?),
+                    Operand::Tmp(t) => (Q_TMP, tmp_off(code, t)?),
+                    Operand::Lit(l) => {
+                        code.literals.get(l as usize)?;
+                        (Q_LIT, lit_off(l)?)
+                    }
+                    _ => return None,
+                };
+                k |= kind << (2 * i);
+                offs[i] = off;
+            }
+            let after = u32::try_from(i + 1 + fc.tail()).ok()?;
+            // (A 64-bit word: no instruction on a target whose `usize` is
+            // narrower.)
+            let p = (u64::from(fc.name) << Q_CACHE_SHIFT)
+                | (u64::from(class) << Q_CLASS_SHIFT)
+                | u64::from(dst(fc.dst)?);
             Inst {
                 k,
                 e: id,
-                a,
-                b: fc.name,
-                c: dst(fc.dst)?,
-                d: class,
+                a: offs[0],
+                b: offs[1],
+                c: rel(code, i, after)?,
+                d: offs[2],
+                p: usize::try_from(p).ok()?,
                 ..plain(TOp::FramelessQ)
             }
         }
@@ -208,62 +244,152 @@ pub(super) unsafe fn count_cv(frame: *mut Frame, inst: &Inst) -> bool {
     unsafe { put_result(st, inst.c, Value::Int(n)) }
 }
 
-/// `Op::FramelessICall` of one argument whose result needs no handler
-/// (`Vm::frameless_icall_op`'s inline result): the call site's cache holds
-/// the builtin (of the frameless class the instruction was decoded for,
-/// neither deprecated nor `#[\NoDiscard]`), no observer is installed, and
-/// the argument (a defined variable, not a reference, or a literal) has a
-/// shape the function accepts as it is (`special::quick_eval`). The
-/// interrupt check after the call is the instruction's poll. Declines
-/// anything else, having changed nothing: the op then runs in `Vm::run`
-/// (which calls the handler, or makes the call with its frame).
+/// `Op::FramelessICall` whose result needs no handler
+/// (`Vm::frameless_icall_op`'s inline result, and the functions of
+/// `special::quick_eval_n`): the call site's cache holds the builtin (of
+/// the frameless class the instruction was decoded for, neither deprecated
+/// nor `#[\NoDiscard]`), no observer is installed, and the arguments
+/// (defined variables and temporaries, none a reference, and literals) have
+/// shapes the function accepts as they are. The temporaries among them are
+/// consumed, as their `Send`s moved them. Done, the instruction jumps to
+/// the op after the call ([`Br::Jump`]: the jump's poll is the interrupt
+/// check after the call). Declines anything else, having changed nothing:
+/// the op then runs in `Vm::run` (which calls the handler, or makes the
+/// call with its frame).
+///
+/// A call of one variable or literal (the math functions, `ord()`,
+/// `chr()`, `dechex()`) is decided here; any other shape out of line
+/// ([`frameless_quick_n`]): together they cost every such call ~85
+/// instructions.
 ///
 /// # Safety
 /// As [`strlen_cv`].
 #[inline(never)]
 #[allow(clippy::cast_ptr_alignment)] // a slot offset from the literal table's base
-pub(super) unsafe fn frameless_quick(frame: *mut Frame, inst: &Inst) -> bool {
+pub(super) unsafe fn frameless_quick(frame: *mut Frame, inst: &Inst) -> Br {
     if super::jit::OBSERVER_ON.load(std::sync::atomic::Ordering::Relaxed) {
-        return false;
+        return Br::Decline;
     }
+    let p = inst.p as u64;
     // SAFETY: the caller's contract: `frame` is the current frame.
     let code = unsafe { &(*frame).code };
     {
         let Ok(cache) = code.fcall_cache.try_borrow() else {
-            return false;
+            return Br::Decline;
         };
-        let Some(Some(entry)) = cache.get(inst.b as usize) else {
-            return false;
+        let slot = usize::try_from(p >> Q_CACHE_SHIFT).unwrap_or(usize::MAX);
+        let Some(Some(entry)) = cache.get(slot) else {
+            return Br::Decline;
         };
         let CachedFuncKind::Builtin(b) = &entry.func else {
-            return false;
+            return Br::Decline;
         };
-        if !crate::special::frameless_class_is(b.flags, inst.d) {
-            return false;
+        let class = u32::try_from((p >> Q_CLASS_SHIFT) & 31).unwrap_or(0);
+        if !crate::special::frameless_class_is(b.flags, class) {
+            return Br::Decline;
         }
     }
+    if inst.k != Q_ONE_CV && inst.k != Q_ONE_LIT {
+        // SAFETY: the caller's contract.
+        return unsafe { frameless_quick_n(frame, inst) };
+    }
+    let dst = u32::try_from(p & 0xffff_ffff).unwrap_or(NO_DST);
     // SAFETY: the caller's contract: `frame` is the current frame.
     let st = unsafe { frame_st(frame) };
-    let v: &Value = if inst.k == KC {
+    let v: &Value = if inst.k == Q_ONE_CV {
         // SAFETY: `a` is a validated variable offset.
         match unsafe { &*cv_slot(st, inst.a) } {
             Some(v) => v,
-            None => return false,
+            None => return Br::Decline,
         }
     } else {
         // SAFETY: `a` is a validated literal offset.
         unsafe { &*st.lits.add(inst.a as usize).cast::<Value>() }
     };
     // A result slot holding a value to release is the generic op's.
-    // SAFETY: `c` is the validated result field.
-    if inst.c != NO_DST && !is_scalar(unsafe { tmp_slot(st, inst.c) }) {
-        return false;
+    // SAFETY: `dst` is the validated result field.
+    if dst != NO_DST && !is_scalar(unsafe { tmp_slot(st, dst) }) {
+        return Br::Decline;
     }
     let Some(r) = crate::special::quick_eval(inst.e, v) else {
-        return false;
+        return Br::Decline;
     };
     // SAFETY: as above; the slot was just seen to hold a scalar.
-    unsafe { put_result(st, inst.c, r) }
+    if unsafe { put_result(st, dst, r) } {
+        Br::Jump
+    } else {
+        Br::Decline
+    }
+}
+
+/// [`frameless_quick`] for any other shape: several arguments, or one in a
+/// temporary. The call site's cache was checked.
+///
+/// # Safety
+/// As [`strlen_cv`].
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // slot offsets from the slot vectors' bases
+unsafe fn frameless_quick_n(frame: *mut Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract: `frame` is the current frame.
+    let st = unsafe { frame_st(frame) };
+    let dst = u32::try_from(inst.p as u64 & 0xffff_ffff).unwrap_or(NO_DST);
+    let count = usize::from(inst.k >> 6);
+    let kind = |i: usize| (inst.k >> (2 * i)) & 3;
+    let offs = [inst.a, inst.b, inst.d];
+    let null = Value::Null;
+    let mut args: [&Value; 3] = [&null; 3];
+    // Whether the result goes where a consumed argument lies.
+    let mut over_arg = false;
+    for (i, arg) in args.iter_mut().enumerate().take(count) {
+        let v: &Value = match kind(i) {
+            // SAFETY: a validated variable offset.
+            Q_CV => match unsafe { &*cv_slot(st, offs[i]) } {
+                Some(v) => v,
+                None => return Br::Decline,
+            },
+            Q_TMP => {
+                over_arg |= offs[i] == dst;
+                // SAFETY: a validated temporary offset.
+                unsafe { &*st.tmps.add(offs[i] as usize).cast::<Value>() }
+            }
+            // SAFETY: a validated literal offset.
+            _ => unsafe { &*st.lits.add(offs[i] as usize).cast::<Value>() },
+        };
+        if matches!(v, Value::Reference(_)) {
+            return Br::Decline;
+        }
+        *arg = v;
+    }
+    // A result slot holding a value to release (other than an argument the
+    // call consumes) is the generic op's.
+    // SAFETY: `dst` is the validated result field.
+    if dst != NO_DST && !over_arg && !is_scalar(unsafe { tmp_slot(st, dst) }) {
+        return Br::Decline;
+    }
+    let result = if count == 1 {
+        crate::special::quick_eval(inst.e, args[0])
+    } else {
+        crate::special::quick_eval_n(inst.e, &args[..count])
+    };
+    let Some(r) = result else {
+        return Br::Decline;
+    };
+    // The arguments are not read past this point: the temporaries among
+    // them are released (a string or an array goes back to its owner's
+    // count; the jump polls for what a release may queue).
+    for (i, off) in offs.iter().enumerate().take(count) {
+        if kind(i) == Q_TMP {
+            // SAFETY: a validated temporary offset.
+            drop(std::mem::take(unsafe { tmp_slot(st, *off) }));
+        }
+    }
+    // SAFETY: as above; the slot holds a scalar (seen above, or the null a
+    // consumed argument left).
+    if unsafe { put_result(st, dst, r) } {
+        Br::Jump
+    } else {
+        Br::Decline
+    }
 }
 
 /// Whether the defined compiled variable at offset `a` has one of the

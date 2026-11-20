@@ -743,6 +743,12 @@ impl HashData {
 }
 
 impl HashTable {
+    /// The byte offset of the element count (`nNumOfElements`, a `u32`)
+    /// inside a table: what machine code that tests an array for
+    /// emptiness reads (php-vm's trace JIT, whose layout test pins it
+    /// together with the count words of the handle).
+    pub const NUM_ELEMENTS_OFFSET: usize = std::mem::offset_of!(HashTable, num_elements);
+
     /// Creates an empty table (`zend_new_array(0)`).
     #[must_use]
     pub fn new() -> Self {

@@ -224,6 +224,13 @@ pub enum ArgSrc {
 /// The operands of [`Op::FramelessICall`]: the call's `InitFCall`
 /// (`name`, `display`; no namespace fallback), its arguments and its
 /// `DoCall` result.
+///
+/// The op stands in one of two places. When the `Send`s and the `DoCall`
+/// follow the `InitFCall` directly, it replaces the `InitFCall` and the ops
+/// after it are `Nop`s (`init_back == 0`). When arguments are computed
+/// between them, it replaces the `DoCall`, and the `InitFCall` and the
+/// `Send`s before it are `Nop`s where they stood (`init_back` and
+/// `send_back`: how many ops back).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FramelessCall {
     /// The lower-case function name literal (the run-time cache key).
@@ -232,12 +239,32 @@ pub struct FramelessCall {
     pub display: u32,
     /// The arguments' `Send` sources (`args[..argc]`).
     pub args: [ArgSrc; 3],
-    /// The arguments as read by the in-place call: `Lit` or `Cv`.
+    /// The arguments as read by the in-place call: `Lit`, `Cv`, or (only
+    /// where arguments are computed first) `Tmp`.
     pub vals: [Operand; 3],
     /// The number of arguments (1..=3).
     pub argc: u8,
     /// The call's result temporary.
     pub dst: Option<u32>,
+    /// 0: the op stands at the call's `InitFCall`. Else it stands at the
+    /// `DoCall`, this many ops after the `InitFCall`.
+    pub init_back: u32,
+    /// With `init_back != 0`: how many ops before the op each `Send` stood.
+    pub send_back: [u32; 3],
+}
+
+impl FramelessCall {
+    /// The ops right after this one that belong to the call (the `Nop`s of
+    /// its `Send`s and `DoCall`): none when the op stands at the `DoCall`.
+    #[inline]
+    #[must_use]
+    pub fn tail(&self) -> usize {
+        if self.init_back == 0 {
+            usize::from(self.argc) + 1
+        } else {
+            0
+        }
+    }
 }
 
 /// The kind of a `foreach` loop.

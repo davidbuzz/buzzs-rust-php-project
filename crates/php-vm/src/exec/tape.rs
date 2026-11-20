@@ -507,11 +507,12 @@ macro_rules! take_jump {
         if $jit && $ip <= at {
             // SAFETY: guaranteed by `$jit` and the test just made the
             // jump backward. (Reached from `run_core`'s `unsafe` block,
-            // hence no `unsafe` here.)  `st` goes by VALUE: taking its
-            // address anywhere in `run_core` keeps it a memory local and
-            // demotes every slot-base access to the stack (measured:
+            // hence no `unsafe` here.)  The hook gets the frame, from
+            // which it derives the slot bases when it needs them: `st`
+            // is never passed by address (that keeps it a memory local
+            // and demotes every slot-base access to the stack; measured:
             // +210M instructions on `fib`).
-            $ip = jit::back_edge($st, &*$ctx, at, $ip);
+            $ip = jit::back_edge($st.f, &*$ctx, at, $ip);
             // A compiled loop leaves when the safe point comes due inside
             // it (at its head, at a nested loop's back edge, after a row
             // that allocates): it is serviced before the next instruction
@@ -1273,7 +1274,7 @@ tape_ops! {
         TypeCheckJmpC = (strs::type_check_jmp_cv, 2, branch_f),
         IssetC = (strs::isset_cv, 1, plain_f),
         IssetJmpC = (strs::isset_jmp_cv, 2, branch_f),
-        FramelessQ = (strs::frameless_quick, 3, poll_f),
+        FramelessQ = (strs::frameless_quick, 1, branch_poll_f),
 
         // ---- end of strs ----
         //
@@ -1772,7 +1773,12 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                 // with a dead (or absent) context the back-edge hook is
                 // compiled out of the loop entirely.
                 let out = match &jctx {
-                    Some(j) => unsafe { run_core::<true>(st, std::ptr::from_ref(j), p) },
+                    Some(j) => {
+                        // For the rows of a compiled loop that read through
+                        // the global scope (`jit::JitCtx::set_vm`).
+                        j.set_vm(std::ptr::from_mut(vm));
+                        unsafe { run_core::<true>(st, std::ptr::from_ref(j), p) }
+                    }
                     None => unsafe { run_core::<false>(st, std::ptr::null(), p) },
                 };
                 // SAFETY: both point into the tape.
@@ -2195,7 +2201,7 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
         // `ZEND_FRAMELESS_ICALL_n` in place (`Vm::frameless_icall_op`),
         // past the `Nop`s of the call ops it replaced.
         Some(Op::FramelessICall(fc)) => match vm.frameless_icall_op(fc, at + 1) {
-            Some(Ok(())) => at + usize::from(fc.argc) + 2,
+            Some(Ok(())) => at + 1 + fc.tail(),
             Some(Err(t)) => {
                 vm.tape_throw = Some(t);
                 at | CALL_THREW
@@ -2204,6 +2210,28 @@ fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
         },
         _ => DECLINED,
     }
+}
+
+/// The reads of [`run_vm_op`] on their fast paths alone, for a compiled
+/// loop (`jit::jit_row_vm_read`): the run-time cache hit of
+/// [`Op::FetchGlobal`] (`mode` given), or a superglobal read as a whole
+/// (`Op::Fetch`, no `mode`), the value into `dst` or the variable `to`.
+/// `Some(stored in the variable)`; `None`, nothing changed, when the
+/// interpreted row has to decide (a miss, an undefined variable read with a
+/// warning).
+pub(super) fn vm_read(
+    vm: &mut Vm,
+    place: u32,
+    dst: u32,
+    to: Option<u32>,
+    mode: Option<FetchMode>,
+) -> Option<bool> {
+    if let Some(mode) = mode {
+        return vm.fetch_global_hit(place, mode, dst, to);
+    }
+    let v = vm.fetch_place_fast(place)?;
+    vm.set_tmp(dst, v);
+    Some(false)
 }
 
 /// [`Op::FetchGlobal`] on a cache miss: the name is resolved and the slot
