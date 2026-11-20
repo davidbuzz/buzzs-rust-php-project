@@ -28,7 +28,10 @@ fn tag_byte_and_int_payload() {
     // they read as anything, so the JIT never looks at them.)
     let v = Value::Int(-0x1122_3344_5566_7788i64);
     let b = bytes(&v);
-    assert_eq!(u64::from_le_bytes(b[8..16].try_into().unwrap()), v.as_int().unwrap() as u64);
+    assert_eq!(
+        u64::from_le_bytes(b[8..16].try_into().unwrap()),
+        v.as_int().unwrap() as u64
+    );
 
     // `None` (an undefined compiled variable) has its own tag; `Some`
     // shares the variant's.

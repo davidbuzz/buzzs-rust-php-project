@@ -1425,13 +1425,15 @@ impl Compiler<'_> {
 }
 
 /// Whether a folded array holds an empty or one-byte string that is not
-/// the shared interned instance.
+/// the shared interned instance, or a string key that is not interned.
 fn has_uninterned_strings(a: &php_runtime::ZArray) -> bool {
-    a.values().any(|v| match v {
-        Value::Str(s) => s.len() <= 1 && !s.is_interned(),
-        Value::Array(inner) => has_uninterned_strings(inner),
-        _ => false,
-    })
+    a.keys()
+        .any(|k| matches!(k, php_runtime::ArrayKey::Str(s) if !s.is_interned()))
+        || a.values().any(|v| match v {
+            Value::Str(s) => s.len() <= 1 && !s.is_interned(),
+            Value::Array(inner) => has_uninterned_strings(inner),
+            _ => false,
+        })
 }
 
 /// The scanner makes empty and one-byte string literals the shared
@@ -1442,7 +1444,14 @@ fn intern_array_strings(a: &mut php_runtime::ZArray) {
     if !has_uninterned_strings(a) {
         return;
     }
-    for (_, v) in a.make_mut().iter_mut() {
+    // The keys of a compile-time array are interned strings, as every
+    // string the compiler keeps is (php-src builds the array from the
+    // AST's interned strings): `$a['key']`, whose literal is interned as
+    // well, then finds its bucket by pointer. Without it every such
+    // lookup compared the bytes.
+    let table = a.make_mut();
+    table.intern_str_keys();
+    for (_, v) in table.iter_mut() {
         match v {
             Value::Str(s) if s.len() <= 1 && !s.is_interned() => *s = s.interned(),
             Value::Array(inner) => intern_array_strings(inner),

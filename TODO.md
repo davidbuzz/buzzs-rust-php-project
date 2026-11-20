@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 48/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 17/82 with `BUZZS_JIT=0`).
+Score: 54/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 18/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -17,13 +17,18 @@ Score: 48/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by d
 - [~] JIT Step 2 — array/string dim rows. Done 2026-11-20 (`24eca59c`): int-offset array
       rows for int elements (`$t = $a[$i]`, the folded `$v = $a[$i]`, `$a[$i] = v`, `$a[] = v`,
       `$a[$i] op= v`) through helpers the trace calls, native `& | ^ << >>` and `NumBinC`.
-      Open: string keys (hash_read, x_eq_hash_v, hash1/hash2), string offsets (x_eq_str_0),
+      String-key reads done too (hash_read and x_eq_hash_v 1.45 -> 0.84, with the keys of
+      compile-time arrays interned). Open: string keys built at run time (hash1/hash2),
+      string-key writes, string offsets (x_eq_str_0),
       nested dims (matrix), float elements (heapsort), `isset`/`++` on an element, and an
       inline packed read in place of the helper call. ary (1.59) and ary2 (1.92) compile now
       and are still over: what is left is table growth and hash inserts in php-runtime.
-- [ ] JIT Step 3 — call-heavy tail: frameless recursion (ackermann 10.67, fib 6.43,
-      fibo 6.39), closure inlining (ops:closure 4.15, ops:new_obj adjacent),
-      native-call inlining (builtins 5.36, calls 5.09, int_func 2.15).
+- [~] JIT Step 3 — call-heavy tail. Done 2026-11-20 (`f457925c`): pure int functions
+      compiled whole with native recursion (ackermann 10.58 -> 0.18, fib 6.31 -> 0.19,
+      fibo 6.27 -> 0.19). Open: calls a trace cannot inline - a method whose body touches a
+      property (suite:calls 4.61), closures (ops:closure 4.27), builtins (builtins 5.36,
+      int_func 1.99) - and the interpreter's own call protocol (~950 instructions per call
+      against C's ~190, memory note `call-redesign-plan`).
 - [ ] JIT Step 4 — `New` rows (new_obj 3.28, micro:new_Foo 2.12, objects 4.63),
       elvis/ternary (`JmpZC` + `Step` rows: x_eq_f_q_f_a 3.49, x_eq_a_elvis_null 2.92,
       x_eq_f_elvis_tmp 2.51, x_eq_f_q_f_tmp 1.94), `$this::CONST` (x_eq_Foo_cc_TEST 3.00: a

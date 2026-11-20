@@ -1696,6 +1696,29 @@ impl HashTable {
         }
     }
 
+    /// Replaces every string key that is not interned by the interned
+    /// instance of its bytes (`zend_new_interned_string` on an array's
+    /// keys, as php-src's compiler leaves a constant array's). The keys,
+    /// their hashes and their order are the same, so nothing about the
+    /// table changes but which string instances it holds: a lookup by an
+    /// interned key (every literal) then finds its bucket by pointer, with
+    /// no byte comparison.
+    pub fn intern_str_keys(&mut self) {
+        let Store::Hash(d) = &mut self.store else {
+            return;
+        };
+        for b in &mut d.buckets {
+            if b.val.is_none() {
+                continue;
+            }
+            if let ArrayKey::Str(k) = &mut b.key {
+                if !k.is_interned() {
+                    *k = k.interned();
+                }
+            }
+        }
+    }
+
     /// Iterates `(key, &mut value)` pairs in order.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&ArrayKey, &mut Value)> {
         let (packed, buckets): (&mut [Option<Value>], &mut [Bucket]) = match &mut self.store {

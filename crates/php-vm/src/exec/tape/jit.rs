@@ -2017,6 +2017,45 @@ unsafe extern "C" fn jit_dim_get(
     }
 }
 
+/// [`jit_dim_get`] for the commonest string-key read, `$v = $arr['key']`:
+/// the key a string literal that is no integer key, the destination the
+/// variable of the folded assignment. The same answers, without the
+/// dispatch on what kind of offset and destination it was given.
+///
+/// # Safety
+/// `arr` and `dst` are compiled variables' slots of the running frame,
+/// `key` a literal of its op array.
+unsafe extern "C" fn jit_dim_get_key(
+    arr: *const crate::vm::CvSlot,
+    key: *const php_runtime::Value,
+    dst: *const crate::vm::CvSlot,
+    _word: u32,
+) -> u32 {
+    use php_runtime::Value;
+    // SAFETY: the caller's contract; the element is copied out before the
+    // destination is written.
+    unsafe {
+        let (Some(Value::Array(a)), Value::Str(k)) = ((*arr).get(), &*key) else {
+            return 1;
+        };
+        let Some(Value::Int(v)) = a.get_zstr(k) else {
+            return 1;
+        };
+        let v = *v;
+        let slot = &*dst;
+        match slot.get() {
+            // Nothing or a scalar: it owns nothing.
+            None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+                std::mem::forget(slot.set(Some(Value::Int(v))));
+            }
+            // A string is released.
+            Some(Value::Str(_)) => drop(slot.set(Some(Value::Int(v)))),
+            Some(_) => return 1,
+        }
+        0
+    }
+}
+
 /// `C_DIMW`'s helper: `$arr[$idx] = $val` (`idx` null: `$arr[] = $val`)
 /// when `arr` holds an array directly and alone (no other handle: no
 /// separation), `val` an `Int`, and `idx` an `Int` key that is new to the
@@ -4433,6 +4472,20 @@ impl Emitter {
     /// `Int` element and returns 0; anything else leaves the row to the
     /// interpreter, nothing changed.
     fn emit_dimr(&mut self, m: JitMeta, i: usize) {
+        // `$v = $arr['key']` has a helper of its own.
+        if m.inc && m.kb == KL && m.kc == KC {
+            self.emit_helper(
+                jit_dim_get_key as *const () as usize,
+                [
+                    HArg::Slot(KC, m.sb),
+                    HArg::Abs(m.lit_b),
+                    HArg::Slot(KC, m.db),
+                ],
+                0,
+                Target::Side(i),
+            );
+            return;
+        }
         self.emit_helper(
             jit_dim_get as *const () as usize,
             [
@@ -6363,6 +6416,26 @@ mod layout_tests {
             0
         );
         assert!(tmp_is(2));
+        // The helper of `$v = $arr['key']`: the same answers.
+        let to2 = CvSlot::new(None);
+        let d2 = std::ptr::from_ref(&to2);
+        let (kb, kg) = (key("beta"), key("gamma"));
+        assert_eq!(unsafe { jit_dim_get_key(np, &raw const kb, d2, 0) }, 0);
+        assert!(matches!(to2.get(), Some(Value::Int(2))));
+        assert_eq!(unsafe { jit_dim_get_key(np, &raw const kg, d2, 0) }, 1);
+        assert!(matches!(to2.get(), Some(Value::Int(2))));
+        let held_text = CvSlot::new(Some(key("old")));
+        assert_eq!(
+            unsafe { jit_dim_get_key(np, &raw const kb, &raw const held_text, 0) },
+            0
+        );
+        assert!(matches!(held_text.get(), Some(Value::Int(2))));
+        let held_arr = CvSlot::new(Some(Value::Array(ZArray::from_values([Value::Int(1)]))));
+        assert_eq!(
+            unsafe { jit_dim_get_key(np, &raw const kb, &raw const held_arr, 0) },
+            1
+        );
+        assert!(matches!(held_arr.get(), Some(Value::Array(_))));
         // A string the destination holds is released, not leaked.
         let text = CvSlot::new(Some(key("old")));
         let tp = std::ptr::from_ref(&text).cast_mut().cast::<u8>();
