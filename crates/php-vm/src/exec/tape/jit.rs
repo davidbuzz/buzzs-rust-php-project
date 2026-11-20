@@ -85,11 +85,14 @@ pub(crate) static OBSERVER_ON: AtomicBool = AtomicBool::new(false);
 /// `plan_call`'s marker for a callee `return` of `Operand::Unused`
 /// (`return;`): the trace stores a null into the caller's result slot.
 const KNULL_ARG: u8 = 5;
-/// `plan_call`'s marker for a caller-side `Send` that can be left out
-/// entirely: the callee's inlined body never mentions that parameter
-/// (or the caller passed more arguments than the callee declares, and
-/// the plain call discards the extras), so there is nothing to guard
-/// and nothing to store, whatever the caller-side value was.
+/// `plan_call`'s marker for a caller-side `Send` that can be left out:
+/// the callee's inlined body never mentions that untyped parameter (or
+/// the caller passed more arguments than the callee declares, and the
+/// plain call discards the extras), so there is nothing to store,
+/// whatever the caller-side value was. A dropped send of a compiled
+/// variable keeps the variable's slot in `off` with `lit == 1`: `plan`
+/// guards that it is defined (the interpreted send warns when it is
+/// not).
 const KSKIP: u8 = 6;
 /// `plan_call`'s receiver kind for a method call whose receiver is the
 /// frame's `$this` (`InitMethodCall` with `Operand::Unused`): not a
@@ -183,8 +186,8 @@ pub(crate) struct JitCtx {
 impl JitCtx {
     /// A context for `tape` (already decoded to `tape_slice`), reading
     /// its eagerly-created tables; `None` when the JIT is off (checked
-    /// with one load), the JIT was off while `tape` was decoded, or
-    /// [`Tape::jit_kill`] ran.
+    /// with one load), the tape has no loop the JIT could compile
+    /// ([`has_loop_close`]: it got no tables), or [`Tape::jit_kill`] ran.
     #[inline]
     pub(crate) fn maybe_for_tape(tape: &Tape, tape_slice: &[Inst]) -> Option<JitCtx> {
         if !enabled() {
@@ -241,11 +244,42 @@ const MAX_TRACES: usize = 4096;
 /// interpreter then runs one iteration and re-enters).
 const ITER_CAP: u32 = 1 << 24;
 
-/// Whether the JIT is enabled for this process (read once).
+/// Whether the JIT is enabled for this process (read once): on by default
+/// where the emitted code can run - x86-64 Linux, the platform of the
+/// emitter's encodings and of the `mmap` constants below - and switched
+/// off with `BUZZS_JIT=0`.
+///
+/// It used to be opt-in (`BUZZS_JIT=1`), which left every ordinary run,
+/// and the acceptance check itself (`perf/bench/acceptance.py` sets no
+/// such variable), measuring the interpreter alone.
 #[inline]
 pub fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("BUZZS_JIT").is_some_and(|v| v != "0"))
+    *ON.get_or_init(|| {
+        cfg!(all(target_arch = "x86_64", target_os = "linux"))
+            && std::env::var_os("BUZZS_JIT").is_none_or(|v| v != "0")
+    })
+}
+
+/// Whether `tape` has an instruction that could close a compiled loop: a
+/// row of a jump class the plan accepts as a region's close (`Jmp`, the
+/// fused compare-and-branch, the fused `++`-compare) that jumps backward.
+/// `plan` refuses a region closed by anything else, so a tape without one
+/// can never trace: it gets no tables, and its frames run the
+/// interpreter's instantiation without the back-edge hook at all (a
+/// function with no loop, recursive ones included, pays nothing for the
+/// JIT being on).
+pub(crate) fn has_loop_close(tape: &[Inst]) -> bool {
+    tape.iter().any(|inst| {
+        #[allow(clippy::cast_possible_wrap)]
+        let backward = (inst.c as i32) < 0;
+        backward
+            && (inst.op == TOp::Jmp
+                || inst
+                    .op
+                    .jit_meta()
+                    .is_some_and(|m| m.class == J_CMP || m.class == J_INCCMP))
+    })
 }
 
 /// The per-tape hot-loop tables, created on the tape's first hot back
@@ -459,14 +493,21 @@ impl Default for JitMeta {
     }
 }
 
-/// One entry guard: slot (`base` 0 = `cvs`, 1 = `tmps`; byte offset),
-/// exact (it must hold an `Int`) or weak (anything the interpreter's
-/// own store test accepts: a scalar or nothing).
+/// One entry guard: slot (`base` 0 = `cvs`, 1 = `tmps`; byte offset) and
+/// what it must hold. `exact`: an `Int` (the slot is read as one).
+/// `plain`: anything the interpreter's own store test accepts, a scalar
+/// or nothing (the slot is only stored into). `defined`: any value at
+/// all, but not nothing (the variable is read by a send the trace drops:
+/// reading an undefined one warns, which only the interpreter does).
+/// `exact` implies the other two; `plain` and `defined` together mean a
+/// scalar.
 #[derive(Clone, Copy)]
 struct Guard {
     base: u8,
     off: u32,
     exact: bool,
+    plain: bool,
+    defined: bool,
 }
 
 /// One operand of an inlined call (an argument or the callee's return
@@ -517,6 +558,12 @@ struct CallPlan {
     /// or [`KTHIS`] for `$this` (offset unused, read through the frame
     /// pointer).
     recv: Option<(u8, u32, u64)>,
+    /// With `recv`: the calling scope the site's `method_cache` entry was
+    /// filled for, as the raw `Frame::scope` field word (0 = no scope).
+    /// The entry answers only that scope (`prepare_method` compares it on
+    /// every call: another scope may see another method of the same
+    /// name, or none), so the emitted guard re-checks it.
+    recv_scope: i64,
     /// The call's scratch slice base (set once the buffer is mapped).
     base: u32,
     /// The scratch slice size.
@@ -735,12 +782,44 @@ fn op_arith(e: u8) -> Option<u8> {
 /// Add one slot guard (merging with an existing one: exact wins).
 fn add_slot(guards: &mut Vec<Guard>, base: u8, off: u32, exact: bool) -> bool {
     if let Some(g) = guards.iter_mut().find(|g| g.base == base && g.off == off) {
-        g.exact |= exact;
+        if exact {
+            g.exact = true;
+        } else {
+            g.plain = true;
+        }
         true
     } else if guards.len() >= MAX_GUARDS {
         false
     } else {
-        guards.push(Guard { base, off, exact });
+        guards.push(Guard {
+            base,
+            off,
+            exact,
+            plain: !exact,
+            defined: false,
+        });
+        true
+    }
+}
+
+/// Add the guard that compiled variable `off` holds a value (merging with
+/// an existing guard of the slot): the trace drops a read of it that the
+/// interpreter makes (a send to a parameter the callee never mentions),
+/// and that read warns when the variable is undefined.
+fn add_defined(guards: &mut Vec<Guard>, off: u32) -> bool {
+    if let Some(g) = guards.iter_mut().find(|g| g.base == KC && g.off == off) {
+        g.defined = true;
+        true
+    } else if guards.len() >= MAX_GUARDS {
+        false
+    } else {
+        guards.push(Guard {
+            base: KC,
+            off,
+            exact: false,
+            plain: false,
+            defined: true,
+        });
         true
     }
 }
@@ -1652,9 +1731,10 @@ fn plan(
     // *caller* operands (the `Send` sources) are read as ints by the
     // trace, and its result temporary is fully written.
     let has_calls = calls.iter().any(|c| c.is_some());
-    // Some inlined call reads its `$this` receiver, or a property read
-    // re-checks the frame's scope: keep the frame pointer (entry
-    // argument `rdx`) in `r10` for those guards.
+    // Some inlined method call re-checks the frame's calling scope (and
+    // reads a `$this` receiver through the frame), or a property read
+    // re-checks the scope: keep the frame pointer (entry argument `rdx`)
+    // in `r10` for those guards.
     let frame = class.contains(&C_PROP)
         || class.contains(&C_PROPW)
         || class.contains(&C_PROPINC)
@@ -1664,10 +1744,7 @@ fn plan(
         || class.contains(&C_SPROPW)
         || class.contains(&C_SPROPISSET)
         || class.contains(&C_CONSTI)
-        || calls
-            .iter()
-            .flatten()
-            .any(|cp| cp.recv.is_some_and(|(kind, _, _)| kind == KTHIS));
+        || calls.iter().flatten().any(|cp| cp.recv.is_some());
     let mut guards: Vec<Guard> = Vec::new();
     // Temporary offsets fully stored by an earlier row of the region (in
     // program order), by what the store left there: an `Int` (`defs`:
@@ -1698,6 +1775,11 @@ fn plan(
                 KT if bools.contains(&arg.off) || nulls.contains(&arg.off) => false,
                 KC if cvbools.contains(&arg.off) => false,
                 KC | KT => add_slot(&mut guards, arg.kind, arg.off, true),
+                // A dropped send of a compiled variable (`plan_call` left
+                // its slot in `off`): whatever it holds is unused, but it
+                // must hold something - the interpreted send of an
+                // undefined variable warns.
+                KSKIP if arg.lit == 1 => add_defined(&mut guards, arg.off),
                 _ => true,
             }) {
                 rej!(format!("guards for the call at {}", head + j));
@@ -2021,6 +2103,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     // cap exits resume without disarming), so only the cache entry's
     // shape is checked here, mirroring `prepare_method`.
     let mut recv: Option<(u8, u32, u64)> = None;
+    let mut recv_scope = 0i64;
     let uf = if let Some(name) = name {
         let cache = code.fcall_cache.borrow();
         match cache.get(name as usize) {
@@ -2051,6 +2134,26 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         if cached.class_addr == 0 {
             rj!("method cache entry has no class");
         }
+        // The entry answers one calling scope only: `prepare_method`
+        // compares the frame's scope with it on every call, because
+        // another scope may see another method of that name, or none (a
+        // private method, a closure bound elsewhere over the same op
+        // array). The plan runs in the frame that enters the trace, so
+        // its scope is the one the entry must be for, and the emitted
+        // guard pins it for every later frame.
+        // SAFETY: the frame outlives the plan (the trace runs in it).
+        let scope = unsafe { &*st.f }
+            .scope
+            .as_ref()
+            .map_or(0, |s| Rc::as_ptr(s) as usize);
+        if cached.scope_addr != scope {
+            rj!("method cache entry is for another calling scope");
+        }
+        recv_scope = if scope == 0 {
+            0
+        } else {
+            scope as i64 - i64::from(RC_VALUE_OFFSET)
+        };
         let cls = match cached.class.upgrade() {
             Some(c) => c,
             None => rj!("cached receiver class is dead"),
@@ -2095,18 +2198,14 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     // `KSKIP`.
     if shape == crate::func::CallShape::TYPED {
         // The trace always passes `Int`s: every parameter must accept
-        // one without coercion, and an `int` return is the only one the
-        // body can be trusted to honour.
+        // one without coercion. (The return type is checked below, once
+        // the body's `Return` operand is known, for every shape.)
         if uf
             .params
             .iter()
             .any(|p| p.ty.as_ref().is_some_and(|t| t.mask & mask::LONG == 0))
-            || uf
-                .return_type
-                .as_ref()
-                .is_some_and(|t| t.mask & mask::LONG == 0)
         {
-            rj!("typed callee rejects an int param or return");
+            rj!("typed callee rejects an int param");
         }
     }
 
@@ -2160,6 +2259,24 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         rows.push(row);
         bc += c_step(c);
     };
+    // The declared return type, whatever the parameters are (the call
+    // shape only says whether a *parameter* is typed): the interpreted
+    // `Return` verifies it for every function that has one
+    // (`Vm::verify_return`), and a value the type does not accept as it
+    // is gets coerced there (`: float`, `: string` and `: bool` turn an
+    // int into something else) or raises a `TypeError`. The inlined body
+    // hands back an `Int`, or nothing for a bare `return;`, so only a
+    // return the check passes unchanged inlines: an int where the type
+    // accepts one, nothing where the type is `void`.
+    if let Some(rt) = uf.return_type.as_ref() {
+        let passes = match ret {
+            Operand::Unused => rt.is_void(),
+            _ => !rt.is_void() && !rt.is_never() && (rt.is_mixed() || rt.mask & mask::LONG != 0),
+        };
+        if !passes {
+            rj!("callee's declared return type would coerce or reject the result");
+        }
+    }
 
     // The scratch slice: the callee's compiled variables, then its
     // temporaries, 16 bytes each; the `KR` offsets below are relative
@@ -2197,11 +2314,32 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             live[i as usize] = true;
         }
     }
+    // A typed parameter's argument is checked against the declaration
+    // whether or not the body reads it (`calls::enter`: a value the type
+    // does not accept as it is leaves the plain call for the generic one,
+    // which coerces it or throws). So its send is never dead: it stays a
+    // live send, which the trace only makes with an `Int` - a literal
+    // resolved below, or a slot guarded as one - and the check above
+    // established that every declared type takes an `Int` unchanged.
+    for (j, p) in uf.params.iter().enumerate() {
+        if j < ncvs && p.ty.as_ref().is_some_and(|t| !t.is_mixed()) {
+            live[j] = true;
+        }
+    }
     for (j, arg) in sends.iter_mut().enumerate() {
         if j >= uf.params.len() || j >= ncvs || !live[j] {
+            // Dropped. A compiled variable's slot stays in `off`, marked
+            // by `lit == 1`: the interpreted send reads the variable, and
+            // reading an undefined one warns, so `plan` guards that it
+            // holds a value (anything: the value itself is unused).
+            let from_cv = arg.kind == KC;
             arg.kind = KSKIP;
-            arg.off = 0;
-            arg.lit = 0;
+            if from_cv {
+                arg.lit = 1;
+            } else {
+                arg.off = 0;
+                arg.lit = 0;
+            }
         } else if arg.kind == KL {
             arg.lit = resolved_lit(st, arg.off)?;
         }
@@ -2362,6 +2500,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         rows,
         ret,
         recv,
+        recv_scope,
         base: 0,
         size: (((ncvs + nt) as u32) << 4).max(16),
     })
@@ -2969,6 +3108,17 @@ impl Emitter {
             self.movabs_rax(cls_addr.wrapping_sub(u64::from(RC_VALUE_OFFSET)) as i64);
             self.cmp_rax_r9();
             self.jcc(0x85, Target::Stub(cp.callove)); // jne: other class
+                                                      // The calling scope the cache entry was filled for, as
+                                                      // `emit_prop_slots` checks it: the method this site
+                                                      // resolved is only this scope's answer.
+            self.load_rax_frame(SCOPE_FIELD);
+            if cp.recv_scope == 0 {
+                self.test_rax();
+            } else {
+                self.movabs_rcx(cp.recv_scope);
+                self.cmp_rax_rcx();
+            }
+            self.jcc(0x85, Target::Stub(cp.callove)); // jne: other scope
         }
         for (n, arg) in cp.sends.iter().enumerate() {
             if arg.kind == KSKIP {
@@ -3530,6 +3680,15 @@ impl Emitter {
             if g.exact {
                 self.cmpb(g.base, g.off, TAG_INT);
                 self.jcc(0x85, Target::Disarm(self.plan.head)); // jne
+            } else if g.plain && g.defined {
+                // A scalar, and a value: the tags below `Str` (`None`
+                // reads as `TAG_NONE`, above it).
+                self.cmpb(g.base, g.off, TAG_STR);
+                self.jcc(0x83, Target::Disarm(self.plan.head)); // jae
+            } else if g.defined {
+                // Any value, but not nothing.
+                self.cmpb(g.base, g.off, TAG_NONE);
+                self.jcc(0x84, Target::Disarm(self.plan.head)); // je
             } else {
                 // A scalar (below `Str`) or nothing: what the
                 // interpreter's own store test accepts.
@@ -3758,7 +3917,9 @@ fn debug_on() -> bool {
 /// entry address as a `usize`, or `usize::MAX` (refused: the region,
 /// this version, stays interpreted).
 fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
-    if TRACES.fetch_add(1, Ordering::Relaxed) >= MAX_TRACES {
+    // The cap is on traces compiled (each owns pages for good): a refused
+    // region costs nothing lasting, so it does not count toward it.
+    if TRACES.load(Ordering::Relaxed) >= MAX_TRACES {
         return usize::MAX;
     }
     let _g = COMPILE
@@ -3814,7 +3975,12 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
                 "jit:   guard base {} off {} {}",
                 g.base,
                 g.off,
-                if g.exact { "exact" } else { "weak" }
+                match (g.exact, g.plain, g.defined) {
+                    (true, _, _) => "exact",
+                    (_, true, true) => "scalar",
+                    (_, true, false) => "weak",
+                    _ => "defined",
+                }
             );
         }
     }
@@ -3869,7 +4035,10 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
         );
     }
     match place(&em.code) {
-        Some(p) => p as usize,
+        Some(p) => {
+            TRACES.fetch_add(1, Ordering::Relaxed);
+            p as usize
+        }
         None => usize::MAX,
     }
 }
@@ -4366,5 +4535,47 @@ mod layout_tests {
             em.code,
             vec![0x48, 0x85, 0xC9, 0xB9, 0, 0, 0, 0, 0x0F, 0x94, 0xC1]
         );
+    }
+
+    /// A slot's guard requirements merge: an exact guard wins, and the
+    /// "defined" of a dropped send joins the "plain" of a store into the
+    /// same variable (together: a scalar).
+    #[test]
+    fn guard_requirements_merge() {
+        let mut g: Vec<Guard> = Vec::new();
+        assert!(add_defined(&mut g, 32));
+        assert_eq!((g[0].exact, g[0].plain, g[0].defined), (false, false, true));
+        assert!(add_slot(&mut g, KC, 32, false));
+        assert_eq!((g[0].exact, g[0].plain, g[0].defined), (false, true, true));
+        assert!(add_slot(&mut g, KC, 32, true));
+        assert!(g[0].exact);
+        assert_eq!(g.len(), 1);
+        // A temporary at the same offset is another slot, and a store
+        // into it asks for nothing but "plain".
+        assert!(add_slot(&mut g, KT, 32, false));
+        assert_eq!(g.len(), 2);
+        assert_eq!((g[1].exact, g[1].plain, g[1].defined), (false, true, false));
+    }
+
+    /// Only a backward row of a jump class the plan accepts as a region's
+    /// close makes a tape worth tables.
+    #[test]
+    fn loop_close_detection() {
+        let forward = Inst {
+            c: 64,
+            ..Inst::plain(TOp::Jmp)
+        };
+        let backward = Inst {
+            c: (-64i32) as u32,
+            ..Inst::plain(TOp::Jmp)
+        };
+        // A row that is no jump, whose `c` only looks negative.
+        let other = Inst {
+            c: u32::MAX,
+            ..Inst::plain(TOp::AssignI)
+        };
+        assert!(!has_loop_close(&[]));
+        assert!(!has_loop_close(&[forward, other]));
+        assert!(has_loop_close(&[forward, other, backward]));
     }
 }

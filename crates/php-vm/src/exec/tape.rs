@@ -128,7 +128,10 @@ impl Tape {
         self.insts.get_or_init(|| {
             php_memlimit::persistent(|| {
                 let tape = lower(code);
-                if jit::enabled() {
+                // Tables only for a tape that has a loop the JIT could
+                // ever compile: without them `run_tape` picks the core
+                // without the back-edge hook for every frame of it.
+                if jit::enabled() && jit::has_loop_close(&tape) {
                     self.jit_init(tape.len());
                 }
                 tape
