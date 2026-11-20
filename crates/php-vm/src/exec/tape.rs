@@ -1196,6 +1196,7 @@ tape_ops! {
         NumBinT = (scalar::num_bin_tmp, 1, plain_f),
         NumBinC = (scalar::num_bin_cv, 2, plain_f),
         NumAssignOpC = (scalar::num_assign_op_cv, 1, plain_f),
+        AbsN = (scalar::abs_num, 2, plain_f),
 
         // ---- end of scalar ----
         //

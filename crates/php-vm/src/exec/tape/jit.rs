@@ -442,6 +442,10 @@ const C_DIMOP: u16 = 30;
 /// (`NumBinC`: the `Bin` and the `AssignCv` after it, the destination
 /// variable in `inst.d`).
 pub(crate) const J_NUMBIN_D: u16 = 31;
+/// `abs($x)` of an int (`AbsN`): the absolute value into the result
+/// temporary, when there is one; `PHP_INT_MIN`, whose magnitude is a
+/// float, is the interpreted row's. The row covers the op slot after it.
+const C_ABS: u16 = 32;
 /// `JitMeta.db` for a property write whose result is discarded (no
 /// destination temporary).
 const NO_DST: u32 = u32::MAX;
@@ -449,7 +453,7 @@ const NO_DST: u32 = u32::MAX;
 /// The number of tape instructions one whitelisted class consumes
 /// (fused rows cover the ops they merge).
 pub(crate) fn c_step(c: u16) -> usize {
-    if c == J_CMP || c == J_ARITH_CV || c == J_NUMBIN_D {
+    if c == J_CMP || c == J_ARITH_CV || c == J_NUMBIN_D || c == C_ABS {
         2
     } else if c == J_INCCMP {
         3
@@ -812,6 +816,14 @@ fn classify(st: &St, inst: &Inst) -> Option<(u16, JitMeta)> {
                 ..JitMeta::default()
             }
         }
+        // `abs(x)`: the operand's kind in `inst.k`, the result temporary
+        // in `inst.c` (`u32::MAX`: unused).
+        TOp::AbsN => JitMeta {
+            class: C_ABS,
+            ka: inst.k,
+            kb: KI,
+            ..JitMeta::default()
+        },
         // `$cv = a op b` (`NumBinC`): the operands as for `NumBinT`, the
         // destination variable in `inst.d`; the row covers the `AssignCv`
         // after the `Bin`.
@@ -1062,6 +1074,9 @@ fn add_class_guards(
         J_NUMBIN_D => {
             read(m.ka, inst.a, guards) && read(m.kb, inst.b, guards) && keep_int(inst.d, guards)
         }
+        // `abs(x)`: the operand is read as an int; a result temporary is
+        // fully stored.
+        C_ABS => read(m.ka, inst.a, guards) && (inst.c == u32::MAX || fresh_dst(inst.c, guards)),
         // The array rows hand their operands to a helper by address, and
         // the helper checks every one of them on every iteration (a
         // wrong type declines, which leaves the row to the interpreter):
@@ -2395,6 +2410,12 @@ fn plan(
                 let c = tape[head + j].c;
                 set_tmp_kind(&mut defs, &mut bools, &mut nulls, c, TmpKind::Int);
             }
+            C_ABS => {
+                let c = tape[head + j].c;
+                if c != u32::MAX {
+                    set_tmp_kind(&mut defs, &mut bools, &mut nulls, c, TmpKind::Int);
+                }
+            }
             // An array read stored an `Int` into its destination (or left
             // the trace): a temporary is a known `Int`, a variable is one
             // again whatever an earlier row left there.
@@ -3600,6 +3621,23 @@ impl Emitter {
                     self.store_int_r9_base(m.ka, inst.a);
                 }
                 self.store_tag_base(m.ka, inst.a, TAG_INT);
+            }
+            // `abs(x)`: nothing to do for an unused result (the operand is
+            // an int, and `abs` of one has no effect); else negate a
+            // negative value, leaving `PHP_INT_MIN` (the one `neg`
+            // overflows on) to the interpreted row.
+            C_ABS => {
+                if inst.c != u32::MAX {
+                    self.to_rax(m.ka, inst.a, m.lit_a);
+                    self.test_rax();
+                    // jns over the `neg` (3 bytes) and its `jo` (6).
+                    let skip = self.code.len() + 6 + 3 + 6;
+                    self.jcc(0x89, Target::At(skip));
+                    self.put(&[REX_W, 0xF7, 0xD8]); // neg rax
+                    self.jcc(0x80, jo); // jo
+                    self.store_int(KT, inst.c);
+                    self.store_tag_base(KT, inst.c, TAG_INT);
+                }
             }
             // `$cv = TMP`: copy the int, then consume the temporary
             // (null it, as the interpreted row does).

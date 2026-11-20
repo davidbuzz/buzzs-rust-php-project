@@ -84,6 +84,28 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::NumAssignOpC)
             }
         }
+        // `abs($x)`, which the compiler folded from its `InitFCall`, `Send`
+        // and `DoCall` into one op covering the op slot after it. The
+        // result goes to its temporary (or nowhere, when it is unused);
+        // an `AssignCv` folded behind it (`to`) then runs as its own
+        // instruction and moves it, which is what the generic op does
+        // when it cannot store into the variable directly. The form with
+        // a folded variable and no temporary stays the generic op's.
+        Op::Abs { src: from, dst, to } => {
+            if dst.is_none() && to.is_some() {
+                return None;
+            }
+            let (ka, fa) = src(code, from)?;
+            Inst {
+                k: ka,
+                a: fa,
+                c: match dst {
+                    Some(d) => tmp_off(code, d)?,
+                    None => NO_TMP,
+                },
+                ..plain(TOp::AbsN)
+            }
+        }
         Op::Bin { op, a, b, dst } => {
             let e = NUM_OPS.iter().position(|&o| o == op)?;
             let (ka, fa) = src(code, a)?;
@@ -265,6 +287,45 @@ pub(super) unsafe fn num_assign_op_cv(frame: *mut crate::vm::Frame, inst: &Inst)
     // SAFETY: `a` is a validated variable offset; it held a number, which
     // owns nothing.
     std::mem::forget(unsafe { cv_slot(st, inst.a) }.replace(r));
+    true
+}
+
+/// "No result temporary" in `c` of an [`TOp::AbsN`] instruction.
+pub(super) const NO_TMP: u32 = u32::MAX;
+
+/// `Op::Abs` of a plain number (`Vm::abs_fast`): the absolute value of an
+/// int (a float for `PHP_INT_MIN`, whose magnitude no int holds) or of a
+/// float, into the result temporary when there is one. Declines anything
+/// else (the generic op makes the call) and a temporary holding a value
+/// to release.
+///
+/// # Safety
+/// As [`num_bin_tmp`].
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+pub(super) unsafe fn abs_num(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // SAFETY: the caller's contract (`a` is a validated operand of kind `k`).
+    let Some(x) = (unsafe { num_of_kind(st, inst.k, inst.a) }) else {
+        return false;
+    };
+    if inst.c == NO_TMP {
+        return true;
+    }
+    let result = match x {
+        Num::Int(i64::MIN) => php_runtime::Value::Float(-Num::Int(i64::MIN).as_f64()),
+        Num::Int(i) => php_runtime::Value::Int(i.abs()),
+        Num::Float(f) => php_runtime::Value::Float(f.abs()),
+    };
+    // SAFETY: `c` is a validated temporary offset.
+    let dst = unsafe { st.tmps.add(inst.c as usize).cast::<php_runtime::Value>() };
+    // SAFETY: `dst` points at a live temporary.
+    if !is_scalar(unsafe { &*dst }) {
+        return false;
+    }
+    // SAFETY: a scalar has nothing to drop; `dst` is valid for writes.
+    unsafe { std::ptr::write(dst, result) };
     true
 }
 
