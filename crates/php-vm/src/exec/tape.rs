@@ -125,25 +125,28 @@ impl Tape {
     /// The instructions, decoded from `code` on first use.
     #[inline]
     fn get(&self, code: &OpArray) -> &[Inst] {
-        self.insts
-            .get_or_init(|| {
-                php_memlimit::persistent(|| {
-                    let tape = lower(code);
-                    if jit::enabled() {
-                        self.jit_init(tape.len());
-                    }
-                    tape
-                })
+        self.insts.get_or_init(|| {
+            php_memlimit::persistent(|| {
+                let tape = lower(code);
+                if jit::enabled() {
+                    self.jit_init(tape.len());
+                }
+                tape
             })
+        })
     }
 
     /// The hot-loop tables, created with the tape.
     fn jit_init(&self, n: usize) {
         let jt = self.jit.get_or_init(|| jit::Tables::new(n));
-        self.jit_cnt
-            .store(jt.cnt() as *mut AtomicI32, std::sync::atomic::Ordering::Relaxed);
-        self.jit_tr
-            .store(jt.tr() as *mut AtomicUsize, std::sync::atomic::Ordering::Relaxed);
+        self.jit_cnt.store(
+            jt.cnt() as *mut AtomicI32,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.jit_tr.store(
+            jt.tr() as *mut AtomicUsize,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     /// Stop arming traces for this tape (a trace was refused or its
@@ -159,7 +162,8 @@ impl Tape {
     /// This tape produced a trace that paid for itself (compiled, or ran
     /// to a poll/cap): never kill its tracing.
     pub(crate) fn jit_good(&self) {
-        self.jit_good.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.jit_good
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// A trace was refused or failed its entry guards. If this tape has
