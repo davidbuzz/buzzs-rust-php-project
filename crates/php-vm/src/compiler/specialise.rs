@@ -27,9 +27,160 @@
 
 use crate::opcode::{
     cmp_outcome, ArgSrc, BinKind, ClassSpec, FetchMode, FramelessCall, IncDecKind, Literal, Op,
-    OpArray, Operand, Place, PlaceBase, PlaceId, Seg,
+    OpArray, Operand, Place, PlaceBase, PlaceId, Seg, UnKind,
 };
 use php_runtime::{BinaryOp, Value};
+
+/// How many tests of a short-circuit result [`result_leads_to`] follows. A
+/// chain's tests have been sent on by the time an earlier jump reaches them
+/// ([`thread_short_circuits`] goes from the last op to the first), so one
+/// step is the rule; the bound keeps a long chain whose end cannot be
+/// followed (`$x = $a && $b && ...`) linear to compile.
+const SHORT_CIRCUIT_HOPS: usize = 8;
+
+/// Where a jump onto `ops[at]` ends up when the temporary `tmp` holds
+/// `value` and the ops there only test it: the `JmpZ` / `JmpNz` of an `if`
+/// or a loop, the `JmpZEx` / `JmpNzEx` of the next `&&` / `||` of a
+/// chain, which stores the same value into its own result and jumps on, or
+/// falls through, or the `Bool` / `Not` that passes it (negated) to the
+/// test after it (`a && (b || c)`: the inner result is the outer one's
+/// right side; `!(a && b)`). `None` when the op there does anything else
+/// with the temporary (stores it, returns it, passes it on).
+fn result_leads_to(ops: &[Op], mut at: u32, mut tmp: u32, mut value: bool) -> Option<u32> {
+    for _ in 0..SHORT_CIRCUIT_HOPS {
+        match *ops.get(at as usize)? {
+            Op::Unary {
+                op: un @ (UnKind::Bool | UnKind::Not),
+                a: Operand::Tmp(t),
+                dst,
+            } if t == tmp => {
+                (at, tmp, value) = (at + 1, dst, value != (un == UnKind::Not));
+            }
+            Op::JmpZ(Operand::Tmp(t), to) if t == tmp => {
+                return Some(if value { at + 1 } else { to });
+            }
+            Op::JmpNz(Operand::Tmp(t), to) if t == tmp => {
+                return Some(if value { to } else { at + 1 });
+            }
+            Op::JmpZEx {
+                a: Operand::Tmp(t),
+                dst,
+                target,
+            } if t == tmp => {
+                if value {
+                    return Some(at + 1);
+                }
+                (at, tmp) = (target, dst);
+            }
+            Op::JmpNzEx {
+                a: Operand::Tmp(t),
+                dst,
+                target,
+            } if t == tmp => {
+                if !value {
+                    return Some(at + 1);
+                }
+                (at, tmp) = (target, dst);
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Makes the `&&` / `||` of a condition jump to where its result leads, and
+/// a `!` or `(bool)` that only feeds a jump that jump. Run before
+/// [`specialise`], for a script compiled without the optimizer.
+///
+/// `zend_compile_short_circuiting` gives `a && b` a result of its own:
+/// `JMPZ_EX a` to its end (the result is false), the right side, `BOOL`
+/// into the result, and at the end whatever uses it. Where that is the jump
+/// of an `if`, of a loop's test or of the next `&&` / `||` of a chain, a
+/// decided left side is tested twice, and the right side's truth is stored
+/// only to be tested again. opcache sends such jumps on
+/// (`zend_optimize_jumps`, `Zend/Optimizer/pass3.c`: `T = JMPZ_EX(X, L1)`
+/// with `L1: JMPZ(T, L2)`) and folds a `BOOL` / `BOOL_NOT` into the jump
+/// after it (`Zend/Optimizer/pass1.c`); so does this:
+///
+/// - a `JmpZEx` / `JmpNzEx` whose target only tests its result
+///   ([`result_leads_to`]) becomes the `JmpZ` / `JmpNz` of its operand to
+///   where that test goes with the value it would have stored. The result
+///   is then not stored: only that test read it;
+/// - a `Bool` or `Not` into a temporary right before the `JmpZ` / `JmpNz`
+///   of that temporary, when no jump lands on that test, becomes the jump
+///   itself, on the operand (negated for a `Not`). The truth of a value is
+///   the same at either op, and so is what reading it reports (an undefined
+///   variable, a NaN), at the same op index and line. The old jump becomes
+///   a `Nop`.
+///
+/// A comparison in front of such a jump is then a smart branch
+/// ([`specialise`]'s `CmpJmp`). The op count, every other op, the lines
+/// and the live ranges stay (a result that is no longer stored was not
+/// stored on the fall-through path before either).
+pub(crate) fn thread_short_circuits(ops: &mut [Op]) {
+    // From the last op to the first: the test a jump is sent through has
+    // then been sent on itself.
+    for i in (0..ops.len()).rev() {
+        let sent = match ops[i] {
+            Op::JmpZEx { a, dst, target } => {
+                result_leads_to(ops, target, dst, false).map(|to| Op::JmpZ(a, to))
+            }
+            Op::JmpNzEx { a, dst, target } => {
+                result_leads_to(ops, target, dst, true).map(|to| Op::JmpNz(a, to))
+            }
+            _ => None,
+        };
+        if let Some(op) = sent {
+            ops[i] = op;
+        }
+    }
+    if !ops.iter().any(|op| {
+        matches!(
+            op,
+            Op::Unary {
+                op: UnKind::Bool | UnKind::Not,
+                ..
+            }
+        )
+    }) {
+        return;
+    }
+    // The ops a jump lands on now.
+    let mut landed = vec![false; ops.len() + 1];
+    for op in ops.iter_mut() {
+        super::optimizer::for_each_label_mut(op, |to| {
+            if let Some(l) = landed.get_mut(*to as usize) {
+                *l = true;
+            }
+        });
+    }
+    // Backwards: the `!` in front of a `Bool` that became a jump is met
+    // after it (`!$a && !$b` as a condition).
+    for at in (1..ops.len()).rev() {
+        if landed[at] {
+            continue;
+        }
+        let Op::Unary {
+            op: un @ (UnKind::Bool | UnKind::Not),
+            a,
+            dst,
+        } = ops[at - 1]
+        else {
+            continue;
+        };
+        let (on_true, to) = match ops[at] {
+            Op::JmpZ(Operand::Tmp(t), to) if t == dst => (false, to),
+            Op::JmpNz(Operand::Tmp(t), to) if t == dst => (true, to),
+            _ => continue,
+        };
+        ops[at - 1] = if on_true == (un == UnKind::Bool) {
+            Op::JmpNz(a, to)
+        } else {
+            Op::JmpZ(a, to)
+        };
+        ops[at] = Op::Nop;
+    }
+}
 
 /// Rewrites `ops` (the finished body whose places are `places`) in place.
 pub(crate) fn specialise(ops: &mut [Op], places: &[Place], literals: &[Literal]) {
@@ -1099,7 +1250,7 @@ fn global_place(places: &[Place], pid: PlaceId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::{compile, CompileOptions};
-    use crate::opcode::{cmp_outcome, BinKind, FetchMode, IncDecKind, Op, Operand};
+    use crate::opcode::{cmp_outcome, BinKind, FetchMode, IncDecKind, Op, Operand, UnKind};
     use php_runtime::BinaryOp;
     use std::rc::Rc;
 
@@ -1843,6 +1994,112 @@ mod tests {
                 .any(|op| matches!(op, Op::AssignOpCvJmp { jmp_if: false, .. })),
             "{ops:?}"
         );
+    }
+
+    #[test]
+    fn short_circuit_conditions_jump_where_their_result_leads() {
+        let exs = |ops: &[Op]| {
+            ops.iter()
+                .filter(|op| matches!(op, Op::JmpZEx { .. } | Op::JmpNzEx { .. }))
+                .count()
+        };
+        let unaries = |ops: &[Op]| {
+            ops.iter()
+                .filter(|op| matches!(op, Op::Unary { .. }))
+                .count()
+        };
+        let smart = |ops: &[Op]| {
+            ops.iter()
+                .filter(|op| matches!(op, Op::CmpJmp { .. }))
+                .count()
+        };
+        // A loop's test: both comparisons are smart branches, nothing is
+        // stored.
+        let ops = main_ops("<?php $a = 1; $b = 9; while ($a < 5 && $b > 0) { $a++; }");
+        assert_eq!(
+            (exs(&ops), unaries(&ops), smart(&ops)),
+            (0, 0, 2),
+            "{ops:?}"
+        );
+        // The second comparison closes the loop itself (the loop's step,
+        // right before the first comparison, is fused with that one).
+        let head = ops
+            .iter()
+            .position(|op| matches!(op, Op::IncDecCv { .. } | Op::IncDecCvCmpJmp { .. }))
+            .expect("the loop's body");
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::CmpJmp { target, jmp_if: true, .. } if *target as usize == head
+            )),
+            "{ops:?}"
+        );
+        // `||`, a chain, a mix of both, and `!` on either side.
+        for src in [
+            "<?php $a = 1; $b = 9; if ($a < 5 || $b > 0) { echo 1; }",
+            "<?php $a = 1; $b = 9; $c = 3; if ($a < 5 && $b > 0 && $c == 3) { echo 1; }",
+            "<?php $a = 1; $b = 9; $c = 3; if (($a < 5 && $b > 0) || $c == 3) { echo 1; }",
+            "<?php $a = 1; $b = 9; $c = 3; if ($a < 5 && ($b > 0 || $c == 3)) { echo 1; }",
+            "<?php $a = 1; $b = 9; do { $a++; } while ($a < 5 || $b < 0);",
+            "<?php $a = 1; $b = 9; for (; $a < 5 && $b > 0; $a++) { echo 1; }",
+            "<?php $a = 1; $b = 0; if (!$a && !$b) { echo 1; }",
+            "<?php $a = 1; $b = 0; if (!($a && $b)) { echo 1; }",
+            "<?php $a = 1; $b = 0; $c = 2; if (!($a || $b) && !$c) { echo 1; }",
+            "<?php $a = 1; if (!$a) { echo 1; }",
+            "<?php $a = [1]; if (isset($a[0], $a[1])) { echo 1; }",
+        ] {
+            let ops = main_ops(src);
+            assert_eq!((exs(&ops), unaries(&ops)), (0, 0), "{src}: {ops:?}");
+        }
+        // A result that is used as a value keeps its ops.
+        for src in [
+            "<?php $a = 1; $b = 9; $x = $a < 5 && $b > 0;",
+            "<?php $a = 1; $b = 9; var_dump($a < 5 || $b > 0);",
+            "<?php $a = 1; $b = 9; return $a && $b;",
+        ] {
+            let ops = main_ops(src);
+            assert_eq!(exs(&ops), 1, "{src}: {ops:?}");
+        }
+        // A chain with a value at its end is not followed past it.
+        let ops = main_ops("<?php $a = 1; $b = 2; $c = 3; $x = $a && $b && $c;");
+        assert_eq!(exs(&ops), 2, "{ops:?}");
+    }
+
+    #[test]
+    fn a_jump_landing_on_a_test_keeps_the_bool_before_it() {
+        // The `Bool` before the second test of the hand-made sequence stays:
+        // the first jump lands on that test with its own value.
+        let mut ops = vec![
+            Op::JmpZ(Operand::Cv(0), 2),
+            Op::Unary {
+                op: UnKind::Bool,
+                a: Operand::Cv(1),
+                dst: 0,
+            },
+            Op::JmpZ(Operand::Tmp(0), 4),
+            Op::Nop,
+            Op::Nop,
+        ];
+        super::thread_short_circuits(&mut ops);
+        assert!(matches!(ops[1], Op::Unary { .. }), "{ops:?}");
+        // Without that jump it becomes the test.
+        ops[0] = Op::Nop;
+        super::thread_short_circuits(&mut ops);
+        assert!(matches!(ops[1], Op::JmpZ(Operand::Cv(1), 4)), "{ops:?}");
+        assert!(matches!(ops[2], Op::Nop), "{ops:?}");
+        // `!`: the opposite jump.
+        let mut ops = vec![
+            Op::Unary {
+                op: UnKind::Not,
+                a: Operand::Cv(1),
+                dst: 0,
+            },
+            Op::JmpZ(Operand::Tmp(0), 3),
+            Op::Nop,
+            Op::Nop,
+        ];
+        super::thread_short_circuits(&mut ops);
+        assert!(matches!(ops[0], Op::JmpNz(Operand::Cv(1), 3)), "{ops:?}");
     }
 
     #[test]

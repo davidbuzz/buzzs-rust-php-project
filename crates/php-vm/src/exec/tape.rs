@@ -132,7 +132,7 @@ impl Tape {
                 // ever compile: without them `run_tape` picks the core
                 // without the back-edge hook for every frame of it.
                 if jit::enabled() && jit::has_loop_close(&tape) {
-                    self.jit_init(tape.len());
+                    self.jit_init(&tape);
                 }
                 tape
             })
@@ -140,8 +140,8 @@ impl Tape {
     }
 
     /// The hot-loop tables, created with the tape.
-    fn jit_init(&self, n: usize) {
-        let jt = self.jit.get_or_init(|| jit::Tables::new(n));
+    fn jit_init(&self, tape: &[Inst]) {
+        let jt = self.jit.get_or_init(|| jit::Tables::new(tape));
         self.jit_cnt.store(
             jt.cnt() as *mut AtomicI32,
             std::sync::atomic::Ordering::Relaxed,
@@ -169,12 +169,13 @@ impl Tape {
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// A trace was refused or failed its entry guards. If this tape has
-    /// not produced a useful trace yet, stop hooking its back edges
-    /// (frames entered after this run it fully interpreted); the
-    /// per-back-edge hook is worth its cost once a trace has paid off.
-    /// Returns whether the tape was killed (so callers can stop hooking
-    /// their own back edges too).
+    /// A loop of this tape that was refused or whose trace failed its
+    /// entry guards has run on for a while (`jit::back_edge` counts its
+    /// back edges). If this tape has not produced a useful trace yet, stop
+    /// hooking its back edges (frames entered after this run it fully
+    /// interpreted); the per-back-edge hook is worth its cost once a trace
+    /// has paid off. Returns whether the tape was killed (so callers can
+    /// stop hooking their own back edges too).
     pub(crate) fn jit_bad(&self) -> bool {
         if self.jit_good.load(std::sync::atomic::Ordering::Relaxed) {
             return false;
@@ -451,6 +452,41 @@ struct Out {
     ip: *const Inst,
     at: *const Inst,
     why: u8,
+}
+
+/// The truth of the temporary a jump tests, which the jump consumes
+/// (`ZEND_JMPZ` / `ZEND_JMPNZ` of a `TMP`: `i_zend_is_true`, then the
+/// operand's release): a bool, an int, a null, a float that is no NaN, or a
+/// string (released out of line). `None`, nothing changed, for anything
+/// else: a NaN (the generic op reports it), an array or an object (their
+/// release may queue a destructor), a reference.
+#[inline(always)]
+// The test of the tape's jumps on a temporary; a float's truth is its
+// comparison with zero.
+#[allow(clippy::inline_always, clippy::float_cmp)]
+fn tmp_truth(slot: &mut Value) -> Option<bool> {
+    let truth = match *slot {
+        Value::Bool(b) => b,
+        Value::Int(i) => i != 0,
+        Value::Null => false,
+        Value::Float(x) if !x.is_nan() => x != 0.0,
+        Value::Str(_) => return Some(str_truth(slot)),
+        _ => return None,
+    };
+    // A scalar owns nothing: overwritten without the drop glue.
+    std::mem::forget(std::mem::take(slot));
+    Some(truth)
+}
+
+/// [`tmp_truth`] of a temporary holding a string, which is released: false
+/// for `""` and `"0"` (`zend_is_true` of a string).
+#[inline(never)]
+fn str_truth(slot: &mut Value) -> bool {
+    match std::mem::take(slot) {
+        Value::Str(s) => !(s.is_empty() || s.as_bytes() == b"0"),
+        // Not reached: the caller saw a string.
+        _ => false,
+    }
 }
 
 #[inline(always)]
@@ -862,13 +898,10 @@ macro_rules! tape_ops {
                     }
                     TOp::Jmp => take_jump!(ip, inst, st, JIT, ctx),
                     TOp::JmpZT => {
-                        let s = tmp_slot(st, inst.a);
-                        let Value::Bool(b) = *s else {
+                        // The temporary is consumed ([`tmp_truth`]).
+                        let Some(b) = tmp_truth(tmp_slot(st, inst.a)) else {
                             return step_out(ip);
                         };
-                        // Consumed, as `hot::take_bool` does (a bool:
-                        // nothing to release).
-                        std::ptr::write(s, Value::Null);
                         if b {
                             ip = ip.add(1);
                         } else {
@@ -876,11 +909,9 @@ macro_rules! tape_ops {
                         }
                     }
                     TOp::JmpNzT => {
-                        let s = tmp_slot(st, inst.a);
-                        let Value::Bool(b) = *s else {
+                        let Some(b) = tmp_truth(tmp_slot(st, inst.a)) else {
                             return step_out(ip);
                         };
-                        std::ptr::write(s, Value::Null);
                         if b {
                             take_jump!(ip, inst, st, JIT, ctx);
                         } else {
@@ -1234,26 +1265,35 @@ tape_ops! {
         NumAssignOpC = (scalar::num_assign_op_cv, 1, plain_f),
         AbsN = (scalar::abs_num, 2, plain_f),
         MoveT = (scalar::move_tmp, 1, plain_f),
+        AssignR = (scalar::assign_res, 1, plain_f),
         JmpSetC = (scalar::jmp_set_cv, 1, branch_f),
         CoalesceC = (scalar::coalesce_cv, 1, branch_f),
+        CoalesceT = (scalar::coalesce_tmp, 1, branch_f),
 
         // ---- end of scalar ----
         //
         //
         //
         // ---- dims (exec/tape/dims.rs) ----
-        FetchDimC = (dims::fetch_dim, 1, branch_poll_f),
+        FetchDimC = (dims::fetch_dim_key, 1, branch_poll_f),
         FetchDimIC = (dims::fetch_dim_int, 1, branch_poll_f),
+        FetchDimIT = (dims::fetch_dim_tmp, 1, branch_poll_f),
         FetchDimSC = (dims::fetch_dim_str, 1, branch_poll_f),
         FetchDimsC = (dims::fetch_dims, 1, branch_poll_f),
         IssetDimC = (dims::isset_dim, 1, poll_f),
-        AssignDimC = (dims::assign_dim, 1, poll_f),
+        AssignDimC = (dims::assign_dim_key, 1, poll_f),
         AssignDimIC = (dims::assign_dim_int, 1, poll_f),
         AssignDimsC = (dims::assign_dims, 1, poll_f),
         AssignOpDimC = (dims::assign_op_dim, 1, poll_f),
         AssignOpDimsC = (dims::assign_op_dims, 1, poll_f),
         IncDecDimC = (dims::incdec_dim, 1, poll_f),
         ConcatCv = (dims::concat_cv, 1, poll_f),
+        ConcatT = (dims::concat_tmp, 1, poll_f),
+        RopeT = (dims::rope_tmp, 1, poll_f),
+        CastStrT = (dims::cast_str_tmp, 1, poll_f),
+        FeFetchA = (dims::fe_fetch, 1, branch_poll_f),
+        FeFetchV = (dims::fe_fetch_v, 2, branch_poll_f),
+        FeFetchKV = (dims::fe_fetch_kv, 3, branch_poll_f),
 
         // ---- end of dims ----
         //

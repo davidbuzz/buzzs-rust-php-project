@@ -282,6 +282,26 @@ impl JitCtx {
 /// A backward jump onto instruction `close`'s target compiles the loop
 /// once `close` has been taken this many times.
 const HOT_LIMIT: i32 = 1_000;
+/// The length in tape rows up to which a loop waits the whole hot limit
+/// ([`head_start`]).
+const HOT_ROWS: i64 = 4;
+
+/// What the back-edge counter of row `inst` starts at when `hot` back
+/// edges make a loop hot: 0, or for a row a region could close with
+/// ([`is_loop_close`]) a head start by the loop's length. The limit counts
+/// rounds, and what a loop costs interpreted before its trace exists is
+/// its rounds times its length: a loop of up to [`HOT_ROWS`] rows waits the
+/// whole limit, one of twenty rows a fifth of it, and none less than a
+/// sixteenth (C PHP's tracing JIT takes any loop after 64 rounds).
+fn head_start(inst: &Inst, hot: i32) -> i32 {
+    if !is_loop_close(inst) {
+        return 0;
+    }
+    #[allow(clippy::cast_possible_wrap)]
+    let rows = i64::from(-(inst.c as i32)) / INST_SIZE + 1;
+    let share = i32::try_from((rows / HOT_ROWS).clamp(1, 16)).unwrap_or(1);
+    hot - (hot / share).max(1)
+}
 /// How many times a loop is planned before it is refused for good, when
 /// what refused it was a run-time cache that was not filled yet (a call
 /// or a property in a branch no iteration had taken): each refusal makes
@@ -367,17 +387,21 @@ pub fn enabled() -> bool {
 /// function with no loop, recursive ones included, pays nothing for the
 /// JIT being on).
 pub(crate) fn has_loop_close(tape: &[Inst]) -> bool {
-    tape.iter().any(|inst| {
-        // Onto an earlier instruction, or onto itself (an empty loop).
-        #[allow(clippy::cast_possible_wrap)]
-        let backward = (inst.c as i32) <= 0;
-        backward
-            && (inst.op == TOp::Jmp
-                || inst
-                    .op
-                    .jit_meta()
-                    .is_some_and(|m| m.class == J_CMP || m.class == J_INCCMP))
-    })
+    tape.iter().any(is_loop_close)
+}
+
+/// Whether `inst` is a row a region could close with: of a jump class the
+/// plan accepts as a close, jumping backward.
+fn is_loop_close(inst: &Inst) -> bool {
+    // Onto an earlier instruction, or onto itself (an empty loop).
+    #[allow(clippy::cast_possible_wrap)]
+    let backward = (inst.c as i32) <= 0;
+    backward
+        && (inst.op == TOp::Jmp
+            || inst
+                .op
+                .jit_meta()
+                .is_some_and(|m| m.class == J_CMP || m.class == J_INCCMP))
 }
 
 /// The per-tape hot-loop tables, created on the tape's first hot back
@@ -388,10 +412,17 @@ pub(crate) struct Tables {
 }
 
 impl Tables {
-    pub(crate) fn new(n: usize) -> Tables {
+    /// The tables of `tape`: a cell and a counter for each of its rows.
+    /// The counter of a row a region could close with starts ahead by what
+    /// the loop's length earns it ([`head_start`]).
+    pub(crate) fn new(tape: &[Inst]) -> Tables {
+        let hot = hot_limit();
         Tables {
-            cnt: (0..n).map(|_| AtomicI32::new(0)).collect(),
-            tr: (0..n).map(|_| AtomicUsize::new(0)).collect(),
+            cnt: tape
+                .iter()
+                .map(|inst| AtomicI32::new(head_start(inst, hot)))
+                .collect(),
+            tr: tape.iter().map(|_| AtomicUsize::new(0)).collect(),
         }
     }
 
@@ -2486,6 +2517,7 @@ fn is_dim_row(op: TOp) -> bool {
     matches!(
         op,
         TOp::FetchDimIC
+            | TOp::FetchDimIT
             | TOp::FetchDimSC
             | TOp::FetchDimC
             | TOp::AssignDimIC
@@ -2565,7 +2597,7 @@ fn plan_dim(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<(u16,
     let sb = inst.a << SLOT_SHIFT;
     let dk = inst.k & 7;
     match inst.op {
-        TOp::FetchDimIC | TOp::FetchDimSC | TOp::FetchDimC => {
+        TOp::FetchDimIC | TOp::FetchDimIT | TOp::FetchDimSC | TOp::FetchDimC => {
             let (kb, slot, lit_b, _) = operand(dk, inst.b, true)?;
             // The destination: the variable of the folded `AssignCv`
             // (`inst.d`; the row then covers that op as well, as the
@@ -2890,9 +2922,14 @@ unsafe extern "C" fn jit_row_fetch_dims(
     // SAFETY: the caller's contract.
     let mut row = unsafe { *inst };
     row.b = super::dims::NO_TO;
+    // The lean path here, without the call into the handler.
+    // SAFETY: the caller's contract; `frame` is the running frame.
+    if super::dims::fetch_packed_two(unsafe { &mut *frame }, &row).is_some() {
+        return 0;
+    }
     // SAFETY: as above; the copy differs from the tape's row only in where
     // the value goes.
-    match unsafe { super::dims::fetch_dims(frame, &row) } {
+    match unsafe { super::dims::fetch_dims_general(frame, &row) } {
         super::Br::Decline => 1,
         _ => 0,
     }
@@ -7780,10 +7817,20 @@ pub(super) unsafe fn back_edge(
     // SAFETY: guaranteed by the caller.
     #[allow(clippy::cast_sign_loss)] // `at` is a row of the tape at `tbase`
     let idx = unsafe { at.offset_from(ctx.tbase) } as usize;
-    // SAFETY: the cells cover the whole tape (`Tables::new(tape.len())`).
+    // SAFETY: the cells cover the whole tape (`Tables::new(tape)`).
     let c = unsafe { &*ctx.jtr.get().add(idx) }.load(Ordering::Relaxed);
     if c == usize::MAX {
-        return target;
+        // A refused loop: its back edges are counted on (from 0, where the
+        // refusal left the counter), and when it has run `GIVE_UP` more hot
+        // limits the tape is given up unless a trace of it has paid off.
+        // SAFETY: the counters cover the whole tape.
+        let count = unsafe { &*counts.add(idx) };
+        let n = count.load(Ordering::Relaxed).wrapping_add(1);
+        count.store(n, Ordering::Relaxed);
+        if n != HOT_CACHE.load(Ordering::Relaxed).saturating_mul(GIVE_UP) {
+            return target;
+        }
+        return refused_edge(ctx, target);
     }
     if c < MAX_ATTEMPTS {
         // Not compiled: one more back edge toward the limit. The edge that
@@ -7798,6 +7845,30 @@ pub(super) unsafe fn back_edge(
     }
     // SAFETY: the caller's contract; the slot bases are the frame's.
     unsafe { back_edge_slow(super::frame_st(f), ctx, at, target) }
+}
+
+/// How many hot limits a refused loop runs on before its tape is given up
+/// ([`refused_edge`]).
+const GIVE_UP: i32 = 8;
+
+/// A refused loop has run [`GIVE_UP`] more hot limits ([`back_edge`]): when
+/// no trace of its tape has paid off by now, the tape is given up
+/// (`Tape::jit_bad`): its back edges are no longer hooked, for frames
+/// entered from now on and, by disarming this frame's context and raising
+/// the safe point (the frame leaves `run_core` through the jump's own poll
+/// and re-enters without the hook), right here. A function's other loops
+/// have had that long to earn a trace; a refused loop on a live tape pays
+/// the hook on every back edge.
+#[cold]
+#[inline(never)]
+fn refused_edge(ctx: &JitCtx, target: *const Inst) -> *const Inst {
+    // SAFETY: a context's tape pointer is null or the tape it was made for,
+    // which outlives the frames that run it.
+    if !ctx.tape.is_null() && unsafe { (*ctx.tape).jit_bad() } {
+        ctx.disarm();
+        crate::interrupt::raise_safe_point();
+    }
+    target
 }
 
 /// [`back_edge`] past its counting path: the cell holds a trace to run, or
@@ -7823,7 +7894,7 @@ unsafe fn back_edge_slow(
     TRACE_VM.with(|vm| vm.set(ctx.vm.get()));
     // SAFETY: guaranteed by the caller.
     let idx = unsafe { at.offset_from(ctx.tbase) } as usize;
-    // SAFETY: the cells cover the whole tape (`Tables::new(tape.len())`).
+    // SAFETY: the cells cover the whole tape (`Tables::new(tape)`).
     let cell = unsafe { &*ctx.jtr.get().add(idx) };
     let c = cell.load(Ordering::Relaxed);
     // 0 and the small values (refused that many times, counting toward
@@ -7906,18 +7977,11 @@ unsafe fn back_edge_slow(
                 eprintln!("jit:   tmp tags = {t:?}");
             }
             cell.store(usize::MAX, Ordering::Release);
-            // This tape's tracing never paid off: stop hooking its back
-            // edges, both for frames entered from now on and (by nulling
-            // this frame's table pointer) right here.  A guard failure
-            // also raises the safe point: the frame leaves `run_core`
-            // through the jump's own poll check and re-enters with a
-            // fresh (dead) context, so the remaining iterations pay the
-            // hook's two instructions and no call at all (the pointer
-            // in `St` is register-local and cannot be nulled here).
-            if !ctx.tape.is_null() && unsafe { (*ctx.tape).jit_bad() } {
-                ctx.disarm();
-                crate::interrupt::raise_safe_point();
-            }
+            // The loop stays interpreted; its back edges count on from
+            // here toward giving the tape up (`refused_edge`).
+            // SAFETY: the counters cover the whole tape, and the context
+            // is alive (tested above).
+            unsafe { (*ctx.jcnt.get().add(idx)).store(0, Ordering::Relaxed) };
             let r = (-(r + 1)).clamp(0, (ctx.tlen - 1) as i64) as usize;
             return unsafe { ctx.tbase.add(r) };
         }
@@ -7943,10 +8007,8 @@ unsafe fn back_edge_slow(
                     );
                 }
                 cell.store(usize::MAX, Ordering::Release);
-                if !ctx.tape.is_null() && unsafe { (*ctx.tape).jit_bad() } {
-                    ctx.disarm();
-                    crate::interrupt::raise_safe_point();
-                }
+                // As after a failed guard: counted on from here.
+                exits.store(0, Ordering::Relaxed);
             }
         } else {
             exits.store(0, Ordering::Relaxed);
@@ -8010,14 +8072,11 @@ unsafe fn edge_count(
     }
     cell.store(compiled, Ordering::Release);
     if compiled == usize::MAX {
-        // The region can't be traced (and never could): if this tape has
-        // no useful trace yet, stop hooking its back edges, for frames
-        // entered from now on and (by disarming this frame's context)
-        // right here.
-        if !ctx.tape.is_null() && unsafe { (*ctx.tape).jit_bad() } {
-            ctx.disarm();
-            crate::interrupt::raise_safe_point();
-        }
+        // The region can't be traced (and never could): the loop stays
+        // interpreted, and its back edges count on from here toward
+        // giving the tape up (`refused_edge`).
+        // SAFETY: as above.
+        unsafe { (*ctx.jcnt.get().add(idx)).store(0, Ordering::Relaxed) };
         target
     } else {
         // The counter now counts the trace's unproductive entries.
@@ -8545,6 +8604,31 @@ mod layout_tests {
         assert!(add_slot(&mut g, KT, 32, false));
         assert_eq!(g.len(), 2);
         assert_eq!((g[1].exact, g[1].plain, g[1].defined), (false, true, false));
+    }
+
+    /// A loop's counter starts ahead by its length: nothing for a short
+    /// loop or a row that closes none, down to a sixteenth of the limit
+    /// left for a long one.
+    #[test]
+    fn a_long_loop_starts_ahead() {
+        let back = |rows: u32| Inst {
+            c: (rows * 32).wrapping_neg(),
+            ..Inst::plain(TOp::Jmp)
+        };
+        // The row jumps `rows` rows back: the loop is one row longer.
+        assert_eq!(head_start(&back(0), 1000), 0);
+        assert_eq!(head_start(&back(3), 1000), 0);
+        assert_eq!(head_start(&back(7), 1000), 500);
+        assert_eq!(head_start(&back(19), 1000), 800);
+        assert_eq!(head_start(&back(100), 1000), 938);
+        assert_eq!(head_start(&back(19), 7), 6);
+        assert_eq!(head_start(&back(19), 1), 0);
+        let forward = Inst {
+            c: 64,
+            ..Inst::plain(TOp::Jmp)
+        };
+        assert_eq!(head_start(&forward, 1000), 0);
+        assert_eq!(head_start(&Inst::plain(TOp::Nop), 1000), 0);
     }
 
     /// Only a backward row of a jump class the plan accepts as a region's

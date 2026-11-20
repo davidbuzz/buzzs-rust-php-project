@@ -1354,6 +1354,21 @@ impl ZStr {
         s
     }
 
+    /// `ZEND_CONCAT` of this string, which stays, and the decimal form of
+    /// `n`: a new, exactly sized string (one allocation; the digits are
+    /// ASCII, so `IS_STR_VALID_UTF8` is as [`ZStr::concat_owned_long`]
+    /// leaves it).
+    #[must_use]
+    pub fn concat_long(&self, n: i64) -> Self {
+        let props = if self.is_empty() {
+            VALID_UTF8
+        } else {
+            self.concat_props()
+        };
+        let mut buf = [0u8; LONG_MAX_LEN];
+        Self::from_parts(self.as_bytes(), format_long(n, &mut buf), props)
+    }
+
     /// Concatenates two byte slices into a new string (nothing is known
     /// about their encoding: see [`ZStr::concat_str`]).
     #[must_use]

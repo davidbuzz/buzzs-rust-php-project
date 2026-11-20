@@ -38,8 +38,10 @@ const NO_DST: u32 = u32::MAX;
 const Q_CV: u8 = 0;
 const Q_TMP: u8 = 1;
 const Q_LIT: u8 = 2;
-/// `k` of a call of one compiled variable, and of one literal.
+/// `k` of a call of one compiled variable, of one temporary and of one
+/// literal.
 const Q_ONE_CV: u8 = (1 << 6) | Q_CV;
+const Q_ONE_TMP: u8 = (1 << 6) | Q_TMP;
 const Q_ONE_LIT: u8 = (1 << 6) | Q_LIT;
 /// Where a frameless call instruction's `p` keeps the function's frameless
 /// class (five bits; the result's offset is below it, the call site's cache
@@ -257,10 +259,11 @@ pub(super) unsafe fn count_cv(frame: *mut Frame, inst: &Inst) -> bool {
 /// the op then runs in `Vm::run` (which calls the handler, or makes the
 /// call with its frame).
 ///
-/// A call of one variable or literal (the math functions, `ord()`,
-/// `chr()`, `dechex()`) is decided here; any other shape out of line
-/// ([`frameless_quick_n`]): together they cost every such call ~85
-/// instructions.
+/// A call of one argument (the math functions, `ord()`, `chr()`,
+/// `dechex()`: of a variable, a literal, or a temporary as in
+/// `chr(65 + $i % 26)`) is decided here; a call of several out of line
+/// ([`frameless_quick_n`], which decodes three operands and costs a call
+/// ~165 instructions around the function).
 ///
 /// # Safety
 /// As [`strlen_cv`].
@@ -289,13 +292,41 @@ pub(super) unsafe fn frameless_quick(frame: *mut Frame, inst: &Inst) -> Br {
             return Br::Decline;
         }
     }
-    if inst.k != Q_ONE_CV && inst.k != Q_ONE_LIT {
+    if inst.k != Q_ONE_CV && inst.k != Q_ONE_LIT && inst.k != Q_ONE_TMP {
         // SAFETY: the caller's contract.
         return unsafe { frameless_quick_n(frame, inst) };
     }
     let dst = u32::try_from(p & 0xffff_ffff).unwrap_or(NO_DST);
     // SAFETY: the caller's contract: `frame` is the current frame.
     let st = unsafe { frame_st(frame) };
+    if inst.k == Q_ONE_TMP {
+        // SAFETY: `a` is a validated temporary offset.
+        let arg = unsafe { tmp_slot(st, inst.a) };
+        // A reference is the generic op's (it reads through it), and so is
+        // a result slot holding a value to release, unless that slot is
+        // the argument's own.
+        // SAFETY: `dst` is the validated result field.
+        if matches!(arg, Value::Reference(_))
+            || (dst != NO_DST && dst != inst.a && !is_scalar(unsafe { tmp_slot(st, dst) }))
+        {
+            return Br::Decline;
+        }
+        let Some(r) = crate::special::quick_eval(inst.e, arg) else {
+            return Br::Decline;
+        };
+        // The argument is consumed, as its `Send` moved it: nothing refers
+        // to it any more, and the result slot then holds a scalar (seen
+        // above, or the null the argument left).
+        // SAFETY: validated offsets, as above.
+        return unsafe {
+            q_consume(st, Q_TMP, inst.a);
+            if put_result(st, dst, r) {
+                Br::Jump
+            } else {
+                Br::Decline
+            }
+        };
+    }
     let v: &Value = if inst.k == Q_ONE_CV {
         // SAFETY: `a` is a validated variable offset.
         match unsafe { &*cv_slot(st, inst.a) } {
@@ -363,9 +394,9 @@ unsafe fn q_consume(st: St, kind: u8, off: u32) {
     }
 }
 
-/// [`frameless_quick`] for any other shape: several arguments, or one in a
-/// temporary. The call site's cache was checked. Straight-line code per
-/// number of arguments: each operand is read where it lies, the result is
+/// [`frameless_quick`] for a call of several arguments (it takes one too).
+/// The call site's cache was checked. Straight-line code per number of
+/// arguments: each operand is read where it lies, the result is
 /// computed, and only then are the consumed temporaries released and the
 /// result stored.
 ///

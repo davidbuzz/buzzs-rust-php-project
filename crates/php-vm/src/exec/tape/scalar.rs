@@ -51,6 +51,46 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             c: rel(code, i, target)?,
             ..plain(TOp::JmpNzC)
         },
+        // A jump on a literal (`while (1)`, `while (true)` whose test stands
+        // at the loop's end): taken always, a plain jump, or never, nothing.
+        Op::JmpZ(Operand::Lit(l), target) | Op::JmpNz(Operand::Lit(l), target) => {
+            let truth = plain_truth(code.literals.get(l as usize)?)?;
+            if truth == matches!(code.ops.get(i)?, Op::JmpNz(..)) {
+                Inst {
+                    c: rel(code, i, target)?,
+                    ..plain(TOp::Jmp)
+                }
+            } else {
+                plain(TOp::Nop)
+            }
+        }
+        // `$cv = val` whose value is used (`$j += ($i = $j)`, `$a = $b =
+        // 0`): the source's kind in `k` (as `TOp::MoveT`'s), the result
+        // temporary in `c`.
+        Op::AssignCv {
+            cv,
+            val,
+            dst: Some(dst),
+        } => {
+            let (k, b) = match val {
+                Operand::Cv(s) => (MOVE_CV, cv_off(code, s)?),
+                Operand::Tmp(t) => (MOVE_TMP, tmp_off(code, t)?),
+                Operand::Lit(l) => {
+                    if !is_scalar(code.literals.get(l as usize)?) {
+                        return None;
+                    }
+                    (MOVE_LIT, lit_off(l)?)
+                }
+                _ => return None,
+            };
+            Inst {
+                k,
+                a: cv_off(code, cv)?,
+                b,
+                c: tmp_off(code, dst)?,
+                ..plain(TOp::AssignR)
+            }
+        }
         // `$cv = a op b` (the `Bin` and the `AssignCv` after it): the
         // variable is in `d`.
         // (and its form fused with the `CmpJmp` after it: see `lower_numeric`)
@@ -164,6 +204,18 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             c: rel(code, i, target)?,
             ..plain(TOp::CoalesceC)
         },
+        // `TMP ?? ...` (an element or a property read for `??`, a call's
+        // result): the temporary in `a`.
+        Op::Coalesce {
+            a: Operand::Tmp(t),
+            dst,
+            target,
+        } => Inst {
+            a: tmp_off(code, t)?,
+            b: tmp_off(code, dst)?,
+            c: rel(code, i, target)?,
+            ..plain(TOp::CoalesceT)
+        },
         _ => return None,
     })
 }
@@ -248,6 +300,69 @@ pub(super) unsafe fn move_tmp(frame: *mut crate::vm::Frame, inst: &Inst) -> bool
     true
 }
 
+/// `Op::AssignCv` with a used result (`ZEND_ASSIGN` whose result is not
+/// `IS_UNUSED`), as `hot::assign_cv_in` runs it, when nothing is released:
+/// the value (a compiled variable's, a consumed temporary's or a literal's)
+/// is a scalar, and so are what the variable and the result temporary
+/// hold (the variable may be undefined). The value's 16 bytes go to both.
+/// Declines anything else, nothing changed: `hot::step` then runs the op.
+///
+/// # Safety
+/// As [`move_tmp`].
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+pub(super) unsafe fn assign_res(frame: *mut crate::vm::Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // By raw pointers: the source may be the variable itself (`$a = $a`)
+    // or the result temporary.
+    // SAFETY: `a` is a validated variable offset, `c` a temporary's.
+    let (cv, res) = unsafe {
+        (
+            st.cvs.add(inst.a as usize).cast::<Option<Value>>(),
+            st.tmps.add(inst.c as usize).cast::<Value>(),
+        )
+    };
+    // SAFETY: both point at live slots.
+    if !matches!(
+        unsafe { &*cv },
+        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_))
+    ) || !is_scalar(unsafe { &*res })
+    {
+        return false;
+    }
+    let from: *mut Value = match inst.k {
+        // SAFETY: `b` is a validated variable offset; a defined variable's
+        // slot is its value.
+        MOVE_CV => match unsafe { &mut *cv_slot(st, inst.b) } {
+            Some(v) => v,
+            None => return false,
+        },
+        // SAFETY: `b` is a validated temporary offset.
+        MOVE_TMP => unsafe { st.tmps.add(inst.b as usize).cast::<Value>() },
+        // SAFETY: `b` is a validated literal offset (a scalar: `lower`);
+        // it is only read.
+        _ => unsafe { st.lits.add(inst.b as usize).cast::<Value>().cast_mut() },
+    };
+    // SAFETY: `from` points at a live value.
+    if !is_scalar(unsafe { &*from }) {
+        return false;
+    }
+    // SAFETY: a scalar's bits are its copy, and the three slots hold
+    // scalars (or the variable nothing): nothing to drop. A consumed
+    // temporary is left null before the result, which may be the same
+    // slot, is written.
+    unsafe {
+        let (v, copy) = (std::ptr::read(from), std::ptr::read(from));
+        if inst.k == MOVE_TMP {
+            std::ptr::write(from, Value::Null);
+        }
+        std::ptr::write(res, copy);
+        std::ptr::write(cv, Some(v));
+    }
+    true
+}
+
 /// `Op::JmpSet` (`ZEND_JMP_SET_SPEC_CV`, `$cv ?: ...`), as
 /// `hot::jmp_set_in` runs it: a truthy value is copied into the result
 /// temporary (`b`) and the jump taken; a falsy one falls through. Declines
@@ -305,6 +420,48 @@ pub(super) unsafe fn coalesce_cv(frame: *mut crate::vm::Frame, inst: &Inst) -> B
             }
             // A scalar has nothing to drop.
             std::mem::forget(std::mem::replace(dst, copy_of(v)));
+            Br::Jump
+        }
+    }
+}
+
+/// `Op::Coalesce` of a temporary (`ZEND_COALESCE_SPEC_TMPVAR`, `TMP ??
+/// ...`), as the generic op runs it: a value that is not null moves into
+/// the result temporary (`b`) and the jump is taken; a null (the consumed
+/// temporary stays null) falls through. Declines a reference (the generic
+/// read looks through it) and a result temporary holding a value to
+/// release.
+///
+/// # Safety
+/// As [`move_tmp`].
+#[inline(never)]
+#[allow(clippy::cast_ptr_alignment)] // a slot offset from a slot vector's base
+pub(super) unsafe fn coalesce_tmp(frame: *mut crate::vm::Frame, inst: &Inst) -> Br {
+    // SAFETY: the caller's contract.
+    let st = unsafe { frame_st(frame) };
+    // By raw pointers: the result may be the tested temporary itself.
+    // SAFETY: `a` and `b` are validated temporary offsets.
+    let (from, dst) = unsafe {
+        (
+            st.tmps.add(inst.a as usize).cast::<Value>(),
+            st.tmps.add(inst.b as usize).cast::<Value>(),
+        )
+    };
+    // SAFETY: `from` points at a live temporary.
+    match unsafe { &*from } {
+        Value::Null => Br::Fall,
+        Value::Reference(_) => Br::Decline,
+        _ => {
+            if from != dst {
+                // SAFETY: `dst` points at a live temporary, another slot.
+                if !is_scalar(unsafe { &*dst }) {
+                    return Br::Decline;
+                }
+                // SAFETY: the value moves from one live slot to another,
+                // which holds a scalar (nothing to drop); the source is
+                // left null, consumed.
+                unsafe { std::ptr::write(dst, std::ptr::replace(from, Value::Null)) };
+            }
             Br::Jump
         }
     }

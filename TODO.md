@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 70/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 20/82 with `BUZZS_JIT=0`).
+Score: 75/82 meet (measured 2026-11-21 with `scripts/acceptance.sh`, JIT on by default; 21/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -26,6 +26,16 @@ Score: 70/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by d
       `sort()`/`rsort()` of int lists and native int callbacks took suite:arrays 1.77 ->
       0.46. `$a[$i][$j]` read into a temporary runs through the tape's handler inside a
       trace (matrix 1.79, unchanged: its inner loop is 625 instructions against C's 352).
+      Done 2026-11-20/21 (interpreted paths; a trace calls the same handlers): a lean
+      `$a[$i][$k]` through two lists (matrix 1.79 -> 0.97), a read into a temporary, and
+      behind the lean paths, each a small function of its own, arrays held by reference
+      (heapsort 2.95 -> 2.21), hashes with int keys (ary2 1.48 -> 1.06 with the hot count
+      by loop length) and string keys in variables and temporaries (hash1 1.97 -> 1.52,
+      hash2 2.54 -> 1.66 with `foreach` on the tape, array_rw 1.81 -> 1.35).
+      Open: heapsort needs floats in traces and the array rows of a trace to take a
+      reference and float elements; hash1, hash2 and array_rw are interpreted loops whose
+      string-key probe (`find_zstr`, ~80 instructions) and handler frames still cost
+      about twice C's.
 - [~] JIT Step 3 — call-heavy tail. Done 2026-11-20 (`f457925c`): pure int functions
       compiled whole with native recursion (ackermann 10.58 -> 0.18, fib 6.31 -> 0.19,
       fibo 6.27 -> 0.19). Done 2026-11-20: `self::`/`parent::`/`static::` calls prepared on
@@ -72,8 +82,16 @@ Score: 70/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by d
 - [x] JIT is the default (owner, 2026-11-20; `57aa54cc`): on for x86-64 Linux, `BUZZS_JIT=0`
       turns it off. `scripts/acceptance.sh` now measures it without a wrapper binary.
 - [ ] JIT follow-ons from NOTE-jit-2026-11-16: guard-reload/loop-note machinery;
-      floats in traces (mandel 1.60, float_mul, float_math); property access inside
-      inlined callee bodies; `self::`/`static::` scope guards for call inlining.
+      floats in traces (the float loops meet the goal interpreted since `&&`/`||`
+      conditions jump straight to their outcome: mandel 1.57 -> 0.78, mandel2 1.00,
+      float_math 0.85; a trace would still be several times faster, and heapsort and
+      suite:objects need it); property access inside inlined callee bodies;
+      `self::`/`static::` scope guards for call inlining.
+- [ ] Objects (objects 3.99, new_obj 3.30, new_Foo 1.72): `new C(...)` with a
+      constructor that only assigns its parameters to properties as part of the `new`
+      row (the constructor call is ~1,200 of new_obj's 2,090 instructions); allocation
+      (`object::new_block` 172) and release (~290 across six functions) against C's
+      ~135 and ~130; the interpreter's user-call protocol for the method call.
 - [ ] Memory allocator: profile per-allocation cost claim (~81→~30 ins) on release build;
       update FEATURE_GAP row % from estimate to measured.
 - [ ] Object creation/layout (0% row): New-row JIT + constructor fast paths; zval-layout

@@ -303,6 +303,44 @@ impl Default for HashTable {
     }
 }
 
+/// Releases an element moved out of a table: a scalar (or a hole) owns
+/// nothing and is forgotten without a call into the drop glue; anything
+/// else is dropped.
+#[inline(always)]
+#[allow(clippy::inline_always)] // a tag test per element of a released table
+fn release_element(slot: Option<Value>) {
+    match slot {
+        None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+            std::mem::forget(slot);
+        }
+        Some(v) => drop(v),
+    }
+}
+
+impl Drop for HashTable {
+    /// `zend_array_destroy`: the elements are released in order, a bucket's
+    /// value before its key. Left to the storage's own drop, every element
+    /// of a list of ints cost a call into the drop glue of `Value`.
+    fn drop(&mut self) {
+        match std::mem::replace(&mut self.store, Store::Uninit) {
+            Store::Uninit => {}
+            Store::Packed(values) => {
+                for slot in values {
+                    release_element(slot);
+                }
+            }
+            Store::Hash(data) => {
+                for bucket in data.buckets {
+                    release_element(bucket.val);
+                    if let ArrayKey::Str(key) = bucket.key {
+                        drop(key);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// `zend_hash_check_size`: rounds a size hint up to a power of two >= 8.
 fn check_size(n: u32) -> u32 {
     if n <= HT_MIN_SIZE {
@@ -1535,6 +1573,49 @@ impl HashTable {
         self.index_insert_slow(h, val, Mode::Update).map(|_| ())
     }
 
+    /// `$a[key] = val` of a plain value (a scalar or a string) for a string
+    /// offset with symbol-table semantics (`zend_symtable_update`: `"12"` is
+    /// the int key 12): one probe of the table, then the store over a plain
+    /// element, the append to a hash with room (under one more handle of
+    /// `key`), or the general insert (initialisation, conversion of a list,
+    /// growth).
+    ///
+    /// # Errors
+    /// Gives `val` back, nothing changed, when the existing element is not
+    /// plain: a reference to write through, or an array or object whose
+    /// release is the caller's business.
+    #[inline]
+    pub fn set_sym_plain(&mut self, key: &ZStr, val: Value) -> Result<(), Value> {
+        if let Some(h) = numeric_key(key.as_bytes()) {
+            let (slot, added) = self.lookup_ex(ArrayKey::Int(h));
+            if !added && !slot.is_plain() {
+                return Err(val);
+            }
+            *slot = val;
+            return Ok(());
+        }
+        let ts = self.table_size;
+        if let Store::Hash(d) = &mut self.store {
+            if let Some(idx) = d.find_zstr(ts, key) {
+                if let Some(slot) = d.buckets.get_mut(idx as usize).and_then(|b| b.val.as_mut()) {
+                    if !slot.is_plain() {
+                        return Err(val);
+                    }
+                    *slot = val;
+                }
+                return Ok(());
+            }
+            if d.buckets.len() < ts as usize {
+                d.append(ts, ArrayKey::Str(key.clone()), val);
+                self.num_elements += 1;
+                return Ok(());
+            }
+        }
+        // A new key from here on (an existing one was decided above).
+        self.str_insert_slow(key.clone(), val, Mode::Update)
+            .map(|_| ())
+    }
+
     /// Mutable lookup of an integer key (one probe, no second storage
     /// match for the slot).
     #[inline]
@@ -1811,6 +1892,35 @@ impl HashTable {
     /// Iterates keys in order.
     pub fn keys(&self) -> impl Iterator<Item = &ArrayKey> {
         self.iter().map(|(k, _)| k)
+    }
+
+    /// Calls `f` with every element that is an array, an object or a
+    /// reference, in order: the elements whose release is more than
+    /// forgetting a scalar or releasing a string (what the collector looks
+    /// at when a table is released). A loop over the storage itself: a
+    /// table of scalars costs a tag test an element.
+    pub fn for_each_counted<'a>(&'a self, mut f: impl FnMut(&'a Value)) {
+        match &self.store {
+            Store::Uninit => {}
+            Store::Packed(values) => {
+                for slot in values {
+                    if let Some(v @ (Value::Array(_) | Value::Object(_) | Value::Reference(_))) =
+                        slot
+                    {
+                        f(v);
+                    }
+                }
+            }
+            Store::Hash(data) => {
+                for bucket in &data.buckets {
+                    if let Some(v @ (Value::Array(_) | Value::Object(_) | Value::Reference(_))) =
+                        &bucket.val
+                    {
+                        f(v);
+                    }
+                }
+            }
+        }
     }
 
     /// Iterates values in order (no keys, so a packed table never touches

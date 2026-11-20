@@ -677,7 +677,6 @@ fn released_ref(r: &php_runtime::PhpRef) {
 /// `zend_array_destroy` → `i_zval_ptr_dtor` on every element of an array
 /// whose last handle is being released: objects that stay referenced become
 /// possible roots; unshared nested arrays are released in turn.
-#[cold]
 #[inline(never)]
 fn released_array(a: &php_runtime::ZArray) {
     if !with_state(|s| !s.protected).unwrap_or(false) {
@@ -685,15 +684,15 @@ fn released_array(a: &php_runtime::ZArray) {
     }
     let mut pending: Vec<&php_runtime::ZArray> = vec![a];
     while let Some(arr) = pending.pop() {
-        for v in arr.values() {
-            match v {
-                Value::Array(inner) if inner.refcount() == 1 && !inner.is_empty() => {
-                    pending.push(inner);
-                }
-                Value::Object(_) | Value::Reference(_) => possible_root(v),
-                _ => {}
+        // Only the elements that can be or hold a root: a table of scalars
+        // and strings costs a tag test an element.
+        arr.for_each_counted(|v| match v {
+            Value::Array(inner) if inner.refcount() == 1 && !inner.is_empty() => {
+                pending.push(inner);
             }
-        }
+            Value::Object(_) | Value::Reference(_) => possible_root(v),
+            _ => {}
+        });
     }
 }
 

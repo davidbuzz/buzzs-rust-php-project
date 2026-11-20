@@ -89,6 +89,13 @@ fn check(code: &OpArray) -> Box<[Inst]> {
             continue;
         }
         let label = match *op {
+            // A jump on a literal that is never taken is a `Nop`.
+            Op::JmpZ(crate::opcode::Operand::Lit(_), _)
+            | Op::JmpNz(crate::opcode::Operand::Lit(_), _)
+                if inst.op == TOp::Nop =>
+            {
+                None
+            }
             Op::Jmp(t) | Op::JmpZ(_, t) | Op::JmpNz(_, t) => Some(t),
             Op::CmpJmp { target, .. } => Some(target),
             Op::IncDecCvCmpJmp { .. } => match code.ops.get(i + 1) {
@@ -222,9 +229,60 @@ fn fused_steps_with_the_variable_on_the_right() {
     assert_eq!((fused, lowered), (3, 2));
 }
 
+/// A jump on a literal is decided when the tape is built: a plain jump
+/// (`while (1)`, whose test stands at the loop's end) or nothing
+/// (`do { } while (0)`); `$a = $b` with a used result and a read into a
+/// temporary are instructions of their own.
+#[test]
+fn literal_jumps_and_used_assignments_are_instructions() {
+    const SRC: &str = r#"<?php
+function f($n, $a) {
+    $i = 0; $j = 1; $t = 0;
+    while (1) { if (++$i > $n) { break; } $j += ($k = $j); $t += $a[$i & 3] + $k; }
+    do { $t++; } while (0);
+    do { $t += 2; } while (false);
+    while (true) { $t += 3; break; }
+    return [$i, $j, $t];
+}
+var_dump(f(5, [1, 2, 3, 4]));
+"#;
+    let arrays = op_arrays(SRC);
+    let code = &arrays[1];
+    let tape = check(code);
+    let mut taken = 0;
+    let mut never = 0;
+    for (i, op) in code.ops.iter().enumerate() {
+        match op {
+            Op::JmpZ(crate::opcode::Operand::Lit(_), _)
+            | Op::JmpNz(crate::opcode::Operand::Lit(_), _) => match tape[i].op {
+                TOp::Jmp => taken += 1,
+                TOp::Nop => never += 1,
+                other => panic!("op {i}: {op:?} is {other:?}"),
+            },
+            Op::AssignCv { dst: Some(_), .. } => assert_eq!(tape[i].op, TOp::AssignR, "op {i}"),
+            Op::FetchDimCv { to: None, .. } => assert_eq!(tape[i].op, TOp::FetchDimIT, "op {i}"),
+            _ => {}
+        }
+    }
+    assert_eq!((taken, never), (2, 2), "{:?}", code.ops);
+    assert_eq!(
+        run(SRC),
+        "array(3) {
+  [0]=>
+  int(6)
+  [1]=>
+  int(32)
+  [2]=>
+  int(49)
+}
+"
+    );
+}
+
 /// Ops with no specialised form keep their place: hot ones are `Step`,
 /// the others `Exit`, and a string or array literal operand is not a
-/// number (`/` and `%` of a number literal are specialised).
+/// number (`/` and `%` of a number literal are specialised, and `.` of a
+/// string literal is the concat instruction).
 #[test]
 fn unspecialised_ops_keep_their_place() {
     let src = "<?php function f($a) { $s = $a . 'x'; $t = $a + 'y'; $u = [1] + $a; $v = $a / 2; \
@@ -249,11 +307,14 @@ fn unspecialised_ops_keep_their_place() {
             crate::opcode::BinKind::Arith(php_runtime::BinaryOp::Div | php_runtime::BinaryOp::Mod)
         ) && matches!(b, crate::opcode::Operand::Lit(l)
             if matches!(code.literals[l as usize], php_runtime::Value::Int(_)));
+        let concat = binop == crate::opcode::BinKind::Arith(php_runtime::BinaryOp::Concat);
         if by_number {
             assert!(
                 matches!(tape[i].op, TOp::NumBinT | TOp::NumBinC),
                 "op {i}: {op:?}"
             );
+        } else if concat {
+            assert_eq!(tape[i].op, TOp::ConcatT, "op {i}: {op:?}");
         } else {
             assert_eq!(tape[i].op, TOp::Step, "op {i}: {op:?}");
         }
@@ -895,13 +956,13 @@ f([10, 20, 30], 1, ["beta" => 2, 7 => "seven"]);
 
 /// The fast path an array read or write tries first is chosen from what
 /// its operands can hold when the tape is built: an int offset (a variable,
-/// a temporary, an int literal), a literal string key that is no integer
-/// key, an append; none for a read without a folded `AssignCv`, a float
-/// or integer-string literal offset, a string literal key of a write or an
-/// array literal value.
+/// a temporary, an int literal) of a read folded with its `AssignCv` or
+/// into its temporary, a literal string key that is no integer key, an
+/// append; none for a float or integer-string literal offset, a string
+/// literal key of a write or an array literal value.
 #[test]
 fn dim_fast_paths_follow_the_operands() {
-    use TOp::{AssignDimC, AssignDimIC, FetchDimC, FetchDimIC, FetchDimSC};
+    use TOp::{AssignDimC, AssignDimIC, FetchDimC, FetchDimIC, FetchDimIT, FetchDimSC};
     let arrays = op_arrays(DIM_FAST_PATHS);
     let tape = check(&arrays[1]);
     let ops = |pick: fn(TOp) -> bool| {
@@ -911,8 +972,8 @@ fn dim_fast_paths_follow_the_operands() {
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        ops(|op| matches!(op, FetchDimC | FetchDimIC | FetchDimSC)),
-        [FetchDimIC, FetchDimIC, FetchDimIC, FetchDimSC, FetchDimC, FetchDimC, FetchDimC]
+        ops(|op| matches!(op, FetchDimC | FetchDimIC | FetchDimIT | FetchDimSC)),
+        [FetchDimIC, FetchDimIC, FetchDimIC, FetchDimSC, FetchDimC, FetchDimC, FetchDimIT]
     );
     assert_eq!(
         ops(|op| matches!(op, AssignDimC | AssignDimIC)),
@@ -982,10 +1043,15 @@ fn strs_in_every_specialised_form() {
     let count = |op: TOp| tape.iter().filter(|i| i.op == op).count();
     assert_eq!(count(TOp::StrlenC), 2, "a result and an unused one");
     assert_eq!(count(TOp::CountC), 2, "a result and an unused one");
-    // `!is_array()` is `BOOL_NOT` and `JMPZ` after the test, as in
-    // php-src before the optimizer folds them.
-    assert_eq!(count(TOp::TypeCheckC), 2, "$b = is_int($n), !is_array()");
-    assert_eq!(count(TOp::TypeCheckJmpC), 1, "if (is_string())");
+    // `!is_array()`: the `BOOL_NOT` and the `JMPZ` after the test are the
+    // opposite jump (`specialise::thread_short_circuits`), which the test
+    // is fused with.
+    assert_eq!(count(TOp::TypeCheckC), 1, "$b = is_int($n)");
+    assert_eq!(
+        count(TOp::TypeCheckJmpC),
+        2,
+        "if (is_string()), if (!is_array())"
+    );
     assert_eq!(count(TOp::IssetC), 2, "$c = isset(), $d = empty()");
     assert_eq!(count(TOp::IssetJmpC), 2, "if (isset()) / if (empty())");
     assert_eq!(
