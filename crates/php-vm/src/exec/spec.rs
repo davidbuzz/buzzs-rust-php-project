@@ -54,7 +54,7 @@ pub(super) use dims::{
 pub(super) use props::{prop_op_in, read_hit};
 pub(super) use statics::{
     assign_static_prop_in, fetch_class_const_in, fetch_const_in, fetch_static_prop_in,
-    isset_static_prop_in,
+    incdec_static_prop_in, isset_static_prop_in,
 };
 pub(super) use strings::{cast_string_in, concat_in, rope_in};
 
@@ -789,6 +789,25 @@ impl Vm {
             }
             GlobalSlot::Empty => None,
         }
+    }
+
+    /// [`crate::opcode::Op::FetchGlobal`] on its run-time cache hit alone
+    /// ([`Vm::fetch_global_cached`]), the value stored as
+    /// [`Vm::store_fetched`] stores it: `Some(true)` when it went into the
+    /// variable of the folded `AssignCv` (which is then skipped),
+    /// `Some(false)` into `dst`. `None`, nothing changed, on a miss and
+    /// for an undefined variable read with a warning:
+    /// [`Vm::fetch_global_fast`] or the generic op decides.
+    #[inline]
+    pub(in crate::exec) fn fetch_global_hit(
+        &mut self,
+        pid: PlaceId,
+        mode: FetchMode,
+        dst: u32,
+        to: Option<u32>,
+    ) -> Option<bool> {
+        let v = self.fetch_global_cached(pid, mode)??;
+        Some(store_fetched_in(self.frames.last_mut()?, dst, to, v))
     }
 
     /// [`crate::opcode::Op::FetchGlobal`]: global variable read

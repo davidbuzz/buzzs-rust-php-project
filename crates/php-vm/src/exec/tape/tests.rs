@@ -71,8 +71,13 @@ fn check(code: &OpArray) -> Box<[Inst]> {
     for (i, op) in code.ops.iter().enumerate() {
         let inst = &tape[i];
         // The call instructions also take ops `Vm::run` runs itself
-        // (`InitMethodCall`, a frameless call).
-        if !matches!(inst.op, TOp::CallInit | TOp::FramelessQ) {
+        // (`InitMethodCall`), and so do the instructions of the ops the
+        // tape runs with the VM at hand (a frameless call, a read through
+        // the global scope).
+        if !matches!(
+            inst.op,
+            TOp::CallInit | TOp::VmOp | TOp::FramelessQ | TOp::IncDecStatic
+        ) {
             assert_eq!(inst.op == TOp::Exit, !hot::is_hot(op), "op {i}: {op:?}");
         }
         // An unspecialised hot op is handed to the old fast path that
@@ -1138,7 +1143,7 @@ fn frameless_calls() {
         .ops
         .iter()
         .zip(tape.iter())
-        .filter(|(op, inst)| matches!(op, Op::FramelessICall(_)) && inst.op == TOp::CallInit)
+        .filter(|(op, inst)| matches!(op, Op::FramelessICall(_)) && inst.op == TOp::VmOp)
         .count();
     assert!(fused >= 2, "{fused}");
     assert_eq!(
@@ -1188,4 +1193,42 @@ fn moves_and_assignments() {
         run(MOVES_AND_ASSIGNMENTS),
         "1,str,2,str,str,7,3,v0,2,str,2,str,arr,7,3,v1,3,str,2,str,arr,big,3,v2 2\ni0 d0 i1 d1 i2 end d2 \n"
     );
+}
+
+const VM_OPS_AND_STATICS: &str = r#"<?php
+$g = 5;
+class K {
+    const A = 3;
+    public static $n = 0;
+    function r($k) { $a = 0; for ($i = 0; $i < $k; $i++) { $x = $this::A; $a += $x + $this::A; self::$n++; $a += ++self::$n; } return $a; }
+}
+function f($s, $k) { $a = 0; $t = ''; for ($i = 0; $i < $k; $i++) { $x = $GLOBALS['g']; $a += $x; $y = $_GET; $a += count($y); $c = $s[$i % 3]; $t .= $c; K::$n++; } return "$a $t " . K::$n; }
+echo (new K)->r(3), ' ', K::$n, "\n";
+echo f("abc", 4), "\n";
+for ($i = 0; $i < 3; $i++) { $v = abs(-$i) + max($i, 1); echo $v; }
+echo "\n";
+"#;
+
+/// `$this::NAME` is one instruction for its two ops, `++` of a static
+/// property has an instruction, reads of a global by name and of a
+/// superglobal run with the VM at hand without leaving the tape, a string
+/// offset is read by the element read's fast path, and builtin calls at
+/// the script's top level (where no call left a pooled frame) are made.
+#[test]
+fn vm_ops_and_statics() {
+    let arrays = op_arrays(VM_OPS_AND_STATICS);
+    for code in &arrays {
+        check(code);
+    }
+    let all: Vec<TOp> = arrays
+        .iter()
+        .flat_map(|c| lower(c).to_vec())
+        .map(|i| i.op)
+        .collect();
+    let count = |op: TOp| all.iter().filter(|&&o| o == op).count();
+    // (The method's rows are not among these op arrays: its `$this::A`
+    // and `self::$n++` show in the output below.)
+    assert_eq!(count(TOp::IncDecStatic), 1, "K::$n++ in f(): {all:?}");
+    assert!(count(TOp::VmOp) >= 2, "$GLOBALS['g'], $_GET: {all:?}");
+    assert_eq!(run(VM_OPS_AND_STATICS), "30 6\n20 abca 10\n124\n");
 }

@@ -61,8 +61,8 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
     match code.ops.get(i)? {
         op if preparable(op) => Some(plain(TOp::CallInit)),
         // `ZEND_FRAMELESS_ICALL_n` (the forms `strs::lower` left): run with
-        // the VM at hand, as a call's start is (`run_call`).
-        Op::FramelessICall(_) => Some(plain(TOp::CallInit)),
+        // the VM at hand (`run_vm_op`).
+        Op::FramelessICall(_) => Some(plain(TOp::VmOp)),
         // A read of a superglobal (`$_GET`) or of a global variable by
         // name (`$GLOBALS['name']`): resolved through the VM's global
         // scope, so run there as well (`Vm::fetch_place_fast`,
@@ -71,8 +71,8 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
             place,
             mode: FetchMode::Read,
             ..
-        } if auto_global_place(code, *place) => Some(plain(TOp::CallInit)),
-        Op::FetchGlobal { .. } => Some(plain(TOp::CallInit)),
+        } if auto_global_place(code, *place) => Some(plain(TOp::VmOp)),
+        Op::FetchGlobal { .. } => Some(plain(TOp::VmOp)),
         // Only an argument of a call one of those started can go to a
         // prepared call; the others keep the generic `Send`, without the
         // detour.
@@ -228,6 +228,7 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
     if live == 0 || live > 50_000 {
         return None;
     }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
     let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
         // No pooled frame at this depth yet: the generic call pushes one.
@@ -329,6 +330,7 @@ pub(super) fn prepare_method(vm: &mut Vm, obj: Operand, lit: u32, slot: usize) -
     if live == 0 || live > 50_000 {
         return None;
     }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
     let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
         return None;
@@ -423,6 +425,7 @@ pub(super) fn prepare_static(vm: &mut Vm, at: usize) -> Option<Prepared> {
     if live == 0 || live > 50_000 {
         return None;
     }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
     let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
         return None;
@@ -480,6 +483,7 @@ pub(super) fn prepare_relative_static(
     if live == 0 || live > 50_000 {
         return None;
     }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
     let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
         return None;
@@ -554,6 +558,7 @@ pub(super) fn prepare_closure(vm: &mut Vm, cv: u32) -> Option<Prepared> {
     if live == 0 || live > 50_000 {
         return None;
     }
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
     let (Some(caller), Some(frame)) = (callers.last_mut(), pool.first_mut()) else {
         return None;
@@ -623,6 +628,7 @@ pub(super) fn new_object(vm: &mut Vm, lit: u32, dst: u32, skip: u32) -> Option<N
         return None;
     }
     let observed = vm.observer.enabled;
+    vm.frames.ensure_pooled(&vm.empty_code, &vm.empty_vars);
     let (callers, pool) = vm.frames.vec.split_at_mut(live);
     let caller = callers.last_mut()?;
     if dst as usize >= caller.tmps.len() {

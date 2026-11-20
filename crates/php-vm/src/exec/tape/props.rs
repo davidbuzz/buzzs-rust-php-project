@@ -1,6 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Tape instructions for object properties and `$this::NAME`.
+//! Tape instructions for object properties, `$this::NAME` and `++`/`--`
+//! of a static property.
 //!
 //! See the "Families" section of [`super`] for the contract of a handler
 //! and of [`lower`].
@@ -23,8 +24,8 @@
 //! constructor's frame.
 
 use super::{Br, Inst, TOp};
-use crate::exec::spec::{prop_op_in, read_hit, store_fetched_in};
-use crate::opcode::{ClassSpec, FetchMode, Op, OpArray, Operand};
+use crate::exec::spec::{incdec_static_prop_in, prop_op_in, read_hit, store_fetched_in};
+use crate::opcode::{ClassSpec, FetchMode, Op, OpArray, Operand, PlaceBase};
 use crate::vm::Frame;
 use std::rc::Rc;
 
@@ -128,6 +129,23 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
                 ..plain(TOp::IssetObjProp)
             }
         }
+        // `Class::$name++` and its kin (`ZEND_PRE_INC_STATIC_PROP` & co.):
+        // the generic `IncDec` of a place that is a static property and
+        // nothing more.
+        Op::IncDec { place, dst, .. } => {
+            let p = code.places.get(place as usize)?;
+            if !matches!(p.base, PlaceBase::StaticProp { .. }) || !p.segs.is_empty() {
+                return None;
+            }
+            if dst.is_some_and(|d| d >= code.num_tmps) {
+                return None;
+            }
+            Inst {
+                a: place,
+                d: i as u32,
+                ..plain(TOp::IncDecStatic)
+            }
+        }
         // `$this::NAME`: the `FetchThis` and the class-constant read of
         // its temporary (`p`) right after it, as one instruction that
         // reads the frame's `$this` where it is. The constant's name
@@ -176,6 +194,25 @@ pub(super) fn lower(code: &OpArray, i: usize) -> Option<Inst> {
         }
         _ => return None,
     })
+}
+
+/// `++`/`--` of a static property ([`TOp::IncDecStatic`], the op at
+/// `inst.d`) on a cache hit (`spec::incdec_static_prop_in`): an untyped
+/// property holding an int or a float. Declines anything else, having
+/// changed nothing: the generic `IncDec` walks the place.
+///
+/// # Safety
+/// As [`prop_in`].
+#[inline(never)]
+pub(super) unsafe fn incdec_static(frame: *mut Frame, inst: &Inst) -> bool {
+    // SAFETY: the caller's contract.
+    let f = unsafe { &mut *frame };
+    // A handle of its own on the op array, as in `prop_in`.
+    let code = Rc::clone(&f.code);
+    let Some(&Op::IncDec { place, kind, dst }) = code.ops.get(inst.d as usize) else {
+        return false;
+    };
+    incdec_static_prop_in(f, place, kind, dst)
 }
 
 /// The value of `$this::NAME` for a [`TOp::ThisConst`] instruction on a

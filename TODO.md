@@ -8,7 +8,7 @@ then conformance closes, then in-scope unimplemented features.
 Status: [ ] open · [~] in progress · [x] done · [-] blocked/awaiting
 
 ## A. Performance vs C (goal: all 82 goal.tsv workloads ≤ 1.10×)
-Score: 58/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 19/82 with `BUZZS_JIT=0`).
+Score: 62/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by default; 20/82 with `BUZZS_JIT=0`).
 
 - [x] JIT Step 1 — inline static-prop read/write/isset + class-const folds (`Ext` tape rows).
       Committed 2026-11-20 with ten row fixes; the wrong `empty()` answer was a `Bool`
@@ -28,18 +28,22 @@ Score: 58/82 meet (measured 2026-11-20 with `scripts/acceptance.sh`, JIT on by d
       fibo 6.27 -> 0.19). Done 2026-11-20: `self::`/`parent::`/`static::` calls prepared on
       the tape and inlined in a compiled loop (self_cc_f 4.64 -> 0.09); frameless builtins
       kept on the tape (`sqrt($x)` & co. as one instruction, the others called in the tape
-      loop: float_math 1.95 -> 0.82). Open: a method whose body touches a property
-      (suite:calls 3.95), builtin calls at a depth where no call left a pooled frame yet
-      (a script's top level: builtins 5.07), and the interpreter's own call protocol
-      (~950 instructions per call against C's ~190, memory note `call-redesign-plan`).
+      loop: float_math 1.95 -> 0.82); methods whose body reads or writes int properties of
+      `$this` inlined (suite:calls 3.95 -> 0.11, suite:props 2.40 -> 0.82 with `self::$s++`
+      compiled too); builtin calls prepared at a depth without a pooled frame. Open: the
+      builtin call protocol itself (suite:builtins 4.69: per call ~3 leaves of the core
+      loop for init/send/call, argument vectors, ~900 instructions against C's ~200), and
+      the interpreter's user-call protocol (memory note `call-redesign-plan`).
 - [~] JIT Step 4 — `New` rows (new_obj 3.27, micro:new_Foo 2.02, objects 4.64),
       elvis/ternary, `$this::CONST`, `$GLOBALS['v']`, `$_GET`. Done 2026-11-20: tape
       instructions for all of them (a ternary's arms, `?:`, `??`, non-scalar assignments,
       `$this::NAME` as one row, global reads run in the tape loop), which is not enough
-      to flip them: x_eq_f_q_f_a 2.43, x_eq_a_elvis_null 1.87, x_eq_f_q_f_tmp 1.47,
-      x_eq_f_elvis_tmp 1.39, x_eq_Foo_cc_TEST 1.34, x_eq_GLOBALS_v 2.14, x_eq__GET 2.71.
-      Open: compiled rows for them (temporaries of bool/null/any scalar kind with joins,
-      refcounted values in a trace), the global reads out of the large `run_call`.
+      to flip them: x_eq_f_q_f_a 2.43, x_eq_a_elvis_null 1.86, x_eq_f_q_f_tmp 1.48,
+      x_eq_f_elvis_tmp 1.40, x_eq_GLOBALS_v 2.02, x_eq__GET 2.60. `$this::CONST` is folded
+      in a trace now (x_eq_Foo_cc_TEST 1.34 -> 0.26).
+      Open: compiled rows for the others (temporaries of bool/null/any scalar kind with
+      joins, refcounted values in a trace), a leaner global read (245 instructions for
+      `$x = $GLOBALS['v']` against C's 94).
       Done earlier: `null`/bool constant folds (x_eq_TEST 2.37 -> 0.29).
 - [x] JIT is the default (owner, 2026-11-20; `57aa54cc`): on for x86-64 Linux, `BUZZS_JIT=0`
       turns it off. `scripts/acceptance.sh` now measures it without a wrapper binary.

@@ -442,6 +442,9 @@ const WHY_CALL: u8 = 4;
 /// Why [`run_core`] stopped: the jump at `at` was taken (to `ip`) and a safe
 /// point is due.
 const WHY_POLL: u8 = 2;
+/// Why [`run_core`] stopped: the op at `ip` is one [`run_vm_op`] runs with
+/// the VM at hand (a read through the global scope, a frameless call).
+const WHY_VM: u8 = 5;
 
 /// Where and why [`run_core`] stopped.
 struct Out {
@@ -672,6 +675,8 @@ macro_rules! tape_ops {
             CallInit,
             /// `Op::Send` of a value ([`calls`]).
             CallSend,
+            /// An op that is no call but needs the VM ([`run_vm_op`]).
+            VmOp,
             /// `Op::Jmp`.
             Jmp,
             /// `Op::JmpZ` of a temporary holding a bool.
@@ -843,6 +848,9 @@ macro_rules! tape_ops {
                     }
                     TOp::CallInit | TOp::CallSend => {
                         return Out { ip, at: ip, why: WHY_CALL };
+                    }
+                    TOp::VmOp => {
+                        return Out { ip, at: ip, why: WHY_VM };
                     }
                     TOp::Jmp => take_jump!(ip, inst, st, JIT, ctx),
                     TOp::JmpZT => {
@@ -1250,6 +1258,7 @@ tape_ops! {
         AssignOpObjProp = (props::prop_in, 1, poll_f),
         IncDecObjProp = (props::prop_in, 1, poll_f),
         IssetObjProp = (props::prop_in, 1, poll_f),
+        IncDecStatic = (props::incdec_static, 1, poll_f),
         ThisConst = (props::this_const, 2, poll_f),
         ThisConstTo = (props::this_const_to, 2, branch_poll_f),
 
@@ -1811,6 +1820,26 @@ pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (
                             d + 1
                         }
                     }
+                    WHY_VM => {
+                        // The interrupt check after a frameless call's
+                        // handler is a safe point: a call being prepared
+                        // becomes the pending call first. (The reads run
+                        // no user code and leave the frame stack alone.)
+                        if matches!(ops.get(at), Some(Op::FramelessICall(_))) {
+                            flush(vm, &mut prep);
+                        }
+                        let next = run_vm_op(vm, ops, at);
+                        let Some(f) = vm.frames.last_mut() else {
+                            flush(vm, &mut prep);
+                            return (0, NO_SAFE_POINT);
+                        };
+                        fp = f;
+                        if next != DECLINED && next & CALL_THREW != 0 {
+                            // As after a builtin's call that threw.
+                            return ((next & !CALL_THREW) | switched, hot::THREW);
+                        }
+                        next
+                    }
                     WHY_EXT => {
                         // An argument the generic `Send` passes goes to the
                         // newest pending call: the prepared one becomes it.
@@ -2103,64 +2132,79 @@ fn run_call(
             }
             flush(vm, prep);
         }
-        // A superglobal or a global variable by name, on the hits
-        // `Vm::run`'s own arms take (into the temporary, or straight into
-        // the variable of the `AssignCv` folded behind a `FetchGlobal`,
-        // which is then skipped); declined, the generic op in `Vm::run`.
-        // Neither runs user code nor looks at the frame stack: a call
-        // being prepared stays as it is.
-        Some(&Op::Fetch {
-            place,
-            mode: FetchMode::Read,
-            dst,
-        }) => {
-            return match vm.fetch_place_fast(place) {
-                Some(v) => {
-                    vm.set_tmp(dst, v);
-                    at + 1
-                }
-                None => DECLINED,
-            };
-        }
-        Some(&Op::FetchGlobal {
-            place,
-            dst,
-            to,
-            mode,
-        }) => {
-            return match vm.fetch_global_fast(place, mode) {
-                Some(v) => {
-                    if vm.store_fetched(dst, to, v) {
-                        at + 2
-                    } else {
-                        at + 1
-                    }
-                }
-                None => DECLINED,
-            };
-        }
-        // `ZEND_FRAMELESS_ICALL_n` in place (`Vm::frameless_icall_op`, as
-        // `Vm::run`'s arm runs it), past the `Nop`s of the call ops it
-        // replaced; declined, the generic op in `Vm::run`. The interrupt
-        // check after the handler is a safe point: a call being prepared
-        // becomes the pending call first.
-        Some(Op::FramelessICall(fc)) => {
-            flush(vm, prep);
-            return match vm.frameless_icall_op(fc, at + 1) {
-                Some(Ok(())) => at + usize::from(fc.argc) + 2,
-                Some(Err(t)) => {
-                    vm.tape_throw = Some(t);
-                    at | CALL_THREW
-                }
-                None => DECLINED,
-            };
-        }
         _ => {}
     }
     let Some(f) = vm.frames.last_mut() else {
         return DECLINED;
     };
     hot::step_ext(f, ops, lits, at)
+}
+
+/// Runs the op at `at` that needs the VM without being a call's start
+/// ([`WHY_VM`]), on the fast path `Vm::run`'s own arm takes for it.
+/// Returns where execution continues, [`DECLINED`] (nothing changed: the
+/// generic op in `Vm::run`), or the op's index with [`CALL_THREW`] when a
+/// frameless call's handler threw (the throw is in `Vm::tape_throw`).
+///
+/// A function of its own, and small: inside [`run_call`], whose frame the
+/// calls' many paths make large, each of these reads paid for all of it.
+#[inline(never)]
+fn run_vm_op(vm: &mut Vm, ops: &[Op], at: usize) -> usize {
+    match ops.get(at) {
+        // A global variable by name: its run-time cache hit, the value
+        // into the temporary or straight into the variable of the
+        // `AssignCv` folded behind the op (then skipped).
+        Some(&Op::FetchGlobal {
+            place,
+            dst,
+            to,
+            mode,
+        }) => match vm.fetch_global_hit(place, mode, dst, to) {
+            Some(stored) => at + 1 + usize::from(stored),
+            None => fetch_global_slow(vm, place, dst, to, mode, at),
+        },
+        // A superglobal read as a whole.
+        Some(&Op::Fetch {
+            place,
+            mode: FetchMode::Read,
+            dst,
+        }) => match vm.fetch_place_fast(place) {
+            Some(v) => {
+                vm.set_tmp(dst, v);
+                at + 1
+            }
+            None => DECLINED,
+        },
+        // `ZEND_FRAMELESS_ICALL_n` in place (`Vm::frameless_icall_op`),
+        // past the `Nop`s of the call ops it replaced.
+        Some(Op::FramelessICall(fc)) => match vm.frameless_icall_op(fc, at + 1) {
+            Some(Ok(())) => at + usize::from(fc.argc) + 2,
+            Some(Err(t)) => {
+                vm.tape_throw = Some(t);
+                at | CALL_THREW
+            }
+            None => DECLINED,
+        },
+        _ => DECLINED,
+    }
+}
+
+/// [`Op::FetchGlobal`] on a cache miss: the name is resolved and the slot
+/// filled (`Vm::fetch_global_fast`).
+#[cold]
+#[inline(never)]
+fn fetch_global_slow(
+    vm: &mut Vm,
+    place: u32,
+    dst: u32,
+    to: Option<u32>,
+    mode: FetchMode,
+    at: usize,
+) -> usize {
+    match vm.fetch_global_fast(place, mode) {
+        Some(v) => at + 1 + usize::from(vm.store_fetched(dst, to, v)),
+        None => DECLINED,
+    }
 }
 
 /// [`run_call`]'s answer when it entered the call it prepared: the

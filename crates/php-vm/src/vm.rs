@@ -742,6 +742,31 @@ impl FrameStack {
         &mut self.vec[idx]
     }
 
+    /// Makes sure a released frame sits right above the live ones: the
+    /// frame a call made at this depth is readied in (`exec/tape/calls.rs`
+    /// prepares its calls in place). The first call at a depth normally
+    /// leaves one there; when none did (only calls that push no frame ran
+    /// so far: frameless builtins), an empty one is appended, as
+    /// [`FrameStack::push_builtin`] appends it.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // one length test per prepared call
+    pub(crate) fn ensure_pooled(
+        &mut self,
+        empty_code: &Rc<OpArray>,
+        empty_vars: &Rc<RefCell<VarStore>>,
+    ) {
+        if self.vec.len() <= self.live {
+            self.grow_pool(empty_code, empty_vars);
+        }
+    }
+
+    /// [`FrameStack::ensure_pooled`]'s append, out of line.
+    #[cold]
+    #[inline(never)]
+    fn grow_pool(&mut self, empty_code: &Rc<OpArray>, empty_vars: &Rc<RefCell<VarStore>>) {
+        self.vec.push(Frame::empty_builtin(empty_code, empty_vars));
+    }
+
     /// Releases the builtin frame on top of the stack in place
     /// ([`Frame::clear_builtin_for_reuse`]), keeping it in the pool.
     #[inline]

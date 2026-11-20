@@ -448,6 +448,9 @@ pub(crate) const J_NUMBIN_D: u16 = 31;
 const C_ABS: u16 = 32;
 /// `Nop` (a slot an op folded into its neighbour left behind): no code.
 const C_NOP: u16 = 33;
+/// `++`/`--` of a static property whose pinned cell holds an `Int`
+/// ([`plan_sprop_incdec`]).
+const C_SPROPINC: u16 = 34;
 /// `JitMeta.db` for a property write whose result is discarded (no
 /// destination temporary).
 const NO_DST: u32 = u32::MAX;
@@ -527,6 +530,15 @@ pub(crate) struct JitMeta {
     /// entry (`Foo::$x` from any scope) matches every scope, so no
     /// check is needed and none is emitted.
     pub(crate) sg: bool,
+    /// A property row's result temporary base: `KT` for a row of the
+    /// region, `KR` for a row of an inlined method (whose temporaries are
+    /// scratch slots).
+    pub(crate) kd: u8,
+    /// A property row of an inlined method: every check its access needs
+    /// was made once, before the method's first row (`emit_call`), so the
+    /// row itself only loads the receiver again and reads or writes the
+    /// slot.
+    pub(crate) bare: bool,
 }
 
 /// The arithmetic ids `C_PROPOPA` accepts in `arith`: `jit_arith_id!`
@@ -578,6 +590,8 @@ impl Default for JitMeta {
             cg: false,
             wc: 0,
             sg: true,
+            kd: KT,
+            bare: false,
         }
     }
 }
@@ -669,6 +683,10 @@ struct CallPlan {
     /// whether the method is an instance one, which needs a `$this` (an
     /// object of the scope's class, whenever the frame has one).
     rel: Option<(i64, Option<i64>, bool)>,
+    /// The property slots of the receiver the inlined method reads or
+    /// writes (its `C_PROP*` rows, all on its `$this`): checked once
+    /// before the method's first row.
+    prop_slots: Vec<u32>,
     /// The call's scratch slice base (set once the buffer is mapped).
     base: u32,
     /// The scratch slice size.
@@ -685,10 +703,20 @@ impl CallPlan {
                 *off = off.wrapping_add(base);
             }
         };
-        for (m, inst) in self.metas.iter().zip(&mut self.rows) {
+        for (m, inst) in self.metas.iter_mut().zip(&mut self.rows) {
             remap(m.ka, &mut inst.a);
             remap(m.kb, &mut inst.b);
             remap(m.kc, &mut inst.c);
+            // A property row keeps its callee slots in the meta: the
+            // value it writes and its result temporary.
+            if m.bare {
+                if m.sc == KR {
+                    m.sw = m.sw.wrapping_add(base);
+                }
+                if m.kd == KR && m.db != NO_DST {
+                    m.db = m.db.wrapping_add(base);
+                }
+            }
         }
         // The returned slot is one of this call's scratch slots as well:
         // left unbased, every call after the region's first would copy
@@ -1072,7 +1100,7 @@ fn add_class_guards(
         // scope, class and slot every iteration like a write; only the
         // result temporary needs an entry guard (fully stored, tag and
         // payload, by the emitted row).
-        C_PROPINC => m.db == NO_DST || fresh_dst(m.db, guards),
+        C_PROPINC | C_SPROPINC => m.db == NO_DST || fresh_dst(m.db, guards),
         C_PROPISSET => fresh_dst(m.db, guards),
         C_PROPOPA => {
             (m.sc == KT || m.sc == KL || read(m.sc, m.sw, guards))
@@ -1110,6 +1138,65 @@ fn add_class_guards(
     }
 }
 
+/// The calling scope of the frame a plan is made in, as a class address
+/// (0: none).
+fn frame_scope(st: &St) -> usize {
+    // SAFETY: the frame outlives the plan (the trace runs in it).
+    unsafe { &*st.f }
+        .scope
+        .as_ref()
+        .map_or(0, |s| Rc::as_ptr(s) as usize)
+}
+
+/// Whether `c` is a class of the instance-property rows an inlined method
+/// may contain ([`plan_callee_prop`]).
+fn is_callee_prop(c: u16) -> bool {
+    matches!(c, C_PROP | C_PROPW | C_PROPINC | C_PROPOPA)
+}
+
+/// A property row of a method being inlined (`row` of the callee's tape,
+/// `code` its op array): a read, write, `++`/`--` or `op=` of a property
+/// of its `$this`, planned as the same row of a region is, from the
+/// callee's own property cache. That entry must have been filled for the
+/// scope the method runs in (`scope`) and for the class of the call's
+/// receiver (`class_addr`, which the call's guard pins): then the
+/// receiver is the object the row works on, and the row is `bare`: what
+/// it needs checked is checked once before the method's first row. `rk`
+/// and `roff` are the receiver as the caller holds it (`KTHIS`, or `KC`
+/// and its slot).
+fn plan_callee_prop(
+    code: &crate::opcode::OpArray,
+    row: &Inst,
+    scope: usize,
+    class_addr: usize,
+    rk: u8,
+    roff: u32,
+) -> Option<(u16, JitMeta)> {
+    let (c, mut m) = match row.op {
+        TOp::FetchObjProp | TOp::FetchObjPropTo => (C_PROP, plan_prop(scope, code, row)?),
+        TOp::AssignObjProp => (C_PROPW, plan_prop_write(scope, code, row)?),
+        TOp::IncDecObjProp => (C_PROPINC, plan_prop_incdec(scope, code, row)?),
+        TOp::AssignOpObjProp => (C_PROPOPA, plan_prop_opa(scope, code, row)?),
+        _ => return None,
+    };
+    // Only the method's own `$this`, and only a receiver the trace can
+    // load again (its `$this` through the frame, or a variable).
+    if m.ka != KTHIS || !matches!(rk, KTHIS | KC) {
+        return None;
+    }
+    // The entry answers the class it was filled for: another receiver
+    // class (the method is inherited, the site is polymorphic) may have
+    // filled it since.
+    if m.lit_a != class_addr as i64 - i64::from(RC_VALUE_OFFSET) {
+        return soft();
+    }
+    m.class = c;
+    m.ka = rk;
+    m.sb = roff;
+    m.bare = true;
+    Some((c, m))
+}
+
 /// The run-time shape of a plain instance-property read (`FetchObjProp`
 /// /`FetchObjPropTo`): the op array's property cache entry for the read's
 /// place, when it is filled for the current frame's calling scope,
@@ -1120,7 +1207,7 @@ fn add_class_guards(
 /// entry only *proved* those once, so none of them may be assumed. A
 /// `None` meta rejects the trace instead: the interpreted row re-runs
 /// the full lookup, which is always correct.
-fn plan_prop(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
+fn plan_prop(scope: usize, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
     let e = code
         .prop_cache
         .try_borrow()
@@ -1138,13 +1225,9 @@ fn plan_prop(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitM
     if e.slot >= 1 << 27 {
         return None;
     }
-    // The plan ran in this very frame; its scope is what the guard
-    // compares against (and 0 for none).
-    // SAFETY: the frame outlives the plan (the trace runs in it).
-    let scope = unsafe { &*st.f }
-        .scope
-        .as_ref()
-        .map_or(0, |s| Rc::as_ptr(s) as usize);
+    // The scope the row runs in (the frame the plan is made in, or the
+    // inlined method's): what the entry must have been filled for, and
+    // what the guard compares against (0 for none).
     if e.scope_addr != scope {
         return soft();
     }
@@ -1201,7 +1284,7 @@ fn plan_prop(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitM
 /// checks. The *source* is guarded `Int` exactly like an arithmetic
 /// read (`KT` sources re-checked per row, so a source an earlier row
 /// fully stored passes the check on its fresh value).
-fn plan_prop_write(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
+fn plan_prop_write(scope: usize, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
     let Some(Op::AssignObjProp { place, val, dst }) = code.ops.get(inst.d as usize) else {
         return None;
     };
@@ -1225,13 +1308,9 @@ fn plan_prop_write(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Optio
     if e.slot >= 1 << 27 {
         return None;
     }
-    // The plan ran in this very frame; its scope is what the guard
-    // compares against (and 0 for none).
-    // SAFETY: the frame outlives the plan (the trace runs in it).
-    let scope = unsafe { &*st.f }
-        .scope
-        .as_ref()
-        .map_or(0, |s| Rc::as_ptr(s) as usize);
+    // The scope the row runs in (the frame the plan is made in, or the
+    // inlined method's): what the entry must have been filled for, and
+    // what the guard compares against (0 for none).
     if e.scope_addr != scope {
         return soft();
     }
@@ -1291,7 +1370,12 @@ fn plan_prop_write(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Optio
 /// The base, slot, scope and class checks the three planners below
 /// share with [`plan_prop_write`] (their emitted guards are identical);
 /// `want` is the entry flag the op's interpreted hit requires.
-fn prop_common(st: &St, code: &crate::opcode::OpArray, inst: &Inst, want: u8) -> Option<JitMeta> {
+fn prop_common(
+    scope: usize,
+    code: &crate::opcode::OpArray,
+    inst: &Inst,
+    want: u8,
+) -> Option<JitMeta> {
     let e = code
         .prop_cache
         .try_borrow()
@@ -1309,13 +1393,9 @@ fn prop_common(st: &St, code: &crate::opcode::OpArray, inst: &Inst, want: u8) ->
     if e.slot >= 1 << 27 {
         return None;
     }
-    // The plan ran in this very frame; its scope is what the guard
-    // compares against (and 0 for none).
-    // SAFETY: the frame outlives the plan (the trace runs in it).
-    let scope = unsafe { &*st.f }
-        .scope
-        .as_ref()
-        .map_or(0, |s| Rc::as_ptr(s) as usize);
+    // The scope the row runs in (the frame the plan is made in, or the
+    // inlined method's): what the entry must have been filled for, and
+    // what the guard compares against (0 for none).
     if e.scope_addr != scope {
         return soft();
     }
@@ -1361,14 +1441,14 @@ fn prop_dst(code: &crate::opcode::OpArray, dst: Option<u32>) -> Option<u32> {
 /// any store, and the interpreted row then converts to `Float` or
 /// declines exactly as its own `accept` check decides. `inc` carries
 /// the direction and `kc` the post-ness of the `IncDecKind`.
-fn plan_prop_incdec(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
+fn plan_prop_incdec(scope: usize, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
     let Some(Op::IncDecObjProp { place, kind, dst }) = code.ops.get(inst.d as usize) else {
         return None;
     };
     if *place != inst.a {
         return None;
     }
-    let mut m = prop_common(st, code, inst, PC_READ | PC_WRITE)?;
+    let mut m = prop_common(scope, code, inst, PC_READ | PC_WRITE)?;
     m.class = C_PROPINC;
     m.db = prop_dst(code, *dst)?;
     m.inc = kind.is_inc();
@@ -1382,14 +1462,14 @@ fn plan_prop_incdec(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Opti
 /// hits, which the JIT leaves to it), and the emitted code answers
 /// `Int`/`Null`/`Bool` slots inline and exits to the interpreted row
 /// for anything else. `inc` carries `empty`.
-fn plan_prop_isset(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
+fn plan_prop_isset(scope: usize, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
     let Some(Op::IssetObjProp { place, dst, empty }) = code.ops.get(inst.d as usize) else {
         return None;
     };
     if *place != inst.a {
         return None;
     }
-    let mut m = prop_common(st, code, inst, PC_ISSET)?;
+    let mut m = prop_common(scope, code, inst, PC_ISSET)?;
     m.class = C_PROPISSET;
     // `isset`/`empty` always write their result temporary.
     m.db = prop_dst(code, Some(*dst))?;
@@ -1404,7 +1484,7 @@ fn plan_prop_isset(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Optio
 /// `plan_prop_write` resolves them. Only int-int operators inline:
 /// `+`/`-`/`*` (which exit `jo` on overflow, leaving the interpreted
 /// row to decide the `Float` conversion) and the three bitwise ops.
-fn plan_prop_opa(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
+fn plan_prop_opa(scope: usize, code: &crate::opcode::OpArray, inst: &Inst) -> Option<JitMeta> {
     let Some(Op::AssignOpObjProp {
         place,
         op,
@@ -1426,7 +1506,7 @@ fn plan_prop_opa(st: &St, code: &crate::opcode::OpArray, inst: &Inst) -> Option<
         php_runtime::BinaryOp::BitXor => OPA_BITXOR,
         _ => return None,
     };
-    let mut m = prop_common(st, code, inst, PC_READ | PC_WRITE)?;
+    let mut m = prop_common(scope, code, inst, PC_READ | PC_WRITE)?;
     m.class = C_PROPOPA;
     m.arith = arith;
     let (sc, sw, lit_c, consume) = match val {
@@ -1636,6 +1716,23 @@ fn plan_sprop_write(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<
     Some(m)
 }
 
+/// The run-time shape of a plain `Foo::$x++` (the tape's `IncDecStatic`
+/// row: an `IncDec` of a static-property place): the pinned cell of a
+/// `fast_plain` entry, as for a write, holding an `Int` (re-checked per
+/// iteration). An overflow leaves before any store (the interpreted row
+/// makes the float). `inc` carries the direction and `kc` the post-ness.
+fn plan_sprop_incdec(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<JitMeta> {
+    let Some(Op::IncDec { place, kind, dst }) = code.ops.get(i) else {
+        return None;
+    };
+    let mut m = sprop_common(st, code, *place, true)?;
+    m.class = C_SPROPINC;
+    m.db = prop_dst(code, *dst)?;
+    m.inc = kind.is_inc();
+    m.kc = u8::from(kind.is_post());
+    Some(m)
+}
+
 /// The run-time shape of a plain `isset(Foo::$x)`/`empty(Foo::$x)`:
 /// the pinned cell, then a branch on its tag (`Int`, `Null` or `Bool`
 /// answered inline exactly as `static_cell_isset` decides, anything
@@ -1767,6 +1864,56 @@ fn plan_const(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<JitMet
         fold_ok(code, i, to, dst)?;
     }
     Some(m)
+}
+
+/// The run-time shape of `$this::NAME` (the tape's `ThisConst` /
+/// `ThisConstTo` row at `i`: the `FetchThis` there and the class-constant
+/// read of its temporary after it) when the constant folds as
+/// [`plan_const`] folds one: the value the constant's cache holds for the
+/// class of the frame's `$this` (`rtcache::class_const_hit_obj_in`, the
+/// hit the interpreted row takes). That value is the class's, as seen
+/// from the frame's scope: the emitted row re-checks both on every
+/// iteration (`ka == KTHIS` marks the class check, `lit_c` the class).
+fn plan_this_const(st: &St, code: &crate::opcode::OpArray, i: usize) -> Option<JitMeta> {
+    // SAFETY: the frame outlives the plan (the trace runs in it).
+    let f = unsafe { &*st.f };
+    let (name, dst, to) = match code.ops.get(i + 1) {
+        Some(Op::FetchClassConst {
+            class: ClassSpec::Dyn(_),
+            name: Operand::Lit(n),
+            dst,
+        }) => (*n, *dst, None),
+        Some(Op::FetchClassConstTo {
+            class: ClassSpec::Dyn(_),
+            name,
+            dst,
+            to,
+        }) => (*name, *dst, Some(*to)),
+        _ => return None,
+    };
+    let this = f.this.as_ref()?;
+    let v = crate::rtcache::class_const_hit_obj_in(f, this, name).or_else(soft)?;
+    let (kind, v) = match v {
+        php_runtime::Value::Int(v) => (CONST_INT, v),
+        php_runtime::Value::Null => (CONST_NULL, 0),
+        php_runtime::Value::Bool(b) => (CONST_BOOL, i64::from(b)),
+        _ => return None,
+    };
+    if let Some(to) = to {
+        fold_ok(code, i + 1, to, dst)?;
+    }
+    let word = |addr: usize| addr as i64 - i64::from(RC_VALUE_OFFSET);
+    Some(JitMeta {
+        class: C_CONSTI,
+        lit_a: v,
+        arith: kind,
+        db: prop_dst(code, Some(dst))?,
+        sg: true,
+        lit_b: f.scope.as_ref().map_or(0, |s| word(Rc::as_ptr(s) as usize)),
+        ka: KTHIS,
+        lit_c: word(Rc::as_ptr(crate::object::class_of(this)) as usize),
+        ..JitMeta::default()
+    })
 }
 
 /// Plan one lowered `Ext` row: the tape keeps the raw op at its own
@@ -2236,6 +2383,7 @@ fn plan(
         rej!("not a loop or too big");
     }
     let len = close - head + 1;
+    let scope = frame_scope(st);
     let mut class = vec![0u16; len];
     let mut meta = vec![JitMeta::default(); len];
     let mut span = vec![0u32; len];
@@ -2259,29 +2407,42 @@ fn plan(
             // `FetchObjPropTo` is scanned and emitted as its own row
             // (the read stores into its temporary and that row moves
             // it, mirroring the interpreted fall-through).
-            match plan_prop(st, code, &tape[i]) {
+            match plan_prop(scope, code, &tape[i]) {
                 Some(m) => (C_PROP, m, 1, None),
                 None => rej!(format!("[{i}] property read not inlinable")),
             }
         } else if tape[i].op == TOp::AssignObjProp {
-            match plan_prop_write(st, code, &tape[i]) {
+            match plan_prop_write(scope, code, &tape[i]) {
                 Some(m) => (C_PROPW, m, 1, None),
                 None => rej!(format!("[{i}] property write not inlinable")),
             }
         } else if tape[i].op == TOp::IncDecObjProp {
-            match plan_prop_incdec(st, code, &tape[i]) {
+            match plan_prop_incdec(scope, code, &tape[i]) {
                 Some(m) => (C_PROPINC, m, 1, None),
                 None => rej!(format!("[{i}] property inc/dec not inlinable")),
             }
         } else if tape[i].op == TOp::IssetObjProp {
-            match plan_prop_isset(st, code, &tape[i]) {
+            match plan_prop_isset(scope, code, &tape[i]) {
                 Some(m) => (C_PROPISSET, m, 1, None),
                 None => rej!(format!("[{i}] property isset/empty not inlinable")),
             }
         } else if tape[i].op == TOp::AssignOpObjProp {
-            match plan_prop_opa(st, code, &tape[i]) {
+            match plan_prop_opa(scope, code, &tape[i]) {
                 Some(m) => (C_PROPOPA, m, 1, None),
                 None => rej!(format!("[{i}] property op= not inlinable")),
+            }
+        } else if tape[i].op == TOp::IncDecStatic {
+            match plan_sprop_incdec(st, code, i) {
+                Some(m) => (C_SPROPINC, m, 1, None),
+                None => rej!(format!("[{i}] static property ++/-- not inlinable")),
+            }
+        } else if matches!(tape[i].op, TOp::ThisConst | TOp::ThisConstTo) {
+            // The row covers the `FetchThis` and the constant read; the
+            // folded `AssignCv` of a `ThisConstTo` is its own row, as after
+            // a property read.
+            match plan_this_const(st, code, i) {
+                Some(m) => (C_CONSTI, m, 2, None),
+                None => rej!(format!("[{i}] $this::NAME not foldable")),
             }
         } else if is_dim_row(tape[i].op) {
             match plan_dim(st, code, &tape[i]) {
@@ -2356,6 +2517,7 @@ fn plan(
         || class.contains(&C_SPROP)
         || class.contains(&C_SPROPW)
         || class.contains(&C_SPROPISSET)
+        || class.contains(&C_SPROPINC)
         || class.contains(&C_CONSTI)
         || calls
             .iter()
@@ -2490,7 +2652,7 @@ fn plan(
             // kept) is fully stored with the `Int`; a consumed `Tmp`
             // source is left `TAG_NULL` (the interpreted row nulls it),
             // so it is no longer a known `Int`.
-            C_PROPW | C_PROPOPA | C_SPROPW | C_PROPINC => {
+            C_PROPW | C_PROPOPA | C_SPROPW | C_PROPINC | C_SPROPINC => {
                 if meta[j].db != NO_DST {
                     set_tmp_kind(&mut defs, &mut bools, &mut nulls, meta[j].db, TmpKind::Int);
                 }
@@ -2628,7 +2790,7 @@ fn plan(
     // whole trace when any row of this trace depends on them.
     let version_guard = class
         .iter()
-        .any(|&c| matches!(c, C_SPROP | C_SPROPW | C_SPROPISSET | C_CONSTI));
+        .any(|&c| matches!(c, C_SPROP | C_SPROPW | C_SPROPISSET | C_SPROPINC | C_CONSTI));
     Some(Plan {
         head,
         close,
@@ -2794,6 +2956,10 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     let mut callee_obj: Option<(u32, u64)> = None;
     let mut callee_pin: Option<php_runtime::Obj> = None;
     let mut rel: Option<(i64, Option<i64>, bool)> = None;
+    // The scope an inlined method runs in (its declaring class, as the
+    // site's `method_cache` entry gives it): what its own property rows'
+    // cache entries must have been filled for.
+    let mut callee_scope = 0usize;
     let uf = if let Some(name) = name {
         let cache = code.fcall_cache.borrow();
         match cache.get(name as usize) {
@@ -2854,6 +3020,11 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         // The guard: this slot must hold an object of exactly this class
         // on every compiled call.
         recv = Some((kind, off, cached.class_addr as u64));
+        callee_scope = cached
+            .method_scope
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .map_or(0, |s| Rc::as_ptr(&s) as usize);
         match cached.func.get() {
             Some(Func::User(uf)) => uf,
             Some(Func::Builtin(_)) => rj!("method is a builtin"),
@@ -3041,25 +3212,45 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             None => rj!("callee body walk ran off the op array at {bc}"),
         }
         let row = uf.code.tape.get(&uf.code)[bc];
-        let (c, m) = match classify(&cst, &row) {
-            Some(cm) => cm,
-            None => rj!("callee row {bc} ({:?}) not classifiable", row.op),
+        let is_prop_row = matches!(
+            row.op,
+            TOp::FetchObjProp
+                | TOp::FetchObjPropTo
+                | TOp::AssignObjProp
+                | TOp::IncDecObjProp
+                | TOp::AssignOpObjProp
+        );
+        let (c, m) = if is_prop_row {
+            // A property of the method's `$this`: of the call's receiver.
+            let Some((rk, roff, cls)) = recv else {
+                rj!("callee row {bc} ({:?}) without a receiver", row.op);
+            };
+            match plan_callee_prop(&uf.code, &row, callee_scope, cls as usize, rk, roff) {
+                Some(cm) => cm,
+                None => rj!("callee property row {bc} ({:?}) not inlinable", row.op),
+            }
+        } else {
+            let (c, m) = match classify(&cst, &row) {
+                Some(cm) => cm,
+                None => rj!("callee row {bc} ({:?}) not classifiable", row.op),
+            };
+            if !matches!(
+                c,
+                C_INC
+                    | C_DEC
+                    | C_ASSIGN_I
+                    | C_ASSIGN_L
+                    | J_ASSIGN_T
+                    | J_ARITH_TMP
+                    | J_NUMBIN_T
+                    | J_ARITH_CV
+                    | J_ASSIGN_OP
+                    | J_NUMBIN_C
+            ) {
+                rj!("callee row {bc} ({:?}) off whitelist", row.op);
+            }
+            (c, m)
         };
-        if !matches!(
-            c,
-            C_INC
-                | C_DEC
-                | C_ASSIGN_I
-                | C_ASSIGN_L
-                | J_ASSIGN_T
-                | J_ARITH_TMP
-                | J_NUMBIN_T
-                | J_ARITH_CV
-                | J_ASSIGN_OP
-                | J_NUMBIN_C
-        ) {
-            rj!("callee row {bc} ({:?}) off whitelist", row.op);
-        }
         if classes.len() >= MAX_CALLEE {
             rj!("callee too long");
         }
@@ -3110,6 +3301,16 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
     for k in 0..classes.len() {
         let m = &metas[k];
         let row = rows[k];
+        if is_callee_prop(classes[k]) {
+            // A property row names a callee slot only as the value it
+            // writes (its other operands are the receiver and a place).
+            if m.sc == KC {
+                if let Some(i) = scratch_idx(KC, m.sw) {
+                    live[i] = true;
+                }
+            }
+            continue;
+        }
         for (kind, off) in [(m.ka, row.a), (m.kb, row.b), (m.kc, row.c)] {
             if kind == KC {
                 if let Some(i) = scratch_idx(kind, off) {
@@ -3179,11 +3380,68 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
             _ => false,
         }
     };
+    // Whether an earlier row of the body wrote a property: what the
+    // interpreter, re-running the call after a later row left the trace,
+    // would write a second time. So after a write only rows that cannot
+    // leave may follow (and a property row's checks are all made before
+    // the first row: `prop_slots`).
+    let mut wrote = false;
+    let mut prop_slots: Vec<u32> = Vec::new();
     for k in 0..classes.len() {
         let c = classes[k];
         let m = &mut metas[k];
         let row = &mut rows[k];
         let (ia, ib, ic) = (row.a, row.b, row.c);
+        if is_callee_prop(c) {
+            // The value written: a callee slot the trace knows holds an
+            // `Int`, or an int literal.
+            if matches!(c, C_PROPW | C_PROPOPA) {
+                match m.sc {
+                    KC | KT => {
+                        let Some(i) = scratch_idx(m.sc, m.sw) else {
+                            rj!("callee property row's value is not a callee slot");
+                        };
+                        if !known[i] {
+                            rj!("callee property row writes a slot that is not a known int");
+                        }
+                        if m.sc == KT {
+                            m.sw += (ncvs as u32) << 4;
+                        }
+                        m.sc = KR;
+                        // A consumed temporary is left null.
+                        if m.consume {
+                            known[i] = false;
+                        }
+                    }
+                    KL => {}
+                    _ => rj!("callee property row's value has no inlinable source"),
+                }
+            }
+            // `++`, `--` and `op=` leave on an overflow (before their own
+            // store).
+            if wrote && matches!(c, C_PROPINC | C_PROPOPA) {
+                rj!("a callee row that can overflow follows a property write");
+            }
+            // The result temporary, fully stored with an `Int`.
+            if m.db != NO_DST {
+                let Some(i) = scratch_idx(KT, m.db) else {
+                    rj!("callee property row's result is not a callee temporary");
+                };
+                known[i] = true;
+                m.db += (ncvs as u32) << 4;
+                m.kd = KR;
+            }
+            if c != C_PROP {
+                wrote = true;
+            }
+            if !prop_slots.contains(&m.slot) {
+                prop_slots.push(m.slot);
+            }
+            continue;
+        }
+        if wrote && !matches!(c, C_ASSIGN_I | C_ASSIGN_L | J_ASSIGN_T) {
+            rj!("a callee row that can leave the trace follows a property write");
+        }
         // Reads the instruction makes, before any write.
         let read = |kind: u8, off: u32, known: &Vec<bool>| -> bool {
             match kind {
@@ -3313,6 +3571,7 @@ fn plan_call(st: &St, code: &crate::opcode::OpArray, init: usize) -> Option<Call
         callee_obj,
         callee_pin,
         rel,
+        prop_slots,
         base: 0,
         size: (((ncvs + nt) as u32) << 4).max(16),
     })
@@ -3813,6 +4072,7 @@ impl Emitter {
             C_SPROP => self.emit_sprop(m, Target::Side(i)),
             C_SPROPW => self.emit_spropw(m, Target::Side(i)),
             C_SPROPISSET => self.emit_spropisset(m, Target::Side(i)),
+            C_SPROPINC => self.emit_spropinc(m, Target::Side(i)),
             C_CONSTI => self.emit_consti(m, Target::Side(i)),
             C_DIMR => self.emit_dimr(m, i),
             C_DIMW => self.emit_dimw(m, i, jit_dim_set as *const () as usize, 0),
@@ -4074,6 +4334,34 @@ impl Emitter {
             self.cmp_rax_r9();
             self.jcc(0x85, Target::Side(cp.callove)); // jne: another object
         }
+        // An inlined method that reads or writes properties of its `$this`
+        // (the receiver, whose class the guard above pinned): everything
+        // those accesses need is checked here, once, before any row of the
+        // body runs, so that no row leaves the trace after another one
+        // wrote a property. The object's `lazy` cell unborrowed and empty,
+        // its `slots` cell unborrowed and long enough
+        // (`emit_prop_slots`'s checks), and every slot the body touches an
+        // `Int` (`emit_prop_int_slot`'s): the body's own writes keep them
+        // ints.
+        if let (false, Some((rk, roff, _))) = (cp.prop_slots.is_empty(), cp.recv) {
+            let jo = Target::Side(cp.callove);
+            self.load_receiver_r9(rk, roff);
+            self.cmpq_r9(OBJ_LAZY.wrapping_add(REFCELL_BORROW), 0);
+            self.jcc(0x85, jo); // jne: borrowed
+            self.cmpq_r9(OBJ_LAZY.wrapping_add(REFCELL_VALUE), 0);
+            self.jcc(0x85, jo); // jne: lazy properties present
+            self.cmpq_r9(SLOTS_BORROW, 0);
+            self.jcc(0x85, jo); // jne: borrowed
+            let top = cp.prop_slots.iter().copied().max().unwrap_or(0);
+            self.mov_rax_r9(SLOTS_LEN);
+            self.cmp_rax_imm(top.wrapping_add(1));
+            self.jcc(0x82, jo); // jb: a slot past the array
+            self.mov_rax_r9(SLOTS_FIRST);
+            for &slot in &cp.prop_slots {
+                self.cmpb_rax(slot << SLOT_SHIFT, TAG_INT);
+                self.jcc(0x85, jo); // jne: not an int (or nothing)
+            }
+        }
         for (n, arg) in cp.sends.iter().enumerate() {
             if arg.kind == KSKIP {
                 continue;
@@ -4084,12 +4372,18 @@ impl Emitter {
             self.store_tag_base(KR, off, TAG_INT);
         }
         for k in 0..cp.classes.len() {
-            self.emit_op(
-                cp.classes[k],
-                cp.metas[k],
-                &cp.rows[k],
-                Target::Disarm(cp.callove),
-            );
+            let (c, m) = (cp.classes[k], cp.metas[k]);
+            // A property row's only exit is its own overflow, before its
+            // store (and the plan lets none follow a write): the
+            // interpreter re-runs the whole call.
+            let side = Target::Side(cp.callove);
+            match c {
+                C_PROP => self.emit_prop(m, side),
+                C_PROPW => self.emit_propw(m, side),
+                C_PROPINC => self.emit_propinc(m, side),
+                C_PROPOPA => self.emit_propopa(m, side),
+                _ => self.emit_op(c, m, &cp.rows[k], Target::Disarm(cp.callove)),
+            }
         }
         if let Some(d) = cp.dst {
             match cp.ret.kind {
@@ -4127,6 +4421,36 @@ impl Emitter {
         }
     }
 
+    /// `r9` = the handle of a receiver the trace already checked: the
+    /// frame's `$this` (`KTHIS`), or the object a compiled variable holds.
+    fn load_receiver_r9(&mut self, kind: u8, off: u32) {
+        if kind == KTHIS {
+            self.load_r9_frame(THIS_FIELD);
+        } else {
+            self.load_r9_at(KC, off.wrapping_add(PAYLOAD));
+        }
+    }
+
+    /// The value a property row writes (or its second operand) into
+    /// `rcx`: a temporary of the region is re-checked on every iteration
+    /// (its entry value may be anything, including the `TAG_NULL` an
+    /// earlier row's consume left, and a temporary the region itself
+    /// produced passes on its fresh value); a compiled variable carries an
+    /// exact entry guard like an arithmetic operand; a scratch slot of an
+    /// inlined method is one the plan proved an `Int`; anything else is a
+    /// plan-time constant.
+    fn prop_src_rcx(&mut self, m: JitMeta, jo: Target) {
+        match m.sc {
+            KT => {
+                self.cmpb(KT, m.sw, TAG_INT);
+                self.jcc(0x85, jo); // jne: not an int
+                self.movrcx_at(KT, m.sw.wrapping_add(PAYLOAD));
+            }
+            KC | KR => self.movrcx_at(m.sc, m.sw.wrapping_add(PAYLOAD)),
+            _ => self.movabs_rcx(m.lit_c),
+        }
+    }
+
     /// Emit one property read (`C_PROP`): [`emit_prop_slots`] and
     /// [`emit_prop_int_slot`] then copy the slot's payload into the
     /// destination temporary with an `Int` tag.
@@ -4138,8 +4462,8 @@ impl Emitter {
         let so = m.slot << SLOT_SHIFT;
         self.mov_rax_rax(so.wrapping_add(PAYLOAD));
         // Fully store the destination temporary (tag and payload).
-        self.store_int(KT, m.db);
-        self.store_tag_base(KT, m.db, TAG_INT);
+        self.store_int(m.kd, m.db);
+        self.store_tag_base(m.kd, m.db, TAG_INT);
     }
 
     /// The checks one property access (read or write) re-runs every
@@ -4161,6 +4485,15 @@ impl Emitter {
                 "jit:   prop base {} off {:#x} class {:#x} scope {:#x} slot {}",
                 m.ka, m.sb, m.lit_a, m.lit_b, m.slot
             );
+        }
+        if m.bare {
+            // A row of an inlined method: its receiver and the object's
+            // state were checked before the method's first row
+            // (`emit_call`); only the handle and the slot array are loaded
+            // again (the rows in between use the registers).
+            self.load_receiver_r9(m.ka, m.sb);
+            self.mov_rax_r9(SLOTS_FIRST);
+            return;
         }
         // The receiver handle in `r9`.
         if m.ka == KTHIS {
@@ -4227,6 +4560,10 @@ impl Emitter {
     /// payload store cannot split an alias), and its tag equals the
     /// new value's, so the tag byte never needs writing.
     fn emit_prop_int_slot(&mut self, m: JitMeta, jo: Target) {
+        // (Checked before the method's first row for a `bare` row.)
+        if m.bare {
+            return;
+        }
         self.cmpb_rax(m.slot << SLOT_SHIFT, TAG_INT);
         self.jcc(0x85, jo); // jne: not an int (or nothing)
     }
@@ -4249,28 +4586,20 @@ impl Emitter {
         // region itself produced passes on its fresh value); a `KC`
         // source carries an exact entry guard like an arithmetic
         // operand; a `KL` source is a plan-time constant.
-        match m.sc {
-            KT => {
-                self.cmpb(KT, m.sw, TAG_INT);
-                self.jcc(0x85, jo); // jne: not an int
-                self.movrcx_at(KT, m.sw.wrapping_add(PAYLOAD));
-            }
-            KC => self.movrcx_at(KC, m.sw.wrapping_add(PAYLOAD)),
-            _ => self.movabs_rcx(m.lit_c),
-        }
+        self.prop_src_rcx(m, jo);
         // The result temporary: fully stored (tag and payload), as the
         // read's destination is.
         if m.db != NO_DST {
-            self.store_rcx_base(KT, m.db);
-            self.store_tag_base(KT, m.db, TAG_INT);
+            self.store_rcx_base(m.kd, m.db);
+            self.store_tag_base(m.kd, m.db, TAG_INT);
         }
         // The slot: tag already `Int` (the guard), so one payload word.
         self.store_rcx_at_rax(so.wrapping_add(PAYLOAD));
         // A consumed source temporary is left null, as the interpreted
         // row does (`put_tmp(slot, Value::Null)`).
         if m.consume {
-            self.store_imm_base(KT, m.sw, 0);
-            self.store_tag_base(KT, m.sw, TAG_NULL);
+            self.store_imm_base(m.sc, m.sw, 0);
+            self.store_tag_base(m.sc, m.sw, TAG_NULL);
         }
     }
 
@@ -4303,11 +4632,11 @@ impl Emitter {
         // The result temporary: fully stored (tag and payload).
         if m.db != NO_DST {
             if m.kc != 0 {
-                self.store_int_r9_base(KT, m.db);
+                self.store_int_r9_base(m.kd, m.db);
             } else {
-                self.store_rcx_base(KT, m.db);
+                self.store_rcx_base(m.kd, m.db);
             }
-            self.store_tag_base(KT, m.db, TAG_INT);
+            self.store_tag_base(m.kd, m.db, TAG_INT);
         }
     }
 
@@ -4384,15 +4713,7 @@ impl Emitter {
         self.emit_prop_int_slot(m, jo);
         let so = m.slot << SLOT_SHIFT;
         // The second operand in `rcx`.
-        match m.sc {
-            KT => {
-                self.cmpb(KT, m.sw, TAG_INT);
-                self.jcc(0x85, jo); // jne: not an int
-                self.movrcx_at(KT, m.sw.wrapping_add(PAYLOAD));
-            }
-            KC => self.movrcx_at(KC, m.sw.wrapping_add(PAYLOAD)),
-            _ => self.movabs_rcx(m.lit_c),
-        }
+        self.prop_src_rcx(m, jo);
         // The arithmetic into `r9`: `01`/`29` `add`/`sub` r/m64, r64
         // with `rm = 001` widened to `r9` by `REX.B` and `reg = 001`
         // the source `rcx`; `imul r9, rcx` is the `0F AF /r` form with
@@ -4415,13 +4736,13 @@ impl Emitter {
         self.store_r9_at_rax(so.wrapping_add(PAYLOAD));
         // The result temporary: fully stored (tag and payload).
         if m.db != NO_DST {
-            self.store_int_r9_base(KT, m.db);
-            self.store_tag_base(KT, m.db, TAG_INT);
+            self.store_int_r9_base(m.kd, m.db);
+            self.store_tag_base(m.kd, m.db, TAG_INT);
         }
         // A consumed source temporary is left null, as for a write.
         if m.consume {
-            self.store_imm_base(KT, m.sw, 0);
-            self.store_tag_base(KT, m.sw, TAG_NULL);
+            self.store_imm_base(m.sc, m.sw, 0);
+            self.store_tag_base(m.sc, m.sw, TAG_NULL);
         }
     }
 
@@ -4533,6 +4854,35 @@ impl Emitter {
         }
     }
 
+    /// Emit one static-property `++`/`--` (`C_SPROPINC`): the guards and
+    /// the cell of a write, then the increment of the cell's payload in
+    /// place, exactly as [`emit_propinc`] increments a slot: the overflow
+    /// exit comes before any store, the cell keeps its `Int` tag, and the
+    /// result temporary (when the expression's value is used) gets the old
+    /// value for a post operator (parked in `r9`) or the new one.
+    fn emit_spropinc(&mut self, m: JitMeta, jo: Target) {
+        self.emit_sprop_guards(m, jo);
+        self.emit_sprop_cell(m, jo);
+        self.cmpb_rax(REFCELL_VALUE, TAG_INT);
+        self.jcc(0x85, jo); // jne: not an int
+        self.movrcx_at_rax(REFCELL_VALUE.wrapping_add(PAYLOAD));
+        if m.kc != 0 {
+            self.mov_r9_rcx();
+        }
+        // `add rcx, 1` / `sub rcx, 1` (`83 /0` and `/5`).
+        self.put(&[REX_W, 0x83, if m.inc { 0xC1 } else { 0xE9 }, 0x01]);
+        self.jcc(0x80, jo); // jo: overflow, before any store
+        self.store_rcx_at_rax(REFCELL_VALUE.wrapping_add(PAYLOAD));
+        if m.db != NO_DST {
+            if m.kc != 0 {
+                self.store_int_r9_base(KT, m.db);
+            } else {
+                self.store_rcx_base(KT, m.db);
+            }
+            self.store_tag_base(KT, m.db, TAG_INT);
+        }
+    }
+
     /// Emit one `isset()`/`empty()` on a static property
     /// (`C_SPROPISSET`): the guards and the cell, then a branch on the
     /// cell's tag exactly like [`emit_propisset`] — `Int`, `Null` and
@@ -4596,6 +4946,17 @@ impl Emitter {
     /// at plan time, so there is no memory to re-read per iteration.
     fn emit_consti(&mut self, m: JitMeta, jo: Target) {
         self.emit_sprop_guards(m, jo);
+        // `$this::NAME`: the value is the constant of one class, which the
+        // frame's `$this` must still be an object of.
+        if m.ka == KTHIS {
+            self.load_r9_frame(THIS_FIELD);
+            self.put(&[REX_W | REX_R | REX_B, 0x85, 0xC9]); // test r9, r9
+            self.jcc(0x84, jo); // je: no `$this`
+            self.obj_class_from_r9();
+            self.movabs_rax(m.lit_c);
+            self.cmp_rax_r9();
+            self.jcc(0x85, jo); // jne: another class
+        }
         match m.arith {
             // `null`: a zero payload and the tag.
             CONST_NULL => {
@@ -5850,7 +6211,10 @@ fn attempt(st: &St, ctx: &JitCtx, head: usize, close: usize) -> usize {
             };
             // A row the tape has no instruction for: the op it stands for.
             let raw = match (inst.op, code.ops.get(d0 + i)) {
-                (TOp::Exit | TOp::Step | TOp::Ext | TOp::CallInit | TOp::CallSend, Some(op)) => {
+                (
+                    TOp::Exit | TOp::Step | TOp::Ext | TOp::CallInit | TOp::CallSend | TOp::VmOp,
+                    Some(op),
+                ) => {
                     format!(" = {op:?}")
                 }
                 _ => String::new(),
@@ -6847,6 +7211,184 @@ mod layout_tests {
     }
 
     /// The exit stubs: what each kind returns in `rax` and `rdx`.
+    /// A property row of an inlined method (`bare`) only loads the
+    /// receiver again and reads or writes the slot: its checks were made
+    /// before the method's first row, so a read and a plain write have no
+    /// exit at all and `+=` only its overflow; a value or a result that is
+    /// one of the method's own slots is addressed off the scratch buffer.
+    #[test]
+    fn inlined_method_property_rows() {
+        let slot = 2u32;
+        let so = slot << SLOT_SHIFT;
+        let read = JitMeta {
+            class: C_PROP,
+            ka: KC,
+            sb: 0x30,
+            db: 0x40,
+            slot,
+            kd: KR,
+            bare: true,
+            ..JitMeta::default()
+        };
+        let mut em = emitter();
+        em.emit_prop(read, Target::Side(0));
+        let mut want = emitter();
+        want.load_r9_at(KC, 0x30 + PAYLOAD);
+        want.mov_rax_r9(SLOTS_FIRST);
+        want.mov_rax_rax(so + PAYLOAD);
+        want.store_int(KR, 0x40);
+        want.store_tag_base(KR, 0x40, TAG_INT);
+        assert_eq!(em.code, want.code);
+        assert!(em.fixups.is_empty(), "a bare read has no exit");
+
+        // The same read through the frame's `$this`.
+        let mut em = emitter();
+        em.emit_prop(
+            JitMeta {
+                ka: KTHIS,
+                sb: 0,
+                ..read
+            },
+            Target::Side(0),
+        );
+        let mut want = emitter();
+        want.load_r9_frame(THIS_FIELD);
+        want.mov_rax_r9(SLOTS_FIRST);
+        want.mov_rax_rax(so + PAYLOAD);
+        want.store_int(KR, 0x40);
+        want.store_tag_base(KR, 0x40, TAG_INT);
+        assert_eq!(em.code, want.code);
+
+        // A write of a scratch slot the plan proved an `Int`: no tag check
+        // of the source, no result.
+        let write = JitMeta {
+            class: C_PROPW,
+            ka: KC,
+            sb: 0x30,
+            db: NO_DST,
+            slot,
+            sc: KR,
+            sw: 0x50,
+            bare: true,
+            ..JitMeta::default()
+        };
+        let mut em = emitter();
+        em.emit_propw(write, Target::Side(0));
+        let mut want = emitter();
+        want.load_r9_at(KC, 0x30 + PAYLOAD);
+        want.mov_rax_r9(SLOTS_FIRST);
+        want.movrcx_at(KR, 0x50 + PAYLOAD);
+        want.store_rcx_at_rax(so + PAYLOAD);
+        assert_eq!(em.code, want.code);
+        assert!(em.fixups.is_empty(), "a bare write has no exit");
+
+        // `+=`: the overflow is its only exit.
+        let mut em = emitter();
+        em.emit_propopa(
+            JitMeta {
+                class: C_PROPOPA,
+                arith: 0,
+                ..write
+            },
+            Target::Side(7),
+        );
+        assert_eq!(em.fixups.len(), 1, "jo only");
+        // A row of the region itself keeps every check.
+        let mut em = emitter();
+        em.emit_prop(
+            JitMeta {
+                bare: false,
+                kd: KT,
+                ..read
+            },
+            Target::Side(0),
+        );
+        assert!(em.fixups.len() >= 6, "{}", em.fixups.len());
+    }
+
+    /// `++`/`--` of a static property works on the pinned cell as the
+    /// property row works on a slot: the tag check, the old payload kept
+    /// for a post operator, the overflow exit before the store.
+    #[test]
+    fn static_incdec_encoding() {
+        let m = JitMeta {
+            class: C_SPROPINC,
+            lit_a: 0x1122_3344_5566,
+            sg: false,
+            db: 0x20,
+            inc: true,
+            kc: 1,
+            ..JitMeta::default()
+        };
+        let mut em = emitter();
+        em.emit_spropinc(m, Target::Side(3));
+        let mut want = emitter();
+        want.emit_sprop_cell(m, Target::Side(3));
+        want.cmpb_rax(REFCELL_VALUE, TAG_INT);
+        want.jcc(0x85, Target::Side(3));
+        want.movrcx_at_rax(REFCELL_VALUE + PAYLOAD);
+        want.mov_r9_rcx();
+        want.put(&[REX_W, 0x83, 0xC1, 0x01]); // add rcx, 1
+        want.jcc(0x80, Target::Side(3));
+        want.store_rcx_at_rax(REFCELL_VALUE + PAYLOAD);
+        want.store_int_r9_base(KT, 0x20);
+        want.store_tag_base(KT, 0x20, TAG_INT);
+        assert_eq!(em.code, want.code);
+
+        // `--`, result unused: `sub rcx, 1` and only the cell is stored.
+        let mut em = emitter();
+        em.emit_spropinc(
+            JitMeta {
+                inc: false,
+                kc: 0,
+                db: NO_DST,
+                ..m
+            },
+            Target::Side(3),
+        );
+        let mut want = emitter();
+        want.emit_sprop_cell(m, Target::Side(3));
+        want.cmpb_rax(REFCELL_VALUE, TAG_INT);
+        want.jcc(0x85, Target::Side(3));
+        want.movrcx_at_rax(REFCELL_VALUE + PAYLOAD);
+        want.put(&[REX_W, 0x83, 0xE9, 0x01]); // sub rcx, 1
+        want.jcc(0x80, Target::Side(3));
+        want.store_rcx_at_rax(REFCELL_VALUE + PAYLOAD);
+        assert_eq!(em.code, want.code);
+    }
+
+    /// A folded `$this::NAME` checks the class of the frame's `$this`
+    /// before it stores the constant; a named constant does not.
+    #[test]
+    fn this_const_guard_encoding() {
+        let m = JitMeta {
+            class: C_CONSTI,
+            lit_a: 7,
+            arith: CONST_INT,
+            db: 0x10,
+            sg: false,
+            ka: KTHIS,
+            lit_c: 0x7700_1100,
+            ..JitMeta::default()
+        };
+        let mut em = emitter();
+        em.emit_consti(m, Target::Side(1));
+        let mut want = emitter();
+        want.load_r9_frame(THIS_FIELD);
+        want.put(&[REX_W | REX_R | REX_B, 0x85, 0xC9]); // test r9, r9
+        want.jcc(0x84, Target::Side(1));
+        want.obj_class_from_r9();
+        want.movabs_rax(0x7700_1100);
+        want.cmp_rax_r9();
+        want.jcc(0x85, Target::Side(1));
+        want.store_imm_base(KT, 0x10, 7);
+        want.store_tag_base(KT, 0x10, TAG_INT);
+        assert_eq!(em.code, want.code);
+        let mut em = emitter();
+        em.emit_consti(JitMeta { ka: KC, ..m }, Target::Side(1));
+        assert!(em.fixups.is_empty(), "no guard for a named constant");
+    }
+
     #[test]
     fn exit_stub_encodings() {
         let mut em = emitter();

@@ -406,7 +406,8 @@ pub(super) unsafe fn fetch_dim_str(frame: *mut Frame, inst: &Inst) -> Br {
 /// The commonest `$v = $cv[$i]`, as `fetch_dim_cv_in` and
 /// `store_fetched_in` make it, without their general steps: an int offset
 /// (in a temporary, a variable or a literal) into a packed array the
-/// variable holds directly, an element that is a scalar or a string, and a
+/// variable holds directly (or into a string it holds: the byte there, as
+/// a one-byte string), an element that is a scalar or a string, and a
 /// folded `AssignCv` variable that holds no array, object or reference
 /// (no possible garbage collection root is released). The element is
 /// copied into the variable, an old string released, and the instruction
@@ -420,10 +421,17 @@ fn fetch_packed_into_cv(f: &mut Frame, inst: &Inst) -> Option<Br> {
         return None;
     }
     let i = int_dim(f, inst)?;
-    let Value::Array(arr) = f.cvs.get(inst.a as usize)?.get()? else {
-        return None;
+    let v = match f.cvs.get(inst.a as usize)?.get()? {
+        Value::Array(arr) => plain_copy(arr.get_packed(i)?)?,
+        // `$str[$i]` inside the string, counted from its start: the shared
+        // one-byte string (`zend_fetch_dimension_str`'s `ZSTR_CHAR`). An
+        // offset from the end or outside the string is the general path's.
+        Value::Str(s) => {
+            let c = *s.as_bytes().get(usize::try_from(i).ok()?)?;
+            Value::Str(php_runtime::ZStr::from_byte(c))
+        }
+        _ => return None,
     };
-    let v = plain_copy(arr.get_packed(i)?)?;
     store_plain_into(f, inst.d, v)
 }
 
