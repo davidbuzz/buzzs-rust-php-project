@@ -296,6 +296,7 @@ impl Vm {
             output_handler_hooks: std::collections::HashMap::new(),
             include_opener: None,
             source_filter: None,
+            source_filter_probe: None,
             script_encoding_provider: None,
             parsed_sources: std::cell::RefCell::new(std::collections::HashMap::new()),
             builtin_deprecations: std::collections::HashMap::new(),

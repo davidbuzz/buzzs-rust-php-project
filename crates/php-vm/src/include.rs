@@ -28,6 +28,13 @@ pub type CompileHookFn = fn(&mut Vm, Rc<[u8]>, &ZStr, bool) -> VmResult<CompileO
 /// runs). Returns the cached unit and its path.
 pub type CachedIncludeHookFn = fn(&mut Vm, &[u8]) -> VmResult<Option<(ZStr, Rc<CompiledUnit>)>>;
 
+/// A hook asked for a cached unit of an included file before the file is
+/// read (by its opened path): a script cache serves the include without
+/// reading the source, as opcache loads a script before
+/// `zend_stream_fixup` reads it. `None` falls back to reading and
+/// compiling.
+pub type PrecompiledHookFn = fn(&mut Vm, &ZStr) -> VmResult<Option<Rc<CompiledUnit>>>;
+
 /// `tsrm_realpath()` as the stream layer implements it, with
 /// `CWDG(realpath_cache)`: the real path of an existing file, `None` when
 /// it cannot be resolved.
@@ -41,6 +48,7 @@ thread_local! {
     static OPTIMIZER_PASSES: std::cell::RefCell<Vec<OptimizerPassFn>> = const { std::cell::RefCell::new(Vec::new()) };
     static CACHED_INCLUDE_HOOK: std::cell::Cell<Option<CachedIncludeHookFn>> = const { std::cell::Cell::new(None) };
     static COMPILE_HOOK: std::cell::Cell<Option<CompileHookFn>> = const { std::cell::Cell::new(None) };
+    static PRECOMPILED_HOOK: std::cell::Cell<Option<PrecompiledHookFn>> = const { std::cell::Cell::new(None) };
     static REALPATH_HOOK: std::cell::Cell<Option<IncludeRealpathFn>> = const { std::cell::Cell::new(None) };
     /// Set while compiling a file opened through a stream wrapper other
     /// than `file://` and `phar://`: such source bypasses the compile hook
@@ -71,6 +79,12 @@ impl Vm {
     /// Installs a compile hook (`zend_compile_file` override point) for files.
     pub fn set_compile_hook(f: CompileHookFn) {
         COMPILE_HOOK.with(|h| h.set(Some(f)));
+    }
+
+    /// Installs the hook asked for a cached unit before an included file
+    /// is read ([`PrecompiledHookFn`]).
+    pub fn set_precompiled_hook(f: PrecompiledHookFn) {
+        PRECOMPILED_HOOK.with(|h| h.set(Some(f)));
     }
 
     /// `zend_optimizer_register_pass`: `pass` runs after opcache's
@@ -886,6 +900,22 @@ impl Vm {
         {
             self.set_tmp(dst, Value::Bool(true));
             return Ok(false);
+        }
+        // A script cache serves the include without the file being read,
+        // unless the source filter may rewrite what would be read.
+        let filter_may_rewrite = self.source_filter.is_some()
+            && self.source_filter_probe.is_none_or(|probe| probe(&real_z));
+        if !filter_may_rewrite {
+            if let Some(hook) = PRECOMPILED_HOOK.with(std::cell::Cell::get) {
+                if let Some(unit) = hook(self, &real_z)? {
+                    if self.included_set.insert(real_z.clone()) {
+                        self.included.push(real_z);
+                    }
+                    self.declare_hoisted(&unit)?;
+                    self.push_include_frame(&unit, FrameKind::Include, dst, Some(kind_name));
+                    return Ok(true);
+                }
+            }
         }
         let src = match std::fs::read(&path) {
             Ok(s) => s,
